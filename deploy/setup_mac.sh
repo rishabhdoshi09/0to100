@@ -24,12 +24,13 @@ cat > "$UI_PLIST" <<PLIST
 <key>Label</key><string>com.quantterm.ui</string>
 <key>ProgramArguments</key><array>
 <string>/bin/bash</string>
-<string>$APP_DIR/scripts/run_quantterm.sh</string>
+<string>$APP_DIR/scripts/run_quantterm_complete.sh</string>
 </array>
 <key>WorkingDirectory</key><string>$APP_DIR</string>
 <key>EnvironmentVariables</key><dict>
 <key>TZ</key><string>Asia/Kolkata</string>
 <key>PYTHONPATH</key><string>$APP_DIR</string>
+<key>QT_NONINTERACTIVE</key><string>1</string>
 <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
 </dict>
 <key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>10</integer>

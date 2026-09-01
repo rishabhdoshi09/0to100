@@ -1,12 +1,13 @@
 # Template only. deploy/setup_server.sh installs an absolute-path unit.
 [Unit]
-Description=QuantTerm desk (Vite :5173 + API :8765)
+Description=QuantTerm complete desk (Vite :5173 + API :8765 + reports :8766)
 After=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=__APP_DIR__
 Environment=PYTHONPATH=__APP_DIR__
-ExecStart=/bin/bash __APP_DIR__/scripts/run_quantterm.sh
+Environment=QT_NONINTERACTIVE=1
+ExecStart=/bin/bash __APP_DIR__/scripts/run_quantterm_complete.sh
 Restart=on-failure
 [Install]
 WantedBy=multi-user.target

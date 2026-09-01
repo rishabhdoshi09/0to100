@@ -1,5 +1,9 @@
 # Final Retail Product Browser Acceptance
 
+> **Historical record** (branch `overhaul/evidence-lab`, commit listed below).
+> Not the current product path. Canonical launcher:
+> `bash scripts/run_quantterm_complete.sh` (Vite/React desk). Streamlit is not started.
+
 Authoritative acceptance record for the QuantTerm React retail terminal.
 
 ## Environment

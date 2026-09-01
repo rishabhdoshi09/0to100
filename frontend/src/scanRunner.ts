@@ -2,12 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchOperation, sendControl } from './api'
 import type { ControlName, OperationRecord } from './types'
 
-export type ScanKind = 'MARKET_SCAN' | 'LONG_TERM_SCAN' | 'LONG_TERM_REFRESH'
+export type ScanKind = 'MARKET_SCAN' | 'LONG_TERM_SCAN' | 'LONG_TERM_REFRESH' | 'MARKET_REPORT'
 
 const KIND_CONTROL: Record<ScanKind, ControlName> = {
   MARKET_SCAN: 'RUN_SCAN_NOW',
   LONG_TERM_SCAN: 'RUN_SCAN_NOW',
   LONG_TERM_REFRESH: 'REFRESH_LONG_TERM_NOW',
+  MARKET_REPORT: 'REFRESH_MARKET_REPORT_NOW',
 }
 
 export const SCAN_POLL_MS = 300
@@ -26,6 +27,7 @@ export function seedKindMatches(seedKind: string, runnerKind: ScanKind): boolean
   if (runnerKind === 'LONG_TERM_SCAN' && (seedKind === 'LONG_TERM_REFRESH' || seedKind === 'MARKET_SCAN')) return true
   if (runnerKind === 'LONG_TERM_REFRESH' && (seedKind === 'LONG_TERM_SCAN' || seedKind === 'LONG_TERM_REFRESH')) return true
   if (runnerKind === 'MARKET_SCAN' && seedKind === 'LONG_TERM_SCAN') return true
+  if (runnerKind === 'MARKET_REPORT' && (seedKind === 'MARKET_REPORT' || seedKind === 'NEWS_REFRESH')) return true
   return false
 }
 
@@ -42,20 +44,25 @@ const STAGE_LABELS: Record<string, string> = {
   TECHNICAL_SCREEN: 'Screening long-term candidates…',
   LONG_TERM_OVERLAY: 'Applying long-term overlay from the same scan…',
   FETCHING_SOURCES: 'Fetching news sources…',
+  ASSEMBLING: 'Assembling today’s market report…',
+  WRITING: 'Writing today’s pulse and wrap…',
+  CURATED: 'News sources curated…',
+  ACQUIRING: 'Downloading filings and fundamentals…',
+  ACQUIRED: 'Filings saved…',
   RECOVERED: 'Recovering interrupted job…',
 }
 
-const STOCK_PROGRESS_STAGES = new Set(['SCANNING', 'RANKING', 'SAVING'])
+const STOCK_PROGRESS_STAGES = new Set(['LOADING_UNIVERSE', 'SCANNING', 'RANKING', 'SAVING'])
 
 export function isStockScanStage(stage: string): boolean {
   return STOCK_PROGRESS_STAGES.has(String(stage || '').trim().toUpperCase())
 }
 
 export function friendlyStageLabel(stage: string, status: string, elapsedSeconds = 0): string {
-  if (status === 'SUCCEEDED') return 'Scan complete'
-  if (status === 'FAILED') return 'Scan failed'
-  if (status === 'CANCELLED') return 'Scan stopped'
-  if (status === 'BLOCKED') return 'Scan blocked'
+  if (status === 'SUCCEEDED') return 'Complete'
+  if (status === 'FAILED') return 'Failed'
+  if (status === 'CANCELLED') return 'Stopped'
+  if (status === 'BLOCKED') return 'Blocked'
   if (status === 'PENDING' && elapsedSeconds >= 15) return 'Waiting for the scan worker…'
   const key = String(stage || '').trim().toUpperCase()
   if (key && STAGE_LABELS[key]) return STAGE_LABELS[key]
@@ -68,9 +75,12 @@ export function friendlyStageLabel(stage: string, status: string, elapsedSeconds
 export function buildProgressLine(operation: OperationRecord | null): string | null {
   if (!operation) return null
   const stage = String(operation.stage || '').trim().toUpperCase()
-  if (!isStockScanStage(stage)) return null
   const total = Number(operation.progress_total || 0)
   const current = Number(operation.progress_current || 0)
+  if (stage === 'LOADING_UNIVERSE' && total > 0) {
+    return `Universe ${total.toLocaleString('en-IN')} NSE names`
+  }
+  if (!isStockScanStage(stage)) return null
   if (total >= 100) {
     return `Scanning ${current.toLocaleString('en-IN')} of ${total.toLocaleString('en-IN')} stocks`
   }
@@ -81,11 +91,17 @@ export function qualifiedResultLine(operation: OperationRecord | null): string |
   if (!operation?.result) return null
   const result = operation.result
   const summary = result.summary as Record<string, unknown> | undefined
-  if (summary && summary.qualified != null) {
-    return `${Number(summary.qualified).toLocaleString('en-IN')} qualified ideas found`
+  const qualified = summary?.qualified ?? summary?.with_any_setup
+  if (qualified != null) {
+    return `${Number(qualified).toLocaleString('en-IN')} qualified ideas found`
   }
   if (typeof result.records === 'number' && result.records > 0) {
     return `${result.records.toLocaleString('en-IN')} ideas saved`
+  }
+  if (typeof result.takeaways === 'number' || typeof result.wrap_lines === 'number') {
+    const wrap = Number(result.wrap_lines || 0)
+    const takes = Number(result.takeaways || 0)
+    if (wrap || takes) return `${wrap || takes} report line${(wrap || takes) === 1 ? '' : 's'} ready`
   }
   return null
 }
@@ -122,6 +138,10 @@ export function progressPercent(operation: OperationRecord | null): number | nul
   const current = Number(operation.progress_current || 0)
   if (total >= 100) return Math.round((current / total) * 100)
   return null
+}
+
+export function operationBlocksUserAction(operation: OperationRecord | null): boolean {
+  return operation?.status === 'RUNNING'
 }
 
 export type ScanRunnerHandle = {
@@ -177,14 +197,15 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
     clearPoll()
     trackedIdRef.current = null
     if (op.status === 'SUCCEEDED') {
-      setNotice('Scan complete — refreshing results…')
+      setNotice('Done — refreshing results…')
       onComplete?.()
       window.setTimeout(() => {
         if (mountedRef.current) setNotice(null)
       }, 5000)
     } else {
+      const code = String(op.error_code || '').trim()
       const detail = op.error_message || op.message || `Scan ${String(op.status).toLowerCase()}`
-      setNotice(detail)
+      setNotice(code ? `${code}: ${detail}` : detail)
     }
   }, [clearPoll, onComplete])
 
@@ -198,6 +219,11 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
         setElapsedSeconds(0)
       }
       setOperation(op)
+      if (isActiveStatus(op.status)) {
+        // PENDING stays user-reassertable. Only a worker-leased RUNNING operation
+        // locks the action button.
+        setIsBusy(operationBlocksUserAction(op))
+      }
       if (isTerminalStatus(op.status)) handleTerminal(op)
     } catch {
       // transient network errors while polling — keep trying until terminal or unmount
@@ -215,7 +241,7 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
   const attachOperation = useCallback((op: OperationRecord) => {
     setOperation(op)
     if (isActiveStatus(op.status)) {
-      setIsBusy(true)
+      setIsBusy(operationBlocksUserAction(op))
       if (trackedIdRef.current !== op.operation_id) beginPolling(op.operation_id)
     } else if (isTerminalStatus(op.status)) {
       setIsBusy(false)
@@ -235,6 +261,7 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
     if (!seed || !seedKindMatches(seed.kind, kind)) return
     if (trackedIdRef.current === seed.operation_id) {
       setOperation(seed)
+      if (isActiveStatus(seed.status)) setIsBusy(operationBlocksUserAction(seed))
       if (isTerminalStatus(seed.status)) handleTerminal(seed)
       return
     }
@@ -274,6 +301,7 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
       if (!mountedRef.current) return
       setOperation(op)
       if (isActiveStatus(op.status)) {
+        setIsBusy(operationBlocksUserAction(op))
         beginPolling(op.operation_id)
       } else if (isTerminalStatus(op.status)) {
         handleTerminal(op)

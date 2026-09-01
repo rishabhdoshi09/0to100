@@ -249,3 +249,33 @@ def test_stack_scripts_restart_children_instead_of_stopping_the_desk():
     assert "curl" not in complete
     assert "run_quantterm_complete.sh --restart" not in inner
     assert "Use --restart" not in complete
+
+
+def test_scan_report_separates_approved_universe_from_scanned():
+    from scan.market_scan_service import run_whole_market_scan
+
+    class Scanner:
+        def scan(self, symbols, progress=None, prefetch=True):
+            assert set(symbols) == {"AAA", "BBB"}
+            if progress:
+                progress(1, 1)
+            return [SimpleNamespace(symbol="AAA", signals=["MOMENTUM"], score=80,
+                                    verdict="BUY", chase_risk=False, price=100,
+                                    momentum_5d=2, rsi=55, volume_ratio=1.5,
+                                    entry=101, stop=95, target=120, reasons=["ok"])]
+
+    report = run_whole_market_scan(
+        universe_provider=lambda: {"AAA": "Alpha", "aaa": "dup", "BBB": "Beta"},
+        prefetch_fn=lambda symbols, progress=None: len(symbols),
+        scanner=Scanner(),
+        fno_provider=lambda: set(),
+        save=False,
+    )
+    assert report.ok
+    assert report.approved_universe == 3
+    assert report.scanned == 1
+    assert report.universe_size == 1
+    assert report.payload["approved_universe"] == 3
+    assert report.payload["scanned"] == 1
+    assert report.payload["universe_size"] == 1
+    assert report.payload["qualified_rows"] == 1

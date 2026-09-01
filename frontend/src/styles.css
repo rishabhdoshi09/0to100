@@ -491,7 +491,13 @@ body::before{
 .live-scan-progress b{ display:block; height:100%; background:linear-gradient(90deg, var(--cyan), var(--purple)); transition:width .35s ease; }
 .live-scan-progress-pulse .pulse-bar{ width:35%; animation: live-scan-pulse 1.4s ease-in-out infinite; }
 @keyframes live-scan-pulse{ 0%,100%{ transform:translateX(0); opacity:.6 } 50%{ transform:translateX(180%); opacity:1 } }
-.live-scan-technical{ display:block; margin-top:8px; color:var(--muted); font-size:11px; }
+.live-scan-op{
+  display:block;
+  margin-top:6px;
+  color:var(--muted);
+  font-size:11px;
+  letter-spacing:.04em;
+}
 .live-scan-notice{ margin-top:8px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
 .live-scan-notice p{ margin:0; flex:1; }
 

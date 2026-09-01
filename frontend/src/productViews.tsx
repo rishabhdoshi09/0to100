@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { SectionTabs, StatusBadge, EmptyState } from './designSystem'
 import {
   ChartWorkspace,
@@ -30,7 +30,71 @@ import {
   type TradePlan,
 } from './productApi'
 import { keepRicher, markInvestigate, recall } from './sessionMemory'
+import { fetchOperation } from './api'
 import type { ChartBar, ControlName, DashboardPayload } from './types'
+
+type AcquireJobState = {
+  operationId: string
+  status: string
+  stage: string
+  message: string
+  failed: boolean
+  error?: string
+}
+
+const ACQUIRE_POLL_MS = 400
+
+async function pollAcquireJob(
+  operationId: string,
+  onTick: (job: AcquireJobState) => void,
+): Promise<AcquireJobState> {
+  for (;;) {
+    const op = await fetchOperation(operationId)
+    const failed = op.status === 'FAILED' || op.status === 'BLOCKED' || op.status === 'CANCELLED'
+    const job: AcquireJobState = {
+      operationId,
+      status: op.status,
+      stage: op.stage || '',
+      message: op.message || '',
+      failed,
+      error: op.error_code
+        ? `${op.error_code}: ${op.error_message || op.message || 'blocked'}`
+        : (op.error_message || undefined),
+    }
+    onTick(job)
+    if (op.status === 'SUCCEEDED' || failed) return job
+    await new Promise((resolve) => window.setTimeout(resolve, ACQUIRE_POLL_MS))
+  }
+}
+
+function AcquireBanner({
+  job,
+  busy,
+  onRetry,
+}: {
+  job?: AcquireJobState | null
+  busy: string
+  onRetry: () => void
+}) {
+  const acquiring = busy === 'ACQUIRE_DUE_DILIGENCE' || busy === 'ACQUIRE_DUE_DILIGENCE_ALL' || Boolean(job && !job.failed && job.status !== 'SUCCEEDED')
+  if (!acquiring && !job) return null
+  return (
+    <aside className={`dd-acquire-banner ${job?.failed ? 'is-failed' : ''}`} aria-live="polite">
+      {job?.failed ? (
+        <>
+          <p>{job.error || job.message || 'Research acquire failed.'}</p>
+          <button type="button" onClick={onRetry}>Retry</button>
+        </>
+      ) : (
+        <p>
+          {job?.stage || 'Downloading filings and fundamentals…'}
+          {job?.operationId ? ` · Job ${job.operationId.slice(0, 8)}` : ''}
+          {job?.message ? ` · ${job.message}` : ''}
+        </p>
+      )}
+    </aside>
+  )
+}
 
 // Read-only risk-first "R lens" — exact shares, rupee risk, reward:risk, book heat. No orders.
 export function RiskLensCard({ plan }: { plan: TradePlan | null }) {
@@ -294,6 +358,8 @@ function InvestigatePanel({
   error,
   caseMemory,
   decision,
+  plan,
+  acquireJob,
   onResearchData,
   onRefresh,
   onAcquire,
@@ -304,6 +370,8 @@ function InvestigatePanel({
   error: string
   caseMemory?: StockWorkspace['case']
   decision?: StockWorkspace['decision_memory']
+  plan?: TradePlan | null
+  acquireJob?: AcquireJobState | null
   onResearchData: () => void
   onRefresh: () => void
   onAcquire: (mode?: 'missing_or_stale' | 'all') => void
@@ -312,14 +380,32 @@ function InvestigatePanel({
   const [openId, setOpenId] = useState<string | null>(null)
   const [section, setSection] = useState('Overview')
   useEffect(() => { setOpenId(null); setSection('Overview') }, [report?.symbol])
+  const banner = (
+    <AcquireBanner job={acquireJob} busy={busy} onRetry={() => onAcquire('missing_or_stale')} />
+  )
   if (loading && !report) {
-    return <div className="large-empty">Loading sector-framework due diligence from files on disk…</div>
+    return (
+      <div className="dd-root">
+        {banner}
+        <div className="large-empty">Loading sector-framework due diligence from files on disk…</div>
+      </div>
+    )
   }
   if (error && !report) {
-    return <EmptyState title="Due diligence did not load" detail={error} />
+    return (
+      <div className="dd-root">
+        {banner}
+        <EmptyState title="Due diligence did not load" detail={error} />
+      </div>
+    )
   }
   if (!report) {
-    return <EmptyState title="Investigate is empty" detail="No due-diligence report is on file for this symbol." />
+    return (
+      <div className="dd-root">
+        {banner}
+        <EmptyState title="Investigate is empty" detail="No due-diligence report is on file for this symbol." />
+      </div>
+    )
   }
   const screen = report.first_screen
   const confirmation = report.fundamental_confirmation || report.vs_technical_setup
@@ -402,13 +488,10 @@ function InvestigatePanel({
   const missingCritical = screen?.critical_metrics_missing || report.critical_metrics_missing || []
   const missingEvidence = screen?.missing_evidence || report.missing_evidence || []
   const confirmationReason = screen?.confirmation_reason || report.confirmation_reason
-  const acquiring = busy === 'ACQUIRE_DUE_DILIGENCE' || busy === 'ACQUIRE_DUE_DILIGENCE_ALL'
   return (
     <div className="dd-root">
       <p className="dd-question">{report.question}</p>
-      {acquiring ? (
-        <aside className="dd-acquire-banner" aria-live="polite">Refreshing missing/stale research data… Investigate GET stays cache-only; this is an explicit acquire.</aside>
-      ) : null}
+      {banner}
       {error && report ? <div className="api-warning">{error}</div> : null}
       <header className="dd-hero">
         <div>
@@ -426,6 +509,34 @@ function InvestigatePanel({
           <p>{confirmationReason ? `${confirmationReason}. ` : ''}{report.vs_detail}</p>
         </aside>
       </header>
+      <aside className="dd-conclusion" aria-label="Practical conclusion">
+        <p>
+          {report.thesis?.text
+            || report.first_screen?.technical_reason?.[0]
+            || report.vs_detail
+            || 'Workspace loaded from files on disk. Missing research stays missing until acquire finishes.'}
+        </p>
+        <div className="dd-score-grid">
+          <article>
+            <span>Entry</span>
+            <strong>{plan?.available && plan.entry != null ? money(plan.entry, 2) : '—'}</strong>
+            <small>{plan?.available ? 'From the saved trade plan' : 'No trade plan on file — levels are not invented'}</small>
+          </article>
+          <article>
+            <span>Invalidation / stop</span>
+            <strong>{plan?.available && plan.stop != null ? money(plan.stop, 2) : '—'}</strong>
+          </article>
+          <article>
+            <span>Target</span>
+            <strong>{plan?.available && plan.target != null ? money(plan.target, 2) : '—'}</strong>
+          </article>
+          <article>
+            <span>Freshness</span>
+            <strong>{report.as_of.fundamentals_freshness || 'MISSING'}</strong>
+            <small>{report.as_of.fundamentals_fetched_at || 'Not acquired'}</small>
+          </article>
+        </div>
+      </aside>
       <div className="dd-score-grid dd-first-grid">
         <article><span>Technical score</span><strong>{screen?.technical_score != null ? `${screen.technical_score}` : (report.technical_context.scanner_score != null ? `${report.technical_context.scanner_score}` : 'Data unavailable')}</strong></article>
         <article><span>Fundamental quality</span><strong>{scoreLabel}</strong><small>{report.fundamental_quality.explain}</small></article>
@@ -440,6 +551,17 @@ function InvestigatePanel({
         <article><span>Warnings</span><strong>{report.flag_groups?.n_warnings ?? report.red_flags.length}</strong></article>
         <article><span>Latest results</span><strong>{screen?.latest_financial_quarter || report.as_of.latest_financial_period || 'Data unavailable'}</strong><small>Refresh: {screen?.latest_data_refresh || report.as_of.latest_data_refresh || report.as_of.fundamentals_fetched_at || 'Data unavailable'}</small></article>
       </div>
+      {(report.named_quality_scores?.scores || []).length ? (
+        <div className="dd-score-grid" aria-label="Named quality scores">
+          {(report.named_quality_scores?.scores || []).map((row) => (
+            <article key={row.id}>
+              <span>{row.label}</span>
+              <strong>{row.label_text || 'Unmeasured'}</strong>
+              <small>{row.detail || (row.available ? '' : 'Missing evidence stays Unmeasured, not a weak company.')}</small>
+            </article>
+          ))}
+        </div>
+      ) : null}
       {missingEvidence.length ? (
         <aside className="dd-missing-evidence" aria-label="Important missing evidence">
           <header>
@@ -842,7 +964,9 @@ export function ProductStockIntelligenceView(props: ViewProps) {
   const [dd, setDd] = useState<DueDiligenceReport | null>(null)
   const [ddLoading, setDdLoading] = useState(false)
   const [ddError, setDdError] = useState('')
+  const [acquireJob, setAcquireJob] = useState<AcquireJobState | null>(null)
   const autoAcquired = useRef(new Set<string>())
+  const acquirePollRef = useRef(0)
 
   const intelTabs = ['Investigate', 'Overview', 'Chart', 'Financials', 'Ratios', 'Ownership', 'Events', 'Peers', 'Evidence']
 
@@ -882,6 +1006,7 @@ export function ProductStockIntelligenceView(props: ViewProps) {
 
   useEffect(() => {
     setTab('Investigate')
+    setAcquireJob(null)
   }, [selected])
 
   const loadDd = async () => {
@@ -894,28 +1019,70 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       const next = await fetchDueDiligence(selected)
       setDd(next)
       setDdError('')
-      setDdLoading(false)
-      if (next.research_coverage?.needs_acquire && !autoAcquired.current.has(selected)) {
-        autoAcquired.current.add(selected)
-        setBusy('ACQUIRE_DUE_DILIGENCE')
-        try {
-          const result = await acquireDueDiligence(selected, 'missing_or_stale')
-          if (result.report) setDd(result.report)
-        } catch (reason) {
-          setDdError(reason instanceof Error ? reason.message : 'Acquire failed — showing files on disk.')
-        } finally {
-          setBusy('')
-        }
-      }
     } catch (reason) {
       setDdError(reason instanceof Error ? reason.message : 'Due diligence failed')
+    } finally {
       setDdLoading(false)
     }
   }
 
+  const startAcquire = useCallback(async (mode: 'missing_or_stale' | 'all' = 'missing_or_stale') => {
+    if (!selected) return
+    const token = ++acquirePollRef.current
+    setBusy(mode === 'all' ? 'ACQUIRE_DUE_DILIGENCE_ALL' : 'ACQUIRE_DUE_DILIGENCE')
+    setDdError('')
+    try {
+      const result = await acquireDueDiligence(selected, mode, { asyncJob: true })
+      if (token !== acquirePollRef.current) return
+      if (result.report) {
+        setDd(result.report)
+        setAcquireJob(null)
+        await load()
+        return
+      }
+      const operationId = result.operation_id
+      if (!operationId) {
+        setDdError('Acquire queued without an operation id')
+        return
+      }
+      const final = await pollAcquireJob(operationId, (job) => {
+        if (token === acquirePollRef.current) setAcquireJob(job)
+      })
+      if (token !== acquirePollRef.current) return
+      if (final.failed) {
+        setDdError(final.error || final.message || 'Research acquire failed')
+        return
+      }
+      await load()
+      await loadDd()
+    } catch (reason) {
+      if (token !== acquirePollRef.current) return
+      setDdError(reason instanceof Error ? reason.message : 'Acquire failed — showing files on disk.')
+      setAcquireJob((prev) => prev ? { ...prev, failed: true, error: reason instanceof Error ? reason.message : 'Acquire failed' } : {
+        operationId: '',
+        status: 'FAILED',
+        stage: '',
+        message: '',
+        failed: true,
+        error: reason instanceof Error ? reason.message : 'Acquire failed',
+      })
+    } finally {
+      if (token === acquirePollRef.current) setBusy('')
+    }
+  }, [selected])
+
   useEffect(() => {
-    if (tab === 'Investigate' && selected) void loadDd()
-  }, [tab, selected, dashboard.scan.scanned_at])
+    if (selected) void loadDd()
+  }, [selected, dashboard.scan.scanned_at])
+
+  useEffect(() => {
+    if (!selected) return
+    const needs = Boolean(dd?.research_coverage?.needs_acquire)
+      || Boolean(workspace && workspace.fundamentals && !workspace.fundamentals.available)
+    if (!needs || autoAcquired.current.has(selected)) return
+    autoAcquired.current.add(selected)
+    void startAcquire('missing_or_stale')
+  }, [selected, dd?.research_coverage?.needs_acquire, workspace?.fundamentals.available, startAcquire])
 
   const runAction = async (control: ControlName | 'REFRESH_STOCK_FUNDAMENTALS' | 'ACQUIRE_DUE_DILIGENCE' | 'ACQUIRE_DUE_DILIGENCE_ALL') => {
     if (!selected) return
@@ -925,18 +1092,16 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       if (control === 'REFRESH_STOCK_FUNDAMENTALS') {
         const result = await refreshStockFundamentals(selected)
         setWorkspace(result.workspace)
-        if (tab === 'Investigate') await loadDd()
+        await loadDd()
       } else if (control === 'ACQUIRE_DUE_DILIGENCE' || control === 'ACQUIRE_DUE_DILIGENCE_ALL') {
-        const result = await acquireDueDiligence(selected, control === 'ACQUIRE_DUE_DILIGENCE_ALL' ? 'all' : 'missing_or_stale')
-        if (result.report) setDd(result.report)
-        else await loadDd()
+        await startAcquire(control === 'ACQUIRE_DUE_DILIGENCE_ALL' ? 'all' : 'missing_or_stale')
       } else {
         await runControl(control)
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Action failed')
     } finally {
-      setBusy('')
+      if (control === 'REFRESH_STOCK_FUNDAMENTALS') setBusy('')
     }
   }
 
@@ -970,6 +1135,12 @@ export function ProductStockIntelligenceView(props: ViewProps) {
 
       <RiskLensCard plan={plan} />
 
+      <AcquireBanner
+        job={acquireJob}
+        busy={busy}
+        onRetry={() => void startAcquire('missing_or_stale')}
+      />
+
       <div className="stock-action-row">
         {(workspace?.next_actions || []).map((item) => (
           <button type="button" key={item.control} disabled={busy === item.control} onClick={() => void runAction(item.control)}>{busy === item.control ? 'Working…' : item.label}</button>
@@ -986,6 +1157,8 @@ export function ProductStockIntelligenceView(props: ViewProps) {
           error={ddError}
           caseMemory={workspace?.case}
           decision={workspace?.decision_memory}
+          plan={plan}
+          acquireJob={acquireJob}
           onResearchData={() => setActive('Research Data')}
           onRefresh={() => void runAction('REFRESH_STOCK_FUNDAMENTALS')}
           onAcquire={(mode) => void runAction(mode === 'all' ? 'ACQUIRE_DUE_DILIGENCE_ALL' : 'ACQUIRE_DUE_DILIGENCE')}
@@ -1156,7 +1329,9 @@ export function StockInvestigatorView(props: ViewProps) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
+  const [acquireJob, setAcquireJob] = useState<AcquireJobState | null>(null)
   const autoAcquired = useRef(new Set<string>())
+  const acquirePollRef = useRef(0)
 
   useEffect(() => {
     const needle = query.trim()
@@ -1178,23 +1353,58 @@ export function StockInvestigatorView(props: ViewProps) {
       const next = await fetchDueDiligence(symbol)
       setReport(next)
       setError('')
-      setLoading(false)
-      if (next.research_coverage?.needs_acquire && !autoAcquired.current.has(symbol)) {
-        autoAcquired.current.add(symbol)
-        setBusy('ACQUIRE_DUE_DILIGENCE')
-        try {
-          const result = await acquireDueDiligence(symbol, 'missing_or_stale')
-          if (result.report) setReport(result.report)
-        } catch (reason) {
-          setError(reason instanceof Error ? reason.message : 'Acquire failed — showing files on disk.')
-        } finally {
-          setBusy('')
-        }
-      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Due diligence failed')
       setReport(null)
+    } finally {
       setLoading(false)
+    }
+  }
+
+  const runAcquire = async (mode: 'missing_or_stale' | 'all' = 'missing_or_stale') => {
+    if (!selected) return
+    const token = ++acquirePollRef.current
+    setBusy(mode === 'all' ? 'ACQUIRE_DUE_DILIGENCE_ALL' : 'ACQUIRE_DUE_DILIGENCE')
+    setError('')
+    try {
+      const result = await acquireDueDiligence(selected, mode, { asyncJob: true })
+      if (token !== acquirePollRef.current) return
+      if (result.report) {
+        setReport(result.report)
+        setAcquireJob(null)
+        return
+      }
+      const operationId = result.operation_id
+      if (!operationId) {
+        setError('Acquire queued without an operation id')
+        return
+      }
+      const final = await pollAcquireJob(operationId, (job) => {
+        if (token === acquirePollRef.current) setAcquireJob(job)
+      })
+      if (token !== acquirePollRef.current) return
+      if (final.failed) {
+        setError(final.error || final.message || 'Research acquire failed')
+        return
+      }
+      await load(selected)
+    } catch (reason) {
+      if (token !== acquirePollRef.current) return
+      setError(reason instanceof Error ? reason.message : 'Acquire failed')
+      setAcquireJob((prev) => (
+        prev
+          ? { ...prev, failed: true, error: reason instanceof Error ? reason.message : 'Acquire failed' }
+          : {
+            operationId: '',
+            status: 'FAILED',
+            stage: '',
+            message: '',
+            failed: true,
+            error: reason instanceof Error ? reason.message : 'Acquire failed',
+          }
+      ))
+    } finally {
+      if (token === acquirePollRef.current) setBusy('')
     }
   }
 
@@ -1202,26 +1412,19 @@ export function StockInvestigatorView(props: ViewProps) {
     if (selected) void load(selected)
   }, [selected, dashboard.scan.scanned_at])
 
+  useEffect(() => {
+    if (!selected || !report?.research_coverage?.needs_acquire) return
+    if (autoAcquired.current.has(selected)) return
+    autoAcquired.current.add(selected)
+    void runAcquire('missing_or_stale')
+  }, [selected, report?.research_coverage?.needs_acquire])
+
   const pick = (symbol: string) => {
     const clean = symbol.toUpperCase()
     setSelected(clean)
     markInvestigate(clean)
     setQuery(clean)
     setMatches([])
-  }
-
-  const runAcquire = async (mode: 'missing_or_stale' | 'all' = 'missing_or_stale') => {
-    if (!selected) return
-    setBusy(mode === 'all' ? 'ACQUIRE_DUE_DILIGENCE_ALL' : 'ACQUIRE_DUE_DILIGENCE')
-    try {
-      const result = await acquireDueDiligence(selected, mode)
-      if (result.report) setReport(result.report)
-      else await load(selected)
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Acquire failed')
-    } finally {
-      setBusy('')
-    }
   }
 
   return (
@@ -1255,6 +1458,7 @@ export function StockInvestigatorView(props: ViewProps) {
         report={report}
         loading={loading}
         error={error}
+        acquireJob={acquireJob}
         onResearchData={() => setActive('Research Data')}
         onRefresh={() => { if (selected) void load(selected) }}
         onAcquire={(mode) => void runAcquire(mode)}

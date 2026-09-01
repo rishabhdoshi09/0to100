@@ -34,10 +34,12 @@ describe('scanRunner semantics', () => {
   it('maps backend stages to friendly retail language', () => {
     expect(friendlyStageLabel('PREPARING_HISTORY', 'RUNNING')).toBe('Preparing market history…')
     expect(friendlyStageLabel('WARMING_HISTORY', 'RUNNING')).toBe('Warming official price cache…')
-    expect(friendlyStageLabel('SCANNING', 'RUNNING')).toBe('Scanning market candidates…')
-    expect(friendlyStageLabel('', 'SUCCEEDED')).toBe('Scan complete')
-    expect(friendlyStageLabel('', 'FAILED')).toBe('Scan failed')
-    expect(friendlyStageLabel('', 'CANCELLED')).toBe('Scan stopped')
+    expect(friendlyStageLabel('ASSEMBLING', 'RUNNING')).toBe('Assembling today’s market report…')
+    expect(friendlyStageLabel('WRITING', 'RUNNING')).toBe('Writing today’s pulse and wrap…')
+    expect(friendlyStageLabel('ACQUIRING', 'RUNNING')).toBe('Downloading filings and fundamentals…')
+    expect(friendlyStageLabel('', 'SUCCEEDED')).toBe('Complete')
+    expect(friendlyStageLabel('', 'FAILED')).toBe('Failed')
+    expect(friendlyStageLabel('', 'CANCELLED')).toBe('Stopped')
     expect(friendlyStageLabel('', 'PENDING', 20)).toBe('Waiting for the scan worker…')
   })
 
@@ -60,7 +62,9 @@ describe('scanRunner semantics', () => {
     expect(seedKindMatches('LONG_TERM_SCAN', 'MARKET_SCAN')).toBe(true)
     expect(seedKindMatches('LONG_TERM_SCAN', 'LONG_TERM_REFRESH')).toBe(true)
     expect(seedKindMatches('LONG_TERM_REFRESH', 'LONG_TERM_REFRESH')).toBe(true)
-    expect(seedKindMatches('MARKET_SCAN', 'LONG_TERM_REFRESH')).toBe(false)
+    expect(seedKindMatches('MARKET_REPORT', 'MARKET_REPORT')).toBe(true)
+    expect(seedKindMatches('NEWS_REFRESH', 'MARKET_REPORT')).toBe(true)
+    expect(seedKindMatches('MARKET_SCAN', 'MARKET_REPORT')).toBe(false)
   })
 
   it('builds progress line only with a real denominator', () => {
@@ -68,10 +72,10 @@ describe('scanRunner semantics', () => {
       .toBe('Scanning 487 of 1,842 stocks')
     expect(buildProgressLine(baseOperation({ progress_current: 10, progress_total: 0 }))).toBeNull()
     expect(buildProgressLine(baseOperation({
-      stage: 'PREPARING_HISTORY',
-      progress_current: 11,
-      progress_total: 500,
-    }))).toBeNull()
+      stage: 'LOADING_UNIVERSE',
+      progress_current: 0,
+      progress_total: 1842,
+    }))).toBe('Universe 1,842 NSE names')
   })
 
   it('never invents a percentage without totals', () => {
@@ -104,5 +108,12 @@ describe('scanRunner semantics', () => {
       result: { summary: { qualified: 26 }, records: 26 },
     })
     expect(qualifiedResultLine(op)).toBe('26 qualified ideas found')
+    expect(qualifiedResultLine(baseOperation({
+      result: { summary: { with_any_setup: 12 }, records: 40 },
+    }))).toBe('12 qualified ideas found')
+    expect(qualifiedResultLine(baseOperation({
+      kind: 'MARKET_REPORT',
+      result: { wrap_lines: 5, takeaways: 3 },
+    }))).toBe('5 report lines ready')
   })
 })

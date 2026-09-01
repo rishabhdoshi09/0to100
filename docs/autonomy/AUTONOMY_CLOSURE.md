@@ -1,5 +1,9 @@
 # Autonomy Closure — engineered operating contract
 
+> **Historical record** (baseline `cae4811` on `overhaul/evidence-lab`).
+> Not the current product path. Canonical launcher:
+> `bash scripts/run_quantterm_complete.sh` (Vite/React desk). Streamlit is not started.
+
 Baseline package: `cae4811` (`overhaul/evidence-lab`). This correction makes the dedicated
 `python main.py autonomy` process the single scheduler and mutation owner. Streamlit is a read-only
 control room that writes durable owner controls; it starts no brain, news loop, scanner, or worker.

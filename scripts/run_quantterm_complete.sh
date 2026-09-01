@@ -9,16 +9,47 @@ if [[ "${1:-}" == "--restart" || "${1:-}" == "--reuse" ]]; then
   shift || true
 fi
 
-if [[ ! -d venv ]]; then
-  echo "Missing venv. Create the QuantTerm Python environment first." >&2
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "[COMPLETE STACK] python3 is required." >&2
   exit 1
 fi
 
+if [[ ! -d venv ]]; then
+  echo "[COMPLETE STACK] Creating venv…"
+  python3 -m venv venv
+fi
+# shellcheck disable=SC1091
 source venv/bin/activate
 
+if ! python -c 'import fastapi, uvicorn, pypdf' >/dev/null 2>&1; then
+  echo "[COMPLETE STACK] Installing Python packages (first run takes a few minutes)…"
+  python -m pip install --upgrade pip wheel
+  python -m pip install -r requirements.txt
+fi
+
 if ! python -c 'import reportlab, fastapi, uvicorn' >/dev/null 2>&1; then
-  echo "[STACK] Installing professional report dependencies…"
+  echo "[COMPLETE STACK] Installing professional report dependencies…"
   python -m pip install 'reportlab>=4.2.0' 'fastapi>=0.115.0' 'uvicorn>=0.30.0'
+fi
+
+if [[ ! -d frontend/node_modules ]]; then
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "[COMPLETE STACK] npm is required for the desk UI. Install Node.js, then re-run." >&2
+    exit 1
+  fi
+  echo "[COMPLETE STACK] Installing frontend packages…"
+  (cd frontend && npm install)
+fi
+
+if [[ ! -f .env ]]; then
+  if [[ -f .env.example ]]; then
+    cp .env.example .env
+    chmod 600 .env 2>/dev/null || true
+    echo "[COMPLETE STACK] Wrote .env from .env.example. Put KITE_API_KEY and KITE_API_SECRET in it, then re-run."
+    exit 2
+  fi
+  echo "[COMPLETE STACK] Missing .env. Create it with KITE_API_KEY and KITE_API_SECRET." >&2
+  exit 2
 fi
 
 auth_rc=0
@@ -47,8 +78,12 @@ if [[ "$auth_rc" -eq 2 ]]; then
 fi
 
 if [[ "$auth_rc" -eq 1 ]]; then
-  echo "[COMPLETE STACK] Zerodha login is needed (once per trading day). Browser will open; paste the redirect URL here."
-  python main.py login
+  if [[ "${QT_NONINTERACTIVE:-}" == "1" || ! -t 0 ]]; then
+    echo "[COMPLETE STACK] Zerodha login is needed (once per trading day). Non-interactive run skipped it. Paper/EOD still work. Run: python main.py login"
+  else
+    echo "[COMPLETE STACK] Zerodha login is needed (once per trading day). Browser will open; paste the redirect URL here."
+    python main.py login
+  fi
 fi
 
 port_open() {

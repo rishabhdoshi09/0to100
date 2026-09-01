@@ -19,6 +19,7 @@ def test_terminal_controls_have_no_live_broker_or_order_action():
         "RUN_LONG_TERM_SCAN_NOW",
         "REFRESH_LONG_TERM_NOW",
         "REFRESH_NEWS_NOW",
+        "REFRESH_MARKET_REPORT_NOW",
         "REFRESH_FNO_NOW",
         "RUN_CYCLE_NOW",
         "REFRESH_DATA_NOW",
@@ -54,6 +55,7 @@ def test_market_controls_are_dispatched_outside_paper_autonomy():
         "RUN_LONG_TERM_SCAN_NOW": "MARKET_SCAN",
         "REFRESH_LONG_TERM_NOW": "LONG_TERM_REFRESH",
         "REFRESH_NEWS_NOW": "NEWS_REFRESH",
+        "REFRESH_MARKET_REPORT_NOW": "MARKET_REPORT",
         "REFRESH_FNO_NOW": "FNO_REFRESH",
         "REFRESH_DATA_NOW": "DATA_PREPARE",
     }

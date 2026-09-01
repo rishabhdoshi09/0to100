@@ -422,4 +422,6 @@ TEXTILES = _real_economy(
 AGRI = _real_economy(
     extra("volume_growth", "Volume growth", ("volume growth",), weight=8),
 )
-GENERIC = (_GROWTH_SALES, _OPM, _PAT, _CFO, *_OWN)
+GENERIC = (
+    _GROWTH_SALES, _OPM, _PAT, _EPS, _CFO, _ROE, _ROCE, _ROA, _DEBT, *_OWN,
+)

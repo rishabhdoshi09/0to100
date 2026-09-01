@@ -593,14 +593,63 @@ def stock_investigator_suggest(q: str = "", limit: int = 8) -> dict[str, Any]:
 
 
 @app.post("/api/due-diligence/{symbol}/acquire")
-def acquire_due_diligence(symbol: str, mode: str = "missing_or_stale") -> dict[str, Any]:
-    """Download missing/stale datasets (or all, if mode=all), persist, then rebuild Investigate from files."""
+def acquire_due_diligence(symbol: str, mode: str = "missing_or_stale", async_job: bool = False) -> dict[str, Any]:
+    """Download missing/stale datasets (or all, if mode=all), persist, then rebuild Investigate from files.
+
+    ``async_job=true`` queues a durable DUE_DILIGENCE_ACQUIRE operation so the desk
+    can show progress and auto-refresh. Default stays synchronous for callers that
+    expect the rebuilt report in the same response.
+    """
     try:
         from product.due_diligence import build_due_diligence
         from product.due_diligence.acquire import acquire_symbol
 
         clean = clean_symbol(symbol)
         force_all = str(mode or "").lower() in {"all", "force", "refresh_all"}
+        if async_job:
+            from operations.market_ops import DUE_DILIGENCE_ACQUIRE, LANES
+            from operations.store import OperationStore
+            import terminal_api as core
+            store = OperationStore(core.OPS_DB)
+            try:
+                store.recover_dead_running()
+            except Exception:
+                pass
+            for item in store.active():
+                payload = item.get("payload") or {}
+                if item.get("kind") != DUE_DILIGENCE_ACQUIRE:
+                    continue
+                if str(payload.get("symbol") or "").upper() == clean:
+                    core._ensure_ops_worker(wait=False)
+                    return {
+                        "accepted": True,
+                        "symbol": clean,
+                        "mode": "all" if force_all else "missing_or_stale",
+                        "async": True,
+                        "operation_id": item.get("operation_id"),
+                        "operation_status": item.get("status"),
+                        "created": False,
+                        "places_orders": False,
+                    }
+            operation, created = store.enqueue(
+                DUE_DILIGENCE_ACQUIRE,
+                lane=LANES[DUE_DILIGENCE_ACQUIRE],
+                requested_by="terminal",
+                payload={"symbol": clean, "force": force_all, "mode": "all" if force_all else "missing_or_stale"},
+                priority=100,
+                deduplicate=False,
+            )
+            core._ensure_ops_worker(wait=False)
+            return {
+                "accepted": True,
+                "symbol": clean,
+                "mode": "all" if force_all else "missing_or_stale",
+                "async": True,
+                "operation_id": operation.get("operation_id"),
+                "operation_status": operation.get("status"),
+                "created": created,
+                "places_orders": False,
+            }
         acquired = acquire_symbol(clean, force=force_all)
         return {
             "accepted": True,

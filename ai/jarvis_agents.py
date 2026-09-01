@@ -778,10 +778,10 @@ class SystemAgent(BaseJarvisAgent):
             return {"error": str(e)}
 
     def _restart_desk(self) -> dict:
-        """Desk is Vite/React. Restart it with bash scripts/run_desk.sh."""
+        """Desk is Vite/React. Restart it with bash scripts/run_quantterm_complete.sh."""
         return {
             "success": False,
-            "error": "The product desk is Vite/React. Restart with: bash scripts/run_desk.sh then open http://127.0.0.1:5173",
+            "error": "The product desk is Vite/React. Restart with: bash scripts/run_quantterm_complete.sh then open http://127.0.0.1:5173",
         }
 
     def _pip_install(self, package: str) -> dict:

@@ -20,6 +20,10 @@ class IntelligenceCycleResult:
     strategies_evaluated: list = field(default_factory=list)
     signals_generated: list = field(default_factory=list)
     signals_rejected: list = field(default_factory=list)
+    # One terminal accounting row for every generated signal.  This is populated
+    # after the authoritative cycle finishes so taken, blocked and otherwise
+    # unselected opportunities cannot silently disappear from learning.
+    decision_outcomes: list = field(default_factory=list)
     unsupported: list = field(default_factory=list)
     events_emitted: int = 0
     cards_created: list = field(default_factory=list)     # strategy ids

@@ -1,8 +1,8 @@
 """QuantTerm entrypoint. The product desk is Vite/React, not Streamlit.
 
 Start: bash scripts/run_quantterm_complete.sh
-Also: bash scripts/run_desk.sh
 Open:  http://127.0.0.1:5173
+scripts/run_desk.sh is a compatibility wrapper that execs the same command.
 """
 from __future__ import annotations
 

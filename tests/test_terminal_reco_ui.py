@@ -118,6 +118,9 @@ def test_market_reports_renders_sourced_desk_note_not_a_blog():
     assert "Stock Intelligence" in src
     assert "From the last market scan" in src
     assert "Scan market" in src
+    assert "Build report" in src
+    assert "bootstrapProduct" in src
+    assert "needs_refresh" in src
     assert "DailyWrapList" in src
     assert "Here's the wrap of the day" in (ROOT / "frontend" / "src" / "dailyWrap.tsx").read_text(encoding="utf-8") or "Here&apos;s the wrap of the day" in (ROOT / "frontend" / "src" / "dailyWrap.tsx").read_text(encoding="utf-8")
     radar = (ROOT / "frontend" / "src" / "marketRadarViews.tsx").read_text(encoding="utf-8")

@@ -18,13 +18,17 @@ minutes, turns each stock into a graded "setup," filters those setups through
 quality gates and a **measured Expected-Value** ranking (learned from the
 system's own past trade outcomes, not hunches), sizes and risk-checks each
 trade, executes with an exchange-side stop+target exit, and then tracks every
-outcome to recalibrate itself. The product UI is the **Vite/React desk**
-(`bash scripts/run_desk.sh` → `http://127.0.0.1:5173`) with a two-way
-**Telegram** bot and an LLM analyst ("JARVIS"). It runs 24/7 as a background
-service. Everything is narrated in plain Hinglish (Hindi-English mix) because
-that's the primary user's language.
+outcome to recalibrate itself. The canonical product UI is the **Vite/React desk**
+(`bash scripts/run_quantterm_complete.sh` → `http://127.0.0.1:5173`). One command
+owns the local stack (desk, terminal API, report API, autonomy, and market-ops
+worker). Streamlit `app.py` is not the product path and is not started. A two-way
+**Telegram** bot and an LLM analyst ("JARVIS") remain optional companions. It
+runs 24/7 as a background service. Everything is narrated in plain Hinglish
+(Hindi-English mix) because that's the primary user's language.
 
-**Branch of record:** `overhaul/evidence-lab`.
+**Canonical launcher:** `bash scripts/run_quantterm_complete.sh`.
+Historical research branches such as `overhaul/evidence-lab` are not the
+current product path.
 
 ---
 
@@ -327,13 +331,15 @@ names the hit sectors — it never forces or blocks a trade on its own.
 
 ## 10. Interfaces
 
-- **Streamlit app (`app.py`)** — the terminal. Pages: **Today** (top picks),
-  **Daily Pulse** (newsletter + Brain hero + Report Card + Coach), **Stocks**
-  (smart scanner + trade ticket + positions + backtest panel), **Options** (a
-  flow scanner rewritten in plain language — it translates PCR/IV/OI-wall jargon
-  into "big money leaning up/down" + three tradeable levels: **Ceiling**
-  (resistance), **Floor** (support), **Magnet** (max pain)), **Portfolio**, and
-  **JARVIS**. Also a Terminal page for charts.
+- **Vite/React desk (`frontend/`, `http://127.0.0.1:5173`)** — the only product
+  UI. Start it with **one command**: `bash scripts/run_quantterm_complete.sh`.
+  Pages: **Home**, **Market Scanner** (click starts a real `MARKET_SCAN` job),
+  **Recommendations** (evidence families from the saved scan; missing scan
+  queues the prerequisite job), **Market Reports** (queues a real report job
+  when today's wrap is missing), **Stock Intelligence** (workspace first, then
+  acquire/refresh of missing research), plus long-term, radar, paper and system
+  health. Click → freshness check → durable backend job → visible progress →
+  auto-refresh. Empty stays empty. No invented prices or headlines.
 - **Telegram bot** — proactive pushes (prime setups, breakout-sniper alerts,
   morning pulse, Kite-login reminder) + two-way commands: `/status`, `/trade`
   (place the best setup now, paper), `/pause` & `/resume`, `/aggressive`
@@ -346,13 +352,18 @@ names the hit sectors — it never forces or blocks a trade on its own.
 
 ---
 
-## 11. Background daemons (started once in `app.py`)
+## 11. Background daemons (started by the one-command stack)
 
-- `auto_scan._worker` — the heartbeat. Every 15 min in market hours: scan →
-  sector heat → conviction → edge → live overlay → Telegram push. Plus morning
-  pulse (8:30–10), Kite-login reminder (8:30–9:15), nightly backtest
-  (off-hours), weekly coach (Sun 17:00+), and market-hours position/watchlist
-  alerts + the breakout sniper.
+`bash scripts/run_quantterm_complete.sh` owns the process tree. It does **not**
+start Streamlit.
+
+- `scripts/local_stack.py` / `scripts/run_quantterm.sh` — Vite desk on :5173,
+  FastAPI terminal (`terminal_product_api`) on :8765, report API on :8766,
+  `python -u main.py autonomy`, and the market-operations worker that runs
+  `MARKET_SCAN`, `MARKET_REPORT`, news, F&O and due-diligence acquire jobs.
+- `auto_scan` / market-ops lanes — whole-market scan, news refresh, report
+  assembly and Investigate acquire. User clicks enqueue the same durable jobs;
+  startup auto-scan is helpful but not the only way a scan can run.
 - `telegram_actions._listener` — long-polls for button taps/commands; chat-id
   guarded to the single authorised user.
 
@@ -370,8 +381,8 @@ MAX_POSITION_SIZE_PCT=0.10  MAX_OPEN_POSITIONS=5
 ```
 
 **Daily ops:** (1) morning `python main.py login` (Telegram nags at 8:30 if
-forgotten — the Kite access token expires daily). (2) `bash scripts/run_desk.sh`
-then open `http://127.0.0.1:5173` — everything else is automatic. (3) For 24/7,
+forgotten — the Kite access token expires daily). (2) `bash scripts/run_quantterm_complete.sh`
+then open `http://127.0.0.1:5173` — one command owns the desk and APIs. (3) For 24/7,
 the Mac runs a sleep-proof launchd service (`deploy/setup_mac.sh`), or a
 Raspberry Pi / VPS (`deploy/setup_server.sh`); see `docs/ALWAYS_ON.md`.
 

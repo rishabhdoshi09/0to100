@@ -1,8 +1,18 @@
 # QuantTerm Terminal Branch Reconciliation
 
-## Branch of record
+## Canonical product path
 
-`agent/quantterm-terminal-ui` remains the primary retail product branch. The dedicated React terminal is the main user experience; Streamlit remains a fallback and engineering observer.
+The product UI is the Vite/React desk. One command owns the local stack:
+
+```bash
+bash scripts/run_quantterm_complete.sh
+```
+
+Then open `http://127.0.0.1:5173`. Streamlit is not started and is not a
+fallback. `scripts/run_desk.sh` only execs the complete launcher.
+Historical branches below (`overhaul/evidence-lab`,
+`agent/quantterm-terminal-ui`) record where ideas came from; they are not
+the current launcher.
 
 ## What was selectively merged
 

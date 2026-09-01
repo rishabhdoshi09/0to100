@@ -1,5 +1,9 @@
 # Permanent Product and Data Completion
 
+> **Historical record** (branch `overhaul/evidence-lab` at the time of writing).
+> Not the current product path. Canonical launcher:
+> `bash scripts/run_quantterm_complete.sh` (Vite/React desk). Streamlit is not started.
+
 Record of the permanent QuantTerm retail terminal and canonical data platform work on `overhaul/evidence-lab`.
 
 ## Implementation baseline

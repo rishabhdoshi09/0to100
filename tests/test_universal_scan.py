@@ -88,6 +88,20 @@ def test_run_long_term_scan_uses_saved_scan_and_skips_ohlcv_walk(monkeypatch):
         "scan.long_term_service._prepare_official_history",
         lambda: (_ for _ in ()).throw(AssertionError("history walk must not run")),
     )
+
+    # Guard the three boundaries separately so a full-suite failure identifies
+    # whether store resolution, projection, or orchestration drifted.
+    import product.scan_store as scan_store
+    import scan.long_term_service as long_term_service
+
+    saved = scan_store.load_scan()
+    assert [row["symbol"] for row in saved["records"]] == ["AAA", "BBB", "CCC"]
+    direct = long_term_service.technical_rows_from_market_scan(
+        saved, min_score=45, top=60, include_watch=True, enrich=False,
+    )
+    assert [row["symbol"] for row in direct] == ["AAA", "BBB"]
+    assert run_long_term_scan is long_term_service.run_long_term_scan
+
     report = run_long_term_scan(
         save=False,
         fundamental_provider=lambda _s, _r: None,
@@ -95,8 +109,8 @@ def test_run_long_term_scan_uses_saved_scan_and_skips_ohlcv_walk(monkeypatch):
     )
     assert called["walk"] == 0
     assert report.ok
-    assert {r["symbol"] for r in report.payload["records"]} == {"AAA", "BBB"}
     assert report.payload["technical_from_saved_scan"] is True
+    assert {r["symbol"] for r in report.payload["records"]} == {"AAA", "BBB"}
 
 
 def test_market_scan_save_writes_long_term_overlay(monkeypatch, tmp_path):
@@ -274,7 +288,9 @@ def test_desk_ui_uses_one_scan_now_for_every_setup():
     assert "Refresh funds" in reco
     assert "keepRicherMemory" in reco
     assert "Refresh long-term" not in reco
-    assert "Run one market scan" in reco
+    # Contract the actual mechanism, not brittle button copy: Recommendations
+    # must invoke the same canonical market-scan runner used by the rest of desk.
+    assert "marketScan.start()" in reco
     assert "mode === 'Long-Term' ? longTermScan : marketScan" not in experience
     assert "Run long-term scan" not in experience
     assert "RUN_SCAN_NOW" in views

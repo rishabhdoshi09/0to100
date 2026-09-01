@@ -1,5 +1,10 @@
 # QuantTerm Retail Runtime — Production-Readiness Sign-off
 
+> **Historical record** from the overhaul era. Not the current product path.
+> Canonical launcher today: `bash scripts/run_quantterm_complete.sh`
+> (Vite/React desk). Streamlit is not started. `scripts/run_desk.sh` only
+> execs that complete launcher.
+
 Scope: **product/runtime integrity** of the retail application — not proof of trading edge. Answers:
 *can a retail user open QuantTerm, understand the market state, see what was evaluated, tell
 "no opportunity" from "system failure," and trust that every displayed conclusion comes from real,

@@ -1,0 +1,1192 @@
+{
+  "issue": 92,
+  "title": "QuantTerm live terminal Definition of Done",
+  "api_base": "http://127.0.0.1:8765",
+  "git_sha": "4542a40db17aa4aa7a9187479b4facc3978fa797",
+  "git_sha_short": "4542a40",
+  "git_branch": "cursor/live-terminal-contract-858e",
+  "git_status_short": "",
+  "tested_at_utc": "2026-08-28T03:12:48Z",
+  "dirty_worktree": false,
+  "gates": [
+    {
+      "id": "0p",
+      "name": "Proof certifies a clean exact commit SHA",
+      "pass": true,
+      "detail": "sha=4542a40db17aa4aa7a9187479b4facc3978fa797 branch=cursor/live-terminal-contract-858e dirty=False"
+    },
+    {
+      "id": "0",
+      "name": "API and market-operations worker are online",
+      "pass": true,
+      "detail": "worker_pid=27837 running=True available=True"
+    },
+    {
+      "id": "6a",
+      "name": "Repeated Scan Now clicks reuse the pending/running job",
+      "pass": true,
+      "detail": "first created=True id=68fa91cee14c\u2026 second created=False id=68fa91cee14c\u2026"
+    },
+    {
+      "id": "1",
+      "name": "Market Scanner Scan Now runs a real job and rows appear",
+      "pass": true,
+      "detail": "status=SUCCEEDED elapsed=4.52s approved_universe=2549 scanned=2335 universe_size=2335 progress=2335/2335 qualified=786 dashboard_rows=786"
+    },
+    {
+      "id": "2",
+      "name": "Recommendations resolve from live/saved evidence (or explain the zero-result)",
+      "pass": true,
+      "detail": "checked_rows=97 high=0 good=62 watch=35 empty_detail=Checked 97 scored names across Business Quality, Catalyst, Fundamental Change, Market Context, Participation, Price Leadership, Structure. Independent evidence families did not agree on a ready, non-extended high-convict"
+    },
+    {
+      "id": "6b",
+      "name": "Repeated Market Reports refresh clicks reuse the pending/running job",
+      "pass": true,
+      "detail": "first created=True id=dbee9a249b45\u2026 second created=False"
+    },
+    {
+      "id": "3",
+      "name": "Market Reports generates a real report that then appears",
+      "pass": true,
+      "detail": "status=SUCCEEDED elapsed=0.12s takeaways=3 wrap=5 reports=2 result={'as_of_ist': '2026-08-28', 'takeaways': 3, 'reports': 2, 'wrap_lines': 5, 'wrap_sourced': 5, 'scan_rows': 786, 'needs_refresh': False, 'missing_lanes': [], 'news': {}}"
+    },
+    {
+      "id": "6c",
+      "name": "Repeated Stock Intelligence acquire clicks reuse the active TCS job",
+      "pass": true,
+      "detail": "first created=True status=PENDING id=063dfec28338\u2026 second created=False id=063dfec28338\u2026"
+    },
+    {
+      "id": "4",
+      "name": "Stock Intelligence loads TCS; acquire/refresh is a real job and the page updates",
+      "pass": true,
+      "detail": "acquire=SUCCEEDED elapsed=3.17s framework=it quality=Unmeasured score=None score_coverage=0.0 decision_coverage=0.0"
+    },
+    {
+      "id": "5",
+      "name": "Failed/blocked job exposes a human-readable blocker and Retry creates a new job",
+      "pass": true,
+      "detail": "kind=FNO_REFRESH status=BLOCKED code=FNO_UNIVERSE_UNAVAILABLE blocker=No current stock F&O underlyings could be mapped; Zerodha login or instrument cache is required retry_created=True new_id=3f3307fdf065\u2026"
+    },
+    {
+      "id": "7",
+      "name": "Conclusions preserve coverage/honesty (missing evidence is Unmeasured, not automatically bad)",
+      "pass": true,
+      "detail": "quality_label=Unmeasured score=None score_coverage=0.0 named=[{'id': 'piotroski_f', 'label_text': 'Unmeasured', 'available': False}, {'id': 'altman_z', 'label_text': 'Unmeasured', 'available': False}, {'id': 'beneish_m', 'label_text': 'Unmeasured', 'available': False}, {'id': 'dupont_roe', 'label_text': 'Unmeasured', 'available': False}]"
+    },
+    {
+      "id": "6d",
+      "name": "After a succeeded scan, Retry/Scan Now creates a new job rather than cloning a finished one",
+      "pass": true,
+      "detail": "new_created=True new_id=e3b09adedf43\u2026 old=68fa91cee14c\u2026"
+    }
+  ],
+  "evidence": {
+    "meta": {
+      "git_sha": "4542a40db17aa4aa7a9187479b4facc3978fa797",
+      "git_sha_short": "4542a40",
+      "git_branch": "cursor/live-terminal-contract-858e",
+      "git_status_short": "",
+      "tested_at_utc": "2026-08-28T03:12:48Z"
+    },
+    "api_base": "http://127.0.0.1:8765",
+    "operations_runtime": {
+      "available": true,
+      "running": true,
+      "worker_pid": 27837,
+      "counts": {
+        "BLOCKED": 3,
+        "FAILED": 2,
+        "SUCCEEDED": 18
+      }
+    },
+    "scan_duplicate": {
+      "first": {
+        "accepted": true,
+        "control": "RUN_SCAN_NOW",
+        "operation_id": "68fa91cee14c48649447ab89f0a1cdd6",
+        "operation_status": "PENDING",
+        "created": true,
+        "priority": 100,
+        "_http_status": 200
+      },
+      "second": {
+        "accepted": true,
+        "control": "RUN_SCAN_NOW",
+        "operation_id": "68fa91cee14c48649447ab89f0a1cdd6",
+        "operation_status": "PENDING",
+        "created": false,
+        "priority": 100,
+        "_http_status": 200
+      }
+    },
+    "scan_terminal": {
+      "operation_id": "68fa91cee14c48649447ab89f0a1cdd6",
+      "kind": "MARKET_SCAN",
+      "status": "SUCCEEDED",
+      "created": null,
+      "stage": "SUCCEEDED",
+      "message": "MARKET_SCAN completed in 4.5s",
+      "error_code": "",
+      "error_message": "",
+      "progress_current": 2335,
+      "progress_total": 2335,
+      "result": {
+        "status": "SUCCEEDED",
+        "payload": {
+          "keys": [
+            "approved_universe",
+            "desk_overlays",
+            "long_term_overlay",
+            "qualified_rows",
+            "records",
+            "scan_status",
+            "scanned",
+            "scanned_at",
+            "schema_version",
+            "source_snapshot_id",
+            "summary",
+            "universe_size"
+          ],
+          "n_keys": 12
+        },
+        "approved_universe": 2549,
+        "universe_size": 2335,
+        "scanned": 2335,
+        "exclusions": [],
+        "source_snapshot_id": "",
+        "error_code": "",
+        "error_message": "",
+        "summary": {
+          "with_any_setup": 786,
+          "qualified": 786,
+          "momentum": 137,
+          "fno_momentum": 0,
+          "near_breakout": 63,
+          "ready_to_trade": 255,
+          "extended": 305
+        },
+        "records": 786,
+        "history": {
+          "ready": true,
+          "symbols": 2874,
+          "sessions": 764,
+          "latest_date": "2026-08-27",
+          "csv_files": 764,
+          "csv_latest_date": "2026-08-27",
+          "cache_exists": true,
+          "cache_path": "/workspace/logs/bhav/store_cache.pkl",
+          "bhavcopy_dir": "/workspace/logs/bhav",
+          "minimum_sessions": 60,
+          "source": "official_nse_bhavcopy"
+        },
+        "telegram": {
+          "setup": 0,
+          "prebreakout": 0,
+          "briefing": 0,
+          "eod": 0,
+          "reason": "not_configured",
+          "last_error": "not_configured",
+          "sniper_watch": 256,
+          "desk": {
+            "recommendations": {
+              "sent": "bool",
+              "reason": "str"
+            },
+            "market_report": {
+              "sent": "bool",
+              "reason": "str"
+            }
+          }
+        },
+        "long_term_overlay": {
+          "status": "SUCCEEDED",
+          "records": 40,
+          "error_code": ""
+        }
+      },
+      "elapsed_s": 4.52
+    },
+    "scan_records": 786,
+    "scan_dashboard_keys": [
+      "_http_status",
+      "autonomy",
+      "conviction",
+      "daily_wrap",
+      "data",
+      "fno",
+      "generated_at",
+      "long_term",
+      "market",
+      "news",
+      "operations",
+      "paper",
+      "scan",
+      "scan_progress"
+    ],
+    "scan_counts": {
+      "approved_universe": 2549,
+      "scanned": 2335,
+      "universe_size": 2335,
+      "qualified_rows": 786,
+      "progress_total": 2335,
+      "dashboard_rows": 786
+    },
+    "recommendations": {
+      "high_conviction_count": 0,
+      "good_setup_count": 62,
+      "watch_count": 35,
+      "checked_rows": 97,
+      "empty_high_conviction": true,
+      "empty_detail": "Checked 97 scored names across Business Quality, Catalyst, Fundamental Change, Market Context, Participation, Price Leadership, Structure. Independent evidence families did not agree on a ready, non-extended high-conviction setup. Empty is a successful output \u2014 the desk does not invent a Buy list. Good setups: 62; watch: 35.",
+      "category_counts": [
+        {
+          "id": "wealth_builders",
+          "count": 0
+        },
+        {
+          "id": "super_trends",
+          "count": 17
+        },
+        {
+          "id": "momentum_breakouts",
+          "count": 40
+        },
+        {
+          "id": "recovery_setups",
+          "count": 40
+        }
+      ]
+    },
+    "report_duplicate": {
+      "first": {
+        "accepted": true,
+        "control": "REFRESH_MARKET_REPORT_NOW",
+        "operation_id": "dbee9a249b45462987743c4fe2f52518",
+        "operation_status": "PENDING",
+        "created": true,
+        "priority": 100,
+        "_http_status": 200
+      },
+      "second": {
+        "accepted": true,
+        "control": "REFRESH_MARKET_REPORT_NOW",
+        "operation_id": "dbee9a249b45462987743c4fe2f52518",
+        "operation_status": "PENDING",
+        "created": false,
+        "priority": 100,
+        "_http_status": 200
+      }
+    },
+    "report_terminal": {
+      "operation_id": "dbee9a249b45462987743c4fe2f52518",
+      "kind": "MARKET_REPORT",
+      "status": "SUCCEEDED",
+      "created": null,
+      "stage": "SUCCEEDED",
+      "message": "MARKET_REPORT completed in 0.1s",
+      "error_code": "",
+      "error_message": "",
+      "progress_current": 0,
+      "progress_total": 0,
+      "result": {
+        "as_of_ist": "2026-08-28",
+        "takeaways": 3,
+        "reports": 2,
+        "wrap_lines": 5,
+        "wrap_sourced": 5,
+        "scan_rows": 786,
+        "needs_refresh": false,
+        "missing_lanes": [],
+        "news": {}
+      },
+      "elapsed_s": 0.12
+    },
+    "market_reports_workspace": {
+      "as_of_ist": "2026-08-28",
+      "takeaways": [
+        "NIFTY 50 \u25bc -0.48% at 24,091",
+        "BANK NIFTY \u25bc -0.47% at 57,510",
+        "IMAGICAA top gainer (+20.0%)"
+      ],
+      "wrap_lines": [
+        {
+          "id": "session_indices",
+          "text": "Indian markets extended losses for the second straight session, with the Nifty falling 0.5% to 24,091, slipping below 24,100, while Bank Nifty fell 0.5%. Pharma stocks ended positive, while FMCG, Auto and IT ended lower.",
+          "source": "Official NSE session",
+          "official": true,
+          "url": "",
+          "symbols": []
+        },
+        {
+          "id": "fbeac90c1f96ec6143e0abad",
+          "text": "NMDC Limited fell 3%. NSLNISP: Significant increase in volume has been observed in NMDC Steel Limited. The Exchange, in order to ensure that investors have latest relevant information about the company and to inform the market place so that the interest of the investors is safeguarded, has written to the company. The response from the company is awaited. Spurt in Volume",
+          "source": "NSE Corporate Announcements",
+          "official": true,
+          "url": "https://nsearchives.nseindia.com/corporate/-",
+          "symbols": [
+            "NMDC",
+            "NSLNISP",
+            "SALSTEEL",
+            "VGUARD"
+          ]
+        },
+        {
+          "id": "9c5d131548d937bd78c1030e",
+          "text": "Performance of Private Corporate Business Sector during Q1:2026-27 Today, the Reserve Bank released the data on performance of the private corporate business sector during the first quarter of 2026-27, drawn from abridged quarterly financial results of 3,247 listed non-government non-financial companies 1 . This summary position also includes comparable data for Q4:2025-26 and Q1:2025-26 to enable study of sequential (q-o-q) and annual (y-o-y) change (web-link: https://data.r",
+          "source": "PRESS RELEASES FROM RBI",
+          "official": true,
+          "url": "https://www.rbi.org.in/scripts/BS_PressReleaseDisplay.aspx?prid=63452",
+          "symbols": [
+            "GLOBAL",
+            "JMFINANCIL",
+            "RETAIL",
+            "V2RETAIL"
+          ]
+        },
+        {
+          "id": "eb8885435259e83c0a116190",
+          "text": "RBI imposes monetary penalty on Jalna District Central Co-operative Bank Ltd., Maharashtra The Reserve Bank of India (RBl) has, by an order dated August 25, 2026, imposed a monetary penalty of \u20b950,000 (Rupees Fifty Thousand only) on Jalna District Central Co-operative Bank Ltd., Maharashtra (the bank), for non-compliance with certain directions issued by RBI on 'Membership of Credit Information Companies (CICs) by Co-operative Banks' and 'Know Your Customer (KYC)'. This penal",
+          "source": "PRESS RELEASES FROM RBI",
+          "official": true,
+          "url": "https://www.rbi.org.in/scripts/BS_PressReleaseDisplay.aspx?prid=63453",
+          "symbols": [
+            "GVPIL",
+            "JMFINANCIL",
+            "TVVISION"
+          ]
+        },
+        {
+          "id": "b5cdb8fd8c506b5f3e7dc595",
+          "text": "From Gift Nifty to Fed chair speech, crude oil prices: 7 key things that changed for Indian stock market overnight Gift Nifty was trading around the 24,251 level, down nearly 30.90 points from the Nifty futures\u2019 previous close, indicating a positive start for the Indian stock market indices.",
+          "source": "mint - markets",
+          "official": false,
+          "url": "https://www.livemint.com/market/stock-market-news/from-gift-nifty-to-fed-chair-speech-crude-oil-prices-7-key-things-that-changed-for-indian-stock-market-overnight-11787880435786.html",
+          "symbols": [
+            "FEL",
+            "FELDVR",
+            "OIL"
+          ]
+        }
+      ],
+      "wrap_sourced": 5,
+      "report_count": 2,
+      "needs_refresh": false,
+      "missing_lanes": []
+    },
+    "tcs_acquire_duplicate": {
+      "first": {
+        "accepted": true,
+        "symbol": "TCS",
+        "mode": "missing_or_stale",
+        "async": true,
+        "operation_id": "063dfec2833845b0894ff9fd70ce4489",
+        "operation_status": "PENDING",
+        "created": true,
+        "places_orders": false,
+        "_http_status": 200
+      },
+      "second": {
+        "accepted": true,
+        "symbol": "TCS",
+        "mode": "missing_or_stale",
+        "async": true,
+        "operation_id": "063dfec2833845b0894ff9fd70ce4489",
+        "operation_status": "PENDING",
+        "created": false,
+        "places_orders": false,
+        "_http_status": 200
+      }
+    },
+    "tcs_acquire_terminal": {
+      "operation_id": "063dfec2833845b0894ff9fd70ce4489",
+      "kind": "DUE_DILIGENCE_ACQUIRE",
+      "status": "SUCCEEDED",
+      "created": null,
+      "stage": "SUCCEEDED",
+      "message": "DUE_DILIGENCE_ACQUIRE completed in 3.2s",
+      "error_code": "",
+      "error_message": "",
+      "progress_current": 0,
+      "progress_total": 0,
+      "result": {
+        "schema_version": 3,
+        "symbol": "TCS",
+        "acquired_at": "2026-08-28T03:12:55.764856+00:00",
+        "inspected_at": "2026-08-28T03:12:55.764856+00:00",
+        "method": "autonomy_download",
+        "mode": "missing_or_stale",
+        "to_fetch": [
+          "valuation",
+          "peer_data",
+          "quarterly_results",
+          "shareholding",
+          "promoter_pledge",
+          "recent_news"
+        ],
+        "skipped": [
+          "nse_filings",
+          "nse_annual",
+          "option_chain"
+        ],
+        "not_an_llm": true,
+        "kpis": {},
+        "guidance": [
+          {
+            "tone": "Neutral",
+            "excerpt": "Exchange regarding a press release dated January 12, 2026, titled \"AI-led Growth and Strong Order Book highlight TCS Q3\". Press Release",
+            "excerpts": [
+              "str"
+            ],
+            "source": "NSE announcement",
+            "source_url": "https://www.nseindia.com/api/corporate-announcements?index=equities&symbol=TCS",
+            "source_date": "",
+            "method": "rule_extract",
+            "not_an_llm": true
+          },
+          {
+            "tone": "Constructive",
+            "excerpt": "Limited has informed the Exchange regarding a press release dated July 10, 2025, titled \"Robust Order Book and Operational Resilience mark TCS Q1\". Press Release",
+            "excerpts": [
+              "str"
+            ],
+            "source": "NSE announcement",
+            "source_url": "https://www.nseindia.com/api/corporate-announcements?index=equities&symbol=TCS",
+            "source_date": "",
+            "method": "rule_extract",
+            "not_an_llm": true
+          },
+          {
+            "tone": "Neutral",
+            "excerpt": "April 10, 2025, titled \"TCS Crosses $30 Billion Revenue Milestone, Strong Order Book Reinforces Confidence in Long-Term Resilience\". Press Release",
+            "excerpts": [
+              "str"
+            ],
+            "source": "NSE announcement",
+            "source_url": "https://www.nseindia.com/api/corporate-announcements?index=equities&symbol=TCS",
+            "source_date": "",
+            "method": "rule_extract",
+            "not_an_llm": true
+          }
+        ],
+        "commentary": [],
+        "order_book": [],
+        "segments": [],
+        "option_chain": {
+          "available": false,
+          "acquired": false,
+          "not_a_signal": true,
+          "places_orders": false
+        },
+        "announcements": [
+          {
+            "headline": "Tata Consultancy Services Limited has informed the Exchange about Schedule of meet Analysts/Institutional Investor Meet/Con. Call Updates",
+            "url": "https://www.nseindia.com/api/corporate-announcements?index=equities&symbol=TCS",
+            "source": "NSE announcements",
+            "source_kind": "exchange"
+          },
+          {
+            "headline": "Tata Consultancy Services Limited has informed the Exchange about Bagging/Receiving of orders/contracts Bagging/Receiving of orders/contracts",
+            "url": "https://www.nseindia.com/api/corporate-announcements?index=equities&symbol=TCS",
+            "source": "NSE announcements",
+            "source_kind": "exchange"
+          },
+          {
+            "headline": "Tata Consultancy Services Limited has informed the Exchange regarding a press release dated August 24, 2026, titled \"TCS and Porsche AG Partner to Accelerate the Future of AI-Powered Mobility\". Press Release",
+            "url": "https://www.nseindia.com/api/corporate-announcements?index=equities&symbol=TCS",
+            "source": "NSE announcements",
+            "source_kind": "exchange"
+          },
+          {
+            "headline": "Tata Consultancy Services Limited has informed the Exchange about Acquisition Acquisition",
+            "url": "https://www.nseindia.com/api/corporate-announcements?index=equities&symbol=TCS",
+            "source": "NSE announcements",
+            "source_kind": "exchange"
+          },
+          {
+            "headline": "Tata Consultancy Services Limited has informed the Exchange regarding 'Press Release - TCS launches Agentic AI platform to transform drug development'. Updates",
+            "url": "https://www.nseindia.com/api/corporate-announcements?index=equities&symbol=TCS",
+            "source": "NSE announcements",
+            "source_kind": "exchange"
+          },
+          {
+            "headline": "Tata Consultancy Services Limited has informed the Exchange regarding 'Pursuant to Regulation 30 read with Schedule III Part A Para A of the Securities and Exchange Board of India (Listing Obligations and Disclosure Requirements) Regulations, 2015, we enclose the communication se",
+            "url": "https://www.nseindia.com/api/corporate-announcements?index=equities&symbol=TCS",
+            "source": "NSE announcements",
+            "source_kind": "exchange"
+          },
+          {
+            "headline": "Tata Consultancy Services Limited has informed the Exchange regarding 'Press Release - TCS and Vodafone join forces to drive AI-led digital transformation for UK enterprises'. Updates",
+            "url": "https://www.nseindia.com/api/corporate-announcements?index=equities&symbol=TCS",
+            "source": "NSE announcements",
+            "source_kind": "exchange"
+          },
+          {
+            "headline": "The Exchange has sought clarification from Tata Consultancy Services Limited with respect to recent news item captioned N Chandrasekaran may step down as Tata Sons chairman ahead of AGM. The response from the Company is attached. News Verification",
+            "url": "https://www.nseindia.com/api/corporate-announcements?index=equities&symbol=TCS",
+            "source": "NSE announcements",
+            "source_kind": "exchange"
+          },
+          "<32 more>"
+        ],
+        "filings": [
+          {
+            "title": "https://www.nseindia.com/api/corporate-announcements?index=equities&symbol=TCS",
+            "url": "https://www.nseindia.com/api/corporate-announcements?index=equities&symbol=TCS",
+            "path": "logs/research_evidence/TCS/autonomy/nse_0.json",
+            "ok": true
+          },
+          {
+            "title": "https://www.nseindia.com/api/corporates-financial-results?index=equities&symbol=TCS",
+            "url": "https://www.nseindia.com/api/corporates-financial-results?index=equities&symbol=TCS",
+            "path": "logs/research_evidence/TCS/autonomy/nse_1.json",
+            "ok": true
+          },
+          {
+            "title": "https://nsearchives.nseindia.com/corporate/TCS_CORPCS_09072026155158_Post_BM_SE_Lettersigned.pdf",
+            "url": "https://nsearchives.nseindia.com/corporate/TCS_CORPCS_09072026155158_Post_BM_SE_Lettersigned.pdf",
+            "path": "logs/research_evidence/TCS/autonomy/nse_att_1.pdf",
+            "ok": true
+          },
+          {
+            "title": "https://nsearchives.nseindia.com/corporate/TCS_CORPCS_09042026155026_SE_Outcome_signed.pdf",
+            "url": "https://nsearchives.nseindia.com/corporate/TCS_CORPCS_09042026155026_SE_Outcome_signed.pdf",
+            "path": "logs/research_evidence/TCS/autonomy/nse_att_2.pdf",
+            "ok": true
+          },
+          {
+            "title": "https://nsearchives.nseindia.com/corporate/TCS_CORPCS_12012026154849_Post_BM_SE_Letter_final.pdf",
+            "url": "https://nsearchives.nseindia.com/corporate/TCS_CORPCS_12012026154849_Post_BM_SE_Letter_final.pdf",
+            "path": "logs/research_evidence/TCS/autonomy/nse_att_3.pdf",
+            "ok": true
+          },
+          {
+            "title": "https://nsearchives.nseindia.com/corporate/TCS_CORPCS_09102025154951_PostBMSELetter.pdf",
+            "url": "https://nsearchives.nseindia.com/corporate/TCS_CORPCS_09102025154951_PostBMSELetter.pdf",
+            "path": "logs/research_evidence/TCS/autonomy/nse_att_4.pdf",
+            "ok": true
+          },
+          {
+            "title": "https://nsearchives.nseindia.com/corporate/TCS_CORPCS_10072025155700_SEIntfinancials.pdf",
+            "url": "https://nsearchives.nseindia.com/corporate/TCS_CORPCS_10072025155700_SEIntfinancials.pdf",
+            "path": "logs/research_evidence/TCS/autonomy/nse_att_5.pdf",
+            "ok": true
+          },
+          {
+            "title": "https://nsearchives.nseindia.com/corporate/SE_Letter-_financialssigned_09012025161053.pdf",
+            "url": "https://nsearchives.nseindia.com/corporate/SE_Letter-_financialssigned_09012025161053.pdf",
+            "path": "logs/research_evidence/TCS/autonomy/nse_att_6.pdf",
+            "ok": true
+          },
+          {
+            "title": "https://www.nseindia.com/api/annual-reports?index=equities&symbol=TCS",
+            "url": "https://www.nseindia.com/api/annual-reports?index=equities&symbol=TCS",
+            "path": "logs/research_evidence/TCS/autonomy/nse_annual_reports.json",
+            "ok": true
+          },
+          {
+            "title": "https://nsearchives.nseindia.com/annual_reports/AR_29263_TCS_2025_2026_A_17427580_15052026234830.pdf",
+            "url": "https://nsearchives.nseindia.com/annual_reports/AR_29263_TCS_2025_2026_A_17427580_15052026234830.pdf",
+            "path": "logs/research_evidence/TCS/autonomy/nse_ar_1.pdf",
+            "ok": true
+          },
+          {
+            "title": "https://nsearchives.nseindia.com/annual_reports/AR_26456_TCS_2024_2025_A_27052025233502.pdf",
+            "url": "https://nsearchives.nseindia.com/annual_reports/AR_26456_TCS_2024_2025_A_27052025233502.pdf",
+            "path": "logs/research_evidence/TCS/autonomy/nse_ar_2.pdf",
+            "ok": true
+          }
+        ],
+        "credit_ratings": [],
+        "downloads": "<11 items>",
+        "steps": [
+          {
+            "id": "screener",
+            "ok": false,
+            "forced": true,
+            "error": "Couldn't find a tree builder with the features you requested: lxml. Do you need to install a parser library?"
+          },
+          {
+            "id": "nse_filings",
+            "ok": true,
+            "skipped": true,
+            "reason": "datasets current"
+          },
+          {
+            "id": "nse_annual_reports",
+            "ok": true,
+            "skipped": true,
+            "reason": "datasets current"
+          },
+          {
+            "id": "option_chain",
+            "ok": true,
+            "skipped": true,
+            "reason": "not requested"
+          }
+        ],
+        "dataset_meta": {
+          "company_master": {
+            "checked_at": "2026-08-27T18:06:10.454513+00:00",
+            "status": "acquisition_failed",
+            "provider": "screener.in",
+            "fetched_at": "2026-08-27T18:06:10.454513+00:00",
+            "error": "Couldn't find a tree builder with the features you requested: lxml. Do you need to install a parser library?"
+          },
+          "quarterly_results": {
+            "checked_at": "2026-08-28T03:12:55.764856+00:00",
+            "status": "acquisition_failed",
+            "provider": "screener.in",
+            "fetched_at": "2026-08-28T03:12:55.764856+00:00",
+            "error": "Couldn't find a tree builder with the features you requested: lxml. Do you need to install a parser library?"
+          },
+          "annual_financials": {
+            "checked_at": "2026-08-27T18:06:10.454513+00:00",
+            "status": "current",
+            "provider": "nseindia.com",
+            "fetched_at": "2026-08-27T18:06:10.454513+00:00"
+          },
+          "shareholding": {
+            "checked_at": "2026-08-28T03:12:55.764856+00:00",
+            "status": "acquisition_failed",
+            "provider": "screener.in",
+            "fetched_at": "2026-08-28T03:12:55.764856+00:00",
+            "error": "Couldn't find a tree builder with the features you requested: lxml. Do you need to install a parser library?"
+          },
+          "promoter_pledge": {
+            "checked_at": "2026-08-28T03:12:55.764856+00:00",
+            "status": "acquisition_failed",
+            "provider": "screener.in",
+            "fetched_at": "2026-08-28T03:12:55.764856+00:00",
+            "error": "Couldn't find a tree builder with the features you requested: lxml. Do you need to install a parser library?"
+          },
+          "valuation": {
+            "checked_at": "2026-08-28T03:12:55.764856+00:00",
+            "status": "acquisition_failed",
+            "provider": "screener.in",
+            "fetched_at": "2026-08-28T03:12:55.764856+00:00",
+            "error": "Couldn't find a tree builder with the features you requested: lxml. Do you need to install a parser library?"
+          },
+          "peer_data": {
+            "checked_at": "2026-08-28T03:12:55.764856+00:00",
+            "status": "acquisition_failed",
+            "provider": "screener.in",
+            "fetched_at": "2026-08-28T03:12:55.764856+00:00",
+            "error": "Couldn't find a tree builder with the features you requested: lxml. Do you need to install a parser library?"
+          },
+          "exchange_filings": {
+            "checked_at": "2026-08-27T18:06:10.454513+00:00",
+            "status": "current",
+            "provider": "nseindia.com",
+            "fetched_at": "2026-08-27T18:06:10.454513+00:00"
+          },
+          "corporate_announcements": {
+            "checked_at": "2026-08-27T18:06:10.454513+00:00",
+            "status": "current",
+            "provider": "nseindia.com",
+            "fetched_at": "2026-08-27T18:06:10.454513+00:00"
+          },
+          "credit_ratings": {
+            "checked_at": "2026-08-27T18:06:10.454513+00:00",
+            "status": "not_yet_acquired",
+            "provider": "nseindia.com",
+            "fetched_at": "2026-08-27T18:06:10.454513+00:00"
+          },
+          "recent_news": {
+            "checked_at": "2026-08-28T03:12:55.764856+00:00",
+            "status": "current",
+            "provider": "news_curator"
+          },
+          "sector_kpis": {
+            "checked_at": "2026-08-27T18:06:10.454513+00:00",
+            "status": "not_yet_acquired",
+            "provider": "nseindia.com / screener.in",
+            "fetched_at": "2026-08-27T18:06:10.454513+00:00"
+          }
+        },
+        "still_missing": [
+          "sales",
+          "opm",
+          "pat",
+          "cfo",
+          "roe",
+          "tcv",
+          "attrition",
+          "cc_growth",
+          "commentary",
+          "order_book",
+          "segments",
+          "option_chain"
+        ],
+        "files_on_disk": [
+          "logs/research_evidence/TCS/autonomy/nse_0.json",
+          "logs/research_evidence/TCS/autonomy/nse_1.json",
+          "logs/research_evidence/TCS/autonomy/nse_att_1.pdf",
+          "logs/research_evidence/TCS/autonomy/nse_att_2.pdf",
+          "logs/research_evidence/TCS/autonomy/nse_att_3.pdf",
+          "logs/research_evidence/TCS/autonomy/nse_att_4.pdf",
+          "logs/research_evidence/TCS/autonomy/nse_att_5.pdf",
+          "logs/research_evidence/TCS/autonomy/nse_att_6.pdf",
+          "logs/research_evidence/TCS/autonomy/nse_annual_reports.json",
+          "logs/research_evidence/TCS/autonomy/nse_ar_1.pdf",
+          "logs/research_evidence/TCS/autonomy/nse_ar_2.pdf"
+        ],
+        "places_orders": false,
+        "sector": "it",
+        "n_ok": 1
+      },
+      "elapsed_s": 3.17
+    },
+    "tcs_workspace": {
+      "symbol": "TCS",
+      "framework": "it",
+      "fundamental_quality": {
+        "score": null,
+        "label": "Unmeasured",
+        "coverage_pct": 0.0,
+        "score_coverage_pct": 0.0,
+        "explain": "No measurable sector KPIs"
+      },
+      "decision_coverage_pct": 0.0,
+      "implementation_coverage_pct": 100.0,
+      "named_score_labels": [
+        {
+          "id": "piotroski_f",
+          "label_text": "Unmeasured",
+          "available": false
+        },
+        {
+          "id": "altman_z",
+          "label_text": "Unmeasured",
+          "available": false
+        },
+        {
+          "id": "beneish_m",
+          "label_text": "Unmeasured",
+          "available": false
+        },
+        {
+          "id": "dupont_roe",
+          "label_text": "Unmeasured",
+          "available": false
+        }
+      ],
+      "intel_keys": [
+        "_http_status",
+        "case",
+        "company",
+        "confidence_pct",
+        "decision_memory",
+        "fno",
+        "fundamentals",
+        "gaps",
+        "generated_at",
+        "long_term",
+        "news",
+        "next_actions",
+        "scanner",
+        "schema_version",
+        "sector",
+        "sources",
+        "state",
+        "summary",
+        "symbol",
+        "technical"
+      ],
+      "acquire_status": "SUCCEEDED",
+      "acquire_error": ""
+    },
+    "infy_acquire": {
+      "enqueue": {
+        "accepted": true,
+        "symbol": "INFY",
+        "mode": "missing_or_stale",
+        "async": true,
+        "operation_id": "5eeac9d3f0db47f2b83b0a4d5d780780",
+        "operation_status": "PENDING",
+        "created": true,
+        "places_orders": false,
+        "_http_status": 200
+      },
+      "terminal": {
+        "operation_id": "5eeac9d3f0db47f2b83b0a4d5d780780",
+        "kind": "DUE_DILIGENCE_ACQUIRE",
+        "status": "SUCCEEDED",
+        "created": null,
+        "stage": "SUCCEEDED",
+        "message": "DUE_DILIGENCE_ACQUIRE completed in 1.4s",
+        "error_code": "",
+        "error_message": "",
+        "progress_current": 0,
+        "progress_total": 0,
+        "result": {
+          "schema_version": 3,
+          "symbol": "INFY",
+          "acquired_at": "2026-08-28T03:12:59.470469+00:00",
+          "inspected_at": "2026-08-28T03:12:59.470469+00:00",
+          "method": "autonomy_download",
+          "mode": "missing_or_stale",
+          "to_fetch": [
+            "valuation",
+            "peer_data",
+            "quarterly_results",
+            "shareholding",
+            "promoter_pledge",
+            "recent_news"
+          ],
+          "skipped": [
+            "nse_filings",
+            "nse_annual",
+            "option_chain"
+          ],
+          "not_an_llm": true,
+          "kpis": {},
+          "guidance": [],
+          "commentary": [],
+          "order_book": [],
+          "segments": [],
+          "option_chain": {
+            "available": false,
+            "acquired": false,
+            "not_a_signal": true,
+            "places_orders": false
+          },
+          "announcements": [
+            {
+              "headline": "Infosys Limited has informed the Exchange about Copy of Newspaper Publication Copy of Newspaper Publication",
+              "url": "https://www.nseindia.com/api/corporate-announcements?index=equities&symbol=INFY",
+              "source": "NSE announcements",
+              "source_kind": "exchange"
+            },
+            {
+              "headline": "Infosys Limited has informed the Exchange regarding 'Investor Conference'. Updates",
+              "url": "https://www.nseindia.com/api/corporate-announcements?index=equities&symbol=INFY",
+              "source": "NSE announcements",
+              "source_kind": "exchange"
+            },
+            {
+              "headline": "Infosys Limited has informed the Exchange regarding 'Infosys Research: The AI ROI Gap: Turning Bold AI Investments into Measurable Enterprise Value'. Updates",
+              "url": "https://www.nseindia.com/api/corporate-announcements?index=equities&symbol=INFY",
+              "source": "NSE announcements",
+              "source_kind": "exchange"
+            },
+            {
+              "headline": "Infosys Limited has informed the Exchange regarding Allotment of 175865 Shares. ESOP/ESOS/ESPS",
+              "url": "https://www.nseindia.com/api/corporate-announcements?index=equities&symbol=INFY",
+              "source": "NSE announcements",
+              "source_kind": "exchange"
+            },
+            {
+              "headline": "Infosys Limited has informed the Exchange about change in Management Change in Management",
+              "url": "https://www.nseindia.com/api/corporate-announcements?index=equities&symbol=INFY",
+              "source": "NSE announcements",
+              "source_kind": "exchange"
+            },
+            {
+              "headline": "Infosys Limited has informed the Exchange regarding 'Infosys Aster Positioned as a Leader in Everest Group s Marketing Transformation Services PEAK Matrix\u00ae Assessment 2026'. Updates",
+              "url": "https://www.nseindia.com/api/corporate-announcements?index=equities&symbol=INFY",
+              "source": "NSE announcements",
+              "source_kind": "exchange"
+            },
+            {
+              "headline": "Infosys Limited has informed the Exchange regarding 'Infosys Collaborates with Knorr Bremse To Accelerate AI Enabled Enterprise Transformation'. Updates",
+              "url": "https://www.nseindia.com/api/corporate-announcements?index=equities&symbol=INFY",
+              "source": "NSE announcements",
+              "source_kind": "exchange"
+            },
+            {
+              "headline": "Infosys Limited has informed the Exchange regarding 'Investor Conference'. Updates",
+              "url": "https://www.nseindia.com/api/corporate-announcements?index=equities&symbol=INFY",
+              "source": "NSE announcements",
+              "source_kind": "exchange"
+            },
+            "<32 more>"
+          ],
+          "filings": [
+            {
+              "title": "https://www.nseindia.com/api/corporate-announcements?index=equities&symbol=INFY",
+              "url": "https://www.nseindia.com/api/corporate-announcements?index=equities&symbol=INFY",
+              "path": "logs/research_evidence/INFY/autonomy/nse_0.json",
+              "ok": true
+            },
+            {
+              "title": "https://www.nseindia.com/api/corporates-financial-results?index=equities&symbol=INFY",
+              "url": "https://www.nseindia.com/api/corporates-financial-results?index=equities&symbol=INFY",
+              "path": "logs/research_evidence/INFY/autonomy/nse_1.json",
+              "ok": true
+            },
+            {
+              "title": "https://nsearchives.nseindia.com/corporate/Infosys_23072026161911_Outcome23072026V1_1.pdf",
+              "url": "https://nsearchives.nseindia.com/corporate/Infosys_23072026161911_Outcome23072026V1_1.pdf",
+              "path": null,
+              "ok": false
+            },
+            {
+              "title": "https://nsearchives.nseindia.com/corporate/Infosys_23042026170027_outcome.pdf",
+              "url": "https://nsearchives.nseindia.com/corporate/Infosys_23042026170027_outcome.pdf",
+              "path": null,
+              "ok": false
+            },
+            {
+              "title": "https://nsearchives.nseindia.com/corporate/Infosys_14012026160405_BM_Outcome_January142026.pdf",
+              "url": "https://nsearchives.nseindia.com/corporate/Infosys_14012026160405_BM_Outcome_January142026.pdf",
+              "path": "logs/research_evidence/INFY/autonomy/nse_att_3.pdf",
+              "ok": true
+            },
+            {
+              "title": "https://nsearchives.nseindia.com/corporate/Infosys_16102025160458_BM_Outcome_Oct162025.pdf",
+              "url": "https://nsearchives.nseindia.com/corporate/Infosys_16102025160458_BM_Outcome_Oct162025.pdf",
+              "path": null,
+              "ok": false
+            },
+            {
+              "title": "https://nsearchives.nseindia.com/corporate/Infosys_23072025153626_Outcome23072025.pdf",
+              "url": "https://nsearchives.nseindia.com/corporate/Infosys_23072025153626_Outcome23072025.pdf",
+              "path": "logs/research_evidence/INFY/autonomy/nse_att_5.pdf",
+              "ok": true
+            },
+            {
+              "title": "https://nsearchives.nseindia.com/corporate/Infosys_05062025092103_Clarification_letter.pdf",
+              "url": "https://nsearchives.nseindia.com/corporate/Infosys_05062025092103_Clarification_letter.pdf",
+              "path": "logs/research_evidence/INFY/autonomy/nse_att_6.pdf",
+              "ok": true
+            },
+            {
+              "title": "https://www.nseindia.com/api/annual-reports?index=equities&symbol=INFY",
+              "url": "https://www.nseindia.com/api/annual-reports?index=equities&symbol=INFY",
+              "path": "logs/research_evidence/INFY/autonomy/nse_annual_reports.json",
+              "ok": true
+            },
+            {
+              "title": "https://nsearchives.nseindia.com/annual_reports/AR_29313_INFY_2025_2026_U_8985411_30052026200413.pdf",
+              "url": "https://nsearchives.nseindia.com/annual_reports/AR_29313_INFY_2025_2026_U_8985411_30052026200413.pdf",
+              "path": "logs/research_evidence/INFY/autonomy/nse_ar_1.pdf",
+              "ok": true
+            },
+            {
+              "title": "https://nsearchives.nseindia.com/annual_reports/AR_29297_INFY_2025_2026_A_8985010_29052026200926.pdf",
+              "url": "https://nsearchives.nseindia.com/annual_reports/AR_29297_INFY_2025_2026_A_8985010_29052026200926.pdf",
+              "path": "logs/research_evidence/INFY/autonomy/nse_ar_2.pdf",
+              "ok": true
+            }
+          ],
+          "credit_ratings": [],
+          "downloads": "<11 items>",
+          "steps": [
+            {
+              "id": "screener",
+              "ok": false,
+              "forced": true,
+              "error": "Couldn't find a tree builder with the features you requested: lxml. Do you need to install a parser library?"
+            },
+            {
+              "id": "nse_filings",
+              "ok": true,
+              "skipped": true,
+              "reason": "datasets current"
+            },
+            {
+              "id": "nse_annual_reports",
+              "ok": true,
+              "skipped": true,
+              "reason": "datasets current"
+            },
+            {
+              "id": "option_chain",
+              "ok": true,
+              "skipped": true,
+              "reason": "not requested"
+            }
+          ],
+          "dataset_meta": {
+            "company_master": {
+              "checked_at": "2026-08-27T18:38:06.040211+00:00",
+              "status": "acquisition_failed",
+              "provider": "screener.in",
+              "fetched_at": "2026-08-27T18:38:06.040211+00:00",
+              "error": "Couldn't find a tree builder with the features you requested: lxml. Do you need to install a parser library?"
+            },
+            "quarterly_results": {
+              "checked_at": "2026-08-28T03:12:59.470469+00:00",
+              "status": "acquisition_failed",
+              "provider": "screener.in",
+              "fetched_at": "2026-08-28T03:12:59.470469+00:00",
+              "error": "Couldn't find a tree builder with the features you requested: lxml. Do you need to install a parser library?"
+            },
+            "annual_financials": {
+              "checked_at": "2026-08-27T18:38:06.040211+00:00",
+              "status": "current",
+              "provider": "nseindia.com",
+              "fetched_at": "2026-08-27T18:38:06.040211+00:00"
+            },
+            "shareholding": {
+              "checked_at": "2026-08-28T03:12:59.470469+00:00",
+              "status": "acquisition_failed",
+              "provider": "screener.in",
+              "fetched_at": "2026-08-28T03:12:59.470469+00:00",
+              "error": "Couldn't find a tree builder with the features you requested: lxml. Do you need to install a parser library?"
+            },
+            "promoter_pledge": {
+              "checked_at": "2026-08-28T03:12:59.470469+00:00",
+              "status": "acquisition_failed",
+              "provider": "screener.in",
+              "fetched_at": "2026-08-28T03:12:59.470469+00:00",
+              "error": "Couldn't find a tree builder with the features you requested: lxml. Do you need to install a parser library?"
+            },
+            "valuation": {
+              "checked_at": "2026-08-28T03:12:59.470469+00:00",
+              "status": "acquisition_failed",
+              "provider": "screener.in",
+              "fetched_at": "2026-08-28T03:12:59.470469+00:00",
+              "error": "Couldn't find a tree builder with the features you requested: lxml. Do you need to install a parser library?"
+            },
+            "peer_data": {
+              "checked_at": "2026-08-28T03:12:59.470469+00:00",
+              "status": "acquisition_failed",
+              "provider": "screener.in",
+              "fetched_at": "2026-08-28T03:12:59.470469+00:00",
+              "error": "Couldn't find a tree builder with the features you requested: lxml. Do you need to install a parser library?"
+            },
+            "exchange_filings": {
+              "checked_at": "2026-08-27T18:38:06.040211+00:00",
+              "status": "current",
+              "provider": "nseindia.com",
+              "fetched_at": "2026-08-27T18:38:06.040211+00:00"
+            },
+            "corporate_announcements": {
+              "checked_at": "2026-08-27T18:38:06.040211+00:00",
+              "status": "current",
+              "provider": "nseindia.com",
+              "fetched_at": "2026-08-27T18:38:06.040211+00:00"
+            },
+            "credit_ratings": {
+              "checked_at": "2026-08-27T18:38:06.040211+00:00",
+              "status": "not_yet_acquired",
+              "provider": "nseindia.com",
+              "fetched_at": "2026-08-27T18:38:06.040211+00:00"
+            },
+            "recent_news": {
+              "checked_at": "2026-08-28T03:12:59.470469+00:00",
+              "status": "current",
+              "provider": "news_curator"
+            },
+            "sector_kpis": {
+              "checked_at": "2026-08-27T18:38:06.040211+00:00",
+              "status": "not_yet_acquired",
+              "provider": "nseindia.com / screener.in",
+              "fetched_at": "2026-08-27T18:38:06.040211+00:00"
+            }
+          },
+          "still_missing": [
+            "sales",
+            "opm",
+            "pat",
+            "cfo",
+            "roe",
+            "tcv",
+            "attrition",
+            "cc_growth",
+            "commentary",
+            "order_book",
+            "segments",
+            "option_chain"
+          ],
+          "files_on_disk": [
+            "logs/research_evidence/INFY/autonomy/nse_0.json",
+            "logs/research_evidence/INFY/autonomy/nse_1.json",
+            "logs/research_evidence/INFY/autonomy/nse_att_3.pdf",
+            "logs/research_evidence/INFY/autonomy/nse_att_5.pdf",
+            "logs/research_evidence/INFY/autonomy/nse_att_6.pdf",
+            "logs/research_evidence/INFY/autonomy/nse_annual_reports.json",
+            "logs/research_evidence/INFY/autonomy/nse_ar_1.pdf",
+            "logs/research_evidence/INFY/autonomy/nse_ar_2.pdf"
+          ],
+          "places_orders": false,
+          "sector": "it",
+          "n_ok": 1
+        },
+        "elapsed_s": 1.44
+      }
+    },
+    "fno": {
+      "enqueue": {
+        "accepted": true,
+        "control": "REFRESH_FNO_NOW",
+        "operation_id": "a635c65531024bd98078b83071e6b3cd",
+        "operation_status": "PENDING",
+        "created": true,
+        "priority": 100,
+        "_http_status": 200
+      },
+      "terminal": {
+        "operation_id": "a635c65531024bd98078b83071e6b3cd",
+        "kind": "FNO_REFRESH",
+        "status": "BLOCKED",
+        "created": null,
+        "stage": "BLOCKED",
+        "message": "No current stock F&O underlyings could be mapped; Zerodha login or instrument cache is required",
+        "error_code": "FNO_UNIVERSE_UNAVAILABLE",
+        "error_message": "No current stock F&O underlyings could be mapped; Zerodha login or instrument cache is required",
+        "progress_current": 0,
+        "progress_total": 0,
+        "result": {
+          "source": "unavailable",
+          "live_refresh_error": "no Zerodha access token configured \u2014 complete the daily login",
+          "total_instrument_rows": 0,
+          "total_future_contracts": 0,
+          "index_future_contracts": 0,
+          "unique_stock_underlyings": 0,
+          "mapped_underlyings": 0,
+          "exclusions": 0
+        },
+        "elapsed_s": 0.0
+      }
+    },
+    "failed_retry": {
+      "original": {
+        "operation_id": "a635c65531024bd98078b83071e6b3cd",
+        "kind": "FNO_REFRESH",
+        "status": "BLOCKED",
+        "created": null,
+        "stage": "BLOCKED",
+        "message": "No current stock F&O underlyings could be mapped; Zerodha login or instrument cache is required",
+        "error_code": "FNO_UNIVERSE_UNAVAILABLE",
+        "error_message": "No current stock F&O underlyings could be mapped; Zerodha login or instrument cache is required",
+        "progress_current": 0,
+        "progress_total": 0,
+        "result": {
+          "source": "unavailable",
+          "live_refresh_error": "no Zerodha access token configured \u2014 complete the daily login",
+          "total_instrument_rows": 0,
+          "total_future_contracts": 0,
+          "index_future_contracts": 0,
+          "unique_stock_underlyings": 0,
+          "mapped_underlyings": 0,
+          "exclusions": 0
+        },
+        "elapsed_s": 0.0
+      },
+      "blocker": "No current stock F&O underlyings could be mapped; Zerodha login or instrument cache is required",
+      "retry": {
+        "accepted": true,
+        "control": "REFRESH_FNO_NOW",
+        "operation_id": "3f3307fdf06541dfb5bed6a0bd484ff3",
+        "operation_status": "PENDING",
+        "created": true,
+        "priority": 100,
+        "_http_status": 200
+      }
+    },
+    "retry_after_success": {
+      "accepted": true,
+      "control": "RUN_SCAN_NOW",
+      "operation_id": "e3b09adedf4344808174ccae38d759f6",
+      "operation_status": "PENDING",
+      "created": true,
+      "priority": 100,
+      "_http_status": 200
+    }
+  },
+  "all_passed": true
+}

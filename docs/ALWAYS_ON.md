@@ -1,5 +1,10 @@
 # QuantTerm ko 24/7 Chalana (Always-On Setup)
 
+Canonical product: the **Vite/React desk**. One command owns the local stack:
+`bash scripts/run_quantterm_complete.sh` → http://127.0.0.1:5173.
+Streamlit is not the product path. Historical research branches such as
+`overhaul/evidence-lab` are not the current checkout.
+
 Mac sleep hote hi background scans, Telegram alerts, breakout sniper —
 sab ruk jaata hai. Full-time trading ke liye system ko hamesha jaagna
 chahiye. Do raste:
@@ -24,36 +29,21 @@ apt update && apt install -y python3.11 python3.11-venv git
 
 ### 2. Project daalo
 ```bash
-git clone https://github.com/rishabhdoshi09/0to100.git
+git clone --branch cursor/live-terminal-contract-858e https://github.com/rishabhdoshi09/0to100.git
 cd 0to100
-git checkout overhaul/evidence-lab
-python3.11 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env && nano .env    # keys bharo
 ```
 
-### 3. systemd service (crash ho toh khud restart)
-`/etc/systemd/system/quantterm.service`:
-```ini
-[Unit]
-Description=QuantTerm Trading Terminal
-After=network.target
+This clone is the accepted Issue #92 product branch, not GitHub's default
+`claude/build-ai-trading-system-miHHd`. The install script then deploys **this**
+checkout. Do not check out historical research branches such as
+`overhaul/evidence-lab`.
 
-[Service]
-WorkingDirectory=/root/0to100
-Environment=PYTHONPATH=/root/0to100
-ExecStart=/bin/bash /root/0to100/scripts/run_quantterm.sh
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
+### 3. systemd services (complete stack + autonomy)
 ```bash
-systemctl daemon-reload
-systemctl enable --now quantterm
-systemctl status quantterm        # green = zinda
+bash deploy/setup_server.sh
 ```
+That installs `quantterm-ui` (`bash scripts/run_quantterm_complete.sh` —
+desk :5173, API :8765, reports :8766, market-ops) and `quantterm-autonomy`.
 
 ### 4. Phone/laptop se kholo
 `http://YOUR_SERVER_IP:5173` — ya Tailscale laga lo (free) taaki
@@ -117,11 +107,11 @@ bhool gaye.
 
 ## Updates lena
 ```bash
-cd 0to100 && git pull origin overhaul/evidence-lab
-systemctl restart quantterm
+cd 0to100 && git pull
+sudo systemctl restart quantterm-ui quantterm-autonomy
 ```
 
 ## Health check
 - Telegram pe subah Pulse aa raha hai? → scans chal rahe hain
 - App ke scanner header pe sab dots green? → data sources theek
-- `journalctl -u quantterm -f` → live logs
+- `journalctl -u quantterm-ui -f` → live desk logs

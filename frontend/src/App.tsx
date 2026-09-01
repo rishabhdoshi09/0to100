@@ -17,6 +17,7 @@ import { EducationView } from './educationViews'
 import { NewsView, OperationsRibbon, FnoView } from './marketViews'
 import { ProductStockIntelligenceView, StockInvestigatorView } from './productViews'
 import { ResearchDataView } from './researchData'
+import { ResearchBacktestView } from './researchBacktestView'
 import {
   AutomationView,
   MarketInternalsView,
@@ -210,7 +211,8 @@ const pageTitles: Record<string, string> = {
   'News & Events': 'News & Events',
   Education: 'Education',
   'Research Data': 'Research Data',
-  Backtest: 'Backtest',
+  Backtest: 'Research & Backtests',
+  'After-Action Blotter': 'After-Action Blotter',
   'F&O Desk': 'F&O Desk',
   'Paper Portfolio': 'My Holdings',
   'System Health': 'System Health',
@@ -236,7 +238,8 @@ const pageSubtitles: Record<string, string> = {
   'News & Events': 'Dated market context with source health.',
   Education: 'Crunched news + macro/micro teach-ins for the share market — never invented blogs, never a signal.',
   'Research Data': 'Verified snapshots, data platform jobs, and evidence uploads.',
-  Backtest: 'Inspect a paper-loss style on past data. This does not change today’s BUY list.',
+  Backtest: 'Production strategy versions, exact backtest parity, experiments, drift and settled decision evidence.',
+  'After-Action Blotter': 'Paper taken/skipped decisions and candidate tests from the autonomy self-feed.',
   'F&O Desk': 'Mapped futures, plus an acquired nearest-expiry OI / IV / PCR snapshot when present.',
   'Paper Portfolio': 'Demat holdings + paper book — sync Zerodha or paste your shares.',
   Portfolio: 'Demat holdings + paper book — sync Zerodha or paste your shares.',
@@ -310,6 +313,11 @@ function App() {
     seedOperation: activeSeed(dashboard, 'LONG_TERM_REFRESH') || activeSeed(dashboard, 'LONG_TERM_SCAN'),
   })
 
+  const marketReport = useScanRunner('MARKET_REPORT', {
+    onComplete: () => void refresh(),
+    seedOperation: activeSeed(dashboard, 'MARKET_REPORT') || activeSeed(dashboard, 'NEWS_REFRESH'),
+  })
+
   const pipelineBusy = (dashboard.operations.active || []).some((item) => (
     item.kind === 'DATA_PREPARE'
     || item.kind === 'FNO_REFRESH'
@@ -317,8 +325,15 @@ function App() {
     || item.kind === 'LONG_TERM_SCAN'
     || item.kind === 'LONG_TERM_REFRESH'
     || item.kind === 'NEWS_REFRESH'
+    || item.kind === 'MARKET_REPORT'
+    || item.kind === 'DUE_DILIGENCE_ACQUIRE'
   ))
-  const scanPollingActive = marketScan.isActive || longTermScan.isActive || pipelineBusy
+  const scanPollingActive = (
+    marketScan.isActive
+    || longTermScan.isActive
+    || marketReport.isActive
+    || pipelineBusy
+  )
 
   useEffect(() => {
     void refresh()
@@ -462,6 +477,7 @@ function App() {
     depth,
     marketScan,
     longTermScan,
+    marketReport,
   }
 
   const primaryPages = [
@@ -539,7 +555,8 @@ function App() {
         />
       ))}
       {keep(['Research Data'], <ResearchDataView symbol={selected} />)}
-      {keep(['Backtest'], <RecoBacktestView {...viewProps} />)}
+      {keep(['Backtest'], <ResearchBacktestView />)}
+      {keep(['After-Action Blotter'], <RecoBacktestView {...viewProps} />)}
       {keep(['F&O Desk'], <FnoView {...viewProps} />)}
       {keep(['Paper Portfolio', 'Portfolio'], <PortfolioView {...viewProps} />)}
       {keep(['System Health', 'Automation'], <AutomationView {...viewProps} />)}

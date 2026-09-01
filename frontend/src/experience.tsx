@@ -41,6 +41,7 @@ export type ExperienceViewProps = {
   depth: DisplayDepth
   marketScan: ScanRunnerHandle
   longTermScan: ScanRunnerHandle
+  marketReport?: ScanRunnerHandle
 }
 
 const scoreOf = (row: ScannerWorkspaceRow) => Number(
@@ -178,10 +179,13 @@ export function LiveScanBanner({
             {scan.etaLine ? ` · ETA ${scan.etaLine}` : ''}
           </small>
         )}
-        {(showFailed || showNotice && !scan.isActive) && (
+        {(showFailed || (showNotice && !scan.isActive)) && (
           <button type="button" className="live-scan-dismiss" onClick={() => scan.dismissNotice()} aria-label="Dismiss">×</button>
         )}
       </div>
+      {scan.operation?.operation_id ? (
+        <small className="live-scan-op">Job {scan.operation.operation_id.slice(0, 8)}</small>
+      ) : null}
       {scan.isActive && (
         <>
           <p className="live-scan-detail">
@@ -200,7 +204,7 @@ export function LiveScanBanner({
           )}
           {depth === 'professional' && scan.operation && (
             <small className="live-scan-technical">
-              {scan.operation.status} · {scan.operation.stage || '—'}
+              {scan.operation.operation_id?.slice(0, 8)} · {scan.operation.status} · {scan.operation.stage || '—'}
               {scan.operation.message ? ` · ${scan.operation.message}` : ''}
             </small>
           )}
@@ -210,7 +214,7 @@ export function LiveScanBanner({
         <div className="live-scan-notice">
           <p>{scan.notice}</p>
           {showFailed && (
-            <button type="button" onClick={() => void scan.retry()}>Retry scan</button>
+            <button type="button" onClick={() => void scan.retry()}>Retry</button>
           )}
         </div>
       )}

@@ -1,25 +1,37 @@
 #!/usr/bin/env bash
-# Install/update QuantTerm as two supervised processes: read-only UI + paper-only autonomy.
+# Install/update QuantTerm as two supervised processes: complete desk stack + paper-only autonomy.
+# Deploys the current checkout. Do not pin historical research branches.
 set -euo pipefail
 
 REPO_URL="${QT_REPO_URL:-https://github.com/rishabhdoshi09/0to100.git}"
-BRANCH="${QT_BRANCH:-overhaul/evidence-lab}"
-APP_DIR="${QT_DIR:-$HOME/0to100}"
+SCRIPT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+if [ -d "$SCRIPT_ROOT/.git" ] || [ -f "$SCRIPT_ROOT/scripts/run_quantterm_complete.sh" ]; then
+  APP_DIR="${QT_DIR:-$SCRIPT_ROOT}"
+else
+  APP_DIR="${QT_DIR:-$HOME/0to100}"
+fi
 RUN_USER="${QT_USER:-$(id -un)}"
 PYTHON_BIN="$APP_DIR/venv/bin/python"
 
-echo "== QuantTerm two-process install: $BRANCH =="
+if [ -d "$APP_DIR/.git" ]; then
+  if [ -n "${QT_BRANCH:-}" ]; then
+    git -C "$APP_DIR" fetch origin "$QT_BRANCH"
+    git -C "$APP_DIR" checkout "$QT_BRANCH"
+    git -C "$APP_DIR" pull --ff-only origin "$QT_BRANCH"
+  fi
+elif [ -n "${QT_BRANCH:-}" ]; then
+  git clone --branch "$QT_BRANCH" "$REPO_URL" "$APP_DIR"
+else
+  # GitHub default is still a historical research branch. A machine with no
+  # checkout yet must land on the accepted product code.
+  git clone --branch cursor/live-terminal-contract-858e "$REPO_URL" "$APP_DIR"
+fi
+
+BRANCH="$(git -C "$APP_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo current)"
+echo "== QuantTerm two-process install: checkout $BRANCH at $APP_DIR =="
 sudo timedatectl set-timezone Asia/Kolkata 2>/dev/null || true
 sudo apt-get update -y
 sudo apt-get install -y git python3 python3-venv python3-pip build-essential cmake curl
-
-if [ -d "$APP_DIR/.git" ]; then
-  git -C "$APP_DIR" fetch origin "$BRANCH"
-  git -C "$APP_DIR" checkout "$BRANCH"
-  git -C "$APP_DIR" pull --ff-only origin "$BRANCH"
-else
-  git clone --branch "$BRANCH" "$REPO_URL" "$APP_DIR"
-fi
 
 cd "$APP_DIR"
 [ -d venv ] || python3 -m venv venv
@@ -31,7 +43,7 @@ mkdir -p logs/autonomy logs/intelligence logs/snapshots logs/kite_history logs/p
 
 sudo tee /etc/systemd/system/quantterm-ui.service >/dev/null <<UNIT
 [Unit]
-Description=QuantTerm desk (Vite :5173 + API :8765)
+Description=QuantTerm complete desk (Vite :5173 + API :8765 + reports :8766)
 After=network-online.target
 Wants=network-online.target
 
@@ -42,8 +54,9 @@ WorkingDirectory=$APP_DIR
 Environment=TZ=Asia/Kolkata
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=$APP_DIR
+Environment=QT_NONINTERACTIVE=1
 EnvironmentFile=-$APP_DIR/.env
-ExecStart=/bin/bash $APP_DIR/scripts/run_quantterm.sh
+ExecStart=/bin/bash $APP_DIR/scripts/run_quantterm_complete.sh
 Restart=on-failure
 RestartSec=5
 
@@ -86,7 +99,8 @@ sudo systemctl --no-pager --lines=8 status quantterm-ui.service || true
 
 cat <<DONE
 
-QuantTerm installed as two services on branch $BRANCH.
+QuantTerm installed as two services on checkout $BRANCH.
+The UI service owns the complete stack (desk :5173, API :8765, reports :8766, market-ops).
 Daily login: cd "$APP_DIR" && "$PYTHON_BIN" main.py login
 Desk logs:     journalctl -u quantterm-ui -f
 Autonomy logs: journalctl -u quantterm-autonomy -f

@@ -286,12 +286,16 @@ def _technical_from_saved_scan_or_walk(
         except Exception:
             payload = None
     if payload and payload.get("records"):
+        # The market scan has already performed the technical analysis. Long-term
+        # is an evidence/fundamental overlay, not a second technical scanner. Keep
+        # every saved scan row above the overlay floor and never silently remove it
+        # through another OHLCV pass.
         return technical_rows_from_market_scan(
             payload,
             min_score=min_score,
             top=top,
             include_watch=include_watch,
-            enrich=True,
+            enrich=False,
             symbols=symbols,
         )
     from scan.long_term import scan_long_term
@@ -314,7 +318,8 @@ def overlay_long_term_from_market_scan(
     """Derive the long-term shortlist from one saved whole-market scan.
 
     Cache-only fundamentals unless ``refresh_fundamentals`` is True. Overlay
-    failure must never invalidate the market scan.
+    failure must never invalidate the market scan. This function deliberately does
+    not re-run a second technical scanner over names the market scan already judged.
     """
     def technical_scanner(symbols=None, min_score=45, top=60, include_watch=True, **_kw):
         return technical_rows_from_market_scan(
@@ -322,7 +327,7 @@ def overlay_long_term_from_market_scan(
             min_score=min_score,
             top=top,
             include_watch=include_watch,
-            enrich=True,
+            enrich=False,
             symbols=symbols,
         )
 
@@ -380,9 +385,17 @@ def run_long_term_scan(
         except Exception:
             saved_scan = None
         if saved_scan and saved_scan.get("records"):
-            technical_scanner = lambda **kwargs: _technical_from_saved_scan_or_walk(
-                saved_payload=saved_scan, **kwargs
-            )
+            # Direct projection is intentional. Do not re-enter a helper that may
+            # fall back to another market walk depending on mutable external state.
+            def technical_scanner(symbols=None, min_score=45, top=60, include_watch=True, **_kw):
+                return technical_rows_from_market_scan(
+                    saved_scan,
+                    symbols=symbols,
+                    min_score=min_score,
+                    top=top,
+                    include_watch=include_watch,
+                    enrich=False,
+                )
             default_technical = False
         else:
             default_technical = True
@@ -433,6 +446,20 @@ def run_long_term_scan(
     except Exception as exc:
         return LongTermScanReport(FAILED, error_code="LONG_TERM_TECHNICAL_ERROR",
                                   error_message=str(exc))
+
+    # A saved market scan is authoritative for this overlay. If an injected
+    # projection unexpectedly returns empty, re-project directly rather than
+    # silently converting an existing scan into an empty long-term desk.
+    if not technical and saved_scan and saved_scan.get("records"):
+        technical = technical_rows_from_market_scan(
+            saved_scan,
+            symbols=symbols,
+            min_score=45,
+            top=technical_limit,
+            include_watch=True,
+            enrich=False,
+        )
+
     if not technical:
         payload = _payload(
             [], scope=scope, refresh=refresh_fundamentals, history=history,
