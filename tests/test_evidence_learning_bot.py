@@ -183,17 +183,19 @@ def test_settled_losing_trades_update_policy_consumed_on_next_cycle(tmp_path):
     )
     assert out["taken"]
     record_taken_evidence(out["taken"], as_of="2026-09-01")
-    closed = book.mark("2026-09-02", {"TCS": (93.0, 95.0, 92.0, 93.5)})
+    closed = book.mark({"TCS": (93.0, 95.0, 92.0, 93.5)}, "2026-09-02")
     assert closed and closed[0].exit_reason in {"STOP", "GAP_STOP"}
     assert closed[0].realized_R < 0
     for _ in range(5):
         ingest_closed_trade(closed[0], path=policy_path, floors=floors)
 
     book2 = PaperBook(capital=100_000)
+    next_card = dict(_eligible_card())
+    next_card["symbol"] = "INFY"
     blocked = run_reco_paper_cycle(
         book=book2,
-        cards=[_eligible_card("INFY")],
-        workspace=_workspace([_eligible_card("INFY")]),
+        cards=[next_card],
+        workspace=_workspace([next_card]),
         now=datetime(2026, 9, 1, 10, tzinfo=timezone.utc),
         as_of="2026-09-03",
         persist_journal=False,
@@ -225,10 +227,13 @@ def test_counterfactual_missed_winner_is_not_booked_as_pnl(tmp_path):
     assert out["classifications"][MISSED_WINNER] == 1
     book = PaperBook(capital=100_000)
     # Hard chase gate still holds — missed-winner stats must not disable it.
+    chased = dict(_eligible_card())
+    chased["chase_risk"] = True
+    chased["entry_state"] = "extended"
     refused = run_reco_paper_cycle(
         book=book,
-        cards=[_eligible_card(chase_risk=True, entry_state="extended")],
-        workspace=_workspace([_eligible_card(chase_risk=True, entry_state="extended")]),
+        cards=[chased],
+        workspace=_workspace([chased]),
         now=datetime(2026, 9, 1, 10, tzinfo=timezone.utc),
         as_of="2026-09-02",
         persist_journal=False,
