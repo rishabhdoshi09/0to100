@@ -6,7 +6,8 @@ Table schema:
   data_json  TEXT
   fetched_at REAL  (Unix timestamp)
 
-TTL = 86 400 seconds (1 trading day).
+Fresh TTL = 86 400 seconds (1 day). Stale rows are intentionally retained so a
+temporary internet/provider failure cannot blank an already-known company.
 """
 
 from __future__ import annotations
@@ -43,14 +44,19 @@ def _connect() -> sqlite3.Connection:
 class FundamentalsCache:
     """Thread-unsafe SQLite cache — use one instance per process."""
 
-    def get(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """Return cached data if fresh, else None."""
+    def _row(self, symbol: str) -> tuple[str, float] | None:
         symbol = symbol.upper()
         with _connect() as conn:
             row = conn.execute(
                 "SELECT data_json, fetched_at FROM fundamentals_cache WHERE symbol = ?",
                 (symbol,),
             ).fetchone()
+        return row if row is not None else None
+
+    def get(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Return cached data only when fresh; stale rows remain on disk for fallback."""
+        symbol = symbol.upper()
+        row = self._row(symbol)
         if row is None:
             return None
         data_json, fetched_at = row
@@ -61,8 +67,32 @@ class FundamentalsCache:
         log.info("fundamentals_cache_hit", symbol=symbol, age_minutes=round(age / 60, 1))
         return json.loads(data_json)
 
+    def get_any(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Return the last-good row regardless of age.
+
+        This is a resilience primitive, not a freshness claim. Callers must label
+        stale delivery explicitly instead of presenting it as current evidence.
+        """
+        symbol = symbol.upper()
+        row = self._row(symbol)
+        if row is None:
+            return None
+        data_json, fetched_at = row
+        payload = json.loads(data_json)
+        if isinstance(payload, dict):
+            payload = dict(payload)
+            payload.setdefault("_cache_fetched_at", datetime_from_timestamp(fetched_at))
+            payload.setdefault("_cache_age_seconds", round(max(0.0, time.time() - fetched_at), 1))
+        return payload
+
+    def age_seconds(self, symbol: str) -> float | None:
+        row = self._row(symbol.upper())
+        if row is None:
+            return None
+        return max(0.0, time.time() - float(row[1]))
+
     def set(self, symbol: str, data: Dict[str, Any]) -> None:
-        """Store data with current timestamp."""
+        """Store a successful acquisition with current timestamp."""
         symbol = symbol.upper()
         payload = json.dumps(data, ensure_ascii=False)
         with _connect() as conn:
@@ -80,7 +110,11 @@ class FundamentalsCache:
         log.info("fundamentals_cache_written", symbol=symbol, bytes=len(payload))
 
     def clear_old(self) -> int:
-        """Delete entries older than TTL. Returns count deleted."""
+        """Explicit destructive housekeeping.
+
+        Normal fundamentals acquisition no longer calls this method because stale
+        rows are valuable last-good evidence during provider outages.
+        """
         cutoff = time.time() - _TTL
         with _connect() as conn:
             cursor = conn.execute(
@@ -93,7 +127,7 @@ class FundamentalsCache:
         return count
 
     def invalidate(self, symbol: str) -> None:
-        """Force-expire a single symbol."""
+        """Delete a single symbol only when explicitly requested."""
         symbol = symbol.upper()
         with _connect() as conn:
             conn.execute(
@@ -101,3 +135,8 @@ class FundamentalsCache:
             )
             conn.commit()
         log.debug("fundamentals_cache_invalidated", symbol=symbol)
+
+
+def datetime_from_timestamp(value: float) -> str:
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat()
