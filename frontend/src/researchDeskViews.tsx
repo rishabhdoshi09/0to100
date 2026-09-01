@@ -127,6 +127,60 @@ export function LearningJournalView() {
           </div>
         ))}
       </Panel>
+      <Panel title="POLICIES UNDER OBSERVATION" subtitle="INSUFFICIENT EVIDENCE until sample floors. One trade cannot move production.">
+        {(learning?.observing || []).length === 0 ? (
+          <div className="empty-row">No hypotheses under observation.</div>
+        ) : (learning?.observing || []).slice(0, 12).map((policy) => (
+          <div className="insight" key={`${policy.policy_id}-obs-${policy.version || 0}`}>
+            <i className="amber" />
+            <div>
+              <strong>{policy.policy_id}</strong>
+              <span>
+                {policy.production_status} · n={policy.sample_size ?? 0} · {policy.confidence || 'INSUFFICIENT EVIDENCE'}
+              </span>
+            </div>
+          </div>
+        ))}
+      </Panel>
+      <Panel title="REJECTED HYPOTHESES" subtitle="No measurable edge, or demoted. Not deleted.">
+        {(learning?.rejected_hypotheses || []).length === 0 ? (
+          <div className="empty-row">No rejected hypotheses yet.</div>
+        ) : (learning?.rejected_hypotheses || []).slice(0, 12).map((policy) => (
+          <div className="insight" key={`${policy.policy_id}-rej-${policy.version || 0}`}>
+            <i className="amber" />
+            <div>
+              <strong>{policy.policy_id}</strong>
+              <span>{policy.production_status} · n={policy.sample_size ?? 0} · no production effect</span>
+            </div>
+          </div>
+        ))}
+      </Panel>
+      <Panel title="WHY BOT TOOK / DID NOT TAKE" subtitle="Deterministic evidence. An LLM must not manufacture this.">
+        {(learning?.explanations?.taken || []).length === 0 && (learning?.explanations?.rejected || []).length === 0 ? (
+          <div className="empty-row">No autopilot explanations yet. Missing stays missing.</div>
+        ) : (
+          <>
+            {(learning?.explanations?.taken || []).map((row) => (
+              <div className="insight" key={`took-${row.symbol}`}>
+                <i className="green" />
+                <div>
+                  <strong>{row.symbol} · {row.title || 'WHY BOT TOOK THIS'}</strong>
+                  <span>{(row.plus || []).join(' · ')}{(row.minus || []).length ? ` — ${(row.minus || []).join(' · ')}` : ''}</span>
+                </div>
+              </div>
+            ))}
+            {(learning?.explanations?.rejected || []).slice(0, 8).map((row) => (
+              <div className="insight" key={`skip-${row.symbol}-${row.reason_code}`}>
+                <i className="amber" />
+                <div>
+                  <strong>{row.symbol} · {row.reason_code || row.title}</strong>
+                  <span>{row.action || (row.minus || []).join(' · ') || 'Rejected with a machine-readable reason'}</span>
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+      </Panel>
       <Panel title="RECENT LEARNING" subtitle="Taken, rejected, and counterfactual classifications — not P&L from skipped names">
         <div className="fact-grid">
           <div><span>Taken fills</span><strong>{recent?.taken_fills ?? 0}</strong></div>

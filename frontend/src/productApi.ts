@@ -1417,10 +1417,17 @@ export type LearningDashboard = {
     latest_as_of: string
     latest_taken: number
     latest_rejected: number
+    latest_waits?: number
+    not_surfaced?: number
     correct_rejects: number
     missed_winners: number
     avoided_losers: number
     good_waits: number
+  }
+  explanations?: {
+    taken?: Array<{ symbol?: string; title?: string; plus?: string[]; minus?: string[]; action?: string; reason_code?: string }>
+    rejected?: Array<{ symbol?: string; title?: string; plus?: string[]; minus?: string[]; action?: string; reason_code?: string }>
+    waits?: Array<{ symbol?: string; reason_code?: string; action?: string }>
   }
   live_readiness?: { live_enabled: boolean; live_locked: boolean; contract_ready?: boolean; unmet?: string[] }
 }

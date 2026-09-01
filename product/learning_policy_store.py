@@ -34,6 +34,9 @@ MIN_SAMPLE_EXPERIMENTAL = 8
 MIN_SAMPLE_ELIGIBLE = 20
 MIN_SAMPLE_ACTIVE = 30
 MIN_ABS_EDGE_R = 0.25
+SHRINKAGE_K = 8.0
+# Two-way conditionals need more samples to avoid combinatorial overfitting.
+CONDITIONAL_SAMPLE_MULT = 2
 
 
 def policy_path(path: str | Path | None = None) -> Path:
@@ -84,15 +87,31 @@ def save_policies(payload: Mapping[str, Any], path: str | Path | None = None) ->
     return target
 
 
-def _status_for(n: int, abs_edge: float, *, floors: Mapping[str, int] | None = None) -> str:
+def _status_for(
+    n: int,
+    abs_edge: float,
+    *,
+    floors: Mapping[str, int] | None = None,
+    source: str = "",
+    conditional: bool = False,
+) -> str:
     floors = dict(floors or {})
     n_exp = int(floors.get("experimental", MIN_SAMPLE_EXPERIMENTAL))
     n_eli = int(floors.get("eligible", MIN_SAMPLE_ELIGIBLE))
     n_act = int(floors.get("active", MIN_SAMPLE_ACTIVE))
+    if conditional:
+        n_exp *= int(floors.get("conditional_mult", CONDITIONAL_SAMPLE_MULT))
+        n_eli *= int(floors.get("conditional_mult", CONDITIONAL_SAMPLE_MULT))
+        n_act *= int(floors.get("conditional_mult", CONDITIONAL_SAMPLE_MULT))
     if n < n_exp:
         return OBSERVING
     if abs_edge < MIN_ABS_EDGE_R:
         return REJECTED if n >= n_eli else OBSERVING
+    # Historical backtest can become EXPERIMENTAL, never ACTIVE on its own.
+    if str(source).startswith("backtest"):
+        if n >= n_eli:
+            return EXPERIMENTAL
+        return OBSERVING
     if n >= n_act:
         return ACTIVE
     if n >= n_eli:
@@ -117,9 +136,22 @@ def upsert_policy(
     store = load_policies(path)
     policies = [dict(p) for p in (store.get("policies") or []) if isinstance(p, Mapping)]
     edge = float(expectancy_R) - float(baseline_R)
-    status = _status_for(int(sample_size), abs(edge), floors=floors)
+    k = float((extra or {}).get("shrinkage_k") or SHRINKAGE_K)
+    n = max(1, int(sample_size))
+    shrunk = (n / (n + k)) * edge
+    conditional = "|" in str(dimension)
+    status = _status_for(
+        int(sample_size), abs(shrunk), floors=floors, source=source, conditional=conditional,
+    )
     existing = next((p for p in policies if p.get("policy_id") == policy_id), None)
     version = int((existing or {}).get("version") or 0) + 1
+    first_seen = str((existing or {}).get("first_seen") or datetime.now(timezone.utc).isoformat())
+    regimes = list((existing or {}).get("regimes_tested") or [])
+    extra_payload = dict(extra or {})
+    regime = str(extra_payload.pop("regime", "") or "")
+    if regime and regime not in regimes:
+        regimes.append(regime)
+    affects = extra_payload.pop("affects_selection", True)
     row = {
         "policy_id": policy_id,
         "version": version,
@@ -129,6 +161,8 @@ def upsert_policy(
         "expectancy_R": round(float(expectancy_R), 4),
         "baseline_R": round(float(baseline_R), 4),
         "expectancy_difference_R": round(edge, 4),
+        "shrunk_expectancy_R": round(shrunk, 4),
+        "shrinkage_k": k,
         "confidence": (
             "INSUFFICIENT_EVIDENCE" if status in {OBSERVING, EXPERIMENTAL}
             else "MEASURED"
@@ -136,8 +170,15 @@ def upsert_policy(
         "production_status": status,
         "evidence_source": source,
         "last_updated": datetime.now(timezone.utc).isoformat(),
+        "first_seen": first_seen,
+        "date_range": {
+            "first": first_seen,
+            "last": datetime.now(timezone.utc).isoformat(),
+        },
+        "regimes_tested": regimes,
+        "affects_selection": bool(affects),
         "live_locked": True,
-        **dict(extra or {}),
+        **extra_payload,
     }
     policies = [p for p in policies if p.get("policy_id") != policy_id]
     policies.append(row)
