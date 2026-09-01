@@ -74,9 +74,9 @@ def ensemble_identity() -> dict[str, Any]:
         "risk_assumptions": "Chase/extension and RSI blow-off fail tape; funds never invent a Buy",
         "backtest_parity": UNVERIFIED,
         "backtest_parity_detail": (
-            "No walk-forward of QT_RECO_ENSEMBLE v1 exists. Scanner signal "
-            "calibration and paper StrategySpec runs use different rules and "
-            "must not be shown as this method's performance."
+            "BACKTEST PARITY: UNVERIFIED. No walk-forward of QT_RECO_ENSEMBLE v1 "
+            "exists. Scanner signal calibration and paper StrategySpec runs use "
+            "different rules and must not be shown as this method's performance."
         ),
         "result_kind": None,
         "label": "QuantTerm recommendation ensemble",

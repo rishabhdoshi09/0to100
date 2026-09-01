@@ -400,7 +400,7 @@ function DecisionSheet({
           </ul>
           {(card.methods || []).length ? (
             <ul>
-              {card.methods.map((method) => (
+              {(card.methods || []).map((method) => (
                 <li key={method.id}>
                   {method.label}: {method.status}
                   {method.strategy_id ? ` · ${method.strategy_id}` : ''}
