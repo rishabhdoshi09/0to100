@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from product.fundamental_intelligence import build_fundamental_intelligence
 from product import research_status as RS
 from product.strategy_contract import (
@@ -62,6 +64,32 @@ def test_backtest_parity_rejects_old_rules_hash(monkeypatch):
     result = parity_for_strategy(strategy)
     assert result["status"] == "UNVERIFIED"
     assert result["evidence"] is None
+
+
+def test_recommendation_ledger_freezes_strategy_version_and_rules_hash(tmp_path):
+    from product.reco_ledger import append_recommendations
+
+    strategy = strategy_for_category("momentum_breakouts")
+    assert strategy is not None
+    path = tmp_path / "reco.jsonl"
+    card = {
+        "symbol": "AAA",
+        "category_id": "momentum_breakouts",
+        "reco_tier": "good_setup",
+        "primary_thesis": "Breakout with independent confirmation",
+        "methods": [],
+        "entry": 100,
+        "stop": 95,
+        "target": 112,
+        "cmp": 99,
+    }
+    assert append_recommendations([card], scan_scanned_at="2026-09-01T10:00:00Z", path=path) == path
+    record = json.loads(path.read_text(encoding="utf-8").strip())
+    assert record["schema_version"] == 3
+    frozen = record["cards"][0]["strategy"]
+    assert frozen["strategy_id"] == strategy.strategy_id
+    assert frozen["strategy_version"] == strategy.version
+    assert frozen["rules_hash"] == strategy.rules_hash
 
 
 def test_research_status_exposes_real_blockers_without_claiming_learning(monkeypatch):
