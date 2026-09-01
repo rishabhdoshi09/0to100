@@ -3,6 +3,10 @@
 No network calls are made here. The loader uses only already-present official
 bhavcopy data, cuts every series at ``as_of`` when supplied, and returns only
 pairwise correlations with enough overlapping sessions. Missing stays missing.
+
+Important: without an explicit or row-derived time anchor, correlations may be
+computed for diagnostics but are NOT labelled point-in-time and must not be used
+as a production hard gate by Portfolio Selection Authority.
 """
 from __future__ import annotations
 
@@ -35,10 +39,11 @@ def build_pit_correlations(
 ) -> dict[str, Any]:
     """Build pairwise close-return correlations from local official NSE data."""
     wanted = sorted({str(s).strip().upper() for s in symbols if str(s).strip()})
+    anchor = as_of[:10] if as_of else ""
     out: dict[str, Any] = {
         "source": "official_nse_bhavcopy_local",
-        "point_in_time": True,
-        "as_of": as_of[:10] if as_of else "",
+        "point_in_time": bool(anchor),
+        "as_of": anchor,
         "window": int(window),
         "min_periods": int(min_periods),
         "symbols_requested": wanted,
@@ -48,6 +53,8 @@ def build_pit_correlations(
         "missing_pairs": [],
         "coverage": 0.0,
         "network_used": False,
+        "production_usable": bool(anchor),
+        "warning": "" if anchor else "NO_TIME_ANCHOR_DIAGNOSTIC_ONLY",
     }
     if len(wanted) < 2:
         return out
@@ -63,7 +70,7 @@ def build_pit_correlations(
             except Exception:
                 pass
         series: dict[str, Any] = {}
-        cutoff = pd.Timestamp(as_of[:10]) if as_of else None
+        cutoff = pd.Timestamp(anchor) if anchor else None
         for symbol in wanted:
             frame = store.get_ohlcv(symbol)
             if frame is None or len(frame) < int(min_periods) + 1 or "close" not in frame.columns:
@@ -99,6 +106,7 @@ def build_pit_correlations(
         return out
     except Exception as exc:
         out["error"] = f"{type(exc).__name__}:{str(exc)[:160]}"
+        out["production_usable"] = False
         return out
 
 
