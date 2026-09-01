@@ -36,8 +36,6 @@ UNVERIFIED = "UNVERIFIED"
 VERIFIED = "VERIFIED"
 RELATED_NOT_PARITY = "RELATED_NOT_PARITY"
 
-# Conservative on purpose. recommendations_workspace contains category nomination;
-# the remaining modules contain expert/family/tier gates and their dependencies.
 _DECISION_CODE_PATHS = (
     "product/reco_methods.py",
     "product/reco_experts.py",
@@ -61,16 +59,13 @@ def _file_sha256(path: Path) -> str:
 
 
 def decision_code_hashes() -> dict[str, str]:
-    """Fingerprint the exact files that determine recommendation nomination/tiering.
+    """Fingerprint files that determine recommendation nomination/tiering.
 
     This deliberately over-invalidates rather than under-invalidates: a harmless
-    edit may require a fresh backtest, but a behavioural edit can never silently
+    edit may require fresh evidence, but a behavioural edit can never silently
     inherit old evidence under the same rules_hash.
     """
-    return {
-        rel: _file_sha256(ROOT / rel)
-        for rel in _DECISION_CODE_PATHS
-    }
+    return {rel: _file_sha256(ROOT / rel) for rel in _DECISION_CODE_PATHS}
 
 
 def ensemble_rules() -> dict[str, Any]:
@@ -101,13 +96,7 @@ def _load_json(path: Path) -> dict[str, Any] | None:
 
 
 def production_backtest_evidence(path: Path | None = None) -> dict[str, Any]:
-    """Read a production-replay artifact and verify it against today's exact hash.
-
-    A result is VERIFIED only when the artifact states that point-in-time guards
-    passed and its rules hash equals the current executable decision hash. Metrics
-    from a mismatched or leaky artifact are returned for audit but never attached
-    as production performance.
-    """
+    """Verify a performance artifact against today's exact executable hash."""
     target = path or PRODUCTION_BACKTEST_PATH
     raw = _load_json(target)
     expected = current_rules_hash()
@@ -120,21 +109,30 @@ def production_backtest_evidence(path: Path | None = None) -> dict[str, Any]:
             "point_in_time_verified": False,
             "metrics": None,
             "detail": (
-                "BACKTEST PARITY: UNVERIFIED. No same-code production replay artifact is on disk. "
+                "BACKTEST PARITY: UNVERIFIED. No same-code production performance artifact is on disk. "
                 "Generic Backtester, scanner calibration and paper StrategySpec results are not substitutes."
             ),
         }
     actual = str(raw.get("rules_hash") or "")
     pit = bool(raw.get("point_in_time_verified"))
     same = bool(actual and actual == expected)
-    verified = same and pit and bool(raw.get("completed"))
+    completed = bool(raw.get("completed"))
+    # Performance attribution must also declare its scope. A decision-integrity
+    # replay alone is never enough to promote historical return metrics.
+    performance_scope = str(raw.get("scope") or "") in {
+        "PRODUCTION_SIGNAL_OUTCOMES",
+        "PRODUCTION_EXECUTION_REPLAY",
+    }
+    verified = same and pit and completed and performance_scope
     reasons: list[str] = []
     if not same:
         reasons.append(f"artifact hash {actual or 'missing'} != current {expected}")
     if not pit:
         reasons.append("point-in-time / leakage gate not verified")
-    if not raw.get("completed"):
+    if not completed:
         reasons.append("replay artifact is not completed")
+    if not performance_scope:
+        reasons.append("artifact scope is not historical signal/execution performance")
     return {
         "available": True,
         "parity": VERIFIED if verified else UNVERIFIED,
@@ -142,14 +140,15 @@ def production_backtest_evidence(path: Path | None = None) -> dict[str, Any]:
         "artifact_rules_hash": actual or None,
         "same_rules_hash": same,
         "point_in_time_verified": pit,
-        "completed": bool(raw.get("completed")),
+        "completed": completed,
+        "scope": raw.get("scope"),
         "generated_at": raw.get("generated_at"),
         "dataset": raw.get("dataset") or {},
         "metrics": raw.get("metrics") if verified else None,
         "audit_metrics": raw.get("metrics") or {},
         "walk_forward": raw.get("walk_forward") or {},
         "detail": (
-            "BACKTEST PARITY: VERIFIED. The production replay used the same executable recommendation hash "
+            "BACKTEST PARITY: VERIFIED. Historical performance uses the same executable recommendation hash "
             "and passed point-in-time leakage guards."
             if verified else
             "BACKTEST PARITY: UNVERIFIED. " + "; ".join(reasons)
@@ -157,9 +156,26 @@ def production_backtest_evidence(path: Path | None = None) -> dict[str, Any]:
     }
 
 
+def decision_replay_evidence() -> dict[str, Any]:
+    """Synchronization check only — explicitly not performance evidence."""
+    try:
+        from product.production_replay import replay_tape_status
+        return replay_tape_status(current_rules_hash=current_rules_hash())
+    except Exception as exc:
+        return {
+            "available": False,
+            "status": "UNAVAILABLE",
+            "integrity_pass": False,
+            "performance_evidence": False,
+            "detail": f"Decision replay unavailable: {exc}",
+        }
+
+
 def ensemble_identity() -> dict[str, Any]:
     rules = ensemble_rules()
     evidence = production_backtest_evidence()
+    replay = decision_replay_evidence()
+    replay_detail = str(replay.get("detail") or "")
     return {
         "strategy_id": ENSEMBLE_ID,
         "strategy_version": ENSEMBLE_VERSION,
@@ -172,15 +188,16 @@ def ensemble_identity() -> dict[str, Any]:
             "persisted market scan overlay",
             "two independent evidence families for Buy",
             f"Live EV / case memory require n≥{EV_MIN_N}",
-            "same executable rules_hash for production backtest attribution",
+            "same executable rules_hash for production performance attribution",
             "point-in-time feature timestamps before outcome timestamps",
         ],
         "entry_logic": "Saved scan entry / buy zone; ensemble does not rescore OHLCV on page open",
         "exit_logic": "Saved scan stop and target; paper GTT on autonomy fills only",
         "risk_assumptions": "Chase/extension and RSI blow-off fail tape; funds never invent a Buy",
         "backtest_parity": evidence["parity"],
-        "backtest_parity_detail": evidence["detail"],
+        "backtest_parity_detail": evidence["detail"] + (f" Decision replay: {replay_detail}" if replay_detail else ""),
         "backtest_evidence": evidence,
+        "decision_replay": replay,
         "result_kind": "SAME_HASH_PRODUCTION_REPLAY" if evidence["parity"] == VERIFIED else None,
         "label": "QuantTerm recommendation ensemble",
         "rules": rules,
@@ -294,12 +311,14 @@ def decorate_card(card: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def production_registry() -> dict[str, Any]:
+    ensemble = ensemble_identity()
     methods = [method_identity(mid) for mid in METHOD_WEIGHTS]
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "role": "production_recommendations",
-        "ensemble": ensemble_identity(),
+        "ensemble": ensemble,
         "methods": methods,
+        "decision_replay": ensemble.get("decision_replay") or {},
         "related_signal_calibration": related_signal_calibration(),
         "note": (
             "These ids describe the live recommendation checks. Paper StrategySpec rows belong on the research list "
