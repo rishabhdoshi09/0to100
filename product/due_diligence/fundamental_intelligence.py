@@ -1,16 +1,16 @@
 """Transparent investor-style fundamental intelligence built from measured report evidence.
 
 This module does not acquire data and does not create a second stock-research engine.
-It projects the evidence already produced by ``StockResearchEngine`` into investor
-questions that are easier to reason about: business quality, financial quality,
-cash flow, governance, capital allocation, growth and valuation.
+It projects evidence already produced by ``StockResearchEngine`` into investor
+questions: business quality, financial quality, cash flow, governance, capital
+allocation, growth and valuation.
 
-Important invariants:
+Invariants:
 - missing evidence is never scored as zero;
-- not-applicable dimensions are removed from the coverage denominator;
-- current valuation multiples alone are context, not an attractiveness score;
-- management commentary is not treated as execution quality unless measured outcomes exist;
-- this score is descriptive fundamental evidence, never an independent BUY signal.
+- not-applicable dimensions leave the coverage denominator;
+- current valuation multiples alone are context, not attractiveness;
+- management commentary is not execution quality without measured outcomes;
+- this score is descriptive evidence, never an independent BUY signal.
 """
 from __future__ import annotations
 
@@ -26,7 +26,6 @@ COMPONENT_WEIGHTS: dict[str, float] = {
     "growth_quality": 10.0,
     "valuation": 10.0,
 }
-
 MIN_DISPLAY_COVERAGE = 0.50
 MIN_SCORED_COMPONENTS = 3
 
@@ -42,10 +41,7 @@ _LABEL_POINTS: dict[str, float] = {
     "deteriorating": 24.0,
     "elevated": 25.0,
 }
-
-_BUSINESS_PILLARS = {
-    "sector", "asset_quality", "funding", "capital", "consistency",
-}
+_BUSINESS_PILLARS = {"sector", "asset_quality", "funding", "capital", "consistency"}
 _GROWTH_PILLARS = {"growth"}
 _GOVERNANCE_PILLARS = {"governance"}
 _GOVERNANCE_FLAG_WORDS = {
@@ -64,11 +60,21 @@ def _f(value: Any) -> float | None:
         return None
 
 
-def _pct(value: Any) -> float:
+def _incoming_fraction(value: Any) -> float:
+    """Accept an upstream fraction (0..1) or percentage (0..100)."""
     number = _f(value)
     if number is None:
         return 0.0
-    return max(0.0, min(1.0, number / 100.0 if number > 1 else number))
+    fraction = number / 100.0 if number > 1.0 else number
+    return max(0.0, min(1.0, fraction))
+
+
+def _component_fraction(component: Mapping[str, Any]) -> float:
+    """Our own component field is always named coverage_pct and always 0..100."""
+    number = _f(component.get("coverage_pct"))
+    if number is None:
+        return 0.0
+    return max(0.0, min(1.0, number / 100.0))
 
 
 def _label_points(label: Any) -> float | None:
@@ -160,9 +166,8 @@ def _component(
 
 
 def _business_component(report: Mapping[str, Any]) -> dict[str, Any]:
-    findings = list(report.get("kpis") or [])
     score, coverage, evidence, explain = _weighted_findings(
-        findings, pillars=_BUSINESS_PILLARS, critical_fallback=True,
+        list(report.get("kpis") or []), pillars=_BUSINESS_PILLARS, critical_fallback=True,
     )
     framework = str((report.get("framework") or {}).get("label") or "sector framework")
     return _component(
@@ -177,23 +182,21 @@ def _business_component(report: Mapping[str, Any]) -> dict[str, Any]:
 def _financial_component(report: Mapping[str, Any]) -> dict[str, Any]:
     quality = dict(report.get("fundamental_quality") or {})
     score = _f(quality.get("score"))
-    coverage = _pct(
+    coverage = _incoming_fraction(
         quality.get("score_coverage_pct")
         if quality.get("score_coverage_pct") is not None
         else quality.get("coverage_pct")
     )
-    evidence = [str(quality.get("explain") or "")]
     return _component(
         "financial_quality", "Financial Quality",
         score=score, coverage=coverage,
         explain=(
-            "Uses the existing sector-weighted QuantTerm fundamental-quality score. "
-            "It is not recomputed from a second model."
+            "Uses the existing sector-weighted QuantTerm fundamental-quality score; it is not recomputed by a second model."
             if score is not None else
             "Existing sector-weighted fundamental quality is Unmeasured because evidence coverage is too thin."
         ),
-        evidence=evidence,
-        formula="Existing StockResearchEngine fundamental_quality.score + its measured evidence coverage.",
+        evidence=[str(quality.get("explain") or "")],
+        formula="Existing StockResearchEngine fundamental_quality.score plus its measured evidence coverage.",
     )
 
 
@@ -202,35 +205,29 @@ def _cash_component(report: Mapping[str, Any]) -> dict[str, Any]:
     applicable = cash.get("applicable") is not False
     if not applicable:
         return _component(
-            "cash_flow", "Cash Flow Quality",
-            score=None, coverage=0.0, applicable=False,
+            "cash_flow", "Cash Flow Quality", score=None, coverage=0.0, applicable=False,
             explain=str(cash.get("detail") or "Cash-conversion analysis is not applicable to this business model."),
             formula="Excluded from the overall evidence denominator when not applicable.",
         )
     metrics = list(cash.get("metrics") or [])
     available = [m for m in metrics if m.get("available")]
-    coverage = len(available) / len(metrics) if metrics else 0.0
-    score = _label_points(cash.get("label"))
-    evidence = [str(m.get("fact") or "") for m in available if m.get("fact")][:5]
     return _component(
         "cash_flow", "Cash Flow Quality",
-        score=score, coverage=coverage,
+        score=_label_points(cash.get("label")),
+        coverage=len(available) / len(metrics) if metrics else 0.0,
         explain=str(cash.get("detail") or "Rule-based CFO/PAT, FCF and working-capital evidence."),
-        evidence=evidence,
-        formula="Rule label from measured cash-conversion checks; no estimate is created when inputs are absent.",
+        evidence=[str(m.get("fact") or "") for m in available if m.get("fact")][:5],
+        formula="Rule label from measured cash-conversion checks; absent inputs create no estimate.",
     )
 
 
 def _governance_component(report: Mapping[str, Any]) -> dict[str, Any]:
-    findings = list(report.get("kpis") or [])
-    score, coverage, evidence, explain = _weighted_findings(findings, pillars=_GOVERNANCE_PILLARS)
-    flags = list(report.get("red_flags") or [])
+    score, coverage, evidence, explain = _weighted_findings(
+        list(report.get("kpis") or []), pillars=_GOVERNANCE_PILLARS,
+    )
     governance_flags: list[Mapping[str, Any]] = []
-    for flag in flags:
-        blob = " ".join(
-            str(flag.get(key) or "")
-            for key in ("kind", "id", "title", "rule")
-        ).lower()
+    for flag in list(report.get("red_flags") or []):
+        blob = " ".join(str(flag.get(k) or "") for k in ("kind", "id", "title", "rule")).lower()
         if any(word in blob for word in _GOVERNANCE_FLAG_WORDS):
             governance_flags.append(flag)
 
@@ -243,10 +240,7 @@ def _governance_component(report: Mapping[str, Any]) -> dict[str, Any]:
             str(f.get("evidence") or f.get("fact") or f.get("title") or "")
             for f in governance_flags
         ][:5] + evidence
-        explain = (
-            f"{len(governance_flags)} measured governance/promoter flag(s) cap the component score. "
-            + explain
-        )
+        explain = f"{len(governance_flags)} measured governance/promoter flag(s) cap the component score. {explain}"
 
     guidance_n = len(list(report.get("extracted_guidance") or []))
     if guidance_n:
@@ -260,52 +254,55 @@ def _governance_component(report: Mapping[str, Any]) -> dict[str, Any]:
         )
     return _component(
         "management_governance", "Management & Governance",
-        score=score, coverage=coverage,
-        explain=explain,
-        evidence=evidence,
-        formula="Governance KPI evidence, capped by measured governance/promoter red flags; commentary alone earns no points.",
+        score=score, coverage=coverage, explain=explain, evidence=evidence,
+        formula="Governance KPI evidence, capped by measured governance/promoter flags; commentary alone earns no points.",
     )
 
 
 def _capital_allocation_component(report: Mapping[str, Any]) -> dict[str, Any]:
     balance = dict(report.get("balance_sheet_rules") or {})
     cash = dict(report.get("cash_flow_quality") or {})
-    sources: list[tuple[str, float]] = []
+    source_scores: list[float] = []
     evidence: list[str] = []
 
     balance_score = _label_points(balance.get("label"))
-    balance_metrics = [m for m in list(balance.get("metrics") or []) if m.get("available")]
     if balance_score is not None:
-        sources.append(("balance-sheet funding", balance_score))
-        evidence.extend(str(m.get("fact") or "") for m in balance_metrics[:3] if m.get("fact"))
-
+        source_scores.append(balance_score)
+        evidence.extend(
+            str(m.get("fact") or "")
+            for m in list(balance.get("metrics") or [])[:3]
+            if m.get("available") and m.get("fact")
+        )
     if cash.get("applicable") is not False:
         cash_score = _label_points(cash.get("label"))
-        cash_metrics = [m for m in list(cash.get("metrics") or []) if m.get("available")]
         if cash_score is not None:
-            sources.append(("cash deployment", cash_score))
-            evidence.extend(str(m.get("fact") or "") for m in cash_metrics[:3] if m.get("fact"))
+            source_scores.append(cash_score)
+            evidence.extend(
+                str(m.get("fact") or "")
+                for m in list(cash.get("metrics") or [])[:3]
+                if m.get("available") and m.get("fact")
+            )
 
-    score = round(sum(v for _, v in sources) / len(sources), 1) if sources else None
-    coverage = min(1.0, len(sources) / 2.0)
-    explain = (
-        "Capital-allocation proxy from measured funding/leverage and cash-generation evidence. "
-        "Acquisitions, buybacks, dividends and project-level returns are not inferred."
-        if sources else
-        "Capital allocation is Unmeasured: the desk does not yet have enough cash/debt deployment evidence to score it."
-    )
+    score = round(sum(source_scores) / len(source_scores), 1) if source_scores else None
     return _component(
         "capital_allocation", "Capital Allocation",
-        score=score, coverage=coverage,
-        explain=explain,
+        score=score,
+        coverage=min(1.0, len(source_scores) / 2.0),
+        explain=(
+            "Capital-allocation proxy from measured funding/leverage and cash-generation evidence. "
+            "Acquisitions, buybacks, dividends and project-level returns are not inferred."
+            if source_scores else
+            "Capital allocation is Unmeasured: cash/debt deployment evidence is too thin to score it."
+        ),
         evidence=evidence,
         formula="Average of measured balance-sheet funding and cash-generation rule scores; strategic uses of capital remain explicit gaps.",
     )
 
 
 def _growth_component(report: Mapping[str, Any]) -> dict[str, Any]:
-    findings = list(report.get("kpis") or [])
-    score, coverage, evidence, explain = _weighted_findings(findings, pillars=_GROWTH_PILLARS)
+    score, coverage, evidence, explain = _weighted_findings(
+        list(report.get("kpis") or []), pillars=_GROWTH_PILLARS,
+    )
     growth = dict(report.get("growth_quality") or {})
     if score is None:
         qualitative = _label_points(growth.get("label"))
@@ -317,26 +314,27 @@ def _growth_component(report: Mapping[str, Any]) -> dict[str, Any]:
             explain = f"Growth-quality rule label: {growth.get('label')}."
     return _component(
         "growth_quality", "Growth Quality",
-        score=score, coverage=coverage,
-        explain=explain,
-        evidence=evidence,
-        formula="Measured growth KPI trend points; falls back only to the rule-based growth-quality label when available.",
+        score=score, coverage=coverage, explain=explain, evidence=evidence,
+        formula="Measured growth KPI trend points; rule-based growth quality is used only when measured.",
     )
 
 
 def _valuation_component(report: Mapping[str, Any]) -> dict[str, Any]:
     valuation = [v for v in list(report.get("valuation") or []) if v.get("available", True)]
-    scored = [
-        v for v in valuation
-        if _f(v.get("score")) is not None or _f(v.get("points")) is not None
-    ]
-    evidence = [str(v.get("fact") or v.get("interpretation") or v.get("label") or "") for v in valuation][:6]
+    scored = [v for v in valuation if _f(v.get("score")) is not None or _f(v.get("points")) is not None]
+    evidence = [
+        str(v.get("fact") or v.get("interpretation") or v.get("label") or "")
+        for v in valuation
+    ][:6]
     if scored:
-        values = [(_f(v.get("score")) if _f(v.get("score")) is not None else _f(v.get("points"))) for v in scored]
+        values = [
+            _f(v.get("score")) if _f(v.get("score")) is not None else _f(v.get("points"))
+            for v in scored
+        ]
         numbers = [v for v in values if v is not None]
         score = round(sum(numbers) / len(numbers), 1) if numbers else None
         coverage = len(scored) / max(len(valuation), 1)
-        explain = "Valuation attractiveness is scored only from valuation evidence that already carries an explicit validated score."
+        explain = "Valuation attractiveness uses only valuation evidence that already carries an explicit validated score."
     else:
         score = None
         coverage = 0.0
@@ -346,15 +344,13 @@ def _valuation_component(report: Mapping[str, Any]) -> dict[str, Any]:
         )
     return _component(
         "valuation", "Valuation",
-        score=score, coverage=coverage,
-        explain=explain,
-        evidence=evidence,
-        formula="No valuation points without an explicit contextual scoring method; current multiples alone earn zero guessed points.",
+        score=score, coverage=coverage, explain=explain, evidence=evidence,
+        formula="No valuation points without an explicit contextual method; current multiples alone earn no guessed points.",
     )
 
 
 def build_fundamental_intelligence(report: Mapping[str, Any]) -> dict[str, Any]:
-    """Build the investor-facing scorecard from one completed due-diligence report."""
+    """Build an investor-facing scorecard from one completed due-diligence report."""
     components = [
         _business_component(report),
         _financial_component(report),
@@ -364,21 +360,20 @@ def build_fundamental_intelligence(report: Mapping[str, Any]) -> dict[str, Any]:
         _growth_component(report),
         _valuation_component(report),
     ]
-
     applicable = [c for c in components if c.get("applicable", True)]
     applicable_weight = sum(float(c.get("max") or 0.0) for c in applicable) or 1.0
     evidence_weight = sum(
-        float(c.get("max") or 0.0) * _pct(c.get("coverage_pct"))
+        float(c.get("max") or 0.0) * _component_fraction(c)
         for c in applicable
     )
     coverage = evidence_weight / applicable_weight
     scored = [c for c in applicable if c.get("score") is not None]
     numerator = sum(
-        float(c["score"]) * float(c.get("max") or 0.0) * _pct(c.get("coverage_pct"))
+        float(c["score"]) * float(c.get("max") or 0.0) * _component_fraction(c)
         for c in scored
     )
     denominator = sum(
-        float(c.get("max") or 0.0) * _pct(c.get("coverage_pct"))
+        float(c.get("max") or 0.0) * _component_fraction(c)
         for c in scored
     )
     raw_score = round(numerator / denominator) if denominator > 0 else None
@@ -415,9 +410,7 @@ def build_fundamental_intelligence(report: Mapping[str, Any]) -> dict[str, Any]:
             "Investor-style synthesis of the same due-diligence evidence. Missing dimensions are skipped, not scored as zero. "
             f"Unmeasured: {', '.join(missing) if missing else 'none'}."
         ),
-        "formula": (
-            "coverage-weighted component score; displayed only when ≥50% applicable evidence coverage and ≥3 components are scored"
-        ),
+        "formula": "coverage-weighted component score; shown only at ≥50% applicable evidence coverage and ≥3 scored components",
         "evidence": [],
         "applicable": True,
         "missing_is_zero": False,
