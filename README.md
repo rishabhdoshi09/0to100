@@ -48,7 +48,13 @@ cd ~/0to100
 bash scripts/run_quantterm_complete.sh
 ```
 
-Open `http://127.0.0.1:5173`. Paste the full Kite redirect URL when asked — you do not need to pick out `request_token` by hand.
+That is the only command a normal operator needs. Home at
+`http://127.0.0.1:5173` is the rest of the day. On an interactive local
+machine the launcher opens Home once after the desk is reachable.
+`./quantterm.sh` is a tiny exec wrapper of the same command.
+
+Paste the full Kite redirect URL when asked — you do not need to pick out
+`request_token` by hand.
 
 `scripts/run_desk.sh` is only a compatibility wrapper. It execs
 `scripts/run_quantterm_complete.sh`. Do not start Streamlit, and do not start

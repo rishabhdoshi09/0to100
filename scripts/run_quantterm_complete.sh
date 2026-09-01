@@ -190,6 +190,35 @@ start_stack
 echo "[COMPLETE STACK] Running in this terminal: desk http://127.0.0.1:5173  · API :8765  · reports :8766  · autonomy  · market scan"
 echo "[COMPLETE STACK] Leave this terminal open. Ctrl-C stops everything. Do not start a second terminal."
 
+HOME_OPENED=0
+wait_for_desk() {
+  local i=0
+  while (( i < 80 )); do
+    if url_ok "http://127.0.0.1:5173/" && url_ok "http://127.0.0.1:8765/api/health"; then
+      return 0
+    fi
+    sleep 0.5 || true
+    i=$((i + 1))
+  done
+  return 1
+}
+
+if wait_for_desk; then
+  python - <<'PY' || true
+from product.startup_check import print_startup_summary
+raise SystemExit(print_startup_summary())
+PY
+  if [[ "${QT_NONINTERACTIVE:-}" != "1" && "${QT_NO_BROWSER:-}" != "1" && -t 0 && "$HOME_OPENED" != "1" ]]; then
+    python - <<'PY' || true
+from product.startup_check import maybe_open_home_browser
+maybe_open_home_browser()
+PY
+    HOME_OPENED=1
+  fi
+else
+  echo "[COMPLETE STACK] Home is still starting. Open http://127.0.0.1:5173 when the desk is up."
+fi
+
 while [[ "$STOP" != "1" ]]; do
   if [[ "$REPORT_EXTERNAL" != "1" ]]; then
     if [[ -z "${REPORT_PID:-}" ]] || ! alive "$REPORT_PID"; then

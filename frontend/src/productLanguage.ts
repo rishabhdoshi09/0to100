@@ -11,14 +11,15 @@ export type PageGuide = {
 export const PAGE_GUIDE: Record<string, PageGuide> = {
   Home: {
     title: 'Home',
-    purpose: 'Three-lane radar — Breakouts, Momentum and Long-Term Picks — plus two distinct “best of” panels from the saved scan.',
+    purpose: 'One place to see if QuantTerm is running, what it is doing, and whether you need to do anything.',
     questions: [
-      'Is official NSE bhavcopy ready?',
-      'Which names are sniper breakouts vs quality-among-breakouts?',
-      'Did the current scan actually finish?',
+      'Do I need to do anything?',
+      'What is QuantTerm doing now, and what comes next?',
+      'Did the paper bot trade — and why or why not?',
+      'Is there enough real evidence yet? Is live money still locked?',
     ],
-    action: 'Scan now if the desk is empty. One scan fills every setup. Then open one name in Stock Intelligence.',
-    doesNot: 'A green market or a sniper tag is not an instruction to buy.',
+    action: 'Leave it running. If Home shows one button, click that. Do not open a second terminal.',
+    doesNot: 'A green market or a sniper tag is not an instruction to buy. Live money stays locked.',
   },
   'Command Center': {
     title: 'Home',

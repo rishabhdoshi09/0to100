@@ -354,8 +354,20 @@ def learning_dashboard_api() -> dict:
 @product.app.get("/api/forward-soak")
 def forward_soak_api() -> dict:
     """Forward paper-trading soak scoreboard from persisted artifacts."""
-    from product.forward_soak import scoreboard
-    return scoreboard()
+    from product.forward_soak import load_latest_verification, persist_soak_verification, scoreboard
+    payload = scoreboard()
+    payload["verification"] = load_latest_verification() or persist_soak_verification()
+    return payload
+
+
+@product.app.post("/api/forward-soak")
+def forward_soak_verify_now() -> dict:
+    """Read-only re-verify. Same function as scripts/verify_forward_soak.py."""
+    from product.forward_soak import persist_soak_verification, scoreboard
+    verified = persist_soak_verification(force=True)
+    board = scoreboard()
+    board["verification"] = verified
+    return board
 
 
 @product.app.get("/api/system-health-contract")

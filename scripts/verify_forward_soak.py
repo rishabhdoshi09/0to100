@@ -36,9 +36,13 @@ LANE_ORDER = (
 
 
 def main() -> int:
-    from product.forward_soak import verify_persisted_soak
+    from product.forward_soak import persist_soak_verification, verify_persisted_soak
 
     result = verify_persisted_soak()
+    try:
+        persist_soak_verification(force=True)
+    except Exception:
+        pass
     lanes = dict(result.get("lanes") or {})
     for name in LANE_ORDER:
         print(f"{name}: {lanes.get(name, 'FAIL')}")

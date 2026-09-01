@@ -4,6 +4,52 @@
   animation: qt-rise .35s ease both;
 }
 
+.home-os-card,
+.reco-desk .home-os-card {
+  margin-bottom: 16px;
+  padding: 16px 18px 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(16, 28, 46, .98), rgba(8, 14, 27, .96));
+  color: var(--text, #e6e9ef);
+}
+.home-os-card.state-login_required,
+.home-os-card.state-failed_recoverable,
+.home-os-card.state-problem { border-color: rgba(255, 184, 77, .45); }
+.home-os-card.state-no_trade,
+.home-os-card.state-market_closed_complete { border-color: rgba(90, 196, 168, .35); }
+.reco-desk .home-os-card h2,
+.home-os-hero h2 { margin: 6px 0 6px; font-size: 28px; line-height: 1.2; color: #f4f7fb; }
+.home-os-hero span { font-size: 10px; letter-spacing: .16em; color: #9aa8bd; }
+.home-os-hero p,
+.reco-desk .home-os-card p { color: #c5d0de; margin: 0 0 10px; }
+.reco-desk .home-os-card strong { color: #f4f7fb; }
+.home-os-now-next, .home-os-grid, .home-os-system, .home-os-opps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+  margin: 10px 0;
+}
+.home-os-now-next > div, .home-os-grid > div, .home-os-system > div, .home-os-opps > div {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.home-os-now-next span, .home-os-grid span, .home-os-system span, .home-os-opps span {
+  display: block;
+  font-size: 9px;
+  letter-spacing: .12em;
+  color: var(--muted);
+}
+.home-os-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+.home-os-actions button { min-width: 140px; }
+.home-os-actions button.secondary { opacity: .85; }
+.home-os-actions em { color: var(--muted); font-size: 13px; }
+.home-os-activity { list-style: none; padding: 0; margin: 8px 0; }
+.home-os-activity li { display: flex; gap: 10px; font-size: 13px; margin: 4px 0; }
+.home-os-activity time { color: var(--muted); min-width: 48px; font-variant-numeric: tabular-nums; }
+.home-os-why { margin: 8px 0 4px; color: var(--muted); font-size: 13px; }
+
 .radar-hero {
   display: flex;
   justify-content: space-between;
