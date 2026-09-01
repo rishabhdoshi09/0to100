@@ -120,9 +120,15 @@ def correlations_for_candidates(
 ) -> dict[str, Any]:
     symbols = [str(r.get("symbol") or "").upper() for r in rows]
     symbols.extend(str(s).upper() for s in (held_symbols or []))
-    return build_pit_correlations(
+    result = build_pit_correlations(
         symbols,
         as_of=as_of or _as_of_from_rows(rows),
         window=window,
         min_periods=min_periods,
     )
+    if not result.get("production_usable"):
+        # Keep diagnostics visible, but make the production-facing key empty so
+        # Portfolio Selection Authority cannot accidentally hard-block on future data.
+        result["diagnostic_correlations"] = dict(result.get("correlations") or {})
+        result["correlations"] = {}
+    return result
