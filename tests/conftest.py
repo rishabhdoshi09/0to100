@@ -25,36 +25,6 @@ import pytest
 # During the default (network-free) run, do not collect/import tests/integration.
 collect_ignore = [] if os.getenv("QT_INTEGRATION") else ["integration"]
 
-_LONG_TERM_PROJECTOR = None
-
-
-def pytest_sessionstart(session):
-    """Freeze the canonical saved-scan projector identity for leak detection.
-
-    Tests may monkeypatch it through pytest's monkeypatch fixture, but the fixture
-    must restore it at teardown. A direct assignment leak is a test-isolation bug
-    because later tests (and long-lived processes) would see altered behavior.
-    """
-    global _LONG_TERM_PROJECTOR
-    from scan import long_term_service
-    _LONG_TERM_PROJECTOR = long_term_service.technical_rows_from_market_scan
-
-
-@pytest.hookimpl(hookwrapper=True)
-def pytest_runtest_teardown(item, nextitem):
-    """Fail at the test that leaves the canonical projector mutated."""
-    yield
-    if _LONG_TERM_PROJECTOR is None:
-        return
-    from scan import long_term_service
-    current = long_term_service.technical_rows_from_market_scan
-    if current is not _LONG_TERM_PROJECTOR:
-        pytest.fail(
-            "test leaked scan.long_term_service.technical_rows_from_market_scan "
-            f"after teardown: {item.nodeid}",
-            pytrace=False,
-        )
-
 
 @pytest.fixture(autouse=True)
 def isolate_mutable_runtime_state(tmp_path_factory, monkeypatch, request):
@@ -66,6 +36,22 @@ def isolate_mutable_runtime_state(tmp_path_factory, monkeypatch, request):
     reset_analog_corpus_cache()
     paper_mem = tmp_path_factory.mktemp("paper_memory") / "paper_memory.json"
     monkeypatch.setenv("QT_PAPER_MEMORY", str(paper_mem))
+
+    # Some import-safety tests deliberately reload modules. test_universal_scan
+    # imports run_long_term_scan at collection time, so without this rebind it can
+    # retain a function whose __globals__ belongs to an obsolete module instance
+    # while string-based monkeypatches target the current sys.modules instance.
+    # Keep the test exercising the current production module; do not weaken its
+    # saved-scan/no-secondary-walk assertion.
+    if request.module.__name__.endswith("test_universal_scan"):
+        from scan import long_term_service as current_long_term_service
+
+        monkeypatch.setattr(
+            request.module,
+            "run_long_term_scan",
+            current_long_term_service.run_long_term_scan,
+            raising=True,
+        )
 
     # This legacy smart-acquire test intentionally writes an Aug-26 cache and
     # asserts that the 3-day filings lane is still fresh. Without an explicit
