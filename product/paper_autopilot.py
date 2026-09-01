@@ -94,6 +94,7 @@ class AutopilotDecision:
     breakdown: dict[str, Any] = field(default_factory=dict)
     why: dict[str, Any] = field(default_factory=dict)
     group: str = ""
+    portfolio: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -118,6 +119,7 @@ class AutopilotDecision:
             "dd_status": (self.context or {}).get("dd_status"),
             "entry_quality": (self.context or {}).get("entry_quality"),
             "missing_evidence": (self.context or {}).get("missing_evidence") or [],
+            "portfolio_authority": self.portfolio or None,
         }
 
 
@@ -561,6 +563,21 @@ def run_reco_paper_cycle(
             _freeze(decision, group="REJECTED")
 
     ranked.sort(key=lambda item: (-item[0], item[1].symbol))
+    try:
+        from product.portfolio_selection_authority import apply_portfolio_authority
+        ranked, diverted = apply_portfolio_authority(
+            ranked, book=book, max_new=max_new, regime=regime,
+        )
+        for decision in diverted:
+            row = decision.as_dict() if hasattr(decision, "as_dict") else dict(decision)
+            if str(getattr(decision, "decision", row.get("decision"))) == WAIT:
+                waits.append(row)
+                _freeze(decision, group="RECOMMENDED_BUT_NOT_FILLED")
+            else:
+                rejections.append(row)
+                _freeze(decision, group="REJECTED")
+    except Exception:
+        diverted = []
     snapshot_id = str(payload.get("scan_scanned_at") or day)
     entered = 0
     for _score, decision in ranked:
@@ -605,13 +622,27 @@ def run_reco_paper_cycle(
         family_risk[sector] = family_risk.get(sector, 0.0) + DEFAULT_RISK_PCT
         cluster_risk[sector] = cluster_risk.get(sector, 0.0) + DEFAULT_RISK_PCT
         opened.append((ENSEMBLE_ID, decision.symbol))
-        taken.append({
+        taken_row = {
             **decision.as_dict(),
             "qty": getattr(pos, "qty", None),
             "entry_fill": getattr(pos, "entry_price", None),
             "status": "TAKEN",
             "group": "TAKEN",
-        })
+        }
+        try:
+            from product.execution_reality import shadow_for_paper_fill
+            shadow = shadow_for_paper_fill(
+                qty=taken_row.get("qty"),
+                entry=taken_row.get("entry_fill") or taken_row.get("entry"),
+                target=taken_row.get("target"),
+                stop=taken_row.get("stop"),
+            )
+            if shadow:
+                # Nested analytics only — qty / entry_fill stay the book fill.
+                taken_row["execution_reality_shadow"] = shadow
+        except Exception:
+            pass
+        taken.append(taken_row)
         try:
             from product.paper_learning_loop import note_later_entry
             note_later_entry(decision.symbol, path=policy_path)
@@ -696,7 +727,23 @@ def run_reco_paper_cycle(
         "live_locked": True,
         "adapter": "paper",
         "rules_hash": ident.get("rules_hash"),
+        "execution_reality": {
+            "shadow_mode": True,
+            "affects_paper_orders": False,
+            "engine_version": "1",
+            "schema_version": 1,
+            "note": "Analytics only. Paper fills remain intended-price until promotion.",
+        },
+        "regime_intelligence_shadow": None,
+        "portfolio_authority": "after_selection_authority",
     }
+    try:
+        from product.regime_intelligence import shadow_classify
+        cycle["regime_intelligence_shadow"] = shadow_classify(
+            None, production_regime=str(regime or "RISK_ON"),
+        )
+    except Exception:
+        cycle["regime_intelligence_shadow"] = {"state": "UNKNOWN", "affects_production": False}
     if persist_journal:
         try:
             record_cycle(cycle)
