@@ -34,9 +34,11 @@ def challenger_promotion_reasons(
         elif adj_exp is None:
             reasons.append("EXECUTION_ADJUSTED_EXPECTANCY_MISSING")
         elif float(adj_exp) <= 0.0:
-            reasons.append("EXECUTION_ADJUSTED_EDGE_NON_POSITIVE")
-        elif gross_exp is not None and float(gross_exp) > 0 and float(adj_exp) <= 0:
-            reasons.append("GROSS_EDGE_DID_NOT_SURVIVE_EXECUTION")
+            reasons.append(
+                "GROSS_EDGE_DID_NOT_SURVIVE_EXECUTION"
+                if gross_exp is not None and float(gross_exp) > 0
+                else "EXECUTION_ADJUSTED_EDGE_NON_POSITIVE"
+            )
 
     if str(adversarial_status or "").upper() in {"FAILED", "FRAGILE"}:
         code = "ADVERSARIAL_FAILED" if str(adversarial_status).upper() == "FAILED" else "ADVERSARIAL_FRAGILE"
@@ -65,7 +67,11 @@ def assess_component(
     if execution_adjusted_expectancy is None:
         blockers.append("EXECUTION_ADJUSTED_EXPECTANCY_MISSING")
     elif execution_adjusted_expectancy <= 0:
-        blockers.append("EXECUTION_ADJUSTED_EDGE_NON_POSITIVE")
+        blockers.append(
+            "GROSS_EDGE_DID_NOT_SURVIVE_EXECUTION"
+            if gross_expectancy is not None and gross_expectancy > 0
+            else "EXECUTION_ADJUSTED_EDGE_NON_POSITIVE"
+        )
     if execution_adjusted_coverage is None or execution_adjusted_coverage < MIN_EXECUTION_COVERAGE:
         blockers.append("EXECUTION_EVIDENCE_INCOMPLETE")
     if str(adversarial_status or "").upper() in {"FAILED", "FRAGILE"}:
@@ -80,7 +86,7 @@ def assess_component(
         "execution_adjusted_coverage": execution_adjusted_coverage,
         "adversarial_status": adversarial_status or "UNKNOWN",
         "decision": decision,
-        "blockers": blockers,
+        "blockers": list(dict.fromkeys(blockers)),
         "explicit_promotion_required": bool(explicit_promotion_required),
         "live_locked": True,
         "notes": list(notes or []),
