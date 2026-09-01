@@ -43,8 +43,13 @@ def _connect() -> sqlite3.Connection:
 class FundamentalsCache:
     """Thread-unsafe SQLite cache — use one instance per process."""
 
-    def get(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """Return cached data if fresh, else None."""
+    def get(self, symbol: str, *, allow_stale: bool = False) -> Optional[Dict[str, Any]]:
+        """Return cached data.
+
+        Fresh hits return as-is. Stale hits are NOT deleted — last-good snapshots
+        stay on disk. Callers that want only fresh data get None unless
+        ``allow_stale=True``, in which case the snapshot is labelled stale.
+        """
         symbol = symbol.upper()
         with _connect() as conn:
             row = conn.execute(
@@ -55,11 +60,27 @@ class FundamentalsCache:
             return None
         data_json, fetched_at = row
         age = time.time() - fetched_at
-        if age > _TTL:
+        stale = age > _TTL
+        if stale:
             log.debug("fundamentals_cache_stale", symbol=symbol, age_hours=round(age / 3600, 1))
+            if not allow_stale:
+                return None
+        try:
+            data = json.loads(data_json)
+        except Exception:
             return None
-        log.info("fundamentals_cache_hit", symbol=symbol, age_minutes=round(age / 60, 1))
-        return json.loads(data_json)
+        if not isinstance(data, dict):
+            return None
+        data["_cache_fetched_at"] = fetched_at
+        data["_cache_age_seconds"] = age
+        data["_cache_stale"] = stale
+        if stale:
+            data["stale"] = True
+            data["source_label"] = "last_good_snapshot"
+            data["source_tier"] = "last_good"
+            data["official"] = False
+        log.info("fundamentals_cache_hit", symbol=symbol, age_minutes=round(age / 60, 1), stale=stale)
+        return data
 
     def set(self, symbol: str, data: Dict[str, Any]) -> None:
         """Store data with current timestamp."""
@@ -80,8 +101,12 @@ class FundamentalsCache:
         log.info("fundamentals_cache_written", symbol=symbol, bytes=len(payload))
 
     def clear_old(self) -> int:
-        """Delete entries older than TTL. Returns count deleted."""
-        cutoff = time.time() - _TTL
+        """Bound disk use without discarding last-good snapshots.
+
+        Rows younger than 90 days are kept even if they are past the 1-day TTL,
+        so a failed official/secondary fetch can still serve a labelled snapshot.
+        """
+        cutoff = time.time() - 90 * 86_400
         with _connect() as conn:
             cursor = conn.execute(
                 "DELETE FROM fundamentals_cache WHERE fetched_at < ?", (cutoff,)

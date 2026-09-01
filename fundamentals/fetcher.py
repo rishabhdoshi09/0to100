@@ -7,6 +7,7 @@ is empty or stale (>1 day).  Always writes results back to cache.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from fundamentals.cache import FundamentalsCache
@@ -41,16 +42,33 @@ def get_deep_fundamentals(
     """
     symbol = symbol.upper().strip()
 
+    last_good = _cache.get(symbol, allow_stale=True)
+
     if not force_refresh:
-        cached = _cache.get(symbol)
+        cached = _cache.get(symbol, allow_stale=False)
         if cached is not None:
+            cached.setdefault("source_label", "cache")
+            cached.setdefault("source_tier", "cache")
             log.info("fundamentals_served_from_cache", symbol=symbol)
             return cached
 
     log.info("fundamentals_scraping", symbol=symbol, force=force_refresh)
-    data = _scraper.fetch_all(symbol)
+    try:
+        data = _scraper.fetch_all(symbol)
+    except Exception:
+        if last_good:
+            last_good["stale"] = True
+            last_good["source_label"] = "last_good_snapshot"
+            last_good["source_tier"] = "last_good"
+            last_good["official"] = False
+            log.info("fundamentals_served_last_good", symbol=symbol)
+            return last_good
+        raise
 
+    if isinstance(data, dict):
+        data.setdefault("source_label", "secondary_public")
+        data.setdefault("source_tier", "secondary")
+        data["official"] = False
+        data["retrieved_at"] = data.get("retrieved_at") or datetime.now(timezone.utc).isoformat()
     _cache.set(symbol, data)
-    _cache.clear_old()   # housekeeping — remove stale entries
-
     return data
