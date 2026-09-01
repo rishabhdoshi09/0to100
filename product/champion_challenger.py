@@ -37,13 +37,15 @@ MIN_OOS_N = 30
 MIN_FORWARD_N = 20
 WEAK_EXPECTANCY = 0.0
 
-# Promotion contract: OOS + forward sample, never in-sample alone.
+# Promotion contract: OOS + forward + execution-adjusted evidence, never
+# in-sample alone. Governance remains fail-closed and explicit.
 PROMOTION_CONTRACT = {
     "forbid_in_sample_only": True,
     "min_oos_n": MIN_OOS_N,
     "min_forward_n": MIN_FORWARD_N,
     "require_explicit_promote": True,
     "require_adversarial_not_failed": True,
+    "require_execution_adjusted_edge": True,
 }
 
 
@@ -280,6 +282,8 @@ class ChampionChallengerEngine:
         *,
         pnl: float,
         execution_adjusted_pnl: float | None = None,
+        execution_complete: bool | None = None,
+        execution_source: str = "",
         regime: str = "",
         sector: str = "",
         taken_by_champion: bool = False,
@@ -292,9 +296,14 @@ class ChampionChallengerEngine:
         if ch is None:
             raise KeyError(challenger_id)
         obs = list(ch.get("forward_observations") or [])
+        adjusted_present = execution_adjusted_pnl is not None
         obs.append({
             "pnl": float(pnl),
             "execution_adjusted_pnl": execution_adjusted_pnl,
+            # Backward compatibility: an explicitly supplied adjusted pnl is
+            # treated as usable evidence unless the caller labels it incomplete.
+            "execution_complete": adjusted_present if execution_complete is None else bool(execution_complete),
+            "execution_source": execution_source or ("provided_execution_adjusted" if adjusted_present else "missing"),
             "regime": regime,
             "sector": sector,
             "taken_by_champion": bool(taken_by_champion),
@@ -317,22 +326,29 @@ class ChampionChallengerEngine:
         obs = list(ch.get("forward_observations") or [])
         oos = [o for o in obs if o.get("split") in {"oos", "forward"}]
         ins = [o for o in obs if o.get("split") == "in_sample"]
+        evidence_rows = oos or obs
         pnls = [float(o["pnl"]) for o in oos] or [float(o["pnl"]) for o in obs]
         adj = [
             float(o["execution_adjusted_pnl"])
-            for o in (oos or obs)
+            for o in evidence_rows
             if o.get("execution_adjusted_pnl") is not None
+        ]
+        complete_adj = [
+            float(o["execution_adjusted_pnl"])
+            for o in evidence_rows
+            if o.get("execution_adjusted_pnl") is not None and bool(o.get("execution_complete"))
         ]
         m = _metrics(pnls)
         champ_m = _metrics(list(champion_pnls or []))
         regimes = {}
         sectors = {}
-        for o in (oos or obs):
+        for o in evidence_rows:
             regimes.setdefault(str(o.get("regime") or "UNKNOWN"), []).append(float(o["pnl"]))
             sectors.setdefault(str(o.get("sector") or "UNKNOWN"), []).append(float(o["pnl"]))
         missed = sum(1 for o in obs if o.get("missed"))
         avoided = sum(1 for o in obs if o.get("avoided_loss"))
         turnover = len(obs)
+        evidence_n = len(evidence_rows)
         comparison = {
             "challenger_id": challenger_id,
             "status": ch.get("status"),
@@ -347,6 +363,10 @@ class ChampionChallengerEngine:
             "execution_adjusted_expectancy": (
                 None if not adj else round(sum(adj) / len(adj), 6)
             ),
+            "execution_adjusted_n": len(adj),
+            "execution_adjusted_coverage": round(len(adj) / evidence_n, 4) if evidence_n else 0.0,
+            "execution_complete_n": len(complete_adj),
+            "execution_complete_coverage": round(len(complete_adj) / evidence_n, 4) if evidence_n else 0.0,
             "regime_stability": {
                 k: round(sum(v) / len(v), 6) for k, v in regimes.items() if v
             },
@@ -367,7 +387,7 @@ class ChampionChallengerEngine:
             "challenger_rules_hash": ch.get("rules_hash"),
         }
         ch["last_comparison"] = comparison
-        # Weak challenger: measured OOS expectancy at or below zero with enough n
+        # Weak challenger: measured OOS gross expectancy at or below zero with enough n.
         if comparison["oos_n"] >= MIN_OOS_N and (m["expectancy"] or 0) <= WEAK_EXPECTANCY:
             ch["status"] = REJECTED
             ch["reject_reason"] = "WEAK_OOS_EXPECTANCY"
@@ -382,7 +402,13 @@ class ChampionChallengerEngine:
         allow_in_sample: bool = False,
         adversarial_status: str = "SURVIVED",
     ) -> dict[str, Any]:
-        """Explicit promotion only. Never a silent replace."""
+        """Explicit promotion only. Never a silent replace.
+
+        Gross edge is insufficient. Once a challenger has promotion-sized OOS
+        evidence, execution-adjusted evidence must also be sufficiently covered
+        and positive. The final action is still explicit; this method never runs
+        automatically from research.
+        """
         if allow_in_sample:
             raise ValueError("in-sample promotion is forbidden")
         ch = self.get(challenger_id)
@@ -390,7 +416,7 @@ class ChampionChallengerEngine:
             raise KeyError(challenger_id)
         before = self.champion()
         comparison = self.compare(challenger_id)
-        reasons = []
+        reasons: list[str] = []
         if comparison.get("in_sample_only"):
             reasons.append("IN_SAMPLE_ONLY")
         if int(comparison.get("oos_n") or 0) < MIN_OOS_N:
@@ -401,11 +427,25 @@ class ChampionChallengerEngine:
             reasons.append("ADVERSARIAL_FAILED")
         if adversarial_status == "FRAGILE":
             reasons.append("ADVERSARIAL_FRAGILE")
+        try:
+            from product.promotion_governance import challenger_promotion_reasons
+            reasons.extend(challenger_promotion_reasons(comparison, adversarial_status=adversarial_status))
+        except Exception:
+            # Governance import failure is itself not a bypass: for a promotion-sized
+            # sample require execution evidence directly here.
+            if int(comparison.get("oos_n") or 0) >= MIN_OOS_N:
+                if int(comparison.get("execution_adjusted_n") or 0) < MIN_OOS_N:
+                    reasons.append("EXECUTION_EVIDENCE_INCOMPLETE")
+                elif comparison.get("execution_adjusted_expectancy") is None or float(comparison["execution_adjusted_expectancy"]) <= 0:
+                    reasons.append("EXECUTION_ADJUSTED_EDGE_NON_POSITIVE")
         if ch.get("status") == REJECTED:
             reasons.append("CHALLENGER_REJECTED")
+        # Stable deterministic reason list for UI/tests/audit.
+        reasons = list(dict.fromkeys(reasons))
         if reasons:
             ch["status"] = ch.get("status") if ch.get("status") == REJECTED else SHADOW
             ch["promotion_blocked"] = reasons
+            ch["last_promotion_comparison"] = comparison
             self._put(ch)
             return {
                 "promoted": False,
@@ -413,6 +453,8 @@ class ChampionChallengerEngine:
                 "reasons": reasons,
                 "champion_rules_hash": before.get("rules_hash"),
                 "champion_unchanged": True,
+                "execution_adjusted_expectancy": comparison.get("execution_adjusted_expectancy"),
+                "execution_adjusted_coverage": comparison.get("execution_adjusted_coverage"),
             }
         ch["status"] = ELIGIBLE
         new_version = int(before.get("version") or 1) + 1
@@ -428,6 +470,13 @@ class ChampionChallengerEngine:
         ch["promoted_at"] = _now()
         ch["promoted_version"] = new_version
         ch["promoted_rules_hash"] = new_hash
+        ch["promotion_evidence"] = {
+            "gross_expectancy": comparison.get("expectancy"),
+            "execution_adjusted_expectancy": comparison.get("execution_adjusted_expectancy"),
+            "execution_adjusted_coverage": comparison.get("execution_adjusted_coverage"),
+            "oos_n": comparison.get("oos_n"),
+            "adversarial_status": adversarial_status,
+        }
         # Challenger still cannot silently execute; paper capital stays on the
         # new explicit champion version only after this log entry.
         self.store["champion"] = {
@@ -447,6 +496,10 @@ class ChampionChallengerEngine:
             "to_hash": new_hash,
             "version": new_version,
             "at": _now(),
+            "gross_expectancy": comparison.get("expectancy"),
+            "execution_adjusted_expectancy": comparison.get("execution_adjusted_expectancy"),
+            "execution_adjusted_coverage": comparison.get("execution_adjusted_coverage"),
+            "adversarial_status": adversarial_status,
         })
         self.store["promotion_log"] = log
         self._put(ch)
@@ -457,6 +510,8 @@ class ChampionChallengerEngine:
             "previous_rules_hash": before.get("rules_hash"),
             "version": new_version,
             "explicit": True,
+            "execution_adjusted_expectancy": comparison.get("execution_adjusted_expectancy"),
+            "execution_adjusted_coverage": comparison.get("execution_adjusted_coverage"),
         }
 
     def reject(self, challenger_id: str, *, reason: str) -> dict[str, Any]:

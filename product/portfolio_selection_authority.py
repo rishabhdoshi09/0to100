@@ -161,15 +161,41 @@ def allocate(
     """Rank already-eligible names for scarce risk capital.
 
     Does not invent BUY. Highest individual score does not automatically win
-    if it duplicates existing portfolio risk.
+    if it duplicates existing portfolio risk. If the caller does not provide a
+    correlation matrix, we try the already-local official NSE bhavcopy store.
+    No network fetch is started from the money path.
     """
-    corr = dict(correlations or {})
     held = _held_symbols(book)
     held_sectors = dict(existing_sectors or {})
     if not held_sectors:
         held_sectors = _held_sectors(book)
 
     rows = [dict(r) for r in eligible]
+    corr_meta: dict[str, Any] = {
+        "source": "caller_supplied" if correlations is not None else "unavailable",
+        "point_in_time": correlations is not None,
+        "coverage": 1.0 if correlations is not None else 0.0,
+        "as_of": "",
+        "network_used": False,
+    }
+    if correlations is None:
+        try:
+            from product.pit_correlation import correlations_for_candidates
+            corr_meta = correlations_for_candidates(rows, held_symbols=sorted(held))
+            corr = dict(corr_meta.get("correlations") or {})
+        except Exception as exc:
+            corr = {}
+            corr_meta = {
+                "source": "unavailable",
+                "point_in_time": False,
+                "coverage": 0.0,
+                "as_of": "",
+                "network_used": False,
+                "error": type(exc).__name__,
+            }
+    else:
+        corr = dict(correlations)
+
     # Deterministic individual rank first (score desc, symbol asc)
     individual = sorted(rows, key=lambda r: (-_score(r), _sym(r)))
     ranked_index = {_sym(r): i + 1 for i, r in enumerate(individual)}
@@ -186,6 +212,9 @@ def allocate(
             "marginal_contribution": individual_score,
             "why_over": "",
             "hard_cap": cap,
+            "correlation_source": corr_meta.get("source") or "unavailable",
+            "correlation_as_of": corr_meta.get("as_of") or "",
+            "correlation_coverage": corr_meta.get("coverage") or 0.0,
         }
         adj = individual_score
         # Sector duplication vs existing book — labelled estimated (sector proxy)
@@ -198,7 +227,8 @@ def allocate(
                 f"penalty={penalty}"
             )
             notes["marginal_contribution"] = round(individual_score - penalty, 4)
-        # Pairwise correlation when supplied (measured). Missing stays unknown.
+        # Pairwise correlation from caller or local official PIT bhavcopy. Missing
+        # stays unknown; sector remains a labelled proxy rather than fake corr.
         measured_corr = []
         for other in held:
             key = _corr_key(symbol, other)
@@ -206,13 +236,14 @@ def allocate(
                 measured_corr.append(float(corr[key]))
         if measured_corr:
             peak = max(measured_corr)
-            notes["correlation_effect"] = f"max_corr={peak:.2f} (measured)"
+            src = str(notes.get("correlation_source") or "measured")
+            notes["correlation_effect"] = f"max_corr={peak:.2f} ({src})"
             if peak >= correlation_cap:
                 notes["hard_cap"] = "CORRELATION_CAP"
             else:
                 adj -= 10.0 * peak
         elif held:
-            notes["correlation_effect"] = "unknown — no PIT correlation supplied; sector used as proxy"
+            notes["correlation_effect"] = "unknown — no usable PIT correlation; sector used as proxy"
         scored.append((adj, row, notes))
 
     scored.sort(key=lambda item: (-item[0], _sym(item[1])))
@@ -316,6 +347,12 @@ def allocate(
                 why_over=why,
                 hard_cap_applied=str(hard) if hard and decision != ENTER_NOW else None,
                 invents_buy=False,
+                fields={
+                    "correlation_source": notes.get("correlation_source") or "unavailable",
+                    "correlation_as_of": notes.get("correlation_as_of") or "",
+                    "correlation_coverage": notes.get("correlation_coverage") or 0.0,
+                    "network_used": bool(corr_meta.get("network_used")),
+                },
             )
         )
 
@@ -338,6 +375,7 @@ def allocate(
                 opportunity_cost="no trade",
                 why_over="",
                 invents_buy=False,
+                fields={"correlation_source": corr_meta.get("source") or "unavailable", "network_used": False},
             )
         )
     return out
@@ -369,6 +407,9 @@ def apply_portfolio_authority(
         card.setdefault("entry", (getattr(decision, "card", None) or {}).get("entry"))
         card.setdefault("stop", (getattr(decision, "card", None) or {}).get("stop"))
         card.setdefault("volume_ratio", (getattr(decision, "card", None) or {}).get("volume_ratio"))
+        context = dict(getattr(decision, "context", None) or {})
+        if context.get("as_of"):
+            card.setdefault("as_of", context.get("as_of"))
         cards.append(card)
         by_symbol[_sym(card)] = (score, decision)
 
