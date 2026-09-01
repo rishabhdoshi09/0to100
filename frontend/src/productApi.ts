@@ -403,6 +403,14 @@ export type DueDiligenceReport = {
   unavailable: string[]
   what_changed: string[]
   red_flags: DueDiligenceFlag[]
+  thesis_breakers?: Array<{
+    title: string
+    severity?: string
+    evidence?: string
+    source?: string
+    source_date?: string
+    why_it_matters?: string
+  }>
   flag_groups?: {
     critical?: DueDiligenceFlag[]
     warnings?: DueDiligenceFlag[]
@@ -819,6 +827,30 @@ export type RecommendationCard = {
   fundamental_confirmation?: string | null
   research_decision_coverage?: number | null
   research_quality_label?: string | null
+  production_strategy?: {
+    strategy_id?: string
+    strategy_version?: number
+    rules_hash?: string
+    label?: string
+    active?: boolean
+  }
+  backtest_parity?: string
+  backtest_parity_detail?: string
+  fundamental_disagreement?: string
+  evidence_scorecard?: {
+    score?: number | null
+    coverage_pct?: number | null
+    quality?: string
+    components?: Array<{
+      id: string
+      label: string
+      score?: number | null
+      coverage_pct?: number | null
+      max_points?: number
+      methods?: RecoMethod[]
+    }>
+    disclaimer?: string
+  }
 }
 
 export type RecoMethod = {
@@ -827,6 +859,10 @@ export type RecoMethod = {
   status: 'pass' | 'fail' | 'unknown' | string
   detail?: string
   points?: number | null
+  strategy_id?: string
+  strategy_version?: number
+  rules_hash?: string
+  backtest_parity?: string
 }
 
 export type RecoExpert = {
@@ -1233,3 +1269,149 @@ export type SymbolRatioRow = {
 export const fetchSymbolRatios = (symbol: string): Promise<{ symbol: string; ratios: SymbolRatioRow[] }> =>
   fetch(`/api/data/ratios/${encodeURIComponent(symbol)}`, { headers: { Accept: 'application/json' } })
     .then((response) => json(response))
+
+export type StrategyCatalog = {
+  schema_version: number
+  role: string
+  ensemble: {
+    strategy_id: string
+    strategy_version: number
+    rules_hash: string
+    active: boolean
+    label: string
+    backtest_parity: string
+    backtest_parity_detail: string
+    universe?: string
+    intended_holding_period?: string
+  }
+  methods: Array<{
+    strategy_id: string
+    strategy_version: number
+    rules_hash: string
+    label: string
+    active: boolean
+    backtest_parity: string
+    backtest_parity_detail: string
+  }>
+  related_signal_calibration?: {
+    available: boolean
+    parity: string
+    label: string
+    detail: string
+    as_of?: string
+  }
+  research_only?: Array<{
+    strategy_id: string
+    strategy_version: number
+    label: string
+    role: string
+    backtest_parity: string
+    backtest_parity_detail: string
+  }>
+  note?: string
+}
+
+export const fetchStrategyCatalog = (): Promise<StrategyCatalog> =>
+  fetch('/api/strategy-catalog', { headers: { Accept: 'application/json' } })
+    .then((response) => json<StrategyCatalog>(response))
+
+export type ResearchStatus = {
+  schema_version: number
+  generated_at: string
+  headlines: string[]
+  learning_status: string
+  disclaimer: string
+  production: StrategyCatalog
+  research_only: StrategyCatalog['research_only']
+  paper: {
+    available: boolean
+    as_of: string
+    closed_trades: number
+    taken: Array<{ symbol?: string; strategy_id?: string }>
+    skipped: Array<{ symbol?: string; reason?: string }>
+    candidate_tests: Array<{ symbol?: string; outcome?: string; r_multiple?: number }>
+    summary: string
+    live_locked: boolean
+  }
+  decision_journal: {
+    counts?: { surfaced_history?: number; latest_scan_decisions?: number }
+    performance?: {
+      sample_size?: number
+      hit_rate_pct?: number | null
+      expectancy_pct?: number | null
+      sufficient_sample?: boolean
+      sample_note?: string
+      scope?: string
+    }
+    entries?: Array<{
+      kind?: string
+      symbol?: string
+      decision?: string
+      reason?: string
+      recorded_at?: string
+    }>
+    note?: string
+    scan_summary?: Record<string, number | string>
+  }
+}
+
+export const fetchResearchStatus = (): Promise<ResearchStatus> =>
+  fetch('/api/research-status', { headers: { Accept: 'application/json' } })
+    .then((response) => json<ResearchStatus>(response))
+
+export type HealthLane = {
+  key: string
+  label: string
+  status: string
+  as_of?: string
+  detail?: string
+}
+
+export type SystemHealthContract = {
+  schema_version: number
+  generated_at: string
+  collapsed_status: null
+  note: string
+  counts: Record<string, number>
+  lanes: HealthLane[]
+}
+
+export const fetchSystemHealthContract = (): Promise<SystemHealthContract> =>
+  fetch('/api/system-health-contract', { headers: { Accept: 'application/json' } })
+    .then((response) => json<SystemHealthContract>(response))
+
+export type ScanAuditPayload = {
+  generated_at?: string
+  summary: Record<string, number | string>
+  total?: number
+  rows?: Array<{
+    symbol: string
+    status?: string
+    reason?: string
+    error?: string
+  }>
+  symbol?: string
+  found?: boolean
+  result?: {
+    symbol: string
+    status?: string
+    reason?: string
+    error?: string
+  } | null
+}
+
+export const fetchScanAudit = (symbol = '', limit = 80): Promise<ScanAuditPayload> => {
+  const params = new URLSearchParams()
+  if (symbol) params.set('symbol', symbol)
+  params.set('limit', String(limit))
+  return fetch(`/api/scan-audit?${params.toString()}`, { headers: { Accept: 'application/json' } })
+    .then((response) => json<ScanAuditPayload>(response))
+}
+
+export const fetchDecisionJournal = (symbol = '', limit = 80): Promise<ResearchStatus['decision_journal']> => {
+  const params = new URLSearchParams()
+  if (symbol) params.set('symbol', symbol)
+  params.set('limit', String(limit))
+  return fetch(`/api/decision-journal?${params.toString()}`, { headers: { Accept: 'application/json' } })
+    .then((response) => json(response))
+}

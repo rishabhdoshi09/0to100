@@ -14,6 +14,11 @@ PRIMARY_PATHS = {
     "/api/due-diligence/{symbol}/acquire",
     "/api/operator-health",
     "/api/product-contract",
+    "/api/strategy-catalog",
+    "/api/research-status",
+    "/api/system-health-contract",
+    "/api/scan-audit",
+    "/api/decision-journal",
 }
 
 
@@ -46,6 +51,8 @@ def test_product_contract_separates_wiring_from_data_availability(monkeypatch):
     assert payload["checks"]["recommendations"]["data_available"] is False
     assert payload["checks"]["market_scan"]["worker_running"] is False
     assert payload["checks"]["learning"]["status"] == "WAITING_FOR_FRESH_EOD_DATA"
+    assert payload["checks"]["strategies"]["catalog_route_registered"] is True
+    assert payload["checks"]["system_health"]["health_contract_route_registered"] is True
 
 
 def test_recommendations_route_returns_honest_empty_workspace(monkeypatch):

@@ -172,7 +172,7 @@ def first_screen(report: Mapping[str, Any]) -> dict[str, Any]:
             *(list(report.get("concerns") or [])[:2]),
         ],
         "sections": [
-            "Overview", "Fundamentals", "Sector KPIs", "Quarterly", "Annual",
+            "Overview", "Thesis Breakers", "Fundamentals", "Sector KPIs", "Quarterly", "Annual",
             "Cash Flow", "Peers", "Shareholding", "Valuation", "News",
             "Filings", "Red Flags", "Sources",
         ],

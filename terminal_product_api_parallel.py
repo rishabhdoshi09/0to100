@@ -160,6 +160,7 @@ def _attach_authority(payload: dict) -> dict:
         build_decision_journal,
         evidence_scorecard,
     )
+    from product.strategy_catalog import decorate_card
 
     for category in payload.get("categories") or []:
         if not isinstance(category, dict):
@@ -195,6 +196,7 @@ def _attach_authority(payload: dict) -> dict:
                 ) if part
             )
             card["evidence_panel"] = panel
+            card.update(decorate_card(card))
 
     authority = build_authority_contract(core._scan_payload())
     journal = build_decision_journal(limit=12)
@@ -272,6 +274,61 @@ def decision_journal(symbol: str = "", limit: int = 120) -> dict:
     """Public audit trail for surfaced and non-surfaced market decisions."""
     from product.evidence_authority import build_decision_journal
     return build_decision_journal(symbol=symbol, limit=max(1, min(int(limit or 120), 1000)))
+
+
+@product.app.get("/api/strategy-catalog")
+def strategy_catalog() -> dict:
+    """Production recommendation methods plus research-only paper strategies."""
+    from product.strategy_catalog import production_registry, research_only_strategies
+
+    payload = production_registry()
+    payload["research_only"] = research_only_strategies()
+    return payload
+
+
+@product.app.get("/api/research-status")
+def research_status() -> dict:
+    """Visible learning/research state from existing paper, journal, and registries."""
+    from product.research_status import build_research_status
+
+    return build_research_status(autonomy=core._autonomy_payload())
+
+
+@product.app.get("/api/system-health-contract")
+def system_health_contract() -> dict:
+    """Independent health lanes. No collapsed green light."""
+    from product.system_health_contract import build_system_health_contract
+
+    scan = core._scan_payload()
+    long_term = core._long_term_payload()
+    report_as_of = ""
+    try:
+        from product.recommendations_workspace import load_today_pulse
+        pulse = load_today_pulse() or {}
+        report_as_of = str(pulse.get("created_at") or pulse.get("date") or "")
+    except Exception:
+        report_as_of = ""
+    fund_cov = None
+    try:
+        summary = dict((long_term or {}).get("summary") or {})
+        raw = summary.get("coverage_pct")
+        if raw is not None and raw != "":
+            fund_cov = float(raw)
+            if fund_cov <= 1.5:
+                fund_cov = fund_cov * 100.0
+    except Exception:
+        fund_cov = None
+    return build_system_health_contract(
+        scan=scan,
+        data=core._data_payload(),
+        news=core._news_payload(),
+        operations=core._operations_payload(),
+        autonomy=core._autonomy_payload(),
+        recommendations_available=bool(scan.get("available") or long_term.get("available")),
+        market_report_as_of=report_as_of,
+        product_wired=True,
+        fundamental_coverage_pct=fund_cov,
+    )
 
 
 @product.app.get("/api/market-reports-workspace")
@@ -376,8 +433,17 @@ def product_contract() -> dict:
         },
         "learning": {
             "operator_health_route_registered": "/api/operator-health" in paths,
+            "research_status_route_registered": "/api/research-status" in paths,
             "status": str(autonomy.get("learning_status") or "UNKNOWN"),
             "supervisor_running": bool(autonomy.get("running")),
+        },
+        "strategies": {
+            "catalog_route_registered": "/api/strategy-catalog" in paths,
+            "journal_route_registered": "/api/decision-journal" in paths,
+        },
+        "system_health": {
+            "health_contract_route_registered": "/api/system-health-contract" in paths,
+            "audit_route_registered": "/api/scan-audit" in paths,
         },
     }
     wired = all(_all_declared_routes_registered(item) for item in checks.values())

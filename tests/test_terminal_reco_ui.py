@@ -7,28 +7,30 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_terminal_sidebar_is_quantterm_discovery_desk():
     src = (ROOT / "frontend" / "src" / "MarketSidebar.tsx").read_text(encoding="utf-8")
     assert "QUANTTERM" in src
-    assert "RESEARCH DESK" in src
     assert "JARVIS DESK" not in src
-    assert "DISCOVERY" in src
-    assert "TOOLS & EVIDENCE" in src
+    assert "MARKETS" in src
+    assert "INTELLIGENCE" in src
+    assert "RESEARCH" in src
+    assert "SYSTEM" in src
     for route in (
         "Home",
         "Market Scanner",
         "Recommendations",
         "Market Reports",
         "Stock Intelligence",
-        "Long-Term Picks",
         "Compare",
         "Watchlist",
-        "Education",
-        "F&O Desk",
-        "My Holdings",
+        "Strategies",
+        "Learning",
+        "Coverage",
+        "Paper Portfolio",
         "System Health",
         "Backtest",
     ):
         assert route in src
     assert "Reco Wealth" not in src
     assert "place_order" not in src
+    assert "reco-filter-btn" not in (ROOT / "frontend" / "src" / "recommendationsViews.tsx").read_text(encoding="utf-8")
 
 
 def test_terminal_uses_reco_desk_not_hud_chrome():
@@ -140,3 +142,21 @@ def test_market_reports_renders_sourced_desk_note_not_a_blog():
     assert "places_orders" in py
     for banned in ("₹600 crore", "20,000 MTPA", "65% pre-booked", "Q1 FY27"):
         assert banned not in py
+
+
+def test_research_desk_exposes_parity_journal_and_health_lanes():
+    app = (ROOT / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
+    assert "StrategiesView" in app
+    assert "LearningJournalView" in app
+    assert "CoverageView" in app
+    assert "ProductionBacktestView" in app
+    assert "SystemHealthView" in app
+    research = (ROOT / "frontend" / "src" / "researchDeskViews.tsx").read_text(encoding="utf-8")
+    assert "BACKTEST PARITY: UNVERIFIED" in research
+    assert "AI is learning" not in research
+    reco = (ROOT / "frontend" / "src" / "recommendationsViews.tsx").read_text(encoding="utf-8")
+    assert "BACKTEST PARITY" in reco
+    assert "fundamental_disagreement" in reco
+    views = (ROOT / "frontend" / "src" / "productViews.tsx").read_text(encoding="utf-8")
+    assert "WHY SHOULD I NOT BUY THIS" in views
+    assert "thesis_breakers" in views

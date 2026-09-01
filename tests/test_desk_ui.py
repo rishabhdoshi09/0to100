@@ -24,7 +24,8 @@ def test_app_points_at_the_vite_desk():
     nav = (ROOT / "frontend" / "src" / "MarketSidebar.tsx").read_text(encoding="utf-8")
     assert "Home" in nav and "Market Scanner" in nav
     assert "Recommendations" in nav and "Market Reports" in nav
-    assert "Long-Term Picks" in nav
+    assert "MARKETS" in nav and "INTELLIGENCE" in nav and "RESEARCH" in nav and "SYSTEM" in nav
+    assert "Strategies" in nav and "Learning" in nav and "Coverage" in nav
     desk = (ROOT / "scripts" / "run_desk.sh").read_text(encoding="utf-8")
     assert "run_quantterm_complete.sh" in desk
     assert "streamlit" not in desk

@@ -1002,7 +1002,23 @@ def slim_workspace_for_desk(payload: Mapping[str, Any]) -> dict[str, Any]:
 def _slim_card(card: Mapping[str, Any]) -> dict[str, Any]:
     row = dict(card)
     row.pop("fundamentals", None)
-    row.pop("methods", None)
+    methods = []
+    for item in row.get("methods") or []:
+        if not isinstance(item, Mapping):
+            continue
+        methods.append({
+            "id": item.get("id"),
+            "label": item.get("label") or item.get("id"),
+            "status": item.get("status"),
+            "detail": str(item.get("detail") or "")[:200],
+            "points": item.get("points"),
+            "strategy_id": item.get("strategy_id"),
+            "strategy_version": item.get("strategy_version"),
+            "rules_hash": item.get("rules_hash"),
+            "backtest_parity": item.get("backtest_parity"),
+        })
+    if methods:
+        row["methods"] = methods
     experts = []
     for item in row.get("experts") or []:
         if not isinstance(item, Mapping):

@@ -641,10 +641,31 @@ function InvestigatePanel({
         </aside>
       ) : null}
       <SectionTabs
-        tabs={screen?.sections || ['Overview', 'Fundamentals', 'Sector KPIs', 'Quarterly', 'Cash Flow', 'Peers', 'Shareholding', 'News', 'Filings', 'Red Flags', 'Sources']}
+        tabs={screen?.sections || ['Overview', 'Thesis Breakers', 'Fundamentals', 'Sector KPIs', 'Quarterly', 'Cash Flow', 'Peers', 'Shareholding', 'News', 'Filings', 'Red Flags', 'Sources']}
         active={section}
         onChange={setSection}
       />
+      {is('Thesis Breakers') || is('Overview') ? (
+        <Panel title="WHY SHOULD I NOT BUY THIS" subtitle="Mandatory. Missing evidence is not a pass.">
+          {(report.thesis_breakers || []).length
+            ? (
+              <ul className="dd-flag-list">
+                {report.thesis_breakers!.map((item, index) => (
+                  <li key={`${item.title}-${index}`}>
+                    <strong>{(item.severity || 'monitor').toUpperCase()} · {item.title}</strong>
+                    <span>{item.evidence}</span>
+                    <small>
+                      {item.why_it_matters || ''}
+                      {' · '}{item.source || 'Source unavailable'}
+                      {item.source_date ? ` · ${item.source_date}` : ''}
+                    </small>
+                  </li>
+                ))}
+              </ul>
+            )
+            : <EmptyState title="No measured thesis breaker on file" detail="This is not a clean bill of health." />}
+        </Panel>
+      ) : null}
       {is('Overview') ? (
         <div className="stock-overview-grid">
           <Panel title="IMPROVING" subtitle="Measured numerical trends only">

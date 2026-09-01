@@ -457,6 +457,51 @@ def _vs_setup(
     return "NEUTRAL", "Evidence is mixed — conviction unchanged."
 
 
+def _thesis_breakers(
+    flags: Sequence[Mapping[str, Any]],
+    concerns: Sequence[str],
+    as_of: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Mandatory 'why should I not buy this' list. Missing is not a pass."""
+    breakers: list[dict[str, Any]] = []
+    for flag in list(flags or [])[:8]:
+        if not isinstance(flag, Mapping):
+            continue
+        breakers.append({
+            "title": str(flag.get("title") or flag.get("kind") or "Red flag"),
+            "severity": str(flag.get("severity") or "monitor"),
+            "evidence": str(flag.get("evidence") or flag.get("fact") or "Evidence unavailable"),
+            "source": str(flag.get("source") or "Source unavailable"),
+            "source_date": str(flag.get("source_date") or ""),
+            "why_it_matters": str(
+                flag.get("why") or flag.get("rule") or flag.get("kind")
+                or "Recorded risk against the thesis"
+            ),
+        })
+    for concern in list(concerns or [])[:4]:
+        text = str(concern or "").strip()
+        if not text:
+            continue
+        breakers.append({
+            "title": "Measured deterioration",
+            "severity": "warning",
+            "evidence": text,
+            "source": "Sector KPI trend",
+            "source_date": str(as_of.get("latest_financial_period") or ""),
+            "why_it_matters": "A deteriorating KPI is a reason not to raise conviction.",
+        })
+    if not breakers:
+        breakers.append({
+            "title": "No measured thesis breaker on file",
+            "severity": "none",
+            "evidence": "Missing evidence is not a pass and is not a clean bill of health.",
+            "source": "Due diligence engine",
+            "source_date": str(as_of.get("generated_at") or ""),
+            "why_it_matters": "WHY SHOULD I NOT BUY THIS remains unanswered until risks are measured.",
+        })
+    return breakers
+
+
 def _defaults(symbol: str) -> dict[str, Any]:
     from product.scan_store import load_scan
     from product.long_term_store import load_long_term_scan
@@ -892,6 +937,7 @@ def build_due_diligence(
         "unavailable": unavailable,
         "what_changed": changed[:4],
         "red_flags": flags,
+        "thesis_breakers": _thesis_breakers(flags, concerns, as_of),
         "flag_groups": flag_groups,
         "watch_next": watch,
         "kpis": findings,

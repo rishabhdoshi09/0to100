@@ -18,11 +18,16 @@ import { NewsView, OperationsRibbon, FnoView } from './marketViews'
 import { ProductStockIntelligenceView, StockInvestigatorView } from './productViews'
 import { ResearchDataView } from './researchData'
 import {
-  AutomationView,
   MarketInternalsView,
   PortfolioView,
-  RecoBacktestView,
 } from './views'
+import {
+  CoverageView,
+  LearningJournalView,
+  ProductionBacktestView,
+  StrategiesView,
+  SystemHealthView,
+} from './researchDeskViews'
 import type { DisplayDepth } from './productLanguage'
 import { addWatchlistItem, bootstrapProduct } from './productApi'
 import { useScanRunner } from './scanRunner'
@@ -201,8 +206,12 @@ const pageTitles: Record<string, string> = {
   'Market Scanner': 'Market Scanner',
   Recommendations: 'Recommendations',
   'Market Reports': 'Market Reports',
-  'Stock Intelligence': 'Stock Intelligence',
-  'Stock Investigator': 'Stock Investigator',
+  'Stock Intelligence': 'Company Intelligence',
+  'Stock Investigator': 'Company Intelligence',
+  'Company Intelligence': 'Company Intelligence',
+  Strategies: 'Strategies',
+  Learning: 'Learning / Decision Journal',
+  Coverage: 'Coverage',
   'Long-Term Picks': 'Long-Term Picks',
   Compare: 'Compare',
   Watchlist: 'Watchlist',
@@ -228,19 +237,23 @@ const pageSubtitles: Record<string, string> = {
   'Long-Term Picks': 'Quality overlay from the same market scan — Refresh funds only reloads Screener.',
   Recommendations: 'Independent experts compete — only high-quality, evidence-backed setups; empty high-conviction is a valid day.',
   'Market Reports': 'Daily Market Pulse archive — trends, sector movers and breakout context from live system state.',
-  'Stock Intelligence': 'Company workspace — chart, financials, ratios and the due-diligence Investigate view.',
-  'Stock Investigator': 'Type any NSE ticker or company name. The same research engine as scanner Investigate runs — not a new scanner.',
+  'Stock Intelligence': 'Company workspace — business framework, quality, cash flow, thesis breakers and missing evidence.',
+  'Stock Investigator': 'Type any NSE ticker. Same Company Intelligence engine — not a second scanner.',
+  'Company Intelligence': 'Company workspace — business framework, quality, cash flow, thesis breakers and missing evidence.',
+  Strategies: 'Production recommendation methods with explicit strategy id, version and parity.',
+  Learning: 'What is being tested or learned — sample sizes, settled trades, rejected names. No “AI is learning”.',
+  Coverage: 'Requested vs checked vs qualified vs missing from the last whole-market scan.',
   Compare: 'Side-by-side comparison across market, growth, quality and technical dimensions.',
   Watchlist: 'Names you are tracking with latest scan context.',
   'Market Overview': 'Regime, breadth, volatility and sector leadership.',
   'News & Events': 'Dated market context with source health.',
   Education: 'Crunched news + macro/micro teach-ins for the share market — never invented blogs, never a signal.',
   'Research Data': 'Verified snapshots, data platform jobs, and evidence uploads.',
-  Backtest: 'Inspect a paper-loss style on past data. This does not change today’s BUY list.',
+  Backtest: 'Production-connected backtests only. Unproven hash stays BACKTEST PARITY: UNVERIFIED.',
   'F&O Desk': 'Mapped futures, plus an acquired nearest-expiry OI / IV / PCR snapshot when present.',
   'Paper Portfolio': 'Demat holdings + paper book — sync Zerodha or paste your shares.',
   Portfolio: 'Demat holdings + paper book — sync Zerodha or paste your shares.',
-  'System Health': 'Operations, autonomy and infrastructure detail.',
+  'System Health': 'Independent health lanes — auth, data, scan, workers, contract. No single green light.',
 }
 
 function App() {
@@ -480,6 +493,7 @@ function App() {
   const primaryPages = [
     'Home', 'Market Scanner', 'Stock Intelligence', 'Stock Investigator', 'Long-Term Picks',
     'Compare', 'Watchlist', 'Command Center', 'Scanner', 'Recommendations', 'Market Reports',
+    'Strategies', 'Learning', 'Coverage', 'Company Intelligence',
   ]
   const showOpsRibbon = !primaryPages.includes(active)
   const showReportActions = [
@@ -499,7 +513,7 @@ function App() {
 
   const pages = (
     <>
-      {keep(['Home', 'Command Center'], <RadarHomeView {...viewProps} onCompare={addToCompare} onWatchlist={addToWatchlist} />)}
+      {keep(['Home', 'Command Center', 'Market'], <RadarHomeView {...viewProps} onCompare={addToCompare} onWatchlist={addToWatchlist} />)}
       {keep(['Market Scanner', 'Scanner'], <MarketScannerView {...viewProps} onCompare={addToCompare} />)}
       {keep(['Recommendations'], <RecommendationsView {...viewProps} />)}
       {keep(['Market Reports'], <MarketReportsView {...viewProps} />)}
@@ -551,11 +565,14 @@ function App() {
           newsRevision={dashboard.news.articles.length}
         />
       ))}
-      {keep(['Research Data'], <ResearchDataView symbol={selected} />)}
-      {keep(['Backtest'], <RecoBacktestView {...viewProps} />)}
+      {keep(['Research Data', 'Data'], <ResearchDataView symbol={selected} />)}
+      {keep(['Strategies'], <StrategiesView />)}
+      {keep(['Backtest', 'Backtests'], <ProductionBacktestView {...viewProps} />)}
+      {keep(['Learning'], <LearningJournalView />)}
+      {keep(['Coverage'], <CoverageView />)}
       {keep(['F&O Desk'], <FnoView {...viewProps} />)}
       {keep(['Paper Portfolio', 'Portfolio'], <PortfolioView {...viewProps} />)}
-      {keep(['System Health', 'Automation'], <AutomationView {...viewProps} />)}
+      {keep(['System Health', 'Automation', 'Health'], <SystemHealthView {...viewProps} />)}
     </>
   )
 

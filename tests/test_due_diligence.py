@@ -759,6 +759,8 @@ def test_stock_research_engine_is_the_same_builder():
         "CONTRADICTS (Low Evidence)",
     }
     assert payload["first_screen"]["ticker"] == "TESTIT"
+    assert payload["thesis_breakers"]
+    assert "Thesis Breakers" in payload["first_screen"]["sections"]
     assert payload["kpis"] == alias["kpis"]
     sales = next(k for k in payload["kpis"] if k["id"] == "sales")
     assert sales["formula"]

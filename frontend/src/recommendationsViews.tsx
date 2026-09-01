@@ -289,7 +289,15 @@ function DecisionSheet({
             {card.primary_thesis ? ` · ${card.primary_thesis}` : ''}
             {card.horizon ? ` · Horizon ${card.horizon}` : ''}
             {card.method_line ? ` · ${card.family_confirms || card.method_confirms || 0} families: ${card.method_line}` : ''}
+            {card.production_strategy?.strategy_id ? ` · ${card.production_strategy.strategy_id} v${card.production_strategy.strategy_version || 1}` : ''}
           </p>
+          <p className="reco-pick-note">
+            BACKTEST PARITY: {card.backtest_parity || 'UNVERIFIED'}
+            {card.production_strategy?.rules_hash ? ` · hash ${card.production_strategy.rules_hash}` : ''}
+          </p>
+          {card.fundamental_disagreement ? (
+            <p className="reco-pick-note">{card.fundamental_disagreement}</p>
+          ) : null}
         </div>
         {points.length > 0 ? (
           <div className="reco-key-points">
@@ -373,6 +381,37 @@ function DecisionSheet({
         </div>
       ) : null}
       {card.next_step ? <p className="reco-next"><strong>Next step.</strong> {card.next_step}</p> : null}
+      {card.evidence_scorecard ? (
+        <div>
+          <h3>Evidence score</h3>
+          <p className="reco-pick-note">
+            {card.evidence_scorecard.score == null ? 'INSUFFICIENT EVIDENCE' : `${card.evidence_scorecard.score}/100`}
+            {' · coverage '}
+            {card.evidence_scorecard.coverage_pct ?? 0}%
+            {' · missing is unknown, not zero.'}
+          </p>
+          <ul>
+            {(card.evidence_scorecard.components || []).map((item) => (
+              <li key={item.id}>
+                {item.label}: {item.score == null ? 'Unmeasured' : `${item.score}/${item.max_points ?? ''}`}
+                {item.coverage_pct != null ? ` · coverage ${item.coverage_pct}%` : ''}
+              </li>
+            ))}
+          </ul>
+          {(card.methods || []).length ? (
+            <ul>
+              {card.methods.map((method) => (
+                <li key={method.id}>
+                  {method.label}: {method.status}
+                  {method.strategy_id ? ` · ${method.strategy_id}` : ''}
+                  {method.backtest_parity ? ` · parity ${method.backtest_parity}` : ''}
+                  {method.detail ? ` — ${method.detail}` : ''}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
       <div className="reco-sheet-actions">
         <button
           type="button"
@@ -662,9 +701,6 @@ export function RecommendationsView({
             onChange={(e) => setQuery(e.target.value)}
             aria-label="Search stocks"
           />
-          <button type="button" className="reco-filter-btn" aria-label="Filters" title="Filters">
-            ☰
-          </button>
         </div>
         <div className="reco-life-toggle" role="tablist" aria-label="Lifecycle">
           {(['Active', 'Closed'] as const).map((tab) => (
@@ -1143,9 +1179,6 @@ export function MarketReportsView({ dashboard, setActive, setSelected, marketSca
             onChange={(e) => setQuery(e.target.value)}
             aria-label="Search reports"
           />
-          <button type="button" className="reco-filter-btn" aria-label="Filters" title="Filters">
-            ☰
-          </button>
         </div>
       </div>
 

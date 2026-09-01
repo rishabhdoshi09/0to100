@@ -1,31 +1,36 @@
 import type { DashboardPayload } from './types'
 
-const PRIMARY_NAV = [
-  ['⌂', 'Home', 'Home'],
-  ['◎', 'Market Scanner', 'Market Scanner'],
+const MARKET_NAV = [
+  ['⌂', 'Home', 'Market'],
+  ['◎', 'Market Scanner', 'Scanner'],
   ['▣', 'Recommendations', 'Recommendations'],
-  ['▤', 'Market Reports', 'Market Reports'],
-  ['◉', 'Stock Intelligence', 'Stock Intelligence'],
-  ['⌕', 'Stock Investigator', 'Stock Investigator'],
-  ['◇', 'Long-Term Picks', 'Long-Term Picks'],
+  ['▤', 'Market Reports', 'Reports'],
+  ['▣', 'Paper Portfolio', 'Portfolio'],
+] as const
+
+const INTELLIGENCE_NAV = [
+  ['◉', 'Stock Intelligence', 'Company Intelligence'],
   ['⇔', 'Compare', 'Compare'],
   ['★', 'Watchlist', 'Watchlist'],
 ] as const
 
-const SECONDARY_NAV = [
-  ['↗', 'Market Overview', 'Market Overview'],
-  ['◈', 'News & Events', 'News & Events'],
-  ['✎', 'Education', 'Education'],
-  ['▤', 'Research Data', 'Research Data'],
-  ['🧪', 'Backtest', 'Backtest'],
-  ['⬡', 'F&O Desk', 'F&O Desk'],
-  ['▣', 'My Holdings', 'Paper Portfolio'],
-  ['◌', 'System Health', 'System Health'],
+const RESEARCH_NAV = [
+  ['⌬', 'Strategies', 'Strategies'],
+  ['🧪', 'Backtest', 'Backtests'],
+  ['✎', 'Learning', 'Learning'],
+] as const
+
+const SYSTEM_NAV = [
+  ['▤', 'Research Data', 'Data'],
+  ['◎', 'Coverage', 'Coverage'],
+  ['◌', 'System Health', 'Health'],
 ] as const
 
 const ROUTE_ALIAS: Record<string, string> = {
   'Command Center': 'Home',
+  Market: 'Home',
   Scanner: 'Market Scanner',
+  Reports: 'Market Reports',
   'Long-Term': 'Long-Term Picks',
   Portfolio: 'Paper Portfolio',
   'Market Internals': 'Market Overview',
@@ -33,6 +38,11 @@ const ROUTE_ALIAS: Record<string, string> = {
   Today: 'Home',
   Setups: 'Market Scanner',
   Desk: 'System Health',
+  'Stock Investigator': 'Stock Intelligence',
+  'Company Intelligence': 'Stock Intelligence',
+  Backtests: 'Backtest',
+  Health: 'System Health',
+  Data: 'Research Data',
 }
 
 function NavigationGroup({
@@ -89,12 +99,14 @@ export function MarketSidebar({
         <div className="reco-mark" aria-hidden="true">QT</div>
         <div className="reco-brand-copy">
           <strong>QUANTTERM</strong>
-          <small>RESEARCH DESK</small>
+          <small>MARKETS + INTELLIGENCE</small>
         </div>
       </div>
       <nav aria-label="Primary navigation">
-        <NavigationGroup label="DISCOVERY" rows={PRIMARY_NAV} active={current} setActive={setActive} />
-        <NavigationGroup label="TOOLS & EVIDENCE" rows={SECONDARY_NAV} active={current} setActive={setActive} />
+        <NavigationGroup label="MARKETS" rows={MARKET_NAV} active={current} setActive={setActive} />
+        <NavigationGroup label="INTELLIGENCE" rows={INTELLIGENCE_NAV} active={current} setActive={setActive} />
+        <NavigationGroup label="RESEARCH" rows={RESEARCH_NAV} active={current} setActive={setActive} />
+        <NavigationGroup label="SYSTEM" rows={SYSTEM_NAV} active={current} setActive={setActive} />
       </nav>
       <div className="sidebar-spacer" />
       <div className="reco-telemetry broker-card">
