@@ -90,6 +90,10 @@ class AutopilotDecision:
     selection_score: float | None = None
     policy_effect: str = "NEUTRAL"
     intent: Any = None
+    context: dict[str, Any] = field(default_factory=dict)
+    breakdown: dict[str, Any] = field(default_factory=dict)
+    why: dict[str, Any] = field(default_factory=dict)
+    group: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -107,6 +111,13 @@ class AutopilotDecision:
             "entry": self.card.get("entry"),
             "stop": self.card.get("stop"),
             "target": self.card.get("target"),
+            "group": self.group,
+            "why": self.why,
+            "breakdown": self.breakdown,
+            "regime": (self.context or {}).get("regime"),
+            "dd_status": (self.context or {}).get("dd_status"),
+            "entry_quality": (self.context or {}).get("entry_quality"),
+            "missing_evidence": (self.context or {}).get("missing_evidence") or [],
         }
 
 
@@ -154,22 +165,38 @@ def _empirical_fail(card: Mapping[str, Any]) -> bool:
 
 def selection_score(card: Mapping[str, Any], policy: Mapping[str, Any] | None = None) -> float:
     """Rank among already-eligible names. Not a BUY oracle."""
-    tier = str(card.get("reco_tier") or "")
-    base = 90.0 if tier == TIER_HIGH else 75.0 if tier == TIER_GOOD else 20.0
-    try:
-        confirms = float(card.get("family_confirms") or 0)
-    except (TypeError, ValueError):
-        confirms = 0.0
-    score = _f(card.get("score")) or 0.0
-    rank = base + min(9.0, confirms * 3.0) + min(5.0, score / 20.0)
-    effect = str((policy or {}).get("final_effect") or "NEUTRAL")
-    if effect == "SUPPORT":
-        rank += 4.0
-    elif effect == "PENALIZE":
-        rank -= 8.0
-    elif effect == "BLOCK":
-        rank -= 50.0
-    return round(rank, 2)
+    from product.decision_context import score_breakdown
+    return float(score_breakdown(card, policy).get("selection_rank") or 0.0)
+
+
+def _group_for(decision: str) -> str:
+    if decision == ENTER_NOW:
+        return "TAKEN"
+    if decision == WAIT:
+        return "RECOMMENDED_BUT_NOT_FILLED"
+    if decision == WATCH:
+        return "REJECTED"
+    if decision in {BLOCK, PORTFOLIO_BLOCK, NO_TRADE}:
+        return "REJECTED"
+    return "REJECTED"
+
+
+def _decorate(decision: AutopilotDecision, *, policy: Mapping[str, Any] | None, context: Mapping[str, Any] | None) -> AutopilotDecision:
+    from product.decision_context import explain, score_breakdown
+    decision.context = dict(context or {})
+    decision.policy_effect = str((policy or {}).get("final_effect") or decision.policy_effect or "NEUTRAL")
+    decision.breakdown = score_breakdown(decision.card, policy, context)
+    decision.selection_score = float(decision.breakdown.get("selection_rank") or 0.0)
+    decision.why = explain(
+        decision=decision.decision,
+        reason_code=decision.reason_code,
+        card=decision.card,
+        context=context,
+        policy=policy,
+        breakdown=decision.breakdown,
+    )
+    decision.group = _group_for(decision.decision)
+    return decision
 
 
 def evaluate_candidate(
@@ -384,7 +411,8 @@ def _intent_for(decision: AutopilotDecision, *, as_of: str, snapshot_id: str):
     )
 
 
-def _execute(decision: AutopilotDecision, *, book, as_of: str, snapshot_id: str, runtime_state=None):
+def execute_paper_decision(decision: AutopilotDecision, *, book, as_of: str, snapshot_id: str, runtime_state=None):
+    """Paper venue only. Live adapter is a separate class and stays locked."""
     intent = _intent_for(decision, as_of=as_of, snapshot_id=snapshot_id)
     decision.intent = intent
     store = getattr(getattr(book, "_pipeline", None), "events", None)
@@ -407,6 +435,13 @@ def _execute(decision: AutopilotDecision, *, book, as_of: str, snapshot_id: str,
     )
 
 
+def _execute(decision: AutopilotDecision, *, book, as_of: str, snapshot_id: str, runtime_state=None):
+    from product.execution_adapter import default_adapter
+    return default_adapter(live=False).submit(
+        decision, book=book, as_of=as_of, snapshot_id=snapshot_id,
+    )
+
+
 def run_reco_paper_cycle(
     *,
     book,
@@ -422,16 +457,19 @@ def run_reco_paper_cycle(
     persist_journal: bool = True,
     max_new: int = 3,
     policy_path=None,
+    scan_records: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Consume saved recommendations and open paper positions for ENTER_NOW names.
 
     Does not mock or bypass risk. Returns a cycle dict the supervisor can merge.
     """
     from product.autopilot_journal import flatten_cards, record_cycle
+    from product.decision_context import snapshot
     from product.evidence_policy_engine import evaluate_policies
 
     clock = now or datetime.now(timezone.utc)
     day = as_of or clock.date().isoformat()
+    ident = _identity()
     payload = dict(workspace or {})
     if cards is None:
         if not payload:
@@ -448,6 +486,7 @@ def run_reco_paper_cycle(
     taken: list[dict[str, Any]] = []
     rejections: list[dict[str, Any]] = []
     waits: list[dict[str, Any]] = []
+    not_surfaced: list[dict[str, Any]] = []
     opened: list[Any] = []
     family_risk: dict[str, float] = {}
     cluster_risk: dict[str, float] = {}
@@ -462,11 +501,43 @@ def run_reco_paper_cycle(
     if not card_list and not cycle_reasons:
         cycle_reasons.append(NOT_SURFACED)
 
+    def _freeze(decision: AutopilotDecision, *, group: str = "") -> None:
+        try:
+            from product.counterfactual_learning import freeze_decision
+            evidence = {
+                **dict(decision.context or {}),
+                "rules_hash": ident.get("rules_hash"),
+                "group": group or decision.group,
+                "detail": decision.detail,
+                "why": decision.why,
+                "setup_label": decision.card.get("setup_label"),
+                "sector": decision.card.get("sector"),
+                "regime": regime,
+            }
+            freeze_decision(
+                symbol=decision.symbol,
+                reason_code=decision.reason_code,
+                decision=decision.decision,
+                entry=_f(decision.card.get("entry")),
+                stop=_f(decision.card.get("stop")),
+                target=_f(decision.card.get("target")),
+                as_of=day,
+                evidence=evidence,
+            )
+        except Exception:
+            pass
+
     ranked: list[tuple[float, AutopilotDecision]] = []
     for card in card_list:
-        policy = evaluate_policies(card, path=policy_path)
+        ctx = snapshot(card, book=book, regime=regime)
+        merged = dict(card)
+        for key, value in ctx.items():
+            if key == "methods":
+                continue
+            merged.setdefault(key, value)
+        policy = evaluate_policies(merged, path=policy_path, regime=regime, book=book)
         decision = evaluate_candidate(
-            card,
+            merged,
             book=book,
             entries_allowed=entries_allowed,
             entry_block_reason=entry_block_reason,
@@ -478,30 +549,16 @@ def run_reco_paper_cycle(
             family_risk=family_risk,
             cluster_risk=cluster_risk,
         )
-        decision.policy_effect = str(policy.get("final_effect") or "NEUTRAL")
-        if decision.selection_score is None:
-            decision.selection_score = selection_score(card, policy)
+        _decorate(decision, policy=policy, context=ctx)
         decisions.append(decision)
         if decision.decision == ENTER_NOW:
             ranked.append((float(decision.selection_score or 0.0), decision))
         elif decision.decision == WAIT:
             waits.append(decision.as_dict())
+            _freeze(decision, group="RECOMMENDED_BUT_NOT_FILLED")
         else:
             rejections.append(decision.as_dict())
-            try:
-                from product.counterfactual_learning import freeze_decision
-                freeze_decision(
-                    symbol=decision.symbol,
-                    reason_code=decision.reason_code,
-                    decision=decision.decision,
-                    entry=_f(decision.card.get("entry")),
-                    stop=_f(decision.card.get("stop")),
-                    target=_f(decision.card.get("target")),
-                    as_of=day,
-                    evidence={"tier": decision.card.get("reco_tier"), "detail": decision.detail},
-                )
-            except Exception:
-                pass
+            _freeze(decision, group="REJECTED")
 
     ranked.sort(key=lambda item: (-item[0], item[1].symbol))
     snapshot_id = str(payload.get("scan_scanned_at") or day)
@@ -512,7 +569,11 @@ def run_reco_paper_cycle(
             leftover["reason_code"] = NO_TRADE
             leftover["detail"] = "not top-of-the-top this cycle"
             leftover["decision"] = NO_TRADE
+            leftover["group"] = "REJECTED"
             rejections.append(leftover)
+            decision.decision = NO_TRADE
+            decision.reason_code = NO_TRADE
+            _freeze(decision, group="REJECTED")
             continue
         try:
             pos = _execute(decision, book=book, as_of=day, snapshot_id=snapshot_id)
@@ -549,14 +610,68 @@ def run_reco_paper_cycle(
             "qty": getattr(pos, "qty", None),
             "entry_fill": getattr(pos, "entry_price", None),
             "status": "TAKEN",
+            "group": "TAKEN",
         })
+        try:
+            from product.paper_learning_loop import note_later_entry
+            note_later_entry(decision.symbol, path=policy_path)
+        except Exception:
+            pass
+
+    reco_symbols = {str(c.get("symbol") or "").upper() for c in card_list}
+    scan_rows = list(scan_records or payload.get("scan_records") or [])
+    close_misses = []
+    for row in scan_rows:
+        if not isinstance(row, Mapping):
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol or symbol in reco_symbols:
+            continue
+        try:
+            score = float(row.get("score") or 0)
+        except (TypeError, ValueError):
+            score = 0.0
+        close_misses.append((score, row, symbol))
+    close_misses.sort(key=lambda item: -item[0])
+    for _score, row, symbol in close_misses[:20]:
+        miss = {
+            "symbol": symbol,
+            "decision": NOT_SURFACED,
+            "reason_code": NOT_SURFACED,
+            "group": "NOT_SURFACED",
+            "detail": "checked by the scan but not a final recommendation",
+            "setup_label": row.get("setup_label") or row.get("classification") or "",
+            "sector": row.get("sector") or "",
+            "score": row.get("score"),
+        }
+        not_surfaced.append(miss)
+        try:
+            from product.counterfactual_learning import freeze_decision
+            freeze_decision(
+                symbol=symbol,
+                reason_code=NOT_SURFACED,
+                decision=NOT_SURFACED,
+                entry=_f(row.get("price") or row.get("close") or row.get("entry")),
+                stop=_f(row.get("stop")),
+                target=_f(row.get("target")),
+                as_of=day,
+                evidence={
+                    "group": "NOT_SURFACED",
+                    "rules_hash": ident.get("rules_hash"),
+                    "regime": regime,
+                    "score": row.get("score"),
+                    "verdict": row.get("verdict"),
+                },
+            )
+        except Exception:
+            pass
 
     final = ENTER_NOW if taken else (WAIT if waits and not rejections else NO_TRADE)
     if not card_list and not taken:
         final = NO_TRADE
     summary = (
         f"taken={len(taken)} rejected={len(rejections)} wait={len(waits)} "
-        f"seen={len(card_list)}"
+        f"seen={len(card_list)} not_surfaced={len(not_surfaced)}"
     )
     cycle = {
         "as_of": day,
@@ -569,6 +684,7 @@ def run_reco_paper_cycle(
         "taken": taken,
         "rejections": rejections,
         "waits": waits,
+        "not_surfaced": not_surfaced,
         "positions_opened": opened,
         "final_decision": final if taken else NO_TRADE,
         "cycle_reasons": cycle_reasons,
@@ -578,6 +694,8 @@ def run_reco_paper_cycle(
         ),
         "source": "recommendation_selection_authority",
         "live_locked": True,
+        "adapter": "paper",
+        "rules_hash": ident.get("rules_hash"),
     }
     if persist_journal:
         try:

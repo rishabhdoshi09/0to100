@@ -26,6 +26,7 @@ from product.counterfactual_learning import (
     ledger_path,
     settle,
 )
+from product.evidence_policy_engine import HARD_REASON_CODES
 from product.learning_policy_store import record_measured_outcome
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -94,6 +95,10 @@ def record_taken_evidence(taken: Sequence[Mapping[str, Any]], *, as_of: str) -> 
             "stop": row.get("stop"),
             "target": row.get("target"),
             "reason_code": row.get("reason_code") or "ELIGIBLE",
+            "regime": row.get("regime") or "",
+            "dd_status": row.get("dd_status") or "",
+            "entry_quality": row.get("entry_quality") or "",
+            "why": row.get("why") or {},
         })
 
 
@@ -121,29 +126,81 @@ def ingest_closed_trade(
     path=None,
     floors: Mapping[str, int] | None = None,
 ) -> dict[str, Any] | None:
-    """One settled paper trade updates the setup policy. Not booked as a new BUY."""
+    """One settled paper trade updates setup (+ limited conditionals). Not a new BUY."""
     row = dict(trade.as_dict()) if hasattr(trade, "as_dict") else dict(trade)
     symbol = str(row.get("symbol") or "").upper()
     if not symbol:
         return None
     evidence = _lookup_taken(symbol)
     setup = str(evidence.get("setup_label") or row.get("setup_label") or "UNKNOWN_SETUP")
+    sector = str(evidence.get("sector") or row.get("sector") or "")
+    regime = str(evidence.get("regime") or row.get("regime") or "")
+    entry_state = str(evidence.get("entry_state") or row.get("entry_state") or "")
     realized = float(row.get("realized_R") or 0.0)
-    policy_id = f"SETUP::{setup}"
-    return record_measured_outcome(
-        policy_id=policy_id,
+    extra_base = {
+        "symbol": symbol,
+        "exit_reason": row.get("exit_reason") or "",
+        "regime": regime,
+        "not_live": True,
+    }
+    last = record_measured_outcome(
+        policy_id=f"SETUP::{setup}",
         dimension="setup",
         bucket=setup,
         realized_R=realized,
         source="paper_forward_taken",
         path=path,
         floors=floors,
-        extra={
-            "symbol": symbol,
-            "exit_reason": row.get("exit_reason") or "",
-            "not_live": True,
-        },
+        extra=extra_base,
     )
+    # At most two 2-way conditionals — never a combinatorial explosion.
+    if setup and sector:
+        record_measured_outcome(
+            policy_id=f"SETUP_SECTOR::{setup}|{sector}",
+            dimension="setup|sector",
+            bucket=f"{setup}|{sector}",
+            realized_R=realized,
+            source="paper_forward_taken",
+            path=path,
+            floors=floors,
+            extra=extra_base,
+        )
+    if setup and regime:
+        record_measured_outcome(
+            policy_id=f"SETUP_REGIME::{setup}|{regime}",
+            dimension="setup|regime",
+            bucket=f"{setup}|{regime}",
+            realized_R=realized,
+            source="paper_forward_taken",
+            path=path,
+            floors=floors,
+            extra=extra_base,
+        )
+    if entry_state:
+        record_measured_outcome(
+            policy_id=f"ENTRY::{entry_state}",
+            dimension="entry_state",
+            bucket=entry_state,
+            realized_R=realized,
+            source="paper_forward_taken",
+            path=path,
+            floors=floors,
+            extra=extra_base,
+        )
+    # Exit quality is evidence-only until an owner promotes an exit policy.
+    exit_reason = str(row.get("exit_reason") or "")
+    if exit_reason:
+        record_measured_outcome(
+            policy_id=f"EXIT::{exit_reason}",
+            dimension="exit_reason",
+            bucket=exit_reason,
+            realized_R=realized,
+            source="paper_forward_exit",
+            path=path,
+            floors=floors,
+            extra={**extra_base, "affects_selection": False},
+        )
+    return last
 
 
 def ingest_closed_book(book, *, path=None, floors: Mapping[str, int] | None = None) -> dict[str, Any]:
@@ -180,10 +237,13 @@ def ingest_counterfactual(
     path=None,
     floors: Mapping[str, int] | None = None,
 ) -> dict[str, Any] | None:
-    """Rejected/waited names update reason-level statistics. Never booked as P&L."""
+    """Rejected/waited names update reason-level statistics. Never booked as P&L.
+
+    Hard gates stay hard: SECTOR_CAP / chase / DD misses are observed, not reversed.
+    A MISSED_WINNER on a *learned* setup block may weaken that setup overlay.
+    """
     classification = str(settled.get("classification") or "")
     reason = str(settled.get("reason_code") or "REJECTED")
-    # Map classification onto a signed R used only for policy evidence, not P&L.
     mapped = {
         CORRECT_REJECTION: 0.40,
         AVOIDED_LOSER: 0.40,
@@ -192,7 +252,8 @@ def ingest_counterfactual(
         RAN_AWAY: 0.0,
         FLAT: 0.0,
     }.get(classification, 0.0)
-    return record_measured_outcome(
+    hard = reason in HARD_REASON_CODES or reason in {"SECTOR_CAP", "CORRELATION_CAP", "MAX_PORTFOLIO_RISK"}
+    last = record_measured_outcome(
         policy_id=f"REJECT::{reason}",
         dimension="reason_code",
         bucket=reason,
@@ -204,7 +265,44 @@ def ingest_counterfactual(
             "classification": classification,
             "not_pnl": True,
             "symbol": settled.get("symbol"),
+            "affects_selection": not hard,
+            "regime": (settled.get("evidence") or {}).get("regime") or settled.get("regime") or "",
         },
+    )
+    evidence = dict(settled.get("evidence") or {})
+    setup = str(evidence.get("setup_label") or settled.get("setup") or "")
+    # Learned setup overlay can be weakened by missed winners; hard gates cannot.
+    if classification == MISSED_WINNER and setup and reason == "EVIDENCE_POLICY_BLOCK":
+        last = record_measured_outcome(
+            policy_id=f"SETUP::{setup}",
+            dimension="setup",
+            bucket=setup,
+            realized_R=0.40,
+            source="counterfactual_missed_winner",
+            path=path,
+            floors=floors,
+            extra={"classification": classification, "not_pnl": True, "symbol": settled.get("symbol")},
+        )
+    if classification == GOOD_WAIT:
+        last = record_measured_outcome(
+            policy_id="ENTRY_QUALITY::GOOD_WAIT",
+            dimension="entry_quality",
+            bucket="good_wait",
+            realized_R=0.20,
+            source="counterfactual_good_wait",
+            path=path,
+            floors=floors,
+            extra={"classification": GOOD_WAIT, "not_pnl": True, "symbol": settled.get("symbol")},
+        )
+    return last
+
+
+def note_later_entry(symbol: str, *, path=None, floors: Mapping[str, int] | None = None) -> dict[str, Any]:
+    """A waited name later received a valid fill → GOOD_WAIT. Not booked as extra P&L."""
+    return settle_pending_counterfactuals(
+        later_entered={str(symbol).upper(): True},
+        path=path,
+        floors=floors,
     )
 
 
@@ -294,10 +392,17 @@ def learning_dashboard(
             "latest_as_of": latest.get("as_of") or "",
             "latest_taken": len(latest.get("taken") or []),
             "latest_rejected": len(latest.get("rejections") or []),
+            "latest_waits": len(latest.get("waits") or []),
+            "not_surfaced": len(latest.get("not_surfaced") or []),
             "correct_rejects": class_counts.get(CORRECT_REJECTION, 0),
             "missed_winners": class_counts.get(MISSED_WINNER, 0),
             "avoided_losers": class_counts.get(AVOIDED_LOSER, 0),
             "good_waits": class_counts.get(GOOD_WAIT, 0),
+        },
+        "explanations": {
+            "taken": [dict(t.get("why") or {}, symbol=t.get("symbol")) for t in (latest.get("taken") or [])[:8]],
+            "rejected": [dict(r.get("why") or {}, symbol=r.get("symbol"), reason_code=r.get("reason_code")) for r in (latest.get("rejections") or [])[:8]],
+            "waits": [dict(w.get("why") or {}, symbol=w.get("symbol"), reason_code=w.get("reason_code")) for w in (latest.get("waits") or [])[:8]],
         },
         "live_readiness": evaluate_live_readiness(),
     }

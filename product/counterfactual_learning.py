@@ -57,8 +57,14 @@ def freeze_decision(
         "hypothetical_target": target,
         "as_of": as_of,
         "evidence": dict(evidence or {}),
+        "rules_hash": str((evidence or {}).get("rules_hash") or ""),
+        "regime": str((evidence or {}).get("regime") or ""),
+        "sector": str((evidence or {}).get("sector") or ""),
+        "setup": str((evidence or {}).get("setup_label") or (evidence or {}).get("setup") or ""),
+        "group": str((evidence or {}).get("group") or ""),
         "outcome": None,
         "classification": None,
+        "not_pnl": True,
     }
     target_path = ledger_path(path)
     target_path.parent.mkdir(parents=True, exist_ok=True)

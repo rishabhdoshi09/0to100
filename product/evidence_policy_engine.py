@@ -2,11 +2,23 @@
 
 Consumes frozen learning policies plus the candidate's point-in-time evidence.
 Outputs SUPPORT / NEUTRAL / PENALIZE / BLOCK. Never emits BUY.
+
+Hard product gates are not reversed by this engine. A policy with
+affects_selection=False is observation-only (counterfactual / exit / portfolio).
 """
 from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+from product.decision_context import (
+    dd_status,
+    entry_quality,
+    extension_bucket,
+    liquidity_bucket,
+    rs_bucket,
+    snapshot,
+    volatility_bucket,
+)
 from product.learning_policy_store import (
     ACTIVE,
     ELIGIBLE,
@@ -21,28 +33,65 @@ BLOCK = "BLOCK"
 
 _EFFECT_RANK = {BLOCK: 3, PENALIZE: 2, SUPPORT: 1, NEUTRAL: 0}
 
+# Learned overlays must not silently disable these production gates.
+HARD_REASON_CODES = {
+    "PAPER_TRADING_DISABLED",
+    "MARKET_NOT_READY",
+    "OUTSIDE_ENTRY_WINDOW",
+    "STALE_RECOMMENDATION",
+    "DD_GATE_FAILED",
+    "ENTRY_TOO_EXTENDED",
+    "INVALID_STOP",
+    "DUPLICATE_POSITION",
+    "MAX_POSITIONS",
+    "MAX_PORTFOLIO_RISK",
+    "SECTOR_CAP",
+    "CORRELATION_CAP",
+    "PER_NAME_CAP",
+    "INSUFFICIENT_CAPITAL",
+    "LIQUIDITY_FAILED",
+    "REGIME_STANDDOWN",
+    "UNRECONCILED",
+    "PORTFOLIO_GATE_ERROR",
+    "NO_VALID_ENTRY",
+}
+
 
 def _bucket_of(candidate: Mapping[str, Any], dimension: str) -> str:
+    if "|" in dimension:
+        return "|".join(_bucket_of(candidate, part) for part in dimension.split("|"))
     if dimension == "reason_code":
         return str(candidate.get("reason_code") or candidate.get("last_reject_reason") or "")
     if dimension == "setup":
         return str(candidate.get("setup_label") or candidate.get("primary_thesis") or "")
     if dimension == "entry_state":
         return str(candidate.get("entry_state") or "")
+    if dimension == "entry_quality":
+        return str(candidate.get("entry_quality") or entry_quality(candidate))
     if dimension == "tier":
         return str(candidate.get("reco_tier") or "")
     if dimension == "sector":
         return str(candidate.get("sector") or "")
+    if dimension == "regime":
+        return str(candidate.get("regime") or (candidate.get("portfolio") or {}).get("regime") or "")
+    if dimension == "dd_status":
+        return str(candidate.get("dd_status") or dd_status(candidate))
+    if dimension == "rs_bucket":
+        return str(candidate.get("rs_bucket") or rs_bucket(candidate.get("rs_percentile")))
+    if dimension == "liquidity":
+        return str(candidate.get("liquidity") or liquidity_bucket(candidate.get("volume_ratio")))
+    if dimension == "volatility":
+        return str(candidate.get("volatility") or volatility_bucket(candidate.get("atr_pct")))
     if dimension == "extension":
+        if candidate.get("extension"):
+            return str(candidate.get("extension"))
         try:
             ext = float(candidate.get("extension_pct") or 0)
         except (TypeError, ValueError):
             return ""
-        if ext > 8:
-            return "extended_gt_8"
-        if ext > 4:
-            return "extended_4_8"
-        return "extended_le_4"
+        return extension_bucket(ext)
+    if dimension == "exit_reason":
+        return str(candidate.get("exit_reason") or "")
     return str(candidate.get(dimension) or "")
 
 
@@ -51,8 +100,17 @@ def evaluate_policies(
     *,
     policies: Sequence[Mapping[str, Any]] | None = None,
     path=None,
+    regime: str = "",
+    book=None,
 ) -> dict[str, Any]:
     """Return the empirical overlay for one candidate. Cannot create a BUY."""
+    ctx = dict(candidate)
+    if "methods" in candidate or "setup_label" in candidate:
+        frozen = snapshot(candidate, book=book, regime=regime or str(candidate.get("regime") or ""))
+        for key, value in frozen.items():
+            ctx.setdefault(key, value)
+    if regime:
+        ctx["regime"] = regime
     if policies is None:
         policies = list((load_policies(path).get("policies") or []))
     supportive: list[dict[str, Any]] = []
@@ -62,17 +120,29 @@ def evaluate_policies(
     coverage = 0
     final = NEUTRAL
     learned_edge = 0.0
+    matched: list[dict[str, Any]] = []
 
     for raw in policies:
         policy = dict(raw)
+        if policy.get("affects_selection") is False:
+            continue
         status = str(policy.get("production_status") or "")
         if status not in {ACTIVE, ELIGIBLE, EXPERIMENTAL}:
             continue
+        source = str(policy.get("evidence_source") or "")
+        # Backtest never outranks same-hash forward paper evidence.
+        if source.startswith("backtest") and status == ACTIVE:
+            status = ELIGIBLE
+            policy = {**policy, "production_status": status, "note": "backtest cannot self-activate"}
         dimension = str(policy.get("dimension") or "")
         bucket = str(policy.get("bucket") or "")
         if not dimension or not bucket:
             continue
-        if _bucket_of(candidate, dimension) != bucket:
+        if _bucket_of(ctx, dimension) != bucket:
+            continue
+        if dimension == "reason_code" and bucket in HARD_REASON_CODES:
+            # Stats for the dashboard only — never disable a hard gate.
+            cautionary.append({**policy, "effect": NEUTRAL, "note": "hard_gate_observation"})
             continue
         coverage += 1
         n = int(policy.get("sample_size") or 0)
@@ -82,6 +152,7 @@ def evaluate_policies(
         confidence = str(policy.get("confidence") or "")
         if confidence == "INSUFFICIENT_EVIDENCE" and status != ACTIVE:
             cautionary.append({**policy, "effect": NEUTRAL, "note": "INSUFFICIENT_EVIDENCE"})
+            matched.append(policy)
             continue
         if status == ACTIVE and edge <= -0.40:
             effect = BLOCK
@@ -95,6 +166,7 @@ def evaluate_policies(
         else:
             effect = NEUTRAL
             cautionary.append({**policy, "effect": effect})
+        matched.append({**policy, "effect": effect})
         if _EFFECT_RANK[effect] > _EFFECT_RANK[final]:
             final = effect
 
@@ -102,6 +174,7 @@ def evaluate_policies(
         "supportive": supportive,
         "cautionary": cautionary,
         "blocking": blocking,
+        "matched": matched,
         "learned_edge_score": round(learned_edge, 4),
         "evidence_coverage": coverage,
         "sample_size": sample,
@@ -111,4 +184,5 @@ def evaluate_policies(
         ),
         "final_effect": final,
         "invents_buy": False,
+        "hard_gates_remain": True,
     }
