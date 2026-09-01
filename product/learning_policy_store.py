@@ -200,10 +200,12 @@ def record_measured_outcome(
 ) -> dict[str, Any]:
     """Increment a policy from one settled observation. Never silent; never invents BUY.
 
-    A gross-only paper observation is retained in policy statistics for audit, but
-    cannot affect selection until a later execution-adjusted observation restores
-    production eligibility. This prevents missing execution evidence from being
-    mistaken for a tradable edge.
+    Gross-only positive evidence is audit-only: without execution-adjusted evidence
+    it cannot SUPPORT or promote a setup. Gross-only *negative* evidence is a
+    conservative upper bound, so after sample/shrinkage gates it may only act as
+    a veto/penalty. Realistic costs cannot turn an already-negative gross edge into
+    a better conservative edge. This keeps old downside protection while preventing
+    optimistic gross P&L from being mistaken for tradable alpha.
     """
     store = load_policies(path)
     existing = next(
@@ -217,8 +219,17 @@ def record_measured_outcome(
     payload = dict(extra or {})
     payload["last_observation_R"] = round(float(realized_R), 4)
     if str(source) == "paper_forward_taken_gross_only":
-        payload["affects_selection"] = False
-        payload["evidence_only_reason"] = "EXECUTION_ADJUSTED_UNAVAILABLE"
+        if mean < 0.0:
+            # Veto-only asymmetry: negative gross evidence is already an upper
+            # bound on a cost-adjusted result. It may protect capital, never
+            # create/support a BUY.
+            payload["affects_selection"] = True
+            payload["gross_only_veto_only"] = True
+            payload["evidence_only_reason"] = "NEGATIVE_GROSS_CONSERVATIVE_BOUND"
+        else:
+            payload["affects_selection"] = False
+            payload["gross_only_veto_only"] = True
+            payload["evidence_only_reason"] = "EXECUTION_ADJUSTED_UNAVAILABLE"
     return upsert_policy(
         policy_id=policy_id,
         dimension=dimension,
