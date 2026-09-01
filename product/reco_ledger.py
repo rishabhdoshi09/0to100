@@ -2,8 +2,9 @@
 
 Stores enough to answer, months later: why did QuantTerm surface this name at
 that timestamp? Missing fields stay empty. Never invents outcomes. The evidence
-score snapshot is frozen at decision time so later method/data changes cannot
-rewrite what the system actually knew then.
+score and production-strategy identity are frozen at decision time so later
+method/data changes cannot rewrite what the system actually knew or which rules
+created the decision.
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ from typing import Any, Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 LEDGER_PATH = ROOT / "logs" / "product" / "reco_ledger.jsonl"
-LEDGER_VERSION = 2
+LEDGER_VERSION = 3
 
 
 def _score_snapshot(card: Mapping[str, Any]) -> dict[str, Any]:
@@ -55,6 +56,30 @@ def _score_snapshot(card: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _strategy_snapshot(card: Mapping[str, Any]) -> dict[str, Any]:
+    category_id = str(card.get("category_id") or "")
+    try:
+        from product.strategy_contract import strategy_for_category
+        strategy = strategy_for_category(category_id)
+    except Exception:
+        strategy = None
+    if strategy is None:
+        return {
+            "strategy_id": None,
+            "strategy_version": None,
+            "rules_hash": None,
+            "category_id": category_id or None,
+            "status": "UNREGISTERED",
+        }
+    return {
+        "strategy_id": strategy.strategy_id,
+        "strategy_version": strategy.version,
+        "rules_hash": strategy.rules_hash,
+        "category_id": strategy.category_id,
+        "status": strategy.status,
+    }
+
+
 def _compact_card(card: Mapping[str, Any]) -> dict[str, Any]:
     experts = []
     for item in card.get("experts") or []:
@@ -88,6 +113,7 @@ def _compact_card(card: Mapping[str, Any]) -> dict[str, Any]:
         "stop": card.get("stop"),
         "target": card.get("target"),
         "cmp": card.get("cmp"),
+        "strategy": _strategy_snapshot(card),
         "evidence_scorecard": _score_snapshot(card),
     }
 
