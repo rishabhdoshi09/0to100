@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import {
+  fetchForwardSoak,
   fetchLearningDashboard,
   fetchResearchStatus,
   fetchScanAudit,
   fetchStrategyCatalog,
   fetchSystemHealthContract,
+  type ForwardSoakScoreboard,
   type HealthLane,
   type LearningDashboard,
   type ResearchStatus,
@@ -88,9 +90,15 @@ export function StrategiesView() {
   )
 }
 
+function metricText(value: number | null | undefined, fallback = 'INSUFFICIENT EVIDENCE'): string {
+  if (value === null || value === undefined) return fallback
+  return String(value)
+}
+
 export function LearningJournalView() {
   const [data, setData] = useState<ResearchStatus | null>(null)
   const [learning, setLearning] = useState<LearningDashboard | null>(null)
+  const [soak, setSoak] = useState<ForwardSoakScoreboard | null>(null)
   const [error, setError] = useState('')
   useEffect(() => {
     fetchResearchStatus()
@@ -99,9 +107,14 @@ export function LearningJournalView() {
     fetchLearningDashboard()
       .then(setLearning)
       .catch(() => setLearning(null))
+    fetchForwardSoak()
+      .then(setSoak)
+      .catch(() => setSoak(null))
   }, [])
   const journal = data?.decision_journal
   const recent = learning?.recent_learning
+  const board = soak || learning?.forward_soak || null
+  const evidenceLabel = board?.insufficient_evidence ? 'INSUFFICIENT EVIDENCE' : (board?.evidence_label || 'INSUFFICIENT EVIDENCE')
   return (
     <section className="workspace-view">
       <div className="reco-how">
@@ -109,6 +122,61 @@ export function LearningJournalView() {
         <p>{data?.disclaimer || 'Measurable evidence only. Empty is a valid state.'}</p>
       </div>
       {error ? <div className="api-warning">{error}</div> : null}
+      <Panel title="FORWARD EVIDENCE SCOREBOARD" subtitle={board?.FORWARD_SOAK_STATUS || 'NOT_STARTED'}>
+        {!board ? (
+          <div className="empty-row">Forward soak scoreboard unavailable. Missing stays missing.</div>
+        ) : (
+          <>
+            <div className="fact-grid">
+              <div><span>Real forward observations</span><strong>{board.real_forward_observations}</strong></div>
+              <div><span>Paper trades taken</span><strong>{board.paper_trades_taken}</strong></div>
+              <div><span>Settled trades</span><strong>{board.settled_trades}</strong></div>
+              <div><span>Rejected candidates settled</span><strong>{board.rejected_candidates_settled}</strong></div>
+              <div><span>Missed winners</span><strong>{board.missed_winners}</strong></div>
+              <div><span>Avoided losers</span><strong>{board.avoided_losers}</strong></div>
+              <div><span>Good waits</span><strong>{board.good_waits}</strong></div>
+              <div><span>Gross expectancy</span><strong>{metricText(board.gross_expectancy)}</strong></div>
+              <div><span>Execution-adjusted expectancy</span><strong>{metricText(board.execution_adjusted_expectancy)}</strong></div>
+              <div><span>Execution coverage</span><strong>{board.execution_adjusted_coverage_pct == null ? evidenceLabel : `${board.execution_adjusted_coverage_pct}%`}</strong></div>
+              <div><span>Current drawdown</span><strong>{metricText(board.current_drawdown)}</strong></div>
+              <div><span>Win rate</span><strong>{metricText(board.win_rate)}</strong></div>
+              <div><span>Average win</span><strong>{metricText(board.average_win)}</strong></div>
+              <div><span>Average loss</span><strong>{metricText(board.average_loss)}</strong></div>
+              <div><span>Active policies</span><strong>{board.active_policies}</strong></div>
+              <div><span>Eligible policies</span><strong>{board.eligible_policies}</strong></div>
+              <div><span>Challengers under evaluation</span><strong>{board.challengers_under_evaluation}</strong></div>
+              <div><span>Live locked</span><strong>yes</strong></div>
+            </div>
+            <p className="panel-copy">{board.soak_detail || board.note || evidenceLabel}</p>
+            {Object.keys(board.setup_level_evidence || {}).length ? (
+              <p className="panel-copy">
+                Setup-level evidence:{' '}
+                {Object.entries(board.setup_level_evidence || {}).map(([key, row]) => `${key} n=${row.n} ${row.evidence}`).join(' · ') || 'none'}
+              </p>
+            ) : null}
+            {Object.keys(board.regime_level_evidence || {}).length ? (
+              <p className="panel-copy">
+                Regime-level evidence:{' '}
+                {Object.entries(board.regime_level_evidence || {}).map(([key, row]) => `${key} n=${row.n} ${row.evidence}`).join(' · ') || 'none'}
+              </p>
+            ) : null}
+            {Object.keys(board.sector_level_evidence || {}).length ? (
+              <p className="panel-copy">
+                Sector-level evidence:{' '}
+                {Object.entries(board.sector_level_evidence || {}).map(([key, row]) => `${key} n=${row.n} ${row.evidence}`).join(' · ') || 'none'}
+              </p>
+            ) : null}
+            {(board.promotion_blockers?.components || []).length ? (
+              <p className="panel-copy">
+                Promotion blockers:{' '}
+                {(board.promotion_blockers?.components || []).map((row) => (
+                  `${row.component} ${row.decision || 'KEEP_SHADOW'}${(row.blockers || []).length ? ` (${(row.blockers || []).join(', ')})` : ''}`
+                )).join(' · ')}
+              </p>
+            ) : null}
+          </>
+        )}
+      </Panel>
       <Panel title="WHAT IS MEASURABLE NOW" subtitle={data?.learning_status || 'UNKNOWN'}>
         {(data?.headlines || []).map((line) => <p className="panel-copy" key={line}>{line}</p>)}
       </Panel>
