@@ -1,12 +1,8 @@
 """Canonical production-method registry for the React desk.
 
-Retail recommendations are NOT StrategySpec paper strategies. This module is
-the only place that names what today's BUY/WATCH list actually runs.
-
-A parity hash must identify executable decision behaviour, not merely threshold
-constants. The ensemble hash therefore fingerprints the production decision
-modules as well as their declared constants. Any decision-code change invalidates
-old parity evidence automatically.
+Retail recommendations are NOT StrategySpec paper strategies. Production
+identity fingerprints executable nomination *and final selection authority* so
+learning/DD changes can never inherit old performance under the same rules hash.
 """
 from __future__ import annotations
 
@@ -41,6 +37,9 @@ _DECISION_CODE_PATHS = (
     "product/reco_experts.py",
     "product/reco_ensemble.py",
     "product/recommendations_workspace.py",
+    "product/selection_authority.py",
+    "product/due_diligence/engine.py",
+    "product/due_diligence/fundamental_intelligence.py",
     "product/breakout_quality.py",
     "product/radar_workspace.py",
 )
@@ -59,12 +58,6 @@ def _file_sha256(path: Path) -> str:
 
 
 def decision_code_hashes() -> dict[str, str]:
-    """Fingerprint files that determine recommendation nomination/tiering.
-
-    This deliberately over-invalidates rather than under-invalidates: a harmless
-    edit may require fresh evidence, but a behavioural edit can never silently
-    inherit old evidence under the same rules_hash.
-    """
     return {rel: _file_sha256(ROOT / rel) for rel in _DECISION_CODE_PATHS}
 
 
@@ -96,7 +89,7 @@ def _load_json(path: Path) -> dict[str, Any] | None:
 
 
 def production_backtest_evidence(path: Path | None = None) -> dict[str, Any]:
-    """Verify a performance artifact against today's exact executable hash."""
+    """Verify performance evidence against today's full executable decision hash."""
     target = path or PRODUCTION_BACKTEST_PATH
     raw = _load_json(target)
     expected = current_rules_hash()
@@ -117,13 +110,12 @@ def production_backtest_evidence(path: Path | None = None) -> dict[str, Any]:
     pit = bool(raw.get("point_in_time_verified"))
     same = bool(actual and actual == expected)
     completed = bool(raw.get("completed"))
-    # Performance attribution must also declare its scope. A decision-integrity
-    # replay alone is never enough to promote historical return metrics.
+    evidence_ready = bool(raw.get("evidence_ready"))
     performance_scope = str(raw.get("scope") or "") in {
         "PRODUCTION_SIGNAL_OUTCOMES",
         "PRODUCTION_EXECUTION_REPLAY",
     }
-    verified = same and pit and completed and performance_scope
+    verified = same and pit and completed and evidence_ready and performance_scope
     reasons: list[str] = []
     if not same:
         reasons.append(f"artifact hash {actual or 'missing'} != current {expected}")
@@ -131,6 +123,8 @@ def production_backtest_evidence(path: Path | None = None) -> dict[str, Any]:
         reasons.append("point-in-time / leakage gate not verified")
     if not completed:
         reasons.append("replay artifact is not completed")
+    if not evidence_ready:
+        reasons.append("minimum production sample/date gates are not met")
     if not performance_scope:
         reasons.append("artifact scope is not historical signal/execution performance")
     return {
@@ -141,6 +135,7 @@ def production_backtest_evidence(path: Path | None = None) -> dict[str, Any]:
         "same_rules_hash": same,
         "point_in_time_verified": pit,
         "completed": completed,
+        "evidence_ready": evidence_ready,
         "scope": raw.get("scope"),
         "generated_at": raw.get("generated_at"),
         "dataset": raw.get("dataset") or {},
@@ -148,8 +143,8 @@ def production_backtest_evidence(path: Path | None = None) -> dict[str, Any]:
         "audit_metrics": raw.get("metrics") or {},
         "walk_forward": raw.get("walk_forward") or {},
         "detail": (
-            "BACKTEST PARITY: VERIFIED. Historical performance uses the same executable recommendation hash "
-            "and passed point-in-time leakage guards."
+            "BACKTEST PARITY: VERIFIED. Production evidence uses the same executable recommendation + "
+            "learning + Due Diligence hash and passed point-in-time/sample gates."
             if verified else
             "BACKTEST PARITY: UNVERIFIED. " + "; ".join(reasons)
         ),
@@ -157,7 +152,6 @@ def production_backtest_evidence(path: Path | None = None) -> dict[str, Any]:
 
 
 def decision_replay_evidence() -> dict[str, Any]:
-    """Synchronization check only — explicitly not performance evidence."""
     try:
         from product.production_replay import replay_tape_status
         return replay_tape_status(current_rules_hash=current_rules_hash())
@@ -186,14 +180,15 @@ def ensemble_identity() -> dict[str, Any]:
         "universe": "NSE EQ approved universe from the last saved market scan",
         "evidence_requirements": [
             "persisted market scan overlay",
-            "two independent evidence families for Buy",
-            f"Live EV / case memory require n≥{EV_MIN_N}",
+            "two independent nomination evidence families",
+            f"observed EV / case memory require n≥{EV_MIN_N} before learned veto/support",
+            "Due Diligence + Fundamental Intelligence gate on production finalists",
             "same executable rules_hash for production performance attribution",
-            "point-in-time feature timestamps before outcome timestamps",
+            "point-in-time evidence before outcome timestamps",
         ],
-        "entry_logic": "Saved scan entry / buy zone; ensemble does not rescore OHLCV on page open",
-        "exit_logic": "Saved scan stop and target; paper GTT on autonomy fills only",
-        "risk_assumptions": "Chase/extension and RSI blow-off fail tape; funds never invent a Buy",
+        "entry_logic": "Saved scan entry / buy zone; page-open never rescans OHLCV",
+        "exit_logic": "Saved scan stop and target; canonical official-bhavcopy first-touch for evidence",
+        "risk_assumptions": "Chase/extension, negative learned edge and failed DD can block; none can invent a Buy",
         "backtest_parity": evidence["parity"],
         "backtest_parity_detail": evidence["detail"] + (f" Decision replay: {replay_detail}" if replay_detail else ""),
         "backtest_evidence": evidence,
@@ -221,7 +216,7 @@ def method_identity(method_id: str) -> dict[str, Any]:
         "backtest_parity": UNVERIFIED,
         "backtest_parity_detail": (
             f"{METHOD_LABELS.get(mid, mid)} is a component check. Production parity is evaluated at the "
-            "ensemble decision layer, not inferred from this chip alone."
+            "full nomination + learning + DD decision layer, not inferred from this chip alone."
         ),
         "result_kind": None,
     }
@@ -232,7 +227,6 @@ def _load_signal_backtest(path: Path | None = None) -> dict[str, Any] | None:
 
 
 def related_signal_calibration(path: Path | None = None) -> dict[str, Any]:
-    """Scanner weight file — related, never treated as reco-method parity."""
     raw = _load_signal_backtest(path)
     if not raw:
         return {
@@ -266,7 +260,6 @@ def annotate_method(method: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def fundamental_disagreement(card: Mapping[str, Any]) -> str:
-    """Explain funds vs structure without calling due diligence or inventing scores."""
     methods = [m for m in (card.get("methods") or []) if isinstance(m, Mapping)]
     by_id = {str(m.get("id") or ""): m for m in methods}
     funds = by_id.get("funds") or {}
@@ -290,7 +283,13 @@ def fundamental_disagreement(card: Mapping[str, Any]) -> str:
 
 
 def decorate_card(card: Mapping[str, Any]) -> dict[str, Any]:
-    row = dict(card)
+    # Page-open gets the same final authority as the post-scan persisted desk.
+    # Idempotent: already-gated Watch/Avoid cards do not rerun DD.
+    try:
+        from product.selection_authority import apply_card_selection_authority
+        row = apply_card_selection_authority(card, run_due_diligence=True)
+    except Exception:
+        row = dict(card)
     methods = [annotate_method(m) for m in (row.get("methods") or []) if isinstance(m, Mapping)]
     if methods:
         row["methods"] = methods
@@ -314,7 +313,7 @@ def production_registry() -> dict[str, Any]:
     ensemble = ensemble_identity()
     methods = [method_identity(mid) for mid in METHOD_WEIGHTS]
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "role": "production_recommendations",
         "ensemble": ensemble,
         "methods": methods,
@@ -328,7 +327,6 @@ def production_registry() -> dict[str, Any]:
 
 
 def research_only_strategies() -> list[dict[str, Any]]:
-    """Registered paper/autonomy specs if a snapshot exists. Never generated here."""
     path = ROOT / "logs" / "autonomy" / "strategy_registry.json"
     if not path.exists():
         return []
