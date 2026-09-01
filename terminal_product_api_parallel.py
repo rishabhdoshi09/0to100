@@ -128,6 +128,31 @@ def _scan_payload_with_coverage() -> dict:
 
 core._scan_payload = _scan_payload_with_coverage
 
+# Stock Intelligence remains one canonical workspace. Add the already-existing
+# cache-only StockResearchEngine as a deep fundamentals projection rather than
+# forcing users to discover a separate hidden due-diligence product.
+_base_build_stock_workspace = product.build_stock_workspace
+
+
+def _stock_workspace_with_fundamental_intelligence(symbol: str) -> dict:
+    base = dict(_base_build_stock_workspace(symbol) or {})
+    try:
+        from product.due_diligence import build_due_diligence
+        deep = build_due_diligence(symbol) or {}
+    except Exception as exc:
+        deep = {"error": str(exc)[:200]}
+    from product.fundamental_intelligence import build_fundamental_intelligence
+    if deep.get("error") and not deep.get("symbol"):
+        dossier = build_fundamental_intelligence(base, {})
+        dossier["error"] = deep["error"]
+    else:
+        dossier = build_fundamental_intelligence(base, deep)
+    base["fundamental_intelligence"] = dossier
+    return base
+
+
+product.build_stock_workspace = _stock_workspace_with_fundamental_intelligence
+
 
 def _component_line(scorecard: dict) -> str:
     bits: list[str] = []
@@ -148,13 +173,7 @@ def _component_line(scorecard: dict) -> str:
 
 
 def _attach_authority(payload: dict) -> dict:
-    """Decorate recommendations with explanatory evidence; never change ranking/gates.
-
-    Existing React cards already render ``evidence`` and ``evidence_coverage``.
-    The existing See Evidence panel renders its provenance paragraph, so the five
-    component scores are injected there as an explanation only. No authority field
-    is read by the recommendation selection or money path.
-    """
+    """Decorate recommendations with explanatory evidence; never change ranking/gates."""
     from product.evidence_authority import (
         build_authority_contract,
         build_decision_journal,
@@ -301,6 +320,14 @@ def research_status() -> dict:
     return build_research_status()
 
 
+@product.app.get("/api/fundamental-intelligence/{symbol}")
+def fundamental_intelligence(symbol: str) -> dict:
+    """Deep, framework-specific fundamental dossier from cached research evidence."""
+    clean = product.clean_symbol(symbol)
+    workspace = _stock_workspace_with_fundamental_intelligence(clean)
+    return dict(workspace.get("fundamental_intelligence") or {})
+
+
 @product.app.get("/api/market-reports-workspace")
 def market_reports_workspace() -> dict:
     """Canonical read projection for Market Reports."""
@@ -401,6 +428,7 @@ def product_contract() -> dict:
         "stock_intelligence": {
             "route_registered": "/api/stock-intelligence/{symbol}" in paths,
             "acquire_route_registered": "/api/due-diligence/{symbol}/acquire" in paths,
+            "fundamental_intelligence_route_registered": "/api/fundamental-intelligence/{symbol}" in paths,
         },
         "learning": {
             "operator_health_route_registered": "/api/operator-health" in paths,
