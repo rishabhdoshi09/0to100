@@ -1,14 +1,12 @@
 """Canonical production-method registry for the React desk.
 
 Retail recommendations are NOT StrategySpec paper strategies. This module is
-the only place that names what today's BUY/WATCH list actually runs:
+the only place that names what today's BUY/WATCH list actually runs.
 
-- reco method ids from ``product.reco_methods``
-- the two-family ensemble gate
-- optional *related* scanner-signal calibration (never implied parity)
-
-If a backtest cannot be proven to use the same rules_hash as the live method,
-parity is UNVERIFIED. Unrelated research backtests are never attached.
+A parity hash must identify executable decision behaviour, not merely threshold
+constants. The ensemble hash therefore fingerprints the production decision
+modules as well as their declared constants. Any decision-code change invalidates
+old parity evidence automatically.
 """
 from __future__ import annotations
 
@@ -30,16 +28,49 @@ from product.reco_methods import (
 
 ROOT = Path(__file__).resolve().parents[1]
 SIGNAL_BACKTEST_PATH = ROOT / "logs" / "signal_backtest.json"
+PRODUCTION_BACKTEST_PATH = ROOT / "logs" / "product" / "qt_reco_ensemble_backtest.json"
 
 ENSEMBLE_ID = "QT_RECO_ENSEMBLE"
 ENSEMBLE_VERSION = 1
 UNVERIFIED = "UNVERIFIED"
+VERIFIED = "VERIFIED"
 RELATED_NOT_PARITY = "RELATED_NOT_PARITY"
+
+# Conservative on purpose. recommendations_workspace contains category nomination;
+# the remaining modules contain expert/family/tier gates and their dependencies.
+_DECISION_CODE_PATHS = (
+    "product/reco_methods.py",
+    "product/reco_experts.py",
+    "product/reco_ensemble.py",
+    "product/recommendations_workspace.py",
+    "product/breakout_quality.py",
+    "product/radar_workspace.py",
+)
 
 
 def _rules_hash(payload: Mapping[str, Any]) -> str:
     blob = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def _file_sha256(path: Path) -> str:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except Exception:
+        return "UNREADABLE"
+
+
+def decision_code_hashes() -> dict[str, str]:
+    """Fingerprint the exact files that determine recommendation nomination/tiering.
+
+    This deliberately over-invalidates rather than under-invalidates: a harmless
+    edit may require a fresh backtest, but a behavioural edit can never silently
+    inherit old evidence under the same rules_hash.
+    """
+    return {
+        rel: _file_sha256(ROOT / rel)
+        for rel in _DECISION_CODE_PATHS
+    }
 
 
 def ensemble_rules() -> dict[str, Any]:
@@ -51,11 +82,84 @@ def ensemble_rules() -> dict[str, Any]:
         "conviction_pass": CONVICTION_PASS,
         "rsi_hard": RSI_HARD,
         "method_weights": dict(METHOD_WEIGHTS),
+        "decision_code_sha256": decision_code_hashes(),
+    }
+
+
+def current_rules_hash() -> str:
+    return _rules_hash(ensemble_rules())
+
+
+def _load_json(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def production_backtest_evidence(path: Path | None = None) -> dict[str, Any]:
+    """Read a production-replay artifact and verify it against today's exact hash.
+
+    A result is VERIFIED only when the artifact states that point-in-time guards
+    passed and its rules hash equals the current executable decision hash. Metrics
+    from a mismatched or leaky artifact are returned for audit but never attached
+    as production performance.
+    """
+    target = path or PRODUCTION_BACKTEST_PATH
+    raw = _load_json(target)
+    expected = current_rules_hash()
+    if not raw:
+        return {
+            "available": False,
+            "parity": UNVERIFIED,
+            "rules_hash": expected,
+            "artifact_rules_hash": None,
+            "point_in_time_verified": False,
+            "metrics": None,
+            "detail": (
+                "BACKTEST PARITY: UNVERIFIED. No same-code production replay artifact is on disk. "
+                "Generic Backtester, scanner calibration and paper StrategySpec results are not substitutes."
+            ),
+        }
+    actual = str(raw.get("rules_hash") or "")
+    pit = bool(raw.get("point_in_time_verified"))
+    same = bool(actual and actual == expected)
+    verified = same and pit and bool(raw.get("completed"))
+    reasons: list[str] = []
+    if not same:
+        reasons.append(f"artifact hash {actual or 'missing'} != current {expected}")
+    if not pit:
+        reasons.append("point-in-time / leakage gate not verified")
+    if not raw.get("completed"):
+        reasons.append("replay artifact is not completed")
+    return {
+        "available": True,
+        "parity": VERIFIED if verified else UNVERIFIED,
+        "rules_hash": expected,
+        "artifact_rules_hash": actual or None,
+        "same_rules_hash": same,
+        "point_in_time_verified": pit,
+        "completed": bool(raw.get("completed")),
+        "generated_at": raw.get("generated_at"),
+        "dataset": raw.get("dataset") or {},
+        "metrics": raw.get("metrics") if verified else None,
+        "audit_metrics": raw.get("metrics") or {},
+        "walk_forward": raw.get("walk_forward") or {},
+        "detail": (
+            "BACKTEST PARITY: VERIFIED. The production replay used the same executable recommendation hash "
+            "and passed point-in-time leakage guards."
+            if verified else
+            "BACKTEST PARITY: UNVERIFIED. " + "; ".join(reasons)
+        ),
     }
 
 
 def ensemble_identity() -> dict[str, Any]:
     rules = ensemble_rules()
+    evidence = production_backtest_evidence()
     return {
         "strategy_id": ENSEMBLE_ID,
         "strategy_version": ENSEMBLE_VERSION,
@@ -68,17 +172,16 @@ def ensemble_identity() -> dict[str, Any]:
             "persisted market scan overlay",
             "two independent evidence families for Buy",
             f"Live EV / case memory require n≥{EV_MIN_N}",
+            "same executable rules_hash for production backtest attribution",
+            "point-in-time feature timestamps before outcome timestamps",
         ],
         "entry_logic": "Saved scan entry / buy zone; ensemble does not rescore OHLCV on page open",
         "exit_logic": "Saved scan stop and target; paper GTT on autonomy fills only",
         "risk_assumptions": "Chase/extension and RSI blow-off fail tape; funds never invent a Buy",
-        "backtest_parity": UNVERIFIED,
-        "backtest_parity_detail": (
-            "BACKTEST PARITY: UNVERIFIED. No walk-forward of QT_RECO_ENSEMBLE v1 "
-            "exists. Scanner signal calibration and paper StrategySpec runs use "
-            "different rules and must not be shown as this method's performance."
-        ),
-        "result_kind": None,
+        "backtest_parity": evidence["parity"],
+        "backtest_parity_detail": evidence["detail"],
+        "backtest_evidence": evidence,
+        "result_kind": "SAME_HASH_PRODUCTION_REPLAY" if evidence["parity"] == VERIFIED else None,
         "label": "QuantTerm recommendation ensemble",
         "rules": rules,
     }
@@ -89,7 +192,7 @@ def method_identity(method_id: str) -> dict[str, Any]:
     rules = {
         "method_id": mid,
         "weight": METHOD_WEIGHTS.get(mid),
-        "ensemble": ensemble_rules(),
+        "ensemble_rules_hash": current_rules_hash(),
     }
     return {
         "strategy_id": f"QT_METHOD_{mid.upper()}" if mid else "QT_METHOD_UNKNOWN",
@@ -100,22 +203,15 @@ def method_identity(method_id: str) -> dict[str, Any]:
         "family": "recommendation_method",
         "backtest_parity": UNVERIFIED,
         "backtest_parity_detail": (
-            f"{METHOD_LABELS.get(mid, mid)} is a live recommendation check. "
-            "It has no dedicated same-hash backtest."
+            f"{METHOD_LABELS.get(mid, mid)} is a component check. Production parity is evaluated at the "
+            "ensemble decision layer, not inferred from this chip alone."
         ),
         "result_kind": None,
     }
 
 
 def _load_signal_backtest(path: Path | None = None) -> dict[str, Any] | None:
-    target = path or SIGNAL_BACKTEST_PATH
-    if not target.exists():
-        return None
-    try:
-        data = json.loads(target.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    return data if isinstance(data, dict) else None
+    return _load_json(path or SIGNAL_BACKTEST_PATH)
 
 
 def related_signal_calibration(path: Path | None = None) -> dict[str, Any]:
@@ -134,9 +230,8 @@ def related_signal_calibration(path: Path | None = None) -> dict[str, Any]:
         "label": "Scanner signal calibration",
         "as_of": raw.get("generated_at") or raw.get("as_of") or raw.get("finished_at"),
         "detail": (
-            "This file adjusts UnifiedScanner composite weights. It is not a "
-            "backtest of QT_RECO_ENSEMBLE and must not be shown as recommendation "
-            "performance."
+            "This file adjusts UnifiedScanner composite weights. It is not a backtest of QT_RECO_ENSEMBLE "
+            "and must not be shown as recommendation performance."
         ),
         "sample_note": raw.get("note") or raw.get("summary") or "",
     }
@@ -166,14 +261,11 @@ def fundamental_disagreement(card: Mapping[str, Any]) -> str:
         return "Fundamentals are unknown — missing evidence, not a failed business."
     if fund_status == "fail" and structure_pass:
         return (
-            "Technical structure passed, but the funds family rejected or could "
-            "not confirm quality. Fundamentals do not independently create a Buy."
+            "Technical structure passed, but the funds family rejected or could not confirm quality. "
+            "Fundamentals do not independently create a Buy."
         )
     if fund_status == "pass" and str(tape.get("status")) == "fail":
-        return (
-            "Business-quality overlay passed, but tape/extension rejected the "
-            "setup. Quality is not a timing instruction."
-        )
+        return "Business-quality overlay passed, but tape/extension rejected the setup. Quality is not a timing instruction."
     conflicts = [str(x) for x in (card.get("conflicts") or []) if x]
     if conflicts:
         return "Recorded disagreement: " + " · ".join(conflicts[:3])
@@ -193,7 +285,7 @@ def decorate_card(card: Mapping[str, Any]) -> dict[str, Any]:
         "label": ident["label"],
         "active": ident["active"],
     }
-    row["backtest_parity"] = UNVERIFIED
+    row["backtest_parity"] = ident["backtest_parity"]
     row["backtest_parity_detail"] = ident["backtest_parity_detail"]
     disagreement = fundamental_disagreement(row)
     if disagreement:
@@ -204,14 +296,14 @@ def decorate_card(card: Mapping[str, Any]) -> dict[str, Any]:
 def production_registry() -> dict[str, Any]:
     methods = [method_identity(mid) for mid in METHOD_WEIGHTS]
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "role": "production_recommendations",
         "ensemble": ensemble_identity(),
         "methods": methods,
         "related_signal_calibration": related_signal_calibration(),
         "note": (
-            "These ids describe the live recommendation checks. Paper "
-            "StrategySpec rows belong on the research list and never rank today's BUY list."
+            "These ids describe the live recommendation checks. Paper StrategySpec rows belong on the research list "
+            "and never rank today's BUY list."
         ),
     }
 
@@ -242,8 +334,7 @@ def research_only_strategies() -> list[dict[str, Any]]:
             "role": "RESEARCH_ONLY",
             "backtest_parity": UNVERIFIED,
             "backtest_parity_detail": (
-                "Paper/autonomy strategy. Not the recommendation ensemble. "
-                "Performance is not attached to today's BUY list."
+                "Paper/autonomy strategy. Not the recommendation ensemble. Performance is not attached to today's BUY list."
             ),
         })
     return out
