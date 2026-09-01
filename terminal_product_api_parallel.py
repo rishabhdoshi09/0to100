@@ -351,6 +351,13 @@ def learning_dashboard_api() -> dict:
     return learning_dashboard()
 
 
+@product.app.get("/api/forward-soak")
+def forward_soak_api() -> dict:
+    """Forward paper-trading soak scoreboard from persisted artifacts."""
+    from product.forward_soak import scoreboard
+    return scoreboard()
+
+
 @product.app.get("/api/system-health-contract")
 def system_health_contract() -> dict:
     """Independent health lanes. No collapsed green light."""
@@ -509,6 +516,7 @@ def product_contract() -> dict:
             "dashboard_route_registered": "/api/learning-dashboard" in paths,
             "why_no_trade_route_registered": "/api/why-no-trade" in paths,
             "paper_autopilot_route_registered": "/api/paper-autopilot" in paths,
+            "forward_soak_route_registered": "/api/forward-soak" in paths,
             "status": str(autonomy.get("learning_status") or "UNKNOWN"),
             "supervisor_running": bool(autonomy.get("running")),
         },

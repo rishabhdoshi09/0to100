@@ -23,6 +23,7 @@ PRIMARY_PATHS = {
     "/api/why-no-trade",
     "/api/learning-policies",
     "/api/learning-dashboard",
+    "/api/forward-soak",
 }
 
 

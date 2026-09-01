@@ -1430,11 +1430,58 @@ export type LearningDashboard = {
     waits?: Array<{ symbol?: string; reason_code?: string; action?: string }>
   }
   live_readiness?: { live_enabled: boolean; live_locked: boolean; contract_ready?: boolean; unmet?: string[] }
+  forward_soak?: ForwardSoakScoreboard | null
+}
+
+export type ForwardSoakScoreboard = {
+  schema_version: number
+  FORWARD_SOAK_STATUS: 'NOT_STARTED' | 'COLLECTING' | 'HEALTHY' | 'DEGRADED' | 'BLOCKED' | string
+  soak_detail?: string
+  live_locked: boolean
+  provenance_filter?: string
+  real_forward_observations: number
+  paper_trades_taken: number
+  settled_trades: number
+  rejected_candidates_settled: number
+  missed_winners: number
+  avoided_losers: number
+  good_waits: number
+  correct_rejections?: number
+  gross_expectancy: number | null
+  execution_adjusted_expectancy: number | null
+  execution_adjusted_coverage_pct: number | null
+  current_drawdown: number | null
+  win_rate: number | null
+  average_win: number | null
+  average_loss: number | null
+  setup_level_evidence?: Record<string, { n: number; expectancy: number | null; evidence: string }>
+  regime_level_evidence?: Record<string, { n: number; expectancy: number | null; evidence: string }>
+  sector_level_evidence?: Record<string, { n: number; expectancy: number | null; evidence: string }>
+  active_policies: number
+  eligible_policies: number
+  challengers_under_evaluation: number
+  promotion_blockers?: {
+    components?: Array<{
+      component: string
+      current_status?: string
+      decision?: string
+      blockers?: string[]
+    }>
+    shadow?: string[]
+    eligible?: string[]
+  }
+  insufficient_evidence: boolean
+  evidence_label: string
+  note?: string
 }
 
 export const fetchLearningDashboard = (): Promise<LearningDashboard> =>
   fetch('/api/learning-dashboard', { headers: { Accept: 'application/json' } })
     .then((response) => json<LearningDashboard>(response))
+
+export const fetchForwardSoak = (): Promise<ForwardSoakScoreboard> =>
+  fetch('/api/forward-soak', { headers: { Accept: 'application/json' } })
+    .then((response) => json<ForwardSoakScoreboard>(response))
 
 export type ScanAuditPayload = {
   generated_at?: string
