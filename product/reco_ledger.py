@@ -1,16 +1,14 @@
 """Append-only recommendation evidence and production-replay ledgers.
 
-Two different questions need two different immutable records:
+``reco_ledger.jsonl`` answers what QuantTerm surfaced and why.
+``reco_replay.jsonl`` freezes the evidence needed to reproduce the FINAL
+production decision: raw candidate inputs, scan-wide expert outputs, learned-edge
+state, Due Diligence gate state, and the final decision under an executable hash.
 
-1. ``reco_ledger.jsonl`` answers: what did QuantTerm surface and why?
-2. ``reco_replay.jsonl`` freezes both the candidate evidence and the scan-wide
-   expert outputs that existed at decision time.
-
-The replay tape deliberately separates ``input`` from ``expert_snapshot``. The
-expert snapshot can reproduce family/tier decisions without pretending that a
-truncated candidate list is the original cross-sectional universe. A future
-full-universe archive may replay expert ranking itself; until then that scope
-must remain explicit.
+Cross-sectional expert outputs stay frozen because the compact recommendation
+candidate set is not the original full ranking universe. Final Selection Authority
+can still be replayed exactly from the frozen gate snapshots without calling fresh
+fundamentals or future learning.
 """
 from __future__ import annotations
 
@@ -22,8 +20,8 @@ from typing import Any, Mapping, Sequence
 ROOT = Path(__file__).resolve().parents[1]
 LEDGER_PATH = ROOT / "logs" / "product" / "reco_ledger.jsonl"
 REPLAY_PATH = ROOT / "logs" / "product" / "reco_replay.jsonl"
-LEDGER_VERSION = 3
-REPLAY_VERSION = 2
+LEDGER_VERSION = 4
+REPLAY_VERSION = 3
 
 _DERIVED_REPLAY_KEYS = frozenset({
     "methods", "experts", "families",
@@ -34,7 +32,10 @@ _DERIVED_REPLAY_KEYS = frozenset({
     "entry_state", "stock_quality", "timing", "conflicts", "ensemble_why_now",
     "allows_recommend", "production_strategy", "backtest_parity",
     "backtest_parity_detail", "fundamental_disagreement", "evidence_scorecard",
-    "authority", "action_badge",
+    "authority", "action_badge", "selection_learning", "due_diligence_gate",
+    "deep_confirm", "fundamental_confirmation", "research_decision_coverage",
+    "fundamental_intelligence_score", "fundamental_intelligence_coverage_pct",
+    "research_engine", "blockers",
 })
 
 
@@ -78,6 +79,13 @@ def _strategy_snapshot() -> dict[str, Any]:
         return {"strategy_id": "QT_RECO_ENSEMBLE", "strategy_version": 1, "rules_hash": None}
 
 
+def _json_safe(value: Any) -> Any:
+    try:
+        return json.loads(json.dumps(value, default=str))
+    except Exception:
+        return None
+
+
 def _compact_card(card: Mapping[str, Any]) -> dict[str, Any]:
     experts = []
     for item in card.get("experts") or []:
@@ -99,25 +107,21 @@ def _compact_card(card: Mapping[str, Any]) -> dict[str, Any]:
         "family_confirms": card.get("family_confirms"), "families": families,
         "experts": experts, "timing": card.get("timing"),
         "stock_quality": card.get("stock_quality"),
-        "conflicts": list(card.get("conflicts") or [])[:4],
+        "conflicts": list(card.get("conflicts") or [])[:8],
+        "blockers": list(card.get("blockers") or [])[:8],
         "scan_scanned_at": card.get("scan_scanned_at"),
         "category_id": card.get("category_id"), "action_badge": card.get("action_badge"),
         "entry": card.get("entry"), "stop": card.get("stop"),
         "target": card.get("target"), "cmp": card.get("cmp"),
         "evidence_scorecard": _score_snapshot(card),
+        "selection_learning": _json_safe(card.get("selection_learning")),
+        "due_diligence_gate": _json_safe(card.get("due_diligence_gate")),
         "production_strategy": _strategy_snapshot(),
     }
 
 
-def _json_safe(value: Any) -> Any:
-    try:
-        return json.loads(json.dumps(value, default=str))
-    except Exception:
-        return None
-
-
 def _replay_input(card: Mapping[str, Any]) -> dict[str, Any]:
-    """Evidence fields before expert/family/tier outputs are applied."""
+    """Evidence fields before expert/family/final-selection outputs are applied."""
     out: dict[str, Any] = {}
     for key, value in card.items():
         if key in _DERIVED_REPLAY_KEYS:
@@ -135,10 +139,29 @@ def _expert_snapshot(card: Mapping[str, Any]) -> list[dict[str, Any]]:
     for item in card.get("experts") or []:
         if not isinstance(item, Mapping):
             continue
+        # Observed Edge is Selection Authority, not part of the base nomination
+        # expert panel. It is frozen separately in selection_snapshot.
+        if str(item.get("id") or "") == "empirical_edge":
+            continue
         safe = _json_safe(dict(item))
         if isinstance(safe, dict):
             out.append(safe)
     return out
+
+
+def _selection_snapshot(card: Mapping[str, Any]) -> dict[str, Any]:
+    """Freeze only gate decisions already known at capture time.
+
+    Replay must never call current Due Diligence or current learning to judge an
+    old decision; that would create look-ahead drift by construction.
+    """
+    learning = card.get("selection_learning")
+    dd = card.get("due_diligence_gate")
+    return {
+        "learning": _json_safe(learning) if isinstance(learning, Mapping) else None,
+        "due_diligence": _json_safe(dd) if isinstance(dd, Mapping) else None,
+        "deep_confirm": bool(card.get("deep_confirm")),
+    }
 
 
 def _decision_snapshot(card: Mapping[str, Any]) -> dict[str, Any]:
@@ -150,6 +173,7 @@ def _decision_snapshot(card: Mapping[str, Any]) -> dict[str, Any]:
         "primary_thesis_id": card.get("primary_thesis_id"),
         "family_confirms": card.get("family_confirms"),
         "category_id": card.get("category_id"),
+        "action_badge": card.get("action_badge"),
     }
 
 
@@ -159,13 +183,7 @@ def append_replay_snapshot(
     scan_scanned_at: str = "",
     path: Path | None = None,
 ) -> Path | None:
-    """Freeze all candidates seen by the recommendation desk at persistence time.
-
-    ``captured_live`` means the record was written from the then-current desk,
-    not reconstructed later with future fundamentals. It does NOT claim that the
-    raw candidate subset can independently recreate cross-sectional expert ranks;
-    those are therefore frozen separately in ``expert_snapshot``.
-    """
+    """Freeze all final candidates seen at the production persistence boundary."""
     target = path or REPLAY_PATH
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -176,7 +194,7 @@ def append_replay_snapshot(
             "captured_at": captured_at,
             "scan_scanned_at": scan_scanned_at,
             "captured_live": True,
-            "replay_scope": "FROZEN_EXPERTS_TO_ENSEMBLE_DECISION",
+            "replay_scope": "FROZEN_EVIDENCE_TO_FINAL_SELECTION",
             "full_expert_replay_available": False,
             "production_strategy": _strategy_snapshot(),
             "n_candidates": len(material),
@@ -184,6 +202,7 @@ def append_replay_snapshot(
                 {
                     "input": _replay_input(card),
                     "expert_snapshot": _expert_snapshot(card),
+                    "selection_snapshot": _selection_snapshot(card),
                     "decision_at_capture": _decision_snapshot(card),
                 }
                 for card in material
@@ -203,7 +222,7 @@ def append_recommendations(
     path: Path | None = None,
     replay_path: Path | None = None,
 ) -> Path | None:
-    """Append surfaced decisions plus a separate all-candidate replay snapshot."""
+    """Append final surfaced decisions plus a separate all-candidate replay snapshot."""
     material = [c for c in cards if isinstance(c, Mapping)]
     target = path or LEDGER_PATH
     replay_target = (
