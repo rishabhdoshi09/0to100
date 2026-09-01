@@ -47,12 +47,39 @@ def symbol_ratios_workspace(symbol: str) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="symbol required")
     from fundamentals.cache import FundamentalsCache
     from data_platform.ratios import ratios_from_fundamentals
-    raw = FundamentalsCache().get(sym) or {}
+    cache = FundamentalsCache()
+    raw = cache.get(sym)
+    stale = False
+    if raw is None:
+        raw = cache.get_any(sym) or {}
+        stale = bool(raw)
     return {
         "symbol": sym,
         "ratios": ratios_from_fundamentals(sym, raw),
         "source": "fundamentals_cache+data_platform.ratios",
+        "delivery_state": "STALE_LAST_GOOD" if stale else "FRESH_CACHE" if raw else "UNAVAILABLE",
+        "stale": stale,
+        "missing_is_zero": False,
     }
+
+
+def corporate_actions_workspace(symbol: str, refresh: bool = Query(False)) -> dict[str, Any]:
+    sym = str(symbol or "").strip().upper()
+    if not sym:
+        raise HTTPException(status_code=400, detail="symbol required")
+    try:
+        from product.corporate_actions import get_corporate_actions
+        return get_corporate_actions(sym, force_refresh=bool(refresh))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        # Acquisition service normally degrades to last-good/unavailable payloads;
+        # this is reserved for an unexpected implementation failure.
+        raise HTTPException(status_code=502, detail=f"Corporate actions failed: {exc}") from exc
+
+
+def corporate_actions_refresh(symbol: str) -> dict[str, Any]:
+    return corporate_actions_workspace(symbol, refresh=True)
 
 
 def fundamentals_backfill_status_workspace() -> dict[str, Any]:
@@ -85,6 +112,18 @@ def install_data_routes(app) -> None:
         symbol_ratios_workspace,
         methods=["GET"],
         name="data_symbol_ratios",
+    )
+    app.add_api_route(
+        "/api/data/corporate-actions/{symbol}",
+        corporate_actions_workspace,
+        methods=["GET"],
+        name="data_corporate_actions",
+    )
+    app.add_api_route(
+        "/api/data/corporate-actions/{symbol}/refresh",
+        corporate_actions_refresh,
+        methods=["POST"],
+        name="data_corporate_actions_refresh",
     )
     app.add_api_route(
         "/api/data/fundamentals-backfill",
