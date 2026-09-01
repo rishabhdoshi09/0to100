@@ -231,6 +231,14 @@ def radar_home_workspace() -> dict[str, Any]:
         home["desk_pipeline"] = describe_desk_pipeline(OperationStore(core.OPS_DB))
     except Exception:
         home["desk_pipeline"] = None
+    try:
+        from product.home_os import build_home_os
+        home["home_os"] = build_home_os(
+            scan=scan if isinstance(scan, dict) else {},
+            radar=home,
+        )
+    except Exception as exc:
+        home["home_os"] = {"state": "PROBLEM", "headline": "Home status unavailable", "subtext": str(exc)[:160], "live_locked": True}
     return home
 
 

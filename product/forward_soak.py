@@ -29,8 +29,10 @@ from product.promotion_governance import assess_component, promotion_board
 ROOT = Path(__file__).resolve().parents[1]
 JOURNEY_PATH = ROOT / "logs" / "product" / "forward_journey.json"
 DAILY_DIR = ROOT / "logs" / "product" / "forward_daily"
+VERIFY_PATH = ROOT / "logs" / "product" / "forward_soak_verify.json"
 SCHEMA_VERSION = 1
 MIN_SCOREBOARD_N = 20
+VERIFY_MIN_INTERVAL_S = 60
 SETTLE_HORIZON = 5
 
 NOT_STARTED = "NOT_STARTED"
@@ -73,6 +75,49 @@ def journey_path() -> Path:
 
 def daily_dir() -> Path:
     return _env_path("QT_FORWARD_DAILY", DAILY_DIR)
+
+
+def verify_state_path() -> Path:
+    return _env_path("QT_FORWARD_SOAK_VERIFY", VERIFY_PATH)
+
+
+def load_latest_verification() -> dict[str, Any]:
+    return _read_json(verify_state_path())
+
+
+def persist_soak_verification(*, min_interval_s: int = VERIFY_MIN_INTERVAL_S, force: bool = False) -> dict[str, Any]:
+    """Read-only verify. Throttled so the runtime does not spam disk."""
+    existing = load_latest_verification()
+    if existing and not force:
+        stamp = str(existing.get("generated_at") or "")
+        try:
+            prev = datetime.fromisoformat(stamp)
+            if prev.tzinfo is None:
+                prev = prev.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - prev).total_seconds()
+            if age < max(5, int(min_interval_s)):
+                return existing
+        except Exception:
+            pass
+    result = verify_persisted_soak()
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": _now(),
+        "lanes": result.get("lanes") or {},
+        "soak_status": result.get("soak_status"),
+        "scoreboard_evidence": result.get("scoreboard_evidence"),
+        "real_forward_n": result.get("real_forward_n"),
+        "valid_no_trade": result.get("valid_no_trade"),
+        "live_locked": result.get("live_locked"),
+        "source": "verify_persisted_soak",
+    }
+    _write_json(verify_state_path(), payload)
+    try:
+        from product.runtime_capabilities import note_run
+        note_run("forward_soak_verify", status=str(payload.get("soak_status") or ""), reason="automatic")
+    except Exception:
+        pass
+    return payload
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -124,6 +169,10 @@ def record_cycle_evidence(cycle: Mapping[str, Any]) -> dict[str, Any]:
     frozen = freeze_cycle(cycle)
     journey = build_runtime_journey(cycle=cycle)
     _write_json(journey_path(), journey)
+    try:
+        persist_soak_verification(min_interval_s=120)
+    except Exception:
+        pass
     return {"ledger": frozen, "journey": journey.get("summary")}
 
 
@@ -278,11 +327,16 @@ def settle_and_report(
     journey = build_runtime_journey()
     _write_json(journey_path(), journey)
     status = soak_status()
+    try:
+        verified = persist_soak_verification(force=True)
+    except Exception:
+        verified = {}
     return {
         "closed_attached": closed,
         "counterfactuals": settled,
         "daily_report": str(report.get("json_path") or ""),
         "soak_status": status.get("status"),
+        "soak_verification": verified.get("lanes") or {},
         "live_locked": True,
     }
 
