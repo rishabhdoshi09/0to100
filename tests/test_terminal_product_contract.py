@@ -19,6 +19,9 @@ PRIMARY_PATHS = {
     "/api/system-health-contract",
     "/api/scan-audit",
     "/api/decision-journal",
+    "/api/paper-autopilot",
+    "/api/why-no-trade",
+    "/api/learning-policies",
 }
 
 

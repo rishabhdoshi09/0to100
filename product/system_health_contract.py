@@ -76,12 +76,16 @@ def build_system_health_contract(
     product_wired: bool | None = None,
     fundamental_coverage_pct: float | None = None,
     filings_as_of: str = "",
+    paper: Mapping[str, Any] | None = None,
+    recommendations_workspace: Mapping[str, Any] | None = None,
+    execution: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     scan = dict(scan or {})
     data = dict(data or {})
     news = dict(news or {})
     operations = dict(operations or {})
     autonomy = dict(autonomy or {})
+    paper = dict(paper or {})
     bhav = dict(data.get("bhavcopy") or {})
     recos_ok = bool(recommendations_available) if recommendations_available is not None else bool(
         scan.get("available")
@@ -182,6 +186,75 @@ def build_system_health_contract(
             detail="wired=true means routes exist; it is not data freshness",
         ),
     ]
+
+    exec_payload = dict(execution or {})
+    if not exec_payload:
+        try:
+            from product.paper_autopilot import execution_health
+            exec_payload = execution_health(
+                autonomy=autonomy,
+                paper=paper,
+                workspace=recommendations_workspace,
+            )
+        except Exception:
+            exec_payload = {}
+    exec_lanes = dict(exec_payload.get("lanes") or {})
+    why = dict(exec_payload.get("why_no_trade") or {})
+    scheduler_status = str(exec_lanes.get("autonomy_scheduler") or (
+        "HEALTHY" if autonomy.get("running") else "WAITING"
+    ))
+    paper_exec_status = str(exec_lanes.get("paper_execution") or "UNKNOWN")
+    lanes.extend([
+        _lane(
+            "scanner",
+            "Scanner",
+            str(exec_lanes.get("scanner") or ("HEALTHY" if scan.get("available") else "MISSING")),
+            as_of=str(scan.get("scanned_at") or ""),
+            detail="Saved whole-market scan — not a green autonomy badge",
+        ),
+        _lane(
+            "recommendations",
+            "Recommendations",
+            str(exec_lanes.get("recommendations") or ("HEALTHY" if recos_ok else "MISSING")),
+            as_of=str(scan.get("scanned_at") or ""),
+            detail="Desk file from the last scan. Empty high-conviction is a valid day.",
+        ),
+        _lane(
+            "selection_authority",
+            "Selection authority",
+            str(exec_lanes.get("selection_authority") or "WAITING"),
+            as_of=str(why.get("as_of") or ""),
+            detail=str(why.get("headline") or "No autopilot cycle recorded"),
+        ),
+        _lane(
+            "autonomy_scheduler",
+            "Autonomy scheduler",
+            scheduler_status,
+            as_of=str(autonomy.get("heartbeat_ist") or ""),
+            detail=(
+                f"pid {autonomy.get('scheduler_owner_pid') or '—'} · "
+                f"{'fresh heartbeat' if autonomy.get('running') else 'not running'}"
+            ),
+        ),
+        _lane(
+            "paper_execution",
+            "Paper execution",
+            paper_exec_status,
+            as_of=str(why.get("as_of") or ""),
+            detail=str(
+                exec_payload.get("paper_execution_detail")
+                or why.get("headline")
+                or "Paper execution is independent of the autonomy badge"
+            ),
+        ),
+        _lane(
+            "exit_supervisor",
+            "Exit supervisor",
+            str(exec_lanes.get("exit_supervisor") or "WAITING"),
+            as_of=str(autonomy.get("heartbeat_ist") or ""),
+            detail="Stop/target management requires a live scheduler process",
+        ),
+    ])
     counts = {"HEALTHY": 0, "STALE": 0, "MISSING": 0, "BROKEN": 0, "UNKNOWN": 0, "WAITING": 0}
     for lane in lanes:
         counts[str(lane["status"])] = counts.get(str(lane["status"]), 0) + 1
@@ -191,8 +264,9 @@ def build_system_health_contract(
         "collapsed_status": None,
         "note": (
             "Lanes are independent. A healthy worker does not make stale news healthy. "
-            "There is no single green light."
+            "A green autonomy badge does not mean paper execution is healthy."
         ),
         "counts": counts,
         "lanes": lanes,
+        "why_no_trade": why,
     }

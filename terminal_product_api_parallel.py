@@ -294,6 +294,60 @@ def research_status() -> dict:
     return build_research_status(autonomy=core._autonomy_payload())
 
 
+@product.app.get("/api/paper-autopilot")
+def paper_autopilot() -> dict:
+    """Latest selection-authority cycle: taken, rejected, waits, why-no-trade."""
+    from product.autopilot_journal import load_journal, why_no_trade
+    from product.live_readiness import evaluate_live_readiness
+    from product.learning_policy_store import load_policies
+
+    why = why_no_trade()
+    journal = load_journal()
+    paper = core._paper_payload()
+    closed = list(paper.get("closed_trades") or [])
+    days = {str(t.get("exit_date") or t.get("entry_date") or "")[:10] for t in closed if isinstance(t, dict)}
+    days.discard("")
+    return {
+        "schema_version": 1,
+        "why_no_trade": why,
+        "latest": journal.get("latest") or {},
+        "paper": {
+            "enabled": paper.get("enabled"),
+            "supervisor_running": paper.get("supervisor_running"),
+            "open_positions": paper.get("open_positions") or [],
+            "refusals": paper.get("refusals") or [],
+        },
+        "policies": load_policies().get("policies") or [],
+        "live_readiness": evaluate_live_readiness(
+            settled_trades=len(closed),
+            trading_days=len(days),
+            expectancy_R=None,
+            max_drawdown_pct=None,
+            distinct_regimes=0,
+            stops_proven=False,
+            critical_lanes_broken=not bool(paper.get("supervisor_running")),
+            rules_hash_stable=False,
+        ),
+        "live_locked": True,
+    }
+
+
+@product.app.get("/api/why-no-trade")
+def why_no_trade_today() -> dict:
+    from product.autopilot_journal import why_no_trade
+    return why_no_trade()
+
+
+@product.app.get("/api/learning-policies")
+def learning_policies() -> dict:
+    from product.learning_policy_store import load_policies
+    from product.live_readiness import evaluate_live_readiness
+    store = load_policies()
+    store["live_readiness"] = evaluate_live_readiness()
+    store["live_locked"] = True
+    return store
+
+
 @product.app.get("/api/system-health-contract")
 def system_health_contract() -> dict:
     """Independent health lanes. No collapsed green light."""
@@ -318,13 +372,23 @@ def system_health_contract() -> dict:
                 fund_cov = fund_cov * 100.0
     except Exception:
         fund_cov = None
+    reco_ws: dict = {}
+    try:
+        from product.recommendations_store import load_recommendations
+        reco_ws = load_recommendations() or {}
+    except Exception:
+        reco_ws = {}
     return build_system_health_contract(
         scan=scan,
         data=core._data_payload(),
         news=core._news_payload(),
         operations=core._operations_payload(),
         autonomy=core._autonomy_payload(),
-        recommendations_available=bool(scan.get("available") or long_term.get("available")),
+        paper=core._paper_payload(),
+        recommendations_workspace=reco_ws,
+        recommendations_available=bool(
+            reco_ws or scan.get("available") or long_term.get("available")
+        ),
         market_report_as_of=report_as_of,
         product_wired=True,
         fundamental_coverage_pct=fund_cov,

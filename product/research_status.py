@@ -69,6 +69,20 @@ def build_research_status(
         lines.append("Paper book has no closed trades in local memory.")
     if learning_status and learning_status != "UNKNOWN":
         lines.append(f"Autonomy learning status: {learning_status}.")
+    try:
+        from product.learning_policy_store import load_policies
+        policies = [
+            p for p in (load_policies().get("policies") or [])
+            if str(p.get("production_status") or "") in {"ACTIVE", "ELIGIBLE", "EXPERIMENTAL"}
+        ]
+        if policies:
+            lines.append(
+                f"{len(policies)} explicit learning polic"
+                f"{'ies' if len(policies) != 1 else 'y'} on file. "
+                "Insufficient samples stay INSUFFICIENT EVIDENCE."
+            )
+    except Exception:
+        policies = []
 
     return {
         "schema_version": 1,

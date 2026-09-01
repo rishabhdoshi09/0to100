@@ -56,5 +56,11 @@ def test_health_contract_has_no_collapsed_green_light():
     assert by_key["operations_worker"]["status"] == "HEALTHY"
     assert by_key["market_report_freshness"]["status"] == "MISSING"
     assert by_key["backtest_registry"]["status"] == "WAITING"
+    assert "paper_execution" in by_key
+    assert "autonomy_scheduler" in by_key
+    assert "selection_authority" in by_key
+    assert payload["collapsed_status"] is None
+    assert payload["why_no_trade"]["available"] is False
+    assert by_key["paper_execution"]["status"] != "HEALTHY"
     assert payload["counts"]["HEALTHY"] >= 1
     assert payload["counts"]["MISSING"] >= 1

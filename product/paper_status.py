@@ -43,10 +43,25 @@ def read_paper_status(*, repo_root=None, autonomy_root=None) -> PaperStatus:
     curve = list(book.get("equity_curve", []) or [])
     equity = float(curve[-1]) if curve else capital + float(book.get("realized_pnl", 0.0) or 0.0)
     open_risk = sum(float(p.get("risk_amount", 0.0) or 0.0) for p in opens)
+    supervisor_running = False
+    try:
+        from product.autonomy_status import read_autonomy_status
+        supervisor_running = bool(read_autonomy_status(autonomy_root or auto).get("running"))
+    except Exception:
+        supervisor_running = False
+    enabled = bool(owner.get("paper_auto_enabled", config.get("enabled", True)))
+    last_cycle = dict(status.get("last_cycle", {}) or {})
+    try:
+        from product.autopilot_journal import why_no_trade
+        why = why_no_trade()
+        if why.get("available"):
+            last_cycle = {**last_cycle, "why_no_trade": why}
+    except Exception:
+        why = {}
     return PaperStatus(
-        enabled=bool(owner.get("paper_auto_enabled", config.get("enabled", True))),
-        supervisor_running=bool(status.get("heartbeat_ist")), capital=capital, equity=equity,
+        enabled=enabled,
+        supervisor_running=supervisor_running, capital=capital, equity=equity,
         open_positions=opens, closed_trades=closed, refusals=tuple(book.get("refusals", []) or []),
         open_risk=open_risk, last_error=str(status.get("explanation", "")),
-        last_cycle=dict(status.get("last_cycle", {}) or {}),
+        last_cycle=last_cycle,
     )

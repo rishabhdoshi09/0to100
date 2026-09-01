@@ -241,7 +241,24 @@ export function SystemHealthView({ dashboard, runControl }: ViewProps) {
           {a.new_paper_entries ? 'Pause entries' : 'Resume entries'}
         </button>
       </div>
-      <Panel title="INDEPENDENT HEALTH LANES" subtitle="No collapsed green light">
+      <Panel title="WHY NO TRADE TODAY" subtitle="Selection authority — not the autonomy badge">
+        {contract?.why_no_trade?.available ? (
+          <>
+            <p className="panel-copy">{contract.why_no_trade.headline}</p>
+            <div className="fact-grid">
+              <div><span>Decision</span><strong>{contract.why_no_trade.decision}</strong></div>
+              <div><span>Taken</span><strong>{(contract.why_no_trade.taken || []).length}</strong></div>
+              <div><span>Rejected</span><strong>{(contract.why_no_trade.rejections || []).length}</strong></div>
+            </div>
+            {(contract.why_no_trade.reasons || []).length ? (
+              <p className="muted">Reasons: {(contract.why_no_trade.reasons || []).join(' · ')}</p>
+            ) : null}
+          </>
+        ) : (
+          <div className="empty-row">No paper-autopilot cycle recorded yet. Missing stays missing.</div>
+        )}
+      </Panel>
+      <Panel title="INDEPENDENT HEALTH LANES" subtitle="No collapsed green light. Paper execution is its own lane.">
         <HealthLanes contract={contract} />
       </Panel>
     </section>

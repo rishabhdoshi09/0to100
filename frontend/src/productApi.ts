@@ -1367,6 +1367,16 @@ export type HealthLane = {
   detail?: string
 }
 
+export type WhyNoTrade = {
+  available: boolean
+  headline: string
+  decision: string
+  reasons: string[]
+  rejections?: Array<{ symbol?: string; reason_code?: string; detail?: string }>
+  taken?: Array<{ symbol?: string }>
+  as_of?: string
+}
+
 export type SystemHealthContract = {
   schema_version: number
   generated_at: string
@@ -1374,6 +1384,7 @@ export type SystemHealthContract = {
   note: string
   counts: Record<string, number>
   lanes: HealthLane[]
+  why_no_trade?: WhyNoTrade
 }
 
 export const fetchSystemHealthContract = (): Promise<SystemHealthContract> =>

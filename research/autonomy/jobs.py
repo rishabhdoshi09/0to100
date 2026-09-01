@@ -332,13 +332,56 @@ class Deps:
         from research.auto_research.scheduler import get_brain
         live = self.live_feed
         brain = get_brain()
+        # Intelligence cycle still manages exits / evidence. New paper entries are
+        # taken from the recommendation selection authority, not strategy-registry signals.
         result = brain.run_intelligence_cycle_day(
-            new_entries_allowed=entries_allowed,
-            entry_block_reason=entry_block_reason,
+            new_entries_allowed=False,
+            entry_block_reason=("RECO_SELECTION_AUTHORITY" if entries_allowed else entry_block_reason),
             session_phase=session_phase,
             capability_failures=capability_failures,
             fresh_live_symbols=(live.fresh_symbols() if live is not None else ()),
         )
+        reco = {}
+        try:
+            from product.paper_autopilot import run_reco_paper_cycle
+            paper_on = True
+            try:
+                paper_on = bool(brain.is_paper_auto_enabled())
+            except Exception:
+                paper_on = True
+            reco = run_reco_paper_cycle(
+                book=brain.intel_book,
+                as_of=str((result or {}).get("as_of_date") or ""),
+                entries_allowed=bool(entries_allowed),
+                entry_block_reason=entry_block_reason,
+                session_phase=session_phase,
+                paper_enabled=paper_on,
+            )
+            if isinstance(result, dict):
+                opened = list(result.get("positions_opened") or [])
+                opened.extend(list(reco.get("positions_opened") or []))
+                result["positions_opened"] = opened
+                result["reco_autopilot"] = {
+                    "taken": reco.get("taken") or [],
+                    "rejections": reco.get("rejections") or [],
+                    "waits": reco.get("waits") or [],
+                    "final_decision": reco.get("final_decision"),
+                    "eligibility": reco.get("eligibility"),
+                    "cycle_reasons": reco.get("cycle_reasons") or [],
+                    "summary": reco.get("summary") or "",
+                }
+                if reco.get("positions_opened"):
+                    result["eligibility"] = "TRADED"
+                elif result.get("eligibility") in {"NO_ELIGIBLE_TRADE", "", None}:
+                    result["eligibility"] = reco.get("eligibility") or result.get("eligibility")
+            try:
+                brain._save_intel_book()
+            except Exception:
+                pass
+        except Exception as exc:
+            if isinstance(result, dict):
+                result.setdefault("reco_autopilot", {})
+                result["reco_autopilot"]["error"] = str(exc)[:300]
         self.telegram.notify_paper_cycle(result, book=brain.intel_book)
         return result
 
