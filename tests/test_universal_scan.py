@@ -81,6 +81,8 @@ def test_run_long_term_scan_uses_saved_scan_and_skips_ohlcv_walk(monkeypatch):
         called["walk"] += 1
         raise AssertionError("scan_long_term must not run when a market scan is on file")
 
+    import scan.long_term_service as lts
+
     monkeypatch.setattr("product.scan_store.load_scan", lambda: _scan_payload())
     monkeypatch.setattr("scan.long_term.scan_long_term", boom)
     monkeypatch.setattr("scan.long_term_service._enrich_with_long_term_score", lambda rows, **_k: rows)
@@ -88,14 +90,58 @@ def test_run_long_term_scan_uses_saved_scan_and_skips_ohlcv_walk(monkeypatch):
         "scan.long_term_service._prepare_official_history",
         lambda: (_ for _ in ()).throw(AssertionError("history walk must not run")),
     )
-    report = run_long_term_scan(
+    report = lts.run_long_term_scan(
         save=False,
+        scope="saved_market_scan",
         fundamental_provider=lambda _s, _r: None,
         sector_lookup=lambda _s: "Technology",
     )
     assert called["walk"] == 0
     assert report.ok
     assert {r["symbol"] for r in report.payload["records"]} == {"AAA", "BBB"}
+    assert report.payload["technical_from_saved_scan"] is True
+    assert report.payload["scope"] == "saved_market_scan"
+
+
+def test_nifty500_scope_projects_saved_scan_without_ohlcv_walk(monkeypatch):
+    """Default nifty500 scope still projects the saved scan, then filters.
+
+    The consistency gate must not convert projection into a second market walk.
+    """
+    called = {"walk": 0}
+
+    def boom(*_a, **_k):
+        called["walk"] += 1
+        raise AssertionError("nifty500 scope must not OHLCV-walk when a saved scan exists")
+
+    payload = {
+        "schema_version": 1,
+        "scanned_at": "2026-08-26T10:00:00+00:00",
+        "records": [
+            {"symbol": "TCS", "score": 82, "price": 100, "reasons": ["Clean"], "verdict": "BUY", "chase_risk": False},
+            {"symbol": "INFY", "score": 70, "price": 50, "reasons": ["Leader"], "verdict": "WATCH", "chase_risk": False},
+            {"symbol": "ZZZNOTINDEX", "score": 90, "price": 10, "reasons": ["Off universe"], "verdict": "BUY", "chase_risk": False},
+        ],
+    }
+    import scan.long_term_service as lts
+
+    monkeypatch.setattr("product.scan_store.load_scan", lambda: payload)
+    monkeypatch.setattr("scan.long_term.scan_long_term", boom)
+    monkeypatch.setattr("scan.long_term_service._enrich_with_long_term_score", lambda rows, **_k: rows)
+    monkeypatch.setattr(
+        "scan.long_term_service._prepare_official_history",
+        lambda: (_ for _ in ()).throw(AssertionError("history walk must not run")),
+    )
+    report = lts.run_long_term_scan(
+        save=False,
+        fundamental_provider=lambda _s, _r: None,
+        sector_lookup=lambda _s: "Technology",
+    )
+    assert called["walk"] == 0
+    assert report.ok
+    symbols = {r["symbol"] for r in report.payload["records"]}
+    assert symbols == {"TCS", "INFY"}
+    assert "ZZZNOTINDEX" not in symbols
     assert report.payload["technical_from_saved_scan"] is True
 
 

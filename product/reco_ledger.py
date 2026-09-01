@@ -14,7 +14,7 @@ from typing import Any, Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 LEDGER_PATH = ROOT / "logs" / "product" / "reco_ledger.jsonl"
-LEDGER_VERSION = 2
+LEDGER_VERSION = 3
 
 
 def _score_snapshot(card: Mapping[str, Any]) -> dict[str, Any]:
@@ -88,6 +88,14 @@ def _compact_card(card: Mapping[str, Any]) -> dict[str, Any]:
         "stop": card.get("stop"),
         "target": card.get("target"),
         "cmp": card.get("cmp"),
+        "allows_recommend": card.get("allows_recommend"),
+        "dd_status": (
+            next(
+                (str(m.get("status") or "") for m in (card.get("methods") or [])
+                 if str(m.get("id") or "") == "funds"),
+                card.get("dd_status") or card.get("dd_verdict") or "",
+            )
+        ),
         "evidence_scorecard": _score_snapshot(card),
     }
 

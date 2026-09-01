@@ -447,19 +447,6 @@ def run_long_term_scan(
         return LongTermScanReport(FAILED, error_code="LONG_TERM_TECHNICAL_ERROR",
                                   error_message=str(exc))
 
-    # A saved market scan is authoritative for this overlay. If an injected
-    # projection unexpectedly returns empty, re-project directly rather than
-    # silently converting an existing scan into an empty long-term desk.
-    if not technical and saved_scan and saved_scan.get("records"):
-        technical = technical_rows_from_market_scan(
-            saved_scan,
-            symbols=symbols,
-            min_score=45,
-            top=technical_limit,
-            include_watch=True,
-            enrich=False,
-        )
-
     if not technical:
         payload = _payload(
             [], scope=scope, refresh=refresh_fundamentals, history=history,

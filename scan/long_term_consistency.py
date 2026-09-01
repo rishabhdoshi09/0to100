@@ -149,12 +149,45 @@ def install() -> None:
 
     def wrapped_run_long_term_scan(*args: Any, **kwargs: Any) -> Any:
         scope = str(kwargs.get("scope") or "nifty500").strip().lower()
-        if scope == "nifty500" and kwargs.get("symbols") is None:
-            from data.nse_universe import NIFTY500
-            kwargs["symbols"] = list(NIFTY500)
+        restrict_nifty500 = (
+            scope == "nifty500"
+            and kwargs.get("symbols") is None
+            and kwargs.get("technical_scanner") is None
+        )
         if kwargs.get("sector_lookup") is None:
             kwargs["sector_lookup"] = hardened_sector_of
-        return postprocess_report(original(*args, **kwargs))
+        # Do not inject NIFTY500 into the technical projector. That turned a
+        # saved-scan projection into an empty shortlist for any symbol outside
+        # the static list and looked like a scanner miss. Restrict AFTER
+        # projecting the saved scan, and never start a second OHLCV walk.
+        report = postprocess_report(original(*args, **kwargs))
+        if restrict_nifty500:
+            try:
+                from data.nse_universe import NIFTY500
+                allowed = {str(s).strip().upper() for s in NIFTY500}
+            except Exception:
+                allowed = set()
+            if allowed:
+                payload = dict(getattr(report, "payload", {}) or {})
+                payload["records"] = [
+                    row for row in list(payload.get("records") or [])
+                    if str((row or {}).get("symbol") or "").strip().upper() in allowed
+                ]
+                payload["nifty500_scope_enforced"] = True
+                if hasattr(report, "__dataclass_fields__"):
+                    try:
+                        report = replace(report, payload=payload)
+                    except Exception:
+                        try:
+                            report.payload = payload
+                        except Exception:
+                            pass
+                else:
+                    try:
+                        report.payload = payload
+                    except Exception:
+                        pass
+        return report
 
     service.run_long_term_scan = wrapped_run_long_term_scan
     service._decision_consistency_installed = True

@@ -67,6 +67,7 @@ def test_persist_desks_saves_recos_and_rebuilds_pulse(monkeypatch, tmp_path):
     assert out["market_reports"] == "saved"
     assert saved["reco"]["from_saved_market_scan"] is True
     assert saved["pulse"] is True
+    assert out["recommendations_error"] is None
 
 
 def test_persist_desks_failure_is_status_not_raise(monkeypatch):
@@ -80,8 +81,12 @@ def test_persist_desks_failure_is_status_not_raise(monkeypatch):
         lambda **_k: (_ for _ in ()).throw(RuntimeError("pulse boom")),
     )
     out = persist_desks_from_market_scan({"records": []})
-    assert out["recommendations"] == "RuntimeError"
-    assert out["market_reports"] == "RuntimeError"
+    assert out["recommendations"] == "error"
+    assert out["market_reports"] == "error"
+    assert out["recommendations_error"]["error_code"] == "DESK_PERSIST_FAILED"
+    assert out["recommendations_error"]["error_type"] == "RuntimeError"
+    assert "reco boom" in out["recommendations_error"]["error_message"]
+    assert out["market_reports_error"]["error_type"] == "RuntimeError"
 
 
 def test_recommendations_get_is_cache_only_when_file_matches(monkeypatch):
