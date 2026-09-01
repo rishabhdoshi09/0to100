@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import {
+  fetchLearningDashboard,
   fetchResearchStatus,
   fetchScanAudit,
   fetchStrategyCatalog,
   fetchSystemHealthContract,
   type HealthLane,
+  type LearningDashboard,
   type ResearchStatus,
   type ScanAuditPayload,
   type StrategyCatalog,
@@ -88,13 +90,18 @@ export function StrategiesView() {
 
 export function LearningJournalView() {
   const [data, setData] = useState<ResearchStatus | null>(null)
+  const [learning, setLearning] = useState<LearningDashboard | null>(null)
   const [error, setError] = useState('')
   useEffect(() => {
     fetchResearchStatus()
       .then(setData)
       .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'Research status unavailable'))
+    fetchLearningDashboard()
+      .then(setLearning)
+      .catch(() => setLearning(null))
   }, [])
   const journal = data?.decision_journal
+  const recent = learning?.recent_learning
   return (
     <section className="workspace-view">
       <div className="reco-how">
@@ -104,6 +111,32 @@ export function LearningJournalView() {
       {error ? <div className="api-warning">{error}</div> : null}
       <Panel title="WHAT IS MEASURABLE NOW" subtitle={data?.learning_status || 'UNKNOWN'}>
         {(data?.headlines || []).map((line) => <p className="panel-copy" key={line}>{line}</p>)}
+      </Panel>
+      <Panel title="PRODUCTION POLICIES" subtitle="Versioned evidence overlays. They never invent a BUY.">
+        {(learning?.active || []).length === 0 ? (
+          <div className="empty-row">No ACTIVE policies yet. INSUFFICIENT EVIDENCE is the honest state.</div>
+        ) : (learning?.active || []).map((policy) => (
+          <div className="insight" key={`${policy.policy_id}-${policy.version || 0}`}>
+            <i className="cyan" />
+            <div>
+              <strong>{policy.policy_id}</strong>
+              <span>
+                {policy.production_status} · n={policy.sample_size ?? 0} · edge {policy.expectancy_difference_R ?? 0}R · {policy.confidence || 'UNKNOWN'}
+              </span>
+            </div>
+          </div>
+        ))}
+      </Panel>
+      <Panel title="RECENT LEARNING" subtitle="Taken, rejected, and counterfactual classifications — not P&L from skipped names">
+        <div className="fact-grid">
+          <div><span>Taken fills</span><strong>{recent?.taken_fills ?? 0}</strong></div>
+          <div><span>Correct rejects</span><strong>{recent?.correct_rejects ?? 0}</strong></div>
+          <div><span>Missed winners</span><strong>{recent?.missed_winners ?? 0}</strong></div>
+          <div><span>Avoided losers</span><strong>{recent?.avoided_losers ?? 0}</strong></div>
+          <div><span>Good waits</span><strong>{recent?.good_waits ?? 0}</strong></div>
+          <div><span>Live locked</span><strong>yes</strong></div>
+        </div>
+        <p className="panel-copy">{learning?.note || ''}</p>
       </Panel>
       <Panel title="SETTLED / REJECTED" subtitle="Paper taken vs skipped, plus latest scan decisions">
         <div className="fact-grid">

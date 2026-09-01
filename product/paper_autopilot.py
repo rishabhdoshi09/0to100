@@ -40,6 +40,8 @@ PER_NAME_CAP = "PER_NAME_CAP"
 INSUFFICIENT_CAPITAL = "INSUFFICIENT_CAPITAL"
 LIQUIDITY_FAILED = "LIQUIDITY_FAILED"
 REGIME_STANDDOWN = "REGIME_STANDDOWN"
+PORTFOLIO_GATE_ERROR = "PORTFOLIO_GATE_ERROR"
+UNRECONCILED = "UNRECONCILED"
 NO_TRADE = "NO_TRADE"
 WAIT_FOR_ENTRY = "WAIT_FOR_ENTRY"
 NOT_SURFACED = "NOT_SURFACED"
@@ -97,6 +99,9 @@ class AutopilotDecision:
             "detail": self.detail,
             "tier": self.card.get("reco_tier"),
             "entry_state": self.card.get("entry_state"),
+            "setup_label": self.card.get("setup_label"),
+            "sector": self.card.get("sector"),
+            "primary_thesis": self.card.get("primary_thesis"),
             "selection_score": self.selection_score,
             "policy_effect": self.policy_effect,
             "entry": self.card.get("entry"),
@@ -289,13 +294,18 @@ def evaluate_candidate(
                     "MAX_POSITIONS": MAX_POSITIONS,
                     "REGIME_STANDDOWN": REGIME_STANDDOWN,
                     "NO_DATA": MARKET_NOT_READY,
+                    "UNRECONCILED": UNRECONCILED,
                 }.get(gate.reason_code, gate.reason_code or PORTFOLIO_BLOCK)
                 kind = PORTFOLIO_BLOCK if mapped in {
                     SECTOR_CAP, CORRELATION_CAP, MAX_POSITIONS, MAX_PORTFOLIO_RISK,
+                    UNRECONCILED, PORTFOLIO_GATE_ERROR,
                 } else BLOCK
                 return AutopilotDecision(symbol, kind, mapped, gate.detail, row)
-        except Exception:
-            pass
+        except Exception as exc:
+            return AutopilotDecision(
+                symbol, PORTFOLIO_BLOCK, PORTFOLIO_GATE_ERROR,
+                str(exc)[:200], row,
+            )
 
         from research.intelligence.runtime.position_sizing import size_long_cash
         sizing = size_long_cash(
@@ -572,6 +582,11 @@ def run_reco_paper_cycle(
     if persist_journal:
         try:
             record_cycle(cycle)
+        except Exception:
+            pass
+        try:
+            from product.paper_learning_loop import record_taken_evidence
+            record_taken_evidence(taken, as_of=day)
         except Exception:
             pass
     return cycle

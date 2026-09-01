@@ -64,3 +64,32 @@ def test_health_contract_has_no_collapsed_green_light():
     assert by_key["paper_execution"]["status"] != "HEALTHY"
     assert payload["counts"]["HEALTHY"] >= 1
     assert payload["counts"]["MISSING"] >= 1
+
+
+def test_system_health_contract_endpoint_uses_data_payload_signature(monkeypatch):
+    """A green autonomy badge must not 500 the health contract, and lanes stay split."""
+    import terminal_product_api_parallel as api
+
+    monkeypatch.setattr(api.core, "_scan_payload", lambda: {
+        "available": False, "records": [], "universe_size": 0, "scanned_at": "",
+    })
+    monkeypatch.setattr(api.core, "_long_term_payload", lambda: {"available": False, "summary": {}})
+    monkeypatch.setattr(api.core, "_operations_payload", lambda: {"running": False, "worker_pid": None})
+    monkeypatch.setattr(api.core, "_fno_payload", lambda: {"available": False})
+    monkeypatch.setattr(api.core, "_news_payload", lambda: {"available": False, "stats": {"total": 0}, "latest_refresh": {}})
+    monkeypatch.setattr(api.core, "_autonomy_payload", lambda: {
+        "running": True, "state": "RUNNING", "plain_state": "ok", "heartbeat_ist": "now",
+        "learning_status": "WAITING_FOR_FRESH_EOD_DATA",
+    })
+    monkeypatch.setattr(api.core, "_paper_payload", lambda: {
+        "enabled": True, "supervisor_running": False, "open_positions": [],
+    })
+    payload = api.system_health_contract()
+    assert payload["collapsed_status"] is None
+    by_key = {lane["key"]: lane for lane in payload["lanes"]}
+    assert "paper_execution" in by_key
+    assert "autonomy_scheduler" in by_key
+    assert "selection_authority" in by_key
+    assert by_key["autonomy_scheduler"]["status"] == "HEALTHY"
+    assert by_key["paper_execution"]["status"] != "HEALTHY"
+    assert payload["why_no_trade"]["available"] is False

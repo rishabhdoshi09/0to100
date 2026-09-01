@@ -72,6 +72,10 @@ def isolate_mutable_runtime_state(tmp_path_factory, monkeypatch, request):
     monkeypatch.setenv("QT_LEARNING_POLICIES", str(policies))
     counter = tmp_path_factory.mktemp("counterfactuals") / "cf.jsonl"
     monkeypatch.setenv("QT_COUNTERFACTUALS", str(counter))
+    taken = tmp_path_factory.mktemp("taken_evidence") / "taken.jsonl"
+    monkeypatch.setenv("QT_TAKEN_EVIDENCE", str(taken))
+    ingested = tmp_path_factory.mktemp("learning_ingested") / "ingested.json"
+    monkeypatch.setenv("QT_LEARNING_INGESTED", str(ingested))
 
     # This legacy smart-acquire test intentionally writes an Aug-26 cache and
     # asserts that the 3-day filings lane is still fresh. Without an explicit

@@ -1391,6 +1391,44 @@ export const fetchSystemHealthContract = (): Promise<SystemHealthContract> =>
   fetch('/api/system-health-contract', { headers: { Accept: 'application/json' } })
     .then((response) => json<SystemHealthContract>(response))
 
+export type LearningPolicy = {
+  policy_id: string
+  version?: number
+  dimension?: string
+  bucket?: string
+  sample_size?: number
+  expectancy_difference_R?: number
+  production_status?: string
+  confidence?: string
+  evidence_source?: string
+}
+
+export type LearningDashboard = {
+  schema_version: number
+  live_locked: boolean
+  note: string
+  policies: LearningPolicy[]
+  active: LearningPolicy[]
+  observing: LearningPolicy[]
+  rejected_hypotheses: LearningPolicy[]
+  counterfactuals: { frozen: number; classified: number; counts: Record<string, number> }
+  recent_learning: {
+    taken_fills: number
+    latest_as_of: string
+    latest_taken: number
+    latest_rejected: number
+    correct_rejects: number
+    missed_winners: number
+    avoided_losers: number
+    good_waits: number
+  }
+  live_readiness?: { live_enabled: boolean; live_locked: boolean; contract_ready?: boolean; unmet?: string[] }
+}
+
+export const fetchLearningDashboard = (): Promise<LearningDashboard> =>
+  fetch('/api/learning-dashboard', { headers: { Accept: 'application/json' } })
+    .then((response) => json<LearningDashboard>(response))
+
 export type ScanAuditPayload = {
   generated_at?: string
   summary: Record<string, number | string>

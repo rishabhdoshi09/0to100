@@ -146,6 +146,43 @@ def upsert_policy(
     return row
 
 
+def record_measured_outcome(
+    *,
+    policy_id: str,
+    dimension: str,
+    bucket: str,
+    realized_R: float,
+    source: str = "paper_forward",
+    path: str | Path | None = None,
+    floors: Mapping[str, int] | None = None,
+    extra: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Increment a policy from one settled observation. Never silent; never invents BUY."""
+    store = load_policies(path)
+    existing = next(
+        (dict(p) for p in (store.get("policies") or []) if p.get("policy_id") == policy_id),
+        None,
+    )
+    n_old = int((existing or {}).get("sample_size") or 0)
+    mean_old = float((existing or {}).get("expectancy_R") or 0.0)
+    n = n_old + 1
+    mean = mean_old + (float(realized_R) - mean_old) / n
+    payload = dict(extra or {})
+    payload["last_observation_R"] = round(float(realized_R), 4)
+    return upsert_policy(
+        policy_id=policy_id,
+        dimension=dimension,
+        bucket=bucket,
+        sample_size=n,
+        expectancy_R=mean,
+        baseline_R=float((existing or {}).get("baseline_R") or 0.0),
+        source=source,
+        path=path,
+        floors=floors,
+        extra=payload,
+    )
+
+
 def active_policies(path: str | Path | None = None) -> list[dict[str, Any]]:
     store = load_policies(path)
     return [

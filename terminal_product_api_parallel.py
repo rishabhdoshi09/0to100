@@ -340,12 +340,15 @@ def why_no_trade_today() -> dict:
 
 @product.app.get("/api/learning-policies")
 def learning_policies() -> dict:
-    from product.learning_policy_store import load_policies
-    from product.live_readiness import evaluate_live_readiness
-    store = load_policies()
-    store["live_readiness"] = evaluate_live_readiness()
-    store["live_locked"] = True
-    return store
+    from product.paper_learning_loop import learning_dashboard
+    return learning_dashboard()
+
+
+@product.app.get("/api/learning-dashboard")
+def learning_dashboard_api() -> dict:
+    """Explicit policy layer + counterfactual counts. Never 'AI is learning'."""
+    from product.paper_learning_loop import learning_dashboard
+    return learning_dashboard()
 
 
 @product.app.get("/api/system-health-contract")
@@ -378,11 +381,15 @@ def system_health_contract() -> dict:
         reco_ws = load_recommendations() or {}
     except Exception:
         reco_ws = {}
+    operations = core._operations_payload()
+    news = core._news_payload()
+    fno = core._fno_payload()
+    data = core._data_payload(scan, long_term, operations, fno, news)
     return build_system_health_contract(
         scan=scan,
-        data=core._data_payload(),
-        news=core._news_payload(),
-        operations=core._operations_payload(),
+        data=data,
+        news=news,
+        operations=operations,
         autonomy=core._autonomy_payload(),
         paper=core._paper_payload(),
         recommendations_workspace=reco_ws,
@@ -498,6 +505,10 @@ def product_contract() -> dict:
         "learning": {
             "operator_health_route_registered": "/api/operator-health" in paths,
             "research_status_route_registered": "/api/research-status" in paths,
+            "policies_route_registered": "/api/learning-policies" in paths,
+            "dashboard_route_registered": "/api/learning-dashboard" in paths,
+            "why_no_trade_route_registered": "/api/why-no-trade" in paths,
+            "paper_autopilot_route_registered": "/api/paper-autopilot" in paths,
             "status": str(autonomy.get("learning_status") or "UNKNOWN"),
             "supervisor_running": bool(autonomy.get("running")),
         },

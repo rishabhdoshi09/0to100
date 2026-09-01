@@ -22,6 +22,7 @@ PRIMARY_PATHS = {
     "/api/paper-autopilot",
     "/api/why-no-trade",
     "/api/learning-policies",
+    "/api/learning-dashboard",
 }
 
 
@@ -54,6 +55,7 @@ def test_product_contract_separates_wiring_from_data_availability(monkeypatch):
     assert payload["checks"]["recommendations"]["data_available"] is False
     assert payload["checks"]["market_scan"]["worker_running"] is False
     assert payload["checks"]["learning"]["status"] == "WAITING_FOR_FRESH_EOD_DATA"
+    assert payload["checks"]["learning"]["dashboard_route_registered"] is True
     assert payload["checks"]["strategies"]["catalog_route_registered"] is True
     assert payload["checks"]["system_health"]["health_contract_route_registered"] is True
 

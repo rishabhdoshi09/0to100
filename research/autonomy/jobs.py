@@ -393,6 +393,14 @@ class Deps:
             entry_block_reason="EOD_MANAGEMENT_ONLY", session_phase="eod",
             capability_failures=capability_failures,
         )
+        try:
+            from product.paper_learning_loop import ingest_closed_book
+            learned = ingest_closed_book(brain.intel_book)
+            if isinstance(result, dict):
+                result["paper_learning"] = learned
+        except Exception as exc:
+            if isinstance(result, dict):
+                result["paper_learning"] = {"error": str(exc)[:200]}
         self.telegram.notify_paper_cycle(result, book=brain.intel_book)
         return result
 
