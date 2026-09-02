@@ -214,7 +214,27 @@ start_market_ops() {
   MARKET_OPS_PID=""; return 1
 }
 
+api_listening() {
+  port_open 8765
+}
+
+adopt_api() {
+  # A listening :8765 is a live API. Never start a second uvicorn on it.
+  if url_ok "http://127.0.0.1:8765/api/health" || api_listening; then
+    if [[ -z "${API_PID:-}" ]] || ! alive "$API_PID"; then
+      API_EXTERNAL=1
+      API_PID=""
+    fi
+    return 0
+  fi
+  return 1
+}
+
 start_api() {
+  if adopt_api; then
+    echo "[STACK] Reusing market API at http://127.0.0.1:8765"
+    return 0
+  fi
   echo "[STACK] Starting local API at http://127.0.0.1:8765 …"
   mkdir -p "$ROOT/logs/stack"
   # terminal_product_api_parallel imports the canonical terminal_product_api:app
@@ -224,6 +244,10 @@ start_api() {
   API_PID=$!
   sleep 0.5 || true
   if ! alive "$API_PID"; then
+    if adopt_api; then
+      echo "[STACK] Bind raced; reusing the API that won :8765."
+      return 0
+    fi
     echo "[STACK] Market API exited before becoming healthy; will retry. See logs/stack/api.log." >&2
     API_PID=""; return 1
   fi
@@ -243,6 +267,15 @@ kick_scan() {
     return 1
   fi
   if ! url_ok "http://127.0.0.1:8765/api/health"; then return 1; fi
+  if python - <<'PY' >/dev/null 2>&1
+from product.desk_pipeline import scan_is_fresh
+raise SystemExit(0 if scan_is_fresh() else 1)
+PY
+  then
+    SCAN_KICKED=1
+    echo "[STACK] Market scan is already current; not queueing another."
+    return 0
+  fi
   echo "[STACK] Queueing market scan, news and long-term funds in this terminal…"
   if python scripts/local_stack.py scan; then SCAN_KICKED=1; return 0; fi
   return 1
@@ -322,9 +355,16 @@ while [[ "$STOP" != "1" ]]; do
     SCAN_KICKED=0
   fi
 
-  if ! url_ok "http://127.0.0.1:8765/api/health"; then
+  if adopt_api; then
+    API_HEALTH_FAILS=0
+  elif ! url_ok "http://127.0.0.1:8765/api/health"; then
     API_HEALTH_FAILS=$((API_HEALTH_FAILS + 1))
-    if (( API_HEALTH_FAILS >= 3 )); then
+    if api_listening; then
+      echo "[STACK] Market API is listening on :8765; health probe failed ${API_HEALTH_FAILS} time(s). Not killing it."
+      API_EXTERNAL=1
+      API_PID=""
+      API_HEALTH_FAILS=0
+    elif (( API_HEALTH_FAILS >= 3 )); then
       echo "[STACK] Market API health failed ${API_HEALTH_FAILS} times; restarting. See logs/stack/api.log."
       if [[ -n "${API_PID:-}" ]]; then kill "$API_PID" >/dev/null 2>&1 || true; fi
       API_EXTERNAL=0
@@ -338,9 +378,13 @@ while [[ "$STOP" != "1" ]]; do
   fi
   if [[ "$API_EXTERNAL" != "1" ]]; then
     if [[ -z "${API_PID:-}" ]] || ! alive "$API_PID"; then
-      echo "[STACK] Market API is down; restarting."
-      start_api || true
-      wait_for_api || echo "[STACK] Market API restart is not healthy yet; will retry." >&2
+      if adopt_api; then
+        : # listening API belongs to another owner; do not spawn a second uvicorn
+      else
+        echo "[STACK] Market API is down; restarting."
+        start_api || true
+        wait_for_api || echo "[STACK] Market API restart is not healthy yet; will retry." >&2
+      fi
     fi
   fi
   if [[ "$FRONTEND_EXTERNAL" != "1" ]] && ! alive "$FRONTEND_PID"; then

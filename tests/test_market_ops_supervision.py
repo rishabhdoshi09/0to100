@@ -44,3 +44,26 @@ def test_launcher_cleanup_owns_market_ops_process():
     assert 'MARKET_OPS_PID=""' in src
     assert 'for pid in "$FRONTEND_PID" "$API_PID" "$MARKET_OPS_PID" "$AUTONOMY_PID"' in src
     assert "market operations, market scan" in src
+
+
+def test_launcher_never_starts_api_while_port_is_listening():
+    src = _inner()
+    assert "adopt_api" in src
+    assert "api_listening" in src
+    start = src.split("start_api()", 1)[1].split("start_frontend()", 1)[0]
+    assert "adopt_api" in start
+    assert start.index("adopt_api") < start.index("Starting local API")
+    loop = src.split('while [[ "$STOP" != "1" ]]', 1)[1]
+    assert "Not killing it" in loop
+    assert "adopt_api" in loop
+    assert "scan_is_fresh" in src
+    assert "not queueing another" in src
+
+
+def test_complete_script_reuses_healthy_stack_without_second_inner():
+    complete = (ROOT / "scripts" / "run_quantterm_complete.sh").read_text(encoding="utf-8")
+    assert "Another QuantTerm supervisor already owns this machine" in complete
+    assert "adopt_report" in complete
+    assert 'STACK_EXTERNAL' in complete
+    assert '[[ "$STACK_EXTERNAL" != "1" ]]' in complete
+    assert "will not stop :5173/:8765/:8766" in complete
