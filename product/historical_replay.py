@@ -158,11 +158,19 @@ def universe_as_of(
     requested = [str(s).strip().upper() for s in (symbols or pit_symbols) if str(s).strip()]
     if not requested:
         try:
+            from data.bhavcopy_runtime import ensure_loaded
+
+            ensure_loaded(rebuild_from_local=False)
+        except Exception:
+            pass
+        try:
             from data.bhavcopy_store import store_symbols
 
             requested = [str(s).upper() for s in (store_symbols() or [])]
         except Exception:
             requested = []
+    if not requested:
+        requested = ["INFY", "TCS", "RELIANCE", "HDFCBANK", "ICICIBANK", "SBIN", "BHARTIARTL", "ITC"]
 
     live: list[str] = []
     degraded: list[str] = []
