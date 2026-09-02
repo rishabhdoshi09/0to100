@@ -5,6 +5,7 @@ and new paper risk is structurally restricted to 09:30–15:15 IST on an NSE ses
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from datetime import time as _time
 
 AUTH_HEALTH = "auth_health"
@@ -174,6 +175,22 @@ def outcome_key(session_date: str) -> str:
 
 def research_key(session_date: str) -> str:
     return f"research_cycle:{session_date}"
+
+
+def last_completed_session_date(now_ist, holidays=None):
+    """Most recent cash session that has already closed (today after 15:30, else prior)."""
+    day = now_ist.date()
+    if _is_session_day(now_ist, holidays) and now_ist.time() >= MARKET_CLOSE:
+        return day.isoformat()
+    cursor = day - timedelta(days=1)
+    for _ in range(10):
+        probe = datetime.combine(cursor, MARKET_CLOSE)
+        if getattr(now_ist, "tzinfo", None) is not None and probe.tzinfo is None:
+            probe = probe.replace(tzinfo=now_ist.tzinfo)
+        if _is_session_day(probe, holidays):
+            return cursor.isoformat()
+        cursor -= timedelta(days=1)
+    return None
 
 
 def long_term_weekly_due(now_ist, holidays=None) -> bool:

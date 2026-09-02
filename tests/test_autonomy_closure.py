@@ -207,6 +207,9 @@ def test_eod_schedule_waits_for_publish_window():
     from research.autonomy import schedules as SCH
     assert SCH.scan_slot(datetime(2026, 7, 31, 16, 0)) is None
     assert SCH.scan_slot(datetime(2026, 7, 31, 18, 5)) == "eod"
+    assert SCH.last_completed_session_date(datetime(2026, 7, 31, 16, 0)) == "2026-07-31"
+    assert SCH.last_completed_session_date(datetime(2026, 8, 1, 0, 5)) == "2026-07-31"
+    assert SCH.last_completed_session_date(datetime(2026, 8, 1, 8, 0)) == "2026-07-31"
 
 
 def test_eod_refresh_requires_completed_session():

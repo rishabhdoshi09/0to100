@@ -81,8 +81,9 @@ def test_off_session_after_close_enqueues_outcome_not_scan():
     assert SCH.PAPER_CYCLE not in types
 
 
-def test_post_market_grind_skips_before_close():
+def test_intraday_enqueue_does_not_start_post_market_grind():
     jobs = _Jobs()
+    jobs.cancel_superseded_pending = lambda *_a, **_k: None
     supervisor = Supervisor.__new__(Supervisor)
     supervisor.jobs = jobs
     supervisor.deps = SimpleNamespace(
@@ -90,8 +91,29 @@ def test_post_market_grind_skips_before_close():
         holidays=lambda: set(),
         active_snapshot_id=lambda: "snap-1",
     )
-    supervisor._enqueue_post_market_grind()
-    assert jobs.enqueued == []
+    supervisor._enqueue_daily_foundation = lambda *_a, **_k: None
+    supervisor.enqueue_due()
+    types = [job_type for job_type, _kwargs in jobs.enqueued]
+    assert SCH.OUTCOME_RESOLUTION not in types
+
+
+def test_overnight_after_midnight_settles_previous_session():
+    jobs = _Jobs()
+    jobs.cancel_superseded_pending = lambda *_a, **_k: None
+    supervisor = Supervisor.__new__(Supervisor)
+    supervisor.jobs = jobs
+    supervisor.deps = SimpleNamespace(
+        now_ist=lambda: datetime(2026, 9, 3, 0, 5, tzinfo=IST),
+        holidays=lambda: set(),
+        active_snapshot_id=lambda: "snap-1",
+    )
+    supervisor._enqueue_daily_foundation = lambda *_a, **_k: None
+    supervisor.enqueue_due()
+    outcomes = [kwargs for job_type, kwargs in jobs.enqueued if job_type == SCH.OUTCOME_RESOLUTION]
+    assert outcomes
+    assert outcomes[0]["idempotency_key"] == SCH.outcome_key("2026-09-02")
+    types = [job_type for job_type, _kwargs in jobs.enqueued]
+    assert SCH.MARKET_SCAN not in types
 
 
 def test_successful_data_refresh_enqueues_current_scan_slot():

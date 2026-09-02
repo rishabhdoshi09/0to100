@@ -211,9 +211,12 @@ class Supervisor:
     def enqueue_due(self, now_ist=None):
         now_ist = now_ist or self.deps.now_ist()
         holidays = self.deps.holidays()
-        if not SCH._is_session_day(now_ist, holidays):
-            return
         session_date = now_ist.date().isoformat()
+        if not SCH._is_session_day(now_ist, holidays):
+            last = SCH.last_completed_session_date(now_ist, holidays)
+            if last:
+                self._enqueue_post_market_grind(now_ist, session_date=last)
+            return
         self.jobs.enqueue(
             SCH.AUTH_HEALTH,
             idempotency_key=f"auth:{session_date}:{SCH.auth_probe_bucket(now_ist)}",
@@ -255,10 +258,12 @@ class Supervisor:
                         idempotency_key=SCH.long_term_key(session_date),
                     )
                 self._enqueue_post_market_grind(now_ist)
-        elif now_ist.time() >= SCH.MARKET_CLOSE:
-            # After the cash session, keep grinding: settle, learn, research.
+        else:
+            # Overnight / between windows: settle the last closed session.
             # Do not start another market scan — desk_pipeline already owns that lane.
-            self._enqueue_post_market_grind(now_ist)
+            last = SCH.last_completed_session_date(now_ist, holidays)
+            if last:
+                self._enqueue_post_market_grind(now_ist, session_date=last)
         try:
             self.jobs.cancel_superseded_pending(SCH.DATA_REFRESH, keep=1)
             self.jobs.cancel_superseded_pending(SCH.MARKET_SCAN, keep=1)
@@ -266,15 +271,13 @@ class Supervisor:
         except Exception:
             pass
 
-    def _enqueue_post_market_grind(self, now_ist=None) -> None:
+    def _enqueue_post_market_grind(self, now_ist=None, session_date: str | None = None) -> None:
         """Settle / learn / research after the cash session without a second scan."""
         now_ist = now_ist or self.deps.now_ist()
         holidays = self.deps.holidays()
-        if not SCH._is_session_day(now_ist, holidays):
+        session_date = session_date or SCH.last_completed_session_date(now_ist, holidays)
+        if not session_date:
             return
-        if now_ist.time() < SCH.MARKET_CLOSE:
-            return
-        session_date = now_ist.date().isoformat()
         outcome = self.jobs.enqueue(
             SCH.OUTCOME_RESOLUTION,
             idempotency_key=SCH.outcome_key(session_date),
