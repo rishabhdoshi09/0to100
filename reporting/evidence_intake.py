@@ -632,8 +632,12 @@ def evidence_requirements(
             "available": available, "source_attached": bool(attached),
             "source": source, "as_of": as_of, "age_days": age,
             "max_age_days": spec.max_age_days, "why": spec.why,
-            "instructions": spec.instructions if acquisition in {"MISSING", "AUTOMATION_FAILED"} else (
-                f"Automatically sourced. Manual upload remains available as a fallback."
+            "instructions": (
+                f"AUTOMATION FAILED. Reason: {failure or 'automatic acquisition failed'}. "
+                f"Manual evidence upload is available as a fallback."
+                if acquisition == "AUTOMATION_FAILED"
+                else spec.instructions if acquisition == "MISSING"
+                else "Automatically sourced. Manual upload remains available as a fallback."
             ),
             "accepted_extensions": list(spec.accepted_extensions),
             "template_available": bool(spec.template_columns),

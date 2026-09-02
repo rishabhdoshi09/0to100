@@ -307,12 +307,13 @@ def run_decision_simulator(
     rows = _decision_rows()
     version = _fingerprint(rows)
     cached = _read_json(target)
+    expected_n = int(replay.get("decisions_tested") or 0) or len(rows)
     if (
         not force
         and cached.get("version") == version
         and cached.get("engine")
         and cached.get("run_id") == replay.get("run_id")
-        and cached.get("decisions_tested") == replay.get("decisions_tested")
+        and int(cached.get("decisions_tested") or 0) == expected_n
     ):
         cached["cache_hit"] = True
         cached["provenance"] = BACKTEST
@@ -412,7 +413,7 @@ def run_decision_simulator(
         "filters_hurt": hurt,
         "simple": replay.get("simple") or simple,
         "note": (
-            str(replay.get("note") or "")
+            str(replay.get("note") or "This does not change REAL_FORWARD_MARKET promotion stats and does not open paper trades.")
             + " Journal overlay classifies already-recorded paper cycles separately."
         ).strip(),
         "sector_edge": _sector_edge(classified),
