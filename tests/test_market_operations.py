@@ -268,13 +268,14 @@ def test_bootstrap_skips_market_scan_when_momentum_artifact_is_fresh(tmp_path: P
     (product / "fno_universe.json").write_text("{}", encoding="utf-8")
     scan_path = product / "latest_momentum_scan.json"
     import json as _json
+    from datetime import datetime, timezone
 
     scan_path.write_text(
         _json.dumps(
             {
                 "schema_version": 1,
                 "records": [],
-                "scanned_at": "2026-09-01T05:00:00+00:00",
+                "scanned_at": datetime.now(timezone.utc).isoformat(),
                 "as_of_session": latest,
                 "history_latest_date": latest,
             }

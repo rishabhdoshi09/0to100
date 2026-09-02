@@ -109,9 +109,11 @@ def test_scan_does_not_proceed_on_stale_large_history(tmp_path: Path, monkeypatc
         assert exc.code == "HISTORY_STALE"
         assert exc.result.get("non_actionable") is True
     assert scanned == []
-    kinds = [row["kind"] for row in worker.store.active() + worker.store.recent()]
+    kinds = {row["kind"] for row in worker.store.recent()}
     assert DATA_PREPARE in kinds
-    assert kinds.count(MARKET_SCAN) == 1
+    assert MARKET_SCAN in kinds
+    assert sum(1 for row in worker.store.recent() if row["kind"] == MARKET_SCAN) == 1
+    assert sum(1 for row in worker.store.recent() if row["kind"] == DATA_PREPARE) == 1
 
 
 def test_current_history_allows_canonical_scan(tmp_path: Path, monkeypatch):
