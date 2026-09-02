@@ -35,7 +35,8 @@ def test_launcher_waits_for_api_before_starting_frontend():
     assert "frontend waits" in initial.lower() or "Frontend waits" in initial
     loop = src.split('while [[ "$STOP" != "1" ]]', 1)[1]
     assert loop.index('url_ok "http://127.0.0.1:8765/api/health"') < loop.index("start_frontend")
-    assert "desk waits until the market API is healthy" in loop
+    assert "port_open 8765" in src.split("wait_for_api()", 1)[1].split("alive()", 1)[0]
+    assert "desk waits until the market API is listening" in loop
 
 
 def test_launcher_cleanup_owns_market_ops_process():

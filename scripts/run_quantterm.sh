@@ -53,6 +53,15 @@ wait_for_api() {
   local tries="${1:-90}"; local i=0
   while (( i < tries )); do
     if url_ok "http://127.0.0.1:8765/api/health"; then return 0; fi
+    # Port listening is enough to avoid Vite ECONNREFUSED. Health may still
+    # be finishing first-import work; do not block the desk on that.
+    if (( i >= 4 )) && port_open 8765; then
+      echo "[STACK] Market API is listening on :8765; starting the desk." >&2
+      return 0
+    fi
+    if (( i % 6 == 5 )); then
+      echo "[STACK] Waiting for market API on :8765 …" >&2
+    fi
     sleep 0.5 || true; i=$((i + 1))
   done
   return 1
@@ -317,11 +326,11 @@ while [[ "$STOP" != "1" ]]; do
     if port_open 5173; then
       FRONTEND_EXTERNAL=1; FRONTEND_PID=""
       echo "[STACK] RecoWealth desk is already on :5173; reusing it."
-    elif url_ok "http://127.0.0.1:8765/api/health"; then
+    elif url_ok "http://127.0.0.1:8765/api/health" || port_open 8765; then
       echo "[STACK] RecoWealth desk is down; restarting."
       start_frontend
     else
-      echo "[STACK] RecoWealth desk waits until the market API is healthy." >&2
+      echo "[STACK] RecoWealth desk waits until the market API is listening." >&2
     fi
   fi
   if [[ "$AUTONOMY_EXTERNAL" != "1" ]] && ! alive "$AUTONOMY_PID"; then

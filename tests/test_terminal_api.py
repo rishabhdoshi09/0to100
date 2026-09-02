@@ -66,6 +66,17 @@ def test_market_controls_are_dispatched_outside_paper_autonomy():
     }
 
 
+def test_health_is_a_cheap_liveness_probe():
+    import inspect
+
+    src = inspect.getsource(terminal_api.health)
+    assert "_autonomy_payload" not in src
+    assert "_operations_payload" not in src
+    payload = terminal_api.health()
+    assert payload["ok"] is True
+    assert payload["service"] == "quantterm-terminal-api"
+
+
 def test_json_safe_strips_nan_and_inf():
     payload = terminal_api._json_safe({"ok": 1.0, "bad": float("nan"), "rows": [float("inf"), 2.0]})
     assert payload == {"ok": 1.0, "bad": None, "rows": [None, 2.0]}

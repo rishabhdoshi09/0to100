@@ -717,15 +717,15 @@ def _conviction(scan: dict, market: dict) -> list[dict]:
 
 @app.get("/api/health")
 def health() -> dict:
-    autonomy = _autonomy_payload()
-    operations = _operations_payload()
+    """Liveness only. Must stay cheap so the launcher can start the desk.
+
+    Autonomy and operations status live on /api/dashboard. This probe must not
+    open SQLite or import supervisor state — a scan can hold those locks.
+    """
     return {
         "ok": True,
         "service": "quantterm-terminal-api",
         "version": app.version,
-        "autonomy_running": autonomy.get("running", False),
-        "autonomy_state": autonomy.get("state", "UNKNOWN"),
-        "market_operations_running": operations.get("running", False),
     }
 
 
