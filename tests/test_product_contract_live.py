@@ -82,7 +82,11 @@ def test_market_report_job_rebuilds_from_official_files(tmp_path: Path, monkeypa
 def test_market_scan_job_writes_qualified_count(tmp_path: Path, monkeypatch):
     store = OperationStore(tmp_path / "ops.db")
     worker = MarketOperationsWorker(store=store)
-    monkeypatch.setattr(worker, "_ensure_history", lambda *_a, **_k: {"sessions": 240, "ready": True})
+    monkeypatch.setattr(
+        worker,
+        "_require_current_history",
+        lambda *_a, **_k: {"sessions": 240, "ready": True, "current": True, "latest_date": "2026-09-01"},
+    )
     monkeypatch.setattr("scan.bulk_fetcher.adopt_ready_store", lambda overlay_live=True: 500)
     monkeypatch.setattr("data.nse_universe.get_nse_universe", lambda: ["AAA", "BBB", "CCC"])
     monkeypatch.setattr(

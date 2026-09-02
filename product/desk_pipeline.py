@@ -84,14 +84,14 @@ def _root():
 
 
 def prices_kind_due() -> str | None:
-    """DATA_PREPARE if history is thin, else FNO_REFRESH if that file is stale."""
+    """DATA_PREPARE if history is thin or stale, else FNO_REFRESH if that file is stale."""
     try:
-        from data.bhavcopy_runtime import status as history_status
+        from data.bhavcopy_runtime import official_history_freshness
 
-        history = history_status(load_cache=True)
+        freshness = official_history_freshness(load_cache=True)
     except Exception:
-        history = {"ready": False, "sessions": 0}
-    if not history.get("ready") or int(history.get("sessions", 0) or 0) < 60:
+        freshness = {"current": False, "ready": False, "sessions": 0}
+    if not freshness.get("current"):
         return DATA_PREPARE
     if _stale(_root() / "logs" / "product" / "fno_universe.json", FNO_FRESH_S):
         return FNO_REFRESH
@@ -101,10 +101,23 @@ def prices_kind_due() -> str | None:
 def scan_is_fresh() -> bool:
     path = _root() / "logs" / "product" / "latest_momentum_scan.json"
     try:
+        from data.bhavcopy_runtime import official_history_freshness
+
+        freshness = official_history_freshness(load_cache=True)
+        if not freshness.get("current"):
+            return False
+        expected = str(freshness.get("expected_latest_completed_session") or "")
+    except Exception:
+        freshness = {}
+        expected = ""
+    try:
         from product.scan_store import load_scan, scan_artifact_is_fresh
 
         payload = load_scan(path)
         if not payload:
+            return False
+        as_of = str(payload.get("as_of_session") or payload.get("history_latest_date") or "")[:10]
+        if expected and (not as_of or as_of < expected):
             return False
         if payload.get("scanned_at"):
             return bool(scan_artifact_is_fresh(path, max_age_s=SCAN_FRESH_S))

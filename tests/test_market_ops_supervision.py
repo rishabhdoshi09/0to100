@@ -26,6 +26,18 @@ def test_launcher_supervises_and_restarts_stale_market_ops():
     assert "SCAN_KICKED=0" in src
 
 
+def test_launcher_waits_for_api_before_starting_frontend():
+    src = _inner()
+    initial = src.split("start_api || true", 1)[1].split('while [[ "$STOP" != "1" ]]', 1)[0]
+    assert "wait_for_api" in initial
+    assert initial.index("wait_for_api") < initial.index("start_frontend")
+    assert initial.index("start_frontend") < initial.index("kick_scan")
+    assert "frontend waits" in initial.lower() or "Frontend waits" in initial
+    loop = src.split('while [[ "$STOP" != "1" ]]', 1)[1]
+    assert loop.index('url_ok "http://127.0.0.1:8765/api/health"') < loop.index("start_frontend")
+    assert "desk waits until the market API is healthy" in loop
+
+
 def test_launcher_cleanup_owns_market_ops_process():
     src = _inner()
     assert 'MARKET_OPS_PID=""' in src

@@ -175,6 +175,11 @@ export type DataReadiness = {
     minimum_sessions?: number
     source?: string
     error?: string
+    current?: boolean
+    expected_latest_completed_session?: string
+    available_session?: string
+    stale_sessions?: number | null
+    reason_code?: string
   }
   scan_saved: boolean
   scan_records: number

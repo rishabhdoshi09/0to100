@@ -643,10 +643,31 @@ def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news
         }
     snapshot = _snapshot_payload()
     blockers: list[str] = []
+    try:
+        from data.bhavcopy_runtime import official_history_freshness
+
+        freshness = official_history_freshness(bhavcopy, load_cache=False)
+        for key in (
+            "current",
+            "expected_latest_completed_session",
+            "available_session",
+            "stale_sessions",
+            "reason_code",
+        ):
+            if key in freshness:
+                bhavcopy[key] = freshness[key]
+    except Exception:
+        freshness = {}
     if not bhavcopy.get("ready"):
         blockers.append("Official NSE bhavcopy history is not ready; direct scans will prepare it first.")
     elif int(bhavcopy.get("sessions", 0) or 0) < int(bhavcopy.get("minimum_sessions", 60) or 60):
         blockers.append("Official bhavcopy history is shallower than the minimum screen requirement.")
+    elif freshness and not freshness.get("current", True):
+        blockers.append(
+            "Official NSE bhavcopy is behind the latest completed session "
+            f"({freshness.get('available_session') or 'unknown'} < "
+            f"{freshness.get('expected_latest_completed_session') or 'unknown'})."
+        )
     if not snapshot.get("ready"):
         blockers.append("Verified snapshot is missing; PAPER autonomy is limited, but direct cash scans can still use official bhavcopy history.")
     if not operations.get("running"):
@@ -656,7 +677,7 @@ def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news
     if not news.get("available"):
         blockers.append("Curated news store is empty; run a news refresh to inspect source health.")
     return {
-        "ready": bool(bhavcopy.get("ready") and operations.get("running")),
+        "ready": bool(bhavcopy.get("ready") and bhavcopy.get("current", True) and operations.get("running")),
         "snapshot": snapshot,
         "bhavcopy": bhavcopy,
         "scan_saved": bool(scan.get("available")),
@@ -869,6 +890,20 @@ def control(control_name: str) -> dict:
         except Exception:
             pass
         kind = _OPERATION_CONTROLS[name]
+        if name in {"RUN_SCAN_NOW", "RUN_LONG_TERM_SCAN_NOW"}:
+            try:
+                from data.bhavcopy_runtime import official_history_freshness
+                from operations.market_ops import DATA_PREPARE
+
+                if not official_history_freshness().get("current"):
+                    store.enqueue(
+                        DATA_PREPARE,
+                        lane=LANES[DATA_PREPARE],
+                        requested_by="terminal",
+                        priority=_USER_OPERATION_PRIORITY,
+                    )
+            except Exception:
+                pass
         operation, created = store.enqueue(
             kind,
             lane=LANES[kind],
