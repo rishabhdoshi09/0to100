@@ -7,23 +7,36 @@ from pathlib import Path
 from operations.store import OperationStore, PENDING, RUNNING, SUCCEEDED
 
 
-def test_user_scan_does_not_block_on_history_download(monkeypatch, tmp_path: Path):
+def test_user_scan_cannot_skip_stale_or_thin_history(monkeypatch, tmp_path: Path):
     import sys
     import types
 
-    from operations.market_ops import MarketOperationsWorker
+    from operations.market_ops import MarketOperationsWorker, OperationBlocked
 
     calls = {"build": 0}
 
     def fake_status(*, load_cache=True):
-        return {"ready": False, "sessions": 12, "symbols": 100}
+        return {"ready": False, "sessions": 12, "symbols": 100, "latest_date": "2026-08-28"}
+
+    def fake_freshness(history=None, **_k):
+        snap = history or fake_status()
+        return {
+            **snap,
+            "current": False,
+            "reason_code": "HISTORY_TOO_SHALLOW",
+            "expected_latest_completed_session": "2026-09-01",
+            "available_session": "2026-08-28",
+            "stale_sessions": 2,
+            "history": snap,
+        }
 
     def fake_build_store(**kwargs):
         calls["build"] += 1
-        raise AssertionError("user scan must not download history")
+        raise AssertionError("scan lane must not download history itself")
 
     runtime = types.ModuleType("data.bhavcopy_runtime")
     runtime.status = fake_status
+    runtime.official_history_freshness = fake_freshness
     store_mod = types.ModuleType("data.bhavcopy_store")
     store_mod.build_store = fake_build_store
     data_mod = types.ModuleType("data")
@@ -34,8 +47,11 @@ def test_user_scan_does_not_block_on_history_download(monkeypatch, tmp_path: Pat
     monkeypatch.setitem(sys.modules, "data.bhavcopy_store", store_mod)
 
     worker = MarketOperationsWorker(store=OperationStore(tmp_path / "ops.db"))
-    history = worker._ensure_history("op1", blocking=False)
-    assert history["sessions"] == 12
+    try:
+        worker._ensure_history("op1", blocking=False)
+        raise AssertionError("thin history must not be treated as ready")
+    except OperationBlocked as exc:
+        assert exc.code in {"HISTORY_TOO_SHALLOW", "HISTORY_STALE", "HISTORY_NOT_READY"}
     assert calls["build"] == 0
 
 
@@ -204,10 +220,18 @@ def test_bootstrap_queues_missing_product_inputs_without_network(tmp_path: Path,
 
     monkeypatch.setattr(MO, "ROOT", tmp_path)
     monkeypatch.setattr(MO, "LOCK_PATH", tmp_path / "market_ops" / "worker.lock")
+    from data.bhavcopy_runtime import expected_latest_completed_session
+
+    latest = expected_latest_completed_session().isoformat()
     monkeypatch.setattr(
         bhavcopy_runtime,
         "status",
-        lambda load_cache=False: {"ready": True, "sessions": 500, "symbols": 3000},
+        lambda load_cache=False: {
+            "ready": True,
+            "sessions": 500,
+            "symbols": 3000,
+            "latest_date": latest,
+        },
     )
 
     store = OperationStore(tmp_path / "market_ops" / "jobs.db")
@@ -226,16 +250,38 @@ def test_bootstrap_skips_market_scan_when_momentum_artifact_is_fresh(tmp_path: P
 
     monkeypatch.setattr(MO, "ROOT", tmp_path)
     monkeypatch.setattr(MO, "LOCK_PATH", tmp_path / "market_ops" / "worker.lock")
+    from data.bhavcopy_runtime import expected_latest_completed_session
+
+    latest = expected_latest_completed_session().isoformat()
     monkeypatch.setattr(
         bhavcopy_runtime,
         "status",
-        lambda load_cache=False: {"ready": True, "sessions": 500, "symbols": 3000},
+        lambda load_cache=False: {
+            "ready": True,
+            "sessions": 500,
+            "symbols": 3000,
+            "latest_date": latest,
+        },
     )
     product = tmp_path / "logs" / "product"
     product.mkdir(parents=True)
     (product / "fno_universe.json").write_text("{}", encoding="utf-8")
     scan_path = product / "latest_momentum_scan.json"
-    scan_path.write_text('{"schema_version": 1, "records": []}', encoding="utf-8")
+    import json as _json
+    from datetime import datetime, timezone
+
+    scan_path.write_text(
+        _json.dumps(
+            {
+                "schema_version": 1,
+                "records": [],
+                "scanned_at": datetime.now(timezone.utc).isoformat(),
+                "as_of_session": latest,
+                "history_latest_date": latest,
+            }
+        ),
+        encoding="utf-8",
+    )
     now = time.time()
     os.utime(scan_path, (now - 60, now - 60))
 

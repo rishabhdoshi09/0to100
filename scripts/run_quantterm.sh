@@ -53,6 +53,15 @@ wait_for_api() {
   local tries="${1:-90}"; local i=0
   while (( i < tries )); do
     if url_ok "http://127.0.0.1:8765/api/health"; then return 0; fi
+    # Port listening is enough to avoid Vite ECONNREFUSED. Health may still
+    # be finishing first-import work; do not block the desk on that.
+    if (( i >= 4 )) && port_open 8765; then
+      echo "[STACK] Market API is listening on :8765; starting the desk." >&2
+      return 0
+    fi
+    if (( i % 6 == 5 )); then
+      echo "[STACK] Waiting for market API on :8765 …" >&2
+    fi
     sleep 0.5 || true; i=$((i + 1))
   done
   return 1
@@ -269,14 +278,19 @@ else
   start_api || true
 fi
 
-if port_open 5173; then
-  FRONTEND_EXTERNAL=1
-  echo "[STACK] Reusing dedicated terminal at http://127.0.0.1:5173"
+# Vite proxies /api/* to :8765. Do not start the desk until health succeeds,
+# otherwise the first paint spam-retries ECONNREFUSED.
+if wait_for_api; then
+  if port_open 5173; then
+    FRONTEND_EXTERNAL=1
+    echo "[STACK] Reusing dedicated terminal at http://127.0.0.1:5173"
+  else
+    start_frontend
+  fi
+  kick_scan || true
 else
-  start_frontend
+  echo "[STACK] Market API did not become healthy; frontend waits. Supervisor will retry." >&2
 fi
-
-kick_scan || true
 
 echo "[STACK] QuantTerm is running in this terminal: desk :5173, API :8765, autonomy, market operations, market scan."
 echo "[STACK] Ctrl-C is the stop signal. A child crash is restarted; it does not stop the desk."
@@ -305,15 +319,18 @@ while [[ "$STOP" != "1" ]]; do
     if [[ -z "${API_PID:-}" ]] || ! alive "$API_PID"; then
       echo "[STACK] Market API is down; restarting."
       start_api || true
+      wait_for_api || echo "[STACK] Market API restart is not healthy yet; will retry." >&2
     fi
   fi
   if [[ "$FRONTEND_EXTERNAL" != "1" ]] && ! alive "$FRONTEND_PID"; then
     if port_open 5173; then
       FRONTEND_EXTERNAL=1; FRONTEND_PID=""
       echo "[STACK] RecoWealth desk is already on :5173; reusing it."
-    else
+    elif url_ok "http://127.0.0.1:8765/api/health" || port_open 8765; then
       echo "[STACK] RecoWealth desk is down; restarting."
       start_frontend
+    else
+      echo "[STACK] RecoWealth desk waits until the market API is listening." >&2
     fi
   fi
   if [[ "$AUTONOMY_EXTERNAL" != "1" ]] && ! alive "$AUTONOMY_PID"; then

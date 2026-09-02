@@ -22,7 +22,7 @@ from typing import Any
 
 import sqlite3
 
-from operations.store import BLOCKED, FAILED, SUCCEEDED, OperationStore
+from operations.store import BLOCKED, FAILED, PENDING, SUCCEEDED, OperationStore
 
 MARKET_SCAN = "MARKET_SCAN"
 LONG_TERM_SCAN = "LONG_TERM_SCAN"
@@ -55,6 +55,8 @@ SCAN_FRESH_S = 6 * 60 * 60
 LONG_TERM_FRESH_S = 3 * 24 * 60 * 60
 DUE_DILIGENCE_FRESH_S = 24 * 60 * 60
 HISTORY_DAYS = 500
+HISTORY_WAIT_POLL_S = 1.0
+HISTORY_WAIT_MAX_S = 30 * 60
 _LANE_IDLE_S = {
     "market_scan": 0.05,
     "long_term": 0.25,
@@ -226,41 +228,54 @@ class MarketOperationsWorker:
         else:
             _emit("PROGRESS", f"{operation_id[:8]} · {stage} · {message}")
 
+    def _history_ready(self, snapshot: dict[str, Any] | None = None) -> tuple[bool, dict[str, Any]]:
+        from data.bhavcopy_runtime import official_history_freshness
+
+        freshness = official_history_freshness(snapshot, load_cache=True)
+        return bool(freshness.get("current")), freshness
+
     def _ensure_history(self, operation_id: str, *, days: int = HISTORY_DAYS,
                         blocking: bool = True) -> dict[str, Any]:
         from data.bhavcopy_runtime import status as history_status
         try:
             current = history_status(load_cache=True)
-            sessions = int(current.get("sessions", 0) or 0)
-            if current.get("ready") and sessions >= 60:
+            ready, freshness = self._history_ready(current)
+            if ready:
                 self._progress(
                     operation_id,
                     "HISTORY_READY",
-                    f"Official history ready · {current.get('sessions', 0)} sessions · {current.get('symbols', 0)} symbols",
+                    f"Official history ready · {current.get('sessions', 0)} sessions · "
+                    f"{freshness.get('available_session') or current.get('latest_date') or 'unknown'} session",
                     current=0,
                     total=0,
                 )
-                return current
+                return {**current, **{k: freshness[k] for k in (
+                    "current", "expected_latest_completed_session", "available_session",
+                    "stale_sessions", "reason_code",
+                ) if k in freshness}}
             if not blocking:
                 self._progress(
                     operation_id,
-                    "HISTORY_READY",
-                    "Using current price cache — user scan does not wait for downloads",
+                    "HISTORY_STALE",
+                    "Official history is not current — scan must wait for DATA_PREPARE",
                     current=0,
                     total=0,
                 )
-                return current
+                raise OperationBlocked(
+                    "Official NSE history is not current enough to scan",
+                    code=str(freshness.get("reason_code") or "HISTORY_STALE"),
+                    result=freshness,
+                )
+        except OperationBlocked:
+            raise
         except Exception:
             current = {}
             if not blocking:
-                self._progress(
-                    operation_id,
-                    "HISTORY_READY",
-                    "Scanning without waiting for a history rebuild",
-                    current=0,
-                    total=0,
+                raise OperationBlocked(
+                    "Official NSE history could not be read",
+                    code="HISTORY_NOT_READY",
+                    result=current,
                 )
-                return current
         acquired = self._history_lock.acquire(timeout=0)
         if not acquired:
             self._progress(
@@ -271,19 +286,30 @@ class MarketOperationsWorker:
             self._history_lock.acquire()
         try:
             current = history_status(load_cache=True)
-            if current.get("ready") and int(current.get("sessions", 0) or 0) >= 60:
+            ready, freshness = self._history_ready(current)
+            if ready:
                 self._progress(
                     operation_id,
                     "HISTORY_READY",
-                    f"Official history ready · {current.get('sessions', 0)} sessions · {current.get('symbols', 0)} symbols",
+                    f"Official history ready · {current.get('sessions', 0)} sessions · "
+                    f"{freshness.get('available_session') or current.get('latest_date') or 'unknown'} session",
                     current=0,
                     total=0,
                 )
-                return current
+                return {**current, **{k: freshness[k] for k in (
+                    "current", "expected_latest_completed_session", "available_session",
+                    "stale_sessions", "reason_code",
+                ) if k in freshness}}
+            stale_note = ""
+            if freshness.get("reason_code") == "HISTORY_STALE":
+                stale_note = (
+                    f" — latest {freshness.get('available_session') or 'unknown'} "
+                    f"behind expected {freshness.get('expected_latest_completed_session')}"
+                )
             self._progress(
                 operation_id,
                 "PREPARING_HISTORY",
-                f"Preparing {days}-session official NSE history — not scanning stocks yet",
+                f"Preparing {days}-session official NSE history — not scanning stocks yet{stale_note}",
                 current=0,
                 total=0,
             )
@@ -301,15 +327,122 @@ class MarketOperationsWorker:
 
             build_store(days=days, progress=progress)
             current = history_status(load_cache=True)
+            ready, freshness = self._history_ready(current)
             if not current.get("ready"):
                 raise OperationBlocked(
                     "Official NSE bhavcopy history could not be prepared",
                     code="BHAVCOPY_NOT_READY",
-                    result=current,
+                    result=freshness or current,
                 )
-            return current
+            if not ready:
+                raise OperationBlocked(
+                    "Official NSE history is still behind the latest completed session",
+                    code=str(freshness.get("reason_code") or "HISTORY_STALE"),
+                    result=freshness,
+                )
+            return {**current, **{k: freshness[k] for k in (
+                "current", "expected_latest_completed_session", "available_session",
+                "stale_sessions", "reason_code",
+            ) if k in freshness}}
         finally:
             self._history_lock.release()
+
+    def _require_current_history(self, operation: dict[str, Any]) -> dict[str, Any]:
+        """Execution-boundary freshness guard for MARKET_SCAN.
+
+        A persisted or priority-jumped scan still cannot evaluate a stale store
+        as today's market. One scan waits for the existing DATA_PREPARE lane.
+        """
+        operation_id = str(operation["operation_id"])
+        ready, freshness = self._history_ready()
+        if ready:
+            self._progress(
+                operation_id,
+                "HISTORY_READY",
+                f"Official history current · {freshness.get('sessions', 0)} sessions · "
+                f"{freshness.get('available_session') or 'unknown'} session",
+                current=0,
+                total=0,
+            )
+            return freshness
+        data_op, created = self.store.enqueue(
+            DATA_PREPARE,
+            lane=LANES[DATA_PREPARE],
+            requested_by=str(operation.get("requested_by") or "market_scan"),
+            payload={
+                "reason": "HISTORY_STALE",
+                "expected_latest_completed_session": freshness.get("expected_latest_completed_session"),
+                "available_session": freshness.get("available_session"),
+            },
+            deduplicate=True,
+        )
+        self._progress(
+            operation_id,
+            "HISTORY_STALE",
+            "Today's latest market data is still being prepared. "
+            f"Expected {freshness.get('expected_latest_completed_session') or 'unknown'} · "
+            f"available {freshness.get('available_session') or 'unknown'}",
+            current=0,
+            total=0,
+        )
+        data_id = str(data_op.get("operation_id") or "")
+        deadline = time.monotonic() + float(HISTORY_WAIT_MAX_S)
+        while time.monotonic() < deadline:
+            ready, freshness = self._history_ready()
+            if ready:
+                self._progress(
+                    operation_id,
+                    "HISTORY_READY",
+                    f"Official history current · {freshness.get('available_session') or 'unknown'} session",
+                    current=0,
+                    total=0,
+                )
+                return freshness
+            rec = self.store.get(data_id) if data_id else self.store.latest(DATA_PREPARE)
+            status = str((rec or {}).get("status") or "")
+            if status in {FAILED, BLOCKED}:
+                raise OperationBlocked(
+                    "Official NSE history is stale and the data refresh did not become current",
+                    code=str(freshness.get("reason_code") or "HISTORY_STALE"),
+                    result={**freshness, "data_prepare_status": status, "non_actionable": True},
+                )
+            if status == SUCCEEDED:
+                ready, freshness = self._history_ready()
+                if ready:
+                    self._progress(
+                        operation_id,
+                        "HISTORY_READY",
+                        f"Official history current · {freshness.get('available_session') or 'unknown'} session",
+                        current=0,
+                        total=0,
+                    )
+                    return freshness
+                raise OperationBlocked(
+                    "Official NSE history is still behind the latest completed session",
+                    code=str(freshness.get("reason_code") or "HISTORY_STALE"),
+                    result={**freshness, "data_prepare_status": status, "non_actionable": True},
+                )
+            stage = "WAITING_FOR_HISTORY" if status in {PENDING, "RUNNING"} or created else "HISTORY_STALE"
+            self._progress(
+                operation_id,
+                stage,
+                "Getting the latest market data before scanning. "
+                f"Expected {freshness.get('expected_latest_completed_session') or 'unknown'} · "
+                f"available {freshness.get('available_session') or 'unknown'}",
+                current=0,
+                total=0,
+            )
+            if self.stop_event.wait(float(HISTORY_WAIT_POLL_S)):
+                raise OperationBlocked(
+                    "Scan stopped while waiting for official history",
+                    code="HISTORY_STALE",
+                    result={**freshness, "non_actionable": True},
+                )
+        raise OperationBlocked(
+            "Timed out waiting for official NSE history to become current",
+            code="HISTORY_STALE",
+            result={**freshness, "non_actionable": True},
+        )
 
     def _notify_scan_telegram(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -338,11 +471,7 @@ class MarketOperationsWorker:
 
     def _run_market_scan(self, operation: dict[str, Any]) -> dict[str, Any]:
         operation_id = str(operation["operation_id"])
-        user_click = (
-            str(operation.get("requested_by") or "") == "terminal"
-            or int(operation.get("priority") or 0) >= 100
-        )
-        history = self._ensure_history(operation_id, blocking=not user_click)
+        history = self._require_current_history(operation)
         try:
             from scan.bulk_fetcher import adopt_ready_store
             adopt_ready_store(overlay_live=True)
@@ -439,6 +568,22 @@ class MarketOperationsWorker:
         result["summary"] = summary
         result["records"] = len(payload.get("records", []) or [])
         result["history"] = history
+        as_of_session = str(
+            history.get("available_session") or history.get("latest_date") or ""
+        )[:10]
+        if as_of_session:
+            result["as_of_session"] = as_of_session
+            result["history_latest_date"] = as_of_session
+            try:
+                from product.scan_store import default_scan_path, load_scan, save_scan
+
+                saved = load_scan(default_scan_path())
+                if saved:
+                    saved["as_of_session"] = as_of_session
+                    saved["history_latest_date"] = as_of_session
+                    save_scan(saved)
+            except Exception:
+                pass
         finish_progress(records=result["records"], setups=int(summary.get("with_any_setup") or 0))
         result["telegram"] = self._notify_scan_telegram(payload)
         result["long_term_overlay"] = dict(payload.get("long_term_overlay") or {})

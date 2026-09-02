@@ -104,6 +104,11 @@ def _load_defaults() -> dict[str, Any]:
         out["operations"] = {"active": store.active(), "recent": store.recent(limit=12)}
     except Exception:
         out["operations"] = {"active": [], "recent": []}
+    try:
+        from data.bhavcopy_runtime import official_history_freshness
+        out["history_freshness"] = official_history_freshness()
+    except Exception:
+        out["history_freshness"] = {}
     return out
 
 
@@ -145,8 +150,21 @@ def build_home_os(
     if auto.get("kite_connected") is False:
         kite_ok = False
     paper_enabled = paper_d.get("enabled", True) is not False
-    data_ready = bool(data_d.get("ready") or (data_d.get("bhavcopy") or {}).get("ready"))
+    bhav = dict(data_d.get("bhavcopy") or {})
+    freshness = _history_freshness(data_d, loaded.get("history_freshness"), now)
+    history_current = bool(freshness.get("current", True))
+    has_session = bool(
+        bhav.get("latest_date")
+        or freshness.get("available_session")
+        or freshness.get("expected_latest_completed_session")
+        or freshness.get("reason_code")
+    )
+    data_ready = bool(data_d.get("ready") or bhav.get("ready"))
+    if has_session:
+        data_ready = data_ready and history_current
     scan_ok = bool(scan_d.get("records") or scan_d.get("available") or scan_d.get("scanned_at"))
+    if has_session and not history_current:
+        scan_ok = False
     reco_ok = bool(reco_d.get("categories") is not None or reco_d.get("schema_version"))
     latest = dict(journal_d.get("latest") or why_d)
     taken = list(why_d.get("taken") or latest.get("taken") or [])
@@ -214,18 +232,26 @@ def build_home_os(
         primary_action = _action("RUN_SCAN_NOW", label="Retry")
         now_line = "Scan failed"
         next_line = "Shared market scan, then recommendations"
-    elif preparing or (not data_ready and not scan_ok):
+    elif (has_session and not history_current) or preparing or (not data_ready and not scan_ok):
         state = PREPARING
-        headline = "QuantTerm is getting today's market ready."
-        subtext = "No extra click is needed. Progress is the desk pipeline you already have."
-        now_line = "Preparing official data" if not data_ready else "Market scan running"
-        if any(str(o.get("kind")) == "MARKET_SCAN" for o in active_ops):
+        if has_session and not history_current:
+            headline = "Today's latest market data is still being prepared."
+            subtext = "Getting the latest market data before scanning."
+            now_line = "Preparing official data"
+            next_line = "Shared market scan after current prices"
+        else:
+            headline = "QuantTerm is getting today's market ready."
+            subtext = "No extra click is needed. Progress is the desk pipeline you already have."
+            now_line = "Preparing official data" if not data_ready else "Market scan running"
+            next_line = "Recommendations and paper decision"
+        if any(str(o.get("kind")) == "MARKET_SCAN" for o in active_ops) and history_current:
             op = next(o for o in active_ops if str(o.get("kind")) == "MARKET_SCAN")
             cur = op.get("current") or op.get("progress_current")
             tot = op.get("total") or op.get("progress_total")
             if cur and tot:
                 now_line = f"Market scan running · {cur} / {tot}"
-        next_line = "Recommendations and paper decision"
+        elif any(str(o.get("kind")) == "DATA_PREPARE" for o in active_ops):
+            now_line = "Preparing official data"
     elif not paper_enabled:
         state = PAUSED
         headline = "The paper bot is paused."
@@ -291,7 +317,7 @@ def build_home_os(
                 "status": op.get("status"),
             }
 
-    best_rows = list((radar_d.get("best_of_best") or [])[:3])
+    best_rows = list((radar_d.get("best_of_best") or [])[:3]) if history_current else []
     opportunities = [explain_opportunity(row) for row in best_rows]
     for row in (rejections + waits)[:4]:
         if isinstance(row, Mapping):
@@ -352,7 +378,11 @@ def build_home_os(
             "market_phase": phase,
             "market_mood": str((dash.get("market") or {}).get("health") or radar_d.get("market_health") or ""),
             "scan_age": str(scan_d.get("scanned_at") or radar_d.get("scan_scanned_at") or ""),
-            "data_fresh": data_ready,
+            "data_fresh": bool(data_ready and history_current),
+            "expected_session": freshness.get("expected_latest_completed_session") or "",
+            "available_session": freshness.get("available_session") or bhav.get("latest_date") or "",
+            "stale_sessions": freshness.get("stale_sessions"),
+            "history_reason_code": freshness.get("reason_code") or "",
             "last_automatic_action": now_line,
             "next_automatic_action": next_line,
         },
@@ -382,6 +412,13 @@ def build_home_os(
         "yesterday": yesterday,
         "recovered": list(recovered or []),
         "live_locked": True,
+        "history_freshness": {
+            "current": history_current,
+            "expected_latest_completed_session": freshness.get("expected_latest_completed_session") or "",
+            "available_session": freshness.get("available_session") or bhav.get("latest_date") or "",
+            "stale_sessions": freshness.get("stale_sessions"),
+            "reason_code": freshness.get("reason_code") or "",
+        },
         "verify": {
             "lanes": (verify.get("lanes") or {}),
             "soak_status": verify.get("soak_status") or soak_d.get("FORWARD_SOAK_STATUS"),
@@ -394,6 +431,37 @@ def build_home_os(
             "action": (primary_action or {}).get("label") or "Nothing. Leave it running.",
         },
     }
+
+
+def _history_freshness(
+    data_d: Mapping[str, Any],
+    loaded: Any,
+    now: datetime | None,
+) -> dict[str, Any]:
+    bhav = dict(data_d.get("bhavcopy") or {})
+    if isinstance(data_d.get("history_freshness"), Mapping):
+        return dict(data_d.get("history_freshness") or {})
+    if bhav.get("reason_code") or "current" in bhav or bhav.get("expected_latest_completed_session"):
+        return {
+            "current": bool(bhav.get("current", True)),
+            "expected_latest_completed_session": bhav.get("expected_latest_completed_session") or "",
+            "available_session": bhav.get("available_session") or bhav.get("latest_date") or "",
+            "stale_sessions": bhav.get("stale_sessions"),
+            "reason_code": bhav.get("reason_code") or "",
+        }
+    if bhav.get("latest_date"):
+        try:
+            from data.bhavcopy_runtime import official_history_freshness
+            return official_history_freshness(bhav, now=now, load_cache=False)
+        except Exception:
+            return {"current": True, "available_session": bhav.get("latest_date"), "reason_code": ""}
+    if isinstance(loaded, Mapping) and (
+        "current" in loaded or loaded.get("reason_code") or loaded.get("expected_latest_completed_session")
+    ):
+        return dict(loaded)
+    if isinstance(loaded, Mapping) and loaded.get("history_freshness"):
+        return dict(loaded.get("history_freshness") or {})
+    return {"current": True, "reason_code": ""}
 
 
 def _activity(

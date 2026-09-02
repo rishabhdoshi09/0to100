@@ -766,6 +766,10 @@ export type HomeOperatingSystem = {
     market_mood?: string
     scan_age?: string
     data_fresh?: boolean
+    expected_session?: string
+    available_session?: string
+    stale_sessions?: number | null
+    history_reason_code?: string
     last_automatic_action?: string
     next_automatic_action?: string
   }
@@ -809,6 +813,13 @@ export type HomeOperatingSystem = {
   }
   recovered?: string[]
   live_locked?: boolean
+  history_freshness?: {
+    current?: boolean
+    expected_latest_completed_session?: string
+    available_session?: string
+    stale_sessions?: number | null
+    reason_code?: string
+  }
   four_questions?: { what?: string; found?: string; meaning?: string; action?: string }
   verify?: { lanes?: Record<string, string>; soak_status?: string; generated_at?: string }
 }

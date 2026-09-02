@@ -556,6 +556,17 @@ function HomeOsCard({
         <details className="home-os-why">
           <summary>Technical details</summary>
           <p>state={os.state} · soak={os.learning?.forward_soak_status} · live_locked={String(os.live_locked)}</p>
+          <p>
+            Expected session: {os.today?.expected_session || os.history_freshness?.expected_latest_completed_session || '—'}
+          </p>
+          <p>
+            Available session: {os.today?.available_session || os.history_freshness?.available_session || '—'}
+          </p>
+          <p>
+            stale sessions={os.today?.stale_sessions ?? os.history_freshness?.stale_sessions ?? 'n/a'}
+            {' · '}
+            reason={os.today?.history_reason_code || os.history_freshness?.reason_code || '—'}
+          </p>
           <p>verify: {JSON.stringify(os.verify?.lanes || {})}</p>
         </details>
       ) : null}

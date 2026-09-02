@@ -29,6 +29,12 @@ def test_complete_script_starts_every_local_service_in_one_process_tree():
     assert "maybe_open_home_browser" in complete
     assert "HOME_OPENED" in complete
     assert complete.count("HOME_OPENED") >= 2
+    desk_fn = complete.split("wait_for_desk()", 1)[1].split("if wait_for_desk", 1)[0]
+    assert 'url_ok "http://127.0.0.1:8765/api/health"' in desk_fn
+    assert 'url_ok "http://127.0.0.1:5173/"' in desk_fn
+    assert desk_fn.index("8765/api/health") < desk_fn.index("5173/")
+    assert "i < 90" in desk_fn
+    assert "i < 120" in desk_fn
 
 
 def test_complete_script_always_stops_old_stack_then_starts_everything():
@@ -43,6 +49,9 @@ def test_complete_script_always_stops_old_stack_then_starts_everything():
     assert complete.count('url_ok "http://127.0.0.1:8766/health"') == 1
     assert 'alive "$REPORT_PID"' in complete
     assert "wait_for_api" in inner
+    boot = inner.split("start_api || true", 1)[1].split('while [[ "$STOP" != "1" ]]', 1)[0]
+    assert boot.index("wait_for_api") < boot.index("start_frontend")
+    assert boot.index("start_frontend") < boot.index("kick_scan")
     assert "npm run dev" in inner
     assert "Use --restart" not in inner
     assert "Use --restart" not in complete
