@@ -360,6 +360,24 @@ def forward_soak_api() -> dict:
     return payload
 
 
+@product.app.get("/api/decision-simulator")
+def decision_simulator_get() -> dict:
+    """Cached take-vs-skip historical report. BACKTEST provenance only."""
+    from product.decision_simulator import load_latest
+    payload = load_latest()
+    if not payload:
+        return {"available": False, "provenance": "BACKTEST", "live_locked": True, "cache_hit": True}
+    payload["available"] = True
+    return payload
+
+
+@product.app.post("/api/decision-simulator")
+def decision_simulator_run() -> dict:
+    """Run or reuse the take-vs-skip simulator. Never writes REAL_FORWARD_MARKET."""
+    from product.decision_simulator import run_decision_simulator
+    return run_decision_simulator()
+
+
 @product.app.post("/api/forward-soak")
 def forward_soak_verify_now() -> dict:
     """Read-only re-verify. Same function as scripts/verify_forward_soak.py."""
