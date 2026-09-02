@@ -5,6 +5,7 @@ export const REQUEST_TIMEOUT_MESSAGE =
   'Request timed out. The page is not waiting forever — retry.'
 
 export const DEFAULT_FETCH_TIMEOUT_MS = 30_000
+export const DASHBOARD_FETCH_TIMEOUT_MS = 60_000
 
 const PROXY_STATUSES = new Set([500, 502, 503, 504])
 

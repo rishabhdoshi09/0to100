@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchChart, fetchDashboard, sendControl } from './api'
+import { deskRefreshBanner } from './deskBanner'
 import {
   CompareView,
   MarketScannerView,
@@ -272,6 +273,7 @@ function App() {
   const [query, setQuery] = useState('')
   const [helpOpen, setHelpOpen] = useState(false)
   const autoPrepareRef = useRef(false)
+  const refreshInFlight = useRef(false)
   const istClock = useIstClock()
   const [depth, setDepth] = useState<DisplayDepth>(() => {
     const saved = window.localStorage.getItem('quantterm-display-depth')
@@ -279,6 +281,8 @@ function App() {
   })
 
   const refresh = useCallback(async () => {
+    if (refreshInFlight.current) return
+    refreshInFlight.current = true
     try {
       const payload = await fetchDashboard()
       setDashboard((prev) => {
@@ -309,6 +313,7 @@ function App() {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Waiting for the market API')
     } finally {
+      refreshInFlight.current = false
       setLoading(false)
     }
   }, [])
@@ -506,6 +511,7 @@ function App() {
   ].includes(active)
   const kiteOk = dashboard.autonomy.state !== 'AUTH_REQUIRED'
     && !(dashboard.autonomy.active_failures || []).some((f) => String(f).includes('auth'))
+  const connectionBanner = error ? deskRefreshBanner(error, dashboardHasWork(dashboard)) : null
 
   const keep = (ids: string[], node: ReactNode) => (
     <KeepPage ids={ids} active={active} seen={seen}>{node}</KeepPage>
@@ -619,10 +625,10 @@ function App() {
           </div>
         </section>
 
-        {error && (
+        {connectionBanner && (
           <div className="api-degraded-banner" role="alert">
-            <strong>Connecting to the market API…</strong>
-            <p>QuantTerm is starting the data lanes. Retry if this stays for more than a minute.</p>
+            <strong>{connectionBanner.title}</strong>
+            <p>{connectionBanner.body}</p>
             <details>
               <summary>Technical details</summary>
               <pre>{error}</pre>

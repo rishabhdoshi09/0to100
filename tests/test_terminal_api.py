@@ -167,3 +167,121 @@ def test_radar_home_keeps_watchlist_when_sepa_ranking_fails(monkeypatch):
     assert "telegram" in home
     assert "headline" in home["telegram"]
     assert "desk_pipeline" in home
+
+
+def test_dashboard_slims_scan_keeps_universe_and_conviction_input(monkeypatch):
+    records = [{"symbol": f"S{i:03d}", "score": i, "composite": i} for i in range(120)]
+    scan = {
+        "available": True,
+        "scanned_at": "2026-09-02T05:00:00+00:00",
+        "universe_size": 1842,
+        "summary": {"with_any_setup": 12},
+        "records": records,
+    }
+    seen: dict[str, int] = {}
+    monkeypatch.setattr(terminal_api, "_scan_payload", lambda: scan)
+    monkeypatch.setattr(
+        terminal_api,
+        "_market_payload",
+        lambda: {
+            "available": True,
+            "health": "Mixed",
+            "summary": "ok",
+            "trade_stance": "Wait",
+            "breadth": "mixed",
+            "leaders": [],
+            "laggards": [],
+            "nifty_change_1d": 0.1,
+            "nifty_change_5d": 0.2,
+            "vix": 12.0,
+            "nifty_price": 25000,
+            "technical_details": {},
+        },
+    )
+    monkeypatch.setattr(terminal_api, "_long_term_payload", lambda: {"available": False, "records": [], "summary": {}, "job": {}})
+    monkeypatch.setattr(terminal_api, "_paper_payload", lambda: {"available": False})
+    monkeypatch.setattr(terminal_api, "_autonomy_payload", lambda: {"available": False, "running": False})
+    monkeypatch.setattr(terminal_api, "_operations_payload", lambda: {"available": False, "running": False})
+    monkeypatch.setattr(terminal_api, "_news_payload", lambda: {"available": False, "articles": []})
+    monkeypatch.setattr(terminal_api, "_fno_payload", lambda: {"available": False, "underlyings": [], "exclusions": []})
+    monkeypatch.setattr(terminal_api, "_scan_progress_payload", lambda: {})
+
+    def fake_data(scan_arg, *_args):
+        return {
+            "ready": False,
+            "snapshot": {},
+            "bhavcopy": {},
+            "scan_saved": True,
+            "scan_records": len(scan_arg.get("records") or []),
+            "long_term_saved": False,
+            "long_term_records": 0,
+            "blockers": [],
+        }
+
+    def fake_conviction(scan_arg, _market):
+        seen["n"] = len(scan_arg.get("records") or [])
+        return [{"symbol": "S119"}]
+
+    monkeypatch.setattr(terminal_api, "_data_payload", fake_data)
+    monkeypatch.setattr(terminal_api, "_conviction", fake_conviction)
+
+    payload = terminal_api.dashboard()
+    assert payload["scan"]["universe_size"] == 1842
+    assert payload["scan"]["dashboard_records_shown"] == 80
+    assert len(payload["scan"]["records"]) == 80
+    assert payload["scan"]["records"][0]["symbol"] == "S119"
+    assert payload["data"]["scan_records"] == 120
+    assert seen["n"] == 120
+
+
+def test_market_payload_does_not_block_on_regime_fetch(monkeypatch):
+    monkeypatch.setattr(terminal_api, "_warm_regime", lambda: None)
+    monkeypatch.setattr("product.market_view.peek_cached_market_view", lambda: None)
+    payload = terminal_api._market_payload()
+    assert payload["available"] is False
+    assert "assembl" in payload["summary"].lower()
+    assert "do not infer" in payload["trade_stance"].lower()
+
+
+def test_data_payload_does_not_unpickle_bhavcopy_inline(monkeypatch):
+    seen: list[bool] = []
+
+    def fake_status(*, load_cache: bool = False):
+        seen.append(load_cache)
+        return {
+            "ready": False,
+            "cache_exists": True,
+            "symbols": 0,
+            "sessions": 0,
+            "latest_date": "",
+            "csv_files": 0,
+            "minimum_sessions": 60,
+        }
+
+    monkeypatch.setattr(terminal_api, "_warm_bhavcopy_cache", lambda: None)
+    monkeypatch.setattr("data.bhavcopy_runtime.status", fake_status)
+    monkeypatch.setattr(terminal_api, "_snapshot_payload", lambda: {"ready": False})
+    monkeypatch.setattr(
+        "data.bhavcopy_runtime.official_history_freshness",
+        lambda history, load_cache=False, **_kwargs: {"current": True},
+    )
+    payload = terminal_api._data_payload(
+        {"available": True, "records": [1, 2]},
+        {"available": False, "records": []},
+        {"running": True},
+        {"available": True},
+        {"available": True},
+    )
+    assert seen == [False]
+    assert payload["scan_records"] == 2
+    assert any("still loading" in item.lower() for item in payload["blockers"])
+
+
+def test_peek_cached_regime_is_missing_until_computed():
+    from core import regime_engine
+
+    regime_engine._CACHE.clear()
+    assert regime_engine.peek_cached_regime() is None
+    assert terminal_api._slim_ranked_records(
+        {"universe_size": 3, "records": [{"symbol": "A", "score": 1}, {"symbol": "B", "score": 9}]}
+    )["records"][0]["symbol"] == "B"

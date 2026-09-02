@@ -863,6 +863,16 @@ def _risk_mode(
 # Public API
 # ---------------------------------------------------------------------------
 
+def peek_cached_regime() -> RegimeState | None:
+    """Return the last computed regime without touching the network.
+
+    Home / ``/api/dashboard`` must stay cheap. A missing cache is missing —
+    callers must not invent Nifty, VIX, or sector leadership.
+    """
+    cached = _CACHE.get("regime_state")
+    return cached if isinstance(cached, RegimeState) else None
+
+
 def compute_regime() -> RegimeState:
     """
     Compute and return the current 5-dimension market regime.

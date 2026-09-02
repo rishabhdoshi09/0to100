@@ -218,6 +218,8 @@ export type DashboardPayload = {
     universe_size: number
     summary: Record<string, number>
     records: ScanRecord[]
+    dashboard_record_limit?: number
+    dashboard_records_shown?: number
   }
   long_term: {
     available: boolean

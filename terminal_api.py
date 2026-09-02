@@ -13,6 +13,7 @@ from pathlib import Path
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from typing import Any
 
@@ -67,8 +68,81 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
+DASHBOARD_SCAN_RECORD_LIMIT = 80
+
+_warm_threads: dict[str, threading.Thread] = {}
+_warm_guard = threading.Lock()
+
+
+def _schedule_warm(name: str, target) -> None:
+    """Run a one-shot warmer without holding the desk request."""
+    with _warm_guard:
+        current = _warm_threads.get(name)
+        if current is not None and current.is_alive():
+            return
+        thread = threading.Thread(target=target, name=f"quantterm-{name}", daemon=True)
+        _warm_threads[name] = thread
+        thread.start()
+
+
+def _warm_regime() -> None:
+    try:
+        from core.regime_engine import compute_regime
+        compute_regime()
+    except Exception:
+        return
+
+
+def _warm_bhavcopy_cache() -> None:
+    try:
+        from data.bhavcopy_runtime import status as bhavcopy_status
+        bhavcopy_status(load_cache=True)
+    except Exception:
+        return
+
+
+def _dashboard_num(row: dict[str, Any], *keys: str) -> float:
+    for key in keys:
+        try:
+            value = float(row.get(key) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if value == value:
+            return value
+    return 0.0
+
+
+def _dashboard_record_rank(row: dict[str, Any]) -> tuple[float, float, float]:
+    return (
+        _dashboard_num(row, "composite", "sepa_score", "score"),
+        _dashboard_num(row, "sepa_score", "score"),
+        _dashboard_num(row, "score"),
+    )
+
+
+def _slim_ranked_records(
+    payload: dict[str, Any],
+    *,
+    limit: int = DASHBOARD_SCAN_RECORD_LIMIT,
+) -> dict[str, Any]:
+    """Keep Home fast: top-ranked rows only. Universe size stays the real count."""
+    if not isinstance(payload, dict):
+        return payload
+    records = [row for row in (payload.get("records") or []) if isinstance(row, dict)]
+    cap = max(1, int(limit))
+    ranked = sorted(records, key=_dashboard_record_rank, reverse=True)[:cap]
+    out = dict(payload)
+    out["records"] = ranked
+    if "universe_size" in payload:
+        out["universe_size"] = int(payload.get("universe_size") or 0) or len(records)
+    out["dashboard_record_limit"] = cap
+    out["dashboard_records_shown"] = len(ranked)
+    return out
+
+
 def _empty_dashboard(error: str, scan: dict[str, Any] | None = None) -> dict[str, Any]:
     payload = scan if isinstance(scan, dict) else _scan_payload()
+    payload = _slim_ranked_records(payload)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "market": {
@@ -235,8 +309,24 @@ def _shutdown() -> None:
 
 def _market_payload() -> dict:
     try:
-        from product.market_view import current_market_view
-        market = current_market_view()
+        from product.market_view import peek_cached_market_view
+        market = peek_cached_market_view()
+        _schedule_warm("regime", _warm_regime)
+        if market is None:
+            return {
+                "available": False,
+                "health": "Unavailable",
+                "summary": "Market regime is still assembling from index history.",
+                "trade_stance": "Do not infer a market stance from missing data.",
+                "breadth": "—",
+                "leaders": [],
+                "laggards": [],
+                "nifty_change_1d": None,
+                "nifty_change_5d": None,
+                "vix": None,
+                "nifty_price": None,
+                "technical_details": {},
+            }
         return {
             "available": True,
             "health": market.health,
@@ -635,7 +725,11 @@ def _fno_payload() -> dict[str, Any]:
 def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news: dict) -> dict:
     try:
         from data.bhavcopy_runtime import status as bhavcopy_status
-        bhavcopy = bhavcopy_status(load_cache=True)
+        # Do not unpickle store_cache.pkl on the Home request. A cold API
+        # process can spend longer than the page timeout loading it.
+        bhavcopy = bhavcopy_status(load_cache=False)
+        if bhavcopy.get("cache_exists") and not bhavcopy.get("ready"):
+            _schedule_warm("bhavcopy-cache", _warm_bhavcopy_cache)
     except Exception as exc:
         bhavcopy = {
             "ready": False,
@@ -664,7 +758,10 @@ def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news
     except Exception:
         freshness = {}
     if not bhavcopy.get("ready"):
-        blockers.append("Official NSE bhavcopy history is not ready; direct scans will prepare it first.")
+        if bhavcopy.get("cache_exists"):
+            blockers.append("Official NSE bhavcopy cache is on disk and still loading into the desk API.")
+        else:
+            blockers.append("Official NSE bhavcopy history is not ready; direct scans will prepare it first.")
     elif int(bhavcopy.get("sessions", 0) or 0) < int(bhavcopy.get("minimum_sessions", 60) or 60):
         blockers.append("Official bhavcopy history is shallower than the minimum screen requirement.")
     elif freshness and not freshness.get("current", True):
@@ -737,7 +834,17 @@ def health() -> dict:
 @app.get("/api/dashboard")
 def dashboard() -> dict:
     """RecoWealth desk bootstrap. Last readable scan survives a subsystem failure."""
-    scan = _scan_payload()
+    try:
+        scan = _scan_payload()
+    except Exception as exc:
+        scan = {
+            "available": False,
+            "scanned_at": "",
+            "universe_size": 0,
+            "summary": {},
+            "records": [],
+            "error": str(exc),
+        }
     try:
         market = _market_payload()
         long_term = _long_term_payload()
@@ -747,6 +854,7 @@ def dashboard() -> dict:
         news = _news_payload()
         fno = _fno_payload()
         data = _data_payload(scan, long_term, operations, fno, news)
+        conviction = _conviction(scan, market)
         daily_wrap: list = []
         try:
             from product.desk_note import daily_wrap as build_daily_wrap
@@ -759,15 +867,15 @@ def dashboard() -> dict:
         return _json_safe({
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "market": market,
-            "scan": scan,
-            "long_term": long_term,
+            "scan": _slim_ranked_records(scan),
+            "long_term": _slim_ranked_records(long_term),
             "paper": paper,
             "autonomy": autonomy,
             "operations": operations,
             "news": news,
             "fno": fno,
             "data": data,
-            "conviction": _conviction(scan, market),
+            "conviction": conviction,
             "scan_progress": _scan_progress_payload(),
             "daily_wrap": daily_wrap,
         })
