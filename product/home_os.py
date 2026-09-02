@@ -389,6 +389,36 @@ def build_home_os(
     )
     check_system = build_check_system(system, live_locked=live_locked)
 
+    runtime: dict[str, Any] = {}
+    try:
+        from product.runtime_lifecycle import inspect_runtime
+
+        runtime = inspect_runtime(api_serving=True)
+    except Exception as exc:
+        runtime = {
+            "lifecycle": "FAILED",
+            "reason": str(exc)[:240],
+            "reasons": [str(exc)[:240]],
+            "components": [],
+        }
+    lifecycle = str(runtime.get("lifecycle") or "")
+    if lifecycle == "FAILED":
+        state = FAILED_RECOVERABLE
+        headline = "A required backend process is down."
+        subtext = str(runtime.get("reason") or "The desk will not hide a dead backend.")
+        now_line = f"FAILED · {runtime.get('reason') or 'see logs/stack'}"
+        next_line = "Supervisor restarts the failed process when recovery is safe"
+        primary_action = _action("CHECK_SYSTEM", label="Check system", kind="refresh")
+    elif lifecycle == "RECOVERING":
+        headline = "QuantTerm is recovering a failed process."
+        subtext = str(runtime.get("reason") or "A worker heartbeat is stale and the supervisor is restarting it.")
+        now_line = f"RECOVERING · {now_line}"
+        next_line = "Confirm health after the restart"
+    elif lifecycle == "DEGRADED" and state in {NORMAL, PREPARING}:
+        now_line = f"DEGRADED · {now_line}"
+        if runtime.get("reason") and state == NORMAL:
+            subtext = str(runtime.get("reason"))
+
     activity = _activity(
         scan_d, why_d, latest, ops, verify, taken, recovered=list(recovered or []),
     )
@@ -450,6 +480,7 @@ def build_home_os(
         "yesterday": yesterday,
         "recovered": list(recovered or []),
         "live_locked": True,
+        "runtime": runtime,
         "history_freshness": {
             "current": history_current,
             "expected_latest_completed_session": freshness.get("expected_latest_completed_session") or "",
@@ -574,13 +605,29 @@ def _past_decisions() -> dict[str, Any]:
     return {
         "available": True,
         "provenance": report.get("provenance") or "BACKTEST",
+        "status": report.get("status"),
+        "run_id": report.get("run_id"),
+        "engine": report.get("engine"),
+        "period_start": report.get("period_start"),
+        "period_end": report.get("period_end"),
+        "trading_sessions": report.get("trading_sessions"),
+        "sessions_done": report.get("sessions_done"),
+        "sessions_total": report.get("sessions_total"),
+        "universe_observations": report.get("universe_observations"),
+        "stocks_evaluated": report.get("stocks_evaluated"),
         "decisions_tested": report.get("decisions_tested") or 0,
-        "would_take": report.get("would_take"),
+        "would_take": report.get("would_take") or report.get("BUY"),
         "rejected": report.get("rejected"),
+        "BUY": report.get("BUY"),
+        "WAIT": report.get("WAIT"),
+        "AVOID": report.get("AVOID"),
+        "REJECT": report.get("REJECT"),
         "correct_rejections": report.get("correct_rejections"),
         "missed_winners": report.get("missed_winners"),
         "avoided_losers": report.get("avoided_losers"),
         "good_waits": report.get("good_waits"),
+        "outcomes_matured": report.get("outcomes_matured"),
+        "open_unresolved": report.get("open_unresolved"),
         "filters_helped": report.get("filters_helped") or [],
         "filters_hurt": report.get("filters_hurt") or [],
         "simple": report.get("simple") or "",

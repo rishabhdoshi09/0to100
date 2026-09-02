@@ -216,13 +216,15 @@ start_market_ops() {
 
 start_api() {
   echo "[STACK] Starting local API at http://127.0.0.1:8765 …"
+  mkdir -p "$ROOT/logs/stack"
   # terminal_product_api_parallel imports the canonical terminal_product_api:app
   # and only corrects performance-safe operation routing.
-  python -u -m uvicorn terminal_product_api_parallel:app --host 127.0.0.1 --port 8765 &
+  python -u -m uvicorn terminal_product_api_parallel:app --host 127.0.0.1 --port 8765 \
+    >>"$ROOT/logs/stack/api.log" 2>&1 &
   API_PID=$!
   sleep 0.5 || true
   if ! alive "$API_PID"; then
-    echo "[STACK] Market API exited before becoming healthy; will retry." >&2
+    echo "[STACK] Market API exited before becoming healthy; will retry. See logs/stack/api.log." >&2
     API_PID=""; return 1
   fi
   return 0
@@ -295,6 +297,11 @@ fi
 echo "[STACK] QuantTerm is running in this terminal: desk :5173, API :8765, autonomy, market operations, market scan."
 echo "[STACK] Ctrl-C is the stop signal. A child crash is restarted; it does not stop the desk."
 
+# Supervisor must outlive a single child failure. set -e would run the EXIT
+# trap and kill the API the next time a probe returns non-zero.
+set +e
+API_HEALTH_FAILS=0
+
 while [[ "$STOP" != "1" ]]; do
   if [[ "$MARKET_OPS_EXTERNAL" != "1" ]]; then
     if [[ -z "${MARKET_OPS_PID:-}" ]] || ! alive "$MARKET_OPS_PID" || ! market_ops_healthy; then
@@ -315,6 +322,20 @@ while [[ "$STOP" != "1" ]]; do
     SCAN_KICKED=0
   fi
 
+  if ! url_ok "http://127.0.0.1:8765/api/health"; then
+    API_HEALTH_FAILS=$((API_HEALTH_FAILS + 1))
+    if (( API_HEALTH_FAILS >= 3 )); then
+      echo "[STACK] Market API health failed ${API_HEALTH_FAILS} times; restarting. See logs/stack/api.log."
+      if [[ -n "${API_PID:-}" ]]; then kill "$API_PID" >/dev/null 2>&1 || true; fi
+      API_EXTERNAL=0
+      API_PID=""
+      start_api || true
+      wait_for_api || echo "[STACK] Market API restart is not healthy yet; will retry." >&2
+      API_HEALTH_FAILS=0
+    fi
+  else
+    API_HEALTH_FAILS=0
+  fi
   if [[ "$API_EXTERNAL" != "1" ]]; then
     if [[ -z "${API_PID:-}" ]] || ! alive "$API_PID"; then
       echo "[STACK] Market API is down; restarting."

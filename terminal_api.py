@@ -17,8 +17,9 @@ import threading
 import time
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from logger import quiet_uvicorn_health_access
 
@@ -36,6 +37,17 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(Exception)
+async def _log_unhandled(request: Request, exc: Exception):
+    if isinstance(exc, HTTPException):
+        raise exc
+    print(f"[API] unhandled {request.method} {request.url.path}: {exc}", flush=True)
+    return JSONResponse(
+        {"ok": False, "error": str(exc)[:300], "path": request.url.path},
+        status_code=500,
+    )
 
 _ops_process: subprocess.Popen | None = None
 
@@ -819,16 +831,43 @@ def _conviction(scan: dict, market: dict) -> list[dict]:
 
 @app.get("/api/health")
 def health() -> dict:
-    """Liveness only. Must stay cheap so the launcher can start the desk.
+    """Liveness plus the cheap STARTING/READY/DEGRADED/FAILED/RECOVERING probe.
 
-    Autonomy and operations status live on /api/dashboard. This probe must not
-    open SQLite or import supervisor state — a scan can hold those locks.
+    File, PID and port checks only. Autonomy SQLite and live scans stay off
+    this path so the launcher can start the desk.
     """
-    return {
+    payload = {
         "ok": True,
         "service": "quantterm-terminal-api",
         "version": app.version,
+        "lifecycle": "READY",
+        "reason": "Terminal API is serving",
+        "reasons": [],
+        "components": [],
+        "live_locked": True,
     }
+    try:
+        from product.runtime_lifecycle import inspect_runtime
+
+        runtime = inspect_runtime(api_serving=True)
+        payload.update({
+            "lifecycle": runtime.get("lifecycle") or "READY",
+            "reason": runtime.get("reason") or payload["reason"],
+            "reasons": runtime.get("reasons") or [],
+            "components": runtime.get("components") or [],
+            "history": runtime.get("history") or {},
+            "checked_at": runtime.get("checked_at"),
+            "live_locked": True,
+        })
+        payload["ok"] = payload["lifecycle"] != "FAILED"
+    except Exception as exc:
+        payload.update({
+            "ok": True,
+            "lifecycle": "DEGRADED",
+            "reason": f"Runtime probe failed: {exc}"[:240],
+            "reasons": [str(exc)[:240]],
+        })
+    return payload
 
 
 @app.get("/api/dashboard")

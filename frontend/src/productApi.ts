@@ -889,6 +889,13 @@ export type HomeOperatingSystem = {
   four_questions?: { what?: string; found?: string; meaning?: string; action?: string }
   verify?: { lanes?: Record<string, string>; soak_status?: string; generated_at?: string }
   simulate_action?: HomeAction | null
+  runtime?: {
+    lifecycle?: string
+    reason?: string
+    reasons?: string[]
+    checked_at?: string
+    components?: Array<{ name?: string; status?: string; detail?: string }>
+  }
   past_decisions?: {
     available?: boolean
     provenance?: string
@@ -1647,16 +1654,52 @@ export const fetchForwardSoak = (): Promise<ForwardSoakScoreboard> =>
 export const verifyForwardSoakNow = (): Promise<ForwardSoakScoreboard> =>
   request('/api/forward-soak', { method: 'POST', headers: { Accept: 'application/json' } })
 
+export type HistoricalDecisionRow = {
+  symbol?: string
+  as_of?: string
+  decision?: string
+  reason_code?: string
+  reasons?: string[]
+  classification?: string
+  outcome_status?: string
+  forward_return_pct?: number | null
+  entry?: number | null
+  stop?: number | null
+  target?: number | null
+  pit?: { as_of?: string; max_bar_date?: string; future_evidence_used?: boolean; degraded?: string[] }
+  engine?: string
+}
+
 export type DecisionSimulatorReport = {
   available?: boolean
+  accepted?: boolean
   provenance?: string
   cache_hit?: boolean
   live_locked?: boolean
   not_promotion_evidence?: boolean
+  status?: string
+  run_id?: string
+  engine?: string
+  phase?: string
+  message?: string
+  period_start?: string
+  period_end?: string
+  trading_sessions?: number
+  sessions_done?: number
+  sessions_total?: number
+  universe_observations?: number
+  stocks_evaluated?: number
+  decision_candidates?: number
   decisions_tested?: number
   would_take?: number
   rejected?: number
   waited?: number
+  BUY?: number
+  WAIT?: number
+  AVOID?: number
+  REJECT?: number
+  outcomes_matured?: number
+  open_unresolved?: number
   correct_rejections?: number
   missed_winners?: number
   avoided_losers?: number
@@ -1665,6 +1708,18 @@ export type DecisionSimulatorReport = {
   filters_hurt?: string[]
   simple?: string
   note?: string
+  session_summaries?: Array<{
+    as_of?: string
+    universe?: number
+    evaluated?: number
+    decisions?: number
+    buy?: number
+    wait?: number
+    avoid?: number
+    reject?: number
+  }>
+  decisions?: HistoricalDecisionRow[]
+  rows?: HistoricalDecisionRow[]
 }
 
 export const fetchDecisionSimulator = (): Promise<DecisionSimulatorReport> =>

@@ -11,6 +11,7 @@ import {
   fetchTradePlan,
   fetchWatchlist,
   verifyForwardSoakNow,
+  fetchDecisionSimulator,
   simulatePastDecisions,
   type HomeAction,
   type HomeOperatingSystem,
@@ -455,6 +456,12 @@ function HomeOsCard({
     <section className={`home-os-card state-${(os.state || '').toLowerCase()}`}>
       <div className="home-os-hero">
         <span>WHAT SHOULD I DO?</span>
+        {os.runtime?.lifecycle ? (
+          <p className="panel-copy">
+            {os.runtime.lifecycle}
+            {os.runtime.reason ? ` · ${os.runtime.reason}` : ''}
+          </p>
+        ) : null}
         <h2>{os.headline}</h2>
         <p>{os.subtext}</p>
         <div className="home-os-now-next">
@@ -838,15 +845,22 @@ export function RadarHomeView(props: ExperienceViewProps & {
       return
     }
     if (control === 'SIMULATE_PAST_DECISIONS') {
-      setDeskNote('Simulating past decisions…')
+      setDeskNote('Historical replay starting…')
       void simulatePastDecisions()
-        .then((payload) => {
+        .then(async (payload) => {
           remember('decision-simulator', payload)
-          setDeskNote(payload.simple || 'Past decision test finished.')
+          let latest = payload
+          for (let i = 0; i < 40 && (latest.status === 'RUNNING' || latest.accepted); i += 1) {
+            setDeskNote(latest.message || latest.simple || `Historical replay running · ${latest.sessions_done || 0}/${latest.sessions_total || '?'}`)
+            await new Promise((resolve) => window.setTimeout(resolve, 1500))
+            latest = await fetchDecisionSimulator()
+          }
+          remember('decision-simulator', latest)
+          setDeskNote(latest.simple || latest.message || 'Historical replay finished.')
           void fetchRadarHome().then(setRadar)
         })
         .catch((reason: unknown) => {
-          setDeskNote(reason instanceof Error ? reason.message : 'Past decision test failed')
+          setDeskNote(reason instanceof Error ? reason.message : 'Historical replay failed')
         })
       return
     }

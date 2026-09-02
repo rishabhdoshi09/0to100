@@ -155,13 +155,15 @@ trap cleanup EXIT
 
 start_report() {
   echo "[COMPLETE STACK] Starting research-report API at http://127.0.0.1:8766 …"
-  python -u -m uvicorn report_api:app --host 127.0.0.1 --port 8766 &
+  mkdir -p "$ROOT/logs/stack"
+  python -u -m uvicorn report_api:app --host 127.0.0.1 --port 8766 \
+    >>"$ROOT/logs/stack/report_api.log" 2>&1 &
   REPORT_PID=$!
   sleep 1 || true
   if alive "$REPORT_PID"; then
     return 0
   fi
-  echo "[COMPLETE STACK] Research-report API failed to start; will retry." >&2
+  echo "[COMPLETE STACK] Research-report API failed to start; will retry. See logs/stack/report_api.log." >&2
   REPORT_PID=""
   return 1
 }
@@ -229,7 +231,22 @@ else
   echo "[COMPLETE STACK] Home is still starting. Open http://127.0.0.1:5173 when the desk is up."
 fi
 
+set +e
+REPORT_HEALTH_FAILS=0
 while [[ "$STOP" != "1" ]]; do
+  if ! url_ok "http://127.0.0.1:8766/health"; then
+    REPORT_HEALTH_FAILS=$((REPORT_HEALTH_FAILS + 1))
+    if (( REPORT_HEALTH_FAILS >= 3 )); then
+      echo "[COMPLETE STACK] Report API health failed; restarting. See logs/stack/report_api.log."
+      if [[ -n "${REPORT_PID:-}" ]]; then kill "$REPORT_PID" >/dev/null 2>&1 || true; fi
+      REPORT_EXTERNAL=0
+      REPORT_PID=""
+      start_report || true
+      REPORT_HEALTH_FAILS=0
+    fi
+  else
+    REPORT_HEALTH_FAILS=0
+  fi
   if [[ "$REPORT_EXTERNAL" != "1" ]]; then
     if [[ -z "${REPORT_PID:-}" ]] || ! alive "$REPORT_PID"; then
       echo "[COMPLETE STACK] Report API is down; restarting."

@@ -917,12 +917,16 @@ def acquire_symbol(
 
     def _ingest(text: str, url: str, source: str) -> None:
         nonlocal text_kpis, guidance, commentary, order_book, segments
-        parsed = extract_research_pack(
-            text,
-            source=source,
-            source_url=url,
-            document_type=_document_type(source, url),
-        )
+        try:
+            parsed = extract_research_pack(
+                text,
+                source=source,
+                source_url=url,
+                document_type=_document_type(source, url),
+            )
+        except Exception as exc:
+            steps.append({"id": "parse", "ok": False, "source": source, "error": str(exc)[:240]})
+            return
         text_kpis = merge_kpi_maps(text_kpis, parsed.get("kpis") or {})
         if "annual report" not in source.lower():
             guidance.extend(parsed.get("guidance") or [])
