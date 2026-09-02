@@ -398,17 +398,19 @@ while [[ "$STOP" != "1" ]]; do
       echo "[STACK] RecoWealth desk waits until the market API is listening." >&2
     fi
   fi
-  if [[ "$AUTONOMY_EXTERNAL" != "1" ]] && ! alive "$AUTONOMY_PID"; then
-    if python - <<'PY' >/dev/null 2>&1
+  if python - <<'PY' >/dev/null 2>&1
 from product.autonomy_status import read_autonomy_status
 raise SystemExit(0 if read_autonomy_status().get("running") else 1)
 PY
-    then
-      AUTONOMY_EXTERNAL=1; AUTONOMY_PID=""
-    else
-      echo "[STACK] Autonomy is down; restarting."
-      start_autonomy || true
+  then
+    if [[ -z "${AUTONOMY_PID:-}" ]] || ! alive "$AUTONOMY_PID"; then
+      AUTONOMY_EXTERNAL=1
+      AUTONOMY_PID=""
     fi
+  else
+    AUTONOMY_EXTERNAL=0
+    echo "[STACK] Autonomy is down; restarting."
+    start_autonomy || true
   fi
   if [[ "$SCAN_KICKED" != "1" ]]; then kick_scan || true; fi
   sleep 1 || true

@@ -46,6 +46,15 @@ def test_launcher_cleanup_owns_market_ops_process():
     assert "market operations, market scan" in src
 
 
+def test_launcher_restarts_dead_external_autonomy():
+    src = _inner()
+    loop = src.split('while [[ "$STOP" != "1" ]]', 1)[1]
+    assert "Autonomy is down; restarting." in loop
+    # Reused autonomy is re-probed every cycle, not trusted forever.
+    assert loop.index("read_autonomy_status") < loop.index("Autonomy is down; restarting.")
+    assert "AUTONOMY_EXTERNAL=0" in loop
+
+
 def test_launcher_never_starts_api_while_port_is_listening():
     src = _inner()
     assert "adopt_api" in src
