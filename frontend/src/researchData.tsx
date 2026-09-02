@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { fetchJson } from './http'
 
 const reportBase = `${window.location.protocol}//${window.location.hostname}:8766`
 
@@ -76,6 +77,7 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
   const [status, setStatus] = useState<EvidenceStatus | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
+  const [loading, setLoading] = useState(false)
   const [drafts, setDrafts] = useState<Record<string, Draft>>({})
 
   const load = async () => {
@@ -83,13 +85,18 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
       setStatus(null)
       return
     }
+    setLoading(true)
     try {
-      const response = await fetch(`${reportBase}/evidence/${encodeURIComponent(symbol)}`, { headers: { Accept: 'application/json' } })
-      if (!response.ok) throw new Error(await response.text())
-      setStatus(await response.json() as EvidenceStatus)
+      const payload = await fetchJson<EvidenceStatus>(`${reportBase}/evidence/${encodeURIComponent(symbol)}`, {
+        headers: { Accept: 'application/json' },
+        timeoutMs: 20_000,
+      })
+      setStatus(payload)
       setError('')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Evidence service unavailable')
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -158,7 +165,8 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
 
   return (
     <section className="research-data-view">
-      {error && <div className="api-warning">{error}</div>}
+      {error && <div className="api-warning">{error} <button type="button" className="secondary" onClick={() => void load()}>Retry</button></div>}
+      {loading && !status ? <p className="panel-copy">Loading evidence status…</p> : null}
       <div className="evidence-summary">
         <div><span>SYMBOL</span><strong>{symbol}</strong></div>
         <div><span>RESEARCH COVERAGE</span><strong>{status?.coverage_pct ?? 0}%</strong></div>

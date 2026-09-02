@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react'
 import {
+  fetchDecisionSimulator,
   fetchForwardSoak,
   fetchLearningDashboard,
   fetchResearchStatus,
   fetchScanAudit,
   fetchStrategyCatalog,
   fetchSystemHealthContract,
+  simulatePastDecisions,
+  type DecisionSimulatorReport,
   type ForwardSoakScoreboard,
   type HealthLane,
   type LearningDashboard,
@@ -14,6 +17,7 @@ import {
   type StrategyCatalog,
   type SystemHealthContract,
 } from './productApi'
+import { pageHealth, pageStatusLabel } from './pageRequest'
 import { Panel } from './components'
 import type { ViewProps } from './views'
 
@@ -100,16 +104,22 @@ export function LearningJournalView() {
   const [learning, setLearning] = useState<LearningDashboard | null>(null)
   const [soak, setSoak] = useState<ForwardSoakScoreboard | null>(null)
   const [error, setError] = useState('')
+  const [loading, setLoading] = useState(true)
   useEffect(() => {
-    fetchResearchStatus()
-      .then(setData)
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'Research status unavailable'))
-    fetchLearningDashboard()
-      .then(setLearning)
-      .catch(() => setLearning(null))
-    fetchForwardSoak()
-      .then(setSoak)
-      .catch(() => setSoak(null))
+    let alive = true
+    setLoading(true)
+    Promise.allSettled([
+      fetchResearchStatus(),
+      fetchLearningDashboard(),
+      fetchForwardSoak(),
+    ]).then(([status, dash, soakRow]) => {
+      if (!alive) return
+      if (status.status === 'fulfilled') setData(status.value)
+      else setError(status.reason instanceof Error ? status.reason.message : 'Research status unavailable')
+      if (dash.status === 'fulfilled') setLearning(dash.value)
+      if (soakRow.status === 'fulfilled') setSoak(soakRow.value)
+    }).finally(() => { if (alive) setLoading(false) })
+    return () => { alive = false }
   }, [])
   const journal = data?.decision_journal
   const recent = learning?.recent_learning
@@ -122,8 +132,11 @@ export function LearningJournalView() {
         <p>{data?.disclaimer || 'Measurable evidence only. Empty is a valid state.'}</p>
       </div>
       {error ? <div className="api-warning">{error}</div> : null}
-      <Panel title="FORWARD EVIDENCE SCOREBOARD" subtitle={board?.FORWARD_SOAK_STATUS || 'NOT_STARTED'}>
-        {!board ? (
+      {loading ? <p className="panel-copy">Loading learning journal…</p> : null}
+      <Panel title="FORWARD EVIDENCE SCOREBOARD" subtitle={board?.FORWARD_SOAK_STATUS || (loading ? 'Loading' : 'NOT_STARTED')}>
+        {loading && !board ? (
+          <div className="empty-row">Loading forward evidence…</div>
+        ) : !board ? (
           <div className="empty-row">Forward soak scoreboard unavailable. Missing stays missing.</div>
         ) : (
           <>
@@ -293,19 +306,29 @@ export function CoverageView() {
   const [query, setQuery] = useState('')
   const [lookup, setLookup] = useState<ScanAuditPayload | null>(null)
   const [error, setError] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [lookupBusy, setLookupBusy] = useState(false)
   useEffect(() => {
+    let alive = true
+    setLoading(true)
     fetchScanAudit('', 80)
-      .then(setData)
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'Coverage unavailable'))
+      .then((payload) => { if (alive) setData(payload) })
+      .catch((reason: unknown) => { if (alive) setError(reason instanceof Error ? reason.message : 'Coverage unavailable') })
+      .finally(() => { if (alive) setLoading(false) })
+    return () => { alive = false }
   }, [])
   const summary = data?.summary || {}
   const inspect = async () => {
     const clean = query.trim().toUpperCase()
     if (!clean) return
+    setLookupBusy(true)
     try {
       setLookup(await fetchScanAudit(clean, 1))
+      setError('')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Lookup failed')
+    } finally {
+      setLookupBusy(false)
     }
   }
   return (
@@ -315,6 +338,7 @@ export function CoverageView() {
         <p>Requested, checked, qualified, no-setup, excluded, and failed are separate. Missing names can be inspected.</p>
       </div>
       {error ? <div className="api-warning">{error}</div> : null}
+      {loading && !data ? <p className="panel-copy">Loading scan coverage…</p> : null}
       <div className="fact-grid">
         {['requested', 'checked', 'qualified', 'no_setup', 'policy_excluded', 'data_unavailable', 'analysis_errors'].map((key) => (
           <div key={key}>
@@ -332,7 +356,7 @@ export function CoverageView() {
             onKeyDown={(event) => { if (event.key === 'Enter') void inspect() }}
             placeholder="TCS"
           />
-          <button type="button" onClick={() => void inspect()}>Look up</button>
+          <button type="button" disabled={lookupBusy} onClick={() => void inspect()}>{lookupBusy ? 'Looking…' : 'Look up'}</button>
         </div>
         {lookup?.result ? (
           <p className="panel-copy">
@@ -382,9 +406,19 @@ function HealthLanes({ contract }: { contract: SystemHealthContract | null }) {
 
 export function SystemHealthView({ dashboard, runControl }: ViewProps) {
   const [contract, setContract] = useState<SystemHealthContract | null>(null)
-  useEffect(() => {
-    fetchSystemHealthContract().then(setContract).catch(() => setContract(null))
-  }, [dashboard.generated_at])
+  const [healthError, setHealthError] = useState('')
+  const [healthLoading, setHealthLoading] = useState(true)
+  const loadContract = () => {
+    setHealthLoading(true)
+    fetchSystemHealthContract()
+      .then((payload) => { setContract(payload); setHealthError('') })
+      .catch((reason: unknown) => {
+        setContract(null)
+        setHealthError(reason instanceof Error ? reason.message : 'Health contract failed')
+      })
+      .finally(() => setHealthLoading(false))
+  }
+  useEffect(() => { loadContract() }, [dashboard.generated_at])
   const a = dashboard.autonomy
   return (
     <section className="workspace-view">
@@ -414,7 +448,32 @@ export function SystemHealthView({ dashboard, runControl }: ViewProps) {
         )}
       </Panel>
       <Panel title="INDEPENDENT HEALTH LANES" subtitle="No collapsed green light. Paper execution is its own lane.">
-        <HealthLanes contract={contract} />
+        {(() => {
+          const page = pageHealth({
+            page: 'System Health',
+            loading: healthLoading,
+            data: contract,
+            error: healthError,
+          })
+          return (
+            <p className="panel-copy">
+              Page: {pageStatusLabel(page.status)}
+              {page.lastError ? ` · ${page.lastError}` : ''}
+              {page.loadingMs ? ` · ${Math.round(page.loadingMs / 1000)}s` : ''}
+            </p>
+          )
+        })()}
+        {healthError ? (
+          <div className="empty-row">
+            {healthError}
+            {' '}
+            <button type="button" className="secondary" onClick={() => loadContract()}>Retry</button>
+          </div>
+        ) : healthLoading && !contract ? (
+          <div className="empty-row">Loading health contract…</div>
+        ) : (
+          <HealthLanes contract={contract} />
+        )}
       </Panel>
     </section>
   )
@@ -422,9 +481,28 @@ export function SystemHealthView({ dashboard, runControl }: ViewProps) {
 
 export function ProductionBacktestView({ dashboard, setActive }: ViewProps) {
   const [catalog, setCatalog] = useState<StrategyCatalog | null>(null)
+  const [catalogError, setCatalogError] = useState('')
+  const [catalogLoading, setCatalogLoading] = useState(true)
+  const [sim, setSim] = useState<DecisionSimulatorReport | null>(null)
+  const [simError, setSimError] = useState('')
+  const [simBusy, setSimBusy] = useState(false)
   useEffect(() => {
-    fetchStrategyCatalog().then(setCatalog).catch(() => setCatalog(null))
+    setCatalogLoading(true)
+    fetchStrategyCatalog()
+      .then((payload) => { setCatalog(payload); setCatalogError('') })
+      .catch((reason: unknown) => setCatalogError(reason instanceof Error ? reason.message : 'Catalog unavailable'))
+      .finally(() => setCatalogLoading(false))
+    fetchDecisionSimulator()
+      .then((payload) => { setSim(payload); setSimError('') })
+      .catch((reason: unknown) => setSimError(reason instanceof Error ? reason.message : 'Simulator unavailable'))
   }, [])
+  const runSim = () => {
+    setSimBusy(true)
+    simulatePastDecisions()
+      .then((payload) => { setSim(payload); setSimError('') })
+      .catch((reason: unknown) => setSimError(reason instanceof Error ? reason.message : 'Simulator failed'))
+      .finally(() => setSimBusy(false))
+  }
   const feed = dashboard.paper.learning?.self_feed || {}
   return (
     <section className="workspace-view">
@@ -435,7 +513,29 @@ export function ProductionBacktestView({ dashboard, setActive }: ViewProps) {
           evaluated, the page says BACKTEST PARITY: UNVERIFIED. Paper diary rows below are outcomes, not a substitute backtest.
         </p>
       </div>
+      <Panel title="PAST DECISION TEST" subtitle="BACKTEST provenance · never writes REAL_FORWARD_MARKET">
+        {simError ? (
+          <p className="panel-copy">
+            {simError}
+            {' '}
+            <button type="button" className="secondary" onClick={runSim}>Retry</button>
+          </p>
+        ) : null}
+        {sim?.simple ? <p className="panel-copy">{sim.simple}</p> : <p className="panel-copy">No historical decision report yet. Click to test taken and skipped names from the journal.</p>}
+        <div className="fact-grid">
+          <div><span>Decisions</span><strong>{sim?.decisions_tested ?? '—'}</strong></div>
+          <div><span>Would take</span><strong>{sim?.would_take ?? '—'}</strong></div>
+          <div><span>Correct rejections</span><strong>{sim?.correct_rejections ?? '—'}</strong></div>
+          <div><span>Missed winners</span><strong>{sim?.missed_winners ?? '—'}</strong></div>
+        </div>
+        <div className="inline-actions" style={{ padding: '12px' }}>
+          <button type="button" disabled={simBusy} onClick={runSim}>{simBusy ? 'Testing…' : 'Simulate past decisions'}</button>
+        </div>
+        <p className="panel-copy">{sim?.note || 'Rejected names are not paper P&L.'}</p>
+      </Panel>
       <Panel title="PRODUCTION ENSEMBLE" subtitle={catalog?.ensemble.strategy_id || 'QT_RECO_ENSEMBLE'}>
+        {catalogLoading && !catalog ? <p className="panel-copy">Waiting for catalog…</p> : null}
+        {catalogError ? <p className="panel-copy">{catalogError}</p> : null}
         <p className="panel-copy">
           <ParityBadge value={catalog?.ensemble.backtest_parity} />
         </p>

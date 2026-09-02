@@ -43,11 +43,14 @@ type AcquireJobState = {
 }
 
 const ACQUIRE_POLL_MS = 400
+const ACQUIRE_MAX_MS = 120_000
 
 async function pollAcquireJob(
   operationId: string,
   onTick: (job: AcquireJobState) => void,
+  maxMs = ACQUIRE_MAX_MS,
 ): Promise<AcquireJobState> {
+  const started = Date.now()
   for (;;) {
     const op = await fetchOperation(operationId)
     const failed = op.status === 'FAILED' || op.status === 'BLOCKED' || op.status === 'CANCELLED'
@@ -63,6 +66,14 @@ async function pollAcquireJob(
     }
     onTick(job)
     if (op.status === 'SUCCEEDED' || failed) return job
+    if (Date.now() - started >= maxMs) {
+      return {
+        ...job,
+        failed: true,
+        status: 'FAILED',
+        error: 'Research download is still running in the background. Showing last good files.',
+      }
+    }
     await new Promise((resolve) => window.setTimeout(resolve, ACQUIRE_POLL_MS))
   }
 }
@@ -1127,13 +1138,25 @@ export function ProductStockIntelligenceView(props: ViewProps) {
   }
 
   if (!selected) return <section className="workspace-view"><div className="large-empty">Search or select an NSE symbol. QuantTerm can open the workspace even when the stock is not already in a saved shortlist.</div></section>
-  if (loading && !workspace) return <section className="workspace-view"><div className="large-empty">Loading verified price, technical, fundamental and source data for {selected}…</div></section>
+
+  const scanRow = dashboard.scan.records.find((row) => row.symbol === selected)
+  const heroSector = workspace?.sector || scanRow?.sector || 'Sector not classified'
+  const heroSummary = workspace?.summary
+    || (loading ? `Loading verified research for ${selected}… Technicals can still be used.` : 'Verified research is still loading.')
 
   return (
     <section className="stock-workspace-v2 reco-light">
-      {error && <div className="api-warning">{error}</div>}
+      {error && (
+        <div className="api-warning">
+          {error}
+          <button type="button" className="secondary" style={{ marginLeft: 8 }} onClick={() => void load()}>Retry</button>
+        </div>
+      )}
+      {loading && !workspace ? (
+        <p className="panel-copy">Loading fundamentals and due diligence. Chart and last known technicals stay visible.</p>
+      ) : null}
       <header className="stock-workspace-hero">
-        <div><span>{workspace?.sector || 'Sector not classified'}</span><h2>{workspace?.company || selected}</h2><p>{selected} · {workspace?.summary || 'Verified research is still loading.'}</p></div>
+        <div><span>{heroSector}</span><h2>{workspace?.company || selected}</h2><p>{selected} · {heroSummary}</p></div>
         <div className="stock-workspace-actions">
           <button
             type="button"
@@ -1155,6 +1178,28 @@ export function ProductStockIntelligenceView(props: ViewProps) {
       </header>
 
       <RiskLensCard plan={plan} />
+      {dd && !ddLoading ? (
+        <Panel title="WHY THIS COMPANY" subtitle={dd.as_of?.generated_at || dd.as_of?.latest_financial_period || 'Files on disk — never fabricated'}>
+          {dd.thesis?.text ? <p className="panel-copy">{dd.thesis.text}</p> : <p className="panel-copy">No rule-based thesis on file yet.</p>}
+          {(dd.strengths || []).length ? <p className="panel-copy">Strengths: {(dd.strengths || []).slice(0, 4).join(' · ')}</p> : null}
+          {(dd.red_flags || []).length ? <p className="panel-copy">Red flags: {(dd.red_flags || []).slice(0, 4).map((flag) => flag.title).join(' · ')}</p> : <p className="panel-copy">Red flags: not available</p>}
+          {ddError ? (
+            <p className="panel-copy">
+              {ddError}
+              {' '}
+              <button type="button" className="secondary" onClick={() => void loadDd()}>Retry</button>
+            </p>
+          ) : null}
+        </Panel>
+      ) : ddLoading ? (
+        <p className="panel-copy">Due diligence is still loading. Technicals stay visible.</p>
+      ) : ddError ? (
+        <p className="panel-copy">
+          {ddError}
+          {' '}
+          <button type="button" className="secondary" onClick={() => void loadDd()}>Retry</button>
+        </p>
+      ) : null}
 
       <AcquireBanner
         job={acquireJob}
@@ -1263,8 +1308,10 @@ export function ProductStockIntelligenceView(props: ViewProps) {
 
       {tab === 'Ratios' && (
         <Panel title="KEY RATIOS" subtitle="Computed centrally from cached fundamentals — missing inputs stay empty">
-          {ratios.length === 0
+          {loading && ratios.length === 0
             ? <EmptyState title="Ratios still loading" detail="Fundamentals cache is filling in. Stay on this page — QuantTerm will not invent missing ratios." />
+            : ratios.length === 0
+            ? <EmptyState title="Ratios not available" detail="Missing stays missing. QuantTerm will not invent ratio values." />
             : <div className="explain-metric-grid">
               {ratios.map((row) => (
                 <article className={`explain-metric ${row.value == null ? 'unavailable' : ''}`} key={row.key}>

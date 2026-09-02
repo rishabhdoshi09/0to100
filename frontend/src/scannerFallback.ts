@@ -48,6 +48,7 @@ export function projectScanRecord(row: Record<string, unknown>): ScannerWorkspac
     else momentum_state = 'watch_momentum'
   }
 
+  const decision = scannerDecision({ ...row, breakout_state, status, verdict, chase_risk: chase })
   return {
     ...(row as ScannerWorkspaceRow),
     change_5d_pct: (row.change_5d_pct ?? row.momentum_5d ?? null) as number | null,
@@ -56,6 +57,11 @@ export function projectScanRecord(row: Record<string, unknown>): ScannerWorkspac
     relative_strength: (row.relative_strength ?? row.score ?? null) as number | null,
     breakout_state: breakout_state as string | null,
     momentum_state: momentum_state as string | null,
+    decision,
+    why: scannerWhy({ ...row, decision, chase_risk: chase }),
+    entry: (row.entry ?? null) as number | null,
+    stop: (row.stop ?? null) as number | null,
+    target: (row.target ?? null) as number | null,
   }
 }
 
@@ -124,4 +130,53 @@ export function scannerEmptyHint(rows: number, filtered: number, hasScan: boolea
 export function dashCell(value: unknown): string {
   if (missing(value)) return '—'
   return String(value)
+}
+
+export function scannerDecision(row: Record<string, unknown>, openSymbols: string[] = []): string {
+  const symbol = String(row.symbol || '').toUpperCase()
+  if (symbol && openSymbols.includes(symbol) && String(row.exit_reason || row.exit_status || '')) {
+    return 'EXIT'
+  }
+  const existing = String(row.decision || row.action_badge || '').toUpperCase()
+  if (['ENTER', 'WAIT', 'WATCH', 'AVOID', 'EXIT'].includes(existing)) return existing
+  const status = String(row.status || '')
+  const verdict = String(row.verdict || '').toUpperCase()
+  const chase = Boolean(row.chase_risk)
+  if (chase || status === 'Wait for pullback') return 'AVOID'
+  if (status === 'Watch for breakout' || String(row.breakout_state || '') === 'near_breakout') return 'WATCH'
+  if (status === 'Ready to trade' && verdict === 'BUY') return 'ENTER'
+  if (verdict === 'BUY') return 'WAIT'
+  if (status) return 'WATCH'
+  return 'WATCH'
+}
+
+export function recoCanonicalDecision(card: {
+  action_badge?: string
+  reco_tier?: string
+  entry_state?: string
+  blockers?: string[]
+  chase_risk?: boolean
+}): string {
+  if (card.chase_risk || (card.blockers || []).length) return 'AVOID'
+  const badge = String(card.action_badge || '').toLowerCase()
+  if (badge === 'buy') return 'ENTER'
+  if (badge.includes('avoid')) return 'AVOID'
+  const entry = String(card.entry_state || '')
+  if (entry === 'extended' || entry === 'near_setup') return 'WAIT'
+  if (badge === 'watch' || badge.includes('research') || badge.includes('hold')) return 'WATCH'
+  const tier = String(card.reco_tier || '')
+  if (tier === 'high_conviction' || tier === 'good_setup') return 'ENTER'
+  if (tier === 'avoid') return 'AVOID'
+  return 'WATCH'
+}
+
+export function scannerWhy(row: Record<string, unknown>): string {
+  const why = String(row.why || row.reason || row.qualify_reason || '')
+  if (why) return why
+  const decision = scannerDecision(row)
+  if (decision === 'AVOID' && row.chase_risk) return 'Too extended'
+  if (decision === 'WATCH') return 'Volume confirmation missing or still forming'
+  if (decision === 'WAIT') return 'Good company, bad price right now'
+  if (decision === 'ENTER') return String(row.setup_label || 'Qualified setup')
+  return ''
 }

@@ -3,9 +3,12 @@ import {
   bestSetupsFromRadar,
   dashCell,
   projectScanRecord,
+  recoCanonicalDecision,
+  scannerDecision,
   scannerEmptyHint,
   scannerFallbackRows,
   scannerMetaFromDashboard,
+  scannerWhy,
 } from './scannerFallback'
 import type { RadarHome } from './productApi'
 import type { DashboardPayload } from './types'
@@ -76,5 +79,31 @@ describe('projectScanRecord', () => {
     expect(dashCell(undefined)).toBe('—')
     expect(dashCell('undefined')).toBe('—')
     expect(dashCell('confirmed_breakout')).toBe('confirmed_breakout')
+    expect(projected.decision).toBe('ENTER')
+  })
+})
+
+describe('scannerDecision', () => {
+  it('uses canonical ENTER / WAIT / WATCH / AVOID and EXIT only for open paper', () => {
+    expect(scannerDecision({ status: 'Ready to trade', verdict: 'BUY' })).toBe('ENTER')
+    expect(scannerDecision({ verdict: 'BUY' })).toBe('WAIT')
+    expect(scannerDecision({ status: 'Watch for breakout' })).toBe('WATCH')
+    expect(scannerDecision({ chase_risk: true })).toBe('AVOID')
+    expect(scannerDecision({ symbol: 'TCS', exit_reason: 'TARGET', decision: 'ENTER' }, ['TCS'])).toBe('EXIT')
+    expect(scannerDecision({ symbol: 'TCS', exit_reason: 'TARGET' }, [])).toBe('WATCH')
+  })
+
+  it('does not invent a why line when none exists and the decision is unknown-empty', () => {
+    expect(scannerWhy({ why: 'Too extended', chase_risk: true })).toBe('Too extended')
+    expect(scannerWhy({ chase_risk: true })).toBe('Too extended')
+  })
+})
+
+describe('recoCanonicalDecision', () => {
+  it('maps recommendation badges without inventing SELL', () => {
+    expect(recoCanonicalDecision({ action_badge: 'Buy' })).toBe('ENTER')
+    expect(recoCanonicalDecision({ action_badge: 'Watch', entry_state: 'extended' })).toBe('WAIT')
+    expect(recoCanonicalDecision({ action_badge: 'Hold / Research' })).toBe('WATCH')
+    expect(recoCanonicalDecision({ blockers: ['DD_GATE_FAILED'] })).toBe('AVOID')
   })
 })
