@@ -57,3 +57,27 @@ def test_user_control_fails_loudly_when_worker_recovery_still_unhealthy(monkeypa
 
     with pytest.raises(RuntimeError, match="launcher watchdog owns recovery"):
         parallel._ensure_ops_worker_strict(wait=False)
+
+
+def test_starting_live_owner_is_not_replaced_by_a_second_worker(monkeypatch):
+    import terminal_api as core
+    import terminal_product_api_parallel as parallel
+
+    spawned = []
+    runtime = {"running": False, "worker_pid": 28422, "process_running": True}
+
+    monkeypatch.setattr(core, "_ops_runtime_payload", lambda: dict(runtime))
+    monkeypatch.setattr(parallel, "pid_is_alive", lambda pid: int(pid or 0) == 28422)
+    monkeypatch.setattr(parallel, "_market_ops_command", lambda pid: "python -m operations.market_ops")
+    monkeypatch.setattr(parallel.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        parallel,
+        "_base_ensure_ops_worker",
+        lambda wait=True: spawned.append(wait) or dict(runtime),
+    )
+
+    observed = parallel._ensure_ops_worker_strict(wait=True)
+    assert observed["worker_pid"] == 28422
+    assert observed["running"] is True
+    assert observed.get("recovering") is True
+    assert spawned == []

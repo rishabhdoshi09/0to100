@@ -213,7 +213,12 @@ def _ensure_ops_worker(*, wait: bool = True) -> dict[str, Any]:
 
 @app.on_event("startup")
 def _startup() -> None:
-    _ensure_ops_worker()
+    try:
+        _ensure_ops_worker()
+    except RuntimeError:
+        # Market Operations is launcher-owned. A late first heartbeat must not
+        # take the desk API down. Home shows WAITING / PREPARING instead.
+        return
 
 
 @app.on_event("shutdown")

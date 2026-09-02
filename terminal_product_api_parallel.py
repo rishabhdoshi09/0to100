@@ -72,11 +72,42 @@ def _stop_stale_owner(runtime: dict) -> bool:
     return True
 
 
+def _live_owner_pid(runtime: dict) -> int:
+    """A live operations.market_ops process is the owner even before the first heartbeat."""
+    try:
+        pid = int(runtime.get("worker_pid") or 0)
+    except (TypeError, ValueError):
+        pid = 0
+    if pid <= 1 or not pid_is_alive(pid):
+        return 0
+    if "operations.market_ops" not in _market_ops_command(pid):
+        return 0
+    return pid
+
+
 def _ensure_ops_worker_strict(*, wait: bool = True) -> dict:
     """Return only when Market Operations is healthy or fail loudly."""
     runtime = _healthy_runtime()
     if runtime.get("running") and pid_is_alive(runtime.get("worker_pid")):
         return runtime
+
+    live = _live_owner_pid(runtime)
+    if live:
+        deadline = time.time() + (4.0 if wait else 0.8)
+        while time.time() < deadline:
+            time.sleep(0.1)
+            runtime = _healthy_runtime()
+            if runtime.get("running") and pid_is_alive(runtime.get("worker_pid")):
+                return runtime
+            if not pid_is_alive(live):
+                break
+        # Launcher already owns this process. Do not spawn a second worker
+        # and do not take the desk API down for a late first heartbeat.
+        out = dict(runtime)
+        out["running"] = True
+        out["worker_pid"] = live
+        out["recovering"] = True
+        return out
 
     _stop_stale_owner(runtime)
     recovered = _base_ensure_ops_worker(wait=True)
