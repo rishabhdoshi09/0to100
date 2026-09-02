@@ -144,6 +144,9 @@ def _fmt_when(value: Any) -> str:
         return ""
     if "T" in text and len(text) >= 16:
         return text[11:16]
+    if " " in text:
+        clock = text.split(" ", 1)[1]
+        return clock[:5] if len(clock) >= 5 else clock
     return text
 
 
