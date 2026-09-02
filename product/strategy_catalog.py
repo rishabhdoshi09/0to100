@@ -80,6 +80,7 @@ def ensemble_identity() -> dict[str, Any]:
         ),
         "result_kind": None,
         "label": "QuantTerm recommendation ensemble",
+        "role": "champion",
         "rules": rules,
     }
 
@@ -98,6 +99,7 @@ def method_identity(method_id: str) -> dict[str, Any]:
         "active": mid in METHOD_WEIGHTS,
         "label": METHOD_LABELS.get(mid, mid or "Unknown"),
         "family": "recommendation_method",
+        "role": "supporting_check",
         "backtest_parity": UNVERIFIED,
         "backtest_parity_detail": (
             f"{METHOD_LABELS.get(mid, mid)} is a live recommendation check. "
@@ -192,7 +194,18 @@ def decorate_card(card: Mapping[str, Any]) -> dict[str, Any]:
         "rules_hash": ident["rules_hash"],
         "label": ident["label"],
         "active": ident["active"],
+        "role": "champion",
     }
+    row["champion"] = ident["label"]
+    row["challengers"] = [
+        {
+            "strategy_id": item.get("strategy_id"),
+            "label": item.get("label"),
+            "role": "challenger",
+            "backtest_parity": item.get("backtest_parity") or UNVERIFIED,
+        }
+        for item in research_only_strategies()[:8]
+    ]
     row["backtest_parity"] = UNVERIFIED
     row["backtest_parity_detail"] = ident["backtest_parity_detail"]
     disagreement = fundamental_disagreement(row)
