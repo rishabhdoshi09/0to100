@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import time
 
 import terminal_api
 
@@ -232,6 +233,46 @@ def test_dashboard_slims_scan_keeps_universe_and_conviction_input(monkeypatch):
     assert payload["scan"]["records"][0]["symbol"] == "S119"
     assert payload["data"]["scan_records"] == 120
     assert seen["n"] == 120
+
+
+def test_dashboard_returns_without_waiting_for_regime_fetch(monkeypatch):
+    def hang():
+        time.sleep(8)
+        raise AssertionError("regime fetch must stay off the dashboard request")
+
+    monkeypatch.setattr("core.regime_engine.compute_regime", hang)
+    monkeypatch.setattr("product.market_view.peek_cached_market_view", lambda: None)
+    monkeypatch.setattr(
+        terminal_api,
+        "_scan_payload",
+        lambda: {"available": True, "scanned_at": "2026-09-02T05:00:00+00:00", "universe_size": 10, "summary": {}, "records": []},
+    )
+    monkeypatch.setattr(terminal_api, "_long_term_payload", lambda: {"available": False, "records": [], "summary": {}, "job": {}})
+    monkeypatch.setattr(terminal_api, "_paper_payload", lambda: {"available": False})
+    monkeypatch.setattr(terminal_api, "_autonomy_payload", lambda: {"available": False, "running": False})
+    monkeypatch.setattr(terminal_api, "_operations_payload", lambda: {"available": False, "running": False})
+    monkeypatch.setattr(terminal_api, "_news_payload", lambda: {"available": False, "articles": []})
+    monkeypatch.setattr(terminal_api, "_fno_payload", lambda: {"available": False, "underlyings": [], "exclusions": []})
+    monkeypatch.setattr(terminal_api, "_scan_progress_payload", lambda: {})
+    monkeypatch.setattr(
+        terminal_api,
+        "_data_payload",
+        lambda *_args: {
+            "ready": False,
+            "snapshot": {},
+            "bhavcopy": {},
+            "scan_saved": True,
+            "scan_records": 0,
+            "long_term_saved": False,
+            "long_term_records": 0,
+            "blockers": [],
+        },
+    )
+    started = time.monotonic()
+    payload = terminal_api.dashboard()
+    assert time.monotonic() - started < 1.5
+    assert payload["market"]["available"] is False
+    assert "assembl" in payload["market"]["summary"].lower()
 
 
 def test_market_payload_does_not_block_on_regime_fetch(monkeypatch):

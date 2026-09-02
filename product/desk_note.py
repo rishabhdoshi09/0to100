@@ -444,9 +444,9 @@ def official_session_wrap(*, scan_payload: Mapping[str, Any] | None = None) -> l
     """Item 1 of the wrap: official India tape. Never invents Sensex, sectors, or news."""
     del scan_payload  # session line is indices + sectors, not scan counts
     try:
-        from product.market_view import current_market_view
+        from product.market_view import peek_cached_market_view
 
-        view = current_market_view()
+        view = peek_cached_market_view()
     except Exception:
         view = None
 

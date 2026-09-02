@@ -54,7 +54,7 @@ def test_empty_news_does_not_invent_the_blog_wrap(monkeypatch):
     from types import SimpleNamespace
 
     monkeypatch.setattr(
-        "product.market_view.current_market_view",
+        "product.market_view.peek_cached_market_view",
         lambda: SimpleNamespace(nifty_change_1d=None, nifty_price=0, summary="", leaders=(), laggards=()),
     )
     monkeypatch.setattr("data.index_store.latest_index_print", lambda *_a, **_k: None)
@@ -89,7 +89,7 @@ def test_daily_wrap_uses_official_session_and_sourced_news(monkeypatch):
     from product.desk_note import daily_wrap
 
     monkeypatch.setattr(
-        "product.market_view.current_market_view",
+        "product.market_view.peek_cached_market_view",
         lambda: SimpleNamespace(
             nifty_change_1d=-0.5,
             nifty_price=0,
@@ -135,7 +135,7 @@ def test_daily_wrap_magazine_tape_from_official_prints(monkeypatch):
         "^CNXFMCG": {"price": 55000.0, "chg_pct": 0.4},
     }
     monkeypatch.setattr(
-        "product.market_view.current_market_view",
+        "product.market_view.peek_cached_market_view",
         lambda: SimpleNamespace(
             nifty_change_1d=-0.5,
             nifty_price=24087.0,
