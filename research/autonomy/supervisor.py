@@ -254,20 +254,43 @@ class Supervisor:
                         SCH.LONG_TERM_SCAN,
                         idempotency_key=SCH.long_term_key(session_date),
                     )
-                outcome = self.jobs.enqueue(SCH.OUTCOME_RESOLUTION,
-                                            idempotency_key=SCH.outcome_key(session_date), critical=True)
-                if outcome.status == JS.SUCCEEDED:
-                    learning = self.jobs.enqueue(SCH.LEARNING_CYCLE,
-                                                 idempotency_key=SCH.learning_key(session_date))
-                    if learning.status == JS.SUCCEEDED:
-                        self.jobs.enqueue(SCH.RESEARCH_CYCLE,
-                                          idempotency_key=SCH.research_key(session_date))
+                self._enqueue_post_market_grind(now_ist)
+        elif now_ist.time() >= SCH.MARKET_CLOSE:
+            # After the cash session, keep grinding: settle, learn, research.
+            # Do not start another market scan — desk_pipeline already owns that lane.
+            self._enqueue_post_market_grind(now_ist)
         try:
             self.jobs.cancel_superseded_pending(SCH.DATA_REFRESH, keep=1)
             self.jobs.cancel_superseded_pending(SCH.MARKET_SCAN, keep=1)
             self.jobs.cancel_superseded_pending(SCH.NEWS_REFRESH, keep=1)
         except Exception:
             pass
+
+    def _enqueue_post_market_grind(self, now_ist=None) -> None:
+        """Settle / learn / research after the cash session without a second scan."""
+        now_ist = now_ist or self.deps.now_ist()
+        holidays = self.deps.holidays()
+        if not SCH._is_session_day(now_ist, holidays):
+            return
+        if now_ist.time() < SCH.MARKET_CLOSE:
+            return
+        session_date = now_ist.date().isoformat()
+        outcome = self.jobs.enqueue(
+            SCH.OUTCOME_RESOLUTION,
+            idempotency_key=SCH.outcome_key(session_date),
+            critical=True,
+        )
+        if getattr(outcome, "status", None) != JS.SUCCEEDED:
+            return
+        learning = self.jobs.enqueue(
+            SCH.LEARNING_CYCLE,
+            idempotency_key=SCH.learning_key(session_date),
+        )
+        if getattr(learning, "status", None) == JS.SUCCEEDED:
+            self.jobs.enqueue(
+                SCH.RESEARCH_CYCLE,
+                idempotency_key=SCH.research_key(session_date),
+            )
 
     def _enqueue_paper_after_scan(self, scan_job) -> None:
         """After a successful shared scan, queue the existing paper cycle once."""

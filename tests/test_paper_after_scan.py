@@ -63,6 +63,37 @@ def test_paper_does_not_enqueue_before_entry_window():
     assert jobs.enqueued == []
 
 
+def test_off_session_after_close_enqueues_outcome_not_scan():
+    jobs = _Jobs()
+    jobs.cancel_superseded_pending = lambda *_a, **_k: None
+    supervisor = Supervisor.__new__(Supervisor)
+    supervisor.jobs = jobs
+    supervisor.deps = SimpleNamespace(
+        now_ist=lambda: datetime(2026, 9, 1, 23, 50, tzinfo=IST),
+        holidays=lambda: set(),
+        active_snapshot_id=lambda: "snap-1",
+    )
+    supervisor._enqueue_daily_foundation = lambda *_a, **_k: None
+    supervisor.enqueue_due()
+    types = [job_type for job_type, _kwargs in jobs.enqueued]
+    assert SCH.OUTCOME_RESOLUTION in types
+    assert SCH.MARKET_SCAN not in types
+    assert SCH.PAPER_CYCLE not in types
+
+
+def test_post_market_grind_skips_before_close():
+    jobs = _Jobs()
+    supervisor = Supervisor.__new__(Supervisor)
+    supervisor.jobs = jobs
+    supervisor.deps = SimpleNamespace(
+        now_ist=lambda: datetime(2026, 9, 1, 14, 10, tzinfo=IST),
+        holidays=lambda: set(),
+        active_snapshot_id=lambda: "snap-1",
+    )
+    supervisor._enqueue_post_market_grind()
+    assert jobs.enqueued == []
+
+
 def test_successful_data_refresh_enqueues_current_scan_slot():
     jobs = _Jobs()
     supervisor = Supervisor.__new__(Supervisor)

@@ -184,7 +184,8 @@ def build_home_os(
     closed = list(paper_d.get("closed_trades") or [])
     active_ops = [o for o in list(ops.get("active") or []) if isinstance(o, Mapping)]
     active_kinds = {str(o.get("kind") or "") for o in active_ops}
-    preparing = bool(active_kinds & {"DATA_PREPARE", "MARKET_SCAN", "LONG_TERM_REFRESH", "NEWS_REFRESH"})
+    # News / long-term overlays are not "official prices are missing".
+    preparing = bool(active_kinds & {"DATA_PREPARE", "MARKET_SCAN"})
     data_failed = any(str(o.get("kind")) == "DATA_PREPARE" and str(o.get("status")) == "FAILED" for o in list(ops.get("recent") or []))
     scan_failed = any(str(o.get("kind")) == "MARKET_SCAN" and str(o.get("status")) == "FAILED" for o in list(ops.get("recent") or []))
     phase = _session_phase(now)
@@ -269,7 +270,12 @@ def build_home_os(
         now_line = "Watching open paper positions" if opens else "Paper entries paused"
         next_line = "Resume when you want new paper trades"
     elif market_closed and (eod_done or valid_no_trade or taken or closed):
-        pending_settle = str((verify.get("lanes") or {}).get("FORWARD SETTLEMENT") or "") == "PENDING" and not closed
+        settle_job_active = bool(active_kinds & {"OUTCOME_RESOLUTION", "outcome_resolution"})
+        pending_settle = (
+            str((verify.get("lanes") or {}).get("FORWARD SETTLEMENT") or "") == "PENDING"
+            and not closed
+            and (phase == "eod" or settle_job_active)
+        )
         if pending_settle and not valid_no_trade:
             state = NORMAL
             headline = "Today's market is closed. Settlement is still finishing."
