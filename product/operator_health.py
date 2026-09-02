@@ -136,4 +136,7 @@ def enrich_autonomy_payload(payload: dict[str, Any]) -> dict[str, Any]:
     out["learning_current"] = str(learning.get("status") or "") == "SUCCEEDED"
     out["research_current"] = str(research.get("status") or "") == "SUCCEEDED"
     out["data_refresh_background"] = refresh_in_progress
+    if refresh_in_progress:
+        out["next_check_at"] = refresh.get("next_retry_at") or refresh.get("scheduled_for")
+        out["data_refresh_next_poll_at"] = refresh.get("next_retry_at") or refresh.get("scheduled_for")
     return out

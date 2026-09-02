@@ -102,9 +102,12 @@ class Supervisor:
     def _load_owner_state(self) -> dict:
         try:
             data = json.loads(self._owner_path.read_text(encoding="utf-8"))
-            return {"paper_auto_enabled": bool(data.get("paper_auto_enabled", True)),
-                    "new_entries_paused": bool(data.get("new_entries_paused", False)),
-                    "halted": bool(data.get("halted", False))}
+            return {
+                "paper_auto_enabled": bool(data.get("paper_auto_enabled", True)),
+                "new_entries_paused": bool(data.get("new_entries_paused", False)),
+                "halted": bool(data.get("halted", False)),
+                "observe_only_date": str(data.get("observe_only_date") or "")[:10],
+            }
         except Exception:
             enabled = True
             try:
@@ -113,8 +116,12 @@ class Supervisor:
                 enabled = bool(cfg.get("enabled", True))
             except Exception:
                 pass
-            return {"paper_auto_enabled": enabled, "new_entries_paused": not enabled,
-                    "halted": False}
+            return {
+                "paper_auto_enabled": enabled,
+                "new_entries_paused": not enabled,
+                "halted": False,
+                "observe_only_date": "",
+            }
 
     def _save_owner_state(self) -> None:
         tmp = self._owner_path.with_suffix(".tmp")
@@ -255,6 +262,49 @@ class Supervisor:
                     if learning.status == JS.SUCCEEDED:
                         self.jobs.enqueue(SCH.RESEARCH_CYCLE,
                                           idempotency_key=SCH.research_key(session_date))
+        try:
+            self.jobs.cancel_superseded_pending(SCH.DATA_REFRESH, keep=1)
+            self.jobs.cancel_superseded_pending(SCH.MARKET_SCAN, keep=1)
+            self.jobs.cancel_superseded_pending(SCH.NEWS_REFRESH, keep=1)
+        except Exception:
+            pass
+
+    def _enqueue_paper_after_scan(self, scan_job) -> None:
+        """After a successful shared scan, queue the existing paper cycle once."""
+        if str(getattr(scan_job, "job_type", "") or "") != SCH.MARKET_SCAN:
+            return
+        now_ist = self.deps.now_ist()
+        holidays = self.deps.holidays()
+        if not SCH.entries_allowed_by_clock(now_ist, holidays):
+            return
+        slot = SCH.scan_slot(now_ist, holidays) or "intraday"
+        if not str(slot).startswith("intraday"):
+            return
+        session_date = now_ist.date().isoformat()
+        snap = str(self.deps.active_snapshot_id() or "none")
+        self.jobs.enqueue(
+            SCH.PAPER_CYCLE,
+            idempotency_key=SCH.paper_cycle_key(snap, f"{session_date}:{slot}"),
+            input_snapshot_id=None if snap == "none" else snap,
+            critical=True,
+        )
+
+    def _enqueue_scan_after_refresh(self, refresh_job) -> None:
+        """After official data succeeds, catch up the current scan slot if it was waiting."""
+        if str(getattr(refresh_job, "job_type", "") or "") != SCH.DATA_REFRESH:
+            return
+        now_ist = self.deps.now_ist()
+        holidays = self.deps.holidays()
+        slot = SCH.scan_slot(now_ist, holidays)
+        if not slot:
+            return
+        session_date = now_ist.date().isoformat()
+        snap = str(self.deps.active_snapshot_id() or "none")
+        self.jobs.enqueue(
+            SCH.MARKET_SCAN,
+            idempotency_key=SCH.scan_key(snap, slot, session_date),
+            input_snapshot_id=None if snap == "none" else snap,
+        )
 
     def _process_controls(self):
         for control in self.controls.pending():
@@ -278,9 +328,17 @@ class Supervisor:
                 elif ctype == CTRL.RESUME_NEW_PAPER_ENTRIES:
                     self.owner_state["new_entries_paused"] = False
                     self.failures.discard(H.OWNER_PAUSED)
+                elif ctype == CTRL.OBSERVE_ONLY_TODAY:
+                    # Operator intent only. Paper decisions and learning continue.
+                    # Live money stays locked regardless.
+                    today = now.date().isoformat()
+                    current = str(self.owner_state.get("observe_only_date") or "")
+                    self.owner_state["observe_only_date"] = "" if current == today else today
+                elif ctype == CTRL.CLEAR_OBSERVE_ONLY:
+                    self.owner_state["observe_only_date"] = ""
                 elif ctype == CTRL.REFRESH_DATA_NOW:
                     self.jobs.enqueue(SCH.DATA_REFRESH,
-                                      idempotency_key=f"manual:data:{control.control_id}", critical=True)
+                                      idempotency_key=f"manual:data:{session}", critical=True)
                 elif ctype == CTRL.RUN_SCAN_NOW:
                     self.jobs.enqueue(SCH.MARKET_SCAN,
                                       idempotency_key=f"manual:scan:{snap}:{control.control_id}")
@@ -444,6 +502,8 @@ class Supervisor:
             if result.status == JS.SUCCEEDED:
                 for dependency in result.unblocks:
                     self.jobs.unblock_dependency(dependency)
+                self._enqueue_scan_after_refresh(job)
+                self._enqueue_paper_after_scan(job)
 
         target = self._gated_state(result.state_hint)
         if target and target != self.state.state:

@@ -176,9 +176,13 @@ class JobStore:
                     "SELECT * FROM jobs WHERE status=? AND lease_expires_at IS NOT NULL "
                     "AND lease_expires_at < ? ORDER BY scheduled_for LIMIT 1", (RUNNING, now)).fetchone()
                 if row is None:
+                    # Poll-wait jobs (background data refresh / market op) stay due,
+                    # but must not starve a real pending scan, paper cycle, or learning job.
                     row = self._db.execute(
                         "SELECT * FROM jobs WHERE status=? AND scheduled_for<=? "
-                        "ORDER BY critical DESC, scheduled_for, created_at LIMIT 1",
+                        "ORDER BY CASE WHEN error_code IN "
+                        "('DATA_REFRESH_IN_PROGRESS','MARKET_OP_IN_PROGRESS','LONG_TERM_OP_IN_PROGRESS') "
+                        "THEN 0 ELSE 1 END DESC, critical DESC, scheduled_for, created_at LIMIT 1",
                         (PENDING, now)).fetchone()
                 if row is None:
                     self._db.execute("COMMIT")

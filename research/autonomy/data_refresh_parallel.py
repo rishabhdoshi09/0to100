@@ -22,6 +22,7 @@ PROGRESS_PATH = ROOT / "logs" / "kite_history" / "progress.json"
 IN_PROGRESS = "DATA_REFRESH_IN_PROGRESS"
 _REUSE_SUCCESS_S = 15 * 60.0
 _STALL_WARN_S = 10 * 60.0
+_STUCK_DEAD_THREAD_S = 15.0
 
 _install_lock = threading.Lock()
 _installed = False
@@ -125,6 +126,7 @@ def make_parallel_data_refresh_handler(
         warning = ""
         if elapsed >= _STALL_WARN_S:
             warning = " · slow/stall warning active"
+        next_poll = 2.0
         return JOBS.JobResult(
             JS.RETRYABLE_FAILED,
             f"data refresh running in background · {stage} · {elapsed:.0f}s{warning}",
@@ -138,7 +140,29 @@ def make_parallel_data_refresh_handler(
                 "required_date": required,
                 "worker_required_date": worker_required,
                 "stall_warning": elapsed >= _STALL_WARN_S,
+                "next_poll_at": round(float(clock()) + next_poll, 1),
                 "progress": progress,
+            },
+        )
+
+    def _dead_worker_result(required: str):
+        from research.autonomy import health as H
+        from research.autonomy import job_store as JS
+        from research.autonomy import jobs as JOBS
+        from research.autonomy import supervisor_state as ST
+
+        return JOBS.JobResult(
+            JS.RETRYABLE_FAILED,
+            "data refresh worker stopped without a result",
+            error_code="DATA_REFRESH_WORKER_STUCK",
+            error_message="background data thread died; supervisor can lease other work",
+            failures={H.SNAPSHOT_STALE},
+            state_hint=ST.DATA_BLOCKED,
+            new_entries_allowed=False,
+            metadata={
+                "execution_plane": "background_data",
+                "required_date": required,
+                "stall_warning": True,
             },
         )
 
@@ -149,6 +173,19 @@ def make_parallel_data_refresh_handler(
             running = bool(state.get("running"))
             result = state.get("result")
             finished_at = float(state.get("finished_at") or 0.0)
+            thread = state.get("thread")
+            started = float(state.get("started_at") or 0.0)
+            dead = bool(
+                running
+                and thread is not None
+                and not thread.is_alive()
+                and result is None
+                and started
+                and now - started >= _STUCK_DEAD_THREAD_S
+            )
+            if dead:
+                state["running"] = False
+                return _dead_worker_result(required)
 
             # A successful refresh may be reused only when it satisfies the date
             # required by THIS durable job. A yesterday-success is never returned
@@ -202,7 +239,7 @@ def install_parallel_data_refresh() -> None:
                     # may increase when leased, but it must never exhaust the failure budget.
                     self.jobs.reschedule_retry(
                         job.job_id,
-                        when=self.clock() + 1.0,
+                        when=self.clock() + 2.0,
                         error_code=error_code,
                         error_message=error_message,
                     )
