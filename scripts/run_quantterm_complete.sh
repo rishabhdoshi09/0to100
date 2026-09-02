@@ -192,8 +192,18 @@ echo "[COMPLETE STACK] Leave this terminal open. Ctrl-C stops everything. Do not
 
 HOME_OPENED=0
 wait_for_desk() {
+  # Inner stack waits for API health, then starts Vite. Do not spend the
+  # whole Home budget on :5173 while :8765 is still coming up.
   local i=0
-  while (( i < 80 )); do
+  while (( i < 90 )); do
+    if url_ok "http://127.0.0.1:8765/api/health"; then
+      break
+    fi
+    sleep 0.5 || true
+    i=$((i + 1))
+  done
+  i=0
+  while (( i < 120 )); do
     if url_ok "http://127.0.0.1:5173/" && url_ok "http://127.0.0.1:8765/api/health"; then
       return 0
     fi
