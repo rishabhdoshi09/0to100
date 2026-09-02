@@ -71,6 +71,25 @@ def test_market_controls_are_dispatched_outside_paper_autonomy():
     }
 
 
+def test_ops_runtime_treats_live_lock_owner_as_running(tmp_path, monkeypatch):
+    import json
+    import os
+
+    ops = tmp_path / "market_ops"
+    ops.mkdir()
+    (ops / "worker.lock").write_text(str(os.getpid()), encoding="utf-8")
+    (ops / "runtime.json").write_text(
+        json.dumps({"process_running": False, "worker_pid": 1, "heartbeat_epoch": 0}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(terminal_api, "OPS_ROOT", ops)
+    monkeypatch.setattr(terminal_api, "OPS_RUNTIME", ops / "runtime.json")
+    payload = terminal_api._ops_runtime_payload()
+    assert payload["running"] is True
+    assert payload["worker_pid"] == os.getpid()
+    assert payload.get("recovering") is True
+
+
 def test_health_is_a_cheap_liveness_probe():
     import inspect
 

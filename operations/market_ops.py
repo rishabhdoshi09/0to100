@@ -857,6 +857,12 @@ class MarketOperationsWorker:
         if not self.lock.acquire():
             _emit("INFO", "another market-operations worker already owns the lock")
             return 1
+        # Claim runtime before bootstrap. Loading official history can stall the
+        # GIL long enough for the launcher to treat a missing heartbeat as death.
+        _atomic_json(RUNTIME_PATH, self._runtime_payload(running=True))
+        heartbeat = threading.Thread(target=self._heartbeat_loop, name="market-ops-heartbeat", daemon=True)
+        heartbeat.start()
+        self._threads = [heartbeat]
         recovered = self.store.recover_orphans()
         bootstrap = self._bootstrap()
         _emit(
@@ -864,10 +870,6 @@ class MarketOperationsWorker:
             f"pid={os.getpid()} · lanes={','.join(sorted(set(LANES.values())))} · "
             f"recovered={recovered} · bootstrap={','.join(bootstrap) or 'nothing_due'}",
         )
-        _atomic_json(RUNTIME_PATH, self._runtime_payload(running=True))
-        heartbeat = threading.Thread(target=self._heartbeat_loop, name="market-ops-heartbeat", daemon=True)
-        heartbeat.start()
-        self._threads = [heartbeat]
         for lane in sorted(set(LANES.values())):
             thread = threading.Thread(
                 target=self._lane_loop,

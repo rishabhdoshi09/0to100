@@ -4,7 +4,7 @@ import os
 import time
 from pathlib import Path
 
-from operations.store import OperationStore, PENDING, RUNNING, SUCCEEDED
+from operations.store import OperationStore, live_lock_owner_pid, PENDING, RUNNING, SUCCEEDED
 
 
 def test_user_scan_cannot_skip_stale_or_thin_history(monkeypatch, tmp_path: Path):
@@ -332,4 +332,22 @@ def test_lane_loop_survives_sqlite_lock(tmp_path: Path, monkeypatch):
     worker._lane_loop("data")
     assert hits["n"] >= 2
     assert worker.stop_event.is_set()
+
+
+def test_live_lock_owner_pid_requires_an_alive_process(tmp_path: Path):
+    lock = tmp_path / "worker.lock"
+    lock.write_text("99999999", encoding="utf-8")
+    assert live_lock_owner_pid(lock) == 0
+    lock.write_text(str(os.getpid()), encoding="utf-8")
+    assert live_lock_owner_pid(lock) == os.getpid()
+
+
+def test_worker_claims_runtime_before_bootstrap():
+    import inspect
+
+    from operations.market_ops import MarketOperationsWorker
+
+    src = inspect.getsource(MarketOperationsWorker.run)
+    assert src.index("_atomic_json(RUNTIME_PATH") < src.index("self._bootstrap()")
+    assert src.index("heartbeat.start()") < src.index("self._bootstrap()")
 

@@ -73,16 +73,31 @@ def _stop_stale_owner(runtime: dict) -> bool:
 
 
 def _live_owner_pid(runtime: dict) -> int:
-    """A live operations.market_ops process is the owner even before the first heartbeat."""
+    """A live lock holder is the owner even when runtime.json still has a dead PID."""
+    candidates: list[int] = []
     try:
-        pid = int(runtime.get("worker_pid") or 0)
+        from operations.store import live_lock_owner_pid
+        lock_pid = int(live_lock_owner_pid(core.OPS_ROOT / "worker.lock") or 0)
+    except Exception:
+        lock_pid = 0
+    if lock_pid:
+        candidates.append(lock_pid)
+    try:
+        runtime_pid = int(runtime.get("worker_pid") or 0)
     except (TypeError, ValueError):
-        pid = 0
-    if pid <= 1 or not pid_is_alive(pid):
-        return 0
-    if "operations.market_ops" not in _market_ops_command(pid):
-        return 0
-    return pid
+        runtime_pid = 0
+    if runtime_pid:
+        candidates.append(runtime_pid)
+    seen: set[int] = set()
+    for pid in candidates:
+        if pid <= 1 or pid in seen or not pid_is_alive(pid):
+            continue
+        seen.add(pid)
+        command = _market_ops_command(pid)
+        if command and "operations.market_ops" not in command:
+            continue
+        return pid
+    return 0
 
 
 def _ensure_ops_worker_strict(*, wait: bool = True) -> dict:

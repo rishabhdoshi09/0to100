@@ -36,6 +36,22 @@ def pid_is_alive(pid: int | None) -> bool:
         return False
 
 
+def read_pid_file(path: str | Path) -> int:
+    """Read a single PID from a lock/runtime pid file. 0 when missing or invalid."""
+    try:
+        text = Path(path).read_text(encoding="utf-8").strip().split()[0]
+        value = int(text)
+    except Exception:
+        return 0
+    return value if value > 1 else 0
+
+
+def live_lock_owner_pid(lock_path: str | Path) -> int:
+    """PID written into the flock file when that process is still alive."""
+    pid = read_pid_file(lock_path)
+    return pid if pid_is_alive(pid) else 0
+
+
 class _BorrowedConnection:
     """Keep one SQLite connection per worker thread instead of opening a new FD each poll."""
 

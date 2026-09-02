@@ -76,6 +76,16 @@ market_ops_healthy() {
   python - <<'PY' >/dev/null 2>&1
 import json, os, time
 from pathlib import Path
+lock = Path("logs/market_ops/worker.lock")
+try:
+    lock_pid = int(lock.read_text(encoding="utf-8").strip().split()[0])
+    if lock_pid > 1:
+        os.kill(lock_pid, 0)
+        raise SystemExit(0)
+except SystemExit:
+    raise
+except Exception:
+    pass
 p = Path("logs/market_ops/runtime.json")
 try:
     r = json.loads(p.read_text(encoding="utf-8"))
@@ -94,6 +104,16 @@ stop_stale_market_ops() {
   python - <<'PY' >/dev/null 2>&1 || true
 import json, os, signal, subprocess, time
 from pathlib import Path
+lock = Path("logs/market_ops/worker.lock")
+try:
+    lock_pid = int(lock.read_text(encoding="utf-8").strip().split()[0])
+    if lock_pid > 1:
+        os.kill(lock_pid, 0)
+        raise SystemExit(0)
+except SystemExit:
+    raise
+except Exception:
+    pass
 p = Path("logs/market_ops/runtime.json")
 try:
     r = json.loads(p.read_text(encoding="utf-8"))

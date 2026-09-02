@@ -246,10 +246,25 @@ def _fresh_epoch(value: Any, max_age_s: float = 10.0) -> bool:
 def _ops_runtime_payload() -> dict[str, Any]:
     runtime = _json_file(OPS_RUNTIME, {})
     running = bool(runtime.get("process_running")) and _fresh_epoch(runtime.get("heartbeat_epoch"))
+    lock_pid = 0
+    if not running:
+        try:
+            from operations.store import live_lock_owner_pid
+            lock_pid = live_lock_owner_pid(OPS_ROOT / "worker.lock")
+        except Exception:
+            lock_pid = 0
+        if lock_pid:
+            running = True
+            runtime = {
+                **runtime,
+                "worker_pid": lock_pid,
+                "process_running": True,
+                "recovering": True,
+            }
     return {
         **runtime,
         "running": running,
-        "process_running": bool(runtime.get("process_running")),
+        "process_running": bool(runtime.get("process_running")) or bool(lock_pid),
     }
 
 
@@ -1025,7 +1040,14 @@ def control(control_name: str) -> dict:
             requested_by="terminal",
             priority=_USER_OPERATION_PRIORITY,
         )
-        _ensure_ops_worker(wait=False)
+        try:
+            worker = _ensure_ops_worker(wait=False)
+        except RuntimeError as exc:
+            from operations.store import live_lock_owner_pid
+            lock_pid = live_lock_owner_pid(OPS_ROOT / "worker.lock")
+            if not lock_pid:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            worker = {"running": True, "worker_pid": lock_pid, "recovering": True}
         return {
             "accepted": True,
             "control": name,
@@ -1033,6 +1055,7 @@ def control(control_name: str) -> dict:
             "operation_status": operation.get("status"),
             "created": created,
             "priority": operation.get("priority"),
+            "worker_recovering": bool((worker or {}).get("recovering")),
         }
     from research.autonomy.controls import request_control
     queued = request_control(name, reason="owner requested control from dedicated terminal frontend")

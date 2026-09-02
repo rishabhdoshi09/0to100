@@ -59,6 +59,23 @@ def test_user_control_fails_loudly_when_worker_recovery_still_unhealthy(monkeypa
         parallel._ensure_ops_worker_strict(wait=False)
 
 
+def test_live_owner_prefers_lock_file_over_dead_runtime_pid(tmp_path, monkeypatch):
+    import os
+
+    import terminal_api as core
+    import terminal_product_api_parallel as parallel
+
+    ops = tmp_path / "market_ops"
+    ops.mkdir()
+    (ops / "worker.lock").write_text(str(os.getpid()), encoding="utf-8")
+    monkeypatch.setattr(core, "OPS_ROOT", ops)
+    monkeypatch.setattr(parallel, "pid_is_alive", lambda pid: int(pid or 0) == os.getpid())
+    monkeypatch.setattr(parallel, "_market_ops_command", lambda _pid: "python -m operations.market_ops")
+
+    observed = parallel._live_owner_pid({"running": False, "worker_pid": 99999})
+    assert observed == os.getpid()
+
+
 def test_starting_live_owner_is_not_replaced_by_a_second_worker(monkeypatch):
     import terminal_api as core
     import terminal_product_api_parallel as parallel

@@ -23,6 +23,8 @@ def test_launcher_supervises_and_restarts_stale_market_ops():
     assert "Reused market-operations worker became stale; taking ownership." in src
     assert "heartbeat_epoch" in src
     assert "time.time() - hb > 8" in src
+    assert "worker.lock" in src
+    assert "lock_pid" in src
     assert "SCAN_KICKED=0" in src
 
 
