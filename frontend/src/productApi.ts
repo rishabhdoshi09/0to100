@@ -143,6 +143,9 @@ export type ScannerWorkspaceRow = ScanRecord
     risk_label?: string | null
     decision?: string | null
     why?: string | null
+    entry?: number | null
+    stop?: number | null
+    target?: number | null
   }
 
 export type ScannerWorkspace = {

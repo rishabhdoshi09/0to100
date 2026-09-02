@@ -29,10 +29,12 @@ def test_simulator_uses_journal_and_stays_backtest(tmp_path, monkeypatch):
     assert first["provenance"] == BACKTEST
     assert first["not_promotion_evidence"] is True
     assert first["live_locked"] is True
+    assert first["not_promotion_evidence"] is True
     assert first["decisions_tested"] >= 3
     assert first["would_take"] >= 1
     assert first["rejected"] >= 1
-    assert "REAL_FORWARD" not in first["note"]
+    assert first["provenance"] != "REAL_FORWARD_MARKET"
+    assert "does not change REAL_FORWARD_MARKET" in first["note"]
     second = run_decision_simulator(force=False)
     assert second["cache_hit"] is True
     assert second["version"] == first["version"]

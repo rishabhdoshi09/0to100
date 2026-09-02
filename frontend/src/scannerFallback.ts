@@ -59,9 +59,9 @@ export function projectScanRecord(row: Record<string, unknown>): ScannerWorkspac
     momentum_state: momentum_state as string | null,
     decision,
     why: scannerWhy({ ...row, decision, chase_risk: chase }),
-    entry: (row.entry ?? null) as number | null,
-    stop: (row.stop ?? null) as number | null,
-    target: (row.target ?? null) as number | null,
+    entry: (typeof row.entry === 'number' ? row.entry : undefined),
+    stop: (typeof row.stop === 'number' ? row.stop : undefined),
+    target: (typeof row.target === 'number' ? row.target : undefined),
   }
 }
 
