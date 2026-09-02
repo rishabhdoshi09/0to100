@@ -745,7 +745,7 @@ export type HomeAction = {
   id?: string
   control?: string
   label: string
-  kind?: 'control' | 'instruction' | string
+  kind?: 'control' | 'instruction' | 'refresh' | string
   instruction?: string
 }
 
@@ -792,6 +792,14 @@ export type HomeOperatingSystem = {
     last_decision?: string
     why?: string
     why_technical?: string[]
+    positions?: Array<{
+      symbol?: string
+      entry?: number
+      status?: string
+      stop?: number
+      target?: number
+      risk_used?: number
+    }>
   }
   learning?: {
     simple?: string
@@ -800,8 +808,58 @@ export type HomeOperatingSystem = {
     insufficient_evidence?: boolean
     forward_soak_status?: string
     live_locked?: boolean
+    promotion_blockers?: unknown
   }
-  system?: Record<string, { status?: string; detail?: string }>
+  system?: Record<string, {
+    id?: string
+    label?: string
+    status?: string
+    status_code?: string
+    summary?: string
+    detail?: string
+    what?: string
+    meaning?: string
+    waiting_for?: string
+    current?: string
+    next?: string
+    after_that?: string
+    last_success_at?: string
+    last_failure_at?: string
+    last_failure_reason?: string
+    progress?: { kind?: string; label?: string; current?: number | null; total?: number | null; status?: string } | null
+    current_job?: string
+    current_job_id?: string
+    current_job_started_at?: string | number
+    next_check_at?: string | number
+    freshness?: string
+    source?: string
+    dependencies?: string[]
+    needs_user?: boolean
+    recovering?: boolean
+    degraded?: boolean
+    primary_action?: HomeAction | null
+    secondary_actions?: HomeAction[]
+    full_details_page?: string
+    full_details_label?: string
+    technical?: Record<string, unknown>
+    live_locked?: boolean
+    positions?: Array<{ symbol?: string; entry?: number; status?: string; stop?: number; target?: number; risk_used?: number }>
+    on?: boolean
+    paused?: boolean
+    last_decision?: string
+    why?: string
+    real_forward_observations?: number
+    settled_trades?: number
+    execution_adjusted_coverage_pct?: number | null
+    insufficient_evidence?: boolean
+    forward_soak_status?: string
+  }>
+  check_system?: {
+    read_only?: boolean
+    source?: string
+    lanes?: Array<{ id?: string; label?: string; status?: string; detail?: string }>
+    action?: HomeAction | null
+  }
   recent_activity?: Array<{ at?: string; text?: string }>
   yesterday?: {
     scan?: boolean

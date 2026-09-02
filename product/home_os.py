@@ -10,7 +10,7 @@ from typing import Any, Mapping, Sequence
 
 from product.operator_language import explain_opportunity, simple_reason
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 NORMAL = "NORMAL"
 LOGIN_REQUIRED = "LOGIN_REQUIRED"
@@ -24,10 +24,6 @@ PROBLEM = "PROBLEM"
 
 def _as_dict(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
-
-
-def _lane(status: str, detail: str = "") -> dict[str, str]:
-    return {"status": status, "detail": detail}
 
 
 def _action(control: str = "", *, label: str, kind: str = "control", instruction: str = "") -> dict[str, str]:
@@ -329,38 +325,50 @@ def build_home_os(
         if n_real and soak_d.get("insufficient_evidence", True)
         else ("QuantTerm is collecting real trading experience." if n_real == 0 else f"{n_real} real observations.")
     )
-
-    system = {
-        "data": _lane("Ready" if data_ready else ("Working" if preparing else "Waiting"), "Official NSE prices"),
-        "zerodha": _lane("Ready" if kite_ok else "Needs you", "WAITING FOR ZERODHA LOGIN" if not kite_ok else "Session ok"),
-        "automation": _lane("Working" if auto.get("running") else "Waiting", "Autonomy supervisor"),
-        "paper_bot": _lane(
-            "Ready" if paper_enabled and (taken or valid_no_trade or opens or why_d.get("available")) else ("Waiting" if paper_enabled else "Needs you"),
-            "Paused" if not paper_enabled else (why_d.get("headline") or "Paper bot"),
-        ),
-        "learning": _lane(
-            "Working" if n_real or soak_d.get("FORWARD_SOAK_STATUS") in {"COLLECTING", "HEALTHY"} else "Waiting",
-            learning_simple,
-        ),
-    }
-    if state == FAILED_RECOVERABLE:
-        if data_failed:
-            system["data"] = _lane("Problem", "Retry official prices")
-        if scan_failed:
-            system["automation"] = _lane("Problem", "Retry the shared scan")
-    if state == PROBLEM:
-        system["paper_bot"] = _lane("Problem", "Live money must stay locked")
-
-    activity = _activity(
-        scan_d, why_d, latest, ops, verify, taken, recovered=list(recovered or []),
-    )
-    yesterday = _yesterday(verify, soak_d, why_d, scan_ok, reco_ok)
-
     last_decision = why_d.get("headline") or latest.get("summary") or "No paper decision yet."
     why_plain = simple_reason(
         (cycle_reasons[0] if cycle_reasons else why_d.get("decision")),
         fallback=last_decision,
     )
+
+    from product.backend_control_plane import build_check_system, build_system_lanes
+
+    system = build_system_lanes(
+        auto=auto,
+        data_d=data_d,
+        paper_d=paper_d,
+        why_d=why_d,
+        soak_d=soak_d,
+        ops=ops,
+        freshness=freshness,
+        verify=verify,
+        kite_ok=kite_ok,
+        data_ready=data_ready,
+        history_current=history_current,
+        preparing=preparing,
+        data_failed=data_failed,
+        scan_failed=scan_failed,
+        scan_ok=scan_ok,
+        paper_enabled=paper_enabled,
+        live_locked=live_locked,
+        taken=taken,
+        opens=opens,
+        closed=closed,
+        valid_no_trade=valid_no_trade,
+        cycle_reasons=cycle_reasons,
+        last_decision=last_decision,
+        why_plain=why_plain,
+        now_line=now_line,
+        next_line=next_line,
+        learning_simple=learning_simple,
+        n_real=n_real,
+    )
+    check_system = build_check_system(system, live_locked=live_locked)
+
+    activity = _activity(
+        scan_d, why_d, latest, ops, verify, taken, recovered=list(recovered or []),
+    )
+    yesterday = _yesterday(verify, soak_d, why_d, scan_ok, reco_ok)
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -397,6 +405,7 @@ def build_home_os(
             "last_decision": last_decision,
             "why": why_plain,
             "why_technical": cycle_reasons or why_d.get("reasons") or [],
+            "positions": list(system.get("paper_bot", {}).get("positions") or []),
         },
         "learning": {
             "simple": learning_simple,
@@ -408,6 +417,7 @@ def build_home_os(
             "live_locked": True,
         },
         "system": system,
+        "check_system": check_system,
         "recent_activity": activity,
         "yesterday": yesterday,
         "recovered": list(recovered or []),

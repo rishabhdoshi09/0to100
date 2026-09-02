@@ -27,6 +27,8 @@ import { RiskLensCard } from './productViews'
 import type { ControlName } from './types'
 import { LiveScanBanner, type ExperienceViewProps } from './experience'
 import { keepRicher, markInvestigate, recall, remember } from './sessionMemory'
+import { SystemLaneInspector, SystemLaneStrip } from './homeSystemInspector'
+import type { CheckSystemSnapshot, SystemLane } from './backendControlPlane'
 import { DailyWrapList, magazineWrapLines } from './dailyWrap'
 import {
   bestSetupsFromRadar,
@@ -433,13 +435,18 @@ function HomeOsCard({
   depth,
   busy,
   onAction,
+  onOpenPage,
 }: {
   os: HomeOperatingSystem
   depth: string
   busy: boolean
   onAction: (action: HomeAction) => void
+  onOpenPage?: (page: string) => void
 }) {
-  const system = os.system || {}
+  const system = (os.system || {}) as Record<string, SystemLane>
+  const [openLane, setOpenLane] = useState<string | null>(null)
+  const checkAction = os.check_system?.action || { id: 'CHECK_SYSTEM', control: 'CHECK_SYSTEM', label: 'Check system', kind: 'refresh' }
+  const selectLane = (id: string) => setOpenLane(id || null)
   return (
     <section className={`home-os-card state-${(os.state || '').toLowerCase()}`}>
       <div className="home-os-hero">
@@ -514,17 +521,39 @@ function HomeOsCard({
           ))}
         </div>
       ) : null}
-      <div className="home-os-system">
-        {['data', 'zerodha', 'automation', 'paper_bot', 'learning'].map((key) => {
-          const lane = system[key] || {}
-          return (
-            <div key={key}>
-              <span>{key.replace('_', ' ')}</span>
-              <strong>{lane.status || 'Waiting'}</strong>
-            </div>
-          )
-        })}
+      <div className="home-os-system-head">
+        <span>BACKEND</span>
+        <button
+          type="button"
+          className="home-os-check"
+          disabled={busy}
+          onClick={() => {
+            setOpenLane('check_system')
+            onAction(checkAction)
+          }}
+        >
+          Check system
+        </button>
       </div>
+      <SystemLaneStrip
+        system={system}
+        selected={openLane && openLane !== 'check_system' ? openLane : null}
+        onSelect={selectLane}
+      />
+      {openLane ? (
+        <SystemLaneInspector
+          laneId={openLane}
+          lane={openLane === 'check_system' ? undefined : system[openLane]}
+          depth={depth}
+          busy={busy}
+          liveLocked={os.live_locked !== false}
+          checkSystem={os.check_system as CheckSystemSnapshot | undefined}
+          system={system}
+          onAction={onAction}
+          onOpenPage={onOpenPage}
+          onClose={() => setOpenLane(null)}
+        />
+      ) : null}
       {(os.recent_activity || []).length ? (
         <ul className="home-os-activity">
           {(os.recent_activity || []).slice(0, 8).map((row, index) => (
@@ -735,6 +764,10 @@ export function RadarHomeView(props: ExperienceViewProps & {
   const runHomeAction = (action: HomeAction) => {
     if (action.kind === 'instruction') return
     const control = String(action.control || '')
+    if (control === 'CHECK_SYSTEM' || action.kind === 'refresh') {
+      void fetchRadarHome().then((payload) => setRadar(payload)).catch(() => undefined)
+      return
+    }
     if (control === 'RUN_SCAN_NOW') {
       void marketScan.start()
       return
@@ -754,6 +787,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
           depth={depth}
           busy={marketScan.isBusy || bootstrapBusy}
           onAction={runHomeAction}
+          onOpenPage={setActive}
         />
       ) : null}
       <header className="radar-hero">
