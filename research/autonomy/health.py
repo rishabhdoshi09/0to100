@@ -9,6 +9,7 @@ the supervisor.
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -97,6 +98,20 @@ def capabilities(active_failures) -> dict:
             "ui": ui, "active_failures": sorted(f), "notes": notes}
 
 
+def _pid_alive(pid) -> bool:
+    try:
+        value = int(pid or 0)
+    except (TypeError, ValueError):
+        return False
+    if value <= 1:
+        return False
+    try:
+        os.kill(value, 0)
+        return True
+    except OSError:
+        return False
+
+
 def _fresh(payload: dict, *, max_age_s: float = 90.0) -> bool:
     """Return whether a heartbeat is recent in its declared clock domain.
 
@@ -178,6 +193,10 @@ def read_status(*, state_path, jobs_db=None, dialogue_path=None) -> dict:
         out["active_job"] = dict(runtime.get("active_job", {}) or {})
     else:
         out["supervisor_running"] = bool(durable.get("process_running", True)) and _fresh(durable)
+
+    # A leftover heartbeat after process death must not look like a live supervisor.
+    if out["supervisor_running"] and not _pid_alive(out.get("scheduler_owner_pid")):
+        out["supervisor_running"] = False
 
     if jobs_db is not None:
         try:

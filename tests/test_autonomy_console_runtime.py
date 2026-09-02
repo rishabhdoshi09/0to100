@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import json
+import os
 import threading
 import time
 
@@ -116,17 +117,18 @@ def test_fresh_runtime_heartbeat_overrides_stale_durable_snapshot(tmp_path):
         "process_running": True,
         "heartbeat_ist": stale,
     }), encoding="utf-8")
+    live_pid = os.getpid()
     (root / "runtime.json").write_text(json.dumps({
         "process_running": True,
         "heartbeat_ist": fresh,
-        "scheduler_owner_pid": 1234,
+        "scheduler_owner_pid": live_pid,
         "active_job": {"job_type": "data_refresh"},
     }), encoding="utf-8")
 
     status = H.read_status(state_path=root / "status.json")
     assert status["supervisor_running"] is True
     assert status["heartbeat_ist"] == fresh
-    assert status["scheduler_owner_pid"] == 1234
+    assert status["scheduler_owner_pid"] == live_pid
     assert status["active_job"]["job_type"] == "data_refresh"
 
 
