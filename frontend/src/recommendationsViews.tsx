@@ -17,6 +17,7 @@ import type { ExperienceViewProps } from './experience'
 import { LiveScanBanner } from './experience'
 import { DailyWrapList, magazineWrapLines } from './dailyWrap'
 import { keepRicherMemory, markInvestigate, recallMemory } from './sessionMemory'
+import { recoCanonicalDecision } from './scannerFallback'
 
 const CAT_ICONS: Record<string, string> = {
   wealth_builders: 'W',
@@ -106,7 +107,7 @@ function CardTile({
     <article className="reco-pick">
       <button type="button" className="reco-pick-hit" onClick={() => onSelect(card)}>
         <div className="reco-pick-row1">
-          <span className={`reco-buy ${badgeClass(card.action_badge)}`}>{card.action_badge}</span>
+          <span className={`reco-buy ${badgeClass(card.action_badge)}`}>{recoCanonicalDecision(card)}</span>
           <span className="reco-opp">{card.reco_tier_label || card.opportunity_label || 'WATCH'}</span>
           <span className={`reco-risk-chip ${risk}`}>
             <span className="reco-risk-meter" aria-hidden="true" />
@@ -123,6 +124,13 @@ function CardTile({
               {card.price_tag ? <span>{card.price_tag}</span> : null}
             </div>
             {card.primary_thesis ? <p className="reco-pick-setup">{card.primary_thesis}</p> : (card.setup_label ? <p className="reco-pick-setup">{card.setup_label}</p> : null)}
+            {card.sector && card.sector !== '—' ? (
+              <p className="reco-pick-note">
+                {card.sector}
+                {card.sector_leadership_score != null ? ` · ${card.sector_leadership_label || 'Sector'} ${Math.round(card.sector_leadership_score)}` : ''}
+                {card.sector_breadth ? ` · Breadth ${card.sector_breadth}` : ''}
+              </p>
+            ) : null}
             {(card.families || []).some((f) => f.status === 'pass') ? (
               <div className="reco-pick-tags" aria-label="Evidence families">
                 {(card.families || []).filter((f) => f.status === 'pass').map((f) => (
@@ -192,7 +200,14 @@ function CardTile({
           <StatusChip label="Health" value={card.strategy_health} />
           <StatusChip label="Market" value={card.market_support} />
           <StatusChip label="Freshness" value={card.freshness || card.price_tag || 'Saved scan'} />
+          <StatusChip label="Decision" value={recoCanonicalDecision(card)} />
         </div>
+        {(card.methods_supporting || []).length ? (
+          <p className="reco-pick-note">Supporting: {(card.methods_supporting || []).join(' · ')}</p>
+        ) : null}
+        {(card.methods_disagreeing || []).length ? (
+          <p className="reco-pick-note">Disagreeing: {(card.methods_disagreeing || []).join(' · ')}</p>
+        ) : null}
         <CaseMemoryBox memory={card.case} />
         {(card.blockers || []).length ? (
           <p className="reco-pick-note">Blockers: {(card.blockers || []).join(' · ')}</p>
@@ -278,7 +293,7 @@ function DecisionSheet({
       <header className="reco-sheet-hero reco-pick-together">
         <div className="reco-pick-identity">
           <div className="reco-pick-row1">
-            <span className={`reco-buy ${badgeClass(card.action_badge)}`}>{card.action_badge}</span>
+            <span className={`reco-buy ${badgeClass(card.action_badge)}`}>{recoCanonicalDecision(card)}</span>
             <span className="reco-opp">{card.reco_tier_label || card.opportunity_label || 'WATCH'}</span>
             <span className={`reco-risk-chip ${risk}`}>{card.risk_tier} Risk</span>
           </div>
@@ -347,7 +362,18 @@ function DecisionSheet({
         <StatusChip label="Coverage" value={card.evidence_coverage != null ? `${Math.round(card.evidence_coverage)}%` : (card.research_decision_coverage != null ? `${Math.round(card.research_decision_coverage)}%` : '—')} />
         <StatusChip label="Freshness" value={card.freshness || card.price_tag || 'Saved scan'} />
         <StatusChip label="Market" value={card.market_support} />
+        <StatusChip label="Decision" value={recoCanonicalDecision(card)} />
+        <StatusChip
+          label="Sector"
+          value={card.sector_leadership_score != null ? `${card.sector_leadership_label || 'Sector'} ${Math.round(card.sector_leadership_score)}` : (card.sector || '—')}
+        />
       </div>
+      {(card.methods_supporting || []).length ? (
+        <p className="reco-pick-note">Methods supporting: {(card.methods_supporting || []).join(' · ')}</p>
+      ) : null}
+      {(card.methods_disagreeing || []).length ? (
+        <p className="reco-pick-note">Methods disagreeing: {(card.methods_disagreeing || []).join(' · ')}</p>
+      ) : null}
       {(card.blockers || []).length ? (
         <p className="reco-pick-note">Blockers: {(card.blockers || []).join(' · ')}</p>
       ) : (card.conflicts || []).length ? (

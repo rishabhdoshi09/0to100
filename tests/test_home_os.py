@@ -137,6 +137,31 @@ def test_journey_a_automatic_verify_persists_without_cli(tmp_path, monkeypatch):
     assert load_latest_verification()["lanes"]["LIVE MONEY"] == "LOCKED"
 
 
+def test_observe_only_does_not_pause_paper():
+    os = build_home_os(
+        dashboard={
+            "autonomy": {
+                "state": "RUNNING",
+                "running": True,
+                "owner_state": {"observe_only_date": "2026-09-01", "new_entries_paused": False},
+            },
+            "data": {"ready": True, "bhavcopy": {"ready": True}},
+        },
+        paper={"enabled": True, "open_positions": [], "closed_trades": []},
+        why={"available": True, "taken": [], "reasons": ["ENTRY_TOO_EXTENDED"], "rejections": [{"symbol": "TCS"}]},
+        journal={"latest": {"taken": [], "rejections": [{"symbol": "TCS"}], "cycle_reasons": ["ENTRY_TOO_EXTENDED"]}},
+        soak={"real_forward_observations": 0, "insufficient_evidence": True},
+        scan={"scanned_at": "2026-09-01T05:00:00+00:00", "records": [{"symbol": "TCS"}]},
+        reco={"schema_version": 4, "categories": []},
+        now=_open(),
+    )
+    assert os["observe_only"] is True
+    assert os["paper_bot"]["on"] is True
+    assert os["paper_bot"]["paused"] is False
+    assert os["live_locked"] is True
+    assert "observe only" in os["subtext"].lower() or "paper still" in os["subtext"].lower()
+
+
 def test_paused_paper_is_a_home_action():
     os = build_home_os(
         dashboard={"autonomy": {"state": "RUNNING", "running": True}, "data": {"ready": True, "bhavcopy": {"ready": True}}},

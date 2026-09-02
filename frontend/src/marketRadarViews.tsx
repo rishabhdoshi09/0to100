@@ -11,6 +11,7 @@ import {
   fetchTradePlan,
   fetchWatchlist,
   verifyForwardSoakNow,
+  simulatePastDecisions,
   type HomeAction,
   type HomeOperatingSystem,
   removeWatchlistItem,
@@ -388,8 +389,8 @@ function DenseTable({
   const cols = mode === 'Long-Term'
     ? ['symbol', 'classification', 'combined_score', 'sector', 'coverage_pct', 'risk_label']
     : depth === 'professional'
-      ? ['symbol', 'price', 'change_5d_pct', 'sector', 'setup_label', 'breakout_state', 'momentum_state', 'relative_strength', 'risk_label']
-      : ['symbol', 'price', 'change_5d_pct', 'sector', 'setup_label', 'risk_label']
+      ? ['symbol', 'price', 'setup_label', 'sector', 'decision', 'entry', 'stop', 'target', 'why']
+      : ['symbol', 'price', 'setup_label', 'sector', 'decision', 'entry', 'stop', 'target', 'why']
 
   return (
     <div className="radar-table-wrap">
@@ -416,8 +417,9 @@ function DenseTable({
                 } else if (col === 'momentum_state') {
                   const key = dashCell(raw)
                   cell = key === '—' ? '—' : (momentumLabel[key] || words(key))
-                } else if (col === 'price') cell = money(raw as number)
+                }                 else if (col === 'price' || col === 'entry' || col === 'stop' || col === 'target') cell = money(raw as number)
                 else if (col === 'change_5d_pct') cell = pct(raw as number)
+                else if (col === 'decision') cell = dashCell(raw || (row as RadarRow).decision)
                 else if (col === 'combined_score' || col === 'relative_strength') cell = raw != null && raw !== '' ? String(raw) : '—'
                 else cell = dashCell(raw)
                 return <td key={col}>{cell}</td>
@@ -436,12 +438,14 @@ function HomeOsCard({
   busy,
   onAction,
   onOpenPage,
+  setSelected,
 }: {
   os: HomeOperatingSystem
   depth: string
   busy: boolean
   onAction: (action: HomeAction) => void
   onOpenPage?: (page: string) => void
+  setSelected?: (symbol: string) => void
 }) {
   const system = (os.system || {}) as Record<string, SystemLane>
   const [openLane, setOpenLane] = useState<string | null>(null)
@@ -480,6 +484,26 @@ function HomeOsCard({
         {os.primary_action?.kind === 'instruction' && os.primary_action.instruction ? (
           <p className="panel-copy">{os.primary_action.instruction}</p>
         ) : null}
+        <div className="home-os-quick" aria-label="Open the next desk page">
+          {[
+            ['Scanner', 'Market Scanner'],
+            ['Recommendations', 'Recommendations'],
+            ['Research', 'Stock Intelligence'],
+            ['Paper Bot', 'Portfolio'],
+            ['Learning', 'Learning'],
+            ['Past decisions', 'Backtest'],
+            ['Health', 'Automation'],
+          ].map(([label, page]) => (
+            <button
+              key={page}
+              type="button"
+              className="home-os-quick-link"
+              onClick={() => onOpenPage?.(page)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
       <div className="home-os-grid">
         <div>
@@ -491,6 +515,7 @@ function HomeOsCard({
           <span>PAPER BOT</span>
           <strong>{os.paper_bot?.paused ? 'PAUSED' : 'ON'}</strong>
           <small>
+            {os.observe_only ? 'Observe only today · paper still runs · ' : ''}
             {os.paper_bot?.positions_open ?? 0} open · {os.paper_bot?.todays_entries ?? 0} today
             {os.paper_bot?.why ? ` · ${os.paper_bot.why}` : ''}
           </small>
@@ -512,13 +537,40 @@ function HomeOsCard({
       </div>
       {(os.opportunities || []).length ? (
         <div className="home-os-opps">
-          {(os.opportunities || []).slice(0, 4).map((row, index) => (
+          {(os.opportunities || []).slice(0, 4).map((row, index) => {
+            const symbol = String(row.found || '').split(/\s+/)[0]
+            return (
             <div key={`${row.found}-${index}`}>
               <span>{row.label || 'Setup'}</span>
               <strong>{row.found}</strong>
               <small>{depth === 'professional' ? (row.technical || row.meaning) : row.meaning}</small>
+              {symbol && onOpenPage ? (
+                <button
+                  type="button"
+                  className="home-os-inspect-link"
+                  onClick={() => {
+                    setSelected?.(symbol)
+                    onOpenPage('Stock Intelligence')
+                  }}
+                >
+                  Research
+                </button>
+              ) : null}
             </div>
-          ))}
+            )
+          })}
+        </div>
+      ) : null}
+      {os.past_decisions?.available ? (
+        <div className="home-os-past">
+          <span>PAST DECISION TEST</span>
+          <strong>{os.past_decisions.simple || `${os.past_decisions.decisions_tested || 0} historical decisions tested`}</strong>
+          <small>
+            {os.past_decisions.filters_helped?.length ? `Helped: ${os.past_decisions.filters_helped.join(', ')}` : 'BACKTEST only — not promotion evidence'}
+            {depth === 'professional' && os.past_decisions.would_take != null
+              ? ` · take ${os.past_decisions.would_take} · reject ${os.past_decisions.rejected ?? 0} · correct ${os.past_decisions.correct_rejections ?? 0} · missed ${os.past_decisions.missed_winners ?? 0}`
+              : ''}
+          </small>
         </div>
       ) : null}
       <div className="home-os-system-head">
@@ -613,20 +665,29 @@ export function RadarHomeView(props: ExperienceViewProps & {
   const [readiness, setReadiness] = useState<ProductReadiness | null>(() => recall<ProductReadiness>('product-readiness') ?? null)
   const [bootstrapBusy, setBootstrapBusy] = useState(false)
   const [deskNote, setDeskNote] = useState('')
+  const [radarNote, setRadarNote] = useState('')
   const autoBootRef = useRef(false)
 
   useEffect(() => {
     let alive = true
     const load = () => {
+      if (!recall('radar-home')) setRadarNote('Refreshing home workspace…')
       fetchRadarHome()
         .then((payload) => {
           const kept = keepRicher('radar-home', payload, (row) => {
             const counts = (row.counts?.breakouts || 0) + (row.counts?.momentum || 0) + (row.counts?.long_term_picks || 0)
             return counts === 0 && !(row.best_setups || []).length && !row.best_breakout
           })
-          if (alive) setRadar(kept)
+          if (alive) {
+            setRadar(kept)
+            setRadarNote('')
+          }
         })
-        .catch(() => { if (alive && !recall('radar-home')) setRadar(null) })
+        .catch((reason: unknown) => {
+          if (!alive) return
+          if (!recall('radar-home')) setRadar(null)
+          setRadarNote(reason instanceof Error ? reason.message : 'Home workspace timed out. Dashboard below still works.')
+        })
       fetchProductReadiness()
         .then((payload) => {
           remember('product-readiness', payload)
@@ -776,6 +837,19 @@ export function RadarHomeView(props: ExperienceViewProps & {
       void verifyForwardSoakNow().then(() => { void fetchRadarHome().then(setRadar) }).catch(() => undefined)
       return
     }
+    if (control === 'SIMULATE_PAST_DECISIONS') {
+      setDeskNote('Simulating past decisions…')
+      void simulatePastDecisions()
+        .then((payload) => {
+          remember('decision-simulator', payload)
+          setDeskNote(payload.simple || 'Past decision test finished.')
+          void fetchRadarHome().then(setRadar)
+        })
+        .catch((reason: unknown) => {
+          setDeskNote(reason instanceof Error ? reason.message : 'Past decision test failed')
+        })
+      return
+    }
     if (control) void runControl(control as ControlName)
   }
 
@@ -788,8 +862,12 @@ export function RadarHomeView(props: ExperienceViewProps & {
           busy={marketScan.isBusy || bootstrapBusy}
           onAction={runHomeAction}
           onOpenPage={setActive}
+          setSelected={setSelected}
         />
-      ) : null}
+      ) : (
+        <p className="panel-copy">{radarNote || 'Loading Home operating system… Dashboard below still works.'}</p>
+      )}
+      {radarNote && homeOs ? <p className="panel-copy">{radarNote}</p> : null}
       <header className="radar-hero">
         <div>
           <span>MARKET DESK</span>

@@ -146,6 +146,18 @@ def build_home_os(
     if auto.get("kite_connected") is False:
         kite_ok = False
     paper_enabled = paper_d.get("enabled", True) is not False
+    owner_state = _as_dict(auto.get("owner_state"))
+    observe_date = str(owner_state.get("observe_only_date") or "")[:10]
+    today_ist = ""
+    try:
+        from zoneinfo import ZoneInfo
+        clock = now or datetime.now(timezone.utc)
+        if clock.tzinfo is None:
+            clock = clock.replace(tzinfo=timezone.utc)
+        today_ist = clock.astimezone(ZoneInfo("Asia/Kolkata")).date().isoformat()
+    except Exception:
+        today_ist = datetime.now(timezone.utc).date().isoformat()
+    observe_only = bool(observe_date and observe_date == today_ist)
     bhav = dict(data_d.get("bhavcopy") or {})
     freshness = _history_freshness(data_d, loaded.get("history_freshness"), now)
     history_current = bool(freshness.get("current", True))
@@ -297,7 +309,19 @@ def build_home_os(
         secondary = [
             _action("RUN_SCAN_NOW", label="Scan now"),
             _action("PAUSE_NEW_PAPER_ENTRIES", label="Pause paper entries"),
+            _action("OBSERVE_ONLY_TODAY", label="Observe only today"),
         ]
+
+    if observe_only and state in {NORMAL, NO_TRADE, MARKET_CLOSED_COMPLETE}:
+        if "nothing was good enough" not in headline.lower() and "did not find" not in headline.lower():
+            subtext = (
+                "Observe only today. Paper decisions and learning continue. "
+                "Live money stays locked. You are not participating."
+            )
+        else:
+            subtext = (
+                f"{subtext} Observe only today — paper still records the day."
+            )
 
     if state == NORMAL and not primary_action:
         primary_action = None
@@ -377,7 +401,9 @@ def build_home_os(
         "subtext": subtext,
         "need_me": state in {LOGIN_REQUIRED, FAILED_RECOVERABLE, PAUSED, PROBLEM},
         "primary_action": primary_action,
-        "secondary_actions": secondary[:3],
+        "secondary_actions": (secondary + [_action("SIMULATE_PAST_DECISIONS", label="Simulate past decisions")])[:4],
+        "simulate_action": _action("SIMULATE_PAST_DECISIONS", label="Simulate past decisions"),
+        "past_decisions": _past_decisions(),
         "now": now_line,
         "next": next_line,
         "progress": progress,
@@ -395,6 +421,8 @@ def build_home_os(
             "next_automatic_action": next_line,
         },
         "opportunities": opportunities[:8],
+        "observe_only": observe_only,
+        "observe_only_date": observe_date if observe_only else "",
         "paper_bot": {
             "on": bool(paper_enabled),
             "paused": not paper_enabled,
@@ -532,4 +560,31 @@ def _yesterday(
         "learning": lanes.get("LEARNING INGESTION") in {"PASS", "PENDING"},
         "forward_evidence": lanes.get("FORWARD SETTLEMENT") == "PASS" or bool(soak.get("real_forward_observations")),
         "live_locked": True,
+    }
+
+
+def _past_decisions() -> dict[str, Any]:
+    try:
+        from product.decision_simulator import load_latest
+        report = load_latest()
+    except Exception:
+        report = {}
+    if not report:
+        return {"available": False, "provenance": "BACKTEST", "live_locked": True}
+    return {
+        "available": True,
+        "provenance": report.get("provenance") or "BACKTEST",
+        "decisions_tested": report.get("decisions_tested") or 0,
+        "would_take": report.get("would_take"),
+        "rejected": report.get("rejected"),
+        "correct_rejections": report.get("correct_rejections"),
+        "missed_winners": report.get("missed_winners"),
+        "avoided_losers": report.get("avoided_losers"),
+        "good_waits": report.get("good_waits"),
+        "filters_helped": report.get("filters_helped") or [],
+        "filters_hurt": report.get("filters_hurt") or [],
+        "simple": report.get("simple") or "",
+        "note": report.get("note") or "",
+        "live_locked": True,
+        "not_promotion_evidence": True,
     }
