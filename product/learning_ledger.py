@@ -121,6 +121,18 @@ def record(
     return row
 
 
+def get(learning_id: str, *, path: Path | None = None) -> dict[str, Any] | None:
+    con = _connect(path)
+    row = con.execute("SELECT * FROM learnings WHERE learning_id=?", (learning_id,)).fetchone()
+    con.close()
+    return dict(row) if row else None
+
+
+def promote(learning_id: str, *, path: Path | None = None) -> dict[str, Any]:
+    """LEVEL 3 is never automatic. Operator / promotion governance only."""
+    raise ValueError(f"refusing silent promotion of {learning_id}")
+
+
 def learned_today(day: str = "", *, path: Path | None = None) -> dict[str, Any]:
     """Honest answer. Nothing statistically meaningful is an acceptable result."""
     target_day = (day or _now()[:10])[:10]

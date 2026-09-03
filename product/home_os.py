@@ -659,6 +659,10 @@ def _past_decisions() -> dict[str, Any]:
         "filters_hurt": report.get("filters_hurt") or [],
         "simple": report.get("simple") or "",
         "note": report.get("note") or "",
+        "PIT_STRONG": report.get("PIT_STRONG"),
+        "PIT_PARTIAL": report.get("PIT_PARTIAL"),
+        "PIT_MARKET_ONLY": report.get("PIT_MARKET_ONLY"),
+        "scorecards_note": "Method/family scorecards stay inspect-only until sample floors.",
         "live_locked": True,
         "not_promotion_evidence": True,
     }

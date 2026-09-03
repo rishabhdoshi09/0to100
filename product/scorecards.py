@@ -124,6 +124,69 @@ def build_scorecards(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def reason_scorecards(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Aggregate outcomes by stable reason code. Sample size always visible."""
+    cards: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        code = str(row.get("reason_code") or "UNSPECIFIED")
+        card = cards.setdefault(code, {
+            "reason_code": code,
+            "n": 0,
+            "wins": 0,
+            "losses": 0,
+            "r_sum": 0.0,
+            "r_n": 0,
+            "mfe_sum": 0.0,
+            "mfe_n": 0,
+            "mae_sum": 0.0,
+            "mae_n": 0,
+            "later_valid_entry": 0,
+        })
+        card["n"] += 1
+        r = _r(row)
+        if r is not None:
+            card["r_sum"] += r
+            card["r_n"] += 1
+            if r > 0:
+                card["wins"] += 1
+            elif r < 0:
+                card["losses"] += 1
+        mfe = _f(row.get("mfe_pct"))
+        mae = _f(row.get("mae_pct"))
+        if mfe is not None:
+            card["mfe_sum"] += mfe
+            card["mfe_n"] += 1
+        if mae is not None:
+            card["mae_sum"] += mae
+            card["mae_n"] += 1
+        if row.get("later_valid_entry") or row.get("later_entered"):
+            card["later_valid_entry"] += 1
+    out = []
+    for card in cards.values():
+        n = card["n"]
+        out.append({
+            "reason_code": card["reason_code"],
+            "n": n,
+            "win_rate": round(card["wins"] / n, 3) if n else None,
+            "loss_rate": round(card["losses"] / n, 3) if n else None,
+            "r_expectancy": round(card["r_sum"] / card["r_n"], 3) if card["r_n"] else None,
+            "mfe_pct": round(card["mfe_sum"] / card["mfe_n"], 3) if card["mfe_n"] else None,
+            "mae_pct": round(card["mae_sum"] / card["mae_n"], 3) if card["mae_n"] else None,
+            "later_valid_entry_rate": round(card["later_valid_entry"] / n, 3) if n else None,
+            "sample_size": n,
+            "ranked": n >= MIN_RANK_N,
+            "confidence": "INSUFFICIENT_SAMPLE" if n < MIN_RANK_N else "MEDIUM",
+        })
+    out.sort(key=lambda r: r["n"], reverse=True)
+    return {
+        "reasons": out,
+        "n_rows": len(list(rows)),
+        "min_rank_n": MIN_RANK_N,
+        "note": "Reason scorecards are descriptive. Tiny n is never a promotion signal.",
+        "affects_production": False,
+    }
+
+
 def quality_metrics(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     rs = [r for r in (_r(row) for row in rows) if r is not None]
     wins = [r for r in rs if r > 0]

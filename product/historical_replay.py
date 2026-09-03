@@ -470,6 +470,21 @@ def decide_session(
             "not_pnl": True,
             "live_locked": True,
         })
+        try:
+            from product.decision_freeze import freeze as freeze_decision
+
+            frozen = freeze_decision(out[-1])
+            out[-1]["freeze_id"] = frozen.get("freeze_id")
+            out[-1]["evidence_fingerprint"] = frozen.get("fingerprint")
+        except Exception:
+            out[-1]["freeze_id"] = ""
+            out[-1]["evidence_fingerprint"] = ""
+        try:
+            from product.event_intelligence import catalyst_notes
+
+            out[-1]["catalyst"] = catalyst_notes(symbol, as_of=as_of)
+        except Exception:
+            out[-1]["catalyst"] = {"usable_as_family_confirm": False}
     return out
 
 
@@ -497,6 +512,18 @@ def evaluate_outcomes(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]
                 later_entered=False,
             )
             item["outcome_status"] = "MATURED"
+        try:
+            from product.decision_outcomes import settle_frozen
+
+            item = settle_frozen(item, horizon=10)
+        except Exception:
+            item["outcome_rewrote_freeze"] = False
+        try:
+            from product.decision_attribution import attribute_outcome
+
+            item["attribution"] = attribute_outcome(item)
+        except Exception:
+            item["attribution"] = {"updates_policy": False}
         classified.append(item)
     return classified
 
@@ -762,6 +789,30 @@ def run_historical_replay(
         "data_fingerprint": data_fp,
         "reproducible_if": "same warehouse generation + same policy versions + same official bars",
     }
+    try:
+        from product.scorecards import build_scorecards, reason_scorecards
+
+        payload["scorecards"] = build_scorecards(classified)
+        payload["reason_scorecards"] = reason_scorecards(classified)
+    except Exception as exc:
+        payload["scorecards_error"] = str(exc)[:160]
+    try:
+        from product.pit_debt import ingest_coverage_debt
+
+        payload["data_debt"] = ingest_coverage_debt(classified)
+    except Exception as exc:
+        payload["data_debt_error"] = str(exc)[:160]
+    try:
+        from product.experiment_queue import from_failures
+
+        attrs = []
+        for r in classified:
+            a = dict(r.get("attribution") or {})
+            a.setdefault("reason_code", r.get("reason_code"))
+            attrs.append(a)
+        payload["experiments_enqueued"] = from_failures(attrs)
+    except Exception as exc:
+        payload["experiments_error"] = str(exc)[:160]
     existing = _read_json(target / REPORT_NAME)
     if existing.get("run_id") == run_id and existing.get("status") == _STATUS_SUCCEEDED and not force:
         existing["cache_hit"] = True

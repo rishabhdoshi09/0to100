@@ -421,6 +421,22 @@ def evaluate_committee(
 
     trigger = _wait_trigger(entry_state, card, reason_code) if decision == T.WAIT_DECISION else {}
 
+    from product.portfolio_committee import evaluate_portfolio
+
+    overlay = evaluate_portfolio(
+        {
+            "symbol": symbol,
+            "decision": decision,
+            "sector": card.get("sector"),
+            "execution_state": execution,
+            "references": {"sector": card.get("sector"), "regime": card.get("regime")},
+        },
+        book=book,
+        as_of=str(as_of or ""),
+    )
+    if overlay.get("portfolio_verdict") == "WAIT_PORTFOLIO" and decision == T.BUY:
+        execution = T.BLOCKED_PORTFOLIO
+
     return CommitteeRecord(
         symbol=symbol,
         decision=decision,
@@ -465,6 +481,8 @@ def evaluate_committee(
             ) if research.get(k) not in (None, "")},
             "family_gate": gate,
             "pit_as_of": str(as_of)[:10] if as_of else "",
+            "portfolio": overlay,
+            "thesis_preserved": True,
         },
     )
 

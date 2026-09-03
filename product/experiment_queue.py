@@ -61,14 +61,38 @@ def enqueue(
 
 
 def from_failures(attributions: list[Mapping[str, Any]], *, path: Path | None = None) -> list[dict[str, Any]]:
-    """Turn repeated WAIT_EXTENDED wake failures into one research question."""
+    """Turn repeated observed patterns into SAFE research questions only."""
+    out: list[dict[str, Any]] = []
     missed = [a for a in attributions if str(a.get("wait_attribution") or "") == "MISSED_REENTRY"]
-    if len(missed) < 8:
-        return []
-    return [enqueue(
-        hypothesis="WAIT_EXTENDED names later offered a valid entry and were not woken.",
-        question_kind="MISSED_REENTRY_WAKE",
-        population="WAIT_EXTENDED matured opportunities",
-        triggering_n=len(missed),
-        path=path,
-    )]
+    if len(missed) >= 8:
+        out.append(enqueue(
+            hypothesis=(
+                "Does the wake logic fail after a healthy contraction following WAIT_EXTENDED?"
+            ),
+            question_kind="MISSED_REENTRY_WAKE",
+            population="WAIT_EXTENDED matured opportunities",
+            triggering_n=len(missed),
+            path=path,
+        ))
+    overstrict = [a for a in attributions if str(a.get("avoid_attribution") or "") == "OVERSTRICT_VETO"]
+    if len(overstrict) >= 12:
+        out.append(enqueue(
+            hypothesis="A repeated veto fires on names that later offered a valid entry.",
+            question_kind="FAMILY_AGREEMENT",
+            population="AVOID rows labelled OVERSTRICT_VETO",
+            triggering_n=len(overstrict),
+            path=path,
+        ))
+    extended = [
+        a for a in attributions
+        if str(a.get("reason_code") or "") in {"ENTRY_TOO_EXTENDED", "EXTENDED"}
+    ]
+    if len(extended) >= 20:
+        out.append(enqueue(
+            hypothesis="The EXTENDED threshold may be excluding later-valid contractions.",
+            question_kind="EXTENDED_THRESHOLD",
+            population="WAIT/AVOID EXTENDED matured opportunities",
+            triggering_n=len(extended),
+            path=path,
+        ))
+    return out
