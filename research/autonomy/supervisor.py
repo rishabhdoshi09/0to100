@@ -573,11 +573,17 @@ class Supervisor:
     def _gated_state(self, hint):
         if self.owner_state.get("halted"):
             return ST.HALTED
-        # Official post-market work is not a broker outage. Let those hints stand.
-        if hint in (ST.OBSERVING, ST.RESEARCHING, ST.PAPER_ACTIVE, ST.DATA_READY):
+        # Official post-market work is not a broker outage. Productive hints stand.
+        if hint in (ST.OBSERVING, ST.RESEARCHING, ST.PAPER_ACTIVE, ST.DATA_READY, ST.DATA_REFRESHING):
             return hint
-        if H.AUTH_MISSING in self.failures or H.AUTH_EXPIRED in self.failures:
-            return ST.AUTH_REQUIRED
+        # Broker login is an execution exception card, not overall autonomy health.
+        if hint == ST.AUTH_REQUIRED or H.AUTH_MISSING in self.failures or H.AUTH_EXPIRED in self.failures:
+            current = getattr(self.state, "state", None) or ST.STARTING
+            if current in (ST.HALTED, ST.DATA_BLOCKED, ST.DEGRADED):
+                return current
+            if current in (ST.OBSERVING, ST.RESEARCHING, ST.PAPER_ACTIVE, ST.DATA_READY, ST.DATA_REFRESHING):
+                return current
+            return ST.OBSERVING
         if H.SNAPSHOT_STALE in self.failures:
             return ST.DATA_BLOCKED
         return hint

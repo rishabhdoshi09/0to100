@@ -119,6 +119,10 @@ def scan_is_fresh() -> bool:
         as_of = str(payload.get("as_of_session") or payload.get("history_latest_date") or "")[:10]
         if expected and (not as_of or as_of < expected):
             return False
+        if expected and as_of >= expected:
+            # Session identity is current. A worker restart must not rescan
+            # just because wall-clock age exceeded SCAN_FRESH_S.
+            return True
         if payload.get("scanned_at"):
             return bool(scan_artifact_is_fresh(path, max_age_s=SCAN_FRESH_S))
     except Exception:
