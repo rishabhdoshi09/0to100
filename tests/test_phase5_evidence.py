@@ -410,6 +410,13 @@ def test_scorecards_do_not_rank_tiny_samples():
     assert metrics["expectancy_r"] == pytest.approx(1.0)
 
 
+def test_pit_workspace_is_never_wall_clock_stale():
+    from product.paper_autopilot import reco_is_stale
+
+    assert reco_is_stale({"point_in_time": True, "generated_at": "2020-01-01T00:00:00+00:00"}) is False
+    assert reco_is_stale({"generated_at": "2020-01-01T00:00:00+00:00"}) is True
+
+
 def test_replay_committee_path_does_not_load_today_research(monkeypatch):
     from product.historical_replay import decide_session
 
