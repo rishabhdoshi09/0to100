@@ -303,16 +303,45 @@ def scan_session(
     return payload
 
 
+def _strongest_cards(workspace: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Keep the strongest reco tier per symbol — same rule as the live loop."""
+    rank = {"high_conviction": 0, "good_setup": 1, "watch": 2, "avoid": 3}
+    best: dict[str, dict[str, Any]] = {}
+    for cat in workspace.get("categories") or []:
+        if not isinstance(cat, Mapping):
+            continue
+        for card in cat.get("cards") or []:
+            if not isinstance(card, Mapping) or not card.get("symbol"):
+                continue
+            symbol = str(card.get("symbol") or "").upper()
+            row = dict(card)
+            row["symbol"] = symbol
+            prev = best.get(symbol)
+            if prev is None or rank.get(str(row.get("reco_tier")), 9) < rank.get(str(prev.get("reco_tier")), 9):
+                best[symbol] = row
+    if best:
+        return list(best.values())
+    from product.autopilot_journal import flatten_cards
+
+    return [dict(c) for c in flatten_cards(workspace) if isinstance(c, dict)]
+
+
 def decide_session(
     as_of: str,
     scan_payload: Mapping[str, Any],
     *,
     decide_fn: Callable[..., Any] | None = None,
     persist_ledger: bool = False,
+    use_committee: bool | None = None,
+    company_evidence: Sequence[Mapping[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Run the production recommendation + gate path on a PIT scan payload."""
-    from product.autopilot_journal import flatten_cards
+    """Run the production recommendation + gate path on a PIT scan payload.
+
+    Default path uses the independence-aware committee with today's research
+    snapshots refused (load_research=False). Tests may inject decide_fn.
+    """
     from product.recommendations_workspace import build_recommendations_workspace
+    from product.pit_availability import grade_replay
 
     workspace = build_recommendations_workspace(
         scan_payload=dict(scan_payload),
@@ -324,23 +353,48 @@ def decide_session(
         point_in_time=True,
         as_of=str(as_of)[:10],
     )
-    cards = flatten_cards(workspace)
-    decide = decide_fn or evaluate_candidate
+    cards = _strongest_cards(workspace)
+    if use_committee is None:
+        use_committee = decide_fn is None
     clock = datetime.fromisoformat(f"{as_of}T15:30:00+05:30")
+    max_bar = str(scan_payload.get("as_of_session") or as_of)[:10]
+    future_bar = max_bar > str(as_of)[:10]
+    pit_grade = grade_replay(
+        as_of=as_of,
+        market_bars_ok=not future_bar,
+        company_items=company_evidence or [],
+        used_today_fundamentals=False,
+        used_today_research=False,
+        used_future_bar=future_bar,
+    )
     out: list[dict[str, Any]] = []
     for card in cards:
         symbol = str(card.get("symbol") or "").upper()
         try:
-            decision = decide(
-                card,
-                book=None,
-                entries_allowed=True,
-                paper_enabled=True,
-                workspace=workspace,
-                now=clock,
-                regime="RISK_ON",
-            )
-            raw = decision.as_dict() if hasattr(decision, "as_dict") else dict(decision)
+            if use_committee:
+                from product.decision_committee import evaluate_committee
+
+                rec = evaluate_committee(
+                    card,
+                    book=None,
+                    broker_ok=False,
+                    entry_window=False,
+                    workspace=workspace,
+                    load_research=False,
+                )
+                raw = rec.as_dict()
+            else:
+                decide = decide_fn or evaluate_candidate
+                decision = decide(
+                    card,
+                    book=None,
+                    entries_allowed=True,
+                    paper_enabled=True,
+                    workspace=workspace,
+                    now=clock,
+                    regime="RISK_ON",
+                )
+                raw = decision.as_dict() if hasattr(decision, "as_dict") else dict(decision)
         except Exception as exc:
             raw = {
                 "symbol": symbol,
@@ -351,11 +405,10 @@ def decide_session(
         mapped = _map_decision(raw.get("decision"))
         reasons = [
             str(raw.get("reason_code") or ""),
-            str(raw.get("detail") or ""),
+            str(raw.get("detail") or raw.get("reason") or ""),
             str(card.get("reason") or card.get("why") or ""),
         ]
         reasons = [item for item in reasons if item]
-        max_bar = str(scan_payload.get("as_of_session") or as_of)[:10]
         out.append({
             "symbol": symbol,
             "as_of": str(as_of)[:10],
@@ -370,13 +423,21 @@ def decide_session(
             "sector": raw.get("sector") or card.get("sector") or "",
             "setup": raw.get("setup_label") or card.get("setup_label") or "",
             "engine": ENGINE,
+            "method_votes": raw.get("method_votes") or raw.get("methods_buy") or [],
+            "evidence_family_votes": raw.get("evidence_family_votes") or raw.get("families") or {},
+            "effective_confirmation_count": raw.get("effective_confirmation_count"),
+            "dependency_notes": raw.get("dependency_notes") or [],
             "pit": {
                 "as_of": str(as_of)[:10],
                 "max_bar_date": max_bar,
-                "future_evidence_used": False,
+                "future_evidence_used": bool(future_bar),
                 "workspace_generated_from_pit_scan": True,
                 "degraded": list(workspace.get("pit_degraded") or []),
+                "grade": pit_grade.get("grade"),
+                "grade_reason": pit_grade.get("reason"),
+                "comparable_to_forward": pit_grade.get("comparable_to_forward"),
             },
+            "pit_grade": pit_grade.get("grade"),
             "provenance": BACKTEST,
             "not_pnl": True,
             "live_locked": True,
@@ -588,6 +649,11 @@ def run_historical_replay(
         "INCONCLUSIVE": sum(1 for r in classified if r.get("classification") == "INCONCLUSIVE"),
         "MATURED": sum(1 for r in classified if r.get("outcome_status") == "MATURED"),
         "UNRESOLVED": sum(1 for r in classified if r.get("outcome_status") == "UNRESOLVED"),
+        "PIT_STRONG": sum(1 for r in classified if r.get("pit_grade") == "PIT_STRONG"),
+        "PIT_PARTIAL": sum(1 for r in classified if r.get("pit_grade") == "PIT_PARTIAL"),
+        "PIT_MARKET_ONLY": sum(1 for r in classified if r.get("pit_grade") == "PIT_MARKET_ONLY"),
+        "PIT_UNAVAILABLE": sum(1 for r in classified if r.get("pit_grade") == "PIT_UNAVAILABLE"),
+        "PIT_UNVERIFIED": sum(1 for r in classified if r.get("pit_grade") == "PIT_UNVERIFIED"),
     }
     status = _STATUS_SUCCEEDED if classified or session_summaries else _STATUS_DEGRADED
     if errors and not classified:
@@ -633,6 +699,11 @@ def run_historical_replay(
         "inconclusive": counts["INCONCLUSIVE"],
         "outcomes_matured": counts["MATURED"],
         "open_unresolved": counts["UNRESOLVED"],
+        "PIT_STRONG": counts["PIT_STRONG"],
+        "PIT_PARTIAL": counts["PIT_PARTIAL"],
+        "PIT_MARKET_ONLY": counts["PIT_MARKET_ONLY"],
+        "PIT_UNAVAILABLE": counts["PIT_UNAVAILABLE"],
+        "PIT_UNVERIFIED": counts["PIT_UNVERIFIED"],
         "session_summaries": session_summaries,
         "errors": errors,
         "decisions": classified[:400],
@@ -662,6 +733,30 @@ def run_historical_replay(
     _write_progress(target, {**progress, **payload, "status": status, "finished_at": finished})
     if classified:
         _append_ledger(target, classified)
+    return payload
+
+
+def run_walk_forward_sample(
+    *,
+    sessions: int = 60,
+    universe_limit: int = 24,
+    symbols: Sequence[str] | None = None,
+    directory: str | Path | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Bounded PIT walk-forward. Not a 2,400-name ten-year sweep."""
+    payload = run_historical_replay(
+        sessions=sessions,
+        universe_limit=universe_limit,
+        symbols=symbols,
+        force=True,
+        directory=directory,
+        persist_live_reco=False,
+        **kwargs,
+    )
+    payload["walk_forward_sample"] = True
+    payload["not_promotion_evidence"] = True
+    payload["provenance"] = BACKTEST
     return payload
 
 
