@@ -145,6 +145,11 @@ def build_home_os(
         kite_ok = False
     if auto.get("kite_connected") is False:
         kite_ok = False
+    reason_code = str(auto.get("reason_code") or "").lower()
+    if reason_code in {"auth_health", "token_missing", "session_expired"}:
+        kite_ok = False
+    if "login is required" in str(auto.get("explanation") or "").lower():
+        kite_ok = False
     paper_enabled = paper_d.get("enabled", True) is not False
     owner_state = _as_dict(auto.get("owner_state"))
     observe_date = str(owner_state.get("observe_only_date") or "")[:10]
