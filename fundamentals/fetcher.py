@@ -8,7 +8,7 @@ structured-results backfill, then falls back to secondary public fundamentals.
 
 Normal reads remain cache-friendly; autonomous Research Data / Investigate
 refreshes prefer the official structured source before scraping a secondary
-site.
+site. Canonical CI stays network-free unless a network integration run opts in.
 
 Official tables never get overwritten by a secondary scrape.
 """
@@ -16,6 +16,7 @@ Official tables never get overwritten by a secondary scrape.
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+import os
 from typing import Any, Dict, Mapping
 
 from fundamentals.cache import FundamentalsCache
@@ -89,6 +90,13 @@ def _official_warehouse_snapshot(symbol: str) -> Dict[str, Any] | None:
     return data
 
 
+def _network_backfill_allowed() -> bool:
+    """Keep canonical CI/tests deterministic while allowing explicit network CI."""
+    if os.getenv("CI") and os.getenv("QT_ALLOW_NETWORK_ACQUIRE") != "1":
+        return False
+    return os.getenv("QT_OFFLINE") != "1"
+
+
 def _try_official_backfill(symbol: str) -> Dict[str, Any] | None:
     """Acquire current official structured results before secondary refresh.
 
@@ -96,6 +104,9 @@ def _try_official_backfill(symbol: str) -> Dict[str, Any] | None:
     dates, raw artifacts and provenance. Failures are non-fatal: the caller may
     still use cache/Screener as a fallback.
     """
+    if not _network_backfill_allowed():
+        log.info("official_fundamentals_backfill_skipped", symbol=symbol, reason="network_disabled")
+        return None
     try:
         from product.pit_backfill import backfill_structured_financials
 
