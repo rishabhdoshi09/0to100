@@ -359,7 +359,12 @@ def inspect_research_coverage(
     fetched_at: str = "",
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Pure cache inspection. Safe to call from GET handlers."""
+    """Pure cache inspection. Safe to call from GET handlers.
+
+    Cached evidence may remain usable when a provider refresh fails, but the
+    dataset must not be labelled current merely because values are still on
+    disk. Provider errors therefore outrank presence/freshness below.
+    """
     now = now or datetime.now(timezone.utc)
     raw = raw if isinstance(raw, Mapping) else {}
     facts = autonomy if isinstance(autonomy, Mapping) else {}
@@ -400,22 +405,29 @@ def inspect_research_coverage(
         elif present and checked_at is None:
             stale = False
 
-        if present and checked_at is not None:
+        # A failed check is an attempt, not a successful data refresh.  Do not
+        # let its timestamp advance the latest-good-data clock.
+        if present and checked_at is not None and error_kind is None:
             if latest_refresh is None or checked_at > latest_refresh:
                 latest_refresh = checked_at
 
-        if present and stale:
-            status = "stale"
-        elif present:
-            status = "current"
-        elif error_kind == "source_unavailable":
+        # Provider truth outranks cached presence.  Cached values remain
+        # available through `present` / `usable_cached`, but the freshness lane
+        # stays unresolved so autonomous retry logic can do its job.
+        if error_kind == "source_unavailable":
             status = "source_unavailable"
         elif error_kind == "acquisition_failed":
             status = "acquisition_failed"
+        elif present and stale:
+            status = "stale"
+        elif present:
+            status = "current"
         elif str(_dataset_meta(facts, ds_id).get("status") or "") == "current" or _dataset_meta(facts, ds_id).get("fetched_at"):
             status = "metric_not_reported"
         else:
             status = "not_yet_acquired"
+
+        usable_cached = bool(present and status in {"stale", "acquisition_failed", "source_unavailable"})
 
         if status == "current":
             if ds_id in {"recent_news", "exchange_filings", "corporate_announcements", "valuation"} and checked_at is not None:
@@ -427,6 +439,8 @@ def inspect_research_coverage(
             if status == "stale":
                 aged = _age_label(checked_at, now)
                 age = f"Stale · {aged}" if aged else "Stale"
+            elif usable_cached:
+                age = f"{age} · cached evidence retained"
 
         label = LABELS[ds_id]
         if ds_id == "sector_kpis":
@@ -438,6 +452,7 @@ def inspect_research_coverage(
             "status": status,
             "required": required,
             "present": present,
+            "usable_cached": usable_cached,
             "age_label": age,
             "checked_at": checked_at.isoformat() if checked_at else None,
             "freshness_hours": round(window.total_seconds() / 3600, 1),
