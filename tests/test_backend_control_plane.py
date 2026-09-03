@@ -124,15 +124,34 @@ def test_waiting_dependency_explains_official_session():
     assert data.get("dependencies")
 
 
-def test_needs_you_zerodha_primary_is_login_without_secrets():
+def test_zerodha_login_is_optional_capability_without_secret_leakage():
     os = build_home_os(
         dashboard={
             "autonomy": {
                 "state": "AUTH_REQUIRED",
                 "running": True,
+                "operator_state": "HEALTHY",
+                "broker": {
+                    "state": "LOGIN_REQUIRED",
+                    "ready": False,
+                    "live_data_ready": False,
+                    "execution_ready": False,
+                    "login_required": True,
+                    "reason_code": "TOKEN_MISSING",
+                },
                 "live_feed": {"connected": False, "access_token": "SHOULD_NOT_LEAK", "last_error": "token=abc"},
             },
-            "data": {"ready": True},
+            "data": {
+                "ready": True,
+                "bhavcopy": {
+                    "ready": True,
+                    "latest_date": "2026-09-01",
+                    "current": True,
+                    "expected_latest_completed_session": "2026-09-01",
+                    "available_session": "2026-09-01",
+                    "reason_code": "HISTORY_CURRENT",
+                },
+            },
         },
         paper={"enabled": True, "open_positions": [], "closed_trades": []},
         why={"available": False},
@@ -140,14 +159,23 @@ def test_needs_you_zerodha_primary_is_login_without_secrets():
         scan={"scanned_at": "2026-09-01T05:00:00+00:00", "records": [{"symbol": "TCS"}]},
         now=_open(),
     )
-    assert os["state"] in {LOGIN_REQUIRED, NORMAL, NO_TRADE}
-    assert os["need_me"] is True
+    assert os["state"] in {NORMAL, NO_TRADE}
+    assert os["state"] != LOGIN_REQUIRED
+    assert os["need_me"] is False
+    assert os["attention"]["required_now"] == []
+    assert os["attention"]["optional_count"] == 1
     assert os["broker"]["login_required"] is True
+    assert os["broker"]["requires_operator_now"] is False
     zed = os["system"]["zerodha"]
-    assert zed["status"] == "Needs you"
-    assert zed["primary_action"]["label"] == "Login to Zerodha"
-    assert zed["primary_action"]["kind"] == "instruction"
-    assert "WAITING FOR ZERODHA LOGIN" in zed["detail"]
+    assert zed["status"] == "Optional login"
+    assert zed["status_code"] == "CAPABILITY_OFFLINE"
+    assert zed["needs_user"] is False
+    assert zed["login_required"] is True
+    assert zed["blocks_autonomy"] is False
+    assert not zed.get("primary_action")
+    optional = zed.get("secondary_actions") or []
+    assert optional and optional[0]["label"] == "Login to Zerodha"
+    assert optional[0]["kind"] == "instruction"
     dumped = str(zed)
     assert "SHOULD_NOT_LEAK" not in dumped
     assert "token=abc" not in dumped
@@ -183,6 +211,8 @@ def test_paper_pause_resume_map_to_existing_controls():
         now=_open(),
     )
     assert paused["state"] == PAUSED
+    assert paused["need_me"] is True
+    assert paused["attention"]["count"] == 1
     bot = paused["system"]["paper_bot"]
     assert bot["status"] == "Needs you"
     assert bot["primary_action"]["control"] == "RESUME_NEW_PAPER_ENTRIES"
