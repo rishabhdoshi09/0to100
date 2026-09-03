@@ -13,6 +13,7 @@ import './radar.css'
 import './reco.css'
 import './recommendations.css'
 import './reco-desk.css'
+import './operator-polish.css'
 
 // Compatibility for two legacy Investigate button guards. Duplicate acquisition
 // is already prevented authoritatively by the API, which returns the active job
