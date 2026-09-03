@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+from product.decision_taxonomy import is_judgment_row
+
 SHORTLIST_TIERS = {"high_conviction", "good_setup"}
 
 
@@ -44,7 +46,8 @@ def build_census(
     reasons = dict(coverage.get("reason_counts") or {})
     summary = dict(scan.get("summary") or {})
     ensemble = dict(reco.get("ensemble") or {})
-    records = list(committee or [])
+    records = [r for r in (committee or []) if is_judgment_row(r)]
+    non_judgment = [r for r in (committee or []) if not is_judgment_row(r)]
     buy = [r for r in records if r.get("decision") == "BUY"]
     wait = [r for r in records if r.get("decision") == "WAIT"]
     avoid = [r for r in records if r.get("decision") == "AVOID"]
@@ -161,6 +164,7 @@ def build_census(
             "AVOID": len(avoid),
             "READY": len(ready),
             "EXECUTION_BLOCKED": len(exec_blocked),
+            "NO_JUDGMENT": len(non_judgment),
             "PAPER_ENTERED": 0,
         },
         "overlapping_diagnostics": {
@@ -175,8 +179,9 @@ def build_census(
                 "count": evaluated_n,
                 "scope": "CURRENT_SCAN+REMEMBERED_WAIT",
                 "overlapping": True,
-                "note": "May exceed SHORTLIST when opportunity memory adds names.",
+                "note": "May exceed SHORTLIST when opportunity memory adds names. Invalid symbols are excluded.",
             },
+            "non_judgment_excluded": len(non_judgment),
         },
         "side_paths": {
             "deep_research": {

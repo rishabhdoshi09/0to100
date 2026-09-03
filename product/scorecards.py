@@ -9,6 +9,7 @@ from typing import Any, Mapping, Sequence
 
 from product.evidence_families import METHOD_AUDIT, CONFIRMATION_FAMILIES
 from product.risk_audit import r_multiple
+from product.decision_taxonomy import is_judgment_row
 
 MIN_RANK_N = 20
 
@@ -80,8 +81,9 @@ def build_scorecards(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     methods = {mid: _empty_card(audit["label"], audit["primary_family"]) for mid, audit in METHOD_AUDIT.items()}
     families = {fam: _empty_card(fam, fam) for fam in CONFIRMATION_FAMILIES}
     disagreements: list[dict[str, Any]] = []
+    judgment_rows = [row for row in rows if is_judgment_row(row)]
 
-    for row in rows:
+    for row in judgment_rows:
         labels = [str(x).lower() for x in (row.get("methods_buy") or [])]
         votes = row.get("method_votes") or []
         if isinstance(votes, list):
@@ -117,7 +119,8 @@ def build_scorecards(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "methods": methods,
         "families": families,
         "disagreements": disagreements[:200],
-        "n_rows": len(list(rows)),
+        "n_rows": len(judgment_rows),
+        "n_excluded_non_judgment": len(list(rows)) - len(judgment_rows),
         "min_rank_n": MIN_RANK_N,
         "note": "No ranking below sample floor. Confidence is sample-size language, not a win probability.",
         "affects_production": False,
@@ -128,6 +131,8 @@ def reason_scorecards(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """Aggregate outcomes by stable reason code. Sample size always visible."""
     cards: dict[str, dict[str, Any]] = {}
     for row in rows:
+        if not is_judgment_row(row):
+            continue
         code = str(row.get("reason_code") or "UNSPECIFIED")
         card = cards.setdefault(code, {
             "reason_code": code,
@@ -178,9 +183,10 @@ def reason_scorecards(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             "confidence": "INSUFFICIENT_SAMPLE" if n < MIN_RANK_N else "MEDIUM",
         })
     out.sort(key=lambda r: r["n"], reverse=True)
+    judgment_n = sum(card["n"] for card in cards.values())
     return {
         "reasons": out,
-        "n_rows": len(list(rows)),
+        "n_rows": judgment_n,
         "min_rank_n": MIN_RANK_N,
         "note": "Reason scorecards are descriptive. Tiny n is never a promotion signal.",
         "affects_production": False,

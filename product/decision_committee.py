@@ -118,6 +118,41 @@ def _f(value: Any) -> float | None:
         return None
 
 
+def _lookup_failure(card: Mapping[str, Any]) -> tuple[str, str] | None:
+    """Invalid ticker or failed data lookup is not an investment judgment."""
+    symbol = str(card.get("symbol") or "").strip().upper()
+    if not symbol:
+        return T.INVALID_SYMBOL, "Symbol is missing."
+    try:
+        from data.nse_universe import _is_valid_symbol
+
+        if not _is_valid_symbol(symbol):
+            return T.INVALID_SYMBOL, "Not a valid NSE equity ticker."
+    except Exception:
+        if len(symbol) > 15 or " " in symbol:
+            return T.INVALID_SYMBOL, "Not a valid NSE equity ticker."
+    status = str(card.get("status") or card.get("data_status") or "").upper()
+    if status in T.NON_JUDGMENT_CODES:
+        return status, str(card.get("reason") or card.get("detail") or status)
+    if str(card.get("reason_code") or "").upper() in T.NON_JUDGMENT_CODES:
+        code = str(card.get("reason_code")).upper()
+        return code, str(card.get("reason") or card.get("detail") or code)
+    return None
+
+
+def _no_judgment_record(symbol: str, reason_code: str, reason: str) -> CommitteeRecord:
+    return CommitteeRecord(
+        symbol=str(symbol or "").upper(),
+        decision=T.NO_JUDGMENT,
+        candidate_state=T.INVALIDATED,
+        entry_state=T.NO_TRIGGER,
+        execution_state=T.NOT_APPLICABLE,
+        reason_code=reason_code,
+        reason=reason,
+        references={"non_judgment": True, "excluded_from_avoid": True},
+    )
+
+
 def _method_vote(status: str) -> str:
     s = str(status or "").lower()
     if s in {"pass", "buy", "confirm"}:
@@ -247,6 +282,34 @@ def _wait_trigger(entry_state: str, card: Mapping[str, Any], reason: str) -> dic
 
 
 def evaluate_committee(
+    card: Mapping[str, Any],
+    *,
+    book=None,
+    broker_ok: bool = False,
+    entry_window: bool = False,
+    workspace: Mapping[str, Any] | None = None,
+    load_research: bool = True,
+    as_of: str | None = None,
+) -> CommitteeRecord:
+    symbol = str(card.get("symbol") or "").upper()
+    failed = _lookup_failure(card)
+    if failed:
+        return _no_judgment_record(symbol, failed[0], failed[1])
+    try:
+        return _evaluate_committee_body(
+            card,
+            book=book,
+            broker_ok=broker_ok,
+            entry_window=entry_window,
+            workspace=workspace,
+            load_research=load_research,
+            as_of=as_of,
+        )
+    except Exception as exc:
+        return _no_judgment_record(symbol, T.ANALYSIS_ERROR, str(exc)[:200])
+
+
+def _evaluate_committee_body(
     card: Mapping[str, Any],
     *,
     book=None,
@@ -520,18 +583,12 @@ def reaudit_ready(
 def evaluate_many(cards: list[Mapping[str, Any]], **kwargs: Any) -> list[CommitteeRecord]:
     out = []
     for card in cards:
-        if not card.get("symbol"):
-            continue
         try:
             out.append(evaluate_committee(card, **kwargs))
         except Exception as exc:
-            out.append(CommitteeRecord(
-                symbol=str(card.get("symbol") or "").upper(),
-                decision=T.AVOID,
-                candidate_state=T.REJECTED,
-                entry_state=T.NO_TRIGGER,
-                execution_state=T.NOT_APPLICABLE,
-                reason_code=T.DATA_INTEGRITY,
-                reason=str(exc)[:200],
+            out.append(_no_judgment_record(
+                str(card.get("symbol") or "").upper(),
+                T.ANALYSIS_ERROR,
+                str(exc)[:200],
             ))
     return out

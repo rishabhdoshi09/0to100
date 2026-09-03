@@ -7,6 +7,8 @@ D. execution_state  — whether paper/live can act
 """
 from __future__ import annotations
 
+from typing import Any, Mapping
+
 # A. candidate states (reuse lifecycle names)
 DISCOVERED = "DISCOVERED"
 SCREENED = "SCREENED"
@@ -26,6 +28,7 @@ CLOSED = "CLOSED"
 BUY = "BUY"
 WAIT_DECISION = "WAIT"
 AVOID = "AVOID"
+NO_JUDGMENT = "NO_JUDGMENT"
 
 # C. entry
 ENTER_NOW = "ENTER_NOW"
@@ -81,6 +84,24 @@ INSUFFICIENT_INDEPENDENT_EVIDENCE = "INSUFFICIENT_INDEPENDENT_EVIDENCE"
 WAIT_PORTFOLIO = "WAIT_PORTFOLIO"
 WAIT_RATIONALLY_MAINTAINED = "WAIT_RATIONALLY_MAINTAINED"
 MISSED_REENTRY = "MISSED_REENTRY"
+
+# Non-judgments: lookup/analysis failures, not investment calls.
+INVALID_SYMBOL = "INVALID_SYMBOL"
+DATA_UNAVAILABLE = "DATA_UNAVAILABLE"
+ANALYSIS_ERROR = "ANALYSIS_ERROR"
+NON_JUDGMENT_CODES = frozenset({INVALID_SYMBOL, DATA_UNAVAILABLE, ANALYSIS_ERROR})
+NON_JUDGMENT_DECISIONS = frozenset({NO_JUDGMENT})
+
+
+def is_non_judgment(decision: str | None = None, reason_code: str | None = None) -> bool:
+    if str(decision or "").upper() in NON_JUDGMENT_DECISIONS:
+        return True
+    return str(reason_code or "").upper() in NON_JUDGMENT_CODES
+
+
+def is_judgment_row(row: Mapping[str, Any] | None) -> bool:
+    payload = row or {}
+    return not is_non_judgment(payload.get("decision"), payload.get("reason_code"))
 
 HARD_VETO_CODES = frozenset({
     LOW_LIQUIDITY, LIQUIDITY_FAILED, ENTRY_TOO_EXTENDED, STALE_CRITICAL_EVIDENCE,

@@ -45,6 +45,7 @@ BUY = "BUY"
 WAIT_D = "WAIT"
 AVOID = "AVOID"
 REJECT = "REJECT"
+NO_JUDGMENT = "NO_JUDGMENT"
 
 _STATUS_RUNNING = "RUNNING"
 _STATUS_SUCCEEDED = "SUCCEEDED"
@@ -200,7 +201,11 @@ def universe_as_of(
     }
 
 
-def _map_decision(raw: str) -> str:
+def _map_decision(raw: str, reason_code: str | None = None) -> str:
+    from product.decision_taxonomy import is_non_judgment
+
+    if is_non_judgment(raw, reason_code):
+        return NO_JUDGMENT
     value = str(raw or "").upper()
     if value == ENTER_NOW:
         return BUY
@@ -210,7 +215,7 @@ def _map_decision(raw: str) -> str:
         return AVOID
     if value in {BLOCK, PORTFOLIO_BLOCK, "REJECT", "REJECTED"}:
         return REJECT
-    if value in {BUY, WAIT_D, AVOID, REJECT}:
+    if value in {BUY, WAIT_D, AVOID, REJECT, NO_JUDGMENT}:
         return value
     return REJECT
 
@@ -414,7 +419,7 @@ def decide_session(
                 "reason_code": "DECISION_ERROR",
                 "detail": str(exc)[:200],
             }
-        mapped = _map_decision(raw.get("decision"))
+        mapped = _map_decision(raw.get("decision"), raw.get("reason_code"))
         reasons = [
             str(raw.get("reason_code") or ""),
             str(raw.get("detail") or raw.get("reason") or ""),
@@ -472,10 +477,16 @@ def decide_session(
         })
         try:
             from product.decision_freeze import freeze as freeze_decision
+            from product.decision_taxonomy import is_judgment_row
 
-            frozen = freeze_decision(out[-1])
-            out[-1]["freeze_id"] = frozen.get("freeze_id")
-            out[-1]["evidence_fingerprint"] = frozen.get("fingerprint")
+            if is_judgment_row(out[-1]):
+                frozen = freeze_decision(out[-1])
+                out[-1]["freeze_id"] = frozen.get("freeze_id")
+                out[-1]["evidence_fingerprint"] = frozen.get("fingerprint")
+            else:
+                out[-1]["freeze_id"] = ""
+                out[-1]["evidence_fingerprint"] = ""
+                out[-1]["excluded_from_learning"] = True
         except Exception:
             out[-1]["freeze_id"] = ""
             out[-1]["evidence_fingerprint"] = ""
@@ -496,7 +507,16 @@ def evaluate_outcomes(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]
         if fwd is None:
             fwd = _forward_return(str(item.get("symbol") or ""), str(item.get("as_of") or ""))
         item["forward_return_pct"] = fwd
+        from product.decision_taxonomy import is_judgment_row
+
         decision = str(item.get("decision") or "").upper()
+        if decision == NO_JUDGMENT or not is_judgment_row(item):
+            item["classification"] = "NOT_A_JUDGMENT"
+            item["outcome_status"] = "EXCLUDED"
+            item["not_pnl"] = True
+            item["attribution"] = {"updates_policy": False, "excluded": True}
+            classified.append(item)
+            continue
         if fwd is None:
             item["classification"] = "INCONCLUSIVE"
             item["outcome_status"] = "UNRESOLVED"
@@ -681,6 +701,7 @@ def run_historical_replay(
                 "wait": sum(1 for d in decisions if d.get("decision") == WAIT_D),
                 "avoid": sum(1 for d in decisions if d.get("decision") == AVOID),
                 "reject": sum(1 for d in decisions if d.get("decision") == REJECT),
+                "no_judgment": sum(1 for d in decisions if d.get("decision") == NO_JUDGMENT),
             })
         except Exception as exc:
             errors.append({"as_of": as_of, "error": str(exc)[:240]})
@@ -695,6 +716,7 @@ def run_historical_replay(
         WAIT_D: sum(1 for r in classified if r.get("decision") == WAIT_D),
         AVOID: sum(1 for r in classified if r.get("decision") == AVOID),
         REJECT: sum(1 for r in classified if r.get("decision") == REJECT),
+        NO_JUDGMENT: sum(1 for r in classified if r.get("decision") == NO_JUDGMENT),
         CORRECT_REJECTION: sum(1 for r in classified if r.get("classification") == CORRECT_REJECTION),
         MISSED_WINNER: sum(1 for r in classified if r.get("classification") == MISSED_WINNER),
         AVOIDED_LOSER: sum(1 for r in classified if r.get("classification") == AVOIDED_LOSER),
@@ -747,6 +769,7 @@ def run_historical_replay(
         WAIT_D: counts[WAIT_D],
         AVOID: counts[AVOID],
         REJECT: counts[REJECT],
+        NO_JUDGMENT: counts.get(NO_JUDGMENT, 0),
         "would_take": counts[BUY],
         "rejected": counts[REJECT] + counts[AVOID],
         "waited": counts[WAIT_D],
@@ -772,7 +795,8 @@ def run_historical_replay(
             f"Historical replay {window[0]} → {window[-1]} · "
             f"{len(window)} sessions · {stocks_evaluated} stocks evaluated · "
             f"{len(classified)} decisions · BUY {counts[BUY]} · WAIT {counts[WAIT_D]} · "
-            f"AVOID {counts[AVOID]} · REJECT {counts[REJECT]}."
+            f"AVOID {counts[AVOID]} · REJECT {counts[REJECT]} · "
+            f"NO_JUDGMENT {counts.get(NO_JUDGMENT, 0)}."
         ),
         "note": (
             "Decisions used official bars available at each session close. "

@@ -401,6 +401,9 @@ def _consume_paper(
         row["execution_block"] = rec.get("execution_state")
         prev = CL.get(CL.candidate_id(symbol, session))
         already = bool(prev and prev.get("decision_id") == did)
+        from product.decision_taxonomy import is_judgment_row
+
+        judgment = is_judgment_row(rec)
         if rec.get("decision") == "BUY" and rec.get("candidate_state") == CL.READY:
             if str(rec.get("execution_state") or "").startswith("BLOCKED"):
                 intents.append(row)
@@ -417,7 +420,7 @@ def _consume_paper(
                 taken.append(row)
         elif rec.get("decision") == "WAIT":
             waits.append(row)
-        else:
+        elif judgment:
             rejections.append(row)
         CL.upsert(
             symbol=symbol, session_date=session, state=state,
@@ -455,7 +458,7 @@ def _consume_paper(
             research_completed=bool(rec.get("evidence_coverage_pct")),
             payload={"decision_id": did, "wait_trigger": rec.get("wait_trigger") or {}},
         )
-        if not already:
+        if not already and judgment:
             try:
                 from product.forward_evidence import freeze_observation
 

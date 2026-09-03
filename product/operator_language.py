@@ -31,6 +31,10 @@ SIMPLE_REASONS: dict[str, str] = {
     "UNANCHORED_CORRELATION": "We don't have enough information from that exact time.",
     "EXECUTION_EVIDENCE_INCOMPLETE": "We do not yet know how costs would have changed the result.",
     "LIVE_MONEY_LOCKED": "Real money stays locked.",
+    "INVALID_SYMBOL": "That ticker is not a real stock we can judge.",
+    "DATA_UNAVAILABLE": "We could not load market data for that name.",
+    "ANALYSIS_ERROR": "The analysis did not finish, so this is not a buy or avoid call.",
+    "NO_JUDGMENT": "This is not an investment judgment.",
     "WAITING FOR ZERODHA LOGIN": "Zerodha login is needed.",
     "KITE_ACCESS_TOKEN_MISSING": "Zerodha login is needed.",
 }
