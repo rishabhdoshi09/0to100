@@ -97,6 +97,37 @@ def test_intraday_enqueue_does_not_start_post_market_grind():
     assert SCH.OUTCOME_RESOLUTION not in types
 
 
+def test_blocked_data_ready_outcome_is_requeued():
+    class Jobs:
+        def __init__(self):
+            self.requeued = []
+            self.unblocked = []
+
+        def enqueue(self, job_type, **kwargs):
+            return SimpleNamespace(
+                job_id="out-1", job_type=job_type, status=JS.BLOCKED,
+                blocked_on="DATA_READY",
+            )
+
+        def requeue(self, job_id):
+            self.requeued.append(job_id)
+
+        def get(self, job_id):
+            return SimpleNamespace(job_id=job_id, status=JS.PENDING, blocked_on="")
+
+        def unblock_dependency(self, dep):
+            self.unblocked.append(dep)
+
+    supervisor = Supervisor.__new__(Supervisor)
+    supervisor.jobs = Jobs()
+    supervisor.deps = SimpleNamespace(
+        now_ist=lambda: datetime(2026, 9, 3, 0, 5, tzinfo=IST),
+        holidays=lambda: set(),
+    )
+    supervisor._enqueue_post_market_grind(session_date="2026-09-02")
+    assert supervisor.jobs.requeued == ["out-1"]
+
+
 def test_overnight_after_midnight_settles_previous_session():
     jobs = _Jobs()
     jobs.cancel_superseded_pending = lambda *_a, **_k: None

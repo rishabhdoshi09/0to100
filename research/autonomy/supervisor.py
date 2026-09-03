@@ -211,6 +211,7 @@ class Supervisor:
     def enqueue_due(self, now_ist=None):
         now_ist = now_ist or self.deps.now_ist()
         holidays = self.deps.holidays()
+        self._release_stale_official_blocks()
         session_date = now_ist.date().isoformat()
         if not SCH._is_session_day(now_ist, holidays):
             last = SCH.last_completed_session_date(now_ist, holidays)
@@ -271,6 +272,37 @@ class Supervisor:
         except Exception:
             pass
 
+    _OFFICIAL_BLOCKERS = frozenset({
+        JOBS.DEP_DATA, JOBS.DEP_OFFICIAL, JOBS.DEP_OUTCOME_DATA, "DATA_READY",
+    })
+
+    def _release_stale_official_blocks(self) -> None:
+        """Old jobs blocked on generic DATA_READY can proceed on official bars."""
+        try:
+            from product.readiness import official_history
+
+            hist = official_history()
+        except Exception:
+            hist = {}
+        if not hist.get("current"):
+            return
+        for dep in self._OFFICIAL_BLOCKERS:
+            try:
+                self.jobs.unblock_dependency(dep)
+            except Exception:
+                continue
+
+    def _requeue_if_official_blocked(self, job):
+        if job is None:
+            return job
+        if getattr(job, "status", None) == JS.BLOCKED and str(getattr(job, "blocked_on", "") or "") in self._OFFICIAL_BLOCKERS:
+            try:
+                self.jobs.requeue(job.job_id)
+                return self.jobs.get(job.job_id)
+            except Exception:
+                return job
+        return job
+
     def _enqueue_post_market_grind(self, now_ist=None, session_date: str | None = None) -> None:
         """Settle / learn / research after the cash session without a second scan."""
         now_ist = now_ist or self.deps.now_ist()
@@ -278,11 +310,12 @@ class Supervisor:
         session_date = session_date or SCH.last_completed_session_date(now_ist, holidays)
         if not session_date:
             return
-        outcome = self.jobs.enqueue(
+        self._release_stale_official_blocks()
+        outcome = self._requeue_if_official_blocked(self.jobs.enqueue(
             SCH.OUTCOME_RESOLUTION,
             idempotency_key=SCH.outcome_key(session_date),
             critical=True,
-        )
+        ))
         if getattr(outcome, "status", None) != JS.SUCCEEDED:
             return
         learning = self.jobs.enqueue(
