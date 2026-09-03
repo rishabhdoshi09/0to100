@@ -662,18 +662,32 @@ def build_due_diligence(
         )
         finding["availability_state"] = state
         finding["availability_label"] = _STATE_LABEL.get(state, "Data unavailable")
-    pack = apply_autonomy_pack(
-        load_evidence_pack(
-            symbol,
-            raw=raw,
-            scan_as_of=str((scan_payload or {}).get("scanned_at") or as_of_session or ""),
-            long_term_as_of=str((long_term_payload or {}).get("scanned_at") or as_of_session or ""),
-            news_as_of=str(events[0]["published_at"] if events else ""),
-            long_row=long_row,
-            row_loader=(lambda *_a, **_k: []) if pit_mode else None,
-        ),
-        autonomy,
-    )
+    if pit_mode:
+        pack = apply_autonomy_pack({
+            "coverage_pct": 0,
+            "gaps": [],
+            "management_commentary": [],
+            "order_book": [],
+            "peers": [],
+            "snapshot_metrics": [],
+            "revenue_drivers": "Data unavailable — no segment table on file.",
+            "business_model": "Data unavailable",
+            "long_term_overlay": {},
+            "flags": [],
+            "next_actions": [],
+        }, {})
+    else:
+        pack = apply_autonomy_pack(
+            load_evidence_pack(
+                symbol,
+                raw=raw,
+                scan_as_of=str((scan_payload or {}).get("scanned_at") or ""),
+                long_term_as_of=str((long_term_payload or {}).get("scanned_at") or ""),
+                news_as_of=str(events[0]["published_at"] if events else ""),
+                long_row=long_row,
+            ),
+            autonomy,
+        )
     if pack.get("revenue_drivers") and pack["revenue_drivers"] != "Data unavailable — no segment table on file.":
         profile["revenue_drivers"] = pack["revenue_drivers"]
     # Classifier owns sector / sub-sector / business_model. Pack may fill about
