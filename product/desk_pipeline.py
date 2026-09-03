@@ -184,7 +184,14 @@ def _kind_for_step(step_id: str, store: OperationStore | None = None) -> str | N
         kind = None if acquire_is_fresh() else DUE_DILIGENCE_ACQUIRE
     else:
         kind = None
-    if kind and store is not None and _recently_succeeded(store, _kinds_for_id(step_id), _fresh_s(step_id)):
+    # Symbol-level acquire freshness already decided this step is due. A previous
+    # shortlist succeeding must not hide a new recommendation candidate.
+    if (
+        kind
+        and store is not None
+        and step_id != "investigate"
+        and _recently_succeeded(store, _kinds_for_id(step_id), _fresh_s(step_id))
+    ):
         return None
     return kind
 

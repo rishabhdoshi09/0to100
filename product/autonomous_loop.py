@@ -105,11 +105,11 @@ def _cards(reco: Mapping[str, Any]) -> list[dict[str, Any]]:
         return out
 
 
-def _census(scan: Mapping[str, Any], reco: Mapping[str, Any], paper: Mapping[str, Any]) -> dict[str, Any]:
+def _census(scan: Mapping[str, Any], reco: Mapping[str, Any], paper: Mapping[str, Any], session: str = "") -> dict[str, Any]:
     coverage = dict(scan.get("coverage") or {})
     reasons = dict(coverage.get("reason_counts") or {})
     ensemble = dict(reco.get("ensemble") or {})
-    states = CL.state_counts(str(scan.get("as_of_session") or session_date())[:10])
+    states = CL.state_counts(str(session or session_date())[:10])
     return {
         "universe": int(coverage.get("requested") or scan.get("requested_universe") or 0),
         "eligible": int(coverage.get("checked") or scan.get("scanned") or 0),
@@ -320,28 +320,31 @@ def _consume_paper(cards: list[dict[str, Any]], reco: Mapping[str, Any], session
             decision_id_value=did, paper_intent_id=intent_id, trigger="paper",
             payload={"paper": row},
         )
-        try:
-            from product.forward_evidence import freeze_observation
+        prev = CL.get(CL.candidate_id(symbol, session))
+        already = bool(prev and prev.get("decision_id") == did)
+        if not already:
+            try:
+                from product.forward_evidence import freeze_observation
 
-            freeze_observation(
-                {**row, "scan_scanned_at": scan_run_id, "reco_tier": card.get("reco_tier")},
-                cycle_id=scan_run_id, as_of=session, group=decision.group or decision.decision,
-                entered=False, surfaced=True,
-            )
-        except Exception:
-            pass
-        try:
-            from product.counterfactual_learning import freeze_decision
+                freeze_observation(
+                    {**row, "scan_scanned_at": scan_run_id, "reco_tier": card.get("reco_tier")},
+                    cycle_id=scan_run_id, as_of=session, group=decision.group or decision.decision,
+                    entered=False, surfaced=True,
+                )
+            except Exception:
+                pass
+            try:
+                from product.counterfactual_learning import freeze_decision
 
-            freeze_decision(
-                symbol=symbol, reason_code=str(row.get("reason_code") or ""),
-                decision=str(row.get("decision") or ""),
-                entry=card.get("entry"), stop=card.get("stop"), target=card.get("target"),
-                as_of=session,
-                evidence={"scan_run_id": scan_run_id, "recommendation_id": rid, "decision_id": did},
-            )
-        except Exception:
-            pass
+                freeze_decision(
+                    symbol=symbol, reason_code=str(row.get("reason_code") or ""),
+                    decision=str(row.get("decision") or ""),
+                    entry=card.get("entry"), stop=card.get("stop"), target=card.get("target"),
+                    as_of=session,
+                    evidence={"scan_run_id": scan_run_id, "recommendation_id": rid, "decision_id": did},
+                )
+            except Exception:
+                pass
     return {
         "taken": taken, "waits": waits, "rejections": rejections, "intents": intents,
         "broker_ok": broker_ok, "entry_window": window,
@@ -659,7 +662,7 @@ def advance_loop(*, trigger: str = "pipeline") -> dict[str, Any]:
         outcomes = settle_official_outcomes(session)
         emit("OUTCOME", f"official settlement · {outcomes.get('n_settled')} matured · {len(outcomes.get('pending') or [])} pending")
 
-    census = _census(scan, reco, paper)
+    census = _census(scan, reco, paper, session)
     funnel = dict((census.get("funnel") or {}))
     funnel["deep_researched"] = int(research.get("n_ok") or 0)
     census["funnel"] = funnel

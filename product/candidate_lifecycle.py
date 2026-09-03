@@ -30,6 +30,12 @@ STATES = (
     WAIT, WAIT_EVIDENCE, REJECTED, INVALIDATED, EXPIRED, CLOSED,
 )
 
+_RANK = {
+    DISCOVERED: 0, SCREENED: 1, WATCH: 1, RESEARCHING: 2, WAIT_EVIDENCE: 2,
+    QUALIFIED: 3, WAIT: 3, REJECTED: 3, READY: 4, ENTERED: 5,
+    INVALIDATED: 6, EXPIRED: 6, CLOSED: 6,
+}
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -101,6 +107,7 @@ def upsert(
     payload: Mapping[str, Any] | None = None,
     trigger: str = "",
     path: Path | None = None,
+    demote: bool = False,
 ) -> dict[str, Any]:
     cid = candidate_id(symbol, session_date)
     now = _now()
@@ -125,6 +132,8 @@ def upsert(
     else:
         merged = dict(prev)
         next_state = state or merged["state"]
+        if not demote and _RANK.get(next_state, 0) < _RANK.get(merged["state"], 0):
+            next_state = merged["state"]
         if next_state != merged["state"] or reason:
             con.execute(
                 "INSERT INTO transitions (candidate_id, from_state, to_state, reason, at, trigger) VALUES (?,?,?,?,?,?)",
