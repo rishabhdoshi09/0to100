@@ -18,6 +18,13 @@
   content: none !important;
 }
 
+/* Broker login is an optional capability, not a global app alarm. A legacy
+   LOGIN_REQUIRED state must therefore not turn the whole Desk amber. Genuine
+   operator intervention is still surfaced through os.need_me and problem states. */
+.home-os-card.state-login_required {
+  border-color: rgba(122, 159, 199, 0.28) !important;
+}
+
 /* Home is not another Scanner. The autonomous operating system already tells
    the operator what happened, what matters, what is next and whether anything
    needs human attention. Discovery/ranking internals live on Scanner. */
@@ -60,13 +67,13 @@
   min-height: 34px;
 }
 
-/* Operator alarm hierarchy: only genuine intervention gets visual urgency. */
+/* Operator alarm hierarchy: only genuine intervention/problem states get
+   visual urgency. LOGIN_REQUIRED alone is intentionally absent. */
 .home-os-grid > div:nth-child(3) {
   border-color: rgba(135, 158, 188, 0.18);
 }
 
 .home-os-card.state-needs_you .home-os-grid > div:nth-child(3),
-.home-os-card.state-login_required .home-os-grid > div:nth-child(3),
 .home-os-card.state-problem .home-os-grid > div:nth-child(3),
 .home-os-card.state-failed_recoverable .home-os-grid > div:nth-child(3) {
   border-color: rgba(255, 184, 77, 0.5);
