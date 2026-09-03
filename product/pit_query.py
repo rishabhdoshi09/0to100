@@ -171,6 +171,37 @@ def attach_pit_to_card(card: dict[str, Any], *, as_of: str, path=None) -> dict[s
     return out
 
 
+def production_comparable(*, fin: dict[str, Any], research: dict[str, Any]) -> bool:
+    """Committee can run the same financial quality path as live Investigate.
+
+    One dated XBRL print is not enough. Trend/margin derivation needs at
+    least two parsed periods, and the tables Investigate consumes must
+    actually contain those periods. Sector labels remain approximate and
+    are not part of this gate.
+    """
+    derived = dict(fin.get("derived") or {})
+    tables = dict(fin.get("tables") or {})
+    quarterly = list(tables.get("quarterly_results") or [])
+    periods = 0
+    for row in quarterly:
+        if str(row.get("row_label") or "").startswith("Sales"):
+            periods = sum(1 for key, value in row.items() if key != "row_label" and value not in (None, ""))
+            break
+    answered = [str(x) for x in (research.get("answered") or []) if x not in {"financial_result_filed"}]
+    return bool(
+        fin.get("numbers_parsed")
+        and not fin.get("stale_for_production")
+        and int(fin.get("n_parsed_results") or 0) >= 2
+        and periods >= 2
+        and (
+            derived.get("pat_margin_pct") is not None
+            or derived.get("revenue_yoy_pct") is not None
+            or derived.get("pbt_margin_pct") is not None
+        )
+        and bool(answered)
+    )
+
+
 def replay_grade_for_symbol(symbol: str, *, as_of: str, market_bars_ok: bool, path=None) -> dict[str, Any]:
     items = company_items_for_grade(symbol, as_of=as_of, path=path)
     grade = grade_replay(
@@ -184,23 +215,21 @@ def replay_grade_for_symbol(symbol: str, *, as_of: str, market_bars_ok: bool, pa
     # PIT_STRONG requires more than "two filings exist".
     fin = get_financial_snapshot(symbol, as_of=as_of, path=path)
     research = get_research_snapshot(symbol, as_of=as_of, path=path)
-    production_comparable = bool(
-        fin.get("numbers_parsed")
-        and not fin.get("stale_for_production")
-        and str(research.get("quality_label") or "") not in {"", "Unmeasured"}
-    )
-    if grade.get("grade") == PIT_STRONG and not production_comparable:
+    comparable = production_comparable(fin=fin, research=research)
+    if grade.get("grade") == PIT_STRONG and not comparable:
         grade["grade"] = PIT_PARTIAL
         grade["reason"] = (
             "Dated filings exist but the production committee cannot make a "
-            "comparable judgment: parsed financial facts or framework answers are missing."
+            "comparable judgment: parsed multi-period financial facts or "
+            "framework answers are missing."
         )
         grade["comparable_to_forward"] = False
     if not items and market_bars_ok:
         grade["grade"] = PIT_MARKET_ONLY
     grade["financial_numbers_parsed"] = bool(fin.get("numbers_parsed"))
+    grade["n_parsed_results"] = int(fin.get("n_parsed_results") or 0)
     grade["research_answered"] = list(research.get("answered") or [])
-    grade["production_comparable"] = production_comparable
+    grade["production_comparable"] = comparable
     return grade
 
 

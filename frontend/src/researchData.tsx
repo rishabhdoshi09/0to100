@@ -79,10 +79,14 @@ const statusClass = (status: string, acquisition?: string) => {
   return 'evidence-status missing'
 }
 
-const acquisitionLabel = (item: Requirement) => {
-  if (item.acquisition === 'AUTO_SOURCED') return 'AUTO-SOURCED'
-  if (item.acquisition === 'AUTOMATION_FAILED') return 'AUTOMATION FAILED'
-  if (item.acquisition === 'MANUAL') return 'MANUAL FALLBACK'
+const acquisitionLabel = (item: Requirement, sourcing = false) => {
+  if (sourcing && item.acquisition !== 'AUTO_SOURCED' && item.acquisition !== 'MANUAL') {
+    return 'AUTO-SOURCING'
+  }
+  if (item.acquisition === 'AUTO_SOURCED') return 'ACQUIRED'
+  if (item.acquisition === 'AUTOMATION_FAILED') return 'FAILED — MANUAL FALLBACK AVAILABLE'
+  if (item.acquisition === 'MANUAL') return 'FAILED — MANUAL FALLBACK AVAILABLE'
+  if (item.acquisition === 'MISSING') return 'AUTO-SOURCING'
   return item.status
 }
 const humanBytes = (value: number) => {
@@ -236,7 +240,11 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
         <header>
           <div>
             <h2>Automatic data preparation</h2>
-            <p>{acquireNote || 'QuantTerm locates official sources itself. Manual upload is only a fallback when automation fails.'}</p>
+            <p>
+              {acquiring
+                ? 'AUTO-SOURCING official filings and datasets. Do not hunt annual reports unless a class fails.'
+                : acquireNote || 'QuantTerm locates official sources itself. Hunt-and-upload is only shown after AUTO-SOURCING fails.'}
+            </p>
           </div>
           <div className="resource-links">
             <button type="button" disabled={acquiring} onClick={() => void autoAcquire()}>{acquiring ? 'Acquiring…' : 'Acquire evidence now'}</button>
@@ -270,12 +278,12 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
         <div className="requirements-list">
           {(status?.requirements || []).map((item) => {
             const current = draft(item.key)
-            const needsManual = item.acquisition === 'AUTOMATION_FAILED' || item.acquisition === 'MISSING' || item.status === 'SOURCE_ATTACHED_UNPARSED'
+            const needsManual = item.acquisition === 'AUTOMATION_FAILED' || item.acquisition === 'MANUAL' || item.status === 'SOURCE_ATTACHED_UNPARSED'
             return (
               <article className="requirement-card" key={item.key}>
                 <div className="requirement-head">
                   <div><h3>{item.label}</h3><p>{item.why}</p></div>
-                  <div className={statusClass(item.status, item.acquisition)}>{acquisitionLabel(item)}</div>
+                  <div className={statusClass(item.status, item.acquisition)}>{acquisitionLabel(item, acquiring)}</div>
                 </div>
                 <div className="requirement-meta">
                   <span>Status <strong>{item.status}</strong></span>
@@ -288,15 +296,21 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
                 {item.evidence ? <p className="requirement-instructions">{item.evidence}</p> : null}
                 {item.source_url ? <p className="panel-copy">Source URL: <a href={item.source_url} target="_blank" rel="noreferrer">{item.source_url}</a></p> : null}
                 {item.sha256 ? <p className="panel-copy">Content hash {item.sha256.slice(0, 16)} · parser {item.parser || '—'}</p> : null}
-                {item.acquisition === 'AUTOMATION_FAILED' ? (
+                {item.acquisition === 'AUTO_SOURCED' ? (
+                  <p className="requirement-instructions">ACQUIRED automatically. No operator hunt required.</p>
+                ) : item.acquisition === 'AUTOMATION_FAILED' || item.acquisition === 'MANUAL' ? (
                   <p className="requirement-instructions">
-                    AUTOMATION FAILED. Reason: {item.failure_reason || 'unknown'}.
+                    FAILED — MANUAL FALLBACK AVAILABLE. Reason: {item.failure_reason || 'unknown'}.
                     {(item.sources_attempted || []).length
                       ? ` Sources attempted: ${(item.sources_attempted || []).map((row) => row.url || row.path || 'unknown').filter(Boolean).join(', ')}`
                       : ''}
-                    {' '}Manual evidence upload available.
+                    {item.instructions ? ` ${item.instructions}` : ''}
                   </p>
-                ) : <p className="requirement-instructions">{item.instructions}</p>}
+                ) : acquiring ? (
+                  <p className="requirement-instructions">AUTO-SOURCING this class. Manual upload stays hidden until it fails.</p>
+                ) : (
+                  <p className="requirement-instructions">Waiting for automatic acquisition. Do not hunt annual reports yet.</p>
+                )}
                 <div className="resource-links">
                   {item.source_url ? <a href={item.source_url} target="_blank" rel="noreferrer">View source</a> : null}
                   {item.links.map((link) => <a key={link.url} href={link.url} target="_blank" rel="noreferrer">{link.official === 'true' ? 'Official · ' : ''}{link.label}</a>)}

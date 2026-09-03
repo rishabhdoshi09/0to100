@@ -81,10 +81,10 @@ def classify_document(text: str) -> str:
 
 
 def _connect(path: Path | None = None) -> sqlite3.Connection:
+    from product.sqlite_runtime import connect, ensure_columns
+
     target = path or DB_PATH
-    target.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(str(target))
-    con.row_factory = sqlite3.Row
+    con = connect(target)
     con.execute(
         """
         CREATE TABLE IF NOT EXISTS evidence (
@@ -114,6 +114,30 @@ def _connect(path: Path | None = None) -> sqlite3.Connection:
         )
         """
     )
+    ensure_columns(con, "evidence", {
+        "symbol": "TEXT",
+        "evidence_type": "TEXT",
+        "period_start": "TEXT",
+        "period_end": "TEXT",
+        "publication_date": "TEXT",
+        "filing_date": "TEXT",
+        "exchange_timestamp": "TEXT",
+        "available_from": "TEXT",
+        "acquired_at": "TEXT",
+        "source": "TEXT",
+        "source_url": "TEXT",
+        "source_identity": "TEXT",
+        "source_trust": "INTEGER",
+        "raw_artifact_id": "TEXT",
+        "parser_version": "TEXT",
+        "extracted_json": "TEXT",
+        "supersedes": "TEXT",
+        "revision": "INTEGER DEFAULT 1",
+        "pit_status": "TEXT",
+        "document_type": "TEXT",
+        "reason_code": "TEXT",
+        "created_at": "TEXT",
+    })
     con.execute("CREATE INDEX IF NOT EXISTS idx_pit_sym_avail ON evidence(symbol, available_from)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_pit_type ON evidence(evidence_type)")
     con.execute(

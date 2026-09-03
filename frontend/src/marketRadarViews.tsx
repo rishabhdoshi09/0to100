@@ -514,26 +514,22 @@ function HomeOsCard({
       </div>
       <div className="home-os-grid">
         <div>
-          <span>TODAY</span>
-          <strong>{os.today?.market_open ? 'Market open' : 'Market closed'}</strong>
-          <small>{os.today?.market_mood || os.today?.market_phase || '—'}</small>
+          <span>SYSTEM</span>
+          <strong>{os.headline}</strong>
+          <small>{os.subtext}</small>
         </div>
         <div>
-          <span>PAPER BOT</span>
-          <strong>{os.paper_bot?.paused ? 'PAUSED' : 'ON'}</strong>
-          <small>
-            {os.observe_only ? 'Observe only today · paper still runs · ' : ''}
-            {os.paper_bot?.positions_open ?? 0} open · {os.paper_bot?.todays_entries ?? 0} today
-            {os.paper_bot?.why ? ` · ${os.paper_bot.why}` : ''}
-          </small>
+          <span>AUTONOMY</span>
+          <strong>{os.runtime?.lifecycle || os.now || os.state}</strong>
+          <small>{os.next || os.runtime?.reason || 'Leave it running'}</small>
         </div>
         <div>
-          <span>LEARNING</span>
-          <strong>{os.learning?.insufficient_evidence ? 'Too early to judge' : (os.learning?.simple || 'Collecting')}</strong>
+          <span>NEEDS YOU</span>
+          <strong>{os.need_me || os.broker?.login_required ? (os.broker?.login_required ? 'Broker login' : 'Yes') : 'No'}</strong>
           <small>
-            {depth === 'professional'
-              ? `REAL_FORWARD_N ${os.learning?.real_forward_n ?? 0} · coverage ${os.learning?.execution_adjusted_coverage_pct ?? 'n/a'}`
-              : os.learning?.simple}
+            {os.need_me
+              ? (os.primary_action?.instruction || os.primary_action?.label || os.broker?.detail || 'Operator action required')
+              : 'No genuine operator intervention'}
           </small>
         </div>
         <div>
@@ -542,13 +538,28 @@ function HomeOsCard({
           <small>Paper only. No live buy button.</small>
         </div>
       </div>
+      {(os.recent_activity || []).length ? (
+        <div className="home-os-past">
+          <span>WHAT QUANTTERM DID</span>
+          <strong>{os.now || 'Recent automatic work'}</strong>
+          <ul className="home-os-activity">
+            {(os.recent_activity || []).slice(0, 8).map((row, index) => (
+              <li key={`${row.text}-${index}`}>
+                {row.at ? <time>{row.at.slice(11, 16) || row.at.slice(0, 10)}</time> : <time>—</time>}
+                <span>{row.text}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       {(os.opportunities || []).length ? (
         <div className="home-os-opps">
-          {(os.opportunities || []).slice(0, 4).map((row, index) => {
+          <span>OPPORTUNITIES</span>
+          {(os.opportunities || []).slice(0, 6).map((row, index) => {
             const symbol = String(row.found || '').split(/\s+/)[0]
             return (
             <div key={`${row.found}-${index}`}>
-              <span>{row.label || 'Setup'}</span>
+              <span>{row.label || row.action || 'WAIT / research'}</span>
               <strong>{row.found}</strong>
               <small>{depth === 'professional' ? (row.technical || row.meaning) : row.meaning}</small>
               {symbol && onOpenPage ? (
@@ -567,7 +578,43 @@ function HomeOsCard({
             )
           })}
         </div>
-      ) : null}
+      ) : (
+        <div className="home-os-past">
+          <span>OPPORTUNITIES</span>
+          <strong>None ready</strong>
+          <small>No BUY / READY names. WAIT and research stay in the committee journal.</small>
+        </div>
+      )}
+      <div className="home-os-grid">
+        <div>
+          <span>PORTFOLIO</span>
+          <strong>{os.paper_bot?.paused ? 'PAUSED' : 'ON'}</strong>
+          <small>
+            {os.observe_only ? 'Observe only today · paper still runs · ' : ''}
+            {os.paper_bot?.positions_open ?? 0} open · heat {String(os.paper_bot?.risk_used ?? 'n/a')}
+            {os.paper_bot?.why ? ` · ${os.paper_bot.why}` : ''}
+          </small>
+        </div>
+        <div>
+          <span>LEARNING</span>
+          <strong>{os.learning?.insufficient_evidence ? 'Too early to judge' : (os.learning?.simple || 'Collecting')}</strong>
+          <small>
+            {depth === 'professional'
+              ? `REAL_FORWARD_N ${os.learning?.real_forward_n ?? 0} · coverage ${os.learning?.execution_adjusted_coverage_pct ?? 'n/a'}`
+              : os.learning?.simple}
+          </small>
+        </div>
+        <div>
+          <span>TODAY</span>
+          <strong>{os.today?.market_open ? 'Market open' : 'Market closed'}</strong>
+          <small>{os.today?.market_mood || os.today?.market_phase || '—'}</small>
+        </div>
+        <div>
+          <span>PAPER BOT</span>
+          <strong>{os.paper_bot?.positions_open ?? 0} open</strong>
+          <small>{os.paper_bot?.todays_entries ?? 0} entries · {os.paper_bot?.exits ?? 0} exits</small>
+        </div>
+      </div>
       {os.past_decisions?.available ? (
         <div className="home-os-past">
           <span>PAST DECISION TEST</span>
@@ -581,7 +628,7 @@ function HomeOsCard({
         </div>
       ) : null}
       <div className="home-os-system-head">
-        <span>BACKEND</span>
+        <span>SYSTEM</span>
         <button
           type="button"
           className="home-os-check"
@@ -612,16 +659,6 @@ function HomeOsCard({
           onOpenPage={onOpenPage}
           onClose={() => setOpenLane(null)}
         />
-      ) : null}
-      {(os.recent_activity || []).length ? (
-        <ul className="home-os-activity">
-          {(os.recent_activity || []).slice(0, 8).map((row, index) => (
-            <li key={`${row.text}-${index}`}>
-              {row.at ? <time>{row.at.slice(11, 16) || row.at.slice(0, 10)}</time> : <time>—</time>}
-              <span>{row.text}</span>
-            </li>
-          ))}
-        </ul>
       ) : null}
       {os.yesterday ? (
         <p className="panel-copy">

@@ -17,10 +17,10 @@ def _now() -> str:
 
 
 def _connect(path: Path | None = None) -> sqlite3.Connection:
+    from product.sqlite_runtime import connect
+
     target = path or DB_PATH
-    target.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(str(target))
-    con.row_factory = sqlite3.Row
+    con = connect(target)
     con.execute(
         """
         CREATE TABLE IF NOT EXISTS decisions (

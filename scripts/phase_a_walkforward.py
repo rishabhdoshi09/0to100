@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 from product.historical_replay import run_walk_forward_sample
 from product.pit_backfill import WALK_FORWARD_UNIVERSE
@@ -14,8 +16,9 @@ from product.pit_coverage import data_debt
 from product.pit_warehouse import counts
 from product.data_integrity import audit_decisions, audit_warehouse
 
-OUT = Path("/opt/cursor/artifacts/phaseA_walkforward.json")
-DIR = Path("/workspace/logs/product/historical_replay_phaseA")
+ARTIFACT_ROOT = Path(os.environ.get("QT_ARTIFACTS") or "/opt/cursor/artifacts")
+OUT = ARTIFACT_ROOT / "phaseA_walkforward.json"
+DIR = Path(os.environ.get("QT_REPLAY_DIR") or ROOT / "logs" / "product" / "historical_replay_phaseA")
 
 
 def main() -> None:
@@ -70,7 +73,7 @@ def main() -> None:
     }
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
-    Path("/opt/cursor/artifacts/phaseA_walkforward_full.json").write_text(
+    (ARTIFACT_ROOT / "phaseA_walkforward_full.json").write_text(
         json.dumps({k: payload.get(k) for k in payload if k not in {"decisions", "rows"}}, indent=2, default=str),
         encoding="utf-8",
     )

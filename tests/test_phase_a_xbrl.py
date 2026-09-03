@@ -151,6 +151,41 @@ def test_screener_unused_when_xbrl_present(tmp_path):
     assert inputs["raw_fundamentals"]["source"] == "pit_warehouse_xbrl"
     assert inputs["raw_fundamentals"]["data"]["quarterly_results"]
     grade = overall_replay_grade("INFY", as_of="2026-06-12", market_bars_ok=True, path=db)
+    assert grade["production_comparable"] is False
+    assert grade["grade"] == PIT_PARTIAL
+
+
+def test_two_parsed_periods_can_be_production_comparable(tmp_path):
+    db = tmp_path / "pit.db"
+    persist({
+        "symbol": "INFY",
+        "evidence_type": DOC_QUARTERLY_RESULT,
+        "publication_date": "2026-01-14",
+        "available_from": "2026-01-14",
+        "period_end": "2025-12-31",
+        "source": "NSE XBRL",
+        "source_identity": "nse_xbrl:q3",
+        "extracted": {
+            "numbers_parsed": True,
+            "facts": {"revenue": 37996.0, "pat": 6811.0, "pbt": 9000.0, "finance_costs": 50.0},
+        },
+    }, path=db)
+    persist({
+        "symbol": "INFY",
+        "evidence_type": DOC_QUARTERLY_RESULT,
+        "publication_date": "2026-04-23",
+        "available_from": "2026-04-23",
+        "period_end": "2026-03-31",
+        "source": "NSE XBRL",
+        "source_identity": "nse_xbrl:q4b",
+        "extracted": {
+            "numbers_parsed": True,
+            "facts": {"revenue": 40986.0, "pat": 8090.0, "pbt": 11000.0, "finance_costs": 60.0},
+        },
+    }, path=db)
+    inputs = pit_research_inputs("INFY", as_of="2026-06-12", path=db)
+    assert inputs["raw_fundamentals"]["point_in_time"] is True
+    grade = overall_replay_grade("INFY", as_of="2026-06-12", market_bars_ok=True, path=db)
     assert grade["production_comparable"] is True
     assert grade["grade"] == PIT_STRONG
-    assert grade["grade"] != PIT_PARTIAL or grade["production_comparable"]
+    assert grade["n_parsed_results"] >= 2

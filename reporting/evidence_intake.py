@@ -340,10 +340,19 @@ def save_upload(symbol: str, kind: str, content: bytes, *, filename: str, as_of:
 
 
 def upload_path(symbol: str, evidence_id: str) -> Path | None:
+    root = ROOT.resolve()
     for item in _load_manifest(symbol):
-        if str(item.get("evidence_id")) == str(evidence_id):
-            path = ROOT / str(item.get("path", ""))
-            return path if path.exists() else None
+        if str(item.get("evidence_id")) != str(evidence_id):
+            continue
+        raw = str(item.get("path") or "")
+        if not raw or raw.startswith("/") or ".." in Path(raw).parts:
+            return None
+        path = (root / raw).resolve()
+        try:
+            path.relative_to(root)
+        except ValueError:
+            return None
+        return path if path.is_file() else None
     return None
 
 

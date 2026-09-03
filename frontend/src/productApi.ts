@@ -896,6 +896,14 @@ export type HomeOperatingSystem = {
     checked_at?: string
     components?: Array<{ name?: string; status?: string; detail?: string }>
   }
+  broker?: {
+    status?: string
+    login_required?: boolean
+    detail?: string
+    live_locked?: boolean
+    paper_only?: boolean
+    paper_mode?: boolean
+  }
   past_decisions?: {
     available?: boolean
     provenance?: string

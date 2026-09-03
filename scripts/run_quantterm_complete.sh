@@ -32,6 +32,18 @@ if ! python -c 'import reportlab, fastapi, uvicorn' >/dev/null 2>&1; then
   python -m pip install 'reportlab>=4.2.0' 'fastapi>=0.115.0' 'uvicorn>=0.30.0'
 fi
 
+python - <<'PY' || true
+from product.sqlite_runtime import bootstrap_product_stores
+from product.pit_warehouse import DB_PATH, counts
+print("[COMPLETE STACK] Product stores:", bootstrap_product_stores())
+warehouse = counts()
+print(f"[COMPLETE STACK] PIT warehouse {DB_PATH}: {warehouse}")
+if not int(warehouse.get("rows") or 0):
+    print("[COMPLETE STACK] PIT warehouse is empty (runtime DB, not versioned).")
+    print("[COMPLETE STACK] Reconstruct official XBRL memory with:")
+    print("  PYTHONPATH=. python scripts/phase_a_xbrl_backfill.py")
+PY
+
 if [[ ! -d frontend/node_modules ]]; then
   if ! command -v npm >/dev/null 2>&1; then
     echo "[COMPLETE STACK] npm is required for the desk UI. Install Node.js, then re-run." >&2

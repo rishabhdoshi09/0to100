@@ -158,7 +158,11 @@ def overall_replay_grade(
             reason = "OHLCV/regime only — no dated company evidence at T"
     elif grade.get("production_comparable"):
         overall = PIT_STRONG
-        reason = "required decision inputs are historically supportable"
+        reason = (
+            "required decision inputs are historically supportable: "
+            "official bars, multi-period parsed financials, and derived "
+            "quality measures the live committee also consumes"
+        )
     else:
         overall = PIT_PARTIAL
         reason = grade.get("reason") or "dated company evidence exists; production-comparable judgment is not"

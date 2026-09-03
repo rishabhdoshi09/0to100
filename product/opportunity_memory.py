@@ -20,10 +20,9 @@ def opportunity_id(symbol: str) -> str:
 
 
 def _connect(path: Path | None = None) -> sqlite3.Connection:
-    target = path or DB_PATH
-    target.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(str(target))
-    con.row_factory = sqlite3.Row
+    from product.sqlite_runtime import connect
+
+    con = connect(path or DB_PATH)
     con.execute(
         """
         CREATE TABLE IF NOT EXISTS opportunities (

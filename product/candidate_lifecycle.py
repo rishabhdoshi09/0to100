@@ -48,8 +48,9 @@ def db_path(path: Path | None = None) -> Path:
 
 
 def _connect(path: Path | None = None) -> sqlite3.Connection:
-    con = sqlite3.connect(str(db_path(path)))
-    con.row_factory = sqlite3.Row
+    from product.sqlite_runtime import connect
+
+    con = connect(db_path(path))
     con.execute(
         """
         CREATE TABLE IF NOT EXISTS candidates (
