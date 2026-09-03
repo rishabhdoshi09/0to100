@@ -797,6 +797,7 @@ class MarketOperationsWorker:
             self._set_active(lane, operation)
             operation_id = str(operation["operation_id"])
             kind = str(operation["kind"])
+            completed_kind = kind
             started = time.monotonic()
             _emit("START", f"{kind} · id={operation_id} · lane={lane} · attempt={operation.get('attempt')}")
             try:
@@ -839,6 +840,19 @@ class MarketOperationsWorker:
                         _emit("QUEUE", f"next desk step {kind} · {nxt.get('message', '')}")
                 except Exception as exc:
                     _emit("INFO", f"desk pipeline advance skipped · {type(exc).__name__}: {exc}")
+                if completed_kind in {MARKET_SCAN, DUE_DILIGENCE_ACQUIRE}:
+                    try:
+                        from product.autonomous_loop import advance_loop
+
+                        loop = advance_loop(trigger=str(completed_kind))
+                        _emit(
+                            "LOOP",
+                            f"autonomous loop · candidates={loop.get('candidates_touched')} · "
+                            f"research={((loop.get('research') or {}).get('n_ok'))} · "
+                            f"paper={((loop.get('paper') or {}).get('eligibility'))}",
+                        )
+                    except Exception as exc:
+                        _emit("INFO", f"autonomous loop skipped · {type(exc).__name__}: {exc}")
 
     def _bootstrap(self) -> list[str]:
         try:

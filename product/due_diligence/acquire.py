@@ -74,9 +74,37 @@ def save_autonomy_facts(symbol: str, payload: Mapping[str, Any]) -> Path:
     return path
 
 
+def _recommendation_shortlist(limit: int = ACQUIRE_CAP) -> list[str]:
+    """Prefer recommendation-worthy names over raw scan rank. Cheap first."""
+    try:
+        from product.recommendations_store import load_recommendations
+        from product.autopilot_journal import flatten_cards
+
+        reco = load_recommendations() or {}
+        cards = [c for c in flatten_cards(reco) if isinstance(c, dict)]
+    except Exception:
+        return []
+    ranked = [
+        c for c in cards
+        if str(c.get("reco_tier") or "") in {"high_conviction", "good_setup"}
+    ]
+    ranked.sort(key=lambda c: (str(c.get("reco_tier")) != "high_conviction", str(c.get("symbol") or "")))
+    out: list[str] = []
+    for card in ranked:
+        symbol = str(card.get("symbol") or "").upper()
+        if symbol and symbol not in out:
+            out.append(symbol)
+        if len(out) >= int(limit):
+            break
+    return out
+
+
 def shortlist_symbols(limit: int = ACQUIRE_CAP, scan_payload: Mapping[str, Any] | None = None) -> list[str]:
     """Names the desk already shortlisted. Does not scan the market."""
     if scan_payload is None:
+        reco_names = _recommendation_shortlist(limit)
+        if reco_names:
+            return reco_names
         try:
             from product.scan_store import load_scan
             scan_payload = load_scan() or {}

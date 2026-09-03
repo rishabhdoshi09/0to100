@@ -235,10 +235,10 @@ class Supervisor:
         if slot == "eod":
             self.jobs.enqueue(SCH.BHAVCOPY_UPDATE,
                               idempotency_key=SCH.eod_bhavcopy_key(session_date))
-            eod_refresh = self.jobs.enqueue(
+            # Kite snapshot refresh is optional after close. Official bhavcopy +
+            # outcome/learning continue even when DATA_REFRESH is BLOCKED on login.
+            self.jobs.enqueue(
                 SCH.DATA_REFRESH, idempotency_key=SCH.eod_data_refresh_key(session_date), critical=True)
-            if eod_refresh.status != JS.SUCCEEDED:
-                return
         snap = str(self.deps.active_snapshot_id() or "none")
         if slot:
             skey = SCH.scan_key(snap, slot, session_date)
@@ -540,6 +540,9 @@ class Supervisor:
     def _gated_state(self, hint):
         if self.owner_state.get("halted"):
             return ST.HALTED
+        # Official post-market work is not a broker outage. Let those hints stand.
+        if hint in (ST.OBSERVING, ST.RESEARCHING, ST.PAPER_ACTIVE, ST.DATA_READY):
+            return hint
         if H.AUTH_MISSING in self.failures or H.AUTH_EXPIRED in self.failures:
             return ST.AUTH_REQUIRED
         if H.SNAPSHOT_STALE in self.failures:

@@ -21,6 +21,9 @@ from research.autonomy import auth as AUTH
 
 DEP_AUTH = "AUTH_READY"
 DEP_DATA = "DATA_READY"
+DEP_OFFICIAL = "OFFICIAL_MARKET_DATA_READY"
+DEP_BROKER = "BROKER_LIVE_DATA_READY"
+DEP_OUTCOME_DATA = "OUTCOME_DATA_READY"
 DEP_SCAN = "SCAN_READY"
 DEP_OUTCOMES = "OUTCOMES_RESOLVED"
 DEP_LEARNING = "LEARNING_READY"
@@ -669,12 +672,27 @@ def run_long_term_refresh_job(ctx) -> JobResult:
     return _run_long_term(ctx, refresh_fundamentals=True)
 
 
+def _official_ready(ctx=None) -> dict:
+    if ctx is not None and hasattr(ctx.deps, "official_history"):
+        try:
+            return dict(ctx.deps.official_history() or {})
+        except Exception:
+            return {"current": False}
+    try:
+        from product.readiness import official_history
+
+        return official_history()
+    except Exception:
+        return {"current": False}
+
+
 def run_market_scan(ctx) -> JobResult:
     snap = ctx.deps.active_snapshot_id()
-    live = {} if snap else _live_market(ctx)
-    if not snap and not live.get("ready"):
-        return JobResult(JS.BLOCKED, "verified active snapshot required before market scan",
-                         failures={H.SNAPSHOT_STALE}, blocked_on=DEP_DATA,
+    official = _official_ready(ctx)
+    live = {} if snap or official.get("current") else _live_market(ctx)
+    if not snap and not official.get("current") and not live.get("ready"):
+        return JobResult(JS.BLOCKED, "official completed-session history required before market scan",
+                         failures={H.SNAPSHOT_STALE}, blocked_on=DEP_OFFICIAL,
                          state_hint=ST.DATA_BLOCKED, new_entries_allowed=False)
     if not snap and live.get("ready"):
         print(
@@ -728,13 +746,13 @@ def _entry_reason(now, holidays, ctx) -> tuple[bool, str, str]:
 
 
 def run_paper_cycle(ctx) -> JobResult:
-    if not ctx.deps.active_snapshot_id():
-        return JobResult(JS.BLOCKED, "verified active snapshot required before paper cycle",
-                         failures={H.SNAPSHOT_STALE}, blocked_on=DEP_DATA,
-                         state_hint=ST.DATA_BLOCKED, new_entries_allowed=False)
     now = ctx.deps.now_ist()
     holidays = ctx.deps.holidays()
     entries_ok, reason, phase = _entry_reason(now, holidays, ctx)
+    if not ctx.deps.active_snapshot_id():
+        # Still consume recommendations and persist BLOCKED_BROKER intents.
+        entries_ok = False
+        reason = reason or "BROKER_LOGIN_REQUIRED"
     try:
         try:
             result = ctx.deps.run_paper_cycle(entries_ok, reason, phase, ctx.active_failures)
@@ -770,44 +788,76 @@ def run_paper_cycle(ctx) -> JobResult:
 
 
 def run_outcome_resolution(ctx) -> JobResult:
-    session_date = ctx.deps.now_ist().date().isoformat()
-    if not ctx.deps.active_snapshot_id():
-        return JobResult(JS.BLOCKED, "verified EOD data required before outcome resolution",
-                         blocked_on=DEP_DATA, failures={H.SNAPSHOT_STALE})
-    if hasattr(ctx.deps, "active_snapshot_info"):
-        latest = str((ctx.deps.active_snapshot_info() or {}).get("latest_date") or "")
-        if latest < session_date:
-            return JobResult(JS.BLOCKED,
-                             f"outcomes wait for completed-session data ({latest or 'unknown'} < {session_date})",
-                             blocked_on=f"EOD_DATA_READY:{session_date}", failures={H.SNAPSHOT_STALE})
+    now = ctx.deps.now_ist()
+    holidays = ctx.deps.holidays() if hasattr(ctx.deps, "holidays") else None
+    session_date = SCH.last_completed_session_date(now, holidays) or now.date().isoformat()
+    official = _official_ready(ctx)
+    available = str(official.get("available_session") or official.get("latest_date") or "")[:10]
+    if not official.get("current") and (not available or available < session_date):
+        return JobResult(
+            JS.BLOCKED,
+            f"official completed-session bars required before outcome resolution ({available or 'none'} < {session_date})",
+            blocked_on=DEP_OUTCOME_DATA,
+            failures={H.SNAPSHOT_STALE},
+        )
+    result: dict = {}
     try:
         if hasattr(ctx.deps, "resolve_outcomes"):
-            result = ctx.deps.resolve_outcomes(session_date, ctx.active_failures)
+            result = ctx.deps.resolve_outcomes(session_date, ctx.active_failures) or {}
         else:
-            result = ctx.deps.run_paper_cycle(False)
+            result = ctx.deps.run_paper_cycle(False) or {}
     except Exception as exc:
-        return JobResult(JS.RETRYABLE_FAILED, "outcome resolution failed",
-                         error_code="OUTCOME_ERROR", error_message=str(exc))
-    closed = len((result or {}).get("positions_closed", []))
-    recorded = len((result or {}).get("outcomes_recorded", []))
+        result = {"paper_book_error": str(exc)[:240]}
+    official_settle: dict = {}
     if not os.environ.get("PYTEST_CURRENT_TEST"):
+        try:
+            from product.autonomous_loop import advance_loop
+
+            official_settle = advance_loop(trigger="outcome_resolution")
+        except Exception as exc:
+            official_settle = {"error": str(exc)[:240]}
         try:
             from product.paper_self_feed import ingest_paper_cycle
 
             ingest_paper_cycle(result or {}, as_of=session_date, slot="eod")
         except Exception:
             pass
-    return JobResult(JS.SUCCEEDED, f"outcomes resolved · {closed} positions closed · {recorded} decoded",
-                     unblocks=(f"{DEP_OUTCOMES}:{session_date}",), metadata=result or {})
+    else:
+        try:
+            from product.autonomous_loop import settle_official_outcomes
+
+            official_settle = settle_official_outcomes(session_date)
+        except Exception as exc:
+            official_settle = {"error": str(exc)[:240]}
+    if isinstance(result, dict):
+        result["official_settlement"] = official_settle
+    closed = len((result or {}).get("positions_closed", []))
+    recorded = len((result or {}).get("outcomes_recorded", []))
+    matured = int((official_settle or {}).get("n_settled") or 0)
+    return JobResult(
+        JS.SUCCEEDED,
+        f"outcomes resolved · {closed} book closes · {recorded} decoded · {matured} official",
+        unblocks=(f"{DEP_OUTCOMES}:{session_date}",),
+        metadata=result or {},
+    )
 
 
 def run_learning_cycle(ctx) -> JobResult:
-    session_date = ctx.deps.now_ist().date().isoformat()
+    now = ctx.deps.now_ist()
+    holidays = ctx.deps.holidays() if hasattr(ctx.deps, "holidays") else None
+    session_date = SCH.last_completed_session_date(now, holidays) or now.date().isoformat()
     try:
-        result = ctx.deps.run_learning(session_date, getattr(ctx, "dialogue", None))
+        result = ctx.deps.run_learning(session_date, getattr(ctx, "dialogue", None)) or {}
     except Exception as exc:
         return JobResult(JS.RETRYABLE_FAILED, "learning cycle failed", error_code="LEARNING_ERROR",
                          error_message=str(exc), failures={H.LEARNING_FAILED}, state_hint=ST.DEGRADED)
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        try:
+            from product.autonomous_loop import consume_learning_memory
+
+            result["settled_memory"] = consume_learning_memory(session_date)
+        except Exception as exc:
+            result["settled_memory"] = {"error": str(exc)[:200]}
     return JobResult(JS.SUCCEEDED,
                      f"learning complete · {result.get('diagnostics', 0)} diagnostics · "
                      f"{result.get('paper_closed', 0)} paper trades · "

@@ -179,6 +179,13 @@ def research_key(session_date: str) -> str:
 
 def last_completed_session_date(now_ist, holidays=None):
     """Most recent cash session that has already closed (today after 15:30, else prior)."""
+    if holidays is None:
+        try:
+            from research.intelligence.data.nse_calendar import load_holidays
+
+            holidays = load_holidays()
+        except Exception:
+            holidays = set()
     day = now_ist.date()
     if _is_session_day(now_ist, holidays) and now_ist.time() >= MARKET_CLOSE:
         return day.isoformat()

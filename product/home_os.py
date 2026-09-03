@@ -208,13 +208,14 @@ def build_home_os(
     now_line = "Watching the market"
     next_line = "Next automatic paper decision after the scan"
 
+    broker_login_required = not kite_ok
     if not live_locked:
         state = PROBLEM
         headline = "Live money must stay locked."
         subtext = "The paper path is the only money path. Do not trade live from Home."
         now_line = "Paper bot only"
         next_line = "Keep live money locked"
-    elif not kite_ok:
+    elif broker_login_required and not (data_ready and scan_ok):
         state = LOGIN_REQUIRED
         headline = "Zerodha login is needed."
         subtext = "Paper and official NSE data can still work. Live quotes wait for login."
@@ -317,6 +318,13 @@ def build_home_os(
             _action("PAUSE_NEW_PAPER_ENTRIES", label="Pause paper entries"),
             _action("OBSERVE_ONLY_TODAY", label="Observe only today"),
         ]
+
+    if broker_login_required and state != LOGIN_REQUIRED and primary_action is None:
+        primary_action = _action(
+            label="Login to Zerodha",
+            kind="instruction",
+            instruction="Official data, scan, research and post-market learning continue. Login is only required for live paper entry.",
+        )
 
     if observe_only and state in {NORMAL, NO_TRADE, MARKET_CLOSED_COMPLETE}:
         if "nothing was good enough" not in headline.lower() and "did not find" not in headline.lower():
@@ -429,13 +437,20 @@ def build_home_os(
         scan_d, why_d, latest, ops, verify, taken, recovered=list(recovered or []),
     )
     yesterday = _yesterday(verify, soak_d, why_d, scan_ok, reco_ok)
+    readiness: dict[str, Any] = {}
+    try:
+        from product.readiness import inspect_readiness
+
+        readiness = inspect_readiness()
+    except Exception:
+        readiness = {}
 
     return {
         "schema_version": SCHEMA_VERSION,
         "state": state,
         "headline": headline,
         "subtext": subtext,
-        "need_me": state in {LOGIN_REQUIRED, FAILED_RECOVERABLE, PAUSED, PROBLEM},
+        "need_me": state in {LOGIN_REQUIRED, FAILED_RECOVERABLE, PAUSED, PROBLEM} or broker_login_required,
         "primary_action": primary_action,
         "secondary_actions": (secondary + [_action("SIMULATE_PAST_DECISIONS", label="Simulate past decisions")])[:4],
         "simulate_action": _action("SIMULATE_PAST_DECISIONS", label="Simulate past decisions"),
@@ -486,6 +501,12 @@ def build_home_os(
         "yesterday": yesterday,
         "recovered": list(recovered or []),
         "live_locked": True,
+        "broker": {
+            "status": "LOGIN_REQUIRED" if broker_login_required else "READY",
+            "login_required": broker_login_required,
+            "detail": "Live paper entry and broker sync wait for Zerodha login." if broker_login_required else "Broker session is usable.",
+        },
+        "readiness": readiness,
         "runtime": runtime,
         "history_freshness": {
             "current": history_current,
