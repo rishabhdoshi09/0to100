@@ -53,15 +53,18 @@ if [[ ! -d frontend/node_modules ]]; then
   (cd frontend && npm install)
 fi
 
+# Broker connectivity is an optional capability. A clean checkout must still be
+# able to start research, scanning, replay, settlement and learning without Kite.
 if [[ ! -f .env ]]; then
   if [[ -f .env.example ]]; then
     cp .env.example .env
     chmod 600 .env 2>/dev/null || true
-    echo "[COMPLETE STACK] Wrote .env from .env.example. Put KITE_API_KEY and KITE_API_SECRET in it, then re-run."
-    exit 2
+    echo "[COMPLETE STACK] Wrote .env from .env.example. Zerodha credentials are optional; continuing in no-broker mode if they are absent."
+  else
+    : > .env
+    chmod 600 .env 2>/dev/null || true
+    echo "[COMPLETE STACK] Created an empty .env. Zerodha credentials are optional; continuing in no-broker mode."
   fi
-  echo "[COMPLETE STACK] Missing .env. Create it with KITE_API_KEY and KITE_API_SECRET." >&2
-  exit 2
 fi
 
 auth_rc=0
@@ -85,15 +88,12 @@ raise SystemExit(0)
 PY
 
 if [[ "$auth_rc" -eq 2 ]]; then
-  echo "[COMPLETE STACK] Put KITE_API_KEY and KITE_API_SECRET in .env, then run this same command again." >&2
-  exit 2
-fi
-
-if [[ "$auth_rc" -eq 1 ]]; then
+  echo "[COMPLETE STACK] Zerodha API credentials are not configured. Broker live-data/execution lanes are disabled; research, official-data scans, replay, settlement and learning continue."
+elif [[ "$auth_rc" -eq 1 ]]; then
   if [[ "${QT_NONINTERACTIVE:-}" == "1" || ! -t 0 ]]; then
-    echo "[COMPLETE STACK] Zerodha login is needed (once per trading day). Non-interactive run skipped it. Paper/EOD still work. Run: python main.py login"
+    echo "[COMPLETE STACK] Zerodha login is needed for broker-dependent work. Non-interactive run skipped it; non-broker autonomy continues. Run: python main.py login"
   else
-    echo "[COMPLETE STACK] Zerodha login is needed (once per trading day). Browser will open; paste the redirect URL here."
+    echo "[COMPLETE STACK] Zerodha login is needed for broker-dependent work. Browser will open; paste the redirect URL here, or Ctrl-C and restart with QT_NONINTERACTIVE=1 to run without broker capability."
     python main.py login
   fi
 fi
