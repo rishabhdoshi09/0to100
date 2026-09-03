@@ -1,4 +1,10 @@
-"""Scoped operator-intervention metrics. Never rewrite historical rows."""
+"""Scoped operator-intervention metrics. Never rewrite historical rows.
+
+Operator attention is measured from work that actually required a person. A
+missing broker session is a capability limitation, not automatically a human
+intervention: official data, research, replay, settlement, learning and shadow
+work can continue without Kite.
+"""
 from __future__ import annotations
 
 import sqlite3
@@ -18,7 +24,10 @@ AUTOMATED_BY = frozenset(
     {"pipeline", "bootstrap", "autonomy", "autonomous_loop", "market_scan", "desk_pipeline"}
 )
 HUMAN_BY = frozenset({"terminal", "user", "product_bootstrap"})
-NECESSARY_HUMAN_KINDS = frozenset({"KITE_LOGIN", "AUTH_HEALTH", "auth_health"})
+# AUTH_HEALTH is an automated probe. KITE_LOGIN represents a genuine human
+# action only when such a job was actually requested/persisted.
+NECESSARY_HUMAN_KINDS = frozenset({"KITE_LOGIN"})
+_ACTIVE_HUMAN_STATUSES = frozenset({"PENDING", "RUNNING", "BLOCKED"})
 
 
 def _now() -> str:
@@ -47,7 +56,7 @@ def _run_started_s() -> float | None:
 def _classify(requested_by: str, kind: str) -> str:
     by = str(requested_by or "")
     job = str(kind or "")
-    if job in NECESSARY_HUMAN_KINDS or "kite" in job.lower():
+    if job in NECESSARY_HUMAN_KINDS:
         return "NECESSARY_HUMAN_ACTION"
     if by in HUMAN_BY:
         if "override" in job.lower():
@@ -146,6 +155,22 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _active_human_requirements(rows: list[dict[str, Any]], *, since: float | None) -> list[str]:
+    """Return only persisted human actions that are still active in this scope."""
+    active: list[str] = []
+    for row in rows:
+        if since is not None and float(row.get("at") or 0) < since:
+            continue
+        if row.get("class") != "NECESSARY_HUMAN_ACTION":
+            continue
+        if str(row.get("status") or "").upper() not in _ACTIVE_HUMAN_STATUSES:
+            continue
+        label = "Zerodha authentication" if str(row.get("kind") or "") == "KITE_LOGIN" else str(row.get("kind") or "Human action")
+        if label not in active:
+            active.append(label)
+    return active
+
+
 def build_operator_metrics(*, session: str = "") -> dict[str, Any]:
     rows = _ops_rows()
     now = time.time()
@@ -163,8 +188,15 @@ def build_operator_metrics(*, session: str = "") -> dict[str, Any]:
     last_7d = [r for r in rows if r["at"] >= now - 7 * 86400]
     broker = RDY.broker_live()
     kite_needed = not bool(broker.get("ready"))
+    active_since = run_started if run_started is not None else session_start
+    necessary_now = _active_human_requirements(rows, since=active_since)
+    optional_capabilities = []
+    if kite_needed:
+        optional_capabilities.append(
+            "Zerodha login for broker-live quotes and broker-dependent paper entry"
+        )
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "generated_at": _now(),
         "do_not_rewrite_history": True,
         "scopes": {
@@ -187,6 +219,10 @@ def build_operator_metrics(*, session: str = "") -> dict[str, Any]:
             if current_run
             else _summarize(current_session) if current_session else _summarize(last_7d)
         ),
-        "necessary_human": ["Kite authentication"] if kite_needed else [],
+        "necessary_human": necessary_now,
+        "operator_attention_required_now": bool(necessary_now),
+        "optional_capabilities": optional_capabilities,
         "kite_needed_for_paper_entry_only": kite_needed,
+        "broker_capability_ready": not kite_needed,
+        "broker_reason_code": broker.get("reason_code") or "",
     }
