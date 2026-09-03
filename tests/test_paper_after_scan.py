@@ -116,6 +116,33 @@ def test_overnight_after_midnight_settles_previous_session():
     assert SCH.MARKET_SCAN not in types
 
 
+def test_eod_without_kite_snapshot_still_enqueues_official_work():
+    jobs = _Jobs()
+    jobs.cancel_superseded_pending = lambda *_a, **_k: None
+
+    def enqueue(job_type, **kwargs):
+        jobs.enqueued.append((job_type, kwargs))
+        status = JS.BLOCKED if job_type == SCH.DATA_REFRESH else JS.SUCCEEDED
+        return SimpleNamespace(status=status, job_type=job_type)
+
+    jobs.enqueue = enqueue
+    supervisor = Supervisor.__new__(Supervisor)
+    supervisor.jobs = jobs
+    supervisor.deps = SimpleNamespace(
+        now_ist=lambda: datetime(2026, 9, 1, 18, 20, tzinfo=IST),
+        holidays=lambda: set(),
+        active_snapshot_id=lambda: None,
+    )
+    supervisor._enqueue_daily_foundation = lambda *_a, **_k: None
+    supervisor._enqueue_post_market_grind = Supervisor._enqueue_post_market_grind.__get__(supervisor)
+    supervisor.enqueue_due()
+    types = [job_type for job_type, _kwargs in jobs.enqueued]
+    assert SCH.BHAVCOPY_UPDATE in types
+    assert SCH.MARKET_SCAN in types
+    assert SCH.OUTCOME_RESOLUTION in types
+    assert SCH.DATA_REFRESH in types
+
+
 def test_successful_data_refresh_enqueues_current_scan_slot():
     jobs = _Jobs()
     supervisor = Supervisor.__new__(Supervisor)

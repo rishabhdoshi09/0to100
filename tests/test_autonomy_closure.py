@@ -243,12 +243,34 @@ def test_outcome_resolution_blocks_old_snapshot():
 
     class Deps:
         def now_ist(self): return datetime(2026, 7, 31, 18, 10)
-        def active_snapshot_id(self): return "snap-old"
-        def active_snapshot_info(self): return {"latest_date": "2026-07-30"}
+        def holidays(self): return set()
+        def active_snapshot_id(self): return None
+        def active_snapshot_info(self): return {}
+        def official_history(self):
+            return {"current": False, "available_session": "2026-07-30", "latest_date": "2026-07-30"}
 
     result = JOBS.run_outcome_resolution(JOBS._Ctx(Deps()))
     assert result.status == JS.BLOCKED
-    assert result.blocked_on == "EOD_DATA_READY:2026-07-31"
+    assert result.blocked_on == JOBS.DEP_OUTCOME_DATA
+
+
+def test_outcome_resolution_uses_official_bars_without_kite():
+    from datetime import datetime
+    from research.autonomy import jobs as JOBS
+    from research.autonomy import job_store as JS
+
+    class Deps:
+        def now_ist(self): return datetime(2026, 7, 31, 18, 10)
+        def holidays(self): return set()
+        def active_snapshot_id(self): return None
+        def official_history(self):
+            return {"current": True, "available_session": "2026-07-31", "latest_date": "2026-07-31"}
+        def resolve_outcomes(self, session_date, failures=()):
+            return {"positions_closed": [], "outcomes_recorded": [], "as_of": session_date}
+
+    result = JOBS.run_outcome_resolution(JOBS._Ctx(Deps()))
+    assert result.status == JS.SUCCEEDED
+    assert result.blocked_on == ""
 
 
 def test_all_ui_entrypoints_are_scheduler_side_effect_free():
