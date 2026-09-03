@@ -533,13 +533,36 @@ def build_due_diligence(
     raw_fundamentals: Mapping[str, Any] | None = None,
     news: Sequence[Mapping[str, Any]] | None = None,
     now: datetime | None = None,
+    as_of_session: str | None = None,
 ) -> dict[str, Any]:
-    """Vertical slice: classify → sector KPIs → news → SUPPORTS/NEUTRAL/CONTRADICTS."""
+    """Vertical slice: classify → sector KPIs → news → SUPPORTS/NEUTRAL/CONTRADICTS.
+
+    as_of_session supplies a historical T. Live defaults (scan, Screener,
+    autonomy_facts, intake rows) are then refused.
+    """
     from product.stock_workspace import clean_symbol
 
     symbol = clean_symbol(symbol)
+    pit_mode = bool(as_of_session)
+    if pit_mode:
+        from product.pit_query import pit_research_inputs
+
+        pit = pit_research_inputs(symbol, as_of=str(as_of_session)[:10])
+        if scan_payload is None:
+            scan_payload = pit["scan_payload"]
+        if long_term_payload is None:
+            long_term_payload = pit["long_term_payload"]
+        if raw_fundamentals is None:
+            raw_fundamentals = pit["raw_fundamentals"]
+        if news is None:
+            news = pit["news"]
+        if now is None:
+            try:
+                now = datetime.fromisoformat(f"{str(as_of_session)[:10]}T15:30:00+05:30")
+            except ValueError:
+                now = datetime.now(timezone.utc)
     now = now or datetime.now(timezone.utc)
-    if scan_payload is None or long_term_payload is None or raw_fundamentals is None or news is None:
+    if not pit_mode and (scan_payload is None or long_term_payload is None or raw_fundamentals is None or news is None):
         defaults = _defaults(symbol)
         scan_payload = defaults["scan"] if scan_payload is None else scan_payload
         long_term_payload = defaults["long_term"] if long_term_payload is None else long_term_payload
@@ -563,11 +586,12 @@ def build_due_diligence(
     fetched_at = str(raw_record.get("fetched_at") or "")
     findings = _evaluate_kpis(raw, framework["kpis"], source_url, fetched_at)
     autonomy: dict[str, Any] = {}
-    try:
-        from product.due_diligence.acquire import load_autonomy_facts
-        autonomy = load_autonomy_facts(symbol)
-    except Exception:
-        autonomy = {}
+    if not pit_mode:
+        try:
+            from product.due_diligence.acquire import load_autonomy_facts
+            autonomy = load_autonomy_facts(symbol)
+        except Exception:
+            autonomy = {}
     measured = merge_kpi_maps(
         extract_kpis_from_raw(raw),
         dict(autonomy.get("kpis") or {}),
@@ -642,10 +666,11 @@ def build_due_diligence(
         load_evidence_pack(
             symbol,
             raw=raw,
-            scan_as_of=str((scan_payload or {}).get("scanned_at") or ""),
-            long_term_as_of=str((long_term_payload or {}).get("scanned_at") or ""),
+            scan_as_of=str((scan_payload or {}).get("scanned_at") or as_of_session or ""),
+            long_term_as_of=str((long_term_payload or {}).get("scanned_at") or as_of_session or ""),
             news_as_of=str(events[0]["published_at"] if events else ""),
             long_row=long_row,
+            row_loader=(lambda *_a, **_k: []) if pit_mode else None,
         ),
         autonomy,
     )
@@ -981,6 +1006,8 @@ def build_due_diligence(
             "not_an_llm": True,
         },
         "as_of": as_of,
+        "point_in_time": pit_mode,
+        "pit_as_of": str(as_of_session)[:10] if pit_mode else "",
         "places_orders": False,
         "uses_llm": False,
         "disclaimer": (

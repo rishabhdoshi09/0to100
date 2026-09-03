@@ -337,11 +337,15 @@ def decide_session(
 ) -> list[dict[str, Any]]:
     """Run the production recommendation + gate path on a PIT scan payload.
 
-    Default path uses the independence-aware committee with today's research
-    snapshots refused (load_research=False). Tests may inject decide_fn.
+    Default path uses the independence-aware committee. Today's research
+    snapshots are refused; warehouse evidence available at T is supplied
+    through the same StockResearchEngine. Tests may inject decide_fn.
     """
     from product.recommendations_workspace import build_recommendations_workspace
     from product.pit_availability import grade_replay
+    from product.pit_coverage import explain_downgrade, overall_replay_grade
+    from product.pit_query import attach_pit_to_card
+    from product.pit_versions import current_versions
 
     workspace = build_recommendations_workspace(
         scan_payload=dict(scan_payload),
@@ -359,17 +363,24 @@ def decide_session(
     clock = datetime.fromisoformat(f"{as_of}T15:30:00+05:30")
     max_bar = str(scan_payload.get("as_of_session") or as_of)[:10]
     future_bar = max_bar > str(as_of)[:10]
-    pit_grade = grade_replay(
-        as_of=as_of,
-        market_bars_ok=not future_bar,
-        company_items=company_evidence or [],
-        used_today_fundamentals=False,
-        used_today_research=False,
-        used_future_bar=future_bar,
-    )
+    versions = current_versions().as_dict()
     out: list[dict[str, Any]] = []
     for card in cards:
         symbol = str(card.get("symbol") or "").upper()
+        card = attach_pit_to_card(dict(card), as_of=as_of)
+        if company_evidence is not None:
+            pit_grade = grade_replay(
+                as_of=as_of,
+                market_bars_ok=not future_bar,
+                company_items=company_evidence,
+                used_today_fundamentals=False,
+                used_today_research=False,
+                used_future_bar=future_bar,
+            )
+        else:
+            pit_grade = overall_replay_grade(
+                symbol, as_of=as_of, market_bars_ok=not future_bar,
+            )
         try:
             if use_committee:
                 from product.decision_committee import evaluate_committee
@@ -380,7 +391,8 @@ def decide_session(
                     broker_ok=False,
                     entry_window=False,
                     workspace=workspace,
-                    load_research=False,
+                    load_research=True,
+                    as_of=str(as_of)[:10],
                 )
                 raw = rec.as_dict()
             else:
@@ -409,6 +421,12 @@ def decide_session(
             str(card.get("reason") or card.get("why") or ""),
         ]
         reasons = [item for item in reasons if item]
+        coverage = dict(pit_grade.get("coverage") or {})
+        downgrade = explain_downgrade(
+            coverage,
+            decision=mapped,
+            reason_code=str(raw.get("reason_code") or ""),
+        )
         out.append({
             "symbol": symbol,
             "as_of": str(as_of)[:10],
@@ -436,8 +454,18 @@ def decide_session(
                 "grade": pit_grade.get("grade"),
                 "grade_reason": pit_grade.get("reason"),
                 "comparable_to_forward": pit_grade.get("comparable_to_forward"),
+                "production_comparable": pit_grade.get("production_comparable"),
+                "missing": downgrade.get("unavailable"),
+                "unverified": downgrade.get("unverified"),
+                "available_categories": downgrade.get("available"),
             },
             "pit_grade": pit_grade.get("grade"),
+            "pit_coverage": coverage,
+            "pit_financial": card.get("pit_financial"),
+            "pit_research": card.get("pit_research"),
+            "pit_sector": card.get("pit_sector"),
+            "pit_downgrade": downgrade,
+            "versions": versions,
             "provenance": BACKTEST,
             "not_pnl": True,
             "live_locked": True,
@@ -661,6 +689,11 @@ def run_historical_replay(
     elif errors:
         status = _STATUS_DEGRADED
     finished = _now()
+    from product.pit_versions import current_versions
+    from product.pit_warehouse import warehouse_fingerprint
+
+    experiment_versions = current_versions().as_dict()
+    data_fp = warehouse_fingerprint()
     payload = {
         "schema_version": SCHEMA_VERSION,
         "available": True,
@@ -724,6 +757,10 @@ def run_historical_replay(
             "universe_limit": universe_limit,
             "symbols": list(symbols or []),
         },
+        "experiment_id": run_id,
+        "versions": experiment_versions,
+        "data_fingerprint": data_fp,
+        "reproducible_if": "same warehouse generation + same policy versions + same official bars",
     }
     existing = _read_json(target / REPORT_NAME)
     if existing.get("run_id") == run_id and existing.get("status") == _STATUS_SUCCEEDED and not force:

@@ -917,6 +917,18 @@ def advance_loop(*, trigger: str = "pipeline") -> dict[str, Any]:
         "duration_s": round(time.time() - started, 3),
         "live_locked": True,
     }
+    if trigger in {"outcome_resolution", "learning_cycle"} and not _entry_window():
+        try:
+            from product.pit_backfill import consume_data_debt
+
+            debt = consume_data_debt(limit=2, entry_window=False)
+            summary["pit_data_debt"] = {
+                "acquired": debt.get("acquired"),
+                "failed": debt.get("failed"),
+                "skipped": debt.get("skipped"),
+            }
+        except Exception as exc:
+            summary["pit_data_debt"] = {"skipped": True, "error": str(exc)[:160]}
     _write_json(SUMMARY_PATH, summary)
     _write_json(METRICS_PATH, metrics)
     return summary
