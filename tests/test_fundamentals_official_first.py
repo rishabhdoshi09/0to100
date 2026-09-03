@@ -123,3 +123,20 @@ def test_secondary_failure_falls_back_to_official(monkeypatch):
 
     assert data["official"] is True
     assert "secondary down" in data["secondary_refresh_error"]
+
+
+def test_canonical_ci_keeps_official_network_backfill_disabled(monkeypatch):
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.delenv("QT_ALLOW_NETWORK_ACQUIRE", raising=False)
+    monkeypatch.delenv("QT_OFFLINE", raising=False)
+    assert fetcher._network_backfill_allowed() is False
+
+    monkeypatch.setenv("QT_ALLOW_NETWORK_ACQUIRE", "1")
+    assert fetcher._network_backfill_allowed() is True
+
+
+def test_explicit_offline_mode_disables_official_network_backfill(monkeypatch):
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setenv("QT_ALLOW_NETWORK_ACQUIRE", "1")
+    monkeypatch.setenv("QT_OFFLINE", "1")
+    assert fetcher._network_backfill_allowed() is False
