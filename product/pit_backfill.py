@@ -395,7 +395,6 @@ def backfill_structured_financials(
         seq = str(item.get("seq") or url.rsplit("/", 1)[-1])
         fname = f"nse_xbrl_{item.get('kind')}_{seq}.xml"
         if _already_have(name, fname):
-            from pathlib import Path
             xml_text = (EVIDENCE_ROOT / name / "autonomy" / fname).read_text(encoding="utf-8", errors="ignore")
             report["skipped"] += 1
         else:
