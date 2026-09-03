@@ -19,7 +19,7 @@ REASON_CODE_VERSION = "reason_codes_v1"
 RISK_POLICY_VERSION = "risk_policy_v1"
 FRAMEWORK_VERSION = "business_frameworks_v1"
 WAREHOUSE_SCHEMA_VERSION = "pit_warehouse_v1"
-PARSER_VERSION = "pit_ingest_v1"
+PARSER_VERSION = "pit_xbrl.v1"
 
 
 @dataclass(frozen=True)

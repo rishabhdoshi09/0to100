@@ -17,6 +17,8 @@ from product.pit_availability import (
     PIT_UNVERIFIED,
     grade_replay,
 )
+from product.pit_events import get_events
+from product.pit_financials import get_business_snapshot, get_fact
 from product.pit_warehouse import (
     DOC_ANNUAL_REPORT,
     DOC_CORPORATE_ANNOUNCEMENT,
@@ -38,9 +40,13 @@ SECTOR_CLASSIFICATION_LIMITATION = (
 
 def get_financial_snapshot(symbol: str, *, as_of: str, path=None) -> dict[str, Any]:
     """Only reports whose publication/filing date is on or before T."""
+    from product.pit_financials import get_financial_snapshot_v2
+
+    parsed = get_financial_snapshot_v2(symbol, as_of=as_of, path=path)
+    if parsed.get("numbers_parsed"):
+        return parsed
     results = get_evidence(symbol, as_of=as_of, evidence_types=(DOC_QUARTERLY_RESULT,), path=path)
     latest = results[0] if results else None
-    numbered = [r for r in results if (r.get("extracted") or {}).get("numbers_parsed")]
     return {
         "symbol": str(symbol).upper(),
         "as_of": str(as_of)[:10],
@@ -49,12 +55,14 @@ def get_financial_snapshot(symbol: str, *, as_of: str, path=None) -> dict[str, A
         "latest_publication": (latest or {}).get("available_from"),
         "latest_period_end": (latest or {}).get("period_end"),
         "latest_source_url": (latest or {}).get("source_url"),
-        "facts": (numbered[0].get("extracted") if numbered else {}),
-        "numbers_parsed": bool(numbered),
+        "facts": {},
+        "derived": {},
+        "tables": {},
+        "numbers_parsed": False,
         "quality_status": "UNKNOWN",
         "note": (
             "Result metadata is dated. Numbers are not inferred from period labels."
-            if results and not numbered else
+            if results else
             "No financial result with a proven publication date on or before T."
         ),
     }
@@ -73,13 +81,22 @@ def get_research_snapshot(symbol: str, *, as_of: str, path=None) -> dict[str, An
         answered.append("shareholding_filed")
     if by_type.get(DOC_ANNUAL_REPORT):
         answered.append("annual_report_present")
+    biz = get_business_snapshot(symbol, as_of=as_of, path=path)
+    for key in (biz.get("answered") or {}):
+        if key not in answered:
+            answered.append(key)
     unknown = [
         name for name in (
             "business_quality_score", "framework_kpis", "margins",
             "cash_flow_quality", "valuation",
+            *(biz.get("unknown") or []),
         )
         if name not in answered
     ]
+    # Metadata-only filings stay Unmeasured. Parsed facts can answer Partial.
+    quality = "Unmeasured"
+    if biz.get("answered"):
+        quality = str(biz.get("quality_label") or "Partial")
     return {
         "symbol": str(symbol).upper(),
         "as_of": str(as_of)[:10],
@@ -94,9 +111,10 @@ def get_research_snapshot(symbol: str, *, as_of: str, path=None) -> dict[str, An
             "annual_report": bool(by_type.get(DOC_ANNUAL_REPORT)),
             "announcements": bool(by_type.get(DOC_CORPORATE_ANNOUNCEMENT) or by_type.get(DOC_EXCHANGE_FILING)),
         },
-        "quality_label": "Unmeasured",
+        "quality_label": quality,
         "vs_technical": "",
         "acquired_at": "",
+        "business": biz,
         "note": "PIT research does not load today's autonomy_facts or Screener cache.",
     }
 
@@ -117,7 +135,7 @@ def get_sector_context(symbol: str, *, as_of: str, scan_row: dict[str, Any] | No
         "as_of": str(as_of)[:10],
         "sector": sector,
         "classification_versioned": False,
-        "status": "UNVERIFIED",
+        "status": "SECTOR_MEMBERSHIP_APPROXIMATE" if sector else "UNAVAILABLE",
         "limitation": SECTOR_CLASSIFICATION_LIMITATION,
         "usable_as_family_confirm": False,
     }
@@ -166,7 +184,11 @@ def replay_grade_for_symbol(symbol: str, *, as_of: str, market_bars_ok: bool, pa
     # PIT_STRONG requires more than "two filings exist".
     fin = get_financial_snapshot(symbol, as_of=as_of, path=path)
     research = get_research_snapshot(symbol, as_of=as_of, path=path)
-    production_comparable = bool(fin.get("numbers_parsed")) and str(research.get("quality_label") or "") not in {"", "Unmeasured"}
+    production_comparable = bool(
+        fin.get("numbers_parsed")
+        and not fin.get("stale_for_production")
+        and str(research.get("quality_label") or "") not in {"", "Unmeasured"}
+    )
     if grade.get("grade") == PIT_STRONG and not production_comparable:
         grade["grade"] = PIT_PARTIAL
         grade["reason"] = (
@@ -214,9 +236,21 @@ def pit_research_inputs(symbol: str, *, as_of: str, path=None) -> dict[str, Any]
         })
         if len(news) >= 40:
             break
+    from product.pit_financials import get_financial_snapshot_v2
+
+    fin = get_financial_snapshot_v2(symbol, as_of=as_of, path=path)
+    tables = dict(fin.get("tables") or {})
+    raw = {
+        "data": tables,
+        "fetched_at": str(fin.get("latest_publication") or ""),
+        "point_in_time": True,
+        "as_of": str(as_of)[:10],
+        "source": "pit_warehouse_xbrl",
+        "freshness": "PIT" if fin.get("numbers_parsed") else "MISSING",
+    }
     return {
         "scan_payload": {"records": [], "point_in_time": True, "as_of_session": str(as_of)[:10]},
         "long_term_payload": {"records": [], "point_in_time": True},
-        "raw_fundamentals": {"data": {}, "fetched_at": "", "point_in_time": True, "as_of": str(as_of)[:10]},
+        "raw_fundamentals": raw,
         "news": news,
     }
