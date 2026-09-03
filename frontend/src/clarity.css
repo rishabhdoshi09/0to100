@@ -1,0 +1,410 @@
+/* QuantTerm clarity layer
+   Final visual pass for the paid-user desk. The global product shell is the
+   light research desk; older dark-terminal components must not leak through
+   with dark backgrounds + light-theme text tokens. */
+
+.terminal-root.reco-desk {
+  grid-template-columns: 224px minmax(0, 1fr);
+  color: var(--rw-ink);
+  background: var(--rw-bg);
+}
+
+html:has(.terminal-root.reco-desk),
+body:has(.terminal-root.reco-desk) {
+  min-width: 980px;
+  background: var(--rw-bg);
+}
+
+.terminal-root.reco-desk .workspace {
+  min-width: 0;
+  color: var(--rw-ink);
+  background:
+    radial-gradient(900px 360px at 42% -90px, rgba(27, 107, 69, 0.055), transparent 65%),
+    linear-gradient(180deg, #f8faf9 0%, #f2f6f3 100%);
+}
+
+/* Top chrome: one calm command bar, not a row of equally loud controls. */
+.reco-desk .topbar {
+  min-height: 68px;
+  height: auto;
+  padding: 10px 22px;
+  gap: 18px;
+  border-bottom: 1px solid var(--rw-line);
+  background: rgba(250, 252, 251, 0.96);
+  box-shadow: 0 3px 18px rgba(20, 32, 26, 0.045);
+}
+
+.reco-desk .search-box {
+  flex: 1 1 520px;
+  width: min(620px, 48vw);
+  max-width: 680px;
+  height: 42px;
+  padding: 0 0 0 13px;
+  border-radius: 11px;
+  border: 1px solid #cfdad3;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(20, 32, 26, 0.03);
+}
+
+.reco-desk .search-box input {
+  min-width: 0;
+  height: 100%;
+  font-size: 14px;
+}
+
+.reco-desk .search-box button {
+  align-self: stretch;
+  min-width: 92px;
+  border: 0;
+  border-left: 1px solid #d7e2da;
+  border-radius: 0 10px 10px 0;
+  background: #edf7f1;
+  color: #145c3d;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.reco-desk .top-status {
+  flex: 0 0 auto;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.reco-desk .live-pill,
+.reco-desk .offline-pill,
+.reco-desk .work-pill,
+.reco-desk .experience-help-trigger,
+.reco-desk .display-depth-toggle {
+  min-height: 34px;
+  white-space: nowrap;
+}
+
+/* Page identity must be the first readable thing below the command bar. */
+.reco-desk .page-title {
+  padding: 20px 24px 15px;
+  margin: 0 0 14px;
+  align-items: center;
+  border-bottom: 1px solid #dde6e0;
+  background: rgba(255, 255, 255, 0.66);
+}
+
+.reco-desk .page-title h1 {
+  margin: 0;
+  color: #14201a;
+  font-family: 'Fraunces', Georgia, serif;
+  font-size: clamp(25px, 2.2vw, 32px);
+  line-height: 1.1;
+  letter-spacing: -0.025em;
+}
+
+.reco-desk .page-title p {
+  max-width: 900px;
+  margin: 6px 0 0;
+  color: #607068;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+/* Connection problems are important, but should not consume half the screen. */
+.reco-desk .api-degraded-banner {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 16px;
+  row-gap: 5px;
+  margin: 0 24px 14px;
+  padding: 12px 14px 12px 16px;
+  border: 1px solid #ead7a7;
+  border-left: 4px solid #b77a18;
+  border-radius: 12px;
+  background: #fffaf0;
+  color: #654b1c;
+  box-shadow: 0 4px 14px rgba(83, 58, 13, 0.05);
+}
+
+.reco-desk .api-degraded-banner > strong {
+  color: #6e4b0f;
+  font-size: 14px;
+}
+
+.reco-desk .api-degraded-banner > p {
+  grid-column: 1;
+  margin: 0;
+  color: #75633f;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.reco-desk .api-degraded-banner > button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  min-height: 36px;
+  padding: 0 13px;
+  border: 1px solid #dfc687;
+  border-radius: 9px;
+  background: #fff;
+  color: #6e4b0f;
+  font-weight: 700;
+}
+
+.reco-desk .api-degraded-banner details {
+  grid-column: 1 / -1;
+  margin-top: 3px;
+  color: #8b7958;
+  font-size: 11px;
+}
+
+.reco-desk .api-degraded-banner pre {
+  max-height: 90px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f5efe2;
+  color: #5d5038;
+}
+
+/* HOME: one coherent light research surface. */
+.reco-desk .radar-home {
+  padding: 0 24px 38px;
+  color: var(--rw-ink);
+}
+
+.reco-desk .home-os-card,
+.reco-desk.reco-desk .home-os-card {
+  overflow: hidden;
+  margin-bottom: 14px;
+  border: 1px solid #d5e1d9;
+  border-radius: 16px;
+  background: #fff;
+  color: #14201a;
+  box-shadow: 0 10px 28px rgba(20, 32, 26, 0.07);
+}
+
+.reco-desk .home-os-hero {
+  padding: 20px 22px 16px;
+  border-bottom: 1px solid #dce8e0;
+  background:
+    radial-gradient(480px 160px at 0% 0%, rgba(27, 107, 69, 0.10), transparent 68%),
+    linear-gradient(180deg, #f7fbf8, #f1f7f3);
+}
+
+.reco-desk .home-os-hero h2,
+.reco-desk .home-os-card h2,
+.reco-desk .home-os-card strong {
+  color: #14201a;
+}
+
+.reco-desk .home-os-hero > span,
+.reco-desk .home-os-now-next span,
+.reco-desk .home-os-grid span,
+.reco-desk .home-os-system span,
+.reco-desk .home-os-opps span,
+.reco-desk .home-os-past span {
+  color: #567166;
+}
+
+.reco-desk .home-os-hero > p,
+.reco-desk .home-os-card p,
+.reco-desk .home-os-grid small,
+.reco-desk .home-os-system em,
+.reco-desk .home-os-why,
+.reco-desk .home-os-activity time {
+  color: #65756d;
+}
+
+.reco-desk .home-os-now-next > div,
+.reco-desk .home-os-grid > div,
+.reco-desk .home-os-opps > div,
+.reco-desk .home-os-past,
+.reco-desk .home-os-inspector,
+.reco-desk .home-os-system > button.home-os-lane {
+  border-color: #d9e4dd;
+  background: #fbfdfc;
+  color: #14201a;
+  box-shadow: none;
+}
+
+.reco-desk .home-os-system > button.home-os-lane:hover,
+.reco-desk .home-os-system > button.home-os-lane:focus-visible,
+.reco-desk .home-os-system > button.home-os-lane.selected {
+  border-color: #b9d3c3;
+  background: #eef7f1;
+}
+
+.reco-desk button.home-os-quick-link,
+.reco-desk .home-os-quick-link {
+  border-color: #cfe0d5;
+  background: #f6faf7;
+  color: #245f45;
+}
+
+/* Market snapshot: large labels + values. The old hard-coded navy cards were
+   combining with dark light-theme text, making this strip nearly unreadable. */
+.reco-desk .radar-home > .radar-market-strip {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 16px;
+  opacity: 1;
+}
+
+.reco-desk .radar-market-strip > div {
+  min-height: 88px;
+  padding: 14px 14px 12px;
+  border: 1px solid #d8e2db;
+  border-radius: 13px;
+  background: #fff;
+  color: #14201a;
+  box-shadow: 0 5px 16px rgba(20, 32, 26, 0.045);
+}
+
+.reco-desk .radar-market-strip span {
+  display: block;
+  margin-bottom: 10px;
+  color: #60756a;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.11em;
+}
+
+.reco-desk .radar-market-strip strong {
+  display: block;
+  color: #14201a;
+  font-size: 17px;
+  line-height: 1.25;
+  font-weight: 750;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Scanner / pipeline components that are intentionally visible on advanced
+   pages should also inherit the same readable surface rather than old navy. */
+.reco-desk .radar-desk-strip > div,
+.reco-desk .radar-pipeline-step,
+.reco-desk .radar-lane-card,
+.reco-desk .today-strip > div,
+.reco-desk .scanner-lane-cards article {
+  border-color: #d8e2db;
+  background: #fff;
+  color: #14201a;
+  box-shadow: 0 4px 14px rgba(20, 32, 26, 0.04);
+}
+
+.reco-desk .radar-desk-strip span,
+.reco-desk .radar-desk-strip small,
+.reco-desk .radar-pipeline-step span,
+.reco-desk .radar-pipeline-step small,
+.reco-desk .radar-lane-card span,
+.reco-desk .radar-lane-card small,
+.reco-desk .radar-pipeline-msg,
+.reco-desk .radar-desk-note {
+  color: #66786f;
+}
+
+.reco-desk .radar-pipeline-step strong,
+.reco-desk .radar-desk-strip strong,
+.reco-desk .radar-lane-card b {
+  color: #14201a;
+}
+
+/* Daily report should read like a report, not like a different website pasted
+   below the terminal. */
+.reco-desk .daily-wrap {
+  margin: 0 0 24px;
+  padding: 24px 28px 22px;
+  border: 1px solid #d8e2db;
+  border-radius: 16px;
+  background: #fff;
+  color: #14201a;
+  box-shadow: 0 8px 24px rgba(20, 32, 26, 0.055);
+}
+
+.reco-desk .daily-wrap .desk-kicker {
+  margin: 0 0 5px;
+  color: #1b6b45;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.reco-desk .daily-wrap h2 {
+  margin: 0 0 18px;
+  color: #14201a;
+  font-family: 'Fraunces', Georgia, serif;
+  font-size: clamp(24px, 2.1vw, 31px);
+  line-height: 1.15;
+  letter-spacing: -0.025em;
+}
+
+.reco-desk .daily-wrap ol {
+  margin: 0;
+  padding-left: 28px;
+}
+
+.reco-desk .daily-wrap li {
+  padding: 12px 0;
+  border-top: 1px solid #e6ede8;
+  color: #1f2b25;
+}
+
+.reco-desk .daily-wrap li:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.reco-desk .daily-wrap li::marker {
+  color: #1b6b45;
+  font-weight: 800;
+}
+
+.reco-desk .daily-wrap li p {
+  margin: 0;
+  color: #26342d;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.reco-desk .daily-wrap .desk-meta {
+  margin-top: 7px;
+  color: #6b7a72;
+  font-size: 11px;
+}
+
+/* Clear card hierarchy everywhere on the light desk. */
+.reco-desk .panel {
+  border-color: #d8e2db;
+  background: #fff;
+  color: #14201a;
+  box-shadow: 0 6px 20px rgba(20, 32, 26, 0.05);
+}
+
+.reco-desk .panel-title {
+  border-bottom-color: #e1e9e4;
+  background: #fbfdfc;
+}
+
+.reco-desk .panel-title strong {
+  color: #14201a;
+}
+
+.reco-desk .panel-title small,
+.reco-desk .panel-copy {
+  color: #66776e;
+}
+
+@media (max-width: 1180px) {
+  .terminal-root.reco-desk { grid-template-columns: 206px minmax(0, 1fr); }
+  .reco-desk .top-status .reco-clock { display: none; }
+  .reco-desk .radar-home > .radar-market-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 920px) {
+  html:has(.terminal-root.reco-desk),
+  body:has(.terminal-root.reco-desk) { min-width: 0; }
+  .terminal-root.reco-desk { grid-template-columns: 1fr; }
+  .reco-desk .sidebar { position: relative; width: 100%; height: auto; }
+  .reco-desk .topbar { position: relative; flex-wrap: wrap; }
+  .reco-desk .search-box { width: 100%; max-width: none; flex-basis: 100%; }
+  .reco-desk .top-status { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
+  .reco-desk .radar-home > .radar-market-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
