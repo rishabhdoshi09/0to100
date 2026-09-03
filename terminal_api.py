@@ -558,13 +558,16 @@ def _autonomy_payload() -> dict:
             telegram = delivery_status()
         except Exception as exc:
             telegram = {"configured": False, "state": "unavailable", "detail": str(exc)}
+        explanation = str(raw.get("explanation") or "") or str(status.get("explanation") or "")
+        reason_code = str(raw.get("reason_code") or status.get("reason_code") or "")
         return {
             "available": True,
             "running": bool(status.get("running")),
             "process_running": bool(runtime.get("process_running", raw.get("process_running", False))),
             "state": str(status.get("state", "UNKNOWN")),
             "plain_state": str(status.get("plain_state", "")),
-            "explanation": str(status.get("explanation", "")),
+            "explanation": explanation,
+            "reason_code": reason_code,
             "heartbeat_ist": str(runtime.get("heartbeat_ist") or status.get("heartbeat_ist", "")),
             "scheduler_owner_pid": runtime.get("scheduler_owner_pid", raw.get("scheduler_owner_pid")),
             "active_job": dict(runtime.get("active_job", {}) or {}),
@@ -593,6 +596,7 @@ def _autonomy_payload() -> dict:
             "state": "UNKNOWN",
             "plain_state": "Autonomy status unavailable.",
             "explanation": str(exc),
+            "reason_code": "",
             "heartbeat_ist": "",
             "scheduler_owner_pid": None,
             "active_job": {},

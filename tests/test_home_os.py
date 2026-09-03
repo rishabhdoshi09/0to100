@@ -70,6 +70,28 @@ def test_observing_with_auth_health_still_needs_zerodha_login():
     assert os["live_locked"] is True
 
 
+def test_observing_auth_health_without_explanation_is_not_broker_ready():
+    os = build_home_os(
+        dashboard={
+            "autonomy": {
+                "state": "OBSERVING",
+                "running": True,
+                "reason_code": "auth_health",
+                "explanation": "",
+            },
+            "data": {"ready": True, "bhavcopy": {"ready": True, "latest_date": "2026-09-01", "current": True}},
+        },
+        paper={"enabled": True, "open_positions": [], "closed_trades": []},
+        why={"available": False},
+        soak={"real_forward_observations": 0, "insufficient_evidence": True},
+        scan={"scanned_at": "2026-09-01T05:00:00+00:00", "records": [{"symbol": "TCS"}]},
+        now=_open(),
+    )
+    assert os["broker"]["login_required"] is True
+    assert os["broker"]["status"] != "READY"
+    assert os["system"]["zerodha"]["status"] == "Needs you"
+
+
 def test_journey_c_no_trade_is_healthy():
     os = build_home_os(
         dashboard={"autonomy": {"state": "RUNNING", "running": True}, "data": {"ready": True, "bhavcopy": {"ready": True}}},

@@ -156,12 +156,13 @@ def read_status(*, state_path, jobs_db=None, dialogue_path=None) -> dict:
            "heartbeat_ist": "", "snapshot_id": "", "recent_transitions": [], "jobs": {},
            "recent_dialogue": [], "new_risk_permitted": False, "positions_manageable": True,
            "active_failures": [], "owner_state": {}, "scheduler_of_record": "", "last_cycle": {},
-           "scheduler_owner_pid": None, "active_job": {}}
+           "scheduler_owner_pid": None, "active_job": {}, "reason_code": ""}
     durable: dict = {}
     try:
         durable = json.loads(state_path.read_text(encoding="utf-8"))
         out.update({"state": durable.get("state", "UNKNOWN"),
                     "explanation": durable.get("explanation", ""),
+                    "reason_code": str(durable.get("reason_code") or ""),
                     "updated_ist": durable.get("updated_ist", ""),
                     "snapshot_id": durable.get("snapshot_id", ""),
                     "heartbeat_ist": durable.get("heartbeat_ist", durable.get("updated_ist", "")),

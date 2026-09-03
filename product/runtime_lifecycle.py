@@ -69,10 +69,13 @@ def _component(name: str, status: str, *, detail: str = "", pid: Any = None) -> 
 
 def inspect_runtime(*, api_serving: bool = True) -> dict[str, Any]:
     """Return STARTING / READY / DEGRADED / FAILED / RECOVERING from live checks."""
-    ops = _read_json(ROOT / "logs" / "market_ops" / "runtime.json")
-    autonomy = _read_json(ROOT / "logs" / "autonomy" / "status.json")
+    ops_path = Path(os.environ.get("QT_MARKET_OPS_RUNTIME") or (ROOT / "logs" / "market_ops" / "runtime.json"))
+    auto_status = Path(os.environ.get("QT_AUTONOMY_STATUS") or (ROOT / "logs" / "autonomy" / "status.json"))
+    auto_runtime = Path(os.environ.get("QT_AUTONOMY_RUNTIME") or (ROOT / "logs" / "autonomy" / "runtime.json"))
+    ops = _read_json(ops_path)
+    autonomy = _read_json(auto_status)
     if not autonomy:
-        autonomy = _read_json(ROOT / "logs" / "autonomy" / "runtime.json")
+        autonomy = _read_json(auto_runtime)
 
     ops_pid = ops.get("worker_pid") or ops.get("pid")
     ops_hb = float(ops.get("heartbeat_epoch") or 0)
