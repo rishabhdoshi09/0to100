@@ -15,3 +15,13 @@
   font-size: 9px;
   letter-spacing: .02em;
 }
+
+/* Broker truth is rendered from the canonical backend readiness in the topbar
+   and autonomous Home OS. The older desk-strip cell inferred auth from autonomy
+   state, so keeping it visible could contradict the canonical status. */
+.radar-desk-strip > div:nth-child(3) { display: none; }
+.radar-desk-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+@media (max-width: 560px) {
+  .radar-desk-strip { grid-template-columns: 1fr; }
+}
