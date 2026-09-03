@@ -253,13 +253,30 @@ start_stack() {
   STACK_PID=$!
 }
 
+# Keep the file descriptor open in this shell for the lifetime of the launcher.
+# Python's fcntl uses the inherited descriptor, so the same machine-wide lock
+# works on macOS and Linux without requiring the external `flock` executable.
+try_machine_lock() {
+  python - <<'PY'
+import errno
+import fcntl
+
+try:
+    fcntl.flock(200, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except OSError as exc:
+    if exc.errno in {errno.EACCES, errno.EAGAIN}:
+        raise SystemExit(1)
+    raise
+PY
+}
+
 echo "[COMPLETE STACK] One command, one terminal. Machine-wide lock so a second checkout cannot kill a healthy desk."
 mkdir -p "$ROOT/logs/stack"
 STACK_LOCK="$(python scripts/local_stack.py machine-lock-path)"
 mkdir -p "$(dirname "$STACK_LOCK")"
 exec 200>"$STACK_LOCK"
 STACK_EXTERNAL=0
-if flock -n 200; then
+if try_machine_lock; then
   export QT_MACHINE_OWNER=1
   echo $$ > "${XDG_RUNTIME_DIR:-/tmp}/quantterm.supervisor.pid"
   python scripts/local_stack.py write-owner --pid $$ --root "$ROOT" >/dev/null || true
