@@ -32,7 +32,7 @@ def _candidate(**overrides):
 
 def test_exact_scan_buy_is_canonical_even_when_broker_auth_blocks_execution():
     out = project_candidate_truth(
-        {"symbol": SYMBOL, "action_badge": "Watch"},
+        {"symbol": SYMBOL, "action_badge": "Watch", "buy_zone_low": 440.0, "buy_zone_high": 445.0},
         scan_run_id=SCAN,
         candidate=_candidate(),
     )
@@ -44,11 +44,20 @@ def test_exact_scan_buy_is_canonical_even_when_broker_auth_blocks_execution():
     assert out["decision_truth_status"] == "CANONICAL_CURRENT_SCAN"
     assert out["decision_match_scope"] == "EXACT_SCAN_RUN"
     assert out["decision_id"].endswith(f"|{SCAN}")
+    assert out["buy_zone_authorized"] is True
+    assert out["buy_zone_low"] == 440.0
+    assert out["buy_zone_high"] == 445.0
 
 
 def test_committee_wait_overrides_raw_ensemble_buy():
     out = project_candidate_truth(
-        {"symbol": SYMBOL, "action_badge": "Buy"},
+        {
+            "symbol": SYMBOL,
+            "action_badge": "Buy",
+            "entry": 442.0,
+            "buy_zone_low": 440.0,
+            "buy_zone_high": 445.0,
+        },
         scan_run_id=SCAN,
         candidate=_candidate(
             decision="WAIT",
@@ -64,6 +73,36 @@ def test_committee_wait_overrides_raw_ensemble_buy():
     assert out["canonical_decision"] == "WAIT"
     assert out["action_badge"] == "Wait"
     assert out["wait_trigger"] == {"type": "EVIDENCE_COMPLETE"}
+    assert out["buy_zone_authorized"] is False
+    assert out["buy_zone_low"] is None
+    assert out["buy_zone_high"] is None
+
+
+def test_avoid_and_unjudged_rows_never_authorize_buy_zone_wording():
+    avoid = project_candidate_truth(
+        {"symbol": SYMBOL, "action_badge": "Buy", "buy_zone_low": 440.0, "buy_zone_high": 445.0},
+        scan_run_id=SCAN,
+        candidate=_candidate(
+            decision="AVOID",
+            decision_id=f"2026-09-03|{SYMBOL}|AVOID|QUALITY_VETO|{SCAN}",
+            state="REJECTED",
+            entry_state="NOT_ELIGIBLE",
+            execution_state="NOT_ELIGIBLE",
+            reason="QUALITY_VETO",
+        ),
+    )
+    unjudged = project_candidate_truth(
+        {"symbol": "NEWNAME", "action_badge": "Buy", "buy_zone_low": 100.0, "buy_zone_high": 102.0},
+        scan_run_id=SCAN,
+        candidate=None,
+    )
+
+    assert avoid["canonical_decision"] == "AVOID"
+    assert avoid["buy_zone_authorized"] is False
+    assert avoid["buy_zone_low"] is None
+    assert unjudged["canonical_decision"] == "NO_JUDGMENT"
+    assert unjudged["buy_zone_authorized"] is False
+    assert unjudged["buy_zone_low"] is None
 
 
 def test_same_session_rescan_cannot_reuse_previous_scan_decision():
@@ -77,7 +116,7 @@ def test_same_session_rescan_cannot_reuse_previous_scan_decision():
         decision_id=f"2026-09-03|{SYMBOL}|BUY|COMMITTEE_BUY|{previous_scan}",
     )
     out = project_candidate_truth(
-        {"symbol": SYMBOL, "action_badge": "Buy"},
+        {"symbol": SYMBOL, "action_badge": "Buy", "buy_zone_low": 440.0},
         scan_run_id=SCAN,
         candidate=stale,
     )
@@ -87,12 +126,13 @@ def test_same_session_rescan_cannot_reuse_previous_scan_decision():
     assert out["decision_truth_status"] == "COMMITTEE_PENDING_FOR_SCAN"
     assert out["decision_match_scope"] == "EXACT_SCAN_CANDIDATE_ONLY"
     assert out["decision_id"] is None
+    assert out["buy_zone_low"] is None
 
 
 def test_different_scan_candidate_is_never_projected():
     old_scan = "2026-09-02T09:45:00+00:00"
     out = project_candidate_truth(
-        {"symbol": SYMBOL, "action_badge": "Buy"},
+        {"symbol": SYMBOL, "action_badge": "Buy", "buy_zone_low": 440.0},
         scan_run_id=SCAN,
         candidate=_candidate(
             scan_run_id=old_scan,
@@ -103,17 +143,19 @@ def test_different_scan_candidate_is_never_projected():
     assert out["canonical_decision"] == "NO_JUDGMENT"
     assert out["action_badge"] == "No judgment"
     assert out["decision_truth_status"] == "CANDIDATE_SCAN_MISMATCH"
+    assert out["buy_zone_low"] is None
 
 
 def test_no_candidate_never_leaks_raw_buy():
     out = project_candidate_truth(
-        {"symbol": "NEWNAME", "action_badge": "Buy"},
+        {"symbol": "NEWNAME", "action_badge": "Buy", "buy_zone_low": 100.0},
         scan_run_id=SCAN,
         candidate=None,
     )
     assert out["raw_action_badge"] == "Buy"
     assert out["canonical_decision"] == "NO_JUDGMENT"
     assert out["action_badge"] == "No judgment"
+    assert out["buy_zone_low"] is None
 
 
 def test_strategy_catalog_applies_canonical_overlay(monkeypatch):
@@ -128,12 +170,16 @@ def test_strategy_catalog_applies_canonical_overlay(monkeypatch):
             "decision_truth_status": "CANONICAL_CURRENT_SCAN",
             "decision_match_scope": "EXACT_SCAN_RUN",
             "action_badge": "Wait",
+            "buy_zone_low": None,
+            "buy_zone_high": None,
+            "buy_zone_authorized": False,
         },
     )
-    out = decorate_card({"symbol": SYMBOL, "action_badge": "Buy", "methods": []})
+    out = decorate_card({"symbol": SYMBOL, "action_badge": "Buy", "buy_zone_low": 440.0, "methods": []})
     assert out["raw_action_badge"] == "Buy"
     assert out["canonical_decision"] == "WAIT"
     assert out["action_badge"] == "Wait"
+    assert out["buy_zone_low"] is None
 
 
 def test_strategy_catalog_fails_closed_when_truth_store_is_unavailable(monkeypatch):
