@@ -2,14 +2,13 @@
 Unified fundamentals entry point.
 
 Authoritative current financial tables come from QuantTerm's dated official
-XBRL warehouse when available. When those tables are absent, QuantTerm first
-attempts its existing official NSE structured-results backfill, then falls back
-to secondary public fundamentals for enrichment or source outages.
+XBRL warehouse when available. During an explicit acquisition/refresh, if those
+tables are absent, QuantTerm first attempts its existing official NSE
+structured-results backfill, then falls back to secondary public fundamentals.
 
-Source precedence:
-
-    official warehouse > official NSE backfill > fresh secondary cache
-    > live secondary scrape > stale last-good
+Normal reads remain cache-friendly; autonomous Research Data / Investigate
+refreshes prefer the official structured source before scraping a secondary
+site.
 
 Official tables never get overwritten by a secondary scrape.
 """
@@ -91,7 +90,7 @@ def _official_warehouse_snapshot(symbol: str) -> Dict[str, Any] | None:
 
 
 def _try_official_backfill(symbol: str) -> Dict[str, Any] | None:
-    """Acquire current official structured results before scraping secondary data.
+    """Acquire current official structured results before secondary refresh.
 
     Uses the already-tested PIT backfill/parser and therefore keeps publication
     dates, raw artifacts and provenance. Failures are non-fatal: the caller may
@@ -150,11 +149,10 @@ def get_deep_fundamentals(
 ) -> Dict[str, Any]:
     """Return the best current fundamentals pack for *symbol*.
 
-    Normal operation avoids a network call when QuantTerm already has usable
-    official financials plus a cached enrichment pack. When core financials are
-    missing, official NSE structured results are attempted before a secondary
-    scrape. A forced refresh may update secondary enrichment, but official
-    tables still win.
+    Normal reads use verified warehouse data when present and otherwise preserve
+    the established cache behavior. Explicit acquisition/refresh is the place
+    where QuantTerm proactively tries official structured NSE results before a
+    secondary scrape. Official tables always win after a secondary enrichment.
     """
     symbol = symbol.upper().strip()
     last_good = _cache.get(symbol, allow_stale=True)
@@ -172,10 +170,9 @@ def get_deep_fundamentals(
             log.info("fundamentals_served_from_cache", symbol=symbol)
         return merged
 
-    # If no fresh secondary cache can satisfy the request, make the system try
-    # its authoritative structured source first. This is exactly the path an
-    # autonomous Research Data / Investigate acquire should prefer.
-    if official is None:
+    # Autonomous Investigate/Research Data forces a refresh when core tables are
+    # missing. Prefer the official exchange route before secondary scraping.
+    if official is None and force_refresh:
         official = _try_official_backfill(symbol)
 
     if official and not force_refresh:
