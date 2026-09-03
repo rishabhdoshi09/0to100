@@ -296,7 +296,9 @@ def data_debt(
         "market_only": market_only,
         "priority": (
             "financial result publication history with parseable numbers"
-            if missing_fin >= missing_biz else
+            if missing_fin >= missing_biz and missing_fin > 0 else
+            "versioned sector membership and dated annual-report metadata"
+            if missing_sector or unverified_dates else
             "dated business / annual-report evidence"
         ),
         "rows": rows[:200],
