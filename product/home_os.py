@@ -253,6 +253,22 @@ def build_home_os(
     next_line = "Next automatic paper decision after the scan"
 
     broker_login_required = not kite_ok
+    # Missing broker auth is not a system-health failure, but during an active
+    # paper session it is the one legitimate human action because broker-live
+    # quotes/entry cannot proceed without it. Observe-only and closed-market
+    # operation remain fully autonomous without a login.
+    broker_action_required = bool(
+        broker_login_required and paper_enabled and not observe_only and not market_closed
+    )
+    broker_action = _action(
+        label="Login to Zerodha",
+        kind="instruction",
+        instruction=(
+            "Run python main.py login to enable broker-live quotes and broker-dependent paper entry. "
+            "Official data, scanning, research, replay, settlement and learning continue without it."
+        ),
+    )
+
     if not live_locked:
         state = PROBLEM
         headline = "Live money must stay locked."
@@ -426,6 +442,25 @@ def build_home_os(
         learning_simple=learning_simple,
         n_real=n_real,
     )
+    # The broker lane is a capability lane, not autonomy health. During an
+    # active paper session, however, login is the one expected human action.
+    # Keep that distinction explicit instead of making the whole system look
+    # degraded or pretending paper entry can proceed without broker auth.
+    if broker_action_required:
+        zerodha = dict(system.get("zerodha") or {})
+        zerodha.update({
+            "status": "Needs you",
+            "status_code": "LOGIN_REQUIRED",
+            "summary": "Login required for broker-dependent paper entry.",
+            "detail": "Research and official-data autonomy continue without Zerodha.",
+            "meaning": "Log in to enable broker-live quotes and paper entry; this is not a system failure.",
+            "needs_user": True,
+            "optional_capability": False,
+            "blocks_autonomy": False,
+            "blocks_live_money": False,
+            "primary_action": broker_action,
+        })
+        system["zerodha"] = zerodha
     check_system = build_check_system(system, live_locked=live_locked)
 
     runtime: dict[str, Any] = {}
@@ -478,20 +513,33 @@ def build_home_os(
             "reason": subtext,
             "action": primary_action,
         })
+    if broker_action_required and state not in {FAILED_RECOVERABLE, PAUSED, PROBLEM}:
+        state = LOGIN_REQUIRED
+        headline = "Zerodha login is needed for broker-dependent paper entry."
+        subtext = (
+            "This is the only expected human step. Official data, scans, research, replay, "
+            "settlement and learning continue automatically."
+        )
+        now_line = "Non-broker autonomy is running"
+        next_line = "Broker paper entry resumes after login"
+        primary_action = broker_action
+        required_attention = [{
+            "id": "BROKER_LOGIN_REQUIRED",
+            "label": "Login to Zerodha",
+            "reason": subtext,
+            "action": broker_action,
+        }]
+
     optional_attention: list[dict[str, Any]] = []
-    if broker_login_required:
+    if broker_login_required and not broker_action_required:
         optional_attention.append({
             "id": "BROKER_LOGIN_OPTIONAL",
             "label": "Connect Zerodha",
             "reason": (
-                "Optional capability: enables broker-live quotes and broker-dependent paper entry. "
+                "Optional right now: enables broker-live quotes and broker-dependent paper entry. "
                 "Official data, scan, research, shadow tracking, settlement and learning continue without it."
             ),
-            "action": _action(
-                label="Login to Zerodha",
-                kind="instruction",
-                instruction="Run python main.py login when you want broker-live capability. No action is required for autonomous research work.",
-            ),
+            "action": broker_action,
         })
     need_me = bool(required_attention)
 
@@ -559,13 +607,20 @@ def build_home_os(
         "recovered": list(recovered or []),
         "live_locked": True,
         "broker": {
-            "status": "OPTIONAL_LOGIN" if broker_login_required else "READY",
+            "status": (
+                "LOGIN_REQUIRED" if broker_action_required
+                else "OPTIONAL_LOGIN" if broker_login_required
+                else "READY"
+            ),
             "login_required": broker_login_required,
-            "requires_operator_now": False,
+            "requires_operator_now": broker_action_required,
             "blocks_autonomy": False,
             "detail": (
-                "Broker-live quotes and broker-dependent paper entry are unavailable until login; autonomous research work continues."
-                if broker_login_required else "Broker session is usable."
+                "Login is required for broker-dependent paper entry; non-broker autonomy continues."
+                if broker_action_required
+                else "Broker-live quotes and broker-dependent paper entry are unavailable until login; autonomous research work continues."
+                if broker_login_required
+                else "Broker session is usable."
             ),
         },
         "readiness": readiness,
