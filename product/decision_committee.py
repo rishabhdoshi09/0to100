@@ -7,10 +7,14 @@ disagreement — and refuses to call a name READY just because ENTER_NOW fired.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from product import decision_taxonomy as T
 from product.due_diligence.evidence import DEFAULT_MIN_DECISION_COVERAGE
+from product.evidence_families import (
+    aggregate_evidence_families,
+    family_gate,
+)
 from product.paper_autopilot import (
     BLOCK,
     ENTER_NOW,
@@ -20,31 +24,7 @@ from product.paper_autopilot import (
     evaluate_candidate,
 )
 from product.reco_ensemble import TIER_GOOD, TIER_HIGH
-
-
-FAMILY_MAP = {
-    "price_leadership": "TREND",
-    "structure": "TECHNICAL",
-    "participation": "VOLUME",
-    "business_quality": "BUSINESS",
-    "fundamental_change": "FINANCIAL",
-    "market_context": "SECTOR",
-    "catalyst": "CATALYST",
-}
-
-METHOD_TO_FAMILY = {
-    "tape": "TECHNICAL",
-    "sepa": "TREND",
-    "trend": "TREND",
-    "rs": "REL_STRENGTH",
-    "volume": "VOLUME",
-    "funds": "FINANCIAL",
-    "quality": "BUSINESS",
-    "sector": "SECTOR",
-    "conviction": "ENTRY",
-    "ev": "HISTORICAL",
-    "case": "HISTORICAL",
-}
+from product.risk_audit import audit_levels
 
 HC_NEEDS_RESEARCH = True
 
@@ -77,6 +57,12 @@ class CommitteeRecord:
     entry: float | None = None
     stop: float | None = None
     target: float | None = None
+    method_votes: list[dict[str, Any]] = field(default_factory=list)
+    evidence_family_votes: dict[str, str] = field(default_factory=dict)
+    dependency_notes: list[str] = field(default_factory=list)
+    effective_confirmation_count: int = 0
+    family_gate_ok: bool = False
+    risk_audit: dict[str, Any] = field(default_factory=dict)
     references: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
@@ -108,6 +94,15 @@ class CommitteeRecord:
             "entry": self.entry,
             "stop": self.stop,
             "target": self.target,
+            "method_votes": self.method_votes,
+            "evidence_family_votes": self.evidence_family_votes,
+            "dependency_notes": self.dependency_notes,
+            "effective_confirmation_count": self.effective_confirmation_count,
+            "family_gate_ok": self.family_gate_ok,
+            "supportive_families": [
+                k for k, v in self.evidence_family_votes.items() if v == "SUPPORTIVE"
+            ],
+            "risk_audit": self.risk_audit,
             "references": self.references,
         }
 
@@ -212,11 +207,15 @@ def _wait_trigger(entry_state: str, card: Mapping[str, Any], reason: str) -> dic
             "price": level,
             "reconsider_when": f"breakout/hold above {level}" if level else "entry trigger prints",
         }
-    if reason == T.INSUFFICIENT_EVIDENCE:
+    if reason in {T.INSUFFICIENT_EVIDENCE, T.INSUFFICIENT_INDEPENDENT_EVIDENCE}:
         return {
             "kind": "EVIDENCE_ACQUIRED",
-            "reason": T.INSUFFICIENT_EVIDENCE,
-            "reconsider_when": "required evidence acquired",
+            "reason": reason,
+            "reconsider_when": (
+                "independent non-price family confirms"
+                if reason == T.INSUFFICIENT_INDEPENDENT_EVIDENCE
+                else "required evidence acquired"
+            ),
         }
     if reason in {T.PORTFOLIO_CONCENTRATION, T.CORRELATION_LIMIT, T.MAX_PORTFOLIO_RISK, T.SECTOR_CAP}:
         return {
@@ -239,27 +238,32 @@ def evaluate_committee(
     symbol = str(card.get("symbol") or "").upper()
     tier = str(card.get("reco_tier") or "")
     entry_state = T.entry_from_card(dict(card))
-    families: dict[str, str] = {}
-    for fam in card.get("families") or []:
-        if isinstance(fam, Mapping) and fam.get("id"):
-            families[FAMILY_MAP.get(str(fam.get("id")), str(fam.get("id")).upper())] = str(fam.get("status") or "unknown").upper()
-    methods_buy, methods_wait, methods_avoid, methods_unknown = [], [], [], []
-    for meth in card.get("methods") or []:
-        if not isinstance(meth, Mapping):
-            continue
-        label = str(meth.get("label") or meth.get("id") or "")
-        vote = _method_vote(str(meth.get("status") or ""))
-        if vote == T.BUY:
-            methods_buy.append(label)
-        elif vote == T.WAIT_DECISION:
-            methods_wait.append(label)
-        elif vote == T.AVOID:
-            methods_avoid.append(label)
-        else:
-            methods_unknown.append(label)
-        mapped = METHOD_TO_FAMILY.get(str(meth.get("id") or ""))
-        if mapped and mapped not in families:
-            families[mapped] = str(meth.get("status") or "unknown").upper()
+    aggregation = aggregate_evidence_families(
+        methods=list(card.get("methods") or []),
+        ensemble_families=list(card.get("families") or []),
+    )
+    families = dict(aggregation.get("evidence_family_votes") or {})
+    methods_buy = [
+        str(m.get("label") or m.get("id") or "")
+        for m in aggregation.get("method_votes") or []
+        if m.get("status") == "SUPPORTIVE"
+    ]
+    methods_wait = [
+        str(m.get("label") or m.get("id") or "")
+        for m in aggregation.get("method_votes") or []
+        if m.get("status") == "NEUTRAL"
+    ]
+    methods_avoid = [
+        str(m.get("label") or m.get("id") or "")
+        for m in aggregation.get("method_votes") or []
+        if m.get("status") == "OPPOSED"
+    ]
+    methods_unknown = [
+        str(m.get("label") or m.get("id") or "")
+        for m in aggregation.get("method_votes") or []
+        if m.get("status") == "UNKNOWN"
+    ]
+    gate = family_gate(aggregation=aggregation, tier=tier)
 
     paper = evaluate_candidate(card, book=book, entries_allowed=True, workspace=workspace)
     paper_decision = paper.decision
@@ -286,9 +290,9 @@ def evaluate_committee(
     if quality_label.lower() in {"weak", "avoid", "poor"}:
         vetoes.append({"code": T.BUSINESS_QUALITY_FAIL, "detail": quality_label})
     caution_wait = vs_tech == "CAUTION" and quality_label.lower() in {"mixed", "weak", "avoid", "poor", ""}
-    if families.get("BUSINESS") == "FAIL":
+    if families.get("BUSINESS_QUALITY") == "OPPOSED" or families.get("BUSINESS") == "FAIL":
         vetoes.append({"code": T.BUSINESS_QUALITY_FAIL, "detail": "business quality family failed"})
-    if families.get("SECTOR") == "FAIL" and tier == TIER_HIGH:
+    if (families.get("SECTOR_CONTEXT") == "OPPOSED" or families.get("SECTOR") == "FAIL") and tier == TIER_HIGH:
         vetoes.append({"code": T.WEAK_SECTOR, "detail": "high-conviction inside a failed sector family"})
 
     research_required = bool(
@@ -309,11 +313,21 @@ def evaluate_committee(
 
     hard = [v for v in vetoes if v["code"] in T.HARD_VETO_CODES or v["code"] == T.INSUFFICIENT_EVIDENCE]
 
-    if paper_decision == ENTER_NOW and not hard and research_ok and not caution_wait:
+    if paper_decision == ENTER_NOW and not hard and research_ok and not caution_wait and gate.get("ok"):
         decision = T.BUY
         candidate_state = T.READY
         reason_code = "COMMITTEE_BUY"
-        reason = "Independent families and gates justify taking risk."
+        reason = (
+            f"{gate.get('effective_confirmation_count')} independent families and gates justify taking risk."
+        )
+    elif paper_decision == ENTER_NOW and not hard and research_ok and not caution_wait and not gate.get("ok"):
+        decision = T.WAIT_DECISION
+        candidate_state = T.WAIT
+        reason_code = T.INSUFFICIENT_INDEPENDENT_EVIDENCE
+        reason = (
+            "Method chips are correlated. "
+            + str(gate.get("detail") or "Independent confirmation is insufficient.")
+        )
     elif paper_decision == ENTER_NOW and not hard and caution_wait:
         decision = T.WAIT_DECISION
         candidate_state = T.WAIT
@@ -338,10 +352,18 @@ def evaluate_committee(
     elif paper_decision in {WATCH, BLOCK, PORTFOLIO_BLOCK} and paper_reason in {
         T.PORTFOLIO_CONCENTRATION, T.CORRELATION_LIMIT, T.MAX_PORTFOLIO_RISK, T.SECTOR_CAP,
     }:
-        decision = T.WAIT_DECISION
-        candidate_state = T.WAIT
-        reason_code = paper_reason
-        reason = "Investment thesis can wait on portfolio capacity."
+        # Portfolio capacity is an execution overlay. Do not rewrite the stock thesis
+        # when independent families would otherwise justify BUY.
+        if gate.get("ok") and research_ok and not hard and not caution_wait and entry_state == T.ENTER_NOW:
+            decision = T.BUY
+            candidate_state = T.READY
+            reason_code = "COMMITTEE_BUY"
+            reason = "Stock thesis is BUY; portfolio committee must admit it separately."
+        else:
+            decision = T.WAIT_DECISION
+            candidate_state = T.WAIT
+            reason_code = paper_reason
+            reason = "Investment thesis can wait on portfolio capacity."
     else:
         decision = T.AVOID
         candidate_state = T.REJECTED
@@ -356,7 +378,9 @@ def evaluate_committee(
 
     execution = T.NOT_APPLICABLE
     if decision == T.BUY:
-        if not broker_ok:
+        if paper_decision == PORTFOLIO_BLOCK:
+            execution = T.BLOCKED_PORTFOLIO
+        elif not broker_ok:
             execution = T.BLOCKED_BROKER_AUTH
         elif not entry_window:
             execution = T.BLOCKED_WINDOW
@@ -365,11 +389,9 @@ def evaluate_committee(
     elif candidate_state in {T.WAIT, T.WAIT_EVIDENCE, T.WATCH}:
         execution = T.NOT_APPLICABLE
 
-    positives = []
-    for name, status in families.items():
-        if status == "PASS":
-            positives.append(name)
+    positives = list(aggregation.get("supportive_families") or [])
     positives.extend(f"method {m}" for m in methods_buy[:4])
+    levels = audit_levels(card)
 
     trigger = _wait_trigger(entry_state, card, reason_code) if decision == T.WAIT_DECISION else {}
 
@@ -400,15 +422,54 @@ def evaluate_committee(
         entry=_f(card.get("entry")),
         stop=_f(card.get("stop")),
         target=_f(card.get("target")),
+        method_votes=list(aggregation.get("method_votes") or []),
+        evidence_family_votes=dict(aggregation.get("evidence_family_votes") or {}),
+        dependency_notes=list(aggregation.get("dependency_notes") or []),
+        effective_confirmation_count=int(aggregation.get("effective_confirmation_count") or 0),
+        family_gate_ok=bool(gate.get("ok")),
+        risk_audit=levels,
         references={
             "reco_tier": tier,
             "primary_thesis": card.get("primary_thesis"),
+            "sector": card.get("sector"),
+            "regime": card.get("regime") or card.get("risk_mode"),
             "research": {k: research.get(k) for k in (
                 "framework_id", "framework_label", "coverage_pct", "quality_label",
                 "acquired_at", "vs_technical",
             ) if research.get(k) not in (None, "")},
+            "family_gate": gate,
         },
     )
+
+
+def reaudit_ready(
+    cards: list[Mapping[str, Any]],
+    *,
+    previous_ready: Sequence[str] | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Re-run READY names through the independence-aware committee."""
+    previous = [str(s).upper() for s in (previous_ready or [])]
+    if not previous:
+        previous = [
+            str(c.get("symbol") or "").upper()
+            for c in cards
+            if str(c.get("candidate_state") or "") == T.READY or str(c.get("decision") or "") == T.BUY
+        ]
+    by = {str(c.get("symbol") or "").upper(): c for c in cards if c.get("symbol")}
+    selected = [by[s] for s in previous if s in by]
+    after = evaluate_many(selected, **kwargs)
+    ready_after = [r.symbol for r in after if r.candidate_state == T.READY and r.decision == T.BUY]
+    dropped = [s for s in previous if s not in ready_after]
+    return {
+        "ready_before": previous,
+        "ready_after": ready_after,
+        "n_before": len(previous),
+        "n_after": len(ready_after),
+        "dropped": dropped,
+        "records": [r.as_dict() for r in after],
+        "note": "A lower READY count from correlated-method collapse is a quality improvement.",
+    }
 
 
 def evaluate_many(cards: list[Mapping[str, Any]], **kwargs: Any) -> list[CommitteeRecord]:
