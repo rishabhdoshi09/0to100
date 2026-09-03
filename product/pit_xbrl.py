@@ -16,13 +16,31 @@ TAG_MAP = {
     "RevenueFromOperations": "revenue",
     "OtherIncome": "other_income",
     "Income": "total_income",
+    "InterestEarned": "interest_earned",
+    "InterestExpended": "interest_expended",
     "ProfitBeforeExceptionalItemsAndTax": "pbt_before_exceptional",
     "ExceptionalItemsBeforeTax": "exceptional_items",
     "ProfitBeforeTax": "pbt",
+    "ProfitLossFromOrdinaryActivitiesBeforeTax": "pbt",
     "ProfitLossForPeriod": "pat",
+    "ProfitLossForThePeriod": "pat",
+    "ProfitLossFromOrdinaryActivitiesAfterTax": "pat",
+    "ProfitLossAfterTaxesMinorityInterestAndShareOfProfitLossOfAssociates": "pat",
     "ProfitLossForPeriodFromContinuingOperations": "pat_continuing",
     "FinanceCosts": "finance_costs",
     "EmployeeBenefitExpense": "employee_expense",
+    "EmployeesCost": "employee_expense",
+    "OperatingProfitBeforeProvisionAndContingencies": "operating_profit",
+    "GrossNonPerformingAssets": "gnpa",
+    "NonPerformingAssets": "nnpa",
+    "PercentageOfGrossNpa": "gnpa_pct",
+    "PercentageOfNpa": "nnpa_pct",
+    "CET1Ratio": "cet1_ratio",
+    "ReturnOnAssets": "roa",
+    "BasicEarningsPerShareAfterExtraordinaryItems": "basic_eps",
+    "DilutedEarningsPerShareAfterExtraordinaryItems": "diluted_eps",
+    "BasicEarningsPerShareBeforeExtraordinaryItems": "basic_eps",
+    "DilutedEarningsPerShareBeforeExtraordinaryItems": "diluted_eps",
     "DepreciationDepletionAndAmortisationExpense": "depreciation",
     "Expenses": "total_expenses",
     "CostOfMaterialsConsumed": "materials",
@@ -54,6 +72,9 @@ TAG_MAP = {
 PER_SHARE = {
     "face_value", "basic_eps", "diluted_eps",
     "basic_eps_continuing", "diluted_eps_continuing",
+}
+RATIOS = {
+    "gnpa_pct", "nnpa_pct", "cet1_ratio", "roa",
 }
 
 MAIN_CONTEXTS = ("OneD", "FourD", "OneI", "PY_I")
@@ -158,7 +179,10 @@ def parse_xbrl(xml_text: str) -> dict[str, Any]:
         if field in PER_SHARE or unit == "INRPerShare":
             scaled = value
             unit_out = "INR_per_share"
-        elif unit in {"INR", "pure", ""} and field:
+        elif field in RATIOS or unit == "pure":
+            scaled = value
+            unit_out = "ratio"
+        elif unit in {"INR", ""} and field:
             scaled = _scale_to_crore(value, decimals=decimals, rounding=rounding)
             unit_out = "INR_crore"
         elif field:
@@ -189,7 +213,17 @@ def parse_xbrl(xml_text: str) -> dict[str, Any]:
             flat[key] = float(val)
             identities[key] = str(item.get("tag") or "")
 
-    n_core = sum(1 for k in ("revenue", "pat", "pbt") if k in flat)
+    if "revenue" not in flat:
+        if "interest_earned" in flat:
+            flat["revenue"] = flat["interest_earned"]
+            identities.setdefault("revenue", identities.get("interest_earned") or "InterestEarned")
+        elif "total_income" in flat:
+            flat["revenue"] = flat["total_income"]
+            identities.setdefault("revenue", identities.get("total_income") or "Income")
+    if "finance_costs" not in flat and "interest_expended" in flat:
+        flat["finance_costs"] = flat["interest_expended"]
+        identities.setdefault("finance_costs", identities.get("interest_expended") or "InterestExpended")
+    n_core = sum(1 for k in ("revenue", "pat", "pbt", "interest_earned") if k in flat)
     ok = n_core >= 1
     if not period_end:
         period_end = (contexts.get("OneD") or {}).get("end") or (contexts.get("OneI") or {}).get("instant") or ""

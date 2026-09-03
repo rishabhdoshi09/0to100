@@ -28,6 +28,26 @@ INFY_XBRL = """<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
+BANK_XBRL = """<?xml version="1.0" encoding="UTF-8"?>
+<xbrl>
+  <context id="OneD"><startDate>2026-04-01</startDate><endDate>2026-06-30</endDate></context>
+  <LevelOfRounding>Crores</LevelOfRounding>
+  <InterestEarned contextRef="OneD" unitRef="INR" decimals="-5">793627800000</InterestEarned>
+  <ProfitLossForThePeriod contextRef="OneD" unitRef="INR" decimals="-5">190597200000</ProfitLossForThePeriod>
+  <ProfitLossFromOrdinaryActivitiesBeforeTax contextRef="OneD" unitRef="INR" decimals="-6">251083000000</ProfitLossFromOrdinaryActivitiesBeforeTax>
+  <PercentageOfGrossNpa contextRef="OneD" unitRef="pure" decimals="INF">0.0117</PercentageOfGrossNpa>
+</xbrl>
+"""
+
+
+def test_bank_xbrl_maps_interest_earned_and_does_not_scale_npa():
+    parsed = parse_xbrl(BANK_XBRL)
+    assert parsed["ok"] is True
+    assert parsed["facts"]["revenue"] == 79362.78
+    assert parsed["facts"]["pat"] == 19059.72
+    assert parsed["facts"]["gnpa_pct"] == 0.0117
+
+
 def test_parse_infy_q1_fy27_matches_official_xbrl():
     parsed = parse_xbrl(INFY_XBRL)
     assert parsed["ok"] is True
