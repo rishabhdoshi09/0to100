@@ -67,6 +67,43 @@ if [[ ! -f .env ]]; then
   fi
 fi
 
+# Older sample files used truthy placeholder credentials. Normalize only known
+# placeholders so they cannot masquerade as configured secrets in readiness or
+# trigger a broken login flow. Real values are never modified.
+python - <<'PY' || true
+from pathlib import Path
+
+path = Path('.env')
+if not path.exists():
+    raise SystemExit(0)
+secret_keys = {
+    'KITE_API_KEY', 'KITE_API_SECRET', 'KITE_ACCESS_TOKEN',
+    'DEEPSEEK_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY',
+    'MARKETAUX_API_KEY', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID',
+}
+markers = (
+    'your_api_key_here', 'your_api_secret_here', 'generated_each_morning',
+    'your_marketaux_key_here', 'your_bot_token_here', 'your_chat_id_here',
+    'sk-...', 'sk-ant-...',
+)
+changed = False
+out = []
+for raw in path.read_text(encoding='utf-8').splitlines():
+    if '=' not in raw or raw.lstrip().startswith('#'):
+        out.append(raw)
+        continue
+    key, value = raw.split('=', 1)
+    clean = value.strip().strip('"').strip("'").lower()
+    if key.strip() in secret_keys and any(marker in clean for marker in markers):
+        out.append(f"{key.strip()}=")
+        changed = True
+    else:
+        out.append(raw)
+if changed:
+    path.write_text('\n'.join(out) + '\n', encoding='utf-8')
+    print('[COMPLETE STACK] Removed placeholder credential values from .env; optional providers remain disabled until real credentials are supplied.')
+PY
+
 auth_rc=0
 python - <<'PY' >/dev/null || auth_rc=$?
 from data.kite_client import _fresh_env
@@ -94,7 +131,14 @@ elif [[ "$auth_rc" -eq 1 ]]; then
     echo "[COMPLETE STACK] Zerodha login is needed for broker-dependent work. Non-interactive run skipped it; non-broker autonomy continues. Run: python main.py login"
   else
     echo "[COMPLETE STACK] Zerodha login is needed for broker-dependent work. Browser will open; paste the redirect URL here, or Ctrl-C and restart with QT_NONINTERACTIVE=1 to run without broker capability."
-    python main.py login
+    login_rc=0
+    python main.py login || login_rc=$?
+    if [[ "$login_rc" -eq 130 ]]; then
+      exit 130
+    fi
+    if [[ "$login_rc" -ne 0 ]]; then
+      echo "[COMPLETE STACK] Zerodha login did not complete. Continuing in no-broker mode; research, scanning, replay, settlement and learning remain available." >&2
+    fi
   fi
 fi
 
