@@ -27,6 +27,8 @@ from product.reco_ensemble import TIER_GOOD, TIER_HIGH
 from product.risk_audit import audit_levels
 
 HC_NEEDS_RESEARCH = True
+COMMITTEE_VERSION = "committee_v2_families"
+EVIDENCE_FAMILY_VERSION = "evidence_families_v1"
 
 
 @dataclass
@@ -127,13 +129,26 @@ def _method_vote(status: str) -> str:
     return "UNKNOWN"
 
 
-def _research_snapshot(symbol: str, card: Mapping[str, Any]) -> dict[str, Any]:
+def _research_snapshot(symbol: str, card: Mapping[str, Any], *, as_of: str | None = None) -> dict[str, Any]:
     try:
         from product.due_diligence.research_engine import StockResearchEngine
 
-        report = StockResearchEngine().investigate(symbol)
+        if as_of:
+            from product.pit_query import pit_research_inputs
+
+            pit = pit_research_inputs(symbol, as_of=as_of)
+            report = StockResearchEngine().investigate(
+                symbol,
+                as_of_session=as_of,
+                scan_payload=pit["scan_payload"],
+                long_term_payload=pit["long_term_payload"],
+                raw_fundamentals=pit["raw_fundamentals"],
+                news=pit["news"],
+            )
+        else:
+            report = StockResearchEngine().investigate(symbol)
     except Exception as exc:
-        return {"error": str(exc)[:200], "available": False}
+        return {"error": str(exc)[:200], "available": False, "pit": bool(as_of)}
     if not isinstance(report, dict) or not report:
         return {"available": False}
     coverage = dict(report.get("decision_coverage") or {})
@@ -156,7 +171,12 @@ def _research_snapshot(symbol: str, card: Mapping[str, Any]) -> dict[str, Any]:
         "quality_label": quality.get("label") or report.get("quality_label") or "",
         "red_flags": flags,
         "vs_technical": str(report.get("vs_technical_setup") or ""),
-        "acquired_at": ((report.get("as_of") or {}).get("autonomy_acquired_at") if isinstance(report.get("as_of"), Mapping) else ""),
+        "acquired_at": (
+            "" if as_of else
+            ((report.get("as_of") or {}).get("autonomy_acquired_at") if isinstance(report.get("as_of"), Mapping) else "")
+        ),
+        "pit": bool(as_of),
+        "pit_as_of": str(as_of)[:10] if as_of else "",
     }
 
 
@@ -234,6 +254,7 @@ def evaluate_committee(
     entry_window: bool = False,
     workspace: Mapping[str, Any] | None = None,
     load_research: bool = True,
+    as_of: str | None = None,
 ) -> CommitteeRecord:
     symbol = str(card.get("symbol") or "").upper()
     tier = str(card.get("reco_tier") or "")
@@ -269,7 +290,12 @@ def evaluate_committee(
     paper_decision = paper.decision
     paper_reason = str(paper.reason_code or "")
 
-    research = _research_snapshot(symbol, card) if load_research else {"available": False}
+    if as_of:
+        research = _research_snapshot(symbol, card, as_of=as_of) if load_research else {
+            "available": False, "pit": True, "pit_as_of": str(as_of)[:10],
+        }
+    else:
+        research = _research_snapshot(symbol, card) if load_research else {"available": False}
     info_value = _information_value(card, paper_decision, paper_reason, research)
     coverage = research.get("coverage_pct")
     if coverage is None:
@@ -435,9 +461,10 @@ def evaluate_committee(
             "regime": card.get("regime") or card.get("risk_mode"),
             "research": {k: research.get(k) for k in (
                 "framework_id", "framework_label", "coverage_pct", "quality_label",
-                "acquired_at", "vs_technical",
+                "acquired_at", "vs_technical", "pit", "pit_as_of",
             ) if research.get(k) not in (None, "")},
             "family_gate": gate,
+            "pit_as_of": str(as_of)[:10] if as_of else "",
         },
     )
 

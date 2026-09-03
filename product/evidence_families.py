@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+FAMILY_SCHEMA_VERSION = "family_schema_v1"
+
 # Canonical families used for confirmation. Context-only families can appear
 # on the record but do not increment effective_confirmation_count.
 PRICE_STRUCTURE = "PRICE_STRUCTURE"

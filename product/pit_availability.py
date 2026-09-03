@@ -9,6 +9,8 @@ from __future__ import annotations
 from datetime import datetime, date
 from typing import Any, Mapping, Sequence
 
+PIT_CONTRACT_VERSION = "pit_contract_v1"
+
 PIT_STRONG = "PIT_STRONG"
 PIT_PARTIAL = "PIT_PARTIAL"
 PIT_MARKET_ONLY = "PIT_MARKET_ONLY"
