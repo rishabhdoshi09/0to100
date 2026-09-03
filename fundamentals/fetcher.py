@@ -2,13 +2,14 @@
 Unified fundamentals entry point.
 
 Authoritative current financial tables come from QuantTerm's dated official
-XBRL warehouse when available. Secondary public fundamentals are used to fill
-non-official gaps (company description, peers, valuation, etc.) and as a
-fallback when the warehouse has no usable current filing.
+XBRL warehouse when available. When those tables are absent, QuantTerm first
+attempts its existing official NSE structured-results backfill, then falls back
+to secondary public fundamentals for enrichment or source outages.
 
-The important rule is source precedence, not source popularity:
+Source precedence:
 
-    official warehouse > fresh secondary cache > live secondary scrape > stale last-good
+    official warehouse > official NSE backfill > fresh secondary cache
+    > live secondary scrape > stale last-good
 
 Official tables never get overwritten by a secondary scrape.
 """
@@ -89,6 +90,30 @@ def _official_warehouse_snapshot(symbol: str) -> Dict[str, Any] | None:
     return data
 
 
+def _try_official_backfill(symbol: str) -> Dict[str, Any] | None:
+    """Acquire current official structured results before scraping secondary data.
+
+    Uses the already-tested PIT backfill/parser and therefore keeps publication
+    dates, raw artifacts and provenance. Failures are non-fatal: the caller may
+    still use cache/Screener as a fallback.
+    """
+    try:
+        from product.pit_backfill import backfill_structured_financials
+
+        report = backfill_structured_financials(symbol, max_xbrl=8, sleep_s=0.0)
+        log.info(
+            "official_fundamentals_backfill",
+            symbol=symbol,
+            acquired=report.get("acquired"),
+            parsed=report.get("parsed"),
+            failed=report.get("failed"),
+        )
+    except Exception as exc:
+        log.info("official_fundamentals_backfill_failed", symbol=symbol, error=str(exc)[:160])
+        return None
+    return _official_warehouse_snapshot(symbol)
+
+
 def _merge_official(base: Mapping[str, Any] | None, official: Mapping[str, Any] | None) -> Dict[str, Any]:
     """Keep useful secondary fields, but official financials always win."""
     merged: Dict[str, Any] = dict(base or {})
@@ -125,34 +150,39 @@ def get_deep_fundamentals(
 ) -> Dict[str, Any]:
     """Return the best current fundamentals pack for *symbol*.
 
-    Normal operation does not scrape when QuantTerm already has usable official
-    XBRL financials plus a cached secondary enrichment pack. A forced refresh
-    may update the secondary enrichment, but official tables still win.
+    Normal operation avoids a network call when QuantTerm already has usable
+    official financials plus a cached enrichment pack. When core financials are
+    missing, official NSE structured results are attempted before a secondary
+    scrape. A forced refresh may update secondary enrichment, but official
+    tables still win.
     """
     symbol = symbol.upper().strip()
     last_good = _cache.get(symbol, allow_stale=True)
     official = _official_warehouse_snapshot(symbol)
+    cached = None if force_refresh else _cache.get(symbol, allow_stale=False)
 
-    if not force_refresh:
-        cached = _cache.get(symbol, allow_stale=False)
-        if cached is not None:
-            merged = _merge_official(cached, official)
-            if official:
-                _cache.set(symbol, merged)
-                log.info("fundamentals_served_official_plus_cache", symbol=symbol)
-            else:
-                merged.setdefault("source_label", "cache")
-                merged.setdefault("source_tier", "cache")
-                log.info("fundamentals_served_from_cache", symbol=symbol)
-            return merged
-
-        # Official financials are already sufficient to avoid a network scrape
-        # for core company numbers. Keep any stale enrichment fields if present.
+    if cached is not None:
+        merged = _merge_official(cached, official)
         if official:
-            merged = _merge_official(last_good, official)
             _cache.set(symbol, merged)
-            log.info("fundamentals_served_from_official_warehouse", symbol=symbol)
-            return merged
+            log.info("fundamentals_served_official_plus_cache", symbol=symbol)
+        else:
+            merged.setdefault("source_label", "cache")
+            merged.setdefault("source_tier", "cache")
+            log.info("fundamentals_served_from_cache", symbol=symbol)
+        return merged
+
+    # If no fresh secondary cache can satisfy the request, make the system try
+    # its authoritative structured source first. This is exactly the path an
+    # autonomous Research Data / Investigate acquire should prefer.
+    if official is None:
+        official = _try_official_backfill(symbol)
+
+    if official and not force_refresh:
+        merged = _merge_official(last_good, official)
+        _cache.set(symbol, merged)
+        log.info("fundamentals_served_from_official_warehouse", symbol=symbol)
+        return merged
 
     log.info("fundamentals_scraping", symbol=symbol, force=force_refresh)
     try:
