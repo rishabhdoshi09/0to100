@@ -254,12 +254,11 @@ function BestOfBestHero({
   const parts = row.best_of_best_parts || {}
   const upside = row.upside_to_target_pct ?? row.upside_from_entry_pct
   const risk = String(row.risk_tier || 'Medium').toLowerCase()
-  const badge = row.action_badge || 'Watch'
   return (
     <article className="radar-bob-hero">
       <button type="button" className="radar-bob-hit" onClick={() => onSelect(String(row.symbol || ''))}>
         <div className="radar-bob-row1">
-          <span className={`reco-buy ${badge.toLowerCase().includes('buy') ? '' : 'is-watch'}`}>{badge}</span>
+          <span className="reco-buy is-watch">Candidate</span>
           <span className="reco-opp">Best among the best</span>
           <span className={`reco-risk-chip ${risk}`}>{row.risk_tier || 'Medium'} Risk</span>
         </div>
@@ -493,13 +492,10 @@ function HomeOsCard({
         ) : null}
         <div className="home-os-quick" aria-label="Open the next desk page">
           {[
-            ['Scanner', 'Market Scanner'],
-            ['Recommendations', 'Recommendations'],
-            ['Research', 'Stock Intelligence'],
-            ['Paper Bot', 'Portfolio'],
+            ['Opportunities', 'Recommendations'],
+            ['Stock Intelligence', 'Stock Intelligence'],
+            ['Portfolio', 'Portfolio'],
             ['Learning', 'Learning'],
-            ['Past decisions', 'Backtest'],
-            ['Health', 'Automation'],
           ].map(([label, page]) => (
             <button
               key={page}
@@ -525,10 +521,10 @@ function HomeOsCard({
         </div>
         <div>
           <span>NEEDS YOU</span>
-          <strong>{os.need_me || os.broker?.login_required ? (os.broker?.login_required ? 'Broker login' : 'Yes') : 'No'}</strong>
+          <strong>{os.need_me ? 'Yes' : 'No'}</strong>
           <small>
             {os.need_me
-              ? (os.primary_action?.instruction || os.primary_action?.label || os.broker?.detail || 'Operator action required')
+              ? (os.primary_action?.instruction || os.primary_action?.label || 'Operator action required')
               : 'No genuine operator intervention'}
           </small>
         </div>
@@ -764,8 +760,9 @@ export function RadarHomeView(props: ExperienceViewProps & {
   }, [selected, dashboard.scan.scanned_at, dashboard.generated_at])
 
   const scanAt = radar?.scan_scanned_at || dashboard.scan.scanned_at || ''
-  const kiteOk = dashboard.autonomy.state !== 'AUTH_REQUIRED'
-    && !(dashboard.autonomy.active_failures || []).some((f) => String(f).includes('auth'))
+  const brokerStatus = String(radar?.home_os?.broker?.status || '').toUpperCase()
+  const kiteOk = brokerStatus === 'READY'
+  const kiteLoginOptional = Boolean(radar?.home_os?.broker?.login_required)
   const telegram = radar?.telegram || dashboard.autonomy.telegram
   const telegramOn = Boolean(telegram?.configured)
   const telegramWarn = telegramOn && telegram?.state !== 'live' && telegram?.state !== 'scan_sent'
@@ -941,7 +938,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
 
       <DeskPipelineStrip pipeline={radar?.desk_pipeline} />
 
-      <div className={`radar-desk-strip ${kiteOk ? '' : 'desk-warn'} ${telegramWarn ? 'telegram-warn' : ''}`}>
+      <div className={`radar-desk-strip ${telegramWarn ? 'telegram-warn' : ''}`}>
         <div>
           <span>SCAN</span>
           <strong>{relativeAge(scanAt)}</strong>
@@ -954,11 +951,13 @@ export function RadarHomeView(props: ExperienceViewProps & {
         </div>
         <div>
           <span>ZERODHA</span>
-          <strong>{kiteOk ? 'SESSION OK' : 'LOGIN NEEDED'}</strong>
+          <strong>{kiteOk ? 'READY' : kiteLoginOptional ? 'LOGIN OPTIONAL' : 'CHECKING'}</strong>
           <small>
             {kiteOk
-              ? 'live quotes / depth available when market is open'
-              : (dashboard.autonomy.plain_state || 'python main.py login')}
+              ? 'broker-dependent quotes and paper capability available'
+              : kiteLoginOptional
+                ? 'Log in only when you want broker-dependent capability. Core research keeps running.'
+                : 'Broker state comes from backend readiness; core research does not depend on it.'}
           </small>
         </div>
         <div>
