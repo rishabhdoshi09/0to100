@@ -15,6 +15,7 @@ import './recommendations.css'
 import './reco-desk.css'
 import './operator-polish.css'
 import './home-calm.css'
+import './clarity.css'
 
 // Compatibility for two legacy Investigate button guards. Duplicate acquisition
 // is already prevented authoritatively by the API, which returns the active job
