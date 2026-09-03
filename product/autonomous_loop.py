@@ -376,6 +376,19 @@ def _consume_paper(
         if not symbol:
             continue
         card = by_card.get(symbol) or {"symbol": symbol}
+        if not rec.get("sector"):
+            rec["sector"] = card.get("sector") or ""
+        try:
+            from product.portfolio_committee import apply_overlay, evaluate_portfolio
+
+            overlay = evaluate_portfolio(rec, book=None, as_of=session)
+            rec = apply_overlay(rec, overlay)
+        except Exception:
+            pass
+        for i, prev_rec in enumerate(records):
+            if str(prev_rec.get("symbol") or "").upper() == symbol:
+                records[i] = rec
+                break
         rid = CL.recommendation_id(scan_run_id, symbol, str(rec.get("tier") or card.get("reco_tier") or ""))
         did = f"{session}|{symbol}|{rec.get('decision')}|{rec.get('reason_code')}|{scan_run_id}"
         intent_id = f"{did}:intent"
@@ -391,6 +404,15 @@ def _consume_paper(
         if rec.get("decision") == "BUY" and rec.get("candidate_state") == CL.READY:
             if str(rec.get("execution_state") or "").startswith("BLOCKED"):
                 intents.append(row)
+                if str(rec.get("execution_state") or "") == "BLOCKED_BROKER_AUTH":
+                    try:
+                        from product.shadow_execution import SHADOW_NOT_EXECUTED, freeze_shadow
+
+                        shadow = freeze_shadow({**row, "shadow_status": SHADOW_NOT_EXECUTED})
+                        row["shadow_status"] = shadow.get("status")
+                        rec["shadow_status"] = shadow.get("status")
+                    except Exception:
+                        pass
             else:
                 taken.append(row)
         elif rec.get("decision") == "WAIT":
@@ -794,6 +816,7 @@ def advance_loop(*, trigger: str = "pipeline") -> dict[str, Any]:
         pass
 
     committee = _evaluate_committee(cards, reco, extra_symbols=extra)
+    committee_before = {str(r.get("symbol") or "").upper(): dict(r) for r in committee}
     shortlist = _research_shortlist(cards, committee=committee)
     write_research_queue(
         shortlist, scan_run_id=scan_run_id, session=session,
@@ -808,6 +831,22 @@ def advance_loop(*, trigger: str = "pipeline") -> dict[str, Any]:
             cards = _cards(reco)
             researched = {str(x.get("symbol") or "").upper() for x in (research.get("acquired") or []) if x.get("symbol")}
             committee = _evaluate_committee(cards, reco, extra_symbols=extra | researched)
+            try:
+                from product.research_value import record_research_effect
+
+                for rec in committee:
+                    sym = str(rec.get("symbol") or "").upper()
+                    if sym not in researched:
+                        continue
+                    record_research_effect(
+                        symbol=sym,
+                        before=committee_before.get(sym) or {},
+                        after=rec,
+                        missing_before=list((committee_before.get(sym) or {}).get("missing_critical") or []),
+                        research_type="DUE_DILIGENCE_ACQUIRE",
+                    )
+            except Exception:
+                pass
         emit(
             "RESEARCH",
             f"deep research {research.get('n_ok')}/{len(shortlist)} cached={len(research.get('cached') or [])} waiting={research.get('n_waiting')}",
@@ -904,6 +943,40 @@ def event_log(limit: int = 40) -> list[dict[str, Any]]:
     return rows[-int(limit):]
 
 
+def _what_it_learned(summary: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    summary = summary or {}
+    try:
+        from product.learning_ledger import learned_today
+
+        today = learned_today(str(summary.get("session_date") or "")[:10] or "")
+    except Exception:
+        today = {
+            "summary": "Nothing statistically meaningful.",
+            "policy_changed": False,
+            "statistically_meaningful": [],
+        }
+    return {
+        "outcomes": summary.get("outcomes"),
+        "reason_aggregations": (summary.get("learning_memory") or {}).get("reason_aggregations"),
+        "policy_changed": False,
+        "production_impact": "none",
+        "learning_level": 1,
+        "today": today.get("summary") or "Nothing statistically meaningful.",
+        "entries": today.get("entries") or [],
+        "statistically_meaningful": today.get("statistically_meaningful") or [],
+        "research_value": _safe_research_value(),
+    }
+
+
+def _safe_research_value() -> dict[str, Any]:
+    try:
+        from product.research_value import summary as research_summary
+
+        return research_summary()
+    except Exception:
+        return {"n": 0, "note": "No research-value observations yet."}
+
+
 def desk_projection() -> dict[str, Any]:
     summary = load_summary()
     readiness = summary.get("readiness") or RDY.inspect_readiness()
@@ -939,11 +1012,7 @@ def desk_projection() -> dict[str, Any]:
             "research": summary.get("research"),
             "woken": summary.get("woken") or [],
         },
-        "what_it_learned": {
-            "outcomes": summary.get("outcomes"),
-            "reason_aggregations": (summary.get("learning_memory") or {}).get("reason_aggregations"),
-            "policy_changed": False,
-        },
+        "what_it_learned": _what_it_learned(summary),
         "census": summary.get("census") or {},
         "candidate_lifecycle": CL.state_counts(session),
         "judgments": {

@@ -6,6 +6,9 @@ from typing import Any, Mapping
 from product import decision_taxonomy as T
 from product.counterfactual_learning import GOOD_WAIT, MISSED_WINNER
 
+WAIT_RATIONALLY_MAINTAINED = "WAIT_RATIONALLY_MAINTAINED"
+MISSED_REENTRY = "MISSED_REENTRY"
+
 # Gates that mean the machine never offered an acceptable risk entry.
 RATIONAL_NO_ENTRY = frozenset(
     {
@@ -61,10 +64,12 @@ def analyze_decision_quality(
         "original_decision_rational": None,
         "note": "",
         "updates_policy": False,
+        "wait_attribution": "",
     }
     if classification == GOOD_WAIT or later_entered:
         out["original_decision_rational"] = True
         out["note"] = "YES — wait resolved into a later valid entry"
+        out["wait_attribution"] = GOOD_WAIT
         return out
     if classification != MISSED_WINNER:
         out["note"] = "Not a missed-winner path. Classification stands on its own."
@@ -72,10 +77,12 @@ def analyze_decision_quality(
     if reason in RATIONAL_NO_ENTRY:
         out["original_decision_rational"] = True
         out["note"] = "YES — never offered acceptable risk entry"
+        out["wait_attribution"] = WAIT_RATIONALLY_MAINTAINED
         return out
     if reason in RATIONAL_QUALITY:
         out["original_decision_rational"] = True
         out["note"] = f"YES — {reason} was a quality veto; a later rally does not reverse it"
+        out["wait_attribution"] = WAIT_RATIONALLY_MAINTAINED
         return out
     if reason in POSSIBLY_STRICT:
         out["original_decision_rational"] = None
@@ -83,4 +90,6 @@ def analyze_decision_quality(
         return out
     out["original_decision_rational"] = False
     out["note"] = "NO — gate may be too conservative"
+    if bool(row.get("later_valid_entry")) and bool(row.get("wake_failed")):
+        out["wait_attribution"] = MISSED_REENTRY
     return out
