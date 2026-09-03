@@ -30,3 +30,13 @@ def test_complete_launcher_keeps_daily_login_optional_for_noninteractive_runs() 
     assert "QT_NONINTERACTIVE" in login_block
     assert "non-broker autonomy continues" in login_block
     assert "python main.py login" in login_block
+
+
+def test_complete_launcher_machine_lock_is_portable_to_macos() -> None:
+    text = LAUNCHER.read_text(encoding="utf-8")
+
+    assert "try_machine_lock()" in text
+    assert "import fcntl" in text
+    assert "fcntl.flock(200, fcntl.LOCK_EX | fcntl.LOCK_NB)" in text
+    assert "if try_machine_lock; then" in text
+    assert "if flock -n 200; then" not in text
