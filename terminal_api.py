@@ -578,7 +578,11 @@ def _autonomy_payload() -> dict:
             "existing_exits": exit_capability != "blocked",
             "research_enabled": research_capability != "blocked",
             "capability_notes": list(status.get("capability_notes", []) or []),
-            "active_failures": list(raw.get("active_failures", []) or []),
+            "active_failures": list(
+                status.get("active_failures")
+                or raw.get("active_failures")
+                or []
+            ),
             "recent_dialogue": list(status.get("recent_dialogue", []) or [])[-40:],
             "recent_transitions": list(status.get("recent_transitions", []) or [])[-30:],
             "jobs": dict(status.get("jobs", {}) or {}),

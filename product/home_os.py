@@ -108,6 +108,50 @@ def _load_defaults() -> dict[str, Any]:
     return out
 
 
+_AUTH_STATES = frozenset({"AUTH_REQUIRED", "TOKEN_MISSING", "SESSION_EXPIRED"})
+_AUTH_REASON_CODES = frozenset({
+    "auth_health",
+    "token_missing",
+    "session_expired",
+    "auth_missing",
+    "auth_expired",
+})
+
+
+def broker_session_usable(auto: Mapping[str, Any] | None) -> bool:
+    """True only with evidence of a usable broker session. Empty snapshots fail closed."""
+    auto = _as_dict(auto)
+    if not auto:
+        return False
+    state = str(auto.get("state") or "").strip().upper()
+    if not state or state in _AUTH_STATES or state == "UNKNOWN":
+        return False
+    if auto.get("available") is False:
+        return False
+    if auto.get("kite_connected") is False:
+        return False
+    failures = [str(x).lower() for x in (auto.get("active_failures") or [])]
+    if any("auth" in item or "token" in item for item in failures):
+        return False
+    if str(auto.get("reason_code") or "").lower() in _AUTH_REASON_CODES:
+        return False
+    explanation = str(auto.get("explanation") or "").lower()
+    if "login is required" in explanation or "zerodha login" in explanation:
+        return False
+    notes = [str(n).lower() for n in (auto.get("capability_notes") or [])]
+    if any("zerodha login" in n or "re-login" in n or "session expired" in n for n in notes):
+        return False
+    feed = _as_dict(auto.get("live_feed"))
+    if str(feed.get("status") or "").upper() in _AUTH_STATES:
+        return False
+    feed_error = str(feed.get("last_error") or "").lower()
+    if feed.get("connected") is False and any(
+        token in feed_error for token in ("credential", "access token", "login", "auth")
+    ):
+        return False
+    return True
+
+
 def build_home_os(
     *,
     dashboard: Mapping[str, Any] | None = None,
@@ -139,24 +183,7 @@ def build_home_os(
     ops = _as_dict(operations if operations is not None else dash.get("operations") or loaded.get("operations"))
     radar_d = _as_dict(radar)
 
-    kite_ok = str(auto.get("state") or "") not in {"AUTH_REQUIRED", "TOKEN_MISSING", "SESSION_EXPIRED"}
-    failures = [str(x) for x in (auto.get("active_failures") or [])]
-    if any("auth" in f.lower() or "token" in f.lower() for f in failures):
-        kite_ok = False
-    if auto.get("kite_connected") is False:
-        kite_ok = False
-    reason_code = str(auto.get("reason_code") or "").lower()
-    if reason_code in {"auth_health", "token_missing", "session_expired", "auth_missing", "auth_expired"}:
-        kite_ok = False
-    explanation = str(auto.get("explanation") or "")
-    if "login is required" in explanation.lower() or "zerodha login" in explanation.lower():
-        kite_ok = False
-    notes = [str(n).lower() for n in (auto.get("capability_notes") or [])]
-    if any("zerodha login" in n or "re-login" in n or "session expired" in n for n in notes):
-        kite_ok = False
-    feed = _as_dict(auto.get("live_feed"))
-    if str(feed.get("status") or "").upper() in {"AUTH_REQUIRED", "TOKEN_MISSING", "SESSION_EXPIRED"}:
-        kite_ok = False
+    kite_ok = broker_session_usable(auto)
     paper_enabled = paper_d.get("enabled", True) is not False
     owner_state = _as_dict(auto.get("owner_state"))
     observe_date = str(owner_state.get("observe_only_date") or "")[:10]

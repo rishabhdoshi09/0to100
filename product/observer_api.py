@@ -233,9 +233,16 @@ def radar_home_workspace() -> dict[str, Any]:
         home["desk_pipeline"] = None
     try:
         from product.home_os import build_home_os
+        autonomy = {}
+        try:
+            if hasattr(core, "_autonomy_payload"):
+                autonomy = core._autonomy_payload() or {}
+        except Exception:
+            autonomy = {}
         home["home_os"] = build_home_os(
             scan=scan if isinstance(scan, dict) else {},
             radar=home,
+            autonomy=autonomy,
         )
     except Exception as exc:
         home["home_os"] = {"state": "PROBLEM", "headline": "Home status unavailable", "subtext": str(exc)[:160], "live_locked": True}

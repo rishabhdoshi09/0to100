@@ -55,6 +55,7 @@ def read_autonomy_status(root=None) -> dict:
         "existing_exits": caps["existing_exits"],
         "research": caps["research"],
         "capability_notes": caps["notes"],
+        "active_failures": list(raw.get("active_failures") or []),
         "jobs": raw.get("jobs", {}),
         "recent_transitions": raw.get("recent_transitions", []),
         "recent_dialogue": raw.get("recent_dialogue", []),
