@@ -56,7 +56,12 @@ def _parse_iso(value: Any) -> datetime | None:
 
 
 def _latest_attempt(facts: Mapping[str, Any]) -> datetime | None:
-    """Latest real provider/check attempt recorded for a symbol."""
+    """Latest real provider/check attempt recorded for a symbol, for diagnostics.
+
+    This value is deliberately *not* used as the normal cooldown clock for a
+    missing dataset. A successful check of dataset A must never suppress an
+    overdue first attempt for unrelated dataset B.
+    """
     stamps: list[datetime] = []
     meta = facts.get("dataset_meta")
     if isinstance(meta, Mapping):
@@ -86,6 +91,8 @@ def _required_problems(coverage: Mapping[str, Any]) -> list[dict[str, Any]]:
             "label": str(raw.get("label") or raw.get("id") or "dataset"),
             "status": status,
             "checked_at": raw.get("checked_at"),
+            "fetched_at": raw.get("fetched_at"),
+            "provider": raw.get("provider") or None,
             "age_label": raw.get("age_label"),
             "cached_data_present": bool(raw.get("present")),
             "truth_source": "coverage",
@@ -142,10 +149,11 @@ def _metadata_refresh_problems(
             "label": str(coverage_row.get("label") or ds_id),
             "status": problem_status,
             "checked_at": raw.get("checked_at") or raw.get("fetched_at"),
+            "fetched_at": raw.get("fetched_at"),
             "age_label": "Refresh failed; cached evidence retained" if coverage_row.get("present") else "Refresh failed",
             "cached_data_present": bool(coverage_row.get("present")),
             "refresh_error": error or None,
-            "provider": raw.get("provider") or None,
+            "provider": raw.get("provider") or coverage_row.get("provider") or None,
             "truth_source": "dataset_meta",
         })
     return problems
@@ -163,6 +171,11 @@ def research_freshness(
     acquire is resolved/current (``metric_not_reported`` is a legitimate resolved
     state). ``retry_due`` is independent: unresolved evidence checked recently
     remains *not fresh*, but is not immediately hammered again.
+
+    Cooldowns are dataset-scoped. A recent attempt for one provider/dataset does
+    not delay a first or overdue attempt for a different missing dataset. The
+    symbol-level last-attempt timestamp is used only when the coverage inspector
+    itself failed and therefore no dataset-specific timestamp exists.
     """
     from product.due_diligence.acquire import (
         inspect_symbol_coverage,
@@ -217,7 +230,14 @@ def research_freshness(
         symbol_next: datetime | None = None
         fallback_attempt = _latest_attempt(facts)
         for problem in problems:
-            checked = _parse_iso(problem.get("checked_at")) or fallback_attempt
+            checked = _parse_iso(problem.get("checked_at"))
+            cooldown_basis = "dataset"
+            if checked is None and str(problem.get("truth_source") or "") == "inspection":
+                checked = fallback_attempt
+                cooldown_basis = "symbol_fallback" if checked is not None else "none"
+            elif checked is None:
+                cooldown_basis = "none"
+
             if checked is None:
                 due = True
                 candidate_next = current
@@ -232,6 +252,7 @@ def research_freshness(
                 **problem,
                 "retry_due": due,
                 "retry_at": candidate_next.isoformat(),
+                "cooldown_basis": cooldown_basis,
             })
 
         fresh = not problems
