@@ -57,3 +57,11 @@
 .radar-home .home-os-quick {
   display: none;
 }
+
+/* Recommendation list cards answer the paid-user question first: decision,
+ * thesis, entry/stop/target and key evidence. Dense diagnostics remain on the
+ * click-through decision sheet instead of competing on every list row. */
+.reco-card-stack .reco-pick .reco-status-row,
+.reco-card-stack .reco-pick .reco-case {
+  display: none;
+}
