@@ -63,7 +63,7 @@ describe('scanner meta and empty copy', () => {
 })
 
 describe('projectScanRecord', () => {
-  it('maps raw scan fields so the table does not render Undefined', () => {
+  it('maps raw scan fields without pretending the scanner made an investment decision', () => {
     const projected = projectScanRecord({
       symbol: 'AAA',
       signals: ['BREAKOUT_52W'],
@@ -79,31 +79,41 @@ describe('projectScanRecord', () => {
     expect(dashCell(undefined)).toBe('—')
     expect(dashCell('undefined')).toBe('—')
     expect(dashCell('confirmed_breakout')).toBe('confirmed_breakout')
-    expect(projected.decision).toBe('ENTER')
+    expect(projected.decision).toBe('SETUP READY')
   })
 })
 
 describe('scannerDecision', () => {
-  it('uses canonical ENTER / WAIT / WATCH / AVOID and EXIT only for open paper', () => {
-    expect(scannerDecision({ status: 'Ready to trade', verdict: 'BUY' })).toBe('ENTER')
-    expect(scannerDecision({ verdict: 'BUY' })).toBe('WAIT')
+  it('uses pre-decision language and reserves BUY/AVOID for the committee', () => {
+    expect(scannerDecision({ status: 'Ready to trade', verdict: 'BUY' })).toBe('SETUP READY')
+    expect(scannerDecision({ verdict: 'BUY' })).toBe('WATCH')
     expect(scannerDecision({ status: 'Watch for breakout' })).toBe('WATCH')
-    expect(scannerDecision({ chase_risk: true })).toBe('AVOID')
+    expect(scannerDecision({ chase_risk: true })).toBe('EXTENDED')
+    expect(scannerDecision({ verdict: 'AVOID' })).toBe('SETUP FAILED')
     expect(scannerDecision({ symbol: 'TCS', exit_reason: 'TARGET', decision: 'ENTER' }, ['TCS'])).toBe('EXIT')
     expect(scannerDecision({ symbol: 'TCS', exit_reason: 'TARGET' }, [])).toBe('WATCH')
   })
 
-  it('does not invent a why line when none exists and the decision is unknown-empty', () => {
+  it('keeps scanner why-copy descriptive instead of pretending to decide', () => {
     expect(scannerWhy({ why: 'Too extended', chase_risk: true })).toBe('Too extended')
-    expect(scannerWhy({ chase_risk: true })).toBe('Too extended')
+    expect(scannerWhy({ chase_risk: true })).toBe('Setup is stretched; wait for a lower-risk entry.')
+    expect(scannerWhy({ status: 'Ready to trade', verdict: 'BUY' })).toContain('Qualified setup')
   })
 })
 
 describe('recoCanonicalDecision', () => {
-  it('maps recommendation badges without inventing SELL', () => {
-    expect(recoCanonicalDecision({ action_badge: 'Buy' })).toBe('ENTER')
+  it('does not promote recommendation badges or tiers into final BUY', () => {
+    expect(recoCanonicalDecision({ action_badge: 'Buy' })).toBe('CANDIDATE')
+    expect(recoCanonicalDecision({ reco_tier: 'high_conviction' })).toBe('CANDIDATE')
     expect(recoCanonicalDecision({ action_badge: 'Watch', entry_state: 'extended' })).toBe('WAIT')
     expect(recoCanonicalDecision({ action_badge: 'Hold / Research' })).toBe('WATCH')
-    expect(recoCanonicalDecision({ blockers: ['DD_GATE_FAILED'] })).toBe('AVOID')
+    expect(recoCanonicalDecision({ blockers: ['DD_GATE_FAILED'] })).toBe('WATCH')
+  })
+
+  it('uses the persisted committee judgment as the only final decision truth', () => {
+    expect(recoCanonicalDecision({ committee_decision: 'BUY', execution_state: 'BLOCKED_BROKER_AUTH' })).toBe('BUY')
+    expect(recoCanonicalDecision({ committee_decision: 'WAIT' })).toBe('WAIT')
+    expect(recoCanonicalDecision({ committee_decision: 'AVOID' })).toBe('AVOID')
+    expect(recoCanonicalDecision({ committee_decision: 'NO_JUDGMENT' })).toBe('NO JUDGMENT')
   })
 })
