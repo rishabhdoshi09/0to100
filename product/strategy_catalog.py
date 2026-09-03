@@ -211,6 +211,34 @@ def decorate_card(card: Mapping[str, Any]) -> dict[str, Any]:
     disagreement = fundamental_disagreement(row)
     if disagreement:
         row["fundamental_disagreement"] = disagreement
+
+    # The ensemble is a nominator. The persisted committee decision is the only
+    # current BUY / WAIT / AVOID authority shown on the Recommendations desk.
+    # Fail closed: if decision truth cannot be read, a raw ensemble Buy must not
+    # leak through as an operator instruction.
+    try:
+        from product.recommendation_truth import decorate_current_recommendation
+
+        row.update(decorate_current_recommendation(row))
+    except Exception:
+        row.update({
+            "raw_action_badge": str(row.get("action_badge") or ""),
+            "canonical_decision": "NO_JUDGMENT",
+            "decision_truth_status": "TRUTH_UNAVAILABLE",
+            "decision_match_scope": "NONE",
+            "canonical_candidate_state": "UNJUDGED",
+            "canonical_entry_state": "",
+            "canonical_execution_state": "",
+            "decision_reason_code": "",
+            "candidate_id": None,
+            "opportunity_id": None,
+            "recommendation_id": None,
+            "decision_id": None,
+            "paper_intent_id": None,
+            "outcome_id": None,
+            "wait_trigger": {},
+            "action_badge": "No judgment",
+        })
     return row
 
 
