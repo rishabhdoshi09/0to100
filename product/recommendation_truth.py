@@ -102,9 +102,17 @@ def project_candidate_truth(
     ``scan_run_id``, ``recommendation_id`` and the decision-id suffix written by
     ``autonomous_loop._consume_paper``. This deliberately treats retained fields
     from an earlier same-session decision as NO_JUDGMENT.
+
+    Buy-zone wording is also decision truth. A scanner/ensemble candidate may
+    carry useful entry geometry, but the UI must not call it a ``Buy Zone`` until
+    the committee has frozen BUY for this exact scan. WAIT/AVOID/NO_JUDGMENT keep
+    the raw ``entry``/stop/target geometry for explanation while buy-zone fields
+    are cleared so the frontend labels the level neutrally as Entry.
     """
     symbol = str(card.get("symbol") or "").upper()
     raw_badge = str(card.get("action_badge") or "")
+    raw_buy_zone_low = card.get("buy_zone_low")
+    raw_buy_zone_high = card.get("buy_zone_high")
     base: dict[str, Any] = {
         "raw_action_badge": raw_badge,
         "canonical_decision": "NO_JUDGMENT",
@@ -123,6 +131,9 @@ def project_candidate_truth(
         "decision_reason_code": "",
         "wait_trigger": {},
         "action_badge": _ACTION_BADGE["NO_JUDGMENT"],
+        "buy_zone_low": None,
+        "buy_zone_high": None,
+        "buy_zone_authorized": False,
     }
     if not symbol or not scan_run_id:
         base["decision_truth_status"] = "SCAN_LINEAGE_UNAVAILABLE"
@@ -164,6 +175,9 @@ def project_candidate_truth(
         "decision_reason_code": str(candidate.get("reason") or ""),
         "wait_trigger": _wait_trigger(candidate),
         "action_badge": _ACTION_BADGE[decision],
+        "buy_zone_low": raw_buy_zone_low if decision == "BUY" else None,
+        "buy_zone_high": raw_buy_zone_high if decision == "BUY" else None,
+        "buy_zone_authorized": decision == "BUY",
     })
     return base
 
