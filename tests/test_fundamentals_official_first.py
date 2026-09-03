@@ -77,6 +77,23 @@ def test_official_warehouse_avoids_unnecessary_scrape_without_fresh_cache(monkey
     assert scraper.calls == 0
 
 
+def test_explicit_acquire_tries_official_backfill_before_secondary(monkeypatch):
+    cache = FakeCache(fresh=None, stale={"about": "Cached company description"})
+    scraper = FakeScraper(data={"about": "Secondary description"})
+    calls = []
+    monkeypatch.setattr(fetcher, "_cache", cache)
+    monkeypatch.setattr(fetcher, "_scraper", scraper)
+    monkeypatch.setattr(fetcher, "_official_warehouse_snapshot", lambda symbol: None)
+    monkeypatch.setattr(fetcher, "_try_official_backfill", lambda symbol: calls.append(symbol) or official_pack())
+
+    data = fetcher.get_deep_fundamentals("INFY", force_refresh=True)
+
+    assert calls == ["INFY"]
+    assert scraper.calls == 1  # secondary enriches, but cannot replace official tables
+    assert data["quarterly_results"][0]["Jun 2026"] == 100
+    assert data["official"] is True
+
+
 def test_forced_secondary_refresh_cannot_overwrite_official_financials(monkeypatch):
     cache = FakeCache(fresh=None, stale=None)
     scraper = FakeScraper(data={
