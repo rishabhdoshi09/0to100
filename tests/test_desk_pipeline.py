@@ -17,7 +17,16 @@ def _fresh_except(monkeypatch, **flags):
     monkeypatch.setattr("product.desk_pipeline.scan_is_fresh", lambda: flags.get("scan", True))
     monkeypatch.setattr("product.desk_pipeline.long_term_is_fresh", lambda: flags.get("long_term", True))
     monkeypatch.setattr("product.desk_pipeline.news_is_fresh", lambda: flags.get("news", True))
-    monkeypatch.setattr("product.desk_pipeline.acquire_is_fresh", lambda: flags.get("investigate", True))
+    investigate_fresh = flags.get("investigate", True)
+    monkeypatch.setattr(
+        "product.desk_pipeline.acquire_freshness",
+        lambda: {
+            "fresh": bool(investigate_fresh),
+            "retry_due": not bool(investigate_fresh),
+            "state": "FRESH" if investigate_fresh else "RETRY_DUE",
+            "unresolved_symbols": [] if investigate_fresh else ["TEST"],
+        },
+    )
 
 
 def test_advance_queues_only_the_first_due_step(tmp_path: Path, monkeypatch):
