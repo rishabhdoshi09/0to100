@@ -1,9 +1,13 @@
 """Operator-facing health projection for the one-terminal QuantTerm product.
 
-The durable autonomy ledger intentionally keeps historical jobs forever.  Raw totals
+The durable autonomy ledger intentionally keeps historical jobs forever. Raw totals
 therefore answer an audit question, not the operator's immediate question: "is the
-system healthy today?"  This module separates current-session health from historical
+system healthy today?" This module separates current-session health from historical
 ledger counts without deleting evidence or changing scheduler semantics.
+
+Broker login is projected as a separate execution/live-data lane. Missing Zerodha
+authentication must not make official-data research or the autonomy supervisor look
+failed when they are otherwise healthy.
 """
 from __future__ import annotations
 
@@ -51,6 +55,27 @@ def _counts(jobs: Iterable[dict[str, Any]]) -> dict[str, int]:
 
 def _latest(jobs: list[dict[str, Any]], job_type: str) -> dict[str, Any]:
     return next((job for job in jobs if str(job.get("job_type") or "") == job_type), {})
+
+
+def _broker_lane() -> dict[str, Any]:
+    """Read the canonical broker readiness without contaminating autonomy health."""
+    try:
+        from product.readiness import broker_status
+
+        return dict(broker_status() or {})
+    except Exception as exc:
+        return {
+            "state": "UNKNOWN",
+            "ready": False,
+            "live_data_ready": False,
+            "execution_ready": False,
+            "auth_ready": False,
+            "login_required": False,
+            "auth_status": "PROBE_FAILED",
+            "reason_code": type(exc).__name__.upper(),
+            "detail": str(exc)[:200],
+            "snapshot_id": "",
+        }
 
 
 def enrich_autonomy_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -136,6 +161,7 @@ def enrich_autonomy_payload(payload: dict[str, Any]) -> dict[str, Any]:
     out["learning_current"] = str(learning.get("status") or "") == "SUCCEEDED"
     out["research_current"] = str(research.get("status") or "") == "SUCCEEDED"
     out["data_refresh_background"] = refresh_in_progress
+    out["broker"] = _broker_lane()
     if refresh_in_progress:
         out["next_check_at"] = refresh.get("next_retry_at") or refresh.get("scheduled_for")
         out["data_refresh_next_poll_at"] = refresh.get("next_retry_at") or refresh.get("scheduled_for")
