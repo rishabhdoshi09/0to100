@@ -353,6 +353,15 @@ def build_stock_workspace(
     scan_row = _find(scan_payload, symbol)
     long_row = _find(long_term_payload, symbol)
     raw_record = dict(raw_fundamentals or {})
+    warehouse_live: dict[str, Any] = {"used": False, "not_historical_replay": True}
+    try:
+        from product.due_diligence.engine import _merge_live_warehouse
+
+        raw_record, warehouse_live = _merge_live_warehouse(
+            symbol, raw_record, as_of=now.date().isoformat(),
+        )
+    except Exception:
+        warehouse_live = {"used": False, "not_historical_replay": True}
     technical = _technical(frame)
     sector = str(long_row.get("sector") or scan_row.get("sector") or "Unclassified")
     company = str(scan_row.get("company") or long_row.get("company") or symbol)
@@ -502,6 +511,7 @@ def build_stock_workspace(
         "gaps": gaps,
         "technical": technical,
         "fundamentals": fundamentals,
+        "warehouse_live": warehouse_live,
         "scanner": scan_row,
         "long_term": long_row,
         "news": news_rows[:10],

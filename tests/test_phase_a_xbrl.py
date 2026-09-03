@@ -189,3 +189,58 @@ def test_two_parsed_periods_can_be_production_comparable(tmp_path):
     assert grade["production_comparable"] is True
     assert grade["grade"] == PIT_STRONG
     assert grade["n_parsed_results"] >= 2
+
+
+def test_live_due_diligence_fills_empty_screener_from_warehouse(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+
+    from product.due_diligence.engine import build_due_diligence
+    from product.pit_query import get_financial_snapshot as real_snap
+
+    db = tmp_path / "pit.db"
+    persist({
+        "symbol": "INFY",
+        "evidence_type": DOC_QUARTERLY_RESULT,
+        "publication_date": "2026-01-14",
+        "available_from": "2026-01-14",
+        "period_end": "2025-12-31",
+        "source": "NSE XBRL",
+        "source_identity": "nse_xbrl:live-q3",
+        "extracted": {
+            "numbers_parsed": True,
+            "facts": {"revenue": 37996.0, "pat": 6811.0, "pbt": 9000.0, "finance_costs": 50.0},
+        },
+    }, path=db)
+    persist({
+        "symbol": "INFY",
+        "evidence_type": DOC_QUARTERLY_RESULT,
+        "publication_date": "2026-04-23",
+        "available_from": "2026-04-23",
+        "period_end": "2026-03-31",
+        "source": "NSE XBRL",
+        "source_identity": "nse_xbrl:live-q4",
+        "extracted": {
+            "numbers_parsed": True,
+            "facts": {"revenue": 40986.0, "pat": 8090.0, "pbt": 11000.0, "finance_costs": 60.0},
+        },
+    }, path=db)
+    monkeypatch.setattr(
+        "product.pit_query.get_financial_snapshot",
+        lambda symbol, as_of, path=None: real_snap(symbol, as_of=as_of, path=db),
+    )
+    monkeypatch.setenv("QT_ALLOW_LIVE_WAREHOUSE", "1")
+    live = build_due_diligence(
+        "INFY",
+        scan_payload={"records": []},
+        long_term_payload={"records": []},
+        raw_fundamentals={"available": False, "data": {}},
+        news=[],
+        now=datetime(2026, 6, 12, tzinfo=timezone.utc),
+    )
+    assert live["point_in_time"] is False
+    assert live["pit_as_of"] == ""
+    assert live["warehouse_live"]["used"] is True
+    assert live["warehouse_live"]["not_historical_replay"] is True
+    assert "quarterly_results" in live["warehouse_live"]["tables_filled"]
+    available = [row for row in live["kpis"] if row.get("available")]
+    assert available

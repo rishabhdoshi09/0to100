@@ -48,6 +48,9 @@ ROOT = Path(__file__).resolve().parents[1]
 OPS_ROOT = ROOT / "logs" / "market_ops"
 RUNTIME_PATH = OPS_ROOT / "runtime.json"
 LOCK_PATH = OPS_ROOT / "worker.lock"
+RSS_PATH = OPS_ROOT / "rss.jsonl"
+_RSS_SAMPLE_EVERY_S = 30.0
+_RSS_KEEP_LINES = 2000
 
 NEWS_FRESH_S = 20 * 60
 FNO_FRESH_S = 24 * 60 * 60
@@ -117,6 +120,43 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
         tmp.unlink(missing_ok=True)
 
 
+def _process_rss_mb(pid: int | None = None) -> float | None:
+    """Resident set size in megabytes from /proc. None if unavailable."""
+    try:
+        status = Path(f"/proc/{int(pid or os.getpid())}/status").read_text(encoding="utf-8")
+    except (OSError, TypeError, ValueError):
+        return None
+    for line in status.splitlines():
+        if line.startswith("VmRSS:"):
+            parts = line.split()
+            try:
+                return round(int(parts[1]) / 1024.0, 1)
+            except (IndexError, ValueError):
+                return None
+    return None
+
+
+def _append_rss_sample(rss_mb: float | None) -> None:
+    if rss_mb is None:
+        return
+    RSS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    row = {
+        "ts": time.time(),
+        "heartbeat": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "pid": os.getpid(),
+        "rss_mb": rss_mb,
+    }
+    with RSS_PATH.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row) + "\n")
+    try:
+        text = RSS_PATH.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        if len(lines) > _RSS_KEEP_LINES:
+            RSS_PATH.write_text("\n".join(lines[-_RSS_KEEP_LINES:]) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
 def _emit(kind: str, message: str) -> None:
     stamp = time.strftime("%H:%M:%S")
     print(f"[{stamp}] MARKET OPS {kind:<9} {message}", flush=True)
@@ -180,6 +220,7 @@ class MarketOperationsWorker:
         self._active: dict[str, dict[str, Any]] = {}
         self._threads: list[threading.Thread] = []
         self._history_lock = threading.Lock()
+        self._last_rss_sample = 0.0
 
     def _set_active(self, lane: str, operation: dict[str, Any] | None) -> None:
         with self._active_lock:
@@ -196,6 +237,7 @@ class MarketOperationsWorker:
     def _runtime_payload(self, *, running: bool) -> dict[str, Any]:
         with self._active_lock:
             active = {lane: dict(value) for lane, value in self._active.items()}
+        rss_mb = _process_rss_mb()
         return {
             "process_running": bool(running),
             "worker_pid": os.getpid(),
@@ -203,6 +245,7 @@ class MarketOperationsWorker:
             "heartbeat": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "lanes": sorted(set(LANES.values())),
             "active": active,
+            "rss_mb": rss_mb,
         }
 
     def _heartbeat_loop(self) -> None:
@@ -211,7 +254,15 @@ class MarketOperationsWorker:
                 self.store.recover_dead_running(keep_pid=os.getpid())
             except Exception:
                 pass
-            _atomic_json(RUNTIME_PATH, self._runtime_payload(running=True))
+            payload = self._runtime_payload(running=True)
+            _atomic_json(RUNTIME_PATH, payload)
+            now = time.time()
+            if now - self._last_rss_sample >= _RSS_SAMPLE_EVERY_S:
+                self._last_rss_sample = now
+                try:
+                    _append_rss_sample(payload.get("rss_mb"))
+                except Exception:
+                    pass
 
     def _progress(self, operation_id: str, stage: str, message: str,
                   current: int | None = None, total: int | None = None) -> None:

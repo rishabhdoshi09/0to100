@@ -335,6 +335,9 @@ class KiteDataSource:
             except Exception:
                 h = {}
         self._hist_cache[cid] = h
+        if len(self._hist_cache) > 64:
+            for key in list(self._hist_cache)[: len(self._hist_cache) - 64]:
+                self._hist_cache.pop(key, None)
         return h
 
     def _save_history(self, cid: str, hist: dict) -> None:

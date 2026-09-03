@@ -351,3 +351,16 @@ def test_worker_claims_runtime_before_bootstrap():
     assert src.index("_atomic_json(RUNTIME_PATH") < src.index("self._bootstrap()")
     assert src.index("heartbeat.start()") < src.index("self._bootstrap()")
 
+
+def test_runtime_payload_includes_rss_mb():
+    from operations.market_ops import MarketOperationsWorker, _process_rss_mb
+
+    rss = _process_rss_mb()
+    assert rss is None or rss > 0
+    worker = MarketOperationsWorker.__new__(MarketOperationsWorker)
+    worker._active_lock = __import__("threading").Lock()
+    worker._active = {}
+    payload = MarketOperationsWorker._runtime_payload(worker, running=True)
+    assert "rss_mb" in payload
+    assert payload["worker_pid"] > 1
+
