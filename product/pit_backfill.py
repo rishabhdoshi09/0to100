@@ -371,14 +371,19 @@ def backfill_structured_financials(
                 "kind": "quarterly",
             })
 
-    # Prefer consolidated, then newest publication, cap downloads.
+    # Newest publication first; integrated + consolidated win ties.
     def _rank(item: dict[str, Any]) -> tuple:
         consol = str(item.get("consolidated") or "").lower()
-        return (0 if consol.startswith("consol") else 1, str(item.get("publication") or ""))
+        pub = str(item.get("publication") or "")
+        return (
+            pub,
+            1 if item.get("kind") == "integrated" else 0,
+            1 if consol.startswith("consol") else 0,
+        )
 
     seen_url = set()
     picked = []
-    for item in sorted(rows, key=_rank):
+    for item in sorted(rows, key=_rank, reverse=True):
         url = str(item.get("xbrl") or "")
         if not url or url in seen_url:
             continue
