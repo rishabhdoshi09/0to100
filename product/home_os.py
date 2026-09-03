@@ -10,7 +10,7 @@ from typing import Any, Mapping, Sequence
 
 from product.operator_language import explain_opportunity, simple_reason
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 NORMAL = "NORMAL"
 LOGIN_REQUIRED = "LOGIN_REQUIRED"
@@ -123,6 +123,11 @@ def broker_session_usable(auto: Mapping[str, Any] | None) -> bool:
     auto = _as_dict(auto)
     if not auto:
         return False
+    # Prefer the canonical broker readiness projection when present. Fall back
+    # to legacy autonomy fields for older saved runtime snapshots.
+    broker = _as_dict(auto.get("broker"))
+    if broker:
+        return bool(broker.get("ready") or broker.get("live_data_ready"))
     state = str(auto.get("state") or "").strip().upper()
     if not state or state in _AUTH_STATES or state == "UNKNOWN":
         return False
@@ -254,18 +259,6 @@ def build_home_os(
         subtext = "The paper path is the only money path. Do not trade live from Home."
         now_line = "Paper bot only"
         next_line = "Keep live money locked"
-    elif broker_login_required and not (data_ready and scan_ok):
-        state = LOGIN_REQUIRED
-        headline = "Zerodha login is needed."
-        subtext = "Paper and official NSE data can still work. Live quotes wait for login."
-        primary_action = _action(
-            label="Login to Zerodha",
-            kind="instruction",
-            instruction="Run the same one command again, or python main.py login. Home will resume by itself after login.",
-        )
-        now_line = "Waiting for Zerodha login"
-        next_line = "Resume live observation after login"
-        secondary = [_action("RUN_SCAN_NOW", label="Scan now"), _action("REFRESH_DATA_NOW", label="Refresh data")]
     elif data_failed and not data_ready:
         state = FAILED_RECOVERABLE
         headline = "Market data needs another try."
@@ -357,13 +350,6 @@ def build_home_os(
             _action("PAUSE_NEW_PAPER_ENTRIES", label="Pause paper entries"),
             _action("OBSERVE_ONLY_TODAY", label="Observe only today"),
         ]
-
-    if broker_login_required and state != LOGIN_REQUIRED and primary_action is None:
-        primary_action = _action(
-            label="Login to Zerodha",
-            kind="instruction",
-            instruction="Official data, scan, research and post-market learning continue. Login is only required for live paper entry.",
-        )
 
     if observe_only and state in {NORMAL, NO_TRADE, MARKET_CLOSED_COMPLETE}:
         if "nothing was good enough" not in headline.lower() and "did not find" not in headline.lower():
@@ -484,12 +470,44 @@ def build_home_os(
     except Exception:
         readiness = {}
 
+    required_attention: list[dict[str, Any]] = []
+    if state in {LOGIN_REQUIRED, FAILED_RECOVERABLE, PAUSED, PROBLEM}:
+        required_attention.append({
+            "id": str((primary_action or {}).get("id") or state),
+            "label": str((primary_action or {}).get("label") or headline),
+            "reason": subtext,
+            "action": primary_action,
+        })
+    optional_attention: list[dict[str, Any]] = []
+    if broker_login_required:
+        optional_attention.append({
+            "id": "BROKER_LOGIN_OPTIONAL",
+            "label": "Connect Zerodha",
+            "reason": (
+                "Optional capability: enables broker-live quotes and broker-dependent paper entry. "
+                "Official data, scan, research, shadow tracking, settlement and learning continue without it."
+            ),
+            "action": _action(
+                label="Login to Zerodha",
+                kind="instruction",
+                instruction="Run python main.py login when you want broker-live capability. No action is required for autonomous research work.",
+            ),
+        })
+    need_me = bool(required_attention)
+
     return {
         "schema_version": SCHEMA_VERSION,
         "state": state,
         "headline": headline,
         "subtext": subtext,
-        "need_me": state in {LOGIN_REQUIRED, FAILED_RECOVERABLE, PAUSED, PROBLEM} or broker_login_required,
+        "need_me": need_me,
+        "attention": {
+            "required_now": required_attention,
+            "optional": optional_attention,
+            "count": len(required_attention),
+            "optional_count": len(optional_attention),
+            "headline": "Action required" if required_attention else "No action required",
+        },
         "primary_action": primary_action,
         "secondary_actions": (secondary + [_action("SIMULATE_PAST_DECISIONS", label="Simulate past decisions")])[:4],
         "simulate_action": _action("SIMULATE_PAST_DECISIONS", label="Simulate past decisions"),
@@ -541,9 +559,14 @@ def build_home_os(
         "recovered": list(recovered or []),
         "live_locked": True,
         "broker": {
-            "status": "LOGIN_REQUIRED" if broker_login_required else "READY",
+            "status": "OPTIONAL_LOGIN" if broker_login_required else "READY",
             "login_required": broker_login_required,
-            "detail": "Live paper entry and broker sync wait for Zerodha login." if broker_login_required else "Broker session is usable.",
+            "requires_operator_now": False,
+            "blocks_autonomy": False,
+            "detail": (
+                "Broker-live quotes and broker-dependent paper entry are unavailable until login; autonomous research work continues."
+                if broker_login_required else "Broker session is usable."
+            ),
         },
         "readiness": readiness,
         "runtime": runtime,
@@ -563,7 +586,7 @@ def build_home_os(
             "what": "Home is QuantTerm's operating system for one market day.",
             "found": headline,
             "meaning": subtext,
-            "action": (primary_action or {}).get("label") or "Nothing. Leave it running.",
+            "action": (primary_action or {}).get("label") if need_me else "Nothing. Leave it running.",
         },
     }
 
