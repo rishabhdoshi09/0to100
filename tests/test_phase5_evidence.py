@@ -24,6 +24,7 @@ from product.learning_ledger import LEVEL_PROMOTE, OBSERVED, learned_today, reco
 from product.paper_autopilot import ENTER_NOW, PORTFOLIO_BLOCK
 from product.pit_availability import (
     PIT_MARKET_ONLY,
+    PIT_PARTIAL,
     PIT_STRONG,
     PIT_UNAVAILABLE,
     PIT_UNVERIFIED,
@@ -420,13 +421,18 @@ def test_pit_workspace_is_never_wall_clock_stale():
 def test_replay_committee_path_does_not_load_today_research(monkeypatch):
     from product.historical_replay import decide_session
 
-    called = {"research": 0}
+    called = {"defaults": 0, "facts": 0}
 
-    def boom(*_a, **_k):
-        called["research"] += 1
-        raise AssertionError("today's research must not be read in PIT replay")
+    def boom_defaults(*_a, **_k):
+        called["defaults"] += 1
+        raise AssertionError("today's research defaults must not be read in PIT replay")
 
-    monkeypatch.setattr("product.decision_committee._research_snapshot", boom)
+    def boom_facts(*_a, **_k):
+        called["facts"] += 1
+        raise AssertionError("today's autonomy_facts must not be read in PIT replay")
+
+    monkeypatch.setattr("product.due_diligence.engine._defaults", boom_defaults)
+    monkeypatch.setattr("product.due_diligence.acquire.load_autonomy_facts", boom_facts)
     monkeypatch.setattr(
         "product.decision_committee.evaluate_candidate",
         lambda *a, **k: _Paper(ENTER_NOW, "ELIGIBLE"),
@@ -447,11 +453,13 @@ def test_replay_committee_path_does_not_load_today_research(monkeypatch):
         },
     )
     rows = decide_session("2026-06-12", {"as_of_session": "2026-06-12", "records": []})
-    assert called["research"] == 0
+    assert called["defaults"] == 0
+    assert called["facts"] == 0
     assert rows
     assert rows[0]["provenance"] == "BACKTEST"
-    assert rows[0]["pit_grade"] in {PIT_MARKET_ONLY, PIT_STRONG, PIT_UNVERIFIED, PIT_UNAVAILABLE}
+    assert rows[0]["pit_grade"] in {PIT_MARKET_ONLY, PIT_PARTIAL, PIT_STRONG, PIT_UNVERIFIED, PIT_UNAVAILABLE}
     assert rows[0]["pit"]["future_evidence_used"] is False
+    assert rows[0].get("versions")
 
 
 def test_experiment_queue_rejects_arbitrary_strategy_mining(tmp_path):
