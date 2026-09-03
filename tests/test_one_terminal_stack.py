@@ -46,7 +46,10 @@ def test_complete_script_always_stops_old_stack_then_starts_everything():
     assert "QT_MACHINE_OWNER" in complete
     assert "QT_MACHINE_OWNER" in inner
     assert "python scripts/local_stack.py stop --ports 5173,8765,8766" in complete
-    assert complete.index("flock -n 200") < complete.index(
+    assert "try_machine_lock()" in complete
+    assert "fcntl.flock(200" in complete
+    assert "if flock -n 200; then" not in complete
+    assert complete.index("try_machine_lock") < complete.index(
         "python scripts/local_stack.py stop --ports 5173,8765,8766"
     )
     assert "will not stop :5173/:8765/:8766" in complete
