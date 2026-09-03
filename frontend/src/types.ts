@@ -188,6 +188,19 @@ export type DataReadiness = {
   blockers: string[]
 }
 
+export type BrokerReadiness = {
+  state: 'READY' | 'LOGIN_REQUIRED' | 'SNAPSHOT_REQUIRED' | 'UNAVAILABLE' | 'CONFIG_REQUIRED' | 'NOT_READY' | 'UNKNOWN' | string
+  ready: boolean
+  live_data_ready: boolean
+  execution_ready: boolean
+  auth_ready: boolean
+  login_required: boolean
+  auth_status: string
+  reason_code: string
+  detail: string
+  snapshot_id: string
+}
+
 export type DashboardPayload = {
   generated_at: string
   market: {
@@ -298,6 +311,7 @@ export type DashboardPayload = {
     new_paper_entries: boolean
     existing_exits?: boolean
     research_enabled?: boolean
+    broker?: BrokerReadiness
     capability_notes?: string[]
     active_failures?: string[]
     recent_dialogue: Array<Record<string, unknown>>
