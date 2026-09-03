@@ -14,10 +14,11 @@ def unique_shortlist_symbols(reco: Mapping[str, Any]) -> list[str]:
         if not isinstance(cat, Mapping):
             continue
         cid = str(cat.get("id") or cat.get("key") or "")
-        if cid not in SHORTLIST_TIERS:
-            continue
         for card in cat.get("cards") or []:
             if not isinstance(card, Mapping):
+                continue
+            tier = str(card.get("reco_tier") or "")
+            if tier not in SHORTLIST_TIERS and cid not in SHORTLIST_TIERS:
                 continue
             symbol = str(card.get("symbol") or "").upper()
             if symbol and symbol not in seen:

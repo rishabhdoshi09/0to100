@@ -92,17 +92,34 @@ def _ensure_reco(scan: Mapping[str, Any]) -> dict[str, Any]:
         return reco
 
 
+_TIER_RANK = {"high_conviction": 0, "good_setup": 1, "watch": 2}
+
+
 def _cards(reco: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """One card per symbol, keeping the strongest recommendation tier."""
+    best: dict[str, dict[str, Any]] = {}
+    for cat in reco.get("categories") or []:
+        if not isinstance(cat, dict):
+            continue
+        for card in cat.get("cards") or []:
+            if not isinstance(card, dict):
+                continue
+            symbol = str(card.get("symbol") or "").upper()
+            if not symbol:
+                continue
+            row = dict(card)
+            row["symbol"] = symbol
+            prev = best.get(symbol)
+            if prev is None or _TIER_RANK.get(str(row.get("reco_tier")), 9) < _TIER_RANK.get(str(prev.get("reco_tier")), 9):
+                best[symbol] = row
+    if best:
+        return list(best.values())
     try:
         from product.autopilot_journal import flatten_cards
 
         return [dict(c) for c in flatten_cards(reco) if isinstance(c, dict)]
     except Exception:
-        out: list[dict[str, Any]] = []
-        for cat in reco.get("categories") or []:
-            if isinstance(cat, dict):
-                out.extend(dict(c) for c in (cat.get("cards") or []) if isinstance(c, dict))
-        return out
+        return []
 
 
 def _census(

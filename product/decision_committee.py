@@ -280,10 +280,12 @@ def evaluate_committee(
     quality_label = str(research.get("quality_label") or card.get("stock_quality") or "")
     if paper_reason in T.HARD_VETO_CODES:
         vetoes.append({"code": paper_reason, "detail": str(paper.detail or paper_reason)})
-    if str(research.get("vs_technical") or "").upper().find("CONTRADICT") >= 0:
+    vs_tech = str(research.get("vs_technical") or "").upper()
+    if vs_tech.find("CONTRADICT") >= 0:
         vetoes.append({"code": T.FINANCIAL_QUALITY_FAIL, "detail": "research contradicts technical setup"})
     if quality_label.lower() in {"weak", "avoid", "poor"}:
         vetoes.append({"code": T.BUSINESS_QUALITY_FAIL, "detail": quality_label})
+    caution_wait = vs_tech == "CAUTION" and quality_label.lower() in {"mixed", "weak", "avoid", "poor", ""}
     if families.get("BUSINESS") == "FAIL":
         vetoes.append({"code": T.BUSINESS_QUALITY_FAIL, "detail": "business quality family failed"})
     if families.get("SECTOR") == "FAIL" and tier == TIER_HIGH:
@@ -307,11 +309,16 @@ def evaluate_committee(
 
     hard = [v for v in vetoes if v["code"] in T.HARD_VETO_CODES or v["code"] == T.INSUFFICIENT_EVIDENCE]
 
-    if paper_decision == ENTER_NOW and not hard and research_ok:
+    if paper_decision == ENTER_NOW and not hard and research_ok and not caution_wait:
         decision = T.BUY
         candidate_state = T.READY
         reason_code = "COMMITTEE_BUY"
         reason = "Independent families and gates justify taking risk."
+    elif paper_decision == ENTER_NOW and not hard and caution_wait:
+        decision = T.WAIT_DECISION
+        candidate_state = T.WAIT
+        reason_code = T.INSUFFICIENT_EVIDENCE
+        reason = "Research does not yet confirm the technical setup."
     elif paper_decision == WAIT or (paper_decision == ENTER_NOW and hard and any(v["code"] in {T.ENTRY_TOO_EXTENDED, T.INSUFFICIENT_EVIDENCE} for v in hard)):
         decision = T.WAIT_DECISION
         if paper_reason == T.ENTRY_TOO_EXTENDED or entry_state == T.EXTENDED:
