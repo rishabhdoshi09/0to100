@@ -67,33 +67,48 @@ def test_official_outcome_settles_without_kite(tmp_path, monkeypatch):
     assert out["settled"][0]["symbol"] == "HAL"
 
 
-def test_paper_consume_records_broker_block(monkeypatch):
+def test_paper_consume_keeps_broker_on_execution_only(monkeypatch, tmp_path):
     from product import autonomous_loop as LOOP
-    from product.paper_autopilot import BROKER_LOGIN_REQUIRED, ENTER_NOW
+    from product import decision_journal as DJ
+    from product import opportunity_memory as OM
 
-    class FakeDecision:
-        decision = ENTER_NOW
-        reason_code = "ELIGIBLE"
-        group = "READY"
-        def as_dict(self):
-            return {"symbol": "INFY", "decision": ENTER_NOW, "reason_code": "ELIGIBLE"}
-
+    monkeypatch.setattr(CL, "DB_PATH", tmp_path / "c.db")
+    monkeypatch.setattr(DJ, "DB_PATH", tmp_path / "d.db")
+    monkeypatch.setattr(DJ, "JSONL_PATH", tmp_path / "d.jsonl")
+    monkeypatch.setattr(OM, "DB_PATH", tmp_path / "o.db")
     monkeypatch.setattr(
         RDY, "inspect_readiness",
         lambda: {"capabilities": {RDY.BROKER_LIVE_DATA_READY: False}},
     )
-    monkeypatch.setattr("product.paper_autopilot.evaluate_candidate", lambda *a, **k: FakeDecision())
     monkeypatch.setattr("product.forward_evidence.freeze_observation", lambda *a, **k: None)
     monkeypatch.setattr("product.counterfactual_learning.freeze_decision", lambda *a, **k: None)
-    monkeypatch.setattr(CL, "upsert", lambda **k: {"candidate_id": "x"})
+    rec = {
+        "symbol": "INFY",
+        "decision": "BUY",
+        "candidate_state": "READY",
+        "entry_state": "ENTER_NOW",
+        "execution_state": "BLOCKED_BROKER_AUTH",
+        "reason_code": "COMMITTEE_BUY",
+        "reason": "families justify taking risk",
+        "tier": "high_conviction",
+        "vetoes": [],
+        "wait_trigger": {},
+    }
     paper = LOOP._consume_paper(
         [{"symbol": "INFY", "reco_tier": "high_conviction", "entry": 100, "stop": 90, "target": 120}],
-        {}, "2026-09-02", "scan-1",
+        {}, "2026-09-02", "scan-1", committee=[rec],
     )
     assert paper["broker_ok"] is False
     assert paper["intents"]
-    assert paper["intents"][0]["reason_code"] == BROKER_LOGIN_REQUIRED
+    assert paper["intents"][0]["decision"] == "BUY"
+    assert paper["intents"][0]["reason_code"] == "COMMITTEE_BUY"
+    assert paper["intents"][0]["execution_state"] == "BLOCKED_BROKER_AUTH"
     assert paper["eligibility"] == "BLOCKED_BROKER"
+    got = CL.get(CL.candidate_id("INFY", "2026-09-02"), path=tmp_path / "c.db")
+    assert got["state"] == "READY"
+    assert got["decision"] == "BUY"
+    assert got["execution_state"] == "BLOCKED_BROKER_AUTH"
+    assert got["reason"] != "BROKER_LOGIN_REQUIRED"
 
 
 def test_acquire_without_download_marks_wait_evidence(monkeypatch, tmp_path):
