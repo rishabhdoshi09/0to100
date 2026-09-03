@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, Mapping
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -114,6 +115,41 @@ def evidence_status(symbol: str) -> dict:
         raise HTTPException(status_code=500, detail=f"Evidence status failed: {exc}") from exc
 
 
+def _acquire_result_summary(acquired: Mapping[str, Any] | None, coverage: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Translate provider attempts into truthful API status.
+
+    ``acquire_symbol`` returns a structured artifact even when every provider
+    failed. Presence of that dict is therefore not success. The API reports the
+    actual non-skipped provider steps plus post-acquire evidence coverage.
+    """
+    acquired = dict(acquired or {})
+    coverage = dict(coverage or {})
+    steps = [dict(step) for step in (acquired.get("steps") or []) if isinstance(step, Mapping)]
+    attempted = [step for step in steps if not step.get("skipped")]
+    succeeded = [step for step in attempted if step.get("ok") is True]
+    failed_steps = [step for step in attempted if step.get("ok") is False]
+    requirements = [row for row in (coverage.get("requirements") or []) if isinstance(row, Mapping)]
+    auto = sum(1 for row in requirements if row.get("acquisition") == "AUTO_SOURCED")
+    automation_failed = sum(1 for row in requirements if row.get("acquisition") == "AUTOMATION_FAILED")
+
+    if automation_failed or failed_steps:
+        run_status = "PARTIAL" if auto or succeeded else "FAILED"
+    elif acquired or auto:
+        run_status = "SUCCEEDED"
+    else:
+        run_status = "FAILED"
+
+    return {
+        "status": run_status,
+        "items_attempted": len(attempted),
+        "items_succeeded": len(succeeded),
+        "items_failed": len(failed_steps),
+        "auto_sourced": auto,
+        "automation_failed": automation_failed,
+        "steps": steps,
+    }
+
+
 @app.post("/evidence/{symbol}/actions/auto-acquire")
 def auto_acquire_evidence(symbol: str, force: bool = False) -> dict:
     """Run the existing acquire_symbol path and return truthful coverage."""
@@ -123,9 +159,8 @@ def auto_acquire_evidence(symbol: str, force: bool = False) -> dict:
 
         clean = clean_symbol(symbol)
         acquired = acquire_symbol(clean, force=force)
-        status = evidence_status(clean)
-        auto = sum(1 for row in status.get("requirements") or [] if row.get("acquisition") == "AUTO_SOURCED")
-        failed = sum(1 for row in status.get("requirements") or [] if row.get("acquisition") == "AUTOMATION_FAILED")
+        coverage = evidence_status(clean)
+        summary = _acquire_result_summary(acquired, coverage)
         return {
             "accepted": True,
             "symbol": clean,
@@ -133,15 +168,9 @@ def auto_acquire_evidence(symbol: str, force: bool = False) -> dict:
             "run_id": str(acquired.get("acquired_at") or acquired.get("inspected_at") or ""),
             "started_at": acquired.get("started_at") or "",
             "finished_at": acquired.get("acquired_at") or acquired.get("inspected_at") or "",
-            "status": "SUCCEEDED" if acquired else "FAILED",
-            "items_attempted": len(acquired.get("steps") or []),
-            "items_succeeded": sum(1 for step in (acquired.get("steps") or []) if step.get("ok")),
-            "items_failed": sum(1 for step in (acquired.get("steps") or []) if step.get("ok") is False and not step.get("skipped")),
-            "auto_sourced": auto,
-            "automation_failed": failed,
-            "steps": acquired.get("steps") or [],
+            **summary,
             "downloads": acquired.get("downloads") or [],
-            "coverage": status,
+            "coverage": coverage,
         }
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
