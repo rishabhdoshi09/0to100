@@ -8,10 +8,10 @@ def test_terminal_sidebar_is_quantterm_discovery_desk():
     src = (ROOT / "frontend" / "src" / "MarketSidebar.tsx").read_text(encoding="utf-8")
     assert "QUANTTERM" in src
     assert "JARVIS DESK" not in src
-    assert "MARKETS" in src
-    assert "INTELLIGENCE" in src
-    assert "RESEARCH" in src
-    assert "SYSTEM" in src
+    assert "PRIMARY_NAV" in src
+    assert "ADVANCED_NAV" in src
+    assert "OPERATE" in src
+    assert "Advanced" in src
     for route in (
         "Home",
         "Market Scanner",

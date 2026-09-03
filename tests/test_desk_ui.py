@@ -22,9 +22,10 @@ def test_app_points_at_the_vite_desk():
     assert "run_desk.sh" in src
     assert "127.0.0.1:5173" in src
     nav = (ROOT / "frontend" / "src" / "MarketSidebar.tsx").read_text(encoding="utf-8")
+    assert "PRIMARY_NAV" in nav and "ADVANCED_NAV" in nav
+    assert "OPERATE" in nav
     assert "Home" in nav and "Market Scanner" in nav
     assert "Recommendations" in nav and "Market Reports" in nav
-    assert "MARKETS" in nav and "INTELLIGENCE" in nav and "RESEARCH" in nav and "SYSTEM" in nav
     assert "Strategies" in nav and "Learning" in nav and "Coverage" in nav
     desk = (ROOT / "scripts" / "run_desk.sh").read_text(encoding="utf-8")
     assert "run_quantterm_complete.sh" in desk
