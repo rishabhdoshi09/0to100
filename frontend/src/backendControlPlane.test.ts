@@ -47,14 +47,33 @@ const waitingData: SystemLane = {
 }
 
 const needsYou: SystemLane = {
-  id: 'zerodha',
+  id: 'paper_bot',
   status: 'Needs you',
   needs_user: true,
   primary_action: {
+    label: 'Resume',
+    control: 'RESUME_NEW_PAPER_ENTRIES',
+  },
+}
+
+const optionalBroker: SystemLane = {
+  id: 'zerodha',
+  status: 'Optional login',
+  status_code: 'CAPABILITY_OFFLINE',
+  needs_user: false,
+  optional_capability: true,
+  blocks_autonomy: false,
+  login_required: true,
+  primary_action: {
     label: 'Login to Zerodha',
     kind: 'instruction',
-    instruction: 'Run the same one command again.',
+    instruction: 'Login only when broker-live capability is wanted.',
   },
+  secondary_actions: [{
+    label: 'Login to Zerodha',
+    kind: 'instruction',
+    instruction: 'Login only when broker-live capability is wanted.',
+  }],
 }
 
 const problemData: SystemLane = {
@@ -117,8 +136,20 @@ describe('WAITING dependency contract', () => {
 describe('NEEDS YOU contract', () => {
   it('shows the one primary action', () => {
     const action = lanePrimaryAction(needsYou)
-    expect(action?.label).toBe('Login to Zerodha')
-    expect(action?.kind).toBe('instruction')
+    expect(action?.label).toBe('Resume')
+    expect(action?.control).toBe('RESUME_NEW_PAPER_ENTRIES')
+    expect(nothingNeeded(needsYou)).toBe(false)
+  })
+})
+
+describe('optional capability contract', () => {
+  it('keeps broker login discoverable without turning it into operator attention', () => {
+    expect(optionalBroker.needs_user).toBe(false)
+    expect(optionalBroker.blocks_autonomy).toBe(false)
+    expect(lanePrimaryAction(optionalBroker)).toBeNull()
+    expect(nothingNeeded(optionalBroker)).toBe(true)
+    expect(laneSecondaryActions(optionalBroker)[0]?.kind).toBe('instruction')
+    expect(laneAriaLabel('zerodha', optionalBroker)).toContain('no action required')
   })
 })
 
