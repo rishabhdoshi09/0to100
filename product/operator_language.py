@@ -37,6 +37,8 @@ SIMPLE_REASONS: dict[str, str] = {
     "NO_JUDGMENT": "This is not an investment judgment.",
     "WAITING FOR ZERODHA LOGIN": "Zerodha login is needed.",
     "KITE_ACCESS_TOKEN_MISSING": "Zerodha login is needed.",
+    "BROKER_LOGIN_REQUIRED": "The stock decision is ready; broker execution waits for Zerodha login.",
+    "BLOCKED_BROKER_AUTH": "The stock decision is ready; broker execution waits for Zerodha login.",
 }
 
 SIMPLE_TERMS: dict[str, str] = {
@@ -78,12 +80,40 @@ def simple_term(term: str) -> str:
 
 
 def explain_opportunity(row: Mapping[str, Any]) -> dict[str, str]:
-    """Four questions for a Home card. Does not change ranking."""
+    """Four questions for a Home card. Does not change ranking or decisions.
+
+    When a persisted committee decision is present, it is the headline truth.
+    Scanner/recommendation-only rows remain research setups and are never
+    promoted to BUY merely because their technical verdict says BUY.
+    """
     symbol = str(row.get("symbol") or "")
     setup = str(row.get("setup_label") or row.get("status") or "setup")
     chase = bool(row.get("chase_risk"))
     reason = str(row.get("reason_code") or row.get("reason") or "")
-    if chase or "EXTENDED" in reason.upper():
+    decision = str(row.get("decision") or row.get("committee_decision") or "").upper()
+    execution = str(row.get("execution_state") or "").upper()
+    entry_state = str(row.get("entry_state") or "").upper()
+
+    if decision == "BUY":
+        if execution.startswith("BLOCKED_"):
+            label = "BUY — execution blocked"
+            meaning = simple_reason(execution, fallback="The investment decision is BUY; execution is waiting on an operational gate.")
+        elif entry_state and entry_state not in {"ENTER_NOW", "READY", "ELIGIBLE"}:
+            label = "BUY — waiting for entry"
+            meaning = "The investment thesis passed, but the planned entry condition is not ready yet."
+        else:
+            label = "BUY"
+            meaning = "The decision committee passed this name. Read the evidence and risk plan before any paper entry."
+    elif decision == "WAIT":
+        label = "WAIT"
+        meaning = simple_reason(reason, fallback="The company/setup may be interesting, but QuantTerm is waiting for a better condition.")
+    elif decision in {"AVOID", "REJECTED"}:
+        label = "AVOID"
+        meaning = simple_reason(reason, fallback="The decision committee rejected this opportunity under the current evidence and risk rules.")
+    elif decision == "NO_JUDGMENT":
+        label = "NO JUDGMENT"
+        meaning = simple_reason(reason or "NO_JUDGMENT")
+    elif chase or "EXTENDED" in reason.upper():
         label = "Waiting for better entry"
         meaning = simple_reason("ENTRY_TOO_EXTENDED")
     elif str(row.get("reco_tier") or "") in {"watch", "avoid"}:
@@ -93,13 +123,23 @@ def explain_opportunity(row: Mapping[str, Any]) -> dict[str, str]:
         label = "Rejected — too risky / too extended / evidence weak"
         meaning = simple_reason(reason)
     else:
-        label = "Best setup"
-        meaning = f"{symbol} is the current top research name. Not a buy button."
+        label = "Research candidate"
+        meaning = f"{symbol} is a current research name. The scanner did not make an investment BUY decision."
+
+    action = (
+        "Open the name to inspect committee evidence, entry and portfolio state."
+        if decision
+        else "Open the name to read the evidence. The decision committee decides BUY / WAIT / AVOID."
+    )
     return {
-        "what": "A research name from the saved market scan — not a new scanner.",
+        "what": (
+            "A persisted committee decision."
+            if decision else
+            "A research name from the saved market scan — not a new scanner."
+        ),
         "found": f"{symbol} · {setup}" if symbol else "No name yet.",
         "meaning": meaning,
-        "action": "Open the name to read the evidence. The paper bot decides entries.",
+        "action": action,
         "label": label,
         "why": simple_reason(reason) if reason else meaning,
         "technical": reason or str(row.get("setup_label") or ""),
