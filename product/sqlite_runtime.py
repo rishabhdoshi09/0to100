@@ -74,7 +74,8 @@ def bootstrap_product_stores() -> dict[str, object]:
             mod = __import__(module, fromlist=[attr])
             obj = getattr(mod, attr)
             if attr == "JobStore":
-                obj()
+                root = Path(__file__).resolve().parents[1]
+                obj(root / "logs" / "autonomy" / "jobs.db")
             else:
                 con = obj()
                 con.close()

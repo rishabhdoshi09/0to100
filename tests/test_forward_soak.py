@@ -324,11 +324,13 @@ def test_journey_and_verifier_from_persisted_artifacts(monkeypatch):
 
 
 def test_valid_no_trade_day_is_not_a_failure(monkeypatch):
+    today = datetime.now(timezone.utc).date().isoformat()
+    clock = datetime.now(timezone.utc)
     failed = dict(_eligible_card())
     failed["dd_verdict"] = "FAIL"
-    _write_scan_reco([failed])
+    _write_scan_reco([failed], as_of=today)
     book = PaperBook(capital=100_000)
-    out = _cycle(book, [failed])
+    out = _cycle(book, [failed], now=clock, as_of=today)
     assert not out["taken"]
     assert out["rejections"]
     monkeypatch.setattr(
