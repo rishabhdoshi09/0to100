@@ -588,7 +588,7 @@ function InvestigatePanel({
             ))}
           </ul>
           {(screen?.deeper_acquire_available || report.deeper_acquire_available) ? (
-            <p>Try deeper source acquisition — additional official providers remain unqueried. Metrics with no validated acquisition path are not re-scraped.</p>
+            <p>AUTO-SOURCING additional official providers. Do not hunt annual reports. Manual fallback appears only after a class fails. Metrics with no validated acquisition path stay unknown.</p>
           ) : (
             <p>Already-queried sources that reported no value are not re-scraped. A listed framework metric is implemented only when QuantTerm has a validated path, definition, period handling, provenance and tests.</p>
           )}
