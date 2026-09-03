@@ -82,6 +82,16 @@ def _connect(path: Path | None = None) -> sqlite3.Connection:
         )
         """
     )
+    present = {r[1] for r in con.execute("PRAGMA table_info(candidates)").fetchall()}
+    for name, sql in (
+        ("decision", "TEXT"),
+        ("entry_state", "TEXT"),
+        ("execution_state", "TEXT"),
+        ("wait_trigger_json", "TEXT"),
+        ("opportunity_id", "TEXT"),
+    ):
+        if name not in present:
+            con.execute(f"ALTER TABLE candidates ADD COLUMN {name} {sql}")
     return con
 
 
@@ -104,6 +114,11 @@ def upsert(
     decision_id_value: str = "",
     paper_intent_id: str = "",
     outcome_id: str = "",
+    decision: str = "",
+    entry_state: str = "",
+    execution_state: str = "",
+    wait_trigger: Mapping[str, Any] | None = None,
+    opportunity_id_value: str = "",
     payload: Mapping[str, Any] | None = None,
     trigger: str = "",
     path: Path | None = None,
@@ -117,12 +132,16 @@ def upsert(
         con.execute(
             """INSERT INTO candidates (
                 candidate_id, symbol, session_date, state, reason, first_seen_at, updated_at,
-                scan_run_id, recommendation_id, decision_id, paper_intent_id, outcome_id, payload_json
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                scan_run_id, recommendation_id, decision_id, paper_intent_id, outcome_id, payload_json,
+                decision, entry_state, execution_state, wait_trigger_json, opportunity_id
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 cid, str(symbol).upper(), str(session_date)[:10], state, reason, now, now,
                 scan_run_id, recommendation_id_value, decision_id_value, paper_intent_id,
                 outcome_id, json.dumps(dict(payload or {}), default=str),
+                decision, entry_state, execution_state,
+                json.dumps(dict(wait_trigger or {}), default=str),
+                opportunity_id_value or str(symbol).upper(),
             ),
         )
         con.execute(
@@ -155,12 +174,21 @@ def upsert(
                decision_id=COALESCE(NULLIF(?, ''), decision_id),
                paper_intent_id=COALESCE(NULLIF(?, ''), paper_intent_id),
                outcome_id=COALESCE(NULLIF(?, ''), outcome_id),
+               decision=COALESCE(NULLIF(?, ''), decision),
+               entry_state=COALESCE(NULLIF(?, ''), entry_state),
+               execution_state=COALESCE(NULLIF(?, ''), execution_state),
+               wait_trigger_json=COALESCE(NULLIF(?, ''), wait_trigger_json),
+               opportunity_id=COALESCE(NULLIF(?, ''), opportunity_id),
                payload_json=?
                WHERE candidate_id=?""",
             (
                 next_state, reason or merged["reason"], now,
                 scan_run_id, recommendation_id_value, decision_id_value,
-                paper_intent_id, outcome_id, json.dumps(body, default=str), cid,
+                paper_intent_id, outcome_id,
+                decision, entry_state, execution_state,
+                json.dumps(dict(wait_trigger or {}), default=str) if wait_trigger else "",
+                opportunity_id_value or str(symbol).upper(),
+                json.dumps(body, default=str), cid,
             ),
         )
     con.commit()

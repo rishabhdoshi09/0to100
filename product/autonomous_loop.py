@@ -105,70 +105,60 @@ def _cards(reco: Mapping[str, Any]) -> list[dict[str, Any]]:
         return out
 
 
-def _census(scan: Mapping[str, Any], reco: Mapping[str, Any], paper: Mapping[str, Any], session: str = "") -> dict[str, Any]:
-    coverage = dict(scan.get("coverage") or {})
-    reasons = dict(coverage.get("reason_counts") or {})
-    ensemble = dict(reco.get("ensemble") or {})
-    states = CL.state_counts(str(session or session_date())[:10])
-    return {
-        "universe": int(coverage.get("requested") or scan.get("requested_universe") or 0),
-        "eligible": int(coverage.get("checked") or scan.get("scanned") or 0),
-        "low_liquidity": int(reasons.get("LOW_LIQUIDITY") or 0),
-        "no_setup": int(reasons.get("NO_SETUP") or 0),
-        "technical_rejection": int(reasons.get("FALLING_KNIFE") or 0) + int(reasons.get("PRICE_BELOW_20") or 0),
-        "extended": int((scan.get("summary") or {}).get("extended") or 0),
-        "insufficient_evidence": int(reasons.get("INSUFFICIENT_HISTORY") or 0) + int(reasons.get("NO_OHLCV") or 0),
-        "qualified": int(coverage.get("qualified") or (scan.get("summary") or {}).get("qualified") or 0),
-        "high_conviction": int(ensemble.get("high_conviction_count") or 0),
-        "good_setup": int(ensemble.get("good_setup_count") or 0),
-        "watch": int(ensemble.get("watch_count") or 0),
-        "paper_taken": len(paper.get("taken") or []),
-        "paper_waits": len(paper.get("waits") or []),
-        "paper_rejections": len(paper.get("rejections") or []),
-        "researching": int(states.get(CL.RESEARCHING) or 0) + int(states.get(CL.WAIT_EVIDENCE) or 0),
-        "ready": int(states.get(CL.READY) or 0),
-        "entered": int(states.get(CL.ENTERED) or 0),
-        "rejected": int(states.get(CL.REJECTED) or 0),
-        "candidate_states": states,
-        "reason_counts": reasons,
-        "funnel": {
-            "universe": int(coverage.get("requested") or scan.get("requested_universe") or 0),
-            "eligible": int(coverage.get("checked") or scan.get("scanned") or 0),
-            "basic_qualified": int(coverage.get("qualified") or (scan.get("summary") or {}).get("qualified") or 0),
-            "recommendation_worthy": int(ensemble.get("high_conviction_count") or 0) + int(ensemble.get("good_setup_count") or 0),
-            "serious_candidates": min(SERIOUS_CANDIDATE_CAP, int(ensemble.get("high_conviction_count") or 0) + int(ensemble.get("good_setup_count") or 0)),
-            "deep_researched": int((paper.get("research_n") or 0) or 0),
-            "ready": int(states.get(CL.READY) or 0),
-            "wait": int(states.get(CL.WAIT) or 0),
-        },
-    }
+def _census(
+    scan: Mapping[str, Any],
+    reco: Mapping[str, Any],
+    paper: Mapping[str, Any],
+    session: str = "",
+    *,
+    committee: list[dict[str, Any]] | None = None,
+    scan_run_id: str = "",
+    researched: list[str] | None = None,
+    generated_at: str = "",
+) -> dict[str, Any]:
+    from product.judgment_census import build_census
+
+    return build_census(
+        scan=scan,
+        reco=reco,
+        committee=committee or paper.get("committee") or [],
+        session=str(session or session_date())[:10],
+        scan_run_id=scan_run_id or str(scan.get("scanned_at") or ""),
+        generated_at=generated_at or _now(),
+        researched_symbols=researched or [],
+        candidate_states=CL.state_counts(str(session or session_date())[:10]),
+    )
 
 
 def _ingest_candidates(scan: Mapping[str, Any], cards: list[dict[str, Any]], session: str) -> list[dict[str, Any]]:
     scan_run_id = str(scan.get("scanned_at") or scan.get("source_snapshot_id") or session)
     rows = []
+    remembered = set()
+    try:
+        from product.opportunity_memory import list_open
+
+        remembered = {str(r.get("symbol") or "").upper() for r in list_open(limit=200)}
+    except Exception:
+        remembered = set()
     reco_symbols = {str(c.get("symbol") or "").upper() for c in cards if c.get("symbol")}
+    keep = reco_symbols | remembered
     for rec in scan.get("records") or []:
         if not isinstance(rec, dict):
             continue
         symbol = str(rec.get("symbol") or "").upper()
-        if not symbol:
+        if not symbol or symbol not in keep:
             continue
         status = str(rec.get("status") or "")
-        ready = status.lower().startswith("ready")
-        if not ready and symbol not in reco_symbols:
-            continue
         verdict = str(rec.get("verdict") or status or "").upper()
         if verdict in {"WATCH", "WAIT"} or "wait" in status.lower() or "pullback" in status.lower():
             state = CL.WATCH
-        elif ready:
-            state = CL.SCREENED
         else:
             state = CL.SCREENED
         rows.append(CL.upsert(
             symbol=symbol, session_date=session, state=state,
             reason=str((rec.get("reasons") or ["scan"])[0])[:240],
             scan_run_id=scan_run_id, trigger="scan",
+            opportunity_id_value=symbol,
             payload={"verdict": rec.get("verdict"), "setup": rec.get("signals"), "status": status},
         ))
     for card in cards:
@@ -187,16 +177,41 @@ def _ingest_candidates(scan: Mapping[str, Any], cards: list[dict[str, Any]], ses
     return rows
 
 
-def _research_shortlist(cards: list[dict[str, Any]]) -> list[str]:
-    ranked = [
-        c for c in cards
-        if str(c.get("reco_tier") or "") in {"high_conviction", "good_setup"}
-    ]
-    ranked.sort(key=lambda c: (str(c.get("reco_tier")) != "high_conviction", str(c.get("symbol") or "")))
-    seen: list[str] = []
-    for card in ranked:
+def _research_shortlist(cards: list[dict[str, Any]], committee: list[dict[str, Any]] | None = None) -> list[str]:
+    """Deep-research only when extra evidence can change a meaningful decision."""
+    by_sym = {str(r.get("symbol") or "").upper(): r for r in (committee or [])}
+    ranked: list[tuple[int, str, str]] = []
+    for card in cards:
         symbol = str(card.get("symbol") or "").upper()
-        if symbol and symbol not in seen:
+        if not symbol:
+            continue
+        rec = by_sym.get(symbol) or {}
+        info = str(rec.get("information_value") or "")
+        if info == "NONE":
+            continue
+        if rec.get("decision") == "AVOID" and info != "HIGH":
+            continue
+        rank = 0 if str(card.get("reco_tier")) == "high_conviction" else 1
+        if info == "HIGH":
+            rank -= 1
+        if rec.get("research_required"):
+            rank -= 1
+        if _facts_present(symbol):
+            continue
+        ranked.append((rank, symbol, info))
+    ranked.sort()
+    seen: list[str] = []
+    for _rank, symbol, _info in ranked:
+        if symbol not in seen:
+            seen.append(symbol)
+        if len(seen) >= DEEP_RESEARCH_CAP:
+            break
+    if seen:
+        return seen
+    # Fallback: high-conviction names still missing facts.
+    for card in cards:
+        symbol = str(card.get("symbol") or "").upper()
+        if str(card.get("reco_tier")) == "high_conviction" and symbol and not _facts_present(symbol):
             seen.append(symbol)
         if len(seen) >= DEEP_RESEARCH_CAP:
             break
@@ -263,72 +278,152 @@ def _acquire(symbols: list[str], session: str, scan_run_id: str, *, download: bo
     }
 
 
-def _consume_paper(cards: list[dict[str, Any]], reco: Mapping[str, Any], session: str, scan_run_id: str) -> dict[str, Any]:
-    readiness = RDY.inspect_readiness()
-    broker_ok = bool(readiness["capabilities"].get(RDY.BROKER_LIVE_DATA_READY))
+def _committee_cards(cards: list[dict[str, Any]], extra_symbols: set[str] | None = None) -> list[dict[str, Any]]:
+    extra = {str(s).upper() for s in (extra_symbols or set()) if s}
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for card in cards:
+        symbol = str(card.get("symbol") or "").upper()
+        if not symbol or symbol in seen:
+            continue
+        tier = str(card.get("reco_tier") or "")
+        if tier in {"high_conviction", "good_setup"} or symbol in extra:
+            seen.add(symbol)
+            out.append(card)
+    return out
+
+
+def _entry_window() -> bool:
     try:
         from research.autonomy import schedules as SCH
         from zoneinfo import ZoneInfo
 
-        now = datetime.now(ZoneInfo("Asia/Kolkata"))
-        window = SCH.entries_allowed_by_clock(now)
+        return bool(SCH.entries_allowed_by_clock(datetime.now(ZoneInfo("Asia/Kolkata"))))
     except Exception:
-        window = False
-    from product.paper_autopilot import (
-        BROKER_LOGIN_REQUIRED,
-        ENTER_NOW,
-        OUTSIDE_ENTRY_WINDOW,
-        WAIT,
-        evaluate_candidate,
-    )
+        return False
 
+
+def _evaluate_committee(
+    cards: list[dict[str, Any]],
+    reco: Mapping[str, Any],
+    *,
+    extra_symbols: set[str] | None = None,
+    broker_ok: bool | None = None,
+    entry_window: bool | None = None,
+) -> list[dict[str, Any]]:
+    from product.decision_committee import evaluate_many
+
+    readiness = RDY.inspect_readiness()
+    if broker_ok is None:
+        broker_ok = bool(readiness["capabilities"].get(RDY.BROKER_LIVE_DATA_READY))
+    if entry_window is None:
+        entry_window = _entry_window()
+    selected = _committee_cards(cards, extra_symbols)
+    return [
+        rec.as_dict()
+        for rec in evaluate_many(
+            selected,
+            book=None,
+            broker_ok=bool(broker_ok),
+            entry_window=bool(entry_window),
+            workspace=reco,
+        )
+    ]
+
+
+def _consume_paper(
+    cards: list[dict[str, Any]],
+    reco: Mapping[str, Any],
+    session: str,
+    scan_run_id: str,
+    *,
+    committee: list[dict[str, Any]] | None = None,
+    extra_symbols: set[str] | None = None,
+) -> dict[str, Any]:
+    """Persist committee judgment. Broker login is execution-only."""
+    readiness = RDY.inspect_readiness()
+    broker_ok = bool(readiness["capabilities"].get(RDY.BROKER_LIVE_DATA_READY))
+    window = _entry_window()
+    records = list(committee or [])
+    if not records:
+        records = _evaluate_committee(
+            cards, reco, extra_symbols=extra_symbols, broker_ok=broker_ok, entry_window=window,
+        )
+    by_card = {str(c.get("symbol") or "").upper(): c for c in cards}
     taken, waits, rejections, intents = [], [], [], []
-    for card in cards:
-        symbol = str(card.get("symbol") or "").upper()
+    from product import decision_journal as DJ
+    from product import opportunity_memory as OM
+
+    for rec in records:
+        symbol = str(rec.get("symbol") or "").upper()
         if not symbol:
             continue
-        decision = evaluate_candidate(card, book=None, entries_allowed=True, workspace=reco)
-        execution_block = ""
-        if decision.decision == ENTER_NOW:
-            if not broker_ok:
-                execution_block = BROKER_LOGIN_REQUIRED
-            elif not window:
-                execution_block = OUTSIDE_ENTRY_WINDOW
-        row = decision.as_dict()
-        row["execution_block"] = execution_block
-        rid = CL.recommendation_id(scan_run_id, symbol, str(card.get("reco_tier") or ""))
-        did = f"{session}|{symbol}|{decision.decision}|{decision.reason_code}|{scan_run_id}"
+        card = by_card.get(symbol) or {"symbol": symbol}
+        rid = CL.recommendation_id(scan_run_id, symbol, str(rec.get("tier") or card.get("reco_tier") or ""))
+        did = f"{session}|{symbol}|{rec.get('decision')}|{rec.get('reason_code')}|{scan_run_id}"
         intent_id = f"{did}:intent"
-        if decision.decision == ENTER_NOW and not execution_block:
-            state = CL.READY
-            taken.append(row)
-        elif decision.decision == ENTER_NOW and execution_block:
-            state = CL.READY
-            row["decision"] = "BLOCKED"
-            row["reason_code"] = execution_block
-            intents.append(row)
-        elif decision.decision == WAIT:
-            state = CL.WAIT
+        state = str(rec.get("candidate_state") or CL.WATCH)
+        demote = state in {CL.WAIT, CL.WAIT_EVIDENCE, CL.REJECTED, CL.WATCH}
+        row = dict(rec)
+        row["decision_id"] = did
+        row["recommendation_id"] = rid
+        row["candidate_id"] = CL.candidate_id(symbol, session)
+        row["execution_block"] = rec.get("execution_state")
+        prev = CL.get(CL.candidate_id(symbol, session))
+        already = bool(prev and prev.get("decision_id") == did)
+        if rec.get("decision") == "BUY" and rec.get("candidate_state") == CL.READY:
+            if str(rec.get("execution_state") or "").startswith("BLOCKED"):
+                intents.append(row)
+            else:
+                taken.append(row)
+        elif rec.get("decision") == "WAIT":
             waits.append(row)
         else:
-            state = CL.REJECTED
             rejections.append(row)
         CL.upsert(
             symbol=symbol, session_date=session, state=state,
-            reason=str(row.get("reason_code") or decision.reason_code),
+            reason=str(rec.get("reason_code") or rec.get("reason") or ""),
             scan_run_id=scan_run_id, recommendation_id_value=rid,
-            decision_id_value=did, paper_intent_id=intent_id, trigger="paper",
-            payload={"paper": row},
+            decision_id_value=did, paper_intent_id=intent_id, trigger="committee",
+            decision=str(rec.get("decision") or ""),
+            entry_state=str(rec.get("entry_state") or ""),
+            execution_state=str(rec.get("execution_state") or ""),
+            wait_trigger=rec.get("wait_trigger") or {},
+            opportunity_id_value=symbol,
+            payload={"committee": rec},
+            demote=demote,
         )
-        prev = CL.get(CL.candidate_id(symbol, session))
-        already = bool(prev and prev.get("decision_id") == did)
+        DJ.persist({
+            **rec,
+            "decision_id": did,
+            "candidate_id": CL.candidate_id(symbol, session),
+            "opportunity_id": symbol,
+            "scan_run_id": scan_run_id,
+            "recommendation_id": rid,
+            "decision_time": _now(),
+            "market_as_of": session,
+            "evidence_cutoff": session,
+        })
+        OM.remember(
+            symbol=symbol, session_date=session, scan_run_id=scan_run_id,
+            state=state, decision=str(rec.get("decision") or ""),
+            entry_state=str(rec.get("entry_state") or ""),
+            execution_state=str(rec.get("execution_state") or ""),
+            reason=str(rec.get("reason_code") or ""),
+            setup=str((rec.get("references") or {}).get("primary_thesis") or ""),
+            tier=str(rec.get("tier") or ""),
+            wait_trigger=rec.get("wait_trigger") or {},
+            research_completed=bool(rec.get("evidence_coverage_pct")),
+            payload={"decision_id": did, "wait_trigger": rec.get("wait_trigger") or {}},
+        )
         if not already:
             try:
                 from product.forward_evidence import freeze_observation
 
                 freeze_observation(
-                    {**row, "scan_scanned_at": scan_run_id, "reco_tier": card.get("reco_tier")},
-                    cycle_id=scan_run_id, as_of=session, group=decision.group or decision.decision,
+                    {**row, "scan_scanned_at": scan_run_id, "reco_tier": rec.get("tier")},
+                    cycle_id=scan_run_id, as_of=session,
+                    group=str(rec.get("decision") or ""),
                     entered=False, surfaced=True,
                 )
             except Exception:
@@ -337,18 +432,32 @@ def _consume_paper(cards: list[dict[str, Any]], reco: Mapping[str, Any], session
                 from product.counterfactual_learning import freeze_decision
 
                 freeze_decision(
-                    symbol=symbol, reason_code=str(row.get("reason_code") or ""),
-                    decision=str(row.get("decision") or ""),
-                    entry=card.get("entry"), stop=card.get("stop"), target=card.get("target"),
+                    symbol=symbol,
+                    reason_code=str(rec.get("reason_code") or ""),
+                    decision=str(rec.get("decision") or ""),
+                    entry=rec.get("entry") or card.get("entry"),
+                    stop=rec.get("stop") or card.get("stop"),
+                    target=rec.get("target") or card.get("target"),
                     as_of=session,
-                    evidence={"scan_run_id": scan_run_id, "recommendation_id": rid, "decision_id": did},
+                    evidence={
+                        "scan_run_id": scan_run_id,
+                        "recommendation_id": rid,
+                        "decision_id": did,
+                        "entry_state": rec.get("entry_state"),
+                        "execution_state": rec.get("execution_state"),
+                    },
                 )
             except Exception:
                 pass
     return {
         "taken": taken, "waits": waits, "rejections": rejections, "intents": intents,
+        "committee": records,
         "broker_ok": broker_ok, "entry_window": window,
-        "eligibility": "TRADED" if taken else ("BLOCKED_BROKER" if intents and not broker_ok else "NO_ELIGIBLE_TRADE"),
+        "eligibility": (
+            "TRADED" if taken else (
+                "BLOCKED_BROKER" if intents and not broker_ok else "NO_ELIGIBLE_TRADE"
+            )
+        ),
     }
 
 
@@ -400,10 +509,17 @@ def settle_official_outcomes(session: str | None = None) -> dict[str, Any]:
             row["classification"] = classification
             rewritten.append(row)
             settled.append({"symbol": symbol, "classification": classification, "return_pct": ret, "as_of": day})
+            from product.missed_winner import analyze_decision_quality
+
+            quality = analyze_decision_quality(
+                row, classification=classification, forward_return_pct=ret,
+            )
+            row["decision_quality"] = quality
             _append_jsonl(LEARNING_PATH, {
                 "at": _now(), "symbol": symbol, "as_of": day,
                 "classification": classification, "return_pct": ret,
                 "reason_code": row.get("reason_code"),
+                "decision_quality": quality,
                 "provenance": "REAL_FORWARD_MARKET",
                 "updates_policy": False,
                 "observation": "counterfactual_settled",
@@ -450,6 +566,7 @@ def consume_learning_memory(session: str | None = None) -> dict[str, Any]:
     by_class: Counter[str] = Counter()
     by_reason: Counter[str] = Counter()
     by_setup: Counter[str] = Counter()
+    by_reason_detail: dict[str, dict[str, int]] = {}
     observations = 0
     try:
         from product.counterfactual_learning import ledger_path
@@ -470,6 +587,19 @@ def consume_learning_memory(session: str | None = None) -> dict[str, Any]:
                 by_class[classification] += 1
                 if row.get("reason_code"):
                     by_reason[f"{row.get('reason_code')}:{classification}"] += 1
+                    detail = by_reason_detail.setdefault(str(row.get("reason_code")), {
+                        "decisions": 0, "later_rallied": 0, "valid_entry_after_wait": 0,
+                        "missed_winner": 0, "correct_rejection": 0, "good_wait": 0,
+                    })
+                    detail["decisions"] += 1
+                    if classification == "MISSED_WINNER":
+                        detail["later_rallied"] += 1
+                        detail["missed_winner"] += 1
+                    if classification == "CORRECT_REJECTION":
+                        detail["correct_rejection"] += 1
+                    if classification == "GOOD_WAIT":
+                        detail["valid_entry_after_wait"] += 1
+                        detail["good_wait"] += 1
                 if row.get("setup"):
                     by_setup[f"{row.get('setup')}:{classification}"] += 1
     except Exception as exc:
@@ -484,6 +614,7 @@ def consume_learning_memory(session: str | None = None) -> dict[str, Any]:
         "observations": observations,
         "classification_counts": dict(by_class),
         "reason_code_stats": dict(by_reason),
+        "reason_aggregations": by_reason_detail,
         "setup_stats": dict(by_setup),
         "updates_policy": False,
         "provenance": "REAL_FORWARD_MARKET",
@@ -590,40 +721,10 @@ def replay_compatible_rows(limit: int = 8) -> list[dict[str, Any]]:
     return out
 
 
-def _operator_metrics() -> dict[str, Any]:
-    automated = 0
-    human = 0
-    try:
-        import sqlite3
+def _operator_metrics(session: str = "") -> dict[str, Any]:
+    from product.operator_metrics import build_operator_metrics
 
-        con = sqlite3.connect(str(ROOT / "logs" / "market_ops" / "jobs.db"))
-        for by, n in con.execute("SELECT requested_by, count(*) FROM operations GROUP BY 1"):
-            if str(by) in {"pipeline", "bootstrap", "autonomy", "autonomous_loop"}:
-                automated += int(n)
-            elif str(by) in {"terminal", "user", "product_bootstrap"}:
-                human += int(n)
-            else:
-                automated += int(n)
-        con.close()
-    except Exception:
-        pass
-    try:
-        import sqlite3
-
-        con = sqlite3.connect(str(ROOT / "logs" / "autonomy" / "jobs.db"))
-        n = list(con.execute("SELECT count(*) FROM jobs"))[0][0]
-        automated += int(n)
-        con.close()
-    except Exception:
-        pass
-    total = automated + human
-    return {
-        "automated_jobs": automated,
-        "human_required_actions": human,
-        "manual_fallbacks": 0,
-        "automation_rate": (automated / total) if total else 1.0,
-        "necessary_human": ["Kite authentication"] if not RDY.broker_live().get("ready") else [],
-    }
+    return build_operator_metrics(session=session)
 
 
 def advance_loop(*, trigger: str = "pipeline") -> dict[str, Any]:
@@ -639,8 +740,48 @@ def advance_loop(*, trigger: str = "pipeline") -> dict[str, Any]:
     reasons = _reassess_reasons(prev, scan_run_id, session, trigger)
     emit("LOOP", f"autonomous loop · trigger={trigger} · {','.join(reasons)}", trigger=trigger, session=session)
 
+    from product import opportunity_memory as OM
+    from product.due_diligence.acquire import write_research_queue
+
     ingested = _ingest_candidates(scan, cards, session)
-    shortlist = _research_shortlist(cards)
+    woken = []
+    try:
+        woken = OM.wake_candidates(scan)
+        if trigger == "DUE_DILIGENCE_ACQUIRE":
+            for row in OM.list_open(states=(CL.WAIT_EVIDENCE,)):
+                symbol = str(row.get("symbol") or "").upper()
+                if symbol and _facts_present(symbol):
+                    woken.append({
+                        "symbol": symbol, "wake_event": "EVIDENCE_ACQUIRED",
+                        "old_state": row.get("last_state"),
+                    })
+        for item in woken:
+            emit("WAKE", f"{item.get('symbol')} woke · {item.get('wake_event')}", **item)
+            OM.remember(
+                symbol=str(item.get("symbol") or ""), session_date=session,
+                scan_run_id=scan_run_id, wake_event=str(item.get("wake_event") or "WAKE"),
+                state=str(item.get("old_state") or ""),
+                reason=str(item.get("wake_event") or ""),
+            )
+    except Exception as exc:
+        emit("WAKE", f"wake pass skipped · {str(exc)[:120]}")
+
+    extra = {str(w.get("symbol") or "").upper() for w in woken if w.get("symbol")}
+    try:
+        extra |= {
+            str(r.get("symbol") or "").upper()
+            for r in OM.list_open(states=(CL.WAIT, CL.WAIT_EVIDENCE, CL.WATCH, CL.READY), limit=200)
+            if r.get("symbol")
+        }
+    except Exception:
+        pass
+
+    committee = _evaluate_committee(cards, reco, extra_symbols=extra)
+    shortlist = _research_shortlist(cards, committee=committee)
+    write_research_queue(
+        shortlist, scan_run_id=scan_run_id, session=session,
+        reasons={r.get("symbol"): r.get("information_value") for r in committee if r.get("symbol")},
+    )
     research = {"symbols": [], "acquired": [], "errors": [], "n_ok": 0, "n_failed": 0, "skipped": "no_shortlist"}
     if shortlist and readiness["capabilities"].get(RDY.RESEARCH_DATA_READY):
         download = _should_download(trigger, prev, scan_run_id)
@@ -648,32 +789,50 @@ def advance_loop(*, trigger: str = "pipeline") -> dict[str, Any]:
         if research.get("n_ok"):
             reco = _ensure_reco(scan)
             cards = _cards(reco)
+            researched = {str(x.get("symbol") or "").upper() for x in (research.get("acquired") or []) if x.get("symbol")}
+            committee = _evaluate_committee(cards, reco, extra_symbols=extra | researched)
         emit(
             "RESEARCH",
             f"deep research {research.get('n_ok')}/{len(shortlist)} cached={len(research.get('cached') or [])} waiting={research.get('n_waiting')}",
             n_ok=research.get("n_ok"), n_failed=research.get("n_failed"), downloaded=research.get("downloaded"),
         )
 
-    paper = _consume_paper(cards, reco, session, scan_run_id)
-    emit("PAPER", f"paper consume · taken={len(paper.get('taken') or [])} waits={len(paper.get('waits') or [])} blocked={len(paper.get('intents') or [])}")
+    paper = _consume_paper(
+        cards, reco, session, scan_run_id, committee=committee, extra_symbols=extra,
+    )
+    emit(
+        "COMMITTEE",
+        f"committee · buy={len(paper.get('taken') or [])} wait={len(paper.get('waits') or [])} "
+        f"avoid={len(paper.get('rejections') or [])} exec_blocked={len(paper.get('intents') or [])}",
+    )
 
     outcomes = {"settled": [], "pending": [], "failed": [], "n_settled": 0}
     if readiness["capabilities"].get(RDY.OUTCOME_DATA_READY):
         outcomes = settle_official_outcomes(session)
         emit("OUTCOME", f"official settlement · {outcomes.get('n_settled')} matured · {len(outcomes.get('pending') or [])} pending")
 
-    census = _census(scan, reco, paper, session)
-    funnel = dict((census.get("funnel") or {}))
-    funnel["deep_researched"] = int(research.get("n_ok") or 0)
-    census["funnel"] = funnel
+    researched_names = list(research.get("symbols") or shortlist or [])
+    census = _census(
+        scan, reco, paper, session,
+        committee=paper.get("committee") or committee,
+        scan_run_id=scan_run_id,
+        researched=researched_names,
+        generated_at=_now(),
+    )
     memory = consume_learning_memory(session) if (outcomes.get("n_settled") or trigger in {"outcome_resolution", "learning_cycle"}) else {}
-    metrics = _operator_metrics()
+    metrics = _operator_metrics(session)
+    next_set = OM.next_session_set(session)
+    _write_json(ROOT / "logs" / "product" / "next_session_set.json", {
+        "session": session, "scan_run_id": scan_run_id, "generated_at": _now(), "buckets": next_set,
+    })
     next_watch = [
-        str(c.get("symbol") or "")
-        for c in CL.list_candidates(session_date=session, states=(CL.WATCH, CL.WAIT, CL.READY, CL.QUALIFIED), limit=20)
+        str(item.get("symbol") or "")
+        for bucket in next_set.values()
+        for item in bucket
+        if item.get("symbol")
     ]
     summary = {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": _now(),
         "trigger": trigger,
         "session_date": session,
@@ -681,8 +840,9 @@ def advance_loop(*, trigger: str = "pipeline") -> dict[str, Any]:
         "readiness": readiness,
         "census": census,
         "reassess_reasons": reasons,
+        "woken": woken,
         "research": {k: research.get(k) for k in ("symbols", "n_ok", "n_failed", "n_waiting", "errors", "downloaded", "cached") if k in research},
-        "learning_memory": {k: memory.get(k) for k in ("observations", "classification_counts", "updates_policy") if memory},
+        "learning_memory": {k: memory.get(k) for k in ("observations", "classification_counts", "reason_aggregations", "updates_policy") if memory},
         "paper": {
             "eligibility": paper.get("eligibility"),
             "taken": len(paper.get("taken") or []),
@@ -691,8 +851,10 @@ def advance_loop(*, trigger: str = "pipeline") -> dict[str, Any]:
             "intents": paper.get("intents") or [],
             "broker_ok": paper.get("broker_ok"),
             "entry_window": paper.get("entry_window"),
+            "committee": paper.get("committee") or [],
         },
         "outcomes": outcomes,
+        "next_session_set": next_set,
         "next_session_watch": [s for s in next_watch if s],
         "operator_metrics": metrics,
         "candidates_touched": len(ingested),
@@ -728,14 +890,28 @@ def event_log(limit: int = 40) -> list[dict[str, Any]]:
 def desk_projection() -> dict[str, Any]:
     summary = load_summary()
     readiness = summary.get("readiness") or RDY.inspect_readiness()
+    session = str(summary.get("session_date") or "")
+    committee = list((summary.get("paper") or {}).get("committee") or [])
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": _now(),
         "what_quantterm_did": project_events(24),
         "what_it_found": summary.get("census") or {},
-        "what_it_is_doing": {"trigger": summary.get("trigger"), "session": summary.get("session_date")},
+        "what_it_is_doing": {"trigger": summary.get("trigger"), "session": session},
         "what_is_blocked": {
             "broker": readiness.get("broker"),
+            "execution": [
+                {
+                    "symbol": r.get("symbol"),
+                    "decision": r.get("decision"),
+                    "candidate_state": r.get("candidate_state"),
+                    "entry_state": r.get("entry_state"),
+                    "execution_state": r.get("execution_state"),
+                    "reason_code": r.get("reason_code"),
+                }
+                for r in committee
+                if str(r.get("execution_state") or "").startswith("BLOCKED")
+            ],
             "paper": (summary.get("paper") or {}).get("intents") or [],
             "outcomes_pending": (summary.get("outcomes") or {}).get("pending") or [],
         },
@@ -744,13 +920,26 @@ def desk_projection() -> dict[str, Any]:
             "scan_run_id": summary.get("scan_run_id"),
             "candidates_touched": summary.get("candidates_touched"),
             "research": summary.get("research"),
+            "woken": summary.get("woken") or [],
         },
         "what_it_learned": {
             "outcomes": summary.get("outcomes"),
+            "reason_aggregations": (summary.get("learning_memory") or {}).get("reason_aggregations"),
             "policy_changed": False,
         },
         "census": summary.get("census") or {},
-        "candidate_lifecycle": CL.state_counts(str(summary.get("session_date") or "")),
+        "candidate_lifecycle": CL.state_counts(session),
+        "judgments": {
+            r.get("symbol"): {
+                "candidate_state": r.get("candidate_state"),
+                "decision": r.get("decision"),
+                "entry_state": r.get("entry_state"),
+                "execution_state": r.get("execution_state"),
+                "reason_code": r.get("reason_code"),
+            }
+            for r in committee
+            if r.get("symbol")
+        },
         "lineage": {
             "scan_run_id": summary.get("scan_run_id"),
             "candidates": [
@@ -758,17 +947,22 @@ def desk_projection() -> dict[str, Any]:
                     "candidate_id": r.get("candidate_id"),
                     "symbol": r.get("symbol"),
                     "state": r.get("state"),
+                    "decision": r.get("decision"),
+                    "entry_state": r.get("entry_state"),
+                    "execution_state": r.get("execution_state"),
                     "scan_run_id": r.get("scan_run_id"),
                     "recommendation_id": r.get("recommendation_id"),
                     "decision_id": r.get("decision_id"),
                     "paper_intent_id": r.get("paper_intent_id"),
                     "outcome_id": r.get("outcome_id"),
+                    "opportunity_id": r.get("opportunity_id"),
                 }
-                for r in CL.list_candidates(session_date=str(summary.get("session_date") or ""), limit=12)
+                for r in CL.list_candidates(session_date=session, limit=12)
             ],
         },
         "readiness": readiness,
-        "operator_metrics": summary.get("operator_metrics") or _operator_metrics(),
+        "operator_metrics": summary.get("operator_metrics") or _operator_metrics(session),
+        "next_session_set": summary.get("next_session_set") or {},
         "next_session_watch": summary.get("next_session_watch") or [],
         "historical_replay": replay_compatible_rows(),
         "live_locked": True,

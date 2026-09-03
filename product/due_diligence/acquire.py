@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[2]
 EVIDENCE_ROOT = ROOT / "logs" / "research_evidence"
 ACQUIRE_CAP = 6
 FACTS_NAME = "autonomy_facts.json"
+RESEARCH_QUEUE_PATH = ROOT / "logs" / "product" / "research_queue.json"
 FRESH_S = 24 * 60 * 60
 MAX_ATTACHMENT_BYTES = 16_000_000
 _ALLOWED_HOSTS = {
@@ -74,8 +75,44 @@ def save_autonomy_facts(symbol: str, payload: Mapping[str, Any]) -> Path:
     return path
 
 
+def write_research_queue(
+    symbols: Sequence[str],
+    *,
+    scan_run_id: str = "",
+    session: str = "",
+    reasons: Mapping[str, Any] | None = None,
+) -> Path:
+    """Loop writes the information-value shortlist; acquire consumes it."""
+    RESEARCH_QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "scan_run_id": scan_run_id,
+        "session": session,
+        "symbols": [str(s).upper() for s in symbols if s],
+        "reasons": dict(reasons or {}),
+        "written_at": datetime.now(timezone.utc).isoformat(),
+    }
+    tmp = RESEARCH_QUEUE_PATH.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    tmp.replace(RESEARCH_QUEUE_PATH)
+    return RESEARCH_QUEUE_PATH
+
+
+def load_research_queue() -> dict[str, Any]:
+    if not RESEARCH_QUEUE_PATH.exists():
+        return {}
+    try:
+        payload = json.loads(RESEARCH_QUEUE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def _recommendation_shortlist(limit: int = ACQUIRE_CAP) -> list[str]:
-    """Prefer recommendation-worthy names over raw scan rank. Cheap first."""
+    """Prefer information-value queue, then recommendation-worthy names."""
+    queue = load_research_queue()
+    queued = [str(s).upper() for s in (queue.get("symbols") or []) if s]
+    if queued:
+        return queued[: int(limit)]
     try:
         from product.recommendations_store import load_recommendations
         from product.autopilot_journal import flatten_cards
