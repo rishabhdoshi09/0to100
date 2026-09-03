@@ -33,6 +33,12 @@ jobs:
           TELEGRAM_BOT_TOKEN: ""
           DEEPSEEK_API_KEY: ""
 
+      - name: Validate launch and supervisor scripts
+        run: |
+          bash -n scripts/run_quantterm_complete.sh
+          bash -n scripts/run_quantterm.sh
+          python -m py_compile scripts/local_stack.py
+
       - name: Compile every module (import-safety net)
         # Compile before environment-dependent smoke so a slow provider test can
         # never prevent the deterministic import-safety gate from running.
