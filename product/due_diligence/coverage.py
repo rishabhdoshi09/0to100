@@ -177,10 +177,23 @@ def _dataset_checked_at(
     *,
     fetched_at: str = "",
 ) -> datetime | None:
+    """Timestamp that represents the evidence age, not merely a recent check.
+
+    Failed attempts use checked_at so retry cooldowns know when the provider was
+    last tried. Healthy/current data uses fetched_at first. This prevents a
+    skipped cache inspection from resetting a 14/30/95-day freshness clock.
+    """
     row = _dataset_meta(facts, dataset_id)
-    stamp = _parse_iso(row.get("checked_at") or row.get("fetched_at") or row.get("acquired_at"))
+    status = str(row.get("status") or "")
+    has_error = status in {"acquisition_failed", "source_unavailable"} or bool(row.get("error"))
+    if has_error:
+        stamp = _parse_iso(row.get("checked_at") or row.get("fetched_at") or row.get("acquired_at"))
+    else:
+        stamp = _parse_iso(row.get("fetched_at") or row.get("checked_at") or row.get("acquired_at"))
     if stamp:
         return stamp
+    # A pack-level timestamp is only a legacy fallback. Provider-level metadata
+    # is preferred whenever it exists.
     pack = _parse_iso(facts.get("acquired_at") or facts.get("inspected_at"))
     if pack:
         return pack
@@ -403,11 +416,13 @@ def inspect_research_coverage(
         if present and checked_at is not None:
             stale = (now - checked_at) > window
         elif present and checked_at is None:
-            stale = False
+            # Presence without a trustworthy source timestamp is usable cache,
+            # not proof that the dataset is current.
+            stale = True
 
         # A failed check is an attempt, not a successful data refresh.  Do not
         # let its timestamp advance the latest-good-data clock.
-        if present and checked_at is not None and error_kind is None:
+        if present and checked_at is not None and error_kind is None and not stale:
             if latest_refresh is None or checked_at > latest_refresh:
                 latest_refresh = checked_at
 
@@ -438,7 +453,7 @@ def inspect_research_coverage(
             age = STATUS_LABEL.get(status, status)
             if status == "stale":
                 aged = _age_label(checked_at, now)
-                age = f"Stale · {aged}" if aged else "Stale"
+                age = f"Stale · {aged}" if aged else "Stale · source age unknown"
             elif usable_cached:
                 age = f"{age} · cached evidence retained"
 
