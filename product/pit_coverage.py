@@ -172,18 +172,31 @@ def overall_replay_grade(
 
 def explain_downgrade(coverage: Mapping[str, Any], *, decision: str = "", reason_code: str = "") -> dict[str, Any]:
     cats = dict((coverage or {}).get("categories") or {})
-    available = [k for k, v in cats.items() if v in {STRONG, PARTIAL}]
+    numbers = bool((coverage or {}).get("financial_numbers_parsed"))
+    available = []
+    missing_for_judgment = []
+    for name, grade in cats.items():
+        if name == "FINANCIALS" and grade in {STRONG, PARTIAL} and not numbers:
+            available.append("FINANCIALS_METADATA")
+            missing_for_judgment.append("PARSED_FINANCIAL_FACTS")
+        elif grade in {STRONG, PARTIAL}:
+            available.append(name)
+        elif grade == UNAVAILABLE:
+            missing_for_judgment.append(name)
+        elif grade == UNVERIFIED:
+            missing_for_judgment.append(f"{name}_UNVERIFIED")
     unavailable = [k for k, v in cats.items() if v == UNAVAILABLE]
     unverified = [k for k, v in cats.items() if v == UNVERIFIED]
     return {
         "available": available,
         "unavailable": unavailable,
         "unverified": unverified,
+        "missing_for_judgment": missing_for_judgment,
         "decision": decision,
         "reason_code": reason_code or "INSUFFICIENT_INDEPENDENT_EVIDENCE",
         "note": (
             "WAIT/AVOID from missing historical evidence is a data gap, not a silent pass. "
-            "Unknown stays unknown."
+            "A dated result filing is not FINANCIAL_QUALITY. Unknown stays unknown."
         ),
     }
 
