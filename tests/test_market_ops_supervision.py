@@ -74,8 +74,11 @@ def test_launcher_never_starts_api_while_port_is_listening():
 
 def test_complete_script_reuses_healthy_stack_without_second_inner():
     complete = (ROOT / "scripts" / "run_quantterm_complete.sh").read_text(encoding="utf-8")
+    inner = _inner()
     assert "Another QuantTerm supervisor already owns this machine" in complete
     assert "adopt_report" in complete
     assert 'STACK_EXTERNAL' in complete
     assert '[[ "$STACK_EXTERNAL" != "1" ]]' in complete
     assert "will not stop :5173/:8765/:8766" in complete
+    assert "Follower: another process owns the machine lock" in inner
+    assert "Not starting or restarting" in inner

@@ -50,6 +50,8 @@ def test_complete_script_always_stops_old_stack_then_starts_everything():
         "python scripts/local_stack.py stop --ports 5173,8765,8766"
     )
     assert "will not stop :5173/:8765/:8766" in complete
+    assert "write-owner" in complete
+    assert "The desk is serving" in complete
     assert "python scripts/local_stack.py stop --ports 5173,8765" in inner
     assert inner.index("QT_MACHINE_OWNER") < inner.index(
         "python scripts/local_stack.py stop --ports 5173,8765"

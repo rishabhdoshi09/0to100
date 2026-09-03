@@ -120,6 +120,20 @@ def test_machine_lock_path_cli(monkeypatch, capsys, tmp_path):
     assert str(tmp_path) in printed
 
 
+def test_write_and_read_machine_owner(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    root = tmp_path / "checkout"
+    root.mkdir()
+    assert LS.main(["write-owner", "--pid", "4242", "--root", str(root)]) == 0
+    written = json.loads(capsys.readouterr().out)
+    assert written["pid"] == 4242
+    assert written["root"] == str(root.resolve())
+    assert LS.main(["owner-status"]) == 0
+    status = json.loads(capsys.readouterr().out)
+    assert status["pid"] == 4242
+    assert status["root"] == str(root.resolve())
+
+
 def test_scan_cli_returns_error_when_api_is_down(monkeypatch, capsys):
     def boom(**kwargs):
         raise RuntimeError("connection refused")

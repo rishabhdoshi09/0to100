@@ -314,6 +314,7 @@ ensure_machine_lock() {
   exec 201>"$lock"
   if flock -n 201; then
     export QT_MACHINE_OWNER=1
+    python scripts/local_stack.py write-owner --pid $$ --root "$ROOT" >/dev/null || true
     echo "[STACK] This inner supervisor owns the machine lock. Stopping leftover :5173/:8765 from a previous owner."
     python scripts/local_stack.py stop --ports 5173,8765 || true
     sleep 1 || true
@@ -323,6 +324,7 @@ ensure_machine_lock() {
     API_EXTERNAL=1
     FRONTEND_EXTERNAL=1
     echo "[STACK] Another machine owner is running; adopting the healthy desk. Not stopping :5173/:8765."
+    echo "[STACK] Follower mode: this process will not start or restart API, Vite, autonomy, or market_ops."
     return 0
   fi
   echo "[STACK] Machine lock is held but :5173/:8765 are not healthy. Not killing them." >&2
@@ -330,6 +332,14 @@ ensure_machine_lock() {
 }
 
 ensure_machine_lock
+
+if [[ "${QT_MACHINE_OWNER:-}" != "1" ]]; then
+  AUTONOMY_EXTERNAL=1
+  MARKET_OPS_EXTERNAL=1
+  API_EXTERNAL=1
+  FRONTEND_EXTERNAL=1
+  echo "[STACK] Follower boot: adopting the owner's desk. Not starting API, Vite, autonomy, or market_ops."
+else
 
 if python - <<'PY' >/dev/null 2>&1
 from product.autonomy_status import read_autonomy_status
@@ -373,6 +383,8 @@ else
   echo "[STACK] Market API did not become healthy; frontend waits. Supervisor will retry." >&2
 fi
 
+fi
+
 echo "[STACK] QuantTerm is running in this terminal: desk :5173, API :8765, autonomy, market operations, market scan."
 echo "[STACK] Ctrl-C is the stop signal. A child crash is restarted; it does not stop the desk."
 
@@ -382,6 +394,11 @@ set +e
 API_HEALTH_FAILS=0
 
 while [[ "$STOP" != "1" ]]; do
+  if [[ "${QT_MACHINE_OWNER:-}" != "1" ]]; then
+    echo "[STACK] Follower: another process owns the machine lock. Not starting or restarting :5173/:8765/autonomy/market_ops."
+    sleep 1 || true
+    continue
+  fi
   # Frontend first: cheap port probe. Do not hide Vite restart behind market_ops Python.
   if [[ "$FRONTEND_EXTERNAL" != "1" ]]; then
     if port_open 5173; then

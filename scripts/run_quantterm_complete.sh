@@ -218,7 +218,8 @@ STACK_EXTERNAL=0
 if flock -n 200; then
   export QT_MACHINE_OWNER=1
   echo $$ > "${XDG_RUNTIME_DIR:-/tmp}/quantterm.supervisor.pid"
-  echo "[COMPLETE STACK] This process owns the machine lock. Stopping leftover listeners from a previous owner, not another checkout."
+  python scripts/local_stack.py write-owner --pid $$ --root "$ROOT" >/dev/null || true
+  echo "[COMPLETE STACK] This process owns the machine lock (root=$ROOT). Stopping leftover listeners from a previous owner, not another checkout."
   python scripts/local_stack.py stop --ports 5173,8765,8766 || true
   sleep 1 || true
 
@@ -238,6 +239,22 @@ else
   if python scripts/local_stack.py ports-healthy --ports 5173,8765 >/dev/null; then
     echo "[COMPLETE STACK] Another QuantTerm supervisor already owns this machine; reusing the running desk."
     echo "[COMPLETE STACK] This terminal will not stop :5173/:8765/:8766 or start a second inner stack."
+    OWNER_JSON="$(python scripts/local_stack.py owner-status 2>/dev/null || echo '{}')"
+    python -c '
+import json, sys
+root, raw = sys.argv[1], sys.argv[2]
+try:
+    owner = json.loads(raw or "{}")
+except Exception:
+    owner = {}
+if not isinstance(owner, dict):
+    owner = {}
+owner_root = str(owner.get("root") or "")
+print("[COMPLETE STACK] Owner pid=%s root=%s sha=%s" % (owner.get("pid") or "?", owner_root or "unknown", str(owner.get("sha") or "")[:12]))
+if owner_root and owner_root != root:
+    print("[COMPLETE STACK] The desk is serving %s, not this checkout (%s)." % (owner_root, root))
+    print("[COMPLETE STACK] This command did not start this checkout'\''s code. Stop the owner from its own terminal if you need this tree.")
+' "$ROOT" "$OWNER_JSON" || true
   else
     echo "[COMPLETE STACK] Another supervisor holds the machine lock but :5173/:8765 are not healthy." >&2
     echo "[COMPLETE STACK] Not killing those ports. Wait for the other owner, or stop it from its own terminal." >&2

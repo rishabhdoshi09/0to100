@@ -20,15 +20,56 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 MACHINE_LOCK_NAME = "quantterm.supervisor.lock"
+MACHINE_OWNER_NAME = "quantterm.supervisor.owner.json"
 
 
 def machine_lock_path() -> Path:
     """One lock for the whole machine, not one lock per checkout."""
     runtime = os.environ.get("XDG_RUNTIME_DIR") or os.environ.get("TMPDIR") or "/tmp"
     return Path(runtime) / MACHINE_LOCK_NAME
+
+
+def machine_owner_path() -> Path:
+    return machine_lock_path().with_name(MACHINE_OWNER_NAME)
+
+
+def _git_sha(root: str) -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            text=True,
+            timeout=2,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return ""
+
+
+def write_machine_owner(*, pid: int, root: str) -> dict:
+    """Record which checkout holds the machine-wide supervisor lock."""
+    payload = {
+        "pid": int(pid),
+        "root": str(Path(root).resolve()),
+        "sha": _git_sha(root),
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }
+    path = machine_owner_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return payload
+
+
+def read_machine_owner() -> dict:
+    path = machine_owner_path()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return raw if isinstance(raw, dict) else {}
 
 
 def port_open(port: int, host: str = "127.0.0.1", timeout_s: float = 0.4) -> bool:
@@ -281,14 +322,32 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "action",
-        choices=("stop", "pids", "scan", "machine-lock-path", "ports-healthy"),
+        choices=(
+            "stop",
+            "pids",
+            "scan",
+            "machine-lock-path",
+            "ports-healthy",
+            "write-owner",
+            "owner-status",
+        ),
     )
     parser.add_argument("--ports", default="5173,8765,8766")
     parser.add_argument("--no-autonomy", action="store_true")
     parser.add_argument("--origin", default="http://127.0.0.1:8765")
+    parser.add_argument("--pid", type=int, default=0)
+    parser.add_argument("--root", default="")
     args = parser.parse_args(argv)
     if args.action == "machine-lock-path":
         print(machine_lock_path())
+        return 0
+    if args.action == "write-owner":
+        root = args.root or os.getcwd()
+        pid = args.pid or os.getpid()
+        print(json.dumps(write_machine_owner(pid=pid, root=root)))
+        return 0
+    if args.action == "owner-status":
+        print(json.dumps(read_machine_owner()))
         return 0
     if args.action == "ports-healthy":
         ports = _parse_ports(args.ports) or (5173, 8765)
