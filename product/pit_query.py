@@ -6,6 +6,7 @@ Screener cache for a historical as_of.
 """
 from __future__ import annotations
 
+from datetime import date, timedelta
 from typing import Any
 
 from product.pit_availability import (
@@ -182,21 +183,37 @@ def replay_grade_for_symbol(symbol: str, *, as_of: str, market_bars_ok: bool, pa
 
 
 def pit_research_inputs(symbol: str, *, as_of: str, path=None) -> dict[str, Any]:
-    """Inputs for StockResearchEngine that cannot leak current-world caches."""
+    """Inputs for StockResearchEngine that cannot leak current-world caches.
+
+    News matches the live curator window: items published in the 90 days
+    ending at T, newest 40. Older warehouse rows remain queryable but are
+    not dumped into the news layer.
+    """
     items = get_evidence(symbol, as_of=as_of, path=path)
+    cutoff = ""
+    try:
+        cutoff = (date.fromisoformat(str(as_of)[:10]) - timedelta(days=90)).isoformat()
+    except ValueError:
+        cutoff = ""
     news = []
     for row in items:
-        if row.get("evidence_type") in {
+        if row.get("evidence_type") not in {
             DOC_CORPORATE_ANNOUNCEMENT, DOC_EXCHANGE_FILING, DOC_QUARTERLY_RESULT,
             DOC_CREDIT_RATING, DOC_INVESTOR_PRESENTATION,
         }:
-            news.append({
-                "symbol": symbol.upper(),
-                "headline": (row.get("extracted") or {}).get("headline") or row.get("evidence_type"),
-                "published_at": row.get("available_from"),
-                "source": row.get("source"),
-                "url": row.get("source_url"),
-            })
+            continue
+        published = str(row.get("available_from") or "")[:10]
+        if cutoff and published and published < cutoff:
+            continue
+        news.append({
+            "symbol": symbol.upper(),
+            "headline": (row.get("extracted") or {}).get("headline") or row.get("evidence_type"),
+            "published_at": row.get("available_from"),
+            "source": row.get("source"),
+            "url": row.get("source_url"),
+        })
+        if len(news) >= 40:
+            break
     return {
         "scan_payload": {"records": [], "point_in_time": True, "as_of_session": str(as_of)[:10]},
         "long_term_payload": {"records": [], "point_in_time": True},
