@@ -94,6 +94,18 @@ const emptyDashboard: DashboardPayload = {
     new_paper_entries: false,
     existing_exits: false,
     research_enabled: false,
+    broker: {
+      state: 'UNKNOWN',
+      ready: false,
+      live_data_ready: false,
+      execution_ready: false,
+      auth_ready: false,
+      login_required: false,
+      auth_status: 'UNKNOWN',
+      reason_code: '',
+      detail: 'Checking Zerodha live-data readiness…',
+      snapshot_id: '',
+    },
     capability_notes: [],
     active_failures: [],
     recent_dialogue: [],
@@ -509,8 +521,20 @@ function App() {
     'Market Overview',
     'Market Internals',
   ].includes(active)
-  const kiteOk = dashboard.autonomy.state !== 'AUTH_REQUIRED'
-    && !(dashboard.autonomy.active_failures || []).some((f) => String(f).includes('auth'))
+  const brokerState = dashboard.autonomy.broker
+  const brokerReady = brokerState?.live_data_ready === true
+  const brokerLabel = brokerReady
+    ? 'ZERODHA OK'
+    : brokerState?.state === 'LOGIN_REQUIRED'
+      ? 'ZERODHA LOGIN'
+      : brokerState?.state === 'SNAPSHOT_REQUIRED'
+        ? 'ZERODHA DATA'
+        : brokerState?.state === 'UNAVAILABLE'
+          ? 'ZERODHA OFFLINE'
+          : brokerState?.state === 'CONFIG_REQUIRED'
+            ? 'ZERODHA CONFIG'
+            : 'ZERODHA CHECK'
+  const brokerTitle = brokerState?.detail || 'Zerodha live-data readiness has not been reported yet.'
   const connectionBanner = error ? deskRefreshBanner(error, dashboardHasWork(dashboard)) : null
 
   const keep = (ids: string[], node: ReactNode) => (
@@ -605,8 +629,8 @@ function App() {
             <DisplayDepthToggle depth={depth} onChange={setDepth} />
             <button type="button" className="experience-help-trigger" onClick={() => setHelpOpen(true)}>What is this?</button>
             <span className={dashboard.data.ready ? 'live-pill' : 'work-pill'}><i /> {dashboard.data.ready ? 'DATA READY' : 'PREPARING DATA'}</span>
-            <span className={kiteOk ? 'live-pill' : 'offline-pill'} title={dashboard.autonomy.plain_state || ''}>
-              <i /> {kiteOk ? 'ZERODHA OK' : 'ZERODHA LOGIN'}
+            <span className={brokerReady ? 'live-pill' : 'offline-pill'} title={brokerTitle}>
+              <i /> {brokerLabel}
             </span>
             <button type="button" onClick={() => void refresh()} aria-label="Refresh dashboard">↻</button>
           </div>
