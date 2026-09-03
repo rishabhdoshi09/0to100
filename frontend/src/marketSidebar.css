@@ -36,3 +36,24 @@
   font-size: .66rem;
   line-height: 1.35;
 }
+
+/*
+ * The paid-product Home surface is an operator desk, not a second Scanner.
+ * Raw ranking widgets remain available in Advanced > Scanner; Home leads with
+ * the persisted OS decisions, activity, portfolio and learning state instead.
+ * This also prevents a scanner-level "Buy" badge from competing visually with
+ * the final committee BUY/WAIT/AVOID truth.
+ */
+.radar-home > .radar-rank-legend,
+.radar-home > .radar-bob-hero,
+.radar-home > .radar-top-stocks,
+.radar-home > .radar-best-breakout,
+.radar-home > .radar-sniper-pool {
+  display: none;
+}
+
+/* Secondary jump links duplicate the simplified sidebar and make Home read
+ * like an engineering control panel. Keep the primary OS action only. */
+.radar-home .home-os-quick {
+  display: none;
+}
