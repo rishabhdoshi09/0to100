@@ -4,6 +4,9 @@ Read-only projection of the autonomy supervisor for the retail UI.
 Reads the supervisor's status snapshot + job ledger + dialogue log from disk. It NEVER starts the
 supervisor and owns no truth — it only translates what the supervisor already recorded into plain
 language for the control room.
+
+Broker readiness is projected independently from supervisor health. Missing Zerodha auth disables
+broker-dependent live-data/execution work; it must not make research/scanning autonomy look broken.
 """
 from __future__ import annotations
 
@@ -20,7 +23,7 @@ def _paths(root=None):
 
 _STATE_PLAIN = {
     "STARTING": "QuantTerm is starting up.",
-    "AUTH_REQUIRED": "Waiting for the daily Zerodha login.",
+    "AUTH_REQUIRED": "Zerodha login is unavailable; non-broker autonomy can continue.",
     "DATA_REFRESHING": "Updating market history.",
     "DATA_BLOCKED": "Market data is not ready — new paper trades are paused.",
     "DATA_READY": "Market data is ready.",
@@ -31,6 +34,27 @@ _STATE_PLAIN = {
     "HALTED": "Stopped. No new activity.",
     "UNKNOWN": "The autonomous supervisor is not running.",
 }
+
+
+def _broker_status() -> dict:
+    """Canonical execution/live-data capability, fail-closed and independent."""
+    try:
+        from product.readiness import broker_status
+
+        return dict(broker_status() or {})
+    except Exception as exc:
+        return {
+            "state": "UNKNOWN",
+            "ready": False,
+            "live_data_ready": False,
+            "execution_ready": False,
+            "auth_ready": False,
+            "login_required": False,
+            "auth_status": "PROBE_FAILED",
+            "reason_code": type(exc).__name__.upper(),
+            "detail": str(exc)[:200],
+            "snapshot_id": "",
+        }
 
 
 def read_autonomy_status(root=None) -> dict:
@@ -62,4 +86,5 @@ def read_autonomy_status(root=None) -> dict:
         "owner_state": raw.get("owner_state", {}),
         "scheduler_of_record": raw.get("scheduler_of_record", ""),
         "last_cycle": raw.get("last_cycle", {}),
+        "broker": _broker_status(),
     }
