@@ -1,29 +1,24 @@
+import './marketSidebar.css'
 import type { DashboardPayload } from './types'
 
-const MARKET_NAV = [
-  ['⌂', 'Home', 'Market'],
-  ['◎', 'Market Scanner', 'Scanner'],
-  ['▣', 'Recommendations', 'Recommendations'],
-  ['▤', 'Market Reports', 'Reports'],
+const PRIMARY_NAV = [
+  ['⌂', 'Home', 'Desk'],
+  ['▣', 'Recommendations', 'Opportunities'],
+  ['◉', 'Stock Intelligence', 'Stock Intelligence'],
   ['▣', 'Paper Portfolio', 'Portfolio'],
-] as const
-
-const INTELLIGENCE_NAV = [
-  ['◉', 'Stock Intelligence', 'Company Intelligence'],
-  ['⇔', 'Compare', 'Compare'],
-  ['★', 'Watchlist', 'Watchlist'],
-] as const
-
-const RESEARCH_NAV = [
-  ['⌬', 'Strategies', 'Strategies'],
-  ['🧪', 'Backtest', 'Backtests'],
   ['✎', 'Learning', 'Learning'],
 ] as const
 
-const SYSTEM_NAV = [
-  ['▤', 'Research Data', 'Data'],
+const ADVANCED_NAV = [
+  ['◎', 'Market Scanner', 'Scanner'],
+  ['▤', 'Market Reports', 'Market Reports'],
+  ['★', 'Watchlist', 'Watchlist'],
+  ['⇔', 'Compare', 'Compare'],
+  ['⌬', 'Strategies', 'Strategies'],
+  ['🧪', 'Backtest', 'Backtests'],
+  ['▤', 'Research Data', 'Research Data'],
   ['◎', 'Coverage', 'Coverage'],
-  ['◌', 'System Health', 'Health'],
+  ['◌', 'System Health', 'System Health'],
 ] as const
 
 const ROUTE_ALIAS: Record<string, string> = {
@@ -37,7 +32,7 @@ const ROUTE_ALIAS: Record<string, string> = {
   Automation: 'System Health',
   Today: 'Home',
   Setups: 'Market Scanner',
-  Desk: 'System Health',
+  Desk: 'Home',
   'Stock Investigator': 'Stock Intelligence',
   'Company Intelligence': 'Stock Intelligence',
   Backtests: 'Backtest',
@@ -45,20 +40,17 @@ const ROUTE_ALIAS: Record<string, string> = {
   Data: 'Research Data',
 }
 
-function NavigationGroup({
-  label,
+function NavigationRows({
   rows,
   active,
   setActive,
 }: {
-  label: string
   rows: ReadonlyArray<readonly [string, string, string]>
   active: string
   setActive: (value: string) => void
 }) {
   return (
     <>
-      <div className="nav-section-label">{label}</div>
       {rows.map(([icon, route, display]) => (
         <button
           key={route}
@@ -93,20 +85,24 @@ export function MarketSidebar({
 }) {
   const operations = dashboard.operations.running
   const current = ROUTE_ALIAS[active] || active
+  const advancedActive = ADVANCED_NAV.some(([, route]) => route === current)
   return (
     <aside className="sidebar reco-sidebar">
       <div className="reco-brand">
         <div className="reco-mark" aria-hidden="true">QT</div>
         <div className="reco-brand-copy">
           <strong>QUANTTERM</strong>
-          <small>MARKETS + INTELLIGENCE</small>
+          <small>AUTONOMOUS MARKET INTELLIGENCE</small>
         </div>
       </div>
       <nav aria-label="Primary navigation">
-        <NavigationGroup label="MARKETS" rows={MARKET_NAV} active={current} setActive={setActive} />
-        <NavigationGroup label="INTELLIGENCE" rows={INTELLIGENCE_NAV} active={current} setActive={setActive} />
-        <NavigationGroup label="RESEARCH" rows={RESEARCH_NAV} active={current} setActive={setActive} />
-        <NavigationGroup label="SYSTEM" rows={SYSTEM_NAV} active={current} setActive={setActive} />
+        <div className="nav-section-label">OPERATE</div>
+        <NavigationRows rows={PRIMARY_NAV} active={current} setActive={setActive} />
+        <p className="nav-primary-note">Daily use stays here. Scanner, backtests and system plumbing are secondary tools.</p>
+        <details className="nav-advanced" open={advancedActive || undefined}>
+          <summary>Advanced</summary>
+          <NavigationRows rows={ADVANCED_NAV} active={current} setActive={setActive} />
+        </details>
       </nav>
       <div className="sidebar-spacer" />
       <div className="reco-telemetry broker-card">
@@ -128,7 +124,7 @@ export function MarketSidebar({
       </div>
       <div className="reco-telemetry broker-card compact-service-card">
         <div className="broker-row">
-          <strong>SCAN ENGINE</strong>
+          <strong>AUTONOMOUS SCAN</strong>
           <span className={operations ? 'status-dot' : 'status-dot status-dot-off'} />
         </div>
         <small>
