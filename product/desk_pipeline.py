@@ -119,6 +119,10 @@ def scan_is_fresh() -> bool:
         as_of = str(payload.get("as_of_session") or payload.get("history_latest_date") or "")[:10]
         if expected and (not as_of or as_of < expected):
             return False
+        if expected and as_of >= expected:
+            # Session identity is current. A worker restart must not rescan
+            # just because wall-clock age exceeded SCAN_FRESH_S.
+            return True
         if payload.get("scanned_at"):
             return bool(scan_artifact_is_fresh(path, max_age_s=SCAN_FRESH_S))
     except Exception:
@@ -184,7 +188,14 @@ def _kind_for_step(step_id: str, store: OperationStore | None = None) -> str | N
         kind = None if acquire_is_fresh() else DUE_DILIGENCE_ACQUIRE
     else:
         kind = None
-    if kind and store is not None and _recently_succeeded(store, _kinds_for_id(step_id), _fresh_s(step_id)):
+    # Symbol-level acquire freshness already decided this step is due. A previous
+    # shortlist succeeding must not hide a new recommendation candidate.
+    if (
+        kind
+        and store is not None
+        and step_id != "investigate"
+        and _recently_succeeded(store, _kinds_for_id(step_id), _fresh_s(step_id))
+    ):
         return None
     return kind
 

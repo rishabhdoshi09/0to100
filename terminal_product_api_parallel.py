@@ -419,9 +419,9 @@ def decision_simulator_get() -> dict:
 
 @product.app.post("/api/decision-simulator")
 def decision_simulator_run() -> dict:
-    """Run or reuse the take-vs-skip simulator. Never writes REAL_FORWARD_MARKET."""
+    """Start a point-in-time historical replay without blocking the HTTP server."""
     from product.decision_simulator import run_decision_simulator
-    return run_decision_simulator()
+    return run_decision_simulator(async_job=True)
 
 
 @product.app.post("/api/forward-soak")

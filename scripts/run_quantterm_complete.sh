@@ -153,15 +153,36 @@ on_stop() {
 trap on_stop INT TERM
 trap cleanup EXIT
 
+adopt_report() {
+  if url_ok "http://127.0.0.1:8766/health" || port_open 8766; then
+    if [[ -z "${REPORT_PID:-}" ]] || ! alive "$REPORT_PID"; then
+      REPORT_EXTERNAL=1
+      REPORT_PID=""
+    fi
+    return 0
+  fi
+  return 1
+}
+
 start_report() {
+  if adopt_report; then
+    echo "[COMPLETE STACK] Reusing research-report API at http://127.0.0.1:8766"
+    return 0
+  fi
   echo "[COMPLETE STACK] Starting research-report API at http://127.0.0.1:8766 …"
-  python -u -m uvicorn report_api:app --host 127.0.0.1 --port 8766 &
+  mkdir -p "$ROOT/logs/stack"
+  python -u -m uvicorn report_api:app --host 127.0.0.1 --port 8766 \
+    >>"$ROOT/logs/stack/report_api.log" 2>&1 &
   REPORT_PID=$!
   sleep 1 || true
   if alive "$REPORT_PID"; then
     return 0
   fi
-  echo "[COMPLETE STACK] Research-report API failed to start; will retry." >&2
+  if adopt_report; then
+    echo "[COMPLETE STACK] Bind raced; reusing the report API that won :8766."
+    return 0
+  fi
+  echo "[COMPLETE STACK] Research-report API failed to start; will retry. See logs/stack/report_api.log." >&2
   REPORT_PID=""
   return 1
 }
@@ -173,19 +194,31 @@ start_stack() {
 }
 
 echo "[COMPLETE STACK] One command, one terminal. Stopping any previous local desk so this run owns everything."
-python scripts/local_stack.py stop --ports 5173,8765,8766 || true
-sleep 1 || true
+mkdir -p "$ROOT/logs/stack"
+STACK_LOCK="$ROOT/logs/stack/quantterm.supervisor.lock"
+exec 200>"$STACK_LOCK"
+STACK_EXTERNAL=0
+if flock -n 200; then
+  echo $$ > "$ROOT/logs/stack/quantterm.supervisor.pid"
+  python scripts/local_stack.py stop --ports 5173,8765,8766 || true
+  sleep 1 || true
 
-if url_ok "http://127.0.0.1:8766/health"; then
-  REPORT_EXTERNAL=1
-  echo "[COMPLETE STACK] Reusing research-report API at http://127.0.0.1:8766"
-elif port_open 8766; then
-  echo "[COMPLETE STACK] Port 8766 is occupied but /health is not ready yet; waiting." >&2
+  if url_ok "http://127.0.0.1:8766/health"; then
+    REPORT_EXTERNAL=1
+    echo "[COMPLETE STACK] Reusing research-report API at http://127.0.0.1:8766"
+  elif port_open 8766; then
+    echo "[COMPLETE STACK] Port 8766 is occupied but /health is not ready yet; waiting." >&2
+  else
+    start_report || true
+  fi
+
+  start_stack
 else
-  start_report || true
+  STACK_EXTERNAL=1
+  REPORT_EXTERNAL=1
+  echo "[COMPLETE STACK] Another QuantTerm supervisor already owns this machine; reusing the running desk."
+  echo "[COMPLETE STACK] This terminal will not stop :5173/:8765/:8766 or start a second inner stack."
 fi
-
-start_stack
 
 echo "[COMPLETE STACK] Running in this terminal: desk http://127.0.0.1:5173  · API :8765  · reports :8766  · autonomy  · market scan"
 echo "[COMPLETE STACK] Leave this terminal open. Ctrl-C stops everything. Do not start a second terminal."
@@ -229,14 +262,40 @@ else
   echo "[COMPLETE STACK] Home is still starting. Open http://127.0.0.1:5173 when the desk is up."
 fi
 
+set +e
+REPORT_HEALTH_FAILS=0
 while [[ "$STOP" != "1" ]]; do
+  if adopt_report; then
+    REPORT_HEALTH_FAILS=0
+  elif ! url_ok "http://127.0.0.1:8766/health"; then
+    REPORT_HEALTH_FAILS=$((REPORT_HEALTH_FAILS + 1))
+    if port_open 8766; then
+      echo "[COMPLETE STACK] Report API is listening on :8766; health probe failed. Not killing it."
+      REPORT_EXTERNAL=1
+      REPORT_PID=""
+      REPORT_HEALTH_FAILS=0
+    elif (( REPORT_HEALTH_FAILS >= 3 )); then
+      echo "[COMPLETE STACK] Report API health failed; restarting. See logs/stack/report_api.log."
+      if [[ -n "${REPORT_PID:-}" ]]; then kill "$REPORT_PID" >/dev/null 2>&1 || true; fi
+      REPORT_EXTERNAL=0
+      REPORT_PID=""
+      start_report || true
+      REPORT_HEALTH_FAILS=0
+    fi
+  else
+    REPORT_HEALTH_FAILS=0
+  fi
   if [[ "$REPORT_EXTERNAL" != "1" ]]; then
     if [[ -z "${REPORT_PID:-}" ]] || ! alive "$REPORT_PID"; then
-      echo "[COMPLETE STACK] Report API is down; restarting."
-      start_report || true
+      if adopt_report; then
+        :
+      else
+        echo "[COMPLETE STACK] Report API is down; restarting."
+        start_report || true
+      fi
     fi
   fi
-  if ! alive "$STACK_PID"; then
+  if [[ "$STACK_EXTERNAL" != "1" ]] && ! alive "$STACK_PID"; then
     echo "[COMPLETE STACK] Inner stack script ended; restarting it. The desk is not supposed to go idle."
     start_stack
   fi

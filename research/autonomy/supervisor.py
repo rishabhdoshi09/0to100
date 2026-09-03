@@ -211,9 +211,13 @@ class Supervisor:
     def enqueue_due(self, now_ist=None):
         now_ist = now_ist or self.deps.now_ist()
         holidays = self.deps.holidays()
-        if not SCH._is_session_day(now_ist, holidays):
-            return
+        self._release_stale_official_blocks()
         session_date = now_ist.date().isoformat()
+        if not SCH._is_session_day(now_ist, holidays):
+            last = SCH.last_completed_session_date(now_ist, holidays)
+            if last:
+                self._enqueue_post_market_grind(now_ist, session_date=last)
+            return
         self.jobs.enqueue(
             SCH.AUTH_HEALTH,
             idempotency_key=f"auth:{session_date}:{SCH.auth_probe_bucket(now_ist)}",
@@ -232,10 +236,10 @@ class Supervisor:
         if slot == "eod":
             self.jobs.enqueue(SCH.BHAVCOPY_UPDATE,
                               idempotency_key=SCH.eod_bhavcopy_key(session_date))
-            eod_refresh = self.jobs.enqueue(
+            # Kite snapshot refresh is optional after close. Official bhavcopy +
+            # outcome/learning continue even when DATA_REFRESH is BLOCKED on login.
+            self.jobs.enqueue(
                 SCH.DATA_REFRESH, idempotency_key=SCH.eod_data_refresh_key(session_date), critical=True)
-            if eod_refresh.status != JS.SUCCEEDED:
-                return
         snap = str(self.deps.active_snapshot_id() or "none")
         if slot:
             skey = SCH.scan_key(snap, slot, session_date)
@@ -254,20 +258,75 @@ class Supervisor:
                         SCH.LONG_TERM_SCAN,
                         idempotency_key=SCH.long_term_key(session_date),
                     )
-                outcome = self.jobs.enqueue(SCH.OUTCOME_RESOLUTION,
-                                            idempotency_key=SCH.outcome_key(session_date), critical=True)
-                if outcome.status == JS.SUCCEEDED:
-                    learning = self.jobs.enqueue(SCH.LEARNING_CYCLE,
-                                                 idempotency_key=SCH.learning_key(session_date))
-                    if learning.status == JS.SUCCEEDED:
-                        self.jobs.enqueue(SCH.RESEARCH_CYCLE,
-                                          idempotency_key=SCH.research_key(session_date))
+                self._enqueue_post_market_grind(now_ist)
+        else:
+            # Overnight / between windows: settle the last closed session.
+            # Do not start another market scan — desk_pipeline already owns that lane.
+            last = SCH.last_completed_session_date(now_ist, holidays)
+            if last:
+                self._enqueue_post_market_grind(now_ist, session_date=last)
         try:
             self.jobs.cancel_superseded_pending(SCH.DATA_REFRESH, keep=1)
             self.jobs.cancel_superseded_pending(SCH.MARKET_SCAN, keep=1)
             self.jobs.cancel_superseded_pending(SCH.NEWS_REFRESH, keep=1)
         except Exception:
             pass
+
+    _OFFICIAL_BLOCKERS = frozenset({
+        JOBS.DEP_DATA, JOBS.DEP_OFFICIAL, JOBS.DEP_OUTCOME_DATA, "DATA_READY",
+    })
+
+    def _release_stale_official_blocks(self) -> None:
+        """Old jobs blocked on generic DATA_READY can proceed on official bars."""
+        try:
+            from product.readiness import official_history
+
+            hist = official_history()
+        except Exception:
+            hist = {}
+        if not hist.get("current"):
+            return
+        for dep in self._OFFICIAL_BLOCKERS:
+            try:
+                self.jobs.unblock_dependency(dep)
+            except Exception:
+                continue
+
+    def _requeue_if_official_blocked(self, job):
+        if job is None:
+            return job
+        if getattr(job, "status", None) == JS.BLOCKED and str(getattr(job, "blocked_on", "") or "") in self._OFFICIAL_BLOCKERS:
+            try:
+                self.jobs.requeue(job.job_id)
+                return self.jobs.get(job.job_id)
+            except Exception:
+                return job
+        return job
+
+    def _enqueue_post_market_grind(self, now_ist=None, session_date: str | None = None) -> None:
+        """Settle / learn / research after the cash session without a second scan."""
+        now_ist = now_ist or self.deps.now_ist()
+        holidays = self.deps.holidays()
+        session_date = session_date or SCH.last_completed_session_date(now_ist, holidays)
+        if not session_date:
+            return
+        self._release_stale_official_blocks()
+        outcome = self._requeue_if_official_blocked(self.jobs.enqueue(
+            SCH.OUTCOME_RESOLUTION,
+            idempotency_key=SCH.outcome_key(session_date),
+            critical=True,
+        ))
+        if getattr(outcome, "status", None) != JS.SUCCEEDED:
+            return
+        learning = self.jobs.enqueue(
+            SCH.LEARNING_CYCLE,
+            idempotency_key=SCH.learning_key(session_date),
+        )
+        if getattr(learning, "status", None) == JS.SUCCEEDED:
+            self.jobs.enqueue(
+                SCH.RESEARCH_CYCLE,
+                idempotency_key=SCH.research_key(session_date),
+            )
 
     def _enqueue_paper_after_scan(self, scan_job) -> None:
         """After a successful shared scan, queue the existing paper cycle once."""
@@ -514,8 +573,17 @@ class Supervisor:
     def _gated_state(self, hint):
         if self.owner_state.get("halted"):
             return ST.HALTED
-        if H.AUTH_MISSING in self.failures or H.AUTH_EXPIRED in self.failures:
-            return ST.AUTH_REQUIRED
+        # Official post-market work is not a broker outage. Productive hints stand.
+        if hint in (ST.OBSERVING, ST.RESEARCHING, ST.PAPER_ACTIVE, ST.DATA_READY, ST.DATA_REFRESHING):
+            return hint
+        # Broker login is an execution exception card, not overall autonomy health.
+        if hint == ST.AUTH_REQUIRED or H.AUTH_MISSING in self.failures or H.AUTH_EXPIRED in self.failures:
+            current = getattr(self.state, "state", None) or ST.STARTING
+            if current in (ST.HALTED, ST.DATA_BLOCKED, ST.DEGRADED):
+                return current
+            if current in (ST.OBSERVING, ST.RESEARCHING, ST.PAPER_ACTIVE, ST.DATA_READY, ST.DATA_REFRESHING):
+                return current
+            return ST.OBSERVING
         if H.SNAPSHOT_STALE in self.failures:
             return ST.DATA_BLOCKED
         return hint

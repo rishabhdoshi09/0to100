@@ -1,6 +1,9 @@
-"""Take-vs-skip historical decision simulator.
+"""Historical decision simulator.
 
-Replays already-recorded paper decisions against later official bars.
+The button path runs a point-in-time replay of the production scanner,
+recommendation workspace, and evaluate_candidate gates. Journal-only
+classification remains a secondary overlay when paper cycles already exist.
+
 This is research/backtest provenance. It never writes REAL_FORWARD_MARKET
 rows and cannot change today's production policy.
 """
@@ -12,7 +15,7 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Sequence  # noqa: I001
 
 from product.counterfactual_learning import (
     AVOIDED_LOSER,
@@ -161,6 +164,8 @@ def _forward_return(symbol: str, as_of: str, entry: Any) -> float | None:
     try:
         from core.outcome_resolver import session_close_return
         result = session_close_return(symbol, as_of, horizon=5)
+        if isinstance(result, tuple) and len(result) >= 2:
+            return float(result[1])
         if isinstance(result, Mapping) and result.get("return_pct") is not None:
             return float(result["return_pct"])
         if isinstance(result, (int, float)):
@@ -244,16 +249,72 @@ def _sector_edge(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 
 
 def load_latest(path: str | Path | None = None) -> dict[str, Any]:
-    return _read_json(report_path(path))
+    try:
+        from product.historical_replay import load_latest as load_replay
+
+        replay = load_replay()
+    except Exception:
+        replay = {}
+    local = _read_json(report_path(path))
+    if replay.get("status") == "RUNNING" or (replay and not local.get("engine")):
+        merged = dict(local)
+        merged.update(replay)
+        merged["available"] = True
+        merged["provenance"] = BACKTEST
+        merged["live_locked"] = True
+        return merged
+    if local:
+        local.setdefault("available", True)
+        return local
+    return replay
 
 
-def run_decision_simulator(*, force: bool = False, path: str | Path | None = None) -> dict[str, Any]:
-    """Classify recorded take/skip decisions using later official bars only."""
+def run_decision_simulator(
+    *,
+    force: bool = False,
+    path: str | Path | None = None,
+    async_job: bool = False,
+    sessions: int = 8,
+    universe_limit: int = 40,
+    symbols: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Replay production decisions at historical dates, then overlay journal outcomes."""
+    from product.historical_replay import (
+        load_latest as load_replay,
+        run_historical_replay,
+        start_replay_async,
+    )
+
+    if async_job:
+        started = start_replay_async(
+            force=force,
+            sessions=sessions,
+            universe_limit=universe_limit,
+            symbols=symbols,
+        )
+        latest = load_replay()
+        latest.update(started)
+        latest["available"] = True
+        return latest
+
+    replay = run_historical_replay(
+        force=force,
+        sessions=sessions,
+        universe_limit=universe_limit,
+        symbols=symbols,
+    )
     target = report_path(path)
     rows = _decision_rows()
     version = _fingerprint(rows)
     cached = _read_json(target)
-    if not force and cached.get("version") == version and cached.get("decisions_tested") == len(rows):
+    expected_n = int(replay.get("decisions_tested") or 0) or len(rows)
+    if (
+        not force
+        and cached.get("version") == version
+        and cached.get("engine")
+        and cached.get("run_id") == replay.get("run_id")
+        and int(cached.get("decisions_tested") or 0) == expected_n
+    ):
         cached["cache_hit"] = True
         cached["provenance"] = BACKTEST
         cached["live_locked"] = True
@@ -305,27 +366,58 @@ def run_decision_simulator(*, force: bool = False, path: str | Path | None = Non
         "cache_hit": False,
         "live_locked": True,
         "not_promotion_evidence": True,
-        "decisions_tested": len(rows),
-        "would_take": counts["TAKEN"],
-        "rejected": counts["REJECTED"],
-        "waited": counts["WAITED"],
-        "correct_rejections": counts[CORRECT_REJECTION],
-        "missed_winners": counts[MISSED_WINNER],
-        "avoided_losers": counts[AVOIDED_LOSER],
-        "good_waits": counts[GOOD_WAIT],
-        "ran_away": counts[RAN_AWAY],
-        "flat": counts[FLAT],
-        "inconclusive": counts[INCONCLUSIVE],
+        "engine": replay.get("engine"),
+        "run_id": replay.get("run_id"),
+        "status": replay.get("status"),
+        "available": True,
+        "period_start": replay.get("period_start"),
+        "period_end": replay.get("period_end"),
+        "trading_sessions": replay.get("trading_sessions"),
+        "universe_observations": replay.get("universe_observations"),
+        "stocks_evaluated": replay.get("stocks_evaluated"),
+        "decision_candidates": replay.get("decision_candidates") or replay.get("decisions_tested"),
+        "BUY": replay.get("BUY"),
+        "WAIT": replay.get("WAIT"),
+        "AVOID": replay.get("AVOID"),
+        "REJECT": replay.get("REJECT"),
+        "outcomes_matured": replay.get("outcomes_matured"),
+        "open_unresolved": replay.get("open_unresolved"),
+        "session_summaries": replay.get("session_summaries") or [],
+        "decisions": replay.get("decisions") or replay.get("rows") or [],
+        "journal_overlay": {
+            "decisions_tested": len(rows),
+            "would_take": counts["TAKEN"],
+            "rejected": counts["REJECTED"],
+            "waited": counts["WAITED"],
+            "correct_rejections": counts[CORRECT_REJECTION],
+            "missed_winners": counts[MISSED_WINNER],
+            "avoided_losers": counts[AVOIDED_LOSER],
+            "good_waits": counts[GOOD_WAIT],
+            "ran_away": counts[RAN_AWAY],
+            "flat": counts[FLAT],
+            "inconclusive": counts[INCONCLUSIVE],
+            "rows": classified[:250],
+        },
+        "decisions_tested": int(replay.get("decisions_tested") or len(classified)),
+        "would_take": int(replay.get("would_take") or replay.get("BUY") or counts["TAKEN"]),
+        "rejected": int(replay.get("rejected") or counts["REJECTED"]),
+        "waited": int(replay.get("waited") or counts["WAITED"]),
+        "correct_rejections": int(replay.get("correct_rejections") or counts[CORRECT_REJECTION]),
+        "missed_winners": int(replay.get("missed_winners") or counts[MISSED_WINNER]),
+        "avoided_losers": int(replay.get("avoided_losers") or counts[AVOIDED_LOSER]),
+        "good_waits": int(replay.get("good_waits") or counts[GOOD_WAIT]),
+        "ran_away": int(replay.get("ran_away") or counts[RAN_AWAY]),
+        "flat": int(replay.get("flat") or counts[FLAT]),
+        "inconclusive": int(replay.get("inconclusive") or counts[INCONCLUSIVE]),
         "filters_helped": helped,
         "filters_hurt": hurt,
-        "simple": simple,
+        "simple": replay.get("simple") or simple,
         "note": (
-            "Historical simulation is BACKTEST provenance. "
-            "It does not change REAL_FORWARD_MARKET promotion stats. "
-            "Rejected names are not paper P&L."
-        ),
+            str(replay.get("note") or "This does not change REAL_FORWARD_MARKET promotion stats and does not open paper trades.")
+            + " Journal overlay classifies already-recorded paper cycles separately."
+        ).strip(),
         "sector_edge": _sector_edge(classified),
-        "rows": classified[:250],
+        "rows": replay.get("decisions") or classified[:250],
     }
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_suffix(target.suffix + ".tmp")

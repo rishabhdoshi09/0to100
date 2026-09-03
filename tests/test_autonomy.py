@@ -157,6 +157,27 @@ def test_graceful_shutdown_persists_and_releases(tmp_path):
     reopened.shutdown()
 
 
+def test_stale_runtime_with_dead_pid_is_not_running(tmp_path):
+    from zoneinfo import ZoneInfo
+    from product.autonomy_status import read_autonomy_status
+
+    root = tmp_path / "auto"
+    root.mkdir()
+    now_ist = datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None).isoformat()
+    (root / "runtime.json").write_text(
+        '{"heartbeat_ist": "%s", "process_running": true, "scheduler_owner_pid": 99999999, "state": "STARTING"}'
+        % now_ist,
+        encoding="utf-8",
+    )
+    (root / "status.json").write_text(
+        '{"state": "STARTING", "process_running": true, "scheduler_owner_pid": 99999999, "heartbeat_ist": "%s"}'
+        % now_ist,
+        encoding="utf-8",
+    )
+    assert H.read_status(state_path=root / "status.json")["supervisor_running"] is False
+    assert read_autonomy_status(root=root)["running"] is False
+
+
 # ══ Data jobs ════════════════════════════════════════════════════════════════════
 def test_auth_required_when_session_invalid(tmp_path):
     r = JOBS.run_auth_health(JOBS._Ctx(FakeDeps(authed=False)))

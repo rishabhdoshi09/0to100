@@ -45,6 +45,7 @@ UNRECONCILED = "UNRECONCILED"
 NO_TRADE = "NO_TRADE"
 WAIT_FOR_ENTRY = "WAIT_FOR_ENTRY"
 NOT_SURFACED = "NOT_SURFACED"
+BROKER_LOGIN_REQUIRED = "BROKER_LOGIN_REQUIRED"
 
 ENTER_NOW = "ENTER_NOW"
 WAIT = "WAIT"
@@ -132,6 +133,9 @@ def _identity() -> dict[str, Any]:
 
 def reco_is_stale(workspace: Mapping[str, Any] | None, *, now: datetime | None = None) -> bool:
     payload = dict(workspace or {})
+    if payload.get("point_in_time"):
+        # Historical reconstructions are dated to T, not to wall-clock freshness.
+        return False
     stamp = (
         _parse_ts(payload.get("generated_at"))
         or _parse_ts(payload.get("scan_scanned_at"))

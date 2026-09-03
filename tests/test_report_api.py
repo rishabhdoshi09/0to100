@@ -10,6 +10,7 @@ def test_report_api_has_no_broker_or_order_routes():
     assert "/reports/equity/{symbol}" in paths
     assert "/reports/basket/long-term" in paths
     assert "/evidence/{symbol}" in paths
+    assert "/evidence/{symbol}/actions/auto-acquire" in paths
     assert "/evidence/{symbol}/{kind}" in paths
     assert "/evidence/templates/{kind}.csv" in paths
     assert not any("broker" in path.lower() or "order" in path.lower() for path in paths)

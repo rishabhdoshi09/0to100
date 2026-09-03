@@ -486,6 +486,7 @@ export function ProductionBacktestView({ dashboard, setActive }: ViewProps) {
   const [sim, setSim] = useState<DecisionSimulatorReport | null>(null)
   const [simError, setSimError] = useState('')
   const [simBusy, setSimBusy] = useState(false)
+  const [openDecision, setOpenDecision] = useState(0)
   useEffect(() => {
     setCatalogLoading(true)
     fetchStrategyCatalog()
@@ -496,10 +497,24 @@ export function ProductionBacktestView({ dashboard, setActive }: ViewProps) {
       .then((payload) => { setSim(payload); setSimError('') })
       .catch((reason: unknown) => setSimError(reason instanceof Error ? reason.message : 'Simulator unavailable'))
   }, [])
+  const pollSim = async (seed?: DecisionSimulatorReport) => {
+    let latest = seed
+    for (let i = 0; i < 60; i += 1) {
+      if (!latest || latest.status === 'RUNNING' || latest.accepted) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1500))
+        latest = await fetchDecisionSimulator()
+        setSim(latest)
+        continue
+      }
+      break
+    }
+    return latest
+  }
   const runSim = () => {
     setSimBusy(true)
     simulatePastDecisions()
-      .then((payload) => { setSim(payload); setSimError('') })
+      .then((payload) => { setSim(payload); setSimError(''); return pollSim(payload) })
+      .then((payload) => { if (payload) setSim(payload) })
       .catch((reason: unknown) => setSimError(reason instanceof Error ? reason.message : 'Simulator failed'))
       .finally(() => setSimBusy(false))
   }
@@ -513,7 +528,7 @@ export function ProductionBacktestView({ dashboard, setActive }: ViewProps) {
           evaluated, the page says BACKTEST PARITY: UNVERIFIED. Paper diary rows below are outcomes, not a substitute backtest.
         </p>
       </div>
-      <Panel title="PAST DECISION TEST" subtitle="BACKTEST provenance · never writes REAL_FORWARD_MARKET">
+      <Panel title="HISTORICAL REPLAY" subtitle="Production scanner + evaluate_candidate · BACKTEST · never writes REAL_FORWARD_MARKET">
         {simError ? (
           <p className="panel-copy">
             {simError}
@@ -521,17 +536,53 @@ export function ProductionBacktestView({ dashboard, setActive }: ViewProps) {
             <button type="button" className="secondary" onClick={runSim}>Retry</button>
           </p>
         ) : null}
-        {sim?.simple ? <p className="panel-copy">{sim.simple}</p> : <p className="panel-copy">No historical decision report yet. Click to test taken and skipped names from the journal.</p>}
+        <p className="panel-copy">
+          {sim?.status || 'NO RUN'}
+          {sim?.period_start ? ` · Period ${sim.period_start} → ${sim.period_end}` : ''}
+          {sim?.sessions_total ? ` · Sessions ${sim.sessions_done ?? 0}/${sim.sessions_total}` : ''}
+        </p>
+        {sim?.simple ? <p className="panel-copy">{sim.simple}</p> : <p className="panel-copy">No historical replay yet. This button runs the production decision path on official past sessions.</p>}
+        <p className="panel-copy">{sim?.engine || ''}</p>
         <div className="fact-grid">
-          <div><span>Decisions</span><strong>{sim?.decisions_tested ?? '—'}</strong></div>
-          <div><span>Would take</span><strong>{sim?.would_take ?? '—'}</strong></div>
+          <div><span>Trading sessions</span><strong>{sim?.trading_sessions ?? '—'}</strong></div>
+          <div><span>Universe observations</span><strong>{sim?.universe_observations ?? '—'}</strong></div>
+          <div><span>Stocks evaluated</span><strong>{sim?.stocks_evaluated ?? '—'}</strong></div>
+          <div><span>Decision candidates</span><strong>{sim?.decision_candidates ?? sim?.decisions_tested ?? '—'}</strong></div>
+          <div><span>BUY</span><strong>{sim?.BUY ?? sim?.would_take ?? '—'}</strong></div>
+          <div><span>WAIT</span><strong>{sim?.WAIT ?? sim?.waited ?? '—'}</strong></div>
+          <div><span>AVOID</span><strong>{sim?.AVOID ?? '—'}</strong></div>
+          <div><span>REJECT</span><strong>{sim?.REJECT ?? sim?.rejected ?? '—'}</strong></div>
+          <div><span>Outcomes matured</span><strong>{sim?.outcomes_matured ?? '—'}</strong></div>
           <div><span>Correct rejections</span><strong>{sim?.correct_rejections ?? '—'}</strong></div>
           <div><span>Missed winners</span><strong>{sim?.missed_winners ?? '—'}</strong></div>
+          <div><span>Open / unresolved</span><strong>{sim?.open_unresolved ?? '—'}</strong></div>
         </div>
         <div className="inline-actions" style={{ padding: '12px' }}>
-          <button type="button" disabled={simBusy} onClick={runSim}>{simBusy ? 'Testing…' : 'Simulate past decisions'}</button>
+          <button type="button" disabled={simBusy} onClick={runSim}>{simBusy ? (sim?.message || 'Replaying…') : 'Simulate past decisions'}</button>
         </div>
-        <p className="panel-copy">{sim?.note || 'Rejected names are not paper P&L.'}</p>
+        <p className="panel-copy">{sim?.note || 'Later prices are used only for outcome classification.'}</p>
+        {(sim?.decisions || sim?.rows || []).slice(0, 12).map((row, index) => (
+          <article key={`${row.as_of}-${row.symbol}-${index}`} className="requirement-card" style={{ marginTop: 8 }}>
+            <button type="button" className="secondary" onClick={() => setOpenDecision(index)}>
+              {row.as_of} · {row.symbol} · {row.decision} · {row.classification || 'UNRESOLVED'}
+            </button>
+            {openDecision === index ? (
+              <div>
+                <p className="panel-copy">Decision: {row.decision} · {row.reason_code}</p>
+                <p className="panel-copy">Reasons: {(row.reasons || []).join(' · ') || '—'}</p>
+                <p className="panel-copy">
+                  Data available at decision date: {row.pit?.max_bar_date || row.as_of || 'unknown'}
+                  {row.pit?.future_evidence_used ? ' · LOOKAHEAD FLAG' : ' · no future bars'}
+                </p>
+                <p className="panel-copy">
+                  Subsequent outcome: {row.forward_return_pct == null ? 'unresolved' : `${row.forward_return_pct}%`}
+                  {' · '}{row.classification || row.outcome_status || 'INCONCLUSIVE'}
+                </p>
+                {(row.pit?.degraded || []).length ? <p className="panel-copy">Degraded: {(row.pit?.degraded || []).join(' · ')}</p> : null}
+              </div>
+            ) : null}
+          </article>
+        ))}
       </Panel>
       <Panel title="PRODUCTION ENSEMBLE" subtitle={catalog?.ensemble.strategy_id || 'QT_RECO_ENSEMBLE'}>
         {catalogLoading && !catalog ? <p className="panel-copy">Waiting for catalog…</p> : null}

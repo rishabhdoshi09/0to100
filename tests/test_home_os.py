@@ -11,6 +11,7 @@ from product.home_os import (
     NO_TRADE,
     NORMAL,
     PAUSED,
+    PREPARING,
     build_home_os,
 )
 from product.operator_language import simple_reason
@@ -37,13 +38,13 @@ def test_journey_b_zerodha_login_required():
         scan={"scanned_at": "2026-09-01T05:00:00+00:00", "records": [{"symbol": "TCS"}]},
         now=_open(),
     )
-    assert os["state"] == LOGIN_REQUIRED
     assert os["need_me"] is True
+    assert os["broker"]["login_required"] is True
     assert os["primary_action"]["label"] == "Login to Zerodha"
     assert os["primary_action"]["kind"] == "instruction"
     assert os["system"]["zerodha"]["status"] == "Needs you"
-    assert "WAITING FOR ZERODHA LOGIN" in os["system"]["zerodha"]["detail"]
     assert os["live_locked"] is True
+    assert os["state"] in {LOGIN_REQUIRED, NORMAL, NO_TRADE, MARKET_CLOSED_COMPLETE}
 
 
 def test_journey_c_no_trade_is_healthy():
@@ -196,6 +197,42 @@ def test_capability_inventory_keeps_engineering_out_of_home():
     assert all(r["Still requires terminal?"] == "no" for r in normal)
     assert by_id("zerodha_observation")["read_only"] is True
     assert by_id("zerodha_observation")["affects_live_money"] is False
+
+
+def test_news_refresh_is_not_preparing_official_data():
+    os = build_home_os(
+        dashboard={
+            "autonomy": {"state": "RUNNING", "running": True},
+            "data": {"ready": True, "bhavcopy": {"ready": True, "latest_date": "2026-09-01", "current": True}},
+        },
+        paper={"enabled": True, "open_positions": [], "closed_trades": []},
+        why={"available": False},
+        soak={"real_forward_observations": 0, "insufficient_evidence": True},
+        scan={"scanned_at": "2026-09-01T05:00:00+00:00", "records": [{"symbol": "TCS"}]},
+        reco={"schema_version": 4, "categories": []},
+        operations={"active": [{"kind": "NEWS_REFRESH", "status": "RUNNING"}], "recent": []},
+        now=_open(),
+    )
+    assert os["state"] != PREPARING
+    assert "Preparing official data" not in (os["now"] or "")
+
+
+def test_home_does_not_claim_settlement_from_stale_soak_off_session():
+    os = build_home_os(
+        dashboard={
+            "autonomy": {"state": "RUNNING", "running": True},
+            "data": {"ready": True, "bhavcopy": {"ready": True, "latest_date": "2026-09-01", "current": True}},
+        },
+        paper={"enabled": True, "open_positions": [], "closed_trades": []},
+        why={"available": False},
+        soak={"real_forward_observations": 0, "insufficient_evidence": True, "FORWARD_SOAK_STATUS": "PENDING"},
+        soak_verify={"lanes": {"FORWARD SETTLEMENT": "PENDING"}, "generated_at": "2026-08-01T10:00:00+00:00"},
+        scan={"scanned_at": "2026-09-01T05:00:00+00:00", "records": [{"symbol": "TCS"}]},
+        reco={"schema_version": 4, "categories": []},
+        operations={"active": [], "recent": []},
+        now=datetime(2026, 9, 1, 23, 50, tzinfo=IST),
+    )
+    assert os["now"] != "End-of-day settlement"
 
 
 def test_radar_home_payload_includes_home_os(monkeypatch):

@@ -18,6 +18,8 @@ def test_simulator_uses_journal_and_stays_backtest(tmp_path, monkeypatch):
     monkeypatch.setenv("QT_PAPER_AUTOPILOT_JOURNAL", str(tmp_path / "journal.json"))
     monkeypatch.setenv("QT_COUNTERFACTUALS", str(tmp_path / "cf.jsonl"))
     monkeypatch.setenv("QT_DECISION_SIMULATOR", str(tmp_path / "sim.json"))
+    monkeypatch.setenv("QT_HISTORICAL_REPLAY_DIR", str(tmp_path / "replay"))
+    monkeypatch.setattr("product.historical_replay.official_sessions", lambda **_k: [])
     from product.autopilot_journal import record_cycle
     record_cycle({
         "as_of": "2026-08-20",

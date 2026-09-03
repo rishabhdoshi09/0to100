@@ -114,6 +114,41 @@ def evidence_status(symbol: str) -> dict:
         raise HTTPException(status_code=500, detail=f"Evidence status failed: {exc}") from exc
 
 
+@app.post("/evidence/{symbol}/actions/auto-acquire")
+def auto_acquire_evidence(symbol: str, force: bool = False) -> dict:
+    """Run the existing acquire_symbol path and return truthful coverage."""
+    try:
+        from product.due_diligence.acquire import acquire_symbol
+        from reporting.evidence_intake import clean_symbol
+
+        clean = clean_symbol(symbol)
+        acquired = acquire_symbol(clean, force=force)
+        status = evidence_status(clean)
+        auto = sum(1 for row in status.get("requirements") or [] if row.get("acquisition") == "AUTO_SOURCED")
+        failed = sum(1 for row in status.get("requirements") or [] if row.get("acquisition") == "AUTOMATION_FAILED")
+        return {
+            "accepted": True,
+            "symbol": clean,
+            "job": "RESEARCH_AUTO_ACQUIRE",
+            "run_id": str(acquired.get("acquired_at") or acquired.get("inspected_at") or ""),
+            "started_at": acquired.get("started_at") or "",
+            "finished_at": acquired.get("acquired_at") or acquired.get("inspected_at") or "",
+            "status": "SUCCEEDED" if acquired else "FAILED",
+            "items_attempted": len(acquired.get("steps") or []),
+            "items_succeeded": sum(1 for step in (acquired.get("steps") or []) if step.get("ok")),
+            "items_failed": sum(1 for step in (acquired.get("steps") or []) if step.get("ok") is False and not step.get("skipped")),
+            "auto_sourced": auto,
+            "automation_failed": failed,
+            "steps": acquired.get("steps") or [],
+            "downloads": acquired.get("downloads") or [],
+            "coverage": status,
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Automatic evidence acquisition failed: {exc}") from exc
+
+
 @app.post("/evidence/{symbol}/actions/refresh-fundamentals")
 def refresh_fundamentals(symbol: str) -> dict:
     try:

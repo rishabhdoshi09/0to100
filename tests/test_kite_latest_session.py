@@ -117,9 +117,13 @@ def test_market_scan_runs_on_kite_live_without_snapshot():
 
 
 def test_market_scan_still_blocks_without_snapshot_or_live():
-    result = JOBS.run_market_scan(JOBS._Ctx(_LiveDeps(snap=None, live={"ready": False})))
+    class NoOfficial(_LiveDeps):
+        def official_history(self):
+            return {"current": False, "available_session": "", "latest_date": ""}
+
+    result = JOBS.run_market_scan(JOBS._Ctx(NoOfficial(snap=None, live={"ready": False})))
     assert result.status == JS.BLOCKED
-    assert result.blocked_on == "DATA_READY" or result.blocked_on == JOBS.DEP_DATA
+    assert result.blocked_on in {JOBS.DEP_OFFICIAL, "OFFICIAL_MARKET_DATA_READY", JOBS.DEP_DATA}
     assert H.SNAPSHOT_STALE in result.failures
 
 

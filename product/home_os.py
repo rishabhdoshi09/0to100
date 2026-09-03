@@ -184,7 +184,8 @@ def build_home_os(
     closed = list(paper_d.get("closed_trades") or [])
     active_ops = [o for o in list(ops.get("active") or []) if isinstance(o, Mapping)]
     active_kinds = {str(o.get("kind") or "") for o in active_ops}
-    preparing = bool(active_kinds & {"DATA_PREPARE", "MARKET_SCAN", "LONG_TERM_REFRESH", "NEWS_REFRESH"})
+    # News / long-term overlays are not "official prices are missing".
+    preparing = bool(active_kinds & {"DATA_PREPARE", "MARKET_SCAN"})
     data_failed = any(str(o.get("kind")) == "DATA_PREPARE" and str(o.get("status")) == "FAILED" for o in list(ops.get("recent") or []))
     scan_failed = any(str(o.get("kind")) == "MARKET_SCAN" and str(o.get("status")) == "FAILED" for o in list(ops.get("recent") or []))
     phase = _session_phase(now)
@@ -207,13 +208,14 @@ def build_home_os(
     now_line = "Watching the market"
     next_line = "Next automatic paper decision after the scan"
 
+    broker_login_required = not kite_ok
     if not live_locked:
         state = PROBLEM
         headline = "Live money must stay locked."
         subtext = "The paper path is the only money path. Do not trade live from Home."
         now_line = "Paper bot only"
         next_line = "Keep live money locked"
-    elif not kite_ok:
+    elif broker_login_required and not (data_ready and scan_ok):
         state = LOGIN_REQUIRED
         headline = "Zerodha login is needed."
         subtext = "Paper and official NSE data can still work. Live quotes wait for login."
@@ -269,7 +271,12 @@ def build_home_os(
         now_line = "Watching open paper positions" if opens else "Paper entries paused"
         next_line = "Resume when you want new paper trades"
     elif market_closed and (eod_done or valid_no_trade or taken or closed):
-        pending_settle = str((verify.get("lanes") or {}).get("FORWARD SETTLEMENT") or "") == "PENDING" and not closed
+        settle_job_active = bool(active_kinds & {"OUTCOME_RESOLUTION", "outcome_resolution"})
+        pending_settle = (
+            str((verify.get("lanes") or {}).get("FORWARD SETTLEMENT") or "") == "PENDING"
+            and not closed
+            and (phase == "eod" or settle_job_active)
+        )
         if pending_settle and not valid_no_trade:
             state = NORMAL
             headline = "Today's market is closed. Settlement is still finishing."
@@ -311,6 +318,13 @@ def build_home_os(
             _action("PAUSE_NEW_PAPER_ENTRIES", label="Pause paper entries"),
             _action("OBSERVE_ONLY_TODAY", label="Observe only today"),
         ]
+
+    if broker_login_required and state != LOGIN_REQUIRED and primary_action is None:
+        primary_action = _action(
+            label="Login to Zerodha",
+            kind="instruction",
+            instruction="Official data, scan, research and post-market learning continue. Login is only required for live paper entry.",
+        )
 
     if observe_only and state in {NORMAL, NO_TRADE, MARKET_CLOSED_COMPLETE}:
         if "nothing was good enough" not in headline.lower() and "did not find" not in headline.lower():
@@ -389,17 +403,54 @@ def build_home_os(
     )
     check_system = build_check_system(system, live_locked=live_locked)
 
+    runtime: dict[str, Any] = {}
+    try:
+        from product.runtime_lifecycle import inspect_runtime
+
+        runtime = inspect_runtime(api_serving=True)
+    except Exception as exc:
+        runtime = {
+            "lifecycle": "FAILED",
+            "reason": str(exc)[:240],
+            "reasons": [str(exc)[:240]],
+            "components": [],
+        }
+    lifecycle = str(runtime.get("lifecycle") or "")
+    if lifecycle == "FAILED":
+        state = FAILED_RECOVERABLE
+        headline = "A required backend process is down."
+        subtext = str(runtime.get("reason") or "The desk will not hide a dead backend.")
+        now_line = f"FAILED · {runtime.get('reason') or 'see logs/stack'}"
+        next_line = "Supervisor restarts the failed process when recovery is safe"
+        primary_action = _action("CHECK_SYSTEM", label="Check system", kind="refresh")
+    elif lifecycle == "RECOVERING":
+        headline = "QuantTerm is recovering a failed process."
+        subtext = str(runtime.get("reason") or "A worker heartbeat is stale and the supervisor is restarting it.")
+        now_line = f"RECOVERING · {now_line}"
+        next_line = "Confirm health after the restart"
+    elif lifecycle == "DEGRADED" and state in {NORMAL, PREPARING}:
+        now_line = f"DEGRADED · {now_line}"
+        if runtime.get("reason") and state == NORMAL:
+            subtext = str(runtime.get("reason"))
+
     activity = _activity(
         scan_d, why_d, latest, ops, verify, taken, recovered=list(recovered or []),
     )
     yesterday = _yesterday(verify, soak_d, why_d, scan_ok, reco_ok)
+    readiness: dict[str, Any] = {}
+    try:
+        from product.readiness import inspect_readiness
+
+        readiness = inspect_readiness()
+    except Exception:
+        readiness = {}
 
     return {
         "schema_version": SCHEMA_VERSION,
         "state": state,
         "headline": headline,
         "subtext": subtext,
-        "need_me": state in {LOGIN_REQUIRED, FAILED_RECOVERABLE, PAUSED, PROBLEM},
+        "need_me": state in {LOGIN_REQUIRED, FAILED_RECOVERABLE, PAUSED, PROBLEM} or broker_login_required,
         "primary_action": primary_action,
         "secondary_actions": (secondary + [_action("SIMULATE_PAST_DECISIONS", label="Simulate past decisions")])[:4],
         "simulate_action": _action("SIMULATE_PAST_DECISIONS", label="Simulate past decisions"),
@@ -450,6 +501,13 @@ def build_home_os(
         "yesterday": yesterday,
         "recovered": list(recovered or []),
         "live_locked": True,
+        "broker": {
+            "status": "LOGIN_REQUIRED" if broker_login_required else "READY",
+            "login_required": broker_login_required,
+            "detail": "Live paper entry and broker sync wait for Zerodha login." if broker_login_required else "Broker session is usable.",
+        },
+        "readiness": readiness,
+        "runtime": runtime,
         "history_freshness": {
             "current": history_current,
             "expected_latest_completed_session": freshness.get("expected_latest_completed_session") or "",
@@ -574,17 +632,37 @@ def _past_decisions() -> dict[str, Any]:
     return {
         "available": True,
         "provenance": report.get("provenance") or "BACKTEST",
+        "status": report.get("status"),
+        "run_id": report.get("run_id"),
+        "engine": report.get("engine"),
+        "period_start": report.get("period_start"),
+        "period_end": report.get("period_end"),
+        "trading_sessions": report.get("trading_sessions"),
+        "sessions_done": report.get("sessions_done"),
+        "sessions_total": report.get("sessions_total"),
+        "universe_observations": report.get("universe_observations"),
+        "stocks_evaluated": report.get("stocks_evaluated"),
         "decisions_tested": report.get("decisions_tested") or 0,
-        "would_take": report.get("would_take"),
+        "would_take": report.get("would_take") or report.get("BUY"),
         "rejected": report.get("rejected"),
+        "BUY": report.get("BUY"),
+        "WAIT": report.get("WAIT"),
+        "AVOID": report.get("AVOID"),
+        "REJECT": report.get("REJECT"),
         "correct_rejections": report.get("correct_rejections"),
         "missed_winners": report.get("missed_winners"),
         "avoided_losers": report.get("avoided_losers"),
         "good_waits": report.get("good_waits"),
+        "outcomes_matured": report.get("outcomes_matured"),
+        "open_unresolved": report.get("open_unresolved"),
         "filters_helped": report.get("filters_helped") or [],
         "filters_hurt": report.get("filters_hurt") or [],
         "simple": report.get("simple") or "",
         "note": report.get("note") or "",
+        "PIT_STRONG": report.get("PIT_STRONG"),
+        "PIT_PARTIAL": report.get("PIT_PARTIAL"),
+        "PIT_MARKET_ONLY": report.get("PIT_MARKET_ONLY"),
+        "scorecards_note": "Method/family scorecards stay inspect-only until sample floors.",
         "live_locked": True,
         "not_promotion_evidence": True,
     }

@@ -24,6 +24,7 @@ class StockResearchEngine:
         raw_fundamentals: Mapping[str, Any] | None = None,
         news: Sequence[Mapping[str, Any]] | None = None,
         now: datetime | None = None,
+        as_of_session: str | None = None,
     ) -> dict[str, Any]:
         return build_due_diligence(
             symbol,
@@ -32,6 +33,7 @@ class StockResearchEngine:
             raw_fundamentals=raw_fundamentals,
             news=news,
             now=now,
+            as_of_session=as_of_session,
         )
 
     def suggest(self, query: str, *, limit: int = 8) -> list[dict[str, Any]]:

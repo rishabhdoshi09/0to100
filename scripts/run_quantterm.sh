@@ -234,15 +234,41 @@ start_market_ops() {
   MARKET_OPS_PID=""; return 1
 }
 
+api_listening() {
+  port_open 8765
+}
+
+adopt_api() {
+  # A listening :8765 is a live API. Never start a second uvicorn on it.
+  if url_ok "http://127.0.0.1:8765/api/health" || api_listening; then
+    if [[ -z "${API_PID:-}" ]] || ! alive "$API_PID"; then
+      API_EXTERNAL=1
+      API_PID=""
+    fi
+    return 0
+  fi
+  return 1
+}
+
 start_api() {
+  if adopt_api; then
+    echo "[STACK] Reusing market API at http://127.0.0.1:8765"
+    return 0
+  fi
   echo "[STACK] Starting local API at http://127.0.0.1:8765 …"
+  mkdir -p "$ROOT/logs/stack"
   # terminal_product_api_parallel imports the canonical terminal_product_api:app
   # and only corrects performance-safe operation routing.
-  python -u -m uvicorn terminal_product_api_parallel:app --host 127.0.0.1 --port 8765 &
+  python -u -m uvicorn terminal_product_api_parallel:app --host 127.0.0.1 --port 8765 \
+    >>"$ROOT/logs/stack/api.log" 2>&1 &
   API_PID=$!
   sleep 0.5 || true
   if ! alive "$API_PID"; then
-    echo "[STACK] Market API exited before becoming healthy; will retry." >&2
+    if adopt_api; then
+      echo "[STACK] Bind raced; reusing the API that won :8765."
+      return 0
+    fi
+    echo "[STACK] Market API exited before becoming healthy; will retry. See logs/stack/api.log." >&2
     API_PID=""; return 1
   fi
   return 0
@@ -261,6 +287,15 @@ kick_scan() {
     return 1
   fi
   if ! url_ok "http://127.0.0.1:8765/api/health"; then return 1; fi
+  if python - <<'PY' >/dev/null 2>&1
+from product.desk_pipeline import scan_is_fresh
+raise SystemExit(0 if scan_is_fresh() else 1)
+PY
+  then
+    SCAN_KICKED=1
+    echo "[STACK] Market scan is already current; not queueing another."
+    return 0
+  fi
   echo "[STACK] Queueing market scan, news and long-term funds in this terminal…"
   if python scripts/local_stack.py scan; then SCAN_KICKED=1; return 0; fi
   return 1
@@ -315,6 +350,11 @@ fi
 echo "[STACK] QuantTerm is running in this terminal: desk :5173, API :8765, autonomy, market operations, market scan."
 echo "[STACK] Ctrl-C is the stop signal. A child crash is restarted; it does not stop the desk."
 
+# Supervisor must outlive a single child failure. set -e would run the EXIT
+# trap and kill the API the next time a probe returns non-zero.
+set +e
+API_HEALTH_FAILS=0
+
 while [[ "$STOP" != "1" ]]; do
   if [[ "$MARKET_OPS_EXTERNAL" != "1" ]]; then
     if [[ -z "${MARKET_OPS_PID:-}" ]] || ! alive "$MARKET_OPS_PID" || ! market_ops_healthy; then
@@ -335,11 +375,36 @@ while [[ "$STOP" != "1" ]]; do
     SCAN_KICKED=0
   fi
 
-  if [[ "$API_EXTERNAL" != "1" ]]; then
-    if [[ -z "${API_PID:-}" ]] || ! alive "$API_PID"; then
-      echo "[STACK] Market API is down; restarting."
+  if adopt_api; then
+    API_HEALTH_FAILS=0
+  elif ! url_ok "http://127.0.0.1:8765/api/health"; then
+    API_HEALTH_FAILS=$((API_HEALTH_FAILS + 1))
+    if api_listening; then
+      echo "[STACK] Market API is listening on :8765; health probe failed ${API_HEALTH_FAILS} time(s). Not killing it."
+      API_EXTERNAL=1
+      API_PID=""
+      API_HEALTH_FAILS=0
+    elif (( API_HEALTH_FAILS >= 3 )); then
+      echo "[STACK] Market API health failed ${API_HEALTH_FAILS} times; restarting. See logs/stack/api.log."
+      if [[ -n "${API_PID:-}" ]]; then kill "$API_PID" >/dev/null 2>&1 || true; fi
+      API_EXTERNAL=0
+      API_PID=""
       start_api || true
       wait_for_api || echo "[STACK] Market API restart is not healthy yet; will retry." >&2
+      API_HEALTH_FAILS=0
+    fi
+  else
+    API_HEALTH_FAILS=0
+  fi
+  if [[ "$API_EXTERNAL" != "1" ]]; then
+    if [[ -z "${API_PID:-}" ]] || ! alive "$API_PID"; then
+      if adopt_api; then
+        : # listening API belongs to another owner; do not spawn a second uvicorn
+      else
+        echo "[STACK] Market API is down; restarting."
+        start_api || true
+        wait_for_api || echo "[STACK] Market API restart is not healthy yet; will retry." >&2
+      fi
     fi
   fi
   if [[ "$FRONTEND_EXTERNAL" != "1" ]] && ! alive "$FRONTEND_PID"; then
@@ -353,17 +418,19 @@ while [[ "$STOP" != "1" ]]; do
       echo "[STACK] RecoWealth desk waits until the market API is listening." >&2
     fi
   fi
-  if [[ "$AUTONOMY_EXTERNAL" != "1" ]] && ! alive "$AUTONOMY_PID"; then
-    if python - <<'PY' >/dev/null 2>&1
+  if python - <<'PY' >/dev/null 2>&1
 from product.autonomy_status import read_autonomy_status
 raise SystemExit(0 if read_autonomy_status().get("running") else 1)
 PY
-    then
-      AUTONOMY_EXTERNAL=1; AUTONOMY_PID=""
-    else
-      echo "[STACK] Autonomy is down; restarting."
-      start_autonomy || true
+  then
+    if [[ -z "${AUTONOMY_PID:-}" ]] || ! alive "$AUTONOMY_PID"; then
+      AUTONOMY_EXTERNAL=1
+      AUTONOMY_PID=""
     fi
+  else
+    AUTONOMY_EXTERNAL=0
+    echo "[STACK] Autonomy is down; restarting."
+    start_autonomy || true
   fi
   if [[ "$SCAN_KICKED" != "1" ]]; then kick_scan || true; fi
   sleep 1 || true

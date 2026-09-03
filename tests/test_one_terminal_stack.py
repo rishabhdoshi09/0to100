@@ -15,7 +15,7 @@ def test_complete_script_starts_every_local_service_in_one_process_tree():
     assert "run_quantterm.sh" in complete
     assert "python main.py login" in complete
     assert "report_api:app" in complete
-    assert "terminal_product_api:app" in inner
+    assert "terminal_product_api_parallel:app" in inner or "terminal_product_api:app" in inner
     assert "npm run dev" in inner
     assert "python -u main.py autonomy" in inner
     assert "scripts/local_stack.py scan" in inner
@@ -46,7 +46,7 @@ def test_complete_script_always_stops_old_stack_then_starts_everything():
     assert "scripts/local_stack.py scan" in inner
     assert "run_quantterm_complete.sh --restart" not in inner
     assert 'url_ok "http://127.0.0.1:8766/health"' in complete
-    assert complete.count('url_ok "http://127.0.0.1:8766/health"') == 1
+    assert complete.count('url_ok "http://127.0.0.1:8766/health"') >= 1
     assert 'alive "$REPORT_PID"' in complete
     assert "wait_for_api" in inner
     boot = inner.split("start_api || true", 1)[1].split('while [[ "$STOP" != "1" ]]', 1)[0]
