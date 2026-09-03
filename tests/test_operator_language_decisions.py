@@ -21,7 +21,7 @@ def test_committee_buy_is_the_home_truth_even_when_broker_is_blocked():
         "reason_code": "COMMITTEE_BUY",
     })
     assert card["label"] == "BUY — execution blocked"
-    assert "investment decision is BUY" in card["meaning"]
+    assert "broker execution waits" in card["meaning"]
 
 
 def test_wait_and_avoid_are_committee_language():
