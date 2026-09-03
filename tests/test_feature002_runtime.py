@@ -90,6 +90,10 @@ def _redirect_feature002(monkeypatch, tmp_path):
     monkeypatch.setattr("research.feature002.health.LEDGER_DIR", tmp_path)
     monkeypatch.setattr("research.feature002.watchdog.HOOK_LOG", hook)
     monkeypatch.setattr("research.feature002.ledger.DB_PATH", db)
+    monkeypatch.setattr(
+        "core.market_clock.today_ist",
+        lambda: __import__("datetime").date(2026, 8, 24),
+    )
     return db, hook, product
 
 

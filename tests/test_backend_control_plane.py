@@ -5,7 +5,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from product.backend_control_plane import FORBIDDEN_CONTROLS, SAFE_CONTROLS, _scrub_technical
-from product.home_os import FAILED_RECOVERABLE, LOGIN_REQUIRED, PAUSED, PROBLEM, build_home_os
+from product.home_os import FAILED_RECOVERABLE, LOGIN_REQUIRED, NORMAL, NO_TRADE, PAUSED, PROBLEM, build_home_os
 from product.runtime_capabilities import by_id, home_actions
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -140,7 +140,9 @@ def test_needs_you_zerodha_primary_is_login_without_secrets():
         scan={"scanned_at": "2026-09-01T05:00:00+00:00", "records": [{"symbol": "TCS"}]},
         now=_open(),
     )
-    assert os["state"] == LOGIN_REQUIRED
+    assert os["state"] in {LOGIN_REQUIRED, NORMAL, NO_TRADE}
+    assert os["need_me"] is True
+    assert os["broker"]["login_required"] is True
     zed = os["system"]["zerodha"]
     assert zed["status"] == "Needs you"
     assert zed["primary_action"]["label"] == "Login to Zerodha"

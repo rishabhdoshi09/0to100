@@ -150,9 +150,11 @@ class TestRunGauntlet:
 
 class TestValidator:
     def test_missing_data_aborts(self, monkeypatch):
-        # no CA table, no index store, empty bhav store in the test env → must fail
+        # Empty CA + empty index store + empty bhav store must abort.
         import data.index_store as IX
         monkeypatch.setattr(IX, "_store", {}, raising=False)
+        monkeypatch.setattr("data.corporate_actions.load_events", lambda: {})
+        monkeypatch.setattr("data.bhavcopy_store.store_symbols", lambda: [])
         v = V.validate()
         assert v["ok"] is False
         assert "corporate_actions_loaded" in v["failed"]
