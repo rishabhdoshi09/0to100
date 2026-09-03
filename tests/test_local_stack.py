@@ -94,6 +94,32 @@ def test_queue_desk_jobs_posts_scan_news_and_funds(monkeypatch):
     assert seen == ["RUN_SCAN_NOW", "REFRESH_NEWS_NOW", "REFRESH_LONG_TERM_NOW"]
 
 
+def test_machine_lock_is_outside_the_checkout(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
+    monkeypatch.delenv("TMPDIR", raising=False)
+    path = LS.machine_lock_path()
+    assert path.name == "quantterm.supervisor.lock"
+    assert str(path.parent) == str(tmp_path / "run")
+    assert "logs/stack" not in str(path)
+
+
+def test_ports_healthy_cli_reports_closed_ports(monkeypatch, capsys):
+    monkeypatch.setattr(LS, "port_open", lambda port, host="127.0.0.1", timeout_s=0.4: port == 8765)
+    assert LS.main(["ports-healthy", "--ports", "5173,8765"]) == 1
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["healthy"] is False
+    assert printed["ports"]["5173"] is False
+    assert printed["ports"]["8765"] is True
+
+
+def test_machine_lock_path_cli(monkeypatch, capsys, tmp_path):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    assert LS.main(["machine-lock-path"]) == 0
+    printed = capsys.readouterr().out.strip()
+    assert printed.endswith("quantterm.supervisor.lock")
+    assert str(tmp_path) in printed
+
+
 def test_scan_cli_returns_error_when_api_is_down(monkeypatch, capsys):
     def boom(**kwargs):
         raise RuntimeError("connection refused")

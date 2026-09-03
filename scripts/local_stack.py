@@ -1,10 +1,12 @@
 """Stop the local QuantTerm listeners by PID, or queue a market scan.
 
-``bash scripts/run_quantterm_complete.sh`` is the one-terminal start. It stops
-any previous local desk, then starts API, UI, reports, autonomy and a market
-scan. ``scan`` POSTs ``RUN_SCAN_NOW`` to the local API. It never uses
-``pkill -f``; it only signals the PIDs it resolved from TCP listen tables,
-``lsof`` on macOS, and autonomy / market-ops runtime files.
+``bash scripts/run_quantterm_complete.sh`` is the one-terminal start. The
+machine-wide supervisor lock lives outside any git checkout so a second
+clone cannot acquire ownership and kill a healthy first desk. Only the
+process that holds that lock may stop :5173/:8765/:8766. ``scan`` POSTs
+``RUN_SCAN_NOW`` to the local API. It never uses ``pkill -f``; it only
+signals the PIDs it resolved from TCP listen tables, ``lsof`` on macOS,
+and autonomy / market-ops runtime files.
 """
 from __future__ import annotations
 
@@ -12,12 +14,37 @@ import argparse
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+MACHINE_LOCK_NAME = "quantterm.supervisor.lock"
+
+
+def machine_lock_path() -> Path:
+    """One lock for the whole machine, not one lock per checkout."""
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or os.environ.get("TMPDIR") or "/tmp"
+    return Path(runtime) / MACHINE_LOCK_NAME
+
+
+def port_open(port: int, host: str = "127.0.0.1", timeout_s: float = 0.4) -> bool:
+    sock = socket.socket()
+    sock.settimeout(max(0.1, float(timeout_s)))
+    try:
+        return sock.connect_ex((host, int(port))) == 0
+    except OSError:
+        return False
+    finally:
+        sock.close()
+
+
+def desk_ports_healthy(ports: tuple[int, ...] = (5173, 8765)) -> bool:
+    """True when every requested local desk port is accepting connections."""
+    return all(port_open(port) for port in ports)
 
 
 def _listen_inodes(port: int) -> set[str]:
@@ -246,13 +273,28 @@ def queue_desk_jobs(*, origin: str = "http://127.0.0.1:8765", timeout_s: float =
     return {"accepted": accepted > 0, "queued": accepted, "jobs": jobs}
 
 
+def _parse_ports(raw: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in str(raw or "").split(",") if part.strip())
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("stop", "pids", "scan"))
+    parser.add_argument(
+        "action",
+        choices=("stop", "pids", "scan", "machine-lock-path", "ports-healthy"),
+    )
     parser.add_argument("--ports", default="5173,8765,8766")
     parser.add_argument("--no-autonomy", action="store_true")
     parser.add_argument("--origin", default="http://127.0.0.1:8765")
     args = parser.parse_args(argv)
+    if args.action == "machine-lock-path":
+        print(machine_lock_path())
+        return 0
+    if args.action == "ports-healthy":
+        ports = _parse_ports(args.ports) or (5173, 8765)
+        ok = desk_ports_healthy(ports)
+        print(json.dumps({"healthy": ok, "ports": {str(port): port_open(port) for port in ports}}))
+        return 0 if ok else 1
     if args.action == "scan":
         try:
             payload = queue_desk_jobs(origin=args.origin)

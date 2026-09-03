@@ -276,7 +276,9 @@ start_api() {
 
 start_frontend() {
   echo "[STACK] Starting dedicated terminal at http://127.0.0.1:5173 …"
-  (cd frontend && npm run dev -- --host 127.0.0.1) &
+  mkdir -p "$ROOT/logs/stack"
+  npm --prefix "$ROOT/frontend" run dev -- --host 127.0.0.1 --port 5173 \
+    >>"$ROOT/logs/stack/vite.log" 2>&1 &
   FRONTEND_PID=$!
 }
 
@@ -301,9 +303,33 @@ PY
   return 1
 }
 
-echo "[STACK] Stopping any previous API, desk, autonomy and market operations so this terminal owns them."
-python scripts/local_stack.py stop --ports 5173,8765 || true
-sleep 1 || true
+ensure_machine_lock() {
+  if [[ "${QT_MACHINE_OWNER:-}" == "1" ]]; then
+    echo "[STACK] Complete launcher already holds the machine-wide supervisor lock; not stopping ports."
+    return 0
+  fi
+  local lock
+  lock="$(python scripts/local_stack.py machine-lock-path)"
+  mkdir -p "$(dirname "$lock")"
+  exec 201>"$lock"
+  if flock -n 201; then
+    export QT_MACHINE_OWNER=1
+    echo "[STACK] This inner supervisor owns the machine lock. Stopping leftover :5173/:8765 from a previous owner."
+    python scripts/local_stack.py stop --ports 5173,8765 || true
+    sleep 1 || true
+    return 0
+  fi
+  if python scripts/local_stack.py ports-healthy --ports 5173,8765 >/dev/null; then
+    API_EXTERNAL=1
+    FRONTEND_EXTERNAL=1
+    echo "[STACK] Another machine owner is running; adopting the healthy desk. Not stopping :5173/:8765."
+    return 0
+  fi
+  echo "[STACK] Machine lock is held but :5173/:8765 are not healthy. Not killing them." >&2
+  exit 1
+}
+
+ensure_machine_lock
 
 if python - <<'PY' >/dev/null 2>&1
 from product.autonomy_status import read_autonomy_status
@@ -356,6 +382,24 @@ set +e
 API_HEALTH_FAILS=0
 
 while [[ "$STOP" != "1" ]]; do
+  # Frontend first: cheap port probe. Do not hide Vite restart behind market_ops Python.
+  if [[ "$FRONTEND_EXTERNAL" != "1" ]]; then
+    if port_open 5173; then
+      if [[ -z "${FRONTEND_PID:-}" ]] || ! alive "$FRONTEND_PID"; then
+        FRONTEND_EXTERNAL=1
+        FRONTEND_PID=""
+        echo "[STACK] RecoWealth desk is already on :5173; reusing it."
+      fi
+    elif url_ok "http://127.0.0.1:8765/api/health" || port_open 8765; then
+      if [[ -z "${FRONTEND_PID:-}" ]] || ! alive "$FRONTEND_PID"; then
+        echo "[STACK] RecoWealth desk is down; restarting."
+        start_frontend
+      fi
+    else
+      echo "[STACK] RecoWealth desk waits until the market API is listening." >&2
+    fi
+  fi
+
   if [[ "$MARKET_OPS_EXTERNAL" != "1" ]]; then
     if [[ -z "${MARKET_OPS_PID:-}" ]] || ! alive "$MARKET_OPS_PID" || ! market_ops_healthy; then
       if market_ops_healthy; then
@@ -405,17 +449,6 @@ while [[ "$STOP" != "1" ]]; do
         start_api || true
         wait_for_api || echo "[STACK] Market API restart is not healthy yet; will retry." >&2
       fi
-    fi
-  fi
-  if [[ "$FRONTEND_EXTERNAL" != "1" ]] && ! alive "$FRONTEND_PID"; then
-    if port_open 5173; then
-      FRONTEND_EXTERNAL=1; FRONTEND_PID=""
-      echo "[STACK] RecoWealth desk is already on :5173; reusing it."
-    elif url_ok "http://127.0.0.1:8765/api/health" || port_open 8765; then
-      echo "[STACK] RecoWealth desk is down; restarting."
-      start_frontend
-    else
-      echo "[STACK] RecoWealth desk waits until the market API is listening." >&2
     fi
   fi
   if python - <<'PY' >/dev/null 2>&1

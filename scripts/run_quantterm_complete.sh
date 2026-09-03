@@ -132,6 +132,7 @@ alive() {
 
 REPORT_PID=""
 STACK_PID=""
+VITE_PID=""
 REPORT_EXTERNAL=0
 STOP=0
 CLEANED=0
@@ -146,6 +147,9 @@ cleanup() {
   echo "[COMPLETE STACK] Stopping report API and QuantTerm stack…"
   if [[ -n "$STACK_PID" ]]; then
     kill "$STACK_PID" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$VITE_PID" ]]; then
+    kill "$VITE_PID" >/dev/null 2>&1 || true
   fi
   if [[ -n "$REPORT_PID" ]]; then
     kill "$REPORT_PID" >/dev/null 2>&1 || true
@@ -205,13 +209,16 @@ start_stack() {
   STACK_PID=$!
 }
 
-echo "[COMPLETE STACK] One command, one terminal. Stopping any previous local desk so this run owns everything."
+echo "[COMPLETE STACK] One command, one terminal. Machine-wide lock so a second checkout cannot kill a healthy desk."
 mkdir -p "$ROOT/logs/stack"
-STACK_LOCK="$ROOT/logs/stack/quantterm.supervisor.lock"
+STACK_LOCK="$(python scripts/local_stack.py machine-lock-path)"
+mkdir -p "$(dirname "$STACK_LOCK")"
 exec 200>"$STACK_LOCK"
 STACK_EXTERNAL=0
 if flock -n 200; then
-  echo $$ > "$ROOT/logs/stack/quantterm.supervisor.pid"
+  export QT_MACHINE_OWNER=1
+  echo $$ > "${XDG_RUNTIME_DIR:-/tmp}/quantterm.supervisor.pid"
+  echo "[COMPLETE STACK] This process owns the machine lock. Stopping leftover listeners from a previous owner, not another checkout."
   python scripts/local_stack.py stop --ports 5173,8765,8766 || true
   sleep 1 || true
 
@@ -228,14 +235,35 @@ if flock -n 200; then
 else
   STACK_EXTERNAL=1
   REPORT_EXTERNAL=1
-  echo "[COMPLETE STACK] Another QuantTerm supervisor already owns this machine; reusing the running desk."
-  echo "[COMPLETE STACK] This terminal will not stop :5173/:8765/:8766 or start a second inner stack."
+  if python scripts/local_stack.py ports-healthy --ports 5173,8765 >/dev/null; then
+    echo "[COMPLETE STACK] Another QuantTerm supervisor already owns this machine; reusing the running desk."
+    echo "[COMPLETE STACK] This terminal will not stop :5173/:8765/:8766 or start a second inner stack."
+  else
+    echo "[COMPLETE STACK] Another supervisor holds the machine lock but :5173/:8765 are not healthy." >&2
+    echo "[COMPLETE STACK] Not killing those ports. Wait for the other owner, or stop it from its own terminal." >&2
+    exit 1
+  fi
 fi
 
 echo "[COMPLETE STACK] Running in this terminal: desk http://127.0.0.1:5173  · API :8765  · reports :8766  · autonomy  · market scan"
 echo "[COMPLETE STACK] Leave this terminal open. Ctrl-C stops everything. Do not start a second terminal."
 
 HOME_OPENED=0
+start_vite_safety_net() {
+  if [[ "$STACK_EXTERNAL" == "1" ]]; then
+    return 1
+  fi
+  if port_open 5173; then
+    return 0
+  fi
+  echo "[COMPLETE STACK] Desk UI is not on :5173 yet; starting Vite from the complete launcher."
+  mkdir -p "$ROOT/logs/stack"
+  npm --prefix "$ROOT/frontend" run dev -- --host 127.0.0.1 --port 5173 \
+    >>"$ROOT/logs/stack/vite.log" 2>&1 &
+  VITE_PID=$!
+  return 0
+}
+
 wait_for_desk() {
   # Inner stack waits for API health, then starts Vite. Do not spend the
   # whole Home budget on :5173 while :8765 is still coming up.
@@ -251,6 +279,9 @@ wait_for_desk() {
   while (( i < 120 )); do
     if url_ok "http://127.0.0.1:5173/" && url_ok "http://127.0.0.1:8765/api/health"; then
       return 0
+    fi
+    if (( i == 16 )); then
+      start_vite_safety_net || true
     fi
     sleep 0.5 || true
     i=$((i + 1))
