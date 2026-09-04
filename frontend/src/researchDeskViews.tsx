@@ -7,8 +7,10 @@ import {
   fetchScanAudit,
   fetchStrategyCatalog,
   fetchSystemHealthContract,
+  simulatePastDecision,
   simulatePastDecisions,
   type DecisionSimulatorReport,
+  type PastDecisionSimulation,
   type ForwardSoakScoreboard,
   type HealthLane,
   type LearningDashboard,
@@ -17,6 +19,7 @@ import {
   type StrategyCatalog,
   type SystemHealthContract,
 } from './productApi'
+import { originalVsSimulated, simulationUiState, displayHonest } from './pastDecisionSimulation'
 import { pageHealth, pageStatusLabel } from './pageRequest'
 import { Panel } from './components'
 import type { ViewProps } from './views'
@@ -487,6 +490,12 @@ export function ProductionBacktestView({ dashboard, setActive }: ViewProps) {
   const [simError, setSimError] = useState('')
   const [simBusy, setSimBusy] = useState(false)
   const [openDecision, setOpenDecision] = useState(0)
+  const [caseSim, setCaseSim] = useState<PastDecisionSimulation | null>(null)
+  const [caseError, setCaseError] = useState('')
+  const [caseBusy, setCaseBusy] = useState(false)
+  const [caseSymbol, setCaseSymbol] = useState('')
+  const [caseAsOf, setCaseAsOf] = useState('')
+  const [caseAlt, setCaseAlt] = useState('BUY')
   useEffect(() => {
     setCatalogLoading(true)
     fetchStrategyCatalog()
@@ -518,6 +527,25 @@ export function ProductionBacktestView({ dashboard, setActive }: ViewProps) {
       .catch((reason: unknown) => setSimError(reason instanceof Error ? reason.message : 'Simulator failed'))
       .finally(() => setSimBusy(false))
   }
+  const runCase = (symbol: string, as_of: string, alternative?: string) => {
+    const name = symbol.trim().toUpperCase()
+    const day = as_of.trim().slice(0, 10)
+    if (!name || !day) {
+      setCaseError('Symbol and historical date are required. No sample decision is invented.')
+      return
+    }
+    setCaseBusy(true)
+    setCaseError('')
+    simulatePastDecision({ symbol: name, as_of: day, alternative: alternative || caseAlt })
+      .then((payload) => { setCaseSim(payload); setCaseError(payload.error || '') })
+      .catch((reason: unknown) => {
+        setCaseSim(null)
+        setCaseError(reason instanceof Error ? reason.message : 'Simulation failed')
+      })
+      .finally(() => setCaseBusy(false))
+  }
+  const caseState = simulationUiState(caseSim, caseError && !caseSim ? caseError : '')
+  const caseView = caseSim ? originalVsSimulated(caseSim) : null
   const feed = dashboard.paper.learning?.self_feed || {}
   return (
     <section className="workspace-view">
@@ -561,6 +589,58 @@ export function ProductionBacktestView({ dashboard, setActive }: ViewProps) {
           <button type="button" disabled={simBusy} onClick={runSim}>{simBusy ? (sim?.message || 'Replaying…') : 'Simulate past decisions'}</button>
         </div>
         <p className="panel-copy">{sim?.note || 'Later prices are used only for outcome classification.'}</p>
+        <Panel title="ONE PAST DECISION" subtitle="Original decision vs simulated alternative · PIT at T · subsequent bars only for outcome">
+          <p className="panel-copy">Replay one persisted QuantTerm decision. Missing journal rows stay UNAVAILABLE. No sample data is substituted.</p>
+          <div className="inline-actions" style={{ padding: '12px', gap: 8 }}>
+            <input value={caseSymbol} onChange={(event) => setCaseSymbol(event.target.value)} placeholder="Symbol" aria-label="Historical symbol" />
+            <input value={caseAsOf} onChange={(event) => setCaseAsOf(event.target.value)} placeholder="YYYY-MM-DD" aria-label="Historical date" />
+            <select value={caseAlt} onChange={(event) => setCaseAlt(event.target.value)} aria-label="Counterfactual action">
+              <option value="BUY">Simulate BUY</option>
+              <option value="WAIT">Simulate WAIT</option>
+              <option value="AVOID">Simulate AVOID</option>
+            </select>
+            <button type="button" disabled={caseBusy} onClick={() => runCase(caseSymbol, caseAsOf, caseAlt)}>
+              {caseBusy ? 'Simulating…' : 'Simulate Past Decision'}
+            </button>
+          </div>
+          {caseBusy ? <p className="panel-copy">Loading point-in-time replay…</p> : null}
+          {caseState === 'error' ? <p className="panel-copy">{caseError}</p> : null}
+          {caseState === 'failed' ? <p className="panel-copy">{caseSim?.error || caseError || 'Simulation failed'}</p> : null}
+          {caseState === 'unavailable' ? <p className="panel-copy">{caseSim?.error || 'No persisted historical decision. Nothing was invented.'}</p> : null}
+          {caseSim && caseView ? (
+            <>
+              <div className="fact-grid">
+                <div><span>Original Decision</span><strong>{caseView.originalAction}</strong></div>
+                <div><span>Simulated Alternative</span><strong>{caseView.simulatedAction}</strong></div>
+                <div><span>Timestamp</span><strong>{displayHonest(caseSim.historical_timestamp)}</strong></div>
+                <div><span>Reason</span><strong>{displayHonest(caseSim.original?.reason_code)}</strong></div>
+              </div>
+              <p className="panel-copy"><strong>{caseView.evidenceLabel}</strong></p>
+              <p className="panel-copy">
+                Close at T: {displayHonest(caseSim.evidence_at_t?.close)}
+                {' · '}max bar {displayHonest(caseSim.evidence_at_t?.max_bar_date)}
+                {caseView.lookahead ? ' · LOOKAHEAD FLAG' : ' · no future bars in the decision'}
+              </p>
+              <p className="panel-copy">
+                Financials: {caseSim.evidence_at_t?.financials?.available ? 'available at T' : displayHonest(caseSim.evidence_at_t?.financials?.status)}
+                {' · '}Research: {caseSim.evidence_at_t?.research?.available ? 'available at T' : displayHonest(caseSim.evidence_at_t?.research?.status)}
+                {' · '}News: {displayHonest(caseSim.evidence_at_t?.news_status)}
+              </p>
+              <p className="panel-copy"><strong>{caseView.outcomeLabel}</strong></p>
+              <div className="fact-grid">
+                <div><span>Actual path</span><strong>{displayHonest((caseSim.subsequent_outcome?.actual as { status?: string } | undefined)?.status)}</strong></div>
+                <div><span>Simulated path</span><strong>{displayHonest((caseSim.subsequent_outcome?.simulated as { status?: string } | undefined)?.status)}</strong></div>
+                <div><span>Simulated MFE</span><strong>{displayHonest((caseSim.subsequent_outcome?.simulated as { mfe_pct?: unknown } | undefined)?.mfe_pct)}</strong></div>
+                <div><span>Simulated MAE</span><strong>{displayHonest((caseSim.subsequent_outcome?.simulated as { mae_pct?: unknown } | undefined)?.mae_pct)}</strong></div>
+                <div><span>Simulated return</span><strong>{displayHonest(caseSim.comparison?.simulated_return_pct)}</strong></div>
+                <div><span>Return delta</span><strong>{displayHonest(caseSim.comparison?.return_delta_pct)}</strong></div>
+              </div>
+              <p className="panel-copy">{displayHonest((caseSim.subsequent_outcome?.simulated as { methodology?: string } | undefined)?.methodology, '')}</p>
+              {(caseSim.warnings || []).length ? <p className="panel-copy">Warnings: {(caseSim.warnings || []).join(' · ')}</p> : null}
+              {caseSim.error && caseState === 'ready' ? <p className="panel-copy">{caseSim.error}</p> : null}
+            </>
+          ) : null}
+        </Panel>
         {(sim?.decisions || sim?.rows || []).slice(0, 12).map((row, index) => (
           <article key={`${row.as_of}-${row.symbol}-${index}`} className="requirement-card" style={{ marginTop: 8 }}>
             <button type="button" className="secondary" onClick={() => setOpenDecision(index)}>
@@ -579,6 +659,20 @@ export function ProductionBacktestView({ dashboard, setActive }: ViewProps) {
                   {' · '}{row.classification || row.outcome_status || 'INCONCLUSIVE'}
                 </p>
                 {(row.pit?.degraded || []).length ? <p className="panel-copy">Degraded: {(row.pit?.degraded || []).join(' · ')}</p> : null}
+                {row.symbol && row.as_of ? (
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={caseBusy}
+                    onClick={() => {
+                      setCaseSymbol(row.symbol || '')
+                      setCaseAsOf(row.as_of || '')
+                      runCase(row.symbol || '', row.as_of || '')
+                    }}
+                  >
+                    Simulate this decision
+                  </button>
+                ) : null}
               </div>
             ) : null}
           </article>
