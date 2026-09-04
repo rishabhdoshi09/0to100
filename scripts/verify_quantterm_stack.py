@@ -146,11 +146,12 @@ def run(args: argparse.Namespace) -> int:
     probes.append(probe_text("Frontend", args.ui.rstrip("/") + "/", args.timeout))
     probes.append(probe_json("Report API", _join(args.reports, "/health"), args.timeout))
 
-    # One row per visible/product-critical surface. Empty data is acceptable; a
-    # missing route, malformed response or timeout is not.
+    # One row per visible/product-critical surface. Market Overview is projected
+    # from /api/dashboard and is therefore covered by the Dashboard probe rather
+    # than inventing a second endpoint just for the page.
     canonical = [
         ("API health", "/api/health", ("resources",)),
-        ("Dashboard", "/api/dashboard", ("market", "scan", "long_term", "operations", "data")),
+        ("Dashboard / Market overview", "/api/dashboard", ("market", "scan", "long_term", "operations", "data")),
         ("Operations", "/api/operations", ("running",)),
         ("Desk pipeline", "/api/desk-pipeline", ("steps",)),
         ("Product contract", "/api/product-contract", ("wired", "checks")),
@@ -158,7 +159,6 @@ def run(args: argparse.Namespace) -> int:
         ("Radar home", "/api/radar-home", ("lanes",)),
         ("Recommendations", "/api/recommendations-workspace", ("categories",)),
         ("Market reports", "/api/market-reports-workspace", ("reports",)),
-        ("Market overview", "/api/market-internals", ()),
         ("System health", "/api/system-health-contract", ()),
         ("Operator health", "/api/operator-health", ()),
         ("Research status", "/api/research-status", ()),
@@ -207,7 +207,7 @@ def run(args: argparse.Namespace) -> int:
         else:
             health.detail = f"resources {resource_state} · api_fd={api_fd} · market_ops_fd={ops_fd}"
 
-    dashboard_probe = by_name.get("Dashboard")
+    dashboard_probe = by_name.get("Dashboard / Market overview")
     dashboard = dashboard_probe.payload if dashboard_probe and dashboard_probe.ok and dashboard_probe.payload else {}
     symbols = _pick_symbols(dashboard, args.symbol)
     if symbols:
