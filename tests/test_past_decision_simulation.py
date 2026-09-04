@@ -386,6 +386,18 @@ def test_lookahead_replay_cannot_report_clean_success(tmp_path, monkeypatch):
     assert out["evidence_at_t"]["reconstructed_engine_decision"]["pit"]["future_evidence_used"] is True
     assert out["subsequent_outcome"]["simulated"]["status"] != "COMPUTED"
     assert out["subsequent_outcome"]["simulated"]["trustworthy"] is False
+    # Canonical CI has no official bhavcopy. The API must still hit the same
+    # fixture bars + lookahead mock, or it would skip replay and look clean.
+    monkeypatch.setattr(
+        "product.decision_simulator.simulate_past_decision",
+        lambda **kwargs: simulate_past_decision(
+            ohlcv_fn=lambda _s: _bars("2025-07-15"),
+            replay_engine=True,
+            **{k: v for k, v in kwargs.items() if k not in {"ohlcv_fn", "replay_engine"}},
+        ),
+    )
     api_payload = api.decision_simulator_get(symbol="RELIANCE", as_of="2025-07-15", alternative="BUY")
     assert api_payload["status"] != SUCCEEDED
     assert api_payload["status"] == PIT_INTEGRITY_FAILED
+    assert api_payload["evidence_at_t"]["future_bars_used_for_decision"] is True
+    assert api_payload["counterfactual_trustworthy"] is False
