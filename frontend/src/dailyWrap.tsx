@@ -37,8 +37,7 @@ type WrapDashboard = {
 
 // "Today" on a market desk must not silently mean "best headline from the last week".
 // An 18-hour rolling window keeps prior-evening/post-close context visible for the
-// next morning while dropping yesterday's old intraday/news inventory by the time
-// it is no longer actionable context. Undated news is excluded rather than guessed.
+// next morning while dropping old intraday/news inventory. Undated news is excluded.
 export const WRAP_NEWS_MAX_AGE_MS = 18 * 60 * 60 * 1000
 
 const GLOBAL_NEEDLES = [
@@ -54,7 +53,7 @@ const FILING_NEEDLES = [
 function prettySector(name: string): string {
   const raw = String(name || '').trim()
   if (!raw) return ''
-  if (['IT', 'FMCG', 'NBFC'].includes(raw.toUpperCase())) return raw.toUpper-Case?.() || raw.toUpperCase()
+  if (['IT', 'FMCG', 'NBFC'].includes(raw.toUpperCase())) return raw.toUpperCase()
   return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase()
 }
 
@@ -62,17 +61,13 @@ function joinNames(names: string[]): string {
   const items = names.map((n) => n.trim()).filter(Boolean)
   if (!items.length) return ''
   if (items.length === 1) return items[0]
-  if (items.length === 2) return `${rawSafe(items[0])} and ${rawSafe(items[1])}`
+  if (items.length === 2) return `${items[0]} and ${items[1]}`
   return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
-}
-
-function rawSafe(value: string): string {
-  return value
 }
 
 function articleBlob(article: WrapArticle | undefined): string {
   return [article?.headline, article?.summary, article?.why_it_matters, article?.source]
-    .map((part) => String(part || '').toString().toLowerCase())
+    .map((part) => String(part || '').toLowerCase())
     .join(' ')
 }
 
