@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Read-only end-to-end verifier for the locally running QuantTerm desk.
 
-This is deliberately stricter than "the ports are open".  It verifies the UI,
+This is deliberately stricter than "the ports are open". It verifies the UI,
 report service and the canonical API surfaces that power the visible product,
 then performs a small status-endpoint soak and checks that API/worker file
 descriptors stay essentially flat.
@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 import time
 import urllib.error
 import urllib.parse
@@ -26,6 +25,7 @@ from typing import Any, Iterable
 DEFAULT_API = "http://127.0.0.1:8765"
 DEFAULT_UI = "http://127.0.0.1:5173"
 DEFAULT_REPORTS = "http://127.0.0.1:8766"
+SCANNER_MODES = ("Momentum", "Conviction", "Breakouts", "Pre-Breakout", "Long-Term", "F&O", "Avoid")
 
 
 @dataclass
@@ -38,7 +38,11 @@ class Probe:
 
 
 def _get(url: str, timeout: float) -> tuple[int, bytes]:
-    request = urllib.request.Request(url, method="GET", headers={"Accept": "application/json,text/html;q=0.9,*/*;q=0.8"})
+    request = urllib.request.Request(
+        url,
+        method="GET",
+        headers={"Accept": "application/json,text/html;q=0.9,*/*;q=0.8"},
+    )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return int(response.status), response.read()
 
@@ -101,23 +105,38 @@ def _fd_counts(health: dict[str, Any] | None) -> tuple[int | None, int | None, s
         except (TypeError, ValueError):
             return None
 
-    return integer(api.get("fd_count")), integer(ops.get("fd_count")), str(resources.get("state") or "UNKNOWN")
+    return (
+        integer(api.get("fd_count")),
+        integer(ops.get("fd_count")),
+        str(resources.get("state") or "UNKNOWN"),
+    )
 
 
-def _pick_symbol(dashboard: dict[str, Any], explicit: str) -> str:
+def _pick_symbols(dashboard: dict[str, Any], explicit: str = "") -> list[str]:
+    out: list[str] = []
     if explicit.strip():
-        return explicit.strip().upper()
+        out.append(explicit.strip().upper())
     for section in ("scan", "long_term"):
         rows = ((dashboard.get(section) or {}).get("records") or []) if isinstance(dashboard.get(section), dict) else []
         for row in rows:
-            if isinstance(row, dict) and str(row.get("symbol") or "").strip():
-                return str(row["symbol"]).strip().upper()
-    return ""
+            if not isinstance(row, dict):
+                continue
+            symbol = str(row.get("symbol") or "").strip().upper()
+            if symbol and symbol not in out:
+                out.append(symbol)
+            if len(out) >= 2:
+                return out
+    return out
+
+
+def _pick_symbol(dashboard: dict[str, Any], explicit: str) -> str:
+    symbols = _pick_symbols(dashboard, explicit)
+    return symbols[0] if symbols else ""
 
 
 def _print(probe: Probe) -> None:
     mark = "PASS" if probe.ok else "FAIL"
-    print(f"[{mark}] {probe.name:<30} {probe.elapsed_ms:>5} ms · {probe.detail}")
+    print(f"[{mark}] {probe.name:<32} {probe.elapsed_ms:>5} ms · {probe.detail}")
 
 
 def run(args: argparse.Namespace) -> int:
@@ -127,6 +146,8 @@ def run(args: argparse.Namespace) -> int:
     probes.append(probe_text("Frontend", args.ui.rstrip("/") + "/", args.timeout))
     probes.append(probe_json("Report API", _join(args.reports, "/health"), args.timeout))
 
+    # One row per visible/product-critical surface. Empty data is acceptable; a
+    # missing route, malformed response or timeout is not.
     canonical = [
         ("API health", "/api/health", ("resources",)),
         ("Dashboard", "/api/dashboard", ("market", "scan", "long_term", "operations", "data")),
@@ -134,13 +155,23 @@ def run(args: argparse.Namespace) -> int:
         ("Desk pipeline", "/api/desk-pipeline", ("steps",)),
         ("Product contract", "/api/product-contract", ("wired", "checks")),
         ("Product readiness", "/api/product-readiness", ("state", "score", "lanes")),
+        ("Radar home", "/api/radar-home", ("lanes",)),
         ("Recommendations", "/api/recommendations-workspace", ("categories",)),
         ("Market reports", "/api/market-reports-workspace", ("reports",)),
+        ("Market overview", "/api/market-internals", ()),
         ("System health", "/api/system-health-contract", ()),
+        ("Operator health", "/api/operator-health", ()),
         ("Research status", "/api/research-status", ()),
         ("Strategies", "/api/strategy-catalog", ()),
+        ("Learning dashboard", "/api/learning-dashboard", ()),
+        ("Paper autopilot", "/api/paper-autopilot", ("live_locked",)),
+        ("Why no trade", "/api/why-no-trade", ()),
         ("Decision journal", "/api/decision-journal?limit=1", ()),
+        ("Decision simulator", "/api/decision-simulator", ("live_locked",)),
         ("Forward soak", "/api/forward-soak", ()),
+        ("Scan audit / Coverage", "/api/scan-audit", ()),
+        ("Watchlist", "/api/watchlist", ("items", "count")),
+        ("Education", "/api/education?min_impact=0&limit=1", ("cards",)),
         ("Data readiness", "/api/data-readiness", ("ready",)),
         ("News", "/api/news", ("articles",)),
         ("F&O", "/api/fno", ()),
@@ -150,6 +181,17 @@ def run(args: argparse.Namespace) -> int:
         result = probe_json(name, _join(args.api, path), args.timeout, keys)
         probes.append(result)
         by_name[name] = result
+
+    for mode in SCANNER_MODES:
+        encoded = urllib.parse.quote(mode, safe="")
+        probes.append(
+            probe_json(
+                f"Scanner · {mode}",
+                _join(args.api, f"/api/scanner-workspace/{encoded}"),
+                args.timeout,
+                ("mode", "rows"),
+            )
+        )
 
     contract = by_name.get("Product contract")
     if contract and contract.ok and contract.payload and contract.payload.get("wired") is not True:
@@ -167,22 +209,35 @@ def run(args: argparse.Namespace) -> int:
 
     dashboard_probe = by_name.get("Dashboard")
     dashboard = dashboard_probe.payload if dashboard_probe and dashboard_probe.ok and dashboard_probe.payload else {}
-    symbol = _pick_symbol(dashboard, args.symbol)
-    if symbol:
+    symbols = _pick_symbols(dashboard, args.symbol)
+    if symbols:
+        symbol = symbols[0]
         encoded = urllib.parse.quote(symbol, safe="")
         symbol_probes = [
-            (f"Chart {symbol}", f"/api/chart/{encoded}", ("symbol", "bars")),
-            (f"Stock intelligence {symbol}", f"/api/stock-intelligence/{encoded}", ()),
-            (f"Due diligence {symbol}", f"/api/due-diligence/{encoded}", ()),
-            (f"Trade plan {symbol}", f"/api/trade-plan/{encoded}", ()),
+            (f"Chart · {symbol}", f"/api/chart/{encoded}", ("symbol", "bars")),
+            (f"Stock intelligence · {symbol}", f"/api/stock-intelligence/{encoded}", ()),
+            (f"Due diligence · {symbol}", f"/api/due-diligence/{encoded}", ()),
+            (f"Trade plan · {symbol}", f"/api/trade-plan/{encoded}", ()),
+            (f"Ratios · {symbol}", f"/api/data/ratios/{encoded}", ()),
         ]
         for name, path, keys in symbol_probes:
             probes.append(probe_json(name, _join(args.api, path), args.timeout, keys))
+        compare_symbols = symbols[:2]
+        if len(compare_symbols) == 2:
+            value = urllib.parse.quote(",".join(compare_symbols), safe="")
+            probes.append(
+                probe_json(
+                    "Compare workspace",
+                    _join(args.api, f"/api/compare?symbols={value}"),
+                    args.timeout,
+                    ("rows", "symbols"),
+                )
+            )
     else:
         print("[INFO] No saved scan symbol available; per-stock probes skipped. Pass --symbol RELIANCE to force them.")
 
     print("\nQuantTerm full-stack contract")
-    print("-" * 78)
+    print("-" * 82)
     for result in probes:
         _print(result)
         if not result.ok:
@@ -191,7 +246,13 @@ def run(args: argparse.Namespace) -> int:
     if args.soak > 0 and not failures:
         before_probe = probe_json("Soak baseline health", _join(args.api, "/api/health"), args.timeout, ("resources",))
         before_api, before_ops, _ = _fd_counts(before_probe.payload)
-        soak_paths = ("/api/health", "/api/operations", "/api/data-readiness", "/api/product-contract")
+        soak_paths = (
+            "/api/health",
+            "/api/operations",
+            "/api/data-readiness",
+            "/api/product-contract",
+            "/api/radar-home",
+        )
         soak_error = ""
         started = time.monotonic()
         for _ in range(args.soak):
@@ -223,14 +284,14 @@ def run(args: argparse.Namespace) -> int:
         if not stable:
             failures.append(soak_probe.name)
 
-    print("-" * 78)
+    print("-" * 82)
     if failures:
         print("NOT WORKING: " + ", ".join(failures))
         return 1
-    print("WORKING: frontend, API, reports and canonical product surfaces answered their contracts.")
+    print("WORKING: frontend, APIs and all probed visible desk surfaces answered their contracts.")
     if args.soak > 0:
         print("RESOURCE CHECK: repeated status traffic did not show material descriptor growth.")
-    print("NOTE: This verifier is read-only. A real scan/acquire action still needs an explicit runtime action test.")
+    print("NOTE: This verifier is read-only. Run verify_quantterm_actions.py for real non-money action proof.")
     return 0
 
 
