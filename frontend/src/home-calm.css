@@ -1,0 +1,89 @@
+/* QuantTerm Desk: calm, exception-first operating surface.
+   Raw scanner machinery remains available in Advanced > Scanner; Home keeps
+   only the autonomous OS, ambient market context, live work, and daily wrap. */
+
+/* Retire the old visual compatibility shim now that Home JSX uses os.need_me
+   as the sole operator-attention truth. */
+.home-os-card.state-normal > .home-os-hero + .home-os-grid > div:nth-child(3) strong,
+.home-os-card.state-preparing > .home-os-hero + .home-os-grid > div:nth-child(3) strong,
+.home-os-card.state-no_trade > .home-os-hero + .home-os-grid > div:nth-child(3) strong,
+.home-os-card.state-market_closed_complete > .home-os-hero + .home-os-grid > div:nth-child(3) strong {
+  font-size: 15px !important;
+}
+
+.home-os-card.state-normal > .home-os-hero + .home-os-grid > div:nth-child(3) strong::after,
+.home-os-card.state-preparing > .home-os-hero + .home-os-grid > div:nth-child(3) strong::after,
+.home-os-card.state-no_trade > .home-os-hero + .home-os-grid > div:nth-child(3) strong::after,
+.home-os-card.state-market_closed_complete > .home-os-hero + .home-os-grid > div:nth-child(3) strong::after {
+  content: none !important;
+}
+
+/* Broker login is an optional capability, not a global app alarm. A legacy
+   LOGIN_REQUIRED state must therefore not turn the whole Desk amber. Genuine
+   operator intervention is still surfaced through os.need_me and problem states. */
+.home-os-card.state-login_required {
+  border-color: rgba(122, 159, 199, 0.28) !important;
+}
+
+/* Home is not another Scanner. The autonomous operating system already tells
+   the operator what happened, what matters, what is next and whether anything
+   needs human attention. Discovery/ranking internals live on Scanner. */
+.radar-home > .radar-hero,
+.radar-home > .radar-pipeline-wrap,
+.radar-home > .radar-desk-strip,
+.radar-home > .radar-scan-share,
+.radar-home > .radar-rank-legend,
+.radar-home > .radar-bob-hero,
+.radar-home > .radar-top-stocks,
+.radar-home > .radar-best-breakout,
+.radar-home > .radar-sniper-pool,
+.radar-home > .radar-three-lanes,
+.radar-home > .radar-workspace {
+  display: none;
+}
+
+/* Ambient context is intentionally quieter than the decision OS above it. */
+.radar-home > .radar-market-strip {
+  margin-top: 14px;
+  opacity: 0.9;
+}
+
+.radar-home > .radar-market-strip > div {
+  min-height: 62px;
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.radar-home .home-os-card + .panel-copy {
+  margin: 8px 2px 0;
+}
+
+/* Make the four primary destinations feel like navigation, not controls that
+   can accidentally change trading state. */
+.home-os-quick {
+  max-width: 720px;
+}
+
+.home-os-quick-link {
+  min-height: 34px;
+}
+
+/* Operator alarm hierarchy: only genuine intervention/problem states get
+   visual urgency. LOGIN_REQUIRED alone is intentionally absent. */
+.home-os-grid > div:nth-child(3) {
+  border-color: rgba(135, 158, 188, 0.18);
+}
+
+.home-os-card.state-needs_you .home-os-grid > div:nth-child(3),
+.home-os-card.state-problem .home-os-grid > div:nth-child(3),
+.home-os-card.state-failed_recoverable .home-os-grid > div:nth-child(3) {
+  border-color: rgba(255, 184, 77, 0.5);
+  background: rgba(255, 184, 77, 0.055);
+}
+
+/* Scanner keeps the full dense operating surface when the user deliberately
+   opens Advanced > Scanner. No scanner selectors outside .radar-home are hidden. */
+@media (max-width: 820px) {
+  .radar-home > .radar-market-strip {
+    margin-top: 10px;
+  }
+}

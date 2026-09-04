@@ -13,7 +13,6 @@ from typing import Any
 from operations.market_ops import (
     DATA_PREPARE,
     DUE_DILIGENCE_ACQUIRE,
-    DUE_DILIGENCE_FRESH_S,
     FNO_FRESH_S,
     FNO_REFRESH,
     LANES,
@@ -60,7 +59,7 @@ DESK_STEPS: tuple[dict[str, str], ...] = (
         "id": "investigate",
         "title": "Investigate acquire",
         "page": "Stock Intelligence",
-        "why": "Download filings and fundamentals for shortlisted names, then Investigate reads the files.",
+        "why": "Download missing or stale evidence for shortlisted names. Failed providers cool down before retrying.",
     },
 )
 
@@ -119,6 +118,10 @@ def scan_is_fresh() -> bool:
         as_of = str(payload.get("as_of_session") or payload.get("history_latest_date") or "")[:10]
         if expected and (not as_of or as_of < expected):
             return False
+        if expected and as_of >= expected:
+            # Session identity is current. A worker restart must not rescan
+            # just because wall-clock age exceeded SCAN_FRESH_S.
+            return True
         if payload.get("scanned_at"):
             return bool(scan_artifact_is_fresh(path, max_age_s=SCAN_FRESH_S))
     except Exception:
@@ -134,13 +137,29 @@ def news_is_fresh() -> bool:
     return not _stale(_root() / "logs" / "news_curator.sqlite3", NEWS_FRESH_S)
 
 
-def acquire_is_fresh() -> bool:
+def acquire_freshness() -> dict[str, Any]:
+    """Dataset-level research truth. A recent attempt alone is never 'fresh'."""
     try:
-        from product.due_diligence.acquire import acquire_is_fresh as facts_fresh
+        from product.due_diligence.freshness import research_freshness
 
-        return bool(facts_fresh())
-    except Exception:
-        return True
+        return dict(research_freshness() or {})
+    except Exception as exc:
+        # Fail closed on truth, but do not create a hot retry loop when the local
+        # coverage inspector itself is broken. System Health can expose the error.
+        return {
+            "fresh": False,
+            "retry_due": False,
+            "state": "CHECK_FAILED",
+            "reason": f"Research freshness check failed: {type(exc).__name__}: {exc}"[:240],
+            "unresolved_symbols": [],
+            "unresolved_datasets": [],
+            "next_retry_at": None,
+        }
+
+
+def acquire_is_fresh() -> bool:
+    """Compatibility bool for callers that only need current/not-current."""
+    return bool(acquire_freshness().get("fresh"))
 
 
 def _fresh_s(step_id: str) -> float:
@@ -152,8 +171,6 @@ def _fresh_s(step_id: str) -> float:
         return LONG_TERM_FRESH_S
     if step_id == "news":
         return NEWS_FRESH_S
-    if step_id == "investigate":
-        return DUE_DILIGENCE_FRESH_S
     return 0.0
 
 
@@ -181,10 +198,19 @@ def _kind_for_step(step_id: str, store: OperationStore | None = None) -> str | N
     elif step_id == "news":
         kind = None if news_is_fresh() else NEWS_REFRESH
     elif step_id == "investigate":
-        kind = None if acquire_is_fresh() else DUE_DILIGENCE_ACQUIRE
+        state = acquire_freshness()
+        kind = DUE_DILIGENCE_ACQUIRE if (not state.get("fresh") and state.get("retry_due")) else None
     else:
         kind = None
-    if kind and store is not None and _recently_succeeded(store, _kinds_for_id(step_id), _fresh_s(step_id)):
+    # Symbol-level research freshness decides this step. A previous shortlist
+    # succeeding must not hide a *new* candidate, while dataset-level cooldowns
+    # prevent retry storms for the same unresolved provider failure.
+    if (
+        kind
+        and store is not None
+        and step_id != "investigate"
+        and _recently_succeeded(store, _kinds_for_id(step_id), _fresh_s(step_id))
+    ):
         return None
     return kind
 
@@ -266,15 +292,25 @@ def _snapshot(
 ) -> dict[str, Any]:
     active = _pipeline_active(store)
     active_kind = str((active or {}).get("kind") or "")
+    research = acquire_freshness()
+    research_cooling = bool(not research.get("fresh") and not research.get("retry_due"))
     seen_due = False
     steps: list[dict[str, Any]] = []
     for spec in DESK_STEPS:
         kind = _kind_for_step(spec["id"], store)
-        latest = store.latest(kind) if kind else None
+        if spec["id"] == "investigate":
+            latest = store.latest(DUE_DILIGENCE_ACQUIRE)
+        else:
+            latest = store.latest(kind) if kind else None
         if spec["id"] == "long_term" and latest is None:
             latest = store.latest(LONG_TERM_SCAN)
         state = "ready"
-        if kind is None:
+        if spec["id"] == "investigate" and research_cooling:
+            # Important: incomplete evidence is not painted green merely because
+            # the provider was attempted recently. It is visibly waiting to retry.
+            state = "waiting"
+            seen_due = True
+        elif kind is None:
             state = "ready"
         elif active and str(active.get("kind") or "") in _kinds_for_id(spec["id"]):
             state = "running" if str(active.get("status") or "") == RUNNING else "queued"
@@ -294,14 +330,18 @@ def _snapshot(
             else:
                 state = "waiting"
                 seen_due = True
-        steps.append(
-            {
-                **spec,
-                "kind": kind,
-                "state": state,
-                "latest_status": (latest or {}).get("status"),
-            }
-        )
+        row = {
+            **spec,
+            "kind": kind,
+            "state": state,
+            "latest_status": (latest or {}).get("status"),
+        }
+        if spec["id"] == "investigate":
+            row["freshness_state"] = research.get("state")
+            row["unresolved_symbols"] = len(list(research.get("unresolved_symbols") or []))
+            row["next_retry_at"] = research.get("next_retry_at")
+            row["freshness_reason"] = research.get("reason")
+        steps.append(row)
 
     current = None
     for row in steps:
@@ -320,6 +360,13 @@ def _snapshot(
         message = "Official prices failed recently — wait before retrying. Later desk steps stay paused."
     elif current:
         message = f"{current['title']} now: {current['why']}"
+    elif research_cooling:
+        count = len(list(research.get("unresolved_symbols") or []))
+        next_retry = str(research.get("next_retry_at") or "provider cooldown")
+        message = (
+            f"Research evidence is still incomplete for {count} shortlisted name(s). "
+            f"Recent provider attempts are cooling down; next retry {next_retry}."
+        )
     elif all(row["state"] == "ready" for row in steps):
         message = "Desk data is current. Home, Recommendations and Market Reports read saved files."
     else:
@@ -347,6 +394,7 @@ def _snapshot(
         "scan_reused": scan_is_fresh(),
         "operations": operations,
         "active_kind": active_kind or None,
+        "research_freshness": research,
     }
 
 

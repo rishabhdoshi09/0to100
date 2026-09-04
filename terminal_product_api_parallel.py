@@ -72,11 +72,57 @@ def _stop_stale_owner(runtime: dict) -> bool:
     return True
 
 
+def _live_owner_pid(runtime: dict) -> int:
+    """A live lock holder is the owner even when runtime.json still has a dead PID."""
+    candidates: list[int] = []
+    try:
+        from operations.store import live_lock_owner_pid
+        lock_pid = int(live_lock_owner_pid(core.OPS_ROOT / "worker.lock") or 0)
+    except Exception:
+        lock_pid = 0
+    if lock_pid:
+        candidates.append(lock_pid)
+    try:
+        runtime_pid = int(runtime.get("worker_pid") or 0)
+    except (TypeError, ValueError):
+        runtime_pid = 0
+    if runtime_pid:
+        candidates.append(runtime_pid)
+    seen: set[int] = set()
+    for pid in candidates:
+        if pid <= 1 or pid in seen or not pid_is_alive(pid):
+            continue
+        seen.add(pid)
+        command = _market_ops_command(pid)
+        if command and "operations.market_ops" not in command:
+            continue
+        return pid
+    return 0
+
+
 def _ensure_ops_worker_strict(*, wait: bool = True) -> dict:
     """Return only when Market Operations is healthy or fail loudly."""
     runtime = _healthy_runtime()
     if runtime.get("running") and pid_is_alive(runtime.get("worker_pid")):
         return runtime
+
+    live = _live_owner_pid(runtime)
+    if live:
+        deadline = time.time() + (4.0 if wait else 0.8)
+        while time.time() < deadline:
+            time.sleep(0.1)
+            runtime = _healthy_runtime()
+            if runtime.get("running") and pid_is_alive(runtime.get("worker_pid")):
+                return runtime
+            if not pid_is_alive(live):
+                break
+        # Launcher already owns this process. Do not spawn a second worker
+        # and do not take the desk API down for a late first heartbeat.
+        out = dict(runtime)
+        out["running"] = True
+        out["worker_pid"] = live
+        out["recovering"] = True
+        return out
 
     _stop_stale_owner(runtime)
     recovered = _base_ensure_ops_worker(wait=True)
@@ -358,6 +404,24 @@ def forward_soak_api() -> dict:
     payload = scoreboard()
     payload["verification"] = load_latest_verification() or persist_soak_verification()
     return payload
+
+
+@product.app.get("/api/decision-simulator")
+def decision_simulator_get() -> dict:
+    """Cached take-vs-skip historical report. BACKTEST provenance only."""
+    from product.decision_simulator import load_latest
+    payload = load_latest()
+    if not payload:
+        return {"available": False, "provenance": "BACKTEST", "live_locked": True, "cache_hit": True}
+    payload["available"] = True
+    return payload
+
+
+@product.app.post("/api/decision-simulator")
+def decision_simulator_run() -> dict:
+    """Start a point-in-time historical replay without blocking the HTTP server."""
+    from product.decision_simulator import run_decision_simulator
+    return run_decision_simulator(async_job=True)
 
 
 @product.app.post("/api/forward-soak")

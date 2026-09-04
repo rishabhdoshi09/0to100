@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+import os
 
 from product.due_diligence.classify import classify_company
 from product.due_diligence.coverage import availability_state_for_kpi, inspect_research_coverage
@@ -525,6 +526,62 @@ def _defaults(symbol: str) -> dict[str, Any]:
     }
 
 
+def _table_period_count(rows: Sequence[Any]) -> int:
+    n = 0
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        n = max(n, sum(1 for key, value in row.items() if key != "row_label" and value not in (None, "")))
+    return n
+
+
+def _merge_live_warehouse(symbol: str, raw_record: Mapping[str, Any], *, as_of: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Fill empty/thin live Screener tables from latest-eligible warehouse filings.
+
+    This is today's live view, not a historical-T replay. Publication dates stay
+    on the warehouse overlay so latest evidence is not confused with a past T.
+    """
+    overlay: dict[str, Any] = {"used": False, "not_historical_replay": True, "as_of": str(as_of)[:10]}
+    if os.environ.get("PYTEST_CURRENT_TEST") and os.environ.get("QT_ALLOW_LIVE_WAREHOUSE") != "1":
+        overlay["reason"] = "pytest isolation"
+        return dict(raw_record), overlay
+    try:
+        from product.pit_query import get_financial_snapshot
+
+        fin = get_financial_snapshot(symbol, as_of=str(as_of)[:10])
+    except Exception:
+        return dict(raw_record), overlay
+    if not fin.get("numbers_parsed"):
+        overlay["reason"] = "warehouse has no parsed numbers as of today"
+        return dict(raw_record), overlay
+    tables = dict(fin.get("tables") or {})
+    data = dict(raw_record.get("data") or {})
+    filled: list[str] = []
+    for key in ("quarterly_results", "profit_loss", "balance_sheet", "cash_flow"):
+        warehouse_rows = list(tables.get(key) or [])
+        live_rows = list(data.get(key) or [])
+        if warehouse_rows and _table_period_count(live_rows) < 2:
+            data[key] = warehouse_rows
+            filled.append(key)
+    if not filled:
+        overlay["reason"] = "live tables already have enough periods"
+        return dict(raw_record), overlay
+    out = dict(raw_record)
+    out["data"] = data
+    overlay.update({
+        "used": True,
+        "source": "pit_warehouse_xbrl",
+        "label": "Latest eligible official filings as of today (not a historical T)",
+        "latest_publication": fin.get("latest_publication"),
+        "latest_period_end": fin.get("latest_period_end"),
+        "n_parsed_results": fin.get("n_parsed_results"),
+        "tables_filled": filled,
+        "point_in_time": False,
+    })
+    out["warehouse_overlay"] = overlay
+    return out, overlay
+
+
 def build_due_diligence(
     symbol: str,
     *,
@@ -533,13 +590,36 @@ def build_due_diligence(
     raw_fundamentals: Mapping[str, Any] | None = None,
     news: Sequence[Mapping[str, Any]] | None = None,
     now: datetime | None = None,
+    as_of_session: str | None = None,
 ) -> dict[str, Any]:
-    """Vertical slice: classify → sector KPIs → news → SUPPORTS/NEUTRAL/CONTRADICTS."""
+    """Vertical slice: classify → sector KPIs → news → SUPPORTS/NEUTRAL/CONTRADICTS.
+
+    as_of_session supplies a historical T. Live defaults (scan, Screener,
+    autonomy_facts, intake rows) are then refused.
+    """
     from product.stock_workspace import clean_symbol
 
     symbol = clean_symbol(symbol)
+    pit_mode = bool(as_of_session)
+    if pit_mode:
+        from product.pit_query import pit_research_inputs
+
+        pit = pit_research_inputs(symbol, as_of=str(as_of_session)[:10])
+        if scan_payload is None:
+            scan_payload = pit["scan_payload"]
+        if long_term_payload is None:
+            long_term_payload = pit["long_term_payload"]
+        if raw_fundamentals is None:
+            raw_fundamentals = pit["raw_fundamentals"]
+        if news is None:
+            news = pit["news"]
+        if now is None:
+            try:
+                now = datetime.fromisoformat(f"{str(as_of_session)[:10]}T15:30:00+05:30")
+            except ValueError:
+                now = datetime.now(timezone.utc)
     now = now or datetime.now(timezone.utc)
-    if scan_payload is None or long_term_payload is None or raw_fundamentals is None or news is None:
+    if not pit_mode and (scan_payload is None or long_term_payload is None or raw_fundamentals is None or news is None):
         defaults = _defaults(symbol)
         scan_payload = defaults["scan"] if scan_payload is None else scan_payload
         long_term_payload = defaults["long_term"] if long_term_payload is None else long_term_payload
@@ -549,6 +629,10 @@ def build_due_diligence(
     scan_row = _find(scan_payload, symbol)
     long_row = _find(long_term_payload, symbol)
     raw_record = dict(raw_fundamentals or {})
+    warehouse_live: dict[str, Any] = {"used": False, "not_historical_replay": True}
+    if not pit_mode:
+        as_of_today = now.date().isoformat() if hasattr(now, "date") else datetime.now(timezone.utc).date().isoformat()
+        raw_record, warehouse_live = _merge_live_warehouse(symbol, raw_record, as_of=as_of_today)
     raw = dict(raw_record.get("data") or {})
     company = str(scan_row.get("company") or long_row.get("company") or symbol)
     sector = str(long_row.get("sector") or scan_row.get("sector") or "")
@@ -563,11 +647,12 @@ def build_due_diligence(
     fetched_at = str(raw_record.get("fetched_at") or "")
     findings = _evaluate_kpis(raw, framework["kpis"], source_url, fetched_at)
     autonomy: dict[str, Any] = {}
-    try:
-        from product.due_diligence.acquire import load_autonomy_facts
-        autonomy = load_autonomy_facts(symbol)
-    except Exception:
-        autonomy = {}
+    if not pit_mode:
+        try:
+            from product.due_diligence.acquire import load_autonomy_facts
+            autonomy = load_autonomy_facts(symbol)
+        except Exception:
+            autonomy = {}
     measured = merge_kpi_maps(
         extract_kpis_from_raw(raw),
         dict(autonomy.get("kpis") or {}),
@@ -638,17 +723,32 @@ def build_due_diligence(
         )
         finding["availability_state"] = state
         finding["availability_label"] = _STATE_LABEL.get(state, "Data unavailable")
-    pack = apply_autonomy_pack(
-        load_evidence_pack(
-            symbol,
-            raw=raw,
-            scan_as_of=str((scan_payload or {}).get("scanned_at") or ""),
-            long_term_as_of=str((long_term_payload or {}).get("scanned_at") or ""),
-            news_as_of=str(events[0]["published_at"] if events else ""),
-            long_row=long_row,
-        ),
-        autonomy,
-    )
+    if pit_mode:
+        pack = apply_autonomy_pack({
+            "coverage_pct": 0,
+            "gaps": [],
+            "management_commentary": [],
+            "order_book": [],
+            "peers": [],
+            "snapshot_metrics": [],
+            "revenue_drivers": "Data unavailable — no segment table on file.",
+            "business_model": "Data unavailable",
+            "long_term_overlay": {},
+            "flags": [],
+            "next_actions": [],
+        }, {})
+    else:
+        pack = apply_autonomy_pack(
+            load_evidence_pack(
+                symbol,
+                raw=raw,
+                scan_as_of=str((scan_payload or {}).get("scanned_at") or ""),
+                long_term_as_of=str((long_term_payload or {}).get("scanned_at") or ""),
+                news_as_of=str(events[0]["published_at"] if events else ""),
+                long_row=long_row,
+            ),
+            autonomy,
+        )
     if pack.get("revenue_drivers") and pack["revenue_drivers"] != "Data unavailable — no segment table on file.":
         profile["revenue_drivers"] = pack["revenue_drivers"]
     # Classifier owns sector / sub-sector / business_model. Pack may fill about
@@ -981,6 +1081,9 @@ def build_due_diligence(
             "not_an_llm": True,
         },
         "as_of": as_of,
+        "point_in_time": pit_mode,
+        "pit_as_of": str(as_of_session)[:10] if pit_mode else "",
+        "warehouse_live": warehouse_live,
         "places_orders": False,
         "uses_llm": False,
         "disclaimer": (

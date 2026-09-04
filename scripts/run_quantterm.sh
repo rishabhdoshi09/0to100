@@ -76,6 +76,16 @@ market_ops_healthy() {
   python - <<'PY' >/dev/null 2>&1
 import json, os, time
 from pathlib import Path
+lock = Path("logs/market_ops/worker.lock")
+try:
+    lock_pid = int(lock.read_text(encoding="utf-8").strip().split()[0])
+    if lock_pid > 1:
+        os.kill(lock_pid, 0)
+        raise SystemExit(0)
+except SystemExit:
+    raise
+except Exception:
+    pass
 p = Path("logs/market_ops/runtime.json")
 try:
     r = json.loads(p.read_text(encoding="utf-8"))
@@ -94,6 +104,16 @@ stop_stale_market_ops() {
   python - <<'PY' >/dev/null 2>&1 || true
 import json, os, signal, subprocess, time
 from pathlib import Path
+lock = Path("logs/market_ops/worker.lock")
+try:
+    lock_pid = int(lock.read_text(encoding="utf-8").strip().split()[0])
+    if lock_pid > 1:
+        os.kill(lock_pid, 0)
+        raise SystemExit(0)
+except SystemExit:
+    raise
+except Exception:
+    pass
 p = Path("logs/market_ops/runtime.json")
 try:
     r = json.loads(p.read_text(encoding="utf-8"))
@@ -214,15 +234,41 @@ start_market_ops() {
   MARKET_OPS_PID=""; return 1
 }
 
+api_listening() {
+  port_open 8765
+}
+
+adopt_api() {
+  # A listening :8765 is a live API. Never start a second uvicorn on it.
+  if url_ok "http://127.0.0.1:8765/api/health" || api_listening; then
+    if [[ -z "${API_PID:-}" ]] || ! alive "$API_PID"; then
+      API_EXTERNAL=1
+      API_PID=""
+    fi
+    return 0
+  fi
+  return 1
+}
+
 start_api() {
+  if adopt_api; then
+    echo "[STACK] Reusing market API at http://127.0.0.1:8765"
+    return 0
+  fi
   echo "[STACK] Starting local API at http://127.0.0.1:8765 …"
+  mkdir -p "$ROOT/logs/stack"
   # terminal_product_api_parallel imports the canonical terminal_product_api:app
   # and only corrects performance-safe operation routing.
-  python -u -m uvicorn terminal_product_api_parallel:app --host 127.0.0.1 --port 8765 &
+  python -u -m uvicorn terminal_product_api_parallel:app --host 127.0.0.1 --port 8765 \
+    >>"$ROOT/logs/stack/api.log" 2>&1 &
   API_PID=$!
   sleep 0.5 || true
   if ! alive "$API_PID"; then
-    echo "[STACK] Market API exited before becoming healthy; will retry." >&2
+    if adopt_api; then
+      echo "[STACK] Bind raced; reusing the API that won :8765."
+      return 0
+    fi
+    echo "[STACK] Market API exited before becoming healthy; will retry. See logs/stack/api.log." >&2
     API_PID=""; return 1
   fi
   return 0
@@ -230,7 +276,9 @@ start_api() {
 
 start_frontend() {
   echo "[STACK] Starting dedicated terminal at http://127.0.0.1:5173 …"
-  (cd frontend && npm run dev -- --host 127.0.0.1) &
+  mkdir -p "$ROOT/logs/stack"
+  npm --prefix "$ROOT/frontend" run dev -- --host 127.0.0.1 --port 5173 \
+    >>"$ROOT/logs/stack/vite.log" 2>&1 &
   FRONTEND_PID=$!
 }
 
@@ -241,14 +289,57 @@ kick_scan() {
     return 1
   fi
   if ! url_ok "http://127.0.0.1:8765/api/health"; then return 1; fi
+  if python - <<'PY' >/dev/null 2>&1
+from product.desk_pipeline import scan_is_fresh
+raise SystemExit(0 if scan_is_fresh() else 1)
+PY
+  then
+    SCAN_KICKED=1
+    echo "[STACK] Market scan is already current; not queueing another."
+    return 0
+  fi
   echo "[STACK] Queueing market scan, news and long-term funds in this terminal…"
   if python scripts/local_stack.py scan; then SCAN_KICKED=1; return 0; fi
   return 1
 }
 
-echo "[STACK] Stopping any previous API, desk, autonomy and market operations so this terminal owns them."
-python scripts/local_stack.py stop --ports 5173,8765 || true
-sleep 1 || true
+ensure_machine_lock() {
+  if [[ "${QT_MACHINE_OWNER:-}" == "1" ]]; then
+    echo "[STACK] Complete launcher already holds the machine-wide supervisor lock; not stopping ports."
+    return 0
+  fi
+  local lock
+  lock="$(python scripts/local_stack.py machine-lock-path)"
+  mkdir -p "$(dirname "$lock")"
+  exec 201>"$lock"
+  if python scripts/local_stack.py try-fd-lock --fd 201; then
+    export QT_MACHINE_OWNER=1
+    python scripts/local_stack.py write-owner --pid $$ --root "$ROOT" >/dev/null || true
+    echo "[STACK] This inner supervisor owns the machine lock. Stopping leftover :5173/:8765 from a previous owner."
+    python scripts/local_stack.py stop --ports 5173,8765 || true
+    sleep 1 || true
+    return 0
+  fi
+  if python scripts/local_stack.py ports-healthy --ports 5173,8765 >/dev/null; then
+    API_EXTERNAL=1
+    FRONTEND_EXTERNAL=1
+    echo "[STACK] Another machine owner is running; adopting the healthy desk. Not stopping :5173/:8765."
+    echo "[STACK] Follower mode: this process will not start or restart API, Vite, autonomy, or market_ops."
+    return 0
+  fi
+  echo "[STACK] Machine lock is held but :5173/:8765 are not healthy. Not killing them." >&2
+  exit 1
+}
+
+ensure_machine_lock
+
+if [[ "${QT_MACHINE_OWNER:-}" != "1" ]]; then
+  AUTONOMY_EXTERNAL=1
+  MARKET_OPS_EXTERNAL=1
+  API_EXTERNAL=1
+  FRONTEND_EXTERNAL=1
+  echo "[STACK] Follower boot: adopting the owner's desk. Not starting API, Vite, autonomy, or market_ops."
+else
 
 if python - <<'PY' >/dev/null 2>&1
 from product.autonomy_status import read_autonomy_status
@@ -292,10 +383,40 @@ else
   echo "[STACK] Market API did not become healthy; frontend waits. Supervisor will retry." >&2
 fi
 
+fi
+
 echo "[STACK] QuantTerm is running in this terminal: desk :5173, API :8765, autonomy, market operations, market scan."
 echo "[STACK] Ctrl-C is the stop signal. A child crash is restarted; it does not stop the desk."
 
+# Supervisor must outlive a single child failure. set -e would run the EXIT
+# trap and kill the API the next time a probe returns non-zero.
+set +e
+API_HEALTH_FAILS=0
+
 while [[ "$STOP" != "1" ]]; do
+  if [[ "${QT_MACHINE_OWNER:-}" != "1" ]]; then
+    echo "[STACK] Follower: another process owns the machine lock. Not starting or restarting :5173/:8765/autonomy/market_ops."
+    sleep 1 || true
+    continue
+  fi
+  # Frontend first: cheap port probe. Do not hide Vite restart behind market_ops Python.
+  if [[ "$FRONTEND_EXTERNAL" != "1" ]]; then
+    if port_open 5173; then
+      if [[ -z "${FRONTEND_PID:-}" ]] || ! alive "$FRONTEND_PID"; then
+        FRONTEND_EXTERNAL=1
+        FRONTEND_PID=""
+        echo "[STACK] RecoWealth desk is already on :5173; reusing it."
+      fi
+    elif url_ok "http://127.0.0.1:8765/api/health" || port_open 8765; then
+      if [[ -z "${FRONTEND_PID:-}" ]] || ! alive "$FRONTEND_PID"; then
+        echo "[STACK] RecoWealth desk is down; restarting."
+        start_frontend
+      fi
+    else
+      echo "[STACK] RecoWealth desk waits until the market API is listening." >&2
+    fi
+  fi
+
   if [[ "$MARKET_OPS_EXTERNAL" != "1" ]]; then
     if [[ -z "${MARKET_OPS_PID:-}" ]] || ! alive "$MARKET_OPS_PID" || ! market_ops_healthy; then
       if market_ops_healthy; then
@@ -315,35 +436,51 @@ while [[ "$STOP" != "1" ]]; do
     SCAN_KICKED=0
   fi
 
-  if [[ "$API_EXTERNAL" != "1" ]]; then
-    if [[ -z "${API_PID:-}" ]] || ! alive "$API_PID"; then
-      echo "[STACK] Market API is down; restarting."
+  if adopt_api; then
+    API_HEALTH_FAILS=0
+  elif ! url_ok "http://127.0.0.1:8765/api/health"; then
+    API_HEALTH_FAILS=$((API_HEALTH_FAILS + 1))
+    if api_listening; then
+      echo "[STACK] Market API is listening on :8765; health probe failed ${API_HEALTH_FAILS} time(s). Not killing it."
+      API_EXTERNAL=1
+      API_PID=""
+      API_HEALTH_FAILS=0
+    elif (( API_HEALTH_FAILS >= 3 )); then
+      echo "[STACK] Market API health failed ${API_HEALTH_FAILS} times; restarting. See logs/stack/api.log."
+      if [[ -n "${API_PID:-}" ]]; then kill "$API_PID" >/dev/null 2>&1 || true; fi
+      API_EXTERNAL=0
+      API_PID=""
       start_api || true
       wait_for_api || echo "[STACK] Market API restart is not healthy yet; will retry." >&2
+      API_HEALTH_FAILS=0
+    fi
+  else
+    API_HEALTH_FAILS=0
+  fi
+  if [[ "$API_EXTERNAL" != "1" ]]; then
+    if [[ -z "${API_PID:-}" ]] || ! alive "$API_PID"; then
+      if adopt_api; then
+        : # listening API belongs to another owner; do not spawn a second uvicorn
+      else
+        echo "[STACK] Market API is down; restarting."
+        start_api || true
+        wait_for_api || echo "[STACK] Market API restart is not healthy yet; will retry." >&2
+      fi
     fi
   fi
-  if [[ "$FRONTEND_EXTERNAL" != "1" ]] && ! alive "$FRONTEND_PID"; then
-    if port_open 5173; then
-      FRONTEND_EXTERNAL=1; FRONTEND_PID=""
-      echo "[STACK] RecoWealth desk is already on :5173; reusing it."
-    elif url_ok "http://127.0.0.1:8765/api/health" || port_open 8765; then
-      echo "[STACK] RecoWealth desk is down; restarting."
-      start_frontend
-    else
-      echo "[STACK] RecoWealth desk waits until the market API is listening." >&2
-    fi
-  fi
-  if [[ "$AUTONOMY_EXTERNAL" != "1" ]] && ! alive "$AUTONOMY_PID"; then
-    if python - <<'PY' >/dev/null 2>&1
+  if python - <<'PY' >/dev/null 2>&1
 from product.autonomy_status import read_autonomy_status
 raise SystemExit(0 if read_autonomy_status().get("running") else 1)
 PY
-    then
-      AUTONOMY_EXTERNAL=1; AUTONOMY_PID=""
-    else
-      echo "[STACK] Autonomy is down; restarting."
-      start_autonomy || true
+  then
+    if [[ -z "${AUTONOMY_PID:-}" ]] || ! alive "$AUTONOMY_PID"; then
+      AUTONOMY_EXTERNAL=1
+      AUTONOMY_PID=""
     fi
+  else
+    AUTONOMY_EXTERNAL=0
+    echo "[STACK] Autonomy is down; restarting."
+    start_autonomy || true
   fi
   if [[ "$SCAN_KICKED" != "1" ]]; then kick_scan || true; fi
   sleep 1 || true

@@ -120,8 +120,9 @@ class JobStore:
         self.path = Path(db_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self._db = sqlite3.connect(str(self.path), check_same_thread=False)
+        self._db = sqlite3.connect(str(self.path), check_same_thread=False, timeout=30.0)
         self._db.row_factory = sqlite3.Row
+        self._db.execute("PRAGMA busy_timeout=30000")
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.executescript(_DDL)
         self._migrate()
@@ -176,9 +177,20 @@ class JobStore:
                     "SELECT * FROM jobs WHERE status=? AND lease_expires_at IS NOT NULL "
                     "AND lease_expires_at < ? ORDER BY scheduled_for LIMIT 1", (RUNNING, now)).fetchone()
                 if row is None:
+                    # Fresh market work is time-sensitive. A long post-market outcome/learning
+                    # job must not get the first lease merely because it is marked critical and
+                    # then make scan/news wait minutes. This is ordering only: it does not skip,
+                    # duplicate, or weaken any critical job.
+                    # Poll-wait jobs remain lowest priority so background polling cannot starve
+                    # real work either.
                     row = self._db.execute(
                         "SELECT * FROM jobs WHERE status=? AND scheduled_for<=? "
-                        "ORDER BY critical DESC, scheduled_for, created_at LIMIT 1",
+                        "ORDER BY CASE job_type "
+                        "WHEN 'market_scan' THEN 40 WHEN 'news_refresh' THEN 30 "
+                        "WHEN 'paper_cycle' THEN 20 ELSE 0 END DESC, "
+                        "CASE WHEN error_code IN "
+                        "('DATA_REFRESH_IN_PROGRESS','MARKET_OP_IN_PROGRESS','LONG_TERM_OP_IN_PROGRESS') "
+                        "THEN 0 ELSE 1 END DESC, critical DESC, scheduled_for, created_at LIMIT 1",
                         (PENDING, now)).fetchone()
                 if row is None:
                     self._db.execute("COMMIT")

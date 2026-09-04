@@ -2,20 +2,8 @@ name: Terminal UI
 
 on:
   push:
-    branches:
-      - agent/quantterm-terminal-ui
+    branches: ["**"]
   pull_request:
-    paths:
-      - 'frontend/**'
-      - 'terminal_api.py'
-      - 'terminal_product_api.py'
-      - 'report_api.py'
-      - 'reporting/**'
-      - 'product/product_readiness.py'
-      - 'product/stock_workspace.py'
-      - 'product/workspace.py'
-      - 'requirements.txt'
-      - '.github/workflows/terminal-ui.yml'
 
 jobs:
   build:
@@ -28,6 +16,9 @@ jobs:
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm install
+      - name: Test frontend
+        working-directory: frontend
+        run: npm test
       - name: Build frontend
         working-directory: frontend
         run: npm run build

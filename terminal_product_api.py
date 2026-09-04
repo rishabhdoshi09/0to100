@@ -511,6 +511,14 @@ def _product_startup() -> None:
     _startup_prepare_product()
 
 
+@app.get("/api/autonomy-desk")
+def autonomy_desk() -> dict[str, Any]:
+    """Read-only autonomous-loop projection. Does not enqueue work."""
+    from product.autonomous_loop import desk_projection
+
+    return desk_projection()
+
+
 @app.get("/api/desk-pipeline")
 def desk_pipeline_status() -> dict[str, Any]:
     """Read-only viewing-order snapshot. Does not enqueue downloads."""

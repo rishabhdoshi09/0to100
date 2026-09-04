@@ -267,6 +267,18 @@ export function BotLearningPanel({ dashboard }: { dashboard: DashboardPayload })
 
 export function PortfolioView({ dashboard, runControl }: ViewProps) {
   const paperReturn = dashboard.paper.capital > 0 ? ((dashboard.paper.equity / dashboard.paper.capital) - 1) * 100 : null
+  if (dashboard.paper.available === false) {
+    return (
+      <section className="workspace-view">
+        <div className="large-empty">
+          Paper book is not available yet. QuantTerm has not loaded a paper ledger. This is empty, not a live account.
+          <div className="inline-actions" style={{ marginTop: 12 }}>
+            <button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Request paper cycle</button>
+          </div>
+        </div>
+      </section>
+    )
+  }
   return (
     <section className="workspace-view">
       <div className="inline-actions"><button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Request paper cycle</button><button type="button" onClick={() => void runControl(dashboard.autonomy.new_paper_entries ? 'PAUSE_NEW_PAPER_ENTRIES' : 'RESUME_NEW_PAPER_ENTRIES')}>{dashboard.autonomy.new_paper_entries ? 'Pause new entries' : 'Resume new entries'}</button></div>

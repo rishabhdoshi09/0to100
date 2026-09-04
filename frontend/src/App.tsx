@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchChart, fetchDashboard, sendControl } from './api'
+import { deskRefreshBanner } from './deskBanner'
 import {
   CompareView,
   MarketScannerView,
@@ -93,6 +94,18 @@ const emptyDashboard: DashboardPayload = {
     new_paper_entries: false,
     existing_exits: false,
     research_enabled: false,
+    broker: {
+      state: 'UNKNOWN',
+      ready: false,
+      live_data_ready: false,
+      execution_ready: false,
+      auth_ready: false,
+      login_required: false,
+      auth_status: 'UNKNOWN',
+      reason_code: '',
+      detail: 'Checking Zerodha live-data readiness…',
+      snapshot_id: '',
+    },
     capability_notes: [],
     active_failures: [],
     recent_dialogue: [],
@@ -272,6 +285,7 @@ function App() {
   const [query, setQuery] = useState('')
   const [helpOpen, setHelpOpen] = useState(false)
   const autoPrepareRef = useRef(false)
+  const refreshInFlight = useRef(false)
   const istClock = useIstClock()
   const [depth, setDepth] = useState<DisplayDepth>(() => {
     const saved = window.localStorage.getItem('quantterm-display-depth')
@@ -279,6 +293,8 @@ function App() {
   })
 
   const refresh = useCallback(async () => {
+    if (refreshInFlight.current) return
+    refreshInFlight.current = true
     try {
       const payload = await fetchDashboard()
       setDashboard((prev) => {
@@ -309,6 +325,7 @@ function App() {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Waiting for the market API')
     } finally {
+      refreshInFlight.current = false
       setLoading(false)
     }
   }, [])
@@ -504,8 +521,21 @@ function App() {
     'Market Overview',
     'Market Internals',
   ].includes(active)
-  const kiteOk = dashboard.autonomy.state !== 'AUTH_REQUIRED'
-    && !(dashboard.autonomy.active_failures || []).some((f) => String(f).includes('auth'))
+  const brokerState = dashboard.autonomy.broker
+  const brokerReady = brokerState?.live_data_ready === true
+  const brokerLabel = brokerReady
+    ? 'ZERODHA OK'
+    : brokerState?.state === 'LOGIN_REQUIRED'
+      ? 'ZERODHA LOGIN'
+      : brokerState?.state === 'SNAPSHOT_REQUIRED'
+        ? 'ZERODHA DATA'
+        : brokerState?.state === 'UNAVAILABLE'
+          ? 'ZERODHA OFFLINE'
+          : brokerState?.state === 'CONFIG_REQUIRED'
+            ? 'ZERODHA CONFIG'
+            : 'ZERODHA CHECK'
+  const brokerTitle = brokerState?.detail || 'Zerodha live-data readiness has not been reported yet.'
+  const connectionBanner = error ? deskRefreshBanner(error, dashboardHasWork(dashboard)) : null
 
   const keep = (ids: string[], node: ReactNode) => (
     <KeepPage ids={ids} active={active} seen={seen}>{node}</KeepPage>
@@ -599,8 +629,8 @@ function App() {
             <DisplayDepthToggle depth={depth} onChange={setDepth} />
             <button type="button" className="experience-help-trigger" onClick={() => setHelpOpen(true)}>What is this?</button>
             <span className={dashboard.data.ready ? 'live-pill' : 'work-pill'}><i /> {dashboard.data.ready ? 'DATA READY' : 'PREPARING DATA'}</span>
-            <span className={kiteOk ? 'live-pill' : 'offline-pill'} title={dashboard.autonomy.plain_state || ''}>
-              <i /> {kiteOk ? 'ZERODHA OK' : 'ZERODHA LOGIN'}
+            <span className={brokerReady ? 'live-pill' : 'offline-pill'} title={brokerTitle}>
+              <i /> {brokerLabel}
             </span>
             <button type="button" onClick={() => void refresh()} aria-label="Refresh dashboard">↻</button>
           </div>
@@ -619,10 +649,10 @@ function App() {
           </div>
         </section>
 
-        {error && (
+        {connectionBanner && (
           <div className="api-degraded-banner" role="alert">
-            <strong>Connecting to the market API…</strong>
-            <p>QuantTerm is starting the data lanes. Retry if this stays for more than a minute.</p>
+            <strong>{connectionBanner.title}</strong>
+            <p>{connectionBanner.body}</p>
             <details>
               <summary>Technical details</summary>
               <pre>{error}</pre>

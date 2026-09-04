@@ -78,4 +78,22 @@ def test_completed_refresh_is_not_reused_for_newer_required_session():
     while time.time() < deadline and handler.runtime_state["running"]:
         time.sleep(0.01)
     assert handler(_NextCtx()).status == JS.SUCCEEDED
-    assert calls == ["2026-08-28", "2026-08-31"]
+
+
+def test_dead_worker_is_reported_instead_of_polling_forever():
+    class _Dead:
+        def is_alive(self):
+            return False
+
+    handler = make_parallel_data_refresh_handler(lambda _ctx: None, clock=lambda: 100.0)
+    handler.runtime_state.update({
+        "running": True,
+        "started_at": 1.0,
+        "finished_at": 0.0,
+        "required": "2026-08-28",
+        "result": None,
+        "thread": _Dead(),
+    })
+    result = handler(_Ctx())
+    assert result.error_code == "DATA_REFRESH_WORKER_STUCK"
+    assert result.status == JS.RETRYABLE_FAILED

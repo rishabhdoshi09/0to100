@@ -5,7 +5,16 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from product.backend_control_plane import FORBIDDEN_CONTROLS, SAFE_CONTROLS, _scrub_technical
-from product.home_os import FAILED_RECOVERABLE, LOGIN_REQUIRED, PAUSED, PROBLEM, build_home_os
+from product.home_os import (
+    FAILED_RECOVERABLE,
+    LOGIN_REQUIRED,
+    MARKET_CLOSED_COMPLETE,
+    NORMAL,
+    NO_TRADE,
+    PAUSED,
+    PROBLEM,
+    build_home_os,
+)
 from product.runtime_capabilities import by_id, home_actions
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -13,6 +22,10 @@ IST = ZoneInfo("Asia/Kolkata")
 
 def _open() -> datetime:
     return datetime(2026, 9, 1, 10, 45, tzinfo=IST)
+
+
+def _eod() -> datetime:
+    return datetime(2026, 9, 1, 19, 10, tzinfo=IST)
 
 
 def _ready_dash(**auto):
@@ -124,15 +137,34 @@ def test_waiting_dependency_explains_official_session():
     assert data.get("dependencies")
 
 
-def test_needs_you_zerodha_primary_is_login_without_secrets():
+def test_zerodha_login_is_optional_capability_without_secret_leakage():
     os = build_home_os(
         dashboard={
             "autonomy": {
                 "state": "AUTH_REQUIRED",
                 "running": True,
+                "operator_state": "HEALTHY",
+                "broker": {
+                    "state": "LOGIN_REQUIRED",
+                    "ready": False,
+                    "live_data_ready": False,
+                    "execution_ready": False,
+                    "login_required": True,
+                    "reason_code": "TOKEN_MISSING",
+                },
                 "live_feed": {"connected": False, "access_token": "SHOULD_NOT_LEAK", "last_error": "token=abc"},
             },
-            "data": {"ready": True},
+            "data": {
+                "ready": True,
+                "bhavcopy": {
+                    "ready": True,
+                    "latest_date": "2026-09-01",
+                    "current": True,
+                    "expected_latest_completed_session": "2026-09-01",
+                    "available_session": "2026-09-01",
+                    "reason_code": "HISTORY_CURRENT",
+                },
+            },
         },
         paper={"enabled": True, "open_positions": [], "closed_trades": []},
         why={"available": False},
@@ -141,15 +173,63 @@ def test_needs_you_zerodha_primary_is_login_without_secrets():
         now=_open(),
     )
     assert os["state"] == LOGIN_REQUIRED
+    assert os["need_me"] is True
+    required = os["attention"]["required_now"]
+    assert required and required[0]["id"] == "BROKER_LOGIN_REQUIRED"
+    assert os["attention"]["optional_count"] == 0
+    assert os["broker"]["login_required"] is True
+    assert os["broker"]["requires_operator_now"] is True
     zed = os["system"]["zerodha"]
     assert zed["status"] == "Needs you"
-    assert zed["primary_action"]["label"] == "Login to Zerodha"
-    assert zed["primary_action"]["kind"] == "instruction"
-    assert "WAITING FOR ZERODHA LOGIN" in zed["detail"]
-    dumped = str(zed)
+    assert zed["status_code"] == "LOGIN_REQUIRED"
+    assert zed["needs_user"] is True
+    assert zed["login_required"] is True
+    assert zed["blocks_autonomy"] is False
+    assert zed.get("primary_action", {}).get("label") == "Login to Zerodha"
+    dumped = str(zed) + str(os.get("broker") or {})
     assert "SHOULD_NOT_LEAK" not in dumped
     assert "token=abc" not in dumped
     assert "access_token" not in (zed.get("technical") or {})
+
+    closed = build_home_os(
+        dashboard={
+            "autonomy": {
+                "state": "AUTH_REQUIRED",
+                "running": True,
+                "operator_state": "HEALTHY",
+                "broker": {
+                    "state": "LOGIN_REQUIRED",
+                    "ready": False,
+                    "login_required": True,
+                    "reason_code": "TOKEN_MISSING",
+                },
+                "live_feed": {"connected": False, "access_token": "SHOULD_NOT_LEAK"},
+            },
+            "data": {
+                "ready": True,
+                "bhavcopy": {
+                    "ready": True,
+                    "latest_date": "2026-09-01",
+                    "current": True,
+                    "expected_latest_completed_session": "2026-09-01",
+                    "available_session": "2026-09-01",
+                    "reason_code": "HISTORY_CURRENT",
+                },
+            },
+        },
+        paper={"enabled": True, "open_positions": [], "closed_trades": []},
+        why={"available": False},
+        soak={"real_forward_observations": 0, "insufficient_evidence": True},
+        scan={"scanned_at": "2026-09-01T05:00:00+00:00", "records": [{"symbol": "TCS"}]},
+        now=_eod(),
+    )
+    assert closed["state"] in {NORMAL, NO_TRADE, MARKET_CLOSED_COMPLETE}
+    assert closed["state"] != LOGIN_REQUIRED
+    assert closed["need_me"] is False
+    assert closed["attention"]["required_now"] == []
+    assert closed["attention"]["optional_count"] == 1
+    assert closed["broker"]["requires_operator_now"] is False
+    assert "SHOULD_NOT_LEAK" not in str(closed["system"]["zerodha"])
 
 
 def test_problem_retry_maps_to_refresh_data_now():
@@ -181,6 +261,8 @@ def test_paper_pause_resume_map_to_existing_controls():
         now=_open(),
     )
     assert paused["state"] == PAUSED
+    assert paused["need_me"] is True
+    assert paused["attention"]["count"] == 1
     bot = paused["system"]["paper_bot"]
     assert bot["status"] == "Needs you"
     assert bot["primary_action"]["control"] == "RESUME_NEW_PAPER_ENTRIES"

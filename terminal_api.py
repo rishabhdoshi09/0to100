@@ -13,11 +13,13 @@ from pathlib import Path
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from logger import quiet_uvicorn_health_access
 
@@ -35,6 +37,17 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(Exception)
+async def _log_unhandled(request: Request, exc: Exception):
+    if isinstance(exc, HTTPException):
+        raise exc
+    print(f"[API] unhandled {request.method} {request.url.path}: {exc}", flush=True)
+    return JSONResponse(
+        {"ok": False, "error": str(exc)[:300], "path": request.url.path},
+        status_code=500,
+    )
 
 _ops_process: subprocess.Popen | None = None
 
@@ -67,8 +80,81 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
+DASHBOARD_SCAN_RECORD_LIMIT = 80
+
+_warm_threads: dict[str, threading.Thread] = {}
+_warm_guard = threading.Lock()
+
+
+def _schedule_warm(name: str, target) -> None:
+    """Run a one-shot warmer without holding the desk request."""
+    with _warm_guard:
+        current = _warm_threads.get(name)
+        if current is not None and current.is_alive():
+            return
+        thread = threading.Thread(target=target, name=f"quantterm-{name}", daemon=True)
+        _warm_threads[name] = thread
+        thread.start()
+
+
+def _warm_regime() -> None:
+    try:
+        from core.regime_engine import compute_regime
+        compute_regime()
+    except Exception:
+        return
+
+
+def _warm_bhavcopy_cache() -> None:
+    try:
+        from data.bhavcopy_runtime import status as bhavcopy_status
+        bhavcopy_status(load_cache=True)
+    except Exception:
+        return
+
+
+def _dashboard_num(row: dict[str, Any], *keys: str) -> float:
+    for key in keys:
+        try:
+            value = float(row.get(key) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if value == value:
+            return value
+    return 0.0
+
+
+def _dashboard_record_rank(row: dict[str, Any]) -> tuple[float, float, float]:
+    return (
+        _dashboard_num(row, "composite", "sepa_score", "score"),
+        _dashboard_num(row, "sepa_score", "score"),
+        _dashboard_num(row, "score"),
+    )
+
+
+def _slim_ranked_records(
+    payload: dict[str, Any],
+    *,
+    limit: int = DASHBOARD_SCAN_RECORD_LIMIT,
+) -> dict[str, Any]:
+    """Keep Home fast: top-ranked rows only. Universe size stays the real count."""
+    if not isinstance(payload, dict):
+        return payload
+    records = [row for row in (payload.get("records") or []) if isinstance(row, dict)]
+    cap = max(1, int(limit))
+    ranked = sorted(records, key=_dashboard_record_rank, reverse=True)[:cap]
+    out = dict(payload)
+    out["records"] = ranked
+    if "universe_size" in payload:
+        out["universe_size"] = int(payload.get("universe_size") or 0) or len(records)
+    out["dashboard_record_limit"] = cap
+    out["dashboard_records_shown"] = len(ranked)
+    return out
+
+
 def _empty_dashboard(error: str, scan: dict[str, Any] | None = None) -> dict[str, Any]:
     payload = scan if isinstance(scan, dict) else _scan_payload()
+    payload = _slim_ranked_records(payload)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "market": {
@@ -172,10 +258,25 @@ def _fresh_epoch(value: Any, max_age_s: float = 10.0) -> bool:
 def _ops_runtime_payload() -> dict[str, Any]:
     runtime = _json_file(OPS_RUNTIME, {})
     running = bool(runtime.get("process_running")) and _fresh_epoch(runtime.get("heartbeat_epoch"))
+    lock_pid = 0
+    if not running:
+        try:
+            from operations.store import live_lock_owner_pid
+            lock_pid = live_lock_owner_pid(OPS_ROOT / "worker.lock")
+        except Exception:
+            lock_pid = 0
+        if lock_pid:
+            running = True
+            runtime = {
+                **runtime,
+                "worker_pid": lock_pid,
+                "process_running": True,
+                "recovering": True,
+            }
     return {
         **runtime,
         "running": running,
-        "process_running": bool(runtime.get("process_running")),
+        "process_running": bool(runtime.get("process_running")) or bool(lock_pid),
     }
 
 
@@ -213,7 +314,12 @@ def _ensure_ops_worker(*, wait: bool = True) -> dict[str, Any]:
 
 @app.on_event("startup")
 def _startup() -> None:
-    _ensure_ops_worker()
+    try:
+        _ensure_ops_worker()
+    except RuntimeError:
+        # Market Operations is launcher-owned. A late first heartbeat must not
+        # take the desk API down. Home shows WAITING / PREPARING instead.
+        return
 
 
 @app.on_event("shutdown")
@@ -230,8 +336,24 @@ def _shutdown() -> None:
 
 def _market_payload() -> dict:
     try:
-        from product.market_view import current_market_view
-        market = current_market_view()
+        from product.market_view import peek_cached_market_view
+        market = peek_cached_market_view()
+        _schedule_warm("regime", _warm_regime)
+        if market is None:
+            return {
+                "available": False,
+                "health": "Unavailable",
+                "summary": "Market regime is still assembling from index history.",
+                "trade_stance": "Do not infer a market stance from missing data.",
+                "breadth": "—",
+                "leaders": [],
+                "laggards": [],
+                "nifty_change_1d": None,
+                "nifty_change_5d": None,
+                "vix": None,
+                "nifty_price": None,
+                "technical_details": {},
+            }
         return {
             "available": True,
             "health": market.health,
@@ -436,13 +558,16 @@ def _autonomy_payload() -> dict:
             telegram = delivery_status()
         except Exception as exc:
             telegram = {"configured": False, "state": "unavailable", "detail": str(exc)}
+        explanation = str(raw.get("explanation") or "") or str(status.get("explanation") or "")
+        reason_code = str(raw.get("reason_code") or status.get("reason_code") or "")
         return {
             "available": True,
             "running": bool(status.get("running")),
             "process_running": bool(runtime.get("process_running", raw.get("process_running", False))),
             "state": str(status.get("state", "UNKNOWN")),
             "plain_state": str(status.get("plain_state", "")),
-            "explanation": str(status.get("explanation", "")),
+            "explanation": explanation,
+            "reason_code": reason_code,
             "heartbeat_ist": str(runtime.get("heartbeat_ist") or status.get("heartbeat_ist", "")),
             "scheduler_owner_pid": runtime.get("scheduler_owner_pid", raw.get("scheduler_owner_pid")),
             "active_job": dict(runtime.get("active_job", {}) or {}),
@@ -453,7 +578,11 @@ def _autonomy_payload() -> dict:
             "existing_exits": exit_capability != "blocked",
             "research_enabled": research_capability != "blocked",
             "capability_notes": list(status.get("capability_notes", []) or []),
-            "active_failures": list(raw.get("active_failures", []) or []),
+            "active_failures": list(
+                status.get("active_failures")
+                or raw.get("active_failures")
+                or []
+            ),
             "recent_dialogue": list(status.get("recent_dialogue", []) or [])[-40:],
             "recent_transitions": list(status.get("recent_transitions", []) or [])[-30:],
             "jobs": dict(status.get("jobs", {}) or {}),
@@ -471,6 +600,7 @@ def _autonomy_payload() -> dict:
             "state": "UNKNOWN",
             "plain_state": "Autonomy status unavailable.",
             "explanation": str(exc),
+            "reason_code": "",
             "heartbeat_ist": "",
             "scheduler_owner_pid": None,
             "active_job": {},
@@ -630,7 +760,11 @@ def _fno_payload() -> dict[str, Any]:
 def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news: dict) -> dict:
     try:
         from data.bhavcopy_runtime import status as bhavcopy_status
-        bhavcopy = bhavcopy_status(load_cache=True)
+        # Do not unpickle store_cache.pkl on the Home request. A cold API
+        # process can spend longer than the page timeout loading it.
+        bhavcopy = bhavcopy_status(load_cache=False)
+        if bhavcopy.get("cache_exists") and not bhavcopy.get("ready"):
+            _schedule_warm("bhavcopy-cache", _warm_bhavcopy_cache)
     except Exception as exc:
         bhavcopy = {
             "ready": False,
@@ -659,7 +793,10 @@ def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news
     except Exception:
         freshness = {}
     if not bhavcopy.get("ready"):
-        blockers.append("Official NSE bhavcopy history is not ready; direct scans will prepare it first.")
+        if bhavcopy.get("cache_exists"):
+            blockers.append("Official NSE bhavcopy cache is on disk and still loading into the desk API.")
+        else:
+            blockers.append("Official NSE bhavcopy history is not ready; direct scans will prepare it first.")
     elif int(bhavcopy.get("sessions", 0) or 0) < int(bhavcopy.get("minimum_sessions", 60) or 60):
         blockers.append("Official bhavcopy history is shallower than the minimum screen requirement.")
     elif freshness and not freshness.get("current", True):
@@ -717,22 +854,59 @@ def _conviction(scan: dict, market: dict) -> list[dict]:
 
 @app.get("/api/health")
 def health() -> dict:
-    """Liveness only. Must stay cheap so the launcher can start the desk.
+    """Liveness plus the cheap STARTING/READY/DEGRADED/FAILED/RECOVERING probe.
 
-    Autonomy and operations status live on /api/dashboard. This probe must not
-    open SQLite or import supervisor state — a scan can hold those locks.
+    File, PID and port checks only. Autonomy SQLite and live scans stay off
+    this path so the launcher can start the desk.
     """
-    return {
+    payload = {
         "ok": True,
         "service": "quantterm-terminal-api",
         "version": app.version,
+        "lifecycle": "READY",
+        "reason": "Terminal API is serving",
+        "reasons": [],
+        "components": [],
+        "live_locked": True,
     }
+    try:
+        from product.runtime_lifecycle import inspect_runtime
+
+        runtime = inspect_runtime(api_serving=True)
+        payload.update({
+            "lifecycle": runtime.get("lifecycle") or "READY",
+            "reason": runtime.get("reason") or payload["reason"],
+            "reasons": runtime.get("reasons") or [],
+            "components": runtime.get("components") or [],
+            "history": runtime.get("history") or {},
+            "checked_at": runtime.get("checked_at"),
+            "live_locked": True,
+        })
+        payload["ok"] = payload["lifecycle"] != "FAILED"
+    except Exception as exc:
+        payload.update({
+            "ok": True,
+            "lifecycle": "DEGRADED",
+            "reason": f"Runtime probe failed: {exc}"[:240],
+            "reasons": [str(exc)[:240]],
+        })
+    return payload
 
 
 @app.get("/api/dashboard")
 def dashboard() -> dict:
     """RecoWealth desk bootstrap. Last readable scan survives a subsystem failure."""
-    scan = _scan_payload()
+    try:
+        scan = _scan_payload()
+    except Exception as exc:
+        scan = {
+            "available": False,
+            "scanned_at": "",
+            "universe_size": 0,
+            "summary": {},
+            "records": [],
+            "error": str(exc),
+        }
     try:
         market = _market_payload()
         long_term = _long_term_payload()
@@ -742,6 +916,7 @@ def dashboard() -> dict:
         news = _news_payload()
         fno = _fno_payload()
         data = _data_payload(scan, long_term, operations, fno, news)
+        conviction = _conviction(scan, market)
         daily_wrap: list = []
         try:
             from product.desk_note import daily_wrap as build_daily_wrap
@@ -754,15 +929,15 @@ def dashboard() -> dict:
         return _json_safe({
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "market": market,
-            "scan": scan,
-            "long_term": long_term,
+            "scan": _slim_ranked_records(scan),
+            "long_term": _slim_ranked_records(long_term),
             "paper": paper,
             "autonomy": autonomy,
             "operations": operations,
             "news": news,
             "fno": fno,
             "data": data,
-            "conviction": _conviction(scan, market),
+            "conviction": conviction,
             "scan_progress": _scan_progress_payload(),
             "daily_wrap": daily_wrap,
         })
@@ -871,6 +1046,8 @@ _AUTONOMY_CONTROLS = {
     "RUN_CYCLE_NOW",
     "PAUSE_NEW_PAPER_ENTRIES",
     "RESUME_NEW_PAPER_ENTRIES",
+    "OBSERVE_ONLY_TODAY",
+    "CLEAR_OBSERVE_ONLY",
 }
 _ALLOWED_CONTROLS = set(_OPERATION_CONTROLS) | _AUTONOMY_CONTROLS
 _USER_OPERATION_PRIORITY = 100
@@ -910,7 +1087,14 @@ def control(control_name: str) -> dict:
             requested_by="terminal",
             priority=_USER_OPERATION_PRIORITY,
         )
-        _ensure_ops_worker(wait=False)
+        try:
+            worker = _ensure_ops_worker(wait=False)
+        except RuntimeError as exc:
+            from operations.store import live_lock_owner_pid
+            lock_pid = live_lock_owner_pid(OPS_ROOT / "worker.lock")
+            if not lock_pid:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            worker = {"running": True, "worker_pid": lock_pid, "recovering": True}
         return {
             "accepted": True,
             "control": name,
@@ -918,6 +1102,7 @@ def control(control_name: str) -> dict:
             "operation_status": operation.get("status"),
             "created": created,
             "priority": operation.get("priority"),
+            "worker_recovering": bool((worker or {}).get("recovering")),
         }
     from research.autonomy.controls import request_control
     queued = request_control(name, reason="owner requested control from dedicated terminal frontend")

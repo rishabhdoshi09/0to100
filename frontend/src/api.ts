@@ -1,25 +1,24 @@
-import { readJson } from './http'
+import { DASHBOARD_FETCH_TIMEOUT_MS, fetchJson } from './http'
 import type { ChartBar, ControlName, DashboardPayload, OperationRecord } from './types'
 
-const json = readJson
+function request<T>(url: string, init?: RequestInit & { timeoutMs?: number }): Promise<T> {
+  return fetchJson<T>(url, { headers: { Accept: 'application/json' }, ...init })
+}
 
 export const fetchDashboard = (): Promise<DashboardPayload> =>
-  fetch('/api/dashboard', { headers: { Accept: 'application/json' } })
-    .then((response) => json<DashboardPayload>(response))
+  request<DashboardPayload>('/api/dashboard', { timeoutMs: DASHBOARD_FETCH_TIMEOUT_MS })
+
+export const fetchHealth = (): Promise<{ ok: boolean; service?: string }> =>
+  request('/api/health', { timeoutMs: 4_000 })
 
 export const fetchChart = (symbol: string): Promise<{ symbol: string; bars: ChartBar[] }> =>
-  fetch(`/api/chart/${encodeURIComponent(symbol)}`, {
-    headers: { Accept: 'application/json' },
-  }).then((response) => json<{ symbol: string; bars: ChartBar[] }>(response))
+  request<{ symbol: string; bars: ChartBar[] }>(`/api/chart/${encodeURIComponent(symbol)}`)
 
 export const fetchOperation = (operationId: string): Promise<OperationRecord> =>
-  fetch(`/api/operations/${encodeURIComponent(operationId)}`, {
-    headers: { Accept: 'application/json' },
-  }).then((response) => json<OperationRecord>(response))
+  request<OperationRecord>(`/api/operations/${encodeURIComponent(operationId)}`)
 
 export const fetchOperationsPayload = (): Promise<DashboardPayload['operations']> =>
-  fetch('/api/operations', { headers: { Accept: 'application/json' } })
-    .then((response) => json<DashboardPayload['operations']>(response))
+  request<DashboardPayload['operations']>('/api/operations')
 
 export const sendControl = (
   control: ControlName,
@@ -31,14 +30,4 @@ export const sendControl = (
   operation_status?: string
   created?: boolean
 }> =>
-  fetch(`/api/controls/${control}`, {
-    method: 'POST',
-    headers: { Accept: 'application/json' },
-  }).then((response) => json<{
-    accepted: boolean
-    control: string
-    control_id?: string
-    operation_id?: string
-    operation_status?: string
-    created?: boolean
-  }>(response))
+  request(`/api/controls/${control}`, { method: 'POST' })

@@ -17,7 +17,16 @@ def _fresh_except(monkeypatch, **flags):
     monkeypatch.setattr("product.desk_pipeline.scan_is_fresh", lambda: flags.get("scan", True))
     monkeypatch.setattr("product.desk_pipeline.long_term_is_fresh", lambda: flags.get("long_term", True))
     monkeypatch.setattr("product.desk_pipeline.news_is_fresh", lambda: flags.get("news", True))
-    monkeypatch.setattr("product.desk_pipeline.acquire_is_fresh", lambda: flags.get("investigate", True))
+    investigate_fresh = flags.get("investigate", True)
+    monkeypatch.setattr(
+        "product.desk_pipeline.acquire_freshness",
+        lambda: {
+            "fresh": bool(investigate_fresh),
+            "retry_due": not bool(investigate_fresh),
+            "state": "FRESH" if investigate_fresh else "RETRY_DUE",
+            "unresolved_symbols": [] if investigate_fresh else ["TEST"],
+        },
+    )
 
 
 def test_advance_queues_only_the_first_due_step(tmp_path: Path, monkeypatch):
@@ -101,6 +110,15 @@ def test_recent_success_does_not_requeue_the_same_step(tmp_path: Path, monkeypat
     assert payload["queued_kind"] is None
     assert {row["id"]: row["state"] for row in payload["steps"]}["news"] == "ready"
     assert "current" in payload
+
+
+def test_new_reco_shortlist_requeues_investigate_after_recent_acquire(tmp_path: Path, monkeypatch):
+    _fresh_except(monkeypatch, investigate=False)
+    store = _store(tmp_path)
+    item, _ = store.enqueue(DUE_DILIGENCE_ACQUIRE, lane="due_diligence", requested_by="pipeline")
+    store.finish(item["operation_id"], status=SUCCEEDED, message="old shortlist", result={"n_ok": 6})
+    payload = advance_desk_pipeline(store, requested_by="test")
+    assert payload["queued_kind"] == DUE_DILIGENCE_ACQUIRE
 
 
 def test_after_news_queues_investigate_acquire(tmp_path: Path, monkeypatch):

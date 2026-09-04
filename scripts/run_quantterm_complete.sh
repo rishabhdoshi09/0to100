@@ -32,6 +32,18 @@ if ! python -c 'import reportlab, fastapi, uvicorn' >/dev/null 2>&1; then
   python -m pip install 'reportlab>=4.2.0' 'fastapi>=0.115.0' 'uvicorn>=0.30.0'
 fi
 
+python - <<'PY' || true
+from product.sqlite_runtime import bootstrap_product_stores
+from product.pit_warehouse import DB_PATH, counts
+print("[COMPLETE STACK] Product stores:", bootstrap_product_stores())
+warehouse = counts()
+print(f"[COMPLETE STACK] PIT warehouse {DB_PATH}: {warehouse}")
+if not int(warehouse.get("rows") or 0):
+    print("[COMPLETE STACK] PIT warehouse is empty (runtime DB, not versioned).")
+    print("[COMPLETE STACK] Reconstruct official XBRL memory with:")
+    print("  PYTHONPATH=. python scripts/phase_a_xbrl_backfill.py")
+PY
+
 if [[ ! -d frontend/node_modules ]]; then
   if ! command -v npm >/dev/null 2>&1; then
     echo "[COMPLETE STACK] npm is required for the desk UI. Install Node.js, then re-run." >&2
@@ -41,16 +53,56 @@ if [[ ! -d frontend/node_modules ]]; then
   (cd frontend && npm install)
 fi
 
+# Broker connectivity is an optional capability. A clean checkout must still be
+# able to start research, scanning, replay, settlement and learning without Kite.
 if [[ ! -f .env ]]; then
   if [[ -f .env.example ]]; then
     cp .env.example .env
     chmod 600 .env 2>/dev/null || true
-    echo "[COMPLETE STACK] Wrote .env from .env.example. Put KITE_API_KEY and KITE_API_SECRET in it, then re-run."
-    exit 2
+    echo "[COMPLETE STACK] Wrote .env from .env.example. Zerodha credentials are optional; continuing in no-broker mode if they are absent."
+  else
+    : > .env
+    chmod 600 .env 2>/dev/null || true
+    echo "[COMPLETE STACK] Created an empty .env. Zerodha credentials are optional; continuing in no-broker mode."
   fi
-  echo "[COMPLETE STACK] Missing .env. Create it with KITE_API_KEY and KITE_API_SECRET." >&2
-  exit 2
 fi
+
+# Older sample files used truthy placeholder credentials. Normalize only known
+# placeholders so they cannot masquerade as configured secrets in readiness or
+# trigger a broken login flow. Real values are never modified.
+python - <<'PY' || true
+from pathlib import Path
+
+path = Path('.env')
+if not path.exists():
+    raise SystemExit(0)
+secret_keys = {
+    'KITE_API_KEY', 'KITE_API_SECRET', 'KITE_ACCESS_TOKEN',
+    'DEEPSEEK_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY',
+    'MARKETAUX_API_KEY', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID',
+}
+markers = (
+    'your_api_key_here', 'your_api_secret_here', 'generated_each_morning',
+    'your_marketaux_key_here', 'your_bot_token_here', 'your_chat_id_here',
+    'sk-...', 'sk-ant-...',
+)
+changed = False
+out = []
+for raw in path.read_text(encoding='utf-8').splitlines():
+    if '=' not in raw or raw.lstrip().startswith('#'):
+        out.append(raw)
+        continue
+    key, value = raw.split('=', 1)
+    clean = value.strip().strip('"').strip("'").lower()
+    if key.strip() in secret_keys and any(marker in clean for marker in markers):
+        out.append(f"{key.strip()}=")
+        changed = True
+    else:
+        out.append(raw)
+if changed:
+    path.write_text('\n'.join(out) + '\n', encoding='utf-8')
+    print('[COMPLETE STACK] Removed placeholder credential values from .env; optional providers remain disabled until real credentials are supplied.')
+PY
 
 auth_rc=0
 python - <<'PY' >/dev/null || auth_rc=$?
@@ -73,16 +125,20 @@ raise SystemExit(0)
 PY
 
 if [[ "$auth_rc" -eq 2 ]]; then
-  echo "[COMPLETE STACK] Put KITE_API_KEY and KITE_API_SECRET in .env, then run this same command again." >&2
-  exit 2
-fi
-
-if [[ "$auth_rc" -eq 1 ]]; then
+  echo "[COMPLETE STACK] Zerodha API credentials are not configured. Broker live-data/execution lanes are disabled; research, official-data scans, replay, settlement and learning continue."
+elif [[ "$auth_rc" -eq 1 ]]; then
   if [[ "${QT_NONINTERACTIVE:-}" == "1" || ! -t 0 ]]; then
-    echo "[COMPLETE STACK] Zerodha login is needed (once per trading day). Non-interactive run skipped it. Paper/EOD still work. Run: python main.py login"
+    echo "[COMPLETE STACK] Zerodha login is needed for broker-dependent work. Non-interactive run skipped it; non-broker autonomy continues. Run: python main.py login"
   else
-    echo "[COMPLETE STACK] Zerodha login is needed (once per trading day). Browser will open; paste the redirect URL here."
-    python main.py login
+    echo "[COMPLETE STACK] Zerodha login is needed for broker-dependent work. Browser will open; paste the redirect URL here, or Ctrl-C and restart with QT_NONINTERACTIVE=1 to run without broker capability."
+    login_rc=0
+    python main.py login || login_rc=$?
+    if [[ "$login_rc" -eq 130 ]]; then
+      exit 130
+    fi
+    if [[ "$login_rc" -ne 0 ]]; then
+      echo "[COMPLETE STACK] Zerodha login did not complete. Continuing in no-broker mode; research, scanning, replay, settlement and learning remain available." >&2
+    fi
   fi
 fi
 
@@ -120,6 +176,7 @@ alive() {
 
 REPORT_PID=""
 STACK_PID=""
+VITE_PID=""
 REPORT_EXTERNAL=0
 STOP=0
 CLEANED=0
@@ -134,6 +191,9 @@ cleanup() {
   echo "[COMPLETE STACK] Stopping report API and QuantTerm stack…"
   if [[ -n "$STACK_PID" ]]; then
     kill "$STACK_PID" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$VITE_PID" ]]; then
+    kill "$VITE_PID" >/dev/null 2>&1 || true
   fi
   if [[ -n "$REPORT_PID" ]]; then
     kill "$REPORT_PID" >/dev/null 2>&1 || true
@@ -153,15 +213,36 @@ on_stop() {
 trap on_stop INT TERM
 trap cleanup EXIT
 
+adopt_report() {
+  if url_ok "http://127.0.0.1:8766/health" || port_open 8766; then
+    if [[ -z "${REPORT_PID:-}" ]] || ! alive "$REPORT_PID"; then
+      REPORT_EXTERNAL=1
+      REPORT_PID=""
+    fi
+    return 0
+  fi
+  return 1
+}
+
 start_report() {
+  if adopt_report; then
+    echo "[COMPLETE STACK] Reusing research-report API at http://127.0.0.1:8766"
+    return 0
+  fi
   echo "[COMPLETE STACK] Starting research-report API at http://127.0.0.1:8766 …"
-  python -u -m uvicorn report_api:app --host 127.0.0.1 --port 8766 &
+  mkdir -p "$ROOT/logs/stack"
+  python -u -m uvicorn report_api:app --host 127.0.0.1 --port 8766 \
+    >>"$ROOT/logs/stack/report_api.log" 2>&1 &
   REPORT_PID=$!
   sleep 1 || true
   if alive "$REPORT_PID"; then
     return 0
   fi
-  echo "[COMPLETE STACK] Research-report API failed to start; will retry." >&2
+  if adopt_report; then
+    echo "[COMPLETE STACK] Bind raced; reusing the report API that won :8766."
+    return 0
+  fi
+  echo "[COMPLETE STACK] Research-report API failed to start; will retry. See logs/stack/report_api.log." >&2
   REPORT_PID=""
   return 1
 }
@@ -172,25 +253,85 @@ start_stack() {
   STACK_PID=$!
 }
 
-echo "[COMPLETE STACK] One command, one terminal. Stopping any previous local desk so this run owns everything."
-python scripts/local_stack.py stop --ports 5173,8765,8766 || true
-sleep 1 || true
+# Keep the file descriptor open in this shell for the lifetime of the launcher.
+# Python's fcntl uses the inherited descriptor, so the same machine-wide lock
+# works on macOS and Linux without requiring the external `flock` executable.
+try_machine_lock() {
+  python scripts/local_stack.py try-fd-lock --fd 200
+}
 
-if url_ok "http://127.0.0.1:8766/health"; then
-  REPORT_EXTERNAL=1
-  echo "[COMPLETE STACK] Reusing research-report API at http://127.0.0.1:8766"
-elif port_open 8766; then
-  echo "[COMPLETE STACK] Port 8766 is occupied but /health is not ready yet; waiting." >&2
+echo "[COMPLETE STACK] One command, one terminal. Machine-wide lock so a second checkout cannot kill a healthy desk."
+mkdir -p "$ROOT/logs/stack"
+STACK_LOCK="$(python scripts/local_stack.py machine-lock-path)"
+mkdir -p "$(dirname "$STACK_LOCK")"
+exec 200>"$STACK_LOCK"
+STACK_EXTERNAL=0
+if try_machine_lock; then
+  export QT_MACHINE_OWNER=1
+  echo $$ > "${XDG_RUNTIME_DIR:-/tmp}/quantterm.supervisor.pid"
+  python scripts/local_stack.py write-owner --pid $$ --root "$ROOT" >/dev/null || true
+  echo "[COMPLETE STACK] This process owns the machine lock (root=$ROOT). Stopping leftover listeners from a previous owner, not another checkout."
+  python scripts/local_stack.py stop --ports 5173,8765,8766 || true
+  sleep 1 || true
+
+  if url_ok "http://127.0.0.1:8766/health"; then
+    REPORT_EXTERNAL=1
+    echo "[COMPLETE STACK] Reusing research-report API at http://127.0.0.1:8766"
+  elif port_open 8766; then
+    echo "[COMPLETE STACK] Port 8766 is occupied but /health is not ready yet; waiting." >&2
+  else
+    start_report || true
+  fi
+
+  start_stack
 else
-  start_report || true
+  STACK_EXTERNAL=1
+  REPORT_EXTERNAL=1
+  if python scripts/local_stack.py ports-healthy --ports 5173,8765 >/dev/null; then
+    echo "[COMPLETE STACK] Another QuantTerm supervisor already owns this machine; reusing the running desk."
+    echo "[COMPLETE STACK] This terminal will not stop :5173/:8765/:8766 or start a second inner stack."
+    OWNER_JSON="$(python scripts/local_stack.py owner-status 2>/dev/null || echo '{}')"
+    python -c '
+import json, sys
+root, raw = sys.argv[1], sys.argv[2]
+try:
+    owner = json.loads(raw or "{}")
+except Exception:
+    owner = {}
+if not isinstance(owner, dict):
+    owner = {}
+owner_root = str(owner.get("root") or "")
+print("[COMPLETE STACK] Owner pid=%s root=%s sha=%s" % (owner.get("pid") or "?", owner_root or "unknown", str(owner.get("sha") or "")[:12]))
+if owner_root and owner_root != root:
+    print("[COMPLETE STACK] The desk is serving %s, not this checkout (%s)." % (owner_root, root))
+    print("[COMPLETE STACK] This command did not start this checkout'\''s code. Stop the owner from its own terminal if you need this tree.")
+' "$ROOT" "$OWNER_JSON" || true
+  else
+    echo "[COMPLETE STACK] Another supervisor holds the machine lock but :5173/:8765 are not healthy." >&2
+    echo "[COMPLETE STACK] Not killing those ports. Wait for the other owner, or stop it from its own terminal." >&2
+    exit 1
+  fi
 fi
-
-start_stack
 
 echo "[COMPLETE STACK] Running in this terminal: desk http://127.0.0.1:5173  · API :8765  · reports :8766  · autonomy  · market scan"
 echo "[COMPLETE STACK] Leave this terminal open. Ctrl-C stops everything. Do not start a second terminal."
 
 HOME_OPENED=0
+start_vite_safety_net() {
+  if [[ "$STACK_EXTERNAL" == "1" ]]; then
+    return 1
+  fi
+  if port_open 5173; then
+    return 0
+  fi
+  echo "[COMPLETE STACK] Desk UI is not on :5173 yet; starting Vite from the complete launcher."
+  mkdir -p "$ROOT/logs/stack"
+  npm --prefix "$ROOT/frontend" run dev -- --host 127.0.0.1 --port 5173 \
+    >>"$ROOT/logs/stack/vite.log" 2>&1 &
+  VITE_PID=$!
+  return 0
+}
+
 wait_for_desk() {
   # Inner stack waits for API health, then starts Vite. Do not spend the
   # whole Home budget on :5173 while :8765 is still coming up.
@@ -206,6 +347,9 @@ wait_for_desk() {
   while (( i < 120 )); do
     if url_ok "http://127.0.0.1:5173/" && url_ok "http://127.0.0.1:8765/api/health"; then
       return 0
+    fi
+    if (( i == 16 )); then
+      start_vite_safety_net || true
     fi
     sleep 0.5 || true
     i=$((i + 1))
@@ -229,14 +373,40 @@ else
   echo "[COMPLETE STACK] Home is still starting. Open http://127.0.0.1:5173 when the desk is up."
 fi
 
+set +e
+REPORT_HEALTH_FAILS=0
 while [[ "$STOP" != "1" ]]; do
+  if adopt_report; then
+    REPORT_HEALTH_FAILS=0
+  elif ! url_ok "http://127.0.0.1:8766/health"; then
+    REPORT_HEALTH_FAILS=$((REPORT_HEALTH_FAILS + 1))
+    if port_open 8766; then
+      echo "[COMPLETE STACK] Report API is listening on :8766; health probe failed. Not killing it."
+      REPORT_EXTERNAL=1
+      REPORT_PID=""
+      REPORT_HEALTH_FAILS=0
+    elif (( REPORT_HEALTH_FAILS >= 3 )); then
+      echo "[COMPLETE STACK] Report API health failed; restarting. See logs/stack/report_api.log."
+      if [[ -n "${REPORT_PID:-}" ]]; then kill "$REPORT_PID" >/dev/null 2>&1 || true; fi
+      REPORT_EXTERNAL=0
+      REPORT_PID=""
+      start_report || true
+      REPORT_HEALTH_FAILS=0
+    fi
+  else
+    REPORT_HEALTH_FAILS=0
+  fi
   if [[ "$REPORT_EXTERNAL" != "1" ]]; then
     if [[ -z "${REPORT_PID:-}" ]] || ! alive "$REPORT_PID"; then
-      echo "[COMPLETE STACK] Report API is down; restarting."
-      start_report || true
+      if adopt_report; then
+        :
+      else
+        echo "[COMPLETE STACK] Report API is down; restarting."
+        start_report || true
+      fi
     fi
   fi
-  if ! alive "$STACK_PID"; then
+  if [[ "$STACK_EXTERNAL" != "1" ]] && ! alive "$STACK_PID"; then
     echo "[COMPLETE STACK] Inner stack script ended; restarting it. The desk is not supposed to go idle."
     start_stack
   fi

@@ -1,0 +1,67 @@
+.reco-sidebar details.nav-advanced {
+  margin-top: 10px;
+  border-top: 1px solid var(--qt-border, rgba(255,255,255,.07));
+  padding-top: 8px;
+}
+
+.reco-sidebar details.nav-advanced > summary {
+  list-style: none;
+  cursor: pointer;
+  color: var(--qt-text-secondary, #8b94a7);
+  font-size: .68rem;
+  font-weight: 800;
+  letter-spacing: .12em;
+  padding: 8px 12px;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.reco-sidebar details.nav-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.reco-sidebar details.nav-advanced > summary::after {
+  content: ' +';
+  float: right;
+  color: var(--qt-text-muted, #525c6e);
+}
+
+.reco-sidebar details.nav-advanced[open] > summary::after {
+  content: ' −';
+}
+
+.reco-sidebar .nav-primary-note {
+  margin: 8px 12px 4px;
+  color: var(--qt-text-muted, #525c6e);
+  font-size: .66rem;
+  line-height: 1.35;
+}
+
+/*
+ * The paid-product Home surface is an operator desk, not a second Scanner.
+ * Raw ranking widgets remain available in Advanced > Scanner; Home leads with
+ * the persisted OS decisions, activity, portfolio and learning state instead.
+ * This also prevents a scanner-level "Buy" badge from competing visually with
+ * the final committee BUY/WAIT/AVOID truth.
+ */
+.radar-home > .radar-rank-legend,
+.radar-home > .radar-bob-hero,
+.radar-home > .radar-top-stocks,
+.radar-home > .radar-best-breakout,
+.radar-home > .radar-sniper-pool {
+  display: none;
+}
+
+/* Secondary jump links duplicate the simplified sidebar and make Home read
+ * like an engineering control panel. Keep the primary OS action only. */
+.radar-home .home-os-quick {
+  display: none;
+}
+
+/* Recommendation list cards answer the paid-user question first: decision,
+ * thesis, entry/stop/target and key evidence. Dense diagnostics remain on the
+ * click-through decision sheet instead of competing on every list row. */
+.reco-card-stack .reco-pick .reco-status-row,
+.reco-card-stack .reco-pick .reco-case {
+  display: none;
+}

@@ -11,6 +11,9 @@ export const SAFE_HOME_CONTROLS = new Set([
   'RUN_CYCLE_NOW',
   'VERIFY_FORWARD_SOAK',
   'CHECK_SYSTEM',
+  'SIMULATE_PAST_DECISIONS',
+  'OBSERVE_ONLY_TODAY',
+  'CLEAR_OBSERVE_ONLY',
 ])
 
 export const FORBIDDEN_HOME_CONTROLS = new Set([
@@ -58,6 +61,9 @@ export type SystemLane = {
   needs_user?: boolean
   recovering?: boolean
   degraded?: boolean
+  optional_capability?: boolean
+  blocks_autonomy?: boolean
+  login_required?: boolean
   primary_action?: HomeAction | null
   secondary_actions?: HomeAction[]
   full_details_page?: string
@@ -132,7 +138,7 @@ export function lanePrimaryAction(lane: SystemLane | undefined): HomeAction | nu
   const action = lane.primary_action || null
   if (!action) return null
   if (!isSafeHomeControl(action.control) && action.kind !== 'instruction') return null
-  if (status === 'Ready' || status === 'Working') return null
+  if (status === 'Ready' || status === 'Working' || lane.optional_capability) return null
   return action
 }
 
@@ -150,8 +156,10 @@ export function laneSecondaryActions(lane: SystemLane | undefined): HomeAction[]
 }
 
 export function nothingNeeded(lane: SystemLane | undefined): boolean {
-  const status = String(lane?.status || '')
-  return status === 'Working' || (status === 'Ready' && !lane?.needs_user)
+  if (!lane || lane.needs_user) return false
+  const status = String(lane.status || '')
+  if (lane.optional_capability) return true
+  return status === 'Working' || status === 'Ready'
 }
 
 export function hasSecretKey(key: string): boolean {
@@ -189,7 +197,8 @@ export function technicalLines(technical: Record<string, unknown> | undefined, l
 export function laneAriaLabel(id: string, lane?: SystemLane): string {
   const title = laneTitle(id, lane)
   const status = lane?.status || 'Waiting'
-  return `${title}: ${status}. View details`
+  const suffix = lane?.optional_capability && !lane?.needs_user ? ' Optional capability; no action required.' : ' View details'
+  return `${title}: ${status}.${suffix}`
 }
 
 export function checkSystemRows(snapshot: CheckSystemSnapshot | undefined, fallback: Record<string, SystemLane>): Array<{ id: string; label: string; status: string }> {

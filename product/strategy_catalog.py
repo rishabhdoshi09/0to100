@@ -80,6 +80,7 @@ def ensemble_identity() -> dict[str, Any]:
         ),
         "result_kind": None,
         "label": "QuantTerm recommendation ensemble",
+        "role": "champion",
         "rules": rules,
     }
 
@@ -98,6 +99,7 @@ def method_identity(method_id: str) -> dict[str, Any]:
         "active": mid in METHOD_WEIGHTS,
         "label": METHOD_LABELS.get(mid, mid or "Unknown"),
         "family": "recommendation_method",
+        "role": "supporting_check",
         "backtest_parity": UNVERIFIED,
         "backtest_parity_detail": (
             f"{METHOD_LABELS.get(mid, mid)} is a live recommendation check. "
@@ -192,12 +194,51 @@ def decorate_card(card: Mapping[str, Any]) -> dict[str, Any]:
         "rules_hash": ident["rules_hash"],
         "label": ident["label"],
         "active": ident["active"],
+        "role": "champion",
     }
+    row["champion"] = ident["label"]
+    row["challengers"] = [
+        {
+            "strategy_id": item.get("strategy_id"),
+            "label": item.get("label"),
+            "role": "challenger",
+            "backtest_parity": item.get("backtest_parity") or UNVERIFIED,
+        }
+        for item in research_only_strategies()[:8]
+    ]
     row["backtest_parity"] = UNVERIFIED
     row["backtest_parity_detail"] = ident["backtest_parity_detail"]
     disagreement = fundamental_disagreement(row)
     if disagreement:
         row["fundamental_disagreement"] = disagreement
+
+    # The ensemble is a nominator. The persisted committee decision is the only
+    # current BUY / WAIT / AVOID authority shown on the Recommendations desk.
+    # Fail closed: if decision truth cannot be read, a raw ensemble Buy must not
+    # leak through as an operator instruction.
+    try:
+        from product.recommendation_truth import decorate_current_recommendation
+
+        row.update(decorate_current_recommendation(row))
+    except Exception:
+        row.update({
+            "raw_action_badge": str(row.get("action_badge") or ""),
+            "canonical_decision": "NO_JUDGMENT",
+            "decision_truth_status": "TRUTH_UNAVAILABLE",
+            "decision_match_scope": "NONE",
+            "canonical_candidate_state": "UNJUDGED",
+            "canonical_entry_state": "",
+            "canonical_execution_state": "",
+            "decision_reason_code": "",
+            "candidate_id": None,
+            "opportunity_id": None,
+            "recommendation_id": None,
+            "decision_id": None,
+            "paper_intent_id": None,
+            "outcome_id": None,
+            "wait_trigger": {},
+            "action_badge": "No judgment",
+        })
     return row
 
 

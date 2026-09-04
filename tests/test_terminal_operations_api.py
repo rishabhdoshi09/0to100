@@ -63,6 +63,35 @@ def test_scan_control_enqueues_without_waiting_for_worker(tmp_path: Path, monkey
     assert any(item.get("kind") == "MARKET_SCAN" for item in store.active())
 
 
+def test_scan_control_stays_accepted_when_ensure_raises_but_lock_is_owned(tmp_path, monkeypatch):
+    import os
+
+    from fastapi.testclient import TestClient
+
+    import terminal_api as api
+
+    jobs_db = tmp_path / "jobs.db"
+    monkeypatch.setattr(api, "OPS_DB", str(jobs_db))
+    monkeypatch.setattr(api, "OPS_ROOT", tmp_path)
+    (tmp_path / "worker.lock").write_text(str(os.getpid()), encoding="utf-8")
+
+    def ensure(*, wait: bool = True):
+        raise RuntimeError(
+            "Market operations worker did not become ready after bounded recovery; "
+            "the command was not silently accepted. The launcher watchdog owns recovery "
+            "after this attempt. Check System Health for the worker blocker."
+        )
+
+    monkeypatch.setattr(api, "_ensure_ops_worker", ensure)
+    client = TestClient(api.app)
+    response = client.post("/api/controls/RUN_SCAN_NOW")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["accepted"] is True
+    assert payload["operation_id"]
+    assert payload.get("worker_recovering") is True
+
+
 def test_scan_control_deduplicates_active_market_scan(client: TestClient):
     first = client.post("/api/controls/RUN_SCAN_NOW")
     second = client.post("/api/controls/RUN_SCAN_NOW")

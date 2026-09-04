@@ -8,7 +8,10 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+
+_READY_REQUIRED_STATUSES = {"READY", "RUNNING", "LOCKED", "COLLECTING", "HEALTHY"}
 
 
 def _port_open(port: int) -> bool:
@@ -34,6 +37,53 @@ def _lane(name: str, status: str, detail: str = "", *, required: bool = False) -
     return {"name": name, "status": status, "detail": detail, "required": required}
 
 
+def _history_readiness() -> tuple[bool, str]:
+    """Use the canonical NSE history freshness contract, not scan-file existence."""
+    try:
+        from data.bhavcopy_runtime import official_history_freshness
+
+        freshness = official_history_freshness(load_cache=True)
+    except Exception as exc:
+        return False, f"Official NSE history unavailable: {str(exc)[:160]}"
+
+    current = bool(freshness.get("current"))
+    available = str(freshness.get("available_session") or "").strip()
+    expected = str(freshness.get("expected_latest_completed_session") or "").strip()
+    reason = str(freshness.get("reason_code") or "").strip()
+    if current:
+        return True, f"Current through {available}" if available else "Official NSE history is current"
+
+    parts = [reason or "HISTORY_NOT_READY"]
+    if available:
+        parts.append(f"available {available}")
+    if expected:
+        parts.append(f"expected {expected}")
+    return False, " · ".join(parts)
+
+
+def _paper_readiness() -> tuple[bool, str]:
+    """Paper capability is ready when its supervising process is actually alive."""
+    try:
+        from product.paper_status import read_paper_status
+
+        paper = read_paper_status()
+    except Exception as exc:
+        return False, f"Paper status unavailable: {str(exc)[:160]}"
+
+    if not bool(paper.supervisor_running):
+        return False, "Paper supervisor is not running"
+    if bool(paper.enabled):
+        return True, "Paper supervisor running"
+    return True, "Paper supervisor running · new paper entries paused"
+
+
+def _required_waiting(lanes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        lane for lane in lanes
+        if lane.get("required") and str(lane.get("status") or "") not in _READY_REQUIRED_STATUSES
+    ]
+
+
 def build_startup_check(*, probe_network: bool = True) -> dict[str, Any]:
     ui = _url_ok("http://127.0.0.1:5173/") if probe_network else _port_open(5173)
     api = _url_ok("http://127.0.0.1:8765/api/health") if probe_network else _port_open(8765)
@@ -55,16 +105,7 @@ def build_startup_check(*, probe_network: bool = True) -> dict[str, Any]:
     except Exception:
         ops_running = False
 
-    data_ready = False
-    try:
-        from pathlib import Path
-        root = Path(__file__).resolve().parents[1]
-        data_ready = (root / "logs" / "product" / "latest_momentum_scan.json").exists()
-        if not data_ready:
-            from product.forward_soak import _scan_payload
-            data_ready = bool((_scan_payload().get("payload") or {}).get("scanned_at"))
-    except Exception:
-        data_ready = False
+    data_ready, data_detail = _history_readiness()
 
     scan_ok = False
     try:
@@ -75,13 +116,7 @@ def build_startup_check(*, probe_network: bool = True) -> dict[str, Any]:
     except Exception:
         scan_ok = False
 
-    paper_ready = True
-    try:
-        from product.paper_status import read_paper_status
-        paper = read_paper_status()
-        paper_ready = bool(paper.enabled or paper.open_positions or True)
-    except Exception:
-        paper_ready = True
+    paper_ready, paper_detail = _paper_readiness()
 
     soak_status = "NOT_STARTED"
     try:
@@ -115,23 +150,22 @@ def build_startup_check(*, probe_network: bool = True) -> dict[str, Any]:
         _lane("REPORTS", "READY" if reports else "WAITING", "optional research reports", required=False),
         _lane("AUTONOMY", "RUNNING" if autonomy_running else "WAITING", required=True),
         _lane("MARKET OPERATIONS", "RUNNING" if ops_running else "WAITING", required=True),
-        _lane("DATA", "READY" if data_ready else "WAITING", required=True),
+        _lane("DATA", "READY" if data_ready else "WAITING", data_detail, required=True),
         _lane("SCAN PIPELINE", "READY" if scan_ok else "WAITING", required=False),
-        _lane("PAPER BOT", "READY" if paper_ready else "WAITING", required=True),
+        _lane("PAPER BOT", "READY" if paper_ready else "WAITING", paper_detail, required=True),
         _lane("FORWARD EVIDENCE", soak_status, required=False),
         _lane("ZERODHA", "READY" if kite_ok else "LOGIN NEEDED", required=False),
         _lane("LIVE MONEY", "LOCKED" if live_locked else "UNLOCKED", required=True),
     ]
-    money_ok = live_locked
-    required_down = [l for l in lanes if l["required"] and l["status"] not in {"READY", "RUNNING", "LOCKED", "COLLECTING", "HEALTHY"}]
-    ready = money_ok and api
+    required_down = _required_waiting(lanes)
+    ready = bool(live_locked and not required_down)
     return {
         "schema_version": SCHEMA_VERSION,
         "ready": ready,
         "home_url": "http://127.0.0.1:5173",
         "lanes": lanes,
         "live_locked": live_locked,
-        "required_waiting": [l["name"] for l in required_down],
+        "required_waiting": [str(lane.get("name") or "") for lane in required_down],
         "note": "Telegram absence is not a product failure.",
     }
 
@@ -139,19 +173,21 @@ def build_startup_check(*, probe_network: bool = True) -> dict[str, Any]:
 def print_startup_summary(*, probe_network: bool = True) -> int:
     payload = build_startup_check(probe_network=probe_network)
     by = {l["name"]: l for l in payload["lanes"]}
-    print("QuantTerm is ready." if payload["ready"] else "QuantTerm is starting.")
+    print("QuantTerm is ready." if payload["ready"] else "QuantTerm is running; required lanes are still preparing.")
     print(f"Home: {payload['home_url']}")
     print()
-    print(f"Data: {by['DATA']['status']}")
+    print(f"Data: {by['DATA']['status']}" + (f" · {by['DATA']['detail']}" if by['DATA'].get('detail') else ""))
     print(f"Automation: {by['AUTONOMY']['status']}")
-    print(f"Paper bot: {by['PAPER BOT']['status']}")
+    print(f"Paper bot: {by['PAPER BOT']['status']}" + (f" · {by['PAPER BOT']['detail']}" if by['PAPER BOT'].get('detail') else ""))
     print(f"Forward evidence: {by['FORWARD EVIDENCE']['status']}")
     print(f"Zerodha: {by['ZERODHA']['status']}")
     print(f"Live money: {by['LIVE MONEY']['status']}")
+    if payload.get("required_waiting"):
+        print("Still preparing: " + ", ".join(payload["required_waiting"]))
     if not payload["live_locked"]:
         print("LIVE MONEY UNLOCKED — fail-closed contract broken")
         return 2
-    return 0 if payload["ready"] else 0
+    return 0
 
 
 def maybe_open_home_browser() -> bool:

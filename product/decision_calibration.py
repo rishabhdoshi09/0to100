@@ -78,12 +78,34 @@ def _bucket(tier: str) -> str:
 
 
 def _implied_p(bucket: str) -> float | None:
+    """Tiers are setup-quality labels, not estimated win probabilities.
+
+    Until a bucket has a measured hit rate (MIN_SAMPLE settled outcomes),
+    QuantTerm must not display an invented percentage.
+    """
+    return None
+
+
+def display_confidence(*, tier: str = "", sample_size: int = 0, hit_rate: float | None = None) -> dict[str, Any]:
+    """What the operator is allowed to see. No decorative percentages."""
+    bucket = _bucket(tier)
+    if sample_size >= MIN_SAMPLE and hit_rate is not None:
+        return {
+            "kind": "MEASURED_HIT_RATE",
+            "label": bucket or "unspecified",
+            "sample_size": sample_size,
+            "hit_rate": hit_rate,
+            "is_probability": True,
+            "display": f"{bucket} · measured hit rate {round(hit_rate * 100, 1)}% (n={sample_size})",
+        }
     return {
-        "high_conviction": 0.62,
-        "good_setup": 0.52,
-        "watch": 0.40,
-        "avoid": 0.30,
-    }.get(bucket)
+        "kind": "SETUP_QUALITY",
+        "label": bucket or "unspecified",
+        "sample_size": sample_size,
+        "hit_rate": None,
+        "is_probability": False,
+        "display": f"{bucket or 'unspecified'} (setup quality — not a win probability)",
+    }
 
 
 class DecisionCalibrationEngine:

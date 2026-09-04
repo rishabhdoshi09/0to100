@@ -134,11 +134,25 @@ button.home-os-check {
   cursor: pointer;
   font-size: 13px;
 }
+.home-os-past {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.home-os-past span { display: block; font-size: 9px; letter-spacing: .12em; color: var(--muted); }
 .home-os-inspect-positions { list-style: none; padding: 0; margin: 8px 0; }
 .home-os-inspect-positions li { display: flex; gap: 10px; font-size: 13px; margin: 4px 0; }
 @media (max-width: 720px) {
   .home-os-system { grid-template-columns: 1fr 1fr; }
   .home-os-inspector { padding: 10px; }
+}
+.home-os-quick { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; }
+button.home-os-quick-link, .home-os-quick-link {
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 11px;
+  opacity: .88;
 }
 .home-os-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
 .home-os-actions button { min-width: 140px; }

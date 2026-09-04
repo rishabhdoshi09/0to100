@@ -188,6 +188,19 @@ export type DataReadiness = {
   blockers: string[]
 }
 
+export type BrokerReadiness = {
+  state: 'READY' | 'LOGIN_REQUIRED' | 'SNAPSHOT_REQUIRED' | 'UNAVAILABLE' | 'CONFIG_REQUIRED' | 'NOT_READY' | 'UNKNOWN' | string
+  ready: boolean
+  live_data_ready: boolean
+  execution_ready: boolean
+  auth_ready: boolean
+  login_required: boolean
+  auth_status: string
+  reason_code: string
+  detail: string
+  snapshot_id: string
+}
+
 export type DashboardPayload = {
   generated_at: string
   market: {
@@ -218,6 +231,8 @@ export type DashboardPayload = {
     universe_size: number
     summary: Record<string, number>
     records: ScanRecord[]
+    dashboard_record_limit?: number
+    dashboard_records_shown?: number
   }
   long_term: {
     available: boolean
@@ -296,6 +311,7 @@ export type DashboardPayload = {
     new_paper_entries: boolean
     existing_exits?: boolean
     research_enabled?: boolean
+    broker?: BrokerReadiness
     capability_notes?: string[]
     active_failures?: string[]
     recent_dialogue: Array<Record<string, unknown>>
@@ -385,3 +401,5 @@ export type ControlName =
   | 'REFRESH_DATA_NOW'
   | 'PAUSE_NEW_PAPER_ENTRIES'
   | 'RESUME_NEW_PAPER_ENTRIES'
+  | 'OBSERVE_ONLY_TODAY'
+  | 'CLEAR_OBSERVE_ONLY'

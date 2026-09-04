@@ -94,6 +94,70 @@ def test_queue_desk_jobs_posts_scan_news_and_funds(monkeypatch):
     assert seen == ["RUN_SCAN_NOW", "REFRESH_NEWS_NOW", "REFRESH_LONG_TERM_NOW"]
 
 
+def test_machine_lock_is_outside_the_checkout(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
+    monkeypatch.delenv("TMPDIR", raising=False)
+    path = LS.machine_lock_path()
+    assert path.name == "quantterm.supervisor.lock"
+    assert str(path.parent) == str(tmp_path / "run")
+    assert "logs/stack" not in str(path)
+
+
+def test_ports_healthy_cli_reports_closed_ports(monkeypatch, capsys):
+    monkeypatch.setattr(LS, "port_open", lambda port, host="127.0.0.1", timeout_s=0.4: port == 8765)
+    monkeypatch.setattr(LS, "service_is_quantterm", lambda port, host="127.0.0.1": True)
+    assert LS.main(["ports-healthy", "--ports", "5173,8765"]) == 1
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["healthy"] is False
+    assert printed["ports"]["5173"] is False
+    assert printed["ports"]["8765"] is True
+
+
+def test_ports_healthy_rejects_unrelated_listener(monkeypatch, capsys):
+    monkeypatch.setattr(LS, "port_open", lambda port, host="127.0.0.1", timeout_s=0.4: True)
+    monkeypatch.setattr(LS, "service_is_quantterm", lambda port, host="127.0.0.1": port != 8765)
+    assert LS.main(["ports-healthy", "--ports", "5173,8765"]) == 1
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["healthy"] is False
+
+
+def test_try_fd_lock_and_soak_status_cli(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr(LS, "port_open", lambda port, host="127.0.0.1", timeout_s=0.4: False)
+    monkeypatch.setattr(LS, "service_is_quantterm", lambda port, host="127.0.0.1": False)
+    assert LS.main(["soak-status", "--root", str(tmp_path)]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["long_duration_soak"] == "PENDING"
+    assert payload["desk_healthy"] is False
+    lock_path = tmp_path / "quantterm.supervisor.lock"
+    lock_path.write_text("", encoding="utf-8")
+    with lock_path.open("w") as handle:
+        assert LS.try_fd_lock(handle.fileno()) is True
+        assert LS.main(["try-fd-lock", "--fd", str(handle.fileno())]) == 0
+
+
+def test_machine_lock_path_cli(monkeypatch, capsys, tmp_path):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    assert LS.main(["machine-lock-path"]) == 0
+    printed = capsys.readouterr().out.strip()
+    assert printed.endswith("quantterm.supervisor.lock")
+    assert str(tmp_path) in printed
+
+
+def test_write_and_read_machine_owner(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    root = tmp_path / "checkout"
+    root.mkdir()
+    assert LS.main(["write-owner", "--pid", "4242", "--root", str(root)]) == 0
+    written = json.loads(capsys.readouterr().out)
+    assert written["pid"] == 4242
+    assert written["root"] == str(root.resolve())
+    assert LS.main(["owner-status"]) == 0
+    status = json.loads(capsys.readouterr().out)
+    assert status["pid"] == 4242
+    assert status["root"] == str(root.resolve())
+
+
 def test_scan_cli_returns_error_when_api_is_down(monkeypatch, capsys):
     def boom(**kwargs):
         raise RuntimeError("connection refused")

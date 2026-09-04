@@ -1,4 +1,4 @@
-import { readJson } from './http'
+import { fetchJson } from './http'
 import type { ControlName, ConvictionRecord, LongTermRecord, NewsArticle, ScanRecord } from './types'
 
 export type ProductLane = {
@@ -141,6 +141,11 @@ export type ScannerWorkspaceRow = ScanRecord
     setup_label?: string | null
     relative_strength?: number | null
     risk_label?: string | null
+    decision?: string | null
+    why?: string | null
+    entry?: number | null
+    stop?: number | null
+    target?: number | null
   }
 
 export type ScannerWorkspace = {
@@ -152,11 +157,13 @@ export type ScannerWorkspace = {
   rows: ScannerWorkspaceRow[]
 }
 
-const json = readJson
+function request<T>(url: string, init?: RequestInit): Promise<T> {
+  return fetchJson<T>(url, { headers: { Accept: 'application/json' }, ...init })
+}
+
 
 export const fetchProductReadiness = (): Promise<ProductReadiness> =>
-  fetch('/api/product-readiness', { headers: { Accept: 'application/json' } })
-    .then((response) => json<ProductReadiness>(response))
+  request('/api/product-readiness', { headers: { Accept: 'application/json' } })
 
 export const bootstrapProduct = (): Promise<{
   accepted: boolean
@@ -167,15 +174,15 @@ export const bootstrapProduct = (): Promise<{
   operations: Array<{ kind: string; operation_id: string; status: string; created: boolean }>
   pipeline?: DeskPipeline
   readiness: ProductReadiness
-}> => fetch('/api/product-bootstrap', {
+}> => request('/api/product-bootstrap', {
   method: 'POST',
   headers: { Accept: 'application/json' },
-}).then((response) => json(response))
+})
 
 export const fetchStockIntelligence = (symbol: string): Promise<StockWorkspace> =>
-  fetch(`/api/stock-intelligence/${encodeURIComponent(symbol)}`, {
+  request(`/api/stock-intelligence/${encodeURIComponent(symbol)}`, {
     headers: { Accept: 'application/json' },
-  }).then((response) => json<StockWorkspace>(response))
+  })
 
 export type DueDiligenceKpi = {
   id: string
@@ -554,15 +561,15 @@ export type DueDiligenceReport = {
 }
 
 export const fetchDueDiligence = (symbol: string): Promise<DueDiligenceReport> =>
-  fetch(`/api/due-diligence/${encodeURIComponent(symbol)}`, {
+  request(`/api/due-diligence/${encodeURIComponent(symbol)}`, {
     headers: { Accept: 'application/json' },
-  }).then((response) => json<DueDiligenceReport>(response))
+  })
 
 export const fetchFrameworkAudit = (framework = ''): Promise<Record<string, unknown>> => {
   const query = framework ? `?framework=${encodeURIComponent(framework)}` : ''
-  return fetch(`/api/due-diligence/framework-audit${query}`, {
+  return request(`/api/due-diligence/framework-audit${query}`, {
     headers: { Accept: 'application/json' },
-  }).then((response) => json(response))
+  })
 }
 
 export const acquireDueDiligence = (
@@ -583,16 +590,16 @@ export const acquireDueDiligence = (
 }> => {
   const params = new URLSearchParams({ mode })
   if (opts?.asyncJob) params.set('async_job', 'true')
-  return fetch(`/api/due-diligence/${encodeURIComponent(symbol)}/acquire?${params.toString()}`, {
+  return request(`/api/due-diligence/${encodeURIComponent(symbol)}/acquire?${params.toString()}`, {
     method: 'POST',
     headers: { Accept: 'application/json' },
-  }).then((response) => json(response))
+  })
 }
 
 export const fetchInvestigatorSuggest = (query: string): Promise<{ query: string; matches: InvestigatorMatch[]; engine: string }> =>
-  fetch(`/api/stock-investigator/suggest?q=${encodeURIComponent(query)}&limit=8`, {
+  request(`/api/stock-investigator/suggest?q=${encodeURIComponent(query)}&limit=8`, {
     headers: { Accept: 'application/json' },
-  }).then((response) => json(response))
+  })
 
 export type TradePlan = {
   available: boolean
@@ -626,28 +633,27 @@ export type TradePlan = {
 
 // Read-only risk-first plan for a scanned candidate. Never places an order.
 export const fetchTradePlan = (symbol: string): Promise<TradePlan> =>
-  fetch(`/api/trade-plan/${encodeURIComponent(symbol)}`, {
+  request(`/api/trade-plan/${encodeURIComponent(symbol)}`, {
     headers: { Accept: 'application/json' },
-  }).then((response) => json<TradePlan>(response))
+  })
 
 export const refreshStockFundamentals = (symbol: string): Promise<{
   accepted: boolean
   symbol: string
   sections: Record<string, number | boolean>
   workspace: StockWorkspace
-}> => fetch(`/api/stock-intelligence/${encodeURIComponent(symbol)}/refresh-fundamentals`, {
+}> => request(`/api/stock-intelligence/${encodeURIComponent(symbol)}/refresh-fundamentals`, {
   method: 'POST',
   headers: { Accept: 'application/json' },
-}).then((response) => json(response))
+})
 
 export const fetchCommandCenterWorkspace = (): Promise<CommandCenterWorkspace> =>
-  fetch('/api/command-center-workspace', { headers: { Accept: 'application/json' } })
-    .then((response) => json<CommandCenterWorkspace>(response))
+  request('/api/command-center-workspace', { headers: { Accept: 'application/json' } })
 
 export const fetchScannerWorkspace = (mode: string): Promise<ScannerWorkspace> =>
-  fetch(`/api/scanner-workspace/${encodeURIComponent(mode)}`, {
+  request(`/api/scanner-workspace/${encodeURIComponent(mode)}`, {
     headers: { Accept: 'application/json' },
-  }).then((response) => json<ScannerWorkspace>(response))
+  })
 
 export type DeskPipelineStep = {
   id: string
@@ -755,6 +761,8 @@ export type HomeOperatingSystem = {
   headline: string
   subtext: string
   need_me?: boolean
+  observe_only?: boolean
+  observe_only_date?: string
   primary_action?: HomeAction | null
   secondary_actions?: HomeAction[]
   now?: string
@@ -880,11 +888,41 @@ export type HomeOperatingSystem = {
   }
   four_questions?: { what?: string; found?: string; meaning?: string; action?: string }
   verify?: { lanes?: Record<string, string>; soak_status?: string; generated_at?: string }
+  simulate_action?: HomeAction | null
+  runtime?: {
+    lifecycle?: string
+    reason?: string
+    reasons?: string[]
+    checked_at?: string
+    components?: Array<{ name?: string; status?: string; detail?: string }>
+  }
+  broker?: {
+    status?: string
+    login_required?: boolean
+    detail?: string
+    live_locked?: boolean
+    paper_only?: boolean
+    paper_mode?: boolean
+  }
+  past_decisions?: {
+    available?: boolean
+    provenance?: string
+    decisions_tested?: number
+    would_take?: number
+    rejected?: number
+    correct_rejections?: number
+    missed_winners?: number
+    avoided_losers?: number
+    good_waits?: number
+    filters_helped?: string[]
+    filters_hurt?: string[]
+    simple?: string
+    note?: string
+  }
 }
 
 export const fetchRadarHome = (): Promise<RadarHome> =>
-  fetch('/api/radar-home', { headers: { Accept: 'application/json' } })
-    .then((response) => json<RadarHome>(response))
+  request('/api/radar-home', { headers: { Accept: 'application/json' } })
 
 export type RecommendationEvidencePanel = {
   sample_size?: number | null
@@ -979,6 +1017,14 @@ export type RecommendationCard = {
   backtest_parity?: string
   backtest_parity_detail?: string
   fundamental_disagreement?: string
+  sector_leadership_score?: number | null
+  sector_leadership_label?: string
+  sector_breadth?: string
+  sector_momentum?: string
+  methods_supporting?: string[]
+  methods_disagreeing?: string[]
+  champion?: string
+  challengers?: Array<{ strategy_id?: string; label?: string; role?: string }>
   evidence_scorecard?: {
     score?: number | null
     coverage_pct?: number | null
@@ -1119,8 +1165,7 @@ export type RecommendationsWorkspace = {
 }
 
 export const fetchRecommendationsWorkspace = (): Promise<RecommendationsWorkspace> =>
-  fetch('/api/recommendations-workspace', { headers: { Accept: 'application/json' } })
-    .then((response) => json<RecommendationsWorkspace>(response))
+  request('/api/recommendations-workspace', { headers: { Accept: 'application/json' } })
 
 export type MarketMover = {
   symbol: string
@@ -1267,8 +1312,7 @@ export type MarketReportsWorkspace = {
 }
 
 export const fetchMarketReportsWorkspace = (): Promise<MarketReportsWorkspace> =>
-  fetch('/api/market-reports-workspace', { headers: { Accept: 'application/json' } })
-    .then((response) => json<MarketReportsWorkspace>(response))
+  request('/api/market-reports-workspace', { headers: { Accept: 'application/json' } })
 
 export type EducationLens = 'MACRO' | 'MICRO' | 'POLICY' | 'DERIVATIVES' | 'CONCEPT'
 
@@ -1319,10 +1363,8 @@ export type EducationFeed = {
 }
 
 export const fetchEducation = (minImpact = 40, limit = 40): Promise<EducationFeed> =>
-  fetch(
-    `/api/education?min_impact=${encodeURIComponent(String(minImpact))}&limit=${encodeURIComponent(String(limit))}`,
-    { headers: { Accept: 'application/json' } },
-  ).then((response) => json<EducationFeed>(response))
+  request(`/api/education?min_impact=${encodeURIComponent(String(minImpact))}&limit=${encodeURIComponent(String(limit))}`,
+    { headers: { Accept: 'application/json' } },)
 
 export type CompareMetric = {
   label: string
@@ -1352,9 +1394,9 @@ export type CompareWorkspace = {
 }
 
 export const fetchCompareWorkspace = (symbols: string[]): Promise<CompareWorkspace> =>
-  fetch(`/api/compare?symbols=${encodeURIComponent(symbols.join(','))}`, {
+  request(`/api/compare?symbols=${encodeURIComponent(symbols.join(','))}`, {
     headers: { Accept: 'application/json' },
-  }).then((response) => json<CompareWorkspace>(response))
+  })
 
 export type WatchlistItem = {
   id: number
@@ -1376,8 +1418,7 @@ export type WatchlistPayload = {
 }
 
 export const fetchWatchlist = (): Promise<WatchlistPayload> =>
-  fetch('/api/watchlist', { headers: { Accept: 'application/json' } })
-    .then((response) => json<WatchlistPayload>(response))
+  request('/api/watchlist', { headers: { Accept: 'application/json' } })
 
 export const addWatchlistItem = (body: {
   symbol: string
@@ -1387,15 +1428,14 @@ export const addWatchlistItem = (body: {
   target_price?: number
   stop_price?: number
 }): Promise<{ accepted: boolean; item: WatchlistItem }> =>
-  fetch('/api/watchlist', {
+  request('/api/watchlist', {
     method: 'POST',
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-  }).then((response) => json(response))
+  })
 
 export const removeWatchlistItem = (rowId: number): Promise<{ accepted: boolean }> =>
-  fetch(`/api/watchlist/${rowId}`, { method: 'DELETE', headers: { Accept: 'application/json' } })
-    .then((response) => json(response))
+  request(`/api/watchlist/${rowId}`, { method: 'DELETE', headers: { Accept: 'application/json' } })
 
 export type SymbolRatioRow = {
   key: string
@@ -1409,8 +1449,7 @@ export type SymbolRatioRow = {
 }
 
 export const fetchSymbolRatios = (symbol: string): Promise<{ symbol: string; ratios: SymbolRatioRow[] }> =>
-  fetch(`/api/data/ratios/${encodeURIComponent(symbol)}`, { headers: { Accept: 'application/json' } })
-    .then((response) => json(response))
+  request(`/api/data/ratios/${encodeURIComponent(symbol)}`, { headers: { Accept: 'application/json' } })
 
 export type StrategyCatalog = {
   schema_version: number
@@ -1454,8 +1493,7 @@ export type StrategyCatalog = {
 }
 
 export const fetchStrategyCatalog = (): Promise<StrategyCatalog> =>
-  fetch('/api/strategy-catalog', { headers: { Accept: 'application/json' } })
-    .then((response) => json<StrategyCatalog>(response))
+  request('/api/strategy-catalog', { headers: { Accept: 'application/json' } })
 
 export type ResearchStatus = {
   schema_version: number
@@ -1498,8 +1536,7 @@ export type ResearchStatus = {
 }
 
 export const fetchResearchStatus = (): Promise<ResearchStatus> =>
-  fetch('/api/research-status', { headers: { Accept: 'application/json' } })
-    .then((response) => json<ResearchStatus>(response))
+  request('/api/research-status', { headers: { Accept: 'application/json' } })
 
 export type HealthLane = {
   key: string
@@ -1530,8 +1567,7 @@ export type SystemHealthContract = {
 }
 
 export const fetchSystemHealthContract = (): Promise<SystemHealthContract> =>
-  fetch('/api/system-health-contract', { headers: { Accept: 'application/json' } })
-    .then((response) => json<SystemHealthContract>(response))
+  request('/api/system-health-contract', { headers: { Accept: 'application/json' } })
 
 export type LearningPolicy = {
   policy_id: string
@@ -1618,16 +1654,87 @@ export type ForwardSoakScoreboard = {
 }
 
 export const fetchLearningDashboard = (): Promise<LearningDashboard> =>
-  fetch('/api/learning-dashboard', { headers: { Accept: 'application/json' } })
-    .then((response) => json<LearningDashboard>(response))
+  request('/api/learning-dashboard', { headers: { Accept: 'application/json' } })
 
 export const fetchForwardSoak = (): Promise<ForwardSoakScoreboard> =>
-  fetch('/api/forward-soak', { headers: { Accept: 'application/json' } })
-    .then((response) => json<ForwardSoakScoreboard>(response))
+  request('/api/forward-soak', { headers: { Accept: 'application/json' } })
 
 export const verifyForwardSoakNow = (): Promise<ForwardSoakScoreboard> =>
-  fetch('/api/forward-soak', { method: 'POST', headers: { Accept: 'application/json' } })
-    .then((response) => json<ForwardSoakScoreboard>(response))
+  request('/api/forward-soak', { method: 'POST', headers: { Accept: 'application/json' } })
+
+export type HistoricalDecisionRow = {
+  symbol?: string
+  as_of?: string
+  decision?: string
+  reason_code?: string
+  reasons?: string[]
+  classification?: string
+  outcome_status?: string
+  forward_return_pct?: number | null
+  entry?: number | null
+  stop?: number | null
+  target?: number | null
+  pit?: { as_of?: string; max_bar_date?: string; future_evidence_used?: boolean; degraded?: string[] }
+  engine?: string
+}
+
+export type DecisionSimulatorReport = {
+  available?: boolean
+  accepted?: boolean
+  provenance?: string
+  cache_hit?: boolean
+  live_locked?: boolean
+  not_promotion_evidence?: boolean
+  status?: string
+  run_id?: string
+  engine?: string
+  phase?: string
+  message?: string
+  period_start?: string
+  period_end?: string
+  trading_sessions?: number
+  sessions_done?: number
+  sessions_total?: number
+  universe_observations?: number
+  stocks_evaluated?: number
+  decision_candidates?: number
+  decisions_tested?: number
+  would_take?: number
+  rejected?: number
+  waited?: number
+  BUY?: number
+  WAIT?: number
+  AVOID?: number
+  REJECT?: number
+  outcomes_matured?: number
+  open_unresolved?: number
+  correct_rejections?: number
+  missed_winners?: number
+  avoided_losers?: number
+  good_waits?: number
+  filters_helped?: string[]
+  filters_hurt?: string[]
+  simple?: string
+  note?: string
+  session_summaries?: Array<{
+    as_of?: string
+    universe?: number
+    evaluated?: number
+    decisions?: number
+    buy?: number
+    wait?: number
+    avoid?: number
+    reject?: number
+  }>
+  decisions?: HistoricalDecisionRow[]
+  rows?: HistoricalDecisionRow[]
+}
+
+export const fetchDecisionSimulator = (): Promise<DecisionSimulatorReport> =>
+  request('/api/decision-simulator', { headers: { Accept: 'application/json' } })
+
+export const simulatePastDecisions = (): Promise<DecisionSimulatorReport> =>
+  request('/api/decision-simulator', { method: 'POST', headers: { Accept: 'application/json' } })
 
 export type ScanAuditPayload = {
   generated_at?: string
@@ -1653,14 +1760,12 @@ export const fetchScanAudit = (symbol = '', limit = 80): Promise<ScanAuditPayloa
   const params = new URLSearchParams()
   if (symbol) params.set('symbol', symbol)
   params.set('limit', String(limit))
-  return fetch(`/api/scan-audit?${params.toString()}`, { headers: { Accept: 'application/json' } })
-    .then((response) => json<ScanAuditPayload>(response))
+  return request(`/api/scan-audit?${params.toString()}`, { headers: { Accept: 'application/json' } })
 }
 
 export const fetchDecisionJournal = (symbol = '', limit = 80): Promise<ResearchStatus['decision_journal']> => {
   const params = new URLSearchParams()
   if (symbol) params.set('symbol', symbol)
   params.set('limit', String(limit))
-  return fetch(`/api/decision-journal?${params.toString()}`, { headers: { Accept: 'application/json' } })
-    .then((response) => json(response))
+  return request(`/api/decision-journal?${params.toString()}`, { headers: { Accept: 'application/json' } })
 }

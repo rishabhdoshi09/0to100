@@ -114,6 +114,7 @@ class ScanPipeline:
             institutional_activity=inst_activity,
         )
         quality_scores = [qe.score(c, df=se.get_cached_df(c.symbol)) for c in candidates]
+        se._df_cache.clear()
 
         # Filter by minimum score
         if self._skip_avoid:

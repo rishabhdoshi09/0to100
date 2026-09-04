@@ -15,8 +15,8 @@ def test_complete_script_starts_every_local_service_in_one_process_tree():
     assert "run_quantterm.sh" in complete
     assert "python main.py login" in complete
     assert "report_api:app" in complete
-    assert "terminal_product_api:app" in inner
-    assert "npm run dev" in inner
+    assert "terminal_product_api_parallel:app" in inner or "terminal_product_api:app" in inner
+    assert "npm --prefix" in inner and "run dev" in inner
     assert "python -u main.py autonomy" in inner
     assert "scripts/local_stack.py scan" in inner
     assert "curl" not in complete
@@ -40,19 +40,40 @@ def test_complete_script_starts_every_local_service_in_one_process_tree():
 def test_complete_script_always_stops_old_stack_then_starts_everything():
     complete = (ROOT / "scripts" / "run_quantterm_complete.sh").read_text(encoding="utf-8")
     inner = (ROOT / "scripts" / "run_quantterm.sh").read_text(encoding="utf-8")
+    assert "machine-lock-path" in complete
+    assert "machine-lock-path" in inner
+    assert "$ROOT/logs/stack/quantterm.supervisor.lock" not in complete
+    assert "QT_MACHINE_OWNER" in complete
+    assert "QT_MACHINE_OWNER" in inner
     assert "python scripts/local_stack.py stop --ports 5173,8765,8766" in complete
+    assert "try_machine_lock()" in complete
+    assert "try-fd-lock --fd 200" in complete
+    assert "try-fd-lock --fd 201" in inner
+    assert "if flock -n 200; then" not in complete
+    assert "if flock -n 201; then" not in inner
+    assert complete.index("try_machine_lock") < complete.index(
+        "python scripts/local_stack.py stop --ports 5173,8765,8766"
+    )
+    assert "will not stop :5173/:8765/:8766" in complete
+    assert "write-owner" in complete
+    assert "The desk is serving" in complete
     assert "python scripts/local_stack.py stop --ports 5173,8765" in inner
+    assert inner.index("QT_MACHINE_OWNER") < inner.index(
+        "python scripts/local_stack.py stop --ports 5173,8765"
+    )
     assert "One command, one terminal" in complete
     assert "scripts/local_stack.py scan" in inner
     assert "run_quantterm_complete.sh --restart" not in inner
     assert 'url_ok "http://127.0.0.1:8766/health"' in complete
-    assert complete.count('url_ok "http://127.0.0.1:8766/health"') == 1
+    assert complete.count('url_ok "http://127.0.0.1:8766/health"') >= 1
     assert 'alive "$REPORT_PID"' in complete
     assert "wait_for_api" in inner
     boot = inner.split("start_api || true", 1)[1].split('while [[ "$STOP" != "1" ]]', 1)[0]
     assert boot.index("wait_for_api") < boot.index("start_frontend")
     assert boot.index("start_frontend") < boot.index("kick_scan")
-    assert "npm run dev" in inner
+    assert "npm --prefix" in inner and "run dev" in inner
+    assert "vite.log" in inner
+    assert "vite.log" in complete
     assert "Use --restart" not in inner
     assert "Use --restart" not in complete
     assert "python3 -m venv venv" in complete

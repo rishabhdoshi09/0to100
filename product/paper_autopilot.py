@@ -24,6 +24,9 @@ MARKET_NOT_READY = "MARKET_NOT_READY"
 OUTSIDE_ENTRY_WINDOW = "OUTSIDE_ENTRY_WINDOW"
 STALE_RECOMMENDATION = "STALE_RECOMMENDATION"
 LOW_QUALITY_SETUP = "LOW_QUALITY_SETUP"
+INVALID_SYMBOL = "INVALID_SYMBOL"
+DATA_UNAVAILABLE = "DATA_UNAVAILABLE"
+ANALYSIS_ERROR = "ANALYSIS_ERROR"
 WATCH_ONLY = "WATCH_ONLY"
 DD_GATE_FAILED = "DD_GATE_FAILED"
 EMPIRICAL_GATE_FAILED = "EMPIRICAL_GATE_FAILED"
@@ -45,6 +48,7 @@ UNRECONCILED = "UNRECONCILED"
 NO_TRADE = "NO_TRADE"
 WAIT_FOR_ENTRY = "WAIT_FOR_ENTRY"
 NOT_SURFACED = "NOT_SURFACED"
+BROKER_LOGIN_REQUIRED = "BROKER_LOGIN_REQUIRED"
 
 ENTER_NOW = "ENTER_NOW"
 WAIT = "WAIT"
@@ -132,6 +136,9 @@ def _identity() -> dict[str, Any]:
 
 def reco_is_stale(workspace: Mapping[str, Any] | None, *, now: datetime | None = None) -> bool:
     payload = dict(workspace or {})
+    if payload.get("point_in_time"):
+        # Historical reconstructions are dated to T, not to wall-clock freshness.
+        return False
     stamp = (
         _parse_ts(payload.get("generated_at"))
         or _parse_ts(payload.get("scan_scanned_at"))
@@ -219,6 +226,20 @@ def evaluate_candidate(
     symbol = str(card.get("symbol") or "").strip().upper()
     row = dict(card)
     row["symbol"] = symbol
+    try:
+        from data.nse_universe import _is_valid_symbol
+        plausible = bool(symbol) and _is_valid_symbol(symbol)
+    except Exception:
+        plausible = bool(symbol) and len(symbol) <= 15 and " " not in symbol
+    if not symbol or not plausible:
+        return AutopilotDecision(
+            symbol, BLOCK, INVALID_SYMBOL,
+            "not a valid NSE equity ticker" if symbol else "symbol missing",
+            row,
+        )
+    status = str(row.get("status") or row.get("data_status") or "").upper()
+    if status in {DATA_UNAVAILABLE, INVALID_SYMBOL, ANALYSIS_ERROR}:
+        return AutopilotDecision(symbol, BLOCK, status, str(row.get("reason") or status), row)
     if not paper_enabled:
         return AutopilotDecision(symbol, BLOCK, PAPER_TRADING_DISABLED, "paper auto is off", row)
     if not entries_allowed:
@@ -505,7 +526,10 @@ def run_reco_paper_cycle(
 
     def _freeze(decision: AutopilotDecision, *, group: str = "") -> None:
         try:
+            from product.decision_taxonomy import is_non_judgment
             from product.counterfactual_learning import freeze_decision
+            if is_non_judgment(decision.decision, decision.reason_code):
+                return
             evidence = {
                 **dict(decision.context or {}),
                 "rules_hash": ident.get("rules_hash"),
@@ -553,6 +577,9 @@ def run_reco_paper_cycle(
         )
         _decorate(decision, policy=policy, context=ctx)
         decisions.append(decision)
+        from product.decision_taxonomy import is_non_judgment
+        if is_non_judgment(decision.decision, decision.reason_code):
+            continue
         if decision.decision == ENTER_NOW:
             ranked.append((float(decision.selection_score or 0.0), decision))
         elif decision.decision == WAIT:

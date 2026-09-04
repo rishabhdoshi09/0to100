@@ -290,6 +290,12 @@ def card_from_row(
         "fundamental_confirmation": scored.get("fundamental_confirmation"),
         "research_decision_coverage": scored.get("research_decision_coverage"),
         "research_quality_label": scored.get("research_quality_label"),
+        "sector_leadership_score": scored.get("sector_leadership_score"),
+        "sector_leadership_label": scored.get("sector_leadership_label") or "",
+        "sector_breadth": scored.get("sector_breadth") or "",
+        "sector_momentum": scored.get("sector_momentum") or "",
+        "methods_supporting": [m.get("label") for m in (scored.get("methods") or []) if isinstance(m, Mapping) and m.get("status") == "pass"],
+        "methods_disagreeing": [m.get("label") for m in (scored.get("methods") or []) if isinstance(m, Mapping) and m.get("status") == "fail"],
         **ups,
         **surface,
         "horizon": surface.get("horizon") or horizon,
@@ -846,19 +852,32 @@ def build_recommendations_workspace(
     settle_cases: bool = False,
     deep_confirm: bool = False,
     persist_ledger: bool = False,
+    point_in_time: bool = False,
+    as_of: str = "",
 ) -> dict[str, Any]:
     """Project recommendation categories + lifecycle from persisted product state.
 
     Page-open defaults skip live technical refresh and case settlement so the
     desk reads the last scan instead of recomputing hundreds of rows.
+
+    ``point_in_time=True`` keeps the same category/ensemble path but refuses
+    live CMP, live EV, current research overlays, and today's tracker state.
+    Those lanes are marked degraded instead of filled from later evidence.
     """
     scan = dict(scan_payload or {})
     lt = dict(long_term_payload or {})
-    scan_at = str(scan.get("scanned_at") or "")
+    scan_at = str(scan.get("scanned_at") or as_of or "")
     lt_at = str(lt.get("scanned_at") or "")
+    pit_degraded: list[str] = []
 
     scan_rows = [enrich_scan_row(dict(r), scanned_at=scan_at) for r in (scan.get("records") or [])]
     lt_rows = [enrich_long_term_row(dict(r), scanned_at=lt_at) for r in (lt.get("records") or [])]
+
+    if point_in_time:
+        refresh_technicals = False
+        settle_cases = False
+        deep_confirm = False
+        persist_ledger = False
 
     if refresh_technicals and (scan_rows or lt_rows):
         try:
@@ -871,18 +890,26 @@ def build_recommendations_workspace(
         except Exception:
             pass
 
-    try:
-        from product.live_technicals import apply_current_trade_levels
-        for row in (*scan_rows, *lt_rows):
-            if _f(row.get("price") or row.get("cmp")) > 0:
-                apply_current_trade_levels(row, None)
-    except Exception:
-        pass
+    if point_in_time:
+        pit_degraded.extend([
+            "live_technicals skipped — current CMP would leak later prices",
+            "live EV skipped — expectancy tables are not point-in-time",
+            "research overlays skipped — saved overlays may be newer than as_of",
+            "tracker lifecycle skipped — Active/Closed is today's book",
+        ])
+    else:
+        try:
+            from product.live_technicals import apply_current_trade_levels
+            for row in (*scan_rows, *lt_rows):
+                if _f(row.get("price") or row.get("cmp")) > 0:
+                    apply_current_trade_levels(row, None)
+        except Exception:
+            pass
 
-    attach_live_ev(scan_rows)
-    scan_rows, lt_rows = attach_research_overlays(
-        scan_rows, lt_rows, scanned_at=scan_at,
-    )
+        attach_live_ev(scan_rows)
+        scan_rows, lt_rows = attach_research_overlays(
+            scan_rows, lt_rows, scanned_at=scan_at,
+        )
     if settle_cases:
         try:
             from product.case_memory import settle_due_cases
@@ -895,7 +922,7 @@ def build_recommendations_workspace(
         buckets = _paint_deep_confirm(
             buckets, scan_payload=scan, long_term_payload=lt,
         )
-    active, closed = _tracker_lifecycle()
+    active, closed = ([], []) if point_in_time else _tracker_lifecycle()
 
     categories = []
     assigned = 0
@@ -934,9 +961,16 @@ def build_recommendations_workspace(
     if str(scan.get("records_status") or "") == "PRIOR_DAY_SNAPSHOT":
         cmp_note = "Scan file is a PRIOR-DAY SNAPSHOT — run a fresh market scan before acting. " + cmp_note
 
+    generated_at = (
+        f"{as_of}T15:30:00+05:30" if point_in_time and len(str(as_of)) == 10
+        else datetime.now(timezone.utc).isoformat()
+    )
     return {
         "schema_version": 4,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": generated_at,
+        "point_in_time": bool(point_in_time),
+        "pit_as_of": str(as_of or scan.get("as_of_session") or "")[:10],
+        "pit_degraded": pit_degraded,
         "scan_scanned_at": scan_at,
         "long_term_scanned_at": lt_at,
         "records_status": str(scan.get("records_status") or ""),

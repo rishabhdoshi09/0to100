@@ -9,6 +9,7 @@ the supervisor.
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -97,6 +98,20 @@ def capabilities(active_failures) -> dict:
             "ui": ui, "active_failures": sorted(f), "notes": notes}
 
 
+def _pid_alive(pid) -> bool:
+    try:
+        value = int(pid or 0)
+    except (TypeError, ValueError):
+        return False
+    if value <= 1:
+        return False
+    try:
+        os.kill(value, 0)
+        return True
+    except OSError:
+        return False
+
+
 def _fresh(payload: dict, *, max_age_s: float = 90.0) -> bool:
     """Return whether a heartbeat is recent in its declared clock domain.
 
@@ -141,12 +156,13 @@ def read_status(*, state_path, jobs_db=None, dialogue_path=None) -> dict:
            "heartbeat_ist": "", "snapshot_id": "", "recent_transitions": [], "jobs": {},
            "recent_dialogue": [], "new_risk_permitted": False, "positions_manageable": True,
            "active_failures": [], "owner_state": {}, "scheduler_of_record": "", "last_cycle": {},
-           "scheduler_owner_pid": None, "active_job": {}}
+           "scheduler_owner_pid": None, "active_job": {}, "reason_code": ""}
     durable: dict = {}
     try:
         durable = json.loads(state_path.read_text(encoding="utf-8"))
         out.update({"state": durable.get("state", "UNKNOWN"),
                     "explanation": durable.get("explanation", ""),
+                    "reason_code": str(durable.get("reason_code") or ""),
                     "updated_ist": durable.get("updated_ist", ""),
                     "snapshot_id": durable.get("snapshot_id", ""),
                     "heartbeat_ist": durable.get("heartbeat_ist", durable.get("updated_ist", "")),
@@ -178,6 +194,10 @@ def read_status(*, state_path, jobs_db=None, dialogue_path=None) -> dict:
         out["active_job"] = dict(runtime.get("active_job", {}) or {})
     else:
         out["supervisor_running"] = bool(durable.get("process_running", True)) and _fresh(durable)
+
+    # A leftover heartbeat after process death must not look like a live supervisor.
+    if out["supervisor_running"] and not _pid_alive(out.get("scheduler_owner_pid")):
+        out["supervisor_running"] = False
 
     if jobs_db is not None:
         try:

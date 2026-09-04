@@ -219,6 +219,10 @@ def backfill_missing(symbols: list[str], *, client=None, now: datetime | None = 
     if loaded:
         with _lock:
             _kite_cache.update(loaded)
+            overflow = len(_kite_cache) - 256
+            if overflow > 0:
+                for key in list(_kite_cache)[:overflow]:
+                    _kite_cache.pop(key, None)
     return {
         "requested": len(requested),
         "missing": len(missing),

@@ -10,7 +10,7 @@ from typing import Any, Mapping, Sequence
 
 from product.operator_language import explain_opportunity, simple_reason
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 NORMAL = "NORMAL"
 LOGIN_REQUIRED = "LOGIN_REQUIRED"
@@ -108,6 +108,55 @@ def _load_defaults() -> dict[str, Any]:
     return out
 
 
+_AUTH_STATES = frozenset({"AUTH_REQUIRED", "TOKEN_MISSING", "SESSION_EXPIRED"})
+_AUTH_REASON_CODES = frozenset({
+    "auth_health",
+    "token_missing",
+    "session_expired",
+    "auth_missing",
+    "auth_expired",
+})
+
+
+def broker_session_usable(auto: Mapping[str, Any] | None) -> bool:
+    """True only with evidence of a usable broker session. Empty snapshots fail closed."""
+    auto = _as_dict(auto)
+    if not auto:
+        return False
+    # Prefer the canonical broker readiness projection when present. Fall back
+    # to legacy autonomy fields for older saved runtime snapshots.
+    broker = _as_dict(auto.get("broker"))
+    if broker:
+        return bool(broker.get("ready") or broker.get("live_data_ready"))
+    state = str(auto.get("state") or "").strip().upper()
+    if not state or state in _AUTH_STATES or state == "UNKNOWN":
+        return False
+    if auto.get("available") is False:
+        return False
+    if auto.get("kite_connected") is False:
+        return False
+    failures = [str(x).lower() for x in (auto.get("active_failures") or [])]
+    if any("auth" in item or "token" in item for item in failures):
+        return False
+    if str(auto.get("reason_code") or "").lower() in _AUTH_REASON_CODES:
+        return False
+    explanation = str(auto.get("explanation") or "").lower()
+    if "login is required" in explanation or "zerodha login" in explanation:
+        return False
+    notes = [str(n).lower() for n in (auto.get("capability_notes") or [])]
+    if any("zerodha login" in n or "re-login" in n or "session expired" in n for n in notes):
+        return False
+    feed = _as_dict(auto.get("live_feed"))
+    if str(feed.get("status") or "").upper() in _AUTH_STATES:
+        return False
+    feed_error = str(feed.get("last_error") or "").lower()
+    if feed.get("connected") is False and any(
+        token in feed_error for token in ("credential", "access token", "login", "auth")
+    ):
+        return False
+    return True
+
+
 def build_home_os(
     *,
     dashboard: Mapping[str, Any] | None = None,
@@ -139,13 +188,20 @@ def build_home_os(
     ops = _as_dict(operations if operations is not None else dash.get("operations") or loaded.get("operations"))
     radar_d = _as_dict(radar)
 
-    kite_ok = str(auto.get("state") or "") not in {"AUTH_REQUIRED", "TOKEN_MISSING", "SESSION_EXPIRED"}
-    failures = [str(x) for x in (auto.get("active_failures") or [])]
-    if any("auth" in f.lower() or "token" in f.lower() for f in failures):
-        kite_ok = False
-    if auto.get("kite_connected") is False:
-        kite_ok = False
+    kite_ok = broker_session_usable(auto)
     paper_enabled = paper_d.get("enabled", True) is not False
+    owner_state = _as_dict(auto.get("owner_state"))
+    observe_date = str(owner_state.get("observe_only_date") or "")[:10]
+    today_ist = ""
+    try:
+        from zoneinfo import ZoneInfo
+        clock = now or datetime.now(timezone.utc)
+        if clock.tzinfo is None:
+            clock = clock.replace(tzinfo=timezone.utc)
+        today_ist = clock.astimezone(ZoneInfo("Asia/Kolkata")).date().isoformat()
+    except Exception:
+        today_ist = datetime.now(timezone.utc).date().isoformat()
+    observe_only = bool(observe_date and observe_date == today_ist)
     bhav = dict(data_d.get("bhavcopy") or {})
     freshness = _history_freshness(data_d, loaded.get("history_freshness"), now)
     history_current = bool(freshness.get("current", True))
@@ -172,7 +228,8 @@ def build_home_os(
     closed = list(paper_d.get("closed_trades") or [])
     active_ops = [o for o in list(ops.get("active") or []) if isinstance(o, Mapping)]
     active_kinds = {str(o.get("kind") or "") for o in active_ops}
-    preparing = bool(active_kinds & {"DATA_PREPARE", "MARKET_SCAN", "LONG_TERM_REFRESH", "NEWS_REFRESH"})
+    # News / long-term overlays are not "official prices are missing".
+    preparing = bool(active_kinds & {"DATA_PREPARE", "MARKET_SCAN"})
     data_failed = any(str(o.get("kind")) == "DATA_PREPARE" and str(o.get("status")) == "FAILED" for o in list(ops.get("recent") or []))
     scan_failed = any(str(o.get("kind")) == "MARKET_SCAN" and str(o.get("status")) == "FAILED" for o in list(ops.get("recent") or []))
     phase = _session_phase(now)
@@ -195,24 +252,29 @@ def build_home_os(
     now_line = "Watching the market"
     next_line = "Next automatic paper decision after the scan"
 
+    broker_login_required = not kite_ok
+    # Missing broker auth is not a system-health failure, but during an active
+    # paper session it is the one legitimate human action because broker-live
+    # quotes/entry cannot proceed without it. Observe-only and closed-market
+    # operation remain fully autonomous without a login.
+    broker_action_required = bool(
+        broker_login_required and paper_enabled and not observe_only and not market_closed
+    )
+    broker_action = _action(
+        label="Login to Zerodha",
+        kind="instruction",
+        instruction=(
+            "Run python main.py login to enable broker-live quotes and broker-dependent paper entry. "
+            "Official data, scanning, research, replay, settlement and learning continue without it."
+        ),
+    )
+
     if not live_locked:
         state = PROBLEM
         headline = "Live money must stay locked."
         subtext = "The paper path is the only money path. Do not trade live from Home."
         now_line = "Paper bot only"
         next_line = "Keep live money locked"
-    elif not kite_ok:
-        state = LOGIN_REQUIRED
-        headline = "Zerodha login is needed."
-        subtext = "Paper and official NSE data can still work. Live quotes wait for login."
-        primary_action = _action(
-            label="Login to Zerodha",
-            kind="instruction",
-            instruction="Run the same one command again, or python main.py login. Home will resume by itself after login.",
-        )
-        now_line = "Waiting for Zerodha login"
-        next_line = "Resume live observation after login"
-        secondary = [_action("RUN_SCAN_NOW", label="Scan now"), _action("REFRESH_DATA_NOW", label="Refresh data")]
     elif data_failed and not data_ready:
         state = FAILED_RECOVERABLE
         headline = "Market data needs another try."
@@ -257,7 +319,12 @@ def build_home_os(
         now_line = "Watching open paper positions" if opens else "Paper entries paused"
         next_line = "Resume when you want new paper trades"
     elif market_closed and (eod_done or valid_no_trade or taken or closed):
-        pending_settle = str((verify.get("lanes") or {}).get("FORWARD SETTLEMENT") or "") == "PENDING" and not closed
+        settle_job_active = bool(active_kinds & {"OUTCOME_RESOLUTION", "outcome_resolution"})
+        pending_settle = (
+            str((verify.get("lanes") or {}).get("FORWARD SETTLEMENT") or "") == "PENDING"
+            and not closed
+            and (phase == "eod" or settle_job_active)
+        )
         if pending_settle and not valid_no_trade:
             state = NORMAL
             headline = "Today's market is closed. Settlement is still finishing."
@@ -297,7 +364,19 @@ def build_home_os(
         secondary = [
             _action("RUN_SCAN_NOW", label="Scan now"),
             _action("PAUSE_NEW_PAPER_ENTRIES", label="Pause paper entries"),
+            _action("OBSERVE_ONLY_TODAY", label="Observe only today"),
         ]
+
+    if observe_only and state in {NORMAL, NO_TRADE, MARKET_CLOSED_COMPLETE}:
+        if "nothing was good enough" not in headline.lower() and "did not find" not in headline.lower():
+            subtext = (
+                "Observe only today. Paper decisions and learning continue. "
+                "Live money stays locked. You are not participating."
+            )
+        else:
+            subtext = (
+                f"{subtext} Observe only today — paper still records the day."
+            )
 
     if state == NORMAL and not primary_action:
         primary_action = None
@@ -363,21 +442,124 @@ def build_home_os(
         learning_simple=learning_simple,
         n_real=n_real,
     )
+    # The broker lane is a capability lane, not autonomy health. During an
+    # active paper session, however, login is the one expected human action.
+    # Keep that distinction explicit instead of making the whole system look
+    # degraded or pretending paper entry can proceed without broker auth.
+    if broker_action_required:
+        zerodha = dict(system.get("zerodha") or {})
+        zerodha.update({
+            "status": "Needs you",
+            "status_code": "LOGIN_REQUIRED",
+            "summary": "Login required for broker-dependent paper entry.",
+            "detail": "Research and official-data autonomy continue without Zerodha.",
+            "meaning": "Log in to enable broker-live quotes and paper entry; this is not a system failure.",
+            "needs_user": True,
+            "optional_capability": False,
+            "blocks_autonomy": False,
+            "blocks_live_money": False,
+            "primary_action": broker_action,
+        })
+        system["zerodha"] = zerodha
     check_system = build_check_system(system, live_locked=live_locked)
+
+    runtime: dict[str, Any] = {}
+    try:
+        from product.runtime_lifecycle import inspect_runtime
+
+        runtime = inspect_runtime(api_serving=True)
+    except Exception as exc:
+        runtime = {
+            "lifecycle": "FAILED",
+            "reason": str(exc)[:240],
+            "reasons": [str(exc)[:240]],
+            "components": [],
+        }
+    lifecycle = str(runtime.get("lifecycle") or "")
+    if lifecycle == "FAILED":
+        state = FAILED_RECOVERABLE
+        headline = "A required backend process is down."
+        subtext = str(runtime.get("reason") or "The desk will not hide a dead backend.")
+        now_line = f"FAILED · {runtime.get('reason') or 'see logs/stack'}"
+        next_line = "Supervisor restarts the failed process when recovery is safe"
+        primary_action = _action("CHECK_SYSTEM", label="Check system", kind="refresh")
+    elif lifecycle == "RECOVERING":
+        headline = "QuantTerm is recovering a failed process."
+        subtext = str(runtime.get("reason") or "A worker heartbeat is stale and the supervisor is restarting it.")
+        now_line = f"RECOVERING · {now_line}"
+        next_line = "Confirm health after the restart"
+    elif lifecycle == "DEGRADED" and state in {NORMAL, PREPARING}:
+        now_line = f"DEGRADED · {now_line}"
+        if runtime.get("reason") and state == NORMAL:
+            subtext = str(runtime.get("reason"))
 
     activity = _activity(
         scan_d, why_d, latest, ops, verify, taken, recovered=list(recovered or []),
     )
     yesterday = _yesterday(verify, soak_d, why_d, scan_ok, reco_ok)
+    readiness: dict[str, Any] = {}
+    try:
+        from product.readiness import inspect_readiness
+
+        readiness = inspect_readiness()
+    except Exception:
+        readiness = {}
+
+    required_attention: list[dict[str, Any]] = []
+    if state in {LOGIN_REQUIRED, FAILED_RECOVERABLE, PAUSED, PROBLEM}:
+        required_attention.append({
+            "id": str((primary_action or {}).get("id") or state),
+            "label": str((primary_action or {}).get("label") or headline),
+            "reason": subtext,
+            "action": primary_action,
+        })
+    if broker_action_required and state not in {FAILED_RECOVERABLE, PAUSED, PROBLEM}:
+        state = LOGIN_REQUIRED
+        headline = "Zerodha login is needed for broker-dependent paper entry."
+        subtext = (
+            "This is the only expected human step. Official data, scans, research, replay, "
+            "settlement and learning continue automatically."
+        )
+        now_line = "Non-broker autonomy is running"
+        next_line = "Broker paper entry resumes after login"
+        primary_action = broker_action
+        required_attention = [{
+            "id": "BROKER_LOGIN_REQUIRED",
+            "label": "Login to Zerodha",
+            "reason": subtext,
+            "action": broker_action,
+        }]
+
+    optional_attention: list[dict[str, Any]] = []
+    if broker_login_required and not broker_action_required:
+        optional_attention.append({
+            "id": "BROKER_LOGIN_OPTIONAL",
+            "label": "Connect Zerodha",
+            "reason": (
+                "Optional right now: enables broker-live quotes and broker-dependent paper entry. "
+                "Official data, scan, research, shadow tracking, settlement and learning continue without it."
+            ),
+            "action": broker_action,
+        })
+    need_me = bool(required_attention)
 
     return {
         "schema_version": SCHEMA_VERSION,
         "state": state,
         "headline": headline,
         "subtext": subtext,
-        "need_me": state in {LOGIN_REQUIRED, FAILED_RECOVERABLE, PAUSED, PROBLEM},
+        "need_me": need_me,
+        "attention": {
+            "required_now": required_attention,
+            "optional": optional_attention,
+            "count": len(required_attention),
+            "optional_count": len(optional_attention),
+            "headline": "Action required" if required_attention else "No action required",
+        },
         "primary_action": primary_action,
-        "secondary_actions": secondary[:3],
+        "secondary_actions": (secondary + [_action("SIMULATE_PAST_DECISIONS", label="Simulate past decisions")])[:4],
+        "simulate_action": _action("SIMULATE_PAST_DECISIONS", label="Simulate past decisions"),
+        "past_decisions": _past_decisions(),
         "now": now_line,
         "next": next_line,
         "progress": progress,
@@ -395,6 +577,8 @@ def build_home_os(
             "next_automatic_action": next_line,
         },
         "opportunities": opportunities[:8],
+        "observe_only": observe_only,
+        "observe_only_date": observe_date if observe_only else "",
         "paper_bot": {
             "on": bool(paper_enabled),
             "paused": not paper_enabled,
@@ -422,6 +606,25 @@ def build_home_os(
         "yesterday": yesterday,
         "recovered": list(recovered or []),
         "live_locked": True,
+        "broker": {
+            "status": (
+                "LOGIN_REQUIRED" if broker_action_required
+                else "OPTIONAL_LOGIN" if broker_login_required
+                else "READY"
+            ),
+            "login_required": broker_login_required,
+            "requires_operator_now": broker_action_required,
+            "blocks_autonomy": False,
+            "detail": (
+                "Login is required for broker-dependent paper entry; non-broker autonomy continues."
+                if broker_action_required
+                else "Broker-live quotes and broker-dependent paper entry are unavailable until login; autonomous research work continues."
+                if broker_login_required
+                else "Broker session is usable."
+            ),
+        },
+        "readiness": readiness,
+        "runtime": runtime,
         "history_freshness": {
             "current": history_current,
             "expected_latest_completed_session": freshness.get("expected_latest_completed_session") or "",
@@ -438,7 +641,7 @@ def build_home_os(
             "what": "Home is QuantTerm's operating system for one market day.",
             "found": headline,
             "meaning": subtext,
-            "action": (primary_action or {}).get("label") or "Nothing. Leave it running.",
+            "action": (primary_action or {}).get("label") if need_me else "Nothing. Leave it running.",
         },
     }
 
@@ -532,4 +735,51 @@ def _yesterday(
         "learning": lanes.get("LEARNING INGESTION") in {"PASS", "PENDING"},
         "forward_evidence": lanes.get("FORWARD SETTLEMENT") == "PASS" or bool(soak.get("real_forward_observations")),
         "live_locked": True,
+    }
+
+
+def _past_decisions() -> dict[str, Any]:
+    try:
+        from product.decision_simulator import load_latest
+        report = load_latest()
+    except Exception:
+        report = {}
+    if not report:
+        return {"available": False, "provenance": "BACKTEST", "live_locked": True}
+    return {
+        "available": True,
+        "provenance": report.get("provenance") or "BACKTEST",
+        "status": report.get("status"),
+        "run_id": report.get("run_id"),
+        "engine": report.get("engine"),
+        "period_start": report.get("period_start"),
+        "period_end": report.get("period_end"),
+        "trading_sessions": report.get("trading_sessions"),
+        "sessions_done": report.get("sessions_done"),
+        "sessions_total": report.get("sessions_total"),
+        "universe_observations": report.get("universe_observations"),
+        "stocks_evaluated": report.get("stocks_evaluated"),
+        "decisions_tested": report.get("decisions_tested") or 0,
+        "would_take": report.get("would_take") or report.get("BUY"),
+        "rejected": report.get("rejected"),
+        "BUY": report.get("BUY"),
+        "WAIT": report.get("WAIT"),
+        "AVOID": report.get("AVOID"),
+        "REJECT": report.get("REJECT"),
+        "correct_rejections": report.get("correct_rejections"),
+        "missed_winners": report.get("missed_winners"),
+        "avoided_losers": report.get("avoided_losers"),
+        "good_waits": report.get("good_waits"),
+        "outcomes_matured": report.get("outcomes_matured"),
+        "open_unresolved": report.get("open_unresolved"),
+        "filters_helped": report.get("filters_helped") or [],
+        "filters_hurt": report.get("filters_hurt") or [],
+        "simple": report.get("simple") or "",
+        "note": report.get("note") or "",
+        "PIT_STRONG": report.get("PIT_STRONG"),
+        "PIT_PARTIAL": report.get("PIT_PARTIAL"),
+        "PIT_MARKET_ONLY": report.get("PIT_MARKET_ONLY"),
+        "scorecards_note": "Method/family scorecards stay inspect-only until sample floors.",
+        "live_locked": True,
+        "not_promotion_evidence": True,
     }

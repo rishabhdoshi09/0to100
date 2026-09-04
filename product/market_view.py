@@ -82,6 +82,16 @@ def build_market_view(regime: Any) -> RetailMarketView:
     )
 
 
+def peek_cached_market_view() -> RetailMarketView | None:
+    """Last readable regime only. None means the view is still assembling."""
+    from core.regime_engine import peek_cached_regime
+
+    cached = peek_cached_regime()
+    if cached is None:
+        return None
+    return build_market_view(cached)
+
+
 def current_market_view() -> RetailMarketView:
     from core.regime_engine import compute_regime
     return build_market_view(compute_regime())

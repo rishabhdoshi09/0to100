@@ -533,6 +533,17 @@ def test_acquire_endpoint_downloads_then_rebuilds(monkeypatch):
     assert all_resp.json()["mode"] == "all"
 
 
+def test_production_shortlist_follows_recommendations(monkeypatch):
+    from product.due_diligence import acquire as ACQ
+
+    monkeypatch.setattr(
+        ACQ,
+        "_recommendation_shortlist",
+        lambda limit=6: ["SAILIFE", "INFY"],
+    )
+    assert ACQ.shortlist_symbols()[:2] == ["SAILIFE", "INFY"]
+
+
 def test_shortlist_and_acquire_do_not_gate_the_scanner():
     from product.due_diligence.acquire import acquire_shortlist, shortlist_symbols
 

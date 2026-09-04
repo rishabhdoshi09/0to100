@@ -11,6 +11,8 @@ import {
   fetchTradePlan,
   fetchWatchlist,
   verifyForwardSoakNow,
+  fetchDecisionSimulator,
+  simulatePastDecisions,
   type HomeAction,
   type HomeOperatingSystem,
   removeWatchlistItem,
@@ -252,12 +254,11 @@ function BestOfBestHero({
   const parts = row.best_of_best_parts || {}
   const upside = row.upside_to_target_pct ?? row.upside_from_entry_pct
   const risk = String(row.risk_tier || 'Medium').toLowerCase()
-  const badge = row.action_badge || 'Watch'
   return (
     <article className="radar-bob-hero">
       <button type="button" className="radar-bob-hit" onClick={() => onSelect(String(row.symbol || ''))}>
         <div className="radar-bob-row1">
-          <span className={`reco-buy ${badge.toLowerCase().includes('buy') ? '' : 'is-watch'}`}>{badge}</span>
+          <span className="reco-buy is-watch">Candidate</span>
           <span className="reco-opp">Best among the best</span>
           <span className={`reco-risk-chip ${risk}`}>{row.risk_tier || 'Medium'} Risk</span>
         </div>
@@ -388,8 +389,8 @@ function DenseTable({
   const cols = mode === 'Long-Term'
     ? ['symbol', 'classification', 'combined_score', 'sector', 'coverage_pct', 'risk_label']
     : depth === 'professional'
-      ? ['symbol', 'price', 'change_5d_pct', 'sector', 'setup_label', 'breakout_state', 'momentum_state', 'relative_strength', 'risk_label']
-      : ['symbol', 'price', 'change_5d_pct', 'sector', 'setup_label', 'risk_label']
+      ? ['symbol', 'price', 'setup_label', 'sector', 'decision', 'entry', 'stop', 'target', 'why']
+      : ['symbol', 'price', 'setup_label', 'sector', 'decision', 'entry', 'stop', 'target', 'why']
 
   return (
     <div className="radar-table-wrap">
@@ -416,8 +417,9 @@ function DenseTable({
                 } else if (col === 'momentum_state') {
                   const key = dashCell(raw)
                   cell = key === '—' ? '—' : (momentumLabel[key] || words(key))
-                } else if (col === 'price') cell = money(raw as number)
+                }                 else if (col === 'price' || col === 'entry' || col === 'stop' || col === 'target') cell = money(raw as number)
                 else if (col === 'change_5d_pct') cell = pct(raw as number)
+                else if (col === 'decision') cell = dashCell(raw || (row as RadarRow).decision)
                 else if (col === 'combined_score' || col === 'relative_strength') cell = raw != null && raw !== '' ? String(raw) : '—'
                 else cell = dashCell(raw)
                 return <td key={col}>{cell}</td>
@@ -436,12 +438,14 @@ function HomeOsCard({
   busy,
   onAction,
   onOpenPage,
+  setSelected,
 }: {
   os: HomeOperatingSystem
   depth: string
   busy: boolean
   onAction: (action: HomeAction) => void
   onOpenPage?: (page: string) => void
+  setSelected?: (symbol: string) => void
 }) {
   const system = (os.system || {}) as Record<string, SystemLane>
   const [openLane, setOpenLane] = useState<string | null>(null)
@@ -451,6 +455,12 @@ function HomeOsCard({
     <section className={`home-os-card state-${(os.state || '').toLowerCase()}`}>
       <div className="home-os-hero">
         <span>WHAT SHOULD I DO?</span>
+        {os.runtime?.lifecycle ? (
+          <p className="panel-copy">
+            {os.runtime.lifecycle}
+            {os.runtime.reason ? ` · ${os.runtime.reason}` : ''}
+          </p>
+        ) : null}
         <h2>{os.headline}</h2>
         <p>{os.subtext}</p>
         <div className="home-os-now-next">
@@ -480,18 +490,104 @@ function HomeOsCard({
         {os.primary_action?.kind === 'instruction' && os.primary_action.instruction ? (
           <p className="panel-copy">{os.primary_action.instruction}</p>
         ) : null}
+        <div className="home-os-quick" aria-label="Open the next desk page">
+          {[
+            ['Opportunities', 'Recommendations'],
+            ['Stock Intelligence', 'Stock Intelligence'],
+            ['Portfolio', 'Portfolio'],
+            ['Learning', 'Learning'],
+          ].map(([label, page]) => (
+            <button
+              key={page}
+              type="button"
+              className="home-os-quick-link"
+              onClick={() => onOpenPage?.(page)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
       <div className="home-os-grid">
         <div>
-          <span>TODAY</span>
-          <strong>{os.today?.market_open ? 'Market open' : 'Market closed'}</strong>
-          <small>{os.today?.market_mood || os.today?.market_phase || '—'}</small>
+          <span>SYSTEM</span>
+          <strong>{os.headline}</strong>
+          <small>{os.subtext}</small>
         </div>
         <div>
-          <span>PAPER BOT</span>
+          <span>AUTONOMY</span>
+          <strong>{os.runtime?.lifecycle || os.now || os.state}</strong>
+          <small>{os.next || os.runtime?.reason || 'Leave it running'}</small>
+        </div>
+        <div>
+          <span>NEEDS YOU</span>
+          <strong>{os.need_me ? 'Yes' : 'No'}</strong>
+          <small>
+            {os.need_me
+              ? (os.primary_action?.instruction || os.primary_action?.label || 'Operator action required')
+              : 'No genuine operator intervention'}
+          </small>
+        </div>
+        <div>
+          <span>LIVE MONEY</span>
+          <strong>Locked</strong>
+          <small>Paper only. No live buy button.</small>
+        </div>
+      </div>
+      {(os.recent_activity || []).length ? (
+        <div className="home-os-past">
+          <span>WHAT QUANTTERM DID</span>
+          <strong>{os.now || 'Recent automatic work'}</strong>
+          <ul className="home-os-activity">
+            {(os.recent_activity || []).slice(0, 8).map((row, index) => (
+              <li key={`${row.text}-${index}`}>
+                {row.at ? <time>{row.at.slice(11, 16) || row.at.slice(0, 10)}</time> : <time>—</time>}
+                <span>{row.text}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {(os.opportunities || []).length ? (
+        <div className="home-os-opps">
+          <span>OPPORTUNITIES</span>
+          {(os.opportunities || []).slice(0, 6).map((row, index) => {
+            const symbol = String(row.found || '').split(/\s+/)[0]
+            return (
+            <div key={`${row.found}-${index}`}>
+              <span>{row.label || row.action || 'WAIT / research'}</span>
+              <strong>{row.found}</strong>
+              <small>{depth === 'professional' ? (row.technical || row.meaning) : row.meaning}</small>
+              {symbol && onOpenPage ? (
+                <button
+                  type="button"
+                  className="home-os-inspect-link"
+                  onClick={() => {
+                    setSelected?.(symbol)
+                    onOpenPage('Stock Intelligence')
+                  }}
+                >
+                  Research
+                </button>
+              ) : null}
+            </div>
+            )
+          })}
+        </div>
+      ) : (
+        <div className="home-os-past">
+          <span>OPPORTUNITIES</span>
+          <strong>None ready</strong>
+          <small>No BUY / READY names. WAIT and research stay in the committee journal.</small>
+        </div>
+      )}
+      <div className="home-os-grid">
+        <div>
+          <span>PORTFOLIO</span>
           <strong>{os.paper_bot?.paused ? 'PAUSED' : 'ON'}</strong>
           <small>
-            {os.paper_bot?.positions_open ?? 0} open · {os.paper_bot?.todays_entries ?? 0} today
+            {os.observe_only ? 'Observe only today · paper still runs · ' : ''}
+            {os.paper_bot?.positions_open ?? 0} open · heat {String(os.paper_bot?.risk_used ?? 'n/a')}
             {os.paper_bot?.why ? ` · ${os.paper_bot.why}` : ''}
           </small>
         </div>
@@ -505,24 +601,30 @@ function HomeOsCard({
           </small>
         </div>
         <div>
-          <span>LIVE MONEY</span>
-          <strong>Locked</strong>
-          <small>Paper only. No live buy button.</small>
+          <span>TODAY</span>
+          <strong>{os.today?.market_open ? 'Market open' : 'Market closed'}</strong>
+          <small>{os.today?.market_mood || os.today?.market_phase || '—'}</small>
+        </div>
+        <div>
+          <span>PAPER BOT</span>
+          <strong>{os.paper_bot?.positions_open ?? 0} open</strong>
+          <small>{os.paper_bot?.todays_entries ?? 0} entries · {os.paper_bot?.exits ?? 0} exits</small>
         </div>
       </div>
-      {(os.opportunities || []).length ? (
-        <div className="home-os-opps">
-          {(os.opportunities || []).slice(0, 4).map((row, index) => (
-            <div key={`${row.found}-${index}`}>
-              <span>{row.label || 'Setup'}</span>
-              <strong>{row.found}</strong>
-              <small>{depth === 'professional' ? (row.technical || row.meaning) : row.meaning}</small>
-            </div>
-          ))}
+      {os.past_decisions?.available ? (
+        <div className="home-os-past">
+          <span>PAST DECISION TEST</span>
+          <strong>{os.past_decisions.simple || `${os.past_decisions.decisions_tested || 0} historical decisions tested`}</strong>
+          <small>
+            {os.past_decisions.filters_helped?.length ? `Helped: ${os.past_decisions.filters_helped.join(', ')}` : 'BACKTEST only — not promotion evidence'}
+            {depth === 'professional' && os.past_decisions.would_take != null
+              ? ` · take ${os.past_decisions.would_take} · reject ${os.past_decisions.rejected ?? 0} · correct ${os.past_decisions.correct_rejections ?? 0} · missed ${os.past_decisions.missed_winners ?? 0}`
+              : ''}
+          </small>
         </div>
       ) : null}
       <div className="home-os-system-head">
-        <span>BACKEND</span>
+        <span>SYSTEM</span>
         <button
           type="button"
           className="home-os-check"
@@ -553,16 +655,6 @@ function HomeOsCard({
           onOpenPage={onOpenPage}
           onClose={() => setOpenLane(null)}
         />
-      ) : null}
-      {(os.recent_activity || []).length ? (
-        <ul className="home-os-activity">
-          {(os.recent_activity || []).slice(0, 8).map((row, index) => (
-            <li key={`${row.text}-${index}`}>
-              {row.at ? <time>{row.at.slice(11, 16) || row.at.slice(0, 10)}</time> : <time>—</time>}
-              <span>{row.text}</span>
-            </li>
-          ))}
-        </ul>
       ) : null}
       {os.yesterday ? (
         <p className="panel-copy">
@@ -613,20 +705,29 @@ export function RadarHomeView(props: ExperienceViewProps & {
   const [readiness, setReadiness] = useState<ProductReadiness | null>(() => recall<ProductReadiness>('product-readiness') ?? null)
   const [bootstrapBusy, setBootstrapBusy] = useState(false)
   const [deskNote, setDeskNote] = useState('')
+  const [radarNote, setRadarNote] = useState('')
   const autoBootRef = useRef(false)
 
   useEffect(() => {
     let alive = true
     const load = () => {
+      if (!recall('radar-home')) setRadarNote('Refreshing home workspace…')
       fetchRadarHome()
         .then((payload) => {
           const kept = keepRicher('radar-home', payload, (row) => {
             const counts = (row.counts?.breakouts || 0) + (row.counts?.momentum || 0) + (row.counts?.long_term_picks || 0)
             return counts === 0 && !(row.best_setups || []).length && !row.best_breakout
           })
-          if (alive) setRadar(kept)
+          if (alive) {
+            setRadar(kept)
+            setRadarNote('')
+          }
         })
-        .catch(() => { if (alive && !recall('radar-home')) setRadar(null) })
+        .catch((reason: unknown) => {
+          if (!alive) return
+          if (!recall('radar-home')) setRadar(null)
+          setRadarNote(reason instanceof Error ? reason.message : 'Home workspace timed out. Dashboard below still works.')
+        })
       fetchProductReadiness()
         .then((payload) => {
           remember('product-readiness', payload)
@@ -659,8 +760,9 @@ export function RadarHomeView(props: ExperienceViewProps & {
   }, [selected, dashboard.scan.scanned_at, dashboard.generated_at])
 
   const scanAt = radar?.scan_scanned_at || dashboard.scan.scanned_at || ''
-  const kiteOk = dashboard.autonomy.state !== 'AUTH_REQUIRED'
-    && !(dashboard.autonomy.active_failures || []).some((f) => String(f).includes('auth'))
+  const brokerStatus = String(radar?.home_os?.broker?.status || '').toUpperCase()
+  const kiteOk = brokerStatus === 'READY'
+  const kiteLoginOptional = Boolean(radar?.home_os?.broker?.login_required)
   const telegram = radar?.telegram || dashboard.autonomy.telegram
   const telegramOn = Boolean(telegram?.configured)
   const telegramWarn = telegramOn && telegram?.state !== 'live' && telegram?.state !== 'scan_sent'
@@ -776,6 +878,26 @@ export function RadarHomeView(props: ExperienceViewProps & {
       void verifyForwardSoakNow().then(() => { void fetchRadarHome().then(setRadar) }).catch(() => undefined)
       return
     }
+    if (control === 'SIMULATE_PAST_DECISIONS') {
+      setDeskNote('Historical replay starting…')
+      void simulatePastDecisions()
+        .then(async (payload) => {
+          remember('decision-simulator', payload)
+          let latest = payload
+          for (let i = 0; i < 40 && (latest.status === 'RUNNING' || latest.accepted); i += 1) {
+            setDeskNote(latest.message || latest.simple || `Historical replay running · ${latest.sessions_done || 0}/${latest.sessions_total || '?'}`)
+            await new Promise((resolve) => window.setTimeout(resolve, 1500))
+            latest = await fetchDecisionSimulator()
+          }
+          remember('decision-simulator', latest)
+          setDeskNote(latest.simple || latest.message || 'Historical replay finished.')
+          void fetchRadarHome().then(setRadar)
+        })
+        .catch((reason: unknown) => {
+          setDeskNote(reason instanceof Error ? reason.message : 'Historical replay failed')
+        })
+      return
+    }
     if (control) void runControl(control as ControlName)
   }
 
@@ -788,8 +910,12 @@ export function RadarHomeView(props: ExperienceViewProps & {
           busy={marketScan.isBusy || bootstrapBusy}
           onAction={runHomeAction}
           onOpenPage={setActive}
+          setSelected={setSelected}
         />
-      ) : null}
+      ) : (
+        <p className="panel-copy">{radarNote || 'Loading Home operating system… Dashboard below still works.'}</p>
+      )}
+      {radarNote && homeOs ? <p className="panel-copy">{radarNote}</p> : null}
       <header className="radar-hero">
         <div>
           <span>MARKET DESK</span>
@@ -812,7 +938,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
 
       <DeskPipelineStrip pipeline={radar?.desk_pipeline} />
 
-      <div className={`radar-desk-strip ${kiteOk ? '' : 'desk-warn'} ${telegramWarn ? 'telegram-warn' : ''}`}>
+      <div className={`radar-desk-strip ${telegramWarn ? 'telegram-warn' : ''}`}>
         <div>
           <span>SCAN</span>
           <strong>{relativeAge(scanAt)}</strong>
@@ -825,11 +951,13 @@ export function RadarHomeView(props: ExperienceViewProps & {
         </div>
         <div>
           <span>ZERODHA</span>
-          <strong>{kiteOk ? 'SESSION OK' : 'LOGIN NEEDED'}</strong>
+          <strong>{kiteOk ? 'READY' : kiteLoginOptional ? 'LOGIN OPTIONAL' : 'CHECKING'}</strong>
           <small>
             {kiteOk
-              ? 'live quotes / depth available when market is open'
-              : (dashboard.autonomy.plain_state || 'python main.py login')}
+              ? 'broker-dependent quotes and paper capability available'
+              : kiteLoginOptional
+                ? 'Log in only when you want broker-dependent capability. Core research keeps running.'
+                : 'Broker state comes from backend readiness; core research does not depend on it.'}
           </small>
         </div>
         <div>

@@ -25,6 +25,9 @@ SAFE_CONTROLS = frozenset({
     "RUN_CYCLE_NOW",
     "VERIFY_FORWARD_SOAK",
     "CHECK_SYSTEM",
+    "SIMULATE_PAST_DECISIONS",
+    "OBSERVE_ONLY_TODAY",
+    "CLEAR_OBSERVE_ONLY",
 })
 
 FORBIDDEN_CONTROLS = frozenset({
@@ -527,32 +530,38 @@ def _data_lane(
 
 def _zerodha_lane(*, auto: Mapping[str, Any], kite_ok: bool) -> dict[str, Any]:
     feed = _as_dict(auto.get("live_feed"))
+    broker = _as_dict(auto.get("broker"))
     heartbeat = str(auto.get("heartbeat_ist") or "")
     last_error = str(feed.get("last_error") or "")
     if last_error and any(part in last_error.lower() for part in ("token", "secret", "password")):
         last_error = "Session error"
     ticking = feed.get("symbols_ticking")
-    connected = feed.get("connected")
-    primary = None
+    optional_login = None
     if not kite_ok:
-        primary = _safe_action(
+        optional_login = _safe_action(
             "",
             label="Login to Zerodha",
             kind="instruction",
-            instruction="Run the same one command again, or python main.py login. Home will resume by itself after login.",
+            instruction="Run python main.py login when you want broker-live quotes or broker-dependent paper entry. Autonomous research continues without it.",
         )
-    status = "Ready" if kite_ok else "Needs you"
-    status_code = "READY" if kite_ok else "NEEDS_YOU"
-    summary = "Connected." if kite_ok else "Zerodha login is needed."
+    status = "Ready" if kite_ok else "Optional login"
+    status_code = "READY" if kite_ok else "CAPABILITY_OFFLINE"
+    summary = "Connected." if kite_ok else "Broker-live capability is offline."
     meaning = (
-        "Used for live quotes and market observation."
+        "Used for live quotes and broker observation."
         if kite_ok
-        else "Official NSE data and paper learning can continue, but live observation is waiting."
+        else "This does not stop official data, scans, research, shadow tracking, settlement, replay or learning."
     )
-    current = f"Last checked: {_fmt_when(heartbeat)}" if kite_ok and heartbeat else ("Waiting for Zerodha login" if not kite_ok else "Session ok")
+    current = (
+        f"Last checked: {_fmt_when(heartbeat)}"
+        if kite_ok and heartbeat
+        else ("Not connected · autonomous non-broker work continues" if not kite_ok else "Session ok")
+    )
     technical = {
-        "auth_health": "ok" if kite_ok else "login_required",
-        "session_state": auto.get("state"),
+        "auth_health": "ok" if kite_ok else "login_required_for_broker_capability",
+        "session_state": broker.get("state") or auto.get("state"),
+        "reason_code": broker.get("reason_code"),
+        "auth_status": broker.get("auth_status"),
         "last_auth_probe": heartbeat or None,
         "live_feed_heartbeat": feed.get("last_connect_ts") or heartbeat or None,
         "symbols_ticking": ticking,
@@ -566,6 +575,7 @@ def _zerodha_lane(*, auto: Mapping[str, Any], kite_ok: bool) -> dict[str, Any]:
         "data_source": "zerodha_kite_observation",
         "known_error": last_error or None,
         "plain_state": auto.get("plain_state"),
+        "blocks_autonomy": False,
     }
     return _lane(
         "zerodha",
@@ -573,15 +583,20 @@ def _zerodha_lane(*, auto: Mapping[str, Any], kite_ok: bool) -> dict[str, Any]:
         status=status,
         status_code=status_code,
         summary=summary,
-        detail="WAITING FOR ZERODHA LOGIN" if not kite_ok else "Session ok",
-        what="Zerodha is the live-quote and observation connection. It cannot place orders from Home.",
+        detail="Optional broker connection" if not kite_ok else "Session ok",
+        what="Zerodha is an optional broker-live capability. It cannot place live orders from Home.",
         meaning=meaning,
-        waiting_for="" if kite_ok else "Zerodha login",
         current=current,
-        next_step="Resume live observation after login" if not kite_ok else "Keep watching live quotes",
-        needs_user=not kite_ok,
-        primary_action=primary,
+        next_step="Autonomous research continues; login only when broker capability is wanted" if not kite_ok else "Keep watching live quotes",
+        needs_user=False,
+        secondary_actions=[optional_login] if optional_login else [],
         technical=technical,
+        extra={
+            "login_required": not kite_ok,
+            "optional_capability": not kite_ok,
+            "blocks_autonomy": False,
+            "blocks_live_money": False,
+        },
     )
 
 

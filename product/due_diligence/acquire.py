@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[2]
 EVIDENCE_ROOT = ROOT / "logs" / "research_evidence"
 ACQUIRE_CAP = 6
 FACTS_NAME = "autonomy_facts.json"
-FRESH_S = 24 * 60 * 60
+RESEARCH_QUEUE_PATH = ROOT / "logs" / "product" / "research_queue.json"
 MAX_ATTACHMENT_BYTES = 16_000_000
 _ALLOWED_HOSTS = {
     "www.screener.in",
@@ -74,9 +74,73 @@ def save_autonomy_facts(symbol: str, payload: Mapping[str, Any]) -> Path:
     return path
 
 
+def write_research_queue(
+    symbols: Sequence[str],
+    *,
+    scan_run_id: str = "",
+    session: str = "",
+    reasons: Mapping[str, Any] | None = None,
+) -> Path:
+    """Loop writes the information-value shortlist; acquire consumes it."""
+    RESEARCH_QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "scan_run_id": scan_run_id,
+        "session": session,
+        "symbols": [str(s).upper() for s in symbols if s],
+        "reasons": dict(reasons or {}),
+        "written_at": datetime.now(timezone.utc).isoformat(),
+    }
+    tmp = RESEARCH_QUEUE_PATH.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    tmp.replace(RESEARCH_QUEUE_PATH)
+    return RESEARCH_QUEUE_PATH
+
+
+def load_research_queue() -> dict[str, Any]:
+    if not RESEARCH_QUEUE_PATH.exists():
+        return {}
+    try:
+        payload = json.loads(RESEARCH_QUEUE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _recommendation_shortlist(limit: int = ACQUIRE_CAP) -> list[str]:
+    """Prefer information-value queue, then recommendation-worthy names."""
+    queue = load_research_queue()
+    queued = [str(s).upper() for s in (queue.get("symbols") or []) if s]
+    if queued:
+        return queued[: int(limit)]
+    try:
+        from product.recommendations_store import load_recommendations
+        from product.autopilot_journal import flatten_cards
+
+        reco = load_recommendations() or {}
+        cards = [c for c in flatten_cards(reco) if isinstance(c, dict)]
+    except Exception:
+        return []
+    ranked = [
+        c for c in cards
+        if str(c.get("reco_tier") or "") in {"high_conviction", "good_setup"}
+    ]
+    ranked.sort(key=lambda c: (str(c.get("reco_tier")) != "high_conviction", str(c.get("symbol") or "")))
+    out: list[str] = []
+    for card in ranked:
+        symbol = str(card.get("symbol") or "").upper()
+        if symbol and symbol not in out:
+            out.append(symbol)
+        if len(out) >= int(limit):
+            break
+    return out
+
+
 def shortlist_symbols(limit: int = ACQUIRE_CAP, scan_payload: Mapping[str, Any] | None = None) -> list[str]:
     """Names the desk already shortlisted. Does not scan the market."""
     if scan_payload is None:
+        reco_names = _recommendation_shortlist(limit)
+        if reco_names:
+            return reco_names
         try:
             from product.scan_store import load_scan
             scan_payload = load_scan() or {}
@@ -113,22 +177,14 @@ def shortlist_symbols(limit: int = ACQUIRE_CAP, scan_payload: Mapping[str, Any] 
 
 
 def acquire_is_fresh(*, now: float | None = None, scan_payload: Mapping[str, Any] | None = None) -> bool:
-    symbols = shortlist_symbols(scan_payload=scan_payload)
-    if not symbols:
-        return True
-    now = time.time() if now is None else now
-    for symbol in symbols:
-        payload = load_autonomy_facts(symbol)
-        stamp = str(payload.get("acquired_at") or "")
-        if not stamp:
-            return False
-        try:
-            acquired = datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
-        except ValueError:
-            return False
-        if now - acquired > FRESH_S:
-            return False
-    return True
+    """Compatibility bool. Evidence freshness is defined only in freshness.py.
+
+    A recent ``acquired_at`` / attempt stamp is not current research. Failed or
+    partial acquisitions stay unresolved; retry cooldown is a separate question.
+    """
+    from product.due_diligence.freshness import research_freshness
+
+    return bool(research_freshness(now=now, scan_payload=scan_payload).get("fresh"))
 
 
 def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -917,12 +973,16 @@ def acquire_symbol(
 
     def _ingest(text: str, url: str, source: str) -> None:
         nonlocal text_kpis, guidance, commentary, order_book, segments
-        parsed = extract_research_pack(
-            text,
-            source=source,
-            source_url=url,
-            document_type=_document_type(source, url),
-        )
+        try:
+            parsed = extract_research_pack(
+                text,
+                source=source,
+                source_url=url,
+                document_type=_document_type(source, url),
+            )
+        except Exception as exc:
+            steps.append({"id": "parse", "ok": False, "source": source, "error": str(exc)[:240]})
+            return
         text_kpis = merge_kpi_maps(text_kpis, parsed.get("kpis") or {})
         if "annual report" not in source.lower():
             guidance.extend(parsed.get("guidance") or [])

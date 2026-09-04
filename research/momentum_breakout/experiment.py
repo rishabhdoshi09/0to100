@@ -176,8 +176,13 @@ def evaluate_trades(trades: list[SimTrade], n_trials: int = 1,
         for t in trades:
             risk_frac = (t.entry_price - t.stop_price) / t.entry_price if t.entry_price else 0.0
             bench.append((t.benchmark_return / risk_frac) if risk_frac > 0 else 0.0)
-    res = H.evaluate(rs, n_trials=n_trials, benchmark_returns=bench,
-                     require_block_ci=require_block_ci)
+    res = H.evaluate(
+        rs,
+        n_trials=n_trials,
+        benchmark_returns=bench,
+        require_block_ci=require_block_ci,
+        block_ci_seed=1,
+    )
     win_R = [r for r in rs if r > 0]
     loss_R = [r for r in rs if r <= 0]
     gross_win = sum(win_R) if win_R else 0.0

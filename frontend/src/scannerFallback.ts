@@ -48,6 +48,7 @@ export function projectScanRecord(row: Record<string, unknown>): ScannerWorkspac
     else momentum_state = 'watch_momentum'
   }
 
+  const decision = scannerDecision({ ...row, breakout_state, status, verdict, chase_risk: chase })
   return {
     ...(row as ScannerWorkspaceRow),
     change_5d_pct: (row.change_5d_pct ?? row.momentum_5d ?? null) as number | null,
@@ -56,6 +57,11 @@ export function projectScanRecord(row: Record<string, unknown>): ScannerWorkspac
     relative_strength: (row.relative_strength ?? row.score ?? null) as number | null,
     breakout_state: breakout_state as string | null,
     momentum_state: momentum_state as string | null,
+    decision,
+    why: scannerWhy({ ...row, decision, chase_risk: chase }),
+    entry: (typeof row.entry === 'number' ? row.entry : undefined),
+    stop: (typeof row.stop === 'number' ? row.stop : undefined),
+    target: (typeof row.target === 'number' ? row.target : undefined),
   }
 }
 
@@ -124,4 +130,77 @@ export function scannerEmptyHint(rows: number, filtered: number, hasScan: boolea
 export function dashCell(value: unknown): string {
   if (missing(value)) return '—'
   return String(value)
+}
+
+/**
+ * Scanner language is deliberately pre-decision language.
+ * Only the persisted decision committee is allowed to say BUY/AVOID.
+ */
+export function scannerDecision(row: Record<string, unknown>, openSymbols: string[] = []): string {
+  const symbol = String(row.symbol || '').toUpperCase()
+  if (symbol && openSymbols.includes(symbol) && String(row.exit_reason || row.exit_status || '')) {
+    return 'EXIT'
+  }
+
+  const existing = String(row.decision || row.action_badge || '').toUpperCase()
+  if (existing === 'EXIT') return 'EXIT'
+  if (existing === 'ENTER' || existing === 'BUY' || existing === 'READY') return 'SETUP READY'
+  if (existing === 'AVOID' || existing === 'REJECTED') return 'SETUP FAILED'
+  if (existing === 'WAIT' || existing === 'WATCH') return 'WATCH'
+
+  const status = String(row.status || '')
+  const verdict = String(row.verdict || '').toUpperCase()
+  const chase = Boolean(row.chase_risk)
+  if (chase || status === 'Wait for pullback') return 'EXTENDED'
+  if (status === 'Watch for breakout' || String(row.breakout_state || '') === 'near_breakout') return 'WATCH'
+  if (status === 'Ready to trade' && verdict === 'BUY') return 'SETUP READY'
+  if (verdict === 'BUY') return 'WATCH'
+  if (verdict === 'AVOID' || verdict === 'REJECT') return 'SETUP FAILED'
+  if (status) return 'WATCH'
+  return 'WATCH'
+}
+
+export function recoCanonicalDecision(card: {
+  action_badge?: string
+  reco_tier?: string
+  entry_state?: string
+  blockers?: string[]
+  chase_risk?: boolean
+  decision?: string
+  committee_decision?: string
+  execution_state?: string
+}): string {
+  const committee = String(card.committee_decision || card.decision || '').toUpperCase()
+  if (committee === 'BUY') return 'BUY'
+  if (committee === 'WAIT') return 'WAIT'
+  if (committee === 'AVOID' || committee === 'REJECTED') return 'AVOID'
+  if (committee === 'NO_JUDGMENT') return 'NO JUDGMENT'
+
+  // Execution blockers must not rewrite the investment thesis.
+  if (String(card.execution_state || '').toUpperCase().startsWith('BLOCKED_')) return 'CANDIDATE'
+  if (card.chase_risk) return 'WAIT'
+
+  const badge = String(card.action_badge || '').toLowerCase()
+  if (badge.includes('avoid')) return 'WATCH'
+  const entry = String(card.entry_state || '')
+  if (entry === 'extended' || entry === 'near_setup') return 'WAIT'
+  if (badge === 'watch' || badge.includes('research') || badge.includes('hold')) return 'WATCH'
+
+  // Recommendation tiers nominate candidates; they are not committee decisions.
+  if (badge === 'buy') return 'CANDIDATE'
+  const tier = String(card.reco_tier || '')
+  if (tier === 'high_conviction' || tier === 'good_setup') return 'CANDIDATE'
+  if (tier === 'avoid') return 'WATCH'
+  return 'WATCH'
+}
+
+export function scannerWhy(row: Record<string, unknown>): string {
+  const why = String(row.why || row.reason || row.qualify_reason || '')
+  if (why) return why
+  const decision = scannerDecision(row)
+  if (decision === 'EXTENDED') return 'Setup is stretched; wait for a lower-risk entry.'
+  if (decision === 'SETUP FAILED') return 'Scanner gates failed; no investment judgment was made.'
+  if (decision === 'WATCH') return 'Volume confirmation missing or setup is still forming.'
+  if (decision === 'SETUP READY') return String(row.setup_label || 'Qualified setup — send to research and committee.')
+  return ''
 }

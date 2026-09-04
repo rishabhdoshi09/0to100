@@ -340,10 +340,19 @@ def save_upload(symbol: str, kind: str, content: bytes, *, filename: str, as_of:
 
 
 def upload_path(symbol: str, evidence_id: str) -> Path | None:
+    root = ROOT.resolve()
     for item in _load_manifest(symbol):
-        if str(item.get("evidence_id")) == str(evidence_id):
-            path = ROOT / str(item.get("path", ""))
-            return path if path.exists() else None
+        if str(item.get("evidence_id")) != str(evidence_id):
+            continue
+        raw = str(item.get("path") or "")
+        if not raw or raw.startswith("/") or ".." in Path(raw).parts:
+            return None
+        path = (root / raw).resolve()
+        try:
+            path.relative_to(root)
+        except ValueError:
+            return None
+        return path if path.is_file() else None
     return None
 
 
@@ -403,6 +412,157 @@ def _raw_section_state(raw: Mapping[str, Any], section: str, minimum_rows: int =
     return False
 
 
+PARSER_VERSION = "quantterm-evidence-intake/3"
+
+
+def _autonomy_pack(symbol: str) -> dict[str, Any]:
+    try:
+        from product.due_diligence.acquire import EVIDENCE_ROOT, load_autonomy_facts
+    except Exception:
+        return {}
+    facts = load_autonomy_facts(symbol)
+    folder = EVIDENCE_ROOT / clean_symbol(symbol) / "autonomy"
+    annual_files: list[dict[str, Any]] = []
+    if folder.exists():
+        for path in sorted(folder.glob("nse_ar_*")) + sorted(folder.glob("nse_att_*")):
+            try:
+                digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            except OSError:
+                continue
+            annual_files.append({
+                "path": str(path.relative_to(ROOT)),
+                "filename": path.name,
+                "sha256": digest,
+                "bytes": path.stat().st_size,
+                "kind": "annual_report" if "ar_" in path.name else "exchange_filing",
+            })
+    facts["_files"] = annual_files
+    return facts
+
+
+def _source_date_from_text(*values: Any) -> str:
+    for value in values:
+        parsed = _parse_datetime(value)
+        if parsed:
+            return parsed.date().isoformat()
+    return ""
+
+
+def _autonomy_requirement(key: str, facts: Mapping[str, Any], raw: Mapping[str, Any]) -> dict[str, Any]:
+    downloads = [d for d in list(facts.get("downloads") or []) if isinstance(d, Mapping)]
+    attempted = []
+    for item in downloads:
+        attempted.append({
+            "url": item.get("url") or "",
+            "ok": bool(item.get("ok")),
+            "error": item.get("error") or "",
+            "path": item.get("path") or "",
+        })
+    steps = [s for s in list(facts.get("steps") or []) if isinstance(s, Mapping)]
+    files = [f for f in list(facts.get("_files") or []) if isinstance(f, Mapping)]
+    acquired_at = str(facts.get("acquired_at") or facts.get("inspected_at") or "")
+    out = {
+        "acquisition": "MISSING",
+        "source": "",
+        "source_url": "",
+        "source_date": "",
+        "acquired_at": acquired_at,
+        "parser": PARSER_VERSION,
+        "sha256": "",
+        "evidence": "",
+        "sources_attempted": attempted,
+        "failure_reason": "",
+    }
+    if key == "business_profile":
+        about = str(raw.get("about") or "").strip()
+        if about:
+            out.update({
+                "acquisition": "AUTO_SOURCED",
+                "source": "company_description / screener.in",
+                "source_url": str(raw.get("url") or "https://www.screener.in"),
+                "source_date": "",
+                "evidence": about[:400],
+            })
+        return out
+    if key == "financial_history":
+        if _raw_section_state(raw, "profit_loss", 3) or _raw_section_state(raw, "quarterly_results", 4):
+            out.update({
+                "acquisition": "AUTO_SOURCED",
+                "source": "screener.in financial statements",
+                "source_url": str(raw.get("url") or "https://www.screener.in"),
+                "source_date": _latest_table_period(list(raw.get("quarterly_results") or []) + list(raw.get("profit_loss") or [])),
+            })
+        return out
+    if key == "shareholding_history":
+        if _raw_section_state(raw, "shareholding", 2):
+            out.update({
+                "acquisition": "AUTO_SOURCED",
+                "source": "screener.in shareholding",
+                "source_url": str(raw.get("url") or "https://www.screener.in"),
+                "source_date": _latest_table_period(raw.get("shareholding") or []),
+            })
+        return out
+    if key == "business_segments":
+        segments = list(facts.get("segments") or [])
+        if segments:
+            first = segments[0] if isinstance(segments[0], Mapping) else {}
+            out.update({
+                "acquisition": "AUTO_SOURCED",
+                "source": str(first.get("source") or "NSE filing / annual report"),
+                "source_url": str(first.get("source_url") or ""),
+                "source_date": _source_date_from_text(first.get("as_of") or first.get("period_end")),
+                "evidence": str(first.get("segment") or first.get("text") or "")[:240],
+            })
+        return out
+    if key == "management_commentary":
+        commentary = list(facts.get("commentary") or [])
+        if commentary:
+            first = commentary[0] if isinstance(commentary[0], Mapping) else {}
+            out.update({
+                "acquisition": "AUTO_SOURCED",
+                "source": str(first.get("source") or "NSE filing"),
+                "source_url": str(first.get("source_url") or ""),
+                "source_date": _source_date_from_text(first.get("event_date") or first.get("as_of")),
+                "evidence": str(first.get("commentary") or "")[:400],
+            })
+        return out
+    if key == "order_book_guidance":
+        rows = list(facts.get("order_book") or []) + list(facts.get("guidance") or [])
+        if rows:
+            first = rows[0] if isinstance(rows[0], Mapping) else {}
+            out.update({
+                "acquisition": "AUTO_SOURCED",
+                "source": str(first.get("source") or "company guidance"),
+                "source_url": str(first.get("source_url") or ""),
+                "source_date": _source_date_from_text(first.get("as_of") or first.get("event_date")),
+                "evidence": str(first.get("excerpt") or first.get("management_wording") or first.get("metric") or "")[:400],
+            })
+        return out
+    if key == "annual_report":
+        annual = next((f for f in files if f.get("kind") == "annual_report"), None)
+        ok_dl = next((d for d in downloads if d.get("ok") and "annual" in str(d.get("path") or d.get("url") or "").lower()), None)
+        if annual or ok_dl:
+            item = annual or {}
+            out.update({
+                "acquisition": "AUTO_SOURCED",
+                "source": "NSE annual report",
+                "source_url": str((ok_dl or {}).get("url") or ""),
+                "source_date": _source_date_from_text((ok_dl or {}).get("source_date")),
+                "sha256": str(item.get("sha256") or ""),
+                "evidence": str(item.get("filename") or (ok_dl or {}).get("path") or "annual report file"),
+            })
+            return out
+        nse_step = next((s for s in steps if s.get("id") == "nse_annual_reports"), {})
+        if nse_step and not nse_step.get("ok") and not nse_step.get("skipped"):
+            out.update({
+                "acquisition": "AUTOMATION_FAILED",
+                "failure_reason": str(nse_step.get("error") or "NSE annual report download failed"),
+                "source": "nseindia.com",
+            })
+        return out
+    return out
+
+
 def evidence_requirements(
     symbol: str, *, price_as_of: str = "", scan_as_of: str = "",
     long_term_as_of: str = "", news_as_of: str = "", fno_as_of: str = "",
@@ -413,48 +573,94 @@ def evidence_requirements(
     section_as_of = dict(raw_record.get("section_as_of", {}) or {})
     links = resource_links(symbol)
     uploads = list_uploads(symbol)
-    auto_presence = {
-        "business_profile": _raw_section_state(raw, "about"),
-        "financial_history": _raw_section_state(raw, "profit_loss", 3) or _raw_section_state(raw, "quarterly_results", 4),
-        "shareholding_history": _raw_section_state(raw, "shareholding", 2),
-        "business_segments": False, "management_commentary": False,
-        "order_book_guidance": False, "annual_report": False,
-    }
-    auto_as_of = {
-        "business_profile": raw_record.get("fetched_at", ""),
-        "financial_history": section_as_of.get("financial_history", ""),
-        "shareholding_history": section_as_of.get("shareholding_history", ""),
-        "business_segments": "", "management_commentary": "",
-        "order_book_guidance": "", "annual_report": "",
-    }
+    facts = _autonomy_pack(symbol)
     items: list[dict[str, Any]] = []
     for key, spec in RESOURCE_SPECS.items():
         attached = latest_upload(symbol, key)
         usable = latest_upload(symbol, key, usable_only=True)
-        if key == "annual_report" and attached:
-            available, source, as_of = True, "USER_SOURCE_DOCUMENT", str(attached.get("as_of") or "")
-            state, age = freshness(as_of, spec.max_age_days)
-        elif auto_presence.get(key):
-            available, source, as_of = True, "SCREENER_DEEP_CACHE", str(auto_as_of.get(key) or "")
-            state, age = freshness(as_of, spec.max_age_days)
-        elif usable:
+        auto = _autonomy_requirement(key, facts, raw)
+        if usable:
             available, source, as_of = True, "USER_STRUCTURED_UPLOAD", str(usable.get("as_of") or "")
             state, age = freshness(as_of, spec.max_age_days)
+            acquisition = "MANUAL"
+            source_url = str(usable.get("source_url") or "")
+            acquired_at = str(usable.get("uploaded_at") or "")
+            sha = str(usable.get("sha256") or "")
+            evidence = ""
+            failure = ""
+        elif key == "annual_report" and attached:
+            available, source, as_of = True, "USER_SOURCE_DOCUMENT", str(attached.get("as_of") or "")
+            state, age = freshness(as_of, spec.max_age_days)
+            acquisition = "MANUAL"
+            source_url = str(attached.get("source_url") or "")
+            acquired_at = str(attached.get("uploaded_at") or "")
+            sha = str(attached.get("sha256") or "")
+            evidence = str(attached.get("filename") or "")
+            failure = ""
+        elif auto.get("acquisition") == "AUTO_SOURCED":
+            available, source = True, str(auto.get("source") or "AUTO")
+            as_of = str(auto.get("source_date") or "")
+            if as_of:
+                state, age = freshness(as_of, spec.max_age_days)
+            else:
+                state, age = "UNKNOWN_DATE", None
+            acquisition = "AUTO_SOURCED"
+            source_url = str(auto.get("source_url") or "")
+            acquired_at = str(auto.get("acquired_at") or "")
+            sha = str(auto.get("sha256") or "")
+            evidence = str(auto.get("evidence") or "")
+            failure = ""
         elif attached:
             available, source, as_of = False, "USER_SOURCE_DOCUMENT", str(attached.get("as_of") or "")
             state, age = "SOURCE_ATTACHED_UNPARSED", age_days(as_of)
+            acquisition = "MANUAL"
+            source_url = str(attached.get("source_url") or "")
+            acquired_at = str(attached.get("uploaded_at") or "")
+            sha = str(attached.get("sha256") or "")
+            evidence = ""
+            failure = ""
+        elif auto.get("acquisition") == "AUTOMATION_FAILED":
+            available, source, as_of = False, str(auto.get("source") or ""), ""
+            state, age = "AUTOMATION_FAILED", None
+            acquisition = "AUTOMATION_FAILED"
+            source_url = ""
+            acquired_at = str(auto.get("acquired_at") or "")
+            sha = ""
+            evidence = ""
+            failure = str(auto.get("failure_reason") or "automatic acquisition failed")
         else:
             available, source, as_of, state, age = False, "", "", "MISSING", None
+            acquisition = "MISSING"
+            source_url = ""
+            acquired_at = str(auto.get("acquired_at") or "")
+            sha = ""
+            evidence = ""
+            failure = ""
         items.append({
             "key": key, "label": spec.label, "status": state,
             "available": available, "source_attached": bool(attached),
             "source": source, "as_of": as_of, "age_days": age,
             "max_age_days": spec.max_age_days, "why": spec.why,
-            "instructions": spec.instructions,
+            "instructions": (
+                f"AUTOMATION FAILED. Reason: {failure or 'automatic acquisition failed'}. "
+                f"Manual evidence upload is available as a fallback."
+                if acquisition == "AUTOMATION_FAILED"
+                else spec.instructions if acquisition == "MISSING"
+                else "Automatically sourced. Manual upload remains available as a fallback."
+            ),
             "accepted_extensions": list(spec.accepted_extensions),
             "template_available": bool(spec.template_columns),
             "template_url": f"/evidence/templates/{key}.csv" if spec.template_columns else "",
             "links": links.get(key, []), "latest_upload": attached or {},
+            "acquisition": acquisition,
+            "source_url": source_url,
+            "source_date": as_of,
+            "acquired_at": acquired_at,
+            "parser": PARSER_VERSION,
+            "sha256": sha,
+            "evidence": evidence,
+            "sources_attempted": auto.get("sources_attempted") or [],
+            "failure_reason": failure,
         })
     runtime_specs = [
         ("price_history", "Official price history", price_as_of, 3),

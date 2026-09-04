@@ -11,6 +11,7 @@ def test_parallel_api_never_silently_accepts_without_market_ops_worker():
     assert "_base_ensure_ops_worker(wait=True)" in src
     assert "Market operations worker did not become ready" in src
     assert "core._ensure_ops_worker = _ensure_ops_worker_strict" in src
+    assert "_live_owner_pid" in src
 
 
 def test_parallel_api_kills_only_verified_stale_worker_before_replacement():

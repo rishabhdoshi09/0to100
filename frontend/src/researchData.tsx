@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { fetchJson } from './http'
 
 const reportBase = `${window.location.protocol}//${window.location.hostname}:8766`
 
@@ -19,6 +20,15 @@ type Requirement = {
   template_url: string
   links: LinkItem[]
   latest_upload: Record<string, unknown>
+  acquisition?: string
+  source_url?: string
+  source_date?: string
+  acquired_at?: string
+  parser?: string
+  sha256?: string
+  evidence?: string
+  sources_attempted?: Array<{ url?: string; ok?: boolean; error?: string; path?: string }>
+  failure_reason?: string
 }
 type RuntimeSource = {
   key: string
@@ -59,11 +69,25 @@ type EvidenceStatus = {
 type Draft = { file: File | null; asOf: string; sourceUrl: string }
 
 const today = () => new Date().toISOString().slice(0, 10)
-const statusClass = (status: string) => {
+const statusClass = (status: string, acquisition?: string) => {
+  if (acquisition === 'AUTO_SOURCED' && status === 'FRESH') return 'evidence-status fresh'
+  if (acquisition === 'AUTO_SOURCED') return 'evidence-status unknown'
+  if (acquisition === 'AUTOMATION_FAILED' || status === 'AUTOMATION_FAILED') return 'evidence-status missing'
   if (status === 'FRESH') return 'evidence-status fresh'
   if (status === 'STALE') return 'evidence-status stale'
   if (status === 'UNKNOWN_DATE') return 'evidence-status unknown'
   return 'evidence-status missing'
+}
+
+const acquisitionLabel = (item: Requirement, sourcing = false) => {
+  if (sourcing && item.acquisition !== 'AUTO_SOURCED' && item.acquisition !== 'MANUAL') {
+    return 'AUTO-SOURCING'
+  }
+  if (item.acquisition === 'AUTO_SOURCED') return 'ACQUIRED'
+  if (item.acquisition === 'AUTOMATION_FAILED') return 'FAILED — MANUAL FALLBACK AVAILABLE'
+  if (item.acquisition === 'MANUAL') return 'FAILED — MANUAL FALLBACK AVAILABLE'
+  if (item.acquisition === 'MISSING') return 'AUTO-SOURCING'
+  return item.status
 }
 const humanBytes = (value: number) => {
   if (!value) return '0 B'
@@ -76,6 +100,9 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
   const [status, setStatus] = useState<EvidenceStatus | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [acquiring, setAcquiring] = useState(false)
+  const [acquireNote, setAcquireNote] = useState('')
   const [drafts, setDrafts] = useState<Record<string, Draft>>({})
 
   const load = async () => {
@@ -83,20 +110,61 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
       setStatus(null)
       return
     }
+    setLoading(true)
     try {
-      const response = await fetch(`${reportBase}/evidence/${encodeURIComponent(symbol)}`, { headers: { Accept: 'application/json' } })
-      if (!response.ok) throw new Error(await response.text())
-      setStatus(await response.json() as EvidenceStatus)
+      const payload = await fetchJson<EvidenceStatus>(`${reportBase}/evidence/${encodeURIComponent(symbol)}`, {
+        headers: { Accept: 'application/json' },
+        timeoutMs: 20_000,
+      })
+      setStatus(payload)
       setError('')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Evidence service unavailable')
+    } finally {
+      setLoading(false)
     }
   }
 
-  useEffect(() => { void load() }, [symbol])
+  const autoAcquire = async () => {
+    if (!symbol) return
+    setAcquiring(true)
+    setAcquireNote('QuantTerm is locating official sources…')
+    setError('')
+    try {
+      const response = await fetch(
+        `${reportBase}/evidence/${encodeURIComponent(symbol)}/actions/auto-acquire`,
+        { method: 'POST', headers: { Accept: 'application/json' } },
+      )
+      if (!response.ok) throw new Error(await response.text())
+      const payload = await response.json() as {
+        auto_sourced?: number
+        automation_failed?: number
+        coverage?: EvidenceStatus
+        steps?: Array<{ id?: string; ok?: boolean; error?: string; skipped?: boolean }>
+      }
+      if (payload.coverage) setStatus(payload.coverage)
+      const failed = (payload.steps || []).filter((step) => step.ok === false && !step.skipped)
+      setAcquireNote(
+        `Automatic acquisition finished · ${payload.auto_sourced ?? 0} sourced · ${payload.automation_failed ?? 0} failed`
+        + (failed.length ? ` · ${failed.map((step) => step.error || step.id).join('; ')}` : ''),
+      )
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Automatic acquisition failed')
+      setAcquireNote('AUTOMATION FAILED — manual upload remains available for the gaps.')
+    } finally {
+      setAcquiring(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!symbol) return
+    void load().then(() => { void autoAcquire() })
+  }, [symbol])
 
   const missingCount = useMemo(() => status?.requirements.filter((item) => !item.available).length || 0, [status])
   const staleCount = useMemo(() => status?.requirements.filter((item) => item.status === 'STALE').length || 0, [status])
+  const autoCount = useMemo(() => status?.requirements.filter((item) => item.acquisition === 'AUTO_SOURCED').length || 0, [status])
+  const failedCount = useMemo(() => status?.requirements.filter((item) => item.acquisition === 'AUTOMATION_FAILED').length || 0, [status])
   const draft = (key: string): Draft => drafts[key] || { file: null, asOf: today(), sourceUrl: '' }
   const patchDraft = (key: string, patch: Partial<Draft>) => {
     setDrafts((current) => ({ ...current, [key]: { ...draft(key), ...patch } }))
@@ -158,19 +226,30 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
 
   return (
     <section className="research-data-view">
-      {error && <div className="api-warning">{error}</div>}
+      {error && <div className="api-warning">{error} <button type="button" className="secondary" onClick={() => void load()}>Retry</button></div>}
+      {loading && !status ? <p className="panel-copy">Loading evidence status…</p> : null}
       <div className="evidence-summary">
         <div><span>SYMBOL</span><strong>{symbol}</strong></div>
-        <div><span>RESEARCH COVERAGE</span><strong>{status?.coverage_pct ?? 0}%</strong></div>
-        <div><span>MISSING DATASETS</span><strong>{missingCount}</strong></div>
-        <div><span>STALE DATASETS</span><strong>{staleCount}</strong></div>
+        <div><span>RESEARCH</span><strong>{autoCount}/{status?.requirements.length || 0} auto-sourced</strong></div>
+        <div><span>AUTOMATION FAILED</span><strong>{failedCount}</strong></div>
+        <div><span>MISSING / STALE</span><strong>{missingCount} / {staleCount}</strong></div>
         <div><span>DEEP FUNDAMENTALS</span><strong>{status?.raw_fundamentals.freshness || 'UNKNOWN'}</strong></div>
       </div>
 
       <div className="evidence-panel">
         <header>
-          <div><h2>Automatic data preparation</h2><p>QuantTerm fetches what it can itself. These operations are independent of paper trading.</p></div>
-          <button type="button" onClick={() => void load()}>Refresh status</button>
+          <div>
+            <h2>Automatic data preparation</h2>
+            <p>
+              {acquiring
+                ? 'AUTO-SOURCING official filings and datasets. Do not hunt annual reports unless a class fails.'
+                : acquireNote || 'QuantTerm locates official sources itself. Hunt-and-upload is only shown after AUTO-SOURCING fails.'}
+            </p>
+          </div>
+          <div className="resource-links">
+            <button type="button" disabled={acquiring} onClick={() => void autoAcquire()}>{acquiring ? 'Acquiring…' : 'Acquire evidence now'}</button>
+            <button type="button" onClick={() => void load()}>Refresh status</button>
+          </div>
         </header>
         <div className="resource-links">
           <button type="button" disabled={busy === 'auto-fundamentals'} onClick={() => void runAutomatic('fundamentals')}>Fetch deep fundamentals</button>
@@ -195,34 +274,59 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
       </div>
 
       <div className="evidence-panel">
-        <header><div><h2>Research completion desk</h2><p>Open the source, download a template, or upload the original evidence with its data date.</p></div></header>
+        <header><div><h2>Research completion desk</h2><p>QuantTerm shows what it obtained. Manual upload appears only when automation missed or failed a class.</p></div></header>
         <div className="requirements-list">
           {(status?.requirements || []).map((item) => {
             const current = draft(item.key)
+            const needsManual = item.acquisition === 'AUTOMATION_FAILED' || item.acquisition === 'MANUAL' || item.status === 'SOURCE_ATTACHED_UNPARSED'
             return (
               <article className="requirement-card" key={item.key}>
                 <div className="requirement-head">
                   <div><h3>{item.label}</h3><p>{item.why}</p></div>
-                  <div className={statusClass(item.status)}>{item.status}</div>
+                  <div className={statusClass(item.status, item.acquisition)}>{acquisitionLabel(item, acquiring)}</div>
                 </div>
                 <div className="requirement-meta">
-                  <span>As of <strong>{item.as_of || 'UNKNOWN'}</strong></span>
+                  <span>Status <strong>{item.status}</strong></span>
+                  <span>Source date <strong>{item.source_date || item.as_of || 'UNKNOWN'}</strong></span>
+                  <span>Acquired at <strong>{item.acquired_at || '—'}</strong></span>
                   <span>Age <strong>{item.age_days === null ? 'unknown' : `${item.age_days}d`}</strong></span>
                   <span>Freshness limit <strong>{item.max_age_days}d</strong></span>
                   <span>Source <strong>{item.source || 'not loaded'}</strong></span>
                 </div>
-                <p className="requirement-instructions">{item.instructions}</p>
+                {item.evidence ? <p className="requirement-instructions">{item.evidence}</p> : null}
+                {item.source_url ? <p className="panel-copy">Source URL: <a href={item.source_url} target="_blank" rel="noreferrer">{item.source_url}</a></p> : null}
+                {item.sha256 ? <p className="panel-copy">Content hash {item.sha256.slice(0, 16)} · parser {item.parser || '—'}</p> : null}
+                {item.acquisition === 'AUTO_SOURCED' ? (
+                  <p className="requirement-instructions">ACQUIRED automatically. No operator hunt required.</p>
+                ) : item.acquisition === 'AUTOMATION_FAILED' || item.acquisition === 'MANUAL' ? (
+                  <p className="requirement-instructions">
+                    FAILED — MANUAL FALLBACK AVAILABLE. Reason: {item.failure_reason || 'unknown'}.
+                    {(item.sources_attempted || []).length
+                      ? ` Sources attempted: ${(item.sources_attempted || []).map((row) => row.url || row.path || 'unknown').filter(Boolean).join(', ')}`
+                      : ''}
+                    {item.instructions ? ` ${item.instructions}` : ''}
+                  </p>
+                ) : acquiring ? (
+                  <p className="requirement-instructions">AUTO-SOURCING this class. Manual upload stays hidden until it fails.</p>
+                ) : (
+                  <p className="requirement-instructions">Waiting for automatic acquisition. Do not hunt annual reports yet.</p>
+                )}
                 <div className="resource-links">
+                  {item.source_url ? <a href={item.source_url} target="_blank" rel="noreferrer">View source</a> : null}
                   {item.links.map((link) => <a key={link.url} href={link.url} target="_blank" rel="noreferrer">{link.official === 'true' ? 'Official · ' : ''}{link.label}</a>)}
-                  {item.template_available && <a href={`${reportBase}${item.template_url}`} target="_blank" rel="noreferrer">Download CSV template</a>}
+                  {item.template_available && needsManual && <a href={`${reportBase}${item.template_url}`} target="_blank" rel="noreferrer">Download CSV template</a>}
                 </div>
-                <small className="accepted-files">Accepted: {item.accepted_extensions.join(', ')}</small>
-                <div className="upload-grid">
-                  <label>Source data date<input type="date" value={current.asOf} onChange={(event) => patchDraft(item.key, { asOf: event.target.value })} /></label>
-                  <label>Source URL<input type="url" placeholder="Paste official filing or IR link" value={current.sourceUrl} onChange={(event) => patchDraft(item.key, { sourceUrl: event.target.value })} /></label>
-                  <label>Evidence file<input type="file" accept={item.accepted_extensions.join(',')} onChange={(event) => patchDraft(item.key, { file: event.target.files?.[0] || null })} /></label>
-                  <button type="button" disabled={busy === item.key} onClick={() => void upload(item)}>{busy === item.key ? 'Uploading…' : 'Upload evidence'}</button>
-                </div>
+                {needsManual ? (
+                  <>
+                    <small className="accepted-files">Manual fallback · accepted: {item.accepted_extensions.join(', ')}</small>
+                    <div className="upload-grid">
+                      <label>Source data date<input type="date" value={current.asOf} onChange={(event) => patchDraft(item.key, { asOf: event.target.value })} /></label>
+                      <label>Source URL<input type="url" placeholder="Paste official filing or IR link" value={current.sourceUrl} onChange={(event) => patchDraft(item.key, { sourceUrl: event.target.value })} /></label>
+                      <label>Evidence file<input type="file" accept={item.accepted_extensions.join(',')} onChange={(event) => patchDraft(item.key, { file: event.target.files?.[0] || null })} /></label>
+                      <button type="button" disabled={busy === item.key} onClick={() => void upload(item)}>{busy === item.key ? 'Uploading…' : 'Upload evidence'}</button>
+                    </div>
+                  </>
+                ) : null}
               </article>
             )
           })}

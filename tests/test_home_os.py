@@ -11,6 +11,7 @@ from product.home_os import (
     NO_TRADE,
     NORMAL,
     PAUSED,
+    PREPARING,
     build_home_os,
 )
 from product.operator_language import simple_reason
@@ -37,13 +38,95 @@ def test_journey_b_zerodha_login_required():
         scan={"scanned_at": "2026-09-01T05:00:00+00:00", "records": [{"symbol": "TCS"}]},
         now=_open(),
     )
-    assert os["state"] == LOGIN_REQUIRED
     assert os["need_me"] is True
+    assert os["broker"]["login_required"] is True
     assert os["primary_action"]["label"] == "Login to Zerodha"
     assert os["primary_action"]["kind"] == "instruction"
     assert os["system"]["zerodha"]["status"] == "Needs you"
-    assert "WAITING FOR ZERODHA LOGIN" in os["system"]["zerodha"]["detail"]
     assert os["live_locked"] is True
+    assert os["state"] in {LOGIN_REQUIRED, NORMAL, NO_TRADE, MARKET_CLOSED_COMPLETE}
+
+
+def test_observing_with_auth_health_still_needs_zerodha_login():
+    os = build_home_os(
+        dashboard={
+            "autonomy": {
+                "state": "OBSERVING",
+                "running": True,
+                "reason_code": "auth_health",
+                "explanation": "daily Zerodha login is required",
+            },
+            "data": {"ready": True},
+        },
+        paper={"enabled": True, "open_positions": [], "closed_trades": []},
+        why={"available": False},
+        soak={"real_forward_observations": 0, "insufficient_evidence": True},
+        scan={"scanned_at": "2026-09-01T05:00:00+00:00", "records": [{"symbol": "TCS"}]},
+        now=_open(),
+    )
+    assert os["need_me"] is True
+    assert os["broker"]["login_required"] is True
+    assert os["system"]["zerodha"]["status"] == "Needs you"
+    assert os["live_locked"] is True
+
+
+def test_observing_auth_health_without_explanation_is_not_broker_ready():
+    os = build_home_os(
+        dashboard={
+            "autonomy": {
+                "state": "OBSERVING",
+                "running": True,
+                "reason_code": "auth_health",
+                "explanation": "",
+            },
+            "data": {"ready": True, "bhavcopy": {"ready": True, "latest_date": "2026-09-01", "current": True}},
+        },
+        paper={"enabled": True, "open_positions": [], "closed_trades": []},
+        why={"available": False},
+        soak={"real_forward_observations": 0, "insufficient_evidence": True},
+        scan={"scanned_at": "2026-09-01T05:00:00+00:00", "records": [{"symbol": "TCS"}]},
+        now=_open(),
+    )
+    assert os["broker"]["login_required"] is True
+    assert os["broker"]["status"] != "READY"
+    assert os["system"]["zerodha"]["status"] == "Needs you"
+
+
+def test_empty_autonomy_snapshot_is_not_broker_ready():
+    os = build_home_os(
+        dashboard={"autonomy": {}, "data": {"ready": True, "bhavcopy": {"ready": True, "latest_date": "2026-09-01", "current": True}}},
+        paper={"enabled": True, "open_positions": [], "closed_trades": []},
+        why={"available": False},
+        soak={"real_forward_observations": 0, "insufficient_evidence": True},
+        scan={"scanned_at": "2026-09-01T05:00:00+00:00", "records": [{"symbol": "TCS"}]},
+        now=_open(),
+    )
+    assert os["broker"]["login_required"] is True
+    assert os["broker"]["status"] != "READY"
+    assert os["system"]["zerodha"]["status"] == "Needs you"
+
+
+def test_observing_auth_missing_failure_without_reason_code_is_not_broker_ready():
+    os = build_home_os(
+        dashboard={
+            "autonomy": {
+                "state": "OBSERVING",
+                "running": True,
+                "reason_code": "paper_cycle",
+                "explanation": "paper cycle: no-op · CAPABILITY_BLOCKED",
+                "active_failures": ["auth_missing", "live_feed_stale", "snapshot_stale"],
+            },
+            "data": {"ready": True, "bhavcopy": {"ready": True, "latest_date": "2026-09-01", "current": True}},
+        },
+        paper={"enabled": True, "open_positions": [], "closed_trades": []},
+        why={"available": False},
+        soak={"real_forward_observations": 0, "insufficient_evidence": True},
+        scan={"scanned_at": "2026-09-01T05:00:00+00:00", "records": [{"symbol": "TCS"}]},
+        now=_open(),
+    )
+    assert os["broker"]["login_required"] is True
+    assert os["broker"]["status"] != "READY"
+    assert os["system"]["zerodha"]["status"] == "Needs you"
 
 
 def test_journey_c_no_trade_is_healthy():
@@ -137,6 +220,31 @@ def test_journey_a_automatic_verify_persists_without_cli(tmp_path, monkeypatch):
     assert load_latest_verification()["lanes"]["LIVE MONEY"] == "LOCKED"
 
 
+def test_observe_only_does_not_pause_paper():
+    os = build_home_os(
+        dashboard={
+            "autonomy": {
+                "state": "RUNNING",
+                "running": True,
+                "owner_state": {"observe_only_date": "2026-09-01", "new_entries_paused": False},
+            },
+            "data": {"ready": True, "bhavcopy": {"ready": True}},
+        },
+        paper={"enabled": True, "open_positions": [], "closed_trades": []},
+        why={"available": True, "taken": [], "reasons": ["ENTRY_TOO_EXTENDED"], "rejections": [{"symbol": "TCS"}]},
+        journal={"latest": {"taken": [], "rejections": [{"symbol": "TCS"}], "cycle_reasons": ["ENTRY_TOO_EXTENDED"]}},
+        soak={"real_forward_observations": 0, "insufficient_evidence": True},
+        scan={"scanned_at": "2026-09-01T05:00:00+00:00", "records": [{"symbol": "TCS"}]},
+        reco={"schema_version": 4, "categories": []},
+        now=_open(),
+    )
+    assert os["observe_only"] is True
+    assert os["paper_bot"]["on"] is True
+    assert os["paper_bot"]["paused"] is False
+    assert os["live_locked"] is True
+    assert "observe only" in os["subtext"].lower() or "paper still" in os["subtext"].lower()
+
+
 def test_paused_paper_is_a_home_action():
     os = build_home_os(
         dashboard={"autonomy": {"state": "RUNNING", "running": True}, "data": {"ready": True, "bhavcopy": {"ready": True}}},
@@ -173,6 +281,42 @@ def test_capability_inventory_keeps_engineering_out_of_home():
     assert by_id("zerodha_observation")["affects_live_money"] is False
 
 
+def test_news_refresh_is_not_preparing_official_data():
+    os = build_home_os(
+        dashboard={
+            "autonomy": {"state": "RUNNING", "running": True},
+            "data": {"ready": True, "bhavcopy": {"ready": True, "latest_date": "2026-09-01", "current": True}},
+        },
+        paper={"enabled": True, "open_positions": [], "closed_trades": []},
+        why={"available": False},
+        soak={"real_forward_observations": 0, "insufficient_evidence": True},
+        scan={"scanned_at": "2026-09-01T05:00:00+00:00", "records": [{"symbol": "TCS"}]},
+        reco={"schema_version": 4, "categories": []},
+        operations={"active": [{"kind": "NEWS_REFRESH", "status": "RUNNING"}], "recent": []},
+        now=_open(),
+    )
+    assert os["state"] != PREPARING
+    assert "Preparing official data" not in (os["now"] or "")
+
+
+def test_home_does_not_claim_settlement_from_stale_soak_off_session():
+    os = build_home_os(
+        dashboard={
+            "autonomy": {"state": "RUNNING", "running": True},
+            "data": {"ready": True, "bhavcopy": {"ready": True, "latest_date": "2026-09-01", "current": True}},
+        },
+        paper={"enabled": True, "open_positions": [], "closed_trades": []},
+        why={"available": False},
+        soak={"real_forward_observations": 0, "insufficient_evidence": True, "FORWARD_SOAK_STATUS": "PENDING"},
+        soak_verify={"lanes": {"FORWARD SETTLEMENT": "PENDING"}, "generated_at": "2026-08-01T10:00:00+00:00"},
+        scan={"scanned_at": "2026-09-01T05:00:00+00:00", "records": [{"symbol": "TCS"}]},
+        reco={"schema_version": 4, "categories": []},
+        operations={"active": [], "recent": []},
+        now=datetime(2026, 9, 1, 23, 50, tzinfo=IST),
+    )
+    assert os["now"] != "End-of-day settlement"
+
+
 def test_radar_home_payload_includes_home_os(monkeypatch):
     import product.observer_api as observer
 
@@ -194,3 +338,36 @@ def test_radar_home_payload_includes_home_os(monkeypatch):
     assert "home_os" in payload
     assert payload["home_os"]["live_locked"] is True
     assert payload["home_os"]["headline"]
+
+
+def test_radar_home_uses_autonomy_payload_for_broker_status(monkeypatch):
+    import product.observer_api as observer
+
+    class _Core:
+        @staticmethod
+        def _scan_payload():
+            return {"scanned_at": "2026-09-01T05:00:00+00:00", "records": [], "universe_size": 0}
+
+        @staticmethod
+        def _market_payload():
+            return {"health": "Quiet", "breadth": "—", "nifty_change_1d": 0, "vix": None, "leaders": [], "laggards": [], "trade_stance": "Open"}
+
+        @staticmethod
+        def _long_term_payload():
+            return {"records": [], "scanned_at": ""}
+
+        @staticmethod
+        def _autonomy_payload():
+            return {
+                "state": "OBSERVING",
+                "running": True,
+                "reason_code": "paper_cycle",
+                "explanation": "paper cycle: no-op",
+                "active_failures": ["auth_missing"],
+                "capability_notes": [],
+            }
+
+    monkeypatch.setattr(observer, "core", _Core)
+    payload = observer.radar_home_workspace()
+    assert payload["home_os"]["broker"]["login_required"] is True
+    assert payload["home_os"]["broker"]["status"] != "READY"

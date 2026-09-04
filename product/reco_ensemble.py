@@ -341,15 +341,28 @@ def allows_buy(row: Mapping[str, Any]) -> bool:
 
 
 def sort_key(card: Mapping[str, Any]) -> tuple:
-    """Tier, then independent families, then scanner score. Not a weighted soup."""
+    """Tier, then independent families, then quality. Sector is a near-tie boost only."""
     tier = str(card.get("reco_tier") or TIER_WATCH)
     confirms = 0
     try:
         confirms = int(card.get("family_confirms") or card.get("method_confirms") or 0)
     except (TypeError, ValueError):
         confirms = 0
-    score = _f(card.get("score")) or 0.0
-    return (TIER_RANK.get(tier, 9), -confirms, -score, str(card.get("symbol") or ""))
+    quality = _f(card.get("quality_score"))
+    if quality is None:
+        quality = _f(card.get("score")) or 0.0
+    sector = _f(card.get("sector_leadership_score")) or 0.0
+    # 2-point quality buckets let a leading sector outrank a nearly equal laggard.
+    # Hard gates / family confirms still win. Sector never invents a Buy.
+    quality_bucket = -int(round(float(quality) / 2.0))
+    return (
+        TIER_RANK.get(tier, 9),
+        -confirms,
+        quality_bucket,
+        -sector,
+        -quality,
+        str(card.get("symbol") or ""),
+    )
 
 
 def attach_expert_layer(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:

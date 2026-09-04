@@ -223,8 +223,16 @@ def _case_method(row: Mapping[str, Any]) -> dict[str, Any]:
 def _sector_method(row: Mapping[str, Any]) -> dict[str, Any]:
     if bool(row.get("sector_laggard")):
         return _method("sector", "fail", f"Lagging sector: {row.get('sector') or '—'}", 0.0)
+    score = _f(row.get("sector_leadership_score"))
+    label = str(row.get("sector_leadership_label") or "Sector")
+    if score is not None and score >= 70:
+        return _method("sector", "pass", f"{label} {score:.0f} · {row.get('sector') or '—'}", min(100.0, score))
     if bool(row.get("sector_leader")):
         return _method("sector", "pass", f"Leading sector: {row.get('sector') or '—'}", 80.0)
+    if score is not None and score < 40:
+        return _method("sector", "fail", f"{label} {score:.0f} · {row.get('sector') or '—'}", score)
+    if score is not None:
+        return _method("sector", "unknown", f"{label} {score:.0f} is mid-pack, ranking only", score)
     return _method("sector", "unknown", "Sector pack not in current leaders/laggards", None)
 
 
@@ -404,6 +412,11 @@ def attach_research_overlays(
     ]
     shadow_by = _shadow_by_symbol(symbols)
     leaders, laggards = _sector_sets()
+    try:
+        from product.sector_leadership import board_from_rows
+        sector_board = board_from_rows(scan_rows, leaders, laggards)
+    except Exception:
+        sector_board = {}
     conv_by = _conviction_by_symbol(scan_rows)
     case_cache: dict[str, dict[str, Any]] = {}
 
@@ -421,6 +434,11 @@ def attach_research_overlays(
         sector = str(out.get("sector") or "").lower()
         out["sector_leader"] = bool(sector and sector in leaders)
         out["sector_laggard"] = bool(sector and sector in laggards)
+        try:
+            from product.sector_leadership import attach_to_row
+            out.update(attach_to_row(out, sector_board))
+        except Exception:
+            pass
         out.update(_case_fields(out, case_cache))
         return attach_method_scores(out)
 
