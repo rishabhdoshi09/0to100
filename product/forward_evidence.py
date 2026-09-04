@@ -124,6 +124,13 @@ def freeze_observation(
     symbol = str(row.get("symbol") or "").strip().upper()
     if not symbol:
         return None
+    try:
+        from product.decision_taxonomy import is_non_judgment
+        if is_non_judgment(row.get("decision") or row.get("selection_result"), row.get("reason_code")):
+            return None
+    except Exception:
+        if str(row.get("decision") or "").upper() == "NO_JUDGMENT":
+            return None
     reason = str(row.get("reason_code") or row.get("decision") or "")
     did = str(row.get("decision_id") or "") or decision_id(
         as_of=as_of, symbol=symbol, group=group, reason_code=reason, cycle_id=cycle_id,

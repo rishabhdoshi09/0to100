@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from product.forward_evidence import (
+    BACKTEST,
     REAL_FORWARD_MARKET,
     TEST_FIXTURE,
     attach_settlement,
@@ -174,6 +175,39 @@ def test_test_fixture_rows_are_excluded_from_promotion_stats():
     assert board["insufficient_evidence"] is True
     assert board["evidence_label"] == "INSUFFICIENT EVIDENCE"
     assert board["gross_expectancy"] is None
+
+
+def test_backtest_rows_cannot_contaminate_real_forward_stats():
+    freeze_observation(
+        {"symbol": "RELIANCE", "reason_code": "ELIGIBLE", "decision": "BUY", "entry": 100, "stop": 94},
+        cycle_id="hist", as_of="2025-12-24", group="taken", entered=True, provenance=BACKTEST,
+    )
+    rows = load_ledger()
+    assert any(r.get("provenance") == BACKTEST for r in rows)
+    assert real_forward_only(rows) == []
+    board = scoreboard()
+    assert board["real_forward_observations"] == 0
+    assert board["paper_trades_taken"] == 0
+    assert board["insufficient_evidence"] is True
+
+
+def test_no_judgment_is_excluded_from_forward_ledger():
+    row = freeze_observation(
+        {
+            "symbol": "NOTAREALTICKERZZZ",
+            "decision": "NO_JUDGMENT",
+            "reason_code": "INVALID_SYMBOL",
+            "entry": 100,
+            "stop": 94,
+        },
+        cycle_id="bad",
+        as_of="2026-09-01",
+        group="rejected",
+        entered=False,
+        provenance=REAL_FORWARD_MARKET,
+    )
+    assert row is None
+    assert load_ledger() == []
 
 
 def test_rejected_candidates_settle_automatically_and_are_not_pnl():
