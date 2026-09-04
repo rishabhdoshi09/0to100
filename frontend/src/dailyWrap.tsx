@@ -5,6 +5,7 @@ export type DailyWrapLine = {
   official?: boolean
   url?: string
   symbols?: string[]
+  published_at?: string
 }
 
 type WrapArticle = {
@@ -17,6 +18,7 @@ type WrapArticle = {
   url?: string
   mentioned_symbols?: string[]
   impact_score?: number
+  published_at?: string
 }
 
 type WrapDashboard = {
@@ -33,6 +35,12 @@ type WrapDashboard = {
   }
 }
 
+// "Today" on a market desk must not silently mean "best headline from the last week".
+// An 18-hour rolling window keeps prior-evening/post-close context visible for the
+// next morning while dropping yesterday's old intraday/news inventory by the time
+// it is no longer actionable context. Undated news is excluded rather than guessed.
+export const WRAP_NEWS_MAX_AGE_MS = 18 * 60 * 60 * 1000
+
 const GLOBAL_NEEDLES = [
   'us inflation', 'fed chair', 'federal reserve', 'treasury yield',
   'us futures', 'bond yield', 's&p', 'nasdaq', 'us markets', 'nvidia',
@@ -46,7 +54,7 @@ const FILING_NEEDLES = [
 function prettySector(name: string): string {
   const raw = String(name || '').trim()
   if (!raw) return ''
-  if (['IT', 'FMCG', 'NBFC'].includes(raw.toUpperCase())) return raw.toUpperCase()
+  if (['IT', 'FMCG', 'NBFC'].includes(raw.toUpperCase())) return raw.toUpper-Case?.() || raw.toUpperCase()
   return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase()
 }
 
@@ -54,13 +62,17 @@ function joinNames(names: string[]): string {
   const items = names.map((n) => n.trim()).filter(Boolean)
   if (!items.length) return ''
   if (items.length === 1) return items[0]
-  if (items.length === 2) return `${items[0]} and ${items[1]}`
+  if (items.length === 2) return `${rawSafe(items[0])} and ${rawSafe(items[1])}`
   return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
+}
+
+function rawSafe(value: string): string {
+  return value
 }
 
 function articleBlob(article: WrapArticle | undefined): string {
   return [article?.headline, article?.summary, article?.why_it_matters, article?.source]
-    .map((part) => String(part || '').toLowerCase())
+    .map((part) => String(part || '').toString().toLowerCase())
     .join(' ')
 }
 
@@ -72,6 +84,56 @@ function articleKind(article: WrapArticle | undefined): 'skip' | 'global' | 'sto
   return 'other'
 }
 
+function publishedMs(value: string | undefined): number | null {
+  const text = String(value || '').trim()
+  if (!text) return null
+  const parsed = Date.parse(text)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+export function isFreshWrapArticle(
+  article: WrapArticle | undefined,
+  nowMs: number = Date.now(),
+): boolean {
+  const published = publishedMs(article?.published_at)
+  if (published == null) return false
+  const age = nowMs - published
+  // Small positive clock skew is tolerated; far-future timestamps are rejected.
+  return age >= -(5 * 60 * 1000) && age <= WRAP_NEWS_MAX_AGE_MS
+}
+
+function isSessionLine(line: DailyWrapLine): boolean {
+  return line.id === 'session_indices' || line.id === 'session_regime'
+}
+
+function freshApiLines(
+  apiLines: DailyWrapLine[],
+  dashboard: WrapDashboard | undefined | null,
+  nowMs: number,
+): DailyWrapLine[] {
+  const articles = dashboard?.news?.articles || []
+  const byId = new Map<string, WrapArticle>()
+  const byUrl = new Map<string, WrapArticle>()
+  for (const article of articles) {
+    const id = String(article.article_id || '').trim()
+    const url = String(article.url || '').trim()
+    if (id) byId.set(id, article)
+    if (url) byUrl.set(url, article)
+  }
+  return apiLines.filter((line) => {
+    if (isSessionLine(line)) return true
+    const directPublished = publishedMs(line.published_at)
+    if (directPublished != null) {
+      const age = nowMs - directPublished
+      return age >= -(5 * 60 * 1000) && age <= WRAP_NEWS_MAX_AGE_MS
+    }
+    const id = String(line.id || '').trim()
+    const url = String(line.url || '').trim()
+    const article = (id ? byId.get(id) : undefined) || (url ? byUrl.get(url) : undefined)
+    return isFreshWrapArticle(article, nowMs)
+  })
+}
+
 export function DailyWrapList({
   lines,
   onSymbol,
@@ -81,9 +143,10 @@ export function DailyWrapList({
 }) {
   if (!lines.length) return null
   return (
-    <section className="daily-wrap" aria-label="Here's the wrap of the day">
-      <p className="desk-kicker">Daily report</p>
-      <h2>Here&apos;s the wrap of the day</h2>
+    <section className="daily-wrap" aria-label="Latest market wrap">
+      <p className="desk-kicker">Fresh market context</p>
+      <h2>Latest market wrap</h2>
+      <p className="daily-wrap-freshness">Last official NSE session plus sourced news published in the last 18 hours. Old or undated headlines are not promoted here.</p>
       <ol>
         {lines.map((line, index) => (
           <li key={line.id || `${index}-${line.text.slice(0, 24)}`}>
@@ -119,13 +182,20 @@ export function isLegacyScanWrap(lines: DailyWrapLine[] | undefined | null): boo
 export function magazineWrapLines(
   apiLines: DailyWrapLine[] | undefined | null,
   dashboard: WrapDashboard | undefined | null,
+  nowMs: number = Date.now(),
 ): DailyWrapLine[] {
   const api = apiLines || []
-  if (api.length && !isLegacyScanWrap(api)) return api
-  return dashboardWrapLines(dashboard)
+  if (api.length && !isLegacyScanWrap(api)) {
+    const fresh = freshApiLines(api, dashboard, nowMs)
+    if (fresh.length) return fresh.slice(0, 5)
+  }
+  return dashboardWrapLines(dashboard, nowMs)
 }
 
-export function dashboardWrapLines(dashboard: WrapDashboard | undefined | null): DailyWrapLine[] {
+export function dashboardWrapLines(
+  dashboard: WrapDashboard | undefined | null,
+  nowMs: number = Date.now(),
+): DailyWrapLine[] {
   const lines: DailyWrapLine[] = []
   const market = dashboard?.market
   if (market?.available && (market.summary || market.nifty_change_1d != null)) {
@@ -160,13 +230,14 @@ export function dashboardWrapLines(dashboard: WrapDashboard | undefined | null):
     lines.push({
       id: 'session_indices',
       text: [head + '.', sector ? `${sector}.` : ''].filter(Boolean).join(' '),
-      source: 'Official NSE session',
+      source: 'Last official NSE session',
       official: true,
     })
   }
 
   const articles = [...(dashboard?.news?.articles || [])]
     .filter((article) => String(article.headline || '').trim())
+    .filter((article) => isFreshWrapArticle(article, nowMs))
     .sort((a, b) => (b.impact_score || 0) - (a.impact_score || 0))
   const stock: DailyWrapLine[] = []
   const other: DailyWrapLine[] = []
@@ -183,6 +254,7 @@ export function dashboardWrapLines(dashboard: WrapDashboard | undefined | null):
       official: Boolean(article.official),
       url: article.url,
       symbols: (article.mentioned_symbols || []).slice(0, 6),
+      published_at: article.published_at,
     }
     if (kind === 'stock') stock.push(item)
     else if (kind === 'global') global.push(item)
