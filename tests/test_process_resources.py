@@ -1,10 +1,13 @@
 """Health diagnostics expose FD pressure without lying about readiness."""
 from __future__ import annotations
 
+import ctypes
+
 from product.process_resources import (
     RESOURCE_EXHAUSTED,
     RESOURCE_OK,
     RESOURCE_PRESSURE,
+    _darwin_open_fd_count,
     classify_fd_pressure,
     resource_diagnostics,
 )
@@ -52,3 +55,31 @@ def test_health_surfaces_resource_exhausted(monkeypatch):
     assert payload["resources"]["state"] == RESOURCE_EXHAUSTED
     assert payload["lifecycle"] == "FAILED"
     assert "exhausted" in str(payload["reason"]).lower() or "exhausted" in " ".join(payload.get("reasons") or []).lower()
+
+
+def test_darwin_fd_counter_uses_libproc_without_spawning_lsof(monkeypatch):
+    import product.process_resources as resources
+
+    class FakeProcPidInfo:
+        argtypes = None
+        restype = None
+
+        def __call__(self, _pid, _flavour, _arg, buffer, _size):
+            if buffer is None:
+                return 40  # capacity request: 5 proc_fdinfo records
+            return 32  # actual result: 4 proc_fdinfo records
+
+    class FakeLibProc:
+        proc_pidinfo = FakeProcPidInfo()
+
+    monkeypatch.setattr(resources.sys, "platform", "darwin")
+    monkeypatch.setattr(ctypes, "CDLL", lambda *_a, **_k: FakeLibProc())
+
+    assert _darwin_open_fd_count(4242) == 4
+
+
+def test_darwin_fd_counter_is_disabled_on_non_macos(monkeypatch):
+    import product.process_resources as resources
+
+    monkeypatch.setattr(resources.sys, "platform", "linux")
+    assert _darwin_open_fd_count(4242) is None
