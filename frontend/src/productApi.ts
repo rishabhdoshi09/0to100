@@ -1665,6 +1665,7 @@ export const verifyForwardSoakNow = (): Promise<ForwardSoakScoreboard> =>
 export type HistoricalDecisionRow = {
   symbol?: string
   as_of?: string
+  decision_id?: string
   decision?: string
   reason_code?: string
   reasons?: string[]
@@ -1730,11 +1731,114 @@ export type DecisionSimulatorReport = {
   rows?: HistoricalDecisionRow[]
 }
 
+export type PastDecisionSimulation = {
+  schema_version?: number
+  kind?: 'PAST_DECISION_SIMULATION' | string
+  status?: string
+  available?: boolean
+  provenance?: string
+  live_locked?: boolean
+  symbol?: string
+  as_of?: string
+  decision_id?: string
+  historical_timestamp?: string
+  fingerprint?: string
+  error?: string | null
+  warnings?: string[]
+  pit_status?: string
+  counterfactual_trustworthy?: boolean
+  matches?: Array<{
+    decision_id?: string
+    symbol?: string
+    as_of?: string
+    decision?: string
+    reason_code?: string
+    decision_time?: string
+  }>
+  original?: {
+    action?: string
+    reason_code?: string
+    reason?: string
+    tier?: string
+    entry?: number | string | null
+    entry_source?: string
+    stop?: number | string | null
+    target?: number | string | null
+    source?: string
+  }
+  simulated?: {
+    action?: string
+    entry?: number | string | null
+    entry_source?: string
+    role?: string
+    defaulted?: boolean
+    trustworthy?: boolean
+  }
+  evidence_at_t?: {
+    label?: string
+    max_bar_date?: string
+    close?: number | string | null
+    future_bars_used_for_decision?: boolean
+    pit_status?: string
+    financials?: { available?: boolean; status?: string; note?: string }
+    research?: { available?: boolean; status?: string; note?: string }
+    sector?: { status?: string; usable_as_family_confirm?: boolean; note?: string }
+    news?: Array<{ headline?: string; available_from?: string; event_class?: string }>
+    news_status?: string
+    reconstructed_engine_decision?: { status?: string; decision?: string; reason?: string }
+  }
+  subsequent_outcome?: {
+    label?: string
+    actual?: Record<string, unknown>
+    simulated?: Record<string, unknown>
+    horizon_sessions?: number
+  }
+  comparison?: {
+    actual_action?: string
+    simulated_action?: string
+    actual_return_pct?: number | string | null
+    simulated_return_pct?: number | string | null
+    return_delta_pct?: number | string | null
+    note?: string
+  }
+}
+
 export const fetchDecisionSimulator = (): Promise<DecisionSimulatorReport> =>
   request('/api/decision-simulator', { headers: { Accept: 'application/json' } })
 
 export const simulatePastDecisions = (): Promise<DecisionSimulatorReport> =>
   request('/api/decision-simulator', { method: 'POST', headers: { Accept: 'application/json' } })
+
+export function pastDecisionSimulationUrl(input: {
+  symbol?: string
+  as_of?: string
+  alternative?: string
+  decision_id?: string
+}): string {
+  const params = new URLSearchParams()
+  if (input.symbol) params.set('symbol', input.symbol)
+  if (input.as_of) params.set('as_of', input.as_of)
+  if (input.alternative) params.set('alternative', input.alternative)
+  if (input.decision_id) params.set('decision_id', input.decision_id)
+  const query = params.toString()
+  return query ? `/api/decision-simulator?${query}` : '/api/decision-simulator'
+}
+
+export const simulatePastDecision = (input: {
+  symbol: string
+  as_of?: string
+  alternative?: string
+  decision_id?: string
+}): Promise<PastDecisionSimulation> =>
+  request(pastDecisionSimulationUrl(input), { method: 'POST', headers: { Accept: 'application/json' } })
+
+export const fetchPastDecisionSimulation = (input: {
+  symbol: string
+  as_of?: string
+  alternative?: string
+  decision_id?: string
+}): Promise<PastDecisionSimulation> =>
+  request(pastDecisionSimulationUrl(input), { headers: { Accept: 'application/json' } })
 
 export type ScanAuditPayload = {
   generated_at?: string
