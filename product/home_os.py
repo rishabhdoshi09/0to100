@@ -492,6 +492,10 @@ def build_home_os(
         now_line = f"DEGRADED · {now_line}"
         if runtime.get("reason") and state == NORMAL:
             subtext = str(runtime.get("reason"))
+    elif lifecycle == "STARTING" and state in {NORMAL, PREPARING}:
+        now_line = f"STARTING · {now_line}"
+        if runtime.get("reason"):
+            subtext = str(runtime.get("reason"))
 
     activity = _activity(
         scan_d, why_d, latest, ops, verify, taken, recovered=list(recovered or []),

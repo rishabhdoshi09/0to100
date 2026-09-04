@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChartWorkspace, Panel } from './components'
+import { deskStartupReason } from './deskStartupState'
 import { money, pct, relativeAge, words } from './format'
 import {
   addWatchlistItem,
@@ -458,7 +459,13 @@ function HomeOsCard({
         {os.runtime?.lifecycle ? (
           <p className="panel-copy">
             {os.runtime.lifecycle}
-            {os.runtime.reason ? ` · ${os.runtime.reason}` : ''}
+            {` · ${deskStartupReason({
+              lifecycle: os.runtime.lifecycle,
+              reason: os.runtime.reason,
+              reasons: os.runtime.reasons,
+              components: os.runtime.components,
+              state: os.runtime.lifecycle === 'READY' ? 'READY' : 'STARTING',
+            })}`}
           </p>
         ) : null}
         <h2>{os.headline}</h2>

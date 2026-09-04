@@ -20,6 +20,13 @@ TERMINAL = frozenset({SUCCEEDED, FAILED, BLOCKED, CANCELLED})
 DEFAULT_RUNNING_LEASE_S = 30 * 60
 KIND_RUNNING_LEASE_S = {
     "DUE_DILIGENCE_ACQUIRE": 15 * 60,
+    "MARKET_SCAN": 20 * 60,
+    "LONG_TERM_SCAN": 20 * 60,
+    "LONG_TERM_REFRESH": 20 * 60,
+    "NEWS_REFRESH": 10 * 60,
+    "MARKET_REPORT": 15 * 60,
+    "FNO_REFRESH": 10 * 60,
+    "DATA_PREPARE": 30 * 60,
 }
 
 
@@ -87,16 +94,36 @@ class OperationStore:
     WAL mode keeps dashboard reads responsive while progress is being written.
     """
 
-    def __init__(self, path: str | Path = "logs/market_ops/jobs.db") -> None:
+    def __init__(
+        self,
+        path: str | Path = "logs/market_ops/jobs.db",
+        *,
+        migrate: bool = True,
+        timeout_s: float = 30.0,
+        busy_timeout_ms: int = 30_000,
+    ) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
-        self._init_schema()
+        self._timeout_s = float(timeout_s)
+        self._busy_timeout_ms = int(busy_timeout_ms)
+        self._migrate = bool(migrate)
+        self._connect_attempts = 3 if migrate else 1
+        if migrate:
+            self._init_schema()
+
+    @classmethod
+    def reader(cls, path: str | Path) -> "OperationStore":
+        """Read-only-ish opener: no schema migration, tiny lock wait."""
+        return cls(path, migrate=False, timeout_s=0.2, busy_timeout_ms=200)
 
     def _connect(self):
+        if not self._migrate and not self.path.exists():
+            raise sqlite3.OperationalError("operations database is unavailable")
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        cache_key = (str(self.path), self._timeout_s, self._busy_timeout_ms)
         cached = getattr(self._local, "con", None)
-        if cached is not None and getattr(self._local, "path", None) == str(self.path):
+        if cached is not None and getattr(self._local, "cache_key", None) == cache_key:
             try:
                 cached.execute("SELECT 1")
                 return _BorrowedConnection(cached)
@@ -107,19 +134,24 @@ class OperationStore:
                     pass
                 self._local.con = None
         last_exc: Exception | None = None
-        for _ in range(3):
+        attempts = max(1, int(getattr(self, "_connect_attempts", 3)))
+        for attempt in range(attempts):
             try:
-                con = sqlite3.connect(str(self.path), timeout=30.0, isolation_level=None)
+                con = sqlite3.connect(str(self.path), timeout=self._timeout_s, isolation_level=None)
                 con.row_factory = sqlite3.Row
-                con.execute("PRAGMA journal_mode=WAL")
-                con.execute("PRAGMA synchronous=NORMAL")
-                con.execute("PRAGMA busy_timeout=30000")
+                if self._migrate:
+                    con.execute("PRAGMA journal_mode=WAL")
+                    con.execute("PRAGMA synchronous=NORMAL")
+                con.execute("PRAGMA query_only=ON" if not self._migrate else "PRAGMA query_only=OFF")
+                con.execute(f"PRAGMA busy_timeout={self._busy_timeout_ms}")
                 self._local.con = con
-                self._local.path = str(self.path)
+                self._local.cache_key = cache_key
                 return _BorrowedConnection(con)
             except sqlite3.OperationalError as exc:
                 last_exc = exc
                 self._drop_cached()
+                if not self._migrate or attempt + 1 >= attempts:
+                    raise
                 time.sleep(0.05)
                 self.path.parent.mkdir(parents=True, exist_ok=True)
         raise last_exc if last_exc is not None else sqlite3.OperationalError("unable to open database file")
@@ -179,7 +211,9 @@ class OperationStore:
                     result_json TEXT NOT NULL DEFAULT '{}',
                     error_code TEXT NOT NULL DEFAULT '',
                     error_message TEXT NOT NULL DEFAULT '',
-                    priority INTEGER NOT NULL DEFAULT 0
+                    priority INTEGER NOT NULL DEFAULT 0,
+                    first_started_at REAL,
+                    attempt_started_at REAL
                 )
                 """
             )
@@ -195,6 +229,14 @@ class OperationStore:
                 con.execute(
                     "ALTER TABLE operations ADD COLUMN priority INTEGER NOT NULL DEFAULT 0"
                 )
+            except sqlite3.OperationalError:
+                pass
+            try:
+                con.execute("ALTER TABLE operations ADD COLUMN first_started_at REAL")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                con.execute("ALTER TABLE operations ADD COLUMN attempt_started_at REAL")
             except sqlite3.OperationalError:
                 pass
             con.execute(
@@ -313,11 +355,16 @@ class OperationStore:
                 return None
             operation_id = str(row["operation_id"])
             con.execute(
-                "UPDATE operations SET status=?,started_at=COALESCE(started_at,?),"
+                "UPDATE operations SET status=?,"
+                "started_at=?,"
+                "attempt_started_at=?,"
+                "first_started_at=COALESCE(first_started_at, ?),"
                 "updated_at=?,attempt=attempt+1,worker_pid=?,stage=?,message=? "
                 "WHERE operation_id=? AND status=?",
                 (
                     RUNNING,
+                    now,
+                    now,
                     now,
                     now,
                     int(worker_pid),
@@ -447,35 +494,90 @@ class OperationStore:
                 recovered += 1
         return recovered
 
-    def recover_stale_running(
+    def attempt_start_epoch(self, row: dict[str, Any] | sqlite3.Row | None) -> float:
+        """Current-attempt start. Never use first_started_at for deadlines."""
+        if row is None:
+            return 0.0
+        try:
+            data = dict(row)
+        except Exception:
+            data = row if isinstance(row, dict) else {}
+        for key in ("attempt_started_at", "started_at"):
+            try:
+                value = float(data.get(key) or 0)
+            except (TypeError, ValueError):
+                value = 0.0
+            if value > 0:
+                return value
+        return 0.0
+
+    def overdue_running(
         self,
         *,
         now: float | None = None,
         deadlines: dict[str, float] | None = None,
-    ) -> int:
-        """Fail RUNNING jobs that exceeded their declared lease/deadline.
+    ) -> list[dict[str, Any]]:
+        """RUNNING rows whose *current attempt* exceeded its lease.
 
-        A live worker that is stuck on one provider must not occupy RUNNING
-        forever. Heartbeats update ``updated_at``; the clock is ``started_at``.
+        Does not mark them FAILED. The owning worker must cancel the actual
+        execution first, then finish(). Marking FAILED while the child is
+        still running is the ghost-execution bug.
         """
         clock = time.time() if now is None else float(now)
         limits = dict(KIND_RUNNING_LEASE_S)
         if deadlines:
             limits.update({str(k): float(v) for k, v in deadlines.items()})
-        recovered = 0
+        overdue: list[dict[str, Any]] = []
         with self._connect() as con:
             rows = list(con.execute("SELECT * FROM operations WHERE status=?", (RUNNING,)))
-            for row in rows:
-                started = float(row["started_at"] or row["updated_at"] or 0)
-                kind = str(row["kind"] or "")
-                limit = float(limits.get(kind, DEFAULT_RUNNING_LEASE_S))
-                if started <= 0 or (clock - started) < limit:
-                    continue
-                age = clock - started
+        for row in rows:
+            started = self.attempt_start_epoch(row)
+            kind = str(row["kind"] or "")
+            limit = float(limits.get(kind, DEFAULT_RUNNING_LEASE_S))
+            if started <= 0 or (clock - started) < limit:
+                continue
+            item = self._decode(row) or {}
+            item["elapsed_s"] = clock - started
+            item["lease_s"] = limit
+            overdue.append(item)
+        return overdue
+
+    def recover_stale_running(
+        self,
+        *,
+        now: float | None = None,
+        deadlines: dict[str, float] | None = None,
+        keep_pid: int | None = None,
+    ) -> int:
+        """Fail only orphaned RUNNING rows whose current-attempt lease elapsed.
+
+        A live local PID is never marked FAILED here. That would leave the
+        worker child still executing while the DB said terminal. The owning
+        worker cancels first, then finish().
+        """
+        clock = time.time() if now is None else float(now)
+        recovered = 0
+        my_pid = os.getpid()
+        keep = int(keep_pid) if keep_pid is not None else None
+        for row in self.overdue_running(now=clock, deadlines=deadlines):
+            try:
+                pid_i = int(row.get("worker_pid") or 0)
+            except (TypeError, ValueError):
+                pid_i = 0
+            if keep is not None and pid_i == keep:
+                continue
+            if pid_i and pid_i == my_pid:
+                continue
+            if pid_i and pid_is_alive(pid_i):
+                continue
+            kind = str(row.get("kind") or "")
+            age = float(row.get("elapsed_s") or 0)
+            limit = float(row.get("lease_s") or DEFAULT_RUNNING_LEASE_S)
+            with self._connect() as con:
                 con.execute(
                     """
                     UPDATE operations SET status=?,finished_at=?,updated_at=?,stage=?,message=?,
-                        error_code=?,error_message=?
+                        error_code=?,error_message=?,worker_pid=NULL
                     WHERE operation_id=? AND status=?
                     """,
                     (
@@ -485,13 +587,53 @@ class OperationStore:
                         FAILED,
                         f"{kind} exceeded its {int(limit)}s deadline after {int(age)}s",
                         "DEADLINE_EXCEEDED",
-                        f"Operation stayed RUNNING for {int(age)}s",
+                        f"Operation stayed RUNNING for {int(age)}s; orphan worker",
                         str(row["operation_id"]),
                         RUNNING,
                     ),
                 )
-                recovered += 1
+            recovered += 1
         return recovered
+
+    def compact_status(
+        self,
+        *,
+        runtime: dict[str, Any] | None = None,
+        kinds: Iterable[str] | None = None,
+        freshness: str = "CURRENT",
+    ) -> dict[str, Any]:
+        """Worker-persisted compact dashboard. Cheap for the HTTP GET path."""
+        runtime = runtime or {}
+        recent = self.recent(80)
+        active = self.active()
+        latest: dict[str, Any] = {}
+        kind_set = {str(kind).upper() for kind in (kinds or ()) if str(kind).strip()}
+        if not kind_set:
+            kind_set = {str(row.get("kind") or "").upper() for row in recent + active}
+            kind_set.discard("")
+        for kind in kind_set:
+            item = self.latest(kind)
+            if item:
+                latest[kind] = item
+        from operations.status_snapshot import slim_operations_status
+
+        return slim_operations_status(
+            {
+                "available": True,
+                "freshness": freshness,
+                "generated_at": time.time(),
+                "running": bool(runtime.get("process_running") or runtime.get("running")),
+                "worker_pid": runtime.get("worker_pid"),
+                "heartbeat": runtime.get("heartbeat", ""),
+                "active_lanes": dict(runtime.get("active") or {}),
+                "counts": self.counts(),
+                "active": active,
+                "recent": recent,
+                "latest": latest,
+                "fd_count": runtime.get("fd_count"),
+                "overdue": self.overdue_running(),
+            }
+        )
 
     def oldest_running(self) -> dict[str, Any] | None:
         with self._connect() as con:
