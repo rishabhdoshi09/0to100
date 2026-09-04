@@ -31,6 +31,7 @@ import {
 } from './productApi'
 import { keepRicher, markInvestigate, recall } from './sessionMemory'
 import { fetchOperation } from './api'
+import { investigateIsAcquiring } from './investigateAcquire'
 import type { ChartBar, ControlName, DashboardPayload } from './types'
 
 type AcquireJobState = {
@@ -87,7 +88,7 @@ function AcquireBanner({
   busy: string
   onRetry: () => void
 }) {
-  const acquiring = busy === 'ACQUIRE_DUE_DILIGENCE' || busy === 'ACQUIRE_DUE_DILIGENCE_ALL' || Boolean(job && !job.failed && job.status !== 'SUCCEEDED')
+  const acquiring = investigateIsAcquiring(busy, job)
   if (!acquiring && !job) return null
   return (
     <aside className={`dd-acquire-banner ${job?.failed ? 'is-failed' : ''}`} aria-live="polite">
@@ -489,6 +490,7 @@ function InvestigatePanel({
       })}
     </div>
   )
+  const acquiring = investigateIsAcquiring(busy, acquireJob)
   const coverage = report.research_coverage
   const coveragePct = coverage?.coverage_pct
   const decisionPct = screen?.decision_coverage_pct ?? report.decision_coverage_pct
