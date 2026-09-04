@@ -37,6 +37,43 @@ def _registered_specs(brain):
         return []
 
 
+def _kick_counterfactual_learning(*, loader=None, runner=None) -> dict:
+    """Start the existing PIT decision simulator without blocking nightly learning.
+
+    This is deliberately BACKTEST/counterfactual evidence.  It never opens a paper
+    position, never changes REAL_FORWARD_MARKET statistics, and never changes live
+    decision weights.  The replay engine itself is cache/idempotency aware; this
+    hook merely makes sure the already-built simulator actually gets exercised by
+    the autonomous overnight learning cycle.
+    """
+    if loader is None or runner is None:
+        from product.decision_simulator import load_latest, run_decision_simulator
+
+        loader = loader or load_latest
+        runner = runner or run_decision_simulator
+    latest = dict(loader() or {})
+    if str(latest.get("status") or "").upper() == "RUNNING":
+        return {
+            "status": "RUNNING",
+            "accepted": False,
+            "already_running": True,
+            "provenance": str(latest.get("provenance") or "BACKTEST"),
+            "decisions_tested": int(latest.get("decisions_tested") or 0),
+            "note": "Existing PIT counterfactual replay is still running; no duplicate was started.",
+        }
+    started = dict(runner(async_job=True, sessions=12, universe_limit=32) or {})
+    return {
+        "status": str(started.get("status") or "UNKNOWN"),
+        "accepted": bool(started.get("accepted", True)),
+        "already_running": False,
+        "provenance": str(started.get("provenance") or "BACKTEST"),
+        "decisions_tested": int(started.get("decisions_tested") or 0),
+        "message": str(started.get("message") or "Bounded PIT counterfactual replay queued."),
+        "not_forward_evidence": True,
+        "live_locked": True,
+    }
+
+
 def derive_diagnostics(brain) -> list[dict]:
     """Derive measured, deterministic strategy diagnostics from the canonical PaperBook."""
     book = brain.intel_book
@@ -119,6 +156,21 @@ def run_learning(brain, *, session_date: str, dialogue=None) -> dict:
         except Exception:
             pass
 
+    counterfactual: dict = {}
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        try:
+            counterfactual = _kick_counterfactual_learning()
+        except Exception as exc:
+            # Learning remains available even if a bounded historical replay cannot
+            # start.  The failure is visible rather than converted to zero evidence.
+            counterfactual = {
+                "status": "UNAVAILABLE",
+                "error": f"{type(exc).__name__}: {exc}"[:240],
+                "provenance": "BACKTEST",
+                "not_forward_evidence": True,
+                "live_locked": True,
+            }
+
     gaps = HYP.plan_gaps(diagnostics)
     for gap in gaps:
         _append(dialogue, Record(
@@ -133,12 +185,12 @@ def run_learning(brain, *, session_date: str, dialogue=None) -> dict:
         as_of=session_date, claim=f"Derived {len(diagnostics)} diagnostics and {len(gaps)} evidence gaps.",
         evidence={"diagnostics": len(diagnostics), "gaps": len(gaps),
                   "paper_cooldown": paper_cooldown, "paper_prefer": paper_prefer,
-                  "paper_closed": paper_closed},
+                  "paper_closed": paper_closed, "counterfactual": counterfactual},
         decision="LEARNING_COMPLETE"))
     return {"session_date": session_date, "diagnostics": len(diagnostics), "gaps": len(gaps),
             "ranked_gaps": [asdict(g) for g in gaps],
             "paper_cooldown": paper_cooldown, "paper_prefer": paper_prefer,
-            "paper_closed": paper_closed}
+            "paper_closed": paper_closed, "counterfactual": counterfactual}
 
 
 def _changes_for(parent, gap: HYP.EvidenceGap) -> dict:
