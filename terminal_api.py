@@ -879,6 +879,7 @@ def health() -> dict:
             "reasons": runtime.get("reasons") or [],
             "components": runtime.get("components") or [],
             "history": runtime.get("history") or {},
+            "resources": runtime.get("resources") or {},
             "checked_at": runtime.get("checked_at"),
             "live_locked": True,
         })

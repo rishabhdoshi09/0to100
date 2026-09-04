@@ -32,6 +32,9 @@ FNO_REFRESH = "FNO_REFRESH"
 DATA_PREPARE = "DATA_PREPARE"
 DUE_DILIGENCE_ACQUIRE = "DUE_DILIGENCE_ACQUIRE"
 MARKET_REPORT = "MARKET_REPORT"
+DUE_DILIGENCE_DEADLINE_S = 12 * 60
+DUE_DILIGENCE_SYMBOL_S = 90.0
+PIPELINE_SNAPSHOT_EVERY_S = 45.0
 
 LANES = {
     MARKET_SCAN: "market_scan",
@@ -221,6 +224,7 @@ class MarketOperationsWorker:
         self._threads: list[threading.Thread] = []
         self._history_lock = threading.Lock()
         self._last_rss_sample = 0.0
+        self._last_pipeline_snapshot = 0.0
 
     def _set_active(self, lane: str, operation: dict[str, Any] | None) -> None:
         with self._active_lock:
@@ -238,6 +242,13 @@ class MarketOperationsWorker:
         with self._active_lock:
             active = {lane: dict(value) for lane, value in self._active.items()}
         rss_mb = _process_rss_mb()
+        fd_count = None
+        try:
+            from product.process_resources import count_open_fds
+
+            fd_count = count_open_fds(os.getpid())
+        except Exception:
+            fd_count = None
         return {
             "process_running": bool(running),
             "worker_pid": os.getpid(),
@@ -246,6 +257,7 @@ class MarketOperationsWorker:
             "lanes": sorted(set(LANES.values())),
             "active": active,
             "rss_mb": rss_mb,
+            "fd_count": fd_count,
         }
 
     def _heartbeat_loop(self) -> None:
@@ -254,9 +266,21 @@ class MarketOperationsWorker:
                 self.store.recover_dead_running(keep_pid=os.getpid())
             except Exception:
                 pass
+            try:
+                self.store.recover_stale_running()
+            except Exception:
+                pass
             payload = self._runtime_payload(running=True)
             _atomic_json(RUNTIME_PATH, payload)
             now = time.time()
+            if now - self._last_pipeline_snapshot >= PIPELINE_SNAPSHOT_EVERY_S:
+                self._last_pipeline_snapshot = now
+                try:
+                    from product.desk_pipeline import refresh_desk_pipeline_snapshot
+
+                    refresh_desk_pipeline_snapshot(self.store)
+                except Exception:
+                    pass
             if now - self._last_rss_sample >= _RSS_SAMPLE_EVERY_S:
                 self._last_rss_sample = now
                 try:
@@ -690,10 +714,18 @@ class MarketOperationsWorker:
         payload = dict(operation.get("payload") or {})
         symbol = str(payload.get("symbol") or "").strip().upper()
         force = bool(payload.get("force"))
+        deadline = time.monotonic() + float(DUE_DILIGENCE_DEADLINE_S)
+        from product.due_diligence.acquire import AcquireTimeout, acquire_shortlist, acquire_symbol
+
+        def _tick(name: str) -> None:
+            self._progress(operation_id, "ACQUIRING", f"Downloading filings and fundamentals for {name}")
+
         if symbol:
             self._progress(operation_id, "ACQUIRING", f"Downloading filings and fundamentals for {symbol}")
-            from product.due_diligence.acquire import acquire_symbol
-            result = acquire_symbol(symbol, force=force)
+            try:
+                result = acquire_symbol(symbol, force=force, deadline_monotonic=deadline)
+            except AcquireTimeout as exc:
+                raise TimeoutError(str(exc)) from exc
             n_ok = 1 if result.get("ok") or result.get("n_ok") or result else 0
             self._progress(operation_id, "ACQUIRED", f"Investigate acquire finished for {symbol}")
             out = dict(result) if isinstance(result, dict) else {"value": str(result)}
@@ -701,8 +733,19 @@ class MarketOperationsWorker:
             out["n_ok"] = int(out.get("n_ok") or n_ok)
             return out
         self._progress(operation_id, "ACQUIRING", "Downloading filings and fundamentals for shortlisted names")
-        from product.due_diligence.acquire import acquire_shortlist
-        result = acquire_shortlist(force=force)
+        result = acquire_shortlist(
+            force=force,
+            deadline_monotonic=deadline,
+            per_symbol_s=DUE_DILIGENCE_SYMBOL_S,
+            progress_cb=_tick,
+        )
+        if result.get("timed_out"):
+            exc = TimeoutError(
+                f"Due-diligence exceeded {int(DUE_DILIGENCE_DEADLINE_S)}s; "
+                f"{result.get('n_ok', 0)} name(s) acquired"
+            )
+            exc.result = result  # type: ignore[attr-defined]
+            raise exc
         self._progress(
             operation_id,
             "ACQUIRED",
@@ -837,6 +880,10 @@ class MarketOperationsWorker:
             except Exception:
                 pass
             try:
+                self.store.recover_stale_running()
+            except Exception:
+                pass
+            try:
                 operation = self.store.lease_next(lane, worker_pid=os.getpid())
             except sqlite3.OperationalError as exc:
                 _emit("INFO", f"lane {lane} waiting for operations db · {exc}")
@@ -870,11 +917,18 @@ class MarketOperationsWorker:
                 _emit("BLOCKED", f"{kind} · id={operation_id} · {elapsed:.1f}s · {exc.code}: {exc}")
             except Exception as exc:
                 elapsed = time.monotonic() - started
+                partial = getattr(exc, "result", None)
+                error_code = (
+                    "DEADLINE_EXCEEDED"
+                    if isinstance(exc, TimeoutError) or "deadline" in str(exc).lower()
+                    else type(exc).__name__
+                )
                 self.store.finish(
                     operation_id,
                     status=FAILED,
                     message=f"{kind} failed after {elapsed:.1f}s",
-                    error_code=type(exc).__name__,
+                    result=partial if isinstance(partial, dict) else None,
+                    error_code=error_code,
                     error_message=str(exc),
                 )
                 _emit("FAILED", f"{kind} · id={operation_id} · {elapsed:.1f}s · {type(exc).__name__}: {exc}")

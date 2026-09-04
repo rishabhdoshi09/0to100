@@ -175,6 +175,7 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
   const [notice, setNotice] = useState<string | null>(null)
   const mountedRef = useRef(true)
   const pollRef = useRef<number | null>(null)
+  const pollInFlight = useRef(false)
   const trackedIdRef = useRef<string | null>(null)
   const completedIdRef = useRef<string | null>(null)
   const startedAtRef = useRef<number | null>(null)
@@ -210,6 +211,8 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
   }, [clearPoll, onComplete])
 
   const pollOnce = useCallback(async (operationId: string) => {
+    if (pollInFlight.current) return
+    pollInFlight.current = true
     try {
       const op = await fetchOperation(operationId)
       if (!mountedRef.current) return
@@ -227,6 +230,8 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
       if (isTerminalStatus(op.status)) handleTerminal(op)
     } catch {
       // transient network errors while polling — keep trying until terminal or unmount
+    } finally {
+      pollInFlight.current = false
     }
   }, [handleTerminal])
 

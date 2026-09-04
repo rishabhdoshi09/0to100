@@ -1,8 +1,10 @@
+import { dedupeInFlight } from './pollGate'
+
 export const API_DOWN_MESSAGE =
   'Market API is not running on :8765. Start with bash scripts/run_quantterm_complete.sh, then retry.'
 
 export const REQUEST_TIMEOUT_MESSAGE =
-  'Dashboard refresh timed out while the backend was preparing data.'
+  'Request timed out. The backend did not respond in time.'
 
 export const DEFAULT_FETCH_TIMEOUT_MS = 30_000
 export const DASHBOARD_FETCH_TIMEOUT_MS = 20_000
@@ -37,19 +39,27 @@ export function withTimeout(ms: number, parent?: AbortSignal): AbortSignal {
 
 export async function fetchJson<T>(
   input: RequestInfo | URL,
-  init?: RequestInit & { timeoutMs?: number },
+  init?: RequestInit & { timeoutMs?: number; dedupe?: boolean },
 ): Promise<T> {
   const timeoutMs = init?.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS
-  const { timeoutMs: _ignored, signal, ...rest } = (init || {}) as RequestInit & { timeoutMs?: number }
-  const combined = withTimeout(timeoutMs, signal || undefined)
-  try {
-    const response = await fetch(input, { ...rest, signal: combined })
-    return await readJson<T>(response)
-  } catch (reason) {
-    const name = reason instanceof Error ? reason.name : ''
-    if (name === 'AbortError' || (reason instanceof DOMException && reason.name === 'AbortError')) {
-      throw new Error(REQUEST_TIMEOUT_MESSAGE)
-    }
-    throw reason
+  const { timeoutMs: _ignored, signal, dedupe, ...rest } = (init || {}) as RequestInit & {
+    timeoutMs?: number
+    dedupe?: boolean
   }
+  const run = async () => {
+    const combined = withTimeout(timeoutMs, signal || undefined)
+    try {
+      const response = await fetch(input, { ...rest, signal: combined })
+      return await readJson<T>(response)
+    } catch (reason) {
+      const name = reason instanceof Error ? reason.name : ''
+      if (name === 'AbortError' || (reason instanceof DOMException && reason.name === 'AbortError')) {
+        throw new Error(REQUEST_TIMEOUT_MESSAGE)
+      }
+      throw reason
+    }
+  }
+  if (dedupe === false) return run()
+  const key = `${String(rest.method || 'GET').toUpperCase()} ${String(input)}`
+  return dedupeInFlight(key, run)
 }
