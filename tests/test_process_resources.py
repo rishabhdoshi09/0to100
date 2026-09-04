@@ -5,6 +5,7 @@ from product.process_resources import (
     RESOURCE_EXHAUSTED,
     RESOURCE_OK,
     RESOURCE_PRESSURE,
+    RESOURCE_UNKNOWN,
     classify_fd_pressure,
     resource_diagnostics,
 )
@@ -15,11 +16,16 @@ def test_classify_fd_pressure_bands():
     assert classify_fd_pressure(10, 100) == RESOURCE_OK
     assert classify_fd_pressure(75, 100) == RESOURCE_PRESSURE
     assert classify_fd_pressure(95, 100) == RESOURCE_EXHAUSTED
+    assert classify_fd_pressure(None, 256) == RESOURCE_UNKNOWN
+    assert classify_fd_pressure(None, None) == RESOURCE_UNKNOWN
 
 
 def test_resource_exhausted_is_honest():
     payload = resource_diagnostics(api_pid=None, market_ops_pid=None)
-    assert payload["state"] in {RESOURCE_OK, RESOURCE_PRESSURE, RESOURCE_EXHAUSTED}
+    assert payload["state"] in {RESOURCE_OK, RESOURCE_PRESSURE, RESOURCE_EXHAUSTED, RESOURCE_UNKNOWN}
+    if payload["api"]["fd_count"] is None or payload["market_ops"]["fd_count"] is None:
+        assert payload["state"] == RESOURCE_UNKNOWN
+        assert payload["state"] != RESOURCE_OK
     assert payload["api"]["pid"]
     assert "api" in payload
     assert "market_ops" in payload
@@ -29,7 +35,13 @@ def test_inspect_runtime_includes_resources():
     runtime = inspect_runtime(api_serving=True)
     assert "resources" in runtime
     assert runtime["resources"]["api"]["pid"]
-    assert runtime["resources"]["state"] in {RESOURCE_OK, RESOURCE_PRESSURE, RESOURCE_EXHAUSTED, "UNKNOWN"}
+    assert runtime["resources"]["state"] in {
+        RESOURCE_OK,
+        RESOURCE_PRESSURE,
+        RESOURCE_EXHAUSTED,
+        RESOURCE_UNKNOWN,
+        "UNKNOWN",
+    }
 
 
 def test_health_surfaces_resource_exhausted(monkeypatch):

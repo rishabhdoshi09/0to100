@@ -658,41 +658,40 @@ def _scan_progress_payload() -> dict[str, Any]:
 
 
 def _operations_payload() -> dict[str, Any]:
+    runtime = _ops_runtime_payload()
+    try:
+        from operations.status_snapshot import load_operations_snapshot
+
+        snapshot, freshness = load_operations_snapshot()
+        if snapshot is not None:
+            payload = dict(snapshot)
+            payload["freshness"] = freshness
+            payload["available"] = True
+            payload["running"] = bool(runtime.get("running"))
+            payload["worker_pid"] = runtime.get("worker_pid") or payload.get("worker_pid")
+            payload["heartbeat"] = runtime.get("heartbeat", payload.get("heartbeat", ""))
+            payload["active_lanes"] = dict(runtime.get("active") or payload.get("active_lanes") or {})
+            return payload
+    except Exception:
+        snapshot = None
     try:
         from operations.market_ops import LANES
         from operations.store import OperationStore
-        store = OperationStore(OPS_DB)
-        runtime = _ops_runtime_payload()
-        recent = store.recent(100)
-        latest = {}
-        for kind in LANES:
-            item = store.latest(kind)
-            if item:
-                latest[kind] = item
-        return {
-            "available": True,
-            "running": bool(runtime.get("running")),
-            "worker_pid": runtime.get("worker_pid"),
-            "heartbeat": runtime.get("heartbeat", ""),
-            "active_lanes": dict(runtime.get("active", {}) or {}),
-            "counts": store.counts(),
-            "active": store.active(),
-            "recent": recent,
-            "latest": latest,
-        }
+
+        store = OperationStore.reader(OPS_DB)
+        payload = store.compact_status(runtime=runtime, kinds=LANES, freshness="CURRENT")
+        payload["available"] = True
+        payload["running"] = bool(runtime.get("running"))
+        return payload
     except Exception as exc:
-        return {
-            "available": False,
-            "running": False,
-            "worker_pid": None,
-            "heartbeat": "",
-            "active_lanes": {},
-            "counts": {},
-            "active": [],
-            "recent": [],
-            "latest": {},
-            "error": str(exc),
-        }
+        from operations.status_snapshot import unavailable_operations_payload
+
+        payload = unavailable_operations_payload(error=str(exc))
+        payload["running"] = bool(runtime.get("running"))
+        payload["worker_pid"] = runtime.get("worker_pid")
+        payload["heartbeat"] = runtime.get("heartbeat", "")
+        payload["active_lanes"] = dict(runtime.get("active") or {})
+        return payload
 
 
 def _news_payload() -> dict[str, Any]:
@@ -705,7 +704,17 @@ def _news_payload() -> dict[str, Any]:
             stats = store.stats(hours=24)
         finally:
             store.close()
-        latest_refresh = _operations_payload().get("latest", {}).get("NEWS_REFRESH", {})
+        latest_refresh = {}
+        try:
+            from operations.status_snapshot import load_operations_snapshot
+
+            snapshot, _freshness = load_operations_snapshot()
+            if snapshot:
+                latest_refresh = (snapshot.get("latest") or {}).get("NEWS_REFRESH", {}) or {}
+        except Exception:
+            latest_refresh = {}
+        if not latest_refresh:
+            latest_refresh = (_operations_payload().get("latest") or {}).get("NEWS_REFRESH", {}) or {}
         return {
             "available": bool(articles or health),
             "stats": stats,
@@ -880,6 +889,7 @@ def health() -> dict:
             "components": runtime.get("components") or [],
             "history": runtime.get("history") or {},
             "resources": runtime.get("resources") or {},
+            "integrity": runtime.get("integrity") or {},
             "checked_at": runtime.get("checked_at"),
             "live_locked": True,
         })
@@ -966,8 +976,23 @@ def operations_status() -> dict:
 
 @app.get("/api/operations/{operation_id}")
 def operation_status(operation_id: str) -> dict:
+    from operations.status_snapshot import load_operations_snapshot
     from operations.store import OperationStore
-    item = OperationStore(OPS_DB).get(operation_id)
+
+    snapshot, _freshness = load_operations_snapshot()
+    if snapshot:
+        for bucket in ("active", "recent"):
+            for item in snapshot.get(bucket) or []:
+                if str(item.get("operation_id") or "") == operation_id:
+                    return item
+        latest = snapshot.get("latest") or {}
+        for item in latest.values():
+            if isinstance(item, dict) and str(item.get("operation_id") or "") == operation_id:
+                return item
+    try:
+        item = OperationStore.reader(OPS_DB).get(operation_id)
+    except sqlite3.OperationalError as exc:
+        raise HTTPException(status_code=503, detail=f"Operations store unavailable: {exc}") from exc
     if item is None:
         raise HTTPException(status_code=404, detail="Operation not found")
     return item

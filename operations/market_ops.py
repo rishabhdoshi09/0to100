@@ -15,6 +15,8 @@ import json
 import os
 from pathlib import Path
 import signal
+import subprocess
+import sys
 import threading
 import time
 import traceback
@@ -22,7 +24,16 @@ from typing import Any
 
 import sqlite3
 
-from operations.store import BLOCKED, FAILED, PENDING, SUCCEEDED, OperationStore
+from operations.store import (
+    BLOCKED,
+    DEFAULT_RUNNING_LEASE_S,
+    FAILED,
+    KIND_RUNNING_LEASE_S,
+    PENDING,
+    SUCCEEDED,
+    TERMINAL,
+    OperationStore,
+)
 
 MARKET_SCAN = "MARKET_SCAN"
 LONG_TERM_SCAN = "LONG_TERM_SCAN"
@@ -35,6 +46,16 @@ MARKET_REPORT = "MARKET_REPORT"
 DUE_DILIGENCE_DEADLINE_S = 12 * 60
 DUE_DILIGENCE_SYMBOL_S = 90.0
 PIPELINE_SNAPSHOT_EVERY_S = 45.0
+BOUNDED_KINDS = {
+    MARKET_SCAN,
+    LONG_TERM_SCAN,
+    LONG_TERM_REFRESH,
+    NEWS_REFRESH,
+    MARKET_REPORT,
+    FNO_REFRESH,
+    DATA_PREPARE,
+    DUE_DILIGENCE_ACQUIRE,
+}
 
 LANES = {
     MARKET_SCAN: "market_scan",
@@ -121,6 +142,37 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
         os.replace(tmp, path)
     finally:
         tmp.unlink(missing_ok=True)
+
+
+def _kill_process_group(proc: subprocess.Popen) -> None:
+    if proc.poll() is not None:
+        return
+    pid = int(proc.pid or 0)
+    if pid <= 0:
+        return
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+    try:
+        proc.wait(timeout=2.0)
+        return
+    except Exception:
+        pass
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.kill()
+        except Exception:
+            pass
+    try:
+        proc.wait(timeout=2.0)
+    except Exception:
+        pass
 
 
 def _process_rss_mb(pid: int | None = None) -> float | None:
@@ -223,17 +275,28 @@ class MarketOperationsWorker:
         self._active: dict[str, dict[str, Any]] = {}
         self._threads: list[threading.Thread] = []
         self._history_lock = threading.Lock()
+        self._children_lock = threading.Lock()
+        self._children: dict[str, subprocess.Popen] = {}
+        self._cancel_ids: set[str] = set()
         self._last_rss_sample = 0.0
         self._last_pipeline_snapshot = 0.0
 
     def _set_active(self, lane: str, operation: dict[str, Any] | None) -> None:
         with self._active_lock:
             if operation:
+                attempt_started = (
+                    operation.get("attempt_started_at")
+                    or operation.get("started_at")
+                    or time.time()
+                )
                 self._active[lane] = {
                     "operation_id": operation.get("operation_id"),
                     "kind": operation.get("kind"),
-                    "started_at": operation.get("started_at") or time.time(),
+                    "started_at": attempt_started,
+                    "attempt_started_at": attempt_started,
+                    "first_started_at": operation.get("first_started_at"),
                     "attempt": operation.get("attempt"),
+                    "child_pid": operation.get("child_pid"),
                 }
             else:
                 self._active.pop(lane, None)
@@ -262,16 +325,10 @@ class MarketOperationsWorker:
 
     def _heartbeat_loop(self) -> None:
         while not self.stop_event.wait(2.0):
-            try:
-                self.store.recover_dead_running(keep_pid=os.getpid())
-            except Exception:
-                pass
-            try:
-                self.store.recover_stale_running()
-            except Exception:
-                pass
+            self._supervisor_sweep()
             payload = self._runtime_payload(running=True)
             _atomic_json(RUNTIME_PATH, payload)
+            self._persist_operations_status(payload)
             now = time.time()
             if now - self._last_pipeline_snapshot >= PIPELINE_SNAPSHOT_EVERY_S:
                 self._last_pipeline_snapshot = now
@@ -287,6 +344,74 @@ class MarketOperationsWorker:
                     _append_rss_sample(payload.get("rss_mb"))
                 except Exception:
                     pass
+
+    def _supervisor_sweep(self) -> None:
+        """One authoritative recovery + cancel pass. Lanes must not do this."""
+        try:
+            self.store.recover_dead_running(keep_pid=os.getpid())
+        except Exception:
+            pass
+        try:
+            self.store.recover_stale_running(keep_pid=os.getpid())
+        except Exception:
+            pass
+        try:
+            self._cancel_overdue_local()
+        except Exception:
+            pass
+        try:
+            self._clear_ghost_active()
+        except Exception:
+            pass
+
+    def _persist_operations_status(self, runtime: dict[str, Any] | None = None) -> None:
+        try:
+            from operations.status_snapshot import persist_operations_snapshot
+
+            payload = self.store.compact_status(
+                runtime=runtime or self._runtime_payload(running=True),
+                kinds=LANES,
+            )
+            persist_operations_snapshot(payload)
+        except Exception:
+            pass
+
+    def _request_cancel(self, operation_id: str) -> None:
+        op_id = str(operation_id)
+        self._cancel_ids.add(op_id)
+        with self._children_lock:
+            proc = self._children.get(op_id)
+        if proc is not None:
+            _kill_process_group(proc)
+
+    def _cancel_overdue_local(self) -> None:
+        my_pid = os.getpid()
+        for row in self.store.overdue_running():
+            try:
+                owner = int(row.get("worker_pid") or 0)
+            except (TypeError, ValueError):
+                owner = 0
+            if owner and owner != my_pid:
+                continue
+            op_id = str(row.get("operation_id") or "")
+            if op_id:
+                self._request_cancel(op_id)
+
+    def _clear_ghost_active(self) -> None:
+        """If DB says terminal, the operation must not stay in runtime.active."""
+        with self._active_lock:
+            active = {lane: dict(value) for lane, value in self._active.items()}
+        for lane, row in active.items():
+            op_id = str(row.get("operation_id") or "")
+            if not op_id:
+                continue
+            try:
+                record = self.store.get(op_id)
+            except Exception:
+                continue
+            if record and str(record.get("status") or "") in TERMINAL:
+                self._request_cancel(op_id)
+                self._set_active(lane, None)
 
     def _progress(self, operation_id: str, stage: str, message: str,
                   current: int | None = None, total: int | None = None) -> None:
@@ -873,16 +998,93 @@ class MarketOperationsWorker:
             return self._run_data_prepare(operation)
         raise RuntimeError(f"No market-operations handler for {kind}")
 
+    def _attempt_deadline_at(self, operation: dict[str, Any]) -> float:
+        kind = str(operation.get("kind") or "")
+        lease_s = float(KIND_RUNNING_LEASE_S.get(kind, DEFAULT_RUNNING_LEASE_S))
+        started = self.store.attempt_start_epoch(operation)
+        if started <= 0:
+            started = time.time()
+        return started + lease_s
+
+    def _run_bounded(self, operation: dict[str, Any]) -> dict[str, Any]:
+        kind = str(operation.get("kind") or "")
+        inline = str(os.environ.get("QT_INLINE_JOBS") or "").strip() in {"1", "true", "yes"}
+        if inline or kind not in BOUNDED_KINDS:
+            if str(operation.get("operation_id") or "") in self._cancel_ids:
+                raise TimeoutError("operation cancelled before execution")
+            return self._execute(operation)
+        return self._run_child_job(operation)
+
+    def _run_child_job(self, operation: dict[str, Any]) -> dict[str, Any]:
+        operation_id = str(operation["operation_id"])
+        kind = str(operation.get("kind") or "")
+        result_path = Path(self.store.path).parent / f".job-{operation_id}.json"
+        env = os.environ.copy()
+        existing = str(env.get("PYTHONPATH") or "").strip()
+        env["PYTHONPATH"] = os.pathsep.join([str(ROOT)] + ([existing] if existing else []))
+        env["QT_JOB_OPERATION_ID"] = operation_id
+        env["QT_JOB_DB"] = str(self.store.path)
+        env["QT_JOB_RESULT"] = str(result_path)
+        proc = subprocess.Popen(
+            [sys.executable, "-u", "-m", "operations.job_runner"],
+            cwd=str(ROOT),
+            env=env,
+            start_new_session=True,
+        )
+        with self._children_lock:
+            self._children[operation_id] = proc
+        self._set_active(
+            str(operation.get("lane") or LANES.get(kind, "")),
+            {**operation, "child_pid": proc.pid},
+        )
+        deadline_at = self._attempt_deadline_at(operation)
+        timed_out = False
+        try:
+            while True:
+                if operation_id in self._cancel_ids or self.stop_event.is_set() or time.time() >= deadline_at:
+                    timed_out = True
+                    _kill_process_group(proc)
+                    break
+                if proc.poll() is not None:
+                    break
+                remaining = max(0.05, min(0.25, deadline_at - time.time()))
+                time.sleep(remaining)
+            if proc.poll() is None:
+                timed_out = True
+                _kill_process_group(proc)
+        finally:
+            with self._children_lock:
+                self._children.pop(operation_id, None)
+        payload: dict[str, Any] = {}
+        try:
+            payload = json.loads(result_path.read_text(encoding="utf-8"))
+        except Exception:
+            payload = {}
+        try:
+            result_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        if timed_out or proc.returncode in {-9, -15} or operation_id in self._cancel_ids:
+            raise TimeoutError(
+                f"{kind} exceeded its attempt deadline or was cancelled; child terminated"
+            )
+        status = str(payload.get("status") or "")
+        if status == "SUCCEEDED" or (payload.get("ok") and proc.returncode == 0):
+            return dict(payload.get("result") or {})
+        if status == "BLOCKED" or proc.returncode == 2:
+            raise OperationBlocked(
+                str(payload.get("error") or f"{kind} blocked"),
+                code=str(payload.get("error_code") or "BLOCKED"),
+                result=dict(payload.get("result") or {}),
+            )
+        error = str(payload.get("error") or f"{kind} child exited {proc.returncode}")
+        exc = RuntimeError(error)
+        if isinstance(payload.get("result"), dict):
+            exc.result = payload["result"]  # type: ignore[attr-defined]
+        raise exc
+
     def _lane_loop(self, lane: str) -> None:
         while not self.stop_event.is_set():
-            try:
-                self.store.recover_dead_running(keep_pid=os.getpid())
-            except Exception:
-                pass
-            try:
-                self.store.recover_stale_running()
-            except Exception:
-                pass
             try:
                 operation = self.store.lease_next(lane, worker_pid=os.getpid())
             except sqlite3.OperationalError as exc:
@@ -892,72 +1094,78 @@ class MarketOperationsWorker:
             if operation is None:
                 self.stop_event.wait(float(_LANE_IDLE_S.get(lane, _DEFAULT_IDLE_S)))
                 continue
-            self._set_active(lane, operation)
-            operation_id = str(operation["operation_id"])
-            kind = str(operation["kind"])
-            completed_kind = kind
-            started = time.monotonic()
-            _emit("START", f"{kind} · id={operation_id} · lane={lane} · attempt={operation.get('attempt')}")
+            self._run_leased_operation(lane, operation)
+
+    def _run_leased_operation(self, lane: str, operation: dict[str, Any]) -> None:
+        self._set_active(lane, operation)
+        operation_id = str(operation["operation_id"])
+        kind = str(operation["kind"])
+        completed_kind = kind
+        started = time.monotonic()
+        _emit("START", f"{kind} · id={operation_id} · lane={lane} · attempt={operation.get('attempt')}")
+        try:
+            result = self._run_bounded(operation)
+            elapsed = time.monotonic() - started
+            message = f"{kind} completed in {elapsed:.1f}s"
+            self.store.finish(operation_id, status=SUCCEEDED, message=message, result=result)
+            _emit("DONE", f"{kind} · id={operation_id} · {elapsed:.1f}s · {result}")
+        except OperationBlocked as exc:
+            elapsed = time.monotonic() - started
+            self.store.finish(
+                operation_id,
+                status=BLOCKED,
+                message=str(exc),
+                result=exc.result,
+                error_code=exc.code,
+                error_message=str(exc),
+            )
+            _emit("BLOCKED", f"{kind} · id={operation_id} · {elapsed:.1f}s · {exc.code}: {exc}")
+        except Exception as exc:
+            elapsed = time.monotonic() - started
+            partial = getattr(exc, "result", None)
+            error_code = (
+                "DEADLINE_EXCEEDED"
+                if isinstance(exc, TimeoutError) or "deadline" in str(exc).lower()
+                else type(exc).__name__
+            )
+            self.store.finish(
+                operation_id,
+                status=FAILED,
+                message=f"{kind} failed after {elapsed:.1f}s",
+                result=partial if isinstance(partial, dict) else None,
+                error_code=error_code,
+                error_message=str(exc),
+            )
+            _emit("FAILED", f"{kind} · id={operation_id} · {elapsed:.1f}s · {type(exc).__name__}: {exc}")
+            traceback.print_exc()
+        finally:
+            self._cancel_ids.discard(operation_id)
+            self._set_active(lane, None)
+            runtime = self._runtime_payload(running=True)
+            _atomic_json(RUNTIME_PATH, runtime)
+            self._persist_operations_status(runtime)
             try:
-                result = self._execute(operation)
-                elapsed = time.monotonic() - started
-                message = f"{kind} completed in {elapsed:.1f}s"
-                self.store.finish(operation_id, status=SUCCEEDED, message=message, result=result)
-                _emit("DONE", f"{kind} · id={operation_id} · {elapsed:.1f}s · {result}")
-            except OperationBlocked as exc:
-                elapsed = time.monotonic() - started
-                self.store.finish(
-                    operation_id,
-                    status=BLOCKED,
-                    message=str(exc),
-                    result=exc.result,
-                    error_code=exc.code,
-                    error_message=str(exc),
-                )
-                _emit("BLOCKED", f"{kind} · id={operation_id} · {elapsed:.1f}s · {exc.code}: {exc}")
+                from product.desk_pipeline import advance_desk_pipeline
+
+                nxt = advance_desk_pipeline(self.store, requested_by="pipeline")
+                nxt_kind = nxt.get("queued_kind")
+                if nxt_kind and nxt.get("queued_created"):
+                    _emit("QUEUE", f"next desk step {nxt_kind} · {nxt.get('message', '')}")
             except Exception as exc:
-                elapsed = time.monotonic() - started
-                partial = getattr(exc, "result", None)
-                error_code = (
-                    "DEADLINE_EXCEEDED"
-                    if isinstance(exc, TimeoutError) or "deadline" in str(exc).lower()
-                    else type(exc).__name__
-                )
-                self.store.finish(
-                    operation_id,
-                    status=FAILED,
-                    message=f"{kind} failed after {elapsed:.1f}s",
-                    result=partial if isinstance(partial, dict) else None,
-                    error_code=error_code,
-                    error_message=str(exc),
-                )
-                _emit("FAILED", f"{kind} · id={operation_id} · {elapsed:.1f}s · {type(exc).__name__}: {exc}")
-                traceback.print_exc()
-            finally:
-                self._set_active(lane, None)
-                _atomic_json(RUNTIME_PATH, self._runtime_payload(running=True))
+                _emit("INFO", f"desk pipeline advance skipped · {type(exc).__name__}: {exc}")
+            if completed_kind in {MARKET_SCAN, DUE_DILIGENCE_ACQUIRE}:
                 try:
-                    from product.desk_pipeline import advance_desk_pipeline
+                    from product.autonomous_loop import advance_loop
 
-                    nxt = advance_desk_pipeline(self.store, requested_by="pipeline")
-                    kind = nxt.get("queued_kind")
-                    if kind and nxt.get("queued_created"):
-                        _emit("QUEUE", f"next desk step {kind} · {nxt.get('message', '')}")
+                    loop = advance_loop(trigger=str(completed_kind))
+                    _emit(
+                        "LOOP",
+                        f"autonomous loop · candidates={loop.get('candidates_touched')} · "
+                        f"research={((loop.get('research') or {}).get('n_ok'))} · "
+                        f"paper={((loop.get('paper') or {}).get('eligibility'))}",
+                    )
                 except Exception as exc:
-                    _emit("INFO", f"desk pipeline advance skipped · {type(exc).__name__}: {exc}")
-                if completed_kind in {MARKET_SCAN, DUE_DILIGENCE_ACQUIRE}:
-                    try:
-                        from product.autonomous_loop import advance_loop
-
-                        loop = advance_loop(trigger=str(completed_kind))
-                        _emit(
-                            "LOOP",
-                            f"autonomous loop · candidates={loop.get('candidates_touched')} · "
-                            f"research={((loop.get('research') or {}).get('n_ok'))} · "
-                            f"paper={((loop.get('paper') or {}).get('eligibility'))}",
-                        )
-                    except Exception as exc:
-                        _emit("INFO", f"autonomous loop skipped · {type(exc).__name__}: {exc}")
+                    _emit("INFO", f"autonomous loop skipped · {type(exc).__name__}: {exc}")
 
     def _bootstrap(self) -> list[str]:
         try:
@@ -983,6 +1191,7 @@ class MarketOperationsWorker:
         heartbeat.start()
         self._threads = [heartbeat]
         recovered = self.store.recover_orphans()
+        self._persist_operations_status(self._runtime_payload(running=True))
         bootstrap = self._bootstrap()
         _emit(
             "ONLINE",

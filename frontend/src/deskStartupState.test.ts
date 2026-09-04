@@ -5,6 +5,8 @@ describe('desk startup state', () => {
   it('never shows PREPARING DATA when the API is dead or resources are exhausted', () => {
     expect(deskStartupState({ resourceState: 'RESOURCE_EXHAUSTED', dataReady: false })).toBe('RESOURCE_EXHAUSTED')
     expect(deskStartupLabel('RESOURCE_EXHAUSTED')).toBe('RESOURCE EXHAUSTED')
+    expect(deskStartupState({ resourceState: 'RESOURCE_UNKNOWN', dataReady: true })).toBe('RESOURCE_UNKNOWN')
+    expect(deskStartupLabel('RESOURCE_UNKNOWN')).toBe('RESOURCE UNKNOWN')
     expect(deskStartupState({ apiUnresponsive: true, dataReady: false })).toBe('API_UNRESPONSIVE')
     expect(deskStartupState({ operationStuck: true })).toBe('OPERATION_STUCK')
     expect(deskStartupState({ waitingForProvider: true })).toBe('WAITING_FOR_PROVIDER')

@@ -13,7 +13,9 @@ export const fetchHealth = (): Promise<{
   service?: string
   lifecycle?: string
   reason?: string
+  reasons?: string[]
   history?: { current?: boolean }
+  integrity?: { state?: string; detail?: string }
   resources?: {
     state?: string
     reason?: string

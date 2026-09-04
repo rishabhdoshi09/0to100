@@ -19,6 +19,10 @@ DEGRADED = "DEGRADED"
 FAILED = "FAILED"
 RECOVERING = "RECOVERING"
 LIFECYCLES = (STARTING, READY, DEGRADED, FAILED, RECOVERING)
+OPERATION_STATE_DIVERGED = "OPERATION_STATE_DIVERGED"
+OPERATION_DEADLINE_EXCEEDED = "OPERATION_DEADLINE_EXCEEDED"
+OPERATIONS_UNAVAILABLE = "OPERATIONS_UNAVAILABLE"
+INTEGRITY_OK = "OK"
 
 
 def _now() -> str:
@@ -190,44 +194,181 @@ def inspect_runtime(*, api_serving: bool = True) -> dict[str, Any]:
 
     oldest_running = None
     active_age = None
+    try:
+        from operations.store import DEFAULT_RUNNING_LEASE_S, KIND_RUNNING_LEASE_S, TERMINAL
+    except Exception:
+        KIND_RUNNING_LEASE_S = {}
+        DEFAULT_RUNNING_LEASE_S = 30 * 60
+        TERMINAL = frozenset({"SUCCEEDED", "FAILED", "BLOCKED", "CANCELLED"})
+
+    overdue_active: list[dict[str, Any]] = []
     for lane, row in (ops.get("active") or {}).items():
         if not isinstance(row, dict):
             continue
         try:
-            started = float(row.get("started_at") or 0)
+            started = float(row.get("attempt_started_at") or row.get("started_at") or 0)
         except (TypeError, ValueError):
             started = 0.0
         if started <= 0:
             continue
         age = time.time() - started
+        kind = str(row.get("kind") or "")
+        lease_s = float(KIND_RUNNING_LEASE_S.get(kind, DEFAULT_RUNNING_LEASE_S))
+        if age > lease_s:
+            overdue_active.append(
+                {
+                    "lane": lane,
+                    "kind": kind,
+                    "operation_id": row.get("operation_id"),
+                    "age_s": round(age, 1),
+                    "lease_s": lease_s,
+                }
+            )
         if active_age is None or age > active_age:
             active_age = age
             oldest_running = {
                 "lane": lane,
-                "kind": row.get("kind"),
+                "kind": kind,
                 "operation_id": row.get("operation_id"),
                 "age_s": round(age, 1),
             }
 
+    persisted_ops_fd = None
+    try:
+        persisted_ops_fd = int(ops["fd_count"]) if ops.get("fd_count") is not None else None
+    except (TypeError, ValueError):
+        persisted_ops_fd = None
+
     resources = {}
     try:
-        from product.process_resources import RESOURCE_EXHAUSTED, RESOURCE_PRESSURE, resource_diagnostics
+        from product.process_resources import (
+            RESOURCE_EXHAUSTED,
+            RESOURCE_PRESSURE,
+            RESOURCE_UNKNOWN,
+            resource_diagnostics,
+        )
 
         resources = resource_diagnostics(
             api_pid=os.getpid() if api_serving else None,
             market_ops_pid=int(ops_pid) if ops_pid else None,
+            market_ops_fd_count=persisted_ops_fd,
             oldest_running=oldest_running,
             active_operation_age_s=None if active_age is None else round(active_age, 1),
         )
         state = str(resources.get("state") or "")
         if state == RESOURCE_EXHAUSTED:
-            lifecycle = FAILED if lifecycle != FAILED else lifecycle
+            lifecycle = FAILED
             reasons.insert(0, str(resources.get("reason") or "Resource exhausted"))
+        elif state == RESOURCE_UNKNOWN:
+            if lifecycle == READY:
+                lifecycle = DEGRADED
+            reasons.append(str(resources.get("reason") or "File-descriptor usage could not be measured"))
         elif state == RESOURCE_PRESSURE and lifecycle == READY:
             lifecycle = DEGRADED
             reasons.append(str(resources.get("reason") or "Resource pressure"))
     except Exception as exc:
-        resources = {"state": "UNKNOWN", "reason": f"resource probe failed: {exc}"[:200]}
+        resources = {"state": "RESOURCE_UNKNOWN", "reason": f"resource probe failed: {exc}"[:200]}
+        if lifecycle == READY:
+            lifecycle = DEGRADED
+        reasons.append(str(resources["reason"]))
+
+    integrity = {
+        "state": INTEGRITY_OK,
+        "detail": "",
+        "diverged": [],
+        "overdue": overdue_active,
+    }
+    snapshot: dict[str, Any] | None = None
+    snap_freshness = "UNAVAILABLE"
+    try:
+        from operations.status_snapshot import load_operations_snapshot
+
+        snapshot, snap_freshness = load_operations_snapshot()
+    except Exception:
+        snapshot, snap_freshness = None, "UNAVAILABLE"
+
+    db_rows: dict[str, dict[str, Any]] = {}
+    if snapshot:
+        for bucket in ("active", "recent"):
+            for item in snapshot.get(bucket) or []:
+                if isinstance(item, dict) and item.get("operation_id"):
+                    db_rows[str(item["operation_id"])] = item
+        for item in (snapshot.get("latest") or {}).values():
+            if isinstance(item, dict) and item.get("operation_id"):
+                db_rows.setdefault(str(item["operation_id"]), item)
+
+    if not snapshot and (ops.get("active") or overdue_active):
+        try:
+            from operations.store import OperationStore
+
+            jobs_db = Path(os.environ.get("QT_OPS_DB") or (ROOT / "logs" / "market_ops" / "jobs.db"))
+            store = OperationStore.reader(jobs_db)
+            for lane, row in (ops.get("active") or {}).items():
+                if not isinstance(row, dict) or not row.get("operation_id"):
+                    continue
+                rec = store.get(str(row["operation_id"]))
+                if rec:
+                    db_rows[str(row["operation_id"])] = rec
+            snap_freshness = "CURRENT"
+        except Exception:
+            snap_freshness = "UNAVAILABLE"
+
+    diverged: list[dict[str, Any]] = []
+    for lane, row in (ops.get("active") or {}).items():
+        if not isinstance(row, dict):
+            continue
+        op_id = str(row.get("operation_id") or "")
+        if not op_id:
+            continue
+        rec = db_rows.get(op_id)
+        if rec and str(rec.get("status") or "") in TERMINAL:
+            diverged.append(
+                {
+                    "lane": lane,
+                    "operation_id": op_id,
+                    "kind": row.get("kind"),
+                    "runtime_status": "ACTIVE",
+                    "db_status": rec.get("status"),
+                }
+            )
+
+    if diverged:
+        integrity["state"] = OPERATION_STATE_DIVERGED
+        integrity["diverged"] = diverged
+        integrity["detail"] = "runtime.active contains an operation the store already marked terminal"
+        reasons.insert(0, OPERATION_STATE_DIVERGED)
+        lifecycle = DEGRADED if lifecycle == READY else lifecycle
+        if lifecycle == STARTING and ops_alive:
+            lifecycle = DEGRADED
+    elif overdue_active:
+        integrity["state"] = OPERATION_DEADLINE_EXCEEDED
+        integrity["detail"] = "an active operation exceeded its declared attempt deadline"
+        reasons.insert(0, OPERATION_DEADLINE_EXCEEDED)
+        lifecycle = DEGRADED if lifecycle == READY else lifecycle
+        if lifecycle == STARTING and ops_alive:
+            lifecycle = DEGRADED
+    elif snap_freshness == "UNAVAILABLE" and ops_alive:
+        integrity["state"] = OPERATIONS_UNAVAILABLE
+        integrity["detail"] = "operations status store is unavailable beyond a bounded probe"
+        reasons.append(OPERATIONS_UNAVAILABLE)
+        if lifecycle == READY:
+            lifecycle = DEGRADED
+
+    if lifecycle == READY and (
+        integrity["state"] != INTEGRITY_OK
+        or str(resources.get("state") or "") in {"RESOURCE_EXHAUSTED", "RESOURCE_UNKNOWN", "UNKNOWN"}
+    ):
+        lifecycle = DEGRADED
+
+    components.append(
+        _component(
+            "operations_integrity",
+            READY if integrity["state"] == INTEGRITY_OK else (
+                FAILED if integrity["state"] == OPERATION_STATE_DIVERGED else DEGRADED
+            ),
+            detail=integrity.get("detail") or integrity["state"],
+        )
+    )
 
     return {
         "schema_version": 1,
@@ -247,5 +388,6 @@ def inspect_runtime(*, api_serving: bool = True) -> dict[str, Any]:
             "reason_code": history.get("reason_code") or "",
         },
         "resources": resources,
+        "integrity": integrity,
         "live_locked": True,
     }

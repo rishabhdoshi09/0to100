@@ -4,6 +4,7 @@ export const DESK_STATES = [
   'OPERATION_STUCK',
   'API_UNRESPONSIVE',
   'RESOURCE_EXHAUSTED',
+  'RESOURCE_UNKNOWN',
   'HISTORY_STALE',
   'READY',
 ] as const
@@ -23,6 +24,7 @@ export type DeskStartupInput = {
 export function deskStartupState(input: DeskStartupInput): DeskStartupState {
   const resource = String(input.resourceState || '').toUpperCase()
   if (resource === 'RESOURCE_EXHAUSTED') return 'RESOURCE_EXHAUSTED'
+  if (resource === 'RESOURCE_UNKNOWN') return 'RESOURCE_UNKNOWN'
   if (input.apiUnresponsive) return 'API_UNRESPONSIVE'
   if (input.operationStuck) return 'OPERATION_STUCK'
   if (input.waitingForProvider) return 'WAITING_FOR_PROVIDER'
@@ -43,6 +45,8 @@ export function deskStartupLabel(state: DeskStartupState): string {
       return 'API UNRESPONSIVE'
     case 'RESOURCE_EXHAUSTED':
       return 'RESOURCE EXHAUSTED'
+    case 'RESOURCE_UNKNOWN':
+      return 'RESOURCE UNKNOWN'
     case 'HISTORY_STALE':
       return 'HISTORY STALE'
     default:
@@ -54,6 +58,8 @@ export function deskStartupRecovery(state: DeskStartupState): string {
   switch (state) {
     case 'RESOURCE_EXHAUSTED':
       return 'Restart the terminal API and market-ops worker. Do not keep polling until file descriptors drop.'
+    case 'RESOURCE_UNKNOWN':
+      return 'File-descriptor usage could not be measured. Health cannot call this READY.'
     case 'API_UNRESPONSIVE':
       return 'The market API is not answering. Start it with bash scripts/run_quantterm_complete.sh.'
     case 'OPERATION_STUCK':

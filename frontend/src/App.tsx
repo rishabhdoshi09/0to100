@@ -384,10 +384,13 @@ function App() {
         const oldestAge = Number(payload.resources?.active_operation_age_s || 0)
         const next = deskStartupState({
           resourceState: resource,
-          operationStuck: oldestAge >= 15 * 60,
+          operationStuck: oldestAge >= 15 * 60
+            || /DIVERGED|DEADLINE|UNAVAILABLE/i.test(
+              `${payload.reason || ''} ${(payload.reasons || []).join(' ')} ${payload.integrity?.state || ''}`,
+            ),
           waitingForProvider: /provider|cooldown/i.test(String(payload.reason || payload.resources?.reason || '')),
           historyStale: payload.history?.current === false && dashboardHasWork(dashboard),
-          dataReady: dashboard.data.ready,
+          dataReady: Boolean(dashboard.data.ready) && payload.lifecycle === 'READY',
           hasSavedData: dashboardHasWork(dashboard),
         })
         setStartupState(next)
