@@ -177,11 +177,18 @@ class JobStore:
                     "SELECT * FROM jobs WHERE status=? AND lease_expires_at IS NOT NULL "
                     "AND lease_expires_at < ? ORDER BY scheduled_for LIMIT 1", (RUNNING, now)).fetchone()
                 if row is None:
-                    # Poll-wait jobs (background data refresh / market op) stay due,
-                    # but must not starve a real pending scan, paper cycle, or learning job.
+                    # Fresh market work is time-sensitive. A long post-market outcome/learning
+                    # job must not get the first lease merely because it is marked critical and
+                    # then make scan/news wait minutes. This is ordering only: it does not skip,
+                    # duplicate, or weaken any critical job.
+                    # Poll-wait jobs remain lowest priority so background polling cannot starve
+                    # real work either.
                     row = self._db.execute(
                         "SELECT * FROM jobs WHERE status=? AND scheduled_for<=? "
-                        "ORDER BY CASE WHEN error_code IN "
+                        "ORDER BY CASE job_type "
+                        "WHEN 'market_scan' THEN 40 WHEN 'news_refresh' THEN 30 "
+                        "WHEN 'paper_cycle' THEN 20 ELSE 0 END DESC, "
+                        "CASE WHEN error_code IN "
                         "('DATA_REFRESH_IN_PROGRESS','MARKET_OP_IN_PROGRESS','LONG_TERM_OP_IN_PROGRESS') "
                         "THEN 0 ELSE 1 END DESC, critical DESC, scheduled_for, created_at LIMIT 1",
                         (PENDING, now)).fetchone()
