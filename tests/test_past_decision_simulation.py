@@ -358,17 +358,32 @@ def test_ambiguous_same_day_requires_decision_id(tmp_path, monkeypatch):
     assert chosen["decision_id"] == "2025-07-15|RELIANCE|AVOID|LOW_QUALITY_SETUP|fixture-2"
 
 
+def _lookahead_replay(*_a, **_k):
+    return {
+        "status": SUCCEEDED,
+        "decision": "WAIT",
+        "reason": "LOOKAHEAD: reconstructed decision saw a bar after T",
+        "pit": {"future_evidence_used": True, "max_bar_date": "2025-08-01"},
+    }
+
+
+def _assert_pit_integrity_failed(payload):
+    assert payload["status"] != SUCCEEDED
+    assert payload["status"] == PIT_INTEGRITY_FAILED
+    assert payload["available"] is False
+    assert payload["counterfactual_trustworthy"] is False
+    assert payload["pit_status"] == PIT_INTEGRITY_FAILED
+    assert payload["evidence_at_t"]["future_bars_used_for_decision"] is True
+    assert payload["evidence_at_t"]["pit_status"] == PIT_INTEGRITY_FAILED
+    assert payload["evidence_at_t"]["reconstructed_engine_decision"]["pit"]["future_evidence_used"] is True
+    assert payload["simulated"]["action"] == UNAVAILABLE
+    assert payload["subsequent_outcome"]["simulated"]["status"] != "COMPUTED"
+    assert payload["subsequent_outcome"]["simulated"]["trustworthy"] is False
+
+
 def test_lookahead_replay_cannot_report_clean_success(tmp_path, monkeypatch):
     _journal(tmp_path, monkeypatch)
-    monkeypatch.setattr(
-        "product.decision_simulator._replay_at_t",
-        lambda *_a, **_k: {
-            "status": SUCCEEDED,
-            "decision": "WAIT",
-            "reason": "reconstructed",
-            "pit": {"future_evidence_used": True, "max_bar_date": "2025-08-01"},
-        },
-    )
+    monkeypatch.setattr("product.decision_simulator._replay_at_t", _lookahead_replay)
     out = simulate_past_decision(
         symbol="RELIANCE",
         as_of="2025-07-15",
@@ -376,28 +391,41 @@ def test_lookahead_replay_cannot_report_clean_success(tmp_path, monkeypatch):
         replay_engine=True,
         ohlcv_fn=lambda _s: _bars("2025-07-15"),
     )
-    assert out["status"] == PIT_INTEGRITY_FAILED
-    assert out["status"] != SUCCEEDED
-    assert out["available"] is False
-    assert out["counterfactual_trustworthy"] is False
-    assert out["pit_status"] == PIT_INTEGRITY_FAILED
-    assert out["evidence_at_t"]["future_bars_used_for_decision"] is True
-    assert out["evidence_at_t"]["pit_status"] == PIT_INTEGRITY_FAILED
-    assert out["evidence_at_t"]["reconstructed_engine_decision"]["pit"]["future_evidence_used"] is True
-    assert out["subsequent_outcome"]["simulated"]["status"] != "COMPUTED"
-    assert out["subsequent_outcome"]["simulated"]["trustworthy"] is False
-    # Canonical CI has no official bhavcopy. The API must still hit the same
-    # fixture bars + lookahead mock, or it would skip replay and look clean.
-    monkeypatch.setattr(
-        "product.decision_simulator.simulate_past_decision",
-        lambda **kwargs: simulate_past_decision(
-            ohlcv_fn=lambda _s: _bars("2025-07-15"),
-            replay_engine=True,
-            **{k: v for k, v in kwargs.items() if k not in {"ohlcv_fn", "replay_engine"}},
-        ),
-    )
+    _assert_pit_integrity_failed(out)
+    # Real GET/POST: no injected ohlcv_fn, no wrapping of simulate_past_decision.
     api_payload = api.decision_simulator_get(symbol="RELIANCE", as_of="2025-07-15", alternative="BUY")
-    assert api_payload["status"] != SUCCEEDED
-    assert api_payload["status"] == PIT_INTEGRITY_FAILED
-    assert api_payload["evidence_at_t"]["future_bars_used_for_decision"] is True
-    assert api_payload["counterfactual_trustworthy"] is False
+    _assert_pit_integrity_failed(api_payload)
+    posted = api.decision_simulator_run(symbol="RELIANCE", as_of="2025-07-15", alternative="BUY")
+    _assert_pit_integrity_failed(posted)
+
+
+def test_api_lookahead_fails_closed_without_official_bars(tmp_path, monkeypatch):
+    """Canonical CI has no bhavcopy. Reconstruction must still be the PIT authority.
+
+    GitHub `python -m pytest` failed here: GET skipped `_replay_at_t` when
+    close-at-T was missing, then reported SUCCEEDED from the journal match.
+    """
+    _journal(tmp_path, monkeypatch)
+    calls: list[tuple] = []
+
+    def replay(symbol, as_of, **kwargs):
+        calls.append((symbol, as_of, kwargs.get("ohlcv_fn")))
+        return _lookahead_replay(symbol, as_of, **kwargs)
+
+    monkeypatch.setattr("product.decision_simulator._replay_at_t", replay)
+    missing_bars = simulate_past_decision(
+        symbol="RELIANCE",
+        as_of="2025-07-15",
+        alternative="BUY",
+        replay_engine=True,
+        ohlcv_fn=lambda _s: None,
+    )
+    _assert_pit_integrity_failed(missing_bars)
+    assert calls, "replay must run even when official close at T is missing"
+    # Do not wrap simulate_past_decision and do not inject fixture bars.
+    got = api.decision_simulator_get(symbol="RELIANCE", as_of="2025-07-15", alternative="BUY")
+    posted = api.decision_simulator_run(symbol="RELIANCE", as_of="2025-07-15", alternative="BUY")
+    _assert_pit_integrity_failed(got)
+    _assert_pit_integrity_failed(posted)
+    assert got["fingerprint"] == posted["fingerprint"]
+    assert len(calls) >= 3

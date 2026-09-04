@@ -1012,18 +1012,15 @@ def simulate_past_decision(
             "decision": UNAVAILABLE,
             "reason": "Engine replay skipped" if not replay_engine else "Engine replay not run",
         }
-        if replay_engine and close_t is not None:
+        if replay_engine:
+            # Reconstruction is the PIT authority for every caller, including
+            # GET/POST which do not inject bars. Missing official close at T is
+            # a reconstruction input, not a license to skip integrity.
             reconstructed = _replay_at_t(
                 name, session, ohlcv_fn=ohlcv_fn, analyzer=analyzer, decide_fn=decide_fn,
             )
             if reconstructed.get("status") == FAILED:
                 warnings.append(str(reconstructed.get("reason") or "Reconstructed decision failed"))
-        elif replay_engine and close_t is None:
-            reconstructed = {
-                "status": UNAVAILABLE,
-                "decision": UNAVAILABLE,
-                "reason": "Cannot replay committee without official bars at T",
-            }
 
         persisted_entry = _num(
             (historical or {}).get("entry") if historical else None
@@ -1050,13 +1047,21 @@ def simulate_past_decision(
         reconstructed_pit = dict(reconstructed.get("pit") or {})
         lookahead = bool(
             reconstructed_pit.get("future_evidence_used")
-            or reconstructed.get("status") == FAILED
-            and "LOOKAHEAD" in str(reconstructed.get("reason") or "").upper()
+            or (
+                reconstructed.get("status") == FAILED
+                and "LOOKAHEAD" in str(reconstructed.get("reason") or "").upper()
+            )
             or any("LOOKAHEAD" in str(item).upper() for item in bar_warnings)
         )
-        pit_status = PIT_INTEGRITY_FAILED if lookahead else (
-            "PIT_OK" if historical else UNAVAILABLE
-        )
+        if lookahead:
+            pit_status = PIT_INTEGRITY_FAILED
+        elif not replay_engine:
+            pit_status = "PIT_OK" if historical else UNAVAILABLE
+        elif reconstructed.get("status") == SUCCEEDED:
+            pit_status = "PIT_OK" if historical else UNAVAILABLE
+        else:
+            # Replay was requested but produced no PIT-clean verdict.
+            pit_status = UNAVAILABLE
         if lookahead:
             warnings.append("PIT look-ahead violation: counterfactual is not trustworthy")
 
