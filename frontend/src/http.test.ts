@@ -41,4 +41,15 @@ describe('fetchJson', () => {
     expect(seen[0].aborted).toBe(false)
     vi.unstubAllGlobals()
   })
+
+  it('releases the timeout as soon as a successful request finishes', async () => {
+    const clearSpy = vi.spyOn(globalThis, 'clearTimeout')
+    vi.stubGlobal('fetch', () => Promise.resolve(new Response('{"ok":true}', { status: 200 })))
+
+    await expect(fetchJson<{ ok: boolean }>('/api/health', { timeoutMs: 30_000, dedupe: false })).resolves.toEqual({ ok: true })
+
+    expect(clearSpy).toHaveBeenCalled()
+    clearSpy.mockRestore()
+    vi.unstubAllGlobals()
+  })
 })
