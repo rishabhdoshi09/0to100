@@ -895,6 +895,8 @@ export type HomeOperatingSystem = {
     reasons?: string[]
     checked_at?: string
     components?: Array<{ name?: string; status?: string; detail?: string }>
+    integrity?: { state?: string; detail?: string }
+    resources?: { state?: string; reason?: string }
   }
   broker?: {
     status?: string

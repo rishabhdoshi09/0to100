@@ -71,6 +71,23 @@ def _component(name: str, status: str, *, detail: str = "", pid: Any = None) -> 
     }
 
 
+def lifecycle_reason(lifecycle: str, reasons: list[str], components: list[dict[str, Any]]) -> str:
+    """Prefer a concrete blocker over the generic STARTING fallback."""
+    for item in reasons:
+        text = str(item or "").strip()
+        if text:
+            return text
+    if lifecycle == READY:
+        return "Required services are alive and official history is current"
+    for row in components:
+        status = str(row.get("status") or "")
+        if status and status != READY:
+            detail = str(row.get("detail") or "").strip()
+            name = str(row.get("name") or "component")
+            return f"{name} is {status}: {detail}" if detail else f"{name} is {status}"
+    return "Desk is still coming up"
+
+
 def inspect_runtime(*, api_serving: bool = True) -> dict[str, Any]:
     """Return STARTING / READY / DEGRADED / FAILED / RECOVERING from live checks."""
     ops_path = Path(os.environ.get("QT_MARKET_OPS_RUNTIME") or (ROOT / "logs" / "market_ops" / "runtime.json"))
@@ -374,11 +391,7 @@ def inspect_runtime(*, api_serving: bool = True) -> dict[str, Any]:
         "schema_version": 1,
         "lifecycle": lifecycle,
         "checked_at": _now(),
-        "reason": reasons[0] if reasons else (
-            "Required services are alive and official history is current"
-            if lifecycle == READY
-            else "Desk is still coming up"
-        ),
+        "reason": lifecycle_reason(lifecycle, reasons, components),
         "reasons": reasons,
         "components": components,
         "history": {

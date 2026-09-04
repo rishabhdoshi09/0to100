@@ -615,21 +615,25 @@ class OperationStore:
             item = self.latest(kind)
             if item:
                 latest[kind] = item
-        return {
-            "available": True,
-            "freshness": freshness,
-            "generated_at": time.time(),
-            "running": bool(runtime.get("process_running") or runtime.get("running")),
-            "worker_pid": runtime.get("worker_pid"),
-            "heartbeat": runtime.get("heartbeat", ""),
-            "active_lanes": dict(runtime.get("active") or {}),
-            "counts": self.counts(),
-            "active": active,
-            "recent": recent,
-            "latest": latest,
-            "fd_count": runtime.get("fd_count"),
-            "overdue": self.overdue_running(),
-        }
+        from operations.status_snapshot import slim_operations_status
+
+        return slim_operations_status(
+            {
+                "available": True,
+                "freshness": freshness,
+                "generated_at": time.time(),
+                "running": bool(runtime.get("process_running") or runtime.get("running")),
+                "worker_pid": runtime.get("worker_pid"),
+                "heartbeat": runtime.get("heartbeat", ""),
+                "active_lanes": dict(runtime.get("active") or {}),
+                "counts": self.counts(),
+                "active": active,
+                "recent": recent,
+                "latest": latest,
+                "fd_count": runtime.get("fd_count"),
+                "overdue": self.overdue_running(),
+            }
+        )
 
     def oldest_running(self) -> dict[str, Any] | None:
         with self._connect() as con:

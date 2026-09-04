@@ -60,6 +60,12 @@ def test_terminal_uses_reco_desk_not_hud_chrome():
     assert "PREPARING DATA" in startup
     assert "RESOURCE EXHAUSTED" in startup
     assert "RESOURCE UNKNOWN" in startup
+    assert "STARTING" in startup
+    assert "DEGRADED" in startup
+    assert "deskStartupReason" in startup
+    app = (ROOT / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
+    assert "payload.lifecycle === 'READY'" not in app
+    assert "deskStartupReason" in app
     assert "KeepPage" in app
     assert "quantterm-nav" in app or "readDeskNav" in app
     assert "sessionMemory" in app or "readSessionJson" in app

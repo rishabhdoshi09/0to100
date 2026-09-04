@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { deskStartupLabel, deskStartupState } from './deskStartupState'
+import { deskStartupLabel, deskStartupReason, deskStartupState } from './deskStartupState'
 
 describe('desk startup state', () => {
   it('never shows PREPARING DATA when the API is dead or resources are exhausted', () => {
@@ -23,5 +23,49 @@ describe('desk startup state', () => {
     })
     expect(state).toBe('WAITING_FOR_PROVIDER')
     expect(state).not.toBe('PREPARING_DATA')
+  })
+
+  it('does not hide a usable saved desk behind generic PREPARING DATA when health is not READY', () => {
+    expect(deskStartupState({
+      lifecycle: 'STARTING',
+      hasSavedData: true,
+      dataReady: true,
+    })).toBe('STARTING')
+    expect(deskStartupLabel('STARTING')).toBe('STARTING')
+    expect(deskStartupState({
+      lifecycle: 'DEGRADED',
+      hasSavedData: true,
+      dataReady: true,
+    })).toBe('DEGRADED')
+    expect(deskStartupState({
+      lifecycle: 'STARTING',
+      hasSavedData: false,
+      dataReady: false,
+    })).toBe('PREPARING_DATA')
+    expect(deskStartupState({
+      lifecycle: 'READY',
+      dataReady: true,
+      hasSavedData: true,
+    })).toBe('READY')
+    expect(deskStartupState({
+      dataReady: true,
+      hasSavedData: true,
+    })).toBe('READY')
+  })
+
+  it('shows the real health blocker instead of Desk is still coming up', () => {
+    const reason = deskStartupReason({
+      lifecycle: 'STARTING',
+      reason: 'Desk is still coming up',
+      reasons: [],
+      components: [
+        { name: 'official_history', status: 'STARTING', detail: 'HISTORY_STALE' },
+        { name: 'api', status: 'READY', detail: 'Terminal API is serving' },
+      ],
+      state: 'STARTING',
+    })
+    expect(reason).toContain('official_history')
+    expect(reason).toContain('HISTORY_STALE')
+    expect(reason).not.toMatch(/desk is still coming up/i)
   })
 })

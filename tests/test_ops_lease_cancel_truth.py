@@ -19,7 +19,8 @@ from product.process_resources import (
     count_open_fds,
     resource_diagnostics,
 )
-from product.runtime_lifecycle import OPERATION_STATE_DIVERGED, READY, inspect_runtime
+from operations.status_snapshot import load_operations_snapshot, persist_operations_snapshot, slim_operations_status
+from product.runtime_lifecycle import OPERATION_STATE_DIVERGED, READY, STARTING, inspect_runtime, lifecycle_reason
 
 
 def test_retry_resets_attempt_deadline(tmp_path: Path):
@@ -302,3 +303,62 @@ def test_no_fd_growth_after_timeout_cancellation(tmp_path: Path, monkeypatch):
     after = count_open_fds()
     assert after is not None
     assert after - warm <= 8
+
+
+def test_compact_status_strips_embedded_scan_payload(tmp_path: Path, monkeypatch):
+    store = OperationStore(tmp_path / "jobs.db")
+    item, _ = store.enqueue("MARKET_SCAN", lane="market_scan")
+    leased = store.lease_next("market_scan", worker_pid=os.getpid())
+    assert leased is not None
+    fat_records = [{"symbol": f"S{i}", "why": "x" * 80} for i in range(400)]
+    store.finish(
+        item["operation_id"],
+        status=SUCCEEDED,
+        message="done",
+        result={
+            "records": 400,
+            "summary": {"qualified": 12},
+            "payload": {"records": fat_records, "universe": list(range(2000))},
+        },
+    )
+    compact = store.compact_status(kinds=["MARKET_SCAN"])
+    latest = compact["latest"]["MARKET_SCAN"]
+    result = latest["result"]
+    assert result["records"] == 400
+    assert result["summary"]["qualified"] == 12
+    assert result["payload"]["n_keys"] == 2
+    encoded = json.dumps(compact)
+    assert len(encoded) < 20_000
+    assert "S199" not in encoded
+    snap = tmp_path / "operations_status.json"
+    persist_operations_snapshot(compact, path=snap)
+    loaded, freshness = load_operations_snapshot(path=snap)
+    assert freshness == "CURRENT"
+    assert loaded["latest"]["MARKET_SCAN"]["result"]["records"] == 400
+    assert "S199" not in json.dumps(loaded)
+
+
+def test_lifecycle_reason_cites_the_blocker_not_generic_starting():
+    components = [
+        {"name": "api", "status": READY, "detail": "serving"},
+        {"name": "official_history", "status": STARTING, "detail": "HISTORY_STALE"},
+    ]
+    assert "official_history" in lifecycle_reason(STARTING, [], components)
+    assert "HISTORY_STALE" in lifecycle_reason(STARTING, [], components)
+    assert lifecycle_reason(STARTING, [], components) != "Desk is still coming up"
+    assert lifecycle_reason(READY, [], components).startswith("Required services")
+    assert lifecycle_reason(STARTING, ["OPERATION_STATE_DIVERGED"], components) == "OPERATION_STATE_DIVERGED"
+    slim = slim_operations_status(
+        {
+            "recent": [
+                {
+                    "kind": "MARKET_SCAN",
+                    "result": {"payload": {"records": [{"symbol": "X"}] * 50}, "records": 50},
+                }
+            ],
+            "latest": {},
+            "active": [],
+        }
+    )
+    assert slim["recent"][0]["result"]["records"] == 50
+    assert slim["recent"][0]["result"]["payload"]["n_keys"] == 1

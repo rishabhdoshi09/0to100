@@ -25,11 +25,66 @@ def snapshot_path() -> Path:
     return Path(raw) if raw else DEFAULT_PATH
 
 
+FAT_BLOB_KEYS = {"payload", "articles", "downloads", "texts", "raw", "rows"}
+_KEEP_NESTED = {"summary", "history", "telegram", "long_term_overlay"}
+
+
+def slim_result_value(key: str, value: Any) -> Any:
+    """Keep status/summary fields; drop embedded scan/filing blobs from GET payloads."""
+    if key in FAT_BLOB_KEYS and isinstance(value, (dict, list)):
+        if isinstance(value, list):
+            return len(value)
+        return {
+            "n_keys": len(value),
+            "keys": sorted(str(item) for item in list(value.keys())[:16]),
+        }
+    if key == "records" and isinstance(value, list):
+        return len(value)
+    if isinstance(value, list) and len(value) > 24:
+        return {"n": len(value)}
+    if isinstance(value, dict) and key not in _KEEP_NESTED:
+        encoded = json.dumps(value, default=str)
+        if len(encoded) > 4000:
+            return {
+                "n_keys": len(value),
+                "keys": sorted(str(item) for item in list(value.keys())[:16]),
+            }
+    return value
+
+
+def slim_operation_record(row: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(row, dict):
+        return {}
+    out = dict(row)
+    payload = out.get("payload")
+    if isinstance(payload, dict):
+        out["payload"] = {str(key): slim_result_value(str(key), item) for key, item in payload.items()}
+    result = out.get("result")
+    if isinstance(result, dict):
+        out["result"] = {str(key): slim_result_value(str(key), item) for key, item in result.items()}
+    return out
+
+
+def slim_operations_status(payload: dict[str, Any]) -> dict[str, Any]:
+    out = dict(payload)
+    for key in ("active", "recent"):
+        rows = out.get(key)
+        if isinstance(rows, list):
+            out[key] = [slim_operation_record(item) if isinstance(item, dict) else item for item in rows]
+    latest = out.get("latest")
+    if isinstance(latest, dict):
+        out["latest"] = {
+            str(key): slim_operation_record(item) if isinstance(item, dict) else item
+            for key, item in latest.items()
+        }
+    return out
+
+
 def persist_operations_snapshot(payload: dict[str, Any], *, path: Path | None = None) -> Path:
     dest = path or snapshot_path()
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(f".{dest.name}.{os.getpid()}.{time.time_ns()}.tmp")
-    body = dict(payload)
+    body = slim_operations_status(dict(payload))
     body.setdefault("generated_at", time.time())
     body.setdefault("freshness", CURRENT)
     try:
@@ -64,7 +119,7 @@ def load_operations_snapshot(
         freshness = STALE
     else:
         freshness = STALE
-    payload = dict(payload)
+    payload = slim_operations_status(dict(payload))
     payload["freshness"] = freshness
     payload["snapshot_age_s"] = round(age, 3)
     payload["available"] = True

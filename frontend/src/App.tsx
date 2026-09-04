@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchChart, fetchDashboard, fetchHealth, sendControl } from './api'
-import { deskStartupLabel, deskStartupRecovery, deskStartupState, type DeskStartupState } from './deskStartupState'
+import { deskStartupLabel, deskStartupReason, deskStartupRecovery, deskStartupState, type DeskStartupState } from './deskStartupState'
 import { createPollGate } from './pollGate'
 import { deskRefreshBanner } from './deskBanner'
 import {
@@ -42,6 +42,50 @@ import {
   writeSessionJson,
 } from './sessionMemory'
 import type { ChartBar, ControlName, DashboardPayload, OperationRecord } from './types'
+
+const FAT_RESULT_KEYS = new Set(['payload', 'articles', 'downloads', 'texts', 'raw', 'rows'])
+
+function slimResultBlob(result: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (!result) return result
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(result)) {
+    if (FAT_RESULT_KEYS.has(key) && value && typeof value === 'object') {
+      if (Array.isArray(value)) {
+        out[key] = value.length
+      } else {
+        const keys = Object.keys(value as Record<string, unknown>)
+        out[key] = { n_keys: keys.length, keys: keys.slice(0, 16) }
+      }
+      continue
+    }
+    if (Array.isArray(value) && value.length > 24) {
+      out[key] = { n: value.length }
+      continue
+    }
+    out[key] = value
+  }
+  return out
+}
+
+function slimOperationRecord(row: OperationRecord): OperationRecord {
+  return {
+    ...row,
+    result: slimResultBlob(row.result) as OperationRecord['result'],
+    payload: slimResultBlob(row.payload) as OperationRecord['payload'],
+  }
+}
+
+function slimOperations(ops: DashboardPayload['operations']): DashboardPayload['operations'] {
+  const latest = Object.fromEntries(
+    Object.entries(ops.latest || {}).map(([key, row]) => [key, slimOperationRecord(row)]),
+  )
+  return {
+    ...ops,
+    active: (ops.active || []).map(slimOperationRecord),
+    recent: (ops.recent || []).map(slimOperationRecord),
+    latest,
+  }
+}
 import type { ReactNode } from 'react'
 
 function activeSeed(dashboard: DashboardPayload, kind: string): OperationRecord | null {
@@ -176,6 +220,7 @@ function dashboardHasWork(payload: DashboardPayload): boolean {
 function slimDashboard(payload: DashboardPayload): DashboardPayload {
   return {
     ...payload,
+    operations: slimOperations(payload.operations),
     scan: { ...payload.scan, records: payload.scan.records.slice(0, 48) },
     long_term: { ...payload.long_term, records: payload.long_term.records.slice(0, 48) },
     news: { ...payload.news, articles: payload.news.articles.slice(0, 24) },
@@ -300,7 +345,10 @@ function App() {
   const refresh = useCallback(async () => {
     if (!refreshGate.current.tryEnter()) return
     try {
-      const payload = await fetchDashboard()
+      const payload = {
+        ...await fetchDashboard(),
+      }
+      payload.operations = slimOperations(payload.operations)
       setDashboard((prev) => {
         const next = dashboardHasWork(prev) && !dashboardHasWork(payload)
           ? {
@@ -384,17 +432,25 @@ function App() {
         const oldestAge = Number(payload.resources?.active_operation_age_s || 0)
         const next = deskStartupState({
           resourceState: resource,
+          lifecycle: payload.lifecycle,
           operationStuck: oldestAge >= 15 * 60
             || /DIVERGED|DEADLINE|UNAVAILABLE/i.test(
               `${payload.reason || ''} ${(payload.reasons || []).join(' ')} ${payload.integrity?.state || ''}`,
             ),
           waitingForProvider: /provider|cooldown/i.test(String(payload.reason || payload.resources?.reason || '')),
           historyStale: payload.history?.current === false && dashboardHasWork(dashboard),
-          dataReady: Boolean(dashboard.data.ready) && payload.lifecycle === 'READY',
+          dataReady: Boolean(dashboard.data.ready),
           hasSavedData: dashboardHasWork(dashboard),
         })
         setStartupState(next)
-        setHealthReason(String(payload.resources?.reason || payload.reason || deskStartupRecovery(next)))
+        setHealthReason(deskStartupReason({
+          lifecycle: payload.lifecycle,
+          reason: payload.reason,
+          reasons: payload.reasons,
+          components: payload.components,
+          resourceReason: payload.resources?.reason,
+          state: next,
+        }))
       } catch {
         healthGate.current.fail(1500, 30_000)
         const next = deskStartupState({
@@ -671,7 +727,7 @@ function App() {
             <DisplayDepthToggle depth={depth} onChange={setDepth} />
             <button type="button" className="experience-help-trigger" onClick={() => setHelpOpen(true)}>What is this?</button>
             <span
-              className={startupState === 'READY' ? 'live-pill' : (startupState === 'PREPARING_DATA' || startupState === 'WAITING_FOR_PROVIDER' ? 'work-pill' : 'offline-pill')}
+              className={startupState === 'READY' ? 'live-pill' : (startupState === 'PREPARING_DATA' || startupState === 'WAITING_FOR_PROVIDER' || startupState === 'STARTING' ? 'work-pill' : 'offline-pill')}
               title={healthReason || deskStartupRecovery(startupState)}
             >
               <i /> {deskStartupLabel(startupState)}
