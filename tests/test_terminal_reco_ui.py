@@ -55,7 +55,10 @@ def test_terminal_uses_reco_desk_not_hud_chrome():
     assert "reco-desk" in app
     assert "hud-shell" not in app
     assert "DATA INCOMPLETE" not in app
-    assert "PREPARING DATA" in app
+    assert "deskStartupLabel" in app
+    startup = (ROOT / "frontend" / "src" / "deskStartupState.ts").read_text(encoding="utf-8")
+    assert "PREPARING DATA" in startup
+    assert "RESOURCE EXHAUSTED" in startup
     assert "KeepPage" in app
     assert "quantterm-nav" in app or "readDeskNav" in app
     assert "sessionMemory" in app or "readSessionJson" in app

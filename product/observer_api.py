@@ -225,10 +225,9 @@ def radar_home_workspace() -> dict[str, Any]:
             "detail": str(exc),
         }
     try:
-        from operations.store import OperationStore
-        from product.desk_pipeline import describe_desk_pipeline
+        from product.desk_pipeline import load_desk_pipeline_status
 
-        home["desk_pipeline"] = describe_desk_pipeline(OperationStore(core.OPS_DB))
+        home["desk_pipeline"] = load_desk_pipeline_status()
     except Exception:
         home["desk_pipeline"] = None
     try:

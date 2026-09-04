@@ -188,6 +188,47 @@ def inspect_runtime(*, api_serving: bool = True) -> dict[str, Any]:
         if not report_listen:
             reasons.append("Research-report API is not listening")
 
+    oldest_running = None
+    active_age = None
+    for lane, row in (ops.get("active") or {}).items():
+        if not isinstance(row, dict):
+            continue
+        try:
+            started = float(row.get("started_at") or 0)
+        except (TypeError, ValueError):
+            started = 0.0
+        if started <= 0:
+            continue
+        age = time.time() - started
+        if active_age is None or age > active_age:
+            active_age = age
+            oldest_running = {
+                "lane": lane,
+                "kind": row.get("kind"),
+                "operation_id": row.get("operation_id"),
+                "age_s": round(age, 1),
+            }
+
+    resources = {}
+    try:
+        from product.process_resources import RESOURCE_EXHAUSTED, RESOURCE_PRESSURE, resource_diagnostics
+
+        resources = resource_diagnostics(
+            api_pid=os.getpid() if api_serving else None,
+            market_ops_pid=int(ops_pid) if ops_pid else None,
+            oldest_running=oldest_running,
+            active_operation_age_s=None if active_age is None else round(active_age, 1),
+        )
+        state = str(resources.get("state") or "")
+        if state == RESOURCE_EXHAUSTED:
+            lifecycle = FAILED if lifecycle != FAILED else lifecycle
+            reasons.insert(0, str(resources.get("reason") or "Resource exhausted"))
+        elif state == RESOURCE_PRESSURE and lifecycle == READY:
+            lifecycle = DEGRADED
+            reasons.append(str(resources.get("reason") or "Resource pressure"))
+    except Exception as exc:
+        resources = {"state": "UNKNOWN", "reason": f"resource probe failed: {exc}"[:200]}
+
     return {
         "schema_version": 1,
         "lifecycle": lifecycle,
@@ -205,5 +246,6 @@ def inspect_runtime(*, api_serving: bool = True) -> dict[str, Any]:
             "expected_session": history.get("expected_latest_completed_session") or "",
             "reason_code": history.get("reason_code") or "",
         },
+        "resources": resources,
         "live_locked": True,
     }

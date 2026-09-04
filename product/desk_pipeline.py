@@ -7,7 +7,11 @@ still uses the existing MARKET_SCAN control and is not a second scan engine.
 """
 from __future__ import annotations
 
+import json
+import os
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from operations.market_ops import (
@@ -28,6 +32,17 @@ from operations.market_ops import (
 from operations.store import BLOCKED, FAILED, PENDING, RUNNING, SUCCEEDED, OperationStore
 
 RETRY_AFTER_FAIL_S = 10 * 60
+SNAPSHOT_STALE_S = 90.0
+SNAPSHOT_UNKNOWN = "UNKNOWN"
+SNAPSHOT_STALE = "STALE"
+SNAPSHOT_CURRENT = "CURRENT"
+
+
+def _snapshot_path() -> Path:
+    raw = os.environ.get("QT_DESK_PIPELINE_SNAPSHOT")
+    if raw:
+        return Path(raw)
+    return Path(__file__).resolve().parents[1] / "logs" / "product" / "desk_pipeline.json"
 
 # Viewing order: Home → Scanner/Recos technical → Recos/funds → Market Reports.
 DESK_STEPS: tuple[dict[str, str], ...] = (
@@ -188,7 +203,12 @@ def _recently_succeeded(store: OperationStore, kinds: set[str], max_age_s: float
     return False
 
 
-def _kind_for_step(step_id: str, store: OperationStore | None = None) -> str | None:
+def _kind_for_step(
+    step_id: str,
+    store: OperationStore | None = None,
+    *,
+    research: dict[str, Any] | None = None,
+) -> str | None:
     if step_id == "prices":
         kind = prices_kind_due()
     elif step_id == "scan":
@@ -198,7 +218,7 @@ def _kind_for_step(step_id: str, store: OperationStore | None = None) -> str | N
     elif step_id == "news":
         kind = None if news_is_fresh() else NEWS_REFRESH
     elif step_id == "investigate":
-        state = acquire_freshness()
+        state = research if research is not None else acquire_freshness()
         kind = DUE_DILIGENCE_ACQUIRE if (not state.get("fresh") and state.get("retry_due")) else None
     else:
         kind = None
@@ -247,10 +267,102 @@ def _step_from_kind(kind: str) -> dict[str, str] | None:
     return None
 
 
-def describe_desk_pipeline(store: OperationStore | None = None) -> dict[str, Any]:
-    """Read-only snapshot. Does not enqueue."""
+def persist_desk_pipeline_snapshot(payload: dict[str, Any], path: Path | None = None) -> Path:
+    """Worker-side write. GET never computes; it only reads this file."""
+    target = path or _snapshot_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    blob = dict(payload)
+    blob["persisted_at"] = datetime.now(timezone.utc).isoformat()
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_text(json.dumps(blob, default=str), encoding="utf-8")
+    tmp.replace(target)
+    return target
+
+
+def _missing_status(*, reason: str) -> dict[str, Any]:
+    steps = [
+        {
+            **spec,
+            "kind": None,
+            "state": "unknown",
+            "latest_status": None,
+        }
+        for spec in DESK_STEPS
+    ]
+    return {
+        "sequential": True,
+        "queued_kind": None,
+        "queued_created": False,
+        "current": None,
+        "steps": steps,
+        "message": reason,
+        "page": "",
+        "scan_reused": False,
+        "operations": [],
+        "active_kind": None,
+        "research_freshness": None,
+        "status_source": "missing",
+        "freshness": SNAPSHOT_UNKNOWN,
+        "generated_at": None,
+        "age_seconds": None,
+    }
+
+
+def load_desk_pipeline_status(path: Path | None = None) -> dict[str, Any]:
+    """GET path: read the persisted snapshot only. Never inspect coverage."""
+    target = path or _snapshot_path()
+    if not target.exists():
+        return _missing_status(reason="Desk pipeline status has not been published yet. Workers write this file.")
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return _missing_status(reason="Persisted desk-pipeline snapshot is unreadable.")
+    if not isinstance(payload, dict):
+        return _missing_status(reason="Persisted desk-pipeline snapshot is not an object.")
+    stamp = str(payload.get("persisted_at") or payload.get("generated_at") or "")
+    age = None
+    try:
+        parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        age = max(0.0, time.time() - parsed.timestamp())
+    except (TypeError, ValueError):
+        age = None
+    out = dict(payload)
+    out["age_seconds"] = None if age is None else round(age, 3)
+    out["status_source"] = "persisted"
+    if age is None or age > SNAPSHOT_STALE_S:
+        out["freshness"] = SNAPSHOT_STALE if age is not None else SNAPSHOT_UNKNOWN
+        note = "Persisted desk status is stale; workers will refresh it. This GET did not recompute coverage."
+        prior = str(out.get("message") or "").strip()
+        out["message"] = f"{prior} {note}".strip() if prior else note
+    else:
+        out["freshness"] = SNAPSHOT_CURRENT
+    return out
+
+
+def describe_desk_pipeline(
+    store: OperationStore | None = None,
+    *,
+    persist: bool = False,
+    research: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Worker/compute snapshot. GET /api/desk-pipeline must use load_desk_pipeline_status."""
     ops = store or OperationStore()
-    return _snapshot(ops, queued_kind=None, queued_op=None, created=False)
+    snapshot_research = research if research is not None else acquire_freshness()
+    return _snapshot(
+        ops,
+        queued_kind=None,
+        queued_op=None,
+        created=False,
+        research=snapshot_research,
+        persist=persist,
+    )
+
+
+def refresh_desk_pipeline_snapshot(store: OperationStore | None = None) -> dict[str, Any]:
+    """Worker cycle: compute once, persist, return the same object."""
+    return describe_desk_pipeline(store, persist=True)
 
 
 def advance_desk_pipeline(
@@ -260,26 +372,39 @@ def advance_desk_pipeline(
 ) -> dict[str, Any]:
     """Enqueue at most the next due step. Skip fresh artifacts. Never invent data."""
     ops = store or OperationStore()
+    research = acquire_freshness()
     active = _pipeline_active(ops)
     if active:
-        return _snapshot(ops, queued_kind=None, queued_op=active, created=False)
+        return _snapshot(
+            ops, queued_kind=None, queued_op=active, created=False,
+            research=research, persist=True,
+        )
 
     for step in DESK_STEPS:
-        kind = _kind_for_step(step["id"], ops)
+        kind = _kind_for_step(step["id"], ops, research=research)
         if not kind:
             continue
         if _recently_failed(ops, kind):
             if step["id"] == "prices":
-                return _snapshot(ops, queued_kind=None, queued_op=None, created=False, halted="prices")
+                return _snapshot(
+                    ops, queued_kind=None, queued_op=None, created=False, halted="prices",
+                    research=research, persist=True,
+                )
             continue
         item, created = ops.enqueue(
             kind,
             lane=LANES[kind],
             requested_by=requested_by,
         )
-        return _snapshot(ops, queued_kind=kind, queued_op=item, created=created)
+        return _snapshot(
+            ops, queued_kind=kind, queued_op=item, created=created,
+            research=research, persist=True,
+        )
 
-    return _snapshot(ops, queued_kind=None, queued_op=None, created=False)
+    return _snapshot(
+        ops, queued_kind=None, queued_op=None, created=False,
+        research=research, persist=True,
+    )
 
 
 def _snapshot(
@@ -289,15 +414,18 @@ def _snapshot(
     queued_op: dict[str, Any] | None,
     created: bool,
     halted: str | None = None,
+    research: dict[str, Any] | None = None,
+    persist: bool = False,
 ) -> dict[str, Any]:
     active = _pipeline_active(store)
     active_kind = str((active or {}).get("kind") or "")
-    research = acquire_freshness()
+    if research is None:
+        research = acquire_freshness()
     research_cooling = bool(not research.get("fresh") and not research.get("retry_due"))
     seen_due = False
     steps: list[dict[str, Any]] = []
     for spec in DESK_STEPS:
-        kind = _kind_for_step(spec["id"], store)
+        kind = _kind_for_step(spec["id"], store, research=research)
         if spec["id"] == "investigate":
             latest = store.latest(DUE_DILIGENCE_ACQUIRE)
         else:
@@ -383,7 +511,7 @@ def _snapshot(
                 "created": created,
             }
         )
-    return {
+    payload = {
         "sequential": True,
         "queued_kind": queued_kind,
         "queued_created": created,
@@ -395,6 +523,31 @@ def _snapshot(
         "operations": operations,
         "active_kind": active_kind or None,
         "research_freshness": research,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "status_source": "computed",
+        "freshness": SNAPSHOT_CURRENT,
+        "age_seconds": 0.0,
+    }
+    if persist:
+        to_write = dict(payload)
+        to_write["research_freshness"] = _compact_research(research)
+        persist_desk_pipeline_snapshot(to_write)
+    return payload
+
+
+def _compact_research(research: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not research:
+        return research
+    unresolved = list(research.get("unresolved_symbols") or [])
+    return {
+        "fresh": research.get("fresh"),
+        "retry_due": research.get("retry_due"),
+        "state": research.get("state"),
+        "reason": research.get("reason"),
+        "unresolved_symbols": unresolved[:20],
+        "unresolved_count": len(unresolved),
+        "next_retry_at": research.get("next_retry_at"),
+        "checked_at": research.get("checked_at"),
     }
 
 

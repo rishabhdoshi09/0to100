@@ -17,6 +17,10 @@ FAILED = "FAILED"
 BLOCKED = "BLOCKED"
 CANCELLED = "CANCELLED"
 TERMINAL = frozenset({SUCCEEDED, FAILED, BLOCKED, CANCELLED})
+DEFAULT_RUNNING_LEASE_S = 30 * 60
+KIND_RUNNING_LEASE_S = {
+    "DUE_DILIGENCE_ACQUIRE": 15 * 60,
+}
 
 
 def pid_is_alive(pid: int | None) -> bool:
@@ -442,6 +446,60 @@ class OperationStore:
                 )
                 recovered += 1
         return recovered
+
+    def recover_stale_running(
+        self,
+        *,
+        now: float | None = None,
+        deadlines: dict[str, float] | None = None,
+    ) -> int:
+        """Fail RUNNING jobs that exceeded their declared lease/deadline.
+
+        A live worker that is stuck on one provider must not occupy RUNNING
+        forever. Heartbeats update ``updated_at``; the clock is ``started_at``.
+        """
+        clock = time.time() if now is None else float(now)
+        limits = dict(KIND_RUNNING_LEASE_S)
+        if deadlines:
+            limits.update({str(k): float(v) for k, v in deadlines.items()})
+        recovered = 0
+        with self._connect() as con:
+            rows = list(con.execute("SELECT * FROM operations WHERE status=?", (RUNNING,)))
+            for row in rows:
+                started = float(row["started_at"] or row["updated_at"] or 0)
+                kind = str(row["kind"] or "")
+                limit = float(limits.get(kind, DEFAULT_RUNNING_LEASE_S))
+                if started <= 0 or (clock - started) < limit:
+                    continue
+                age = clock - started
+                con.execute(
+                    """
+                    UPDATE operations SET status=?,finished_at=?,updated_at=?,stage=?,message=?,
+                        error_code=?,error_message=?
+                    WHERE operation_id=? AND status=?
+                    """,
+                    (
+                        FAILED,
+                        clock,
+                        clock,
+                        FAILED,
+                        f"{kind} exceeded its {int(limit)}s deadline after {int(age)}s",
+                        "DEADLINE_EXCEEDED",
+                        f"Operation stayed RUNNING for {int(age)}s",
+                        str(row["operation_id"]),
+                        RUNNING,
+                    ),
+                )
+                recovered += 1
+        return recovered
+
+    def oldest_running(self) -> dict[str, Any] | None:
+        with self._connect() as con:
+            row = con.execute(
+                "SELECT * FROM operations WHERE status=? ORDER BY started_at ASC LIMIT 1",
+                (RUNNING,),
+            ).fetchone()
+        return self._decode(row)
 
     def get(self, operation_id: str) -> dict[str, Any] | None:
         with self._connect() as con:
