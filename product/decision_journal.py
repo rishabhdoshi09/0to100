@@ -102,11 +102,56 @@ def persist(record: Mapping[str, Any], *, path: Path | None = None) -> dict[str,
     return row
 
 
+def hydrate(row: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Flatten the persisted payload. Missing fields stay missing."""
+    if not row:
+        return None
+    out = dict(row)
+    raw = out.pop("payload_json", None)
+    if raw:
+        try:
+            payload = json.loads(raw) if isinstance(raw, str) else dict(raw)
+        except Exception:
+            payload = {}
+        if isinstance(payload, Mapping):
+            for key, value in payload.items():
+                if key not in out or out.get(key) in (None, "", [], {}):
+                    out[key] = value
+    return out
+
+
 def get(decision_id: str, path: Path | None = None) -> dict[str, Any] | None:
     con = _connect(path)
     row = con.execute("SELECT * FROM decisions WHERE decision_id=?", (decision_id,)).fetchone()
     con.close()
-    return dict(row) if row else None
+    return hydrate(dict(row) if row else None)
+
+
+def list_for_symbol(
+    symbol: str,
+    *,
+    as_of: str = "",
+    limit: int = 20,
+    path: Path | None = None,
+) -> list[dict[str, Any]]:
+    """Persisted judgments for one symbol. Does not invent a missing decision."""
+    name = str(symbol or "").strip().upper()
+    if not name:
+        return []
+    con = _connect(path)
+    session = str(as_of or "")[:10]
+    if session:
+        rows = [dict(r) for r in con.execute(
+            "SELECT * FROM decisions WHERE symbol=? AND market_as_of=? ORDER BY decision_time DESC LIMIT ?",
+            (name, session, int(limit)),
+        )]
+    else:
+        rows = [dict(r) for r in con.execute(
+            "SELECT * FROM decisions WHERE symbol=? ORDER BY decision_time DESC LIMIT ?",
+            (name, int(limit)),
+        )]
+    con.close()
+    return [hydrate(row) for row in rows if hydrate(row)]
 
 
 def list_for_session(session: str, *, limit: int = 200, path: Path | None = None) -> list[dict[str, Any]]:
@@ -116,7 +161,7 @@ def list_for_session(session: str, *, limit: int = 200, path: Path | None = None
         (str(session)[:10], int(limit)),
     )]
     con.close()
-    return rows
+    return [hydrate(row) for row in rows if hydrate(row)]
 
 
 def counts(session: str = "", path: Path | None = None) -> dict[str, int]:

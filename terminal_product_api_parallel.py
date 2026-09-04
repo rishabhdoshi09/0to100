@@ -407,9 +407,21 @@ def forward_soak_api() -> dict:
 
 
 @product.app.get("/api/decision-simulator")
-def decision_simulator_get() -> dict:
-    """Cached take-vs-skip historical report. BACKTEST provenance only."""
-    from product.decision_simulator import load_latest
+def decision_simulator_get(
+    symbol: str = "",
+    as_of: str = "",
+    alternative: str = "",
+    decision_id: str = "",
+) -> dict:
+    """Batch report, or one persisted decision when symbol/decision_id is given."""
+    from product.decision_simulator import load_latest, simulate_past_decision
+    if str(symbol or "").strip() or str(decision_id or "").strip():
+        return simulate_past_decision(
+            symbol=symbol,
+            as_of=as_of,
+            alternative=alternative,
+            decision_id=decision_id,
+        )
     payload = load_latest()
     if not payload:
         return {"available": False, "provenance": "BACKTEST", "live_locked": True, "cache_hit": True}
@@ -418,9 +430,21 @@ def decision_simulator_get() -> dict:
 
 
 @product.app.post("/api/decision-simulator")
-def decision_simulator_run() -> dict:
-    """Start a point-in-time historical replay without blocking the HTTP server."""
-    from product.decision_simulator import run_decision_simulator
+def decision_simulator_run(
+    symbol: str = "",
+    as_of: str = "",
+    alternative: str = "",
+    decision_id: str = "",
+) -> dict:
+    """Single-decision counterfactual when addressed; otherwise start the batch replay."""
+    from product.decision_simulator import run_decision_simulator, simulate_past_decision
+    if str(symbol or "").strip() or str(decision_id or "").strip():
+        return simulate_past_decision(
+            symbol=symbol,
+            as_of=as_of,
+            alternative=alternative,
+            decision_id=decision_id,
+        )
     return run_decision_simulator(async_job=True)
 
 
