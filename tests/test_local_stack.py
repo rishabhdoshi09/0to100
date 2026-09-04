@@ -105,11 +105,35 @@ def test_machine_lock_is_outside_the_checkout(tmp_path, monkeypatch):
 
 def test_ports_healthy_cli_reports_closed_ports(monkeypatch, capsys):
     monkeypatch.setattr(LS, "port_open", lambda port, host="127.0.0.1", timeout_s=0.4: port == 8765)
+    monkeypatch.setattr(LS, "service_is_quantterm", lambda port, host="127.0.0.1": True)
     assert LS.main(["ports-healthy", "--ports", "5173,8765"]) == 1
     printed = json.loads(capsys.readouterr().out)
     assert printed["healthy"] is False
     assert printed["ports"]["5173"] is False
     assert printed["ports"]["8765"] is True
+
+
+def test_ports_healthy_rejects_unrelated_listener(monkeypatch, capsys):
+    monkeypatch.setattr(LS, "port_open", lambda port, host="127.0.0.1", timeout_s=0.4: True)
+    monkeypatch.setattr(LS, "service_is_quantterm", lambda port, host="127.0.0.1": port != 8765)
+    assert LS.main(["ports-healthy", "--ports", "5173,8765"]) == 1
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["healthy"] is False
+
+
+def test_try_fd_lock_and_soak_status_cli(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr(LS, "port_open", lambda port, host="127.0.0.1", timeout_s=0.4: False)
+    monkeypatch.setattr(LS, "service_is_quantterm", lambda port, host="127.0.0.1": False)
+    assert LS.main(["soak-status", "--root", str(tmp_path)]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["long_duration_soak"] == "PENDING"
+    assert payload["desk_healthy"] is False
+    lock_path = tmp_path / "quantterm.supervisor.lock"
+    lock_path.write_text("", encoding="utf-8")
+    with lock_path.open("w") as handle:
+        assert LS.try_fd_lock(handle.fileno()) is True
+        assert LS.main(["try-fd-lock", "--fd", str(handle.fileno())]) == 0
 
 
 def test_machine_lock_path_cli(monkeypatch, capsys, tmp_path):

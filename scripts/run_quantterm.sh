@@ -312,7 +312,7 @@ ensure_machine_lock() {
   lock="$(python scripts/local_stack.py machine-lock-path)"
   mkdir -p "$(dirname "$lock")"
   exec 201>"$lock"
-  if flock -n 201; then
+  if python scripts/local_stack.py try-fd-lock --fd 201; then
     export QT_MACHINE_OWNER=1
     python scripts/local_stack.py write-owner --pid $$ --root "$ROOT" >/dev/null || true
     echo "[STACK] This inner supervisor owns the machine lock. Stopping leftover :5173/:8765 from a previous owner."

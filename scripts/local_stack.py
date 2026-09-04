@@ -83,9 +83,113 @@ def port_open(port: int, host: str = "127.0.0.1", timeout_s: float = 0.4) -> boo
         sock.close()
 
 
+_SERVICE_IDENTITY = {
+    8765: ("http://127.0.0.1:8765/api/health", "quantterm-terminal-api"),
+    8766: ("http://127.0.0.1:8766/health", "quantterm-research-report-api"),
+}
+
+
+def service_is_quantterm(port: int, host: str = "127.0.0.1") -> bool:
+    """True only when the listener is this desk, not an unrelated process on the port."""
+    port = int(port)
+    if port == 5173:
+        try:
+            with urllib.request.urlopen(f"http://{host}:5173/", timeout=1.2) as resp:
+                if int(resp.status) != 200:
+                    return False
+                body = resp.read(8000).decode("utf-8", errors="replace").lower()
+        except Exception:
+            return False
+        return 'id="root"' in body and ("vite" in body or "quantterm" in body or "recowealth" in body)
+    spec = _SERVICE_IDENTITY.get(port)
+    if spec is None:
+        return port_open(port, host=host)
+    url, service = spec
+    if host != "127.0.0.1":
+        url = url.replace("127.0.0.1", host)
+    try:
+        with urllib.request.urlopen(url, timeout=1.2) as resp:
+            if int(resp.status) != 200:
+                return False
+            payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except Exception:
+        return False
+    return isinstance(payload, dict) and str(payload.get("service") or "") == service
+
+
 def desk_ports_healthy(ports: tuple[int, ...] = (5173, 8765)) -> bool:
-    """True when every requested local desk port is accepting connections."""
-    return all(port_open(port) for port in ports)
+    """True when every requested port is a QuantTerm listener, not merely occupied."""
+    return all(port_open(port) and service_is_quantterm(port) for port in ports)
+
+
+def try_fd_lock(fd: int) -> bool:
+    """Non-blocking exclusive flock via Python so macOS does not need util-linux flock."""
+    import errno
+    import fcntl
+
+    try:
+        fcntl.flock(int(fd), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError as exc:
+        if exc.errno in {errno.EACCES, errno.EAGAIN}:
+            return False
+        raise
+
+
+def soak_status(*, root: str | Path | None = None) -> dict:
+    """Operator diagnostic. Does not certify a multi-hour unattended soak."""
+    root = Path(root) if root else Path.cwd()
+    rss_path = root / "logs" / "market_ops" / "rss.jsonl"
+    rss: list[dict] = []
+    if rss_path.exists():
+        for line in rss_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(row, dict):
+                rss.append(row)
+    sqlite: dict[str, str] = {}
+    for rel in (
+        "logs/product/pit_warehouse.db",
+        "logs/market_ops/jobs.db",
+        "logs/autonomy/jobs.db",
+    ):
+        path = root / rel
+        if not path.exists():
+            sqlite[rel] = "missing"
+            continue
+        try:
+            import sqlite3
+
+            con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            sqlite[rel] = str(con.execute("PRAGMA integrity_check").fetchone()[0])
+            con.close()
+        except Exception as exc:
+            sqlite[rel] = f"error:{type(exc).__name__}"
+    ports = (5173, 8765, 8766)
+    return {
+        "owner": read_machine_owner(),
+        "ports": {
+            str(port): {
+                "listening": port_open(port),
+                "quantterm": service_is_quantterm(port),
+            }
+            for port in ports
+        },
+        "desk_healthy": desk_ports_healthy(ports),
+        "market_ops_rss": {
+            "n": len(rss),
+            "first_mb": (rss[0] or {}).get("rss_mb") if rss else None,
+            "last_mb": (rss[-1] or {}).get("rss_mb") if rss else None,
+            "last_heartbeat": (rss[-1] or {}).get("heartbeat") if rss else None,
+        },
+        "sqlite": sqlite,
+        "long_duration_soak": "PENDING",
+        "note": "This is a point-in-time diagnostic. Overnight unattended evidence remains pending.",
+    }
 
 
 def _listen_inodes(port: int) -> set[str]:
@@ -330,6 +434,8 @@ def main(argv: list[str] | None = None) -> int:
             "ports-healthy",
             "write-owner",
             "owner-status",
+            "try-fd-lock",
+            "soak-status",
         ),
     )
     parser.add_argument("--ports", default="5173,8765,8766")
@@ -337,7 +443,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--origin", default="http://127.0.0.1:8765")
     parser.add_argument("--pid", type=int, default=0)
     parser.add_argument("--root", default="")
+    parser.add_argument("--fd", type=int, default=0)
     args = parser.parse_args(argv)
+    if args.action == "try-fd-lock":
+        return 0 if try_fd_lock(args.fd) else 1
+    if args.action == "soak-status":
+        print(json.dumps(soak_status(root=args.root or None), default=str))
+        return 0
     if args.action == "machine-lock-path":
         print(machine_lock_path())
         return 0

@@ -257,17 +257,7 @@ start_stack() {
 # Python's fcntl uses the inherited descriptor, so the same machine-wide lock
 # works on macOS and Linux without requiring the external `flock` executable.
 try_machine_lock() {
-  python - <<'PY'
-import errno
-import fcntl
-
-try:
-    fcntl.flock(200, fcntl.LOCK_EX | fcntl.LOCK_NB)
-except OSError as exc:
-    if exc.errno in {errno.EACCES, errno.EAGAIN}:
-        raise SystemExit(1)
-    raise
-PY
+  python scripts/local_stack.py try-fd-lock --fd 200
 }
 
 echo "[COMPLETE STACK] One command, one terminal. Machine-wide lock so a second checkout cannot kill a healthy desk."

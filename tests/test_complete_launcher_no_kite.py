@@ -36,7 +36,7 @@ def test_complete_launcher_machine_lock_is_portable_to_macos() -> None:
     text = LAUNCHER.read_text(encoding="utf-8")
 
     assert "try_machine_lock()" in text
-    assert "import fcntl" in text
-    assert "fcntl.flock(200, fcntl.LOCK_EX | fcntl.LOCK_NB)" in text
+    assert "try-fd-lock --fd 200" in text
     assert "if try_machine_lock; then" in text
     assert "if flock -n 200; then" not in text
+    assert "if flock -n 201; then" not in text
