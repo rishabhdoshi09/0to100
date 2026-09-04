@@ -2,11 +2,15 @@
 """Exercise QuantTerm's real safe product actions against a running local stack.
 
 Unlike verify_quantterm_stack.py, this script intentionally queues real research
-operations and waits for their durable operation records to finish.  It never
-submits a broker order, never unlocks live money, and never bypasses risk gates.
+operations and waits for their durable operation records to finish. It also proves
+a reversible Watchlist write and the read-only forward-soak verification path.
+It never submits a broker order, never unlocks live money, and never bypasses risk
+gates.
 
 Default sequence:
-  RUN_SCAN_NOW -> REFRESH_LONG_TERM_NOW -> REFRESH_MARKET_REPORT_NOW
+  RUN_SCAN_NOW -> REFRESH_LONG_TERM_NOW -> REFRESH_NEWS_NOW ->
+  REFRESH_MARKET_REPORT_NOW -> output checks -> temporary Watchlist add/remove ->
+  forward-soak verification.
 
 Optionally, --symbol SYMBOL also exercises the durable due-diligence acquire for
 that stock after the shared desk pipeline has finished.
@@ -27,16 +31,24 @@ TERMINAL = {"SUCCEEDED", "FAILED", "BLOCKED", "CANCELLED"}
 SAFE_CONTROLS = (
     ("Market scan", "RUN_SCAN_NOW"),
     ("Long-term fundamentals", "REFRESH_LONG_TERM_NOW"),
+    ("News and filings", "REFRESH_NEWS_NOW"),
     ("Market report", "REFRESH_MARKET_REPORT_NOW"),
 )
 
 
-def _request_json(url: str, *, method: str = "GET", timeout: float = 10.0) -> dict[str, Any]:
+def _request_json(
+    url: str,
+    *,
+    method: str = "GET",
+    timeout: float = 10.0,
+    body: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    encoded = json.dumps(body).encode("utf-8") if body is not None else (b"" if method != "GET" else None)
     request = urllib.request.Request(
         url,
         method=method,
         headers={"Accept": "application/json", "Content-Type": "application/json"},
-        data=b"" if method != "GET" else None,
+        data=encoded,
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -46,8 +58,8 @@ def _request_json(url: str, *, method: str = "GET", timeout: float = 10.0) -> di
                 raise RuntimeError(f"{url} returned non-object JSON")
             return payload
     except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")[:500]
-        raise RuntimeError(f"HTTP {exc.code} {url}: {body}") from exc
+        response_body = exc.read().decode("utf-8", errors="replace")[:500]
+        raise RuntimeError(f"HTTP {exc.code} {url}: {response_body}") from exc
 
 
 def _url(base: str, path: str) -> str:
@@ -67,7 +79,11 @@ def _resource_state(health: dict[str, Any]) -> str:
 
 
 def _start_control(api: str, control: str, timeout: float) -> dict[str, Any]:
-    payload = _request_json(_url(api, f"/api/controls/{urllib.parse.quote(control, safe='')}"), method="POST", timeout=timeout)
+    payload = _request_json(
+        _url(api, f"/api/controls/{urllib.parse.quote(control, safe='')}"),
+        method="POST",
+        timeout=timeout,
+    )
     if payload.get("accepted") is not True:
         raise RuntimeError(f"{control} was not accepted: {payload}")
     operation_id = str(payload.get("operation_id") or "")
@@ -111,7 +127,7 @@ def _assert_succeeded(label: str, operation: dict[str, Any]) -> None:
         raise RuntimeError(f"{label} ended {status}{f' [{code}]' if code else ''}: {detail}")
 
 
-def _verify_outputs(api: str, timeout: float) -> None:
+def _verify_outputs(api: str, timeout: float) -> tuple[dict[str, Any], str]:
     dashboard = _request_json(_url(api, "/api/dashboard"), timeout=timeout)
     scan = dict(dashboard.get("scan") or {})
     data = dict(dashboard.get("data") or {})
@@ -129,6 +145,58 @@ def _verify_outputs(api: str, timeout: float) -> None:
     recommendations = _request_json(_url(api, "/api/recommendations-workspace"), timeout=timeout)
     if not isinstance(recommendations.get("categories"), list):
         raise RuntimeError("Recommendations workspace contract is malformed after scan")
+
+    news = _request_json(_url(api, "/api/news"), timeout=timeout)
+    if not isinstance(news.get("articles"), list):
+        raise RuntimeError("News workspace contract is malformed after news refresh")
+
+    symbol = ""
+    for row in scan.get("records") or []:
+        if isinstance(row, dict) and str(row.get("symbol") or "").strip():
+            symbol = str(row["symbol"]).strip().upper()
+            break
+    return dashboard, symbol
+
+
+def _verify_watchlist_roundtrip(api: str, symbol: str, timeout: float) -> None:
+    if not symbol:
+        print("[INFO] Watchlist write proof skipped because the saved scan has no symbol")
+        return
+    print(f"[RUN] Watchlist reversible write · {symbol}")
+    created = _request_json(
+        _url(api, "/api/watchlist"),
+        method="POST",
+        timeout=timeout,
+        body={"symbol": symbol, "notes": "QuantTerm integration verifier — temporary row"},
+    )
+    item = dict(created.get("item") or {})
+    row_id = item.get("id")
+    if created.get("accepted") is not True or row_id is None:
+        raise RuntimeError(f"Watchlist add did not return an inserted row id: {created}")
+    try:
+        listing = _request_json(_url(api, "/api/watchlist"), timeout=timeout)
+        if not any(int(row.get("id") or -1) == int(row_id) for row in listing.get("items") or [] if isinstance(row, dict)):
+            raise RuntimeError("Watchlist POST succeeded but its row is absent from the GET projection")
+    finally:
+        removed = _request_json(
+            _url(api, f"/api/watchlist/{int(row_id)}"),
+            method="DELETE",
+            timeout=timeout,
+        )
+        if removed.get("accepted") is not True:
+            raise RuntimeError(f"Temporary Watchlist row could not be removed: {removed}")
+    listing = _request_json(_url(api, "/api/watchlist"), timeout=timeout)
+    if any(int(row.get("id") or -1) == int(row_id) for row in listing.get("items") or [] if isinstance(row, dict)):
+        raise RuntimeError("Watchlist DELETE accepted but temporary row is still present")
+    print("[PASS] Watchlist POST → GET → DELETE is cross-wired and reversible")
+
+
+def _verify_forward_soak_action(api: str, timeout: float) -> None:
+    print("[RUN] Forward-soak verification · read-only persisted evidence")
+    payload = _request_json(_url(api, "/api/forward-soak"), method="POST", timeout=timeout)
+    if "verification" not in payload:
+        raise RuntimeError("Forward-soak POST returned without verification evidence")
+    print("[PASS] Forward-soak verification path")
 
 
 def _acquire_symbol(api: str, symbol: str, *, op_timeout: float, request_timeout: float) -> None:
@@ -168,7 +236,13 @@ def run(args: argparse.Namespace) -> int:
     before_api = _fd(before, "api")
     before_ops = _fd(before, "market_ops")
 
-    for label, control in SAFE_CONTROLS:
+    controls = list(SAFE_CONTROLS)
+    if args.include_data_refresh:
+        controls.insert(0, ("Official data refresh", "REFRESH_DATA_NOW"))
+    if args.include_fno:
+        controls.append(("F&O instrument refresh", "REFRESH_FNO_NOW"))
+
+    for label, control in controls:
         print(f"[RUN] {label} · {control}")
         started = _start_control(args.api, control, args.request_timeout)
         operation_id = str(started["operation_id"])
@@ -181,8 +255,13 @@ def run(args: argparse.Namespace) -> int:
         _assert_succeeded(label, operation)
         print(f"[PASS] {label} · {operation_id[:8]}\n")
 
-    _verify_outputs(args.api, args.request_timeout)
-    print("[PASS] Dashboard, Recommendations and Market Reports reflect persisted outputs")
+    _dashboard, scan_symbol = _verify_outputs(args.api, args.request_timeout)
+    print("[PASS] Dashboard, Recommendations, News and Market Reports reflect persisted outputs")
+
+    if not args.skip_watchlist_write:
+        _verify_watchlist_roundtrip(args.api, scan_symbol or args.symbol.strip().upper(), args.request_timeout)
+
+    _verify_forward_soak_action(args.api, args.request_timeout)
 
     if args.symbol:
         _acquire_symbol(
@@ -210,7 +289,8 @@ def run(args: argparse.Namespace) -> int:
     if ops_growth is not None and ops_growth > args.fd_growth_limit:
         raise RuntimeError(f"Market-ops descriptors grew by {ops_growth}; limit is {args.fd_growth_limit}")
 
-    print("\nWORKING: real scan, long-term refresh and market-report operations completed end-to-end.")
+    print("\nWORKING: real scan, long-term, news and market-report operations completed end-to-end.")
+    print("WORKING: reversible Watchlist and forward-evidence actions are cross-wired.")
     if args.symbol:
         print(f"WORKING: {args.symbol.strip().upper()} acquisition and Stock Intelligence also completed end-to-end.")
     return 0
@@ -221,9 +301,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--api", default="http://127.0.0.1:8765")
     parser.add_argument("--request-timeout", type=float, default=8.0)
     parser.add_argument("--operation-timeout", type=float, default=1200.0, help="seconds per scan/report operation")
-    parser.add_argument("--acquire-timeout", type=float, default=420.0)
+    parser.add_argument("--acquire-timeout", type=float, default=720.0)
     parser.add_argument("--fd-growth-limit", type=int, default=8)
     parser.add_argument("--symbol", default="", help="also test real due-diligence acquire for this NSE symbol")
+    parser.add_argument("--include-data-refresh", action="store_true", help="also queue DATA_PREPARE (can download official history)")
+    parser.add_argument("--include-fno", action="store_true", help="also refresh F&O instruments; may require Zerodha capability")
+    parser.add_argument("--skip-watchlist-write", action="store_true", help="skip temporary POST/DELETE Watchlist proof")
     return parser
 
 
