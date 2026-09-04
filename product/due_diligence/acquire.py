@@ -24,7 +24,6 @@ EVIDENCE_ROOT = ROOT / "logs" / "research_evidence"
 ACQUIRE_CAP = 6
 FACTS_NAME = "autonomy_facts.json"
 RESEARCH_QUEUE_PATH = ROOT / "logs" / "product" / "research_queue.json"
-FRESH_S = 24 * 60 * 60
 MAX_ATTACHMENT_BYTES = 16_000_000
 _ALLOWED_HOSTS = {
     "www.screener.in",
@@ -178,22 +177,14 @@ def shortlist_symbols(limit: int = ACQUIRE_CAP, scan_payload: Mapping[str, Any] 
 
 
 def acquire_is_fresh(*, now: float | None = None, scan_payload: Mapping[str, Any] | None = None) -> bool:
-    symbols = shortlist_symbols(scan_payload=scan_payload)
-    if not symbols:
-        return True
-    now = time.time() if now is None else now
-    for symbol in symbols:
-        payload = load_autonomy_facts(symbol)
-        stamp = str(payload.get("acquired_at") or "")
-        if not stamp:
-            return False
-        try:
-            acquired = datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
-        except ValueError:
-            return False
-        if now - acquired > FRESH_S:
-            return False
-    return True
+    """Compatibility bool. Evidence freshness is defined only in freshness.py.
+
+    A recent ``acquired_at`` / attempt stamp is not current research. Failed or
+    partial acquisitions stay unresolved; retry cooldown is a separate question.
+    """
+    from product.due_diligence.freshness import research_freshness
+
+    return bool(research_freshness(now=now, scan_payload=scan_payload).get("fresh"))
 
 
 def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:

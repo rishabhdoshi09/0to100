@@ -151,6 +151,49 @@ def test_successful_meta_without_error_remains_current(monkeypatch):
     assert state["state"] == "CURRENT"
 
 
+def test_acquire_adapter_does_not_treat_recent_failed_attempt_as_fresh(monkeypatch):
+    """The old acquire_is_fresh clock used acquired_at age. That must stay dead."""
+    _wire(
+        monkeypatch,
+        coverage=_coverage("acquisition_failed", checked_at="2026-09-03T11:59:00+00:00", present=False),
+        facts={"acquired_at": "2026-09-03T11:59:30+00:00", "inspected_at": "2026-09-03T11:59:45+00:00"},
+    )
+    canonical = RF.research_freshness(now=NOW)
+    assert canonical["fresh"] is False
+    assert canonical["state"] != "CURRENT"
+    assert ACQ.acquire_is_fresh(now=NOW) is False
+    from product import desk_pipeline as DP
+
+    assert DP.acquire_is_fresh() is False
+    assert DP.acquire_freshness().get("fresh") is False
+    assert DP.acquire_freshness().get("state") != "CURRENT"
+
+
+def test_acquire_module_has_no_second_freshness_clock():
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1] / "product" / "due_diligence" / "acquire.py").read_text(
+        encoding="utf-8"
+    )
+    assert "def acquire_is_fresh" in src
+    assert "from product.due_diligence.freshness import research_freshness" in src
+    assert "now - acquired" not in src
+    assert "FRESH_S" not in src
+    assert "24 * 60 * 60" not in src.split("def acquire_is_fresh", 1)[1].split("def ", 1)[0]
+
+
+def test_inspection_timestamp_cannot_rejuvenate_stale_cache(monkeypatch):
+    _wire(
+        monkeypatch,
+        coverage=_coverage("stale", checked_at="2026-09-03T11:59:50+00:00", present=True),
+        facts={"inspected_at": "2026-09-03T11:59:50+00:00", "acquired_at": "2026-01-01T00:00:00+00:00"},
+    )
+    state = RF.research_freshness(now=NOW)
+    assert state["fresh"] is False
+    assert state["unresolved_datasets"][0]["cached_data_present"] is True
+    assert ACQ.acquire_is_fresh(now=NOW) is False
+
+
 def test_local_inspection_failure_fails_closed_without_hot_loop(monkeypatch):
     monkeypatch.setattr(ACQ, "shortlist_symbols", lambda **_kwargs: ["ABC"])
     monkeypatch.setattr(
