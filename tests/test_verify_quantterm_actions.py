@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import scripts.verify_quantterm_actions as verify
 
 
