@@ -496,6 +496,7 @@ export function ProductionBacktestView({ dashboard, setActive }: ViewProps) {
   const [caseSymbol, setCaseSymbol] = useState('')
   const [caseAsOf, setCaseAsOf] = useState('')
   const [caseAlt, setCaseAlt] = useState('BUY')
+  const [caseDecisionId, setCaseDecisionId] = useState('')
   useEffect(() => {
     setCatalogLoading(true)
     fetchStrategyCatalog()
@@ -527,16 +528,17 @@ export function ProductionBacktestView({ dashboard, setActive }: ViewProps) {
       .catch((reason: unknown) => setSimError(reason instanceof Error ? reason.message : 'Simulator failed'))
       .finally(() => setSimBusy(false))
   }
-  const runCase = (symbol: string, as_of: string, alternative?: string) => {
+  const runCase = (symbol: string, as_of: string, alternative?: string, decisionId?: string) => {
     const name = symbol.trim().toUpperCase()
     const day = as_of.trim().slice(0, 10)
+    const id = (decisionId || caseDecisionId).trim()
     if (!name || !day) {
       setCaseError('Symbol and historical date are required. No sample decision is invented.')
       return
     }
     setCaseBusy(true)
     setCaseError('')
-    simulatePastDecision({ symbol: name, as_of: day, alternative: alternative || caseAlt })
+    simulatePastDecision({ symbol: name, as_of: day, alternative: alternative || caseAlt, decision_id: id || undefined })
       .then((payload) => { setCaseSim(payload); setCaseError(payload.error || '') })
       .catch((reason: unknown) => {
         setCaseSim(null)
@@ -594,6 +596,7 @@ export function ProductionBacktestView({ dashboard, setActive }: ViewProps) {
           <div className="inline-actions" style={{ padding: '12px', gap: 8 }}>
             <input value={caseSymbol} onChange={(event) => setCaseSymbol(event.target.value)} placeholder="Symbol" aria-label="Historical symbol" />
             <input value={caseAsOf} onChange={(event) => setCaseAsOf(event.target.value)} placeholder="YYYY-MM-DD" aria-label="Historical date" />
+            <input value={caseDecisionId} onChange={(event) => setCaseDecisionId(event.target.value)} placeholder="decision_id if several that day" aria-label="Decision id" />
             <select value={caseAlt} onChange={(event) => setCaseAlt(event.target.value)} aria-label="Counterfactual action">
               <option value="BUY">Simulate BUY</option>
               <option value="WAIT">Simulate WAIT</option>
@@ -607,6 +610,25 @@ export function ProductionBacktestView({ dashboard, setActive }: ViewProps) {
           {caseState === 'error' ? <p className="panel-copy">{caseError}</p> : null}
           {caseState === 'failed' ? <p className="panel-copy">{caseSim?.error || caseError || 'Simulation failed'}</p> : null}
           {caseState === 'unavailable' ? <p className="panel-copy">{caseSim?.error || 'No persisted historical decision. Nothing was invented.'}</p> : null}
+          {caseState === 'ambiguous' ? (
+            <div>
+              <p className="panel-copy">{caseSim?.error || 'Multiple persisted decisions match. Select the exact decision_id.'}</p>
+              {(caseSim?.matches || []).map((match) => (
+                <button
+                  key={match.decision_id || `${match.as_of}-${match.decision}`}
+                  type="button"
+                  className="secondary"
+                  disabled={caseBusy}
+                  onClick={() => {
+                    setCaseDecisionId(match.decision_id || '')
+                    runCase(match.symbol || caseSymbol, match.as_of || caseAsOf, caseAlt, match.decision_id)
+                  }}
+                >
+                  {match.decision_id} · {match.decision} · {match.reason_code}
+                </button>
+              ))}
+            </div>
+          ) : null}
           {caseSim && caseView ? (
             <>
               <div className="fact-grid">
@@ -614,6 +636,10 @@ export function ProductionBacktestView({ dashboard, setActive }: ViewProps) {
                 <div><span>Simulated Alternative</span><strong>{caseView.simulatedAction}</strong></div>
                 <div><span>Timestamp</span><strong>{displayHonest(caseSim.historical_timestamp)}</strong></div>
                 <div><span>Reason</span><strong>{displayHonest(caseSim.original?.reason_code)}</strong></div>
+                <div><span>Original entry</span><strong>{displayHonest(caseSim.original?.entry)}</strong></div>
+                <div><span>Original entry source</span><strong>{displayHonest(caseSim.original?.entry_source)}</strong></div>
+                <div><span>Simulated entry source</span><strong>{displayHonest(caseSim.simulated?.entry_source)}</strong></div>
+                <div><span>PIT status</span><strong>{displayHonest(caseSim.pit_status)}</strong></div>
               </div>
               <p className="panel-copy"><strong>{caseView.evidenceLabel}</strong></p>
               <p className="panel-copy">
@@ -667,7 +693,8 @@ export function ProductionBacktestView({ dashboard, setActive }: ViewProps) {
                     onClick={() => {
                       setCaseSymbol(row.symbol || '')
                       setCaseAsOf(row.as_of || '')
-                      runCase(row.symbol || '', row.as_of || '')
+                      setCaseDecisionId(row.decision_id || '')
+                      runCase(row.symbol || '', row.as_of || '', undefined, row.decision_id)
                     }}
                   >
                     Simulate this decision

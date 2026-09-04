@@ -1665,6 +1665,7 @@ export const verifyForwardSoakNow = (): Promise<ForwardSoakScoreboard> =>
 export type HistoricalDecisionRow = {
   symbol?: string
   as_of?: string
+  decision_id?: string
   decision?: string
   reason_code?: string
   reasons?: string[]
@@ -1744,26 +1745,41 @@ export type PastDecisionSimulation = {
   fingerprint?: string
   error?: string | null
   warnings?: string[]
+  pit_status?: string
+  counterfactual_trustworthy?: boolean
+  matches?: Array<{
+    decision_id?: string
+    symbol?: string
+    as_of?: string
+    decision?: string
+    reason_code?: string
+    decision_time?: string
+  }>
   original?: {
     action?: string
     reason_code?: string
     reason?: string
     tier?: string
     entry?: number | string | null
+    entry_source?: string
     stop?: number | string | null
     target?: number | string | null
     source?: string
   }
   simulated?: {
     action?: string
+    entry?: number | string | null
+    entry_source?: string
     role?: string
     defaulted?: boolean
+    trustworthy?: boolean
   }
   evidence_at_t?: {
     label?: string
     max_bar_date?: string
     close?: number | string | null
     future_bars_used_for_decision?: boolean
+    pit_status?: string
     financials?: { available?: boolean; status?: string; note?: string }
     research?: { available?: boolean; status?: string; note?: string }
     sector?: { status?: string; usable_as_family_confirm?: boolean; note?: string }

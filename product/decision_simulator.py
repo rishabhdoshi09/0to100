@@ -33,7 +33,12 @@ UNKNOWN = "UNKNOWN"
 NOT_ENTERED = "NOT_ENTERED"
 FAILED = "FAILED"
 HISTORICAL_DECISION_UNAVAILABLE = "HISTORICAL_DECISION_UNAVAILABLE"
+AMBIGUOUS_HISTORICAL_DECISION = "AMBIGUOUS_HISTORICAL_DECISION"
+PIT_INTEGRITY_FAILED = "PIT_INTEGRITY_FAILED"
 SUCCEEDED = "SUCCEEDED"
+ENTRY_PERSISTED = "PERSISTED_DECISION"
+ENTRY_CLOSE_AT_T = "OFFICIAL_CLOSE_AT_T_ASSUMPTION"
+ENTRY_UNAVAILABLE = "UNAVAILABLE"
 
 _ENTER_ACTIONS = frozenset({"BUY", "ENTER", "ENTER_NOW", "TAKEN", "TAKE"})
 _VALID_ACTIONS = frozenset({"BUY", "WAIT", "AVOID", "REJECT", "NO_JUDGMENT"})
@@ -553,24 +558,57 @@ def _pit_news(symbol: str, as_of: str) -> list[dict[str, Any]]:
     return kept
 
 
-def _find_historical_decision(
-    *,
-    symbol: str,
-    as_of: str,
-    decision_id: str = "",
-) -> dict[str, Any] | None:
-    from product.decision_journal import get as dj_get, list_for_symbol
+def _row_symbol(row: Mapping[str, Any] | None) -> str:
+    return str((row or {}).get("symbol") or "").strip().upper()
 
-    if decision_id:
-        found = dj_get(decision_id)
-        if found:
-            return found
+
+def _row_day(row: Mapping[str, Any] | None) -> str:
+    raw = (row or {}).get("market_as_of") or (row or {}).get("as_of") or (row or {}).get("decision_time") or ""
+    return str(raw)[:10]
+
+
+def _row_decision_id(row: Mapping[str, Any] | None) -> str:
+    if not row:
+        return ""
+    explicit = str(row.get("decision_id") or row.get("freeze_id") or "").strip()
+    if explicit:
+        return explicit
+    return "|".join([
+        _row_day(row),
+        _row_symbol(row),
+        str(row.get("decision") or row.get("raw_decision") or ""),
+        str(row.get("reason_code") or ""),
+    ])
+
+
+def _identity_error(row: Mapping[str, Any], symbol: str, as_of: str) -> str:
     name = str(symbol or "").strip().upper()
     session = str(as_of or "")[:10]
+    found_symbol = _row_symbol(row)
+    found_day = _row_day(row)
+    if name and found_symbol and found_symbol != name:
+        return (
+            f"decision_id identity mismatch: persisted symbol {found_symbol} "
+            f"does not match requested {name}"
+        )
+    if session and found_day and found_day != session:
+        return (
+            f"decision_id identity mismatch: persisted date {found_day} "
+            f"does not match requested {session}"
+        )
+    return ""
+
+
+def _collect_historical_rows(*, symbol: str, as_of: str) -> list[dict[str, Any]]:
+    from product.decision_journal import list_for_symbol
+
+    name = str(symbol or "").strip().upper()
+    session = str(as_of or "")[:10]
+    rows: list[dict[str, Any]] = []
     if name:
-        matches = list_for_symbol(name, as_of=session, limit=5)
-        if matches:
-            return matches[0]
+        for item in list_for_symbol(name, as_of=session, limit=50):
+            if isinstance(item, Mapping):
+                rows.append(dict(item))
     try:
         from product.autopilot_journal import load_journal
 
@@ -593,13 +631,13 @@ def _find_historical_decision(
                 row.setdefault("market_as_of", cycle_day)
                 if bucket == "taken":
                     row.setdefault("decision", "BUY")
-                return row
+                rows.append(row)
     try:
         from product.historical_replay import ledger_path
 
         path = ledger_path()
         if path.exists():
-            for line in reversed(path.read_text(encoding="utf-8").splitlines()):
+            for line in path.read_text(encoding="utf-8").splitlines():
                 try:
                     item = json.loads(line)
                 except Exception:
@@ -611,10 +649,71 @@ def _find_historical_decision(
                 item_day = str(item.get("as_of") or item.get("market_as_of") or "")[:10]
                 if session and item_day != session:
                     continue
-                return dict(item)
+                rows.append(dict(item))
     except Exception:
-        return None
-    return None
+        pass
+    unique: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        key = _row_decision_id(row)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        tagged = dict(row)
+        tagged["decision_id"] = key
+        unique.append(tagged)
+    return unique
+
+
+def _find_historical_decision(
+    *,
+    symbol: str,
+    as_of: str,
+    decision_id: str = "",
+) -> dict[str, Any]:
+    from product.decision_journal import get as dj_get
+
+    wanted_id = str(decision_id or "").strip()
+    if wanted_id:
+        found = dj_get(wanted_id)
+        if not found:
+            for row in _collect_historical_rows(symbol=symbol, as_of=as_of):
+                if _row_decision_id(row) == wanted_id:
+                    found = row
+                    break
+        if not found and (symbol or as_of):
+            for row in _collect_historical_rows(symbol=str(symbol or "").strip().upper(), as_of=""):
+                if _row_decision_id(row) == wanted_id:
+                    found = row
+                    break
+        if not found:
+            return {"status": FAILED, "error": f"decision_id {wanted_id} does not match a persisted decision"}
+        mismatch = _identity_error(found, symbol, as_of)
+        if mismatch:
+            return {"status": FAILED, "error": mismatch, "row": dict(found)}
+        tagged = dict(found)
+        tagged["decision_id"] = _row_decision_id(tagged)
+        return {"status": "FOUND", "row": tagged}
+
+    matches = _collect_historical_rows(symbol=symbol, as_of=as_of)
+    if not matches:
+        return {"status": "MISSING"}
+    if len(matches) > 1:
+        return {
+            "status": AMBIGUOUS_HISTORICAL_DECISION,
+            "matches": [
+                {
+                    "decision_id": _row_decision_id(row),
+                    "symbol": _row_symbol(row),
+                    "as_of": _row_day(row),
+                    "decision": row.get("decision") or row.get("raw_decision") or UNKNOWN,
+                    "reason_code": row.get("reason_code") or UNKNOWN,
+                    "decision_time": row.get("decision_time") or _row_day(row),
+                }
+                for row in matches
+            ],
+        }
+    return {"status": "FOUND", "row": matches[0]}
 
 
 def _default_alternative(actual: str) -> str:
@@ -628,6 +727,7 @@ def _outcome_for_action(
     stop: float | None,
     target: float | None,
     later_bars: Sequence[Mapping[str, Any]],
+    entry_source: str = ENTRY_UNAVAILABLE,
 ) -> dict[str, Any]:
     from product.decision_outcomes import path_metrics
 
@@ -642,6 +742,7 @@ def _outcome_for_action(
             "status": NOT_ENTERED,
             "methodology": "No position. Subsequent prices describe the market, not a trade.",
             "simulated_entry": UNAVAILABLE,
+            "entry_source": ENTRY_UNAVAILABLE,
             "stop": _honest(stop),
             "hypothetical_return_pct": UNAVAILABLE,
             "hypothetical_r": UNAVAILABLE,
@@ -655,6 +756,7 @@ def _outcome_for_action(
             "status": UNAVAILABLE,
             "methodology": "BUY was simulated but no entry price existed at T.",
             "simulated_entry": UNAVAILABLE,
+            "entry_source": ENTRY_UNAVAILABLE,
             "stop": _honest(stop),
             "hypothetical_return_pct": UNAVAILABLE,
             "hypothetical_r": UNAVAILABLE,
@@ -677,13 +779,22 @@ def _outcome_for_action(
             "bars_used": 0,
         }
     metrics = path_metrics(entry=entry, stop=stop, target=target, bars=list(later_bars))
+    assumption = (
+        " Entry is the official close at T, not a persisted QuantTerm entry."
+        if entry_source == ENTRY_CLOSE_AT_T else
+        " Entry is the persisted historical level."
+        if entry_source == ENTRY_PERSISTED else
+        ""
+    )
     return {
         "status": "COMPUTED",
         "methodology": (
             "Official bars after T only. Frozen entry/stop from decision-time. "
             "Stop-before-target. Simulated first-touch / close path — not live execution."
+            + assumption
         ),
         "simulated_entry": entry,
+        "entry_source": entry_source,
         "stop": _honest(stop),
         "hypothetical_return_pct": _honest(metrics.get("return_pct")),
         "hypothetical_r": _honest(metrics.get("r_multiple")),
@@ -803,11 +914,44 @@ def simulate_past_decision(
                 "original": {"action": UNAVAILABLE},
                 "simulated": {"action": UNAVAILABLE},
             }
-        historical = _find_historical_decision(symbol=name, as_of=session, decision_id=str(decision_id or ""))
+        located = _find_historical_decision(symbol=name, as_of=session, decision_id=str(decision_id or ""))
+        if located.get("status") == FAILED:
+            return {
+                "schema_version": 1,
+                "kind": "PAST_DECISION_SIMULATION",
+                "status": FAILED,
+                "available": False,
+                "provenance": BACKTEST,
+                "live_locked": True,
+                "symbol": name or UNAVAILABLE,
+                "as_of": session or UNAVAILABLE,
+                "decision_id": str(decision_id or "") or UNAVAILABLE,
+                "error": located.get("error") or "decision identity mismatch",
+                "warnings": ["Persisted decision identity did not match the requested symbol/date"],
+                "original": {"action": UNAVAILABLE, "entry": UNAVAILABLE, "entry_source": ENTRY_UNAVAILABLE},
+                "simulated": {"action": UNAVAILABLE, "entry": UNAVAILABLE, "entry_source": ENTRY_UNAVAILABLE},
+            }
+        if located.get("status") == AMBIGUOUS_HISTORICAL_DECISION:
+            return {
+                "schema_version": 1,
+                "kind": "PAST_DECISION_SIMULATION",
+                "status": AMBIGUOUS_HISTORICAL_DECISION,
+                "available": False,
+                "provenance": BACKTEST,
+                "live_locked": True,
+                "symbol": name,
+                "as_of": session,
+                "error": "Multiple persisted decisions match this symbol and date. Select a decision_id.",
+                "matches": located.get("matches") or [],
+                "warnings": ["Exact decision is ambiguous until decision_id is supplied"],
+                "original": {"action": UNAVAILABLE, "entry": UNAVAILABLE, "entry_source": ENTRY_UNAVAILABLE},
+                "simulated": {"action": UNAVAILABLE, "entry": UNAVAILABLE, "entry_source": ENTRY_UNAVAILABLE},
+            }
+        historical = located.get("row") if located.get("status") == "FOUND" else None
         if historical and not name:
-            name = str(historical.get("symbol") or "").upper()
+            name = _row_symbol(historical)
         if historical and not session:
-            session = str(historical.get("market_as_of") or historical.get("as_of") or historical.get("decision_time") or "")[:10]
+            session = _row_day(historical)
         if not name or not session:
             return {
                 "schema_version": 1,
@@ -818,6 +962,8 @@ def simulate_past_decision(
                 "live_locked": True,
                 "error": "symbol and historical timestamp are required",
                 "warnings": ["Missing symbol or as_of"],
+                "original": {"action": UNAVAILABLE, "entry": UNAVAILABLE, "entry_source": ENTRY_UNAVAILABLE},
+                "simulated": {"action": UNAVAILABLE, "entry": UNAVAILABLE, "entry_source": ENTRY_UNAVAILABLE},
             }
 
         from product.historical_replay import ohlcv_as_of
@@ -879,71 +1025,159 @@ def simulate_past_decision(
                 "reason": "Cannot replay committee without official bars at T",
             }
 
-        entry = _num((historical or {}).get("entry") or (historical or {}).get("hypothetical_entry"))
-        if entry is None:
-            entry = close_t
-        stop = _num((historical or {}).get("stop") or (historical or {}).get("hypothetical_stop"))
-        target = _num((historical or {}).get("target") or (historical or {}).get("hypothetical_target"))
-        if entry is None:
-            warnings.append("No decision-time entry or official close; BUY path stays UNAVAILABLE")
-        if stop is None:
+        persisted_entry = _num(
+            (historical or {}).get("entry") if historical else None
+        )
+        if persisted_entry is None and historical:
+            persisted_entry = _num(historical.get("hypothetical_entry"))
+        original_entry_source = ENTRY_PERSISTED if persisted_entry is not None else ENTRY_UNAVAILABLE
+        simulated_entry = persisted_entry
+        simulated_entry_source = original_entry_source
+        if simulated_entry is None and close_t is not None and historical:
+            simulated_entry = close_t
+            simulated_entry_source = ENTRY_CLOSE_AT_T
+            warnings.append(
+                "No persisted original entry. Counterfactual uses official close at T "
+                f"({ENTRY_CLOSE_AT_T}); that is not a QuantTerm-recorded entry."
+            )
+        stop = _num((historical or {}).get("stop") or (historical or {}).get("hypothetical_stop")) if historical else None
+        target = _num((historical or {}).get("target") or (historical or {}).get("hypothetical_target")) if historical else None
+        if historical and persisted_entry is None and simulated_entry is None:
+            warnings.append("No persisted entry and no official close at T; BUY path stays UNAVAILABLE")
+        if historical and stop is None:
             warnings.append("No defined stop at T; R-multiple stays UNAVAILABLE")
+
+        reconstructed_pit = dict(reconstructed.get("pit") or {})
+        lookahead = bool(
+            reconstructed_pit.get("future_evidence_used")
+            or reconstructed.get("status") == FAILED
+            and "LOOKAHEAD" in str(reconstructed.get("reason") or "").upper()
+            or any("LOOKAHEAD" in str(item).upper() for item in bar_warnings)
+        )
+        pit_status = PIT_INTEGRITY_FAILED if lookahead else (
+            "PIT_OK" if historical else UNAVAILABLE
+        )
+        if lookahead:
+            warnings.append("PIT look-ahead violation: counterfactual is not trustworthy")
 
         later = _later_session_bars(name, session, ohlcv_fn=ohlcv_fn, horizon=horizon)
         if any(str(bar.get("date") or "")[:10] <= session for bar in later):
             warnings.append("LOOKAHEAD: outcome series included T or earlier; those bars were dropped")
             later = [bar for bar in later if str(bar.get("date") or "")[:10] > session]
-        if not later:
+            lookahead = True
+            pit_status = PIT_INTEGRITY_FAILED
+        if not later and historical:
             warnings.append("No official subsequent bars after T")
 
+        withheld = {
+            "status": UNAVAILABLE,
+            "methodology": "PIT integrity failed. Counterfactual withheld.",
+            "simulated_entry": UNAVAILABLE,
+            "entry_source": ENTRY_UNAVAILABLE,
+            "stop": _honest(stop if historical else None),
+            "hypothetical_return_pct": UNAVAILABLE,
+            "hypothetical_r": UNAVAILABLE,
+            "mfe_pct": UNAVAILABLE,
+            "mae_pct": UNAVAILABLE,
+            "subsequent_market_return_pct": UNAVAILABLE,
+            "bars_used": 0,
+            "trustworthy": False,
+        }
         actual_action = actual or UNAVAILABLE
         simulated_action = alt or UNAVAILABLE
-        actual_outcome = _outcome_for_action(
-            action=actual_action if actual_action != UNKNOWN else "",
-            entry=entry,
-            stop=stop,
-            target=target,
-            later_bars=later,
-        ) if historical else {
-            "status": UNAVAILABLE,
-            "methodology": "No persisted historical decision. Outcome is not invented.",
-            "simulated_entry": UNAVAILABLE,
-            "stop": UNAVAILABLE,
-            "hypothetical_return_pct": UNAVAILABLE,
-            "hypothetical_r": UNAVAILABLE,
-            "mfe_pct": UNAVAILABLE,
-            "mae_pct": UNAVAILABLE,
-            "subsequent_market_return_pct": UNAVAILABLE,
-            "bars_used": 0,
-        }
-        simulated_outcome = _outcome_for_action(
-            action=simulated_action if simulated_action != UNAVAILABLE else "",
-            entry=entry,
-            stop=stop,
-            target=target,
-            later_bars=later,
-        ) if historical and simulated_action != UNAVAILABLE else {
-            "status": UNAVAILABLE,
-            "methodology": "Counterfactual was not run because the historical decision is missing or the alternative is unknown.",
-            "simulated_entry": UNAVAILABLE,
-            "stop": UNAVAILABLE,
-            "hypothetical_return_pct": UNAVAILABLE,
-            "hypothetical_r": UNAVAILABLE,
-            "mfe_pct": UNAVAILABLE,
-            "mae_pct": UNAVAILABLE,
-            "subsequent_market_return_pct": UNAVAILABLE,
-            "bars_used": 0,
-        }
+        if lookahead:
+            actual_outcome = dict(withheld)
+            actual_outcome["methodology"] = "PIT integrity failed. Actual path withheld."
+            simulated_outcome = dict(withheld)
+        elif historical:
+            actual_outcome = _outcome_for_action(
+                action=actual_action if actual_action != UNKNOWN else "",
+                entry=persisted_entry,
+                stop=stop,
+                target=target,
+                later_bars=later,
+                entry_source=original_entry_source,
+            )
+            simulated_outcome = _outcome_for_action(
+                action=simulated_action if simulated_action != UNAVAILABLE else "",
+                entry=simulated_entry,
+                stop=stop,
+                target=target,
+                later_bars=later,
+                entry_source=simulated_entry_source,
+            )
+        else:
+            actual_outcome = {
+                "status": UNAVAILABLE,
+                "methodology": "No persisted historical decision. Outcome is not invented.",
+                "simulated_entry": UNAVAILABLE,
+                "entry_source": ENTRY_UNAVAILABLE,
+                "stop": UNAVAILABLE,
+                "hypothetical_return_pct": UNAVAILABLE,
+                "hypothetical_r": UNAVAILABLE,
+                "mfe_pct": UNAVAILABLE,
+                "mae_pct": UNAVAILABLE,
+                "subsequent_market_return_pct": UNAVAILABLE,
+                "bars_used": 0,
+            }
+            simulated_outcome = {
+                "status": UNAVAILABLE,
+                "methodology": "Counterfactual was not run because the historical decision is missing or the alternative is unknown.",
+                "simulated_entry": UNAVAILABLE,
+                "entry_source": ENTRY_UNAVAILABLE,
+                "stop": UNAVAILABLE,
+                "hypothetical_return_pct": UNAVAILABLE,
+                "hypothetical_r": UNAVAILABLE,
+                "mfe_pct": UNAVAILABLE,
+                "mae_pct": UNAVAILABLE,
+                "subsequent_market_return_pct": UNAVAILABLE,
+                "bars_used": 0,
+            }
 
-        status = SUCCEEDED if historical else HISTORICAL_DECISION_UNAVAILABLE
+        if lookahead:
+            status = PIT_INTEGRITY_FAILED
+            reconstructed = dict(reconstructed)
+            pit_aligned = dict(reconstructed.get("pit") or {})
+            pit_aligned["future_evidence_used"] = True
+            reconstructed["pit"] = pit_aligned
+            if reconstructed.get("status") != FAILED:
+                reconstructed["status"] = PIT_INTEGRITY_FAILED
+        elif historical:
+            status = SUCCEEDED
+        else:
+            status = HISTORICAL_DECISION_UNAVAILABLE
+        if lookahead:
+            error = "PIT look-ahead violation; counterfactual is not trustworthy"
+            comparison = {
+                "actual_action": actual_action,
+                "simulated_action": simulated_action,
+                "actual_return_pct": UNAVAILABLE,
+                "simulated_return_pct": UNAVAILABLE,
+                "return_delta_pct": UNAVAILABLE,
+                "trustworthy": False,
+                "note": "PIT integrity failed. Comparison withheld.",
+            }
+        elif historical:
+            error = None
+            comparison = _compare(actual_outcome, simulated_outcome, actual=actual_action, alternative=simulated_action)
+        else:
+            error = "No persisted QuantTerm decision for this symbol at that timestamp"
+            comparison = {
+                "actual_action": UNAVAILABLE,
+                "simulated_action": UNAVAILABLE,
+                "return_delta_pct": UNAVAILABLE,
+                "note": "No persisted decision to compare.",
+            }
         payload = {
             "schema_version": 1,
             "kind": "PAST_DECISION_SIMULATION",
             "status": status,
-            "available": bool(historical),
+            "available": bool(historical) and not lookahead,
             "provenance": BACKTEST,
             "live_locked": True,
             "not_promotion_evidence": True,
+            "counterfactual_trustworthy": bool(historical) and not lookahead,
+            "pit_status": pit_status,
             "symbol": name,
             "as_of": session,
             "decision_id": str((historical or {}).get("decision_id") or decision_id or "") or UNAVAILABLE,
@@ -953,7 +1187,8 @@ def simulate_past_decision(
                 "reason_code": _honest((historical or {}).get("reason_code")),
                 "reason": _honest((historical or {}).get("reason")),
                 "tier": _honest((historical or {}).get("tier")),
-                "entry": _honest(entry if historical else None),
+                "entry": _honest(persisted_entry if historical else None),
+                "entry_source": original_entry_source if historical else ENTRY_UNAVAILABLE,
                 "stop": _honest(stop if historical else None),
                 "target": _honest(target if historical else None),
                 "source": "decision_journal" if historical and (historical or {}).get("decision_id") else (
@@ -961,15 +1196,19 @@ def simulate_past_decision(
                 ),
             },
             "simulated": {
-                "action": simulated_action if historical else UNAVAILABLE,
+                "action": simulated_action if historical and not lookahead else UNAVAILABLE,
+                "entry": _honest(simulated_entry if historical and not lookahead else None),
+                "entry_source": simulated_entry_source if historical and not lookahead else ENTRY_UNAVAILABLE,
                 "role": "COUNTERFACTUAL_ALTERNATIVE",
                 "defaulted": not bool(str(alternative or "").strip()) and bool(historical),
+                "trustworthy": bool(historical) and not lookahead,
             },
             "evidence_at_t": {
                 "label": "Information known at decision time",
                 "max_bar_date": max_bar or UNAVAILABLE,
                 "close": _honest(close_t),
-                "future_bars_used_for_decision": False,
+                "future_bars_used_for_decision": lookahead,
+                "pit_status": pit_status,
                 "financials": financial if financial.get("available") else {
                     "available": False,
                     "status": UNAVAILABLE,
@@ -995,15 +1234,9 @@ def simulate_past_decision(
                 "simulated": simulated_outcome,
                 "horizon_sessions": horizon,
             },
-            "comparison": _compare(actual_outcome, simulated_outcome, actual=actual_action, alternative=simulated_action)
-            if historical else {
-                "actual_action": UNAVAILABLE,
-                "simulated_action": UNAVAILABLE,
-                "return_delta_pct": UNAVAILABLE,
-                "note": "No persisted decision to compare.",
-            },
+            "comparison": comparison,
             "warnings": warnings,
-            "error": None if historical else "No persisted QuantTerm decision for this symbol at that timestamp",
+            "error": error,
         }
         fingerprint_src = {
             k: payload[k]

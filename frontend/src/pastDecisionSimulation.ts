@@ -1,6 +1,14 @@
 import type { PastDecisionSimulation } from './productApi'
 
-const HONEST = new Set(['UNAVAILABLE', 'UNKNOWN', 'NOT_ENTERED', 'FAILED', 'HISTORICAL_DECISION_UNAVAILABLE'])
+const HONEST = new Set([
+  'UNAVAILABLE',
+  'UNKNOWN',
+  'NOT_ENTERED',
+  'FAILED',
+  'HISTORICAL_DECISION_UNAVAILABLE',
+  'AMBIGUOUS_HISTORICAL_DECISION',
+  'PIT_INTEGRITY_FAILED',
+])
 
 export function isHonestUnknown(value: unknown): boolean {
   if (value == null || value === '') return true
@@ -12,11 +20,12 @@ export function displayHonest(value: unknown, fallback = 'UNAVAILABLE'): string 
   return String(value)
 }
 
-export function simulationUiState(result: PastDecisionSimulation | null, error = ''): 'idle' | 'error' | 'unavailable' | 'failed' | 'ready' {
+export function simulationUiState(result: PastDecisionSimulation | null, error = ''): 'idle' | 'error' | 'unavailable' | 'failed' | 'ambiguous' | 'ready' {
   if (error) return 'error'
   if (!result) return 'idle'
   const status = String(result.status || '').toUpperCase()
-  if (status === 'FAILED') return 'failed'
+  if (status === 'FAILED' || status === 'PIT_INTEGRITY_FAILED') return 'failed'
+  if (status === 'AMBIGUOUS_HISTORICAL_DECISION') return 'ambiguous'
   if (status === 'HISTORICAL_DECISION_UNAVAILABLE' || result.available === false) return 'unavailable'
   return 'ready'
 }

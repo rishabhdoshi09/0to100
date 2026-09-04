@@ -35,6 +35,8 @@ describe('past decision simulation contract', () => {
   it('surfaces missing history and failures instead of sample data', () => {
     expect(simulationUiState(null, 'backend down')).toBe('error')
     expect(simulationUiState({ status: 'FAILED', error: 'boom' })).toBe('failed')
+    expect(simulationUiState({ status: 'PIT_INTEGRITY_FAILED', available: false })).toBe('failed')
+    expect(simulationUiState({ status: 'AMBIGUOUS_HISTORICAL_DECISION', available: false, matches: [] })).toBe('ambiguous')
     expect(simulationUiState({ status: 'HISTORICAL_DECISION_UNAVAILABLE', available: false })).toBe('unavailable')
     expect(simulationUiState({ status: 'SUCCEEDED', available: true, original: { action: 'WAIT' } })).toBe('ready')
   })

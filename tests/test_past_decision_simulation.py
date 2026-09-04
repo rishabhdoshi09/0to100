@@ -8,8 +8,13 @@ import pandas as pd
 import terminal_product_api_parallel as api
 from product.decision_journal import persist
 from product.decision_simulator import (
+    AMBIGUOUS_HISTORICAL_DECISION,
+    ENTRY_CLOSE_AT_T,
+    ENTRY_PERSISTED,
+    ENTRY_UNAVAILABLE,
     HISTORICAL_DECISION_UNAVAILABLE,
     NOT_ENTERED,
+    PIT_INTEGRITY_FAILED,
     SUCCEEDED,
     UNAVAILABLE,
     simulate_past_decision,
@@ -35,6 +40,8 @@ def _bars(end: str, n: int = 80, *, future_days: int = 8, start: float = 100.0) 
 def _journal(tmp_path, monkeypatch, **over):
     monkeypatch.setattr("product.decision_journal.DB_PATH", tmp_path / "decisions.db")
     monkeypatch.setattr("product.decision_journal.JSONL_PATH", tmp_path / "decisions.jsonl")
+    monkeypatch.setenv("QT_PAPER_AUTOPILOT_JOURNAL", str(tmp_path / "no-journal.json"))
+    monkeypatch.setenv("QT_HISTORICAL_REPLAY_DIR", str(tmp_path / "replay"))
     row = {
         "decision_id": "2025-07-15|RELIANCE|WAIT|ENTRY_TOO_EXTENDED|fixture",
         "symbol": "RELIANCE",
@@ -76,6 +83,8 @@ def test_historical_decision_loads_from_journal(tmp_path, monkeypatch):
     assert out["original"]["action"] == "WAIT"
     assert out["original"]["reason_code"] == "ENTRY_TOO_EXTENDED"
     assert out["original"]["entry"] == 100.0
+    assert out["original"]["entry_source"] == ENTRY_PERSISTED
+    assert out["simulated"]["entry_source"] == ENTRY_PERSISTED
     assert out["provenance"] == BACKTEST
     assert out["live_locked"] is True
 
@@ -174,7 +183,10 @@ def test_missing_journal_does_not_invent_a_decision(tmp_path, monkeypatch):
     assert out["original"]["action"] == UNAVAILABLE
     assert out["simulated"]["action"] == UNAVAILABLE
     assert out["comparison"]["return_delta_pct"] == UNAVAILABLE
-    assert "invent" not in json.dumps(out["subsequent_outcome"]).lower() or True
+    blob = json.dumps(out["subsequent_outcome"]).lower()
+    assert "invented" in blob or "not invented" in blob
+    assert out["original"]["entry"] == UNAVAILABLE
+    assert out["original"]["entry_source"] == ENTRY_UNAVAILABLE
     assert out["error"]
 
 
@@ -248,4 +260,132 @@ def test_journal_fixture_smoke_reliance_july(tmp_path, monkeypatch):
     assert out["original"]["action"] == "WAIT"
     assert out["simulated"]["action"] == "BUY"
     assert out["evidence_at_t"]["future_bars_used_for_decision"] is False
+    assert out["pit_status"] == "PIT_OK"
     assert datetime.fromisoformat(out["generated_at"].replace("Z", "+00:00")).tzinfo == timezone.utc
+
+
+def test_missing_persisted_entry_is_not_original_close(tmp_path, monkeypatch):
+    _journal(tmp_path, monkeypatch, entry=None, hypothetical_entry=None)
+    out = simulate_past_decision(
+        symbol="RELIANCE",
+        as_of="2025-07-15",
+        alternative="BUY",
+        replay_engine=False,
+        ohlcv_fn=lambda _s: _bars("2025-07-15", start=100),
+    )
+    assert out["status"] == SUCCEEDED
+    assert out["original"]["action"] == "WAIT"
+    assert out["original"]["entry"] == UNAVAILABLE
+    assert out["original"]["entry_source"] == ENTRY_UNAVAILABLE
+    assert out["simulated"]["entry_source"] == ENTRY_CLOSE_AT_T
+    assert out["simulated"]["entry"] not in {None, UNAVAILABLE}
+    assert out["subsequent_outcome"]["simulated"]["entry_source"] == ENTRY_CLOSE_AT_T
+    assert "not a QuantTerm-recorded entry" in " ".join(out["warnings"])
+
+
+def test_decision_id_binds_to_symbol_and_date(tmp_path, monkeypatch):
+    row = _journal(tmp_path, monkeypatch)
+    did = row["decision_id"]
+    ok = simulate_past_decision(
+        symbol="RELIANCE",
+        as_of="2025-07-15",
+        decision_id=did,
+        alternative="BUY",
+        replay_engine=False,
+        ohlcv_fn=lambda _s: _bars("2025-07-15"),
+    )
+    assert ok["status"] == SUCCEEDED
+    assert ok["decision_id"] == did
+    wrong_symbol = simulate_past_decision(
+        symbol="TCS",
+        as_of="2025-07-15",
+        decision_id=did,
+        alternative="BUY",
+        replay_engine=False,
+        ohlcv_fn=lambda _s: _bars("2025-07-15"),
+    )
+    assert wrong_symbol["status"] == "FAILED"
+    assert "identity mismatch" in str(wrong_symbol["error"])
+    assert "RELIANCE" in str(wrong_symbol["error"])
+    assert wrong_symbol["original"]["entry"] == UNAVAILABLE
+    wrong_date = simulate_past_decision(
+        symbol="RELIANCE",
+        as_of="2025-01-01",
+        decision_id=did,
+        alternative="BUY",
+        replay_engine=False,
+        ohlcv_fn=lambda _s: _bars("2025-07-15"),
+    )
+    assert wrong_date["status"] == "FAILED"
+    assert "identity mismatch" in str(wrong_date["error"])
+    assert "2025-07-15" in str(wrong_date["error"])
+
+
+def test_ambiguous_same_day_requires_decision_id(tmp_path, monkeypatch):
+    _journal(tmp_path, monkeypatch)
+    persist({
+        "decision_id": "2025-07-15|RELIANCE|AVOID|LOW_QUALITY_SETUP|fixture-2",
+        "symbol": "RELIANCE",
+        "decision": "AVOID",
+        "decision_time": "2025-07-15T11:00:00+00:00",
+        "market_as_of": "2025-07-15",
+        "reason_code": "LOW_QUALITY_SETUP",
+        "entry": 101.0,
+        "stop": 94.0,
+        "target": 112.0,
+    }, path=tmp_path / "decisions.db")
+    ambiguous = simulate_past_decision(
+        symbol="RELIANCE",
+        as_of="2025-07-15",
+        alternative="BUY",
+        replay_engine=False,
+        ohlcv_fn=lambda _s: _bars("2025-07-15"),
+    )
+    assert ambiguous["status"] == AMBIGUOUS_HISTORICAL_DECISION
+    ids = {row["decision_id"] for row in ambiguous["matches"]}
+    assert "2025-07-15|RELIANCE|WAIT|ENTRY_TOO_EXTENDED|fixture" in ids
+    assert "2025-07-15|RELIANCE|AVOID|LOW_QUALITY_SETUP|fixture-2" in ids
+    chosen = simulate_past_decision(
+        symbol="RELIANCE",
+        as_of="2025-07-15",
+        decision_id="2025-07-15|RELIANCE|AVOID|LOW_QUALITY_SETUP|fixture-2",
+        alternative="BUY",
+        replay_engine=False,
+        ohlcv_fn=lambda _s: _bars("2025-07-15"),
+    )
+    assert chosen["status"] == SUCCEEDED
+    assert chosen["original"]["action"] == "AVOID"
+    assert chosen["decision_id"] == "2025-07-15|RELIANCE|AVOID|LOW_QUALITY_SETUP|fixture-2"
+
+
+def test_lookahead_replay_cannot_report_clean_success(tmp_path, monkeypatch):
+    _journal(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "product.decision_simulator._replay_at_t",
+        lambda *_a, **_k: {
+            "status": SUCCEEDED,
+            "decision": "WAIT",
+            "reason": "reconstructed",
+            "pit": {"future_evidence_used": True, "max_bar_date": "2025-08-01"},
+        },
+    )
+    out = simulate_past_decision(
+        symbol="RELIANCE",
+        as_of="2025-07-15",
+        alternative="BUY",
+        replay_engine=True,
+        ohlcv_fn=lambda _s: _bars("2025-07-15"),
+    )
+    assert out["status"] == PIT_INTEGRITY_FAILED
+    assert out["status"] != SUCCEEDED
+    assert out["available"] is False
+    assert out["counterfactual_trustworthy"] is False
+    assert out["pit_status"] == PIT_INTEGRITY_FAILED
+    assert out["evidence_at_t"]["future_bars_used_for_decision"] is True
+    assert out["evidence_at_t"]["pit_status"] == PIT_INTEGRITY_FAILED
+    assert out["evidence_at_t"]["reconstructed_engine_decision"]["pit"]["future_evidence_used"] is True
+    assert out["subsequent_outcome"]["simulated"]["status"] != "COMPUTED"
+    assert out["subsequent_outcome"]["simulated"]["trustworthy"] is False
+    api_payload = api.decision_simulator_get(symbol="RELIANCE", as_of="2025-07-15", alternative="BUY")
+    assert api_payload["status"] != SUCCEEDED
+    assert api_payload["status"] == PIT_INTEGRITY_FAILED
