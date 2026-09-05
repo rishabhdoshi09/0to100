@@ -10,11 +10,18 @@ ROOT = Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / "frontend" / "src"
 API_LITERAL = re.compile(r"(?P<quote>['\"`])(?P<path>/api/.*?)(?P=quote)")
 TEMPLATE_EXPR = re.compile(r"\$\{[^}]+\}")
+TRAILING_QUERY_EXPR = re.compile(
+    r"\$\{(?:query|params|searchParams)(?:\.toString\(\))?\}$"
+)
 FASTAPI_PARAM = re.compile(r"\{[^}]+\}")
 
 
 def _normalise(path: str) -> str:
     path = path.split("?", 1)[0]
+    # A template variable named query/params appended directly to a static path
+    # represents an optional query string, not another backend path segment.
+    # Strip it before normalising real dynamic path parameters.
+    path = TRAILING_QUERY_EXPR.sub("", path)
     path = TEMPLATE_EXPR.sub("{}", path)
     path = FASTAPI_PARAM.sub("{}", path)
     return path.rstrip("/") or "/"
@@ -28,8 +35,12 @@ def _frontend_api_paths() -> dict[str, set[str]]:
         text = path.read_text(encoding="utf-8")
         for match in API_LITERAL.finditer(text):
             raw = match.group("path")
-            # Ignore malformed/incomplete fragments rather than pretending they are a route.
+            # Ignore malformed/incomplete fragments rather than pretending they are
+            # routes. This matters for regex matches that begin inside a JavaScript
+            # template expression containing nested quotes.
             if not raw.startswith("/api/") or any(ch in raw for ch in ("\n", "\r")):
+                continue
+            if raw.count("${") != raw.count("}"):
                 continue
             normal = _normalise(raw)
             found.setdefault(normal, set()).add(str(path.relative_to(ROOT)))
