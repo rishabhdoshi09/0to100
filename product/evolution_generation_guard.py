@@ -1,8 +1,15 @@
 """Generation guard for autonomous historical evidence.
 
-Historical reproduction is valid only for the exact policy/data generation that
-produced it. If decision rules, PIT versions, or the warehouse fingerprint move,
-old derived replay artifacts are invalidated before PAPER selection can use them.
+Historical reproduction is valid only for the exact decision-system generation
+that produced it. If committee/risk/PIT-contract versions or the champion rules
+hash move, old derived replay artifacts are invalidated before PAPER selection
+can use them.
+
+The PIT warehouse *content* fingerprint is recorded for audit but deliberately
+excluded from the immediate invalidation key: new filings/evidence may arrive all
+day and must not repeatedly block paper selection. Ordinary data growth is picked
+up by autonomous_evolution's bounded session refresh cadence; rule/contract changes
+invalidate immediately.
 
 Only derived autonomous-evolution artifacts are removed. Source market data,
 forward paper evidence, and live state are never touched.
@@ -55,14 +62,16 @@ def current_generation() -> dict[str, Any]:
     except Exception as exc:
         champion = {"error": str(exc)[:160]}
 
-    payload = {
+    # Immediate scientific invalidation key: decision semantics, not everyday
+    # evidence-volume churn. Warehouse content remains attached as audit context.
+    identity_payload = {
         "versions": _json_safe(versions),
-        "warehouse": _json_safe(warehouse),
         "champion": _json_safe(champion),
     }
-    raw = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
+    raw = json.dumps(identity_payload, sort_keys=True, default=str, separators=(",", ":"))
     return {
-        **payload,
+        **identity_payload,
+        "warehouse_fingerprint": _json_safe(warehouse),
         "fingerprint": hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20],
     }
 
