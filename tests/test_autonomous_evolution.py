@@ -133,6 +133,7 @@ def test_positive_gross_only_paper_does_not_fake_confidence_boost():
 
 def test_production_history_gate_blocks_until_bootstrap_completes(monkeypatch):
     import product.autonomous_evolution as evolution
+    import product.evolution_generation_guard as generation_guard
     from product.evidence_policy_engine import _historical_gate
 
     monkeypatch.setattr(
@@ -146,6 +147,11 @@ def test_production_history_gate_blocks_until_bootstrap_completes(monkeypatch):
         },
     )
     monkeypatch.setattr(evolution, "ensure_started_async", lambda: {"status": "RUNNING"})
+    monkeypatch.setattr(
+        generation_guard,
+        "ensure_current_generation",
+        lambda: {"fingerprint": "test-gen", "historical_replay_required": True, "changed": False},
+    )
 
     gate = _historical_gate({"setup_label": "VCP"}, [], enabled=True)
 
@@ -157,6 +163,7 @@ def test_production_history_gate_blocks_until_bootstrap_completes(monkeypatch):
 
 def test_production_history_gate_releases_only_reproduced_setup(monkeypatch):
     import product.autonomous_evolution as evolution
+    import product.evolution_generation_guard as generation_guard
     from product.evidence_policy_engine import _historical_gate
 
     monkeypatch.setattr(
@@ -168,6 +175,12 @@ def test_production_history_gate_releases_only_reproduced_setup(monkeypatch):
             "analysis_complete": True,
             "paper_ready_setups": 1,
         },
+    )
+    monkeypatch.setattr(evolution, "ensure_started_async", lambda: {"status": "SUCCEEDED"})
+    monkeypatch.setattr(
+        generation_guard,
+        "ensure_current_generation",
+        lambda: {"fingerprint": "test-gen", "historical_replay_required": False, "changed": False},
     )
 
     gate = _historical_gate(
