@@ -119,11 +119,8 @@ def _historical_gate(
             "live_locked": True,
         }
     try:
-        from product.autonomous_evolution import (
-            bootstrap_status,
-            confidence_from_policies,
-            ensure_started_async,
-        )
+        from product.autonomous_evolution import bootstrap_status, ensure_started_async
+        from product.evidence_confidence import confidence_from_policies
 
         state = bootstrap_status()
         if not state.get("analysis_complete"):
