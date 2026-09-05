@@ -570,6 +570,14 @@ class OperationStore:
         return self._decode_summary(row)
 
     def recent(self, limit: int = 80) -> list[dict[str, Any]]:
+        """Return lightweight recent status rows; never fetch historical result blobs.
+
+        This method is intentionally the safe default because it feeds desk/status
+        projections. Call ``recent_full`` or ``get`` only on explicit detail paths.
+        """
+        return self.recent_summary(limit)
+
+    def recent_full(self, limit: int = 80) -> list[dict[str, Any]]:
         """Return full recent operations for explicit detail/history consumers."""
         with self._connect() as con:
             rows = con.execute(
