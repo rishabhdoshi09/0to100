@@ -20,6 +20,24 @@ def _buy(setup: str, r_value: float) -> dict:
     }
 
 
+def _historical_policy(setup: str = "VCP", score: float = 72.0) -> dict:
+    return {
+        "policy_id": f"HIST_SETUP::{setup}",
+        "dimension": "setup",
+        "bucket": setup,
+        "sample_size": 30,
+        "expectancy_R": 0.45,
+        "expectancy_difference_R": 0.45,
+        "production_status": "ELIGIBLE",
+        "confidence": "REPRODUCED_BACKTEST",
+        "affects_selection": True,
+        "historical_reproduced_positive": True,
+        "historical_confidence_score": score,
+        "splits_tested": 3,
+        "positive_splits": 3,
+    }
+
+
 def test_reproduced_history_requires_multiple_positive_splits(monkeypatch):
     monkeypatch.setenv("QT_EVOLUTION_MIN_HIST_N", "8")
     monkeypatch.setenv("QT_EVOLUTION_MIN_POSITIVE_SPLITS", "2")
@@ -58,17 +76,7 @@ def test_one_good_backtest_slice_is_not_reproduction(monkeypatch):
 
 
 def test_forward_paper_can_strengthen_or_decay_historical_confidence():
-    historical = {
-        "policy_id": "HIST_SETUP::VCP",
-        "dimension": "setup",
-        "bucket": "VCP",
-        "sample_size": 30,
-        "expectancy_R": 0.45,
-        "historical_reproduced_positive": True,
-        "historical_confidence_score": 72.0,
-        "splits_tested": 3,
-        "positive_splits": 3,
-    }
+    historical = _historical_policy()
     positive_forward = {
         "policy_id": "SETUP::VCP",
         "dimension": "setup",
@@ -104,15 +112,7 @@ def test_forward_paper_can_strengthen_or_decay_historical_confidence():
 
 
 def test_positive_gross_only_paper_does_not_fake_confidence_boost():
-    historical = {
-        "policy_id": "HIST_SETUP::VCP",
-        "sample_size": 30,
-        "expectancy_R": 0.40,
-        "historical_reproduced_positive": True,
-        "historical_confidence_score": 70.0,
-        "splits_tested": 3,
-        "positive_splits": 3,
-    }
+    historical = _historical_policy(score=70.0)
     gross_only = {
         "policy_id": "SETUP::VCP",
         "sample_size": 15,
@@ -129,6 +129,63 @@ def test_positive_gross_only_paper_does_not_fake_confidence_boost():
     assert result["forward_observed_n"] == 15
     assert result["confidence_stage"] == "FORWARD_EVIDENCE_UNTRUSTED"
     assert result["forward_trusted_positive"] is False
+
+
+def test_production_history_gate_blocks_until_bootstrap_completes(monkeypatch):
+    import product.autonomous_evolution as evolution
+    from product.evidence_policy_engine import _historical_gate
+
+    monkeypatch.setattr(
+        evolution,
+        "bootstrap_status",
+        lambda: {
+            "required": True,
+            "status": "RUNNING",
+            "analysis_complete": False,
+            "paper_ready_setups": 0,
+        },
+    )
+    monkeypatch.setattr(evolution, "ensure_started_async", lambda: {"status": "RUNNING"})
+
+    gate = _historical_gate({"setup_label": "VCP"}, [], enabled=True)
+
+    assert gate["paper_eligible"] is False
+    assert gate["bootstrap_complete"] is False
+    assert gate["confidence_stage"] == "HISTORICAL_BOOTSTRAP"
+    assert gate["live_locked"] is True
+
+
+def test_production_history_gate_releases_only_reproduced_setup(monkeypatch):
+    import product.autonomous_evolution as evolution
+    from product.evidence_policy_engine import _historical_gate
+
+    monkeypatch.setattr(
+        evolution,
+        "bootstrap_status",
+        lambda: {
+            "required": True,
+            "status": "SUCCEEDED",
+            "analysis_complete": True,
+            "paper_ready_setups": 1,
+        },
+    )
+
+    gate = _historical_gate(
+        {"setup_label": "VCP"},
+        [_historical_policy()],
+        enabled=True,
+    )
+    unknown = _historical_gate(
+        {"setup_label": "UNSEEN"},
+        [_historical_policy()],
+        enabled=True,
+    )
+
+    assert gate["paper_eligible"] is True
+    assert gate["historical_ready"] is True
+    assert gate["bootstrap_complete"] is True
+    assert unknown["paper_eligible"] is False
+    assert unknown["historical_ready"] is False
 
 
 def test_split_plan_is_disjoint_and_leaves_forward_outcome_buffer(monkeypatch):
