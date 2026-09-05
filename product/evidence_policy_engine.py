@@ -121,9 +121,11 @@ def _historical_gate(
     try:
         from product.autonomous_evolution import bootstrap_status, ensure_started_async
         from product.evidence_confidence import confidence_from_policies
+        from product.evolution_generation_guard import ensure_current_generation
 
+        generation = ensure_current_generation()
         state = bootstrap_status()
-        if not state.get("analysis_complete"):
+        if generation.get("historical_replay_required") or not state.get("analysis_complete"):
             ensure_started_async()
             state = bootstrap_status()
         confidence = confidence_from_policies(candidate, policies)
@@ -136,6 +138,8 @@ def _historical_gate(
                 "bootstrap_status": state.get("status") or "RUNNING",
                 "bootstrap_complete": False,
                 "paper_ready_setups": int(state.get("paper_ready_setups") or 0),
+                "generation_fingerprint": generation.get("fingerprint"),
+                "generation_changed": bool(generation.get("changed")),
                 "live_locked": True,
             }
         return {
@@ -144,6 +148,8 @@ def _historical_gate(
             "bootstrap_status": state.get("status") or "SUCCEEDED",
             "bootstrap_complete": True,
             "paper_ready_setups": int(state.get("paper_ready_setups") or 0),
+            "generation_fingerprint": generation.get("fingerprint"),
+            "generation_changed": bool(generation.get("changed")),
             "live_locked": True,
         }
     except Exception as exc:
