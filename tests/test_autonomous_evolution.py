@@ -3,9 +3,9 @@ from __future__ import annotations
 from product.autonomous_evolution import (
     _aggregate_splits,
     _split_plan,
-    confidence_from_policies,
     summarize_report,
 )
+from product.evidence_confidence import confidence_from_policies
 
 
 def _buy(setup: str, r_value: float) -> dict:
@@ -77,6 +77,7 @@ def test_forward_paper_can_strengthen_or_decay_historical_confidence():
         "expectancy_R": 0.40,
         "expectancy_difference_R": 0.40,
         "evidence_source": "paper_forward_taken_execution_adjusted",
+        "affects_selection": True,
     }
     negative_forward = {
         **positive_forward,
@@ -100,6 +101,34 @@ def test_forward_paper_can_strengthen_or_decay_historical_confidence():
     assert decayed["confidence_stage"] == "FORWARD_DECAYED"
     assert decayed["paper_eligible"] is False
     assert decayed["live_locked"] is True
+
+
+def test_positive_gross_only_paper_does_not_fake_confidence_boost():
+    historical = {
+        "policy_id": "HIST_SETUP::VCP",
+        "sample_size": 30,
+        "expectancy_R": 0.40,
+        "historical_reproduced_positive": True,
+        "historical_confidence_score": 70.0,
+        "splits_tested": 3,
+        "positive_splits": 3,
+    }
+    gross_only = {
+        "policy_id": "SETUP::VCP",
+        "sample_size": 15,
+        "expectancy_R": 0.60,
+        "expectancy_difference_R": 0.60,
+        "evidence_source": "paper_forward_taken_gross_only",
+        "affects_selection": False,
+    }
+
+    result = confidence_from_policies({"setup_label": "VCP"}, [historical, gross_only])
+
+    assert result["evidence_confidence_score"] == 70.0
+    assert result["forward_n"] == 0
+    assert result["forward_observed_n"] == 15
+    assert result["confidence_stage"] == "FORWARD_EVIDENCE_UNTRUSTED"
+    assert result["forward_trusted_positive"] is False
 
 
 def test_split_plan_is_disjoint_and_leaves_forward_outcome_buffer(monkeypatch):
