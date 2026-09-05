@@ -22,6 +22,32 @@ KIND_RUNNING_LEASE_S = {
     "DUE_DILIGENCE_ACQUIRE": 15 * 60,
 }
 
+# Status/history reads are on the hot path for Home, Dashboard, News and readiness.
+# Keep them metadata-only so a 700-800KB MARKET_SCAN result can never turn a cheap
+# status request into a multi-second blob read + JSON decode. Full payload/result
+# remains available through get(operation_id) and the explicit full-history method.
+_SUMMARY_COLUMNS = (
+    "operation_id",
+    "kind",
+    "lane",
+    "status",
+    "requested_by",
+    "requested_at",
+    "started_at",
+    "finished_at",
+    "updated_at",
+    "attempt",
+    "worker_pid",
+    "stage",
+    "message",
+    "progress_current",
+    "progress_total",
+    "error_code",
+    "error_message",
+    "priority",
+)
+_SUMMARY_SELECT = ",".join(_SUMMARY_COLUMNS)
+
 
 def pid_is_alive(pid: int | None) -> bool:
     """True when this OS still has a process for ``pid``."""
@@ -201,6 +227,10 @@ class OperationStore:
                 "CREATE INDEX IF NOT EXISTS idx_operations_lease "
                 "ON operations(status, lane, priority, requested_at)"
             )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_operations_requested_at "
+                "ON operations(requested_at DESC)"
+            )
 
     @staticmethod
     def _decode(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -213,6 +243,17 @@ class OperationStore:
                 data[key.removesuffix("_json")] = json.loads(raw or "{}")
             except Exception:
                 data[key.removesuffix("_json")] = {}
+        total = int(data.get("progress_total") or 0)
+        current = int(data.get("progress_current") or 0)
+        data["progress_pct"] = round((current / total) * 100, 1) if total > 0 else None
+        return data
+
+    @staticmethod
+    def _decode_summary(row: sqlite3.Row | None) -> dict[str, Any] | None:
+        """Decode metadata-only rows without ever touching payload/result JSON."""
+        if row is None:
+            return None
+        data = dict(row)
         total = int(data.get("progress_total") or 0)
         current = int(data.get("progress_current") or 0)
         data["progress_pct"] = round((current / total) * 100, 1) if total > 0 else None
@@ -502,6 +543,7 @@ class OperationStore:
         return self._decode(row)
 
     def get(self, operation_id: str) -> dict[str, Any] | None:
+        """Return one full operation, including payload/result JSON."""
         with self._connect() as con:
             row = con.execute(
                 "SELECT * FROM operations WHERE operation_id=?", (operation_id,)
@@ -509,6 +551,7 @@ class OperationStore:
         return self._decode(row)
 
     def latest(self, kind: str) -> dict[str, Any] | None:
+        """Return the full latest operation for callers that explicitly need details."""
         with self._connect() as con:
             row = con.execute(
                 "SELECT * FROM operations WHERE kind=? ORDER BY requested_at DESC LIMIT 1",
@@ -516,7 +559,18 @@ class OperationStore:
             ).fetchone()
         return self._decode(row)
 
+    def latest_summary(self, kind: str) -> dict[str, Any] | None:
+        """Latest operation metadata without payload/result blob I/O or JSON decode."""
+        with self._connect() as con:
+            row = con.execute(
+                f"SELECT {_SUMMARY_SELECT} FROM operations "
+                "WHERE kind=? ORDER BY requested_at DESC LIMIT 1",
+                (str(kind).upper(),),
+            ).fetchone()
+        return self._decode_summary(row)
+
     def recent(self, limit: int = 80) -> list[dict[str, Any]]:
+        """Return full recent operations for explicit detail/history consumers."""
         with self._connect() as con:
             rows = con.execute(
                 "SELECT * FROM operations ORDER BY requested_at DESC LIMIT ?",
@@ -524,7 +578,18 @@ class OperationStore:
             ).fetchall()
         return [self._decode(row) or {} for row in rows]
 
+    def recent_summary(self, limit: int = 80) -> list[dict[str, Any]]:
+        """Return recent operation metadata only; safe for latency-sensitive status APIs."""
+        with self._connect() as con:
+            rows = con.execute(
+                f"SELECT {_SUMMARY_SELECT} FROM operations "
+                "ORDER BY requested_at DESC LIMIT ?",
+                (max(1, min(int(limit), 250)),),
+            ).fetchall()
+        return [self._decode_summary(row) or {} for row in rows]
+
     def active(self) -> list[dict[str, Any]]:
+        """Return full active operations for explicit detail consumers."""
         with self._connect() as con:
             rows = con.execute(
                 "SELECT * FROM operations WHERE status IN (?,?) "
@@ -532,6 +597,16 @@ class OperationStore:
                 (RUNNING, PENDING, RUNNING),
             ).fetchall()
         return [self._decode(row) or {} for row in rows]
+
+    def active_summary(self) -> list[dict[str, Any]]:
+        """Return active operation metadata only for UI/status hot paths."""
+        with self._connect() as con:
+            rows = con.execute(
+                f"SELECT {_SUMMARY_SELECT} FROM operations WHERE status IN (?,?) "
+                "ORDER BY CASE status WHEN ? THEN 0 ELSE 1 END, requested_at ASC",
+                (RUNNING, PENDING, RUNNING),
+            ).fetchall()
+        return [self._decode_summary(row) or {} for row in rows]
 
     def counts(self) -> dict[str, int]:
         with self._connect() as con:
