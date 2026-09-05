@@ -43,8 +43,9 @@ describe('scanRunner semantics', () => {
     expect(friendlyStageLabel('', 'PENDING', 20)).toBe('Waiting for the scan worker…')
   })
 
-  it('polls the scan worker several times a second so a click looks instant', () => {
-    expect(SCAN_POLL_MS).toBeLessThanOrEqual(300)
+  it('keeps progress responsive without hammering the local API', () => {
+    expect(SCAN_POLL_MS).toBeGreaterThanOrEqual(750)
+    expect(SCAN_POLL_MS).toBeLessThanOrEqual(1500)
   })
 
   it('detects terminal and active statuses', () => {

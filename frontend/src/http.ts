@@ -22,19 +22,34 @@ export async function readJson<T>(response: Response): Promise<T> {
   return response.json() as Promise<T>
 }
 
-export function withTimeout(ms: number, parent?: AbortSignal): AbortSignal {
+type TimeoutHandle = {
+  signal: AbortSignal
+  cleanup: () => void
+}
+
+function createTimeoutHandle(ms: number, parent?: AbortSignal): TimeoutHandle {
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), Math.max(1, ms))
-  const abort = () => {
-    clearTimeout(timer)
+  let cleaned = false
+  const timeout = setTimeout(() => controller.abort(), Math.max(1, ms))
+  const onParentAbort = () => {
     if (!controller.signal.aborted) controller.abort()
   }
   if (parent) {
-    if (parent.aborted) abort()
-    else parent.addEventListener('abort', abort, { once: true })
+    if (parent.aborted) onParentAbort()
+    else parent.addEventListener('abort', onParentAbort, { once: true })
   }
-  controller.signal.addEventListener('abort', () => clearTimeout(timer), { once: true })
-  return controller.signal
+  const cleanup = () => {
+    if (cleaned) return
+    cleaned = true
+    clearTimeout(timeout)
+    if (parent) parent.removeEventListener('abort', onParentAbort)
+  }
+  controller.signal.addEventListener('abort', cleanup, { once: true })
+  return { signal: controller.signal, cleanup }
+}
+
+export function withTimeout(ms: number, parent?: AbortSignal): AbortSignal {
+  return createTimeoutHandle(ms, parent).signal
 }
 
 export async function fetchJson<T>(
@@ -47,9 +62,9 @@ export async function fetchJson<T>(
     dedupe?: boolean
   }
   const run = async () => {
-    const combined = withTimeout(timeoutMs, signal || undefined)
+    const timed = createTimeoutHandle(timeoutMs, signal || undefined)
     try {
-      const response = await fetch(input, { ...rest, signal: combined })
+      const response = await fetch(input, { ...rest, signal: timed.signal })
       return await readJson<T>(response)
     } catch (reason) {
       const name = reason instanceof Error ? reason.name : ''
@@ -57,6 +72,11 @@ export async function fetchJson<T>(
         throw new Error(REQUEST_TIMEOUT_MESSAGE)
       }
       throw reason
+    } finally {
+      // A successful fetch used to leave its timeout and parent abort listener alive
+      // until the full timeout window elapsed. With several desk pollers that created
+      // avoidable timer/listener pressure. Always release them when the request ends.
+      timed.cleanup()
     }
   }
   if (dedupe === false) return run()

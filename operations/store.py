@@ -22,6 +22,53 @@ KIND_RUNNING_LEASE_S = {
     "DUE_DILIGENCE_ACQUIRE": 15 * 60,
 }
 
+# Status/history reads are on the hot path for Home, Dashboard, News and readiness.
+# Keep them metadata-only so a 700-800KB MARKET_SCAN result can never turn a cheap
+# status request into a multi-second blob read + JSON decode. Full payload/result
+# remains available through get(operation_id) and the explicit full-history method.
+_SUMMARY_COLUMNS = (
+    "operation_id",
+    "kind",
+    "lane",
+    "status",
+    "requested_by",
+    "requested_at",
+    "started_at",
+    "finished_at",
+    "updated_at",
+    "attempt",
+    "worker_pid",
+    "stage",
+    "message",
+    "progress_current",
+    "progress_total",
+    "error_code",
+    "error_message",
+    "priority",
+)
+_SUMMARY_SELECT = ",".join(_SUMMARY_COLUMNS)
+_MARKET_SCAN_ARTIFACT = "logs/product/latest_momentum_scan.json"
+
+
+def _result_for_storage(kind: str, status: str, result: dict[str, Any] | None) -> dict[str, Any]:
+    """Keep operation history compact while preserving the canonical result artifact.
+
+    Successful market scans already persist their complete payload in the canonical
+    product scan store. Duplicating that payload into every operation row made a
+    status/history request read and decode tens of megabytes. Store only the compact
+    execution summary/reference here; explicit non-scan results remain unchanged.
+    Existing historical rows are intentionally left readable for compatibility.
+    """
+    data = dict(result or {})
+    if str(kind).upper() == "MARKET_SCAN" and status == SUCCEEDED and "payload" in data:
+        data.pop("payload", None)
+        data["artifact"] = {
+            "type": "canonical_scan_store",
+            "path": _MARKET_SCAN_ARTIFACT,
+        }
+        data["result_compacted"] = True
+    return data
+
 
 def pid_is_alive(pid: int | None) -> bool:
     """True when this OS still has a process for ``pid``."""
@@ -82,9 +129,9 @@ class _BorrowedConnection:
 class OperationStore:
     """SQLite-backed queue shared by the API and the market-operations worker.
 
-    Every public method opens a short-lived SQLite connection. This avoids sharing
-    connection objects across the API process, worker process and worker threads.
-    WAL mode keeps dashboard reads responsive while progress is being written.
+    Connections are cached per worker thread so polling does not continually open
+    new file descriptors. WAL keeps readers and the dedicated operation worker from
+    blocking each other during normal status/progress traffic.
     """
 
     def __init__(self, path: str | Path = "logs/market_ops/jobs.db") -> None:
@@ -201,6 +248,10 @@ class OperationStore:
                 "CREATE INDEX IF NOT EXISTS idx_operations_lease "
                 "ON operations(status, lane, priority, requested_at)"
             )
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS idx_operations_requested_at "
+                "ON operations(requested_at DESC)"
+            )
 
     @staticmethod
     def _decode(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -213,6 +264,17 @@ class OperationStore:
                 data[key.removesuffix("_json")] = json.loads(raw or "{}")
             except Exception:
                 data[key.removesuffix("_json")] = {}
+        total = int(data.get("progress_total") or 0)
+        current = int(data.get("progress_current") or 0)
+        data["progress_pct"] = round((current / total) * 100, 1) if total > 0 else None
+        return data
+
+    @staticmethod
+    def _decode_summary(row: sqlite3.Row | None) -> dict[str, Any] | None:
+        """Decode metadata-only rows without ever touching payload/result JSON."""
+        if row is None:
+            return None
+        data = dict(row)
         total = int(data.get("progress_total") or 0)
         current = int(data.get("progress_current") or 0)
         data["progress_pct"] = round((current / total) * 100, 1) if total > 0 else None
@@ -313,8 +375,8 @@ class OperationStore:
                 return None
             operation_id = str(row["operation_id"])
             con.execute(
-                "UPDATE operations SET status=?,started_at=COALESCE(started_at,?),"
-                "updated_at=?,attempt=attempt+1,worker_pid=?,stage=?,message=? "
+                "UPDATE operations SET status=?,started_at=?,finished_at=NULL,updated_at=?,"
+                "attempt=attempt+1,worker_pid=?,stage=?,message=?,error_code='',error_message='' "
                 "WHERE operation_id=? AND status=?",
                 (
                     RUNNING,
@@ -371,6 +433,12 @@ class OperationStore:
             raise ValueError(f"invalid terminal status: {status}")
         now = time.time()
         with self._connect() as con:
+            row = con.execute(
+                "SELECT kind FROM operations WHERE operation_id=?",
+                (operation_id,),
+            ).fetchone()
+            kind = str(row["kind"] or "") if row is not None else ""
+            stored_result = _result_for_storage(kind, status, result)
             con.execute(
                 """
                 UPDATE operations SET status=?,finished_at=?,updated_at=?,stage=?,message=?,
@@ -385,7 +453,7 @@ class OperationStore:
                     now,
                     status,
                     str(message),
-                    json.dumps(result or {}, default=str),
+                    json.dumps(stored_result, default=str),
                     str(error_code or ""),
                     str(error_message or ""),
                     status,
@@ -395,12 +463,12 @@ class OperationStore:
             )
 
     def recover_orphans(self) -> int:
-        """Requeue operations left RUNNING by a crashed worker process."""
+        """Requeue operations left RUNNING by a stopped worker with a fresh next lease clock."""
         now = time.time()
         with self._connect() as con:
             cur = con.execute(
-                "UPDATE operations SET status=?,updated_at=?,stage=?,message=?,worker_pid=NULL "
-                "WHERE status=?",
+                "UPDATE operations SET status=?,started_at=NULL,finished_at=NULL,updated_at=?,"
+                "stage=?,message=?,worker_pid=NULL WHERE status=?",
                 (
                     PENDING,
                     now,
@@ -433,8 +501,8 @@ class OperationStore:
                 if pid_i and pid_is_alive(pid_i):
                     continue
                 con.execute(
-                    "UPDATE operations SET status=?,updated_at=?,stage=?,message=?,worker_pid=NULL "
-                    "WHERE operation_id=? AND status=?",
+                    "UPDATE operations SET status=?,started_at=NULL,finished_at=NULL,updated_at=?,"
+                    "stage=?,message=?,worker_pid=NULL WHERE operation_id=? AND status=?",
                     (
                         PENDING,
                         now,
@@ -453,10 +521,12 @@ class OperationStore:
         now: float | None = None,
         deadlines: dict[str, float] | None = None,
     ) -> int:
-        """Fail RUNNING jobs that exceeded their declared lease/deadline.
+        """Fail only abandoned RUNNING rows that exceeded their lease.
 
-        A live worker that is stuck on one provider must not occupy RUNNING
-        forever. Heartbeats update ``updated_at``; the clock is ``started_at``.
+        Never mark an operation terminal while its recorded worker PID is alive:
+        changing SQLite state cannot stop the Python lane that is still executing,
+        and doing so can create a second PENDING operation behind an invisible live
+        scan. Operation-specific code owns real execution deadlines for live work.
         """
         clock = time.time() if now is None else float(now)
         limits = dict(KIND_RUNNING_LEASE_S)
@@ -464,14 +534,29 @@ class OperationStore:
             limits.update({str(k): float(v) for k, v in deadlines.items()})
         recovered = 0
         with self._connect() as con:
-            rows = list(con.execute("SELECT * FROM operations WHERE status=?", (RUNNING,)))
+            rows = list(
+                con.execute(
+                    "SELECT operation_id,kind,worker_pid,started_at,updated_at "
+                    "FROM operations WHERE status=?",
+                    (RUNNING,),
+                )
+            )
             for row in rows:
-                started = float(row["started_at"] or row["updated_at"] or 0)
+                try:
+                    worker_pid = int(row["worker_pid"] or 0)
+                except (TypeError, ValueError):
+                    worker_pid = 0
+                if worker_pid and pid_is_alive(worker_pid):
+                    continue
+                last_activity = max(
+                    float(row["started_at"] or 0),
+                    float(row["updated_at"] or 0),
+                )
                 kind = str(row["kind"] or "")
                 limit = float(limits.get(kind, DEFAULT_RUNNING_LEASE_S))
-                if started <= 0 or (clock - started) < limit:
+                if last_activity <= 0 or (clock - last_activity) < limit:
                     continue
-                age = clock - started
+                age = clock - last_activity
                 con.execute(
                     """
                     UPDATE operations SET status=?,finished_at=?,updated_at=?,stage=?,message=?,
@@ -483,9 +568,9 @@ class OperationStore:
                         clock,
                         clock,
                         FAILED,
-                        f"{kind} exceeded its {int(limit)}s deadline after {int(age)}s",
+                        f"{kind} abandoned its {int(limit)}s lease after {int(age)}s without a live worker",
                         "DEADLINE_EXCEEDED",
-                        f"Operation stayed RUNNING for {int(age)}s",
+                        f"Operation had no live worker and no activity for {int(age)}s",
                         str(row["operation_id"]),
                         RUNNING,
                     ),
@@ -502,6 +587,7 @@ class OperationStore:
         return self._decode(row)
 
     def get(self, operation_id: str) -> dict[str, Any] | None:
+        """Return one full operation, including payload/result JSON."""
         with self._connect() as con:
             row = con.execute(
                 "SELECT * FROM operations WHERE operation_id=?", (operation_id,)
@@ -509,6 +595,7 @@ class OperationStore:
         return self._decode(row)
 
     def latest(self, kind: str) -> dict[str, Any] | None:
+        """Return the full latest operation for callers that explicitly need details."""
         with self._connect() as con:
             row = con.execute(
                 "SELECT * FROM operations WHERE kind=? ORDER BY requested_at DESC LIMIT 1",
@@ -516,7 +603,26 @@ class OperationStore:
             ).fetchone()
         return self._decode(row)
 
+    def latest_summary(self, kind: str) -> dict[str, Any] | None:
+        """Latest operation metadata without payload/result blob I/O or JSON decode."""
+        with self._connect() as con:
+            row = con.execute(
+                f"SELECT {_SUMMARY_SELECT} FROM operations "
+                "WHERE kind=? ORDER BY requested_at DESC LIMIT 1",
+                (str(kind).upper(),),
+            ).fetchone()
+        return self._decode_summary(row)
+
     def recent(self, limit: int = 80) -> list[dict[str, Any]]:
+        """Return lightweight recent status rows; never fetch historical result blobs.
+
+        This method is intentionally the safe default because it feeds desk/status
+        projections. Call ``recent_full`` or ``get`` only on explicit detail paths.
+        """
+        return self.recent_summary(limit)
+
+    def recent_full(self, limit: int = 80) -> list[dict[str, Any]]:
+        """Return full recent operations for explicit detail/history consumers."""
         with self._connect() as con:
             rows = con.execute(
                 "SELECT * FROM operations ORDER BY requested_at DESC LIMIT ?",
@@ -524,7 +630,18 @@ class OperationStore:
             ).fetchall()
         return [self._decode(row) or {} for row in rows]
 
+    def recent_summary(self, limit: int = 80) -> list[dict[str, Any]]:
+        """Return recent operation metadata only; safe for latency-sensitive status APIs."""
+        with self._connect() as con:
+            rows = con.execute(
+                f"SELECT {_SUMMARY_SELECT} FROM operations "
+                "ORDER BY requested_at DESC LIMIT ?",
+                (max(1, min(int(limit), 250)),),
+            ).fetchall()
+        return [self._decode_summary(row) or {} for row in rows]
+
     def active(self) -> list[dict[str, Any]]:
+        """Return full active operations for explicit detail consumers."""
         with self._connect() as con:
             rows = con.execute(
                 "SELECT * FROM operations WHERE status IN (?,?) "
@@ -532,6 +649,16 @@ class OperationStore:
                 (RUNNING, PENDING, RUNNING),
             ).fetchall()
         return [self._decode(row) or {} for row in rows]
+
+    def active_summary(self) -> list[dict[str, Any]]:
+        """Return active operation metadata only for UI/status hot paths."""
+        with self._connect() as con:
+            rows = con.execute(
+                f"SELECT {_SUMMARY_SELECT} FROM operations WHERE status IN (?,?) "
+                "ORDER BY CASE status WHEN ? THEN 0 ELSE 1 END, requested_at ASC",
+                (RUNNING, PENDING, RUNNING),
+            ).fetchall()
+        return [self._decode_summary(row) or {} for row in rows]
 
     def counts(self) -> dict[str, int]:
         with self._connect() as con:
