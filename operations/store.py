@@ -47,6 +47,27 @@ _SUMMARY_COLUMNS = (
     "priority",
 )
 _SUMMARY_SELECT = ",".join(_SUMMARY_COLUMNS)
+_MARKET_SCAN_ARTIFACT = "logs/product/latest_momentum_scan.json"
+
+
+def _result_for_storage(kind: str, status: str, result: dict[str, Any] | None) -> dict[str, Any]:
+    """Keep operation history compact while preserving the canonical result artifact.
+
+    Successful market scans already persist their complete payload in the canonical
+    product scan store. Duplicating that payload into every operation row made a
+    status/history request read and decode tens of megabytes. Store only the compact
+    execution summary/reference here; explicit non-scan results remain unchanged.
+    Existing historical rows are intentionally left readable for compatibility.
+    """
+    data = dict(result or {})
+    if str(kind).upper() == "MARKET_SCAN" and status == SUCCEEDED and "payload" in data:
+        data.pop("payload", None)
+        data["artifact"] = {
+            "type": "canonical_scan_store",
+            "path": _MARKET_SCAN_ARTIFACT,
+        }
+        data["result_compacted"] = True
+    return data
 
 
 def pid_is_alive(pid: int | None) -> bool:
@@ -108,9 +129,9 @@ class _BorrowedConnection:
 class OperationStore:
     """SQLite-backed queue shared by the API and the market-operations worker.
 
-    Every public method opens a short-lived SQLite connection. This avoids sharing
-    connection objects across the API process, worker process and worker threads.
-    WAL mode keeps dashboard reads responsive while progress is being written.
+    Connections are cached per worker thread so polling does not continually open
+    new file descriptors. WAL keeps readers and the dedicated operation worker from
+    blocking each other during normal status/progress traffic.
     """
 
     def __init__(self, path: str | Path = "logs/market_ops/jobs.db") -> None:
@@ -354,8 +375,8 @@ class OperationStore:
                 return None
             operation_id = str(row["operation_id"])
             con.execute(
-                "UPDATE operations SET status=?,started_at=COALESCE(started_at,?),"
-                "updated_at=?,attempt=attempt+1,worker_pid=?,stage=?,message=? "
+                "UPDATE operations SET status=?,started_at=?,finished_at=NULL,updated_at=?,"
+                "attempt=attempt+1,worker_pid=?,stage=?,message=?,error_code='',error_message='' "
                 "WHERE operation_id=? AND status=?",
                 (
                     RUNNING,
@@ -412,6 +433,12 @@ class OperationStore:
             raise ValueError(f"invalid terminal status: {status}")
         now = time.time()
         with self._connect() as con:
+            row = con.execute(
+                "SELECT kind FROM operations WHERE operation_id=?",
+                (operation_id,),
+            ).fetchone()
+            kind = str(row["kind"] or "") if row is not None else ""
+            stored_result = _result_for_storage(kind, status, result)
             con.execute(
                 """
                 UPDATE operations SET status=?,finished_at=?,updated_at=?,stage=?,message=?,
@@ -426,7 +453,7 @@ class OperationStore:
                     now,
                     status,
                     str(message),
-                    json.dumps(result or {}, default=str),
+                    json.dumps(stored_result, default=str),
                     str(error_code or ""),
                     str(error_message or ""),
                     status,
@@ -436,12 +463,12 @@ class OperationStore:
             )
 
     def recover_orphans(self) -> int:
-        """Requeue operations left RUNNING by a crashed worker process."""
+        """Requeue operations left RUNNING by a stopped worker with a fresh next lease clock."""
         now = time.time()
         with self._connect() as con:
             cur = con.execute(
-                "UPDATE operations SET status=?,updated_at=?,stage=?,message=?,worker_pid=NULL "
-                "WHERE status=?",
+                "UPDATE operations SET status=?,started_at=NULL,finished_at=NULL,updated_at=?,"
+                "stage=?,message=?,worker_pid=NULL WHERE status=?",
                 (
                     PENDING,
                     now,
@@ -474,8 +501,8 @@ class OperationStore:
                 if pid_i and pid_is_alive(pid_i):
                     continue
                 con.execute(
-                    "UPDATE operations SET status=?,updated_at=?,stage=?,message=?,worker_pid=NULL "
-                    "WHERE operation_id=? AND status=?",
+                    "UPDATE operations SET status=?,started_at=NULL,finished_at=NULL,updated_at=?,"
+                    "stage=?,message=?,worker_pid=NULL WHERE operation_id=? AND status=?",
                     (
                         PENDING,
                         now,
@@ -494,10 +521,12 @@ class OperationStore:
         now: float | None = None,
         deadlines: dict[str, float] | None = None,
     ) -> int:
-        """Fail RUNNING jobs that exceeded their declared lease/deadline.
+        """Fail only abandoned RUNNING rows that exceeded their lease.
 
-        A live worker that is stuck on one provider must not occupy RUNNING
-        forever. Heartbeats update ``updated_at``; the clock is ``started_at``.
+        Never mark an operation terminal while its recorded worker PID is alive:
+        changing SQLite state cannot stop the Python lane that is still executing,
+        and doing so can create a second PENDING operation behind an invisible live
+        scan. Operation-specific code owns real execution deadlines for live work.
         """
         clock = time.time() if now is None else float(now)
         limits = dict(KIND_RUNNING_LEASE_S)
@@ -505,14 +534,29 @@ class OperationStore:
             limits.update({str(k): float(v) for k, v in deadlines.items()})
         recovered = 0
         with self._connect() as con:
-            rows = list(con.execute("SELECT * FROM operations WHERE status=?", (RUNNING,)))
+            rows = list(
+                con.execute(
+                    "SELECT operation_id,kind,worker_pid,started_at,updated_at "
+                    "FROM operations WHERE status=?",
+                    (RUNNING,),
+                )
+            )
             for row in rows:
-                started = float(row["started_at"] or row["updated_at"] or 0)
+                try:
+                    worker_pid = int(row["worker_pid"] or 0)
+                except (TypeError, ValueError):
+                    worker_pid = 0
+                if worker_pid and pid_is_alive(worker_pid):
+                    continue
+                last_activity = max(
+                    float(row["started_at"] or 0),
+                    float(row["updated_at"] or 0),
+                )
                 kind = str(row["kind"] or "")
                 limit = float(limits.get(kind, DEFAULT_RUNNING_LEASE_S))
-                if started <= 0 or (clock - started) < limit:
+                if last_activity <= 0 or (clock - last_activity) < limit:
                     continue
-                age = clock - started
+                age = clock - last_activity
                 con.execute(
                     """
                     UPDATE operations SET status=?,finished_at=?,updated_at=?,stage=?,message=?,
@@ -524,9 +568,9 @@ class OperationStore:
                         clock,
                         clock,
                         FAILED,
-                        f"{kind} exceeded its {int(limit)}s deadline after {int(age)}s",
+                        f"{kind} abandoned its {int(limit)}s lease after {int(age)}s without a live worker",
                         "DEADLINE_EXCEEDED",
-                        f"Operation stayed RUNNING for {int(age)}s",
+                        f"Operation had no live worker and no activity for {int(age)}s",
                         str(row["operation_id"]),
                         RUNNING,
                     ),
