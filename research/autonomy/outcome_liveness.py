@@ -36,6 +36,7 @@ def settle_paper_session(brain, session_date: str) -> dict[str, Any]:
 
     No strategy evaluation, recommendation generation or historical backtest is run here.
     ``PaperBook.mark`` is session-idempotent, so retries/restarts cannot age a position twice.
+    Entry-session full-day OHLC is explicitly disabled in this production EOD lane.
     """
     day = str(session_date or "")[:10]
     book = getattr(brain, "intel_book", None)
@@ -106,7 +107,7 @@ def settle_paper_session(brain, session_date: str) -> dict[str, Any]:
                 "live_locked": True,
             }
 
-        closed = list(book.mark(bars, day) if bars else [])
+        closed = list(book.mark(bars, day, allow_entry_session=False) if bars else [])
         rows = [_trade_row(trade) for trade in closed]
 
         # Persist book state first. Audit/event projection is useful, but it must never
@@ -267,7 +268,7 @@ def _run_outcome_resolution_light(ctx):
         )
 
     # Counterfactual/taken-vs-not-taken settlement is also lightweight. Crucially,
-    # do NOT call autonomous_loop.advance_loop(trigger='outcome_resolution'): that path
+    # do not invoke the legacy full autonomous-loop outcome trigger here: that path
     # reevaluates committees/research and can perform unrelated heavy work.
     try:
         from product.autonomous_loop import settle_official_outcomes
