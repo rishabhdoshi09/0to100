@@ -23,6 +23,8 @@ def _setup(candidate: Mapping[str, Any]) -> str:
 def confidence_from_policies(
     candidate: Mapping[str, Any],
     policies: Sequence[Mapping[str, Any]],
+    *,
+    generation_fingerprint: str = "",
 ) -> dict[str, Any]:
     setup = _setup(candidate)
     hist = next(
@@ -34,7 +36,12 @@ def confidence_from_policies(
         {},
     )
 
-    hist_ready = bool(hist.get("historical_reproduced_positive"))
+    hist_generation = str(hist.get("generation_fingerprint") or "")
+    generation_match = bool(
+        not generation_fingerprint
+        or (hist_generation and hist_generation == generation_fingerprint)
+    )
+    hist_ready = bool(hist.get("historical_reproduced_positive") and generation_match)
     hist_score = float(hist.get("historical_confidence_score") or 0.0)
 
     source = str(raw_forward.get("evidence_source") or "")
@@ -60,7 +67,10 @@ def confidence_from_policies(
         min(100.0, 50.0 + 30.0 * edge_component + 20.0 * forward_sample),
     )
 
-    if not hist_ready:
+    if hist and generation_fingerprint and not generation_match:
+        combined = 0.0
+        stage = "HISTORICAL_GENERATION_MISMATCH"
+    elif not hist_ready:
         combined = min(49.0, hist_score)
         stage = "HISTORICAL_UNPROVEN"
     elif forward_n <= 0:
@@ -90,6 +100,9 @@ def confidence_from_policies(
     return {
         "setup": setup,
         "historical_ready": hist_ready,
+        "historical_generation_fingerprint": hist_generation,
+        "generation_fingerprint": generation_fingerprint,
+        "historical_generation_match": generation_match,
         "historical_n": int(hist.get("sample_size") or 0),
         "historical_mean_R": hist.get("expectancy_R"),
         "historical_splits": int(hist.get("splits_tested") or 0),
