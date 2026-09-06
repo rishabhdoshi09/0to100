@@ -77,7 +77,7 @@ def run_supervisor(*, root=None, interval_s: float = 15.0, max_iterations=None) 
     install_parallel_runtime()
 
     # DATA_REFRESH used to remain inside Supervisor.tick() for the full Kite
-    # history/snapshot catch-up.  Keep the canonical handler and all of its data
+    # history/snapshot catch-up. Keep the canonical handler and all of its data
     # gates, but execute that heavy I/O in a background data lane so controls,
     # health and other due jobs remain responsive while the refresh is running.
     from research.autonomy.data_refresh_parallel import install_parallel_data_refresh
@@ -94,6 +94,13 @@ def run_supervisor(*, root=None, interval_s: float = 15.0, max_iterations=None) 
     # the unresolved rows after a provider/decoder failure.
     from research.autonomy.outcome_integrity import install_outcome_integrity
     install_outcome_integrity()
+
+    # The legacy lock unlinked its flock path on release. A waiting process can acquire
+    # the old inode between unlock and unlink while a third process creates a new inode,
+    # producing two apparent owners. Install the non-unlinking flock before Supervisor
+    # construction; the lock file is stable and its PID is rewritten only after ownership.
+    from research.autonomy.safe_singleton_lock import install_supervisor_singleton_lock
+    install_supervisor_singleton_lock()
 
     from research.autonomy.supervisor import Supervisor
     from research.autonomy.console_runtime import run_visible_loop
