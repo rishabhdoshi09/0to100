@@ -147,7 +147,10 @@ def _manage_positions(ctx, store, book, state, res) -> None:
         tb = ctx.today_bar(pos.symbol)
         if tb is not None:
             bars[pos.symbol] = tb                        # (o,h,l,c) → gap-aware exits
-    closed = book.mark(bars, ctx.as_of_date) if bars else []
+    # This is the authoritative forward/intelligence paper ledger, not historical
+    # research simulation. A position opened on this session must never be tested
+    # against the session's full daily OHLC, which may contain pre-entry price action.
+    closed = book.mark(bars, ctx.as_of_date, allow_entry_session=False) if bars else []
     for t in closed:
         # outcome + execution decode (idempotent via deterministic ids)
         for rec in REG.decode("outcome", t.as_dict(), ctx={"split": "forward"}):

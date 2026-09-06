@@ -45,7 +45,20 @@ SCAN_INTERVAL_MIN = 15
 
 
 def _is_session_day(now_ist, holidays=None) -> bool:
-    return now_ist.weekday() < 5 and not (holidays and now_ist.date() in holidays)
+    """Return whether ``now_ist`` falls on an NSE cash session day.
+
+    ``nse_calendar.load_holidays`` persists ISO strings while tests/callers may inject
+    ``date`` objects.  The old implementation compared only a ``date`` object against
+    the set, so a real persisted holiday such as ``"2026-10-02"`` was silently ignored.
+    Accept both representations; unknown calendars remain weekends-only/fail-closed at
+    the official-history readiness layer.
+    """
+    day = now_ist.date()
+    if day.weekday() >= 5:
+        return False
+    if not holidays:
+        return True
+    return day not in holidays and day.isoformat() not in holidays
 
 
 def in_auth_window(now_ist, holidays=None) -> bool:

@@ -110,6 +110,23 @@ def reconcile_record(record: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
+def _bind_payload(report: Any, payload: dict[str, Any]) -> Any:
+    """Attach a count-reconciled payload to the canonical report object."""
+    from product.long_term_store import reconcile_long_term_payload
+
+    payload = reconcile_long_term_payload(payload)
+    if hasattr(report, "__dataclass_fields__"):
+        try:
+            return replace(report, payload=payload)
+        except Exception:
+            pass
+    try:
+        report.payload = payload
+    except Exception:
+        pass
+    return report
+
+
 def postprocess_report(report: Any) -> Any:
     """Reconcile records without changing the canonical report type."""
     payload = dict(getattr(report, "payload", {}) or {})
@@ -127,16 +144,7 @@ def postprocess_report(report: Any) -> Any:
         "financial_sector_fallback": True,
         "nifty500_scope_enforced": True,
     }
-    if hasattr(report, "__dataclass_fields__"):
-        try:
-            return replace(report, payload=payload)
-        except Exception:
-            pass
-    try:
-        report.payload = payload
-    except Exception:
-        pass
-    return report
+    return _bind_payload(report, payload)
 
 
 def install() -> None:
@@ -160,6 +168,7 @@ def install() -> None:
         # saved-scan projection into an empty shortlist for any symbol outside
         # the static list and looked like a scanner miss. Restrict AFTER
         # projecting the saved scan, and never start a second OHLCV walk.
+        should_save = bool(kwargs.get("save", True))
         report = postprocess_report(original(*args, **kwargs))
         if restrict_nifty500:
             try:
@@ -174,19 +183,15 @@ def install() -> None:
                     if str((row or {}).get("symbol") or "").strip().upper() in allowed
                 ]
                 payload["nifty500_scope_enforced"] = True
-                if hasattr(report, "__dataclass_fields__"):
-                    try:
-                        report = replace(report, payload=payload)
-                    except Exception:
-                        try:
-                            report.payload = payload
-                        except Exception:
-                            pass
-                else:
-                    try:
-                        report.payload = payload
-                    except Exception:
-                        pass
+                report = _bind_payload(report, payload)
+        if should_save:
+            payload = dict(getattr(report, "payload", {}) or {})
+            # Only rewrite when the canonical service produced a scan payload.
+            # Failure reports have an empty payload and must not clobber a
+            # previous durable shortlist.
+            if "records" in payload:
+                from product.long_term_store import save_long_term_scan
+                save_long_term_scan(payload)
         return report
 
     service.run_long_term_scan = wrapped_run_long_term_scan
