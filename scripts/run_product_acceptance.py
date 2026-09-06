@@ -2,12 +2,14 @@
 """Live product-acceptance matrix against a running canonical QuantTerm stack.
 
 Writes logs/product/product_acceptance.json. Never unlocks live money.
+
+Classification inspects the durable operation *result*, not only operation.status.
+A non-empty JSON object is not proof that a feature works.
 """
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import time
@@ -16,10 +18,29 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 TERMINAL = {"SUCCEEDED", "FAILED", "BLOCKED", "CANCELLED"}
+PAPER_CYCLE_DONE = {"TRADED", "NO_ELIGIBLE_TRADE", "BLOCKED_SAFETY", "NO_DATA", "BLOCKED_BROKER"}
+EXPECTED_EXTERNAL_TOKENS = (
+    "FNO_UNIVERSE_UNAVAILABLE",
+    "LOGIN REQUIRED",
+    "LOGIN_REQUIRED",
+    "BROKER_LOGIN_REQUIRED",
+)
+EXPECTED_EXTERNAL_FEATURES = frozenset({"Data refresh", "F&O refresh"})
+EXPLICIT_BLOCKER_CODES = frozenset({
+    "FNO_UNIVERSE_UNAVAILABLE",
+    "BROKER_LOGIN_REQUIRED",
+    "LOGIN_REQUIRED",
+    "LOGIN REQUIRED",
+    "HISTORY_TOO_SHALLOW",
+    "HISTORY_STALE",
+    "HISTORY_NOT_READY",
+    "SNAPSHOT_STALE",
+    "OFFICIAL_HISTORY_UNAVAILABLE",
+})
 
 
 def _now() -> str:
@@ -31,6 +52,197 @@ def _sha() -> str:
         return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     except Exception:
         return ""
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _as_list(value: Any) -> list[Any]:
+    return list(value) if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)) else []
+
+
+def _join_reasons(*parts: Any) -> str:
+    seen: list[str] = []
+    for part in parts:
+        text = str(part or "").strip()
+        if text and text not in seen:
+            seen.append(text)
+    return "; ".join(seen)
+
+
+def collect_nested_blockers(result: Mapping[str, Any] | None) -> list[str]:
+    """Surface nested blocked lanes (e.g. DATA_PREPARE F&O) from a durable result."""
+    reasons: list[str] = []
+    payload = _as_dict(result)
+
+    def walk(node: Any, path: str) -> None:
+        if isinstance(node, Mapping):
+            blocked = node.get("blocked") is True
+            code = str(node.get("code") or node.get("error_code") or "").strip()
+            error = str(node.get("error") or node.get("error_message") or node.get("message") or "").strip()
+            if blocked:
+                label = path or "lane"
+                detail = _join_reasons(code, error) or "blocked"
+                reasons.append(f"{label} blocked: {detail}")
+            elif path and code and str(node.get("status") or "").upper() == "BLOCKED":
+                reasons.append(f"{path} blocked: {code}")
+            for key, child in node.items():
+                if key in {"history", "payload", "artifact"}:
+                    continue
+                child_path = str(key)
+                walk(child, child_path)
+        elif isinstance(node, Sequence) and not isinstance(node, (str, bytes, bytearray)):
+            for item in node:
+                walk(item, path)
+
+    walk(payload, "")
+    missing = [str(item) for item in _as_list(payload.get("missing_lanes")) if str(item).strip()]
+    for lane in missing:
+        token = f"missing_lanes={lane}"
+        if token not in reasons and not any(lane in item for item in reasons):
+            reasons.append(token)
+    # Deduplicate while preserving order.
+    out: list[str] = []
+    for item in reasons:
+        if item not in out:
+            out.append(item)
+    return out
+
+
+def _has_explicit_blocker(op: Mapping[str, Any], nested: Sequence[str]) -> bool:
+    code = str(op.get("error_code") or "").strip()
+    blocked_on = str(op.get("blocked_on") or "").strip()
+    message = str(op.get("error_message") or op.get("message") or op.get("blocked_reason") or "")
+    blob = " ".join([code, blocked_on, message, " ".join(nested)]).upper()
+    if code and (code.upper() in {item.upper() for item in EXPLICIT_BLOCKER_CODES} or "UNAVAILABLE" in code.upper() or "LOGIN" in code.upper() or "BLOCK" in code.upper()):
+        return True
+    if blocked_on:
+        return True
+    if nested:
+        return True
+    for token in EXPLICIT_BLOCKER_CODES:
+        if token.upper() in blob:
+            return True
+    return False
+
+
+def classify_operation(op: Mapping[str, Any] | None) -> dict[str, str]:
+    """Grade a durable market-ops (or similar) record from status *and* result.
+
+    Contract:
+      SUCCEEDED + clean result → PASS
+      SUCCEEDED + result.degraded=true → DEGRADED
+      nested blocked lanes appear in blocker_reason
+      FAILED → FAIL
+      CANCELLED → FAIL
+      BLOCKED → BLOCKED only with an explicit blocker; otherwise FAIL
+      Internal exceptions are never silently turned into DEGRADED/BLOCKED.
+    """
+    payload = _as_dict(op)
+    status = str(payload.get("status") or "").upper()
+    result = payload.get("result")
+    if isinstance(result, str):
+        try:
+            parsed = json.loads(result)
+            result = parsed if isinstance(parsed, Mapping) else {}
+        except Exception:
+            result = {}
+    result_d = _as_dict(result)
+    nested = collect_nested_blockers(result_d)
+    degraded = result_d.get("degraded") is True
+    error_code = str(payload.get("error_code") or "").strip()
+    error_message = str(payload.get("error_message") or payload.get("message") or "").strip()
+    nested_reason = _join_reasons(*nested)
+
+    if status in {"FAILED", "CANCELLED"}:
+        return {
+            "status": "FAIL",
+            "blocker_reason": _join_reasons(error_code, error_message, nested_reason) or status,
+        }
+    if status == "BLOCKED":
+        reason = _join_reasons(error_code, error_message, nested_reason) or status
+        if _has_explicit_blocker(payload, nested):
+            return {"status": "BLOCKED", "blocker_reason": reason}
+        return {
+            "status": "FAIL",
+            "blocker_reason": _join_reasons("BLOCKED without explicit blocker", reason),
+        }
+    if status == "SUCCEEDED":
+        if degraded or nested:
+            return {
+                "status": "DEGRADED",
+                "blocker_reason": _join_reasons(
+                    "degraded=true" if degraded else "",
+                    nested_reason,
+                    error_code,
+                    error_message,
+                ) or "degraded result",
+            }
+        return {"status": "PASS", "blocker_reason": ""}
+    return {
+        "status": "FAIL",
+        "blocker_reason": _join_reasons(status or "UNKNOWN", error_code, error_message) or "non-terminal operation",
+    }
+
+
+def is_expected_external_blocker(row: Mapping[str, Any]) -> bool:
+    """LOGIN REQUIRED / FNO_UNIVERSE_UNAVAILABLE on data/F&O lanes only."""
+    feature = str(row.get("feature") or "")
+    status = str(row.get("status") or "").upper()
+    reason = str(row.get("blocker_reason") or "").upper()
+    if feature not in EXPECTED_EXTERNAL_FEATURES:
+        return False
+    if status not in {"DEGRADED", "BLOCKED"}:
+        return False
+    return any(token in reason for token in EXPECTED_EXTERNAL_TOKENS)
+
+
+def product_acceptance_verdict(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    live_locked: bool,
+) -> dict[str, Any]:
+    """Overall PASS is allowed with the known F&O login blocker, not arbitrary DEGRADED."""
+    if not live_locked:
+        return {
+            "verdict": "PRODUCT ACCEPTANCE HOLD",
+            "exit_code": 1,
+            "reason": "live money was not locked",
+        }
+    fails = [str(row.get("feature") or "") for row in rows if str(row.get("status") or "").upper() == "FAIL"]
+    if fails:
+        return {
+            "verdict": "PRODUCT ACCEPTANCE HOLD",
+            "exit_code": 1,
+            "reason": "internal FAILED feature: " + ", ".join(fails),
+        }
+    unexpected: list[str] = []
+    expected: list[str] = []
+    for row in rows:
+        status = str(row.get("status") or "").upper()
+        feature = str(row.get("feature") or "")
+        if status == "PASS":
+            continue
+        if is_expected_external_blocker(row):
+            expected.append(f"{feature}={status}")
+            continue
+        unexpected.append(f"{feature}={status}")
+    if unexpected:
+        return {
+            "verdict": "PRODUCT ACCEPTANCE HOLD",
+            "exit_code": 1,
+            "reason": "non-pass feature is not an expected external blocker: " + ", ".join(unexpected),
+        }
+    return {
+        "verdict": "PRODUCT ACCEPTANCE PASS",
+        "exit_code": 0,
+        "reason": (
+            "required features passed; expected external blocker: " + ", ".join(expected)
+            if expected
+            else "required features passed; live money locked"
+        ),
+    }
 
 
 def _request_json(
@@ -108,15 +320,198 @@ def _start_control(api: str, control: str, timeout: float) -> dict[str, Any]:
     return payload
 
 
-def _classify_terminal(status: str, *, require_success: bool) -> str:
-    status = str(status or "").upper()
-    if status == "SUCCEEDED":
-        return "PASS"
-    if status == "BLOCKED":
-        return "BLOCKED"
-    if status in {"FAILED", "CANCELLED"}:
-        return "FAIL" if require_success else "DEGRADED"
-    return "FAIL"
+def grade_stock_intelligence(payload: Mapping[str, Any] | None, symbol: str) -> dict[str, str]:
+    data = _as_dict(payload)
+    if not data:
+        return {"status": "FAIL", "blocker_reason": "empty stock-intelligence payload"}
+    got = str(data.get("symbol") or data.get("ticker") or "").upper()
+    if got != str(symbol or "").upper():
+        return {"status": "FAIL", "blocker_reason": f"symbol missing or mismatched ({got or 'none'})"}
+    if data.get("schema_version") in {None, ""}:
+        return {"status": "FAIL", "blocker_reason": "missing schema_version"}
+    sources = _as_list(data.get("sources"))
+    if not sources or not all(isinstance(item, Mapping) for item in sources):
+        return {"status": "FAIL", "blocker_reason": "missing sources contract"}
+    if not isinstance(data.get("technical"), Mapping) or not isinstance(data.get("fundamentals"), Mapping):
+        return {"status": "FAIL", "blocker_reason": "missing technical/fundamentals structure"}
+    return {"status": "PASS", "blocker_reason": ""}
+
+
+def grade_due_diligence(payload: Mapping[str, Any] | None, symbol: str) -> dict[str, str]:
+    data = _as_dict(payload)
+    if not data:
+        return {"status": "FAIL", "blocker_reason": "empty due-diligence payload"}
+    got = str(data.get("symbol") or "").upper()
+    if got != str(symbol or "").upper():
+        return {"status": "FAIL", "blocker_reason": f"symbol missing or mismatched ({got or 'none'})"}
+    if data.get("schema_version") in {None, ""}:
+        return {"status": "FAIL", "blocker_reason": "missing schema_version"}
+    kpis = data.get("kpis") if isinstance(data.get("kpis"), list) else data.get("findings")
+    if not isinstance(kpis, list):
+        return {"status": "FAIL", "blocker_reason": "missing kpis/findings"}
+    coverage = data.get("research_coverage") if isinstance(data.get("research_coverage"), Mapping) else data.get("decision_coverage")
+    if not isinstance(coverage, Mapping) and data.get("decision_coverage_pct") is None:
+        return {"status": "FAIL", "blocker_reason": "missing coverage contract"}
+    verdict = data.get("vs_technical_setup") or data.get("fundamental_confirmation") or data.get("thesis")
+    if verdict in {None, ""}:
+        return {"status": "FAIL", "blocker_reason": "missing Investigate verdict"}
+    return {"status": "PASS", "blocker_reason": ""}
+
+
+def grade_recommendations(payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    data = _as_dict(payload)
+    categories = data.get("categories")
+    if not isinstance(categories, list):
+        return {"status": "FAIL", "blocker_reason": "missing categories contract", "cards": 0}
+    if not categories or not all(isinstance(item, Mapping) and "cards" in item for item in categories):
+        return {"status": "FAIL", "blocker_reason": "categories are not structured recommendation buckets", "cards": 0}
+    rec_status = str(data.get("records_status") or "")
+    if rec_status == "FAILED":
+        return {"status": "FAIL", "blocker_reason": "records_status=FAILED", "cards": 0}
+    if data.get("rebuilding"):
+        return {"status": "DEGRADED", "blocker_reason": "projection rebuilding from persisted scan", "cards": 0}
+    if not (data.get("generated_at") or data.get("scan_scanned_at")):
+        return {"status": "FAIL", "blocker_reason": "missing generation timestamp", "cards": 0}
+    cards = 0
+    for cat in categories:
+        cards += len(_as_list(cat.get("cards")))
+    return {"status": "PASS", "blocker_reason": "", "cards": cards}
+
+
+def grade_market_reports(payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    data = _as_dict(payload)
+    reports = [item for item in _as_list(data.get("reports")) if isinstance(item, Mapping)]
+    missing = [str(item) for item in _as_list(data.get("missing_lanes")) if str(item).strip()]
+    if data.get("error") and not reports:
+        return {"status": "FAIL", "blocker_reason": str(data.get("error")), "count": 0}
+    if not reports:
+        return {"status": "FAIL", "blocker_reason": "no durable market reports", "count": 0}
+    structured = 0
+    for item in reports:
+        if item.get("id") or item.get("title") or item.get("as_of") or item.get("as_of_ist") or item.get("body") or item.get("sections"):
+            structured += 1
+    if structured <= 0:
+        return {"status": "FAIL", "blocker_reason": "reports present but unstructured", "count": len(reports)}
+    reason = ",".join(missing)
+    return {"status": "PASS", "blocker_reason": reason, "count": len(reports)}
+
+
+def grade_simulator(payload: Mapping[str, Any] | None) -> dict[str, str]:
+    data = _as_dict(payload)
+    sim_status = str(data.get("status") or "").upper()
+    if sim_status in {"UNAVAILABLE", "HISTORICAL_DECISION_UNAVAILABLE", "AMBIGUOUS_HISTORICAL_DECISION"}:
+        return {"status": "DEGRADED", "blocker_reason": sim_status}
+    if sim_status == "RUNNING":
+        return {"status": "FAIL", "blocker_reason": "simulator still RUNNING; not treated as success"}
+    if sim_status != "SUCCEEDED":
+        return {"status": "FAIL", "blocker_reason": sim_status or "missing simulator status"}
+    original = _as_dict(data.get("original") or data.get("decision"))
+    if not (original.get("action") or original.get("reason") or original.get("reason_code") or data.get("decision")):
+        return {"status": "FAIL", "blocker_reason": "SUCCEEDED without historical decision/reasons"}
+    if data.get("schema_version") in {None, ""} and data.get("kind") not in {"PAST_DECISION_SIMULATION"}:
+        return {"status": "FAIL", "blocker_reason": "missing simulator schema"}
+    return {"status": "PASS", "blocker_reason": ""}
+
+
+def grade_learning_dashboard(payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    data = _as_dict(payload)
+    if not data:
+        return {"status": "FAIL", "blocker_reason": "empty learning dashboard", "count": 0}
+    if data.get("schema_version") in {None, ""}:
+        return {"status": "FAIL", "blocker_reason": "missing schema_version", "count": 0}
+    if data.get("live_locked") is not True:
+        return {"status": "FAIL", "blocker_reason": "learning dashboard did not lock live money", "count": 0}
+    if "policies" not in data or "counterfactuals" not in data:
+        return {"status": "FAIL", "blocker_reason": "missing policies/counterfactuals contract", "count": 0}
+    count = len(_as_list(data.get("policies")))
+    return {"status": "PASS", "blocker_reason": "", "count": count}
+
+
+def grade_forward_soak(payload: Mapping[str, Any] | None) -> dict[str, str]:
+    data = _as_dict(payload)
+    verification = data.get("verification")
+    if not isinstance(verification, Mapping):
+        return {"status": "FAIL", "blocker_reason": "missing verification contract"}
+    lanes = verification.get("lanes") if isinstance(verification.get("lanes"), Mapping) else data.get("lanes")
+    if not isinstance(lanes, Mapping):
+        return {"status": "FAIL", "blocker_reason": "verification missing lanes"}
+    live = verification.get("live_locked")
+    if live is None:
+        live = data.get("live_locked")
+    if live is not True:
+        return {"status": "FAIL", "blocker_reason": "forward soak did not prove live_locked"}
+    return {"status": "PASS", "blocker_reason": ""}
+
+
+def grade_paper_status(payload: Mapping[str, Any] | None, *, live_locked: bool) -> dict[str, Any]:
+    data = _as_dict(payload)
+    if not data:
+        return {"status": "FAIL", "blocker_reason": "empty paper-autopilot payload", "count": 0}
+    if "last_cycle" not in data or "open_positions" not in data:
+        return {"status": "FAIL", "blocker_reason": "missing last_cycle/open_positions contract", "count": 0}
+    if not live_locked:
+        return {"status": "FAIL", "blocker_reason": "live money unlocked", "count": 0}
+    count = len(_as_list(data.get("open_positions") or data.get("positions")))
+    return {"status": "PASS", "blocker_reason": "", "count": count}
+
+
+def _cycle_identity(cycle: Mapping[str, Any] | None) -> str:
+    data = _as_dict(cycle)
+    return "|".join(
+        str(data.get(key) or "")
+        for key in ("cycle_id", "as_of_date", "as_of", "eligibility", "status", "finished_at")
+    )
+
+
+def _paper_jobs(autonomy: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    jobs = [
+        dict(item)
+        for item in _as_list(_as_dict(autonomy).get("jobs_recent"))
+        if isinstance(item, Mapping) and str(item.get("job_type") or "") == "paper_cycle"
+    ]
+    return jobs
+
+
+def grade_paper_cycle_execution(
+    *,
+    job: Mapping[str, Any] | None = None,
+    last_cycle: Mapping[str, Any] | None = None,
+    observed: bool = False,
+) -> dict[str, str]:
+    job_d = _as_dict(job)
+    cycle = _as_dict(last_cycle)
+    job_status = str(job_d.get("status") or "").upper()
+    eligibility = str(
+        cycle.get("eligibility")
+        or cycle.get("decision")
+        or job_d.get("result_summary")
+        or ""
+    ).upper()
+    if job_status in {"FAILED", "CANCELLED"}:
+        return {
+            "status": "FAIL",
+            "blocker_reason": _join_reasons(job_d.get("error_code"), job_d.get("error_message"), job_status),
+        }
+    if job_status == "BLOCKED":
+        reason = _join_reasons(job_d.get("error_code"), job_d.get("blocked_reason"), job_d.get("blocked_on"))
+        if _has_explicit_blocker(job_d, []):
+            return {"status": "BLOCKED", "blocker_reason": reason or "paper_cycle BLOCKED"}
+        return {"status": "FAIL", "blocker_reason": _join_reasons("paper_cycle BLOCKED without explicit blocker", reason)}
+    if observed and (job_status == "SUCCEEDED" or any(token in eligibility for token in PAPER_CYCLE_DONE)):
+        if "NO_ELIGIBLE_TRADE" in eligibility:
+            return {"status": "PASS", "blocker_reason": "NO_ELIGIBLE_TRADE after completed cycle"}
+        if "TRADED" in eligibility:
+            return {"status": "PASS", "blocker_reason": ""}
+        if job_status == "SUCCEEDED":
+            return {
+                "status": "PASS",
+                "blocker_reason": str(job_d.get("result_summary") or eligibility or "paper_cycle SUCCEEDED"),
+            }
+        return {"status": "PASS", "blocker_reason": eligibility}
+    return {
+        "status": "DEGRADED",
+        "blocker_reason": "control accepted; durable cycle completion not observed",
+    }
 
 
 def run(args: argparse.Namespace) -> int:
@@ -151,6 +546,7 @@ def run(args: argparse.Namespace) -> int:
     except Exception:
         ui_ok = False
     report_ok = False
+    report: dict[str, Any] = {}
     try:
         report = _request_json("http://127.0.0.1:8766/health", timeout=5)
         report_ok = bool(report.get("ok"))
@@ -160,7 +556,7 @@ def run(args: argparse.Namespace) -> int:
         feature="UI + report endpoints",
         trigger_tested="GET :5173/ and GET :8766/health",
         backend_path="vite + report_api",
-        status="PASS" if ui_ok and report_ok else "DEGRADED",
+        status="PASS" if ui_ok and report_ok else "FAIL",
         blocker_reason="" if ui_ok and report_ok else f"ui={ui_ok} report={report_ok} {report.get('error') or ''}",
         start_timestamp=_now(),
         finish_timestamp=_now(),
@@ -175,25 +571,22 @@ def run(args: argparse.Namespace) -> int:
         raise RuntimeError("dashboard invented a market stance while available=false")
 
     controls = [
-        ("Market Scan", "RUN_SCAN_NOW", True, "logs/product/latest_momentum_scan.json"),
-        ("News refresh", "REFRESH_NEWS_NOW", False, "logs/news_curator.sqlite3"),
-        ("Market Report", "REFRESH_MARKET_REPORT_NOW", False, "logs/product/market_reports/"),
-        ("Data refresh", "REFRESH_DATA_NOW", False, "official history / DATA_PREPARE"),
-        ("F&O refresh", "REFRESH_FNO_NOW", False, "logs/product/fno_universe.json"),
+        ("Market Scan", "RUN_SCAN_NOW", "logs/product/latest_momentum_scan.json"),
+        ("News refresh", "REFRESH_NEWS_NOW", "logs/news_curator.sqlite3"),
+        ("Market Report", "REFRESH_MARKET_REPORT_NOW", "logs/product/market_reports/"),
+        ("Data refresh", "REFRESH_DATA_NOW", "official history / DATA_PREPARE"),
+        ("F&O refresh", "REFRESH_FNO_NOW", "logs/product/fno_universe.json"),
     ]
     if args.include_long_term:
-        controls.insert(1, ("Long-term fundamentals", "REFRESH_LONG_TERM_NOW", False, "logs/product/latest_long_term_scan.json"))
+        controls.insert(1, ("Long-term fundamentals", "REFRESH_LONG_TERM_NOW", "logs/product/latest_long_term_scan.json"))
 
-    for label, control, require_success, artifact in controls:
+    for label, control, artifact in controls:
         started = _now()
         print(f"[RUN] {label} · {control}")
         try:
             queued = _start_control(api, control, args.request_timeout)
             op = _wait_operation(api, str(queued["operation_id"]), timeout=args.operation_timeout, request_timeout=args.request_timeout)
-            status = _classify_terminal(str(op.get("status") or ""), require_success=require_success)
-            reason = ""
-            if status != "PASS":
-                reason = str(op.get("error_code") or op.get("error_message") or op.get("message") or op.get("status") or "")
+            graded = classify_operation(op)
             count = int(op.get("progress_current") or op.get("progress_total") or 0)
             rows.append(_row(
                 feature=label,
@@ -205,11 +598,11 @@ def run(args: argparse.Namespace) -> int:
                 durable_artifact=artifact,
                 freshness=str(op.get("status") or ""),
                 result_count=count,
-                status=status,
-                blocker_reason=reason,
+                status=graded["status"],
+                blocker_reason=graded["blocker_reason"],
                 code_sha=sha,
             ))
-            print(f"[{status}] {label} · {op.get('status')}\n")
+            print(f"[{graded['status']}] {label} · {op.get('status')} · {graded['blocker_reason']}\n")
         except Exception as exc:
             rows.append(_row(
                 feature=label,
@@ -231,53 +624,32 @@ def run(args: argparse.Namespace) -> int:
         if not rec.get("rebuilding"):
             break
         time.sleep(1.5)
-    rec_status = str(rec.get("records_status") or "")
-    cards = 0
-    for cat in rec.get("categories") or []:
-        if isinstance(cat, dict):
-            cards += len(cat.get("cards") or [])
-    rec_ok = rec.get("categories") is not None and rec_status != "FAILED"
-    if rec.get("rebuilding"):
-        rec_grade = "DEGRADED"
-        rec_reason = "projection rebuilding from persisted scan"
-    elif rec_ok:
-        rec_grade = "PASS"
-        rec_reason = ""
-    else:
-        rec_grade = "FAIL"
-        rec_reason = rec_status or "malformed workspace"
+    rec_grade = grade_recommendations(rec)
     rows.append(_row(
         feature="Recommendations",
         trigger_tested="GET /api/recommendations-workspace",
         backend_path="product.recommendations_liveness",
         durable_artifact="logs/product/latest_recommendations.json",
-        freshness=str(rec.get("scan_scanned_at") or rec_status),
-        result_count=cards,
-        status=rec_grade,
-        blocker_reason=rec_reason,
+        freshness=str(rec.get("scan_scanned_at") or rec.get("records_status") or ""),
+        result_count=int(rec_grade.get("cards") or 0),
+        status=rec_grade["status"],
+        blocker_reason=rec_grade["blocker_reason"],
         start_timestamp=_now(),
         finish_timestamp=_now(),
         code_sha=sha,
     ))
 
     reports = _request_json(_url(api, "/api/market-reports-workspace"), timeout=args.request_timeout)
-    report_count = len(reports.get("reports") or [])
-    missing = list(reports.get("missing_lanes") or [])
-    if reports.get("error") and not report_count:
-        report_grade, report_reason = "FAIL", str(reports.get("error"))
-    elif reports.get("stale") or reports.get("needs_refresh") or missing:
-        report_grade, report_reason = "DEGRADED", ",".join(missing) or "needs_refresh"
-    else:
-        report_grade, report_reason = "PASS", ""
+    report_grade = grade_market_reports(reports)
     rows.append(_row(
         feature="Market Report workspace",
         trigger_tested="GET /api/market-reports-workspace",
         backend_path="product.recommendations_workspace.build_market_reports_workspace",
         durable_artifact="logs/product/market_reports/",
         freshness=str(reports.get("as_of_ist") or ""),
-        result_count=report_count,
-        status=report_grade,
-        blocker_reason=report_reason,
+        result_count=int(report_grade.get("count") or 0),
+        status=report_grade["status"],
+        blocker_reason=report_grade["blocker_reason"],
         start_timestamp=_now(),
         finish_timestamp=_now(),
         code_sha=sha,
@@ -285,29 +657,31 @@ def run(args: argparse.Namespace) -> int:
 
     symbol = args.symbol.strip().upper() or "TCS"
     intel = _request_json(_url(api, f"/api/stock-intelligence/{urllib.parse.quote(symbol)}"), timeout=args.request_timeout)
-    intel_ok = bool(intel) and (intel.get("symbol") or intel.get("ticker") or intel.get("available") is not False)
+    intel_grade = grade_stock_intelligence(intel, symbol)
     rows.append(_row(
         feature="Stock Intelligence",
         trigger_tested=f"GET /api/stock-intelligence/{symbol}",
         backend_path="product.stock_workspace.build_stock_workspace",
         durable_artifact=f"research/fundamentals cache · {symbol}",
-        result_count=1 if intel else 0,
-        status="PASS" if intel_ok else "DEGRADED",
-        blocker_reason="" if intel_ok else "empty structured payload",
+        result_count=1 if intel_grade["status"] == "PASS" else 0,
+        status=intel_grade["status"],
+        blocker_reason=intel_grade["blocker_reason"],
         start_timestamp=_now(),
         finish_timestamp=_now(),
         code_sha=sha,
     ))
 
     dd = _request_json(_url(api, f"/api/due-diligence/{urllib.parse.quote(symbol)}"), timeout=args.request_timeout)
+    dd_grade = grade_due_diligence(dd, symbol)
     rows.append(_row(
         feature="Investigate / Due Diligence read",
         trigger_tested=f"GET /api/due-diligence/{symbol}",
         backend_path="product.due_diligence.build_due_diligence",
         durable_artifact=f"logs/research_evidence/{symbol}/",
-        result_count=len((dd.get("questions") or dd.get("facts") or dd.get("items") or []) if isinstance(dd, dict) else []),
-        status="PASS" if dd else "FAIL",
-        freshness=str((dd.get("freshness") or dd.get("status") or "") if isinstance(dd, dict) else ""),
+        result_count=len(_as_list(dd.get("kpis") or dd.get("findings"))),
+        status=dd_grade["status"],
+        freshness=str((dd.get("freshness") or _as_dict(dd.get("as_of")).get("generated_at") or dd.get("status") or "") if isinstance(dd, dict) else ""),
+        blocker_reason=dd_grade["blocker_reason"],
         start_timestamp=_now(),
         finish_timestamp=_now(),
         code_sha=sha,
@@ -327,8 +701,8 @@ def run(args: argparse.Namespace) -> int:
             else:
                 op_id = str(queued.get("operation_id") or "")
                 op = _wait_operation(api, op_id, timeout=args.acquire_timeout, request_timeout=args.request_timeout)
-                status = _classify_terminal(str(op.get("status") or ""), require_success=False)
-                reason = str(op.get("error_code") or op.get("error_message") or "")
+                graded = classify_operation(op)
+                status, reason = graded["status"], graded["blocker_reason"]
             rows.append(_row(
                 feature="Investigate acquire",
                 trigger_tested=f"POST /api/due-diligence/{symbol}/acquire",
@@ -347,7 +721,7 @@ def run(args: argparse.Namespace) -> int:
                 trigger_tested=f"POST /api/due-diligence/{symbol}/acquire",
                 start_timestamp=started,
                 finish_timestamp=_now(),
-                status="BLOCKED",
+                status="FAIL",
                 blocker_reason=str(exc)[:300],
                 code_sha=sha,
             ))
@@ -360,13 +734,7 @@ def run(args: argparse.Namespace) -> int:
         while str(sim.get("status") or "") == "RUNNING" and time.monotonic() < deadline:
             time.sleep(1.5)
             sim = _request_json(_url(api, "/api/decision-simulator"), timeout=args.request_timeout)
-        sim_status = str(sim.get("status") or "")
-        if sim_status in { "UNAVAILABLE", "HISTORICAL_DECISION_UNAVAILABLE", "AMBIGUOUS_HISTORICAL_DECISION"}:
-            grade = "DEGRADED"
-        elif sim_status in {"SUCCEEDED", "RUNNING"} or sim.get("decision") or sim.get("original"):
-            grade = "PASS"
-        else:
-            grade = "DEGRADED"
+        sim_grade = grade_simulator(sim)
         rows.append(_row(
             feature="Simulate Past Decision",
             trigger_tested="POST /api/decision-simulator",
@@ -374,10 +742,10 @@ def run(args: argparse.Namespace) -> int:
             finish_timestamp=_now(),
             backend_path="product.decision_simulator",
             durable_artifact="logs/product/decision_simulator.json",
-            freshness=sim_status,
-            status=grade,
-            blocker_reason="" if grade == "PASS" else sim_status or str(sim.get("message") or "")[:200],
-            result_count=int(sim.get("sessions_done") or 1 if grade == "PASS" else 0),
+            freshness=str(sim.get("status") or ""),
+            status=sim_grade["status"],
+            blocker_reason=sim_grade["blocker_reason"],
+            result_count=int(sim.get("sessions_done") or 1 if sim_grade["status"] == "PASS" else 0),
             code_sha=sha,
         ))
     except Exception as exc:
@@ -387,25 +755,36 @@ def run(args: argparse.Namespace) -> int:
             start_timestamp=started,
             finish_timestamp=_now(),
             backend_path="product.decision_simulator",
-            status="DEGRADED",
+            status="FAIL",
             blocker_reason=str(exc)[:300],
             code_sha=sha,
         ))
 
     paper = _request_json(_url(api, "/api/paper-autopilot"), timeout=args.request_timeout)
+    paper_grade = grade_paper_status(paper, live_locked=live_locked)
     rows.append(_row(
         feature="Paper execution status",
         trigger_tested="GET /api/paper-autopilot",
         backend_path="product.paper_autopilot",
         durable_artifact="logs/product paper book / journal",
-        result_count=len(paper.get("positions") or paper.get("open_positions") or []),
-        status="PASS" if isinstance(paper, dict) else "FAIL",
+        result_count=int(paper_grade.get("count") or 0),
+        status=paper_grade["status"],
         freshness=str(paper.get("status") or paper.get("state") or ""),
-        blocker_reason="" if live_locked else "live money unlocked",
+        blocker_reason=paper_grade["blocker_reason"],
         start_timestamp=_now(),
         finish_timestamp=_now(),
         code_sha=sha,
     ))
+
+    before_cycle = _cycle_identity(paper.get("last_cycle") if isinstance(paper, dict) else {})
+    before_jobs: list[dict[str, Any]] = []
+    try:
+        before_dash = _request_json(_url(api, "/api/dashboard"), timeout=max(args.request_timeout, 20))
+        before_jobs = _paper_jobs(_as_dict(before_dash.get("autonomy")))
+    except Exception:
+        before_jobs = []
+    before_job_ids = {str(job.get("job_id") or "") for job in before_jobs if job.get("job_id")}
+    before_finished = max((float(job.get("finished_at") or 0) for job in before_jobs), default=0.0)
 
     started = _now()
     try:
@@ -421,6 +800,56 @@ def run(args: argparse.Namespace) -> int:
             durable_artifact="logs/autonomy/",
             status="PASS" if cycle.get("accepted") and control_id else "FAIL",
             blocker_reason="" if cycle.get("accepted") else str(cycle)[:200],
+            freshness="request accepted" if cycle.get("accepted") else "",
+            code_sha=sha,
+        ))
+        observed_job: dict[str, Any] = {}
+        observed_cycle: dict[str, Any] = {}
+        observed = False
+        deadline = time.monotonic() + float(args.cycle_timeout)
+        while time.monotonic() < deadline:
+            try:
+                paper_now = _request_json(_url(api, "/api/paper-autopilot"), timeout=args.request_timeout)
+            except Exception:
+                paper_now = {}
+            last_cycle = _as_dict(paper_now.get("last_cycle"))
+            identity = _cycle_identity(last_cycle)
+            if last_cycle and identity and identity != before_cycle:
+                observed_cycle = last_cycle
+                observed = True
+            try:
+                dash = _request_json(_url(api, "/api/dashboard"), timeout=max(args.request_timeout, 20))
+                jobs = _paper_jobs(_as_dict(dash.get("autonomy")))
+            except Exception:
+                jobs = []
+            for job in jobs:
+                job_id = str(job.get("job_id") or "")
+                finished_at = float(job.get("finished_at") or 0)
+                job_status = str(job.get("status") or "").upper()
+                newer = (job_id and job_id not in before_job_ids) or (finished_at > before_finished > 0 and finished_at >= before_finished)
+                if newer and job_status in TERMINAL:
+                    observed_job = job
+                    observed = True
+                    break
+            if observed and (observed_job or any(token in str(observed_cycle.get("eligibility") or "").upper() for token in PAPER_CYCLE_DONE)):
+                break
+            time.sleep(1.5)
+        exec_grade = grade_paper_cycle_execution(
+            job=observed_job,
+            last_cycle=observed_cycle or _as_dict((paper.get("last_cycle") if isinstance(paper, dict) else {})),
+            observed=observed,
+        )
+        rows.append(_row(
+            feature="Paper cycle execution",
+            trigger_tested="durable last_cycle / autonomy jobs_recent",
+            operation_id=str(observed_job.get("job_id") or control_id),
+            start_timestamp=started,
+            finish_timestamp=_now(),
+            backend_path="research.autonomy.jobs.run_paper_cycle",
+            durable_artifact="logs/autonomy/status.json last_cycle",
+            status=exec_grade["status"],
+            blocker_reason=exec_grade["blocker_reason"],
+            freshness=str(observed_job.get("status") or observed_cycle.get("eligibility") or "unobserved"),
             code_sha=sha,
         ))
     except Exception as exc:
@@ -429,57 +858,60 @@ def run(args: argparse.Namespace) -> int:
             trigger_tested="POST /api/controls/RUN_CYCLE_NOW",
             start_timestamp=started,
             finish_timestamp=_now(),
-            status="DEGRADED",
+            status="FAIL",
             blocker_reason=str(exc)[:300],
             code_sha=sha,
         ))
 
     learning = _request_json(_url(api, "/api/learning-dashboard"), timeout=args.request_timeout)
+    learn_grade = grade_learning_dashboard(learning)
     rows.append(_row(
         feature="Learning loop dashboard",
         trigger_tested="GET /api/learning-dashboard",
         backend_path="product learning ledger",
         durable_artifact="logs/product/taken_evidence.jsonl",
-        result_count=int((learning.get("n_policies") or learning.get("policy_count") or 0) or 0),
-        status="PASS" if isinstance(learning, dict) else "FAIL",
+        result_count=int(learn_grade.get("count") or 0),
+        status=learn_grade["status"],
+        blocker_reason=learn_grade["blocker_reason"],
         start_timestamp=_now(),
         finish_timestamp=_now(),
         code_sha=sha,
     ))
 
     soak = _request_json(_url(api, "/api/forward-soak"), method="POST", timeout=args.request_timeout)
+    soak_grade = grade_forward_soak(soak)
     rows.append(_row(
         feature="Forward soak verification",
         trigger_tested="POST /api/forward-soak",
         backend_path="product.forward_soak",
         durable_artifact="forward soak ledger",
-        status="PASS" if "verification" in soak else "FAIL",
+        status=soak_grade["status"],
+        blocker_reason=soak_grade["blocker_reason"],
         start_timestamp=_now(),
         finish_timestamp=_now(),
         code_sha=sha,
     ))
 
+    verdict = product_acceptance_verdict(rows, live_locked=live_locked)
     out = {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": _now(),
         "code_sha": sha,
         "api": api,
         "live_locked": live_locked,
+        "verdict": verdict["verdict"],
+        "verdict_reason": verdict["reason"],
         "features": rows,
     }
     dest = Path(args.output)
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(json.dumps(out, indent=2), encoding="utf-8")
     print(f"\nWrote {dest}")
-    worst = "PASS"
     for row in rows:
         print(f"  {row['status']:9} {row['feature']}: {row.get('blocker_reason') or row.get('freshness') or ''}")
-        if row["status"] == "FAIL":
-            worst = "FAIL"
-        elif row["status"] in {"DEGRADED", "BLOCKED"} and worst == "PASS":
-            worst = row["status"]
-    print(f"\nMATRIX {worst}")
-    return 1 if worst == "FAIL" else 0
+    print(f"\n{verdict['verdict']}")
+    print(verdict["reason"])
+    return int(verdict["exit_code"])
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -488,6 +920,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--request-timeout", type=float, default=12.0)
     parser.add_argument("--operation-timeout", type=float, default=1200.0)
     parser.add_argument("--acquire-timeout", type=float, default=720.0)
+    parser.add_argument("--cycle-timeout", type=float, default=180.0)
     parser.add_argument("--symbol", default="TCS")
     parser.add_argument("--as-of", dest="as_of", default="2024-01-15")
     parser.add_argument("--acquire", action="store_true")

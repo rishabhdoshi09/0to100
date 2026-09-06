@@ -93,4 +93,4 @@ def test_quality_engine_rs_does_not_use_demo_regime(monkeypatch):
     monkeypatch.setattr("yfinance.Ticker", lambda *_a, **_k: _Boom())
     engine = QualityEngine()
     close = np.array([100.0 + i for i in range(30)], dtype=float)
-    assert engine._rs_vs_nifty("HDFCBANK", close) == 0.0
+    assert engine._rs_vs_nifty("HDFCBANK", close) is None
