@@ -65,6 +65,23 @@ def test_eod_settlement_marks_once_without_full_intelligence_cycle():
     assert brain.full_cycles == 0
 
 
+def test_entry_day_full_daily_bar_cannot_retroactively_close_new_position():
+    # This bar crosses both stop and target. Because the paper position was opened
+    # on this same session, none of this session's full-day OHLC may be used to exit it.
+    brain = _Brain({"AAA": (100.0, 120.0, 90.0, 105.0)})
+    opened = brain.intel_book.open_position(
+        "S1", "AAA", 100.0, 95.0, 110.0, "2026-09-04", 5,
+    )
+    assert opened is not None
+
+    result = settle_paper_session(brain, "2026-09-04")
+    assert result["status"] == "EOD_SETTLED"
+    assert result["positions_closed"] == []
+    assert ("S1", "AAA") in brain.intel_book.open
+    assert brain.intel_book.open[("S1", "AAA")].bars_held == 0
+    assert brain.intel_book.open[("S1", "AAA")].last_marked_session == ""
+
+
 def test_eod_settlement_fails_closed_when_open_positions_have_no_bars():
     brain = _Brain({})
     opened = brain.intel_book.open_position(
