@@ -81,7 +81,7 @@ def test_missing_recommendations_return_truthful_empty_refreshing_shape(monkeypa
     assert result["records_status"] == "REFRESHING"
     assert result["rebuilding"] is True
     assert result["categories"] is not None
-    assert "not fabricated" in result["disclaimer"].lower()
+    assert "no recommendation was fabricated" in result["disclaimer"].lower()
 
 
 def test_route_replacement_leaves_exactly_one_fast_get(monkeypatch):
