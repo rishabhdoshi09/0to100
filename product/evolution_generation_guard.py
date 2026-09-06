@@ -120,6 +120,26 @@ def ensure_current_generation(*, identity: str | Path | None = None) -> dict[str
         )
         invalidated: list[str] = []
         if changed:
+            # Defense in depth: derived HIST_* policies are generation-scoped.
+            # Purge them immediately so stale setup eligibility cannot survive
+            # while the new generation is being replayed.
+            from product.learning_policy_store import load_policies, policy_path, save_policies
+            policies_target = policy_path()
+            store = load_policies(policies_target)
+            policies = [
+                dict(p)
+                for p in (store.get("policies") or [])
+                if isinstance(p, Mapping)
+            ]
+            kept = [
+                p for p in policies
+                if not str(p.get("policy_id") or "").startswith("HIST_")
+            ]
+            if len(kept) != len(policies):
+                store["policies"] = kept
+                save_policies(store, policies_target)
+                invalidated.append(f"{policies_target}#HIST_*")
+
             state = state_path()
             if state.exists():
                 try:
