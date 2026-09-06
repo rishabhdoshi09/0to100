@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
+
 from product import recommendations_liveness as RL
 
 
@@ -79,3 +82,25 @@ def test_missing_recommendations_return_truthful_empty_refreshing_shape(monkeypa
     assert result["rebuilding"] is True
     assert result["categories"] is not None
     assert "not fabricated" in result["disclaimer"].lower()
+
+
+def test_route_replacement_leaves_exactly_one_fast_get(monkeypatch):
+    from fastapi import FastAPI
+
+    app = FastAPI()
+    app.add_api_route("/api/recommendations-workspace", lambda: {"legacy": 1}, methods=["GET"], name="legacy_one")
+    app.add_api_route("/api/recommendations-workspace", lambda: {"legacy": 2}, methods=["GET"], name="legacy_two")
+    fake_core = SimpleNamespace(app=app)
+    fake_parallel = SimpleNamespace(_attach_authority=None)
+    monkeypatch.setitem(sys.modules, "terminal_api", fake_core)
+    monkeypatch.setitem(sys.modules, "terminal_product_api_parallel", fake_parallel)
+    monkeypatch.setattr(RL, "build_fast_response", lambda core, attach_authority=None: {"fast": True})
+
+    RL._replace_route()
+    matches = [
+        route for route in app.router.routes
+        if getattr(route, "path", None) == "/api/recommendations-workspace"
+        and "GET" in set(getattr(route, "methods", set()) or set())
+    ]
+    assert len(matches) == 1
+    assert matches[0].name == "recommendations_workspace_persisted_first"
