@@ -1,4 +1,12 @@
-"""Bounded read-only startup self-check. Telegram absence is not fatal."""
+"""Bounded read-only startup self-check. Telegram absence is not fatal.
+
+Operational readiness and evidence readiness are independent truths.
+
+A process may be operating while evidence is still missing, stale, building,
+or incomplete. Those states must remain distinguishable: evidence-dependent
+claims fail closed, but the runtime is not labelled down merely because a
+scan or history file is not yet current.
+"""
 
 from __future__ import annotations
 
@@ -8,10 +16,29 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
+# Process/service statuses that count as operationally functioning.
+_OPERATIONAL_READY_STATUSES = {"READY", "RUNNING", "LOCKED", "HEALTHY"}
 
-_READY_REQUIRED_STATUSES = {"READY", "RUNNING", "LOCKED", "COLLECTING", "HEALTHY"}
+# Evidence is ready only when the durable artifact is present, valid, and current.
+_EVIDENCE_READY_STATUSES = {"READY", "HEALTHY", "CURRENT"}
+_EVIDENCE_BUILDING_STATUSES = {
+    "BUILDING",
+    "COLLECTING",
+    "WAITING",
+    "NOT_STARTED",
+    "INCOMPLETE",
+}
+_EVIDENCE_STALE_STATUSES = {"STALE"}
+_EVIDENCE_MISSING_STATUSES = {"MISSING"}
+
+# Align with operations.market_ops.SCAN_FRESH_S without importing the worker module.
+SCAN_EVIDENCE_MAX_AGE_S = 6 * 60 * 60
+
+DOMAIN_OPERATIONAL = "operational"
+DOMAIN_EVIDENCE = "evidence"
+DOMAIN_CAPABILITY = "capability"
 
 
 def _port_open(port: int) -> bool:
@@ -33,55 +60,174 @@ def _url_ok(url: str) -> bool:
         return False
 
 
-def _lane(name: str, status: str, detail: str = "", *, required: bool = False) -> dict[str, Any]:
-    return {"name": name, "status": status, "detail": detail, "required": required}
+def _lane(
+    name: str,
+    status: str,
+    detail: str = "",
+    *,
+    required: bool = False,
+    domain: str = DOMAIN_OPERATIONAL,
+) -> dict[str, Any]:
+    return {
+        "name": name,
+        "status": status,
+        "detail": detail,
+        "required": required,
+        "domain": domain,
+    }
 
 
-def _history_readiness() -> tuple[bool, str]:
+def _history_readiness() -> tuple[str, str]:
     """Use the canonical NSE history freshness contract, not scan-file existence."""
     try:
         from data.bhavcopy_runtime import official_history_freshness
 
         freshness = official_history_freshness(load_cache=True)
     except Exception as exc:
-        return False, f"Official NSE history unavailable: {str(exc)[:160]}"
+        return "MISSING", f"Official NSE history unavailable: {str(exc)[:160]}"
 
     current = bool(freshness.get("current"))
     available = str(freshness.get("available_session") or "").strip()
     expected = str(freshness.get("expected_latest_completed_session") or "").strip()
     reason = str(freshness.get("reason_code") or "").strip()
     if current:
-        return True, f"Current through {available}" if available else "Official NSE history is current"
+        return "READY", f"Current through {available}" if available else "Official NSE history is current"
 
     parts = [reason or "HISTORY_NOT_READY"]
     if available:
         parts.append(f"available {available}")
     if expected:
         parts.append(f"expected {expected}")
-    return False, " · ".join(parts)
+    detail = " · ".join(parts)
+    if available:
+        return "STALE", detail
+    return "MISSING", detail
 
 
-def _paper_readiness() -> tuple[bool, str]:
+def _scan_evidence_status(payload: dict[str, Any] | None) -> tuple[str, str]:
+    """Classify the durable whole-market scan as READY / STALE / INCOMPLETE / MISSING."""
+    if not payload or not isinstance(payload, dict):
+        return "MISSING", "No saved whole-market scan"
+    records = payload.get("records")
+    if not isinstance(records, list):
+        records = []
+    scanned_at = str(payload.get("scanned_at") or "").strip()
+    if not scanned_at and not records:
+        return "MISSING", "Scan artifact is empty"
+    try:
+        from product.scan_store import scan_age_hours
+
+        age_h = scan_age_hours(payload)
+    except Exception:
+        age_h = None
+    if age_h is None:
+        if records:
+            return "INCOMPLETE", "Scan records exist but scanned_at is unusable"
+        return "MISSING", "Scan artifact has no usable timestamp"
+    age_s = age_h * 3600.0
+    if age_s > float(SCAN_EVIDENCE_MAX_AGE_S):
+        return "STALE", f"Scan is {age_h:.1f}h old · scanned_at {scanned_at}"
+    if not records:
+        return "INCOMPLETE", f"Scan has no records · scanned_at {scanned_at}"
+    return "READY", f"{len(records)} records · scanned_at {scanned_at}"
+
+
+def _paper_readiness() -> tuple[str, str]:
     """Paper capability is ready when its supervising process is actually alive."""
     try:
         from product.paper_status import read_paper_status
 
         paper = read_paper_status()
     except Exception as exc:
-        return False, f"Paper status unavailable: {str(exc)[:160]}"
+        return "WAITING", f"Paper status unavailable: {str(exc)[:160]}"
 
     if not bool(paper.supervisor_running):
-        return False, "Paper supervisor is not running"
+        return "WAITING", "Paper supervisor is not running"
     if bool(paper.enabled):
-        return True, "Paper supervisor running"
-    return True, "Paper supervisor running · new paper entries paused"
+        return "READY", "Paper supervisor running"
+    return "READY", "Paper supervisor running · new paper entries paused"
 
 
-def _required_waiting(lanes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [
-        lane for lane in lanes
-        if lane.get("required") and str(lane.get("status") or "") not in _READY_REQUIRED_STATUSES
+def _required_waiting(
+    lanes: list[dict[str, Any]],
+    *,
+    domain: str | None = None,
+    ready_statuses: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    ready = ready_statuses or _OPERATIONAL_READY_STATUSES
+    out = []
+    for lane in lanes:
+        if not lane.get("required"):
+            continue
+        if domain is not None and str(lane.get("domain") or "") != domain:
+            continue
+        if str(lane.get("status") or "") not in ready:
+            out.append(lane)
+    return out
+
+
+def _aggregate_operational(lanes: list[dict[str, Any]], *, live_locked: bool) -> dict[str, Any]:
+    waiting = _required_waiting(
+        lanes, domain=DOMAIN_OPERATIONAL, ready_statuses=_OPERATIONAL_READY_STATUSES,
+    )
+    blockers = [str(lane.get("name") or "") for lane in waiting]
+    if not live_locked:
+        blockers.append("LIVE MONEY")
+        return {
+            "ready": False,
+            "status": "FAILED",
+            "blockers": blockers,
+            "reasons": ["Live money is unlocked — fail-closed contract broken"],
+        }
+    if not waiting:
+        return {"ready": True, "status": "READY", "blockers": [], "reasons": []}
+    names = {str(lane.get("name") or "") for lane in waiting}
+    statuses = {str(lane.get("status") or "") for lane in waiting}
+    if statuses & {"FAILED", "UNLOCKED", "BROKEN"}:
+        status = "FAILED"
+    elif names & {"UI", "API", "AUTONOMY", "MARKET OPERATIONS", "PAPER BOT"}:
+        status = "NOT_READY"
+    else:
+        status = "DEGRADED"
+    reasons = [
+        f"{lane.get('name')}: {lane.get('status')}"
+        + (f" · {lane.get('detail')}" if lane.get("detail") else "")
+        for lane in waiting
     ]
+    return {"ready": False, "status": status, "blockers": blockers, "reasons": reasons}
+
+
+def _aggregate_evidence(lanes: list[dict[str, Any]]) -> dict[str, Any]:
+    required = [
+        lane for lane in lanes
+        if lane.get("required") and str(lane.get("domain") or "") == DOMAIN_EVIDENCE
+    ]
+    blockers = [
+        str(lane.get("name") or "")
+        for lane in required
+        if str(lane.get("status") or "") not in _EVIDENCE_READY_STATUSES
+    ]
+    statuses = [str(lane.get("status") or "") for lane in required]
+    reasons = [
+        f"{lane.get('name')}: {lane.get('status')}"
+        + (f" · {lane.get('detail')}" if lane.get("detail") else "")
+        for lane in required
+        if str(lane.get("status") or "") not in _EVIDENCE_READY_STATUSES
+    ]
+    if not required or all(status in _EVIDENCE_READY_STATUSES for status in statuses):
+        return {"ready": True, "status": "READY", "blockers": [], "reasons": []}
+    if any(status in _EVIDENCE_MISSING_STATUSES for status in statuses):
+        if any(status in _EVIDENCE_READY_STATUSES | _EVIDENCE_STALE_STATUSES | _EVIDENCE_BUILDING_STATUSES for status in statuses):
+            status = "DEGRADED"
+        else:
+            status = "MISSING"
+    elif any(status in _EVIDENCE_STALE_STATUSES for status in statuses):
+        status = "STALE"
+    elif any(status in _EVIDENCE_BUILDING_STATUSES for status in statuses):
+        status = "BUILDING"
+    else:
+        status = "NOT_READY"
+    return {"ready": False, "status": status, "blockers": blockers, "reasons": reasons}
 
 
 def build_startup_check(*, probe_network: bool = True) -> dict[str, Any]:
@@ -105,18 +251,16 @@ def build_startup_check(*, probe_network: bool = True) -> dict[str, Any]:
     except Exception:
         ops_running = False
 
-    data_ready, data_detail = _history_readiness()
+    data_status, data_detail = _history_readiness()
 
-    scan_ok = False
+    scan_status, scan_detail = "MISSING", "No saved whole-market scan"
     try:
-        from product.scan_store import default_scan_path
-        from product.forward_soak import _read_json
-        payload = _read_json(default_scan_path())
-        scan_ok = bool(payload.get("records") or payload.get("available") or payload.get("scanned_at"))
-    except Exception:
-        scan_ok = False
+        from product.scan_store import default_scan_path, load_scan
+        scan_status, scan_detail = _scan_evidence_status(load_scan(default_scan_path()))
+    except Exception as exc:
+        scan_status, scan_detail = "MISSING", f"Scan artifact unreadable: {str(exc)[:160]}"
 
-    paper_ready, paper_detail = _paper_readiness()
+    paper_status, paper_detail = _paper_readiness()
 
     soak_status = "NOT_STARTED"
     try:
@@ -145,45 +289,76 @@ def build_startup_check(*, probe_network: bool = True) -> dict[str, Any]:
         live_locked = True
 
     lanes = [
-        _lane("UI", "READY" if ui else "WAITING", "http://127.0.0.1:5173", required=True),
-        _lane("API", "READY" if api else "WAITING", "http://127.0.0.1:8765", required=True),
-        _lane("REPORTS", "READY" if reports else "WAITING", "optional research reports", required=False),
-        _lane("AUTONOMY", "RUNNING" if autonomy_running else "WAITING", required=True),
-        _lane("MARKET OPERATIONS", "RUNNING" if ops_running else "WAITING", required=True),
-        _lane("DATA", "READY" if data_ready else "WAITING", data_detail, required=True),
-        _lane("SCAN PIPELINE", "READY" if scan_ok else "WAITING", required=False),
-        _lane("PAPER BOT", "READY" if paper_ready else "WAITING", paper_detail, required=True),
-        _lane("FORWARD EVIDENCE", soak_status, required=False),
-        _lane("ZERODHA", "READY" if kite_ok else "LOGIN NEEDED", required=False),
-        _lane("LIVE MONEY", "LOCKED" if live_locked else "UNLOCKED", required=True),
+        _lane("UI", "READY" if ui else "WAITING", "http://127.0.0.1:5173", required=True, domain=DOMAIN_OPERATIONAL),
+        _lane("API", "READY" if api else "WAITING", "http://127.0.0.1:8765", required=True, domain=DOMAIN_OPERATIONAL),
+        _lane("REPORTS", "READY" if reports else "WAITING", "optional research reports", required=False, domain=DOMAIN_CAPABILITY),
+        _lane("AUTONOMY", "RUNNING" if autonomy_running else "WAITING", required=True, domain=DOMAIN_OPERATIONAL),
+        _lane("MARKET OPERATIONS", "RUNNING" if ops_running else "WAITING", required=True, domain=DOMAIN_OPERATIONAL),
+        _lane("DATA", data_status, data_detail, required=True, domain=DOMAIN_EVIDENCE),
+        _lane("SCAN PIPELINE", scan_status, scan_detail, required=True, domain=DOMAIN_EVIDENCE),
+        _lane("PAPER BOT", paper_status, paper_detail, required=True, domain=DOMAIN_OPERATIONAL),
+        _lane("FORWARD EVIDENCE", soak_status, required=False, domain=DOMAIN_EVIDENCE),
+        _lane("ZERODHA", "READY" if kite_ok else "LOGIN NEEDED", required=False, domain=DOMAIN_CAPABILITY),
+        _lane("LIVE MONEY", "LOCKED" if live_locked else "UNLOCKED", required=True, domain=DOMAIN_OPERATIONAL),
     ]
-    required_down = _required_waiting(lanes)
-    ready = bool(live_locked and not required_down)
+    operational = _aggregate_operational(lanes, live_locked=live_locked)
+    evidence = _aggregate_evidence(lanes)
+    operational_waiting = _required_waiting(
+        lanes, domain=DOMAIN_OPERATIONAL, ready_statuses=_OPERATIONAL_READY_STATUSES,
+    )
+    evidence_waiting = _required_waiting(
+        lanes, domain=DOMAIN_EVIDENCE, ready_statuses=_EVIDENCE_READY_STATUSES,
+    )
+    # Fully ready means both planes are ready. Do not use this boolean as a
+    # proxy for process liveness — that is operational.ready.
+    fully_ready = bool(operational["ready"] and evidence["ready"] and live_locked)
     return {
         "schema_version": SCHEMA_VERSION,
-        "ready": ready,
+        "ready": fully_ready,
+        "operational_ready": bool(operational["ready"]),
+        "evidence_ready": bool(evidence["ready"]),
+        "operational": operational,
+        "evidence": evidence,
         "home_url": "http://127.0.0.1:5173",
         "lanes": lanes,
         "live_locked": live_locked,
-        "required_waiting": [str(lane.get("name") or "") for lane in required_down],
-        "note": "Telegram absence is not a product failure.",
+        "required_waiting": [str(lane.get("name") or "") for lane in operational_waiting + evidence_waiting],
+        "operational_waiting": [str(lane.get("name") or "") for lane in operational_waiting],
+        "evidence_waiting": [str(lane.get("name") or "") for lane in evidence_waiting],
+        "note": "Telegram absence is not a product failure. Operational readiness is not evidence readiness.",
     }
 
 
 def print_startup_summary(*, probe_network: bool = True) -> int:
     payload = build_startup_check(probe_network=probe_network)
     by = {l["name"]: l for l in payload["lanes"]}
-    print("QuantTerm is ready." if payload["ready"] else "QuantTerm is running; required lanes are still preparing.")
+    operational = dict(payload.get("operational") or {})
+    evidence = dict(payload.get("evidence") or {})
+    print(f"Operational runtime: {operational.get('status') or 'UNKNOWN'}")
+    if operational.get("blockers"):
+        print("  blockers: " + ", ".join(operational["blockers"]))
+    print(f"Evidence: {evidence.get('status') or 'UNKNOWN'}")
+    if evidence.get("blockers"):
+        print("  blockers: " + ", ".join(evidence["blockers"]))
+    if operational.get("ready") and evidence.get("ready"):
+        print("QuantTerm is ready.")
+    elif operational.get("ready"):
+        print("QuantTerm is operating; evidence-dependent claims are not fully ready.")
+    else:
+        print("QuantTerm operational runtime is not ready.")
     print(f"Home: {payload['home_url']}")
     print()
     print(f"Data: {by['DATA']['status']}" + (f" · {by['DATA']['detail']}" if by['DATA'].get('detail') else ""))
+    print(f"Scan: {by['SCAN PIPELINE']['status']}" + (f" · {by['SCAN PIPELINE']['detail']}" if by['SCAN PIPELINE'].get('detail') else ""))
     print(f"Automation: {by['AUTONOMY']['status']}")
     print(f"Paper bot: {by['PAPER BOT']['status']}" + (f" · {by['PAPER BOT']['detail']}" if by['PAPER BOT'].get('detail') else ""))
     print(f"Forward evidence: {by['FORWARD EVIDENCE']['status']}")
     print(f"Zerodha: {by['ZERODHA']['status']}")
     print(f"Live money: {by['LIVE MONEY']['status']}")
-    if payload.get("required_waiting"):
-        print("Still preparing: " + ", ".join(payload["required_waiting"]))
+    if payload.get("operational_waiting"):
+        print("Operational still preparing: " + ", ".join(payload["operational_waiting"]))
+    if payload.get("evidence_waiting"):
+        print("Evidence still preparing: " + ", ".join(payload["evidence_waiting"]))
     if not payload["live_locked"]:
         print("LIVE MONEY UNLOCKED — fail-closed contract broken")
         return 2
