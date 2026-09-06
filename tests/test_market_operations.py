@@ -352,6 +352,29 @@ def test_worker_claims_runtime_before_bootstrap():
     assert src.index("heartbeat.start()") < src.index("self._bootstrap()")
 
 
+def test_data_prepare_keeps_history_when_fno_is_blocked(monkeypatch, tmp_path: Path):
+    from operations.market_ops import MarketOperationsWorker, OperationBlocked
+
+    worker = MarketOperationsWorker.__new__(MarketOperationsWorker)
+    history = {"current": True, "available_session": "2026-09-04"}
+    monkeypatch.setattr(worker, "_ensure_history", lambda *_a, **_k: history)
+
+    def boom(_operation):
+        raise OperationBlocked(
+            "No current stock F&O underlyings could be mapped",
+            code="FNO_UNIVERSE_UNAVAILABLE",
+            result={"mapped_underlyings": 0},
+        )
+
+    monkeypatch.setattr(worker, "_run_fno", boom)
+    result = worker._run_data_prepare({"operation_id": "op-data"})
+    assert result["history"]["current"] is True
+    assert result["degraded"] is True
+    assert result["missing_lanes"] == ["fno"]
+    assert result["fno"]["blocked"] is True
+    assert result["fno"]["code"] == "FNO_UNIVERSE_UNAVAILABLE"
+
+
 def test_runtime_payload_includes_rss_mb():
     from operations.market_ops import MarketOperationsWorker, _process_rss_mb
 

@@ -103,8 +103,8 @@ def _start_control(api: str, control: str, timeout: float) -> dict[str, Any]:
     payload = _request_json(_url(api, f"/api/controls/{urllib.parse.quote(control, safe='')}"), method="POST", timeout=timeout)
     if payload.get("accepted") is not True:
         raise RuntimeError(f"{control} was not accepted: {payload}")
-    if not payload.get("operation_id"):
-        raise RuntimeError(f"{control} accepted without operation_id: {payload}")
+    if not payload.get("operation_id") and not payload.get("control_id"):
+        raise RuntimeError(f"{control} accepted without operation_id/control_id: {payload}")
     return payload
 
 
@@ -224,7 +224,13 @@ def run(args: argparse.Namespace) -> int:
             ))
             print(f"[FAIL] {label}: {exc}\n")
 
-    rec = _request_json(_url(api, "/api/recommendations-workspace"), timeout=max(args.request_timeout, 30))
+    rec = {}
+    rec_deadline = time.monotonic() + 90
+    while time.monotonic() < rec_deadline:
+        rec = _request_json(_url(api, "/api/recommendations-workspace"), timeout=max(args.request_timeout, 30))
+        if not rec.get("rebuilding"):
+            break
+        time.sleep(1.5)
     rec_status = str(rec.get("records_status") or "")
     cards = 0
     for cat in rec.get("categories") or []:
@@ -350,6 +356,10 @@ def run(args: argparse.Namespace) -> int:
     started = _now()
     try:
         sim = _request_json(_url(api, "/api/decision-simulator"), method="POST", timeout=max(args.request_timeout, 60), body=sim_body)
+        deadline = time.monotonic() + 90
+        while str(sim.get("status") or "") == "RUNNING" and time.monotonic() < deadline:
+            time.sleep(1.5)
+            sim = _request_json(_url(api, "/api/decision-simulator"), timeout=args.request_timeout)
         sim_status = str(sim.get("status") or "")
         if sim_status in { "UNAVAILABLE", "HISTORICAL_DECISION_UNAVAILABLE", "AMBIGUOUS_HISTORICAL_DECISION"}:
             grade = "DEGRADED"
@@ -400,15 +410,16 @@ def run(args: argparse.Namespace) -> int:
     started = _now()
     try:
         cycle = _start_control(api, "RUN_CYCLE_NOW", args.request_timeout)
+        control_id = str(cycle.get("control_id") or cycle.get("operation_id") or "")
         rows.append(_row(
             feature="Paper cycle request",
             trigger_tested="POST /api/controls/RUN_CYCLE_NOW",
-            operation_id=str(cycle.get("operation_id") or cycle.get("job_id") or ""),
+            operation_id=control_id,
             start_timestamp=started,
             finish_timestamp=_now(),
             backend_path="research.autonomy.controls → paper_cycle",
             durable_artifact="logs/autonomy/",
-            status="PASS" if cycle.get("accepted") else "FAIL",
+            status="PASS" if cycle.get("accepted") and control_id else "FAIL",
             blocker_reason="" if cycle.get("accepted") else str(cycle)[:200],
             code_sha=sha,
         ))
