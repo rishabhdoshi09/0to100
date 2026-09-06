@@ -100,14 +100,16 @@
 }
 
 .truth-fresh,
-.truth-ready {
+.truth-ready,
+.truth-succeeded {
   color: #8ce9b2;
   border-color: rgba(77, 208, 132, .28);
   background: rgba(77, 208, 132, .08);
 }
 
 .truth-running,
-.truth-refreshing {
+.truth-refreshing,
+.truth-pending {
   color: #7bdcff;
   border-color: rgba(75, 190, 242, .28);
   background: rgba(75, 190, 242, .08);
@@ -122,6 +124,8 @@
 }
 
 .truth-failed,
+.truth-retryable_failed,
+.truth-blocked,
 .truth-offline {
   color: #ff9a9a;
   border-color: rgba(244, 94, 94, .3);
