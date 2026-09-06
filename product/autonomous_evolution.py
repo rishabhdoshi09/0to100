@@ -277,56 +277,103 @@ def _aggregate_splits(split_summaries: Sequence[Mapping[str, Any]]) -> tuple[dic
     return setups, reasons
 
 
-def _publish_history_policies(setups: Mapping[str, Any], reasons: Mapping[str, Any]) -> list[dict[str, Any]]:
-    from product.learning_policy_store import upsert_policy
+def _publish_history_policies(
+    setups: Mapping[str, Any],
+    reasons: Mapping[str, Any],
+    *,
+    generation_fingerprint: str,
+) -> list[dict[str, Any]]:
+    """Atomically replace this generation's historical policy projection.
+
+    Forward-paper policies are preserved. All prior HIST_* rows are removed in
+    the staging copy so a setup absent from the new generation cannot survive.
+    The target store is swapped only after every historical row is built.
+    """
+    from product.learning_policy_store import (
+        load_policies,
+        policy_path,
+        save_policies,
+        upsert_policy,
+    )
+
+    target = policy_path()
+    stage = target.with_suffix(
+        target.suffix + f".history-stage-{os.getpid()}-{threading.get_ident()}"
+    )
+    store = load_policies(target)
+    store["policies"] = [
+        dict(p)
+        for p in (store.get("policies") or [])
+        if isinstance(p, Mapping)
+        and not str(p.get("policy_id") or "").startswith("HIST_")
+    ]
+    save_policies(store, stage)
 
     published: list[dict[str, Any]] = []
-    for setup, raw in sorted(setups.items()):
-        row = dict(raw or {})
-        reproduced = bool(row.get("reproduced"))
-        published.append(upsert_policy(
-            policy_id=f"HIST_SETUP::{setup}",
-            dimension="setup",
-            bucket=str(setup),
-            sample_size=int(row.get("n") or 0),
-            expectancy_R=float(row.get("mean_R") or 0.0),
-            source="backtest_reproduced",
-            extra={
-                "production_status": "ELIGIBLE" if reproduced else "EXPERIMENTAL",
-                "confidence": "REPRODUCED_BACKTEST" if reproduced else "INSUFFICIENT_EVIDENCE",
-                "affects_selection": bool(reproduced),
-                "historical_reproduced_positive": bool(reproduced),
-                "historical_confidence_score": row.get("historical_confidence_score"),
-                "historical_only": True,
-                "splits_tested": row.get("tested_splits"),
-                "positive_splits": row.get("positive_splits"),
-                "worst_split_mean_R": row.get("worst_split_mean_R"),
-                "split_metrics": row.get("split_metrics") or [],
-                "live_locked": True,
-            },
-        ))
-    for reason, raw in sorted(reasons.items()):
-        row = dict(raw or {})
-        # Historical rejection diagnostics are research-only. Forward
-        # counterfactual evidence remains the authority for changing filters.
-        published.append(upsert_policy(
-            policy_id=f"HIST_REJECT::{reason}",
-            dimension="reason_code",
-            bucket=str(reason),
-            sample_size=int(row.get("n") or 0),
-            expectancy_R=float(row.get("mean_quality") or 0.0),
-            source="backtest_reproduced_counterfactual",
-            extra={
-                "production_status": "EXPERIMENTAL",
-                "confidence": "RESEARCH_ONLY",
-                "affects_selection": False,
-                "historical_only": True,
-                "classification_counts": row.get("classifications") or {},
-                "split_metrics": row.get("split_metrics") or [],
-                "not_pnl": True,
-                "live_locked": True,
-            },
-        ))
+    try:
+        for setup, raw in sorted(setups.items()):
+            row = dict(raw or {})
+            reproduced = bool(row.get("reproduced"))
+            published.append(upsert_policy(
+                policy_id=f"HIST_SETUP::{setup}",
+                dimension="setup",
+                bucket=str(setup),
+                sample_size=int(row.get("n") or 0),
+                expectancy_R=float(row.get("mean_R") or 0.0),
+                source="backtest_reproduced",
+                path=stage,
+                extra={
+                    "production_status": "ELIGIBLE" if reproduced else "EXPERIMENTAL",
+                    "confidence": "REPRODUCED_BACKTEST" if reproduced else "INSUFFICIENT_EVIDENCE",
+                    "affects_selection": bool(reproduced),
+                    "historical_reproduced_positive": bool(reproduced),
+                    "historical_confidence_score": row.get("historical_confidence_score"),
+                    "historical_only": True,
+                    "generation_fingerprint": generation_fingerprint,
+                    "splits_tested": row.get("tested_splits"),
+                    "positive_splits": row.get("positive_splits"),
+                    "worst_split_mean_R": row.get("worst_split_mean_R"),
+                    "split_metrics": row.get("split_metrics") or [],
+                    "live_locked": True,
+                },
+            ))
+        for reason, raw in sorted(reasons.items()):
+            row = dict(raw or {})
+            counts = dict(row.get("classifications") or {})
+            n = int(row.get("n") or 0)
+            missed = int(counts.get("MISSED_WINNER") or 0)
+            missed_rate = missed / max(1, n)
+            over_rejection = bool(n >= 8 and missed_rate >= 0.35)
+            published.append(upsert_policy(
+                policy_id=f"HIST_REJECT::{reason}",
+                dimension="reason_code",
+                bucket=str(reason),
+                sample_size=n,
+                expectancy_R=float(row.get("mean_quality") or 0.0),
+                source="backtest_reproduced_counterfactual",
+                path=stage,
+                extra={
+                    "production_status": "EXPERIMENTAL",
+                    "confidence": "RESEARCH_ONLY",
+                    "affects_selection": False,
+                    "historical_only": True,
+                    "generation_fingerprint": generation_fingerprint,
+                    "classification_counts": counts,
+                    "historical_missed_rate": round(missed_rate, 6),
+                    "over_rejection_candidate": over_rejection,
+                    "split_metrics": row.get("split_metrics") or [],
+                    "not_pnl": True,
+                    "live_locked": True,
+                },
+            ))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(stage, target)
+    finally:
+        if stage.exists():
+            try:
+                stage.unlink()
+            except OSError:
+                pass
     return published
 
 
@@ -430,6 +477,8 @@ def run_bootstrap(*, force: bool = False, path: str | Path | None = None) -> dic
 
     target = state_path(path)
     sessions = official_sessions()
+    from product.evolution_generation_guard import current_generation
+    generation_fingerprint = str(current_generation().get("fingerprint") or "")
     state = bootstrap_status(target)
     if not force and not _needs_refresh(state, sessions):
         return state
@@ -455,6 +504,7 @@ def run_bootstrap(*, force: bool = False, path: str | Path | None = None) -> dic
         "analysis_complete": False,
         "started_at": _now(),
         "history_anchor": _latest_anchor(sessions),
+        "generation_fingerprint": generation_fingerprint,
         "plan": plan,
         "live_locked": True,
     }
@@ -486,10 +536,18 @@ def run_bootstrap(*, force: bool = False, path: str | Path | None = None) -> dic
             errors.append({"split_id": sid, "error": str(exc)[:240]})
 
     setups, reasons = _aggregate_splits(summaries)
-    published = _publish_history_policies(setups, reasons) if summaries else []
     hypotheses = _hypotheses(setups, reasons)
     ready = sorted(setup for setup, row in setups.items() if row.get("reproduced"))
     complete = len(summaries) == len(plan) and not errors
+    published = (
+        _publish_history_policies(
+            setups,
+            reasons,
+            generation_fingerprint=generation_fingerprint,
+        )
+        if complete
+        else []
+    )
     payload = {
         "schema_version": SCHEMA_VERSION,
         "required": True,
@@ -498,6 +556,7 @@ def run_bootstrap(*, force: bool = False, path: str | Path | None = None) -> dic
         "paper_ready_setups": len(ready),
         "ready_setups": ready,
         "history_anchor": _latest_anchor(sessions),
+        "generation_fingerprint": generation_fingerprint,
         "splits": summaries,
         "setups": setups,
         "reason_diagnostics": reasons,
@@ -548,73 +607,6 @@ def ensure_started_async() -> dict[str, Any]:
         _thread.start()
     return {**state, "status": "RUNNING", "analysis_complete": False}
 
-
-def confidence_from_policies(
-    candidate: Mapping[str, Any],
-    policies: Sequence[Mapping[str, Any]],
-) -> dict[str, Any]:
-    """Historical prior first; forward paper evidence then strengthens/decays it.
-
-    ``evidence_confidence_score`` is an explicit composite evidence score, not a
-    claimed win probability.
-    """
-    setup = _setup(candidate)
-    hist = next(
-        (dict(p) for p in policies if str(p.get("policy_id") or "") == f"HIST_SETUP::{setup}"),
-        {},
-    )
-    forward = next(
-        (dict(p) for p in policies if str(p.get("policy_id") or "") == f"SETUP::{setup}"),
-        {},
-    )
-    hist_ready = bool(hist.get("historical_reproduced_positive"))
-    hist_score = float(hist.get("historical_confidence_score") or 0.0)
-    forward_n = int(forward.get("sample_size") or 0)
-    forward_edge = float(forward.get("expectancy_difference_R") or 0.0)
-    forward_sample = min(1.0, forward_n / 30.0)
-    forward_edge_component = math.tanh(forward_edge / 0.50) if forward_n else 0.0
-    forward_score = max(0.0, min(100.0, 50.0 + 30.0 * forward_edge_component + 20.0 * forward_sample))
-
-    if not hist_ready:
-        combined = min(49.0, hist_score)
-        stage = "HISTORICAL_UNPROVEN"
-    elif forward_n <= 0:
-        combined = min(79.0, hist_score)
-        stage = "HISTORICAL_BASE"
-    else:
-        forward_weight = min(0.70, 0.20 + 0.50 * forward_sample)
-        combined = hist_score * (1.0 - forward_weight) + forward_score * forward_weight
-        if forward_n < 8:
-            stage = "FORWARD_EARLY"
-        elif forward_edge <= -0.20:
-            stage = "FORWARD_DECAYED"
-        elif forward_n < 20:
-            stage = "FORWARD_CALIBRATING"
-        else:
-            stage = "FORWARD_CONFIRMED" if forward_edge > 0 else "FORWARD_WEAK"
-    combined = round(max(0.0, min(95.0, combined)), 1)
-
-    paper_eligible = bool(hist_ready)
-    if forward_n >= 5 and forward_edge <= -0.25:
-        paper_eligible = False
-    return {
-        "setup": setup,
-        "historical_ready": hist_ready,
-        "historical_n": int(hist.get("sample_size") or 0),
-        "historical_mean_R": hist.get("expectancy_R"),
-        "historical_splits": int(hist.get("splits_tested") or 0),
-        "historical_positive_splits": int(hist.get("positive_splits") or 0),
-        "historical_confidence_score": round(hist_score, 1),
-        "forward_n": forward_n,
-        "forward_mean_R": forward.get("expectancy_R"),
-        "forward_source": forward.get("evidence_source") or "",
-        "forward_confidence_score": round(forward_score, 1) if forward_n else 0.0,
-        "evidence_confidence_score": combined,
-        "confidence_stage": stage,
-        "paper_eligible": paper_eligible,
-        "is_win_probability": False,
-        "live_locked": True,
-    }
 
 
 if __name__ == "__main__":
