@@ -12,7 +12,6 @@ replay can authorize PAPER exploration only; it can never unlock live money.
 """
 from __future__ import annotations
 
-import os
 from typing import Any, Mapping, Sequence
 
 from product.decision_context import (
@@ -128,7 +127,11 @@ def _historical_gate(
         if generation.get("historical_replay_required") or not state.get("analysis_complete"):
             ensure_started_async()
             state = bootstrap_status()
-        confidence = confidence_from_policies(candidate, policies)
+        confidence = confidence_from_policies(
+            candidate,
+            policies,
+            generation_fingerprint=str(generation.get("fingerprint") or ""),
+        )
         if not state.get("analysis_complete"):
             return {
                 **confidence,
@@ -185,10 +188,10 @@ def evaluate_policies(
         policies = list((load_policies(path).get("policies") or []))
     policies = list(policies or [])
 
-    # Existing unit/injected-policy callers remain deterministic. Production
-    # store-backed paper selection enforces history-first unless pytest is the
-    # caller; dedicated tests exercise the pure gate directly.
-    enforce_history = bool(store_backed and not os.environ.get("PYTEST_CURRENT_TEST"))
+    # Explicit policy/path injection is a research/test seam. The normal
+    # production store-backed call (policies=None, path=None) always enforces
+    # the history-first gate; there is no pytest/environment bypass.
+    enforce_history = bool(store_backed and path is None)
     historical = _historical_gate(ctx, policies, enabled=enforce_history)
 
     supportive: list[dict[str, Any]] = []
