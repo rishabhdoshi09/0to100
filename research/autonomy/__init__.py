@@ -89,6 +89,12 @@ def run_supervisor(*, root=None, interval_s: float = 15.0, max_iterations=None) 
     from research.autonomy.outcome_liveness import install_outcome_liveness
     install_outcome_liveness()
 
+    # A partial official counterfactual settlement must not report SUCCESS and unblock
+    # learning. Successful rows are idempotent, so the same durable job can retry only
+    # the unresolved rows after a provider/decoder failure.
+    from research.autonomy.outcome_integrity import install_outcome_integrity
+    install_outcome_integrity()
+
     from research.autonomy.supervisor import Supervisor
     from research.autonomy.console_runtime import run_visible_loop
 
