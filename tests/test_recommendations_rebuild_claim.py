@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import multiprocessing as mp
+import os
 import time
 
 from product import recommendations_liveness as RL
@@ -20,6 +22,23 @@ def _paths(monkeypatch, tmp_path):
     monkeypatch.setenv("QT_RECOMMENDATIONS_REBUILD_STATE", str(tmp_path / "rebuild.json"))
 
 
+def _hold_rebuild_claim(lock_path: str, state_path: str, ready, release) -> None:
+    os.environ["QT_RECOMMENDATIONS_REBUILD_LOCK"] = lock_path
+    os.environ["QT_RECOMMENDATIONS_REBUILD_STATE"] = state_path
+    from product import recommendations_liveness as worker_rl
+
+    scan = _Core._scan_payload()
+    long_term = _Core._long_term_payload()
+    claim = worker_rl._claim_rebuild(scan, long_term)
+    ready.put((claim is not None, os.getpid()))
+    if claim is None:
+        return
+    try:
+        release.wait(10)
+    finally:
+        worker_rl._release_claim(claim)
+
+
 def test_rebuild_claim_is_process_exclusive(monkeypatch, tmp_path):
     _paths(monkeypatch, tmp_path)
     scan = _Core._scan_payload()
@@ -38,6 +57,32 @@ def test_rebuild_claim_is_process_exclusive(monkeypatch, tmp_path):
     second = RL._claim_rebuild(scan, long_term)
     assert second is not None
     RL._release_claim(second)
+
+
+def test_rebuild_claim_is_exclusive_across_independent_processes(monkeypatch, tmp_path):
+    _paths(monkeypatch, tmp_path)
+    ctx = mp.get_context("spawn")
+    ready = ctx.Queue()
+    release = ctx.Event()
+    process = ctx.Process(
+        target=_hold_rebuild_claim,
+        args=(str(tmp_path / "rebuild.lock"), str(tmp_path / "rebuild.json"), ready, release),
+    )
+    process.start()
+    acquired, child_pid = ready.get(timeout=10)
+    assert acquired is True
+    try:
+        assert RL._claim_rebuild(_Core._scan_payload(), _Core._long_term_payload()) is None
+        state = RL._read_state()
+        assert state["status"] == "RUNNING"
+        assert int(state["pid"]) == int(child_pid)
+    finally:
+        release.set()
+        process.join(timeout=10)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=5)
+    assert process.exitcode == 0
 
 
 def test_failed_current_generation_is_explicit_not_refreshing_forever(monkeypatch, tmp_path):
