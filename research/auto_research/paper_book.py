@@ -157,27 +157,27 @@ class PaperBook:
         return sum(p.qty * p.r_unit for p in self.open.values())
 
     # ── mark-to-market: advance one bar for every open position ──────────────────
-    def mark(self, bars: dict, date: str) -> list[ClosedTrade]:
-        """Advance at most one official trading session per position.
+    def mark(self, bars: dict, date: str, *, allow_entry_session: bool = True) -> list[ClosedTrade]:
+        """Advance at most one trading session per position.
 
-        `bars` maps symbol -> (high, low, close) OR (open, high, low, close). When an open is
+        ``bars`` maps symbol -> (high, low, close) OR (open, high, low, close). When an open is
         given, a GAP THROUGH the stop fills at the gap price (worse than the stop) and a gap
         through the target fills at the gap (better). Otherwise closes STOP-first
         (conservative), then TARGET, then MAX_HOLD.
 
-        The persisted ``last_marked_session`` makes this operation idempotent across autonomy
-        retries and different cycle IDs. A position opened on ``date`` is deliberately not
-        marked with that date's full daily OHLC: doing so would use price action that occurred
-        before the simulated entry and create look-ahead exits.
+        ``last_marked_session`` makes the operation idempotent across retries/restarts. The
+        generic research simulator historically models signals as known before the supplied bar,
+        so ``allow_entry_session`` defaults to True to preserve that contract. Production EOD
+        settlement passes False because an intraday paper entry must never be evaluated against
+        the completed full-day OHLC for its own entry session.
         """
         closed_now: list[ClosedTrade] = []
         session = str(date or "")[:10]
         marked_any = False
         for key, pos in list(self.open.items()):
-            # Daily-bar paper accounting must be point-in-time safe and retry-safe.
             if not session:
                 continue
-            if str(pos.entry_date or "")[:10] >= session:
+            if not allow_entry_session and str(pos.entry_date or "")[:10] >= session:
                 continue
             if str(getattr(pos, "last_marked_session", "") or "")[:10] == session:
                 continue
