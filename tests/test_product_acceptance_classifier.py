@@ -157,6 +157,11 @@ def test_simulator_running_is_not_pass():
         "original": {"action": "WAIT", "reason_code": "NO_SETUP"},
     })
     assert ok["status"] == "PASS"
+    assert grade_simulator({
+        "status": "SUCCEEDED",
+        "kind": "PAST_DECISION_SIMULATION",
+        "original": {"action": "UNAVAILABLE"},
+    })["status"] == "FAIL"
 
 
 def test_learning_and_soak_require_contracts():
@@ -180,6 +185,13 @@ def test_paper_cycle_request_is_not_execution():
         "available": True,
         "last_cycle": {},
         "open_positions": [],
+    }, live_locked=True)["status"] == "PASS"
+    assert grade_paper_status({
+        "schema_version": 1,
+        "why_no_trade": {"available": False, "reasons": ["NO_CYCLE_RECORDED"]},
+        "latest": {},
+        "paper": {"enabled": True, "open_positions": []},
+        "live_locked": True,
     }, live_locked=True)["status"] == "PASS"
     unobserved = grade_paper_cycle_execution(observed=False)
     assert unobserved["status"] == "DEGRADED"
