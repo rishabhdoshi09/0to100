@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from product.autonomous_evolution import (
     _aggregate_splits,
+    _publish_history_policies,
     _split_plan,
     summarize_report,
 )
@@ -35,6 +36,7 @@ def _historical_policy(setup: str = "VCP", score: float = 72.0) -> dict:
         "historical_confidence_score": score,
         "splits_tested": 3,
         "positive_splits": 3,
+        "generation_fingerprint": "gen-A",
     }
 
 
@@ -213,3 +215,227 @@ def test_split_plan_is_disjoint_and_leaves_forward_outcome_buffer(monkeypatch):
     flattened = [day for split in plan for day in split["sessions"]]
     assert len(flattened) == len(set(flattened)) == 12
     assert max(flattened) < sessions[-5]
+
+
+
+def test_generation_mismatch_fails_closed():
+    historical = _historical_policy()
+    result = confidence_from_policies(
+        {"setup_label": "VCP"},
+        [historical],
+        generation_fingerprint="gen-B",
+    )
+    assert result["historical_generation_match"] is False
+    assert result["historical_ready"] is False
+    assert result["paper_eligible"] is False
+    assert result["confidence_stage"] == "HISTORICAL_GENERATION_MISMATCH"
+    assert result["evidence_confidence_score"] == 0.0
+
+
+def test_store_backed_evaluate_policies_enforces_history_during_pytest(monkeypatch, tmp_path):
+    import product.autonomous_evolution as evolution
+    import product.evolution_generation_guard as generation_guard
+    from product.evidence_policy_engine import BLOCK, evaluate_policies
+    from product.learning_policy_store import upsert_policy
+
+    policy_path = tmp_path / "policies.json"
+    monkeypatch.setenv("QT_LEARNING_POLICIES", str(policy_path))
+    monkeypatch.setenv("QT_AUTONOMOUS_EVOLUTION", str(tmp_path / "evolution.json"))
+    upsert_policy(
+        policy_id="HIST_SETUP::VCP",
+        dimension="setup",
+        bucket="VCP",
+        sample_size=30,
+        expectancy_R=0.45,
+        source="backtest_reproduced",
+        extra={
+            "production_status": "ELIGIBLE",
+            "confidence": "REPRODUCED_BACKTEST",
+            "affects_selection": True,
+            "historical_reproduced_positive": True,
+            "historical_confidence_score": 72.0,
+            "splits_tested": 3,
+            "positive_splits": 3,
+            "generation_fingerprint": "gen-A",
+        },
+    )
+    monkeypatch.setattr(
+        generation_guard,
+        "ensure_current_generation",
+        lambda: {
+            "fingerprint": "gen-A",
+            "historical_replay_required": False,
+            "changed": False,
+        },
+    )
+    monkeypatch.setattr(
+        evolution,
+        "bootstrap_status",
+        lambda: {
+            "required": True,
+            "status": "SUCCEEDED",
+            "analysis_complete": True,
+            "paper_ready_setups": 1,
+        },
+    )
+    monkeypatch.setattr(evolution, "ensure_started_async", lambda: {"status": "SUCCEEDED"})
+
+    allowed = evaluate_policies({"setup_label": "VCP"})
+    blocked = evaluate_policies({"setup_label": "UNSEEN"})
+
+    assert allowed["historical_forward_confidence"]["required"] is True
+    assert allowed["historical_forward_confidence"]["historical_ready"] is True
+    assert blocked["historical_forward_confidence"]["required"] is True
+    assert blocked["final_effect"] == BLOCK
+    assert any(
+        row.get("policy_id") == "AUTONOMOUS_HISTORY_FIRST_GATE"
+        for row in blocked["blocking"]
+    )
+
+
+def test_generation_change_purges_only_historical_policies(monkeypatch, tmp_path):
+    import json
+    import product.evolution_generation_guard as generation_guard
+    from product.learning_policy_store import load_policies, upsert_policy
+
+    policy_path = tmp_path / "policies.json"
+    state_path = tmp_path / "evolution.json"
+    run_dir = tmp_path / "runs"
+    identity_path = tmp_path / "identity.json"
+    monkeypatch.setenv("QT_LEARNING_POLICIES", str(policy_path))
+    monkeypatch.setenv("QT_AUTONOMOUS_EVOLUTION", str(state_path))
+    monkeypatch.setenv("QT_AUTONOMOUS_EVOLUTION_DIR", str(run_dir))
+    monkeypatch.setenv("QT_AUTONOMOUS_EVOLUTION_IDENTITY", str(identity_path))
+
+    upsert_policy(
+        policy_id="HIST_SETUP::VCP",
+        dimension="setup",
+        bucket="VCP",
+        sample_size=30,
+        expectancy_R=0.45,
+        source="backtest_reproduced",
+        extra={"historical_reproduced_positive": True, "generation_fingerprint": "gen-A"},
+    )
+    upsert_policy(
+        policy_id="SETUP::VCP",
+        dimension="setup",
+        bucket="VCP",
+        sample_size=30,
+        expectancy_R=0.20,
+        source="paper_forward_taken_execution_adjusted",
+    )
+    state_path.write_text(json.dumps({"analysis_complete": True}), encoding="utf-8")
+    run_dir.mkdir(parents=True)
+    (run_dir / "artifact.json").write_text("{}", encoding="utf-8")
+    identity_path.write_text(json.dumps({"fingerprint": "gen-A"}), encoding="utf-8")
+    monkeypatch.setattr(
+        generation_guard,
+        "current_generation",
+        lambda: {
+            "versions": {},
+            "champion": {},
+            "warehouse_fingerprint": {},
+            "fingerprint": "gen-B",
+        },
+    )
+
+    verdict = generation_guard.ensure_current_generation()
+    policies = load_policies()["policies"]
+    ids = {row["policy_id"] for row in policies}
+
+    assert verdict["changed"] is True
+    assert "HIST_SETUP::VCP" not in ids
+    assert "SETUP::VCP" in ids
+    assert not state_path.exists()
+    assert not run_dir.exists()
+
+
+def test_degraded_bootstrap_does_not_publish_partial_history(monkeypatch, tmp_path):
+    import product.historical_replay as replay
+    import product.evolution_generation_guard as generation_guard
+    from product.autonomous_evolution import run_bootstrap
+    from product.learning_policy_store import load_policies, upsert_policy
+
+    policy_path = tmp_path / "policies.json"
+    monkeypatch.setenv("QT_LEARNING_POLICIES", str(policy_path))
+    monkeypatch.setenv("QT_AUTONOMOUS_EVOLUTION_DIR", str(tmp_path / "runs"))
+    monkeypatch.setenv("QT_EVOLUTION_SPLITS", "2")
+    monkeypatch.setenv("QT_EVOLUTION_SESSIONS_PER_SPLIT", "2")
+    monkeypatch.setenv("QT_EVOLUTION_OUTCOME_BUFFER", "2")
+    sessions = [f"2026-01-{day:02d}" for day in range(1, 12)]
+    monkeypatch.setattr(replay, "official_sessions", lambda: sessions)
+    calls = {"n": 0}
+
+    def fake_replay(**kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("split failure")
+        return {
+            "run_id": "one",
+            "status": "SUCCEEDED",
+            "decisions": [_buy("VCP", 0.8), _buy("VCP", 0.6)],
+        }
+
+    monkeypatch.setattr(replay, "run_historical_replay", fake_replay)
+    monkeypatch.setattr(
+        generation_guard,
+        "current_generation",
+        lambda: {"fingerprint": "gen-A"},
+    )
+    upsert_policy(
+        policy_id="SETUP::KEEP",
+        dimension="setup",
+        bucket="KEEP",
+        sample_size=5,
+        expectancy_R=0.1,
+        source="paper_forward_taken_execution_adjusted",
+    )
+
+    result = run_bootstrap(force=True, path=tmp_path / "state.json")
+    ids = {row["policy_id"] for row in load_policies()["policies"]}
+
+    assert result["analysis_complete"] is False
+    assert result["status"] == "DEGRADED"
+    assert result["published_policies"] == []
+    assert not any(policy_id.startswith("HIST_") for policy_id in ids)
+    assert "SETUP::KEEP" in ids
+
+
+def test_historical_over_rejection_links_to_forward_counterfactual(monkeypatch, tmp_path):
+    from product.learning_policy_store import load_policies
+    from product.paper_learning_loop import ingest_counterfactual
+    from product.counterfactual_learning import MISSED_WINNER
+
+    policy_path = tmp_path / "policies.json"
+    monkeypatch.setenv("QT_LEARNING_POLICIES", str(policy_path))
+    _publish_history_policies(
+        {},
+        {
+            "SOFT_FILTER": {
+                "n": 10,
+                "mean_quality": -0.4,
+                "classifications": {"MISSED_WINNER": 4, "FLAT": 6},
+                "split_metrics": [],
+            }
+        },
+        generation_fingerprint="gen-A",
+    )
+
+    ingest_counterfactual(
+        {
+            "symbol": "XYZ",
+            "reason_code": "SOFT_FILTER",
+            "classification": MISSED_WINNER,
+            "evidence": {"regime": "RISK_ON"},
+        },
+        floors={"experimental": 1, "eligible": 2, "active": 3},
+    )
+    policies = load_policies()["policies"]
+    forward = next(row for row in policies if row["policy_id"] == "REJECT::SOFT_FILTER")
+
+    assert forward["historical_hypothesis_linked"] is True
+    assert forward["historical_policy_id"] == "HIST_REJECT::SOFT_FILTER"
+    assert forward["historical_generation_fingerprint"] == "gen-A"
+    assert forward["historical_over_rejection_candidate"] is True
+    assert forward["historical_missed_rate"] == 0.4
+    assert forward["not_pnl"] is True
