@@ -5,7 +5,7 @@ The brain's daily loop needs three data hooks. In tests these are injected (dete
 in production they come from here, reading the canonical stores the rest of QuantTerm uses:
 
   • backtest_evaluator(spec, split) -> EvidenceReport   (in-sample, from bhavcopy history)
-  • daily_bars(date)               -> {symbol: (h,l,c)}  (the day being forward-tested)
+  • daily_bars(date)               -> {symbol: (o,h,l,c)} (the exact forward-test session)
   • signals_for(paper_strategy, date) -> [signal dicts]  (entries from the strategy's rules)
 
 Every one degrades HONESTLY: with no research-grade data on disk they return empty / invalid
@@ -112,24 +112,43 @@ def _universe(provider) -> list:
         return []
 
 
-# ── forward-test data (the day's bars) ───────────────────────────────────────────
+# ── forward-test data (the exact completed session) ─────────────────────────────
 
 def daily_bars(date: str) -> dict:
-    """{symbol: (high, low, close)} for `date` from the canonical store. Empty when the
-    session isn't on disk — the paper day then simply opens/marks nothing, honestly."""
+    """Return exact-session official NSE bars for PAPER marking.
+
+    The old provider looked for a non-existent ``bhav_for_date`` function and then
+    expected uppercase NSE CSV column names from a normalized frame. In production
+    that silently returned ``{}``, so autonomous PAPER positions could fail to age or
+    close even though the official bhavcopy was on disk.
+
+    This reads only the requested session's already-downloaded canonical bhavcopy. It
+    never substitutes the latest day, never calls a live provider, and therefore cannot
+    leak future prices into a forward/PIT decision. Four-field OHLC is returned so gap
+    exits are modeled by ``PaperBook.mark``.
+    """
     out: dict = {}
     try:
+        from datetime import datetime
         from data import bhavcopy_store as bs
-        frame = bs.bhav_for_date(date) if hasattr(bs, "bhav_for_date") else None
-        if frame is None:
+
+        day = datetime.strptime(str(date)[:10], "%Y-%m-%d").date()
+        reader = getattr(bs, "_read_day", None)
+        frame = reader(day) if callable(reader) else None
+        if frame is None or len(frame) == 0:
             return {}
-        for row in frame.itertuples():
-            sym = getattr(row, "SYMBOL", None)
-            hi = getattr(row, "HIGH_PRICE", None)
-            lo = getattr(row, "LOW_PRICE", None)
-            cl = getattr(row, "CLOSE_PRICE", None)
-            if sym and hi and lo and cl:
-                out[str(sym).strip().upper()] = (float(hi), float(lo), float(cl))
+        for row in frame.itertuples(index=False):
+            sym = getattr(row, "symbol", None)
+            op = getattr(row, "open", None)
+            hi = getattr(row, "high", None)
+            lo = getattr(row, "low", None)
+            cl = getattr(row, "close", None)
+            if not sym or any(value is None for value in (op, hi, lo, cl)):
+                continue
+            values = tuple(float(value) for value in (op, hi, lo, cl))
+            if any(value != value for value in values):
+                continue
+            out[str(sym).strip().upper()] = values
     except Exception:
         return {}
     return out
