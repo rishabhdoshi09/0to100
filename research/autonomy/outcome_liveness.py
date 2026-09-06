@@ -1,8 +1,8 @@
 """Bounded EOD settlement for the autonomy supervisor.
 
 The normal PAPER intelligence cycle is intentionally rich: it can evaluate strategies,
-build evidence cards and (when the snapshot changes) run in-sample evidence.  That work
-must never sit inside OUTCOME_RESOLUTION.  EOD settlement only needs to:
+build evidence cards and (when the snapshot changes) run in-sample evidence. That work
+must never sit inside OUTCOME_RESOLUTION. EOD settlement only needs to:
 
 1. mark already-open PAPER positions against the completed official session,
 2. persist/learn any closes,
@@ -38,14 +38,16 @@ def settle_paper_session(brain, session_date: str) -> dict[str, Any]:
     ``PaperBook.mark`` is session-idempotent, so retries/restarts cannot age a position twice.
     """
     day = str(session_date or "")[:10]
+    book = getattr(brain, "intel_book", None)
+    open_count = len(getattr(book, "open", {}) or {}) if book is not None else 0
     if not day:
         return {
             "status": "NO_SESSION",
             "as_of_date": "",
             "positions_closed": [],
             "outcomes_recorded": [],
-            "open_before": len(getattr(getattr(brain, "intel_book", None), "open", {}) or {}),
-            "open_after": len(getattr(getattr(brain, "intel_book", None), "open", {}) or {}),
+            "open_before": open_count,
+            "open_after": open_count,
             "bars": 0,
             "warnings": ["No completed session was supplied."],
             "live_locked": True,
@@ -64,8 +66,8 @@ def settle_paper_session(brain, session_date: str) -> dict[str, Any]:
             "as_of_date": day,
             "positions_closed": [],
             "outcomes_recorded": [],
-            "open_before": len(getattr(getattr(brain, "intel_book", None), "open", {}) or {}),
-            "open_after": len(getattr(getattr(brain, "intel_book", None), "open", {}) or {}),
+            "open_before": open_count,
+            "open_after": open_count,
             "bars": 0,
             "warnings": ["Paper mutation lock is busy; supervisor will retry."],
             "live_locked": True,
@@ -91,6 +93,18 @@ def settle_paper_session(brain, session_date: str) -> dict[str, Any]:
                     "warnings": [f"Official paper bars unavailable: {type(exc).__name__}: {exc}"[:240]],
                     "live_locked": True,
                 }
+        if open_before and not bars:
+            return {
+                "status": "BARS_UNAVAILABLE",
+                "as_of_date": day,
+                "positions_closed": [],
+                "outcomes_recorded": [],
+                "open_before": open_before,
+                "open_after": open_before,
+                "bars": 0,
+                "warnings": ["Open PAPER positions exist but the completed-session bar set is empty."],
+                "live_locked": True,
+            }
 
         closed = list(book.mark(bars, day) if bars else [])
         rows = [_trade_row(trade) for trade in closed]
@@ -181,6 +195,8 @@ def _resolve_outcomes_light(self, session_date: str, capability_failures=()):
 
     brain = get_brain()
     result = settle_paper_session(brain, session_date)
+    if result.get("status") != "EOD_SETTLED":
+        return result
 
     try:
         from product.paper_learning_loop import ingest_closed_book
@@ -234,6 +250,20 @@ def _run_outcome_resolution_light(ctx):
             "paper outcome settlement failed",
             error_code="PAPER_SETTLEMENT_ERROR",
             error_message=str(exc)[:240],
+        )
+
+    paper_status = str((result or {}).get("status") or "")
+    if paper_status in {"SKIPPED_LOCKED", "BARS_UNAVAILABLE", "NO_SESSION"}:
+        return J.JobResult(
+            JS.RETRYABLE_FAILED,
+            "paper outcome settlement not ready",
+            error_code=(
+                "PAPER_SETTLEMENT_BUSY" if paper_status == "SKIPPED_LOCKED"
+                else "PAPER_BARS_UNAVAILABLE" if paper_status == "BARS_UNAVAILABLE"
+                else "PAPER_SESSION_UNAVAILABLE"
+            ),
+            error_message="; ".join(str(x) for x in ((result or {}).get("warnings") or []))[:240],
+            metadata=result or {},
         )
 
     # Counterfactual/taken-vs-not-taken settlement is also lightweight. Crucially,
