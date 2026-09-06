@@ -17,6 +17,9 @@ class _Ctx:
     def today_bar(self, _symbol: str):
         return self._bar
 
+    def cycle_id(self):
+        return f"test:{self.as_of_date}"
+
 
 
 def _result():
