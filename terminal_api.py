@@ -354,18 +354,19 @@ def _market_payload() -> dict:
                 "nifty_price": None,
                 "technical_details": {},
             }
+        available = bool(getattr(market, "available", True)) and str(market.health or "") != "Unavailable"
         return {
-            "available": True,
+            "available": available,
             "health": market.health,
             "summary": market.summary,
             "trade_stance": market.trade_stance,
             "breadth": market.breadth,
-            "leaders": list(market.leaders),
-            "laggards": list(market.laggards),
-            "nifty_change_1d": _safe_float(market.nifty_change_1d),
-            "nifty_change_5d": _safe_float(market.nifty_change_5d),
-            "vix": _safe_float(market.vix),
-            "nifty_price": _safe_float(getattr(market, "nifty_price", None)),
+            "leaders": list(market.leaders) if available else [],
+            "laggards": list(market.laggards) if available else [],
+            "nifty_change_1d": _safe_float(market.nifty_change_1d) if available else None,
+            "nifty_change_5d": _safe_float(market.nifty_change_5d) if available else None,
+            "vix": _safe_float(market.vix) if available else None,
+            "nifty_price": _safe_float(getattr(market, "nifty_price", None)) if available else None,
             "technical_details": dict(getattr(market, "technical_details", {}) or {}),
         }
     except Exception as exc:

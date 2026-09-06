@@ -351,24 +351,26 @@ class QualityEngine:
             return 0.0
 
     def _rs_vs_nifty(self, symbol: str, close: np.ndarray) -> float:
+        if close is None or len(close) < 21:
+            return 0.0
+        s_ret = (float(close[-1]) / float(close[-21]) - 1) * 100
+        try:
+            from data.index_store import recent_index_closes
+            nifty = recent_index_closes("^NSEI", n=21)
+            if len(nifty) >= 21 and nifty[-21] > 0:
+                n_ret = (float(nifty[-1]) / float(nifty[-21]) - 1) * 100
+                return round(s_ret - n_ret, 2)
+        except Exception:
+            pass
         try:
             import yfinance as yf
             nifty = yf.Ticker("^NSEI").history(period="30d")
             if nifty is not None and len(nifty) >= 21:
                 n_ret = (float(nifty["Close"].iloc[-1]) / float(nifty["Close"].iloc[-21]) - 1) * 100
-                s_ret = (float(close[-1]) / float(close[-21]) - 1) * 100 if len(close) >= 21 else 0.0
                 return round(s_ret - n_ret, 2)
         except Exception:
             pass
-        # Demo fallback: use sector return from regime as proxy
-        try:
-            from core.demo_data import DEMO_REGIME
-            sector = self._guess_sector(symbol)
-            sector_ret = DEMO_REGIME["sector_returns"].get(sector or "", 0.0)
-            nifty_1d = DEMO_REGIME["nifty_change_1d"]
-            return round(sector_ret - nifty_1d, 2)
-        except Exception:
-            return 0.0
+        return 0.0
 
     def _guess_sector(self, symbol: str) -> Optional[str]:
         """Rough sector mapping from symbol name patterns."""

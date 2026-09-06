@@ -1,6 +1,6 @@
 """
-Demo data provider — returns realistic NSE market data when live sources fail.
-Used as final fallback in regime engine and scan pipeline.
+Demo fixtures for local UI experiments. Production regime, scan, report, and
+recommendation paths must never treat these numbers as live market evidence.
 """
 from __future__ import annotations
 
