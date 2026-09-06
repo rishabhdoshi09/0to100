@@ -480,6 +480,8 @@ def run_reco_paper_cycle(
     persist_journal: bool = True,
     max_new: int = 3,
     policy_path=None,
+    policies: Sequence[Mapping[str, Any]] | None = None,
+    enforce_history: bool | None = None,
     scan_records: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Consume saved recommendations and open paper positions for ENTER_NOW names.
@@ -561,7 +563,14 @@ def run_reco_paper_cycle(
             if key == "methods":
                 continue
             merged.setdefault(key, value)
-        policy = evaluate_policies(merged, path=policy_path, regime=regime, book=book)
+        policy = evaluate_policies(
+            merged,
+            policies=policies,
+            path=policy_path,
+            regime=regime,
+            book=book,
+            enforce_history=enforce_history,
+        )
         decision = evaluate_candidate(
             merged,
             book=book,

@@ -107,14 +107,16 @@ def _historical_gate(
 ) -> dict[str, Any]:
     """Return the history→forward confidence gate used by production paper selection.
 
-    Explicit ``policies=`` calls are research/tests and skip this production gate;
-    the normal store-backed call enables it. The gate is fail-closed once enabled.
+    Callers opt in via ``evaluate_policies(..., enforce_history=...)``. The gate
+    is fail-closed once enabled: missing bootstrap or an unreproduced setup
+    cannot enter paper.
     """
     if not enabled:
         return {
             "required": False,
             "paper_eligible": True,
             "confidence_stage": "NOT_ENFORCED",
+            "bootstrap_complete": True,
             "live_locked": True,
         }
     try:
@@ -173,8 +175,19 @@ def evaluate_policies(
     path=None,
     regime: str = "",
     book=None,
+    enforce_history: bool | None = None,
 ) -> dict[str, Any]:
-    """Return the empirical overlay for one candidate. Cannot create a BUY."""
+    """Return the empirical overlay for one candidate. Cannot create a BUY.
+
+    History-first enforcement is an explicit API, not a pytest/environment check:
+
+    - ``policies=None`` (store-backed) enforces the production gate by default,
+      including when ``path=`` names which policy file to read. ``path=`` is not
+      a bypass.
+    - ``policies=[...]`` is the research/test injection seam and skips the
+      production gate unless ``enforce_history=True``.
+    - ``enforce_history=True/False`` always wins when the caller sets it.
+    """
     ctx = dict(candidate)
     if "methods" in candidate or "setup_label" in candidate:
         frozen = snapshot(candidate, book=book, regime=regime or str(candidate.get("regime") or ""))
@@ -183,15 +196,15 @@ def evaluate_policies(
     if regime:
         ctx["regime"] = regime
 
-    store_backed = policies is None
+    injected = policies is not None
     if policies is None:
         policies = list((load_policies(path).get("policies") or []))
     policies = list(policies or [])
 
-    # Explicit policy/path injection is a research/test seam. The normal
-    # production store-backed call (policies=None, path=None) always enforces
-    # the history-first gate; there is no pytest/environment bypass.
-    enforce_history = bool(store_backed and path is None)
+    if enforce_history is None:
+        enforce_history = not injected
+    else:
+        enforce_history = bool(enforce_history)
     historical = _historical_gate(ctx, policies, enabled=enforce_history)
 
     supportive: list[dict[str, Any]] = []

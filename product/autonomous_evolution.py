@@ -43,6 +43,40 @@ _lock = threading.Lock()
 _thread: threading.Thread | None = None
 
 
+def _bootstrap_lock_path(target: Path) -> Path:
+    return Path(str(target) + ".lock")
+
+
+def _try_acquire_bootstrap_lock(target: Path):
+    """Exclusive cross-process lock. None means another process already owns bootstrap."""
+    lock_path = _bootstrap_lock_path(target)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(lock_path, "a+", encoding="utf-8")
+    try:
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle
+
+
+def _release_bootstrap_lock(handle) -> None:
+    if handle is None:
+        return
+    try:
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        pass
+    try:
+        handle.close()
+    except OSError:
+        pass
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -122,7 +156,7 @@ def _usable_buy(row: Mapping[str, Any]) -> tuple[str, float] | None:
         return None
     if grade and grade not in {"PIT_STRONG", "PIT_PARTIAL"}:
         return None
-    if str(row.get("outcome_status") or "") not in {"MATURED", ""}:
+    if str(row.get("outcome_status") or "").strip().upper() != "MATURED":
         return None
     value = row.get("r_multiple")
     try:
@@ -473,11 +507,30 @@ def _needs_refresh(state: Mapping[str, Any], all_sessions: Sequence[str]) -> boo
 
 def run_bootstrap(*, force: bool = False, path: str | Path | None = None) -> dict[str, Any]:
     """Produce + reproduce historical evidence, then publish PAPER-only priors."""
-    from product.historical_replay import official_sessions, run_historical_replay
-
     target = state_path(path)
-    sessions = official_sessions()
+    lock_handle = _try_acquire_bootstrap_lock(target)
+    if lock_handle is None:
+        current = bootstrap_status(target)
+        return {
+            **current,
+            "required": True,
+            "analysis_complete": bool(current.get("analysis_complete")),
+            "status": current.get("status") or "RUNNING",
+            "bootstrap_lock": "held_elsewhere",
+            "live_locked": True,
+        }
+    try:
+        return _run_bootstrap_locked(force=force, path=path, target=target)
+    finally:
+        _release_bootstrap_lock(lock_handle)
+
+
+def _run_bootstrap_locked(*, force: bool, path: str | Path | None, target: Path) -> dict[str, Any]:
+    """Produce + reproduce historical evidence, then publish PAPER-only priors."""
+    from product.historical_replay import official_sessions, run_historical_replay
     from product.evolution_generation_guard import current_generation
+
+    sessions = official_sessions()
     generation_fingerprint = str(current_generation().get("fingerprint") or "")
     state = bootstrap_status(target)
     if not force and not _needs_refresh(state, sessions):

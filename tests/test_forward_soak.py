@@ -110,6 +110,7 @@ def _cycle(book, cards, **kwargs):
     kwargs.setdefault("paper_enabled", True)
     kwargs.setdefault("persist_journal", True)
     kwargs.setdefault("workspace", _workspace(cards))
+    kwargs.setdefault("enforce_history", False)
     return run_reco_paper_cycle(book=book, cards=cards, **kwargs)
 
 
