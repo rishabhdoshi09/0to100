@@ -12,6 +12,7 @@ This module installs a single replacement GET route at FastAPI startup:
 """
 from __future__ import annotations
 
+import sys
 import threading
 from datetime import datetime, timezone
 from typing import Any, Mapping
@@ -157,8 +158,10 @@ def build_fast_response(core, attach_authority=None) -> dict[str, Any]:
 
 
 def _replace_route() -> None:
-    import terminal_api as core
-    import terminal_product_api_parallel as parallel
+    core = sys.modules.get("terminal_api")
+    parallel = sys.modules.get("terminal_product_api_parallel")
+    if core is None or parallel is None:
+        return
 
     app = core.app
     path = "/api/recommendations-workspace"
@@ -182,13 +185,12 @@ def _replace_route() -> None:
 
 
 def register_terminal_recommendations_liveness() -> None:
-    """Register once; actual route replacement runs after all API modules are imported."""
+    """Register only when terminal_api is already being assembled; never import it as a side effect."""
     global _INSTALLED
     if _INSTALLED:
         return
-    try:
-        import terminal_api as core
-    except Exception:
+    core = sys.modules.get("terminal_api")
+    if core is None or not hasattr(core, "app"):
         return
 
     @core.app.on_event("startup")
