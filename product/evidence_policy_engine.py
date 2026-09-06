@@ -5,6 +5,10 @@ Outputs SUPPORT / NEUTRAL / PENALIZE / BLOCK. Never emits BUY.
 
 Hard product gates are not reversed by this engine. A policy with
 affects_selection=False is observation-only (counterfactual / exit / portfolio).
+
+Production paper selection additionally follows the autonomous evidence ladder:
+reproduced PIT history first, then real-forward paper confirmation. Historical
+replay can authorize PAPER exploration only; it can never unlock live money.
 """
 from __future__ import annotations
 
@@ -95,6 +99,75 @@ def _bucket_of(candidate: Mapping[str, Any], dimension: str) -> str:
     return str(candidate.get(dimension) or "")
 
 
+def _historical_gate(
+    candidate: Mapping[str, Any],
+    policies: Sequence[Mapping[str, Any]],
+    *,
+    enabled: bool,
+) -> dict[str, Any]:
+    """Return the history→forward confidence gate used by production paper selection.
+
+    Callers opt in via ``evaluate_policies(..., enforce_history=...)``. The gate
+    is fail-closed once enabled: missing bootstrap or an unreproduced setup
+    cannot enter paper.
+    """
+    if not enabled:
+        return {
+            "required": False,
+            "paper_eligible": True,
+            "confidence_stage": "NOT_ENFORCED",
+            "bootstrap_complete": True,
+            "live_locked": True,
+        }
+    try:
+        from product.autonomous_evolution import bootstrap_status, ensure_started_async
+        from product.evidence_confidence import confidence_from_policies
+        from product.evolution_generation_guard import ensure_current_generation
+
+        generation = ensure_current_generation()
+        state = bootstrap_status()
+        if generation.get("historical_replay_required") or not state.get("analysis_complete"):
+            ensure_started_async()
+            state = bootstrap_status()
+        confidence = confidence_from_policies(
+            candidate,
+            policies,
+            generation_fingerprint=str(generation.get("fingerprint") or ""),
+        )
+        if not state.get("analysis_complete"):
+            return {
+                **confidence,
+                "required": True,
+                "paper_eligible": False,
+                "confidence_stage": "HISTORICAL_BOOTSTRAP",
+                "bootstrap_status": state.get("status") or "RUNNING",
+                "bootstrap_complete": False,
+                "paper_ready_setups": int(state.get("paper_ready_setups") or 0),
+                "generation_fingerprint": generation.get("fingerprint"),
+                "generation_changed": bool(generation.get("changed")),
+                "live_locked": True,
+            }
+        return {
+            **confidence,
+            "required": True,
+            "bootstrap_status": state.get("status") or "SUCCEEDED",
+            "bootstrap_complete": True,
+            "paper_ready_setups": int(state.get("paper_ready_setups") or 0),
+            "generation_fingerprint": generation.get("fingerprint"),
+            "generation_changed": bool(generation.get("changed")),
+            "live_locked": True,
+        }
+    except Exception as exc:
+        return {
+            "required": True,
+            "paper_eligible": False,
+            "confidence_stage": "HISTORICAL_GATE_ERROR",
+            "bootstrap_complete": False,
+            "error": str(exc)[:200],
+            "live_locked": True,
+        }
+
+
 def evaluate_policies(
     candidate: Mapping[str, Any],
     *,
@@ -102,8 +175,19 @@ def evaluate_policies(
     path=None,
     regime: str = "",
     book=None,
+    enforce_history: bool | None = None,
 ) -> dict[str, Any]:
-    """Return the empirical overlay for one candidate. Cannot create a BUY."""
+    """Return the empirical overlay for one candidate. Cannot create a BUY.
+
+    History-first enforcement is an explicit API, not a pytest/environment check:
+
+    - ``policies=None`` (store-backed) enforces the production gate by default,
+      including when ``path=`` names which policy file to read. ``path=`` is not
+      a bypass.
+    - ``policies=[...]`` is the research/test injection seam and skips the
+      production gate unless ``enforce_history=True``.
+    - ``enforce_history=True/False`` always wins when the caller sets it.
+    """
     ctx = dict(candidate)
     if "methods" in candidate or "setup_label" in candidate:
         frozen = snapshot(candidate, book=book, regime=regime or str(candidate.get("regime") or ""))
@@ -111,8 +195,18 @@ def evaluate_policies(
             ctx.setdefault(key, value)
     if regime:
         ctx["regime"] = regime
+
+    injected = policies is not None
     if policies is None:
         policies = list((load_policies(path).get("policies") or []))
+    policies = list(policies or [])
+
+    if enforce_history is None:
+        enforce_history = not injected
+    else:
+        enforce_history = bool(enforce_history)
+    historical = _historical_gate(ctx, policies, enabled=enforce_history)
+
     supportive: list[dict[str, Any]] = []
     cautionary: list[dict[str, Any]] = []
     blocking: list[dict[str, Any]] = []
@@ -130,7 +224,8 @@ def evaluate_policies(
         if status not in {ACTIVE, ELIGIBLE, EXPERIMENTAL}:
             continue
         source = str(policy.get("evidence_source") or "")
-        # Backtest never outranks same-hash forward paper evidence.
+        # Backtest never self-activates. Reproduced history may be ELIGIBLE for
+        # paper exploration but remains live-locked.
         if source.startswith("backtest") and status == ACTIVE:
             status = ELIGIBLE
             policy = {**policy, "production_status": status, "note": "backtest cannot self-activate"}
@@ -170,6 +265,26 @@ def evaluate_policies(
         if _EFFECT_RANK[effect] > _EFFECT_RANK[final]:
             final = effect
 
+    if enforce_history and not historical.get("paper_eligible"):
+        gate_row = {
+            "policy_id": "AUTONOMOUS_HISTORY_FIRST_GATE",
+            "dimension": "setup",
+            "bucket": _bucket_of(ctx, "setup"),
+            "effect": BLOCK,
+            "production_status": "SYSTEM_GATE",
+            "evidence_source": "historical_then_forward",
+            "confidence_stage": historical.get("confidence_stage"),
+            "evidence_confidence_score": historical.get("evidence_confidence_score"),
+            "note": (
+                "Autonomous paper entry waits until this setup reproduces in independent "
+                "PIT historical slices; forward paper evidence can later strengthen or decay it."
+            ),
+            "live_locked": True,
+        }
+        blocking.append(gate_row)
+        matched.append(gate_row)
+        final = BLOCK
+
     return {
         "supportive": supportive,
         "cautionary": cautionary,
@@ -182,7 +297,13 @@ def evaluate_policies(
             "INSUFFICIENT_EVIDENCE" if coverage == 0 or sample < 8
             else "MEASURED"
         ),
+        "historical_forward_confidence": historical,
+        "evidence_confidence_score": historical.get("evidence_confidence_score"),
+        "confidence_stage": historical.get("confidence_stage"),
+        "historical_base_ready": bool(historical.get("historical_ready")),
+        "forward_confirmation_n": int(historical.get("forward_n") or 0),
         "final_effect": final,
         "invents_buy": False,
         "hard_gates_remain": True,
+        "live_locked": True,
     }

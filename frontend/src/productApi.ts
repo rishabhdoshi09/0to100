@@ -567,7 +567,7 @@ export const fetchDueDiligence = (symbol: string): Promise<DueDiligenceReport> =
 
 export const fetchFrameworkAudit = (framework = ''): Promise<Record<string, unknown>> => {
   const query = framework ? `?framework=${encodeURIComponent(framework)}` : ''
-  return request(`/api/due-diligence/framework-audit${query}`, {
+  return request('/api/due-diligence/framework-audit' + query, {
     headers: { Accept: 'application/json' },
   })
 }

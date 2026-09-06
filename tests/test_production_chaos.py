@@ -38,6 +38,7 @@ def _cycle(book, cards):
         cards=cards,
         now=now,
         as_of="2026-09-01",
+        enforce_history=False,
         workspace={
             "schema_version": 4,
             "generated_at": now.isoformat(),

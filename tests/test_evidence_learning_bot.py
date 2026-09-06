@@ -15,7 +15,13 @@ from product.counterfactual_learning import (
 from product.evidence_policy_engine import BLOCK, evaluate_policies
 from product.learning_policy_store import ACTIVE, upsert_policy
 from product.live_readiness import evaluate_live_readiness
-from product.paper_autopilot import EVIDENCE_POLICY_BLOCK, run_reco_paper_cycle
+from product.paper_autopilot import EVIDENCE_POLICY_BLOCK, run_reco_paper_cycle as _run_reco_paper_cycle
+
+
+def run_reco_paper_cycle(*args, **kwargs):
+    """Learning-overlay tests are not the history-first production gate."""
+    kwargs.setdefault("enforce_history", False)
+    return _run_reco_paper_cycle(*args, **kwargs)
 from research.auto_research.paper_book import PaperBook
 
 
@@ -466,6 +472,6 @@ def test_one_observation_is_insufficient_evidence(tmp_path):
     )
     assert row["production_status"] == "OBSERVING"
     assert row["confidence"] == "INSUFFICIENT_EVIDENCE"
-    effect = evaluate_policies({"setup_label": "NR7"}, path=path)
+    effect = evaluate_policies({"setup_label": "NR7"}, path=path, enforce_history=False)
     assert effect["final_effect"] != BLOCK
     assert effect["invents_buy"] is False
