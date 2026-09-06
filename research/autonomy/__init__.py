@@ -83,6 +83,12 @@ def run_supervisor(*, root=None, interval_s: float = 15.0, max_iterations=None) 
     from research.autonomy.data_refresh_parallel import install_parallel_data_refresh
     install_parallel_data_refresh()
 
+    # OUTCOME_RESOLUTION must be a bounded EOD settlement lane. The full intelligence
+    # cycle evaluates strategies and may run historical evidence; doing that here used
+    # to keep a critical job alive for many minutes and starve the rest of the desk.
+    from research.autonomy.outcome_liveness import install_outcome_liveness
+    install_outcome_liveness()
+
     from research.autonomy.supervisor import Supervisor
     from research.autonomy.console_runtime import run_visible_loop
 
