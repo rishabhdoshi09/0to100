@@ -864,7 +864,7 @@ def health() -> dict:
         "ok": True,
         "service": "quantterm-terminal-api",
         "version": app.version,
-        "lifecycle": "READY",
+        "lifecycle": None,
         "reason": "Terminal API is serving",
         "reasons": [],
         "components": [],
@@ -874,7 +874,7 @@ def health() -> dict:
 
         runtime = inspect_runtime(api_serving=True)
         payload.update({
-            "lifecycle": runtime.get("lifecycle") or "READY",
+            "lifecycle": runtime.get("lifecycle"),
             "reason": runtime.get("reason") or payload["reason"],
             "reasons": runtime.get("reasons") or [],
             "components": runtime.get("components") or [],
