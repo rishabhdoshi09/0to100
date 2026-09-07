@@ -4,6 +4,7 @@ import inspect
 import time
 
 import terminal_api
+from scripts.run_product_acceptance import grade_canonical_health, product_acceptance_verdict
 
 
 def test_capability_strings_are_not_coerced_by_python_truthiness():
@@ -117,27 +118,39 @@ def test_health_surfaces_inspect_runtime_ready_flags_without_inventing_them(monk
         },
     )
     payload = terminal_api.health()
+    assert payload["ok"] is True
+    assert payload["lifecycle"] == "READY"
     assert payload["operational_ready"] is True
     assert payload["evidence_ready"] is True
     assert payload["live_locked"] is True
-    assert payload["lifecycle"] == "READY"
+    graded = grade_canonical_health(payload)
+    assert graded["status"] == "PASS"
+    assert product_acceptance_verdict(
+        [{"feature": "Canonical stack / readiness", "status": graded["status"]}],
+        live_locked=graded["live_locked"],
+    )["verdict"] == "PRODUCT ACCEPTANCE PASS"
 
     monkeypatch.setattr(
         "product.runtime_lifecycle.inspect_runtime",
         lambda **_k: {
-            "lifecycle": "DEGRADED",
-            "reason": "evidence not ready",
+            "lifecycle": "READY",
+            "reason": "Required services are alive and official history is current",
             "reasons": [],
             "components": [],
             "history": {},
             "resources": {},
-            "live_locked": True,
         },
     )
     omitted = terminal_api.health()
-    assert "operational_ready" not in omitted
-    assert "evidence_ready" not in omitted
-    assert omitted["live_locked"] is True
+    assert omitted.get("operational_ready") is not True
+    assert omitted.get("evidence_ready") is not True
+    assert omitted.get("live_locked") is not True
+    omitted_grade = grade_canonical_health(omitted)
+    assert omitted_grade["status"] == "FAIL"
+    assert product_acceptance_verdict(
+        [{"feature": "Canonical stack / readiness", "status": omitted_grade["status"]}],
+        live_locked=omitted_grade["live_locked"],
+    )["verdict"] == "PRODUCT ACCEPTANCE HOLD"
 
 
 def test_json_safe_strips_nan_and_inf():

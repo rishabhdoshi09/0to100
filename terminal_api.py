@@ -868,7 +868,6 @@ def health() -> dict:
         "reason": "Terminal API is serving",
         "reasons": [],
         "components": [],
-        "live_locked": True,
     }
     try:
         from product.runtime_lifecycle import inspect_runtime
@@ -882,15 +881,11 @@ def health() -> dict:
             "history": runtime.get("history") or {},
             "resources": runtime.get("resources") or {},
             "checked_at": runtime.get("checked_at"),
-            "live_locked": True,
         })
-        # Surface already-computed inspect_runtime flags. Do not invent True.
-        if "operational_ready" in runtime:
-            payload["operational_ready"] = runtime["operational_ready"]
-        if "evidence_ready" in runtime:
-            payload["evidence_ready"] = runtime["evidence_ready"]
-        if "live_locked" in runtime:
-            payload["live_locked"] = runtime["live_locked"]
+        # Copy inspect_runtime safety/readiness only. Never invent a positive value.
+        for key in ("operational_ready", "evidence_ready", "live_locked"):
+            if key in runtime:
+                payload[key] = runtime[key]
         payload["ok"] = payload["lifecycle"] != "FAILED"
     except Exception as exc:
         payload.update({
