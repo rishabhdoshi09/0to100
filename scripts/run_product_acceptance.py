@@ -198,6 +198,38 @@ def is_expected_external_blocker(row: Mapping[str, Any]) -> bool:
     return any(token in reason for token in EXPECTED_EXTERNAL_TOKENS)
 
 
+def grade_canonical_health(payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Fail-closed canonical /api/health gate. Missing safety fields are never PASS."""
+    data = _as_dict(payload)
+    reasons: list[str] = []
+    if "ok" not in data or data.get("ok") is not True:
+        reasons.append("health.ok is not True")
+    if "live_locked" not in data:
+        reasons.append("missing live_locked")
+    elif data.get("live_locked") is not True:
+        reasons.append("live_locked is not True")
+    if "operational_ready" not in data:
+        reasons.append("missing operational_ready")
+    elif data.get("operational_ready") is not True:
+        reasons.append("operational_ready is not True")
+    if "evidence_ready" not in data:
+        reasons.append("missing evidence_ready")
+    elif data.get("evidence_ready") is not True:
+        reasons.append("evidence_ready is not True")
+    if "lifecycle" not in data:
+        reasons.append("missing lifecycle")
+    elif data.get("lifecycle") != "READY":
+        reasons.append(f"lifecycle {data.get('lifecycle')!r} is not READY")
+    live_locked = data.get("live_locked") is True if "live_locked" in data else False
+    if reasons:
+        return {
+            "status": "FAIL",
+            "blocker_reason": _join_reasons(*reasons),
+            "live_locked": live_locked,
+        }
+    return {"status": "PASS", "blocker_reason": "", "live_locked": True}
+
+
 def product_acceptance_verdict(
     rows: Sequence[Mapping[str, Any]],
     *,
@@ -557,22 +589,36 @@ def run(args: argparse.Namespace) -> int:
     print(f"QuantTerm real product acceptance\nSHA {sha}\nAPI {api}\n")
 
     health = _request_json(_url(api, "/api/health"), timeout=args.request_timeout)
-    live_locked = bool(health.get("live_locked", True))
+    health_grade = grade_canonical_health(health)
+    live_locked = bool(health_grade.get("live_locked") is True)
     rows.append(_row(
         feature="Canonical stack / readiness",
         trigger_tested="GET /api/health",
-        backend_path="product.startup_check + terminal_api",
+        backend_path="product.runtime_lifecycle.inspect_runtime + terminal_api",
         durable_artifact="logs/market_ops/runtime.json",
-        freshness=str(health.get("lifecycle") or ""),
+        freshness=str(health.get("lifecycle") if "lifecycle" in health else ""),
         result_count=len(health.get("components") or []),
-        status="PASS" if health.get("ok") and live_locked else "FAIL",
-        blocker_reason="" if live_locked else "live money was not locked",
+        status=health_grade["status"],
+        blocker_reason=health_grade["blocker_reason"],
         start_timestamp=_now(),
         finish_timestamp=_now(),
         code_sha=sha,
     ))
     if not live_locked:
-        print("NOT WORKING: live money is not locked")
+        print("NOT WORKING: live money lock was not explicitly proven")
+        dest = Path(args.output)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(json.dumps({
+            "schema_version": 2,
+            "generated_at": _now(),
+            "code_sha": sha,
+            "api": api,
+            "live_locked": False,
+            "verdict": "PRODUCT ACCEPTANCE HOLD",
+            "verdict_reason": health_grade["blocker_reason"] or "live money was not locked",
+            "features": rows,
+        }, indent=2), encoding="utf-8")
+        print(f"Wrote {dest}")
         return 1
 
     ui_ok = False

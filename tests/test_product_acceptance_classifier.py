@@ -4,6 +4,7 @@ from __future__ import annotations
 from scripts.run_product_acceptance import (
     classify_operation,
     collect_nested_blockers,
+    grade_canonical_health,
     grade_due_diligence,
     grade_forward_soak,
     grade_learning_dashboard,
@@ -236,3 +237,88 @@ def test_verdict_allows_only_expected_fno_blocker():
     )
     assert hold_fail["verdict"] == "PRODUCT ACCEPTANCE HOLD"
     assert product_acceptance_verdict(rows, live_locked=False)["verdict"] == "PRODUCT ACCEPTANCE HOLD"
+
+
+_READY_HEALTH = {
+    "ok": True,
+    "live_locked": True,
+    "operational_ready": True,
+    "evidence_ready": True,
+    "lifecycle": "READY",
+}
+
+
+def test_canonical_health_explicit_ready_pass():
+    graded = grade_canonical_health(_READY_HEALTH)
+    assert graded["status"] == "PASS"
+    assert graded["live_locked"] is True
+    assert graded["blocker_reason"] == ""
+
+
+def test_canonical_health_missing_live_locked_fail():
+    payload = dict(_READY_HEALTH)
+    del payload["live_locked"]
+    graded = grade_canonical_health(payload)
+    assert graded["status"] == "FAIL"
+    assert "missing live_locked" in graded["blocker_reason"]
+    assert graded["live_locked"] is False
+    assert product_acceptance_verdict(
+        [{"feature": "Canonical stack / readiness", "status": graded["status"]}],
+        live_locked=graded["live_locked"],
+    )["verdict"] == "PRODUCT ACCEPTANCE HOLD"
+
+
+def test_canonical_health_live_locked_false_fail():
+    payload = dict(_READY_HEALTH)
+    payload["live_locked"] = False
+    graded = grade_canonical_health(payload)
+    assert graded["status"] == "FAIL"
+    assert "live_locked is not True" in graded["blocker_reason"]
+    assert graded["live_locked"] is False
+
+
+def test_canonical_health_missing_operational_ready_fail():
+    payload = dict(_READY_HEALTH)
+    del payload["operational_ready"]
+    graded = grade_canonical_health(payload)
+    assert graded["status"] == "FAIL"
+    assert "missing operational_ready" in graded["blocker_reason"]
+
+
+def test_canonical_health_missing_evidence_ready_fail():
+    payload = dict(_READY_HEALTH)
+    del payload["evidence_ready"]
+    graded = grade_canonical_health(payload)
+    assert graded["status"] == "FAIL"
+    assert "missing evidence_ready" in graded["blocker_reason"]
+
+
+def test_canonical_health_lifecycle_degraded_is_not_pass():
+    payload = dict(_READY_HEALTH)
+    payload["lifecycle"] = "DEGRADED"
+    graded = grade_canonical_health(payload)
+    assert graded["status"] != "PASS"
+    assert graded["status"] == "FAIL"
+    assert "DEGRADED" in graded["blocker_reason"]
+
+
+def test_canonical_health_lifecycle_ready_with_all_explicit_invariants_pass():
+    graded = grade_canonical_health({
+        "ok": True,
+        "live_locked": True,
+        "operational_ready": True,
+        "evidence_ready": True,
+        "lifecycle": "READY",
+        "components": [{"name": "api", "status": "READY"}],
+    })
+    assert graded == {"status": "PASS", "blocker_reason": "", "live_locked": True}
+    for lifecycle in ("STARTING", "BLOCKED", "FAILED", "", None):
+        payload = dict(_READY_HEALTH)
+        payload["lifecycle"] = lifecycle
+        assert grade_canonical_health(payload)["status"] != "PASS"
+    none_lock = dict(_READY_HEALTH)
+    none_lock["live_locked"] = None
+    assert grade_canonical_health(none_lock)["status"] == "FAIL"
+    missing_ok = dict(_READY_HEALTH)
+    del missing_ok["ok"]
+    assert grade_canonical_health(missing_ok)["status"] == "FAIL"

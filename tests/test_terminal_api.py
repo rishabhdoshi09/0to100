@@ -101,6 +101,45 @@ def test_health_is_a_cheap_liveness_probe():
     assert payload["service"] == "quantterm-terminal-api"
 
 
+def test_health_surfaces_inspect_runtime_ready_flags_without_inventing_them(monkeypatch):
+    monkeypatch.setattr(
+        "product.runtime_lifecycle.inspect_runtime",
+        lambda **_k: {
+            "lifecycle": "READY",
+            "reason": "Required services are alive and official history is current",
+            "reasons": [],
+            "components": [],
+            "history": {},
+            "resources": {},
+            "operational_ready": True,
+            "evidence_ready": True,
+            "live_locked": True,
+        },
+    )
+    payload = terminal_api.health()
+    assert payload["operational_ready"] is True
+    assert payload["evidence_ready"] is True
+    assert payload["live_locked"] is True
+    assert payload["lifecycle"] == "READY"
+
+    monkeypatch.setattr(
+        "product.runtime_lifecycle.inspect_runtime",
+        lambda **_k: {
+            "lifecycle": "DEGRADED",
+            "reason": "evidence not ready",
+            "reasons": [],
+            "components": [],
+            "history": {},
+            "resources": {},
+            "live_locked": True,
+        },
+    )
+    omitted = terminal_api.health()
+    assert "operational_ready" not in omitted
+    assert "evidence_ready" not in omitted
+    assert omitted["live_locked"] is True
+
+
 def test_json_safe_strips_nan_and_inf():
     payload = terminal_api._json_safe({"ok": 1.0, "bad": float("nan"), "rows": [float("inf"), 2.0]})
     assert payload == {"ok": 1.0, "bad": None, "rows": [None, 2.0]}

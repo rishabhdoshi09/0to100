@@ -884,6 +884,13 @@ def health() -> dict:
             "checked_at": runtime.get("checked_at"),
             "live_locked": True,
         })
+        # Surface already-computed inspect_runtime flags. Do not invent True.
+        if "operational_ready" in runtime:
+            payload["operational_ready"] = runtime["operational_ready"]
+        if "evidence_ready" in runtime:
+            payload["evidence_ready"] = runtime["evidence_ready"]
+        if "live_locked" in runtime:
+            payload["live_locked"] = runtime["live_locked"]
         payload["ok"] = payload["lifecycle"] != "FAILED"
     except Exception as exc:
         payload.update({
