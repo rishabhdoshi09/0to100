@@ -13,12 +13,65 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from pathlib import Path
+import threading
 from typing import Any
+
+
+_CACHE_RELOAD_LOCK = threading.Lock()
+_LAST_CACHE_RELOAD_ATTEMPT: tuple[Any, ...] | None = None
 
 
 def _store_module():
     from data import bhavcopy_store as store
     return store
+
+
+def _cache_signature(path: Path) -> tuple[int, int, int] | None:
+    """Cheap identity for the persisted pickle currently visible on disk."""
+    try:
+        stat = path.stat()
+        return (int(stat.st_mtime_ns), int(stat.st_size), int(stat.st_ino))
+    except Exception:
+        return None
+
+
+def _sync_persisted_cache(store) -> None:
+    """Reload a newer persisted cache at most once per unchanged cache file.
+
+    Raw CSVs can appear before another process has finished rebuilding/writing the
+    canonical pickle. Comparing only ``csv_latest > memory_latest`` therefore used
+    to reload the same large pickle on every health poll. Remember the exact cache
+    file identity attempted for a given memory/disk date pair: a failed-to-advance
+    reload is suppressed until the atomic pickle file actually changes.
+    """
+    global _LAST_CACHE_RELOAD_ATTEMPT
+
+    with _CACHE_RELOAD_LOCK:
+        with store._lock:
+            empty = not bool(store._store)
+            memory_latest = store._store_last_day
+
+        if empty:
+            store._load_pkl()
+            return
+
+        dates = store._dates_on_disk()
+        disk_latest = dates[-1] if dates else None
+        if disk_latest is None or (
+            isinstance(memory_latest, date) and disk_latest <= memory_latest
+        ):
+            return
+
+        attempt = (memory_latest, disk_latest, _cache_signature(store._PKL))
+        if attempt == _LAST_CACHE_RELOAD_ATTEMPT:
+            return
+
+        # Mark before loading. _load_pkl() is fail-safe and may legitimately leave
+        # memory on the older completed session; repeated requests must not spin on
+        # that same unchanged pickle. An atomic rewrite changes the signature and
+        # permits the next coherence reload immediately.
+        _LAST_CACHE_RELOAD_ATTEMPT = attempt
+        store._load_pkl()
 
 
 def _snapshot(store) -> dict[str, Any]:
@@ -46,26 +99,13 @@ def status(*, load_cache: bool = False) -> dict[str, Any]:
     """Return canonical history readiness without network access.
 
     ``load_cache=True`` keeps this process coherent with the persisted canonical
-    cache. It loads ``store_cache.pkl`` when memory is empty and also reloads when
-    another QuantTerm process has written a newer completed session to disk.
+    cache. It loads ``store_cache.pkl`` when memory is empty and reloads when a
+    newer raw session exists, but never reloads the same unchanged pickle in a
+    tight loop while another process is still publishing that session.
     """
     store = _store_module()
     if load_cache:
-        with store._lock:
-            empty = not bool(store._store)
-            memory_latest = store._store_last_day
-        if empty:
-            store._load_pkl()
-        else:
-            dates = store._dates_on_disk()
-            disk_latest = dates[-1] if dates else None
-            if disk_latest is not None and (
-                not isinstance(memory_latest, date) or disk_latest > memory_latest
-            ):
-                # DATA_PREPARE may run in market-ops while API/autonomy retain an
-                # older in-memory map. Reload the canonical pickle so long-lived
-                # readers observe the newly persisted session without a restart.
-                store._load_pkl()
+        _sync_persisted_cache(store)
     return _snapshot(store)
 
 
