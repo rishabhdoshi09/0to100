@@ -1,0 +1,225 @@
+.truth-monitor {
+  border: 1px solid var(--qt-border, rgba(255,255,255,.08));
+  background: linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,.015));
+  border-radius: 14px;
+  padding: 11px;
+  margin: 10px 0 8px;
+}
+
+.truth-monitor > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 9px;
+}
+
+.truth-monitor > header > div {
+  display: grid;
+  gap: 2px;
+}
+
+.truth-monitor > header strong {
+  color: var(--qt-text-primary, #eef2f8);
+  font-size: .76rem;
+  line-height: 1.2;
+}
+
+.truth-monitor > header button {
+  border: 0;
+  background: transparent;
+  color: var(--qt-accent, #6ed7ff);
+  font-size: .67rem;
+  font-weight: 800;
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.truth-kicker {
+  color: var(--qt-text-muted, #6f7a8f);
+  font-size: .58rem;
+  font-weight: 900;
+  letter-spacing: .14em;
+}
+
+.truth-lanes {
+  display: grid;
+  gap: 6px;
+}
+
+.truth-lane {
+  min-width: 0;
+  border: 1px solid rgba(255,255,255,.055);
+  border-radius: 9px;
+  padding: 7px 8px;
+  background: rgba(4, 9, 16, .24);
+}
+
+.truth-lane > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.truth-lane > div > span:first-child {
+  min-width: 0;
+  color: var(--qt-text-secondary, #a7b0c0);
+  font-size: .66rem;
+  font-weight: 750;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.truth-lane small {
+  display: block;
+  color: var(--qt-text-muted, #667187);
+  font-size: .59rem;
+  line-height: 1.3;
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.truth-badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 17px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,.08);
+  padding: 1px 6px;
+  font-size: .51rem;
+  font-weight: 900;
+  letter-spacing: .055em;
+  color: #b8c0cf;
+  background: rgba(255,255,255,.035);
+}
+
+.truth-fresh,
+.truth-ready,
+.truth-succeeded {
+  color: #8ce9b2;
+  border-color: rgba(77, 208, 132, .28);
+  background: rgba(77, 208, 132, .08);
+}
+
+.truth-running,
+.truth-refreshing,
+.truth-pending {
+  color: #7bdcff;
+  border-color: rgba(75, 190, 242, .28);
+  background: rgba(75, 190, 242, .08);
+}
+
+.truth-stale,
+.truth-partial,
+.truth-degraded {
+  color: #f0c36d;
+  border-color: rgba(229, 173, 64, .3);
+  background: rgba(229, 173, 64, .08);
+}
+
+.truth-failed,
+.truth-retryable_failed,
+.truth-blocked,
+.truth-offline {
+  color: #ff9a9a;
+  border-color: rgba(244, 94, 94, .3);
+  background: rgba(244, 94, 94, .08);
+}
+
+.truth-missing {
+  color: #9da8ba;
+}
+
+.truth-details {
+  margin-top: 8px;
+  border-top: 1px solid rgba(255,255,255,.055);
+  padding-top: 7px;
+}
+
+.truth-details > summary {
+  list-style: none;
+  cursor: pointer;
+  color: var(--qt-text-muted, #6f7a8f);
+  font-size: .6rem;
+  font-weight: 800;
+  user-select: none;
+}
+
+.truth-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.truth-details > summary::after {
+  content: ' +';
+  float: right;
+}
+
+.truth-details[open] > summary::after {
+  content: ' −';
+}
+
+.truth-source-list,
+.truth-job-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.truth-source-list > div,
+.truth-job {
+  display: grid;
+  gap: 2px;
+  padding: 7px;
+  border-radius: 8px;
+  background: rgba(0,0,0,.15);
+}
+
+.truth-source-list span,
+.truth-job small {
+  color: var(--qt-text-muted, #667187);
+  font-size: .58rem;
+  line-height: 1.35;
+}
+
+.truth-source-list strong,
+.truth-job strong {
+  color: var(--qt-text-secondary, #aeb8c8);
+  font-size: .62rem;
+  line-height: 1.3;
+}
+
+.truth-job > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.truth-job em {
+  color: #ff9a9a;
+  font-size: .57rem;
+  font-style: normal;
+  line-height: 1.35;
+}
+
+.truth-empty {
+  color: var(--qt-text-muted, #667187);
+  font-size: .6rem;
+  margin: 8px 0 0;
+}
+
+@media (max-height: 780px) {
+  .truth-lane small,
+  .truth-details {
+    display: none;
+  }
+  .truth-monitor {
+    padding: 8px;
+  }
+}
