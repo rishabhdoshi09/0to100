@@ -18,6 +18,9 @@ class RetailMarketView:
     vix: float
     nifty_price: float
     technical_details: dict
+    available: bool = True
+    data_source: str = "live"
+    unavailable_reason: str = ""
 
 
 def _get(source: Any, name: str, default: Any = None) -> Any:
@@ -34,6 +37,48 @@ def build_market_view(regime: Any) -> RetailMarketView:
     breadth_strength = int(_get(regime, "breadth_strength", 50) or 0)
     leaders = tuple(str(x) for x in (_get(regime, "leading_sectors", []) or []))
     laggards = tuple(str(x) for x in (_get(regime, "lagging_sectors", []) or []))
+    source = str(_get(regime, "data_source", "live") or "live")
+    reason = str(_get(regime, "unavailable_reason", "") or "")
+    available_flag = _get(regime, "data_available", None)
+    regime_name = str(_get(regime, "market_regime", "") or "").upper()
+    if available_flag is None:
+        available = source != "unavailable" and regime_name not in {"UNAVAILABLE", "UNKNOWN"}
+    else:
+        available = bool(available_flag)
+    if not available or regime_name == "UNAVAILABLE" or source == "unavailable":
+        available = False
+        health = "Unavailable"
+        stance = "Do not infer a market stance from missing regime evidence."
+        summary = reason or "Market regime evidence is unavailable. Missing index/sector series are not filled with demo data."
+        return RetailMarketView(
+            health=health,
+            summary=summary,
+            trade_stance=stance,
+            breadth="Unavailable",
+            leaders=(),
+            laggards=(),
+            nifty_change_1d=0.0,
+            nifty_change_5d=0.0,
+            vix=0.0,
+            nifty_price=0.0,
+            technical_details={
+                "market_regime": "UNAVAILABLE",
+                "volatility_regime": "UNAVAILABLE",
+                "risk_mode": "UNAVAILABLE",
+                "breakout_environment": "UNAVAILABLE",
+                "institutional_activity": "UNAVAILABLE",
+                "regime_score": 0.0,
+                "regime_confidence": 0.0,
+                "quality_multiplier": 1.0,
+                "timestamp": _get(regime, "timestamp", ""),
+                "data_available": False,
+                "data_source": "unavailable",
+                "unavailable_reason": reason,
+            },
+            available=False,
+            data_source="unavailable",
+            unavailable_reason=reason,
+        )
 
     if score >= 68 and risk != "RISK_OFF":
         health = "Healthy"
@@ -78,7 +123,12 @@ def build_market_view(regime: Any) -> RetailMarketView:
             "regime_confidence": _get(regime, "regime_confidence", 0.0),
             "quality_multiplier": _get(regime, "quality_multiplier", 1.0),
             "timestamp": _get(regime, "timestamp", ""),
+            "data_available": True,
+            "data_source": source,
         },
+        available=True,
+        data_source=source,
+        unavailable_reason="",
     )
 
 

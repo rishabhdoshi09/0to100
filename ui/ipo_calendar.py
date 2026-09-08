@@ -239,7 +239,7 @@ def _parse_listing(raw: list) -> List[IPOItem]:
 def get_ipos() -> List[IPOItem]:
     """
     Fetch IPOs from NSE. Returns list[IPOItem].
-    Falls back to demo data if NSE is unreachable.
+    Empty when NSE is unreachable — never substitutes demo IPOs.
     """
     try:
         sess = _build_nse_session()
@@ -273,14 +273,13 @@ def get_ipos() -> List[IPOItem]:
             except Exception:
                 errors += 1
 
-        # If all three endpoints failed, fall back to demo
         if errors == 3 or not all_ipos:
-            return _DEMO_IPOS
+            return []
 
         return all_ipos
 
     except Exception:
-        return _DEMO_IPOS
+        return []
 
 
 # ── Formatting helpers ────────────────────────────────────────────────────────
@@ -430,7 +429,7 @@ def render_ipo_calendar() -> None:
         ipos = get_ipos()
 
     if not ipos:
-        st.info("IPO data temporarily unavailable. Check NSE website at nseindia.com/market-data/ipo")
+        st.info("UNAVAILABLE — NSE IPO calendar could not be fetched. Empty is empty; demo IPOs are not shown.")
         return
 
     # ── Last updated ──────────────────────────────────────────────────────────

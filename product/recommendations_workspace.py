@@ -1415,20 +1415,27 @@ def build_market_reports_workspace(
         )
     market_ctx: dict[str, Any] = {}
     try:
-        from product.market_view import current_market_view
-        view = current_market_view()
-        market_ctx = {
-            "health": getattr(view, "health", "") or "",
-            "breadth": getattr(view, "breadth", "") or "",
-            "trade_stance": getattr(view, "trade_stance", "") or "",
-            "leaders": list(getattr(view, "leaders", ()) or []),
-            "laggards": list(getattr(view, "laggards", ()) or []),
-            "summary": getattr(view, "summary", "") or "",
-        }
-        if not market_ctx.get("health") and not market_ctx.get("breadth"):
-            market_ctx = {}
+        from product.market_view import current_market_view, peek_cached_market_view
+        view = current_market_view() if rebuild else peek_cached_market_view()
+        if view is not None:
+            available = bool(getattr(view, "available", True)) and str(getattr(view, "health", "") or "") != "Unavailable"
+            market_ctx = {
+                "available": available,
+                "health": getattr(view, "health", "") or "",
+                "breadth": getattr(view, "breadth", "") or "",
+                "trade_stance": getattr(view, "trade_stance", "") or "",
+                "leaders": list(getattr(view, "leaders", ()) or []) if available else [],
+                "laggards": list(getattr(view, "laggards", ()) or []) if available else [],
+                "summary": getattr(view, "summary", "") or "",
+                "data_source": getattr(view, "data_source", "") or "",
+            }
+            if not available:
+                missing_lanes.append("regime")
+        else:
+            missing_lanes.append("regime")
     except Exception:
         market_ctx = {}
+        missing_lanes.append("regime")
     return {
         "schema_version": 2,
         "generated_at": datetime.now(timezone.utc).isoformat(),
