@@ -232,7 +232,7 @@ start_report() {
   echo "[COMPLETE STACK] Starting research-report API at http://127.0.0.1:8766 …"
   mkdir -p "$ROOT/logs/stack"
   python -u -m uvicorn report_api:app --host 127.0.0.1 --port 8766 \
-    >>"$ROOT/logs/stack/report_api.log" 2>&1 &
+    >>"$ROOT/logs/stack/report_api.log" 2>&1 200>&- &
   REPORT_PID=$!
   sleep 1 || true
   if alive "$REPORT_PID"; then
@@ -249,13 +249,17 @@ start_report() {
 
 start_stack() {
   echo "[COMPLETE STACK] Starting QuantTerm terminal, market operations, autonomy and market scan…"
-  bash scripts/run_quantterm.sh &
+  # Only this outer supervisor may retain FD 200. If the inner stack survives
+  # this shell, it must not keep the machine-wide flock alive as an orphan.
+  bash scripts/run_quantterm.sh 200>&- &
   STACK_PID=$!
 }
 
 # Keep the file descriptor open in this shell for the lifetime of the launcher.
 # Python's fcntl uses the inherited descriptor, so the same machine-wide lock
 # works on macOS and Linux without requiring the external `flock` executable.
+# Every long-lived child explicitly closes FD 200 before exec so the lock dies
+# with this supervisor rather than leaking into an orphan service.
 try_machine_lock() {
   python scripts/local_stack.py try-fd-lock --fd 200
 }
@@ -327,7 +331,7 @@ start_vite_safety_net() {
   echo "[COMPLETE STACK] Desk UI is not on :5173 yet; starting Vite from the complete launcher."
   mkdir -p "$ROOT/logs/stack"
   npm --prefix "$ROOT/frontend" run dev -- --host 127.0.0.1 --port 5173 \
-    >>"$ROOT/logs/stack/vite.log" 2>&1 &
+    >>"$ROOT/logs/stack/vite.log" 2>&1 200>&- &
   VITE_PID=$!
   return 0
 }

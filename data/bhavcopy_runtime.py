@@ -45,15 +45,27 @@ def _snapshot(store) -> dict[str, Any]:
 def status(*, load_cache: bool = False) -> dict[str, Any]:
     """Return canonical history readiness without network access.
 
-    ``load_cache=True`` loads ``store_cache.pkl`` into this process when its
-    in-memory map is empty. This is safe for API/read-only processes.
+    ``load_cache=True`` keeps this process coherent with the persisted canonical
+    cache. It loads ``store_cache.pkl`` when memory is empty and also reloads when
+    another QuantTerm process has written a newer completed session to disk.
     """
     store = _store_module()
     if load_cache:
         with store._lock:
             empty = not bool(store._store)
+            memory_latest = store._store_last_day
         if empty:
             store._load_pkl()
+        else:
+            dates = store._dates_on_disk()
+            disk_latest = dates[-1] if dates else None
+            if disk_latest is not None and (
+                not isinstance(memory_latest, date) or disk_latest > memory_latest
+            ):
+                # DATA_PREPARE may run in market-ops while API/autonomy retain an
+                # older in-memory map. Reload the canonical pickle so long-lived
+                # readers observe the newly persisted session without a restart.
+                store._load_pkl()
     return _snapshot(store)
 
 
