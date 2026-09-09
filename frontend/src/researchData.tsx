@@ -174,9 +174,14 @@ export function ResearchDataView({ symbol }: { symbol: string }) {
     setBusy(`auto-${action}`)
     setError('')
     try {
+      const controlAction = action === 'history'
+        ? 'REFRESH_DATA_NOW'
+        : action === 'news'
+          ? 'REFRESH_NEWS_NOW'
+          : 'REFRESH_FNO_NOW'
       const endpoint = action === 'fundamentals'
         ? `${reportBase}/evidence/${encodeURIComponent(symbol)}/actions/refresh-fundamentals`
-        : `/api/controls/${action === 'history' ? 'REFRESH_DATA_NOW' : action === 'news' ? 'REFRESH_NEWS_NOW' : 'REFRESH_FNO_NOW'}`
+        : `/api/controls/${controlAction}`
       const response = await fetch(endpoint, { method: 'POST', headers: { Accept: 'application/json' } })
       if (!response.ok) throw new Error(await response.text())
       window.setTimeout(() => void load(), action === 'fundamentals' ? 100 : 1500)

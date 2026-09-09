@@ -15,7 +15,10 @@ def test_queue_product_bootstrap_enqueues_first_due_step_only(tmp_path: Path, mo
     monkeypatch.setattr("product.desk_pipeline.scan_is_fresh", lambda: False)
     monkeypatch.setattr("product.desk_pipeline.long_term_is_fresh", lambda: False)
     monkeypatch.setattr("product.desk_pipeline.news_is_fresh", lambda: False)
-    monkeypatch.setattr("product.desk_pipeline.acquire_is_fresh", lambda: True)
+    monkeypatch.setattr(
+        "product.desk_pipeline.acquire_freshness",
+        lambda: {"fresh": True, "retry_due": False, "state": "CURRENT", "unresolved_symbols": []},
+    )
 
     payload = tpa.queue_product_bootstrap(requested_by="api_startup")
     assert payload["accepted"] is True
@@ -40,7 +43,10 @@ def test_queue_product_bootstrap_skips_fresh_market_scan(tmp_path: Path, monkeyp
     monkeypatch.setattr("product.desk_pipeline.scan_is_fresh", lambda: True)
     monkeypatch.setattr("product.desk_pipeline.long_term_is_fresh", lambda: False)
     monkeypatch.setattr("product.desk_pipeline.news_is_fresh", lambda: False)
-    monkeypatch.setattr("product.desk_pipeline.acquire_is_fresh", lambda: True)
+    monkeypatch.setattr(
+        "product.desk_pipeline.acquire_freshness",
+        lambda: {"fresh": True, "retry_due": False, "state": "CURRENT", "unresolved_symbols": []},
+    )
 
     payload = tpa.queue_product_bootstrap(requested_by="api_startup")
     kinds = {item["kind"] for item in payload["operations"]}
@@ -58,11 +64,13 @@ def test_desk_pipeline_get_does_not_enqueue(tmp_path: Path, monkeypatch):
     store_path = tmp_path / "jobs.db"
     monkeypatch.setattr(tpa.core, "OPS_DB", store_path)
     monkeypatch.setattr(tpa.core, "_ensure_ops_worker", lambda: {"running": True})
-    monkeypatch.setattr("product.desk_pipeline.prices_kind_due", lambda: DATA_PREPARE)
-    monkeypatch.setattr("product.desk_pipeline.scan_is_fresh", lambda: False)
-    monkeypatch.setattr("product.desk_pipeline.long_term_is_fresh", lambda: False)
-    monkeypatch.setattr("product.desk_pipeline.news_is_fresh", lambda: False)
-    monkeypatch.setattr("product.desk_pipeline.acquire_is_fresh", lambda: True)
+    calls: list[str] = []
+    monkeypatch.setattr("product.desk_pipeline.prices_kind_due", lambda: calls.append("prices") or DATA_PREPARE)
+    monkeypatch.setattr("product.desk_pipeline.scan_is_fresh", lambda: calls.append("scan") or False)
+    monkeypatch.setattr(
+        "product.desk_pipeline.acquire_freshness",
+        lambda: calls.append("research") or {"fresh": False, "retry_due": True, "state": "RETRY_DUE", "unresolved_symbols": ["X"]},
+    )
 
     client = TestClient(tpa.app)
     response = client.get("/api/desk-pipeline")
@@ -71,6 +79,8 @@ def test_desk_pipeline_get_does_not_enqueue(tmp_path: Path, monkeypatch):
     assert body["sequential"] is True
     assert body["queued_kind"] is None
     assert body["steps"][0]["id"] == "prices"
+    assert body["freshness"] in {"UNKNOWN", "STALE"}
+    assert calls == []
     assert OperationStore(store_path).active() == []
 
 

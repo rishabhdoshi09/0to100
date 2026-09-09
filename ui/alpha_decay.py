@@ -1,6 +1,6 @@
 """
 Alpha Decay Tracker — is your trading edge eroding?
-Reads from logs/journal.db (table: trades). Falls back to demo data.
+Reads from logs/journal.db (table: trades). Missing journals stay empty.
 """
 from __future__ import annotations
 
@@ -87,7 +87,7 @@ def _generate_demo_trades(n: int = 60) -> pd.DataFrame:
 def _load_trades() -> tuple[pd.DataFrame, bool]:
     """
     Returns (df, is_demo).
-    Tries logs/journal.db → table trades. Falls back to demo data.
+    Tries logs/journal.db → table trades. Missing journals stay empty.
     """
     if _DB_PATH.exists():
         try:
@@ -103,12 +103,7 @@ def _load_trades() -> tuple[pd.DataFrame, bool]:
         except Exception:
             pass
 
-    demo = _generate_demo_trades(60)
-    demo["date"]    = pd.to_datetime(demo["date"])
-    demo["pnl"]     = pd.to_numeric(demo["pnl"])
-    demo["pnl_pct"] = pd.to_numeric(demo["pnl_pct"])
-    demo["win"]     = demo["pnl"] > 0
-    return demo, True
+    return pd.DataFrame(), True
 
 
 # ── Rolling metrics ───────────────────────────────────────────────────────────

@@ -11,7 +11,10 @@ const KIND_CONTROL: Record<ScanKind, ControlName> = {
   MARKET_REPORT: 'REFRESH_MARKET_REPORT_NOW',
 }
 
-export const SCAN_POLL_MS = 300
+// Operation progress changes at human-scale, not every few hundred milliseconds.
+// Keep this bounded so several visible runners cannot hammer the local API while a
+// long scan/provider job is active.
+export const SCAN_POLL_MS = 1000
 export const TERMINAL_STATUSES = new Set(['SUCCEEDED', 'FAILED', 'BLOCKED', 'CANCELLED'])
 
 export function isTerminalStatus(status: string): boolean {
@@ -175,6 +178,7 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
   const [notice, setNotice] = useState<string | null>(null)
   const mountedRef = useRef(true)
   const pollRef = useRef<number | null>(null)
+  const pollInFlight = useRef(false)
   const trackedIdRef = useRef<string | null>(null)
   const completedIdRef = useRef<string | null>(null)
   const startedAtRef = useRef<number | null>(null)
@@ -210,6 +214,8 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
   }, [clearPoll, onComplete])
 
   const pollOnce = useCallback(async (operationId: string) => {
+    if (pollInFlight.current) return
+    pollInFlight.current = true
     try {
       const op = await fetchOperation(operationId)
       if (!mountedRef.current) return
@@ -227,6 +233,8 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
       if (isTerminalStatus(op.status)) handleTerminal(op)
     } catch {
       // transient network errors while polling — keep trying until terminal or unmount
+    } finally {
+      pollInFlight.current = false
     }
   }, [handleTerminal])
 

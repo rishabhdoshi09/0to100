@@ -289,6 +289,23 @@ def ingest_counterfactual(
         FLAT: 0.0,
     }.get(classification, 0.0)
     hard = reason in HARD_REASON_CODES or reason in {"SECTOR_CAP", "CORRELATION_CAP", "MAX_PORTFOLIO_RISK"}
+    from product.learning_policy_store import load_policies
+    policy_store = load_policies(path)
+    hist = next(
+        (
+            dict(p)
+            for p in (policy_store.get("policies") or [])
+            if str(p.get("policy_id") or "") == f"HIST_REJECT::{reason}"
+        ),
+        {},
+    )
+    historical_bridge = {
+        "historical_policy_id": str(hist.get("policy_id") or ""),
+        "historical_generation_fingerprint": str(hist.get("generation_fingerprint") or ""),
+        "historical_over_rejection_candidate": bool(hist.get("over_rejection_candidate")),
+        "historical_missed_rate": hist.get("historical_missed_rate"),
+        "historical_hypothesis_linked": bool(hist),
+    }
     last = record_measured_outcome(
         policy_id=f"REJECT::{reason}",
         dimension="reason_code",
@@ -303,6 +320,7 @@ def ingest_counterfactual(
             "symbol": settled.get("symbol"),
             "affects_selection": not hard,
             "regime": (settled.get("evidence") or {}).get("regime") or settled.get("regime") or "",
+            **historical_bridge,
         },
     )
     evidence = dict(settled.get("evidence") or {})

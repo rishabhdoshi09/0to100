@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { fetchChart, fetchDashboard, sendControl } from './api'
+import { fetchChart, fetchDashboard, fetchHealth, sendControl } from './api'
+import { deskStartupLabel, deskStartupRecovery, deskStartupState, type DeskStartupState } from './deskStartupState'
+import { createPollGate } from './pollGate'
 import { deskRefreshBanner } from './deskBanner'
 import {
   CompareView,
@@ -285,7 +287,10 @@ function App() {
   const [query, setQuery] = useState('')
   const [helpOpen, setHelpOpen] = useState(false)
   const autoPrepareRef = useRef(false)
-  const refreshInFlight = useRef(false)
+  const refreshGate = useRef(createPollGate())
+  const healthGate = useRef(createPollGate())
+  const [startupState, setStartupState] = useState<DeskStartupState>('PREPARING_DATA')
+  const [healthReason, setHealthReason] = useState('')
   const istClock = useIstClock()
   const [depth, setDepth] = useState<DisplayDepth>(() => {
     const saved = window.localStorage.getItem('quantterm-display-depth')
@@ -293,8 +298,7 @@ function App() {
   })
 
   const refresh = useCallback(async () => {
-    if (refreshInFlight.current) return
-    refreshInFlight.current = true
+    if (!refreshGate.current.tryEnter()) return
     try {
       const payload = await fetchDashboard()
       setDashboard((prev) => {
@@ -322,10 +326,11 @@ function App() {
       ]
       const first = allSymbols[0] || ''
       setSelected((current) => current || first)
+      refreshGate.current.succeed()
     } catch (reason) {
+      refreshGate.current.fail()
       setError(reason instanceof Error ? reason.message : 'Waiting for the market API')
     } finally {
-      refreshInFlight.current = false
       setLoading(false)
     }
   }, [])
@@ -368,6 +373,40 @@ function App() {
     const timer = window.setInterval(() => void refresh(), interval)
     return () => window.clearInterval(timer)
   }, [refresh, scanPollingActive])
+
+  useEffect(() => {
+    const probe = async () => {
+      if (!healthGate.current.tryEnter()) return
+      try {
+        const payload = await fetchHealth()
+        healthGate.current.succeed()
+        const resource = String(payload.resources?.state || '')
+        const oldestAge = Number(payload.resources?.active_operation_age_s || 0)
+        const next = deskStartupState({
+          resourceState: resource,
+          operationStuck: oldestAge >= 15 * 60,
+          waitingForProvider: /provider|cooldown/i.test(String(payload.reason || payload.resources?.reason || '')),
+          historyStale: payload.history?.current === false && dashboardHasWork(dashboard),
+          dataReady: dashboard.data.ready,
+          hasSavedData: dashboardHasWork(dashboard),
+        })
+        setStartupState(next)
+        setHealthReason(String(payload.resources?.reason || payload.reason || deskStartupRecovery(next)))
+      } catch {
+        healthGate.current.fail(1500, 30_000)
+        const next = deskStartupState({
+          apiUnresponsive: true,
+          hasSavedData: dashboardHasWork(dashboard),
+          dataReady: false,
+        })
+        setStartupState(next)
+        setHealthReason(deskStartupRecovery(next))
+      }
+    }
+    void probe()
+    const timer = window.setInterval(() => void probe(), 10_000)
+    return () => window.clearInterval(timer)
+  }, [dashboard, error])
 
   useEffect(() => {
     if (autoPrepareRef.current || loading || error) return
@@ -628,7 +667,12 @@ function App() {
             <span className="reco-clock" title="Asia/Kolkata">{istClock || '—:—:—'} IST</span>
             <DisplayDepthToggle depth={depth} onChange={setDepth} />
             <button type="button" className="experience-help-trigger" onClick={() => setHelpOpen(true)}>What is this?</button>
-            <span className={dashboard.data.ready ? 'live-pill' : 'work-pill'}><i /> {dashboard.data.ready ? 'DATA READY' : 'PREPARING DATA'}</span>
+            <span
+              className={startupState === 'READY' ? 'live-pill' : (startupState === 'PREPARING_DATA' || startupState === 'WAITING_FOR_PROVIDER' ? 'work-pill' : 'offline-pill')}
+              title={healthReason || deskStartupRecovery(startupState)}
+            >
+              <i /> {deskStartupLabel(startupState)}
+            </span>
             <span className={brokerReady ? 'live-pill' : 'offline-pill'} title={brokerTitle}>
               <i /> {brokerLabel}
             </span>

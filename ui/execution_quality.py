@@ -97,7 +97,7 @@ def _load_trades() -> tuple[pd.DataFrame, bool]:
                 return df, False
         except Exception:
             pass
-    return _demo_trades(), True
+    return pd.DataFrame(), True
 
 
 # ── yfinance fetch (daily open as signal proxy) ───────────────────────────────
@@ -305,7 +305,7 @@ def render_execution_quality() -> None:
 
     trades_raw, is_demo = _load_trades()
     if is_demo:
-        st.info("No `logs/journal.db` found — showing demo data.", icon="ℹ️")
+        st.warning("UNAVAILABLE — no trade journal on disk. Fill-quality charts are not invented.")
 
     if trades_raw.empty:
         st.warning("No trades to analyze.")

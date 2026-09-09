@@ -707,10 +707,13 @@ export function RadarHomeView(props: ExperienceViewProps & {
   const [deskNote, setDeskNote] = useState('')
   const [radarNote, setRadarNote] = useState('')
   const autoBootRef = useRef(false)
+  const radarInFlight = useRef(false)
 
   useEffect(() => {
     let alive = true
     const load = () => {
+      if (radarInFlight.current) return
+      radarInFlight.current = true
       if (!recall('radar-home')) setRadarNote('Refreshing home workspace…')
       fetchRadarHome()
         .then((payload) => {
@@ -728,6 +731,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
           if (!recall('radar-home')) setRadar(null)
           setRadarNote(reason instanceof Error ? reason.message : 'Home workspace timed out. Dashboard below still works.')
         })
+        .finally(() => { radarInFlight.current = false })
       fetchProductReadiness()
         .then((payload) => {
           remember('product-readiness', payload)

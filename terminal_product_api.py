@@ -521,11 +521,10 @@ def autonomy_desk() -> dict[str, Any]:
 
 @app.get("/api/desk-pipeline")
 def desk_pipeline_status() -> dict[str, Any]:
-    """Read-only viewing-order snapshot. Does not enqueue downloads."""
-    from operations.store import OperationStore
-    from product.desk_pipeline import describe_desk_pipeline
+    """Read persisted worker snapshot only. Never inspects shortlist coverage."""
+    from product.desk_pipeline import load_desk_pipeline_status
 
-    return describe_desk_pipeline(OperationStore(core.OPS_DB))
+    return load_desk_pipeline_status()
 
 
 @app.post("/api/product-bootstrap")

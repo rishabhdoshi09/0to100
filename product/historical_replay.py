@@ -618,12 +618,19 @@ def run_historical_replay(
     usable = all_sessions[:-1] if len(all_sessions) > 1 else all_sessions
     window = usable[-max(1, int(sessions)) :]
     run_id = _fingerprint(window, [str(s).upper() for s in (symbols or [])] + [str(universe_limit)])
+    from product.pit_versions import current_versions
+    from product.pit_warehouse import warehouse_fingerprint
+
+    experiment_versions = current_versions().as_dict()
+    data_fp = warehouse_fingerprint()
     cached = _read_json(target / REPORT_NAME)
     if (
         not force
         and cached.get("run_id") == run_id
         and cached.get("status") == _STATUS_SUCCEEDED
         and cached.get("engine") == ENGINE
+        and cached.get("data_fingerprint") == data_fp
+        and cached.get("versions") == experiment_versions
     ):
         cached["cache_hit"] = True
         cached["available"] = True
@@ -738,9 +745,6 @@ def run_historical_replay(
     elif errors:
         status = _STATUS_DEGRADED
     finished = _now()
-    from product.pit_versions import current_versions
-    from product.pit_warehouse import warehouse_fingerprint
-
     experiment_versions = current_versions().as_dict()
     data_fp = warehouse_fingerprint()
     payload = {
@@ -838,7 +842,13 @@ def run_historical_replay(
     except Exception as exc:
         payload["experiments_error"] = str(exc)[:160]
     existing = _read_json(target / REPORT_NAME)
-    if existing.get("run_id") == run_id and existing.get("status") == _STATUS_SUCCEEDED and not force:
+    if (
+        existing.get("run_id") == run_id
+        and existing.get("status") == _STATUS_SUCCEEDED
+        and existing.get("data_fingerprint") == data_fp
+        and existing.get("versions") == experiment_versions
+        and not force
+    ):
         existing["cache_hit"] = True
         return existing
     _atomic_json(target / REPORT_NAME, payload)

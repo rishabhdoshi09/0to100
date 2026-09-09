@@ -189,7 +189,7 @@ def test_async_acquire_enqueues_symbol_job_and_dedupes_same_ticker(tmp_path: Pat
 def test_due_diligence_acquire_handler_runs_for_one_symbol(tmp_path: Path, monkeypatch):
     seen: list[tuple[str, bool]] = []
 
-    def fake_acquire(symbol: str, force: bool = False):
+    def fake_acquire(symbol: str, force: bool = False, **_kwargs):
         seen.append((symbol, force))
         return {"ok": True, "n_ok": 1, "symbol": symbol}
 

@@ -8,7 +8,21 @@ function request<T>(url: string, init?: RequestInit & { timeoutMs?: number }): P
 export const fetchDashboard = (): Promise<DashboardPayload> =>
   request<DashboardPayload>('/api/dashboard', { timeoutMs: DASHBOARD_FETCH_TIMEOUT_MS })
 
-export const fetchHealth = (): Promise<{ ok: boolean; service?: string }> =>
+export const fetchHealth = (): Promise<{
+  ok: boolean
+  service?: string
+  lifecycle?: string
+  reason?: string
+  history?: { current?: boolean }
+  resources?: {
+    state?: string
+    reason?: string
+    api?: { pid?: number; fd_count?: number; fd_soft_limit?: number; fd_used_pct?: number }
+    market_ops?: { pid?: number; fd_count?: number }
+    active_operation_age_s?: number | null
+    oldest_running_operation?: { kind?: string; age_s?: number; operation_id?: string } | null
+  }
+}> =>
   request('/api/health', { timeoutMs: 4_000 })
 
 export const fetchChart = (symbol: string): Promise<{ symbol: string; bars: ChartBar[] }> =>

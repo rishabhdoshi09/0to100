@@ -371,6 +371,14 @@ def test_l_restart_does_not_duplicate_replay(tmp_path):
     assert second["run_id"] == first["run_id"]
     assert ledger_two == ledger_one
 
+    report = tmp_path / "latest.json"
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    payload["data_fingerprint"] = "stale-pit-data"
+    report.write_text(json.dumps(payload), encoding="utf-8")
+    third = run_historical_replay(force=False, **kwargs)
+    assert third.get("cache_hit") is not True
+    assert third.get("data_fingerprint") != "stale-pit-data"
+
 
 def test_report_auto_acquire_route_exists():
     import report_api

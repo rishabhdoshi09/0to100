@@ -137,6 +137,7 @@ def test_single_eligible_name_still_trades_on_money_path():
         cards=[card],
         now=now,
         as_of="2026-09-01",
+        enforce_history=False,
         workspace={
             "schema_version": 4,
             "generated_at": now.isoformat(),

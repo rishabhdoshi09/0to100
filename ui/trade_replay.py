@@ -107,7 +107,7 @@ def _load_trades() -> tuple[pd.DataFrame, bool]:
                 return df, False
         except Exception:
             pass
-    return _demo_trades(), True
+    return pd.DataFrame(), True
 
 
 # ── Fetch OHLCV ────────────────────────────────────────────────────────────────
@@ -359,7 +359,7 @@ def render_trade_replay() -> None:
 
     trades, is_demo = _load_trades()
     if is_demo:
-        st.info("Using demo trades — connect `logs/journal.db` for live data.", icon="ℹ️")
+        st.warning("UNAVAILABLE — no trade journal on disk. Demo trades are not shown.")
 
     if trades.empty:
         st.warning("No trades available for replay.")
@@ -419,13 +419,10 @@ def render_trade_replay() -> None:
 
     if df_full.empty:
         st.warning(
-            f"Could not fetch data for {symbol} from yfinance — using synthetic OHLCV.",
-            icon="⚠️",
+            f"UNAVAILABLE — could not fetch official/yfinance OHLCV for {symbol}. "
+            "A synthetic chart is not invented."
         )
-        hold_days = max(5, (exit_dt - entry_dt).days)
-        df_full = _synthetic_ohlcv(entry_price, hold_days + 14, seed=sel_idx)
-        entry_dt = df_full.index[5]
-        exit_dt  = df_full.index[5 + hold_days]
+        return
 
     # Align entry / exit to available trading days
     available_dates = df_full.index

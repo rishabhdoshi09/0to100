@@ -292,16 +292,54 @@ def _empty_nse() -> dict[str, Any]:
     return {"step": {"id": "nse_filings", "ok": False}, "downloads": [], "texts": [], "headlines": []}
 
 
+class AcquireTimeout(Exception):
+    """Provider or symbol work exceeded the declared deadline."""
+
+
+def _check_deadline(deadline_monotonic: float | None) -> None:
+    if deadline_monotonic is not None and time.monotonic() >= float(deadline_monotonic):
+        raise AcquireTimeout("due-diligence deadline exceeded")
+
+
+def _close_http(obj) -> None:
+    close = getattr(obj, "close", None)
+    if not callable(close):
+        return
+    try:
+        close()
+    except Exception:
+        pass
+
+
+def _warmup_get(session, url: str, *, timeout: float) -> None:
+    response = None
+    try:
+        response = session.get(url, timeout=timeout)
+        try:
+            response.content
+        except Exception:
+            pass
+    finally:
+        _close_http(response)
+
+
 def _nse_session():
     import requests
 
     session = requests.Session()
     session.headers.update(_BROWSER_HEADERS)
     session.headers["Referer"] = "https://www.nseindia.com/companies-listing/corporate-filings-announcements"
+    warmup = None
     try:
-        session.get("https://www.nseindia.com/", timeout=12)
+        warmup = session.get("https://www.nseindia.com/", timeout=12)
+        try:
+            warmup.content
+        except Exception:
+            pass
     except Exception:
         pass
+    finally:
+        _close_http(warmup)
     return session
 
 
@@ -314,24 +352,27 @@ def _save_bytes(symbol: str, name: str, content: bytes) -> Path:
 def _download(session, url: str, *, symbol: str, name: str, max_bytes: int | None = None) -> dict[str, Any]:
     if not _allowed(url):
         return {"ok": False, "url": url, "error": "host not on the official allow-list"}
+    response = None
     try:
         response = session.get(url, timeout=18, allow_redirects=True)
+        if response.status_code != 200:
+            return {"ok": False, "url": url, "error": f"HTTP {response.status_code}"}
+        content = response.content or b""
+        limit = MAX_ATTACHMENT_BYTES if max_bytes is None else max_bytes
+        if len(content) > limit:
+            return {"ok": False, "url": url, "error": f"file larger than {limit // 1_000_000} MB — skipped"}
+        path = _save_bytes(symbol, name, content)
+        return {
+            "ok": True,
+            "url": url,
+            "path": str(path.relative_to(ROOT)),
+            "bytes": len(content),
+            "content_type": str(response.headers.get("Content-Type") or ""),
+        }
     except Exception as exc:
         return {"ok": False, "url": url, "error": str(exc)[:240]}
-    if response.status_code != 200:
-        return {"ok": False, "url": url, "error": f"HTTP {response.status_code}"}
-    content = response.content or b""
-    limit = MAX_ATTACHMENT_BYTES if max_bytes is None else max_bytes
-    if len(content) > limit:
-        return {"ok": False, "url": url, "error": f"file larger than {limit // 1_000_000} MB — skipped"}
-    path = _save_bytes(symbol, name, content)
-    return {
-        "ok": True,
-        "url": url,
-        "path": str(path.relative_to(ROOT)),
-        "bytes": len(content),
-        "content_type": str(response.headers.get("Content-Type") or ""),
-    }
+    finally:
+        _close_http(response)
 
 
 def _quarterly_has_values(data: Mapping[str, Any]) -> bool:
@@ -534,8 +575,8 @@ def _fetch_option_chain(symbol: str, session) -> dict[str, Any]:
     downloaded: dict[str, Any] = {"ok": False, "url": url, "error": "not attempted"}
     last_error = ""
     try:
-        session.get("https://www.nseindia.com/option-chain", timeout=12)
-        session.get(f"https://www.nseindia.com/option-chain?symbol={symbol}", timeout=12)
+        _warmup_get(session, "https://www.nseindia.com/option-chain", timeout=12)
+        _warmup_get(session, f"https://www.nseindia.com/option-chain?symbol={symbol}", timeout=12)
     except Exception:
         pass
     for attempt in range(3):
@@ -546,7 +587,7 @@ def _fetch_option_chain(symbol: str, session) -> dict[str, Any]:
             last_error = str(downloaded.get("error") or "download failed")
             if "HTTP 401" in last_error or "HTTP 403" in last_error:
                 try:
-                    session.get("https://www.nseindia.com/option-chain", timeout=12)
+                    _warmup_get(session, "https://www.nseindia.com/option-chain", timeout=12)
                 except Exception:
                     pass
             continue
@@ -779,12 +820,14 @@ def acquire_symbol(
     force: bool = False,
     datasets: list[str] | None = None,
     now: datetime | None = None,
+    deadline_monotonic: float | None = None,
 ) -> dict[str, Any]:
     """Download only the datasets that are missing or stale. Never invent numbers."""
     from product.stock_workspace import clean_symbol
 
     symbol = clean_symbol(symbol)
     now = now or datetime.now(timezone.utc)
+    _check_deadline(deadline_monotonic)
     previous = load_autonomy_facts(symbol)
     try:
         plan = plan_acquire(symbol, force=force, datasets=datasets, now=now)
@@ -847,80 +890,92 @@ def acquire_symbol(
     nse_error = ""
     session = None
     need_nse = lanes.get("nse_filings") or lanes.get("nse_annual") or lanes.get("option_chain")
-    if need_nse:
-        try:
-            session = _nse_session()
-        except Exception as exc:
-            session = None
-            nse_error = str(exc)[:240]
-        if session is None:
-            if lanes.get("nse_filings"):
-                nse = _empty_nse()
-                nse["step"]["error"] = nse_error or "no NSE session"
-                nse["step"]["status"] = "source_unavailable"
-            if lanes.get("nse_annual"):
-                annual = {
-                    "step": {
-                        "id": "nse_annual_reports",
-                        "ok": False,
-                        "error": nse_error or "no NSE session",
-                        "status": "source_unavailable",
-                    },
-                    "downloads": [],
-                    "texts": [],
-                }
-            if lanes.get("option_chain"):
-                chain = {
-                    "step": {"id": "option_chain", "ok": False, "error": nse_error or "no NSE session"},
-                    "download": {},
-                    "snapshot": {
-                        "available": False,
-                        "acquired": False,
-                        "reason": nse_error or "no NSE session",
-                        "not_a_signal": True,
-                        "places_orders": False,
-                    },
-                }
-        else:
-            if lanes.get("nse_filings"):
-                try:
-                    nse = _fetch_nse(symbol, session)
-                except Exception as exc:
+    try:
+        _check_deadline(deadline_monotonic)
+        if need_nse:
+            try:
+                session = _nse_session()
+            except Exception as exc:
+                session = None
+                nse_error = str(exc)[:240]
+            if session is None:
+                if lanes.get("nse_filings"):
                     nse = _empty_nse()
-                    nse["step"]["error"] = str(exc)[:240]
-            else:
-                nse = _empty_nse()
-                nse["step"]["skipped"] = True
-                skipped.append("nse_filings")
-            if lanes.get("nse_annual"):
-                try:
-                    annual = _fetch_annual_reports(symbol, session)
-                except Exception as exc:
-                    annual = {"step": {"id": "nse_annual_reports", "ok": False, "error": str(exc)[:240]}, "downloads": [], "texts": []}
-            else:
-                skipped.append("nse_annual")
-            if lanes.get("option_chain"):
-                try:
-                    chain = _fetch_option_chain(symbol, session)
-                except Exception as exc:
+                    nse["step"]["error"] = nse_error or "no NSE session"
+                    nse["step"]["status"] = "source_unavailable"
+                if lanes.get("nse_annual"):
+                    annual = {
+                        "step": {
+                            "id": "nse_annual_reports",
+                            "ok": False,
+                            "error": nse_error or "no NSE session",
+                            "status": "source_unavailable",
+                        },
+                        "downloads": [],
+                        "texts": [],
+                    }
+                if lanes.get("option_chain"):
                     chain = {
-                        "step": {"id": "option_chain", "ok": False, "error": str(exc)[:240]},
+                        "step": {"id": "option_chain", "ok": False, "error": nse_error or "no NSE session"},
                         "download": {},
                         "snapshot": {
                             "available": False,
-                            "acquired": True,
-                            "reason": str(exc)[:240],
+                            "acquired": False,
+                            "reason": nse_error or "no NSE session",
                             "not_a_signal": True,
                             "places_orders": False,
                         },
                     }
             else:
-                skipped.append("option_chain")
-    else:
-        skipped.extend(["nse_filings", "nse_annual", "option_chain"])
-        steps.append({"id": "nse_filings", "ok": True, "skipped": True, "reason": "datasets current"})
-        steps.append({"id": "nse_annual_reports", "ok": True, "skipped": True, "reason": "datasets current"})
-        steps.append({"id": "option_chain", "ok": True, "skipped": True, "reason": "not requested"})
+                if lanes.get("nse_filings"):
+                    try:
+                        nse = _fetch_nse(symbol, session)
+                    except Exception as exc:
+                        nse = _empty_nse()
+                        nse["step"]["error"] = str(exc)[:240]
+                else:
+                    nse = _empty_nse()
+                    nse["step"]["skipped"] = True
+                    skipped.append("nse_filings")
+                if lanes.get("nse_annual"):
+                    try:
+                        annual = _fetch_annual_reports(symbol, session)
+                    except Exception as exc:
+                        annual = {"step": {"id": "nse_annual_reports", "ok": False, "error": str(exc)[:240]}, "downloads": [], "texts": []}
+                else:
+                    skipped.append("nse_annual")
+                if lanes.get("option_chain"):
+                    try:
+                        chain = _fetch_option_chain(symbol, session)
+                    except Exception as exc:
+                        chain = {
+                            "step": {"id": "option_chain", "ok": False, "error": str(exc)[:240]},
+                            "download": {},
+                            "snapshot": {
+                                "available": False,
+                                "acquired": True,
+                                "reason": str(exc)[:240],
+                                "not_a_signal": True,
+                                "places_orders": False,
+                            },
+                        }
+                else:
+                    skipped.append("option_chain")
+        else:
+            skipped.extend(["nse_filings", "nse_annual", "option_chain"])
+            steps.append({"id": "nse_filings", "ok": True, "skipped": True, "reason": "datasets current"})
+            steps.append({"id": "nse_annual_reports", "ok": True, "skipped": True, "reason": "datasets current"})
+            steps.append({"id": "option_chain", "ok": True, "skipped": True, "reason": "not requested"})
+    except AcquireTimeout:
+        nse_error = nse_error or "due-diligence deadline exceeded"
+        if need_nse and not (nse.get("step") or {}).get("error"):
+            nse = _empty_nse()
+            nse["step"]["error"] = nse_error
+            nse["step"]["status"] = "source_unavailable"
+        raise
+    finally:
+        _close_http(session)
+        session = None
 
     if need_nse:
         steps.append(nse["step"])
@@ -1160,20 +1215,42 @@ def acquire_shortlist(
     limit: int = ACQUIRE_CAP,
     force: bool = False,
     scan_payload: Mapping[str, Any] | None = None,
+    deadline_monotonic: float | None = None,
+    per_symbol_s: float = 90.0,
+    progress_cb=None,
 ) -> dict[str, Any]:
     symbols = shortlist_symbols(limit=limit, scan_payload=scan_payload)
     results = []
     errors = []
+    timed_out = False
+    skipped = []
     for symbol in symbols:
+        if deadline_monotonic is not None and time.monotonic() >= float(deadline_monotonic):
+            timed_out = True
+            skipped.append(symbol)
+            errors.append({"symbol": symbol, "error": "operation deadline exceeded", "status": "TIMEOUT"})
+            continue
+        symbol_deadline = time.monotonic() + max(1.0, float(per_symbol_s))
+        if deadline_monotonic is not None:
+            symbol_deadline = min(symbol_deadline, float(deadline_monotonic))
         try:
-            results.append(acquire_symbol(symbol, force=force))
+            if progress_cb:
+                progress_cb(symbol)
+            results.append(acquire_symbol(symbol, force=force, deadline_monotonic=symbol_deadline))
+        except AcquireTimeout as exc:
+            timed_out = True
+            errors.append({"symbol": symbol, "error": str(exc)[:240], "status": "TIMEOUT"})
         except Exception as exc:
             errors.append({"symbol": symbol, "error": str(exc)[:240]})
         time.sleep(0.2)
+    status = "TIMEOUT" if timed_out else ("PARTIAL" if errors and results else "SUCCEEDED")
     return {
         "accepted": True,
+        "status": status,
+        "timed_out": timed_out,
         "symbols": symbols,
         "acquired": [row.get("symbol") for row in results],
+        "skipped": skipped,
         "errors": errors,
         "n_ok": len(results),
         "n_failed": len(errors),

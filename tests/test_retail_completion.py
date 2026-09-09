@@ -57,8 +57,10 @@ def test_market_view_uses_plain_language():
         "breadth_label": "STRONG", "breadth_strength": 68,
         "leading_sectors": ["AUTO", "BANK"], "lagging_sectors": ["IT"],
         "nifty_change_1d": 0.7, "nifty_change_5d": 2.1, "vix": 13.4,
+        "market_regime": "TRENDING_BULL", "data_available": True,
     })
     assert view.health == "Healthy"
+    assert view.available is True
     assert "New paper trades are allowed" in view.trade_stance
     assert "Auto" in view.summary or "AUTO" in view.summary
 

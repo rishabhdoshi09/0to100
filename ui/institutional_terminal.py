@@ -187,14 +187,6 @@ def _fetch_chart(symbol: str, timeframe: str) -> pd.DataFrame | None:
             return df
     except Exception:
         pass
-    # 3. Demo OHLCV
-    try:
-        from core.demo_data import make_demo_ohlcv
-        rows = make_demo_ohlcv(symbol, bars=min(days, 250))
-        if rows:
-            return pd.DataFrame(rows)
-    except Exception:
-        pass
     return None
 
 

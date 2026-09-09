@@ -215,10 +215,11 @@ def render_real_holdings() -> None:
             unsafe_allow_html=True,
         )
         if not kite_connected:
-            st.caption(f"Demo mode — showing sample data. (Kite error: {kite_error})")
+            st.warning("LOGIN REQUIRED — holdings are unavailable until Zerodha is connected. Sample holdings are not shown.")
+            st.caption(f"Kite error: {kite_error}")
         else:
-            st.caption("Demo mode — no holdings found in your Zerodha account.")
-        holdings = _DEMO_HOLDINGS
+            st.info("No holdings found in the connected Zerodha account.")
+        holdings = []
         is_demo = True
 
     if not holdings:
