@@ -58,10 +58,29 @@ def _connect(path: Path | None = None) -> sqlite3.Connection:
             old_state TEXT,
             new_state TEXT,
             reason TEXT,
-            session_date TEXT
+            session_date TEXT,
+            old_decision TEXT,
+            new_decision TEXT,
+            old_entry_state TEXT,
+            new_entry_state TEXT,
+            old_execution_state TEXT,
+            new_execution_state TEXT
         )
         """
     )
+    # Existing desks may already have the pre-decision-transition event schema.
+    # Additive migrations keep the ledger readable without replacing the DB.
+    event_cols = {str(row[1]) for row in con.execute("PRAGMA table_info(opportunity_events)")}
+    for name in (
+        "old_decision",
+        "new_decision",
+        "old_entry_state",
+        "new_entry_state",
+        "old_execution_state",
+        "new_execution_state",
+    ):
+        if name not in event_cols:
+            con.execute(f"ALTER TABLE opportunity_events ADD COLUMN {name} TEXT")
     return con
 
 
@@ -107,8 +126,15 @@ def remember(
             ),
         )
         con.execute(
-            "INSERT INTO opportunity_events (opportunity_id, at, event, old_state, new_state, reason, session_date) VALUES (?,?,?,?,?,?,?)",
-            (oid, now, "DISCOVERED", "", state, reason, str(session_date)[:10]),
+            """INSERT INTO opportunity_events (
+                opportunity_id, at, event, old_state, new_state, reason, session_date,
+                old_decision, new_decision, old_entry_state, new_entry_state,
+                old_execution_state, new_execution_state
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                oid, now, "DISCOVERED", "", state, reason, str(session_date)[:10],
+                "", decision, "", entry_state, "", execution_state,
+            ),
         )
     else:
         merged = dict(prev)
@@ -120,11 +146,39 @@ def remember(
             peak_rank = rank
         started = merged.get("research_started_at") or (now if research_started else "")
         completed = merged.get("research_completed_at") or (now if research_completed else "")
-        old_state = merged.get("last_state") or ""
-        if state and state != old_state:
+        old_state = str(merged.get("last_state") or "")
+        old_decision = str(merged.get("last_decision") or "")
+        old_entry_state = str(merged.get("last_entry_state") or "")
+        old_execution_state = str(merged.get("last_execution_state") or "")
+        next_state = str(state or old_state)
+        next_decision = str(decision or old_decision)
+        next_entry_state = str(entry_state or old_entry_state)
+        next_execution_state = str(execution_state or old_execution_state)
+        if state and next_state != old_state:
             con.execute(
-                "INSERT INTO opportunity_events (opportunity_id, at, event, old_state, new_state, reason, session_date) VALUES (?,?,?,?,?,?,?)",
-                (oid, now, wake_event or "REEVALUATED", old_state, state, reason, str(session_date)[:10]),
+                """INSERT INTO opportunity_events (
+                    opportunity_id, at, event, old_state, new_state, reason, session_date,
+                    old_decision, new_decision, old_entry_state, new_entry_state,
+                    old_execution_state, new_execution_state
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    oid, now, wake_event or "REEVALUATED", old_state, next_state, reason,
+                    str(session_date)[:10], old_decision, next_decision,
+                    old_entry_state, next_entry_state, old_execution_state, next_execution_state,
+                ),
+            )
+        if decision and next_decision != old_decision:
+            con.execute(
+                """INSERT INTO opportunity_events (
+                    opportunity_id, at, event, old_state, new_state, reason, session_date,
+                    old_decision, new_decision, old_entry_state, new_entry_state,
+                    old_execution_state, new_execution_state
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    oid, now, "DECISION_CHANGED", old_state, next_state, reason,
+                    str(session_date)[:10], old_decision, next_decision,
+                    old_entry_state, next_entry_state, old_execution_state, next_execution_state,
+                ),
             )
         body = dict(payload or {})
         if merged.get("payload_json"):
@@ -146,9 +200,7 @@ def remember(
                WHERE opportunity_id=?""",
             (
                 str(session_date)[:10], scan_run_id or merged.get("last_scan_run_id"),
-                state or merged.get("last_state"), decision or merged.get("last_decision"),
-                entry_state or merged.get("last_entry_state"),
-                execution_state or merged.get("last_execution_state"),
+                next_state, next_decision, next_entry_state, next_execution_state,
                 reason or merged.get("last_reason"),
                 json.dumps(dict(wait_trigger or json.loads(merged.get("wait_trigger_json") or "{}")), default=str),
                 peak_tier, peak_rank, started, completed, wake_event or merged.get("wake_event"),
