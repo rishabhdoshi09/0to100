@@ -94,3 +94,43 @@ def test_stock_workspace_attaches_acquired_option_chain(tmp_path, monkeypatch):
     assert chain["not_a_signal"] is True
     assert any(source["name"] == "Option-chain snapshot" for source in result["sources"])
     assert result["fno"]["lot_size"] == 100
+
+
+def test_stock_workspace_canonical_wait_overrides_local_buy(monkeypatch):
+    monkeypatch.setattr(
+        "product.recommendation_truth.decorate_current_recommendation",
+        lambda card: {
+            "raw_action_badge": card.get("action_badge"),
+            "canonical_decision": "WAIT",
+            "decision_truth_status": "CANONICAL_CURRENT_SCAN",
+            "decision_match_scope": "EXACT_SCAN_RUN",
+            "action_badge": "Wait",
+            "buy_zone_authorized": False,
+        },
+    )
+
+    result = build_stock_workspace(
+        "TEST",
+        scan_payload={
+            "scanned_at": "2026-01-28T10:00:00+00:00",
+            "records": [{
+                "symbol": "TEST",
+                "company": "Test Ltd",
+                "verdict": "BUY",
+                "action_badge": "Buy",
+                "score": 92,
+            }],
+        },
+        long_term_payload={},
+        raw_fundamentals={},
+        frame=[],
+        news=[],
+        fno_payload={},
+        now=datetime(2026, 1, 28, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert result["scanner"]["verdict"] == "BUY"
+    assert result["decision_memory"]["canonical_decision"] == "WAIT"
+    assert result["decision_memory"]["stance"] == "WAIT"
+    assert result["decision_memory"]["stance_source"] == "CANONICAL_RECOMMENDATION"
+    assert result["decision_memory"]["recommendation_truth"]["action_badge"] == "Wait"
