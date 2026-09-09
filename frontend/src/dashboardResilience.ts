@@ -32,39 +32,48 @@ function hasAutonomyHistory(payload: DashboardPayload['autonomy']): boolean {
  * Merge a degraded dashboard read with the last durable read snapshot.
  *
  * Current operational/safety truth always comes from `incoming`. Only durable
- * read history is carried forward when the new projection is unavailable or
- * empty. This keeps the desk useful during a refresh/provider failure without
- * turning stale observations into current execution authority.
+ * read history is carried forward when the corresponding subsystem explicitly
+ * reports unavailable. A healthy/current empty result is authoritative and is
+ * never repopulated from old state.
  */
 export function reconcileDashboard(
   previous: DashboardPayload,
   incoming: DashboardPayload,
 ): DashboardPayload {
-  const scan = !hasScanRows(incoming.scan) && hasScanRows(previous.scan)
+  const preserveScan = incoming.scan.available === false
+    && !hasScanRows(incoming.scan)
+    && hasScanRows(previous.scan)
+  const scan = preserveScan
     ? {
         ...previous.scan,
-        available: incoming.scan.available,
+        available: false,
       }
     : incoming.scan
 
-  const longTerm = !hasLongTermRows(incoming.long_term) && hasLongTermRows(previous.long_term)
+  const preserveLongTerm = incoming.long_term.available === false
+    && !hasLongTermRows(incoming.long_term)
+    && hasLongTermRows(previous.long_term)
+  const longTerm = preserveLongTerm
     ? {
         ...previous.long_term,
-        available: incoming.long_term.available,
+        available: false,
         job: incoming.long_term.job || previous.long_term.job,
       }
     : incoming.long_term
 
-  const conviction = incoming.conviction.length === 0 && previous.conviction.length > 0
+  const conviction = preserveScan && incoming.conviction.length === 0 && previous.conviction.length > 0
     ? previous.conviction
     : incoming.conviction
 
-  const preservePaper = !hasPaperHistory(incoming.paper) && hasPaperHistory(previous.paper)
+  const preservePaper = incoming.paper.available === false
+    && !hasPaperHistory(incoming.paper)
+    && hasPaperHistory(previous.paper)
   const paper: DashboardPayload['paper'] = preservePaper
     ? {
         ...incoming.paper,
-        // `available` means the paper book is readable. Execution truth remains
-        // fail-closed through enabled/supervisor/autonomy fields from incoming.
+        // `available` is read availability here: the durable book is readable.
+        // Write/execution truth stays fail-closed via the current enabled,
+        // supervisor and autonomy capability fields from incoming.
         available: true,
         capital: previous.paper.capital,
         equity: previous.paper.equity,
@@ -81,12 +90,14 @@ export function reconcileDashboard(
       }
     : incoming.paper
 
-  const preserveAutonomy = !hasAutonomyHistory(incoming.autonomy) && hasAutonomyHistory(previous.autonomy)
+  const preserveAutonomy = incoming.autonomy.available === false
+    && !hasAutonomyHistory(incoming.autonomy)
+    && hasAutonomyHistory(previous.autonomy)
   const autonomy: DashboardPayload['autonomy'] = preserveAutonomy
     ? {
         ...incoming.autonomy,
-        // These are historical/read-only surfaces. Current running state,
-        // capabilities, failures, broker state and write controls stay incoming.
+        // Historical/read-only surfaces survive degradation. Current running
+        // state, broker truth, capabilities, failures and controls remain new.
         recent_dialogue: previous.autonomy.recent_dialogue,
         recent_transitions: previous.autonomy.recent_transitions,
         jobs_recent: previous.autonomy.jobs_recent,
@@ -134,15 +145,20 @@ export function reconcileDashboard(
     fno,
     data: {
       ...incoming.data,
-      // Counts describe durable artifacts. Readiness/blockers remain current.
-      scan_saved: incoming.data.scan_saved || previous.data.scan_saved || hasScanRows(scan),
-      scan_records: Math.max(incoming.data.scan_records || 0, previous.data.scan_records || 0, scan.records.length),
-      long_term_saved: incoming.data.long_term_saved || previous.data.long_term_saved || hasLongTermRows(longTerm),
-      long_term_records: Math.max(
-        incoming.data.long_term_records || 0,
-        previous.data.long_term_records || 0,
-        longTerm.records.length,
-      ),
+      // Counts describe durable artifacts only while those artifacts are being
+      // preserved. Current readiness and blocker truth always remain incoming.
+      scan_saved: incoming.data.scan_saved || (preserveScan && previous.data.scan_saved),
+      scan_records: preserveScan
+        ? Math.max(incoming.data.scan_records || 0, previous.data.scan_records || 0, scan.records.length)
+        : incoming.data.scan_records,
+      long_term_saved: incoming.data.long_term_saved || (preserveLongTerm && previous.data.long_term_saved),
+      long_term_records: preserveLongTerm
+        ? Math.max(
+            incoming.data.long_term_records || 0,
+            previous.data.long_term_records || 0,
+            longTerm.records.length,
+          )
+        : incoming.data.long_term_records,
     },
   }
 }
