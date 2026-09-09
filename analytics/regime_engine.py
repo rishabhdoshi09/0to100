@@ -53,7 +53,15 @@ def _fetch_nifty(days: int = 260) -> Optional[pd.DataFrame]:
         return None
 
 
-def _fetch_vix() -> float:
+def _fetch_vix() -> float | None:
+    try:
+        from data.index_store import latest_index_print
+        print_ = latest_index_print("^INDIAVIX") or {}
+        price = print_.get("price")
+        if price:
+            return float(price)
+    except Exception:
+        pass
     try:
         import yfinance as yf
         df = yf.Ticker("^INDIAVIX").history(period="5d")
@@ -61,7 +69,7 @@ def _fetch_vix() -> float:
             return float(df["Close"].iloc[-1])
     except Exception:
         pass
-    return 16.0  # default neutral VIX
+    return None
 
 
 def _fetch_sector_returns() -> dict[str, float]:
@@ -107,8 +115,8 @@ def _calc_atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int 
 
 def compute_regime() -> RegimeSnapshot:
     """
-    Compute the current market regime.
-    Always returns a valid RegimeSnapshot (falls back to defaults on error).
+    Compute the current market regime from Nifty history.
+    Missing history returns UNAVAILABLE — never a synthetic bullish default.
     """
     df = _fetch_nifty(days=260)
     if df is None or len(df) < 60:
@@ -141,11 +149,15 @@ def compute_regime() -> RegimeSnapshot:
 
     # ── VIX ──────────────────────────────────────────────────────────────────
     vix = _fetch_vix()
-    vix_state = "NORMAL"
-    if vix < 14:
+    if vix is None:
+        vix_state = "UNAVAILABLE"
+        vix = 0.0
+    elif vix < 14:
         vix_state = "LOW"
     elif vix > 20:
         vix_state = "HIGH"
+    else:
+        vix_state = "NORMAL"
 
     # ── Sector breadth proxy ──────────────────────────────────────────────────
     sector_rets = _fetch_sector_returns()
@@ -156,7 +168,7 @@ def compute_regime() -> RegimeSnapshot:
         breadth = "STRONG" if breadth_ratio >= 0.6 else ("WEAK" if breadth_ratio <= 0.35 else "NEUTRAL")
         sector_leader = max(sector_rets, key=sector_rets.get) if sector_rets else "N/A"
     else:
-        breadth = "NEUTRAL"
+        breadth = "UNAVAILABLE"
         sector_leader = "N/A"
 
     # ── Regime classification ─────────────────────────────────────────────────
@@ -170,7 +182,7 @@ def compute_regime() -> RegimeSnapshot:
                     else 35 if above_50
                     else 10)
     breadth_score = {"STRONG": 85, "NEUTRAL": 50, "WEAK": 20}.get(breadth, 50)
-    vix_score     = {"LOW": 80, "NORMAL": 55, "HIGH": 25}.get(vix_state, 55)
+    vix_score     = {"LOW": 80, "NORMAL": 55, "HIGH": 25, "UNAVAILABLE": 50}.get(vix_state, 50)
     atr_score     = {"EXPANDING": 70, "STABLE": 55, "CONTRACTING": 45}.get(atr_regime_label, 55)
 
     regime_score = ma_score * 0.40 + breadth_score * 0.30 + vix_score * 0.20 + atr_score * 0.10
@@ -212,17 +224,17 @@ def compute_regime() -> RegimeSnapshot:
 
 def _default_snapshot() -> RegimeSnapshot:
     return RegimeSnapshot(
-        regime="UNKNOWN",
-        regime_score=50.0,
+        regime="UNAVAILABLE",
+        regime_score=0.0,
         emoji="⚪",
         nifty_price=0.0,
         nifty_change_pct=0.0,
         sma50=0.0,
         sma200=0.0,
-        atr_regime="STABLE",
-        vix=16.0,
-        vix_state="NORMAL",
-        breadth="NEUTRAL",
+        atr_regime="UNAVAILABLE",
+        vix=0.0,
+        vix_state="UNAVAILABLE",
+        breadth="UNAVAILABLE",
         sector_leader="N/A",
         quality_multiplier=1.0,
         timestamp=datetime.now().strftime("%H:%M"),

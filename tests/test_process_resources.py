@@ -1,10 +1,13 @@
 """Health diagnostics expose FD pressure without lying about readiness."""
 from __future__ import annotations
 
+import ctypes
+
 from product.process_resources import (
     RESOURCE_EXHAUSTED,
     RESOURCE_OK,
     RESOURCE_PRESSURE,
+    _darwin_open_fd_count,
     classify_fd_pressure,
     resource_diagnostics,
 )
@@ -52,3 +55,105 @@ def test_health_surfaces_resource_exhausted(monkeypatch):
     assert payload["resources"]["state"] == RESOURCE_EXHAUSTED
     assert payload["lifecycle"] == "FAILED"
     assert "exhausted" in str(payload["reason"]).lower() or "exhausted" in " ".join(payload.get("reasons") or []).lower()
+
+
+def test_darwin_fd_counter_uses_libproc_without_spawning_lsof(monkeypatch):
+    import product.process_resources as resources
+
+    class FakeProcPidInfo:
+        argtypes = None
+        restype = None
+
+        def __call__(self, _pid, _flavour, _arg, buffer, _size):
+            if buffer is None:
+                return 40  # capacity request: 5 proc_fdinfo records
+            return 32  # actual result: 4 proc_fdinfo records
+
+    class FakeLibProc:
+        proc_pidinfo = FakeProcPidInfo()
+
+    monkeypatch.setattr(resources.sys, "platform", "darwin")
+    monkeypatch.setattr(ctypes, "CDLL", lambda *_a, **_k: FakeLibProc())
+
+    assert _darwin_open_fd_count(4242) == 4
+
+
+def test_darwin_fd_counter_is_disabled_on_non_macos(monkeypatch):
+    import product.process_resources as resources
+
+    monkeypatch.setattr(resources.sys, "platform", "linux")
+    assert _darwin_open_fd_count(4242) is None
+
+
+def test_inspect_runtime_does_not_conflate_operational_and_evidence(monkeypatch):
+    import os
+    import time
+    from datetime import datetime, timezone, timedelta
+
+    import product.runtime_lifecycle as RL
+
+    pid = os.getpid()
+    now = time.time()
+    stale_scan = {
+        "schema_version": 1,
+        "scanned_at": (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat(),
+        "records": [{"symbol": "OLD"}],
+    }
+
+    def fake_read_json(path):
+        text = str(path)
+        if "market_ops" in text:
+            return {
+                "worker_pid": pid,
+                "pid": pid,
+                "heartbeat_epoch": now,
+                "process_running": True,
+                "running": True,
+                "active": {},
+            }
+        if "autonomy" in text:
+            return {
+                "scheduler_owner_pid": pid,
+                "process_running": True,
+                "running": True,
+                "state": "OBSERVING",
+            }
+        if "latest_momentum_scan" in text:
+            return stale_scan
+        return {}
+
+    monkeypatch.setattr(RL, "_read_json", fake_read_json)
+    monkeypatch.setattr(RL, "_port_open", lambda port: True)
+    monkeypatch.setattr(RL, "_pid_alive", lambda value: int(value or 0) == pid)
+    monkeypatch.setattr(
+        "data.bhavcopy_runtime.official_history_freshness",
+        lambda *_a, **_k: {
+            "current": False,
+            "ready": True,
+            "sessions": 100,
+            "reason_code": "HISTORY_STALE",
+            "available_session": "2026-09-01",
+            "expected_latest_completed_session": "2026-09-05",
+        },
+    )
+    monkeypatch.setattr(
+        "data.bhavcopy_runtime.status",
+        lambda **_k: {"ready": True, "sessions": 100, "latest_date": "2026-09-01"},
+    )
+    monkeypatch.setattr(
+        "product.process_resources.resource_diagnostics",
+        lambda **_k: {
+            "state": RESOURCE_OK,
+            "reason": "",
+            "api": {"pid": pid, "state": RESOURCE_OK},
+            "market_ops": {"pid": pid, "state": RESOURCE_OK},
+        },
+    )
+
+    runtime = inspect_runtime(api_serving=True)
+    assert runtime["operational_ready"] is True
+    assert runtime["evidence_ready"] is False
+    assert runtime["operational"]["status"] in {"READY", "DEGRADED"}
+    assert runtime["lifecycle"] == "DEGRADED"
+    assert runtime["lifecycle"] != "STARTING"
+    assert runtime["lifecycle"] != "READY"

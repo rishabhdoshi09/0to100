@@ -111,6 +111,10 @@ class RegimeState:
 
     # Sector rotation leaders (from acceleration matrix) — optional
     rotation_leaders: list[dict] = field(default_factory=list)
+    # Truth plane: never fill missing Nifty/sector series with demo numbers.
+    data_available: bool = True
+    data_source: str = "live"
+    unavailable_reason: str = ""
 
     # ------------------------------------------------------------------
     def to_dict(self) -> dict:
@@ -873,6 +877,40 @@ def peek_cached_regime() -> RegimeState | None:
     return cached if isinstance(cached, RegimeState) else None
 
 
+def _unavailable_regime(reason: str) -> RegimeState:
+    fetch_time_utc = datetime.now(timezone.utc)
+    return RegimeState(
+        market_regime="UNAVAILABLE",
+        volatility_regime="UNAVAILABLE",
+        breadth_strength=0,
+        breadth_label="UNAVAILABLE",
+        breakout_environment="UNAVAILABLE",
+        risk_mode="UNAVAILABLE",
+        institutional_activity="UNAVAILABLE",
+        leading_sectors=[],
+        lagging_sectors=[],
+        rotation_mode="UNAVAILABLE",
+        sector_returns={},
+        nifty_price=0.0,
+        nifty_change_1d=0.0,
+        nifty_change_5d=0.0,
+        sma50=0.0,
+        sma200=0.0,
+        vix=0.0,
+        regime_score=0.0,
+        regime_confidence=0.0,
+        regime_confidence_label="UNCERTAIN",
+        quality_multiplier=1.0,
+        recommended_playbooks=[],
+        avoid_patterns=[],
+        timestamp=fetch_time_utc.strftime("%H:%M"),
+        data_age_mins=0,
+        data_available=False,
+        data_source="unavailable",
+        unavailable_reason=reason,
+    )
+
+
 def compute_regime() -> RegimeState:
     """
     Compute and return the current 5-dimension market regime.
@@ -882,7 +920,8 @@ def compute_regime() -> RegimeState:
     cached = _CACHE.get("regime_state")
     cached_ts = _CACHE.get("timestamp", 0.0)
 
-    if cached is not None and (now - cached_ts) < _cache_ttl():
+    ttl = 60.0 if (cached is not None and not getattr(cached, "data_available", True)) else _cache_ttl()
+    if cached is not None and (now - cached_ts) < ttl:
         return cached
 
     # ---- parallel data fetch ------------------------------------------------
@@ -915,45 +954,16 @@ def compute_regime() -> RegimeState:
     leaders, laggards, rotation_mode, sector_returns = _classify_sector_rotation(sector_data)
     institutional = _classify_institutional(nifty_df, market_regime, vix, sma50, sma200)
 
-    # ---- demo fallback: if no live data, use realistic demo data ------------
     all_data_missing = (np.isnan(nifty_price) or nifty_price == 0.0)
     if all_data_missing:
-        try:
-            from core.demo_data import DEMO_REGIME as _d
-            logger.info("Live data unavailable — using demo data (HTTP 403 / network restricted env)")
-            fetch_time_utc = datetime.now(timezone.utc)
-            state = RegimeState(
-                market_regime=_d["market_regime"],
-                volatility_regime=_d["volatility_regime"],
-                breadth_strength=int(_d["breadth_strength"]),
-                breadth_label=_d["breadth_label"],
-                breakout_environment=_d["breakout_environment"],
-                risk_mode=_d["risk_mode"],
-                institutional_activity=_d["institutional_activity"],
-                leading_sectors=_d["leading_sectors"],
-                lagging_sectors=_d["lagging_sectors"],
-                rotation_mode=_d["rotation_mode"],
-                sector_returns=_d["sector_returns"],
-                nifty_price=_d["nifty_price"],
-                nifty_change_1d=_d["nifty_change_1d"],
-                nifty_change_5d=_d["nifty_change_5d"],
-                sma50=_d["sma50"],
-                sma200=_d["sma200"],
-                vix=_d["vix"],
-                regime_score=_d["regime_score"],
-                regime_confidence=60.0,
-                regime_confidence_label="MODERATE",
-                quality_multiplier=_d["quality_multiplier"],
-                recommended_playbooks=_d["recommended_playbooks"],
-                avoid_patterns=_d["avoid_patterns"],
-                timestamp=fetch_time_utc.strftime("%H:%M") + " ⚠demo",
-                data_age_mins=0,
-            )
-            _CACHE["regime_state"] = state
-            _CACHE["timestamp"] = now
-            return state
-        except Exception as exc:
-            logger.warning("Demo data fallback failed: %s", exc)
+        logger.warning("Regime evidence unavailable — official index, Kite, and Yahoo lacked a usable Nifty series")
+        state = _unavailable_regime(
+            "Official NSE index store, Kite, and Yahoo all lacked a usable Nifty series. "
+            "Market health is unavailable, not assumed bullish."
+        )
+        _CACHE["regime_state"] = state
+        _CACHE["timestamp"] = now
+        return state
 
     # ---- derived fields -----------------------------------------------------
     regime_score = _compute_regime_score(market_regime, volatility_regime, breadth_score, institutional)

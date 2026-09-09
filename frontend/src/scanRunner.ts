@@ -11,7 +11,10 @@ const KIND_CONTROL: Record<ScanKind, ControlName> = {
   MARKET_REPORT: 'REFRESH_MARKET_REPORT_NOW',
 }
 
-export const SCAN_POLL_MS = 300
+// Operation progress changes at human-scale, not every few hundred milliseconds.
+// Keep this bounded so several visible runners cannot hammer the local API while a
+// long scan/provider job is active.
+export const SCAN_POLL_MS = 1000
 export const TERMINAL_STATUSES = new Set(['SUCCEEDED', 'FAILED', 'BLOCKED', 'CANCELLED'])
 
 export function isTerminalStatus(status: string): boolean {

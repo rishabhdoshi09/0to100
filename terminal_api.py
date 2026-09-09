@@ -354,18 +354,19 @@ def _market_payload() -> dict:
                 "nifty_price": None,
                 "technical_details": {},
             }
+        available = bool(getattr(market, "available", True)) and str(market.health or "") != "Unavailable"
         return {
-            "available": True,
+            "available": available,
             "health": market.health,
             "summary": market.summary,
             "trade_stance": market.trade_stance,
             "breadth": market.breadth,
-            "leaders": list(market.leaders),
-            "laggards": list(market.laggards),
-            "nifty_change_1d": _safe_float(market.nifty_change_1d),
-            "nifty_change_5d": _safe_float(market.nifty_change_5d),
-            "vix": _safe_float(market.vix),
-            "nifty_price": _safe_float(getattr(market, "nifty_price", None)),
+            "leaders": list(market.leaders) if available else [],
+            "laggards": list(market.laggards) if available else [],
+            "nifty_change_1d": _safe_float(market.nifty_change_1d) if available else None,
+            "nifty_change_5d": _safe_float(market.nifty_change_5d) if available else None,
+            "vix": _safe_float(market.vix) if available else None,
+            "nifty_price": _safe_float(getattr(market, "nifty_price", None)) if available else None,
             "technical_details": dict(getattr(market, "technical_details", {}) or {}),
         }
     except Exception as exc:
@@ -863,26 +864,28 @@ def health() -> dict:
         "ok": True,
         "service": "quantterm-terminal-api",
         "version": app.version,
-        "lifecycle": "READY",
+        "lifecycle": None,
         "reason": "Terminal API is serving",
         "reasons": [],
         "components": [],
-        "live_locked": True,
     }
     try:
         from product.runtime_lifecycle import inspect_runtime
 
         runtime = inspect_runtime(api_serving=True)
         payload.update({
-            "lifecycle": runtime.get("lifecycle") or "READY",
+            "lifecycle": runtime.get("lifecycle"),
             "reason": runtime.get("reason") or payload["reason"],
             "reasons": runtime.get("reasons") or [],
             "components": runtime.get("components") or [],
             "history": runtime.get("history") or {},
             "resources": runtime.get("resources") or {},
             "checked_at": runtime.get("checked_at"),
-            "live_locked": True,
         })
+        # Copy inspect_runtime safety/readiness only. Never invent a positive value.
+        for key in ("operational_ready", "evidence_ready", "live_locked"):
+            if key in runtime:
+                payload[key] = runtime[key]
         payload["ok"] = payload["lifecycle"] != "FAILED"
     except Exception as exc:
         payload.update({

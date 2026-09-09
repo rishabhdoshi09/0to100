@@ -251,3 +251,15 @@ def enrich_autonomy_payload(payload: dict[str, Any]) -> dict[str, Any]:
         out["next_check_at"] = refresh.get("next_retry_at") or refresh.get("scheduled_for")
         out["data_refresh_next_poll_at"] = refresh.get("next_retry_at") or refresh.get("scheduled_for")
     return out
+
+
+# terminal_product_api_parallel imports this module during API assembly. Register a
+# startup-time route swap (not an import-time route mutation) so all duplicate legacy
+# recommendation routes have already been declared before the persisted-first route wins.
+try:
+    from product.recommendations_liveness import register_terminal_recommendations_liveness
+
+    register_terminal_recommendations_liveness()
+except Exception:
+    # Health projection must remain import-safe even outside the dedicated terminal API.
+    pass

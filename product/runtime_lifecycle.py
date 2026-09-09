@@ -102,7 +102,21 @@ def inspect_runtime(*, api_serving: bool = True) -> dict[str, Any]:
         history = {"current": False, "ready": False, "reason_code": "HISTORY_PROBE_FAILED", "error": str(exc)[:200]}
 
     scan = _read_json(ROOT / "logs" / "product" / "latest_momentum_scan.json")
-    scan_ok = bool(scan.get("records") or scan.get("scanned_at"))
+    scan_status = "MISSING"
+    scan_detail = "no saved whole-market scan"
+    try:
+        from product.startup_check import _scan_evidence_status
+
+        scan_status, scan_detail = _scan_evidence_status(scan)
+        scan_ok = scan_status in {"READY", "HEALTHY", "CURRENT"}
+        scan_stale = scan_status == "STALE"
+    except Exception:
+        scan_ok = bool(scan.get("records") or scan.get("scanned_at"))
+        scan_stale = False
+        scan_detail = str(scan.get("scanned_at") or "no saved whole-market scan")
+
+    history_current = bool(history.get("current"))
+    history_present = bool(history.get("ready") or history.get("sessions") or history.get("available_session"))
 
     components = [
         _component(
@@ -139,17 +153,17 @@ def inspect_runtime(*, api_serving: bool = True) -> dict[str, Any]:
         ),
         _component(
             "official_history",
-            READY if history.get("current") else (STARTING if history.get("ready") or history.get("sessions") else FAILED),
+            READY if history_current else (DEGRADED if history_present else FAILED),
             detail=(
                 f"as of {history.get('available_session') or history.get('latest_date') or 'unknown'}"
-                if history.get("current")
+                if history_current
                 else str(history.get("reason_code") or history.get("error") or "official history not current")
             ),
         ),
         _component(
             "scan_artifact",
-            READY if scan_ok else STARTING,
-            detail=str(scan.get("scanned_at") or "no saved whole-market scan"),
+            READY if scan_ok else (DEGRADED if scan_stale or scan.get("records") or scan.get("scanned_at") else STARTING),
+            detail=scan_detail,
         ),
     ]
 
@@ -161,20 +175,57 @@ def inspect_runtime(*, api_serving: bool = True) -> dict[str, Any]:
         reasons.append("Market-operations worker is not alive")
     elif by_name["market_ops"] == RECOVERING:
         reasons.append("Market-operations heartbeat is stale; supervisor should restart it")
-    if by_name["official_history"] == FAILED:
+    if not history_current:
         reasons.append(str(history.get("reason_code") or "Official NSE history is not ready"))
-    if not scan_ok and history.get("current"):
+    if scan_stale:
+        reasons.append("Saved whole-market scan is stale")
+    elif not scan_ok and history_current:
         reasons.append("Official history is current but no scan artifact exists yet")
+
+    operational_blockers: list[str] = []
+    if by_name["api"] == FAILED:
+        operational_blockers.append("api")
+    if by_name["market_ops"] in {FAILED, RECOVERING, STARTING}:
+        operational_blockers.append("market_ops")
+    operational_ready = by_name["api"] == READY and by_name["market_ops"] == READY
+    if by_name["api"] == FAILED or by_name["market_ops"] == FAILED:
+        operational_status = FAILED
+    elif by_name["market_ops"] == RECOVERING:
+        operational_status = RECOVERING
+    elif operational_ready:
+        operational_status = READY
+    else:
+        operational_status = STARTING
+
+    evidence_blockers: list[str] = []
+    if not history_current:
+        evidence_blockers.append("official_history")
+    if not scan_ok:
+        evidence_blockers.append("scan_artifact")
+    evidence_ready = history_current and scan_ok
+    if evidence_ready:
+        evidence_status = READY
+    elif scan_stale or (history_present and not history_current):
+        evidence_status = DEGRADED if (history_present or scan_stale or scan.get("records")) else FAILED
+        if history_present and not history_current:
+            evidence_status = DEGRADED
+        if scan_stale:
+            evidence_status = DEGRADED
+    elif history_present or scan.get("records") or scan.get("scanned_at"):
+        evidence_status = STARTING
+    else:
+        evidence_status = FAILED
 
     if by_name["api"] == FAILED:
         lifecycle = FAILED
     elif by_name["market_ops"] == RECOVERING:
         lifecycle = RECOVERING
     elif by_name["market_ops"] == FAILED:
-        lifecycle = FAILED if api_serving or api_listen else FAILED
-    elif by_name["api"] == READY and by_name["market_ops"] == READY and by_name["official_history"] == READY and scan_ok:
+        lifecycle = FAILED
+    elif operational_ready and evidence_ready:
         lifecycle = READY
-    elif by_name["official_history"] == FAILED and (api_serving or api_listen):
+    elif operational_ready and not evidence_ready:
+        # Runtime is up; evidence is stale/missing. Do not call this STARTING.
         lifecycle = DEGRADED
     elif by_name["api"] == READY and by_name["market_ops"] in {STARTING, READY}:
         lifecycle = STARTING
@@ -185,8 +236,12 @@ def inspect_runtime(*, api_serving: bool = True) -> dict[str, Any]:
         lifecycle = DEGRADED
         if not auto_alive:
             reasons.append("Autonomy supervisor is not running")
+            operational_blockers.append("autonomy")
         if not report_listen:
             reasons.append("Research-report API is not listening")
+            operational_blockers.append("reports")
+        operational_ready = False
+        operational_status = DEGRADED
 
     oldest_running = None
     active_age = None
@@ -221,24 +276,46 @@ def inspect_runtime(*, api_serving: bool = True) -> dict[str, Any]:
         )
         state = str(resources.get("state") or "")
         if state == RESOURCE_EXHAUSTED:
-            lifecycle = FAILED if lifecycle != FAILED else lifecycle
+            lifecycle = FAILED
+            operational_ready = False
+            operational_status = FAILED
+            if "resources" not in operational_blockers:
+                operational_blockers.append("resources")
             reasons.insert(0, str(resources.get("reason") or "Resource exhausted"))
         elif state == RESOURCE_PRESSURE and lifecycle == READY:
             lifecycle = DEGRADED
+            operational_status = DEGRADED
             reasons.append(str(resources.get("reason") or "Resource pressure"))
     except Exception as exc:
         resources = {"state": "UNKNOWN", "reason": f"resource probe failed: {exc}"[:200]}
 
+    if operational_ready and evidence_ready:
+        reason = "Required services are alive and official history is current"
+    elif operational_ready and not evidence_ready:
+        reason = reasons[0] if reasons else "Runtime is operating; evidence is not fully ready"
+    elif lifecycle == FAILED:
+        reason = reasons[0] if reasons else "Operational runtime failed"
+    else:
+        reason = reasons[0] if reasons else "Desk is still coming up"
+
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "lifecycle": lifecycle,
         "checked_at": _now(),
-        "reason": reasons[0] if reasons else (
-            "Required services are alive and official history is current"
-            if lifecycle == READY
-            else "Desk is still coming up"
-        ),
+        "reason": reason,
         "reasons": reasons,
+        "operational_ready": bool(operational_ready),
+        "evidence_ready": bool(evidence_ready),
+        "operational": {
+            "ready": bool(operational_ready),
+            "status": operational_status,
+            "blockers": operational_blockers,
+        },
+        "evidence": {
+            "ready": bool(evidence_ready),
+            "status": evidence_status,
+            "blockers": evidence_blockers,
+        },
         "components": components,
         "history": {
             "current": bool(history.get("current")),

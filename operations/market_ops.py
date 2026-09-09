@@ -850,8 +850,18 @@ class MarketOperationsWorker:
     def _run_data_prepare(self, operation: dict[str, Any]) -> dict[str, Any]:
         operation_id = str(operation["operation_id"])
         history = self._ensure_history(operation_id)
-        fno = self._run_fno(operation)
-        return {"history": history, "fno": fno}
+        try:
+            fno = self._run_fno(operation)
+            return {"history": history, "fno": fno}
+        except OperationBlocked as exc:
+            # Official history can be current while F&O still needs a broker login.
+            # Do not pretend the whole data refresh failed.
+            return {
+                "history": history,
+                "fno": {"blocked": True, "code": exc.code, "error": str(exc), **dict(exc.result or {})},
+                "degraded": True,
+                "missing_lanes": ["fno"],
+            }
 
     def _execute(self, operation: dict[str, Any]) -> dict[str, Any]:
         kind = str(operation.get("kind", ""))

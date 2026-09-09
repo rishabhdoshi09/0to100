@@ -34,6 +34,9 @@ class PaperPosition:
     requested_risk_pct: float = 0.0
     approved_risk_pct: float = 0.0
     bars_held: int = 0
+    # One official session may be observed by several autonomy cycles. Persist the last
+    # session applied to this position so retries/restarts/cycle-id changes cannot age it twice.
+    last_marked_session: str = ""
 
     @property
     def r_unit(self) -> float:
@@ -154,14 +157,30 @@ class PaperBook:
         return sum(p.qty * p.r_unit for p in self.open.values())
 
     # ── mark-to-market: advance one bar for every open position ──────────────────
-    def mark(self, bars: dict, date: str) -> list[ClosedTrade]:
-        """Advance one trading day. `bars` maps symbol -> (high, low, close) OR
-        (open, high, low, close). When an open is given, a GAP THROUGH the stop fills at the
-        gap price (worse than the stop) and a gap through the target fills at the gap (better)
-        — honest to how NSE actually opens. Otherwise closes STOP-first (conservative), then
-        TARGET, then MAX_HOLD. Returns the trades closed on this bar."""
+    def mark(self, bars: dict, date: str, *, allow_entry_session: bool = True) -> list[ClosedTrade]:
+        """Advance at most one trading session per position.
+
+        ``bars`` maps symbol -> (high, low, close) OR (open, high, low, close). When an open is
+        given, a GAP THROUGH the stop fills at the gap price (worse than the stop) and a gap
+        through the target fills at the gap (better). Otherwise closes STOP-first
+        (conservative), then TARGET, then MAX_HOLD.
+
+        ``last_marked_session`` makes the operation idempotent across retries/restarts. The
+        generic research simulator historically models signals as known before the supplied bar,
+        so ``allow_entry_session`` defaults to True to preserve that contract. Production EOD
+        settlement passes False because an intraday paper entry must never be evaluated against
+        the completed full-day OHLC for its own entry session.
+        """
         closed_now: list[ClosedTrade] = []
+        session = str(date or "")[:10]
+        marked_any = False
         for key, pos in list(self.open.items()):
+            if not session:
+                continue
+            if not allow_entry_session and str(pos.entry_date or "")[:10] >= session:
+                continue
+            if str(getattr(pos, "last_marked_session", "") or "")[:10] == session:
+                continue
             bar = bars.get(pos.symbol)
             if bar is None:
                 continue
@@ -169,7 +188,11 @@ class PaperBook:
                 op, high, low, close = (float(bar[0]), float(bar[1]), float(bar[2]), float(bar[3]))
             else:
                 op, high, low, close = (None, float(bar[0]), float(bar[1]), float(bar[2]))
+            # Mark the session before applying exits. If later code raises in-process, a retry
+            # cannot age this same position twice; the caller persists the book atomically.
+            pos.last_marked_session = session
             pos.bars_held += 1
+            marked_any = True
             exit_price = exit_reason = None
             if op is not None and op <= pos.stop_price:      # gap DOWN through stop → worse fill
                 exit_price, exit_reason = op, "GAP_STOP"
@@ -182,8 +205,9 @@ class PaperBook:
             elif pos.bars_held >= pos.max_holding_days:
                 exit_price, exit_reason = close, "MAX_HOLD"
             if exit_price is not None:
-                closed_now.append(self._close(key, pos, exit_price, exit_reason, date))
-        self.equity_curve.append(self.equity(bars))
+                closed_now.append(self._close(key, pos, exit_price, exit_reason, session))
+        if marked_any:
+            self.equity_curve.append(self.equity(bars))
         return closed_now
 
     def _close(self, key, pos: PaperPosition, exit_price: float, reason: str,
@@ -215,7 +239,8 @@ class PaperBook:
             for pos in self.open.values():
                 bar = bars.get(pos.symbol)
                 if bar is not None:
-                    eq += (float(bar[2]) - pos.entry_price) * pos.qty
+                    close = float(bar[3]) if len(bar) >= 4 else float(bar[2])
+                    eq += (close - pos.entry_price) * pos.qty
         return eq
 
     # ── reporting ────────────────────────────────────────────────────────────────
