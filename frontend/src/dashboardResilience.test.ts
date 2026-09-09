@@ -208,4 +208,54 @@ describe('reconcileDashboard', () => {
     expect(result.paper.open_positions.map((row) => row.symbol)).toEqual(['NEW'])
     expect(result.autonomy.recent_transitions).toEqual([{ from: 'WAIT', to: 'AVOID' }])
   })
+
+  it('does not resurrect stale data when a healthy subsystem reports a real empty state', () => {
+    const previous = dashboard()
+    const incoming = dashboard({
+      scan: {
+        available: true,
+        scanned_at: '2026-09-09T12:20:00Z',
+        universe_size: 500,
+        summary: { with_any_setup: 0 },
+        records: [],
+      },
+      conviction: [],
+      paper: {
+        available: true,
+        enabled: true,
+        supervisor_running: true,
+        capital: 100000,
+        equity: 100000,
+        equity_curve: [],
+        open_risk: 0,
+        risk_per_trade_pct: 0.01,
+        max_positions: 5,
+        open_positions: [],
+        closed_trades: [],
+        refusals: [],
+        last_cycle: {},
+      },
+      autonomy: {
+        ...previous.autonomy,
+        available: true,
+        recent_dialogue: [],
+        recent_transitions: [],
+        jobs_recent: [],
+        last_cycle: {},
+      },
+      data: {
+        ...previous.data,
+        scan_saved: true,
+        scan_records: 0,
+      },
+    })
+
+    const result = reconcileDashboard(previous, incoming)
+    expect(result.scan.records).toEqual([])
+    expect(result.conviction).toEqual([])
+    expect(result.paper.open_positions).toEqual([])
+    expect(result.paper.closed_trades).toEqual([])
+    expect(result.autonomy.recent_transitions).toEqual([])
+    expect(result.data.scan_records).toBe(0)
+  })
 })
