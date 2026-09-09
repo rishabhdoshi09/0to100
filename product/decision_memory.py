@@ -435,22 +435,78 @@ def morning_strip() -> dict[str, Any]:
     }
 
 
+def _stock_intelligence_truth(symbol: str, row: Mapping[str, Any]) -> dict[str, Any]:
+    """Current-scan recommendation authority for Stock Intelligence.
+
+    Scanner/recommendation rows remain evidence. They do not get to independently
+    emit BUY/WAIT/AVOID here. If canonical truth is unavailable or pending, this
+    projection fails closed to NO_JUDGMENT and the compatibility stance is WAIT.
+    """
+    card = dict(row or {})
+    card.setdefault("symbol", str(symbol or "").upper())
+    try:
+        from product.recommendation_truth import decorate_current_recommendation
+        truth = dict(decorate_current_recommendation(card) or {})
+    except Exception as exc:
+        truth = {
+            "canonical_decision": "NO_JUDGMENT",
+            "decision_truth_status": "TRUTH_UNAVAILABLE",
+            "decision_match_scope": "NONE",
+            "action_badge": "No judgment",
+            "buy_zone_authorized": False,
+            "error": str(exc)[:160],
+        }
+    decision = str(truth.get("canonical_decision") or "NO_JUDGMENT").upper()
+    if decision not in {"BUY", "WAIT", "AVOID"}:
+        truth["canonical_decision"] = "NO_JUDGMENT"
+        truth.setdefault("decision_truth_status", "NO_CURRENT_SCAN_JUDGMENT")
+        truth.setdefault("decision_match_scope", "NONE")
+        truth.setdefault("action_badge", "No judgment")
+        truth.setdefault("buy_zone_authorized", False)
+    return truth
+
+
 def for_symbol(
     symbol: str,
     *,
     row: Mapping[str, Any] | None = None,
     frame: Any = None,
 ) -> dict[str, Any]:
-    """Stock Intelligence / search: why yes, why no, similar, trust."""
+    """Stock Intelligence / search: canonical stance plus evidence and learning."""
     src = dict(row or {})
     src.setdefault("symbol", str(symbol or "").upper())
-    stance = stance_for_row(src)
-    why = why_not(symbol, row=src) if stance != "YES" else {
-        "found": False, "line": "", "places_orders": False,
-    }
+
+    truth = _stock_intelligence_truth(symbol, src)
+    canonical_decision = str(truth.get("canonical_decision") or "NO_JUDGMENT").upper()
+    stance = {
+        "BUY": "YES",
+        "WAIT": "WAIT",
+        "AVOID": "NO",
+    }.get(canonical_decision, "WAIT")
+
+    if canonical_decision == "AVOID":
+        why = why_not(symbol, row=src)
+    elif canonical_decision == "WAIT":
+        why = {
+            "found": False,
+            "line": "Canonical decision is WAIT; Stock Intelligence does not emit a competing rejection verdict.",
+            "places_orders": False,
+        }
+    elif canonical_decision == "NO_JUDGMENT":
+        why = {
+            "found": False,
+            "line": "No current-scan canonical judgment yet; scanner evidence is not promoted into a Stock Intelligence verdict.",
+            "places_orders": False,
+        }
+    else:
+        why = {"found": False, "line": "", "places_orders": False}
+
     return {
         "symbol": str(symbol or "").upper(),
         "stance": stance,
+        "canonical_decision": canonical_decision,
+        "stance_source": "CANONICAL_RECOMMENDATION",
+        "recommendation_truth": truth,
         "setup_quality": setup_quality(src),
         "similar": similar_setup(src, frame=frame, symbol=symbol),
         "why_not": why,
