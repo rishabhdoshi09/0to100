@@ -3,6 +3,11 @@
 Does not invent a second recommendation engine. Methods / families / research /
 paper gates already exist. This layer names the judgment, the vetoes, and the
 disagreement — and refuses to call a name READY just because ENTER_NOW fired.
+
+The committee is deliberately deterministic and bounded. Current-session
+judgment consumes already-persisted research facts; evidence acquisition is a
+separate supervised operation. That separation prevents a decision tick from
+turning into an unbounded research workload or hidden network wait.
 """
 from __future__ import annotations
 
@@ -29,6 +34,8 @@ from product.risk_audit import audit_levels
 HC_NEEDS_RESEARCH = True
 COMMITTEE_VERSION = "committee_v2_families"
 EVIDENCE_FAMILY_VERSION = "evidence_families_v1"
+DECISION_SCHEMA_VERSION = 1
+MAX_COMMITTEE_CANDIDATES = 15
 
 
 @dataclass
@@ -69,6 +76,10 @@ class CommitteeRecord:
 
     def as_dict(self) -> dict[str, Any]:
         return {
+            "decision_schema_version": DECISION_SCHEMA_VERSION,
+            "decision_engine": "deterministic_committee",
+            "deterministic": True,
+            "llm_required": False,
             "symbol": self.symbol,
             "decision": self.decision,
             "candidate_state": self.candidate_state,
@@ -165,6 +176,24 @@ def _method_vote(status: str) -> str:
 
 
 def _research_snapshot(symbol: str, card: Mapping[str, Any], *, as_of: str | None = None) -> dict[str, Any]:
+    # Current-session judgment is read-only. Acquisition is owned by the
+    # supervised autonomy/data lane, never by committee evaluation. If facts
+    # have not been durably acquired yet, fail closed and let information-value
+    # ranking queue the symbol for acquisition.
+    if not as_of:
+        try:
+            from product.due_diligence.acquire import load_autonomy_facts
+
+            facts = dict(load_autonomy_facts(symbol) or {})
+        except Exception:
+            facts = {}
+        if not facts:
+            return {
+                "available": False,
+                "cached_only": True,
+                "reason": "autonomy_facts_missing",
+                "pit": False,
+            }
     try:
         from product.due_diligence.research_engine import StockResearchEngine
 
@@ -580,9 +609,27 @@ def reaudit_ready(
     }
 
 
-def evaluate_many(cards: list[Mapping[str, Any]], **kwargs: Any) -> list[CommitteeRecord]:
+def evaluate_many(
+    cards: list[Mapping[str, Any]],
+    *,
+    max_records: int | None = MAX_COMMITTEE_CANDIDATES,
+    **kwargs: Any,
+) -> list[CommitteeRecord]:
+    """Evaluate a bounded finalist set.
+
+    Callers already rank/filter candidates before committee review. Preserving
+    their order and applying a hard default cap makes runtime cost predictable.
+    Pass ``max_records=None`` only in explicit offline/research contexts.
+    """
+    selected = cards
+    if max_records is not None:
+        try:
+            limit = max(0, int(max_records))
+        except (TypeError, ValueError):
+            limit = MAX_COMMITTEE_CANDIDATES
+        selected = cards[:limit]
     out = []
-    for card in cards:
+    for card in selected:
         try:
             out.append(evaluate_committee(card, **kwargs))
         except Exception as exc:
