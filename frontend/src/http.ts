@@ -1,4 +1,5 @@
 import { dedupeInFlight } from './pollGate'
+import { durableReadFallback } from './readFallback'
 
 export const API_DOWN_MESSAGE =
   'Market API is not running on :8765. Start with bash scripts/run_quantterm_complete.sh, then retry.'
@@ -67,6 +68,8 @@ export async function fetchJson<T>(
       const response = await fetch(input, { ...rest, signal: timed.signal })
       return await readJson<T>(response)
     } catch (reason) {
+      const fallback = durableReadFallback<T>(input, String(rest.method || 'GET'))
+      if (fallback !== undefined) return fallback
       const name = reason instanceof Error ? reason.name : ''
       if (name === 'AbortError' || (reason instanceof DOMException && reason.name === 'AbortError')) {
         throw new Error(REQUEST_TIMEOUT_MESSAGE)

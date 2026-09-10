@@ -1,9 +1,10 @@
-"""Sequential desk data pipeline — one download at a time, in viewing order.
+"""Priority-aware desk data pipeline using the market-ops isolated lanes.
 
-Home needs official prices then the whole-market scan. Recommendations need
-long-term funds next. Market Reports need news last. Automation never starts
-the next step while a pipeline job is pending or running. User-clicked Scan Now
-still uses the existing MARKET_SCAN control and is not a second scan engine.
+The desk still respects dependency order: official prices before the market
+scan, then long-term/news/research work. Secondary work is deliberately
+serialized for resource control, but it must never starve critical recovery.
+If DATA_PREPARE or MARKET_SCAN becomes due while a secondary lane is active,
+the recovery job may be queued into its own isolated lane immediately.
 """
 from __future__ import annotations
 
@@ -44,7 +45,8 @@ def _snapshot_path() -> Path:
         return Path(raw)
     return Path(__file__).resolve().parents[1] / "logs" / "product" / "desk_pipeline.json"
 
-# Viewing order: Home → Scanner/Recos technical → Recos/funds → Market Reports.
+
+# Dependency/viewing order: Home → Scanner/Recos technical → funds → Reports → research.
 DESK_STEPS: tuple[dict[str, str], ...] = (
     {
         "id": "prices",
@@ -90,6 +92,10 @@ PIPELINE_KINDS = frozenset(
     }
 )
 
+# These restore the desk's authoritative market state. They may leapfrog an
+# already-running secondary lane, but never overlap another recovery operation.
+CRITICAL_RECOVERY_KINDS = frozenset({DATA_PREPARE, MARKET_SCAN})
+
 
 def _root():
     from operations import market_ops as MO
@@ -98,7 +104,7 @@ def _root():
 
 
 def prices_kind_due() -> str | None:
-    """DATA_PREPARE if history is thin or stale, else FNO_REFRESH if that file is stale."""
+    """DATA_PREPARE if history is thin/stale, else FNO_REFRESH if its file is stale."""
     try:
         from data.bhavcopy_runtime import official_history_freshness
 
@@ -122,7 +128,6 @@ def scan_is_fresh() -> bool:
             return False
         expected = str(freshness.get("expected_latest_completed_session") or "")
     except Exception:
-        freshness = {}
         expected = ""
     try:
         from product.scan_store import load_scan, scan_artifact_is_fresh
@@ -134,8 +139,8 @@ def scan_is_fresh() -> bool:
         if expected and (not as_of or as_of < expected):
             return False
         if expected and as_of >= expected:
-            # Session identity is current. A worker restart must not rescan
-            # just because wall-clock age exceeded SCAN_FRESH_S.
+            # Session identity is authoritative. Worker restarts must not force a
+            # rescan solely because wall-clock age crossed SCAN_FRESH_S.
             return True
         if payload.get("scanned_at"):
             return bool(scan_artifact_is_fresh(path, max_age_s=SCAN_FRESH_S))
@@ -153,14 +158,12 @@ def news_is_fresh() -> bool:
 
 
 def acquire_freshness() -> dict[str, Any]:
-    """Dataset-level research truth. A recent attempt alone is never 'fresh'."""
+    """Dataset-level research truth. A recent attempt alone is never fresh."""
     try:
         from product.due_diligence.freshness import research_freshness
 
         return dict(research_freshness() or {})
     except Exception as exc:
-        # Fail closed on truth, but do not create a hot retry loop when the local
-        # coverage inspector itself is broken. System Health can expose the error.
         return {
             "fresh": False,
             "retry_due": False,
@@ -222,9 +225,6 @@ def _kind_for_step(
         kind = DUE_DILIGENCE_ACQUIRE if (not state.get("fresh") and state.get("retry_due")) else None
     else:
         kind = None
-    # Symbol-level research freshness decides this step. A previous shortlist
-    # succeeding must not hide a *new* candidate, while dataset-level cooldowns
-    # prevent retry storms for the same unresolved provider failure.
     if (
         kind
         and store is not None
@@ -246,11 +246,28 @@ def _recently_failed(store: OperationStore, kind: str) -> bool:
     return 0 <= age < RETRY_AFTER_FAIL_S
 
 
+def _pipeline_active_items(store: OperationStore) -> list[dict[str, Any]]:
+    return [
+        item for item in store.active()
+        if str(item.get("kind") or "") in PIPELINE_KINDS
+    ]
+
+
+def _primary_active(store: OperationStore) -> dict[str, Any] | None:
+    active = _pipeline_active_items(store)
+    if not active:
+        return None
+    for spec in DESK_STEPS:
+        kinds = _kinds_for_id(spec["id"])
+        match = next((item for item in active if str(item.get("kind") or "") in kinds), None)
+        if match:
+            return match
+    return active[0]
+
+
 def _pipeline_active(store: OperationStore) -> dict[str, Any] | None:
-    for item in store.active():
-        if str(item.get("kind") or "") in PIPELINE_KINDS:
-            return item
-    return None
+    """Compatibility helper: return the highest-priority active pipeline item."""
+    return _primary_active(store)
 
 
 def _step_from_kind(kind: str) -> dict[str, str] | None:
@@ -281,16 +298,12 @@ def persist_desk_pipeline_snapshot(payload: dict[str, Any], path: Path | None = 
 
 def _missing_status(*, reason: str) -> dict[str, Any]:
     steps = [
-        {
-            **spec,
-            "kind": None,
-            "state": "unknown",
-            "latest_status": None,
-        }
+        {**spec, "kind": None, "state": "unknown", "latest_status": None}
         for spec in DESK_STEPS
     ]
     return {
         "sequential": True,
+        "critical_recovery_parallel": True,
         "queued_kind": None,
         "queued_created": False,
         "current": None,
@@ -300,6 +313,7 @@ def _missing_status(*, reason: str) -> dict[str, Any]:
         "scan_reused": False,
         "operations": [],
         "active_kind": None,
+        "active_kinds": [],
         "research_freshness": None,
         "status_source": "missing",
         "freshness": SNAPSHOT_UNKNOWN,
@@ -347,7 +361,7 @@ def describe_desk_pipeline(
     persist: bool = False,
     research: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Worker/compute snapshot. GET /api/desk-pipeline must use load_desk_pipeline_status."""
+    """Worker/compute snapshot. GET /api/desk-pipeline uses load_desk_pipeline_status."""
     ops = store or OperationStore()
     snapshot_research = research if research is not None else acquire_freshness()
     return _snapshot(
@@ -365,45 +379,98 @@ def refresh_desk_pipeline_snapshot(store: OperationStore | None = None) -> dict[
     return describe_desk_pipeline(store, persist=True)
 
 
+def _next_due_step(
+    store: OperationStore,
+    *,
+    research: dict[str, Any],
+) -> tuple[dict[str, str] | None, str | None, str | None]:
+    """Return (step, kind, halted). Failed non-price steps cool down and are skipped."""
+    for step in DESK_STEPS:
+        kind = _kind_for_step(step["id"], store, research=research)
+        if not kind:
+            continue
+        if _recently_failed(store, kind):
+            if step["id"] == "prices":
+                return step, None, "prices"
+            continue
+        return step, kind, None
+    return None, None, None
+
+
 def advance_desk_pipeline(
     store: OperationStore | None = None,
     *,
     requested_by: str = "desk_pipeline",
 ) -> dict[str, Any]:
-    """Enqueue at most the next due step. Skip fresh artifacts. Never invent data."""
+    """Queue the next due step, letting critical recovery bypass secondary work."""
     ops = store or OperationStore()
     research = acquire_freshness()
-    active = _pipeline_active(ops)
-    if active:
+    step, kind, halted = _next_due_step(ops, research=research)
+    active_items = _pipeline_active_items(ops)
+    primary_active = _primary_active(ops)
+    active_kinds = {str(item.get("kind") or "") for item in active_items}
+
+    if halted:
         return _snapshot(
-            ops, queued_kind=None, queued_op=active, created=False,
-            research=research, persist=True,
+            ops,
+            queued_kind=None,
+            queued_op=primary_active,
+            created=False,
+            halted=halted,
+            research=research,
+            persist=True,
         )
 
-    for step in DESK_STEPS:
-        kind = _kind_for_step(step["id"], ops, research=research)
-        if not kind:
-            continue
-        if _recently_failed(ops, kind):
-            if step["id"] == "prices":
-                return _snapshot(
-                    ops, queued_kind=None, queued_op=None, created=False, halted="prices",
-                    research=research, persist=True,
-                )
-            continue
+    if active_items:
+        # market_ops owns isolated lanes. A secondary provider/download must not
+        # starve market truth recovery, but DATA_PREPARE and MARKET_SCAN still
+        # serialize against each other to preserve their dependency ordering.
+        recovery_active = bool(active_kinds & CRITICAL_RECOVERY_KINDS)
+        if kind in CRITICAL_RECOVERY_KINDS and not recovery_active:
+            item, created = ops.enqueue(
+                kind,
+                lane=LANES[kind],
+                requested_by=requested_by,
+            )
+            return _snapshot(
+                ops,
+                queued_kind=kind,
+                queued_op=item,
+                created=created,
+                research=research,
+                persist=True,
+            )
+        return _snapshot(
+            ops,
+            queued_kind=None,
+            queued_op=primary_active,
+            created=False,
+            research=research,
+            persist=True,
+        )
+
+    if kind:
         item, created = ops.enqueue(
             kind,
             lane=LANES[kind],
             requested_by=requested_by,
         )
         return _snapshot(
-            ops, queued_kind=kind, queued_op=item, created=created,
-            research=research, persist=True,
+            ops,
+            queued_kind=kind,
+            queued_op=item,
+            created=created,
+            research=research,
+            persist=True,
         )
 
     return _snapshot(
-        ops, queued_kind=None, queued_op=None, created=False,
-        research=research, persist=True,
+        ops,
+        queued_kind=None,
+        queued_op=None,
+        created=False,
+        research=research,
+        persist=True,
     )
 
 
@@ -417,8 +484,10 @@ def _snapshot(
     research: dict[str, Any] | None = None,
     persist: bool = False,
 ) -> dict[str, Any]:
-    active = _pipeline_active(store)
-    active_kind = str((active or {}).get("kind") or "")
+    active_items = _pipeline_active_items(store)
+    active_kinds = [str(item.get("kind") or "") for item in active_items]
+    primary_active = _primary_active(store)
+    active_kind = str((primary_active or {}).get("kind") or "")
     if research is None:
         research = acquire_freshness()
     research_cooling = bool(not research.get("fresh") and not research.get("retry_due"))
@@ -432,16 +501,21 @@ def _snapshot(
             latest = store.latest(kind) if kind else None
         if spec["id"] == "long_term" and latest is None:
             latest = store.latest(LONG_TERM_SCAN)
+        matching_active = next(
+            (
+                item for item in active_items
+                if str(item.get("kind") or "") in _kinds_for_id(spec["id"])
+            ),
+            None,
+        )
         state = "ready"
         if spec["id"] == "investigate" and research_cooling:
-            # Important: incomplete evidence is not painted green merely because
-            # the provider was attempted recently. It is visibly waiting to retry.
             state = "waiting"
             seen_due = True
-        elif kind is None:
+        elif kind is None and matching_active is None:
             state = "ready"
-        elif active and str(active.get("kind") or "") in _kinds_for_id(spec["id"]):
-            state = "running" if str(active.get("status") or "") == RUNNING else "queued"
+        elif matching_active:
+            state = "running" if str(matching_active.get("status") or "") == RUNNING else "queued"
             seen_due = True
         elif queued_kind and queued_kind in _kinds_for_id(spec["id"]):
             state = "queued" if created or str((queued_op or {}).get("status") or "") == PENDING else "running"
@@ -452,13 +526,10 @@ def _snapshot(
                 state = "failed" if spec["id"] == "prices" else "skipped_failed"
                 if spec["id"] == "prices":
                     seen_due = True
-            elif seen_due or (active and not seen_due):
-                state = "waiting"
-                seen_due = True
             else:
                 state = "waiting"
                 seen_due = True
-        row = {
+        row: dict[str, Any] = {
             **spec,
             "kind": kind,
             "state": state,
@@ -487,7 +558,10 @@ def _snapshot(
     if halted == "prices":
         message = "Official prices failed recently — wait before retrying. Later desk steps stay paused."
     elif current:
-        message = f"{current['title']} now: {current['why']}"
+        if len(active_items) > 1:
+            message = f"{current['title']} now; {len(active_items)} isolated lanes active. {current['why']}"
+        else:
+            message = f"{current['title']} now: {current['why']}"
     elif research_cooling:
         count = len(list(research.get("unresolved_symbols") or []))
         next_retry = str(research.get("next_retry_at") or "provider cooldown")
@@ -498,7 +572,7 @@ def _snapshot(
     elif all(row["state"] == "ready" for row in steps):
         message = "Desk data is current. Home, Recommendations and Market Reports read saved files."
     else:
-        message = "Desk preparation will continue one step at a time."
+        message = "Desk preparation will continue in dependency order; critical recovery may bypass secondary lanes."
 
     queued_step = _step_from_kind(queued_kind) if queued_kind else None
     operations = []
@@ -513,6 +587,7 @@ def _snapshot(
         )
     payload = {
         "sequential": True,
+        "critical_recovery_parallel": True,
         "queued_kind": queued_kind,
         "queued_created": created,
         "current": current,
@@ -522,6 +597,7 @@ def _snapshot(
         "scan_reused": scan_is_fresh(),
         "operations": operations,
         "active_kind": active_kind or None,
+        "active_kinds": sorted(set(active_kinds)),
         "research_freshness": research,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "status_source": "computed",

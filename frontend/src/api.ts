@@ -1,12 +1,17 @@
+import { reconcileDashboard } from './dashboardResilience'
 import { DASHBOARD_FETCH_TIMEOUT_MS, fetchJson } from './http'
+import { readSessionJson } from './sessionMemory'
 import type { ChartBar, ControlName, DashboardPayload, OperationRecord } from './types'
 
 function request<T>(url: string, init?: RequestInit & { timeoutMs?: number }): Promise<T> {
   return fetchJson<T>(url, { headers: { Accept: 'application/json' }, ...init })
 }
 
-export const fetchDashboard = (): Promise<DashboardPayload> =>
-  request<DashboardPayload>('/api/dashboard', { timeoutMs: DASHBOARD_FETCH_TIMEOUT_MS })
+export const fetchDashboard = async (): Promise<DashboardPayload> => {
+  const incoming = await request<DashboardPayload>('/api/dashboard', { timeoutMs: DASHBOARD_FETCH_TIMEOUT_MS })
+  const previous = readSessionJson<DashboardPayload>('quantterm-dashboard')
+  return previous ? reconcileDashboard(previous, incoming) : incoming
+}
 
 export const fetchHealth = (): Promise<{
   ok: boolean
