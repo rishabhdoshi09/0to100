@@ -202,14 +202,16 @@ def update_outcomes(check_after_days: int = 5, lookback_days: int = 40) -> int:
     close-to-close NO. Missing bars stay pending. Never writes a live quote.
     """
     try:
-        too_old = (_now() - timedelta(days=lookback_days)) \
-            .isoformat(timespec="seconds")
+        # `lookback_days` is a calendar-day retention window. Compare against
+        # the cutoff date, not the current wall-clock time, so unresolved rows
+        # from earlier on the cutoff day are not silently skipped.
+        cutoff_day = (_now() - timedelta(days=lookback_days)).date().isoformat()
         c = _conn()
         try:
             rows = c.execute(
                 "SELECT id, symbol, decided_at, decision, entry_ref, stop_ref "
                 "FROM decisions WHERE outcome_pct IS NULL AND decided_at >= ?",
-                (too_old,),
+                (cutoff_day,),
             ).fetchall()
             if not rows:
                 return 0
