@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from product.exit_engine import evaluate_exit
+from product.live_execution_interlock import get_live_execution_state
 from product.paper_execution_model import model_fill
 from product.portfolio_heat import measure, persist
 from product.portfolio_stress import run_scenarios
@@ -41,6 +42,11 @@ def main() -> None:
         capital=1_000_000,
     )
     exits = evaluate_exit(buy, last_price=1510)
+    live_state = get_live_execution_state()
+    live_locked = bool(live_state.verified and live_state.locked and not live_state.authorized)
+    if not live_locked:
+        raise RuntimeError("Phase I refused: canonical live-execution interlock is not verified locked")
+
     payload = {
         "shadow_status": shadow["status"],
         "shadow_is_paper_fill": is_paper_fill(shadow),
@@ -49,7 +55,8 @@ def main() -> None:
         "heat": heat,
         "stress": {k: stress[k] for k in stress if k != "base_heat"},
         "exit_on_gap": exits,
-        "live_locked": True,
+        "live_locked": live_locked,
+        "live_interlock": live_state.as_dict(),
         "note": "Soak exercises real policy objects. It does not send broker orders.",
     }
     OUT.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
@@ -58,7 +65,7 @@ def main() -> None:
         "paper_fill_not_perfect": paper.get("perfect_fill") is False,
         "heat_pct": heat.get("gross_open_risk_pct"),
         "exit": exits.get("action"),
-        "live_locked": True,
+        "live_locked": live_locked,
     }, indent=2))
 
 
