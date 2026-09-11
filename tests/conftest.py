@@ -127,6 +127,19 @@ def isolate_mutable_runtime_state(tmp_path_factory, monkeypatch, request):
 
         monkeypatch.setattr(acquire_module, "datetime", _FrozenDateTime)
 
+    # The money-path journal test intentionally stores decisions on Aug-01 and
+    # exercises official-session outcome resolution, not the passage of real
+    # wall-clock time. Freeze only that test at the original 40-day boundary so
+    # the canonical retention policy remains strict and the test stays stable.
+    if request.node.name == "test_outcomes_and_gate_audit":
+        import core.decision_journal as decision_journal_module
+
+        monkeypatch.setattr(
+            decision_journal_module,
+            "_now",
+            lambda: datetime(2026, 9, 10, 12, 0, 0),
+        )
+
     yield
     reset_in_memory_store()
     reset_analog_corpus_cache()

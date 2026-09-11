@@ -8,9 +8,16 @@ from __future__ import annotations
 
 from typing import Any
 
+from product.live_execution_interlock import (
+    LiveExecutionBlocked,
+    assert_live_execution_allowed,
+)
 
-class LiveMoneyLocked(RuntimeError):
-    """Live adapter refused the decision. Paper path is unaffected."""
+
+# Backwards-compatible exception name used by existing callers/tests.  It is an
+# alias to the same canonical broker-boundary failure class so there is one
+# safety contract rather than two independent locks.
+LiveMoneyLocked = LiveExecutionBlocked
 
 
 class PaperExecutionAdapter:
@@ -24,14 +31,18 @@ class PaperExecutionAdapter:
 
 
 class LiveExecutionAdapter:
-    """Present so the architecture is real. Always refuses in this task."""
+    """Live adapter consumes the same canonical live-execution interlock."""
 
     venue = "live"
 
     def submit(self, decision: Any, **_kwargs):
-        raise LiveMoneyLocked(
-            "Live money is fail-closed. The same decision object may feed a live "
-            "adapter later only after the readiness contract is met and an owner enables it."
+        assert_live_execution_allowed("live_execution_adapter.submit")
+        # No live venue implementation is intentionally reachable in the current
+        # paper/shadow production contract.  If authorization is implemented in
+        # the future, this adapter must be wired to the certified OMS, never a
+        # direct broker escape hatch.
+        raise LiveExecutionBlocked(
+            "Live authorization existed but no certified OMS venue is configured; blocked."
         )
 
 
