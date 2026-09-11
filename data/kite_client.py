@@ -26,29 +26,46 @@ from product.live_execution_interlock import assert_live_execution_allowed
 log = get_logger(__name__)
 
 
-# Methods on KiteConnect that can mutate broker/exchange state.  The raw escape
-# hatch is wrapped so callers cannot bypass the same interlock used by
-# KiteClient.place_order().
-_BROKER_MUTATIONS = frozenset({
-    "place_order",
-    "modify_order",
-    "cancel_order",
-    "place_gtt",
-    "modify_gtt",
-    "delete_gtt",
-    "convert_position",
+# Explicit read-only allowlist for the raw KiteConnect escape hatch. Any public
+# callable not named here is treated as a broker mutation and must pass the
+# canonical live-execution interlock before it can reach the SDK. This is
+# intentionally allow-by-enumeration: a capital-moving method added by a future
+# Kite SDK release therefore fails closed by default.
+_BROKER_READS = frozenset({
+    "quote",
+    "ltp",
+    "ohlc",
+    "historical_data",
+    "instruments",
+    "orders",
+    "order_history",
+    "trades",
+    "positions",
+    "holdings",
+    "margins",
+    "order_margins",
+    "basket_order_margins",
+    "profile",
+    "get_gtts",
+    "get_gtt",
+    "trigger_range",
+    "mf_instruments",
+    "mf_orders",
+    "mf_order_history",
+    "mf_sips",
+    "auction_instruments",
 })
 
 
 class _GuardedKiteProxy:
-    """Read-through KiteConnect proxy that interlocks every known mutation."""
+    """Read-through KiteConnect proxy; every non-allowlisted call fails closed."""
 
     def __init__(self, raw: KiteConnect) -> None:
         object.__setattr__(self, "_raw", raw)
 
     def __getattr__(self, name: str):
         attr = getattr(object.__getattribute__(self, "_raw"), name)
-        if name not in _BROKER_MUTATIONS or not callable(attr):
+        if not callable(attr) or name in _BROKER_READS:
             return attr
 
         @wraps(attr)
@@ -59,10 +76,9 @@ class _GuardedKiteProxy:
         return guarded
 
     def __setattr__(self, name: str, value: Any) -> None:
-        # Do not permit callers to replace guarded methods on the proxy.
-        if name in _BROKER_MUTATIONS:
-            raise AttributeError(f"Cannot override guarded broker mutation: {name}")
-        setattr(object.__getattribute__(self, "_raw"), name, value)
+        # The raw proxy is a read-only facade. Callers must not replace SDK
+        # methods/attributes through it and thereby create a second policy path.
+        raise AttributeError(f"Cannot mutate guarded Kite proxy attribute: {name}")
 
 
 def parse_request_token(raw: str) -> str:
@@ -278,5 +294,5 @@ class KiteClient:
 
     @property
     def raw(self) -> _GuardedKiteProxy:
-        """Guarded escape hatch: reads pass through; broker mutations do not."""
+        """Guarded escape hatch: explicit reads pass; every other call interlocks."""
         return _GuardedKiteProxy(self._kite)
