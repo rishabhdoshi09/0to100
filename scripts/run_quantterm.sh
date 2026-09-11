@@ -179,12 +179,20 @@ CLEANED=0
 # in turn made the outer supervisor see a live process and never restart it.
 SHUTDOWN_GRACE_S="${QT_SHUTDOWN_GRACE_S:-10}"
 
+# Signal a process and, when it leads its own process group, the whole group.
+# A bare `kill $pid` only reaches the wrapper of a multi-process service.
+signal_tree() {
+  local pid="$1" sig="$2"
+  kill "-$sig" "-$pid" >/dev/null 2>&1 || true   # process group, if it leads one
+  kill "-$sig" "$pid" >/dev/null 2>&1 || true    # the process itself
+}
+
 stop_pid() {
   local pid="${1:-}"
   local label="${2:-process}"
   [[ -n "$pid" ]] || return 0
   kill -0 "$pid" >/dev/null 2>&1 || return 0
-  kill -TERM "$pid" >/dev/null 2>&1 || true
+  signal_tree "$pid" TERM
   local waited=0
   while (( waited < SHUTDOWN_GRACE_S * 10 )); do
     kill -0 "$pid" >/dev/null 2>&1 || return 0
@@ -192,7 +200,7 @@ stop_pid() {
     waited=$((waited + 1))
   done
   echo "[STACK] $label (pid $pid) did not stop within ${SHUTDOWN_GRACE_S}s; sending SIGKILL." >&2
-  kill -9 "$pid" >/dev/null 2>&1 || true
+  signal_tree "$pid" KILL
   return 0
 }
 
@@ -302,7 +310,11 @@ start_api() {
 start_frontend() {
   echo "[STACK] Starting dedicated terminal at http://127.0.0.1:5173 …"
   mkdir -p "$ROOT/logs/stack"
-  npm --prefix "$ROOT/frontend" run dev -- --host 127.0.0.1 --port 5173 \
+  # Own process group. `npm run dev` is a wrapper chain (npm -> sh -> node ->
+  # esbuild); signalling only the npm PID left the node server still serving
+  # :5173 after the API was gone — a healthy-looking desk with no backend.
+  # setsid makes the PID a group leader so the whole tree can be stopped.
+  setsid npm --prefix "$ROOT/frontend" run dev -- --host 127.0.0.1 --port 5173 \
     >>"$ROOT/logs/stack/vite.log" 2>&1 &
   FRONTEND_PID=$!
 }

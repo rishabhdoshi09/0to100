@@ -186,12 +186,19 @@ CLEANED=0
 # API already gone.
 SHUTDOWN_GRACE_S="${QT_SHUTDOWN_GRACE_S:-15}"
 
+# Signal a process and, when it leads its own process group, the whole group.
+signal_tree() {
+  local pid="$1" sig="$2"
+  kill "-$sig" "-$pid" >/dev/null 2>&1 || true
+  kill "-$sig" "$pid" >/dev/null 2>&1 || true
+}
+
 stop_pid() {
   local pid="${1:-}"
   local label="${2:-process}"
   [[ -n "$pid" ]] || return 0
   kill -0 "$pid" >/dev/null 2>&1 || return 0
-  kill -TERM "$pid" >/dev/null 2>&1 || true
+  signal_tree "$pid" TERM
   local waited=0
   while (( waited < SHUTDOWN_GRACE_S * 10 )); do
     kill -0 "$pid" >/dev/null 2>&1 || return 0
@@ -199,7 +206,7 @@ stop_pid() {
     waited=$((waited + 1))
   done
   echo "[COMPLETE STACK] $label (pid $pid) did not stop within ${SHUTDOWN_GRACE_S}s; sending SIGKILL." >&2
-  kill -9 "$pid" >/dev/null 2>&1 || true
+  signal_tree "$pid" KILL
   return 0
 }
 
@@ -371,7 +378,7 @@ start_vite_safety_net() {
   fi
   echo "[COMPLETE STACK] Desk UI is not on :5173 yet; starting Vite from the complete launcher."
   mkdir -p "$ROOT/logs/stack"
-  npm --prefix "$ROOT/frontend" run dev -- --host 127.0.0.1 --port 5173 \
+  setsid npm --prefix "$ROOT/frontend" run dev -- --host 127.0.0.1 --port 5173 \
     >>"$ROOT/logs/stack/vite.log" 2>&1 200>&- &
   VITE_PID=$!
   return 0
