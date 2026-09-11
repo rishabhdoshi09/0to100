@@ -59,20 +59,27 @@ def _patch_operational_healthy(monkeypatch, *, autonomy=True, ops=True, paper=Tr
 
     monkeypatch.setattr(Path, "read_text", patched_read_text)
 
-    if live_locked:
-        from product.execution_adapter import LiveMoneyLocked
+    class _InterlockState:
+        verified = True
+        locked = bool(live_locked)
+        authorized = not bool(live_locked)
+        reason = "locked" if live_locked else "test-authorized"
 
-        class _Adapter:
-            def submit(self, _order):
-                raise LiveMoneyLocked("locked")
+        def as_dict(self):
+            return {
+                "schema_version": 1,
+                "verified": self.verified,
+                "locked": self.locked,
+                "authorized": self.authorized,
+                "status": "LOCKED" if self.locked else "AUTHORIZED",
+                "reason": self.reason,
+                "source": "test",
+            }
 
-        monkeypatch.setattr("product.execution_adapter.LiveExecutionAdapter", _Adapter)
-    else:
-        class _Adapter:
-            def submit(self, _order):
-                return {"ok": True}
-
-        monkeypatch.setattr("product.execution_adapter.LiveExecutionAdapter", _Adapter)
+    monkeypatch.setattr(
+        "product.live_execution_interlock.get_live_execution_state",
+        lambda: _InterlockState(),
+    )
 
 
 def _patch_history(monkeypatch, *, current: bool, available="2026-09-04", expected="2026-09-05", reason="HISTORY_STALE"):
@@ -278,8 +285,10 @@ def test_live_money_unlocked_is_operational_failure(monkeypatch):
 
     payload = build_startup_check(probe_network=False)
     assert payload["live_locked"] is False
+    assert payload["live_lock_verified"] is True
     assert payload["operational_ready"] is False
     assert payload["operational"]["status"] == "FAILED"
+    assert "LIVE MONEY" in payload["operational"]["blockers"]
     assert payload["ready"] is False
 
 
