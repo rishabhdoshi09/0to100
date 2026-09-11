@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-import pytest
+import inspect
 
-from data.kite_client import KiteClient
+import pytest
+from kiteconnect import KiteConnect
+
+from data.kite_client import KiteClient, _BROKER_READS, _GuardedKiteProxy
 from execution.fo_executor import FnOExecutor
 from product.execution_adapter import LiveExecutionAdapter
 from product.live_execution_interlock import (
@@ -10,6 +13,24 @@ from product.live_execution_interlock import (
     get_live_execution_state,
 )
 from product.startup_check import _aggregate_operational, _lane, _live_lock_readiness
+
+
+_AUDITED_CAPITAL_MUTATIONS = (
+    "place_order",
+    "modify_order",
+    "cancel_order",
+    "place_gtt",
+    "modify_gtt",
+    "delete_gtt",
+    "convert_position",
+    "exit_order",
+    "place_autoslice_order",
+    "place_mf_order",
+    "cancel_mf_order",
+    "place_mf_sip",
+    "modify_mf_sip",
+    "cancel_mf_sip",
+)
 
 
 class FakeKite:
@@ -44,8 +65,56 @@ class FakeKite:
     def convert_position(self, *args, **kwargs):
         return self._mutation("convert_position", *args, **kwargs)
 
+    def exit_order(self, *args, **kwargs):
+        return self._mutation("exit_order", *args, **kwargs)
+
+    def place_autoslice_order(self, *args, **kwargs):
+        return self._mutation("place_autoslice_order", *args, **kwargs)
+
+    def place_mf_order(self, *args, **kwargs):
+        return self._mutation("place_mf_order", *args, **kwargs)
+
+    def cancel_mf_order(self, *args, **kwargs):
+        return self._mutation("cancel_mf_order", *args, **kwargs)
+
+    def place_mf_sip(self, *args, **kwargs):
+        return self._mutation("place_mf_sip", *args, **kwargs)
+
+    def modify_mf_sip(self, *args, **kwargs):
+        return self._mutation("modify_mf_sip", *args, **kwargs)
+
+    def cancel_mf_sip(self, *args, **kwargs):
+        return self._mutation("cancel_mf_sip", *args, **kwargs)
+
+    def future_sdk_method(self, *args, **kwargs):
+        return self._mutation("future_sdk_method", *args, **kwargs)
+
     def orders(self):
         self.reads.append("orders")
+        return []
+
+    def order_history(self, order_id):
+        self.reads.append("order_history")
+        return [{"order_id": order_id, "status": "COMPLETE"}]
+
+    def instruments(self, exchange=None):
+        self.reads.append("instruments")
+        return [{"exchange": exchange}]
+
+    def order_margins(self, params):
+        self.reads.append("order_margins")
+        return [{"total": {"total": 1.0}, "params": params}]
+
+    def margins(self, segment=None):
+        self.reads.append("margins")
+        return {"equity": {"available": {"cash": 1000.0}}, "segment": segment}
+
+    def positions(self):
+        self.reads.append("positions")
+        return {"net": [], "day": []}
+
+    def holdings(self):
+        self.reads.append("holdings")
         return []
 
 
@@ -78,24 +147,56 @@ def test_kite_place_order_is_blocked_before_sdk_call():
     assert fake.mutations == []
 
 
-@pytest.mark.parametrize(
-    "method",
-    [
-        "place_order",
-        "modify_order",
-        "cancel_order",
-        "place_gtt",
-        "modify_gtt",
-        "delete_gtt",
-        "convert_position",
-    ],
-)
-def test_raw_broker_mutations_share_the_same_fail_closed_boundary(method):
+@pytest.mark.parametrize("method", _AUDITED_CAPITAL_MUTATIONS)
+def test_every_audited_raw_capital_mutation_is_blocked(method):
+    fake = FakeKite()
+    client = _client(fake)
+
+    assert method not in _BROKER_READS
+    with pytest.raises(LiveExecutionBlocked):
+        getattr(client.raw, method)()
+
+    assert fake.mutations == []
+
+
+def test_every_current_sdk_callable_not_explicitly_read_only_is_fail_closed():
+    """A Kite SDK upgrade cannot silently create a new raw mutation bypass."""
+    public_callables = sorted(
+        name
+        for name, member in inspect.getmembers(KiteConnect)
+        if not name.startswith("_") and callable(member)
+    )
+    assert public_callables
+
+    for method in public_callables:
+        if method in _BROKER_READS:
+            continue
+
+        reached: list[str] = []
+
+        class Surface:
+            pass
+
+        surface = Surface()
+
+        def sdk_call(*args, _method=method, **kwargs):
+            reached.append(_method)
+            return "SHOULD_NOT_BE_REACHED"
+
+        setattr(surface, method, sdk_call)
+        proxy = _GuardedKiteProxy(surface)  # type: ignore[arg-type]
+
+        with pytest.raises(LiveExecutionBlocked, match="blocked"):
+            getattr(proxy, method)()
+        assert reached == [], method
+
+
+def test_unknown_future_raw_callable_fails_closed_by_default():
     fake = FakeKite()
     client = _client(fake)
 
     with pytest.raises(LiveExecutionBlocked):
-        getattr(client.raw, method)()
+        client.raw.future_sdk_method()
 
     assert fake.mutations == []
 
@@ -105,8 +206,37 @@ def test_raw_read_only_methods_remain_available():
     client = _client(fake)
 
     assert client.raw.orders() == []
-    assert fake.reads == ["orders"]
+    assert client.raw.order_history("OID")[-1]["status"] == "COMPLETE"
+    assert client.raw.instruments("NFO") == [{"exchange": "NFO"}]
+    assert client.raw.order_margins([])[0]["total"]["total"] == 1.0
+    assert client.raw.margins("equity")["equity"]["available"]["cash"] == 1000.0
+    assert client.raw.positions() == {"net": [], "day": []}
+    assert client.raw.holdings() == []
+    assert fake.reads == [
+        "orders",
+        "order_history",
+        "instruments",
+        "order_margins",
+        "margins",
+        "positions",
+        "holdings",
+    ]
     assert fake.mutations == []
+
+
+def test_raw_non_callable_sdk_constants_remain_available():
+    fake = FakeKite()
+    client = _client(fake)
+
+    assert client.raw.GTT_TYPE_OCO == "two-leg"
+
+
+def test_guarded_proxy_refuses_attribute_replacement():
+    fake = FakeKite()
+    client = _client(fake)
+
+    with pytest.raises(AttributeError):
+        client.raw.place_order = lambda: None
 
 
 def test_fno_direct_raw_place_order_bypass_is_blocked(monkeypatch):
