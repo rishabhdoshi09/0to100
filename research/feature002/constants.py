@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from core.runtime_paths import logs_dir, logs_path
 
 EXPERIMENT = "FEATURE-002"
 FEATURE_SET_VERSION = "feature-002.v1"
@@ -47,7 +48,7 @@ UNTIL_MATURE = "FORWARD VALIDATION ACTIVE — INSUFFICIENT NEW DATA"
 OUT_DIR = (
     Path(__file__).resolve().parents[2] / "docs" / "overhaul" / "experiments" / "FEATURE-002"
 )
-LEDGER_DIR = Path(__file__).resolve().parents[2] / "logs" / "feature002"
+LEDGER_DIR = logs_path("feature002")
 DB_PATH = LEDGER_DIR / "shadow.db"
 
 _PROTOCOL = {

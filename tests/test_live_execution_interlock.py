@@ -229,6 +229,19 @@ def test_guarded_call_cannot_be_replaced_on_the_proxy():
             setattr(proxy, name, lambda *a, **k: "unguarded")
 
 
+def test_proxy_refuses_all_assignment_not_just_guarded_names():
+    """A read-only facade: no attribute may be installed through the proxy.
+
+    Per-name refusal would still let a caller add a new attribute and build a
+    second policy path beside the interlock.
+    """
+    proxy = _real_proxy()
+
+    for name in ("quote", "root", "brand_new_attribute", "_post"):
+        with pytest.raises(AttributeError):
+            setattr(proxy, name, "anything")
+
+
 def test_raw_read_only_methods_remain_available():
     fake = FakeKite()
     client = _client(fake)

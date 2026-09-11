@@ -9,11 +9,16 @@ from pathlib import Path
 from typing import Iterable
 
 from news.curator_models import CuratedArticle, SourceHealth
+from core.runtime_paths import logs_dir, logs_path
 
 
 class NewsCuratorStore:
-    def __init__(self, path: str | Path = "logs/news_curator.sqlite3") -> None:
-        self.path = Path(path)
+    def __init__(self, path: str | Path | None = None) -> None:
+        # The default used to be the relative string "logs/news_curator.sqlite3",
+        # which resolves against the current working directory. Anything run
+        # from the checkout — the test suite included — therefore wrote the
+        # real store. Resolve it through the runtime root instead.
+        self.path = Path(path) if path is not None else logs_path("news_curator.sqlite3")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(self.path, check_same_thread=False)

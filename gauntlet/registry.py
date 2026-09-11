@@ -13,8 +13,9 @@ import json
 import subprocess
 import time
 from pathlib import Path
+from core.runtime_paths import logs_dir, logs_path
 
-_REG_FILE = Path(__file__).resolve().parent.parent / "logs" / "gauntlet" / "experiments.jsonl"
+_REG_FILE = logs_path("gauntlet", "experiments.jsonl")
 
 
 def _git_commit() -> str:

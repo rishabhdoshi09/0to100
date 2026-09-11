@@ -13,14 +13,15 @@ from typing import Any, Mapping
 
 from product import candidate_lifecycle as CL
 from product import readiness as RDY
+from core.runtime_paths import logs_dir, logs_path
 
 ROOT = Path(__file__).resolve().parents[1]
-SUMMARY_PATH = ROOT / "logs" / "product" / "autonomous_loop.json"
-EVENTS_PATH = ROOT / "logs" / "product" / "autonomy_events.jsonl"
-LEARNING_PATH = ROOT / "logs" / "product" / "learning_observations.jsonl"
-MEMORY_PATH = ROOT / "logs" / "product" / "learning_memory.json"
-METRICS_PATH = ROOT / "logs" / "product" / "operator_metrics.json"
-FAILURES_PATH = ROOT / "logs" / "product" / "loop_failures.jsonl"
+SUMMARY_PATH = logs_dir() / "product" / "autonomous_loop.json"
+EVENTS_PATH = logs_dir() / "product" / "autonomy_events.jsonl"
+LEARNING_PATH = logs_dir() / "product" / "learning_observations.jsonl"
+MEMORY_PATH = logs_dir() / "product" / "learning_memory.json"
+METRICS_PATH = logs_dir() / "product" / "operator_metrics.json"
+FAILURES_PATH = logs_dir() / "product" / "loop_failures.jsonl"
 DEEP_RESEARCH_CAP = 6
 SERIOUS_CANDIDATE_CAP = 15
 
@@ -703,7 +704,7 @@ def project_events(limit: int = 40) -> list[dict[str, Any]]:
     try:
         import sqlite3
 
-        con = sqlite3.connect(str(ROOT / "logs" / "market_ops" / "jobs.db"))
+        con = sqlite3.connect(str(logs_dir() / "market_ops" / "jobs.db"))
         con.row_factory = sqlite3.Row
         for row in con.execute(
             "SELECT kind, status, message, finished_at, requested_by FROM operations "
@@ -722,7 +723,7 @@ def project_events(limit: int = 40) -> list[dict[str, Any]]:
     try:
         import sqlite3
 
-        con = sqlite3.connect(str(ROOT / "logs" / "autonomy" / "jobs.db"))
+        con = sqlite3.connect(str(logs_dir() / "autonomy" / "jobs.db"))
         con.row_factory = sqlite3.Row
         for row in con.execute(
             "SELECT job_type, status, result_summary, finished_at FROM jobs "
@@ -742,7 +743,7 @@ def project_events(limit: int = 40) -> list[dict[str, Any]]:
 
 
 def replay_compatible_rows(limit: int = 8) -> list[dict[str, Any]]:
-    path = ROOT / "logs" / "product" / "historical_replay" / "decisions.jsonl"
+    path = logs_dir() / "product" / "historical_replay" / "decisions.jsonl"
     if not path.exists():
         return []
     out = []
@@ -881,7 +882,7 @@ def advance_loop(*, trigger: str = "pipeline") -> dict[str, Any]:
     memory = consume_learning_memory(session) if (outcomes.get("n_settled") or trigger in {"outcome_resolution", "learning_cycle"}) else {}
     metrics = _operator_metrics(session)
     next_set = OM.next_session_set(session)
-    _write_json(ROOT / "logs" / "product" / "next_session_set.json", {
+    _write_json(logs_dir() / "product" / "next_session_set.json", {
         "session": session, "scan_run_id": scan_run_id, "generated_at": _now(), "buckets": next_set,
     })
     next_watch = [

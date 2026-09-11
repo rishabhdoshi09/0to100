@@ -22,7 +22,9 @@ from typing import Any
 
 import sqlite3
 
-from operations.store import BLOCKED, FAILED, PENDING, SUCCEEDED, OperationStore
+from data.bhavcopy_store import HistoryAcquisitionCancelled
+from operations.store import BLOCKED, CANCELLED, FAILED, PENDING, SUCCEEDED, OperationStore
+from core.runtime_paths import logs_dir, logs_path
 
 MARKET_SCAN = "MARKET_SCAN"
 LONG_TERM_SCAN = "LONG_TERM_SCAN"
@@ -48,7 +50,7 @@ LANES = {
 }
 
 ROOT = Path(__file__).resolve().parents[1]
-OPS_ROOT = ROOT / "logs" / "market_ops"
+OPS_ROOT = logs_dir() / "market_ops"
 RUNTIME_PATH = OPS_ROOT / "runtime.json"
 LOCK_PATH = OPS_ROOT / "worker.lock"
 RSS_PATH = OPS_ROOT / "rss.jsonl"
@@ -184,7 +186,7 @@ def _stale(path: Path, max_age_s: float, *, now: float | None = None) -> bool:
 
 
 def _write_instrument_cache(rows: list[dict[str, Any]]) -> Path:
-    path = ROOT / "logs" / "instruments_cache.csv"
+    path = logs_dir() / "instruments_cache.csv"
     path.parent.mkdir(parents=True, exist_ok=True)
     fields = sorted({str(key) for row in rows for key in row})
     tmp = path.with_suffix(".tmp")
@@ -198,7 +200,7 @@ def _write_instrument_cache(rows: list[dict[str, Any]]) -> Path:
 
 
 def _persist_fno_report(report) -> Path:
-    path = ROOT / "logs" / "product" / "fno_universe.json"
+    path = logs_dir() / "product" / "fno_universe.json"
     payload = {
         "generated_at": time.time(),
         "source": report.source,
@@ -400,7 +402,8 @@ class MarketOperationsWorker:
                     total=0,
                 )
 
-            build_store(days=days, progress=progress)
+            # Shutdown must not wait out a full history acquisition.
+            build_store(days=days, progress=progress, should_stop=self.stop_event.is_set)
             current = history_status(load_cache=True)
             ready, freshness = self._history_ready(current)
             if not current.get("ready"):
@@ -781,7 +784,7 @@ class MarketOperationsWorker:
         news: dict[str, Any] = {}
         try:
             from news.curator_store import NewsCuratorStore
-            store = NewsCuratorStore(ROOT / "logs" / "news_curator.sqlite3")
+            store = NewsCuratorStore(logs_dir() / "news_curator.sqlite3")
             try:
                 articles = [item.as_dict() for item in store.recent(hours=168, limit=120)]
             finally:
@@ -925,6 +928,19 @@ class MarketOperationsWorker:
                     error_message=str(exc),
                 )
                 _emit("BLOCKED", f"{kind} · id={operation_id} · {elapsed:.1f}s · {exc.code}: {exc}")
+            except HistoryAcquisitionCancelled as exc:
+                # Shutdown interrupted the lane. This is not a failure of the
+                # operation and must not read as one: record CANCELLED so the
+                # next boot requeues it truthfully.
+                elapsed = time.monotonic() - started
+                self.store.finish(
+                    operation_id,
+                    status=CANCELLED,
+                    message=f"{kind} cancelled by shutdown after {elapsed:.1f}s",
+                    error_code="SHUTDOWN_CANCELLED",
+                    error_message=str(exc),
+                )
+                _emit("CANCELLED", f"{kind} · id={operation_id} · {elapsed:.1f}s · shutdown")
             except Exception as exc:
                 elapsed = time.monotonic() - started
                 partial = getattr(exc, "result", None)

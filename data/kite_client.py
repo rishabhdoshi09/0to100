@@ -112,12 +112,12 @@ class _GuardedKiteProxy:
         return guarded
 
     def __setattr__(self, name: str, value: Any) -> None:
-        # Do not permit callers to replace a guarded call with an unguarded one.
-        raw = object.__getattribute__(self, "_raw")
-        existing = getattr(raw, name, None)
-        if existing is not None and _is_guarded_attribute(name, existing):
-            raise AttributeError(f"Cannot override guarded broker call: {name}")
-        setattr(raw, name, value)
+        # The proxy is a read-only facade. Assignment through it is refused
+        # outright rather than per-name: a caller that can install an attribute
+        # here can install a second policy path, and no production caller needs
+        # to write through the escape hatch. Authentication and any other SDK
+        # state changes belong to KiteClient's own attribute.
+        raise AttributeError(f"Cannot mutate guarded Kite proxy attribute: {name}")
 
 
 def parse_request_token(raw: str) -> str:

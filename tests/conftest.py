@@ -17,15 +17,132 @@ To run the integration suite explicitly (may be slow / need network):
 `collect_ignore` prevents pytest from even importing the integration directory during
 the default run, so the network-free suite cannot stall on their import chain.
 """
+import hashlib
 import os
+import shutil
+import tempfile
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
+
+# ---------------------------------------------------------------------------
+# Runtime isolation. This block runs before any QuantTerm module is imported,
+# which matters because several of them resolve durable paths into module-level
+# constants at import time.
+#
+# Without it the suite wrote real artifacts into the checkout: a long-term
+# shortlist of the fixture symbols AAA and BBB reached
+# logs/product/latest_long_term_scan.json, research evidence for the invented
+# ticker QTTRUTHA reached logs/research_evidence/, and the running desk then
+# read them as genuine and told the operator a scan was available.
+# ---------------------------------------------------------------------------
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_REAL_LOGS = _REPO_ROOT / "logs"
+
+if not os.environ.get("QT_RUNTIME_ROOT"):
+    os.environ["QT_RUNTIME_ROOT"] = tempfile.mkdtemp(prefix="quantterm-test-runtime-")
+
+_RUNTIME_ROOT = Path(os.environ["QT_RUNTIME_ROOT"])
+(_RUNTIME_ROOT / "logs").mkdir(parents=True, exist_ok=True)
 
 # During the default (network-free) run, do not collect/import tests/integration.
 collect_ignore = [] if os.getenv("QT_INTEGRATION") else ["integration"]
 
 _LONG_TERM_PROJECTOR = None
+
+
+def _runtime_tree_fingerprint(root: Path) -> str:
+    """Content hash of every file under ``root``.
+
+    Directory existence is deliberately not part of the fingerprint: an empty
+    ``logs/`` created by a mkdir is not contamination, a file written into it
+    is. Absent and empty therefore hash the same.
+    """
+    if not root.exists():
+        return "EMPTY"
+    files = sorted(p for p in root.rglob("*") if p.is_file())
+    if not files:
+        return "EMPTY"
+    digest = hashlib.sha256()
+    for path in files:
+        digest.update(str(path.relative_to(root)).encode("utf-8"))
+        try:
+            digest.update(str(path.stat().st_size).encode("utf-8"))
+            digest.update(path.read_bytes())
+        except OSError:
+            digest.update(b"<unreadable>")
+    return digest.hexdigest()
+
+
+def _runtime_tree_files(root: Path) -> set[str]:
+    if not root.exists():
+        return set()
+    return {str(p.relative_to(root)) for p in root.rglob("*") if p.is_file()}
+
+
+_REAL_LOGS_BEFORE: tuple[str, set[str]] = ("", set())
+
+
+def pytest_configure(config):
+    """Fingerprint the production runtime tree before anything runs."""
+    global _REAL_LOGS_BEFORE
+    _REAL_LOGS_BEFORE = (
+        _runtime_tree_fingerprint(_REAL_LOGS),
+        _runtime_tree_files(_REAL_LOGS),
+    )
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Fail the run if the suite touched production runtime state.
+
+    This is the invariant, not a lint: tests may not write into the real
+    ``logs/`` tree by any route, whichever module resolved the path.
+    """
+    before_hash, before_files = _REAL_LOGS_BEFORE
+    after_hash = _runtime_tree_fingerprint(_REAL_LOGS)
+    if after_hash == before_hash:
+        try:
+            shutil.rmtree(_RUNTIME_ROOT, ignore_errors=True)
+        except Exception:
+            pass
+        return
+
+    after_files = _runtime_tree_files(_REAL_LOGS)
+    added = sorted(after_files - before_files)
+    removed = sorted(before_files - after_files)
+    modified = sorted(f for f in (after_files & before_files))
+
+    detail = [
+        "",
+        "=" * 78,
+        "TEST CONTAMINATION: the suite changed production runtime state.",
+        f"  runtime root under test : {_RUNTIME_ROOT}",
+        f"  protected tree          : {_REAL_LOGS}",
+    ]
+    if added:
+        detail.append(f"  files created ({len(added)}):")
+        detail += [f"    + {name}" for name in added[:40]]
+        if len(added) > 40:
+            detail.append(f"    … and {len(added) - 40} more")
+    if removed:
+        detail.append(f"  files deleted ({len(removed)}):")
+        detail += [f"    - {name}" for name in removed[:20]]
+    if not added and not removed and modified:
+        detail.append("  existing files were modified in place")
+    detail += [
+        "",
+        "  Route every durable path through core.runtime_paths (logs_dir /",
+        "  logs_path) so QT_RUNTIME_ROOT redirects it. A module that resolves",
+        "  its own path from __file__ writes into the developer's checkout and",
+        "  the product then reads the fixture back as real evidence.",
+        "=" * 78,
+    ]
+    message = "\n".join(detail)
+    print(message)
+    if hasattr(session, "exitstatus"):
+        session.exitstatus = 1
+    raise pytest.UsageError(message)
 
 
 def pytest_sessionstart(session):

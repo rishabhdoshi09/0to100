@@ -22,9 +22,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from logger import quiet_uvicorn_health_access
+from core.runtime_paths import logs_dir, logs_path
 
 ROOT = Path(__file__).resolve().parent
-OPS_ROOT = ROOT / "logs" / "market_ops"
+OPS_ROOT = logs_dir() / "market_ops"
 OPS_RUNTIME = OPS_ROOT / "runtime.json"
 OPS_DB = OPS_ROOT / "jobs.db"
 
@@ -464,7 +465,7 @@ def _long_term_payload() -> dict:
 
 
 def _paper_equity_curve() -> list[float]:
-    raw = _json_file(ROOT / "logs" / "intelligence" / "intel_book.json", {})
+    raw = _json_file(logs_dir() / "intelligence" / "intel_book.json", {})
     curve: list[float] = []
     for value in raw.get("equity_curve", []) or []:
         parsed = _safe_float(value)
@@ -628,7 +629,7 @@ def _autonomy_payload() -> dict:
 def _snapshot_payload() -> dict:
     try:
         from research.intelligence.data.snapshot_store import SnapshotStore
-        root = ROOT / "logs" / "snapshots"
+        root = logs_dir() / "snapshots"
         store = SnapshotStore(root)
         snapshot_id = store.get_active_snapshot()
         if not snapshot_id:
@@ -699,7 +700,7 @@ def _operations_payload() -> dict[str, Any]:
 def _news_payload() -> dict[str, Any]:
     try:
         from news.curator_store import NewsCuratorStore
-        store = NewsCuratorStore(ROOT / "logs" / "news_curator.sqlite3")
+        store = NewsCuratorStore(logs_dir() / "news_curator.sqlite3")
         try:
             articles = [item.as_dict() for item in store.recent(hours=168, limit=120)]
             health = [item.as_dict() for item in store.source_health()]
@@ -726,7 +727,7 @@ def _news_payload() -> dict[str, Any]:
 
 
 def _fno_payload() -> dict[str, Any]:
-    path = ROOT / "logs" / "product" / "fno_universe.json"
+    path = logs_dir() / "product" / "fno_universe.json"
     persisted = _json_file(path, {})
     if persisted:
         persisted["available"] = int(persisted.get("mapped_underlyings", 0) or 0) > 0

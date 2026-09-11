@@ -43,6 +43,7 @@ from product.due_diligence.score_breakdown import score_breakdown
 from product.due_diligence.series import dated_series, direction, find_row, row_label, snapshot
 from product.due_diligence.thesis import compose_thesis
 from product.due_diligence.wiring import apply_autonomy_pack, load_evidence_pack
+from core.runtime_paths import logs_dir, logs_path
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -511,7 +512,7 @@ def _defaults(symbol: str) -> dict[str, Any]:
     news: list[dict[str, Any]] = []
     try:
         from news.curator_store import NewsCuratorStore
-        store = NewsCuratorStore(ROOT / "logs" / "news_curator.sqlite3")
+        store = NewsCuratorStore(logs_dir() / "news_curator.sqlite3")
         try:
             news = [item.as_dict() for item in store.recent(hours=24 * 90, limit=40, symbol=symbol)]
         finally:

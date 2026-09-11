@@ -218,7 +218,10 @@ def test_bootstrap_queues_missing_product_inputs_without_network(tmp_path: Path,
     from data import bhavcopy_runtime
     from operations import market_ops as MO
 
-    monkeypatch.setattr(MO, "ROOT", tmp_path)
+    # Redirect the runtime root rather than a module constant: durable paths
+    # resolve through core.runtime_paths now, so QT_RUNTIME_ROOT is the
+    # supported way to point the product at a scratch tree.
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
     monkeypatch.setattr(MO, "LOCK_PATH", tmp_path / "market_ops" / "worker.lock")
     from data.bhavcopy_runtime import expected_latest_completed_session
 
@@ -248,7 +251,10 @@ def test_bootstrap_skips_market_scan_when_momentum_artifact_is_fresh(tmp_path: P
     from data import bhavcopy_runtime
     from operations import market_ops as MO
 
-    monkeypatch.setattr(MO, "ROOT", tmp_path)
+    # Redirect the runtime root rather than a module constant: durable paths
+    # resolve through core.runtime_paths now, so QT_RUNTIME_ROOT is the
+    # supported way to point the product at a scratch tree.
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
     monkeypatch.setattr(MO, "LOCK_PATH", tmp_path / "market_ops" / "worker.lock")
     from data.bhavcopy_runtime import expected_latest_completed_session
 

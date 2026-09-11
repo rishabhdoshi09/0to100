@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from logger import quiet_uvicorn_health_access
+from core.runtime_paths import logs_dir, logs_path
 
 app = FastAPI(title="QuantTerm Research Report API", version="0.3.0")
 quiet_uvicorn_health_access()
@@ -60,7 +61,7 @@ def _runtime_as_of(symbol: str) -> dict[str, str]:
     try:
         from news.curator_store import NewsCuratorStore
         from reporting.evidence_intake import ROOT
-        store = NewsCuratorStore(ROOT / "logs" / "news_curator.sqlite3")
+        store = NewsCuratorStore(logs_path("news_curator.sqlite3"))
         try:
             rows = store.recent(hours=24 * 30, limit=1, symbol=symbol.upper())
         finally:

@@ -22,13 +22,14 @@ import json
 import os
 import time
 from pathlib import Path
+from core.runtime_paths import logs_dir, logs_path
 
 E0, E1, E2, E3, E4, E5, E6 = range(7)
 _LABEL = {E0: "E0 designed", E1: "E1 code-reviewed", E2: "E2 unit-tested",
           E3: "E3 historically validated", E4: "E4 paper-validated",
           E5: "E5 live-validated", E6: "E6 stable across regimes"}
 
-_AUDIT = Path(__file__).resolve().parent.parent / "logs" / "evidence_audit.jsonl"
+_AUDIT = logs_path("evidence_audit.jsonl")
 
 # capability → (current level, one-line honest basis). Conservative on purpose.
 _LEVELS: dict[str, tuple[int, str]] = {

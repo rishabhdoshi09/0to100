@@ -13,8 +13,9 @@ import hashlib
 import json
 import time
 from pathlib import Path
+from core.runtime_paths import logs_dir, logs_path
 
-_FREEZE_FILE = Path(__file__).resolve().parent.parent / "logs" / "gauntlet" / "freeze.json"
+_FREEZE_FILE = logs_path("gauntlet", "freeze.json")
 
 
 def _snapshot() -> dict:

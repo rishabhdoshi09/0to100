@@ -29,6 +29,7 @@ import sqlite3
 from datetime import datetime, timedelta
 
 from logger import get_logger
+from core.runtime_paths import logs_dir, logs_path
 
 log = get_logger(__name__)
 
@@ -43,8 +44,7 @@ def _now() -> datetime:
     from core.market_clock import now_ist
     return now_ist().replace(tzinfo=None)
 
-_DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                        "logs", "decisions.db")
+_DB_PATH = str(logs_path("decisions.db"))
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS decisions (

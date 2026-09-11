@@ -10,10 +10,11 @@ import os
 import time
 from pathlib import Path
 from typing import Any
+from core.runtime_paths import logs_dir, logs_path
 
 
 def default_progress_path() -> Path:
-    return Path(__file__).resolve().parents[1] / "logs" / "product" / "scan_progress.json"
+    return logs_path("product", "scan_progress.json")
 
 
 DEFAULT_PROGRESS_PATH = default_progress_path()

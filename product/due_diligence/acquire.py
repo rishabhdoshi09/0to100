@@ -18,12 +18,13 @@ from product.due_diligence.extract import (
     merge_kpi_maps,
 )
 from product.due_diligence.option_chain import summarize_option_chain
+from core.runtime_paths import logs_dir, logs_path
 
 ROOT = Path(__file__).resolve().parents[2]
-EVIDENCE_ROOT = ROOT / "logs" / "research_evidence"
+EVIDENCE_ROOT = logs_dir() / "research_evidence"
 ACQUIRE_CAP = 6
 FACTS_NAME = "autonomy_facts.json"
-RESEARCH_QUEUE_PATH = ROOT / "logs" / "product" / "research_queue.json"
+RESEARCH_QUEUE_PATH = logs_dir() / "product" / "research_queue.json"
 MAX_ATTACHMENT_BYTES = 16_000_000
 _ALLOWED_HOSTS = {
     "www.screener.in",
@@ -625,7 +626,7 @@ def _news_snippets(symbol: str) -> list[tuple[str, str, str]]:
     out: list[tuple[str, str, str]] = []
     try:
         from news.curator_store import NewsCuratorStore
-        store = NewsCuratorStore(ROOT / "logs" / "news_curator.sqlite3")
+        store = NewsCuratorStore(logs_dir() / "news_curator.sqlite3")
         try:
             for item in store.recent(hours=24 * 90, limit=20, symbol=symbol):
                 payload = item.as_dict() if hasattr(item, "as_dict") else dict(item)
@@ -645,7 +646,7 @@ def _news_items(symbol: str) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     try:
         from news.curator_store import NewsCuratorStore
-        store = NewsCuratorStore(ROOT / "logs" / "news_curator.sqlite3")
+        store = NewsCuratorStore(logs_dir() / "news_curator.sqlite3")
         try:
             for item in store.recent(hours=24 * 90, limit=40, symbol=symbol):
                 payload = item.as_dict() if hasattr(item, "as_dict") else dict(item)

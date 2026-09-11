@@ -22,9 +22,10 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from core.runtime_paths import logs_dir, logs_path
 
 ROOT = Path(__file__).resolve().parents[1]
-CASES_DB = ROOT / "logs" / "product" / "cases" / "cases.db"
+CASES_DB = logs_dir() / "product" / "cases" / "cases.db"
 PROVEN_N = 30
 _HORIZON_SESSIONS = int(os.getenv("QT_OUTCOME_HORIZON", "15") or 15)
 

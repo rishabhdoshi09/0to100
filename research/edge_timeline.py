@@ -26,8 +26,9 @@ import time
 from pathlib import Path
 
 from research import drift as _drift
+from core.runtime_paths import logs_path
 
-_DB_PATH = Path(__file__).resolve().parent.parent / "logs" / "edge_timeline.db"
+_DB_PATH = logs_path("edge_timeline.db")
 
 # A DECAYING signal with no recovery event and this many trades elapsed since
 # the decay began is treated as DEAD (the edge did not come back).

@@ -35,8 +35,9 @@ from pathlib import Path
 
 import numpy as np
 from scipy.stats import t as _student_t
+from core.runtime_paths import logs_dir, logs_path
 
-_DB_PATH = Path(__file__).resolve().parent.parent / "logs" / "experiments.db"
+_DB_PATH = logs_path("experiments.db")
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS experiments (

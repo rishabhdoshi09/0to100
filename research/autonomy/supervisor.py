@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 
 from research.autonomy import job_store as JS
@@ -292,12 +293,39 @@ class Supervisor:
             except Exception:
                 continue
 
+    def _official_retry_ready(self) -> bool:
+        """True when official completed-session data could plausibly have landed.
+
+        Official-data blockers are structural: the exchange has not published
+        the session yet. Requeueing them on every 15-second tick re-ran the job
+        thousands of times a day against a condition that cannot change until
+        the next publication window.
+        """
+        until = float(getattr(self, "_official_retry_not_before", 0.0) or 0.0)
+        return time.time() >= until
+
+    def _defer_official_retry(self) -> None:
+        try:
+            delay = float(
+                SCH.seconds_until_official_data_boundary(
+                    self.deps.now_ist(),
+                    self.deps.holidays() if hasattr(self.deps, "holidays") else None,
+                )
+            )
+        except Exception:
+            delay = 300.0
+        self._official_retry_not_before = time.time() + max(60.0, delay)
+
     def _requeue_if_official_blocked(self, job):
         if job is None:
             return job
         if getattr(job, "status", None) == JS.BLOCKED and str(getattr(job, "blocked_on", "") or "") in self._OFFICIAL_BLOCKERS:
+            if not self._official_retry_ready():
+                # Still BLOCKED, truthfully, until the next publication window.
+                return job
             try:
                 self.jobs.requeue(job.job_id)
+                self._defer_official_retry()
                 return self.jobs.get(job.job_id)
             except Exception:
                 return job

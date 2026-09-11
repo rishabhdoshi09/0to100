@@ -218,11 +218,23 @@ def _incremental_append(new_days: list[date]) -> None:
     _save_pkl()
 
 
-def build_store(days: int = DEFAULT_DAYS, progress=None) -> int:
+class HistoryAcquisitionCancelled(RuntimeError):
+    """Raised when a shutdown signal interrupts bhavcopy acquisition."""
+
+
+def build_store(days: int = DEFAULT_DAYS, progress=None, should_stop=None) -> int:
     """
     Ensure the store covers ~`days` sessions (~2 years by default).
     Fast paths: in-memory → pickle cache → incremental append of new
     days only. Full CSV re-parse happens once, then never again.
+
+    ``should_stop`` is an optional predicate polled between completed
+    downloads. Without it this loop is uninterruptible: it submits every
+    missing session up front and the executor's context manager then waits for
+    all of them, so a Ctrl-C arriving mid-acquisition was deferred until
+    hundreds of requests had finished. On cancellation the queued futures are
+    dropped and HistoryAcquisitionCancelled is raised; whatever reached disk
+    stays there, because a partial history is still a real history.
     """
     candidates = _trading_days_back(days)
 
@@ -231,7 +243,9 @@ def build_store(days: int = DEFAULT_DAYS, progress=None) -> int:
     if missing:
         log.info("bhav_download_start", missing=len(missing))
         done = 0
-        with ThreadPoolExecutor(max_workers=6) as pool:
+        cancelled = False
+        pool = ThreadPoolExecutor(max_workers=6)
+        try:
             futs = {pool.submit(_download_day, d): d for d in missing}
             for fut in as_completed(futs):
                 done += 1
@@ -240,6 +254,24 @@ def build_store(days: int = DEFAULT_DAYS, progress=None) -> int:
                         progress(done, len(missing))
                     except Exception:
                         pass
+                if should_stop is not None:
+                    try:
+                        stop_now = bool(should_stop())
+                    except Exception:
+                        stop_now = False
+                    if stop_now:
+                        cancelled = True
+                        break
+        finally:
+            # cancel_futures drops everything still queued; at most max_workers
+            # requests remain in flight and each carries its own timeout, so
+            # shutdown stays bounded.
+            pool.shutdown(wait=not cancelled, cancel_futures=True)
+        if cancelled:
+            log.info("bhav_download_cancelled", completed=done, requested=len(missing))
+            raise HistoryAcquisitionCancelled(
+                f"History acquisition cancelled after {done}/{len(missing)} sessions"
+            )
 
     available = [d for d in candidates if _day_path(d).exists()]
     if len(available) < _MIN_DAYS:

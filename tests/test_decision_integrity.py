@@ -212,7 +212,9 @@ def test_scan_fresh_when_session_identity_current(monkeypatch, tmp_path):
         "scanned_at": "2020-01-01T00:00:00+00:00",
         "as_of_session": "2026-09-02",
     }), encoding="utf-8")
-    monkeypatch.setattr(DP, "_root", lambda: tmp_path)
+    # Durable paths resolve through core.runtime_paths now, so the runtime
+    # root is what redirects them — not a per-module _root() helper.
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
     monkeypatch.setattr(
         "data.bhavcopy_runtime.official_history_freshness",
         lambda load_cache=True: {

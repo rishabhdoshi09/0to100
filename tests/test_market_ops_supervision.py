@@ -45,7 +45,14 @@ def test_launcher_waits_for_api_before_starting_frontend():
 def test_launcher_cleanup_owns_market_ops_process():
     src = _inner()
     assert 'MARKET_OPS_PID=""' in src
-    assert 'for pid in "$FRONTEND_PID" "$API_PID" "$MARKET_OPS_PID" "$AUTONOMY_PID"' in src
+    # Cleanup must stop every child it owns, and bound the wait: an unbounded
+    # `wait` let a child that defers SIGTERM hold the supervisor open forever.
+    cleanup = src.split("cleanup() {", 1)[1].split("on_stop()", 1)[0]
+    for child in ("$FRONTEND_PID", "$API_PID", "$MARKET_OPS_PID", "$AUTONOMY_PID"):
+        assert f'stop_pid "{child}"' in cleanup, child
+    # Desk before API: no UI may outlive the backend it talks to.
+    assert cleanup.index('stop_pid "$FRONTEND_PID"') < cleanup.index('stop_pid "$API_PID"')
+    assert "SHUTDOWN_GRACE_S" in src and "kill -9" in src
     assert "market operations, market scan" in src
 
 

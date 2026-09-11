@@ -18,8 +18,9 @@ import os
 import sqlite3
 import time
 from pathlib import Path
+from core.runtime_paths import logs_path
 
-_DB_PATH = Path(__file__).resolve().parent.parent / "logs" / "long_term.db"
+_DB_PATH = logs_path("long_term.db")
 
 ACTIVE = "ACTIVE"
 EXITED = "EXITED"

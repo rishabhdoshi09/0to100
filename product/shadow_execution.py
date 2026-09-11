@@ -12,9 +12,10 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
+from core.runtime_paths import logs_dir, logs_path
 
 ROOT = Path(__file__).resolve().parents[1]
-LEDGER = ROOT / "logs" / "product" / "shadow_intents.jsonl"
+LEDGER = logs_dir() / "product" / "shadow_intents.jsonl"
 
 PAPER_ENTERED = "PAPER_ENTERED"
 SHADOW_NOT_EXECUTED = "SHADOW_NOT_EXECUTED"

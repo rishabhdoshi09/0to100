@@ -12,9 +12,9 @@ import sqlite3
 import os
 import threading
 from datetime import datetime, timedelta  # noqa: F401 — kept for callers that import the name
+from core.runtime_paths import logs_path
 
-_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "logs", "signal_outcomes.db")
-_DB_PATH = os.path.normpath(_DB_PATH)
+_DB_PATH = str(logs_path("signal_outcomes.db"))
 
 
 def _now() -> datetime:

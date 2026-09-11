@@ -18,9 +18,10 @@ from typing import Any, Mapping, Sequence
 
 from product.due_diligence.provenance import SOURCE_TRUST, classify_source_type
 from product.pit_availability import PIT_UNVERIFIED, available_to_engine_at_t
+from core.runtime_paths import logs_dir, logs_path
 
 ROOT = Path(__file__).resolve().parents[1]
-DB_PATH = Path(os.environ.get("QT_PIT_WAREHOUSE") or ROOT / "logs" / "product" / "pit_warehouse.db")
+DB_PATH = Path(os.environ.get("QT_PIT_WAREHOUSE") or logs_dir() / "product" / "pit_warehouse.db")
 
 DOC_ANNUAL_REPORT = "ANNUAL_REPORT"
 DOC_QUARTERLY_RESULT = "QUARTERLY_RESULT"

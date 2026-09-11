@@ -79,6 +79,41 @@ def in_scan_window(now_ist, holidays=None) -> bool:
             and ENTRY_WINDOW_START <= now_ist.time() <= ENTRY_WINDOW_END)
 
 
+def seconds_until_official_data_boundary(now_ist, holidays=None, *, max_wait_s: float = 6 * 3600) -> float:
+    """Seconds until official completed-session bars could plausibly exist.
+
+    A job blocked on "the exchange has not published today's session yet" has a
+    structural blocker, not a transient one: nothing can change until the next
+    publication window. Retrying it on the supervisor's 15-second tick produced
+    thousands of identical BLOCKED rows a day and buried real failures.
+
+    Returns the wait to the next EOD publication window, floored so we never
+    spin and capped so a bad clock or an exotic holiday run cannot park a job
+    indefinitely.
+    """
+    floor_s = 300.0
+    if in_eod_window(now_ist, holidays):
+        # Inside the window the data can land at any moment; poll gently.
+        return floor_s
+
+    probe = now_ist
+    for _ in range(8):  # today plus a week of holidays is ample
+        if _is_session_day(probe, holidays):
+            boundary = probe.replace(
+                hour=EOD_WINDOW_START.hour,
+                minute=EOD_WINDOW_START.minute,
+                second=0,
+                microsecond=0,
+            )
+            if boundary > now_ist:
+                wait = (boundary - now_ist).total_seconds()
+                return max(floor_s, min(float(max_wait_s), wait))
+        probe = (probe + timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+    return max(floor_s, min(float(max_wait_s), 3600.0))
+
+
 def in_eod_window(now_ist, holidays=None) -> bool:
     return (_is_session_day(now_ist, holidays)
             and EOD_WINDOW_START <= now_ist.time() <= EOD_WINDOW_END)

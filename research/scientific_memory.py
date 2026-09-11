@@ -38,8 +38,9 @@ import os
 import sqlite3
 import time
 from pathlib import Path
+from core.runtime_paths import logs_dir, logs_path
 
-_DB_PATH = Path(__file__).resolve().parent.parent / "logs" / "scientific_memory.db"
+_DB_PATH = logs_path("scientific_memory.db")
 
 # Lifecycle states. REJECTED is first-class NEGATIVE knowledge ("what doesn't
 # work") — preserved so a hypothesis generator never wastes a cycle re-testing it.
