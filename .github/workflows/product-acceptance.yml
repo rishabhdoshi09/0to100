@@ -1,0 +1,269 @@
+name: Product Acceptance
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  product-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      QT_NONINTERACTIVE: "1"
+      QT_NO_BROWSER: "1"
+      KITE_ACCESS_TOKEN: ""
+      KITE_API_KEY: ""
+      KITE_API_SECRET: ""
+      TELEGRAM_BOT_TOKEN: ""
+      DEEPSEEK_API_KEY: ""
+      ANTHROPIC_API_KEY: ""
+      OPENAI_API_KEY: ""
+
+    steps:
+      - name: Checkout exact source SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify exact checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          echo "actual=$actual"
+          echo "expected=$EXPECTED_SHA"
+          test "$actual" = "$EXPECTED_SHA"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.20.0"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Prepare evidence directory
+        run: mkdir -p logs/product
+
+      - name: Start complete QuantTerm virtual environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          nohup bash scripts/run_quantterm_complete.sh --restart > logs/product/complete_stack.log 2>&1 &
+          echo $! > logs/product/complete_stack.pid
+
+      - name: Wait for canonical API
+        shell: bash
+        run: |
+          set -euo pipefail
+          ready=0
+          for _ in $(seq 1 300); do
+            if curl -fsS --max-time 3 http://127.0.0.1:8765/api/health > logs/product/pre_acceptance_health.json 2>/dev/null; then
+              ready=1
+              break
+            fi
+            if [[ -f logs/product/complete_stack.pid ]] && ! kill -0 "$(cat logs/product/complete_stack.pid)" 2>/dev/null; then
+              echo "Complete stack exited before health endpoint became available" >&2
+              tail -200 logs/product/complete_stack.log || true
+              exit 1
+            fi
+            sleep 2
+          done
+          if [[ "$ready" != "1" ]]; then
+            echo "Canonical API did not become reachable" >&2
+            tail -200 logs/product/complete_stack.log || true
+            exit 1
+          fi
+
+      - name: Prove canonical live interlock is verified locked
+        shell: bash
+        run: |
+          set -euo pipefail
+          venv/bin/python - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+          from product.live_execution_interlock import get_live_execution_state
+
+          sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          state = get_live_execution_state()
+          evidence = {
+              "code_sha": sha,
+              "verified": bool(state.verified),
+              "locked": bool(state.locked),
+              "authorized": bool(state.authorized),
+              "status": state.status,
+              "reason": state.reason,
+              "source": state.source,
+          }
+          Path("logs/product/live_interlock_evidence.json").write_text(
+              json.dumps(evidence, indent=2), encoding="utf-8"
+          )
+          assert sha == __import__("os").environ["EXPECTED_SHA"], (sha, __import__("os").environ["EXPECTED_SHA"])
+          assert state.verified is True
+          assert state.locked is True
+          assert state.authorized is False
+          PY
+
+      - name: Run exact-SHA product acceptance
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          venv/bin/python scripts/run_product_acceptance.py \
+            --acquire \
+            --operation-timeout 1200 \
+            --acquire-timeout 720 \
+            --cycle-timeout 240 \
+            --output logs/product/product_acceptance.json \
+            2>&1 | tee logs/product/product_acceptance.log
+
+      - name: Enforce strict product-acceptance contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          venv/bin/python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path("logs/product/product_acceptance.json")
+          assert path.exists(), "missing scripts/run_product_acceptance.py evidence"
+          payload = json.loads(path.read_text(encoding="utf-8"))
+          assert payload.get("code_sha") == os.environ["EXPECTED_SHA"], (
+              payload.get("code_sha"), os.environ["EXPECTED_SHA"]
+          )
+          assert payload.get("verdict") == "PRODUCT ACCEPTANCE PASS", payload.get("verdict_reason")
+          assert payload.get("live_locked") is True
+
+          rows = {str(row.get("feature")): row for row in payload.get("features", []) if isinstance(row, dict)}
+          required_pass = [
+              "Canonical stack / readiness",
+              "UI + report endpoints",
+              "Market Scan",
+              "Data refresh",
+              "Recommendations",
+              "Market Report workspace",
+              "Stock Intelligence",
+              "Investigate / Due Diligence read",
+              "Investigate acquire",
+              "Simulate Past Decision",
+              "Paper execution status",
+              "Paper cycle request",
+              "Paper cycle execution",
+              "Learning loop dashboard",
+              "Forward soak verification",
+          ]
+          missing = [name for name in required_pass if name not in rows]
+          non_pass = {
+              name: {
+                  "status": rows.get(name, {}).get("status"),
+                  "reason": rows.get(name, {}).get("blocker_reason"),
+              }
+              for name in required_pass
+              if name in rows and rows[name].get("status") != "PASS"
+          }
+          assert not missing, f"missing required acceptance rows: {missing}"
+          assert not non_pass, f"required acceptance rows not PASS: {non_pass}"
+          PY
+
+      - name: Restart complete stack and prove durable recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f logs/product/complete_stack.pid ]]; then
+            kill -TERM "$(cat logs/product/complete_stack.pid)" 2>/dev/null || true
+            for _ in $(seq 1 30); do
+              if ! kill -0 "$(cat logs/product/complete_stack.pid)" 2>/dev/null; then
+                break
+              fi
+              sleep 1
+            done
+          fi
+
+          nohup bash scripts/run_quantterm_complete.sh --restart > logs/product/restart_stack.log 2>&1 &
+          echo $! > logs/product/restart_stack.pid
+
+          recovered=0
+          for _ in $(seq 1 180); do
+            if curl -fsS --max-time 3 http://127.0.0.1:8765/api/health > logs/product/restart_health.json 2>/dev/null; then
+              if venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+          p = json.loads(Path("logs/product/restart_health.json").read_text(encoding="utf-8"))
+          raise SystemExit(0 if (
+              p.get("ok") is True
+              and p.get("operational_ready") is True
+              and p.get("evidence_ready") is True
+              and p.get("live_locked") is True
+              and p.get("live_lock_verified") is True
+          ) else 1)
+          PY
+              then
+                recovered=1
+                break
+              fi
+            fi
+            if ! kill -0 "$(cat logs/product/restart_stack.pid)" 2>/dev/null; then
+              echo "Restarted stack exited before recovery" >&2
+              tail -200 logs/product/restart_stack.log || true
+              exit 1
+            fi
+            sleep 2
+          done
+          test "$recovered" = "1"
+
+          venv/bin/python - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          health = json.loads(Path("logs/product/restart_health.json").read_text(encoding="utf-8"))
+          acceptance = json.loads(Path("logs/product/product_acceptance.json").read_text(encoding="utf-8"))
+          evidence = {
+              "code_sha": sha,
+              "expected_sha": os.environ["EXPECTED_SHA"],
+              "recovered": True,
+              "health": {
+                  "ok": health.get("ok"),
+                  "lifecycle": health.get("lifecycle"),
+                  "operational_ready": health.get("operational_ready"),
+                  "evidence_ready": health.get("evidence_ready"),
+                  "live_locked": health.get("live_locked"),
+                  "live_lock_verified": health.get("live_lock_verified"),
+              },
+              "product_acceptance_verdict": acceptance.get("verdict"),
+              "product_acceptance_code_sha": acceptance.get("code_sha"),
+          }
+          assert sha == os.environ["EXPECTED_SHA"]
+          assert acceptance.get("code_sha") == sha
+          assert acceptance.get("verdict") == "PRODUCT ACCEPTANCE PASS"
+          Path("logs/product/restart_recovery_evidence.json").write_text(
+              json.dumps(evidence, indent=2), encoding="utf-8"
+          )
+          PY
+
+      - name: Upload exact-SHA acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 30
+          path: |
+            logs/product/product_acceptance.json
+            logs/product/product_acceptance.log
+            logs/product/live_interlock_evidence.json
+            logs/product/pre_acceptance_health.json
+            logs/product/restart_health.json
+            logs/product/restart_recovery_evidence.json
+            logs/product/complete_stack.log
+            logs/product/restart_stack.log
