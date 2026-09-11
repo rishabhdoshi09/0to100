@@ -14,7 +14,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from core.runtime_paths import logs_dir, logs_path
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_REPORT_DIR = ROOT / "logs" / "reports"
+DEFAULT_REPORT_DIR = logs_path("reports")
 
 
 def _as_float(value: Any) -> float | None:

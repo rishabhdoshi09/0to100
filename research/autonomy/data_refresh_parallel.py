@@ -16,9 +16,10 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
+from core.runtime_paths import logs_dir, logs_path
 
 ROOT = Path(__file__).resolve().parents[2]
-PROGRESS_PATH = ROOT / "logs" / "kite_history" / "progress.json"
+PROGRESS_PATH = logs_path("kite_history", "progress.json")
 IN_PROGRESS = "DATA_REFRESH_IN_PROGRESS"
 _REUSE_SUCCESS_S = 15 * 60.0
 _STALL_WARN_S = 10 * 60.0

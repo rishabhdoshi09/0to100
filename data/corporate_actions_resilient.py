@@ -32,10 +32,11 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from data import corporate_actions as CA
+from core.runtime_paths import logs_dir, logs_path
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_EVENTS_PATH = ROOT / "logs" / "ca_events.json"
-DEFAULT_COVERAGE_PATH = ROOT / "logs" / "ca_coverage.json"
+DEFAULT_EVENTS_PATH = logs_path("ca_events.json")
+DEFAULT_COVERAGE_PATH = logs_path("ca_coverage.json")
 NSE_PAGE = "https://www.nseindia.com/companies-listing/corporate-filings-actions"
 NSE_API = "https://www.nseindia.com/api/corporates-corporateActions"
 BSE_API = "https://api.bseindia.com/BseIndiaAPI/api/DefaultData/w"

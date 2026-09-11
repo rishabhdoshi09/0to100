@@ -19,10 +19,11 @@ import time
 from pathlib import Path
 
 from logger import get_logger
+from core.runtime_paths import logs_dir, logs_path
 
 log = get_logger(__name__)
 
-_CACHE_FILE = Path(__file__).resolve().parent.parent / "logs" / "us_indices.json"
+_CACHE_FILE = logs_path("us_indices.json")
 _TTL_S = 86400                        # refresh membership once a day
 _TICKER = re.compile(r"^[A-Z]{1,5}$")  # plain common-stock tickers
 

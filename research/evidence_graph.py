@@ -32,8 +32,9 @@ import os
 import sqlite3
 import time
 from pathlib import Path
+from core.runtime_paths import logs_dir, logs_path
 
-_DB_PATH = Path(__file__).resolve().parent.parent / "logs" / "evidence_graph.db"
+_DB_PATH = logs_path("evidence_graph.db")
 
 # node kinds — the object types the research lifecycle produces
 KINDS = ("FEATURE", "SCHEMA", "HYPOTHESIS", "EXPERIMENT", "BELIEF", "GATE",

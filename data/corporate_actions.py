@@ -30,8 +30,9 @@ import json
 import os
 import re
 from pathlib import Path
+from core.runtime_paths import logs_dir, logs_path
 
-_CA_FILE = Path(__file__).resolve().parent.parent / "logs" / "ca_events.json"
+_CA_FILE = logs_path("ca_events.json")
 _VALID_TYPES = {"split", "bonus", "consolidation", "dividend"}
 
 

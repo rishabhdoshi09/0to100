@@ -25,10 +25,11 @@ from typing import Optional
 import pandas as pd
 
 from logger import get_logger
+from core.runtime_paths import logs_dir, logs_path
 
 log = get_logger(__name__)
 
-_BHAV_DIR = Path(__file__).resolve().parent.parent / "logs" / "bhav"
+_BHAV_DIR = logs_path("bhav")
 _HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"),

@@ -30,6 +30,7 @@ import json
 import os
 import time
 from pathlib import Path
+from core.runtime_paths import logs_dir, logs_path
 
 NORMAL, DE_RISK, HALT = "NORMAL", "DE_RISK", "HALT"
 
@@ -43,7 +44,7 @@ _ECE_LIMIT = float(os.getenv("QT_GOV_ECE_LIMIT", "0.10") or 0.10)
 _SLIP_LIMIT = float(os.getenv("QT_GOV_SLIP_LIMIT", "2.0") or 2.0)
 _DERISK_MULT = float(os.getenv("QT_GOV_DERISK_MULT", "0.5") or 0.5)
 
-_STATE_FILE = Path(__file__).resolve().parent.parent / "logs" / "governance_state.json"
+_STATE_FILE = logs_path("governance_state.json")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
