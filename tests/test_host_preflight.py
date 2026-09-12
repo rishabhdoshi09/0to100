@@ -149,7 +149,7 @@ def test_a_runtime_root_inside_the_checkout_is_flagged(monkeypatch):
     monkeypatch.delenv("QT_RUNTIME_ROOT", raising=False)
     check = check_runtime_root()
     assert check.status == WARN
-    assert "clean checkout" in check.detail
+    assert "inside the source checkout" in check.detail
     assert check.evidence["persistent"] is False
 
 

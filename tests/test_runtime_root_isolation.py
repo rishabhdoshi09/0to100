@@ -1,19 +1,9 @@
-"""
-The runtime root is the single place every durable artifact path comes from.
+"""Guard the single mutable runtime root across production modules.
 
-Two things this suite has already been burned by:
-
-  * a module that resolves `<repo>/logs/...` itself keeps writing into the
-    checkout no matter what the test harness redirects, and the running desk
-    then reads test fixtures as genuine market state;
-  * a module that resolves a RELATIVE `logs/...` writes wherever the process
-    happened to be started from, so a daemon launched by systemd and the same
-    daemon launched by hand disagree about where their state lives.
-
-`core.runtime_paths` fixes both: production resolves to `<repo>/logs`, and a
-process (the test harness, a sandbox, a second checkout) can redirect the whole
-tree with `QT_RUNTIME_ROOT`. These tests assert that no production module has
-quietly gone back to resolving the path itself.
+Production code must not self-resolve ``logs/...``. Tests and service managers
+can redirect the whole mutable tree with QT_RUNTIME_ROOT, while an installed
+checkout may use the ignored ``.quantterm_runtime_root`` breadcrumb when no
+environment override is present.
 """
 from __future__ import annotations
 
@@ -25,18 +15,35 @@ from pathlib import Path
 
 import pytest
 
-from core.runtime_paths import ENV_VAR, REPO_ROOT, logs_dir, logs_path, runtime_root
+from core.runtime_paths import (
+    ENV_VAR,
+    POINTER_NAME,
+    REPO_ROOT,
+    logs_dir,
+    logs_path,
+    read_runtime_pointer,
+    runtime_root,
+)
 
-# Directories that are NOT the running product: the archived Streamlit pages,
-# the legacy entrypoint, developer scripts run by hand from the checkout, the
-# test suite itself, and the virtualenv.
 _EXCLUDED_PREFIXES = ("tests/", "ui/", "scripts/", "venv/", ".venv/", "frontend/")
 _EXCLUDED_FILES = ("legacy_app.py", "core/runtime_paths.py")
+_SELF_RESOLVED = re.compile(
+    r'/\s*["\']logs["\']|Path\(\s*["\']logs[/"\']|\.joinpath\(\s*["\']logs["\']'
+)
 
-# `something / "logs"` and `Path("logs...")` — the two shapes that resolve a
-# durable path without going through the runtime root. Comments and prose that
-# merely name a file under logs/ do not match either.
-_SELF_RESOLVED = re.compile(r'/\s*["\']logs["\']|Path\(\s*["\']logs[/"\']')
+# These two installer lines build paths beneath the explicit destination root
+# passed by the caller. They are not process-state path resolution. Keep the
+# exemption exact so any new use of joinpath("logs", ...) still fails the guard.
+_EXPLICIT_TARGET_PATHS = {
+    (
+        "product/host_install.py",
+        'service_logs = _resolved(runtime_root).joinpath("logs", "service")',
+    ),
+    (
+        "product/host_install.py",
+        '_resolved(runtime_root).joinpath("logs", "service").mkdir(parents=True, exist_ok=True)',
+    ),
+}
 
 
 def _production_sources() -> list[Path]:
@@ -56,7 +63,8 @@ def test_no_production_module_resolves_a_logs_path_itself():
         rel = path.relative_to(REPO_ROOT).as_posix()
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             code = line.split("#", 1)[0]
-            if _SELF_RESOLVED.search(code):
+            stripped = code.strip()
+            if _SELF_RESOLVED.search(code) and (rel, stripped) not in _EXPLICIT_TARGET_PATHS:
                 offenders.append(f"{rel}:{lineno}: {line.strip()}")
     assert not offenders, (
         "these modules resolve a logs path without core.runtime_paths, so "
@@ -64,8 +72,22 @@ def test_no_production_module_resolves_a_logs_path_itself():
     )
 
 
-def test_production_default_is_the_checkout_logs_tree():
-    """With no override set, every path must land in <repo>/logs — unchanged."""
+def test_joinpath_logs_spelling_is_guarded():
+    assert _SELF_RESOLVED.search('root.joinpath("logs", "x.json")')
+
+
+def test_explicit_installer_target_exceptions_remain_exact():
+    by_file: dict[str, list[str]] = {}
+    for rel, expected in _EXPLICIT_TARGET_PATHS:
+        by_file.setdefault(rel, []).append(expected)
+    for rel, expected_lines in by_file.items():
+        text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        for expected in expected_lines:
+            matching = [line.strip() for line in text.splitlines() if line.strip() == expected]
+            assert matching == [expected]
+
+
+def test_default_contract_respects_installed_pointer_when_present():
     env = {k: v for k, v in os.environ.items() if k != ENV_VAR}
     probe = (
         "from core.runtime_paths import logs_dir, logs_path, runtime_root;"
@@ -77,9 +99,10 @@ def test_production_default_is_the_checkout_logs_tree():
         capture_output=True, text=True, check=True,
     )
     root, logs, nested = proc.stdout.split("\n")[:3]
-    assert Path(root) == REPO_ROOT
-    assert Path(logs) == REPO_ROOT / "logs"
-    assert Path(nested) == REPO_ROOT / "logs" / "a" / "b.json"
+    expected_root = read_runtime_pointer() or REPO_ROOT
+    assert Path(root) == expected_root
+    assert Path(logs) == expected_root / "logs"
+    assert Path(nested) == expected_root / "logs" / "a" / "b.json"
 
 
 def test_override_redirects_the_whole_tree(tmp_path, monkeypatch):
@@ -90,19 +113,17 @@ def test_override_redirects_the_whole_tree(tmp_path, monkeypatch):
 
 
 def test_override_is_read_per_call_not_frozen_at_import(tmp_path, monkeypatch):
-    """A cached root would silently ignore a harness that redirects later."""
     first = logs_dir()
     monkeypatch.setenv(ENV_VAR, str(tmp_path))
     assert logs_dir() == tmp_path / "logs" != first
 
 
-def test_blank_override_falls_back_to_the_checkout(monkeypatch):
+def test_blank_override_uses_pointer_or_checkout(monkeypatch):
     monkeypatch.setenv(ENV_VAR, "   ")
-    assert runtime_root() == REPO_ROOT
+    assert runtime_root() == (read_runtime_pointer() or REPO_ROOT)
 
 
 def test_suite_itself_runs_under_an_override():
-    """Guards the conftest block: if it stops applying, every test writes live."""
     assert os.environ.get(ENV_VAR), "conftest must redirect the runtime root"
     assert runtime_root() != REPO_ROOT
     assert REPO_ROOT not in logs_dir().parents
@@ -115,8 +136,6 @@ def test_suite_itself_runs_under_an_override():
     ("product.recommendations_store", "DEFAULT_RECO_PATH"),
 ])
 def test_module_level_path_constants_follow_the_override(module, attr):
-    """These bind at import time, so they must bind to the redirected root."""
     import importlib
-
     resolved = Path(getattr(importlib.import_module(module), attr))
     assert runtime_root() in resolved.parents
