@@ -20,7 +20,7 @@ data → signals → EV ranking → risk gates → execution → outcomes → le
 - **Learn**: every BUY and every rejected candidate is journaled with its prediction; outcomes resolve later; calibration is audited; leaky signals get demoted per regime.
 - **Stay honest**: no market evidence means no profitability claim. Stale, missing, degraded, or blocked data must look that way in both the APIs and the desk.
 
-## Canonical local product path
+## Canonical product path
 
 The product UI is the **Vite/React desk**. Streamlit is not the product path.
 
