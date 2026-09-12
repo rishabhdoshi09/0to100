@@ -549,6 +549,20 @@ def stock_intelligence(symbol: str) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Stock intelligence failed: {exc}") from exc
 
 
+@app.get("/api/forward-evidence")
+def forward_evidence_board() -> dict[str, Any]:
+    """Has the desk earned any market evidence yet, and how much."""
+    try:
+        from product.forward_evidence_board import build_forward_evidence_board
+
+        # The persisted book, not a live brain: this endpoint must be cheap and
+        # must never start the autonomy machinery to answer a question.
+        book = core._json_file(logs_dir() / "intelligence" / "intel_book.json", {})
+        return build_forward_evidence_board(book=book)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Forward evidence failed: {exc}") from exc
+
+
 @app.get("/api/decisions")
 def decisions_board(limit: int = 40) -> dict[str, Any]:
     """The canonical ranked decision board. Reads the saved scan, never runs one."""

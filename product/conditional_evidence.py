@@ -247,6 +247,39 @@ def _public(cell: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def cells(*, evidence_class: str = PAPER_FORWARD,
+          path: str | Path | None = None) -> list[dict[str, Any]]:
+    """Every cell of one evidence class, richest sample first.
+
+    Reading order matters on a screen: the cells with enough observations to
+    mean something belong at the top, and the long tail of ones and twos below,
+    clearly marked as not yet a claim.
+    """
+    klass = normalise_evidence_class(evidence_class)
+    store = load(path)
+    out: list[dict[str, Any]] = []
+    for key, cell in (store.get("cells") or {}).items():
+        if not isinstance(cell, Mapping):
+            continue
+        if not str(key).startswith(f"{klass}::"):
+            continue
+        row = dict(cell)
+        row["usable_for_ranking"] = int(row.get("count") or 0) >= MIN_SAMPLE
+        out.append(row)
+    out.sort(key=lambda r: (-int(r.get("count") or 0), str(r.get("context_key") or "")))
+    return out
+
+
+def parse_context(context_key: str) -> dict[str, str]:
+    """Split a context key back into its named parts, for grouping on a screen."""
+    parts: dict[str, str] = {}
+    for chunk in str(context_key or "").split("|"):
+        name, _, value = chunk.partition("=")
+        if name:
+            parts[name.strip()] = value.strip()
+    return parts
+
+
 def ranking_evidence(
     context_key: str,
     *,
