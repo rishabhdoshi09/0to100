@@ -1,26 +1,25 @@
 """Installed-host entrypoint for the QuantTerm paper/shadow desk.
 
 The service manager starts this module, not the interactive launcher. It loads an
-optional operator-owned environment file, starts the low-frequency post-session
+optional operator-owned environment file, starts one low-frequency post-session
 report scheduler, then hands process ownership to the canonical host supervisor.
-No credential value is logged or written back to disk here.
+Scheduler failures are persisted and alert at most once per IST date instead of
+being silently swallowed.
 """
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import threading
 import time
+from typing import Any
 
 REPORT_POLL_SECONDS = 15 * 60
+REPORT_SCHEDULER_REL = Path("state") / "daily_report_scheduler.json"
 
 
 def load_env_file(path: str | os.PathLike[str] | None) -> list[str]:
-    """Load simple KEY=VALUE lines without echoing values.
-
-    Existing process variables win, so a service-manager override is never silently
-    replaced by a stale file. The return value contains key names only.
-    """
     if not path:
         return []
     target = Path(path).expanduser()
@@ -50,21 +49,69 @@ def load_env_file(path: str | os.PathLike[str] | None) -> list[str]:
     return loaded
 
 
+def _read_scheduler_status() -> dict[str, Any]:
+    from core.runtime_paths import runtime_path
+    path = runtime_path(REPORT_SCHEDULER_REL)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_scheduler_status(payload: dict[str, Any]) -> None:
+    from core.runtime_paths import runtime_path
+    path = runtime_path(REPORT_SCHEDULER_REL)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _report_iteration() -> dict[str, Any]:
+    from core.market_clock import now_ist
+    now = now_ist()
+    previous = _read_scheduler_status()
+    payload: dict[str, Any] = {
+        "schema_version": 1,
+        "last_attempt_ist": now.isoformat(),
+        "ist_date": now.date().isoformat(),
+        "state": "OK",
+        "last_error": "",
+        "alerted_date": str(previous.get("alerted_date") or ""),
+    }
+    try:
+        from product.host_report_job import run_once
+        result = run_once(now=now)
+        payload["report_result"] = result
+        payload["state"] = "RAN" if result.get("ran") else "NOT_DUE"
+    except Exception as exc:
+        payload["state"] = "FAILED"
+        payload["last_error"] = f"{type(exc).__name__}: report scheduler iteration failed"
+        if payload["alerted_date"] != now.date().isoformat():
+            try:
+                from product.host_alerts import send_operational_alert
+                alert = send_operational_alert(
+                    "QuantTerm daily operating report scheduler failed\n"
+                    f"IST date: {now.date().isoformat()}\n"
+                    f"Failure class: {type(exc).__name__}\n"
+                    "Read state/daily_report_scheduler.json and service logs."
+                ).to_dict()
+                payload["alert"] = alert
+                if alert.get("attempted"):
+                    payload["alerted_date"] = now.date().isoformat()
+            except Exception as alert_exc:
+                payload["alert"] = {
+                    "attempted": True, "delivered": False,
+                    "detail": f"{type(alert_exc).__name__}: alert delivery failed",
+                }
+    _write_scheduler_status(payload)
+    return payload
+
+
 def _report_loop() -> None:
-    """Poll the idempotent report job without creating a second scheduler owner.
-
-    ``host_report_job.run_once`` decides whether a report is actually due and
-    de-duplicates by IST date. This loop only supplies a coarse wake-up cadence.
-    A report failure is intentionally non-fatal to the desk: the report job
-    persists its own evidence and operational alerts cover critical results.
-    """
     while True:
-        try:
-            from product.host_report_job import run_once
-
-            run_once()
-        except Exception:
-            pass
+        _report_iteration()
         time.sleep(REPORT_POLL_SECONDS)
 
 
@@ -82,9 +129,8 @@ def main() -> int:
     ).start()
 
     from product.host_supervisor import main as supervisor_main
-
     return int(supervisor_main())
 
 
-if __name__ == "__main__":  # pragma: no cover
+if __name__ == "__main__":
     raise SystemExit(main())

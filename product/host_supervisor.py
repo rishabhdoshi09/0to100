@@ -1,13 +1,9 @@
 """Always-on host supervisor for the QuantTerm paper/shadow desk.
 
-The OS service manager owns exactly this process.  This process owns all desk
-children.  It intentionally does not shell out to the interactive launchers,
-because those launchers historically wrote supervisor logs relative to the git
-checkout; an installed host must keep every mutable artifact under the
-persistent ``QT_RUNTIME_ROOT``.
-
-Capital safety is checked before any child starts.  This supervisor never calls
-a broker mutation and never enables live execution.
+The OS service manager owns exactly this process; this process owns the desk
+children. Mutable state stays under QT_RUNTIME_ROOT, live execution is verified
+locked before any child starts, and crash/recovery truth is persisted rather
+than overwritten by a generic STOPPED marker.
 """
 from __future__ import annotations
 
@@ -18,9 +14,9 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
-import threading
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -165,6 +161,7 @@ class Child:
         self.restarts = 0
         self.health_failures = 0
         self.last_start = 0.0
+        self.last_health_ok: bool | None = None
 
     @property
     def alive(self) -> bool:
@@ -182,11 +179,11 @@ class Child:
         env["QT_NO_BROWSER"] = "1"
         self.proc = subprocess.Popen(
             list(self.spec.argv), cwd=REPO_ROOT, env=env,
-            stdout=self.log, stderr=subprocess.STDOUT,
-            start_new_session=True,
+            stdout=self.log, stderr=subprocess.STDOUT, start_new_session=True,
         )
         self.last_start = time.time()
         self.health_failures = 0
+        self.last_health_ok = None
 
     def terminate(self, grace_s: float = STOP_GRACE_S) -> None:
         proc = self.proc
@@ -257,14 +254,7 @@ class HostSupervisor:
             raise RuntimeError(f"live execution is not verified-locked: {state.status}")
 
     def bootstrap_host(self) -> None:
-        """Own the first durable-store build before consumers start.
-
-        Repair code intentionally refuses to turn a small per-symbol repair
-        request into a 500-session bootstrap.  The installed host has one
-        explicit place where that expensive first build belongs.
-        """
         from product.host_bootstrap import bootstrap_host_state
-
         self.bootstrap = bootstrap_host_state(should_stop=lambda: self.stop_requested)
         state = str(self.bootstrap.get("state") or "FAILED")
         if state in {"FAILED", "CANCELLED"}:
@@ -274,29 +264,27 @@ class HostSupervisor:
 
     def _probe_market_access_worker(self) -> None:
         try:
-            from product.host_preflight import probe_market_access
-
+            from product.host_preflight import FAIL, UNKNOWN, probe_market_access
             checks, environment = probe_market_access()
             self.market_access = {
                 "checked_at": _now(),
                 "environment": environment,
                 "checks": [c.to_dict() for c in checks],
             }
+            required_blocked = any(c.required and c.status in {FAIL, UNKNOWN} for c in checks)
+            # If the first official-history bootstrap was degraded only because
+            # market egress was unavailable, a later successful coarse reprobe
+            # owns one retry. No fast provider retry loop is introduced.
+            if str(self.bootstrap.get("state") or "") == "DEGRADED" and not required_blocked:
+                from product.host_bootstrap import bootstrap_host_state
+                self.bootstrap = bootstrap_host_state(should_stop=lambda: self.stop_requested)
         except Exception as exc:
             self.market_access = {
-                "checked_at": _now(),
-                "environment": {},
-                "checks": [],
+                "checked_at": _now(), "environment": {}, "checks": [],
                 "error": f"{type(exc).__name__}: {exc}"[:300],
             }
 
     def maybe_reprobe_market_access(self, *, force: bool = False) -> None:
-        """Coarsely re-evaluate an aggregate egress block without retry storms.
-
-        Provider workers own their normal schedules.  This probe is deliberately
-        sparse: a firewall fixed after startup becomes visible without requiring
-        a manual restart, while a blocked environment is not hammered per source.
-        """
         now = time.monotonic()
         if not force and now - self._last_market_probe < MARKET_REPROBE_SECONDS:
             return
@@ -305,8 +293,7 @@ class HostSupervisor:
         self._last_market_probe = now
         self._market_probe_thread = threading.Thread(
             target=self._probe_market_access_worker,
-            name="quantterm-market-egress-probe",
-            daemon=True,
+            name="quantterm-market-egress-probe", daemon=True,
         )
         self._market_probe_thread.start()
 
@@ -373,14 +360,15 @@ class HostSupervisor:
 
     def _supervise_child(self, child: Child) -> None:
         if not child.alive:
+            child.last_health_ok = False
             child.close_log()
             self.start_child(child.spec.name)
             return
-        healthy = False
         try:
             healthy = bool(child.spec.health())
         except Exception:
             healthy = False
+        child.last_health_ok = healthy
         if healthy:
             child.health_failures = 0
             return
@@ -409,6 +397,7 @@ class HostSupervisor:
                 name: {
                     "pid": child.proc.pid if child.proc else None,
                     "alive": child.alive,
+                    "healthy": child.last_health_ok,
                     "health_failures": child.health_failures,
                     "starts": child.restarts,
                 }
@@ -422,12 +411,14 @@ class HostSupervisor:
         except Exception:
             pass
 
-    def stop_all(self) -> None:
+    def stop_all(self, *, terminal_state: str = "STOPPED", error: str = "") -> None:
         for name in ("frontend", "market_api", "report_api", "market_ops", "autonomy"):
             self.children[name].terminate()
-        self.write_status(state="STOPPED")
+        self.write_status(state=terminal_state, error=error)
 
     def run(self) -> int:
+        terminal_state = "STOPPED"
+        terminal_error = ""
         try:
             self.verify_safety()
             self.acquire_machine_lock()
@@ -444,11 +435,13 @@ class HostSupervisor:
                 time.sleep(HEARTBEAT_SECONDS)
             return 0
         except Exception as exc:
-            self.write_status(state="FAILED", error=f"{type(exc).__name__}: {exc}"[:300])
+            terminal_state = "FAILED"
+            terminal_error = f"{type(exc).__name__}: {exc}"[:300]
+            self.write_status(state=terminal_state, error=terminal_error)
             print(f"HOST SUPERVISOR FAILED: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
             return 1
         finally:
-            self.stop_all()
+            self.stop_all(terminal_state=terminal_state, error=terminal_error)
 
 
 def main() -> int:

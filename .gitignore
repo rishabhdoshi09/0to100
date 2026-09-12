@@ -36,6 +36,7 @@ logs/
 *.pkl
 *.json
 !docs/issue92_live_dod_proof.json
+.quantterm_runtime_root
 
 # ── IDE ───────────────────────────────────────────────────────────────────────
 .idea/
