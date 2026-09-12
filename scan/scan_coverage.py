@@ -82,10 +82,16 @@ def _precheck_reason(df) -> tuple[str, str]:
 
 
 class ScanCoverageProbe:
-    def __init__(self, symbols: Iterable[str], *, instrumented: bool, history_repair: dict | None = None):
+    def __init__(self, symbols: Iterable[str], *, instrumented: bool, history_repair: dict | None = None,
+                 universe_provenance: dict | None = None):
         self.requested = [_symbol(s) for s in symbols if _symbol(s)]
         self.instrumented = bool(instrumented)
         self.history_repair = dict(history_repair or {})
+        # Which market list this scan claims to have walked, and where it came
+        # from. "Whole market scanned" is a claim about a universe, and a
+        # universe pulled from a CSV shipped with the checkout is not the same
+        # market as one pulled from the exchange this morning.
+        self.universe_provenance = dict(universe_provenance or {})
         self._lock = threading.Lock()
         self._rows: dict[str, dict[str, Any]] = {}
 
@@ -193,6 +199,7 @@ class ScanCoverageProbe:
             "scanner_instrumented": self.instrumented,
             "walked_total_reported": int(walked_total or 0),
             "history_repair": self.history_repair,
+            "universe_provenance": self.universe_provenance,
             "reason_counts": dict(sorted(counts.items())),
         }
         return {
@@ -201,6 +208,34 @@ class ScanCoverageProbe:
             "summary": summary,
             "ledger": ledger,
         }
+
+
+def _universe_provenance() -> dict:
+    """Where the intended universe came from, if the loader recorded it.
+
+    Read-only and fail-safe: coverage evidence is better with provenance and
+    still honest without it, but it must never be the reason a scan aborts.
+    """
+    try:
+        from data.nse_universe import last_universe_acquisition
+
+        result = last_universe_acquisition()
+        if result is None:
+            return {"state": "UNRECORDED",
+                    "detail": "the universe was loaded before provenance was tracked"}
+        return {
+            "state": result.state,
+            "source": result.source,
+            "tier": result.tier,
+            "fallback_level": result.fallback_level,
+            "record_count": result.record_count,
+            "content_hash": result.content_hash,
+            "fetched_at": result.fetched_at,
+            "parser_version": result.parser_version,
+            "parser_changed_somewhere": result.parser_changed,
+        }
+    except Exception as exc:
+        return {"state": "UNRECORDED", "detail": f"{type(exc).__name__}: {exc}"[:160]}
 
 
 @contextmanager
@@ -221,7 +256,9 @@ def observe_scanner(scanner, symbols: Iterable[str]):
 
     original = getattr(scanner, "_analyze", None)
     instrumented = callable(original)
-    probe = ScanCoverageProbe(requested, instrumented=instrumented, history_repair=history_repair)
+    probe = ScanCoverageProbe(requested, instrumented=instrumented,
+                              history_repair=history_repair,
+                              universe_provenance=_universe_provenance())
     if not instrumented:
         yield probe
         return

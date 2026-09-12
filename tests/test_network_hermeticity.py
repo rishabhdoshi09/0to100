@@ -184,3 +184,67 @@ def test_the_rss_fallback_is_bounded_and_restores_the_default_timeout():
         "the fallback must not leave a global socket timeout behind it"
     )
     assert fetcher_module is not None
+
+
+# ---------------------------------------------------------------------------
+# The unbounded-fallback class, as a standing invariant rather than one audit.
+#
+# news.fetcher shipped a bounded requests.get() whose except-branch fell back to
+# an unbounded urllib fetch. A one-time sweep found it was the only instance;
+# this keeps it that way, because the next one will be written by someone who
+# has never heard of the first.
+# ---------------------------------------------------------------------------
+import re
+import subprocess
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+_FETCHERS = re.compile(
+    r'\b(requests\.(get|post|head|put|delete)'
+    r'|[A-Za-z_.]*session\.(get|post|head)'
+    r'|urlopen|urlretrieve'
+    r'|feedparser\.parse)\s*\('
+)
+
+# Not the running product: archived pages, the legacy entrypoint, developer
+# scripts, the test suite, the unrelated fintel sub-app, and the virtualenv.
+_NOT_PRODUCTION = ("tests/", "ui/", "scripts/", "venv/", ".venv/", "fintel/",
+                   "legacy_app.py")
+
+
+def _production_sources() -> list[Path]:
+    listed = subprocess.run(
+        ["git", "ls-files", "*.py"], cwd=REPO_ROOT,
+        capture_output=True, text=True, check=True,
+    ).stdout.split()
+    return [REPO_ROOT / rel for rel in listed
+            if not rel.startswith(_NOT_PRODUCTION)]
+
+
+def test_every_outbound_fetch_in_production_is_bounded():
+    offenders: list[str] = []
+    for path in _production_sources():
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        for index, line in enumerate(lines):
+            match = _FETCHERS.search(line.split("#", 1)[0])
+            if not match:
+                continue
+            call = match.group(1)
+            window = "\n".join(lines[index:index + 16])
+            if call == "feedparser.parse":
+                # Parsing bytes already fetched is not a fetch. Handing it a URL
+                # is, and feedparser has no per-call timeout of its own.
+                argument = line.split("feedparser.parse(", 1)[1]
+                if not re.match(r'\s*(feed_url|url|source\.url|["\']http)', argument):
+                    continue
+                bounded = "setdefaulttimeout" in window
+            else:
+                bounded = "timeout" in window
+            if not bounded:
+                offenders.append(f"{rel}:{index + 1}: {line.strip()[:100]}")
+    assert not offenders, (
+        "these outbound calls have no bound, so a hung upstream holds their "
+        "lane open indefinitely:\n  " + "\n  ".join(offenders)
+    )

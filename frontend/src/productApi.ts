@@ -1918,3 +1918,8 @@ export const fetchDecisionWhy = (symbol: string): Promise<DecisionWhy> =>
   request(`/api/decisions/${encodeURIComponent(symbol)}/why`, {
     headers: { Accept: 'application/json' },
   })
+
+import type { ForwardEvidenceBoard } from './forwardEvidenceModel'
+
+export const fetchForwardEvidence = (): Promise<ForwardEvidenceBoard> =>
+  request('/api/forward-evidence', { headers: { Accept: 'application/json' } })

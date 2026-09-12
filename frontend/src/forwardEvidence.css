@@ -1,0 +1,46 @@
+/* Forward evidence — the empty state is a first-class rendering, not a gap. */
+.forward-evidence { display: flex; flex-direction: column; gap: 18px; }
+.forward-evidence__state { border-radius: 8px; padding: 12px 14px; border: 1px solid; }
+.forward-evidence__state h2 { margin: 0 0 4px; font-size: 0.95rem; letter-spacing: 0.06em; }
+.forward-evidence__state p { margin: 0; }
+.forward-evidence__state--none {
+  border-color: rgba(150, 150, 150, 0.5); background: rgba(150, 150, 150, 0.08);
+}
+.forward-evidence__state--accumulating {
+  border-color: rgba(240, 180, 40, 0.5); background: rgba(240, 180, 40, 0.08);
+}
+.forward-evidence__state--measured {
+  border-color: rgba(70, 170, 110, 0.5); background: rgba(70, 170, 110, 0.08);
+}
+.forward-evidence__class { margin-top: 6px !important; font-size: 0.78rem; opacity: 0.7; }
+.forward-evidence__warning {
+  margin: 0; padding: 8px 10px; border-radius: 6px;
+  background: rgba(220, 90, 90, 0.12); font-size: 0.85rem;
+}
+.forward-evidence__groups {
+  display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+.forward-evidence__group {
+  border: 1px solid rgba(128, 128, 128, 0.25); border-radius: 8px; padding: 10px 12px;
+}
+.forward-evidence__group h3,
+.forward-evidence__distribution h3,
+.forward-evidence__unresolved h3 {
+  margin: 0 0 8px; font-size: 0.78rem; text-transform: uppercase; opacity: 0.7;
+}
+.forward-evidence table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.forward-evidence th { text-align: left; font-weight: 600; opacity: 0.6; font-size: 0.72rem; }
+.forward-evidence td { padding: 2px 0; font-variant-numeric: tabular-nums; }
+.forward-evidence tr.is-thin { opacity: 0.6; }
+.forward-evidence__floor { font-size: 0.72rem; opacity: 0.7; text-align: right; }
+.forward-evidence__none { margin: 0; font-style: italic; opacity: 0.7; font-size: 0.85rem; }
+.forward-evidence__distribution ul { list-style: none; margin: 0; padding: 0; }
+.forward-evidence__distribution li {
+  display: grid; grid-template-columns: 90px 1fr 40px; align-items: center; gap: 8px;
+  font-size: 0.8rem; font-variant-numeric: tabular-nums;
+}
+.forward-evidence__bar {
+  height: 10px; border-radius: 3px; background: rgba(120, 140, 200, 0.55); min-width: 2px;
+}
+.forward-evidence__count { text-align: right; }
+.forward-evidence__footer { font-size: 0.75rem; opacity: 0.65; }

@@ -549,18 +549,44 @@ def stock_intelligence(symbol: str) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Stock intelligence failed: {exc}") from exc
 
 
+def _market_regime() -> str:
+    """The regime label the canonical decision path conditions its evidence on.
+
+    Deliberately empty when the market view is unavailable. An unknown regime
+    is honest; labelling it "Unavailable" would make that string a regime of
+    its own and quietly split the evidence cells in two.
+    """
+    try:
+        market = core._market_payload() or {}
+    except Exception:
+        return ""
+    if not market.get("available"):
+        return ""
+    health = str(market.get("health") or "").strip().upper()
+    return "" if health in ("", "UNAVAILABLE") else health
+
+
+@app.get("/api/forward-evidence")
+def forward_evidence_board() -> dict[str, Any]:
+    """Has the desk earned any market evidence yet, and how much."""
+    try:
+        from product.forward_evidence_board import build_forward_evidence_board
+
+        # The persisted book, not a live brain: this endpoint must be cheap and
+        # must never start the autonomy machinery to answer a question.
+        book = core._json_file(logs_dir() / "intelligence" / "intel_book.json", {})
+        return build_forward_evidence_board(book=book)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Forward evidence failed: {exc}") from exc
+
+
 @app.get("/api/decisions")
 def decisions_board(limit: int = 40) -> dict[str, Any]:
     """The canonical ranked decision board. Reads the saved scan, never runs one."""
     try:
         from product.decision_service import decision_board
 
-        market = core._market_payload() or {}
-        return decision_board(
-            market_state=str(market.get("regime") or market.get("state") or ""),
-            sector_state="",
-            limit=limit,
-        )
+        return decision_board(market_state=_market_regime(), limit=limit)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Decision board failed: {exc}") from exc
 
@@ -571,11 +597,7 @@ def decision_why_endpoint(symbol: str) -> dict[str, Any]:
     try:
         from product.decision_service import decision_why
 
-        market = core._market_payload() or {}
-        return decision_why(
-            clean_symbol(symbol),
-            market_state=str(market.get("regime") or market.get("state") or ""),
-        )
+        return decision_why(clean_symbol(symbol), market_state=_market_regime())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
