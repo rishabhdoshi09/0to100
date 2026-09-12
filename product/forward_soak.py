@@ -25,11 +25,12 @@ from product.forward_evidence import (
     real_forward_only,
 )
 from product.promotion_governance import assess_component, promotion_board
+from core.runtime_paths import logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
-JOURNEY_PATH = ROOT / "logs" / "product" / "forward_journey.json"
-DAILY_DIR = ROOT / "logs" / "product" / "forward_daily"
-VERIFY_PATH = ROOT / "logs" / "product" / "forward_soak_verify.json"
+JOURNEY_PATH = logs_dir() / "product" / "forward_journey.json"
+DAILY_DIR = logs_dir() / "product" / "forward_daily"
+VERIFY_PATH = logs_dir() / "product" / "forward_soak_verify.json"
 SCHEMA_VERSION = 1
 MIN_SCOREBOARD_N = 20
 VERIFY_MIN_INTERVAL_S = 60
@@ -354,7 +355,7 @@ def build_runtime_journey(*, cycle: Mapping[str, Any] | None = None) -> dict[str
     paper = read_paper_status()
     policies = load_policies()
     ledger = load_ledger()
-    ingested = _read_json(Path(os.environ.get("QT_LEARNING_INGESTED") or ROOT / "logs" / "product" / "learning_ingested.json"))
+    ingested = _read_json(Path(os.environ.get("QT_LEARNING_INGESTED") or logs_dir() / "product" / "learning_ingested.json"))
     cycle_id = str(latest.get("cycle_id") or "")
     scan_ok = bool((scan["payload"] or {}).get("records") or (scan["payload"] or {}).get("available"))
     reco_cards = 0

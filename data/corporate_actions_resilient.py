@@ -276,7 +276,7 @@ def _rows_from_nse_payload(payload: Any, *, source: str) -> list[dict[str, Any]]
 
 
 def _instrument_maps(path: Path | None = None) -> tuple[set[str], dict[str, str], dict[str, str]]:
-    path = path or (ROOT / "logs" / "instruments_cache.csv")
+    path = path or (logs_dir() / "instruments_cache.csv")
     symbols: set[str] = set()
     by_isin: dict[str, str] = {}
     names: dict[str, set[str]] = {}

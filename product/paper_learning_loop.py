@@ -28,10 +28,11 @@ from product.counterfactual_learning import (
 )
 from product.evidence_policy_engine import HARD_REASON_CODES
 from product.learning_policy_store import record_measured_outcome
+from core.runtime_paths import logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
-TAKEN_PATH = ROOT / "logs" / "product" / "taken_evidence.jsonl"
-INGESTED_PATH = ROOT / "logs" / "product" / "learning_ingested.json"
+TAKEN_PATH = logs_dir() / "product" / "taken_evidence.jsonl"
+INGESTED_PATH = logs_dir() / "product" / "learning_ingested.json"
 
 
 def _env_path(name: str, default: Path) -> Path:

@@ -9,8 +9,9 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from core.runtime_paths import logs_path
 
-_DB_PATH = Path("logs/thesis_db.db")
+_DB_PATH = logs_path("thesis_db.db")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS trade_theses (

@@ -11,9 +11,10 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
+from core.runtime_paths import logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
-STATE_PATH = ROOT / "logs" / "product" / "capability_runtime.json"
+STATE_PATH = logs_dir() / "product" / "capability_runtime.json"
 
 AUTOMATIC = "AUTOMATIC"
 HOME_ACTION = "HOME_ACTION"

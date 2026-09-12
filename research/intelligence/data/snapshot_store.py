@@ -17,6 +17,7 @@ import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from core.runtime_paths import logs_dir
 
 SCHEMA_VERSION = 1
 PARSER_VERSION = 1
@@ -33,7 +34,7 @@ def _canonical_csv(rows, header) -> str:
 class SnapshotStore:
     def __init__(self, root=None):
         self.root = Path(root) if root else (
-            Path(__file__).resolve().parents[3] / "logs" / "snapshots")
+            logs_dir() / "snapshots")
         self.root.mkdir(parents=True, exist_ok=True)
 
     # ── commit (immutable + content-addressed) ───────────────────────────────────

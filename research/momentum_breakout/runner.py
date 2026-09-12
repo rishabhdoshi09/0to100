@@ -32,8 +32,9 @@ from research.momentum_breakout import pit_safety as PS
 from research.momentum_breakout import observation as OBS
 from research.momentum_breakout import experiment as EXP
 from research.momentum_breakout import dataset as DS
+from core.runtime_paths import logs_path
 
-_ARTIFACT_ROOT = Path(__file__).resolve().parent.parent.parent / "logs" / "experiments" / "EXP-006"
+_ARTIFACT_ROOT = logs_path("experiments", "EXP-006")
 
 
 def _regime_at(bench: np.ndarray, i: int) -> str:

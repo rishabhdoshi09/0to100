@@ -31,7 +31,7 @@ from operations.market_ops import (
     _stale,
 )
 from operations.store import BLOCKED, FAILED, PENDING, RUNNING, SUCCEEDED, OperationStore
-from core.runtime_paths import logs_dir, logs_path
+from core.runtime_paths import logs_dir
 
 RETRY_AFTER_FAIL_S = 10 * 60
 SNAPSHOT_STALE_S = 90.0
@@ -44,7 +44,7 @@ def _snapshot_path() -> Path:
     raw = os.environ.get("QT_DESK_PIPELINE_SNAPSHOT")
     if raw:
         return Path(raw)
-    return Path(__file__).resolve().parents[1] / "logs" / "product" / "desk_pipeline.json"
+    return logs_dir() / "product" / "desk_pipeline.json"
 
 
 # Dependency/viewing order: Home → Scanner/Recos technical → funds → Reports → research.

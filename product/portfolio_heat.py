@@ -8,9 +8,10 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from core.runtime_paths import logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
-PATH = ROOT / "logs" / "product" / "portfolio_heat.json"
+PATH = logs_dir() / "product" / "portfolio_heat.json"
 
 
 def _f(value: Any) -> float | None:

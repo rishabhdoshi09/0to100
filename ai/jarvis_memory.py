@@ -12,9 +12,10 @@ import requests
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+from core.runtime_paths import logs_path
 
 
-_DB_PATH = Path("logs/jarvis_memory.db")
+_DB_PATH = logs_path("jarvis_memory.db")
 
 
 class JarvisMemory:

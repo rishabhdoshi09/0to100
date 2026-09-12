@@ -14,11 +14,12 @@ from pathlib import Path
 from typing import Any
 
 from product import readiness as RDY
+from core.runtime_paths import logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
-OPS_DB = ROOT / "logs" / "market_ops" / "jobs.db"
-AUTO_DB = ROOT / "logs" / "autonomy" / "jobs.db"
-RUNTIME_PATH = ROOT / "logs" / "autonomy" / "runtime.json"
+OPS_DB = logs_dir() / "market_ops" / "jobs.db"
+AUTO_DB = logs_dir() / "autonomy" / "jobs.db"
+RUNTIME_PATH = logs_dir() / "autonomy" / "runtime.json"
 
 AUTOMATED_BY = frozenset(
     {"pipeline", "bootstrap", "autonomy", "autonomous_loop", "market_scan", "desk_pipeline"}

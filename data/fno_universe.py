@@ -14,8 +14,9 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
+from core.runtime_paths import logs_path
 
-DEFAULT_CACHE_PATH = Path("logs/instruments_cache.csv")
+DEFAULT_CACHE_PATH = logs_path("instruments_cache.csv")
 
 INDEX_UNDERLYINGS = frozenset(
     {

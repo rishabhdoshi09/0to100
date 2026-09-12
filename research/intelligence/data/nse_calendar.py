@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from core.runtime_paths import logs_dir
 
 _CLOSE_HM = (15, 30)                 # NSE regular close (IST)
 _PUBLISH_CUTOFF_HM = (18, 0)         # after this IST time the day's bhavcopy is expected available
@@ -30,7 +31,7 @@ def _now_ist() -> datetime:
 
 def load_holidays() -> set:
     for p in (Path("data/nse_holidays.json"),
-              Path(__file__).resolve().parents[3] / "logs" / "nse_holidays.json"):
+              logs_dir() / "nse_holidays.json"):
         try:
             if p.exists():
                 return {str(x) for x in json.loads(p.read_text())}

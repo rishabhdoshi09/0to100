@@ -19,12 +19,13 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from product.paper_lessons import _get, is_paper_loss, trade_pnl
+from core.runtime_paths import logs_path
 
 SCHEMA_VERSION = 1
 COOLDOWN_DAYS = 5
 CONSECUTIVE_LOSSES = 2
 PREFER_MIN_TRADES = 3
-DEFAULT_PATH = Path("logs/product/paper_memory.json")
+DEFAULT_PATH = logs_path("product/paper_memory.json")
 
 LIVE_STILL_LOCKED = (
     "Live orders stay locked. Paper memory only changes which PAPER names "

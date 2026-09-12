@@ -24,10 +24,11 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from core.runtime_paths import logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_STATE = ROOT / "logs" / "product" / "autonomous_evolution.json"
-DEFAULT_RUN_DIR = ROOT / "logs" / "product" / "autonomous_evolution"
+DEFAULT_STATE = logs_dir() / "product" / "autonomous_evolution.json"
+DEFAULT_RUN_DIR = logs_dir() / "product" / "autonomous_evolution"
 SCHEMA_VERSION = 1
 
 DEFAULT_SPLITS = 3

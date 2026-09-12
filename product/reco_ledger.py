@@ -11,9 +11,10 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from core.runtime_paths import logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
-LEDGER_PATH = ROOT / "logs" / "product" / "reco_ledger.jsonl"
+LEDGER_PATH = logs_dir() / "product" / "reco_ledger.jsonl"
 LEDGER_VERSION = 3
 
 

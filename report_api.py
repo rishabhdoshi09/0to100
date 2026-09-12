@@ -74,7 +74,7 @@ def _runtime_as_of(symbol: str) -> dict[str, str]:
     try:
         import json
         from reporting.evidence_intake import ROOT
-        path = ROOT / "logs" / "product" / "fno_universe.json"
+        path = logs_dir() / "product" / "fno_universe.json"
         if path.exists():
             dates["fno_as_of"] = str(json.loads(path.read_text(encoding="utf-8")).get("generated_at", ""))
     except Exception:

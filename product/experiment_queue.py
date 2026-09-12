@@ -10,9 +10,10 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
+from core.runtime_paths import logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
-QUEUE = ROOT / "logs" / "product" / "experiment_queue.jsonl"
+QUEUE = logs_dir() / "product" / "experiment_queue.jsonl"
 
 SAFE_QUESTIONS = frozenset({
     "EXTENDED_THRESHOLD",

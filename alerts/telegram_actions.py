@@ -23,6 +23,7 @@ import time
 from datetime import datetime
 
 from logger import get_logger
+from core.runtime_paths import logs_dir
 
 log = get_logger(__name__)
 
@@ -60,7 +61,7 @@ def _do_paper_trade(sym: str, entry: float, stop: float, target: float) -> str:
 def _do_watchlist(sym: str, entry: float, stop: float, target: float) -> str:
     import sqlite3
     from pathlib import Path
-    db = Path(__file__).resolve().parent.parent / "logs" / "watchlist.db"
+    db = logs_dir() / "watchlist.db"
     try:
         db.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(db)

@@ -20,10 +20,11 @@ from core.market_clock import IST
 from pathlib import Path
 
 from logger import get_logger
+from core.runtime_paths import logs_dir
 
 log = get_logger(__name__)
 
-_WL_DB = Path(__file__).resolve().parent.parent / "logs" / "watchlist.db"
+_WL_DB = logs_dir() / "watchlist.db"
 _lock = threading.Lock()
 _alerted: dict[str, set] = {}
 

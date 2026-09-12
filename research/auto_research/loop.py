@@ -31,6 +31,7 @@ from research.strategy_studio import discovery as DISC
 from research.strategy_studio import review as REV
 from research.strategy_studio import spec as S
 from research.auto_research.thread import ResearchThread
+from core.runtime_paths import logs_dir
 
 
 # ── the outcome of one cycle ─────────────────────────────────────────────────────
@@ -248,7 +249,7 @@ def canonical_readiness(logs_root=None) -> dict:
         from pathlib import Path
         from research.momentum_breakout import data_setup as D
         root = Path(logs_root) if logs_root else (
-            Path(__file__).resolve().parent.parent.parent / "logs")
+            logs_dir())
         v = D.validate_dataset(root)
         return D.readiness(v)
     except Exception as e:

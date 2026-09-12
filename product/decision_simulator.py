@@ -27,6 +27,7 @@ from product.counterfactual_learning import (
     classify_forward,
 )
 from product.forward_evidence import BACKTEST
+from core.runtime_paths import logs_dir
 
 UNAVAILABLE = "UNAVAILABLE"
 UNKNOWN = "UNKNOWN"
@@ -44,7 +45,7 @@ _ENTER_ACTIONS = frozenset({"BUY", "ENTER", "ENTER_NOW", "TAKEN", "TAKE"})
 _VALID_ACTIONS = frozenset({"BUY", "WAIT", "AVOID", "REJECT", "NO_JUDGMENT"})
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_PATH = ROOT / "logs" / "product" / "decision_simulator.json"
+DEFAULT_PATH = logs_dir() / "product" / "decision_simulator.json"
 SCHEMA_VERSION = 1
 
 INCONCLUSIVE = "INCONCLUSIVE"

@@ -116,7 +116,7 @@ def _default_inputs(symbol: str) -> dict[str, Any]:
     except Exception:
         news = []
     try:
-        path = ROOT / "logs" / "product" / "fno_universe.json"
+        path = logs_dir() / "product" / "fno_universe.json"
         if path.exists():
             fno = json.loads(path.read_text(encoding="utf-8"))
         else:

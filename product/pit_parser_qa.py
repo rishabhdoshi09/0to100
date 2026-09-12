@@ -11,9 +11,10 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from product.pit_xbrl import PARSER_VERSION, parse_xbrl
+from core.runtime_paths import logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
-LEDGER = ROOT / "logs" / "product" / "parser_qa.jsonl"
+LEDGER = logs_dir() / "product" / "parser_qa.jsonl"
 
 
 def compare_facts(

@@ -6,6 +6,7 @@ import json
 import os
 import time
 from pathlib import Path
+from core.runtime_paths import logs_dir
 
 
 class LiveFeedController:
@@ -20,7 +21,7 @@ class LiveFeedController:
         self._quote_log_at = 0.0
 
     def _tokens(self, symbols) -> dict[int, str]:
-        cache = Path(__file__).resolve().parents[2] / "logs" / "instruments_cache.csv"
+        cache = logs_dir() / "instruments_cache.csv"
         if not cache.exists():
             return {}
         wanted = {str(s).upper() for s in symbols}

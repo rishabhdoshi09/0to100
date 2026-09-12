@@ -14,9 +14,10 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from core.runtime_paths import logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_PATH = ROOT / "logs" / "product" / "forward_evidence.jsonl"
+DEFAULT_PATH = logs_dir() / "product" / "forward_evidence.jsonl"
 SCHEMA_VERSION = 1  # previous: none. Additive research ledger.
 
 REAL_FORWARD_MARKET = "REAL_FORWARD_MARKET"

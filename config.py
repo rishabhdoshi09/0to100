@@ -10,6 +10,7 @@ from typing import List
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from core.runtime_paths import logs_dir, runtime_path
 
 
 class Settings(BaseSettings):
@@ -127,12 +128,17 @@ class Settings(BaseSettings):
 
     # ── Logging ───────────────────────────────────────────────────────────────
     log_level: str = Field(default="INFO")
-    log_dir: Path = Field(default=Path("logs"))
+    log_dir: Path = Field(default=logs_dir())
 
     @field_validator("log_dir", mode="before")
     @classmethod
     def _make_log_dir(cls, v: str | Path) -> Path:
-        p = Path(v)
+        # A relative LOG_DIR (e.g. the .env default "logs") must not depend on the
+        # process CWD: a daemon started from elsewhere would otherwise write its
+        # logs into a different tree than every other runtime path.
+        p = Path(v).expanduser()
+        if not p.is_absolute():
+            p = runtime_path(*p.parts)
         p.mkdir(parents=True, exist_ok=True)
         return p
 

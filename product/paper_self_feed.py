@@ -14,12 +14,13 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
+from core.runtime_paths import logs_path
 
 SCHEMA_VERSION = 1
 SHADOW_HORIZON = 10
 MAX_SHADOW = 16
-DEFAULT_LATEST = Path("logs/product/paper_self_feed.json")
-DEFAULT_REPORT_DIR = Path("logs/autonomy/paper_cycle_reports")
+DEFAULT_LATEST = logs_path("product/paper_self_feed.json")
+DEFAULT_REPORT_DIR = logs_path("autonomy/paper_cycle_reports")
 
 NOT_A_SAMPLE = (
     "Candidate tests use official bars on names this desk already ranked. "

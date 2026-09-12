@@ -28,10 +28,11 @@ from typing import Optional
 import numpy as np
 
 from logger import get_logger
+from core.runtime_paths import logs_path
 
 log = get_logger(__name__)
 
-_STATE_FILE = Path("logs/whipsaw_state.json")
+_STATE_FILE = logs_path("whipsaw_state.json")
 _LOCK = threading.Lock()
 
 

@@ -20,10 +20,11 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
+from core.runtime_paths import logs_path
 
 
 def _default_path() -> Path:
-    return Path(__file__).resolve().parent.parent.parent / "logs" / "auto_research" / "knowledge.json"
+    return logs_path("auto_research", "knowledge.json")
 
 
 @dataclass

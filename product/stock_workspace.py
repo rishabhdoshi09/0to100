@@ -321,7 +321,7 @@ def _default_inputs(symbol: str) -> dict[str, Any]:
         news = []
     fno = {}
     try:
-        path = ROOT / "logs" / "product" / "fno_universe.json"
+        path = logs_dir() / "product" / "fno_universe.json"
         fno = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     except Exception:
         fno = {}

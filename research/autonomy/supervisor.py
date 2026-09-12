@@ -13,6 +13,7 @@ from research.autonomy import health as H
 from research.autonomy import jobs as JOBS
 from research.autonomy import controls as CTRL
 from research.autonomy.dialogue import DialogueLog, Record, OPERATIONAL_INCIDENT
+from core.runtime_paths import logs_path
 
 _MAX_ATTEMPTS = 5
 _BASE_BACKOFF_S = 2.0
@@ -112,8 +113,7 @@ class Supervisor:
         except Exception:
             enabled = True
             try:
-                repo = Path(__file__).resolve().parents[2]
-                cfg = json.loads((repo / "logs" / "intelligence" / "paper_config.json").read_text())
+                cfg = json.loads(logs_path("intelligence", "paper_config.json").read_text())
                 enabled = bool(cfg.get("enabled", True))
             except Exception:
                 pass
@@ -498,8 +498,7 @@ class Supervisor:
         except Exception:
             pass
         try:
-            repo = Path(__file__).resolve().parents[2]
-            book = json.loads((repo / "logs" / "intelligence" / "intel_book.json").read_text())
+            book = json.loads(logs_path("intelligence", "intel_book.json").read_text())
             add(str(p.get("symbol", "")).upper() for p in book.get("open", []))
         except Exception:
             pass

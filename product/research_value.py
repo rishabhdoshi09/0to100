@@ -9,9 +9,10 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
+from core.runtime_paths import logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
-LEDGER = ROOT / "logs" / "product" / "research_value.jsonl"
+LEDGER = logs_dir() / "product" / "research_value.jsonl"
 
 DECISION_CHANGED = "DECISION_CHANGED"
 CONFIDENCE_CHANGED = "CONFIDENCE_CHANGED"

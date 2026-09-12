@@ -17,6 +17,7 @@ from product.institutional_readiness import build_institutional_readiness
 from product.observer_api import install as install_observer_api, observer_payload
 from product.product_readiness import build_product_readiness
 from product.stock_workspace import build_stock_workspace, clean_symbol
+from core.runtime_paths import logs_dir
 
 app = core.app
 app.version = "0.11.0"
@@ -31,14 +32,14 @@ except Exception:
     pass
 
 INSTITUTIONAL_CERTIFICATIONS = (
-    core.ROOT / "logs" / "institutional_readiness" / "certifications.json"
+    logs_dir() / "institutional_readiness" / "certifications.json"
 )
-TARGET_EVENT_STORE = core.ROOT / "logs" / "intelligence" / "events.jsonl"
-OMS_DB = core.ROOT / "logs" / "oms" / "orders.db"
-RISK_DB = core.ROOT / "logs" / "risk" / "decisions.db"
-RECONCILIATION_DB = core.ROOT / "logs" / "reconciliation" / "reports.db"
-PROTECTION_DB = core.ROOT / "logs" / "protection" / "plans.db"
-TCA_DB = core.ROOT / "logs" / "tca" / "assessments.db"
+TARGET_EVENT_STORE = logs_dir() / "intelligence" / "events.jsonl"
+OMS_DB = logs_dir() / "oms" / "orders.db"
+RISK_DB = logs_dir() / "risk" / "decisions.db"
+RECONCILIATION_DB = logs_dir() / "reconciliation" / "reports.db"
+PROTECTION_DB = logs_dir() / "protection" / "plans.db"
+TCA_DB = logs_dir() / "tca" / "assessments.db"
 
 
 def _current_product_payloads() -> dict[str, dict[str, Any]]:
@@ -386,7 +387,7 @@ def _trade_plan_payload(symbol: str) -> dict[str, Any]:
     if not (record.get("entry") and record.get("stop")):
         return {"available": False, "symbol": sym,
                 "message": "This candidate has no entry/stop yet — no risk plan can be computed."}
-    book = core._json_file(core.ROOT / "logs" / "intelligence" / "intel_book.json", {})
+    book = core._json_file(logs_dir() / "intelligence" / "intel_book.json", {})
     try:
         capital = float(book.get("capital") or 0.0)
     except Exception:

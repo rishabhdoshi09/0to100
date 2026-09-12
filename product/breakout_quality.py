@@ -10,6 +10,7 @@ AVOID_REVIEW. Optional order-book / concall context is attached when available
 from __future__ import annotations
 
 from typing import Any, Mapping
+from core.runtime_paths import logs_dir
 
 # Technical sniper / Telegram lane — eased so mid-day on-pace prints still arm.
 # Best-among can still pass a stricter min_volume explicitly.
@@ -194,9 +195,9 @@ def enrich_optional_context(symbol: str) -> dict[str, Any]:
         import json
         root = Path(__file__).resolve().parents[1]
         for path in (
-            root / "logs" / "evidence" / f"{sym}.json",
-            root / "logs" / "intelligence" / "earnings" / f"{sym}.json",
-            root / "logs" / "product" / "earnings_cache" / f"{sym}.json",
+            logs_dir() / "evidence" / f"{sym}.json",
+            logs_dir() / "intelligence" / "earnings" / f"{sym}.json",
+            logs_dir() / "product" / "earnings_cache" / f"{sym}.json",
         ):
             if not path.exists():
                 continue

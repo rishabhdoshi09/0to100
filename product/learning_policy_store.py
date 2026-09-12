@@ -15,9 +15,10 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
+from core.runtime_paths import logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_PATH = ROOT / "logs" / "product" / "learning_policies.json"
+DEFAULT_PATH = logs_dir() / "product" / "learning_policies.json"
 SCHEMA_VERSION = 1
 
 OBSERVING = "OBSERVING"

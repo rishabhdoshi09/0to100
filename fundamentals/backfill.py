@@ -13,11 +13,12 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from logger import get_logger
+from core.runtime_paths import logs_dir
 
 log = get_logger(__name__)
 
 _ROOT = Path(__file__).resolve().parents[1]
-_STATE_PATH = _ROOT / "logs" / "product" / "fundamentals_backfill.json"
+_STATE_PATH = logs_dir() / "product" / "fundamentals_backfill.json"
 _DELAY_SECONDS = 1.0
 
 

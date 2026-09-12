@@ -14,8 +14,9 @@ import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
+from core.runtime_paths import logs_path
 
-DB_PATH = Path("logs/watchlist_promoter.db")
+DB_PATH = logs_path("watchlist_promoter.db")
 
 
 # ── Database initialisation ───────────────────────────────────────────────────

@@ -24,9 +24,10 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
+from core.runtime_paths import logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_IDENTITY = ROOT / "logs" / "product" / "autonomous_evolution_identity.json"
+DEFAULT_IDENTITY = logs_dir() / "product" / "autonomous_evolution_identity.json"
 _lock = threading.Lock()
 
 

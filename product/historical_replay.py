@@ -32,9 +32,10 @@ from product.paper_autopilot import (
     WATCH,
     evaluate_candidate,
 )
+from core.runtime_paths import logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DIR = ROOT / "logs" / "product" / "historical_replay"
+DEFAULT_DIR = logs_dir() / "product" / "historical_replay"
 REPORT_NAME = "latest.json"
 PROGRESS_NAME = "progress.json"
 LEDGER_NAME = "decisions.jsonl"

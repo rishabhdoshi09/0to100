@@ -27,10 +27,11 @@ from pathlib import Path
 from typing import Optional
 
 from logger import get_logger
+from core.runtime_paths import logs_path
 
 log = get_logger(__name__)
 
-_CACHE_FILE = Path("logs/event_calendar_cache.json")
+_CACHE_FILE = logs_path("event_calendar_cache.json")
 
 
 # ── Hardcoded high-impact macro dates (FY 2025-26) ───────────────────────────

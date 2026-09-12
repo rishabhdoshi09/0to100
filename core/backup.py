@@ -16,10 +16,11 @@ import sqlite3
 from pathlib import Path
 
 from logger import get_logger
+from core.runtime_paths import logs_dir
 
 log = get_logger(__name__)
 
-_LOGS = Path(__file__).resolve().parent.parent / "logs"
+_LOGS = logs_dir()
 _BACKUP_ROOT = _LOGS / "backup"
 KEEP_DAYS = 7
 

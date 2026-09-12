@@ -22,10 +22,11 @@ from pathlib import Path
 from typing import Optional
 
 from logger import get_logger
+from core.runtime_paths import logs_dir
 
 log = get_logger(__name__)
 
-_DB = Path(__file__).resolve().parent.parent / "logs" / "trades.db"
+_DB = logs_dir() / "trades.db"
 _db_lock = threading.Lock()
 
 _DDL = """

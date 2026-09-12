@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from product.reco_methods import METHOD_WEIGHTS
+from core.runtime_paths import logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -151,7 +152,7 @@ def evidence_scorecard(card: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _read_reco_ledger(path: Path | None = None, *, max_lines: int = 500) -> list[dict[str, Any]]:
-    target = path or (ROOT / "logs" / "product" / "reco_ledger.jsonl")
+    target = path or (logs_dir() / "product" / "reco_ledger.jsonl")
     if not target.exists():
         return []
     try:

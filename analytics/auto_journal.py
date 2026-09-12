@@ -14,8 +14,9 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from core.runtime_paths import logs_path
 
-_DB_PATH = Path("logs/auto_journal.db")
+_DB_PATH = logs_path("auto_journal.db")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS journal_entries (
@@ -200,7 +201,7 @@ def close_entry(
                 try:
                     from pathlib import Path as _Path
                     import sqlite3 as _sqlite3
-                    thesis_db = _Path("logs/thesis_db.db")
+                    thesis_db = _logs_path("thesis_db.db")
                     if thesis_db.exists():
                         tc_conn = _sqlite3.connect(str(thesis_db))
                         tc_row = tc_conn.execute(

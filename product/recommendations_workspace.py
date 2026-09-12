@@ -46,9 +46,10 @@ from product.reco_ensemble import (
     confirm_finalists,
     ensemble_summary,
 )
+from core.runtime_paths import logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
-REPORTS_DIR = ROOT / "logs" / "product" / "market_reports"
+REPORTS_DIR = logs_dir() / "product" / "market_reports"
 
 # Reco-Wealth analogues — QuantTerm evidence names (not a brand clone).
 CATEGORIES: tuple[dict[str, str], ...] = (
