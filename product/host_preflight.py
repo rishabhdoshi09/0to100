@@ -1,14 +1,15 @@
-"""Truthful host preflight for QuantTerm paper/shadow operation.
+"""Truthful host preflight for QuantTerm PAPER/SHADOW operation.
 
 A host is never READY without real market access and a verified locked live
-execution interlock.  Service-manager checks are optional readiness evidence,
-but they must query the same user scope the installer actually uses.
+execution interlock. Operational constraints such as memory pressure and macOS
+sleep are surfaced explicitly rather than silently treated as healthy.
 """
 from __future__ import annotations
 
 import getpass
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -30,6 +31,7 @@ READY = "READY_FOR_PAPER_OPERATION"
 BLOCKED = "BLOCKED"
 MIN_PYTHON = (3, 11)
 MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024
+MIN_AVAILABLE_MEMORY_BYTES = 4 * 1024 * 1024 * 1024
 DESK_PORTS = (8765, 8766, 5173)
 EPHEMERAL_PREFIXES = ("/tmp/", "/var/tmp/", "/dev/shm/")
 MARKET_ENDPOINTS: tuple[tuple[str, str, str], ...] = (
@@ -123,8 +125,7 @@ def check_runtime_root() -> Check:
     if root == REPO_ROOT.resolve() or REPO_ROOT.resolve() in root.parents:
         return _warn(
             "runtime_root",
-            f"{root} is inside the source checkout; a clean checkout or branch change would take "
-            "the accumulated market evidence with it. Install/adopt a persistent runtime root.",
+            f"{root} is inside the source checkout; accumulated market evidence is not durable across checkout changes",
             path=str(root), persistent=False,
         )
     if (str(root) + "/").startswith(EPHEMERAL_PREFIXES):
@@ -149,6 +150,71 @@ def check_disk_space() -> Check:
             free_bytes=usage.free,
         )
     return _ok("disk_space", f"{free_gb:.1f} GB free", free_bytes=usage.free)
+
+
+def _memory_snapshot() -> dict[str, int]:
+    """Return total/available RAM without making psutil a hard dependency."""
+    try:
+        import psutil  # type: ignore
+        vm = psutil.virtual_memory()
+        return {"total": int(vm.total), "available": int(vm.available)}
+    except Exception:
+        pass
+
+    if sys.platform.startswith("linux"):
+        try:
+            rows: dict[str, int] = {}
+            for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+                key, value = line.split(":", 1)
+                if key in {"MemTotal", "MemAvailable"}:
+                    rows[key] = int(value.strip().split()[0]) * 1024
+            if rows.get("MemTotal") and rows.get("MemAvailable") is not None:
+                return {"total": rows["MemTotal"], "available": rows["MemAvailable"]}
+        except Exception:
+            pass
+
+    if sys.platform == "darwin":
+        try:
+            sysctl = subprocess.run(
+                ["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=5, check=True,
+            )
+            total = int(sysctl.stdout.strip())
+            vm = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=5, check=True).stdout
+            match = re.search(r"page size of (\d+) bytes", vm)
+            page_size = int(match.group(1)) if match else 4096
+            pages: dict[str, int] = {}
+            for line in vm.splitlines():
+                m = re.match(r"([^:]+):\s+(\d+)\.?", line)
+                if m:
+                    pages[m.group(1).strip()] = int(m.group(2))
+            available_pages = sum(
+                pages.get(name, 0)
+                for name in ("Pages free", "Pages inactive", "Pages speculative", "Pages purgeable")
+            )
+            return {"total": total, "available": available_pages * page_size}
+        except Exception:
+            pass
+    return {}
+
+
+def check_memory() -> Check:
+    snapshot = _memory_snapshot()
+    total = int(snapshot.get("total") or 0)
+    available = int(snapshot.get("available") or 0)
+    if total <= 0 or available <= 0:
+        return _unknown("memory_capacity", "RAM availability could not be measured", required=False)
+    total_gb = total / (1024 ** 3)
+    available_gb = available / (1024 ** 3)
+    if available < MIN_AVAILABLE_MEMORY_BYTES:
+        return _warn(
+            "memory_capacity",
+            f"{available_gb:.1f} GB RAM available of {total_gb:.1f} GB; low-memory hosts may swap during whole-market scans",
+            total_bytes=total, available_bytes=available,
+        )
+    return _ok(
+        "memory_capacity", f"{available_gb:.1f} GB RAM available of {total_gb:.1f} GB",
+        total_bytes=total, available_bytes=available,
+    )
 
 
 def check_database_writable() -> Check:
@@ -250,12 +316,10 @@ def _linger_state() -> tuple[str, str]:
         return "unknown", f"{type(exc).__name__}"
     if proc.returncode != 0:
         return "unknown", (proc.stderr.strip() or f"rc={proc.returncode}")[:120]
-    value = proc.stdout.strip().lower()
-    return value, ""
+    return proc.stdout.strip().lower(), ""
 
 
 def check_service_installation() -> Check:
-    """Whether the installed user service will actually return after reboot/login."""
     systemctl = shutil.which("systemctl")
     if systemctl:
         try:
@@ -276,8 +340,7 @@ def check_service_installation() -> Check:
         linger, linger_error = _linger_state()
         if state == "enabled" and linger == "yes":
             return _ok(
-                "service_installation",
-                f"systemd user unit enabled, linger=yes (currently {running})",
+                "service_installation", f"systemd user unit enabled, linger=yes (currently {running})",
                 manager="systemd", enabled=True, active=running, linger=True,
             )
         if state == "enabled":
@@ -287,8 +350,7 @@ def check_service_installation() -> Check:
                 manager="systemd", enabled=True, active=running, linger=linger, linger_error=linger_error,
             )
         return _warn(
-            "service_installation",
-            "systemd user unit is not enabled; the desk will not come back after reboot/login",
+            "service_installation", "systemd user unit is not enabled; the desk will not come back after reboot/login",
             manager="systemd", enabled=False, active=running, linger=linger,
         )
     if sys.platform == "darwin" and shutil.which("launchctl"):
@@ -313,6 +375,47 @@ def check_service_installation() -> Check:
     return _warn(
         "service_installation", "no supported service manager found; the desk will not survive a reboot",
         manager="", enabled=False,
+    )
+
+
+def check_power_management() -> Check:
+    """Surface macOS idle/lid sleep risk for an unattended laptop host."""
+    if sys.platform != "darwin":
+        return _ok("power_management", "non-macOS host; macOS sleep check not applicable", platform=sys.platform)
+    pmset = shutil.which("pmset") or "/usr/bin/pmset"
+    if not Path(pmset).exists() and shutil.which("pmset") is None:
+        return _unknown("power_management", "pmset unavailable; macOS sleep state is unverified", required=False)
+    try:
+        proc = subprocess.run([pmset, "-g"], capture_output=True, text=True, timeout=10)
+    except Exception as exc:
+        return _unknown("power_management", f"pmset query failed: {type(exc).__name__}", required=False)
+    if proc.returncode != 0:
+        return _unknown("power_management", f"pmset returned rc={proc.returncode}", required=False)
+    sleep_minutes: int | None = None
+    for line in proc.stdout.splitlines():
+        match = re.match(r"^\s*sleep\s+(\d+)\b", line)
+        if match:
+            sleep_minutes = int(match.group(1))
+            break
+    caffeinate = Path("/usr/bin/caffeinate").exists() or bool(shutil.which("caffeinate"))
+    if sleep_minutes is None:
+        return _unknown(
+            "power_management", "pmset output did not expose the active idle-sleep setting", required=False,
+            raw=proc.stdout[-1000:],
+        )
+    if sleep_minutes > 0:
+        detail = (
+            f"macOS idle sleep is enabled ({sleep_minutes} min). Installed launchd service uses caffeinate -i "
+            "to prevent idle sleep while running, but closing the laptop lid can still suspend market-hour work."
+        )
+        return _warn(
+            "power_management", detail,
+            sleep_minutes=sleep_minutes, caffeinate_available=caffeinate, lid_close_risk=True,
+        )
+    return _ok(
+        "power_management",
+        "macOS idle sleep is disabled; keep the laptop powered and do not close the lid unless clamshell wake is configured",
+        sleep_minutes=0, caffeinate_available=caffeinate, lid_close_risk=True,
     )
 
 
@@ -380,8 +483,8 @@ def run_host_preflight(
 ) -> dict[str, Any]:
     checks: list[Check] = [
         check_python_runtime(), check_repository_sha(), check_runtime_root(), check_disk_space(),
-        check_database_writable(), check_clock(), check_ports(), check_secrets(), check_live_lock(),
-        check_service_installation(),
+        check_memory(), check_database_writable(), check_clock(), check_ports(), check_secrets(),
+        check_live_lock(), check_service_installation(), check_power_management(),
     ]
     environment: dict[str, Any] = {}
     if skip_network:
