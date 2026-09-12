@@ -73,6 +73,26 @@ def is_ist_today(ts, today: str | None = None) -> bool:
     return ist_day_of(ts) == (today or today_ist().isoformat())
 
 
+def console_stamp() -> str:
+    """One clock for every line the stack prints, with the zone spelled out.
+
+    The stack used to interleave two clocks in one stdout stream: market_ops
+    stamped lines with the host clock while the autonomy console stamped its
+    heartbeats in IST. Both printed a bare HH:MM:SS, so on a UTC host the same
+    log read
+
+        [10:57:24] MARKET OPS PROGRESS ...
+        [16:27:24] HEARTBEAT ...
+
+    Nothing was broken and nothing crashed; the log simply told an operator
+    that the heartbeat was five and a half hours in the future. IST is the
+    trading timezone the desk is reasoned about in, so IST wins — and it says
+    so on every line, because an unlabelled timestamp is what allowed two of
+    them to coexist unnoticed.
+    """
+    return now_ist().strftime("%H:%M:%S IST")
+
+
 def system_tz_is_ist() -> bool:
     """Diagnostics: kya machine ka local clock IST hai? Gates ab IST-explicit
     hain isliye galat TZ par bhi SAHI chalenge — par logs/cron timestamps

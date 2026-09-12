@@ -147,3 +147,80 @@ def test_the_api_exposes_the_board():
 
     paths = {route.path for route in api.app.routes if hasattr(route, "path")}
     assert "/api/forward-evidence" in paths
+
+
+# ---------------------------------------------------------------------------
+# Maturity grades DEPTH of evidence, never quality of it.
+# ---------------------------------------------------------------------------
+from product.forward_evidence_board import DEVELOPING, EARLY, INSUFFICIENT_SAMPLE, MATURE
+
+
+@pytest.mark.parametrize("n,expected", [
+    (0, NO_MARKET_EVIDENCE),
+    (1, INSUFFICIENT_SAMPLE),
+    (29, INSUFFICIENT_SAMPLE),
+    (30, EARLY),
+    (89, EARLY),
+    (90, DEVELOPING),
+    (299, DEVELOPING),
+    (300, MATURE),
+])
+def test_maturity_follows_the_deepest_context(n, expected):
+    if n:
+        _settle(n, realized_R=0.1, context="setup=VCP|regime=HEALTHY")
+    assert build_forward_evidence_board()["state"] == expected
+
+
+def test_maturity_is_depth_not_edge():
+    """A mature losing strategy is mature. The label makes no claim."""
+    _settle(300, realized_R=-1.0, context="setup=VCP|regime=HEALTHY")
+    board = build_forward_evidence_board()
+    assert board["state"] == MATURE
+    assert board["by_setup"][0]["expectancy_R"] == pytest.approx(-1.0)
+    assert "not an edge" in board["headline"]
+    assert "never a claim" in board["maturity_thresholds"]["note"]
+
+
+def test_many_thin_contexts_do_not_add_up_to_maturity():
+    """Depth is per context. Sixty one-trade cells is not a measured setup."""
+    for i in range(60):
+        _settle(1, realized_R=0.5, context=f"setup=S{i}|regime=HEALTHY")
+    board = build_forward_evidence_board()
+    assert board["settled_trades"] == 60
+    assert board["state"] == INSUFFICIENT_SAMPLE
+
+
+def test_drawdown_is_reported_over_the_settled_path():
+    """Expectancy hides the path; a strategy is lived through, not averaged."""
+    _settle(3, realized_R=-1.0, context="setup=VCP|regime=A")
+    _settle(2, realized_R=1.0, context="setup=VCP|regime=B")
+    shape = build_forward_evidence_board()["risk_shape"]
+    assert shape["max_drawdown_R"] == pytest.approx(-3.0)
+    assert shape["measured_from"] == 5
+
+
+def test_risk_shape_reports_absence_rather_than_zero():
+    board = build_forward_evidence_board()
+    shape = board["risk_shape"]
+    assert shape["worst_mae_R"] is None
+    assert shape["best_mfe_R"] is None
+    assert shape["max_drawdown_R"] is None
+    assert shape["calibration_gap"] is None
+    assert "no confidence was recorded" in shape["calibration_note"]
+
+
+def test_calibration_gap_says_which_direction_the_system_erred():
+    key = "setup=VCP|regime=HEALTHY"
+    for i in range(10):
+        outcome = Outcome(
+            position_id=f"pos_{i}", paper_order_id=f"ord_{i}",
+            paper_intent_id=f"int_{i}", decision_id=f"dec_{i}", symbol="AAA",
+            realized_R=-1.0, exit_reason="STOP", exit_session=f"2026-09-{i + 1:02d}",
+            resolved_at=f"2026-10-01T00:00:{i:02d}+00:00",
+            evidence_class=PAPER_FORWARD,
+        )
+        CE.record_outcome(outcome, context_key=key, evidence_class=PAPER_FORWARD,
+                          calibrated_confidence=0.8)
+    shape = build_forward_evidence_board()["risk_shape"]
+    assert shape["calibration_gap"] == pytest.approx(0.8)
+    assert "claimed more confidence than it earned" in shape["calibration_note"]
