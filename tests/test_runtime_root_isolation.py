@@ -1,5 +1,4 @@
-"""
-The runtime root is the single place every durable artifact path comes from.
+"""Guard the single mutable runtime root across production modules.
 
 Production code must not self-resolve ``logs/...``. Tests and service managers
 can redirect the whole mutable tree with QT_RUNTIME_ROOT, while an installed
@@ -16,11 +15,35 @@ from pathlib import Path
 
 import pytest
 
-from core.runtime_paths import ENV_VAR, REPO_ROOT, logs_dir, logs_path, runtime_root
+from core.runtime_paths import (
+    ENV_VAR,
+    POINTER_NAME,
+    REPO_ROOT,
+    logs_dir,
+    logs_path,
+    read_runtime_pointer,
+    runtime_root,
+)
 
 _EXCLUDED_PREFIXES = ("tests/", "ui/", "scripts/", "venv/", ".venv/", "frontend/")
 _EXCLUDED_FILES = ("legacy_app.py", "core/runtime_paths.py")
-_SELF_RESOLVED = re.compile(r'/\s*["\']logs["\']|Path\(\s*["\']logs[/"\']')
+_SELF_RESOLVED = re.compile(
+    r'/\s*["\']logs["\']|Path\(\s*["\']logs[/"\']|\.joinpath\(\s*["\']logs["\']'
+)
+
+# These two installer lines build paths beneath the explicit destination root
+# passed by the caller. They are not process-state path resolution. Keep the
+# exemption exact so any new use of joinpath("logs", ...) still fails the guard.
+_EXPLICIT_TARGET_PATHS = {
+    (
+        "product/host_install.py",
+        'service_logs = _resolved(runtime_root).joinpath("logs", "service")',
+    ),
+    (
+        "product/host_install.py",
+        '_resolved(runtime_root).joinpath("logs", "service").mkdir(parents=True, exist_ok=True)',
+    ),
+}
 
 
 def _production_sources() -> list[Path]:
@@ -40,7 +63,8 @@ def test_no_production_module_resolves_a_logs_path_itself():
         rel = path.relative_to(REPO_ROOT).as_posix()
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             code = line.split("#", 1)[0]
-            if _SELF_RESOLVED.search(code):
+            stripped = code.strip()
+            if _SELF_RESOLVED.search(code) and (rel, stripped) not in _EXPLICIT_TARGET_PATHS:
                 offenders.append(f"{rel}:{lineno}: {line.strip()}")
     assert not offenders, (
         "these modules resolve a logs path without core.runtime_paths, so "
@@ -48,7 +72,22 @@ def test_no_production_module_resolves_a_logs_path_itself():
     )
 
 
-def test_production_default_is_the_checkout_logs_tree():
+def test_joinpath_logs_spelling_is_guarded():
+    assert _SELF_RESOLVED.search('root.joinpath("logs", "x.json")')
+
+
+def test_explicit_installer_target_exceptions_remain_exact():
+    by_file: dict[str, list[str]] = {}
+    for rel, expected in _EXPLICIT_TARGET_PATHS:
+        by_file.setdefault(rel, []).append(expected)
+    for rel, expected_lines in by_file.items():
+        text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        for expected in expected_lines:
+            matching = [line.strip() for line in text.splitlines() if line.strip() == expected]
+            assert matching == [expected]
+
+
+def test_default_contract_respects_installed_pointer_when_present():
     env = {k: v for k, v in os.environ.items() if k != ENV_VAR}
     probe = (
         "from core.runtime_paths import logs_dir, logs_path, runtime_root;"
@@ -60,9 +99,10 @@ def test_production_default_is_the_checkout_logs_tree():
         capture_output=True, text=True, check=True,
     )
     root, logs, nested = proc.stdout.split("\n")[:3]
-    assert Path(root) == REPO_ROOT
-    assert Path(logs) == REPO_ROOT / "logs"
-    assert Path(nested) == REPO_ROOT / "logs" / "a" / "b.json"
+    expected_root = read_runtime_pointer() or REPO_ROOT
+    assert Path(root) == expected_root
+    assert Path(logs) == expected_root / "logs"
+    assert Path(nested) == expected_root / "logs" / "a" / "b.json"
 
 
 def test_override_redirects_the_whole_tree(tmp_path, monkeypatch):
@@ -78,9 +118,9 @@ def test_override_is_read_per_call_not_frozen_at_import(tmp_path, monkeypatch):
     assert logs_dir() == tmp_path / "logs" != first
 
 
-def test_blank_override_falls_back_to_the_checkout(monkeypatch):
+def test_blank_override_uses_pointer_or_checkout(monkeypatch):
     monkeypatch.setenv(ENV_VAR, "   ")
-    assert runtime_root() == REPO_ROOT
+    assert runtime_root() == (read_runtime_pointer() or REPO_ROOT)
 
 
 def test_suite_itself_runs_under_an_override():
