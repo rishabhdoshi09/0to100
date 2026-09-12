@@ -1,0 +1,129 @@
+/* Final presentation layer: visual refinement only; no state semantics. */
+
+:root {
+  --qt-glow-cyan: rgba(56, 189, 248, 0.14);
+  --qt-surface-glass: rgba(13, 20, 32, 0.82);
+  --qt-shadow-soft: 0 10px 30px rgba(0, 0, 0, 0.22);
+  --qt-shadow-focus: 0 0 0 3px rgba(56, 189, 248, 0.14);
+}
+
+body {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.sidebar {
+  box-shadow: 12px 0 40px rgba(0, 0, 0, 0.16);
+}
+
+.brand-mark {
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.02), 0 8px 22px rgba(56, 189, 248, .08);
+}
+
+.nav-item {
+  position: relative;
+}
+
+.nav-item.active::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 9px;
+  bottom: 9px;
+  width: 2px;
+  border-radius: 3px;
+  background: var(--cyan);
+  box-shadow: 0 0 12px var(--qt-glow-cyan);
+}
+
+.topbar {
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .14);
+}
+
+.panel,
+.metric,
+.broker-card,
+.system-mini,
+.search-box {
+  box-shadow: var(--qt-shadow-soft);
+}
+
+.panel,
+.metric {
+  transition: border-color 140ms ease, transform 140ms ease, box-shadow 140ms ease;
+}
+
+.panel:hover,
+.metric:hover {
+  border-color: rgba(255,255,255,.11);
+}
+
+button,
+input,
+[role="button"] {
+  outline: none;
+}
+
+button:focus-visible,
+input:focus-visible,
+[role="button"]:focus-visible {
+  box-shadow: var(--qt-shadow-focus);
+  border-color: rgba(56, 189, 248, .52) !important;
+}
+
+button:not(:disabled) {
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease, transform 120ms ease;
+}
+
+button:not(:disabled):active {
+  transform: translateY(1px);
+}
+
+table tbody tr {
+  transition: background 120ms ease;
+}
+
+table tbody tr:hover {
+  background: rgba(56, 189, 248, .035);
+}
+
+.api-warning,
+.offline-pill,
+.work-pill {
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.015);
+}
+
+::selection {
+  background: rgba(56, 189, 248, .22);
+  color: #f8fbff;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(139, 148, 167, .28) transparent;
+}
+
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: rgba(139, 148, 167, .22);
+  border-radius: 999px;
+}
+*::-webkit-scrollbar-thumb:hover { background: rgba(139, 148, 167, .36); }
+
+@media (max-width: 1360px) {
+  body { min-width: 1080px; }
+  .terminal-root { grid-template-columns: 220px minmax(0, 1fr); }
+  .topbar { padding-inline: 18px; }
+  .page-title { padding-inline: 18px; }
+  .metric-grid { padding-inline: 18px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
