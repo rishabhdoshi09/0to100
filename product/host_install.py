@@ -1,10 +1,9 @@
-"""Turn a validated QuantTerm checkout into an always-on paper/shadow host.
+"""Install and control the QuantTerm always-on PAPER/SHADOW host.
 
-Code and mutable runtime evidence are deliberately separated.  The installer
-copies repo-local durable state once, preserves the source, records the adopted
-persistent root for non-service CLI processes, pins the service to the exact
-checkout SHA, and refuses to claim success until a newly-started supervisor for
-that same SHA is alive and truthfully reporting capital safety.
+Code and mutable runtime evidence are deliberately separated. The installer
+adopts one persistent runtime root, pins the service to the exact checkout SHA,
+and refuses to claim success until that exact supervisor and all required
+children prove healthy. The installer never authorizes live broker execution.
 """
 from __future__ import annotations
 
@@ -40,10 +39,13 @@ DURABLE_DIRS = (
 MANIFEST_REL = Path("state") / "host_runtime_manifest.json"
 DEPLOYMENT_REL = Path("state") / "host_deployment.json"
 SUPERVISOR_REL = Path("state") / "host_supervisor.json"
+START_HISTORY_REL = Path("state") / "host_start_history.json"
 REPORT_SCHEDULER_REL = Path("state") / "daily_report_scheduler.json"
 REPORT_JOB_REL = Path("state") / "daily_report_job.json"
 EXPECTED_CHILDREN = ("autonomy", "market_ops", "market_api", "report_api", "frontend")
 HEARTBEAT_STALE_S = 10.0
+DEFAULT_STARTUP_TIMEOUT_S = 300.0
+DEFAULT_BOOTSTRAP_TIMEOUT_S = 1800.0
 
 
 class HostInstallError(RuntimeError):
@@ -158,9 +160,6 @@ def migrate_repo_runtime(
             raise HostInstallError(f"runtime manifest is unreadable: {marker}: {exc}") from exc
         if not isinstance(payload, dict) or not payload.get("initialized_at"):
             raise HostInstallError(f"runtime manifest is invalid: {marker}")
-        # The persistent root is authoritative after first adoption.  Leave the
-        # preserved repo-local copy alone but make it unreachable to ordinary CLI
-        # processes by writing the ignored runtime-root pointer.
         try:
             write_runtime_pointer(target, repo_root=repo_root)
         except Exception as exc:
@@ -234,10 +233,6 @@ def _systemd_quote(value: str) -> str:
 
 
 def _systemd_path(value: Path) -> str:
-    # WorkingDirectory= is a path directive, not an ExecStart-style command.
-    # Quoting the whole value is parsed as part of the path by systemd and is
-    # fatal. Spaces are legal in the remaining directive value. Escape only the
-    # systemd specifier introducer.
     return str(_resolved(value)).replace("%", "%%")
 
 
@@ -281,6 +276,8 @@ def render_launchd_plist(
     def esc(value: str) -> str:
         return html.escape(value, quote=True)
 
+    # Explicit target path, not this process's runtime resolution. The installer
+    # materializes this directory before launchd is asked to spawn the process.
     service_logs = _resolved(runtime_root).joinpath("logs", "service")
     env_entries = {
         "PYTHONPATH": str(_resolved(repo_root)),
@@ -292,6 +289,8 @@ def render_launchd_plist(
     env_xml = "\n".join(
         f"      <key>{esc(key)}</key><string>{esc(value)}</string>" for key, value in env_entries.items()
     )
+    # caffeinate -i prevents idle sleep while the service is alive. It cannot
+    # override ordinary lid-close sleep; host preflight reports that limitation.
     return f'''<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -299,6 +298,7 @@ def render_launchd_plist(
   <key>Label</key><string>{LAUNCHD_LABEL}</string>
   <key>ProgramArguments</key>
   <array>
+    <string>/usr/bin/caffeinate</string><string>-i</string>
     <string>{esc(python)}</string><string>-u</string><string>-m</string><string>product.host_entrypoint</string>
   </array>
   <key>WorkingDirectory</key><string>{esc(str(_resolved(repo_root)))}</string>
@@ -307,9 +307,10 @@ def render_launchd_plist(
 {env_xml}
   </dict>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
+  <key>KeepAlive</key>
+  <dict><key>SuccessfulExit</key><false/></dict>
   <key>ThrottleInterval</key><integer>5</integer>
-  <key>ProcessType</key><string>Background</string>
+  <key>ProcessType</key><string>Adaptive</string>
   <key>StandardOutPath</key><string>{esc(str(service_logs / "launchd.out.log"))}</string>
   <key>StandardErrorPath</key><string>{esc(str(service_logs / "launchd.err.log"))}</string>
 </dict>
@@ -344,6 +345,7 @@ def install_service_definition(
     path, label = _service_paths(manager, home=home)
     path.parent.mkdir(parents=True, exist_ok=True)
     if manager == "launchd":
+        # This is an explicit destination root; it is intentionally not logs_path().
         _resolved(runtime_root).joinpath("logs", "service").mkdir(parents=True, exist_ok=True)
     content = (
         render_systemd_unit(repo_root=repo_root, runtime_root=runtime_root, python=python,
@@ -386,8 +388,6 @@ def _systemctl_action(action: str) -> subprocess.CompletedProcess:
         _ensure_systemd_linger()
         _run(command + ["daemon-reload"], timeout=20)
         _run(command + ["enable", f"{SERVICE_NAME}.service"], timeout=30)
-        # `enable --now` is a no-op for an already-running changed unit.  Restart
-        # explicitly so upgrades actually apply the newly pinned SHA.
         _run(command + ["restart", f"{SERVICE_NAME}.service"], timeout=30)
         return _run(command + ["status", "--no-pager", f"{SERVICE_NAME}.service"],
                     check=False, timeout=20)
@@ -426,8 +426,6 @@ def _launchd_action(action: str, plist: Path) -> subprocess.CompletedProcess:
         _launchd_bootstrap(domain, target, plist)
         return _run(["launchctl", "print", target], check=False, timeout=20)
     if action == "stop":
-        # KeepAlive jobs immediately respawn after `launchctl kill`; bootout is
-        # the operation that actually stops/unloads the installed desk.
         return _run(["launchctl", "bootout", target], check=False, timeout=20)
     return _run(["launchctl", "print", target], check=False, timeout=20)
 
@@ -511,40 +509,80 @@ def _children_ready(payload: Mapping[str, Any]) -> bool:
 
 
 def wait_for_supervisor(
-    runtime_root: Path, *, expected_sha: str, started_after: float, timeout_s: float = 45.0,
+    runtime_root: Path, *, expected_sha: str, started_after: float,
+    timeout_s: float = DEFAULT_STARTUP_TIMEOUT_S,
+    bootstrap_timeout_s: float = DEFAULT_BOOTSTRAP_TIMEOUT_S,
 ) -> dict[str, Any]:
-    """Accept only evidence from the supervisor started for this installation."""
+    """Prove a fresh exact-SHA supervisor without penalizing a real first bootstrap.
+
+    BOOTSTRAPPING must keep a fresh heartbeat and may use the larger bounded
+    bootstrap budget. Once the process reaches STARTING/RUNNING it receives a
+    fresh normal startup window for the five required children.
+    """
     path = _resolved(runtime_root) / SUPERVISOR_REL
-    deadline = time.monotonic() + timeout_s
+    startup_deadline = time.monotonic() + max(0.01, timeout_s)
+    bootstrap_deadline = time.monotonic() + max(timeout_s, bootstrap_timeout_s)
+    startup_phase_seen = False
     last: dict[str, Any] = {}
-    while time.monotonic() < deadline:
+    last_state = ""
+
+    while True:
+        now_mono = time.monotonic()
+        active_deadline = bootstrap_deadline if last_state == "BOOTSTRAPPING" else startup_deadline
+        if now_mono >= active_deadline:
+            break
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(payload, dict):
                 last = payload
                 state = str(payload.get("state") or "")
+                last_state = state
                 started_epoch = _timestamp_epoch(payload.get("started_at"))
                 heartbeat_epoch = _timestamp_epoch(payload.get("heartbeat_at"))
                 fresh_instance = started_epoch is not None and started_epoch >= started_after - 0.25
                 correct_sha = str(payload.get("production_sha") or "") == expected_sha
-                fresh_heartbeat = heartbeat_epoch is not None and time.time() - heartbeat_epoch <= HEARTBEAT_STALE_S
-                if state == "RUNNING" and fresh_instance and correct_sha and fresh_heartbeat and _children_ready(payload):
-                    return payload
-                if state in {"FAILED", "STOPPED"} and fresh_instance:
+                heartbeat_age = None if heartbeat_epoch is None else time.time() - heartbeat_epoch
+                fresh_heartbeat = heartbeat_age is not None and heartbeat_age <= HEARTBEAT_STALE_S
+
+                if fresh_instance and correct_sha and state == "BOOTSTRAPPING":
+                    if not fresh_heartbeat:
+                        break
+                    startup_deadline = max(startup_deadline, time.monotonic() + timeout_s)
+                    if time.monotonic() >= bootstrap_deadline:
+                        break
+                elif fresh_instance and correct_sha and state in {"STARTING", "RUNNING"}:
+                    if not fresh_heartbeat:
+                        break
+                    if not startup_phase_seen:
+                        startup_deadline = time.monotonic() + timeout_s
+                        startup_phase_seen = True
+                    if state == "RUNNING" and _children_ready(payload):
+                        return payload
+                elif state in {"FAILED", "STOPPED"} and fresh_instance:
                     break
         except Exception:
             pass
         time.sleep(0.5)
+
     raise HostInstallError(
-        f"installed supervisor did not prove RUNNING for SHA {expected_sha} within {timeout_s:.0f}s; "
+        f"installed supervisor did not prove RUNNING for SHA {expected_sha}; "
         f"last_state={last.get('state') or 'missing'} last_sha={last.get('production_sha') or 'missing'} "
         f"error={last.get('error') or ''}"
     )
 
 
+def _clear_start_history(runtime_root: Path) -> None:
+    try:
+        (_resolved(runtime_root) / START_HISTORY_REL).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def install_host(
     *, runtime_root: Path | None = None, env_file: Path | None = None,
     manager: str | None = None, start: bool = True,
+    startup_timeout_s: float = DEFAULT_STARTUP_TIMEOUT_S,
+    bootstrap_timeout_s: float = DEFAULT_BOOTSTRAP_TIMEOUT_S,
 ) -> dict[str, Any]:
     ensure_clean_checkout(REPO_ROOT)
     sha = git_sha(REPO_ROOT)
@@ -569,24 +607,34 @@ def install_host(
 
     previous_deployment = deployment_manifest(root)
     started_after = time.time()
+    _clear_start_history(root)  # explicit operator install/restart begins a new bounded generation
     try:
         service_action("install", manager=selected)
-        running = wait_for_supervisor(root, expected_sha=sha, started_after=started_after)
+        running = wait_for_supervisor(
+            root, expected_sha=sha, started_after=started_after,
+            timeout_s=startup_timeout_s, bootstrap_timeout_s=bootstrap_timeout_s,
+        )
     except Exception:
-        # Restore the prior definition and restart it. The deployment manifest is
-        # intentionally written only after a successful new start, so a failed
-        # upgrade cannot advertise the candidate SHA as deployed.
         backup = Path(definition.get("backup") or "") if definition.get("backup") else None
         service_path = Path(definition["path"])
         if backup is not None and backup.exists():
             shutil.copy2(backup, service_path)
             try:
+                _clear_start_history(root)
                 rollback_started = time.time()
                 service_action("install", manager=selected)
                 previous_sha = str(previous_deployment.get("build_sha") or "")
                 if previous_sha:
-                    wait_for_supervisor(root, expected_sha=previous_sha,
-                                        started_after=rollback_started, timeout_s=30)
+                    wait_for_supervisor(
+                        root, expected_sha=previous_sha, started_after=rollback_started,
+                        timeout_s=startup_timeout_s, bootstrap_timeout_s=bootstrap_timeout_s,
+                    )
+            except Exception:
+                pass
+        else:
+            # A failed first install must not leave an unmanifested orphan alive.
+            try:
+                service_action("stop", manager=selected)
             except Exception:
                 pass
         raise
@@ -642,9 +690,10 @@ def host_status(runtime_root: Path | None = None, *, manager: str | None = None)
     child_state = {
         name: {
             "alive": bool((children.get(name) or {}).get("alive")) if isinstance(children.get(name), Mapping) else False,
-            "healthy": (children.get(name) or {}).get("healthy")
-            if isinstance(children.get(name), Mapping) else None,
+            "healthy": (children.get(name) or {}).get("healthy") if isinstance(children.get(name), Mapping) else None,
             "health_failures": int((children.get(name) or {}).get("health_failures") or 0)
+            if isinstance(children.get(name), Mapping) else None,
+            "health_bad_for_s": (children.get(name) or {}).get("health_bad_for_s")
             if isinstance(children.get(name), Mapping) else None,
         }
         for name in EXPECTED_CHILDREN
@@ -652,12 +701,14 @@ def host_status(runtime_root: Path | None = None, *, manager: str | None = None)
     all_children_alive = all(row["alive"] for row in child_state.values())
     all_children_healthy = all(row["healthy"] is True for row in child_state.values())
     live = _read_live_safety()
+
     def _read_optional(rel: Path) -> dict[str, Any]:
         try:
             value = json.loads((root / rel).read_text(encoding="utf-8"))
             return value if isinstance(value, dict) else {}
         except Exception:
             return {}
+
     report_scheduler = _read_optional(REPORT_SCHEDULER_REL)
     report_job = _read_optional(REPORT_JOB_REL)
     service_ok = bool(selected) and service.get("returncode") == 0
@@ -734,6 +785,8 @@ def main(argv: list[str] | None = None) -> int:
     install.add_argument("--env-file", type=Path)
     install.add_argument("--manager", choices=("systemd", "launchd"))
     install.add_argument("--no-start", action="store_true")
+    install.add_argument("--startup-timeout", type=float, default=DEFAULT_STARTUP_TIMEOUT_S)
+    install.add_argument("--bootstrap-timeout", type=float, default=DEFAULT_BOOTSTRAP_TIMEOUT_S)
     install.add_argument("--json", action="store_true")
 
     status = sub.add_parser("status")
@@ -755,6 +808,8 @@ def main(argv: list[str] | None = None) -> int:
             payload = install_host(
                 runtime_root=args.runtime_root, env_file=args.env_file,
                 manager=args.manager, start=not args.no_start,
+                startup_timeout_s=args.startup_timeout,
+                bootstrap_timeout_s=args.bootstrap_timeout,
             )
             print(json.dumps(payload, indent=2, default=str) if args.json else (
                 f"HOST INSTALLED\nsha={payload['build_sha']}\nruntime={payload['runtime_root']}\n"
@@ -777,8 +832,8 @@ def main(argv: list[str] | None = None) -> int:
         if proc.stderr:
             print(proc.stderr.rstrip(), file=sys.stderr)
         return int(proc.returncode)
-    except HostInstallError as exc:
-        print(f"HOST INSTALL BLOCKED: {exc}", file=sys.stderr)
+    except (HostInstallError, RuntimeError) as exc:
+        print(f"HOST CONTROL BLOCKED: {exc}", file=sys.stderr)
         return 2
 
 
