@@ -13,7 +13,11 @@ def test_legacy_mac_setup_routes_to_canonical_host_installer() -> None:
 
 def test_legacy_mac_setup_does_not_recreate_obsolete_launchd_topology() -> None:
     text = SETUP_MAC.read_text(encoding="utf-8")
-    assert "com.quantterm.ui" not in text
-    assert "com.quantterm.autonomy" not in text
-    assert "KeepAlive" not in text
+    # Legacy labels may appear only so the compatibility wrapper can remove old
+    # agents. It must never write/recreate their plists or restore old policies.
+    assert "cat > \"$UI_PLIST\"" not in text
+    assert "cat > \"$AUTO_PLIST\"" not in text
+    assert "<key>KeepAlive</key>" not in text
     assert "pmset -a sleep 0" not in text
+    assert "install_quantterm_host.sh" in text
+    assert "rm -f \"$legacy\"" in text
