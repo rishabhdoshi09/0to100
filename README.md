@@ -145,5 +145,7 @@ research/evidence infrastructure, and the **Vite/React desk** (Home · Market
 Scanner · Recommendations · Market Reports · Stock Intelligence). Archived
 Streamlit pages under `ui/` are not started.
 
+Historical research branches such as `overhaul/evidence-lab` are not the current product path.
+
 *Canonical launcher: `bash scripts/run_quantterm_complete.sh`. Canonical
 persistent host installer: `bash scripts/install_quantterm_host.sh`.*
