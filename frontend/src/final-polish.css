@@ -1,0 +1,146 @@
+/* Final presentation layer.
+   Keep this deliberately small: the desk's truth/degraded-state semantics live
+   in component classes; this file improves legibility and interaction without
+   changing status meaning or hiding warnings. */
+
+.reco-desk {
+  --qt-focus: #2f7d59;
+  --qt-soft-line: #d9e4dd;
+  --qt-hover: #f7faf8;
+}
+
+.reco-desk ::selection {
+  background: rgba(27, 107, 69, 0.16);
+  color: #14201a;
+}
+
+.reco-desk button,
+.reco-desk a,
+.reco-desk input,
+.reco-desk select,
+.reco-desk textarea,
+.reco-desk .panel,
+.reco-desk .home-os-card,
+.reco-desk .radar-market-strip > div,
+.reco-desk .radar-lane-card {
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
+}
+
+.reco-desk button:focus-visible,
+.reco-desk a:focus-visible,
+.reco-desk input:focus-visible,
+.reco-desk select:focus-visible,
+.reco-desk textarea:focus-visible,
+.reco-desk [tabindex]:focus-visible {
+  outline: 3px solid rgba(47, 125, 89, 0.22);
+  outline-offset: 2px;
+}
+
+.reco-desk button:not(:disabled):hover,
+.reco-desk a[href]:hover {
+  filter: saturate(1.03);
+}
+
+.reco-desk .panel:hover,
+.reco-desk .home-os-card:hover,
+.reco-desk .radar-market-strip > div:hover,
+.reco-desk .radar-lane-card:hover {
+  border-color: #cbdad1;
+  box-shadow: 0 9px 24px rgba(20, 32, 26, 0.065);
+}
+
+/* Dense market data stays scan-friendly: subdued headers, clear row rhythm,
+   numeric columns remain untouched by layout assumptions in individual views. */
+.reco-desk table {
+  width: 100%;
+  border-spacing: 0;
+}
+
+.reco-desk table th {
+  border-bottom: 1px solid #d5e1d9;
+  background: #f7faf8;
+  color: #566a60;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.reco-desk table td {
+  border-bottom-color: #e6ede8;
+}
+
+.reco-desk table tbody tr:hover td {
+  background: #fafcfb;
+}
+
+/* Pills remain truthful through their existing semantic classes; this only
+   gives all of them the same physical weight in the command bar. */
+.reco-desk .live-pill,
+.reco-desk .offline-pill,
+.reco-desk .work-pill,
+.reco-desk .display-depth-toggle,
+.reco-desk .experience-help-trigger {
+  border-radius: 999px;
+  box-shadow: 0 1px 2px rgba(20, 32, 26, 0.035);
+}
+
+.reco-desk .sidebar {
+  box-shadow: 1px 0 0 rgba(20, 32, 26, 0.035);
+}
+
+.reco-desk .sidebar a,
+.reco-desk .sidebar button {
+  border-radius: 9px;
+}
+
+.reco-desk .workspace {
+  scrollbar-color: #b8c9be transparent;
+  scrollbar-width: thin;
+}
+
+.reco-desk .workspace::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.reco-desk .workspace::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+  background-color: #b8c9be;
+}
+
+.reco-desk .workspace::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Respect older hardware and accessibility preferences: no decorative motion
+   when the OS asks for reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  .reco-desk *,
+  .reco-desk *::before,
+  .reco-desk *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+@media (max-width: 920px) {
+  .reco-desk .page-title,
+  .reco-desk .radar-home {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .reco-desk .api-degraded-banner {
+    margin-left: 16px;
+    margin-right: 16px;
+  }
+}
