@@ -140,3 +140,82 @@ def test_the_report_never_runs_a_scan(monkeypatch):
             monkeypatch.setattr(MSS, name, lambda *a, **k: called.append(name))
     build_daily_operating_report()
     assert called == []
+
+
+# ---------------------------------------------------------------------------
+# The scheduler-facing contract: a report is only useful unattended if the
+# exit code carries the verdict.
+# ---------------------------------------------------------------------------
+def test_unmet_proofs_exit_one_not_zero(capsys):
+    from product.daily_operating_report import main
+
+    assert main(["--no-write"]) == 1
+    assert "UNMET OPERATING PROOFS" in capsys.readouterr().out
+
+
+def test_a_clean_session_exits_zero(monkeypatch, capsys):
+    import product.daily_operating_report as R
+
+    monkeypatch.setattr(R, "unmet_operating_proofs", lambda report: [])
+    assert R.main(["--no-write"]) == 0
+
+
+def test_an_unconfirmed_live_lock_exits_two(monkeypatch):
+    import product.daily_operating_report as R
+
+    monkeypatch.setattr(R, "_capital_safety_section",
+                        lambda: {"available": True, "live_locked": False,
+                                 "broker_mutations": 0})
+    assert R.main(["--no-write"]) == 2
+
+
+def test_broker_mutations_exit_two(monkeypatch):
+    import product.daily_operating_report as R
+
+    monkeypatch.setattr(R, "_capital_safety_section",
+                        lambda: {"available": True, "live_locked": True,
+                                 "broker_mutations": 1})
+    assert R.main(["--no-write"]) == 2
+
+
+def test_a_critical_silent_wrongness_finding_exits_two(monkeypatch):
+    import product.daily_operating_report as R
+
+    monkeypatch.setattr(R, "_silent_wrongness_section",
+                        lambda: {"available": True, "checks_run": 9, "clean": False,
+                                 "discovered": 1, "critical": 1, "warnings": 0,
+                                 "unknown": 0, "findings": []})
+    assert R.main(["--no-write"]) == 2
+
+
+def test_the_report_is_written_even_when_the_session_went_badly(tmp_path):
+    from product.daily_operating_report import main
+
+    main([])
+    written = list((tmp_path / "logs" / "product" / "operating_reports").glob("*.json"))
+    assert written, "the worst sessions are the ones whose evidence must survive"
+
+
+def test_a_persistence_failure_never_loses_the_report(monkeypatch, capsys):
+    import product.daily_operating_report as R
+
+    def explode(report=None):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(R, "write_daily_operating_report", explode)
+    code = R.main([])
+    out = capsys.readouterr().out
+    assert "could not persist" in out
+    assert "PRODUCTION_SHA" in out, "the report still reaches the operator"
+    assert code in (0, 1, 2)
+
+
+def test_json_output_is_machine_readable(capsys):
+    import json as _json
+
+    from product.daily_operating_report import main
+
+    main(["--json", "--no-write"])
+    payload = _json.loads(capsys.readouterr().out)
+    assert payload["schema_version"] == 1
+    assert "capital_safety" in payload

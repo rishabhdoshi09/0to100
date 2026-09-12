@@ -522,3 +522,45 @@ def write_daily_operating_report(report: Mapping[str, Any] | None = None) -> Pat
     tmp.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
     os.replace(tmp, target)
     return target
+
+
+def main(argv: list[str] | None = None) -> int:
+    """`python -m product.daily_operating_report` — the session report.
+
+    Exit code is the operator-facing signal, so a scheduler can act on it:
+
+        0  every daily proof was evidenced
+        1  the report was produced and some proofs were unmet
+        2  a critical silent-wrongness finding, or the live lock unconfirmed
+
+    A non-zero exit is not a crash; it means read the report. The report is
+    always written, because a session that went badly is exactly the one whose
+    evidence must survive.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description="QuantTerm daily operating report")
+    parser.add_argument("--json", action="store_true", help="print JSON instead of text")
+    parser.add_argument("--no-write", action="store_true", help="do not persist the report")
+    args = parser.parse_args(argv)
+
+    report = build_daily_operating_report()
+    if not args.no_write:
+        try:
+            write_daily_operating_report(report)
+        except Exception as exc:  # persisting must never lose the report
+            print(f"# could not persist the report: {type(exc).__name__}: {exc}")
+
+    print(json.dumps(report, indent=2, default=str) if args.json else render_text(report))
+
+    capital = report.get("capital_safety") or {}
+    findings = report.get("silent_wrongness") or {}
+    if not capital.get("live_locked") or int(capital.get("broker_mutations") or 0):
+        return 2
+    if findings.get("available") and findings.get("critical"):
+        return 2
+    return 1 if unmet_operating_proofs(report) else 0
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised through main()
+    raise SystemExit(main())
