@@ -105,6 +105,9 @@ def test_launchd_plist_is_pinned_without_embedding_secret_values(tmp_path):
     assert "product.host_entrypoint" in plist
     assert "deadbeef" in plist
     assert str(runtime.resolve()) in plist
+    assert str(runtime.resolve() / "logs" / "service" / "launchd.out.log") in plist
+    assert str(runtime.resolve() / "logs" / "service" / "launchd.err.log") in plist
+    assert str(repo.resolve() / "logs") not in plist
     assert "KITE_API_SECRET" not in plist
 
 
