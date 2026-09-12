@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from core.runtime_paths import logs_path
 
 
 @dataclass(frozen=True)
@@ -29,12 +30,14 @@ def _json(path, default):
         return default
 
 
-def read_paper_status(*, repo_root=None, autonomy_root=None) -> PaperStatus:
-    root = Path(repo_root) if repo_root else Path(__file__).resolve().parents[1]
+def read_paper_status(*, autonomy_root=None) -> PaperStatus:
+    # The old repo_root argument is gone: QT_RUNTIME_ROOT redirects the whole
+    # tree, so a second way to point this one reader elsewhere was only a way
+    # for it to disagree with the rest of the runtime.
     from research.autonomy import default_root
     auto = Path(autonomy_root) if autonomy_root else default_root()
-    book = _json(root / "logs" / "intelligence" / "intel_book.json", {})
-    config = _json(root / "logs" / "intelligence" / "paper_config.json", {})
+    book = _json(logs_path("intelligence", "intel_book.json"), {})
+    config = _json(logs_path("intelligence", "paper_config.json"), {})
     status = _json(auto / "status.json", {})
     owner = dict(status.get("owner_state", {}))
     opens = tuple(book.get("open", []) or [])

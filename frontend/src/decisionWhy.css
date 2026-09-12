@@ -1,0 +1,35 @@
+/* WHY THIS DECISION — every section rendered, including the empty ones. */
+.decision-why { display: flex; flex-direction: column; gap: 16px; }
+.decision-why__header h2 { margin: 0 0 4px; font-size: 1.05rem; }
+.decision-why__headline { margin: 0; font-weight: 600; }
+.decision-why__ranking,
+.decision-why__scan { margin: 2px 0 0; opacity: 0.75; font-size: 0.85rem; }
+.decision-why__gaps {
+  margin: 0; padding: 8px 10px; border-radius: 6px;
+  background: rgba(240, 180, 40, 0.12); font-size: 0.85rem;
+}
+.decision-why__sections {
+  display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+.decision-why__section {
+  border: 1px solid rgba(128, 128, 128, 0.25);
+  border-radius: 8px; padding: 10px 12px;
+}
+.decision-why__section h3 { margin: 0 0 6px; font-size: 0.8rem; text-transform: uppercase; opacity: 0.7; }
+.decision-why__section--conflict { border-color: rgba(220, 90, 90, 0.5); }
+.decision-why__section--gap { border-color: rgba(240, 180, 40, 0.5); }
+.decision-why__section--unavailable { opacity: 0.6; border-style: dashed; }
+.decision-why__unavailable { margin: 0; font-style: italic; }
+.decision-why__items { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 6px; }
+.decision-why__item-label { display: block; font-weight: 600; }
+.decision-why__item-detail { display: block; font-size: 0.85rem; opacity: 0.8; }
+.decision-why__item-meta { display: flex; gap: 8px; font-size: 0.72rem; opacity: 0.65; }
+.decision-why__class { text-transform: uppercase; letter-spacing: 0.04em; }
+.decision-why__fields { margin: 0; display: flex; flex-direction: column; gap: 4px; }
+.decision-why__field { display: flex; justify-content: space-between; gap: 12px; font-size: 0.85rem; }
+.decision-why__field dt { opacity: 0.7; }
+.decision-why__field dd { margin: 0; font-variant-numeric: tabular-nums; }
+.decision-why__value { margin: 0; font-variant-numeric: tabular-nums; }
+.decision-why__footer { font-size: 0.75rem; opacity: 0.6; }
+.decision-why__authority { letter-spacing: 0.05em; }

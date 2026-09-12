@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import Any, Mapping
+from core.runtime_paths import logs_dir
 
 OFFICIAL_MARKET_DATA_READY = "OFFICIAL_MARKET_DATA_READY"
 BROKER_LIVE_DATA_READY = "BROKER_LIVE_DATA_READY"
@@ -55,7 +56,7 @@ def kite_snapshot_id() -> str:
         from research.intelligence.data.snapshot_store import SnapshotStore
         from pathlib import Path
 
-        logs = Path(__file__).resolve().parents[1] / "logs"
+        logs = logs_dir()
         return str(SnapshotStore(logs / "snapshots").get_active_snapshot() or "")
     except Exception:
         return ""

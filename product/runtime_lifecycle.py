@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from core.runtime_paths import logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
 STARTING = "STARTING"
@@ -69,9 +70,9 @@ def _component(name: str, status: str, *, detail: str = "", pid: Any = None) -> 
 
 def inspect_runtime(*, api_serving: bool = True) -> dict[str, Any]:
     """Return STARTING / READY / DEGRADED / FAILED / RECOVERING from live checks."""
-    ops_path = Path(os.environ.get("QT_MARKET_OPS_RUNTIME") or (ROOT / "logs" / "market_ops" / "runtime.json"))
-    auto_status = Path(os.environ.get("QT_AUTONOMY_STATUS") or (ROOT / "logs" / "autonomy" / "status.json"))
-    auto_runtime = Path(os.environ.get("QT_AUTONOMY_RUNTIME") or (ROOT / "logs" / "autonomy" / "runtime.json"))
+    ops_path = Path(os.environ.get("QT_MARKET_OPS_RUNTIME") or (logs_dir() / "market_ops" / "runtime.json"))
+    auto_status = Path(os.environ.get("QT_AUTONOMY_STATUS") or (logs_dir() / "autonomy" / "status.json"))
+    auto_runtime = Path(os.environ.get("QT_AUTONOMY_RUNTIME") or (logs_dir() / "autonomy" / "runtime.json"))
     ops = _read_json(ops_path)
     autonomy = _read_json(auto_status)
     if not autonomy:
@@ -101,7 +102,7 @@ def inspect_runtime(*, api_serving: bool = True) -> dict[str, Any]:
     except Exception as exc:
         history = {"current": False, "ready": False, "reason_code": "HISTORY_PROBE_FAILED", "error": str(exc)[:200]}
 
-    scan = _read_json(ROOT / "logs" / "product" / "latest_momentum_scan.json")
+    scan = _read_json(logs_dir() / "product" / "latest_momentum_scan.json")
     scan_status = "MISSING"
     scan_detail = "no saved whole-market scan"
     try:

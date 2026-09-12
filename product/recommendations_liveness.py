@@ -20,14 +20,15 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
+from core.runtime_paths import logs_dir
 
 _INSTALLED = False
 _BUILD_LOCK = threading.Lock()
 _BUILD_THREAD: threading.Thread | None = None
 _RETRY_AFTER_FAILURE_S = 30.0
 _ROOT = Path(__file__).resolve().parents[1]
-_DEFAULT_LOCK_PATH = _ROOT / "logs" / "product" / "recommendations_rebuild.lock"
-_DEFAULT_STATE_PATH = _ROOT / "logs" / "product" / "recommendations_rebuild_state.json"
+_DEFAULT_LOCK_PATH = logs_dir() / "product" / "recommendations_rebuild.lock"
+_DEFAULT_STATE_PATH = logs_dir() / "product" / "recommendations_rebuild_state.json"
 
 
 def _lock_path() -> Path:

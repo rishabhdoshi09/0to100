@@ -19,10 +19,11 @@ import time
 from pathlib import Path
 
 from logger import get_logger
+from core.runtime_paths import logs_dir, logs_path
 
 log = get_logger(__name__)
 
-_CACHE_FILE = Path(__file__).resolve().parent.parent / "logs" / "us_symbols.json"
+_CACHE_FILE = logs_path("us_symbols.json")
 _TTL_S = 86400                      # refresh the listing once a day
 _CLEAN = re.compile(r"^[A-Z]{1,5}$")  # plain common-stock tickers only
 _MAX = 8000

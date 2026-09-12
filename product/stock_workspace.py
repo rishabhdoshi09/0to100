@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import re
 from typing import Any, Mapping, Sequence
+from core.runtime_paths import logs_dir, logs_path
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -311,7 +312,7 @@ def _default_inputs(symbol: str) -> dict[str, Any]:
         frame = None
     try:
         from news.curator_store import NewsCuratorStore
-        store = NewsCuratorStore(ROOT / "logs" / "news_curator.sqlite3")
+        store = NewsCuratorStore(logs_path("news_curator.sqlite3"))
         try:
             news = [item.as_dict() for item in store.recent(hours=24 * 30, limit=20, symbol=symbol)]
         finally:
@@ -320,7 +321,7 @@ def _default_inputs(symbol: str) -> dict[str, Any]:
         news = []
     fno = {}
     try:
-        path = ROOT / "logs" / "product" / "fno_universe.json"
+        path = logs_dir() / "product" / "fno_universe.json"
         fno = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     except Exception:
         fno = {}

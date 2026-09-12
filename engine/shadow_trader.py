@@ -18,10 +18,11 @@ from pathlib import Path
 from typing import Optional
 
 from logger import get_logger
+from core.runtime_paths import logs_path
 
 log = get_logger(__name__)
 
-_DB = Path("logs/shadow_trades.db")
+_DB = logs_path("shadow_trades.db")
 _LOCK = threading.Lock()
 _DIVERGENCE_THRESHOLD = 0.20   # 20% PnL divergence triggers alert
 _MIN_SAMPLE = 20               # minimum trades before divergence analysis

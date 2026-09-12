@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import subprocess
 import threading
 import time
 import uuid
@@ -21,6 +22,23 @@ DEFAULT_RUNNING_LEASE_S = 30 * 60
 KIND_RUNNING_LEASE_S = {
     "DUE_DILIGENCE_ACQUIRE": 15 * 60,
 }
+
+# No operation may sit RUNNING forever. Liveness of the recorded PID defers
+# recovery, but it can never defer it indefinitely: PIDs get reused, workers
+# hang, and a row nobody will ever finish is worse than a row failed honestly.
+ABSOLUTE_MAX_RUNNING_S = 6 * 60 * 60
+
+# A recorded worker PID only counts as "our worker still running" when the
+# process at that PID is actually a QuantTerm worker. Linux reuses PIDs, and
+# containers commonly run as root where os.kill(pid, 0) succeeds against
+# anything, including PID 1. Identity is the command line, not the number.
+WORKER_COMMAND_SIGNATURES = (
+    "operations.market_ops",
+    "main.py autonomy",
+    "terminal_product_api",
+    "terminal_api",
+    "report_api",
+)
 
 # Status/history reads are on the hot path for Home, Dashboard, News and readiness.
 # Keep them metadata-only so a 700-800KB MARKET_SCAN result can never turn a cheap
@@ -85,6 +103,58 @@ def pid_is_alive(pid: int | None) -> bool:
         return False
     except Exception:
         return False
+
+
+def process_command(pid: int | None) -> str:
+    """Command line of ``pid``, or "" when it cannot be read."""
+    try:
+        value = int(pid or 0)
+    except (TypeError, ValueError):
+        return ""
+    if value <= 0:
+        return ""
+    try:
+        return subprocess.check_output(
+            ["ps", "-p", str(value), "-o", "command="],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=1.0,
+        ).strip()
+    except Exception:
+        return ""
+
+
+def worker_pid_is_live(pid: int | None, *, signatures: tuple[str, ...] = WORKER_COMMAND_SIGNATURES) -> bool:
+    """True only when ``pid`` is alive AND is recognisably a QuantTerm worker.
+
+    ``pid_is_alive`` alone is not proof that the operation's original worker is
+    still running:
+
+      * PIDs are reused, so the number can belong to an unrelated process;
+      * as root, ``os.kill(pid, 0)`` succeeds against PID 1 and every other
+        process on the host, so almost nothing ever looks dead.
+
+    Treating either case as "still working" strands the operation in RUNNING
+    forever. When the command line cannot be read at all we fall back to bare
+    liveness, which is the conservative direction: it defers recovery rather
+    than cancelling work that may still be in flight, and the absolute ceiling
+    still applies.
+    """
+    if not pid_is_alive(pid):
+        return False
+    try:
+        if int(pid or 0) == os.getpid():
+            # A process always recognises itself. Whoever leased this row is
+            # asking, in-process, whether it is still running — and it is,
+            # whatever its command line looks like. This also covers embedded
+            # and differently-named entrypoints.
+            return True
+    except (TypeError, ValueError):
+        return False
+    command = process_command(pid)
+    if not command:
+        return True
+    return any(signature in command for signature in signatures)
 
 
 def read_pid_file(path: str | Path) -> int:
@@ -498,7 +568,8 @@ class OperationStore:
                     pid_i = 0
                 if keep_pid is not None and pid_i == int(keep_pid):
                     continue
-                if pid_i and pid_is_alive(pid_i):
+                # Identity, not just liveness: a reused PID is not our worker.
+                if pid_i and worker_pid_is_live(pid_i):
                     continue
                 con.execute(
                     "UPDATE operations SET status=?,started_at=NULL,finished_at=NULL,updated_at=?,"
@@ -521,12 +592,21 @@ class OperationStore:
         now: float | None = None,
         deadlines: dict[str, float] | None = None,
     ) -> int:
-        """Fail only abandoned RUNNING rows that exceeded their lease.
+        """Fail abandoned RUNNING rows that exceeded their lease.
 
-        Never mark an operation terminal while its recorded worker PID is alive:
-        changing SQLite state cannot stop the Python lane that is still executing,
-        and doing so can create a second PENDING operation behind an invisible live
-        scan. Operation-specific code owns real execution deadlines for live work.
+        Do not mark an operation terminal while its recorded worker is genuinely
+        still running: changing SQLite state cannot stop the Python lane that is
+        executing, and doing so can create a second PENDING operation behind an
+        invisible live scan.
+
+        "Genuinely still running" means the PID is alive *and* the process at
+        that PID is a QuantTerm worker. A bare liveness check strands operations
+        forever whenever a PID is reused, and as root it strands them almost
+        always, because os.kill succeeds against every process on the host.
+
+        Whatever liveness says, ABSOLUTE_MAX_RUNNING_S is a hard ceiling. A row
+        older than that is failed with DEADLINE_EXCEEDED so no operation can be
+        permanently RUNNING.
         """
         clock = time.time() if now is None else float(now)
         limits = dict(KIND_RUNNING_LEASE_S)
@@ -546,17 +626,18 @@ class OperationStore:
                     worker_pid = int(row["worker_pid"] or 0)
                 except (TypeError, ValueError):
                     worker_pid = 0
-                if worker_pid and pid_is_alive(worker_pid):
-                    continue
                 last_activity = max(
                     float(row["started_at"] or 0),
                     float(row["updated_at"] or 0),
                 )
                 kind = str(row["kind"] or "")
                 limit = float(limits.get(kind, DEFAULT_RUNNING_LEASE_S))
-                if last_activity <= 0 or (clock - last_activity) < limit:
+                age = clock - last_activity if last_activity > 0 else 0.0
+                over_ceiling = last_activity > 0 and age >= ABSOLUTE_MAX_RUNNING_S
+                if worker_pid and worker_pid_is_live(worker_pid) and not over_ceiling:
                     continue
-                age = clock - last_activity
+                if last_activity <= 0 or age < limit:
+                    continue
                 con.execute(
                     """
                     UPDATE operations SET status=?,finished_at=?,updated_at=?,stage=?,message=?,
@@ -568,9 +649,18 @@ class OperationStore:
                         clock,
                         clock,
                         FAILED,
-                        f"{kind} abandoned its {int(limit)}s lease after {int(age)}s without a live worker",
+                        (
+                            f"{kind} exceeded the {int(ABSOLUTE_MAX_RUNNING_S)}s absolute running ceiling "
+                            f"after {int(age)}s"
+                            if over_ceiling
+                            else f"{kind} abandoned its {int(limit)}s lease after {int(age)}s without a live worker"
+                        ),
                         "DEADLINE_EXCEEDED",
-                        f"Operation had no live worker and no activity for {int(age)}s",
+                        (
+                            f"Operation stayed RUNNING for {int(age)}s, past the absolute ceiling"
+                            if over_ceiling
+                            else f"Operation had no live QuantTerm worker and no activity for {int(age)}s"
+                        ),
                         str(row["operation_id"]),
                         RUNNING,
                     ),

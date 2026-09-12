@@ -37,6 +37,15 @@ class PaperPosition:
     # One official session may be observed by several autonomy cycles. Persist the last
     # session applied to this position so retries/restarts/cycle-id changes cannot age it twice.
     last_marked_session: str = ""
+    # Linkage back to the decision that opened this position. Empty for positions
+    # opened by the research simulators, which have no canonical decision behind
+    # them — and whose outcomes therefore cannot become conditional evidence.
+    decision_id: str = ""
+    paper_intent_id: str = ""
+    # The conditional cell this position's outcome will update, frozen at open
+    # time. Re-deriving it at settlement would key the outcome by a regime that
+    # has since changed, so the trade would update a cell it was never ranked in.
+    context_key: str = ""
 
     @property
     def r_unit(self) -> float:
@@ -58,6 +67,9 @@ class ClosedTrade:
     exit_reason: str            # STOP / TARGET / MAX_HOLD
     realized_R: float
     pnl: float
+    decision_id: str = ""
+    paper_intent_id: str = ""
+    context_key: str = ""
 
     def as_dict(self): return asdict(self)
 
@@ -88,7 +100,10 @@ class PaperBook:
     def open_position(self, strategy_id: str, symbol: str, entry: float, stop: float,
                       target: float, date: str, max_holding_days: int, *,
                       risk_pct_of_capital: float | None = None,
-                      quantity: int | None = None) -> PaperPosition | None:
+                      quantity: int | None = None,
+                      decision_id: str = "",
+                      paper_intent_id: str = "",
+                      context_key: str = "") -> PaperPosition | None:
         """Open a simulated long from an approved risk budget and optional exact quantity.
 
         ``risk_pct_of_capital`` uses percentage points: ``1.0`` means one percent of
@@ -134,6 +149,9 @@ class PaperBook:
             risk_amount=sizing.risk_amount,
             requested_risk_pct=sizing.requested_risk_pct,
             approved_risk_pct=sizing.actual_risk_pct,
+            decision_id=str(decision_id or ""),
+            paper_intent_id=str(paper_intent_id or ""),
+            context_key=str(context_key or ""),
         )
         self.open[key] = pos
         return pos
@@ -151,6 +169,9 @@ class PaperBook:
             int(intent.holding_horizon_days),
             risk_pct_of_capital=float(intent.intended_risk_pct),
             quantity=(required_quantity if required_quantity > 0 else None),
+            decision_id=str(getattr(intent, "decision_id", "") or ""),
+            paper_intent_id=str(getattr(intent, "record_id", "") or ""),
+            context_key=str(getattr(intent, "context_key", "") or ""),
         )
 
     def open_risk(self) -> float:
@@ -227,7 +248,10 @@ class PaperBook:
         t = ClosedTrade(strategy_id=pos.strategy_id, symbol=pos.symbol,
                         entry_price=pos.entry_price, exit_price=exit_fill,
                         stop_price=pos.stop_price, qty=pos.qty, entry_date=pos.entry_date,
-                        exit_date=date, exit_reason=reason, realized_R=realized_R, pnl=pnl)
+                        exit_date=date, exit_reason=reason, realized_R=realized_R, pnl=pnl,
+                        decision_id=getattr(pos, "decision_id", "") or "",
+                        paper_intent_id=getattr(pos, "paper_intent_id", "") or "",
+                        context_key=getattr(pos, "context_key", "") or "")
         self.closed.append(t)
         del self.open[key]
         return t

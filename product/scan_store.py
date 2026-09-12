@@ -10,9 +10,10 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+from core.runtime_paths import logs_dir, logs_path
 
 def default_scan_path() -> Path:
-    return Path(__file__).resolve().parents[1] / "logs" / "product" / "latest_momentum_scan.json"
+    return logs_path("product", "latest_momentum_scan.json")
 
 
 DEFAULT_SCAN_PATH = default_scan_path()

@@ -24,9 +24,10 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import numpy as np
+from core.runtime_paths import logs_dir, logs_path
 
 
-AUDIT_PATH = Path(__file__).resolve().parents[1] / "logs" / "product" / "latest_scan_audit.json"
+AUDIT_PATH = logs_path("product", "latest_scan_audit.json")
 
 QUALIFIED = "QUALIFIED"
 NO_SETUP = "NO_SETUP"

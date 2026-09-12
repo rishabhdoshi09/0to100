@@ -8,8 +8,9 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Mapping
+from core.runtime_paths import logs_path
 
-DEFAULT_RECO_PATH = Path("logs/product/latest_recommendations.json")
+DEFAULT_RECO_PATH = logs_path("product/latest_recommendations.json")
 
 
 def save_recommendations(payload: Mapping[str, Any], path: str | Path = DEFAULT_RECO_PATH) -> Path:

@@ -17,10 +17,11 @@ import time
 from pathlib import Path
 
 from logger import get_logger
+from core.runtime_paths import logs_dir, logs_path
 
 log = get_logger(__name__)
 
-_FILE = Path(__file__).resolve().parent.parent / "logs" / "dead_symbols.json"
+_FILE = logs_path("dead_symbols.json")
 _TTL_DAYS = 7
 
 _lock = threading.Lock()

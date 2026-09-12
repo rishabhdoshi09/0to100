@@ -24,11 +24,25 @@ import { pageHealth, pageStatusLabel } from './pageRequest'
 import { Panel } from './components'
 import type { ViewProps } from './views'
 
-function laneTone(status: string): string {
+// A lane whose acquisition was refused or errored must not read as neutral.
+// BLOCKED/FAILED/BROKEN are problems the operator has to see; MISSING, STALE,
+// PARTIAL and WAITING are honest gaps, not faults.
+const LANE_BAD = new Set(['BROKEN', 'FAILED', 'BLOCKED'])
+const LANE_GAP = new Set(['MISSING', 'STALE', 'PARTIAL', 'WAITING'])
+
+export function laneTone(status: string): string {
   const s = (status || '').toUpperCase()
   if (s === 'HEALTHY') return 'positive'
-  if (s === 'BROKEN') return 'negative'
+  if (LANE_BAD.has(s)) return 'negative'
   return ''
+}
+
+export function laneDot(status: string): string {
+  const s = (status || '').toUpperCase()
+  if (s === 'HEALTHY') return 'green'
+  if (LANE_BAD.has(s)) return 'amber'
+  if (LANE_GAP.has(s)) return 'cyan'
+  return 'cyan'
 }
 
 function ParityBadge({ value }: { value?: string }) {
@@ -396,7 +410,7 @@ function HealthLanes({ contract }: { contract: SystemHealthContract | null }) {
       </div>
       {(contract.lanes || []).map((lane: HealthLane) => (
         <div className="insight" key={lane.key}>
-          <i className={lane.status === 'HEALTHY' ? 'green' : lane.status === 'BROKEN' ? 'amber' : 'cyan'} />
+          <i className={laneDot(lane.status)} />
           <div>
             <strong className={laneTone(lane.status)}>{lane.label}: {lane.status}</strong>
             <span>{lane.detail}{lane.as_of ? ` · ${lane.as_of}` : ''}</span>

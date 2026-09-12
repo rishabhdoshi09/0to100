@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from data_platform.contracts import CompanyProfile, ObservationMeta, QualityStatus, utc_now_iso
+from core.runtime_paths import logs_path
 
 
 def _sector_of(symbol: str) -> str:
@@ -18,7 +19,7 @@ def _fno_eligible(symbol: str) -> bool:
     try:
         from pathlib import Path
         import json
-        path = Path("logs/product/fno_universe.json")
+        path = logs_path("product/fno_universe.json")
         if not path.exists():
             return False
         payload = json.loads(path.read_text(encoding="utf-8"))

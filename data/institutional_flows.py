@@ -23,10 +23,11 @@ import time
 from pathlib import Path
 
 from logger import get_logger
+from core.runtime_paths import logs_dir
 
 log = get_logger(__name__)
 
-_CACHE = Path(__file__).resolve().parent.parent / "logs" / "inst_flows.json"
+_CACHE = logs_dir() / "inst_flows.json"
 _TTL_S = 3600 * 3              # 3h — din mein 2-3 refresh kaafi
 
 _HEADERS = {

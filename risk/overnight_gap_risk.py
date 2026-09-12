@@ -29,10 +29,11 @@ from typing import Optional
 import numpy as np
 
 from logger import get_logger
+from core.runtime_paths import logs_path
 
 log = get_logger(__name__)
 
-_DB = Path("logs/gap_history.db")
+_DB = logs_path("gap_history.db")
 
 
 def _init_db() -> None:

@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from logger import get_logger
+from core.runtime_paths import logs_dir, logs_path
 
 log = get_logger(__name__)
 
@@ -250,7 +251,7 @@ def _headlines(max_n: int = 5) -> list[str]:
         from pathlib import Path
         from news.curator_store import NewsCuratorStore
         root = Path(__file__).resolve().parents[1]
-        store = NewsCuratorStore(root / "logs" / "news_curator.sqlite3")
+        store = NewsCuratorStore(logs_path("news_curator.sqlite3"))
         try:
             arts = store.recent(hours=18, limit=max_n)
             out = []

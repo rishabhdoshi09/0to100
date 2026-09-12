@@ -11,9 +11,10 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from core.runtime_paths import logs_dir, logs_path
 
 ROOT = Path(__file__).resolve().parents[1]
-DB_PATH = ROOT / "logs" / "product" / "pit_data_debt.db"
+DB_PATH = logs_dir() / "product" / "pit_data_debt.db"
 
 OPEN = "OPEN"
 RETRY = "RETRY"

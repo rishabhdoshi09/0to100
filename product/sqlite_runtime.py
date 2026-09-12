@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from core.runtime_paths import logs_dir, logs_path
 
 
 def connect(path: str | Path, *, timeout: float = 30.0, wal: bool = True) -> sqlite3.Connection:
@@ -75,7 +76,7 @@ def bootstrap_product_stores() -> dict[str, object]:
             obj = getattr(mod, attr)
             if attr == "JobStore":
                 root = Path(__file__).resolve().parents[1]
-                obj(root / "logs" / "autonomy" / "jobs.db")
+                obj(logs_dir() / "autonomy" / "jobs.db")
             else:
                 con = obj()
                 con.close()

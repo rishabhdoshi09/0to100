@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 
 from research.autonomy import job_store as JS
@@ -12,6 +13,7 @@ from research.autonomy import health as H
 from research.autonomy import jobs as JOBS
 from research.autonomy import controls as CTRL
 from research.autonomy.dialogue import DialogueLog, Record, OPERATIONAL_INCIDENT
+from core.runtime_paths import logs_path
 
 _MAX_ATTEMPTS = 5
 _BASE_BACKOFF_S = 2.0
@@ -111,8 +113,7 @@ class Supervisor:
         except Exception:
             enabled = True
             try:
-                repo = Path(__file__).resolve().parents[2]
-                cfg = json.loads((repo / "logs" / "intelligence" / "paper_config.json").read_text())
+                cfg = json.loads(logs_path("intelligence", "paper_config.json").read_text())
                 enabled = bool(cfg.get("enabled", True))
             except Exception:
                 pass
@@ -292,12 +293,39 @@ class Supervisor:
             except Exception:
                 continue
 
+    def _official_retry_ready(self) -> bool:
+        """True when official completed-session data could plausibly have landed.
+
+        Official-data blockers are structural: the exchange has not published
+        the session yet. Requeueing them on every 15-second tick re-ran the job
+        thousands of times a day against a condition that cannot change until
+        the next publication window.
+        """
+        until = float(getattr(self, "_official_retry_not_before", 0.0) or 0.0)
+        return time.time() >= until
+
+    def _defer_official_retry(self) -> None:
+        try:
+            delay = float(
+                SCH.seconds_until_official_data_boundary(
+                    self.deps.now_ist(),
+                    self.deps.holidays() if hasattr(self.deps, "holidays") else None,
+                )
+            )
+        except Exception:
+            delay = 300.0
+        self._official_retry_not_before = time.time() + max(60.0, delay)
+
     def _requeue_if_official_blocked(self, job):
         if job is None:
             return job
         if getattr(job, "status", None) == JS.BLOCKED and str(getattr(job, "blocked_on", "") or "") in self._OFFICIAL_BLOCKERS:
+            if not self._official_retry_ready():
+                # Still BLOCKED, truthfully, until the next publication window.
+                return job
             try:
                 self.jobs.requeue(job.job_id)
+                self._defer_official_retry()
                 return self.jobs.get(job.job_id)
             except Exception:
                 return job
@@ -470,8 +498,7 @@ class Supervisor:
         except Exception:
             pass
         try:
-            repo = Path(__file__).resolve().parents[2]
-            book = json.loads((repo / "logs" / "intelligence" / "intel_book.json").read_text())
+            book = json.loads(logs_path("intelligence", "intel_book.json").read_text())
             add(str(p.get("symbol", "")).upper() for p in book.get("open", []))
         except Exception:
             pass

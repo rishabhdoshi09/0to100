@@ -27,9 +27,10 @@ from product.reco_methods import (
     RSI_HARD,
     SEPA_PASS,
 )
+from core.runtime_paths import logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
-SIGNAL_BACKTEST_PATH = ROOT / "logs" / "signal_backtest.json"
+SIGNAL_BACKTEST_PATH = logs_dir() / "signal_backtest.json"
 
 ENSEMBLE_ID = "QT_RECO_ENSEMBLE"
 ENSEMBLE_VERSION = 1
@@ -259,7 +260,7 @@ def production_registry() -> dict[str, Any]:
 
 def research_only_strategies() -> list[dict[str, Any]]:
     """Registered paper/autonomy specs if a snapshot exists. Never generated here."""
-    path = ROOT / "logs" / "autonomy" / "strategy_registry.json"
+    path = logs_dir() / "autonomy" / "strategy_registry.json"
     if not path.exists():
         return []
     try:

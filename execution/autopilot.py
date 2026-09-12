@@ -47,10 +47,11 @@ from core.market_clock import (IST, today_ist as _ist_today,
 from pathlib import Path
 
 from logger import get_logger
+from core.runtime_paths import logs_dir
 
 log = get_logger(__name__)
 
-_STATE_FILE = Path(__file__).resolve().parent.parent / "logs" / "autopilot.json"
+_STATE_FILE = logs_dir() / "autopilot.json"
 _lock = threading.RLock()
 # Serialises the whole gate→size→place path. Scanner aur sniper alag
 # threads se consider() bulate hain — bina iske dono ek saath daily/position

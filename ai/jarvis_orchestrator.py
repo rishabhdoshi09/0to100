@@ -29,6 +29,7 @@ from ai.jarvis_agents import (
     _llm,
     _parse_json,
 )
+from core.runtime_paths import logs_path
 
 
 # ── LLM-availability guard ────────────────────────────────────────────────────
@@ -447,7 +448,7 @@ class JarvisOrchestrator:
             try:
                 import sqlite3
                 from pathlib import Path
-                _wdb = Path("logs/watchlist.db")
+                _wdb = logs_path("watchlist.db")
                 if _wdb.exists():
                     _conn = sqlite3.connect(_wdb, check_same_thread=False)
                     _rows = _conn.execute(

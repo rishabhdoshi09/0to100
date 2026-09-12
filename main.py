@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from config import settings
 from logger import configure_logging, get_logger
+from core.runtime_paths import logs_path
 
 configure_logging()
 log = get_logger("main")
@@ -848,7 +849,7 @@ def cmd_walkforward(args) -> None:
 
 def cmd_kill(args) -> None:
     """Write a kill switch flag file. The live engine checks this on startup."""
-    flag = Path("logs/.kill_switch")
+    flag = logs_path(".kill_switch")
     flag.parent.mkdir(parents=True, exist_ok=True)
     flag.touch()
     print("Kill switch flag written. The engine will refuse to start/continue.")

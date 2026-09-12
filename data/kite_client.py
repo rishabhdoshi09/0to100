@@ -26,29 +26,82 @@ from product.live_execution_interlock import assert_live_execution_allowed
 log = get_logger(__name__)
 
 
-# Methods on KiteConnect that can mutate broker/exchange state.  The raw escape
-# hatch is wrapped so callers cannot bypass the same interlock used by
-# KiteClient.place_order().
-_BROKER_MUTATIONS = frozenset({
-    "place_order",
-    "modify_order",
-    "cancel_order",
-    "place_gtt",
-    "modify_gtt",
-    "delete_gtt",
-    "convert_position",
+# The raw escape hatch is deny-by-default.
+#
+# An earlier version enumerated the *mutations* to guard.  That is unsafe: the
+# broker SDK ships more capital-moving calls than any such list remembers
+# (mutual-fund orders, SIP mandates, autoslice orders, exit_order), and a new
+# SDK release can add more at any time.  A forgotten name reached the broker
+# while the canonical interlock reported LOCKED.
+#
+# So the allowlist below names the calls that are known to be read-only, and
+# EVERYTHING else callable on KiteConnect — including the private HTTP
+# transports (_post/_put/_delete/_request) and any method a future SDK adds —
+# goes through the same canonical interlock used by KiteClient.place_order().
+#
+# Membership rule: a method belongs here only if it cannot change broker,
+# exchange, order, position, mandate or session state.  Margin/contract-note
+# calculators qualify even though they are HTTP POSTs, because they compute
+# rather than commit.  Session mutators (set_access_token, generate_session,
+# renew/invalidate token) are deliberately NOT here: KiteClient owns
+# authentication through its own attribute, and nothing should be able to
+# invalidate a live session through the escape hatch.
+_BROKER_READS = frozenset({
+    # Quotes and history
+    "quote",
+    "ltp",
+    "ohlc",
+    "historical_data",
+    "instruments",
+    "trigger_range",
+    "get_auction_instruments",
+    # Account and order state (read-only)
+    "profile",
+    "margins",
+    "orders",
+    "order_history",
+    "order_trades",
+    "trades",
+    "positions",
+    "holdings",
+    # GTT reads
+    "get_gtt",
+    "get_gtts",
+    # Mutual-fund reads
+    "mf_orders",
+    "mf_sips",
+    "mf_holdings",
+    "mf_instruments",
+    # Calculators: compute a number, commit nothing
+    "order_margins",
+    "basket_order_margins",
+    "get_virtual_contract_note",
+    # Login URL construction is local string building
+    "login_url",
 })
 
 
+def _is_guarded_attribute(name: str, attr: Any) -> bool:
+    """True when this attribute must pass the canonical broker interlock."""
+    if not callable(attr):
+        # Exchange/variety/product constants and plain data carry no capability.
+        return False
+    if name.startswith("__") and name.endswith("__"):
+        # Dunders are object protocol, not broker calls.  Guarding them breaks
+        # copy/pickle/introspection and protects nothing.
+        return False
+    return name not in _BROKER_READS
+
+
 class _GuardedKiteProxy:
-    """Read-through KiteConnect proxy that interlocks every known mutation."""
+    """Read-through KiteConnect proxy. Deny-by-default on everything callable."""
 
     def __init__(self, raw: KiteConnect) -> None:
         object.__setattr__(self, "_raw", raw)
 
     def __getattr__(self, name: str):
         attr = getattr(object.__getattribute__(self, "_raw"), name)
-        if name not in _BROKER_MUTATIONS or not callable(attr):
+        if not _is_guarded_attribute(name, attr):
             return attr
 
         @wraps(attr)
@@ -59,10 +112,12 @@ class _GuardedKiteProxy:
         return guarded
 
     def __setattr__(self, name: str, value: Any) -> None:
-        # Do not permit callers to replace guarded methods on the proxy.
-        if name in _BROKER_MUTATIONS:
-            raise AttributeError(f"Cannot override guarded broker mutation: {name}")
-        setattr(object.__getattribute__(self, "_raw"), name, value)
+        # The proxy is a read-only facade. Assignment through it is refused
+        # outright rather than per-name: a caller that can install an attribute
+        # here can install a second policy path, and no production caller needs
+        # to write through the escape hatch. Authentication and any other SDK
+        # state changes belong to KiteClient's own attribute.
+        raise AttributeError(f"Cannot mutate guarded Kite proxy attribute: {name}")
 
 
 def parse_request_token(raw: str) -> str:

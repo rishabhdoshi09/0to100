@@ -12,8 +12,9 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from core.runtime_paths import logs_dir, logs_path
 
-_DIR = Path(__file__).resolve().parent.parent / "logs" / "gauntlet"
+_DIR = logs_path("gauntlet")
 
 # The honest caveats that apply to EVERY historical gauntlet result. These are not
 # boilerplate — each is a real reason a committee should discount the number.

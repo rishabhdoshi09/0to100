@@ -14,10 +14,11 @@ from typing import Any, Mapping, Sequence
 
 from product.pit_ingest import harvest_symbol
 from product.pit_warehouse import persist_artifact
+from core.runtime_paths import logs_dir, logs_path
 
 ROOT = Path(__file__).resolve().parents[1]
-STATE_PATH = ROOT / "logs" / "product" / "pit_backfill_state.json"
-EVIDENCE_ROOT = ROOT / "logs" / "research_evidence"
+STATE_PATH = logs_dir() / "product" / "pit_backfill_state.json"
+EVIDENCE_ROOT = logs_dir() / "research_evidence"
 
 WALK_FORWARD_UNIVERSE = (
     "INFY", "TCS", "RELIANCE", "HDFCBANK", "ICICIBANK", "SBIN", "ITC",

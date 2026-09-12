@@ -173,15 +173,48 @@ SCAN_KICKED=0
 STOP=0
 CLEANED=0
 
+# Bounded stop: SIGTERM, wait up to SHUTDOWN_GRACE_S, then SIGKILL. `wait` on
+# its own is unbounded — a child that defers its signal handler (a lane mid
+# acquisition, for example) held the whole supervisor in `wait` forever, which
+# in turn made the outer supervisor see a live process and never restart it.
+SHUTDOWN_GRACE_S="${QT_SHUTDOWN_GRACE_S:-10}"
+
+# Signal a process and, when it leads its own process group, the whole group.
+# A bare `kill $pid` only reaches the wrapper of a multi-process service.
+signal_tree() {
+  local pid="$1" sig="$2"
+  kill "-$sig" "-$pid" >/dev/null 2>&1 || true   # process group, if it leads one
+  kill "-$sig" "$pid" >/dev/null 2>&1 || true    # the process itself
+}
+
+stop_pid() {
+  local pid="${1:-}"
+  local label="${2:-process}"
+  [[ -n "$pid" ]] || return 0
+  kill -0 "$pid" >/dev/null 2>&1 || return 0
+  signal_tree "$pid" TERM
+  local waited=0
+  while (( waited < SHUTDOWN_GRACE_S * 10 )); do
+    kill -0 "$pid" >/dev/null 2>&1 || return 0
+    sleep 0.1 || true
+    waited=$((waited + 1))
+  done
+  echo "[STACK] $label (pid $pid) did not stop within ${SHUTDOWN_GRACE_S}s; sending SIGKILL." >&2
+  signal_tree "$pid" KILL
+  return 0
+}
+
 cleanup() {
   if [[ "$CLEANED" == "1" ]]; then return; fi
   CLEANED=1; STOP=1
   echo
   echo "[STACK] Stopping QuantTerm child services…"
-  for pid in "$FRONTEND_PID" "$API_PID" "$MARKET_OPS_PID" "$AUTONOMY_PID"; do
-    if [[ -n "$pid" ]]; then kill "$pid" >/dev/null 2>&1 || true; fi
-  done
-  wait >/dev/null 2>&1 || true
+  # Desk first: a UI that outlives its API shows a healthy-looking app with no
+  # backend behind it. Then the API, then the workers.
+  stop_pid "$FRONTEND_PID" "RecoWealth desk"
+  stop_pid "$API_PID" "market API"
+  stop_pid "$MARKET_OPS_PID" "market-operations worker"
+  stop_pid "$AUTONOMY_PID" "autonomy supervisor"
   [[ "$AUTONOMY_EXTERNAL" == "1" ]] && echo "[STACK] Existing external autonomy supervisor was left running."
   [[ "$MARKET_OPS_EXTERNAL" == "1" ]] && echo "[STACK] Existing external market-operations worker was left running."
   [[ "$API_EXTERNAL" == "1" ]] && echo "[STACK] Existing market API on :8765 was left running."
@@ -277,7 +310,11 @@ start_api() {
 start_frontend() {
   echo "[STACK] Starting dedicated terminal at http://127.0.0.1:5173 …"
   mkdir -p "$ROOT/logs/stack"
-  npm --prefix "$ROOT/frontend" run dev -- --host 127.0.0.1 --port 5173 \
+  # Own process group. `npm run dev` is a wrapper chain (npm -> sh -> node ->
+  # esbuild); signalling only the npm PID left the node server still serving
+  # :5173 after the API was gone — a healthy-looking desk with no backend.
+  # setsid makes the PID a group leader so the whole tree can be stopped.
+  setsid npm --prefix "$ROOT/frontend" run dev -- --host 127.0.0.1 --port 5173 \
     >>"$ROOT/logs/stack/vite.log" 2>&1 &
   FRONTEND_PID=$!
 }
@@ -388,6 +425,16 @@ fi
 echo "[STACK] QuantTerm is running in this terminal: desk :5173, API :8765, autonomy, market operations, market scan."
 echo "[STACK] Ctrl-C is the stop signal. A child crash is restarted; it does not stop the desk."
 
+# Heartbeat so the outer supervisor can tell "alive" from "still supervising".
+# Process existence is not health: this loop can be alive and no longer doing
+# its job, and the outer launcher used to see only the PID.
+HEARTBEAT_FILE="$ROOT/logs/stack/inner_supervisor.heartbeat"
+mkdir -p "$(dirname "$HEARTBEAT_FILE")"
+beat() {
+  printf '%s %s\n' "$$" "$(date -u +%s)" > "$HEARTBEAT_FILE" 2>/dev/null || true
+}
+beat
+
 # Supervisor must outlive a single child failure. set -e would run the EXIT
 # trap and kill the API the next time a probe returns non-zero.
 set +e
@@ -483,5 +530,6 @@ PY
     start_autonomy || true
   fi
   if [[ "$SCAN_KICKED" != "1" ]]; then kick_scan || true; fi
+  beat
   sleep 1 || true
 done

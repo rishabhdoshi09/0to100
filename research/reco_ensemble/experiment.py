@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from core.runtime_paths import logs_dir
 
 ROOT = Path(__file__).resolve().parents[2]
 EXPERIMENT_ID = "EXP-RECO-001"
@@ -50,7 +51,7 @@ def _bhav_ready() -> tuple[bool, str]:
         )
     universe = ROOT / "data" / "universe_history.json"
     if not universe.exists():
-        alt = ROOT / "logs" / "research" / "universe_history.json"
+        alt = logs_dir() / "research" / "universe_history.json"
         if not alt.exists():
             return False, "universe_history.json is missing — cannot rebuild a point-in-time NSE universe."
     return True, "bhavcopy and universe history are present"

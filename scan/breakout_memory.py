@@ -9,9 +9,10 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import date, timedelta
 from typing import Optional
+from core.runtime_paths import logs_dir, logs_path
 
 # ── DB path ───────────────────────────────────────────────────────────────────
-_DB_DIR  = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs")
+_DB_DIR  = str(logs_dir())
 _DB_PATH = os.path.join(_DB_DIR, "breakout_memory.db")
 
 

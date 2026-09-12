@@ -20,11 +20,11 @@ import threading
 from datetime import datetime, date
 
 from logger import get_logger
+from core.runtime_paths import logs_path
 
 log = get_logger(__name__)
 
-_STATE_FILE = __import__("pathlib").Path(__file__).resolve().parent.parent \
-    / "logs" / "us_autopilot.json"
+_STATE_FILE = logs_path("us_autopilot.json")
 _lock = threading.RLock()
 _consider_lock = threading.Lock()
 

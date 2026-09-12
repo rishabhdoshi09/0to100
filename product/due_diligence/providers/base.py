@@ -8,9 +8,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 from urllib.parse import urlparse
+from core.runtime_paths import logs_dir, logs_path
 
 ROOT = Path(__file__).resolve().parents[3]
-ARCHIVE = ROOT / "logs" / "research_evidence"
+ARCHIVE = logs_dir() / "research_evidence"
 DEFAULT_TIMEOUT_S = 20
 DEFAULT_RETRIES = 2
 DEFAULT_RATE_GAP_S = 1.0

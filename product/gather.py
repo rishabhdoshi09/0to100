@@ -7,6 +7,7 @@ from pathlib import Path
 from product.projection import ProductInputs
 from product.paper_status import read_paper_status
 from product.autonomy_status import read_autonomy_status
+from core.runtime_paths import logs_dir
 
 
 def gather_product_inputs() -> ProductInputs:
@@ -26,10 +27,9 @@ def gather_product_inputs() -> ProductInputs:
         pass
 
     active_id = None; latest_date = ""; instrument_count = 0; data_ready = False
-    root = Path(__file__).resolve().parents[1]
     try:
         from research.intelligence.data.snapshot_store import SnapshotStore
-        store = SnapshotStore(root / "logs" / "snapshots")
+        store = SnapshotStore(logs_dir() / "snapshots")
         active_id = store.get_active_snapshot()
         if active_id:
             manifest_path = Path(store.root) / active_id / "manifest.json"
@@ -48,7 +48,7 @@ def gather_product_inputs() -> ProductInputs:
     except Exception:
         pass
 
-    paper = read_paper_status(repo_root=root)
+    paper = read_paper_status()
     autonomy = read_autonomy_status()
     return ProductInputs(
         market_open=market_open, market_label=market_label, kite_connected=kite_connected,

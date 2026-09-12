@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
+from core.runtime_paths import logs_path
 
 _HEADERS = {
     "User-Agent": (
@@ -21,7 +22,7 @@ _HEADERS = {
     "Accept": "application/json",
 }
 
-_DB_PATH = Path("logs/circuit_history.db")
+_DB_PATH = logs_path("circuit_history.db")
 _SESSION: requests.Session | None = None
 
 _CACHE: dict = {}          # {"ts": float, "upper": [...], "lower": [...]}

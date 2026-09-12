@@ -36,8 +36,9 @@ from pathlib import Path
 import numpy as np
 
 from research import feature_schema as _S
+from core.runtime_paths import logs_path
 
-_DB_PATH = Path(__file__).resolve().parent.parent / "logs" / "feature_store.db"
+_DB_PATH = logs_path("feature_store.db")
 
 # observation kinds — the whole point is that a REJECTION or NEAR_MISS is as much
 # an observation as a TRADE (non-event learning needs them on equal footing).

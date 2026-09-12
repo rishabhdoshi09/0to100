@@ -6,13 +6,14 @@ Thin orchestration over the existing canonical components. Never a second source
 broker order; never live capital in this milestone.
 """
 from __future__ import annotations
+from core.runtime_paths import logs_dir, logs_path
 
 DEFAULT_ROOT = "logs/autonomy"
 
 
 def default_root():
     from pathlib import Path
-    return Path(__file__).resolve().parents[2] / "logs" / "autonomy"
+    return logs_path("autonomy")
 
 
 def _existing_owner(root) -> tuple[str, str]:

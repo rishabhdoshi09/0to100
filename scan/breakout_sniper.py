@@ -27,6 +27,7 @@ from datetime import datetime
 from core.market_clock import IST
 
 from logger import get_logger
+from core.runtime_paths import logs_dir
 
 log = get_logger(__name__)
 
@@ -171,7 +172,7 @@ def build_watch_map(results: list[dict]) -> dict[int, dict]:
     try:
         import sqlite3
         from pathlib import Path
-        db = Path(__file__).resolve().parent.parent / "logs" / "watchlist.db"
+        db = logs_dir() / "watchlist.db"
         if db.exists():
             conn = sqlite3.connect(db)
             for sym, hi, stp, tgt in conn.execute(

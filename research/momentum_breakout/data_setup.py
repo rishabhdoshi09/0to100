@@ -20,6 +20,7 @@ import zipfile
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
+from core.runtime_paths import logs_dir
 
 # ── ZIP safety limits (decompression-bomb + traversal defence) ─────────────────
 MAX_ZIP_ENTRIES = 20000
@@ -686,7 +687,7 @@ def materialize(logs_root=None) -> dict:
 
 
 def _repo_logs() -> Path:
-    return Path(__file__).resolve().parent.parent.parent / "logs"
+    return logs_dir()
 
 
 # ══════════════════════════════════════════════════════════════════════════════

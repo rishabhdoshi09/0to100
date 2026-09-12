@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ai.agent_bus import AgentBus, AgentMessage
+from core.runtime_paths import logs_dir
 
 
 # ── Result dataclass ──────────────────────────────────────────────────────────
@@ -725,7 +726,7 @@ class SystemAgent(BaseJarvisAgent):
         try:
             p = Path(path)
             if not p.exists():
-                log_files = list(Path("logs").glob("*.log")) if Path("logs").exists() else []
+                log_files = list(logs_dir().glob("*.log")) if logs_dir().exists() else []
                 if not log_files:
                     return "No log files found"
                 p = log_files[0]

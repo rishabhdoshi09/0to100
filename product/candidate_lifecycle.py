@@ -7,9 +7,10 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
+from core.runtime_paths import logs_dir, logs_path
 
 ROOT = Path(__file__).resolve().parents[1]
-DB_PATH = ROOT / "logs" / "product" / "candidates.db"
+DB_PATH = logs_dir() / "product" / "candidates.db"
 
 DISCOVERED = "DISCOVERED"
 SCREENED = "SCREENED"

@@ -15,8 +15,9 @@ import traceback
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+from core.runtime_paths import logs_dir
 
-_ERR_LOG = Path(__file__).resolve().parent.parent / "logs" / "errors.log"
+_ERR_LOG = logs_dir() / "errors.log"
 _MAX_LOG_BYTES = 512 * 1024      # rotate at 512 KB — never grows unbounded
 
 

@@ -9,8 +9,9 @@ import sqlite3
 from datetime import date
 from pathlib import Path
 from typing import Any, Optional
+from core.runtime_paths import logs_dir, logs_path
 
-DEFAULT_DB = Path("logs/watchlist.db")
+DEFAULT_DB = logs_path("watchlist.db")
 
 
 def _connect(path: Path) -> sqlite3.Connection:

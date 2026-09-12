@@ -13,9 +13,10 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from product.pit_versions import current_versions
+from core.runtime_paths import logs_dir, logs_path
 
 ROOT = Path(__file__).resolve().parents[1]
-DB_PATH = ROOT / "logs" / "product" / "decision_freeze.db"
+DB_PATH = logs_dir() / "product" / "decision_freeze.db"
 
 
 def _now() -> str:

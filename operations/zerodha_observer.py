@@ -21,14 +21,15 @@ from execution.protection.store import ProtectionStore
 from execution.reconciliation.snapshot_store import BrokerSnapshotStore
 from execution.reconciliation.store import ReconciliationReportStore
 from execution.reconciliation.zerodha_cycle import run_zerodha_observation_cycle
+from core.runtime_paths import logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
-OBSERVER_ROOT = ROOT / "logs" / "reconciliation"
+OBSERVER_ROOT = logs_dir() / "reconciliation"
 RUNTIME_PATH = OBSERVER_ROOT / "observer_runtime.json"
 STATE_PATH = OBSERVER_ROOT / "observer_schedule.json"
 LOCK_PATH = OBSERVER_ROOT / "observer.lock"
-OMS_DB = ROOT / "logs" / "oms" / "orders.db"
-PROTECTION_DB = ROOT / "logs" / "protection" / "plans.db"
+OMS_DB = logs_dir() / "oms" / "orders.db"
+PROTECTION_DB = logs_dir() / "protection" / "plans.db"
 SNAPSHOT_DB = OBSERVER_ROOT / "broker_snapshots.db"
 REPORT_DB = OBSERVER_ROOT / "reports.db"
 IST = ZoneInfo("Asia/Kolkata")

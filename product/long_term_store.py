@@ -18,8 +18,9 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Mapping
+from core.runtime_paths import logs_dir, logs_path
 
-DEFAULT_LONG_TERM_PATH = Path("logs/product/latest_long_term_scan.json")
+DEFAULT_LONG_TERM_PATH = logs_path("product/latest_long_term_scan.json")
 
 _CLASSIFICATIONS = (
     "QUALITY_COMPOUNDER",

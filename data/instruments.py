@@ -18,11 +18,12 @@ import requests
 
 from config import settings
 from logger import get_logger
+from core.runtime_paths import logs_path
 
 log = get_logger(__name__)
 
 _INSTRUMENT_URL = "https://api.kite.trade/instruments"
-_CACHE_FILE = Path("logs/instruments_cache.csv")
+_CACHE_FILE = logs_path("instruments_cache.csv")
 _CACHE_TTL_SECONDS = 86_400  # 24 h
 
 

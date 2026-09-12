@@ -19,11 +19,12 @@ import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any
+from core.runtime_paths import logs_dir
 
 ROOT = Path(__file__).resolve().parents[2]
-OPS_DB = ROOT / "logs" / "market_ops" / "jobs.db"
-OPS_RUNTIME = ROOT / "logs" / "market_ops" / "runtime.json"
-CA_RUNTIME = ROOT / "logs" / "ca_refresh_runtime.json"
+OPS_DB = logs_dir() / "market_ops" / "jobs.db"
+OPS_RUNTIME = logs_dir() / "market_ops" / "runtime.json"
+CA_RUNTIME = logs_dir() / "ca_refresh_runtime.json"
 
 _BRIDGE_PENDING = {"MARKET_OP_IN_PROGRESS", "LONG_TERM_OP_IN_PROGRESS"}
 # Autonomy scans are 15-minute observations. Reuse any successful scan from

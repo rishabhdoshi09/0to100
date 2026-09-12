@@ -28,10 +28,11 @@ from product.counterfactual_learning import (
 )
 from product.evidence_policy_engine import HARD_REASON_CODES
 from product.learning_policy_store import record_measured_outcome
+from core.runtime_paths import logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
-TAKEN_PATH = ROOT / "logs" / "product" / "taken_evidence.jsonl"
-INGESTED_PATH = ROOT / "logs" / "product" / "learning_ingested.json"
+TAKEN_PATH = logs_dir() / "product" / "taken_evidence.jsonl"
+INGESTED_PATH = logs_dir() / "product" / "learning_ingested.json"
 
 
 def _env_path(name: str, default: Path) -> Path:
@@ -123,6 +124,64 @@ def _lookup_taken(symbol: str) -> dict[str, Any]:
     return {}
 
 
+def record_conditional_evidence(row: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Fold one settled paper trade into the conditional evidence it belongs to.
+
+    Only a trade that can name the decision it came from counts. A position
+    opened before the linkage existed, or by one of the research simulators,
+    has no canonical decision behind it and therefore no cell it was ranked in
+    — recording it anywhere would be inventing an attribution.
+
+    The paper venue has no broker to acknowledge an order, so the intent IS the
+    order: paper_order_id is the intent's id rather than a fabricated one. The
+    position id is derived from the intent and the entry session, which are
+    exactly what identify the position in the book.
+    """
+    decision_id = str(row.get("decision_id") or "")
+    context_key = str(row.get("context_key") or "")
+    intent_id = str(row.get("paper_intent_id") or "")
+    if not decision_id or not context_key or not intent_id:
+        return None
+    if row.get("realized_R") is None:
+        return None
+
+    try:
+        from product.conditional_evidence import record_outcome
+        from product.decision_chain import Outcome, _derive
+        from product.evidence_class import PAPER_FORWARD
+
+        position_id = _derive("pos", intent_id, str(row.get("symbol") or ""),
+                              str(row.get("entry_date") or ""))
+        outcome = Outcome(
+            position_id=position_id,
+            paper_order_id=intent_id,
+            paper_intent_id=intent_id,
+            decision_id=decision_id,
+            symbol=str(row.get("symbol") or ""),
+            exit_reason=str(row.get("exit_reason") or ""),
+            realized_R=float(row.get("realized_R")),
+            entry_price=row.get("entry_price"),
+            exit_price=row.get("exit_price"),
+            entry_session=str(row.get("entry_date") or "")[:10],
+            exit_session=str(row.get("exit_date") or "")[:10],
+            evidence_class=PAPER_FORWARD,
+        )
+        update = record_outcome(outcome, context_key=context_key,
+                                evidence_class=PAPER_FORWARD)
+        return {
+            "decision_id": decision_id,
+            "outcome_id": outcome.outcome_id,
+            "evidence_update_id": update.evidence_update_id,
+            "context_key": context_key,
+            "before": update.before,
+            "after": update.after,
+            "changed": update.changed,
+        }
+    except Exception as exc:
+        log_note = str(exc)[:200]
+        return {"error": log_note, "decision_id": decision_id}
+
+
 def ingest_closed_trade(
     trade: Mapping[str, Any] | Any,
     *,
@@ -159,6 +218,7 @@ def ingest_closed_trade(
             "quality": "GROSS_ONLY",
             "paper_fill_unchanged": True,
         }
+    conditional = record_conditional_evidence(row)
     realized = float(integrity.get("policy_realized_R") if integrity.get("policy_realized_R") is not None else (row.get("realized_R") or 0.0))
     source = (
         "paper_forward_taken_execution_adjusted"
@@ -178,6 +238,11 @@ def ingest_closed_trade(
         "execution_coverage": float(integrity.get("execution_coverage") or 0.0),
         "evidence_quality": integrity.get("quality") or "GROSS_ONLY",
         "paper_fill_unchanged": True,
+        # The chain back to the decision, so a policy row months from now can
+        # still name the trades behind it.
+        "decision_id": str(row.get("decision_id") or ""),
+        "context_key": str(row.get("context_key") or ""),
+        "evidence_update_id": str((conditional or {}).get("evidence_update_id") or ""),
     }
     last = record_measured_outcome(
         policy_id=f"SETUP::{setup}",
@@ -236,6 +301,8 @@ def ingest_closed_trade(
             floors=floors,
             extra={**extra_base, "affects_selection": False},
         )
+    if isinstance(last, dict) and conditional:
+        last = {**last, "conditional_evidence": conditional}
     return last
 
 

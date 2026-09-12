@@ -12,6 +12,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Dict, List
+from core.runtime_paths import logs_dir, logs_path
 
 logger = logging.getLogger(__name__)
 
@@ -263,7 +264,7 @@ def _filter_to_instruments(symbols: List[str], token_map: dict) -> List[str]:
 # ── Tier 1: Kite instruments cache ────────────────────────────────────────────
 
 def _load_from_kite_cache() -> tuple:
-    cache_path = _BASE_DIR / "logs" / "instruments_cache.csv"
+    cache_path = logs_path("instruments_cache.csv")
     if not cache_path.exists():
         return [], {}
     try:
@@ -448,10 +449,9 @@ def point_in_time_universe(as_of, path=None) -> dict:
     official NSE bhavcopy (``refresh_universe_history``) should do that instead of
     inventing listing dates."""
     import pandas as pd
-    base = Path(__file__).resolve().parent.parent
     import os as _os
     p = Path(path) if path else Path(
-        _os.getenv("QT_UNIVERSE_HISTORY_FILE", str(base / "logs" / "universe_history.json")))
+        _os.getenv("QT_UNIVERSE_HISTORY_FILE", str(logs_path("universe_history.json"))))
     asof = pd.Timestamp(as_of)
     if not p.exists():
         return {"as_of": str(asof.date()), "symbols": get_nse_universe(),
@@ -484,7 +484,7 @@ def universe_history_path() -> Path:
     override = _os.getenv("QT_UNIVERSE_HISTORY_FILE")
     if override:
         return Path(override)
-    return Path(__file__).resolve().parent.parent / "logs" / "universe_history.json"
+    return logs_dir() / "universe_history.json"
 
 
 def refresh_universe_history(*, as_of=None, force: bool = False) -> dict:
@@ -545,7 +545,7 @@ def get_nse_universe_by_sector() -> Dict[str, List[str]]:
     Sector data is only present when loaded from Kite instruments cache
     (which includes a 'sector' or 'segment' column).
     """
-    cache_path = _BASE_DIR / "logs" / "instruments_cache.csv"
+    cache_path = logs_path("instruments_cache.csv")
     if not cache_path.exists():
         return {}
     try:

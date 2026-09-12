@@ -21,9 +21,10 @@ from research.feature002.constants import (
     UNTIL_MATURE,
     protocol_hash,
 )
+from core.runtime_paths import logs_dir
 
-SCAN_STATE = Path(__file__).resolve().parents[2] / "logs" / "scan_store.json"
-PRODUCT_SCAN = Path(__file__).resolve().parents[2] / "logs" / "product" / "latest_momentum_scan.json"
+SCAN_STATE = logs_dir() / "scan_store.json"
+PRODUCT_SCAN = logs_dir() / "product" / "latest_momentum_scan.json"
 HOOK_LOG = LEDGER_DIR / "hook_log.jsonl"
 HEALTH_LOG_PATH = LEDGER_DIR / "research_logging_health.json"
 HEALTH_DOC_PATH = (

@@ -181,6 +181,35 @@ REPORT_EXTERNAL=0
 STOP=0
 CLEANED=0
 
+# Bounded stop. An unbounded `wait` here let a child that defers SIGTERM hold
+# the launcher open indefinitely, leaving the desk serving on :5173 with the
+# API already gone.
+SHUTDOWN_GRACE_S="${QT_SHUTDOWN_GRACE_S:-15}"
+
+# Signal a process and, when it leads its own process group, the whole group.
+signal_tree() {
+  local pid="$1" sig="$2"
+  kill "-$sig" "-$pid" >/dev/null 2>&1 || true
+  kill "-$sig" "$pid" >/dev/null 2>&1 || true
+}
+
+stop_pid() {
+  local pid="${1:-}"
+  local label="${2:-process}"
+  [[ -n "$pid" ]] || return 0
+  kill -0 "$pid" >/dev/null 2>&1 || return 0
+  signal_tree "$pid" TERM
+  local waited=0
+  while (( waited < SHUTDOWN_GRACE_S * 10 )); do
+    kill -0 "$pid" >/dev/null 2>&1 || return 0
+    sleep 0.1 || true
+    waited=$((waited + 1))
+  done
+  echo "[COMPLETE STACK] $label (pid $pid) did not stop within ${SHUTDOWN_GRACE_S}s; sending SIGKILL." >&2
+  signal_tree "$pid" KILL
+  return 0
+}
+
 cleanup() {
   if [[ "$CLEANED" == "1" ]]; then
     return
@@ -189,16 +218,10 @@ cleanup() {
   STOP=1
   echo
   echo "[COMPLETE STACK] Stopping report API and QuantTerm stack…"
-  if [[ -n "$STACK_PID" ]]; then
-    kill "$STACK_PID" >/dev/null 2>&1 || true
-  fi
-  if [[ -n "$VITE_PID" ]]; then
-    kill "$VITE_PID" >/dev/null 2>&1 || true
-  fi
-  if [[ -n "$REPORT_PID" ]]; then
-    kill "$REPORT_PID" >/dev/null 2>&1 || true
-  fi
-  wait >/dev/null 2>&1 || true
+  # Desk first so no UI outlives its backend, then the inner stack, then reports.
+  stop_pid "$VITE_PID" "desk UI"
+  stop_pid "$STACK_PID" "inner stack supervisor"
+  stop_pid "$REPORT_PID" "research-report API"
   if [[ "$REPORT_EXTERNAL" == "1" ]]; then
     echo "[COMPLETE STACK] Existing report API on :8766 was left running."
   fi
@@ -245,6 +268,31 @@ start_report() {
   echo "[COMPLETE STACK] Research-report API failed to start; will retry. See logs/stack/report_api.log." >&2
   REPORT_PID=""
   return 1
+}
+
+# The inner supervisor writes "<pid> <unix-seconds>" every loop. A heartbeat
+# older than this means it is no longer supervising even if the process exists.
+INNER_HEARTBEAT_FILE="$ROOT/logs/stack/inner_supervisor.heartbeat"
+INNER_HEARTBEAT_MAX_AGE_S="${QT_INNER_HEARTBEAT_MAX_AGE_S:-45}"
+
+inner_heartbeat_fresh() {
+  local expect_pid="${1:-}"
+  python - "$INNER_HEARTBEAT_FILE" "$expect_pid" "$INNER_HEARTBEAT_MAX_AGE_S" <<'PY'
+import sys, time
+from pathlib import Path
+
+path, expect_pid, max_age = Path(sys.argv[1]), sys.argv[2].strip(), float(sys.argv[3])
+try:
+    pid_text, beat_text = path.read_text(encoding="utf-8").split()[:2]
+    beat = float(beat_text)
+except Exception:
+    # No heartbeat yet: give a freshly started supervisor room to write one
+    # rather than reaping it on its first loop.
+    raise SystemExit(0)
+if expect_pid and pid_text != expect_pid:
+    raise SystemExit(0)
+raise SystemExit(0 if (time.time() - beat) <= max_age else 1)
+PY
 }
 
 start_stack() {
@@ -330,7 +378,7 @@ start_vite_safety_net() {
   fi
   echo "[COMPLETE STACK] Desk UI is not on :5173 yet; starting Vite from the complete launcher."
   mkdir -p "$ROOT/logs/stack"
-  npm --prefix "$ROOT/frontend" run dev -- --host 127.0.0.1 --port 5173 \
+  setsid npm --prefix "$ROOT/frontend" run dev -- --host 127.0.0.1 --port 5173 \
     >>"$ROOT/logs/stack/vite.log" 2>&1 200>&- &
   VITE_PID=$!
   return 0
@@ -410,9 +458,20 @@ while [[ "$STOP" != "1" ]]; do
       fi
     fi
   fi
-  if [[ "$STACK_EXTERNAL" != "1" ]] && ! alive "$STACK_PID"; then
-    echo "[COMPLETE STACK] Inner stack script ended; restarting it. The desk is not supposed to go idle."
-    start_stack
+  if [[ "$STACK_EXTERNAL" != "1" ]]; then
+    if ! alive "$STACK_PID"; then
+      echo "[COMPLETE STACK] Inner stack script ended; restarting it. The desk is not supposed to go idle."
+      start_stack
+    elif ! inner_heartbeat_fresh "$STACK_PID"; then
+      # Alive but no longer supervising — e.g. wedged in cleanup waiting on a
+      # child that deferred SIGTERM. Process existence alone used to satisfy
+      # this check, so the API could stay down indefinitely.
+      echo "[COMPLETE STACK] Inner stack supervisor (pid $STACK_PID) is alive but its heartbeat is stale; replacing it." >&2
+      stop_pid "$STACK_PID" "wedged inner stack supervisor"
+      STACK_PID=""
+      rm -f "$INNER_HEARTBEAT_FILE" 2>/dev/null || true
+      start_stack
+    fi
   fi
   sleep 3 || true
 done

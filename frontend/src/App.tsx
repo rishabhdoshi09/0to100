@@ -19,6 +19,7 @@ import { MarketSidebar } from './MarketSidebar'
 import { EducationView } from './educationViews'
 import { NewsView, OperationsRibbon, FnoView } from './marketViews'
 import { ProductStockIntelligenceView, StockInvestigatorView } from './productViews'
+import { DecisionWhyView } from './decisionWhyView'
 import { ResearchDataView } from './researchData'
 import {
   MarketInternalsView,
@@ -634,6 +635,7 @@ function App() {
           newsRevision={dashboard.news.articles.length}
         />
       ))}
+      {keep(['Why This Decision', 'Why'], <DecisionWhyView symbol={selected} />)}
       {keep(['Research Data', 'Data'], <ResearchDataView symbol={selected} />)}
       {keep(['Strategies'], <StrategiesView />)}
       {keep(['Backtest', 'Backtests'], <ProductionBacktestView {...viewProps} />)}

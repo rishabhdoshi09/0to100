@@ -20,10 +20,11 @@ from pathlib import Path
 from typing import Optional
 
 from logger import get_logger
+from core.runtime_paths import logs_path
 
 log = get_logger(__name__)
 
-_STATE_FILE = Path("logs/flash_crash_state.json")
+_STATE_FILE = logs_path("flash_crash_state.json")
 _LOCK = threading.Lock()
 
 # Thresholds

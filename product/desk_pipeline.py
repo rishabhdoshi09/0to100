@@ -31,6 +31,7 @@ from operations.market_ops import (
     _stale,
 )
 from operations.store import BLOCKED, FAILED, PENDING, RUNNING, SUCCEEDED, OperationStore
+from core.runtime_paths import logs_dir
 
 RETRY_AFTER_FAIL_S = 10 * 60
 SNAPSHOT_STALE_S = 90.0
@@ -43,7 +44,7 @@ def _snapshot_path() -> Path:
     raw = os.environ.get("QT_DESK_PIPELINE_SNAPSHOT")
     if raw:
         return Path(raw)
-    return Path(__file__).resolve().parents[1] / "logs" / "product" / "desk_pipeline.json"
+    return logs_dir() / "product" / "desk_pipeline.json"
 
 
 # Dependency/viewing order: Home → Scanner/Recos technical → funds → Reports → research.
@@ -113,13 +114,13 @@ def prices_kind_due() -> str | None:
         freshness = {"current": False, "ready": False, "sessions": 0}
     if not freshness.get("current"):
         return DATA_PREPARE
-    if _stale(_root() / "logs" / "product" / "fno_universe.json", FNO_FRESH_S):
+    if _stale(logs_dir() / "product" / "fno_universe.json", FNO_FRESH_S):
         return FNO_REFRESH
     return None
 
 
 def scan_is_fresh() -> bool:
-    path = _root() / "logs" / "product" / "latest_momentum_scan.json"
+    path = logs_dir() / "product" / "latest_momentum_scan.json"
     try:
         from data.bhavcopy_runtime import official_history_freshness
 
@@ -150,11 +151,11 @@ def scan_is_fresh() -> bool:
 
 
 def long_term_is_fresh() -> bool:
-    return not _stale(_root() / "logs" / "product" / "latest_long_term_scan.json", LONG_TERM_FRESH_S)
+    return not _stale(logs_dir() / "product" / "latest_long_term_scan.json", LONG_TERM_FRESH_S)
 
 
 def news_is_fresh() -> bool:
-    return not _stale(_root() / "logs" / "news_curator.sqlite3", NEWS_FRESH_S)
+    return not _stale(logs_dir() / "news_curator.sqlite3", NEWS_FRESH_S)
 
 
 def acquire_freshness() -> dict[str, Any]:

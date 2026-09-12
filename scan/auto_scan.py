@@ -56,6 +56,7 @@ _thread_started: bool = False
 # API block risk) and the laptop's duty cycle for marginal value.
 # Tune via .env QT_SCAN_REFRESH_S if ever needed — not via code edits.
 import os as _os
+from core.runtime_paths import logs_path
 _MARKET_REFRESH_S = int(_os.getenv("QT_SCAN_REFRESH_S", "900") or 900)
 _OFFHOURS_REFRESH_S = 3600     # hourly otherwise
 
@@ -111,7 +112,7 @@ _pushed: dict[str, set] = {}
 
 # ── Restart persistence — scan results + push-dedupe survive restarts ─────────
 from pathlib import Path as _Path
-_STATE_FILE = _Path(__file__).resolve().parent.parent / "logs" / "scan_store.json"
+_STATE_FILE = logs_path("scan_store.json")
 
 
 def _save_state() -> None:
@@ -780,7 +781,7 @@ def _maybe_update_outcomes() -> None:
     # target-vs-stop first-touch so the learning stack stops inheriting the proxy.
     # Guarded by a marker file → runs exactly once, then never again.
     try:
-        _marker = _Path(__file__).resolve().parent.parent / "logs" / ".outcomes_reresolved_v1"
+        _marker = _logs_dir() / ".outcomes_reresolved_v1"
         if not _marker.exists():
             from core.signal_outcome_tracker import reresolve_history
             n = reresolve_history()

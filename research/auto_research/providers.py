@@ -16,6 +16,7 @@ a passing strategy. Pure reads; no live broker order path.
 from __future__ import annotations
 
 from research.strategy_studio.discovery import EvidenceReport
+from core.runtime_paths import logs_dir
 
 
 def ensure_production_paper_pipeline() -> bool:
@@ -42,7 +43,7 @@ def ensure_production_paper_pipeline() -> bool:
         from execution.tca.store import TcaStore
         from risk.governor_store import RiskDecisionStore
 
-        logs = Path(__file__).resolve().parents[2] / "logs"
+        logs = logs_dir()
         pipeline = PaperExecutionPipeline(
             oms_store=OmsStore(logs / "oms" / "orders.db"),
             risk_store=RiskDecisionStore(logs / "risk" / "decisions.db"),

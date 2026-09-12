@@ -26,10 +26,11 @@ import numpy as np
 import pandas as pd
 
 from logger import get_logger
+from core.runtime_paths import logs_path
 
 log = get_logger(__name__)
 
-_DB = Path("logs/stop_hunt_history.db")
+_DB = logs_path("stop_hunt_history.db")
 
 
 def _init_db() -> None:

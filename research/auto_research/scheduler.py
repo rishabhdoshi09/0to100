@@ -26,6 +26,7 @@ from research.auto_research.paper_autonomy import PaperAutonomyManager
 from research.auto_research.thread import ResearchThread
 from research.strategy_studio import discovery as DISC
 from research.strategy_studio import spec as S
+from core.runtime_paths import logs_dir, logs_path
 
 
 @dataclass
@@ -512,7 +513,7 @@ def get_brain(**kwargs) -> AutoResearchBrain:
             kwargs.setdefault("signal_fn", P.signals_for)
             kwargs.setdefault("bars_fn", P.daily_bars)
             kwargs.setdefault("regime_fn", P.current_regime)
-            _logs = Path(__file__).resolve().parent.parent.parent / "logs"
+            _logs = logs_dir()
             kwargs.setdefault("paper_state_path", _logs / "auto_research" / "paper_book.json")
             # the two-brain runtime persists to logs/intelligence/ (what Brain Observatory reads)
             kwargs.setdefault("event_store_path", _logs / "intelligence" / "events.jsonl")
@@ -531,7 +532,7 @@ def get_brain(**kwargs) -> AutoResearchBrain:
             from research.intelligence.registry import StrategyRegistry
             from research.strategy_studio import discovery as _D
             _BRAIN.snapshot_store = SnapshotStore(
-                _P(__file__).resolve().parent.parent.parent / "logs" / "snapshots")
+                logs_path("snapshots"))
             _BRAIN.strategy_registry = StrategyRegistry().build(
                 _D.generate(_D.DiscoveryBudget()))
         except Exception:

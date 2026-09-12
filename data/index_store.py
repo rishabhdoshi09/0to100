@@ -21,10 +21,11 @@ from typing import Optional
 import pandas as pd
 
 from logger import get_logger
+from core.runtime_paths import logs_path
 
 log = get_logger(__name__)
 
-_DIR = Path(__file__).resolve().parent.parent / "logs" / "indices"
+_DIR = logs_path("indices")
 _PKL = _DIR / "index_store.pkl"
 # whole-batch budget for building the index store from the network; a dead feed gives up here
 # instead of blocking the caller through hundreds of per-day request timeouts

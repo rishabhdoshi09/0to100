@@ -16,9 +16,10 @@ from fastapi import Body, HTTPException, Query
 import terminal_api as core
 from product.data_api import install_data_routes
 from product.workspace import SCANNER_MODES, build_command_center_state, scanner_rows
+from core.runtime_paths import logs_dir
 
-RUNTIME_PATH = core.ROOT / "logs" / "reconciliation" / "observer_runtime.json"
-SNAPSHOT_DB = core.ROOT / "logs" / "reconciliation" / "broker_snapshots.db"
+RUNTIME_PATH = logs_dir() / "reconciliation" / "observer_runtime.json"
+SNAPSHOT_DB = logs_dir() / "reconciliation" / "broker_snapshots.db"
 
 _observer_process: subprocess.Popen | None = None
 _installed = False

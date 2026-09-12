@@ -18,6 +18,7 @@ from research.autonomy import schedules as SCH
 from research.autonomy import supervisor_state as ST
 from research.autonomy import health as H
 from research.autonomy import auth as AUTH
+from core.runtime_paths import logs_dir
 
 DEP_AUTH = "AUTH_READY"
 DEP_DATA = "DATA_READY"
@@ -64,7 +65,7 @@ class Deps:
         self.root = Path(root or default_root())
         self.live_feed = live_feed
         self.repo_root = Path(__file__).resolve().parents[2]
-        self.logs = self.repo_root / "logs"
+        self.logs = logs_dir()
         self.logs.mkdir(parents=True, exist_ok=True)
         from research.autonomy.telegram_notifications import TelegramNotifier
         self.telegram = TelegramNotifier(self.root)

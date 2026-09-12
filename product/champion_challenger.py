@@ -18,9 +18,10 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from core.runtime_paths import logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_PATH = ROOT / "logs" / "product" / "challengers.json"
+DEFAULT_PATH = logs_dir() / "product" / "challengers.json"
 SCHEMA_VERSION = 1  # previous: none. Additive research ledger.
 
 PROPOSED = "PROPOSED"

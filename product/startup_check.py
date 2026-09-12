@@ -10,6 +10,7 @@ import os
 import socket
 import urllib.request
 from typing import Any
+from core.runtime_paths import logs_dir
 
 SCHEMA_VERSION = 3
 _OPERATIONAL_READY_STATUSES = {"READY", "RUNNING", "LOCKED", "HEALTHY"}
@@ -204,7 +205,7 @@ def build_startup_check(*, probe_network: bool = True) -> dict[str, Any]:
     try:
         import json
         from pathlib import Path
-        runtime = json.loads((Path(__file__).resolve().parents[1] / "logs" / "market_ops" / "runtime.json").read_text())
+        runtime = json.loads((logs_dir() / "market_ops" / "runtime.json").read_text())
         ops_running = bool(runtime.get("running") or runtime.get("process_running"))
     except Exception:
         ops_running = False

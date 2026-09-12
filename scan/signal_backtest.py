@@ -25,10 +25,11 @@ from pathlib import Path
 import numpy as np
 
 from logger import get_logger
+from core.runtime_paths import logs_dir
 
 log = get_logger(__name__)
 
-_OUT = Path(__file__).resolve().parent.parent / "logs" / "signal_backtest.json"
+_OUT = logs_dir() / "signal_backtest.json"
 
 # Breakeven-trail level for the per-signal expectancy sim — mirrors the live
 # autopilot's breakeven_trigger_pct (default 2.0). Backtesting WITH the trail

@@ -115,6 +115,9 @@ class NewsFetcher:
         log.info("news_fetched", total=len(articles), fresh=len(fresh))
         return sorted(fresh, key=lambda x: x.published_at, reverse=True)
 
+    # Bound for the feedparser fallback below, which has no timeout of its own.
+    _RSS_FALLBACK_TIMEOUT_S = 10.0
+
     def _fetch_rss(self, feed_url: str, max_age_hours: int) -> List[RawArticle]:
         if feedparser is None:                    # optional dep absent → no RSS, never a crash
             log.warning("feedparser_unavailable", url=feed_url)
@@ -138,7 +141,17 @@ class NewsFetcher:
                     bozo=bool(getattr(feed, "bozo", False)),
                 )
         except Exception:
-            feed = feedparser.parse(feed_url, request_headers=_browser_headers)
+            # feedparser does its own HTTP through urllib, which honours no
+            # per-call timeout — a hung feed would block the news lane forever.
+            # Bound it explicitly, and put the global default back afterwards.
+            import socket as _socket
+
+            previous_timeout = _socket.getdefaulttimeout()
+            _socket.setdefaulttimeout(self._RSS_FALLBACK_TIMEOUT_S)
+            try:
+                feed = feedparser.parse(feed_url, request_headers=_browser_headers)
+            finally:
+                _socket.setdefaulttimeout(previous_timeout)
         now = datetime.now(timezone.utc)
         cutoff_ts = now.timestamp() - max_age_hours * 3600
         articles: List[RawArticle] = []

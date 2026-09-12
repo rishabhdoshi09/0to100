@@ -13,9 +13,10 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from core.runtime_paths import logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_PATH = ROOT / "logs" / "product" / "calibration.json"
+DEFAULT_PATH = logs_dir() / "product" / "calibration.json"
 SCHEMA_VERSION = 1
 MIN_SAMPLE = 20
 

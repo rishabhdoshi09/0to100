@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 from logger import get_logger
+from core.runtime_paths import logs_dir
 
 log = get_logger(__name__)
 
@@ -45,7 +46,7 @@ def compute_calibration(db_path: Optional[str] = None) -> Optional[CalibrationRe
     Read trade journal from SQLite, compute calibration per score bucket.
     Returns None if insufficient data (< 20 closed trades).
     """
-    path = db_path or str(Path("logs") / "jarvis_memory.db")
+    path = db_path or str(logs_dir() / "jarvis_memory.db")
     try:
         con = sqlite3.connect(path)
         rows = con.execute(

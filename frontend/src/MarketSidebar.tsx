@@ -5,6 +5,7 @@ const PRIMARY_NAV = [
   ['⌂', 'Home', 'Desk'],
   ['▣', 'Recommendations', 'Opportunities'],
   ['◉', 'Stock Intelligence', 'Stock Intelligence'],
+  ['?', 'Why This Decision', 'Why This Decision'],
   ['▣', 'Paper Portfolio', 'Portfolio'],
   ['✎', 'Learning', 'Learning'],
 ] as const
@@ -38,6 +39,7 @@ const ROUTE_ALIAS: Record<string, string> = {
   Backtests: 'Backtest',
   Health: 'System Health',
   Data: 'Research Data',
+  Why: 'Why This Decision',
 }
 
 function NavigationRows({

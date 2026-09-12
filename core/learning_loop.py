@@ -11,10 +11,11 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from core.runtime_paths import logs_dir, logs_path
 
 # ── DB path ───────────────────────────────────────────────────────────────────
 
-_DB_PATH = Path(__file__).parent.parent / "logs" / "learning_loop.db"
+_DB_PATH = logs_path("learning_loop.db")
 
 # Universal baseline win rate used when quality_engine rates are unavailable
 _UNIVERSAL_BASELINE = 0.55
