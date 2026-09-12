@@ -8,6 +8,7 @@ const PRIMARY_NAV = [
   ['?', 'Why This Decision', 'Why This Decision'],
   ['▣', 'Paper Portfolio', 'Portfolio'],
   ['✎', 'Learning', 'Learning'],
+  ['∑', 'Forward Evidence', 'Forward Evidence'],
 ] as const
 
 const ADVANCED_NAV = [
@@ -40,6 +41,7 @@ const ROUTE_ALIAS: Record<string, string> = {
   Health: 'System Health',
   Data: 'Research Data',
   Why: 'Why This Decision',
+  Evidence: 'Forward Evidence',
 }
 
 function NavigationRows({
