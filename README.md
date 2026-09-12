@@ -37,44 +37,76 @@ data → signals → EV ranking → risk gates → execution → outcomes → le
   posture (GREEN LIGHT / NORMAL / DEFENSIVE / STAND ASIDE) + a prioritised
   to-do — on the Pulse tab and in a morning Telegram briefing.
 
-## Canonical product path (one command)
+## Run on the production Mac
 
-The product UI is the **Vite/React desk**. Streamlit is not the product path
-and is not started. One command owns the local stack (desk, terminal API,
-report API, autonomy, and the market-operations worker):
+The product UI is the **Vite/React desk**. Streamlit is not the product path.
+For the production Mac, use the production branch and the host installer so the
+service is pinned to the exact checkout it validates:
 
 ```bash
 cd ~/0to100
+git fetch origin
+git checkout claude/build-ai-trading-system-miHHd
+git pull --ff-only origin claude/build-ai-trading-system-miHHd
+bash scripts/install_quantterm_host.sh
+bash scripts/quantterm_status.sh
+```
+
+Then open `http://127.0.0.1:5173`.
+
+After a later `git pull`, run `bash scripts/install_quantterm_host.sh` again so
+the installed service is deliberately repinned and revalidated. Full operating,
+upgrade, sleep/lid, and rollback guidance is in
+[`docs/MAC_LOCAL_RUNBOOK.md`](docs/MAC_LOCAL_RUNBOOK.md).
+
+### Foreground mode
+
+For a quick session without installing the always-on service, one command owns
+the local stack (desk, terminal API, report API, autonomy, and market-operations
+worker):
+
+```bash
 bash scripts/run_quantterm_complete.sh
 ```
 
-That is the only command a normal operator needs. Home at
-`http://127.0.0.1:5173` is the rest of the day. On an interactive local
-machine the launcher opens Home once after the desk is reachable.
-`./quantterm.sh` is a tiny exec wrapper of the same command.
+That is the normal foreground command. Home at `http://127.0.0.1:5173` is the
+rest of the day. On an interactive local machine the launcher opens Home once
+after the desk is reachable. `./quantterm.sh` is a tiny exec wrapper of the same
+command.
 
 Paste the full Kite redirect URL when asked — you do not need to pick out
-`request_token` by hand.
+`request_token` by hand. Broker credentials are optional for non-broker PAPER /
+SHADOW research lanes; missing capabilities must degrade honestly rather than
+fabricate market data.
 
 `scripts/run_desk.sh` is only a compatibility wrapper. It execs
-`scripts/run_quantterm_complete.sh`. Do not start Streamlit, and do not start
-a second terminal for the same stack.
+`scripts/run_quantterm_complete.sh`. Do not start Streamlit, and do not start a
+second terminal or checkout for the same stack.
+
+For a new clone:
 
 ```bash
 git clone https://github.com/rishabhdoshi09/0to100.git && cd 0to100
-cp .env.example .env          # put KITE_API_KEY and KITE_API_SECRET in it once
+git checkout claude/build-ai-trading-system-miHHd
+cp .env.example .env          # optional: put KITE_API_KEY and KITE_API_SECRET here
+chmod 600 .env
 bash scripts/run_quantterm_complete.sh
 ```
 
-## Run it 24/7
+## Host controls
 
-| Where | How |
+| Action | Command |
 |---|---|
-| Your Mac (₹0) | `bash deploy/setup_mac.sh` — launchd runs `scripts/run_quantterm_complete.sh` |
-| Any Ubuntu server / VPS | `bash deploy/setup_server.sh` — systemd, same complete stack, IST timezone, auto-restart |
-| Oracle Cloud free tier | see `docs/ORACLE_SETUP.md` |
+| Install / repin / validate | `bash scripts/install_quantterm_host.sh` |
+| Status | `bash scripts/quantterm_status.sh` |
+| Restart | `bash scripts/quantterm_restart.sh` |
+| Stop | `bash scripts/quantterm_stop.sh` |
+| Foreground complete stack | `bash scripts/run_quantterm_complete.sh` |
 
-Details: `docs/ALWAYS_ON.md`.
+The always-on host deployment uses persistent runtime state and platform service
+management (`launchd` on macOS, systemd user service on Linux). The supported Mac
+procedure is the runbook above; older deployment helpers are not the canonical
+production path.
 
 ## Invariants (the non-negotiables)
 
@@ -114,6 +146,5 @@ core (Brain, decision journal, sim lab, market clock), and the **Vite/React
 desk** (Home · Market Scanner · Recommendations · Market Reports · Stock
 Intelligence). Archived Streamlit pages under `ui/` are not started.
 
-*Build: see `VERSION`. Canonical launcher: `bash scripts/run_quantterm_complete.sh`.
-Historical research branches such as `overhaul/evidence-lab` are not the
-current product path.*
+*Build: see `VERSION`. Canonical foreground launcher: `bash scripts/run_quantterm_complete.sh`.
+Canonical always-on Mac path: `bash scripts/install_quantterm_host.sh`.*
