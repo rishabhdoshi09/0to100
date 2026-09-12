@@ -163,8 +163,9 @@ def _append_rss_sample(rss_mb: float | None) -> None:
 
 
 def _emit(kind: str, message: str) -> None:
-    stamp = time.strftime("%H:%M:%S")
-    print(f"[{stamp}] MARKET OPS {kind:<9} {message}", flush=True)
+    from core.market_clock import console_stamp
+
+    print(f"[{console_stamp()}] MARKET OPS {kind:<9} {message}", flush=True)
 
 
 def _operation_result(report: Any) -> dict[str, Any]:

@@ -34,8 +34,21 @@ from product.evidence_class import (
 SCHEMA_VERSION = 1
 
 NO_MARKET_EVIDENCE = "NO_MARKET_EVIDENCE"
-ACCUMULATING = "ACCUMULATING"
-MEASURED = "MEASURED"
+INSUFFICIENT_SAMPLE = "INSUFFICIENT_SAMPLE"
+EARLY = "EARLY"
+DEVELOPING = "DEVELOPING"
+MATURE = "MATURE"
+
+#: Retained so existing callers and tests keep working: ACCUMULATING was the
+#: previous name for INSUFFICIENT_SAMPLE.
+ACCUMULATING = INSUFFICIENT_SAMPLE
+MEASURED = EARLY
+
+#: Sample-depth multiples of the floor. These grade how MUCH has settled, and
+#: nothing else. A MATURE cell with a negative expectancy is a mature negative
+#: result — maturity is never a claim that an edge exists.
+DEVELOPING_MULTIPLE = 3
+MATURE_MULTIPLE = 10
 
 
 def _group(rows: list[dict[str, Any]], field: str) -> list[dict[str, Any]]:
@@ -65,6 +78,61 @@ def _group(rows: list[dict[str, Any]], field: str) -> list[dict[str, Any]]:
         out.append(bucket)
     out.sort(key=lambda b: (-int(b["count"]), str(b.get(field))))
     return out
+
+
+def _maturity(settled: list[dict[str, Any]], total: int) -> str:
+    """How deep the evidence is. Never how good it is."""
+    if total == 0:
+        return NO_MARKET_EVIDENCE
+    deepest = max((int(r.get("count") or 0) for r in settled), default=0)
+    if deepest < MIN_SAMPLE:
+        return INSUFFICIENT_SAMPLE
+    if deepest >= MIN_SAMPLE * MATURE_MULTIPLE:
+        return MATURE
+    if deepest >= MIN_SAMPLE * DEVELOPING_MULTIPLE:
+        return DEVELOPING
+    return EARLY
+
+
+def _max_drawdown(r_values: list[float]) -> float | None:
+    """Worst peak-to-trough of the cumulative R curve, in resolution order.
+
+    Reported only because the average tells you nothing about the path. A
+    strategy whose expectancy is positive and whose drawdown is eleven R is
+    not tradable by anyone who has to live through it.
+    """
+    if not r_values:
+        return None
+    equity = 0.0
+    peak = 0.0
+    worst = 0.0
+    for value in r_values:
+        equity += float(value)
+        peak = max(peak, equity)
+        worst = min(worst, equity - peak)
+    return round(worst, 4)
+
+
+def _risk_shape(settled: list[dict[str, Any]]) -> dict[str, Any]:
+    """MAE, MFE, drawdown and calibration — only where they were measured."""
+    maes = [float(r["mae_R"]) for r in settled if r.get("mae_R") is not None]
+    mfes = [float(r["mfe_R"]) for r in settled if r.get("mfe_R") is not None]
+    gaps = [float(r["calibration_gap"]) for r in settled
+            if r.get("calibration_gap") is not None]
+    stream: list[float] = []
+    for row in settled:
+        stream.extend(float(v) for v in (row.get("r_values") or []))
+    return {
+        "worst_mae_R": min(maes) if maes else None,
+        "best_mfe_R": max(mfes) if mfes else None,
+        "max_drawdown_R": _max_drawdown(stream),
+        "calibration_gap": (sum(gaps) / len(gaps)) if gaps else None,
+        "calibration_note": (
+            "positive means the system claimed more confidence than it earned"
+            if gaps else "no confidence was recorded with these outcomes"
+        ),
+        "measured_from": len(stream),
+    }
 
 
 def _distribution(rows: list[dict[str, Any]]) -> dict[str, int]:
@@ -138,26 +206,24 @@ def build_forward_evidence_board(*, book: Any = None,
     total = sum(int(row.get("count") or 0) for row in settled)
     usable = [row for row in settled if row.get("usable_for_ranking")]
 
-    if total == 0:
-        state = NO_MARKET_EVIDENCE
+    state = _maturity(settled, total)
+    deepest = max((int(r.get("count") or 0) for r in settled), default=0)
+    if state == NO_MARKET_EVIDENCE:
         headline = (
             "No paper trade has settled yet. The learning machinery is wired "
             "and proved, but nothing here has been earned from the market."
         )
-    elif not usable:
-        state = ACCUMULATING
-        best = max((int(r.get("count") or 0) for r in settled), default=0)
+    elif state == INSUFFICIENT_SAMPLE:
         headline = (
             f"{total} settled trade{'s' if total != 1 else ''} so far. The "
-            f"richest context has {best} of the {MIN_SAMPLE} needed before it "
-            "may affect ranking."
+            f"richest context has {deepest} of the {MIN_SAMPLE} needed before "
+            "it may affect ranking."
         )
     else:
-        state = MEASURED
         headline = (
-            f"{total} settled trades. {len(usable)} context"
-            f"{'s' if len(usable) != 1 else ''} carry enough sample to affect "
-            "ranking."
+            f"{total} settled trades, deepest context {deepest}. "
+            f"{len(usable)} context{'s' if len(usable) != 1 else ''} carry "
+            "enough sample to affect ranking. Sample depth is not an edge."
         )
 
     open_rows = _open_positions(book)
@@ -174,6 +240,13 @@ def build_forward_evidence_board(*, book: Any = None,
         "by_regime": _group(settled, "regime"),
         "by_sector": _group(settled, "sector"),
         "r_distribution": _distribution(settled),
+        "risk_shape": _risk_shape(settled),
+        "maturity_thresholds": {
+            "insufficient_below": MIN_SAMPLE,
+            "developing_at": MIN_SAMPLE * DEVELOPING_MULTIPLE,
+            "mature_at": MIN_SAMPLE * MATURE_MULTIPLE,
+            "note": "depth of evidence only; never a claim that an edge exists",
+        },
         "unresolved": open_rows,
         "unresolved_count": len(open_rows),
         "unattributable_open": sum(1 for r in open_rows if not r["attributable"]),

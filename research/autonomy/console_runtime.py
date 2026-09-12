@@ -21,9 +21,10 @@ from research.autonomy import supervisor_state as ST
 
 
 def _stamp() -> str:
+    from core.market_clock import console_stamp
+
     try:
-        value = ST._now_ist_iso()
-        return value[11:19] if len(value) >= 19 else value
+        return console_stamp()
     except Exception:
         return time.strftime("%H:%M:%S")
 

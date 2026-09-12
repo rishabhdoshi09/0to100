@@ -10,7 +10,7 @@ import socket
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 from core.runtime_paths import logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -59,13 +59,66 @@ def _port_open(port: int) -> bool:
         sock.close()
 
 
+# The autonomy supervisor's own states, mapped once. Liveness is not
+# capability: a supervisor can be running perfectly while unable to do
+# anything, and the component must report the second, not the first.
+_AUTONOMY_STATE_TO_COMPONENT = {
+    "OBSERVING": READY,
+    "PAPER_ACTIVE": READY,
+    "RESEARCHING": READY,
+    "DATA_READY": READY,
+    "DATA_REFRESHING": READY,
+    "STARTING": STARTING,
+    "AUTH_REQUIRED": DEGRADED,
+    "DATA_BLOCKED": DEGRADED,
+    "DEGRADED": DEGRADED,
+    "HALTED": DEGRADED,
+    "UNKNOWN": STARTING,
+}
+
+
 def _component(name: str, status: str, *, detail: str = "", pid: Any = None) -> dict[str, Any]:
-    return {
+    """One runtime component, with status and detail forced to agree.
+
+    The same defect the system-health lanes had lives here on a different
+    surface: status measured whether a process was alive while detail
+    described what it could actually do, so the desk reported
+
+        autonomy | READY | DATA_BLOCKED
+
+    An operator reads the status word. A component whose own detail describes
+    a blocked or degraded condition is not READY, whatever its PID says.
+    """
+    state = str(status or STARTING)
+    text = detail or ""
+    contradiction = ""
+    if state == READY:
+        try:
+            from product.system_health_contract import detail_contradicts_healthy
+
+            contradiction = detail_contradicts_healthy(text)
+        except Exception:
+            contradiction = ""
+        if contradiction:
+            state = DEGRADED
+    row = {
         "name": name,
-        "status": status,
-        "detail": detail,
+        "status": state,
+        "detail": text,
         "pid": int(pid) if _pid_alive(pid) else None,
     }
+    if contradiction:
+        row["status_demoted_from"] = READY
+        row["status_demoted_because"] = f"the component's own detail reports {contradiction!r}"
+    return row
+
+
+def _autonomy_component_status(autonomy: Mapping[str, Any], *, alive: bool) -> str:
+    """Status from the supervisor's own state, the same place the detail comes from."""
+    if not alive:
+        return STARTING
+    state = str(autonomy.get("state") or "").strip().upper()
+    return _AUTONOMY_STATE_TO_COMPONENT.get(state, DEGRADED if state else STARTING)
 
 
 def inspect_runtime(*, api_serving: bool = True) -> dict[str, Any]:
@@ -143,7 +196,7 @@ def inspect_runtime(*, api_serving: bool = True) -> dict[str, Any]:
         ),
         _component(
             "autonomy",
-            READY if auto_alive else STARTING,
+            _autonomy_component_status(autonomy, alive=auto_alive),
             detail=str(autonomy.get("plain_state") or autonomy.get("state") or "not running"),
             pid=auto_pid,
         ),
