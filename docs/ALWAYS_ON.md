@@ -101,6 +101,13 @@ The installer/service definition alone cannot roll code back for you.
 ## Linux / VPS
 
 `deploy/setup_server.sh` remains the existing server-oriented compatibility path.
+Its fresh-clone path is still explicitly pinned to the accepted server branch so
+it cannot accidentally land on the repository's historical default:
+
+```bash
+git clone --branch cursor/live-terminal-contract-858e https://github.com/rishabhdoshi09/0to100.git
+```
+
 Before unattended use on a new Linux host, apply the same evidence standard as
 on the Mac: exact code identity, durable runtime state, bounded restart/recovery,
 truthful data-source health, and PAPER/SHADOW-only safety until separately
