@@ -404,10 +404,40 @@ def evaluate_candidate(
     )
 
 
+def _canonical_decision(decision: AutopilotDecision, *, as_of: str, snapshot_id: str):
+    """The canonical Decision behind this autopilot decision.
+
+    Built through the one adapter rather than re-reading card keys here, so the
+    decision the paper book records is the same object the desk published and
+    the UI explained. Never raises: a paper cycle must not stop because a
+    decision could not be canonicalised, it simply records no linkage and its
+    outcome cannot become conditional evidence.
+    """
+    try:
+        from product.decision_adapter import decision_from_card
+        from product.decision_ranking import decision_context_key
+        from product.evidence_class import PAPER_FORWARD
+
+        canonical = decision_from_card(
+            decision.card,
+            source_scan_id=str(snapshot_id or ""),
+            market_state=str(decision.card.get("market_state") or ""),
+            sector_state=str(decision.card.get("sector_state") or ""),
+            evidence_class=PAPER_FORWARD,
+            generated_at=str(as_of or ""),
+        )
+        return canonical.decision_id, decision_context_key(canonical)
+    except Exception:
+        return "", ""
+
+
 def _intent_for(decision: AutopilotDecision, *, as_of: str, snapshot_id: str):
     from research.intelligence.schemas import TradeIntent
     ident = _identity()
     card = decision.card
+    decision_id, context_key = _canonical_decision(
+        decision, as_of=as_of, snapshot_id=snapshot_id
+    )
     return TradeIntent(
         strategy_id=ident["strategy_id"],
         strategy_version=int(ident.get("strategy_version") or 1),
@@ -431,6 +461,8 @@ def _intent_for(decision: AutopilotDecision, *, as_of: str, snapshot_id: str):
         stop_rule="recommendation_stop",
         exit_rule="recommendation_target",
         reasons=(decision.reason_code, str(card.get("primary_thesis") or "")),
+        decision_id=decision_id,
+        context_key=context_key,
     )
 
 
@@ -455,6 +487,9 @@ def execute_paper_decision(decision: AutopilotDecision, *, book, as_of: str, sna
         as_of,
         int(intent.holding_horizon_days),
         risk_pct_of_capital=float(intent.intended_risk_pct),
+        decision_id=str(getattr(intent, "decision_id", "") or ""),
+        paper_intent_id=str(getattr(intent, "record_id", "") or ""),
+        context_key=str(getattr(intent, "context_key", "") or ""),
     )
 
 

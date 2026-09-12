@@ -88,7 +88,7 @@ def test_target_portfolio_is_the_source_of_exact_trade_quantity():
     assert intent.target_portfolio_id == build.portfolio.record_id
     assert intent.target_position_id == target.record_id
     assert intent.required_quantity == 50
-    assert intent.schema_version == 2
+    assert intent.schema_version == 3
 
     position = book.open_intent(intent, date="2026-08-01")
     assert position is not None

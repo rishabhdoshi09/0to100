@@ -19,7 +19,7 @@ import json
 from dataclasses import dataclass, field, asdict, fields
 
 SCHEMA_VERSION = 1
-TRADE_INTENT_SCHEMA_VERSION = 2
+TRADE_INTENT_SCHEMA_VERSION = 3
 
 
 def _rid(kind: str, payload: dict) -> str:
@@ -268,6 +268,12 @@ class TradeIntent(_Base):
     priority: int = 0
     reasons: tuple = ()
     invalidation: tuple = ()
+    # Linkage to the canonical decision this intent came from, and the
+    # conditional cell that decision was ranked in. Frozen here so the outcome
+    # updates the same cell the decision was judged against — re-deriving it at
+    # settlement would key the trade by a regime that has since moved on.
+    decision_id: str = ""
+    context_key: str = ""
 
 
 @dataclass(frozen=True)
