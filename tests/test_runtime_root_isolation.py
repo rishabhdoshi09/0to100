@@ -14,6 +14,11 @@ Two things this suite has already been burned by:
 process (the test harness, a sandbox, a second checkout) can redirect the whole
 tree with `QT_RUNTIME_ROOT`. These tests assert that no production module has
 quietly gone back to resolving the path itself.
+
+One narrow exception exists for the host installer: it renders a launchd file
+for an explicit *target* ``runtime_root`` supplied to the renderer. That path is
+not process runtime state and is independently pinned by host-install tests. The
+exception is deliberately exact so another self-resolved logs path still fails.
 """
 from __future__ import annotations
 
@@ -38,6 +43,16 @@ _EXCLUDED_FILES = ("legacy_app.py", "core/runtime_paths.py")
 # merely name a file under logs/ do not match either.
 _SELF_RESOLVED = re.compile(r'/\s*["\']logs["\']|Path\(\s*["\']logs[/"\']')
 
+# The installer is not resolving *this process's* runtime tree here. It is
+# serialising a launchd path for the explicit destination root supplied by the
+# caller. Keep this exact: do not turn it into a file-wide or regex exemption.
+_EXPLICIT_TARGET_PATHS = {
+    (
+        "product/host_install.py",
+        'service_logs = _resolved(runtime_root) / "logs" / "service"',
+    ),
+}
+
 
 def _production_sources() -> list[Path]:
     out = subprocess.run(
@@ -56,12 +71,21 @@ def test_no_production_module_resolves_a_logs_path_itself():
         rel = path.relative_to(REPO_ROOT).as_posix()
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             code = line.split("#", 1)[0]
-            if _SELF_RESOLVED.search(code):
+            stripped = code.strip()
+            if _SELF_RESOLVED.search(code) and (rel, stripped) not in _EXPLICIT_TARGET_PATHS:
                 offenders.append(f"{rel}:{lineno}: {line.strip()}")
     assert not offenders, (
         "these modules resolve a logs path without core.runtime_paths, so "
         "QT_RUNTIME_ROOT cannot redirect them:\n  " + "\n  ".join(offenders)
     )
+
+
+def test_explicit_target_exception_is_still_exact():
+    """If the installer line changes, this exception must be reviewed rather than widening silently."""
+    rel, expected = next(iter(_EXPLICIT_TARGET_PATHS))
+    text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+    matching = [line.strip() for line in text.splitlines() if line.strip() == expected]
+    assert matching == [expected]
 
 
 def test_production_default_is_the_checkout_logs_tree():
