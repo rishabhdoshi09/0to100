@@ -121,3 +121,52 @@ def test_the_api_exposes_both_decision_routes():
     paths = {route.path for route in api.app.routes if hasattr(route, "path")}
     assert "/api/decisions" in paths
     assert "/api/decisions/{symbol}/why" in paths
+
+
+# ---------------------------------------------------------------------------
+# The regime label the canonical path conditions on.
+#
+# Audited defect, self-inflicted: the endpoint read market["regime"] and
+# market["state"], neither of which the market payload has. Every decision
+# therefore carried an empty market_state, every context key said
+# regime=UNKNOWN, and the whole point of conditioning evidence on the tape
+# quietly stopped happening while everything still looked fine.
+# ---------------------------------------------------------------------------
+def test_the_market_regime_reaches_the_context_key(monkeypatch):
+    import terminal_api as core
+    import terminal_product_api as api
+
+    monkeypatch.setattr(core, "_market_payload",
+                        lambda: {"available": True, "health": "Healthy"})
+    assert api._market_regime() == "HEALTHY"
+
+
+def test_an_unavailable_market_view_yields_no_regime_rather_than_a_label(monkeypatch):
+    """"Unavailable" as a regime would split the evidence cells in two."""
+    import terminal_api as core
+    import terminal_product_api as api
+
+    monkeypatch.setattr(core, "_market_payload",
+                        lambda: {"available": False, "health": "Unavailable"})
+    assert api._market_regime() == ""
+
+
+def test_a_broken_market_view_never_breaks_the_decision_board(monkeypatch):
+    import terminal_api as core
+    import terminal_product_api as api
+
+    def explode():
+        raise RuntimeError("index store is down")
+
+    monkeypatch.setattr(core, "_market_payload", explode)
+    assert api._market_regime() == ""
+
+
+def test_the_regime_actually_conditions_the_evidence_cell():
+    from product.decision_ranking import decision_context_key
+
+    healthy = decisions_from_workspace(_workspace(_card("INFY")), market_state="HEALTHY")
+    narrow = decisions_from_workspace(_workspace(_card("INFY")), market_state="NARROW")
+    assert decision_context_key(healthy[0]) != decision_context_key(narrow[0])
+    assert "regime=HEALTHY" in decision_context_key(healthy[0])
+    assert "regime=NARROW" in decision_context_key(narrow[0])
