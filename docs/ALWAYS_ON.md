@@ -1,117 +1,128 @@
-# QuantTerm ko 24/7 Chalana (Always-On Setup)
+# QuantTerm — Always-On Operation
 
-Canonical product: the **Vite/React desk**. One command owns the local stack:
-`bash scripts/run_quantterm_complete.sh` → http://127.0.0.1:5173.
-Streamlit is not the product path. Historical research branches such as
-`overhaul/evidence-lab` are not the current checkout.
+Canonical product: the **Vite/React desk**. The ordinary foreground launcher is:
 
-Mac sleep hote hi background scans, Telegram alerts, breakout sniper —
-sab ruk jaata hai. Full-time trading ke liye system ko hamesha jaagna
-chahiye. Do raste:
-
----
-
-## Option A: Sasta VPS (recommended, ~₹300-500/month)
-
-Koi bhi 2GB-RAM Ubuntu VPS chalega (Hetzner/DigitalOcean/Oracle
-free-tier bhi).
-
-> **Oracle Always Free (₹0) chuna hai?** Poora step-by-step —
-> account → Ampere A1 VM → ek-command setup script → Tailscale —
-> **[docs/ORACLE_SETUP.md](ORACLE_SETUP.md)** mein hai.
-> Server-side sab kuch `deploy/setup_server.sh` automate karta hai.
-
-### 1. Server taiyaar karo
 ```bash
-ssh root@YOUR_SERVER_IP
-apt update && apt install -y python3.11 python3.11-venv git
+bash scripts/run_quantterm_complete.sh
 ```
 
-### 2. Project daalo
+For unattended operation on the supported host path, install the persistent
+host supervisor instead of keeping a terminal open.
+
+## MacBook (canonical path)
+
+From the production/default branch:
+
 ```bash
-git clone --branch cursor/live-terminal-contract-858e https://github.com/rishabhdoshi09/0to100.git
-cd 0to100
+cd ~/0to100
+git pull --ff-only
+bash scripts/install_quantterm_host.sh
+bash scripts/quantterm_status.sh
 ```
 
-This clone is the accepted Issue #92 product branch, not GitHub's default
-`claude/build-ai-trading-system-miHHd`. The install script then deploys **this**
-checkout. Do not check out historical research branches such as
-`overhaul/evidence-lab`.
+`deploy/setup_mac.sh` is retained only for backward compatibility and now routes
+to the same canonical installer. Do **not** maintain a second custom launchd
+agent for the same checkout.
 
-### 3. systemd services (complete stack + autonomy)
+The canonical host deployment provides:
+
+- a persistent runtime root outside the mutable Git checkout;
+- copy/verify migration that preserves the source and blocks divergent roots;
+- exact checkout-SHA pinning so mixed-code operation fails closed;
+- one host supervisor with bounded child and host restart protection;
+- bootstrap heartbeat/progress during long first-history setup;
+- truthful health/degraded/FAILED state and operational failure alerts;
+- memory and macOS power-management preflight;
+- post-session operating-report scheduling;
+- a verified-locked live-execution interlock.
+
+### Mac power behaviour
+
+The launchd service is wrapped with `/usr/bin/caffeinate -i`, which prevents
+ordinary idle system sleep while the service is active. It does **not** make a
+closed laptop lid safe for unattended execution: lid-close can still suspend a
+MacBook. For the 2015 MacBook Air, keep the charger connected and the lid open
+for unattended market operation unless you have separately validated a
+supported closed-display setup.
+
+The installer reports power-management warnings rather than pretending they are
+fixed. Avoid relying on permanent global `pmset sleep 0` changes as the primary
+safety mechanism.
+
+### Operator controls
+
 ```bash
-bash deploy/setup_server.sh
-```
-That installs `quantterm-ui` (`bash scripts/run_quantterm_complete.sh` —
-desk :5173, API :8765, reports :8766, market-ops) and `quantterm-autonomy`.
-
-### 4. Phone/laptop se kholo
-`http://YOUR_SERVER_IP:5173` — ya Tailscale laga lo (free) taaki
-sirf tumhare devices se khule:
-```bash
-curl -fsSL https://tailscale.com/install.sh | sh && tailscale up
-```
-
----
-
-## Option B: Apna Mac hi 24/7 (₹0, koi credit card nahi)
-
-> Oracle/AWS/GCP sab **credit card maangte hain** — card nahi hai toh
-> yeh sabse practical rasta hai. Ek command:
-```bash
-cd ~/0to100 && bash deploy/setup_mac.sh
-```
-Script karta hai: Mac ki sleep band + **launchd service** (login/boot pe
-khud start, crash pe 10s mein khud restart — systemd jaisa hi). Phone se
-bahar se dekhna ho toh Tailscale (free) laga lo.
-- MacBook: charger + dhakkan khula, ya `sudo pmset -a disablesleep 1`
-- Kharcha: ~₹100-150/month bijli. Limitation: bijli/net gaya = system gaya.
-
-### 🍃 Mac garam ho raha hai? (business software saath chal raha?)
-
-Eco mode chalao — **wahi signals, wahi gates, bas thandi machine**:
-```bash
-QT_ECO=1 bash deploy/setup_mac.sh     # service eco mein reinstall
-```
-Eco kya karta hai: **off-hours full-market scan bilkul band** (raat ko
-scan pure heat tha — EOD data badalta hi nahi), scan threads 8→2,
-market-hours cadence 30 min. Sniper (instant breakouts) websocket hai —
-woh waise hi chalta rehta hai. Briefing/outcomes/backtest sab normal.
-
-MacBook **Air** (fanless) + doosra software 24/7 = long-term sahi nahi.
-Sasta permanent fix: **Raspberry Pi 4/5 (₹5-8k one-time, UPI se milta
-hai, 5W, silent)** — usi pe `deploy/setup_server.sh` chala do, Mac
-business ke liye free.
-
-**Baad mein card ke bina VPS chahiye ho toh:** Hostinger VPS (~₹350/mo)
-**UPI accept karta hai** — phir `deploy/setup_server.sh` wahi ek-command
-setup wahan chala dena.
-
-## Option C: Ghar ka Raspberry Pi / purana laptop
-
-Wahi Linux steps (`deploy/setup_server.sh`) — bas machine ghar pe.
-Bijli + internet stable ho toh kaafi hai.
-
----
-
-## Roz ka ritual (server pe bhi wahi)
-
-Kite token roz subah chahiye. Server pe:
-```bash
-ssh root@YOUR_SERVER_IP
-cd 0to100 && source venv/bin/activate && python main.py login
-```
-Token daalte hi service khud naya token utha legi (`.env` reload
-next cycle pe). 8:30 baje Telegram reminder waise bhi aayega agar
-bhool gaye.
-
-## Updates lena
-```bash
-cd 0to100 && git pull
-sudo systemctl restart quantterm-ui quantterm-autonomy
+bash scripts/quantterm_status.sh
+bash scripts/quantterm_restart.sh
+bash scripts/quantterm_stop.sh
 ```
 
-## Health check
-- Telegram pe subah Pulse aa raha hai? → scans chal rahe hain
-- App ke scanner header pe sab dots green? → data sources theek
-- `journalctl -u quantterm-ui -f` → live desk logs
+Status is authoritative only when it matches the installed exact SHA, heartbeat
+is fresh, required children are healthy, and the live interlock remains verified
+locked. A running process alone is not sufficient evidence of readiness.
+
+## Daily broker session
+
+QuantTerm can run non-broker research/official-data/learning lanes without a Kite
+session. Broker-dependent lanes require real Zerodha credentials and a valid
+session. When login is required on an interactive checkout:
+
+```bash
+cd ~/0to100
+source venv/bin/activate
+python main.py login
+```
+
+Paste the complete redirect URL when prompted. Never insert placeholder values
+just to make readiness look configured.
+
+## Updating the Mac checkout
+
+The persistent service is intentionally pinned to the exact Git SHA that was
+validated at install time. After pulling a new production release, reinstall the
+service so the deployed SHA and checkout agree:
+
+```bash
+cd ~/0to100
+git pull --ff-only
+bash scripts/install_quantterm_host.sh
+bash scripts/quantterm_status.sh
+```
+
+Do not force a mismatched checkout to run under an older service definition.
+
+### Rollback limitation
+
+Rollback is **not atomic** today because the service runs from a mutable Git
+checkout rather than immutable release directories. If a new release must be
+reverted, restore the prior Git SHA and reinstall/validate that exact checkout.
+The installer/service definition alone cannot roll code back for you.
+
+## Linux / VPS
+
+`deploy/setup_server.sh` remains the existing server-oriented compatibility path.
+Before unattended use on a new Linux host, apply the same evidence standard as
+on the Mac: exact code identity, durable runtime state, bounded restart/recovery,
+truthful data-source health, and PAPER/SHADOW-only safety until separately
+accepted.
+
+## What “healthy” means
+
+A healthy QuantTerm host is not merely a green web page. It means the complete
+operating loop is coherent:
+
+1. intended data sources are attempted and provenance/freshness is visible;
+2. stale, missing, partial or blocked sources degrade honestly;
+3. scheduled acquisition/scanning/decision/outcome/report jobs execute without
+   manual triggering when they are due;
+4. durable state survives process restart and checkout refresh;
+5. scanner, decisions, journal, forward evidence, reports and UI all project the
+   same backend truth;
+6. portfolio/risk gates stay enforced;
+7. live execution remains verified locked;
+8. forward performance claims remain forbidden until the evidence contract is
+   actually satisfied (`MIN_SAMPLE=30`).
+
+Real-market PAPER_FORWARD outcomes still have to be earned on a host that can
+reach the required upstreams. Synthetic or replay evidence is useful for proving
+machinery, never for pretending the market has validated the strategy.
