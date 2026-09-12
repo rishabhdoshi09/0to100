@@ -70,11 +70,12 @@ Full Mac operating procedure: [`docs/MACBOOK_RUNBOOK.md`](docs/MACBOOK_RUNBOOK.m
 
 1. **No fake data, ever** — no data → skip, never simulate market truth.
 2. **Stale must look stale** — freshness is labeled everywhere.
-3. **PAPER/SHADOW is the proving ground**; live execution stays locked until separately authorised and verified.
-4. **Telegram actions remain paper-only.**
-5. **1% risk/trade · 10% per name · 5% total open risk.**
-6. **Evidence over vibes** — fewer than 30 outcomes means no performance claim; proven losers demote.
-7. **Every decision is outcome-tracked** — including rejections.
+3. **Every live entry must ship with its exchange-side protective exit**; deployment changes must not bypass the execution safety boundary.
+4. **PAPER/SHADOW is the proving ground**; live execution stays locked until separately authorised and verified.
+5. **Telegram actions remain paper-only.**
+6. **1% risk/trade · 10% per name · 5% total open risk.**
+7. **Evidence over vibes** — fewer than 30 outcomes means no performance claim; proven losers demote.
+8. **Every decision is outcome-tracked** — including rejections.
 
 ## Testing
 
