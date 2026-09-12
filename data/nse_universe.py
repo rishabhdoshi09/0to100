@@ -263,99 +263,99 @@ def _filter_to_instruments(symbols: List[str], token_map: dict) -> List[str]:
 
 # ── Tier 1: Kite instruments cache ────────────────────────────────────────────
 
-def _load_from_kite_cache() -> tuple:
+def _fetch_kite_cache() -> dict:
+    """Broker instrument cache. Raises when it cannot be read at all."""
     cache_path = logs_path("instruments_cache.csv")
     if not cache_path.exists():
-        return [], {}
-    try:
-        import pandas as pd
-        df = pd.read_csv(cache_path, dtype=str, low_memory=False)
-        required = {"tradingsymbol", "exchange", "instrument_type"}
-        if not required.issubset(df.columns):
-            return [], {}
-        df = df[
-            (df["exchange"].str.upper() == "NSE") &
-            (df["instrument_type"].str.upper() == "EQ")
-        ]
-        symbols = df["tradingsymbol"].dropna().str.strip().str.upper().tolist()
-        names: Dict[str, str] = {}
-        if "name" in df.columns:
-            for _, row in df.iterrows():
-                sym = str(row["tradingsymbol"]).strip().upper()
-                names[sym] = str(row.get("name", "")).strip()
-        valid = [s for s in symbols if _is_valid_symbol(s)]
-        logger.info("Tier 1 (Kite cache): loaded %d symbols", len(valid))
-        return valid, names
-    except Exception as exc:
-        logger.warning("Tier 1 failed: %s", exc)
-        return [], {}
+        raise FileNotFoundError(f"no instrument cache at {cache_path}")
+    import pandas as pd
+    df = pd.read_csv(cache_path, dtype=str, low_memory=False)
+    required = {"tradingsymbol", "exchange", "instrument_type"}
+    if not required.issubset(df.columns):
+        # The file exists and parsed, but it is not the shape we know. That is
+        # a schema change, NOT an empty market — the distinction is the whole
+        # point of routing this through the acquisition contract.
+        return {"symbols": [], "names": {}, "schema_ok": False,
+                "detail": f"missing columns: {sorted(required - set(df.columns))}"}
+    df = df[
+        (df["exchange"].str.upper() == "NSE") &
+        (df["instrument_type"].str.upper() == "EQ")
+    ]
+    symbols = df["tradingsymbol"].dropna().str.strip().str.upper().tolist()
+    names: Dict[str, str] = {}
+    if "name" in df.columns:
+        for _, row in df.iterrows():
+            sym = str(row["tradingsymbol"]).strip().upper()
+            names[sym] = str(row.get("name", "")).strip()
+    return {"symbols": [s for s in symbols if _is_valid_symbol(s)],
+            "names": names, "schema_ok": True, "detail": ""}
 
 
 # ── Tier 2: NSE equity list ───────────────────────────────────────────────────
 
-def _load_from_nse_website() -> tuple:
+def _fetch_nse_equity_list() -> dict:
+    """Official NSE equity list. Raises on network/HTTP failure."""
     url = "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept-Language": "en-US,en;q=0.9",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
-    try:
-        import io
-        import requests
-        import pandas as pd
-        resp = requests.get(url, headers=headers, timeout=15)
-        resp.raise_for_status()
-        df = pd.read_csv(io.StringIO(resp.text), dtype=str)
-        # Normalise column names
-        df.columns = [c.strip().upper() for c in df.columns]
-        if "SYMBOL" not in df.columns:
-            return [], {}
-        name_col = None
-        for candidate in ("NAME OF COMPANY", "COMPANY NAME", "NAME"):
-            if candidate in df.columns:
-                name_col = candidate
-                break
-        symbols = df["SYMBOL"].dropna().str.strip().str.upper().tolist()
-        names: Dict[str, str] = {}
-        if name_col:
-            for _, row in df.iterrows():
-                sym = str(row["SYMBOL"]).strip().upper()
-                names[sym] = str(row.get(name_col, "")).strip()
-        valid = [s for s in symbols if _is_valid_symbol(s)]
-        logger.info("Tier 2 (NSE website): loaded %d symbols", len(valid))
-        return valid, names
-    except Exception as exc:
-        logger.warning("Tier 2 failed: %s", exc)
-        return [], {}
+    import io
+    import requests
+    import pandas as pd
+    resp = requests.get(url, headers=headers, timeout=15)
+    resp.raise_for_status()
+    df = pd.read_csv(io.StringIO(resp.text), dtype=str)
+    df.columns = [c.strip().upper() for c in df.columns]
+    if "SYMBOL" not in df.columns:
+        return {"symbols": [], "names": {}, "schema_ok": False,
+                "detail": f"EQUITY_L.csv has no SYMBOL column; got {list(df.columns)[:8]}"}
+    name_col = None
+    for candidate in ("NAME OF COMPANY", "COMPANY NAME", "NAME"):
+        if candidate in df.columns:
+            name_col = candidate
+            break
+    symbols = df["SYMBOL"].dropna().str.strip().str.upper().tolist()
+    names: Dict[str, str] = {}
+    if name_col:
+        for _, row in df.iterrows():
+            sym = str(row["SYMBOL"]).strip().upper()
+            names[sym] = str(row.get(name_col, "")).strip()
+    return {"symbols": [s for s in symbols if _is_valid_symbol(s)],
+            "names": names, "schema_ok": True, "detail": ""}
 
 
 # ── Tier 3: local fallback CSV ────────────────────────────────────────────────
 
-def _load_from_fallback_csv() -> tuple:
+def _fetch_bundled_csv() -> dict:
+    """The CSV shipped with the checkout. Last-known-good, not a live source."""
     csv_path = _BASE_DIR / "data" / "nse_symbols_fallback.csv"
     if not csv_path.exists():
-        logger.warning("Tier 3: fallback CSV not found at %s", csv_path)
-        return [], {}
-    try:
-        import pandas as pd
-        df = pd.read_csv(csv_path, dtype=str)
-        df.columns = [c.strip().upper() for c in df.columns]
-        if "SYMBOL" not in df.columns:
-            return [], {}
-        name_col = "NAME" if "NAME" in df.columns else None
-        symbols = df["SYMBOL"].dropna().str.strip().str.upper().tolist()
-        names: Dict[str, str] = {}
-        if name_col:
-            for _, row in df.iterrows():
-                sym = str(row["SYMBOL"]).strip().upper()
-                names[sym] = str(row.get(name_col, "")).strip()
-        valid = [s for s in symbols if _is_valid_symbol(s)]
-        logger.info("Tier 3 (fallback CSV): loaded %d symbols", len(valid))
-        return valid, names
-    except Exception as exc:
-        logger.warning("Tier 3 failed: %s", exc)
-        return [], {}
+        raise FileNotFoundError(f"bundled universe CSV missing at {csv_path}")
+    import pandas as pd
+    df = pd.read_csv(csv_path, dtype=str)
+    df.columns = [c.strip().upper() for c in df.columns]
+    if "SYMBOL" not in df.columns:
+        return {"symbols": [], "names": {}, "schema_ok": False,
+                "detail": "bundled CSV has no SYMBOL column"}
+    name_col = "NAME" if "NAME" in df.columns else None
+    symbols = df["SYMBOL"].dropna().str.strip().str.upper().tolist()
+    names: Dict[str, str] = {}
+    if name_col:
+        for _, row in df.iterrows():
+            sym = str(row["SYMBOL"]).strip().upper()
+            names[sym] = str(row.get(name_col, "")).strip()
+    return {"symbols": [s for s in symbols if _is_valid_symbol(s)],
+            "names": names, "schema_ok": True, "detail": ""}
+
+
+def _fetch_builtin_constant() -> dict:
+    """The NIFTY500 constant compiled into the package. Never fails, and is
+    therefore the only source that may not be preferred: reaching it means the
+    desk is running on a hardcoded list and should say so."""
+    return {"symbols": list(NIFTY500), "names": {}, "schema_ok": True,
+            "detail": "built-in NIFTY500 constant"}
 
 
 # ── Process-lifetime cache ────────────────────────────────────────────────────
@@ -365,37 +365,78 @@ _cached_names: Dict[str, str] = {}
 _universe_loaded: bool = False
 
 
+UNIVERSE_DATASET = "nse_universe"
+UNIVERSE_PARSER_VERSION = "2"
+
+_last_acquisition = None
+
+
+def _universe_validator(payload) -> "Validation":
+    """Tell a schema change apart from an empty answer.
+
+    A source whose columns moved returns zero symbols, and zero symbols would
+    otherwise read as "NSE has no equities today". One of those is a scraper to
+    fix; the other has never happened.
+    """
+    from data.acquisition import EMPTY, PARSER_CHANGED, Validation
+
+    if not isinstance(payload, dict):
+        return Validation.bad(PARSER_CHANGED, "source returned an unexpected shape")
+    if not payload.get("schema_ok", True):
+        return Validation.bad(PARSER_CHANGED, str(payload.get("detail") or "schema changed"))
+    symbols = payload.get("symbols") or []
+    if not symbols:
+        return Validation.bad(EMPTY, "source parsed cleanly but listed no symbols")
+    return Validation.good(record_count=len(symbols))
+
+
+def _universe_sources() -> list:
+    from data.acquisition import Source, SourceTier
+
+    return [
+        Source("kite_instrument_cache", SourceTier.BROKER, _fetch_kite_cache,
+               _universe_validator, identifier="logs/instruments_cache.csv"),
+        Source("nse_equity_list", SourceTier.OFFICIAL_FILE, _fetch_nse_equity_list,
+               _universe_validator,
+               identifier="https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"),
+        Source("bundled_csv", SourceTier.LAST_KNOWN_GOOD, _fetch_bundled_csv,
+               _universe_validator, identifier="data/nse_symbols_fallback.csv"),
+        Source("builtin_nifty500", SourceTier.LAST_KNOWN_GOOD, _fetch_builtin_constant,
+               _universe_validator, identifier="data.nse_universe.NIFTY500"),
+    ]
+
+
+def last_universe_acquisition():
+    """The provenance of the universe currently in memory, if any."""
+    return _last_acquisition
+
+
 def _load_universe() -> tuple:
-    global _cached_universe, _cached_names, _universe_loaded
+    global _cached_universe, _cached_names, _universe_loaded, _last_acquisition
     if _universe_loaded:
         return _cached_universe, _cached_names
 
-    symbols: List[str] = []
-    names: Dict[str, str] = {}
+    from data.acquisition import acquire
 
-    # Tier 1
-    t1_syms, t1_names = _load_from_kite_cache()
-    if t1_syms:
-        symbols = t1_syms
-        names.update(t1_names)
+    result = acquire(
+        UNIVERSE_DATASET, _universe_sources(),
+        parser_version=UNIVERSE_PARSER_VERSION,
+    )
+    _last_acquisition = result
 
-    # Tier 2
+    payload = result.value if result.ok else {}
+    symbols: List[str] = list((payload or {}).get("symbols") or [])
+    names: Dict[str, str] = dict((payload or {}).get("names") or {})
+
+    if result.parser_changed:
+        for attempt in result.attempts:
+            if attempt.outcome == "PARSER_CHANGED":
+                logger.error("universe source %s no longer matches its parser: %s",
+                             attempt.source, attempt.detail)
     if not symbols:
-        t2_syms, t2_names = _load_from_nse_website()
-        if t2_syms:
-            symbols = t2_syms
-            names.update(t2_names)
-
-    # Tier 3
-    if not symbols:
-        t3_syms, t3_names = _load_from_fallback_csv()
-        symbols = t3_syms
-        names.update(t3_names)
-
-    # Ultimate fallback — use the built-in NIFTY500 constant
-    if not symbols:
-        logger.warning("All tiers failed — using built-in NIFTY500 list")
-        symbols = list(NIFTY500)
+        # Every source, including the built-in constant, failed. That should be
+        # impossible; say so loudly rather than returning a quiet empty market.
+        logger.error("universe acquisition returned nothing: %s", result.state)
 
     # Cross-check against the live Kite instrument map — removes stale NSE
     # listings (Tier-2 EQUITY_L.csv is broader than what Kite actually carries)
