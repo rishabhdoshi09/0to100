@@ -29,6 +29,18 @@ _OP_RUNNING = {"RUNNING", "PENDING"}
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
+# product.readiness.broker_status is the authority on whether the desk can talk
+# to Zerodha. These are its states, mapped onto lane states once, here.
+_BROKER_STATE_TO_LANE = {
+    "READY": "HEALTHY",
+    "LOGIN_REQUIRED": "BROKEN",
+    "SNAPSHOT_REQUIRED": "PARTIAL",
+    "UNAVAILABLE": "FAILED",
+    "CONFIG_REQUIRED": "BLOCKED",
+    "NOT_READY": "UNKNOWN",
+    "UNKNOWN": "UNKNOWN",
+}
+
 
 def as_of_utc(value: Any, *, naive_tz: timezone = timezone.utc) -> str:
     """Normalise a lane timestamp to timezone-aware UTC ISO-8601.
@@ -74,6 +86,59 @@ def as_of_utc(value: Any, *, naive_tz: timezone = timezone.utc) -> str:
     return text
 
 
+# Phrases that describe a lane needing attention. A lane whose own detail says
+# one of these things may not also claim to be HEALTHY: the operator reads the
+# dot, not the sentence, so a green dot over "running with reduced capability"
+# is worse than no dot at all.
+_DEGRADED_PHRASES = (
+    "reduced capability",
+    "not ready",
+    "not available",
+    "unavailable",
+    "login required",
+    "login is required",
+    "is unavailable",
+    "requires attention",
+    "needs attention",
+    "attention required",
+    "paused",
+    "blocked",
+    "degraded",
+    "stopped",
+    "halted",
+    "failed",
+    "failure",
+    "error",
+    "cannot",
+    "could not",
+    "is not running",
+    "not verified",
+    "missing",
+    "expired",
+)
+
+# Negations that make a degraded phrase benign: "0 errors" is not an error.
+_BENIGN_PREFIXES = ("no ", "0 ", "zero ", "without ", "free of ")
+
+
+def detail_contradicts_healthy(detail: str) -> str:
+    """Return the phrase that makes this detail incompatible with HEALTHY.
+
+    Empty string means the detail and a green dot can honestly coexist.
+    """
+    text = str(detail or "").strip().lower()
+    if not text:
+        return ""
+    for phrase in _DEGRADED_PHRASES:
+        start = text.find(phrase)
+        while start != -1:
+            prefix = text[max(0, start - 12):start]
+            if not any(prefix.endswith(b) for b in _BENIGN_PREFIXES):
+                return phrase
+            start = text.find(phrase, start + 1)
+    return ""
+
+
 def _lane(
     key: str,
     label: str,
@@ -86,13 +151,27 @@ def _lane(
     state = str(status or "UNKNOWN").upper()
     if state not in LANE_STATES:
         state = "UNKNOWN"
-    return {
+    text = detail or ""
+    contradiction = ""
+    if state == "HEALTHY":
+        contradiction = detail_contradicts_healthy(text)
+        if contradiction:
+            # We do not know this lane is healthy — its own detail says
+            # otherwise — so it reports UNKNOWN rather than a green dot.
+            state = "UNKNOWN"
+    lane = {
         "key": key,
         "label": label,
         "status": state,
         "as_of": as_of_utc(as_of, naive_tz=as_of_naive_tz),
-        "detail": detail or "",
+        "detail": text,
     }
+    if contradiction:
+        lane["status_demoted_from"] = "HEALTHY"
+        lane["status_demoted_because"] = (
+            f"the lane's own detail reports {contradiction!r}"
+        )
+    return lane
 
 
 def _op_status(operation: Mapping[str, Any] | None) -> str:
@@ -191,29 +270,38 @@ def _recommendations_lane(
 
 
 def _auth_lane(autonomy: Mapping[str, Any]) -> dict[str, Any]:
+    # Both halves of this lane come from ONE authoritative state. The previous
+    # version read supervisor liveness for the status and borrowed the
+    # supervisor's plain_state for the detail, so a DEGRADED supervisor
+    # produced a green auth dot over the sentence "running with reduced
+    # capability" — and neither half was about authentication at all.
+    broker = dict(autonomy.get("broker") or {})
+    broker_state = str(broker.get("state") or "").upper()
+    if broker_state:
+        status = _BROKER_STATE_TO_LANE.get(broker_state, "UNKNOWN")
+        return _lane(
+            "zerodha_auth", "Zerodha authentication", status,
+            as_of=str(autonomy.get("heartbeat_ist") or ""),
+            as_of_naive_tz=IST,
+            detail=str(broker.get("detail") or broker_state),
+        )
+
+    # No broker projection available: say so rather than inferring auth health
+    # from something that does not measure it.
     state = str(autonomy.get("state") or "")
     failures = [str(x) for x in (autonomy.get("active_failures") or [])]
-    auth_fail = state == "AUTH_REQUIRED" or any("auth" in f.lower() for f in failures)
-    if auth_fail:
+    if state == "AUTH_REQUIRED" or any("auth" in f.lower() for f in failures):
         return _lane(
             "zerodha_auth", "Zerodha authentication", "BROKEN",
             as_of=str(autonomy.get("heartbeat_ist") or ""),
             as_of_naive_tz=IST,
-            detail=autonomy.get("plain_state") or "Kite login required",
-        )
-    running = bool(autonomy.get("running"))
-    if running and state not in {"", "UNKNOWN", "STOPPED", "OFFLINE"}:
-        return _lane(
-            "zerodha_auth", "Zerodha authentication", "HEALTHY",
-            as_of=str(autonomy.get("heartbeat_ist") or ""),
-            as_of_naive_tz=IST,
-            detail=str(autonomy.get("plain_state") or state or "Session present"),
+            detail=str(autonomy.get("plain_state") or "Kite login required"),
         )
     return _lane(
         "zerodha_auth", "Zerodha authentication", "UNKNOWN",
         as_of=str(autonomy.get("heartbeat_ist") or ""),
-            as_of_naive_tz=IST,
-        detail=str(autonomy.get("plain_state") or "Autonomy supervisor is not running — auth not verified"),
+        as_of_naive_tz=IST,
+        detail="Broker readiness has not been probed — authentication is not verified.",
     )
 
 

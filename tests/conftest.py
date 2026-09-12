@@ -26,6 +26,8 @@ from pathlib import Path
 
 import pytest
 
+from tests import network_policy
+
 # ---------------------------------------------------------------------------
 # Runtime isolation. This block runs before any QuantTerm module is imported,
 # which matters because several of them resolve durable paths into module-level
@@ -85,8 +87,11 @@ _REAL_LOGS_BEFORE: tuple[str, set[str]] = ("", set())
 
 
 def pytest_configure(config):
-    """Fingerprint the production runtime tree before anything runs."""
+    """Fingerprint the production runtime tree, and close the network."""
     global _REAL_LOGS_BEFORE
+    # Installed before collection: a module that opens a socket at import time
+    # is an uncontrolled external dependency like any other.
+    network_policy.install()
     _REAL_LOGS_BEFORE = (
         _runtime_tree_fingerprint(_REAL_LOGS),
         _runtime_tree_files(_REAL_LOGS),
@@ -157,10 +162,47 @@ def pytest_sessionstart(session):
     _LONG_TERM_PROJECTOR = long_term_service.technical_rows_from_market_scan
 
 
+def pytest_collection_modifyitems(config, items):
+    """Keep the canonical run hermetic by construction, not by discipline.
+
+    A test that needs a real upstream is not skipped quietly — it is not part
+    of this gate at all. It runs in its own named gate:
+
+        QT_LIVE_SOURCE=1 python -m pytest -m live_source
+    """
+    if os.getenv("QT_LIVE_SOURCE"):
+        return
+    deselected = []
+    kept = []
+    for item in items:
+        if item.get_closest_marker("live_source") or item.get_closest_marker("network"):
+            deselected.append(item)
+        else:
+            kept.append(item)
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = kept
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_protocol(item, nextitem):
+    """Open the network only for tests that are explicitly allowed to use it."""
+    network_policy.take_attempts()
+    allowed = any(item.get_closest_marker(name) for name in network_policy.ALLOWED_MARKERS)
+    network_policy.allow(bool(allowed))
+    try:
+        yield
+    finally:
+        network_policy.allow(False)
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_teardown(item, nextitem):
     """Fail at the test that leaves the canonical projector mutated."""
     yield
+    attempts = network_policy.take_attempts()
+    if attempts:
+        pytest.fail(network_policy.failure_message(attempts), pytrace=False)
     if _LONG_TERM_PROJECTOR is None:
         return
     from scan import long_term_service

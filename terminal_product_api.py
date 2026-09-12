@@ -549,6 +549,39 @@ def stock_intelligence(symbol: str) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Stock intelligence failed: {exc}") from exc
 
 
+@app.get("/api/decisions")
+def decisions_board(limit: int = 40) -> dict[str, Any]:
+    """The canonical ranked decision board. Reads the saved scan, never runs one."""
+    try:
+        from product.decision_service import decision_board
+
+        market = core._market_payload() or {}
+        return decision_board(
+            market_state=str(market.get("regime") or market.get("state") or ""),
+            sector_state="",
+            limit=limit,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Decision board failed: {exc}") from exc
+
+
+@app.get("/api/decisions/{symbol}/why")
+def decision_why_endpoint(symbol: str) -> dict[str, Any]:
+    """WHY THIS DECISION, rendered from the decision record itself."""
+    try:
+        from product.decision_service import decision_why
+
+        market = core._market_payload() or {}
+        return decision_why(
+            clean_symbol(symbol),
+            market_state=str(market.get("regime") or market.get("state") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Decision explanation failed: {exc}") from exc
+
+
 @app.get("/api/due-diligence/framework-audit")
 def due_diligence_framework_audit(framework: str = "") -> dict[str, Any]:
     """Static capability table. Cache-only — never scrapes, never scores a company."""

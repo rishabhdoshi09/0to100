@@ -183,3 +183,123 @@ def test_counts_cover_every_emitted_state():
     emitted = {str(lane["status"]) for lane in contract["lanes"]}
     assert emitted <= set(contract["counts"])
     assert sum(contract["counts"].values()) == len(contract["lanes"])
+
+
+# ---------------------------------------------------------------------------
+# Status and detail must agree.
+#
+# Audited defect: the zerodha_auth lane read its STATUS off supervisor liveness
+# and borrowed its DETAIL from the supervisor's plain_state. Neither half
+# measured authentication, and when the supervisor ran DEGRADED the lane showed
+# a green dot above the sentence "Running with reduced capability — see
+# details." The operator reads the dot.
+# ---------------------------------------------------------------------------
+from product.system_health_contract import detail_contradicts_healthy
+
+
+def _autonomy(**kwargs) -> dict:
+    base = {"running": True, "state": "OBSERVING", "heartbeat_ist": "2026-09-11T21:51:40"}
+    base.update(kwargs)
+    return base
+
+
+@pytest.mark.parametrize("broker_state,expected", [
+    ("READY", "HEALTHY"),
+    ("LOGIN_REQUIRED", "BROKEN"),
+    ("SNAPSHOT_REQUIRED", "PARTIAL"),
+    ("UNAVAILABLE", "FAILED"),
+    ("CONFIG_REQUIRED", "BLOCKED"),
+    ("NOT_READY", "UNKNOWN"),
+])
+def test_auth_lane_follows_the_authoritative_broker_state(broker_state, expected):
+    lane = _lanes(autonomy=_autonomy(broker={
+        "state": broker_state,
+        "detail": f"broker reports {broker_state}",
+    }))["zerodha_auth"]
+    assert lane["status"] == expected
+
+
+def test_a_degraded_supervisor_no_longer_produces_a_green_auth_dot():
+    """The exact reported defect."""
+    lane = _lanes(autonomy=_autonomy(
+        state="DEGRADED",
+        plain_state="Running with reduced capability — see details.",
+    ))["zerodha_auth"]
+    assert lane["status"] != "HEALTHY"
+
+
+def test_auth_detail_comes_from_the_same_source_as_its_status():
+    detail = "Zerodha session is valid and the active broker snapshot is available."
+    lane = _lanes(autonomy=_autonomy(
+        state="DEGRADED",
+        plain_state="Running with reduced capability — see details.",
+        broker={"state": "READY", "detail": detail},
+    ))["zerodha_auth"]
+    assert lane["status"] == "HEALTHY"
+    assert lane["detail"] == detail, "the supervisor's sentence must not leak in"
+
+
+def test_unprobed_broker_is_unknown_not_healthy():
+    lane = _lanes(autonomy=_autonomy())["zerodha_auth"]
+    assert lane["status"] == "UNKNOWN"
+    assert "not verified" in lane["detail"].lower()
+
+
+@pytest.mark.parametrize("detail", [
+    "Running with reduced capability — see details.",
+    "Market data is not ready — new paper trades are paused.",
+    "Zerodha login is unavailable; non-broker autonomy can continue.",
+    "Stopped. No new activity.",
+    "The refresh failed.",
+    "Session expired.",
+])
+def test_a_degraded_detail_can_never_carry_a_healthy_status(detail):
+    """The general invariant, not one lane's special case."""
+    assert detail_contradicts_healthy(detail)
+    lane = _lanes(autonomy=_autonomy(
+        broker={"state": "READY", "detail": detail},
+    ))["zerodha_auth"]
+    assert lane["status"] == "UNKNOWN"
+    assert lane["status_demoted_from"] == "HEALTHY"
+    assert "detail" in lane["status_demoted_because"]
+
+
+@pytest.mark.parametrize("detail", [
+    "Zerodha session is valid and the active broker snapshot is available.",
+    "requested 2,000 · checked 1,980 · qualified 12",
+    "0 errors in the last hour",
+    "no missing sessions",
+    "Market data is ready.",
+    "",
+])
+def test_a_clean_detail_keeps_its_healthy_status(detail):
+    assert detail_contradicts_healthy(detail) == ""
+    lane = _lanes(autonomy=_autonomy(
+        broker={"state": "READY", "detail": detail},
+    ))["zerodha_auth"]
+    assert lane["status"] == "HEALTHY"
+    assert "status_demoted_from" not in lane
+
+
+def test_no_lane_in_a_full_payload_contradicts_itself():
+    """Audit the whole contract, not only the lane that was reported."""
+    contract = build_system_health_contract(
+        scan={"scanned_at": "2026-09-11T03:43:43+00:00", "available": True},
+        news=_news(status="SUCCEEDED", articles=5),
+        autonomy=_autonomy(
+            state="DEGRADED",
+            plain_state="Running with reduced capability — see details.",
+            broker={"state": "SNAPSHOT_REQUIRED", "detail": "no snapshot yet"},
+        ),
+        recommendations_available=True,
+        data={"available": True},
+        operations={},
+        paper={},
+        execution={},
+    )
+    offenders = [
+        (lane["key"], lane["detail"])
+        for lane in contract["lanes"]
+        if lane["status"] == "HEALTHY" and detail_contradicts_healthy(lane["detail"])
+    ]
+    assert not offenders, f"lanes claiming HEALTHY over a degraded detail: {offenders}"

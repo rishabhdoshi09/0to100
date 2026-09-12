@@ -35,9 +35,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run test suite (canonical network-free)
-        # Canonical complete network-free suite. tests/integration is excluded BY
-        # CLASSIFICATION via tests/conftest.py (not an ad-hoc --ignore).
+      - name: Canonical gate — hermetic, zero external network
+        # NETWORK = FORBIDDEN. tests/conftest.py installs a socket-level policy:
+        # anything off this machine is refused AND recorded, and the attempt
+        # alone fails the test, so a module that swallows the error cannot hide.
+        # tests/integration and any live_source test are excluded BY
+        # CLASSIFICATION, not by an ad-hoc --ignore.
         run: |
           python -m pytest
         env:
@@ -59,10 +62,25 @@ jobs:
           python -m compileall -q data scan risk execution ui reports ai core alerts news research product reporting operations fundamentals
           python -m py_compile terminal_api.py terminal_product_api.py report_api.py
 
-      - name: Run integration tests (environment-dependent; bounded and non-blocking)
+      - name: Integration gate — controlled external dependencies
+        # Explicitly NOT the canonical gate: heavy import chains and real
+        # sources. Bounded and non-blocking so an upstream outage cannot fail
+        # a deterministic build.
         continue-on-error: true
         run: |
           timeout 120s env QT_INTEGRATION=1 python -m pytest tests/integration -q --tb=short
+        env:
+          KITE_ACCESS_TOKEN: ""
+          TELEGRAM_BOT_TOKEN: ""
+          DEEPSEEK_API_KEY: ""
+
+      - name: Live-source gate — real upstreams (never blocks the build)
+        # The only place a test is allowed off the machine. Deselected from the
+        # canonical run by classification; surfaced here so an upstream that has
+        # changed shape is visible rather than silently untested.
+        continue-on-error: true
+        run: |
+          timeout 300s env QT_LIVE_SOURCE=1 python -m pytest -m live_source -q --tb=short
         env:
           KITE_ACCESS_TOKEN: ""
           TELEGRAM_BOT_TOKEN: ""

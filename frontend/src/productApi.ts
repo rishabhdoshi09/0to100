@@ -1873,3 +1873,48 @@ export const fetchDecisionJournal = (symbol = '', limit = 80): Promise<ResearchS
   params.set('limit', String(limit))
   return request(`/api/decision-journal?${params.toString()}`, { headers: { Accept: 'application/json' } })
 }
+
+// ── Canonical decisions ────────────────────────────────────────────────────
+// One decision per name, ranked against measured evidence, with the "why"
+// rendered from the decision record rather than narrated over it.
+import type { DecisionWhy } from './decisionWhyModel'
+
+export type RankedDecisionRow = {
+  decision_id: string
+  symbol: string
+  state: string
+  setup: string
+  base_score: number
+  evidence_adjustment: number
+  ranking_score: number
+  entry: number | null
+  stop: number | null
+  target: number | null
+  expected_R: number | null
+  context_key: string
+  evidence_counts: Record<string, number>
+  evidence: Record<string, unknown>
+  why: string
+}
+
+export type DecisionBoard = {
+  schema_version: number
+  available: boolean
+  state: 'DECIDED' | 'NO_DECISIONS' | 'NO_CANDIDATES' | string
+  reason: string
+  scan_scanned_at: string
+  decisions: RankedDecisionRow[]
+  counts: Record<string, number>
+  actionable?: number
+  evidence_gaps: Record<string, number>
+}
+
+export const fetchDecisionBoard = (limit = 40): Promise<DecisionBoard> =>
+  request(`/api/decisions?limit=${encodeURIComponent(String(limit))}`, {
+    headers: { Accept: 'application/json' },
+  })
+
+export const fetchDecisionWhy = (symbol: string): Promise<DecisionWhy> =>
+  request(`/api/decisions/${encodeURIComponent(symbol)}/why`, {
+    headers: { Accept: 'application/json' },
+  })
