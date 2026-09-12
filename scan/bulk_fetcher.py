@@ -20,7 +20,7 @@ from __future__ import annotations
 import threading
 import time
 from datetime import datetime, timedelta
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import pandas as pd
 
@@ -135,14 +135,87 @@ def _frame_from_kite(candles: list[dict]) -> Optional[pd.DataFrame]:
     return frame
 
 
-def backfill_missing(symbols: list[str], *, client=None, now: datetime | None = None) -> dict:
-    """Targeted repair for current NSE EQ symbols absent from the bhavcopy store.
+def _repair_via_bhavcopy(missing: list[str]) -> dict:
+    """Official route: bring the store up to date, then re-read the gaps.
 
-    This is DATA ONLY. It uses the same authenticated Kite data facade as PAPER_AUTO
-    and exposes no order/GTT surface. Every missing requested symbol is attempted
-    when a valid daily Zerodha session exists; unresolved/failed names remain missing
-    so the scan coverage ledger can report them honestly.
+    A symbol is usually absent because it listed after the store was last
+    built, so the fix is sessions rather than symbols. When the store is
+    already current these names are genuinely not in the official record, and
+    saying that quickly is better than downloading the same sessions again.
     """
+    from data import bhavcopy_store as BS
+
+    stored = set(BS.store_symbols() or [])
+    still = [s for s in missing if s not in stored]
+    if not still:
+        return {}
+
+    if not BS.is_ready():
+        # An empty store is a bootstrap problem, and bootstrapping it means
+        # hundreds of session downloads. A scan asking for three missing
+        # symbols must not turn into that: the data layer owns the first build.
+        raise LookupError("official store is not built yet; bootstrap owns that")
+
+    current = False
+    try:
+        from research.intelligence.data import nse_calendar as CAL
+
+        required = CAL.latest_required_session(CAL._now_ist(), CAL.load_holidays())
+        latest = BS.latest_two_eq_sessions()
+        newest = max((d for d in (latest or []) if d), default=None)
+        current = bool(newest and str(newest)[:10] >= required.isoformat())
+    except Exception:
+        current = False
+
+    if current:
+        raise LookupError(
+            f"{len(still)} symbols absent from an up-to-date official store"
+        )
+
+    BS.build_store()
+    out: dict[str, pd.DataFrame] = {}
+    for symbol in still:
+        try:
+            frame = BS.get_ohlcv(symbol)
+        except Exception:
+            continue
+        if frame is not None and len(frame) >= 30:
+            out[symbol] = frame
+    return out
+
+
+def _repair_via_yfinance(missing: list[str]) -> dict:
+    """Last resort, and labelled as such in the provenance."""
+    _prefetch_yf(list(missing))
+    with _lock:
+        return {s: _yf_cache[s] for s in missing if s in _yf_cache}
+
+
+def _repair_frames_validator(payload):
+    from data.acquisition import EMPTY, PARSER_CHANGED, Validation
+
+    if not isinstance(payload, dict):
+        return Validation.bad(PARSER_CHANGED, "repair source returned an unexpected shape")
+    if not payload:
+        return Validation.bad(EMPTY, "source supplied none of the missing symbols")
+    return Validation.good(record_count=len(payload))
+
+
+def backfill_missing(symbols: list[str], *, client=None, now: datetime | None = None) -> dict:
+    """Repair the history the scan needs, from whichever source can supply it.
+
+    A missing symbol is a gap to close, not a verdict. The broker is preferred
+    because it is authenticated and current, but a missing Zerodha session is a
+    fact about our login rather than about the market, and it used to leave
+    every gap open — so the official store and finally a public source are
+    tried in turn for whatever the rung above could not supply.
+
+    DATA ONLY: no order or GTT surface is reachable from here. Symbols that no
+    source can supply stay missing, so the coverage ledger reports them
+    honestly rather than the scan pretending to have walked them.
+    """
+    from data.acquisition import Source, SourceTier, acquire
+
     requested = list(dict.fromkeys(
         str(s).strip().upper() for s in (symbols or []) if str(s).strip()
     ))
@@ -153,6 +226,69 @@ def backfill_missing(symbols: list[str], *, client=None, now: datetime | None = 
     if not missing:
         return {"requested": len(requested), "missing": 0, "attempted": 0, "loaded": 0, "unresolved": 0, "failed": 0}
 
+    wanted = set(missing)
+    outcome: dict[str, Any] = {"unresolved": 0, "failed": 0, "attempted": 0}
+
+    def kite_rung() -> dict:
+        frames, stats = _repair_via_kite(missing, client=client, now=now)
+        outcome.update(stats)
+        return frames
+
+    result = acquire(
+        "scan_history_repair",
+        [
+            Source("zerodha_kite_data_only", SourceTier.BROKER, kite_rung,
+                   _repair_frames_validator, identifier="kite historical/day"),
+            Source("nse_bhavcopy", SourceTier.OFFICIAL_FILE,
+                   lambda: _repair_via_bhavcopy(missing), _repair_frames_validator,
+                   identifier="NSE bhavcopy store"),
+            Source("yfinance_daily", SourceTier.REPUTABLE_PUBLIC,
+                   lambda: _repair_via_yfinance(missing), _repair_frames_validator,
+                   identifier="yfinance 1d"),
+        ],
+        accumulate=lambda acc, new: {**acc, **new},
+        complete=lambda acc: wanted <= set(acc),
+        parser_version="1",
+    )
+
+    loaded = dict(result.value or {}) if result.ok else {}
+    if loaded:
+        with _lock:
+            _kite_cache.update(loaded)
+            overflow = len(_kite_cache) - 256
+            if overflow > 0:
+                for key in list(_kite_cache)[:overflow]:
+                    _kite_cache.pop(key, None)
+
+    report = {
+        "requested": len(requested),
+        "missing": len(missing),
+        # "attempted" keeps its original meaning — symbols the BROKER resolved
+        # and tried — because callers and the coverage ledger already read it
+        # that way. The ladder's own reach is attempted_total.
+        "attempted": int(outcome.get("attempted") or 0),
+        "attempted_total": len(missing),
+        "loaded": len(loaded),
+        "unresolved": len(wanted - set(loaded)),
+        "failed": int(outcome.get("failed") or 0),
+        "state": result.state,
+        "sources": list(result.contributing_sources),
+        "source": result.source or "",
+        "attempts": [
+            {"source": a.source, "outcome": a.outcome, "detail": a.detail[:160],
+             "loaded": a.record_count}
+            for a in result.attempts
+        ],
+    }
+    if outcome.get("error_code"):
+        report["error_code"] = outcome["error_code"]
+        report["error"] = outcome.get("error", "")
+    return report
+
+
+def _repair_via_kite(missing: list[str], *, client=None, now: datetime | None = None):
+    """The broker rung. Returns (frames, stats); raises when the session is unusable."""
+    stats: dict[str, Any] = {"attempted": 0, "failed": 0}
     try:
         if client is None:
             from research.intelligence.data.kite_activation import KiteDataClient
@@ -163,11 +299,9 @@ def backfill_missing(symbols: list[str], *, client=None, now: datetime | None = 
             raise RuntimeError("empty Kite profile")
         instruments = list(client.instruments("NSE"))
     except Exception as exc:
-        return {
-            "requested": len(requested), "missing": len(missing), "attempted": 0,
-            "loaded": 0, "unresolved": len(missing), "failed": 0,
-            "error_code": "KITE_HISTORY_UNAVAILABLE", "error": f"{type(exc).__name__}: {exc}",
-        }
+        stats["error_code"] = "KITE_HISTORY_UNAVAILABLE"
+        stats["error"] = f"{type(exc).__name__}: {exc}"
+        raise
 
     token_by_symbol: dict[str, object] = {}
     for row in instruments:
@@ -183,10 +317,8 @@ def backfill_missing(symbols: list[str], *, client=None, now: datetime | None = 
             token_by_symbol[sym] = token
 
     resolvable = [s for s in missing if s in token_by_symbol]
-    unresolved = len(missing) - len(resolvable)
     if not resolvable:
-        return {"requested": len(requested), "missing": len(missing), "attempted": 0,
-                "loaded": 0, "unresolved": unresolved, "failed": 0}
+        return {}, stats
 
     try:
         from research.intelligence.data import nse_calendar as CAL
@@ -216,22 +348,9 @@ def backfill_missing(symbols: list[str], *, client=None, now: datetime | None = 
         except Exception:
             failed += 1
 
-    if loaded:
-        with _lock:
-            _kite_cache.update(loaded)
-            overflow = len(_kite_cache) - 256
-            if overflow > 0:
-                for key in list(_kite_cache)[:overflow]:
-                    _kite_cache.pop(key, None)
-    return {
-        "requested": len(requested),
-        "missing": len(missing),
-        "attempted": len(resolvable),
-        "loaded": len(loaded),
-        "unresolved": unresolved,
-        "failed": failed,
-        "source": "zerodha_kite_data_only",
-    }
+    stats["attempted"] = len(resolvable)
+    stats["failed"] = failed
+    return loaded, stats
 
 
 def get_cached(symbol: str) -> Optional[pd.DataFrame]:

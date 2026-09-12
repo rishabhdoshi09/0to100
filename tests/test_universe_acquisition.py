@@ -120,3 +120,57 @@ def test_symbol_validation_still_applies_to_every_rung(monkeypatch):
                         lambda: {"symbols": [s for s in ["AAA", "BBB"]], "names": {},
                                  "schema_ok": True, "detail": ""})
     assert all(U._is_valid_symbol(s) for s in U.get_nse_universe())
+
+
+# ---------------------------------------------------------------------------
+# "Whole market scanned" is a claim about a universe. The coverage evidence
+# must therefore say WHICH universe, and how the desk got hold of it.
+# ---------------------------------------------------------------------------
+def test_coverage_evidence_names_the_universe_it_walked(monkeypatch):
+    from scan.scan_coverage import ScanCoverageProbe, _universe_provenance
+
+    monkeypatch.setattr(U, "_fetch_kite_cache", lambda: _payload(["AAA", "BBB"]))
+    U.get_nse_universe()
+
+    provenance = _universe_provenance()
+    assert provenance["source"] == "kite_instrument_cache"
+    assert provenance["state"] == ACQUIRED
+    assert provenance["fallback_level"] == 0
+    assert provenance["content_hash"]
+
+    probe = ScanCoverageProbe(["AAA", "BBB"], instrumented=True,
+                              universe_provenance=provenance)
+    summary = probe.finalize()["summary"]
+    assert summary["universe_provenance"]["source"] == "kite_instrument_cache"
+
+
+def test_a_scan_on_bundled_data_says_so_in_its_coverage(monkeypatch):
+    """The dishonest case: a full-market claim standing on months-old data."""
+    from scan.scan_coverage import _universe_provenance
+
+    monkeypatch.setattr(U, "_fetch_kite_cache",
+                        lambda: (_ for _ in ()).throw(FileNotFoundError("x")))
+    monkeypatch.setattr(U, "_fetch_nse_equity_list",
+                        lambda: (_ for _ in ()).throw(ConnectionError("x")))
+    U.get_nse_universe()
+
+    provenance = _universe_provenance()
+    assert provenance["state"] == LAST_KNOWN_GOOD_STATE
+    assert provenance["fallback_level"] >= 2
+
+
+def test_missing_provenance_is_unrecorded_not_invented(monkeypatch):
+    from scan.scan_coverage import _universe_provenance
+
+    monkeypatch.setattr(U, "last_universe_acquisition", lambda: None)
+    assert _universe_provenance()["state"] == "UNRECORDED"
+
+
+def test_provenance_lookup_never_breaks_a_scan(monkeypatch):
+    from scan.scan_coverage import _universe_provenance
+
+    def explode():
+        raise RuntimeError("provenance store is on fire")
+
+    monkeypatch.setattr(U, "last_universe_acquisition", explode)
+    assert _universe_provenance()["state"] == "UNRECORDED"

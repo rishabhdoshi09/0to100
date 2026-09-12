@@ -148,6 +148,9 @@ class AcquisitionResult:
     source: str = ""
     tier: int | None = None
     fallback_level: int = 0        # 0 = the first source worked
+    #: Every source that contributed, in order, when the ladder was filling a
+    #: gap rather than picking a winner. Empty for first-wins acquisitions.
+    contributing_sources: tuple[str, ...] = ()
     record_count: int | None = None
     content_hash: str = ""
     attempts: tuple[Attempt, ...] = ()
@@ -183,6 +186,7 @@ class AcquisitionResult:
             "tier": self.tier,
             "fallback_level": self.fallback_level,
             "record_count": self.record_count,
+            "contributing_sources": list(self.contributing_sources),
             "content_hash": self.content_hash,
             "fetched_at": self.fetched_at,
             "effective_at": self.effective_at,
@@ -283,6 +287,8 @@ def acquire(
     sources: Sequence[Source],
     *,
     corroborate: Callable[[Any, Any], bool] | None = None,
+    accumulate: Callable[[Any, Any], Any] | None = None,
+    complete: Callable[[Any], bool] | None = None,
     persist: bool = True,
     parser_version: str = "",
     effective_at: str = "",
@@ -298,9 +304,20 @@ def acquire(
     they materially disagree the result is SOURCE_CONFLICT and carries both:
     picking whichever value lets the workflow continue is how a wrong price
     becomes a position.
+
+    ``accumulate`` switches the ladder from picking a winner to filling a gap.
+    Some datasets are not one answer but a set — the symbols missing from the
+    history store, the quotes for a watchlist — and a source that supplies
+    three of ten has not failed. Each validating payload is merged into the
+    accumulator and the walk continues until ``complete`` says the set is full
+    or the sources run out. Every contributor is named in the provenance,
+    because "half of this came from Yahoo" is exactly the sort of thing that
+    must not be invisible.
     """
     attempts: list[Attempt] = []
     winner: tuple[Source, Any, Validation] | None = None
+    gathered: Any = None
+    contributors: list[str] = []
 
     for index, source in enumerate(sources):
         started = time.monotonic()
@@ -334,6 +351,15 @@ def acquire(
             detail=verdict.detail, record_count=verdict.record_count,
             duration_ms=int((time.monotonic() - started) * 1000), at=_now(),
         ))
+        if verdict.ok and accumulate is not None:
+            gathered = payload if gathered is None else accumulate(gathered, payload)
+            contributors.append(source.name)
+            if winner is None:
+                winner = (source, gathered, verdict)
+            if complete is not None and complete(gathered):
+                break
+            continue
+
         if verdict.ok and winner is None:
             winner = (source, payload, verdict)
             if corroborate is None:
@@ -373,12 +399,26 @@ def acquire(
         return result
 
     source, payload, verdict = winner
+    if accumulate is not None:
+        payload = gathered
     level = next(i for i, s in enumerate(sources) if s is source)
-    state = LAST_KNOWN_GOOD_STATE if source.tier == SourceTier.LAST_KNOWN_GOOD else ACQUIRED
+    # When several rungs contributed, the state reflects the WEAKEST one used:
+    # a set half-filled from a bundled cache is not fresh just because the
+    # first contributor was the exchange.
+    used = [s for s in sources if s.name in set(contributors)] if contributors else [source]
+    weakest = max((s.tier for s in used), default=source.tier)
+    state = LAST_KNOWN_GOOD_STATE if weakest == SourceTier.LAST_KNOWN_GOOD else ACQUIRED
+    record_count = verdict.record_count
+    if accumulate is not None:
+        try:
+            record_count = len(payload)  # type: ignore[arg-type]
+        except TypeError:
+            pass
     result = AcquisitionResult(
         dataset=dataset, state=state, value=payload, source=source.name,
         tier=int(source.tier), fallback_level=level,
-        record_count=verdict.record_count, content_hash=_hash(payload),
+        contributing_sources=tuple(contributors),
+        record_count=record_count, content_hash=_hash(payload),
         attempts=tuple(attempts), fetched_at=_now(), effective_at=effective_at,
         parser_version=parser_version,
     )
