@@ -97,4 +97,6 @@ That writes `docs/issue92_live_dod_proof.md` and `docs/issue92_live_dod_proof.js
 
 The full map lives in [`CLAUDE.md`](CLAUDE.md) — data layer (bhavcopy/Kite/NSE/US), signal layer (scanner, EV engine, live edge, breadth), risk layer (sizer, portfolio risk, correlation), execution boundary, core (Brain, decision journal, sim lab, market clock), and the **Vite/React desk** (Home · Market Scanner · Recommendations · Market Reports · Stock Intelligence).
 
+Historical research branches such as `overhaul/evidence-lab` are **not the current product path**.
+
 *Build: see `VERSION`. Canonical foreground launcher: `bash scripts/run_quantterm_complete.sh`. Canonical persistent Mac install: `bash scripts/install_quantterm_host.sh`.*
