@@ -2,16 +2,17 @@
 
 The OS service manager owns exactly this process; this process owns the desk
 children. Mutable state stays under QT_RUNTIME_ROOT, live execution is verified
-locked before any child starts, and crash/recovery truth is persisted rather
-than overwritten by a generic STOPPED marker.
+locked before any child starts, and failure/recovery truth is persisted.
 """
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -26,13 +27,20 @@ from typing import IO, Any, Callable
 from core.runtime_paths import REPO_ROOT, ensure_logs_path, logs_path, runtime_path, runtime_root
 
 STATUS_PATH = Path("state") / "host_supervisor.json"
+START_HISTORY_PATH = Path("state") / "host_start_history.json"
+FAILURE_ALERT_PATH = Path("state") / "host_failure_alert.json"
 LOCK_NAME = "quantterm.supervisor.lock"
 OWNER_NAME = "quantterm.supervisor.owner.json"
 HEARTBEAT_SECONDS = 2.0
 MARKET_REPROBE_SECONDS = 1800.0
-HEALTH_FAILURE_LIMIT = 3
+HEALTH_HTTP_TIMEOUT_S = 5.0
+STARTUP_HEALTH_GRACE_S = 45.0
+HEALTH_FAILURE_WINDOW_S = 60.0
 CRASH_LOOP_WINDOW_S = 300.0
 CRASH_LOOP_LIMIT = 5
+SERVICE_START_WINDOW_S = 300.0
+SERVICE_START_LIMIT = 5
+FAILURE_ALERT_DEDUPE_S = 6 * 60 * 60
 STOP_GRACE_S = 12.0
 
 
@@ -70,11 +78,27 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
-def _port_url_ok(url: str, timeout: float = 1.5) -> bool:
+def _read_json(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
+def _port_url_ok(url: str, timeout: float = HEALTH_HTTP_TIMEOUT_S) -> bool:
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
             return int(response.status) == 200
     except Exception:
+        return False
+
+
+def _tcp_port_open(host: str, port: int, timeout: float = 1.0) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
         return False
 
 
@@ -123,6 +147,7 @@ class ChildSpec:
     argv: tuple[str, ...]
     health: Callable[[], bool]
     start_after: tuple[str, ...] = ()
+    liveness: Callable[[], bool] | None = None
 
 
 def child_specs() -> tuple[ChildSpec, ...]:
@@ -136,12 +161,14 @@ def child_specs() -> tuple[ChildSpec, ...]:
             (python, "-u", "-m", "uvicorn", "terminal_product_api_parallel:app",
              "--host", "127.0.0.1", "--port", "8765"),
             lambda: _port_url_ok("http://127.0.0.1:8765/api/health"),
+            liveness=lambda: _tcp_port_open("127.0.0.1", 8765),
         ),
         ChildSpec(
             "report_api",
             (python, "-u", "-m", "uvicorn", "report_api:app",
              "--host", "127.0.0.1", "--port", "8766"),
             lambda: _port_url_ok("http://127.0.0.1:8766/health"),
+            liveness=lambda: _tcp_port_open("127.0.0.1", 8766),
         ),
         ChildSpec(
             "frontend",
@@ -149,6 +176,7 @@ def child_specs() -> tuple[ChildSpec, ...]:
              "--host", "127.0.0.1", "--port", "5173"),
             lambda: _port_url_ok("http://127.0.0.1:5173/"),
             start_after=("market_api",),
+            liveness=lambda: _tcp_port_open("127.0.0.1", 5173),
         ),
     )
 
@@ -162,6 +190,7 @@ class Child:
         self.health_failures = 0
         self.last_start = 0.0
         self.last_health_ok: bool | None = None
+        self.health_bad_since: float | None = None
 
     @property
     def alive(self) -> bool:
@@ -184,6 +213,7 @@ class Child:
         self.last_start = time.time()
         self.health_failures = 0
         self.last_health_ok = None
+        self.health_bad_since = None
 
     def terminate(self, grace_s: float = STOP_GRACE_S) -> None:
         proc = self.proc
@@ -253,6 +283,54 @@ class HostSupervisor:
         if not (state.locked and state.verified) or state.authorized:
             raise RuntimeError(f"live execution is not verified-locked: {state.status}")
 
+    def _register_service_start(self) -> bool:
+        """Persist a host-level restart window so launchd cannot loop forever."""
+        path = runtime_path(START_HISTORY_PATH)
+        now = time.time()
+        payload = _read_json(path)
+        starts = []
+        for value in payload.get("starts") or []:
+            try:
+                epoch = float(value)
+            except Exception:
+                continue
+            if now - epoch <= SERVICE_START_WINDOW_S:
+                starts.append(epoch)
+        starts.append(now)
+        _atomic_json(path, {
+            "schema_version": 1,
+            "window_s": SERVICE_START_WINDOW_S,
+            "limit": SERVICE_START_LIMIT,
+            "starts": starts,
+            "updated_at": _now(),
+        })
+        return len(starts) <= SERVICE_START_LIMIT
+
+    def _alert_failure_once(self, reason: str) -> None:
+        """Send one bounded outage alert per SHA/reason inside a long dedupe window."""
+        try:
+            path = runtime_path(FAILURE_ALERT_PATH)
+            text = str(reason or "host supervisor failed")[:300]
+            fingerprint = hashlib.sha256(f"{_git_sha()}|{text}".encode("utf-8")).hexdigest()
+            previous = _read_json(path)
+            previous_epoch = float(previous.get("alerted_epoch") or 0)
+            if previous.get("fingerprint") == fingerprint and time.time() - previous_epoch < FAILURE_ALERT_DEDUPE_S:
+                return
+            from product.host_alerts import send_operational_alert
+            result = send_operational_alert(f"QuantTerm host supervisor FAILED: {text}")
+            _atomic_json(path, {
+                "schema_version": 1,
+                "fingerprint": fingerprint,
+                "sha": _git_sha(),
+                "reason": text,
+                "alerted_at": _now(),
+                "alerted_epoch": time.time(),
+                "alert": result.to_dict(),
+            })
+        except Exception:
+            # Alerting must never mutate trading state or mask the original failure.
+            pass
+
     def bootstrap_host(self) -> None:
         from product.host_bootstrap import bootstrap_host_state
         self.bootstrap = bootstrap_host_state(should_stop=lambda: self.stop_requested)
@@ -261,6 +339,29 @@ class HostSupervisor:
             raise RuntimeError(
                 f"host bootstrap {state.lower()}: {self.bootstrap.get('error') or 'no detail'}"
             )
+
+    def _bootstrap_with_heartbeat(self) -> None:
+        """Run the potentially long first-history build while publishing liveness."""
+        errors: list[BaseException] = []
+        done = threading.Event()
+
+        def worker() -> None:
+            try:
+                self.bootstrap_host()
+            except BaseException as exc:  # propagate to the supervisor thread
+                errors.append(exc)
+            finally:
+                done.set()
+
+        self.write_status(state="BOOTSTRAPPING")
+        thread = threading.Thread(target=worker, name="quantterm-host-bootstrap", daemon=True)
+        thread.start()
+        while not done.wait(HEARTBEAT_SECONDS):
+            self.write_status(state="BOOTSTRAPPING")
+        thread.join(timeout=1)
+        self.write_status(state="STARTING")
+        if errors:
+            raise errors[0]
 
     def _probe_market_access_worker(self) -> None:
         try:
@@ -272,9 +373,6 @@ class HostSupervisor:
                 "checks": [c.to_dict() for c in checks],
             }
             required_blocked = any(c.required and c.status in {FAIL, UNKNOWN} for c in checks)
-            # If the first official-history bootstrap was degraded only because
-            # market egress was unavailable, a later successful coarse reprobe
-            # owns one retry. No fast provider retry loop is introduced.
             if str(self.bootstrap.get("state") or "") == "DEGRADED" and not required_blocked:
                 from product.host_bootstrap import bootstrap_host_state
                 self.bootstrap = bootstrap_host_state(should_stop=lambda: self.stop_requested)
@@ -335,10 +433,11 @@ class HostSupervisor:
     def start_all(self) -> None:
         for name in ("autonomy", "market_ops", "market_api", "report_api"):
             self.start_child(name)
-        deadline = time.monotonic() + 45
+        deadline = time.monotonic() + 120
         while time.monotonic() < deadline and not self.children["market_api"].spec.health():
             if not self.children["market_api"].alive:
                 break
+            self.write_status(state="STARTING")
             time.sleep(0.5)
         self.start_child("frontend")
 
@@ -371,16 +470,31 @@ class HostSupervisor:
         child.last_health_ok = healthy
         if healthy:
             child.health_failures = 0
+            child.health_bad_since = None
             return
-        if time.time() - child.last_start < 20:
+        if time.time() - child.last_start < STARTUP_HEALTH_GRACE_S:
             return
+
         child.health_failures += 1
-        if child.health_failures < HEALTH_FAILURE_LIMIT:
+        if child.health_bad_since is None:
+            child.health_bad_since = time.time()
+
+        # An HTTP endpoint can be slow under swap while its process and socket are
+        # still alive. Do not convert pressure into a restart storm.
+        if child.spec.liveness is not None:
+            try:
+                if child.spec.liveness():
+                    return
+            except Exception:
+                pass
+
+        if time.time() - child.health_bad_since < HEALTH_FAILURE_WINDOW_S:
             return
         child.terminate()
         self.start_child(child.spec.name)
 
     def status_payload(self, *, state: str = "RUNNING", error: str = "") -> dict[str, Any]:
+        now = time.time()
         return {
             "schema_version": 1,
             "state": state,
@@ -399,6 +513,7 @@ class HostSupervisor:
                     "alive": child.alive,
                     "healthy": child.last_health_ok,
                     "health_failures": child.health_failures,
+                    "health_bad_for_s": None if child.health_bad_since is None else max(0.0, now - child.health_bad_since),
                     "starts": child.restarts,
                 }
                 for name, child in self.children.items()
@@ -420,9 +535,20 @@ class HostSupervisor:
         terminal_state = "STOPPED"
         terminal_error = ""
         try:
+            if not self._register_service_start():
+                terminal_state = "FAILED"
+                terminal_error = (
+                    f"host service restart limit exceeded: more than {SERVICE_START_LIMIT} starts "
+                    f"inside {SERVICE_START_WINDOW_S:.0f}s"
+                )
+                self.write_status(state=terminal_state, error=terminal_error)
+                self._alert_failure_once(terminal_error)
+                # Successful exit intentionally defeats launchd SuccessfulExit=false
+                # and systemd Restart=on-failure, stopping an unbounded loop.
+                return 0
             self.verify_safety()
             self.acquire_machine_lock()
-            self.bootstrap_host()
+            self._bootstrap_with_heartbeat()
             self.maybe_reprobe_market_access(force=True)
             self.start_all()
             self.write_status()
@@ -438,6 +564,7 @@ class HostSupervisor:
             terminal_state = "FAILED"
             terminal_error = f"{type(exc).__name__}: {exc}"[:300]
             self.write_status(state=terminal_state, error=terminal_error)
+            self._alert_failure_once(terminal_error)
             print(f"HOST SUPERVISOR FAILED: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
             return 1
         finally:
