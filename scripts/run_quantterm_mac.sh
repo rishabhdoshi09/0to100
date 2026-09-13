@@ -12,6 +12,50 @@ WATCH_INTERVAL_S="${QT_STORAGE_WATCH_INTERVAL_S:-15}"
 
 bash "$PREFLIGHT"
 
+# launchd does not source the user's interactive shell profile.  Node/npm is
+# commonly installed through nvm on older Macs, so a healthy interactive shell
+# can have npm while launchd cannot resolve it.  Prefer the installer-pinned
+# absolute path, then the launchd PATH, then common per-user managers.  Prepend
+# npm's directory to PATH as well because npm's shebang uses `/usr/bin/env node`.
+resolve_npm() {
+  local candidate="${QT_NPM_BIN:-}"
+  if [[ -n "$candidate" && -x "$candidate" ]]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+
+  candidate="$(command -v npm 2>/dev/null || true)"
+  if [[ -n "$candidate" && -x "$candidate" ]]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+
+  # Bash 3.2-compatible fallback for nvm/Volta/asdf installs.  Do not depend on
+  # shell startup files; inspect only executable paths owned by this user.
+  for candidate in \
+    "$HOME"/.nvm/versions/node/*/bin/npm \
+    "$HOME"/.volta/bin/npm \
+    "$HOME"/.asdf/shims/npm
+  do
+    if [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+QT_NPM_BIN="$(resolve_npm || true)"
+if [[ -z "$QT_NPM_BIN" || ! -x "$QT_NPM_BIN" ]]; then
+  echo "[MAC RUNTIME] npm is required for the desk UI but launchd cannot resolve it." >&2
+  echo "[MAC RUNTIME] Re-run deploy/setup_mac.sh from a terminal where 'command -v npm' succeeds." >&2
+  exit 78
+fi
+export QT_NPM_BIN
+NPM_BIN_DIR="$(cd "$(dirname "$QT_NPM_BIN")" && pwd -P)"
+export PATH="$NPM_BIN_DIR:${PATH:-/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
+echo "[MAC RUNTIME] npm resolved at $QT_NPM_BIN"
+
 # macOS Catalina does not ship the util-linux `setsid` command used by the
 # generic Unix launchers to give Vite its own process group.  Export a Bash
 # compatibility function only when the native command is absent.  The child
@@ -27,8 +71,12 @@ import sys
 
 if len(sys.argv) < 2:
     raise SystemExit("setsid compatibility launcher requires a command")
+command = sys.argv[1]
+if command == "npm":
+    command = os.environ.get("QT_NPM_BIN") or command
+argv = [command, *sys.argv[2:]]
 os.setsid()
-os.execvp(sys.argv[1], sys.argv[1:])
+os.execvpe(command, argv, os.environ)
 PY
   }
   export -f setsid
