@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Strict façade for QuantTerm product acceptance.
 
-The large operation-grading implementation lives in ``_product_acceptance_core``.
-This façade keeps the acceptance boundary small and explicit: broker safety must
-be verified, locked, and unauthorized, and Paper acceptance reads the real
-``/api/dashboard`` Paper projection plus canonical ``/api/health`` safety truth.
+The established operation-grading implementation lives in
+``_product_acceptance_core``. This façade keeps the acceptance boundary small
+and explicit: broker safety must be verified, locked, and unauthorized, Paper
+acceptance exercises the real Paper Autopilot route, and Forward Soak uses its
+actual read endpoint.
 """
 from __future__ import annotations
 
@@ -21,7 +22,7 @@ if _SPEC is None or _SPEC.loader is None:  # pragma: no cover - import failure i
 _core = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_core)
 
-# Re-export the established acceptance helpers; strict helpers below intentionally
+# Re-export established acceptance helpers; strict helpers below intentionally
 # override the corresponding names.
 for _name in dir(_core):
     if not _name.startswith("__"):
@@ -81,24 +82,24 @@ def grade_paper_status(
     live_lock_verified: bool,
     live_execution_authorized: bool | None = None,
 ) -> dict[str, Any]:
-    """Grade persisted Paper state while keeping broker safety a separate authority."""
+    """Grade persisted Paper state while keeping broker safety authoritative."""
     data = _core._as_dict(payload)
     if not data:
-        return {"status": "FAIL", "blocker_reason": "empty Paper projection", "count": 0}
+        return {"status": "FAIL", "blocker_reason": "empty Paper Autopilot projection", "count": 0}
     nested = _core._as_dict(data.get("paper"))
     positions = nested.get("open_positions") if "open_positions" in nested else data.get("open_positions")
     has_cycle = "last_cycle" in data or "latest" in data or "why_no_trade" in data
     if positions is None or not has_cycle:
         return {"status": "FAIL", "blocker_reason": "missing paper positions/cycle contract", "count": 0}
-    if live_lock_verified is not True:
-        return {"status": "FAIL", "blocker_reason": "canonical paper-execution live lock is unverified", "count": 0}
-    if live_locked is not True:
-        return {"status": "FAIL", "blocker_reason": "canonical paper-execution boundary is not locked", "count": 0}
+    if live_lock_verified is not True or data.get("live_lock_verified") is not True:
+        return {"status": "FAIL", "blocker_reason": "paper execution live lock is unverified", "count": 0}
+    if live_locked is not True or data.get("live_locked") is not True:
+        return {"status": "FAIL", "blocker_reason": "paper execution did not prove live money locked", "count": 0}
     authorized = live_execution_authorized
     if authorized is None:
         authorized = data.get("live_execution_authorized")
-    if authorized is not False:
-        return {"status": "FAIL", "blocker_reason": "canonical live execution was not proven unauthorized", "count": 0}
+    if authorized is not False or data.get("live_execution_authorized") is not False:
+        return {"status": "FAIL", "blocker_reason": "paper execution did not prove live execution unauthorized", "count": 0}
     return {"status": "PASS", "blocker_reason": "", "count": len(_core._as_list(positions))}
 
 
@@ -109,34 +110,22 @@ def _request_json(
     timeout: float = 12.0,
     body: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Route the obsolete Paper-only probe to the real dashboard projection.
-
-    No safety value is invented: canonical safety fields are copied from the
-    same terminal's /api/health response solely for acceptance grading.
-    """
+    """Correct the legacy soak probe to the route's real read-only contract."""
     parsed = urllib.parse.urlsplit(url)
-    if parsed.path.rstrip("/") == "/api/paper-autopilot":
-        base = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, "", "", "")).rstrip("/")
-        dashboard = _original_request_json(f"{base}/api/dashboard", timeout=timeout)
-        paper = _core._as_dict(dashboard.get("paper"))
-        health = _original_request_json(f"{base}/api/health", timeout=timeout)
-        for key in ("live_locked", "live_lock_verified", "live_execution_authorized"):
-            if key in health:
-                paper[key] = health[key]
-        return paper
+    if parsed.path.rstrip("/") == "/api/forward-soak" and method.upper() == "POST":
+        return _original_request_json(url, method="GET", timeout=timeout, body=None)
     return _original_request_json(url, method=method, timeout=timeout, body=body)
 
 
 def _row(**kwargs: Any) -> dict[str, Any]:
-    if kwargs.get("feature") == "Paper execution status":
-        kwargs["trigger_tested"] = "GET /api/dashboard[paper] + GET /api/health"
-        kwargs["backend_path"] = "terminal_api._paper_payload + product.runtime_lifecycle"
+    if kwargs.get("feature") == "Forward soak verification":
+        kwargs["trigger_tested"] = "GET /api/forward-soak"
     return _original_row(**kwargs)
 
 
 def run(args) -> int:
     # The core's run function resolves helpers in the core module namespace.
-    # Install the strict boundary functions before executing it.
+    # Install strict boundary functions before executing it.
     _core.grade_learning_dashboard = grade_learning_dashboard
     _core.grade_forward_soak = grade_forward_soak
     _core.grade_paper_status = grade_paper_status
