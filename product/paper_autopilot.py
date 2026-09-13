@@ -775,6 +775,9 @@ def run_reco_paper_cycle(
         f"taken={len(taken)} rejected={len(rejections)} wait={len(waits)} "
         f"seen={len(card_list)} not_surfaced={len(not_surfaced)}"
     )
+    from product.live_safety import live_safety_projection
+
+    safety = live_safety_projection()
     cycle = {
         "as_of": day,
         "session_phase": session_phase,
@@ -795,7 +798,6 @@ def run_reco_paper_cycle(
             "BLOCKED_SAFETY" if not entries_allowed or not paper_enabled else "NO_ELIGIBLE_TRADE"
         ),
         "source": "recommendation_selection_authority",
-        "live_locked": True,
         "adapter": "paper",
         "rules_hash": ident.get("rules_hash"),
         "execution_reality": {
@@ -808,6 +810,7 @@ def run_reco_paper_cycle(
         "regime_intelligence_shadow": None,
         "portfolio_authority": "after_selection_authority",
         "cycle_id": f"{day}:{ident.get('rules_hash') or ''}:{clock.isoformat()}",
+        **safety,
     }
     try:
         from product.regime_intelligence import shadow_classify
