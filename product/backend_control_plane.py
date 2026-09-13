@@ -741,7 +741,7 @@ def _automation_lane(
         "operator_state": operator_state or None,
         "heartbeat": auto.get("heartbeat_ist") or None,
         "current_job": job_type or None,
-        "job_id": active_job.get("job_id") or scan_op.get("operation_id") or prepare.get("operation_id"),
+        "job_id": active_job.get("job_id") or active_job.get("id") or scan_op.get("operation_id") or prepare.get("operation_id"),
         "job_type": job_type or None,
         "scheduled_for": active_job.get("scheduled_for"),
         "started_at": active_job.get("started_at") or active_job.get("started_monotonic"),
