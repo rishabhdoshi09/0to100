@@ -1,9 +1,10 @@
 import './marketSidebar.css'
+import { OperatorQuickControls, operatorState } from './operatorControlCenter'
 import type { DashboardPayload } from './types'
 
 const PRIMARY_NAV = [
   ['⌂', 'Home', 'Desk'],
-  ['⚙', 'Control Center', 'Control Center'],
+  ['⚙', 'System Health', 'Control Center'],
   ['▣', 'Recommendations', 'Opportunities'],
   ['◉', 'Stock Intelligence', 'Stock Intelligence'],
   ['?', 'Why This Decision', 'Why This Decision'],
@@ -21,7 +22,6 @@ const ADVANCED_NAV = [
   ['🧪', 'Backtest', 'Backtests'],
   ['▤', 'Research Data', 'Research Data'],
   ['◎', 'Coverage', 'Coverage'],
-  ['◌', 'System Health', 'System Health'],
 ] as const
 
 const ROUTE_ALIAS: Record<string, string> = {
@@ -32,7 +32,7 @@ const ROUTE_ALIAS: Record<string, string> = {
   'Long-Term': 'Long-Term Picks',
   Portfolio: 'Paper Portfolio',
   'Market Internals': 'Market Overview',
-  Automation: 'Control Center',
+  Automation: 'System Health',
   Today: 'Home',
   Setups: 'Market Scanner',
   Desk: 'Home',
@@ -79,17 +79,6 @@ function dataCopy(dashboard: DashboardPayload): string {
   return busy ? 'Preparing official history…' : 'Starting official prices…'
 }
 
-function systemState(dashboard: DashboardPayload): 'RUNNING' | 'REFRESHING' | 'ATTENTION' {
-  const runtimeOnline = Boolean(
-    dashboard.operations.running
-    || dashboard.autonomy.running
-    || dashboard.autonomy.process_running,
-  )
-  if (!runtimeOnline) return 'ATTENTION'
-  if ((dashboard.operations.active || []).length > 0) return 'REFRESHING'
-  return 'RUNNING'
-}
-
 export function MarketSidebar({
   active,
   setActive,
@@ -102,7 +91,7 @@ export function MarketSidebar({
   const operations = dashboard.operations.running
   const current = ROUTE_ALIAS[active] || active
   const advancedActive = ADVANCED_NAV.some(([, route]) => route === current)
-  const runtimeState = systemState(dashboard)
+  const runtimeState = operatorState(dashboard)
   const scanOperation = (dashboard.operations.active || []).find((row) => row.kind === 'MARKET_SCAN')
   const scanCurrent = Number(scanOperation?.progress_current || dashboard.scan_progress?.current || 0)
   const scanTotal = Number(scanOperation?.progress_total || dashboard.scan_progress?.total || 0)
@@ -121,6 +110,7 @@ export function MarketSidebar({
         <div className="nav-section-label">OPERATE</div>
         <NavigationRows rows={PRIMARY_NAV} active={current} setActive={setActive} />
         <p className="nav-primary-note">Daily use and safe manual controls stay here. Research plumbing remains under Advanced.</p>
+        <OperatorQuickControls dashboard={dashboard} openControlCenter={() => setActive('System Health')} />
         <details className="nav-advanced" open={advancedActive || undefined}>
           <summary>Advanced</summary>
           <NavigationRows rows={ADVANCED_NAV} active={current} setActive={setActive} />
@@ -148,7 +138,7 @@ export function MarketSidebar({
             Scan {scanTotal > 0 ? `${scanCurrent.toLocaleString('en-IN')}/${scanTotal.toLocaleString('en-IN')}` : scanOperation.stage || scanOperation.status}
           </small>
         ) : null}
-        <button type="button" onClick={() => setActive('Control Center')}>Open controls</button>
+        <button type="button" onClick={() => setActive('System Health')}>Open Control Center</button>
       </div>
       <div className="reco-telemetry broker-card">
         <div className="broker-row">
