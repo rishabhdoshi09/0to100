@@ -453,6 +453,7 @@ def build_home_os(
         scan_ok=scan_ok,
         paper_enabled=paper_enabled,
         live_locked=live_locked,
+        live_lock_verified=live_lock_verified,
         taken=taken,
         opens=opens,
         closed=closed,
@@ -480,7 +481,13 @@ def build_home_os(
             "primary_action": broker_action,
         })
         system["zerodha"] = zerodha
-    check_system = build_check_system(system, live_locked=live_locked)
+    check_system = build_check_system(
+        system,
+        live_locked=live_locked,
+        live_lock_verified=live_lock_verified,
+        live_lock_reason=str(live_safety.get("live_lock_reason") or ""),
+        live_lock_source=str(live_safety.get("live_lock_source") or "product.live_execution_interlock"),
+    )
 
     runtime: dict[str, Any] = {}
     try:
