@@ -70,15 +70,34 @@ def _history_readiness() -> tuple[str, str]:
     return ("STALE", detail) if available else ("MISSING", detail)
 
 
-def _scan_evidence_status(payload: dict[str, Any] | None) -> tuple[str, str]:
+def _scan_evidence_status(
+    payload: dict[str, Any] | None,
+    *,
+    expected_session: str = "",
+) -> tuple[str, str]:
     if not payload or not isinstance(payload, dict):
         return "MISSING", "No saved whole-market scan"
     records = payload.get("records")
     if not isinstance(records, list):
         records = []
     scanned_at = str(payload.get("scanned_at") or "").strip()
+    as_of = str(payload.get("as_of_session") or payload.get("history_latest_date") or "")[:10]
+    expected = str(expected_session or "")[:10]
     if not scanned_at and not records:
         return "MISSING", "Scan artifact is empty"
+
+    # Session identity is the authoritative market-freshness clock.  A Friday
+    # scan remains current through a weekend/holiday even after six wall-clock
+    # hours, while a scan for an older session is stale immediately once a newer
+    # completed session is expected.  This mirrors product.desk_pipeline.
+    if expected and as_of:
+        if as_of < expected:
+            return "STALE", f"Scan session {as_of} behind expected {expected} · scanned_at {scanned_at}"
+        if not records:
+            return "INCOMPLETE", f"Scan has no records · session {as_of} · scanned_at {scanned_at}"
+        return "READY", f"{len(records)} records · session {as_of} · scanned_at {scanned_at}"
+
+    # Backward compatibility for older artifacts that predate session metadata.
     try:
         from product.scan_store import scan_age_hours
         age_h = scan_age_hours(payload)
@@ -211,9 +230,23 @@ def build_startup_check(*, probe_network: bool = True) -> dict[str, Any]:
         ops_running = False
 
     data_status, data_detail = _history_readiness()
+    expected_scan_session = ""
+    try:
+        from data.bhavcopy_runtime import official_history_freshness
+        history_freshness = official_history_freshness(load_cache=True)
+        expected_scan_session = str(
+            history_freshness.get("expected_latest_completed_session")
+            or history_freshness.get("available_session")
+            or ""
+        )[:10]
+    except Exception:
+        expected_scan_session = ""
     try:
         from product.scan_store import default_scan_path, load_scan
-        scan_status, scan_detail = _scan_evidence_status(load_scan(default_scan_path()))
+        scan_status, scan_detail = _scan_evidence_status(
+            load_scan(default_scan_path()),
+            expected_session=expected_scan_session,
+        )
     except Exception as exc:
         scan_status, scan_detail = "MISSING", f"Scan artifact unreadable: {str(exc)[:160]}"
     paper_status, paper_detail = _paper_readiness()
