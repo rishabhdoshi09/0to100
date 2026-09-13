@@ -2,8 +2,8 @@
 # Fail-closed storage gate for the macOS QuantTerm service.
 #
 # The production runtime may live on an APFS sparsebundle stored on an external
-# disk.  No QuantTerm process may start until that exact storage chain is
-# present, mounted, verified and writable.  In particular, this script never
+# disk. No QuantTerm process may start until that exact storage chain is
+# present, mounted, verified and writable. In particular, this script never
 # creates the canonical runtime path: a missing external volume must remain a
 # hard failure instead of silently becoming a fresh local runtime.
 set -euo pipefail
@@ -19,6 +19,7 @@ info() {
 
 OS_NAME="${QT_PREFLIGHT_UNAME:-$(uname -s)}"
 REQUIRED="${QT_STORAGE_PREFLIGHT_REQUIRED:-0}"
+ATTACH_IF_NEEDED="${QT_STORAGE_PREFLIGHT_ATTACH:-1}"
 
 if [[ "$OS_NAME" != "Darwin" ]]; then
   if [[ "$REQUIRED" == "1" ]]; then
@@ -37,7 +38,7 @@ CANONICAL_RUNTIME="${QT_RUNTIME_LINK:-$HOME/Library/Application Support/QuantTer
 [[ -d "$EXTERNAL_VOLUME" ]] || fail "external volume is not mounted: $EXTERNAL_VOLUME"
 [[ -d "$SPARSEBUNDLE" ]] || fail "APFS sparsebundle is missing: $SPARSEBUNDLE"
 
-# The canonical path must already be a symlink.  Do not mkdir it, repair it, or
+# The canonical path must already be a symlink. Do not mkdir it, repair it, or
 # replace it here: doing so while the external disk is absent can split durable
 # state between the internal and external disks.
 [[ -L "$CANONICAL_RUNTIME" ]] || fail "canonical runtime is not a symlink: $CANONICAL_RUNTIME"
@@ -46,6 +47,9 @@ LINK_TARGET="$(readlink "$CANONICAL_RUNTIME")"
   "runtime symlink target mismatch: expected '$EXPECTED_RUNTIME', got '$LINK_TARGET'"
 
 if ! diskutil info "$STORAGE_MOUNT" >/dev/null 2>&1; then
+  if [[ "$ATTACH_IF_NEEDED" != "1" ]]; then
+    fail "runtime volume is not mounted at $STORAGE_MOUNT"
+  fi
   info "mounting APFS sparsebundle: $SPARSEBUNDLE"
   hdiutil attach -nobrowse "$SPARSEBUNDLE" >/dev/null || fail "could not attach sparsebundle"
 fi
@@ -63,7 +67,7 @@ FS_PERSONALITY="$(printf '%s\n' "$DISK_INFO" | awk -F: '/^[[:space:]]*File Syste
 [[ -r "$EXPECTED_RUNTIME" ]] || fail "runtime directory is not readable: $EXPECTED_RUNTIME"
 [[ -w "$EXPECTED_RUNTIME" ]] || fail "runtime directory is not writable: $EXPECTED_RUNTIME"
 
-# Resolve through both paths only after the mount is verified.  This proves the
+# Resolve through both paths only after the mount is verified. This proves the
 # canonical application-support path and the expected external directory are
 # the same directory, without depending on the `realpath` utility (not present
 # on older macOS releases such as Catalina).
