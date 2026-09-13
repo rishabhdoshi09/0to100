@@ -469,9 +469,21 @@ def test_event_store_failure_blocks_mutation_and_read_only_ui():
 
 
 def test_failure_never_becomes_no_trade():
-    # auth missing blocks entries but KEEPS existing management — never a silent "no trade"
-    caps = H.capabilities({H.AUTH_MISSING})
-    assert caps["new_paper_entries"] == H.BLOCKED and caps["existing_exits"] == H.ALLOWED
+    """A failure degrades exactly what depends on it and never silently halts the desk.
+
+    Broker session state gates LIVE order placement only. Paper fills are priced
+    from the official bhavcopy-derived scan and the paper autopilot never calls
+    the broker, so a lapsed daily token must not freeze paper entries. Under
+    authorized live execution the same failure must still block. In both modes
+    existing position management keeps running.
+    """
+    paper = H.capabilities({H.AUTH_MISSING}, live_authorized=False)
+    assert paper["new_paper_entries"] == H.ALLOWED
+    assert paper["existing_exits"] == H.ALLOWED
+
+    live = H.capabilities({H.AUTH_MISSING}, live_authorized=True)
+    assert live["new_paper_entries"] == H.BLOCKED
+    assert live["existing_exits"] == H.ALLOWED
 
 
 # ══ Product projection ═══════════════════════════════════════════════════════════

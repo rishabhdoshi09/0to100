@@ -441,7 +441,7 @@ export function SystemHealthView({ dashboard, runControl }: ViewProps) {
     <section className="workspace-view">
       <div className="inline-actions">
         <button type="button" onClick={() => void runControl('RUN_SCAN_NOW')}>Start market scan</button>
-        <button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Request paper cycle</button>
+        <button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Run paper evaluation now</button>
         <button type="button" onClick={() => void runControl('REFRESH_DATA_NOW')}>Prepare market data</button>
         <button type="button" onClick={() => void runControl(a.new_paper_entries ? 'PAUSE_NEW_PAPER_ENTRIES' : 'RESUME_NEW_PAPER_ENTRIES')}>
           {a.new_paper_entries ? 'Pause entries' : 'Resume entries'}
