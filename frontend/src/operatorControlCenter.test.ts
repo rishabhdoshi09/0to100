@@ -102,7 +102,7 @@ describe('operator control center', () => {
     expect(controls.some((control) => /LIVE|BUY|SELL|UNLOCK/.test(control))).toBe(false)
   })
 
-  it('reports running, refreshing and attention from durable runtime state', () => {
+  it('reports running, refreshing and attention from current operator-plane truth', () => {
     expect(operatorState(dashboard())).toBe('RUNNING')
 
     const base = dashboard()
@@ -126,6 +126,9 @@ describe('operator control center', () => {
 
     expect(operatorState(dashboard({
       operations: { ...base.operations, running: false },
+    }))).toBe('ATTENTION')
+
+    expect(operatorState(dashboard({
       autonomy: { ...base.autonomy, running: false, process_running: false },
     }))).toBe('ATTENTION')
   })
