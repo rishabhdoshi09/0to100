@@ -1,76 +1,94 @@
 #!/usr/bin/env bash
-# Install/update QuantTerm as two launchd agents on the current Mac checkout.
+# Install/update QuantTerm as one canonical launchd agent on the current Mac.
+# The complete launcher owns autonomy, market_ops, APIs and the desk; a second
+# autonomy LaunchAgent would create competing ownership/restart paths.
 set -euo pipefail
+
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SYSTEM_PYTHON="${QT_SYSTEM_PYTHON:-$(command -v python3)}"
+
+EXTERNAL_VOLUME="${QT_STORAGE_EXTERNAL_VOLUME:-/Volumes/Expansion}"
+STORAGE_BUNDLE="${QT_STORAGE_BUNDLE:-$EXTERNAL_VOLUME/QuantTermStorage.sparsebundle}"
+STORAGE_MOUNT="${QT_STORAGE_MOUNT:-/Volumes/QuantTermStorage}"
+STORAGE_RUNTIME="${QT_STORAGE_RUNTIME:-$STORAGE_MOUNT/QuantTerm/runtime}"
+RUNTIME_LINK="${QT_RUNTIME_LINK:-$HOME/Library/Application Support/QuantTerm/runtime}"
+
+# Refuse installation against an absent/wrong runtime. This is intentionally
+# before dependency installation or launchd mutation so setup cannot create a
+# half-installed service while the durable store is unavailable.
+QT_STORAGE_PREFLIGHT_REQUIRED=1 \
+QT_STORAGE_EXTERNAL_VOLUME="$EXTERNAL_VOLUME" \
+QT_STORAGE_BUNDLE="$STORAGE_BUNDLE" \
+QT_STORAGE_MOUNT="$STORAGE_MOUNT" \
+QT_STORAGE_RUNTIME="$STORAGE_RUNTIME" \
+QT_RUNTIME_LINK="$RUNTIME_LINK" \
+  bash "$APP_DIR/scripts/quantterm_storage_preflight.sh"
+
 [ -d "$APP_DIR/venv" ] || "$SYSTEM_PYTHON" -m venv "$APP_DIR/venv"
 PYTHON_BIN="${QT_PYTHON:-$APP_DIR/venv/bin/python}"
 "$PYTHON_BIN" -m pip install --upgrade pip wheel
 "$PYTHON_BIN" -m pip install -r "$APP_DIR/requirements.txt"
 [ -f "$APP_DIR/.env" ] || { cp "$APP_DIR/.env.example" "$APP_DIR/.env" 2>/dev/null || touch "$APP_DIR/.env"; }
 chmod 600 "$APP_DIR/.env" 2>/dev/null || true
+
 AGENTS="$HOME/Library/LaunchAgents"
-UI_PLIST="$AGENTS/com.quantterm.ui.plist"
-AUTO_PLIST="$AGENTS/com.quantterm.autonomy.plist"
-mkdir -p "$AGENTS" "$APP_DIR/logs/autonomy" "$APP_DIR/logs/intelligence" \
-         "$APP_DIR/logs/snapshots" "$APP_DIR/logs/kite_history" "$APP_DIR/logs/product"
+APP_PLIST="$AGENTS/com.quantterm.ui.plist"
+OLD_AUTO_PLIST="$AGENTS/com.quantterm.autonomy.plist"
+OLD_COMBINED_PLIST="$AGENTS/com.quantterm.app.plist"
+LAUNCH_LOG_DIR="$HOME/Library/Logs/QuantTerm"
+mkdir -p "$AGENTS" "$LAUNCH_LOG_DIR"
 
 sudo pmset -a sleep 0 displaysleep 10 || true
 
-cat > "$UI_PLIST" <<PLIST
+cat > "$APP_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>Label</key><string>com.quantterm.ui</string>
 <key>ProgramArguments</key><array>
 <string>/bin/bash</string>
-<string>$APP_DIR/scripts/run_quantterm_complete.sh</string>
+<string>$APP_DIR/scripts/run_quantterm_mac.sh</string>
 </array>
 <key>WorkingDirectory</key><string>$APP_DIR</string>
 <key>EnvironmentVariables</key><dict>
 <key>TZ</key><string>Asia/Kolkata</string>
 <key>PYTHONPATH</key><string>$APP_DIR</string>
 <key>QT_NONINTERACTIVE</key><string>1</string>
-<key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+<key>QT_STORAGE_PREFLIGHT_REQUIRED</key><string>1</string>
+<key>QT_STORAGE_EXTERNAL_VOLUME</key><string>$EXTERNAL_VOLUME</string>
+<key>QT_STORAGE_BUNDLE</key><string>$STORAGE_BUNDLE</string>
+<key>QT_STORAGE_MOUNT</key><string>$STORAGE_MOUNT</string>
+<key>QT_STORAGE_RUNTIME</key><string>$STORAGE_RUNTIME</string>
+<key>QT_RUNTIME_LINK</key><string>$RUNTIME_LINK</string>
+<key>QT_RUNTIME_ROOT</key><string>$RUNTIME_LINK</string>
+<key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
 </dict>
-<key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>10</integer>
-<key>StandardOutPath</key><string>$APP_DIR/logs/ui.log</string>
-<key>StandardErrorPath</key><string>$APP_DIR/logs/ui.log</string>
+<key>RunAtLoad</key><true/>
+<key>KeepAlive</key><dict>
+  <key>PathState</key><dict>
+    <key>$EXTERNAL_VOLUME</key><true/>
+  </dict>
+</dict>
+<key>ThrottleInterval</key><integer>60</integer>
+<key>StandardOutPath</key><string>$LAUNCH_LOG_DIR/launchd.log</string>
+<key>StandardErrorPath</key><string>$LAUNCH_LOG_DIR/launchd.log</string>
 </dict></plist>
 PLIST
 
-cat > "$AUTO_PLIST" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-<key>Label</key><string>com.quantterm.autonomy</string>
-<key>ProgramArguments</key><array>
-<string>$PYTHON_BIN</string><string>$APP_DIR/main.py</string><string>autonomy</string>
-<string>--interval</string><string>15</string>
-</array>
-<key>WorkingDirectory</key><string>$APP_DIR</string>
-<key>EnvironmentVariables</key><dict>
-<key>TZ</key><string>Asia/Kolkata</string><key>QT_AUTONOMY_OWNER</key><string>1</string>
-</dict>
-<key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>10</integer>
-<key>StandardOutPath</key><string>$APP_DIR/logs/autonomy.log</string>
-<key>StandardErrorPath</key><string>$APP_DIR/logs/autonomy.log</string>
-</dict></plist>
-PLIST
+plutil -lint "$APP_PLIST" >/dev/null
 
-# Remove the obsolete combined agent, then idempotently reload both real agents.
-OLD="$AGENTS/com.quantterm.app.plist"
-launchctl bootout "gui/$(id -u)" "$OLD" 2>/dev/null || launchctl unload "$OLD" 2>/dev/null || true
-rm -f "$OLD"
-for plist in "$UI_PLIST" "$AUTO_PLIST"; do
-  launchctl bootout "gui/$(id -u)" "$plist" 2>/dev/null || launchctl unload "$plist" 2>/dev/null || true
-  launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null || launchctl load -w "$plist"
+# Remove historical competing service definitions before loading the one owner.
+for old in "$OLD_COMBINED_PLIST" "$OLD_AUTO_PLIST"; do
+  launchctl bootout "gui/$(id -u)" "$old" 2>/dev/null || launchctl unload "$old" 2>/dev/null || true
+  rm -f "$old"
 done
-launchctl kickstart -k "gui/$(id -u)/com.quantterm.autonomy" || true
+
+launchctl bootout "gui/$(id -u)" "$APP_PLIST" 2>/dev/null || launchctl unload "$APP_PLIST" 2>/dev/null || true
+launchctl bootstrap "gui/$(id -u)" "$APP_PLIST" 2>/dev/null || launchctl load -w "$APP_PLIST"
 launchctl kickstart -k "gui/$(id -u)/com.quantterm.ui" || true
 
-echo "QuantTerm desk + autonomy agents installed."
+echo "QuantTerm canonical macOS agent installed."
+echo "External runtime: $STORAGE_RUNTIME"
 echo "Daily login: cd '$APP_DIR' && '$PYTHON_BIN' main.py login"
 echo "Desk: http://127.0.0.1:5173"
-echo "UI log: $APP_DIR/logs/ui.log"
-echo "Autonomy log: $APP_DIR/logs/autonomy.log"
+echo "Launch log: $LAUNCH_LOG_DIR/launchd.log"
