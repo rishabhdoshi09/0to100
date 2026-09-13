@@ -63,7 +63,6 @@ export const OPERATOR_ACTIONS: Array<{
 ]
 
 const ACTIVE_STATUSES = new Set(['PENDING', 'RUNNING'])
-const BAD_STATUSES = new Set(['FAILED', 'BLOCKED', 'CANCELLED'])
 
 export function activeOperation(dashboard: DashboardPayload, kind: string): OperationRecord | undefined {
   return (dashboard.operations.active || []).find((row) => (
@@ -78,12 +77,6 @@ export function operatorState(dashboard: DashboardPayload): OperatorState {
     || dashboard.autonomy.process_running,
   )
   if (!runtimeOnline) return 'ATTENTION'
-
-  const failed = Object.values(dashboard.operations.latest || {}).some((row) => (
-    BAD_STATUSES.has(String(row?.status || '').toUpperCase())
-  ))
-  if (failed && !(dashboard.operations.active || []).length) return 'ATTENTION'
-
   if ((dashboard.operations.active || []).length > 0) return 'REFRESHING'
   return 'RUNNING'
 }
