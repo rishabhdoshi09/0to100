@@ -5,6 +5,7 @@ so the UI opens instantly instead of rescanning the full market on every rerun.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from datetime import datetime, timezone
@@ -103,6 +104,82 @@ def _record(signal: Any, names: Mapping[str, str], fno_symbols: set[str]) -> dic
     return row
 
 
+SUPPORTED_SCHEMA_VERSIONS = (1, 2)
+UNKNOWN_FRESHNESS = "UNKNOWN"
+PRICE_SOURCE = "official_nse_bhavcopy"
+
+
+def _history_freshness() -> tuple[dict[str, Any], str]:
+    """Authoritative NSE session truth, or an explicit reason why it is unknown.
+
+    Never guesses a session date. A caller that cannot reach the canonical
+    bhavcopy store gets empty values plus the reason, so the UI can say
+    "unavailable" instead of implying the scan's own clock is a data date.
+    """
+    try:
+        from data.bhavcopy_runtime import official_history_freshness
+        return dict(official_history_freshness()), ""
+    except Exception as exc:  # canonical store unreadable in this process
+        return {}, f"{type(exc).__name__}: official history freshness unavailable"
+
+
+def scan_provenance(
+    *,
+    started_at: datetime | None = None,
+    completed_at: datetime | None = None,
+    universe_failed: int | None = None,
+    freshness: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Separate WHEN THE SCAN RAN from WHICH MARKET SESSION IT READ.
+
+    A recently executed job does not make its inputs current. These are two
+    independent facts and the product must never collapse them into one date.
+    """
+    completed = completed_at or datetime.now(timezone.utc)
+    started = started_at or completed
+    if freshness is None:
+        history, reason = _history_freshness()
+    else:
+        history, reason = dict(freshness), ""
+
+    session = str(history.get("available_session") or "")[:10]
+    expected = str(history.get("expected_latest_completed_session") or "")[:10]
+    reason_code = str(history.get("reason_code") or "") or (UNKNOWN_FRESHNESS if not history else "")
+    if not history and not reason:
+        reason = "official history freshness returned no data"
+    if not session and not reason:
+        # History answered, but it has no usable session yet. Carry its own
+        # machine-readable cause forward so the UI never shows a blank "why".
+        reason = f"no official market session available ({reason_code or UNKNOWN_FRESHNESS})"
+
+    # A start after the finish is incoherent input, not a zero-second scan.
+    # Report the duration as unknown rather than emit a plausible-looking 0.0.
+    elapsed = (completed - started).total_seconds()
+    duration = round(elapsed, 3) if elapsed >= 0 else None
+    scan_id = hashlib.sha256(
+        f"{completed.isoformat()}|{session}|{expected}".encode("utf-8")
+    ).hexdigest()[:16]
+
+    return {
+        "scan_id": scan_id,
+        # when the job ran — never a data date
+        "scan_started_at": started.isoformat(),
+        "scan_completed_at": completed.isoformat(),
+        "scan_duration_s": duration,
+        # which market session the prices actually came from
+        "market_session_date": session,
+        "price_data_as_of": session,
+        "expected_session_date": expected,
+        "sessions_behind": history.get("stale_sessions"),
+        "data_freshness": reason_code or UNKNOWN_FRESHNESS,
+        "data_current": bool(history.get("current")) if history else False,
+        "price_source": PRICE_SOURCE if session else "",
+        "universe_failed": int(universe_failed) if universe_failed is not None else None,
+        "provenance_available": bool(session),
+        "provenance_reason": reason,
+    }
+
+
 def build_scan_payload(
     names: Mapping[str, str],
     results: Iterable[Any],
@@ -111,6 +188,9 @@ def build_scan_payload(
     scanned_at: datetime | None = None,
     scanned: int | None = None,
     approved_universe: int | None = None,
+    started_at: datetime | None = None,
+    universe_failed: int | None = None,
+    freshness: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     fno = {str(s).upper() for s in fno_symbols}
     records = [_record(row, names, fno) for row in results]
@@ -125,8 +205,14 @@ def build_scan_payload(
     scanned_n = int(scanned) if scanned is not None else normalized_n
     qualified_n = len(records)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "scanned_at": now.isoformat(),
+        "provenance": scan_provenance(
+            started_at=started_at,
+            completed_at=now,
+            universe_failed=universe_failed,
+            freshness=freshness,
+        ),
         "approved_universe": approved_n,
         "scanned": scanned_n,
         "qualified_rows": qualified_n,
@@ -159,8 +245,30 @@ def load_scan(path: str | Path = DEFAULT_SCAN_PATH) -> dict[str, Any] | None:
         return None
     try:
         payload = json.loads(target.read_text(encoding="utf-8"))
-        if int(payload.get("schema_version", 0)) != 1 or not isinstance(payload.get("records"), list):
+        if int(payload.get("schema_version", 0)) not in SUPPORTED_SCHEMA_VERSIONS:
             return None
+        if not isinstance(payload.get("records"), list):
+            return None
+        if not isinstance(payload.get("provenance"), Mapping):
+            # A pre-provenance artifact is still real data, but its market
+            # session is genuinely unknown. Say so rather than let the UI read
+            # scanned_at as if it were a data date.
+            payload["provenance"] = {
+                "scan_id": "",
+                "scan_started_at": "",
+                "scan_completed_at": str(payload.get("scanned_at") or ""),
+                "scan_duration_s": None,
+                "market_session_date": "",
+                "price_data_as_of": "",
+                "expected_session_date": "",
+                "sessions_behind": None,
+                "data_freshness": UNKNOWN_FRESHNESS,
+                "data_current": False,
+                "price_source": "",
+                "universe_failed": None,
+                "provenance_available": False,
+                "provenance_reason": "scan predates session provenance (schema v1)",
+            }
         return payload
     except Exception:
         return None

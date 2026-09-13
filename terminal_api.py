@@ -393,12 +393,16 @@ def _scan_payload() -> dict:
         from product.scan_store import load_scan
         payload = load_scan() or {}
         records = [dict(row) for row in (payload.get("records", []) or []) if isinstance(row, dict)]
+        provenance = payload.get("provenance")
         return {
             "available": bool(payload),
             "scanned_at": payload.get("scanned_at", ""),
             "universe_size": int(payload.get("universe_size", 0) or 0),
             "summary": dict(payload.get("summary", {}) or {}),
             "records": records,
+            # WHEN THE SCAN RAN vs WHICH SESSION IT READ are different facts.
+            # The desk must be able to render them separately.
+            "provenance": dict(provenance) if isinstance(provenance, dict) else {},
         }
     except Exception as exc:
         return {
@@ -407,6 +411,7 @@ def _scan_payload() -> dict:
             "universe_size": 0,
             "summary": {},
             "records": [],
+            "provenance": {},
             "error": str(exc),
         }
 
@@ -910,6 +915,7 @@ def dashboard() -> dict:
             "universe_size": 0,
             "summary": {},
             "records": [],
+            "provenance": {},
             "error": str(exc),
         }
     try:

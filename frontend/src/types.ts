@@ -201,6 +201,24 @@ export type BrokerReadiness = {
   snapshot_id: string
 }
 
+/** When a scan RAN vs which market session it READ. Never the same fact. */
+export type ScanProvenance = {
+  scan_id?: string
+  scan_started_at?: string
+  scan_completed_at?: string
+  scan_duration_s?: number | null
+  market_session_date?: string
+  price_data_as_of?: string
+  expected_session_date?: string
+  sessions_behind?: number | null
+  data_freshness?: string
+  data_current?: boolean
+  price_source?: string
+  universe_failed?: number | null
+  provenance_available?: boolean
+  provenance_reason?: string
+}
+
 export type DashboardPayload = {
   generated_at: string
   market: {
@@ -233,6 +251,7 @@ export type DashboardPayload = {
     records: ScanRecord[]
     dashboard_record_limit?: number
     dashboard_records_shown?: number
+    provenance?: ScanProvenance
   }
   long_term: {
     available: boolean

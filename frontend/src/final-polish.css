@@ -127,3 +127,41 @@ table tbody tr:hover {
     animation-iteration-count: 1 !important;
   }
 }
+
+/* ── Scan provenance ───────────────────────────────────────────────────────
+   Two independent facts, never one date: when the scan ran, and which market
+   session its prices came from. Stale or unknown sessions are visually
+   distinct so a recent job can never read as fresh data. */
+.scan-provenance {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 10px;
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.35;
+}
+.scan-provenance > div {
+  display: contents;
+}
+.scan-provenance dt {
+  color: #5b6472;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+.scan-provenance dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: #1d232b;
+  font-weight: 600;
+}
+.scan-session-current { color: #17795e; }
+.scan-session-stale   { color: #a4571a; }
+.scan-session-unknown { color: #6b7280; font-weight: 500; }
+.scan-provenance-note {
+  display: block;
+  margin-top: 4px;
+  font-size: 10.5px;
+  color: #a4571a;
+  line-height: 1.35;
+}

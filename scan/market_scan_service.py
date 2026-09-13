@@ -7,6 +7,7 @@ is reported as failure; a healthy scan with zero setups is a valid result.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Callable, Mapping, Any
 
 
@@ -241,6 +242,10 @@ def run_whole_market_scan(
     fail to qualify, be excluded by an explicit policy gate, lack enough data, or
     raise an analysis error, but it may no longer silently disappear.
     """
+    # Real wall-clock start of this scan run. Persisted so the product can show
+    # how long a scan took and, crucially, keep the run instant separate from
+    # the market session its prices came from.
+    scan_started_at = datetime.now(timezone.utc)
     universe_provider = universe_provider or _default_universe
     prefetch_fn = prefetch_fn or _default_prefetch
     scanner = scanner or _default_scanner()
@@ -357,12 +362,18 @@ def run_whole_market_scan(
         scanned_n = int(coverage.get("checked") or 0)
     else:
         scanned_n = walked_total or requested_n
+    failed_n = coverage.get("failed")
+    if failed_n is None:
+        checked = coverage.get("checked")
+        failed_n = max(0, requested_n - int(checked)) if checked is not None else None
     payload = build_scan_payload(
         names,
         results,
         fno_symbols,
         scanned=scanned_n,
         approved_universe=approved_n,
+        started_at=scan_started_at,
+        universe_failed=int(failed_n) if failed_n is not None else None,
     )
     # Preserve the established `universe_size == actually checked` API contract
     # while exposing the full requested set separately. This is the distinction
