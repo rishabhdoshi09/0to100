@@ -50,8 +50,12 @@ class FakeKite:
 
 
 def _client(fake: FakeKite) -> KiteClient:
+    """Build a client around a fake SDK without reopening the raw escape hatch."""
+    from data.kite_client import _GuardedKiteProxy
+
     client = object.__new__(KiteClient)
-    client._kite = fake
+    object.__setattr__(client, "_KiteClient__sdk", fake)
+    object.__setattr__(client, "_KiteClient__broker_proxy", _GuardedKiteProxy(fake))
     client._access_token = "test-token"
     client._api_key = "test-key"
     client._api_secret = "test-secret"
@@ -100,35 +104,21 @@ def test_raw_broker_mutations_share_the_same_fail_closed_boundary(method):
     assert fake.mutations == []
 
 
-# ---------------------------------------------------------------------------
-# Deny-by-default boundary.
-#
-# These tests are written against the REAL KiteConnect class, not a stub, so a
-# future SDK upgrade that adds a capital-moving call fails the suite instead of
-# silently opening a hole.  Nothing here can transmit: the interlock raises
-# before the SDK method body runs, and no credentials are configured.
-# ---------------------------------------------------------------------------
-
 CAPITAL_MOVING_SDK_CALLS = (
-    # Equity / derivative orders
     "place_order",
     "modify_order",
     "cancel_order",
-    "exit_order",            # SDK-internally calls cancel_order on the raw object
+    "exit_order",
     "place_autoslice_order",
     "convert_position",
-    # Exchange-side protective orders
     "place_gtt",
     "modify_gtt",
     "delete_gtt",
-    # Mutual funds — real money, and not an "order" by name
     "place_mf_order",
     "cancel_mf_order",
-    # Recurring mandates
     "place_mf_sip",
     "modify_mf_sip",
     "cancel_mf_sip",
-    # Raw HTTP transports: a mutation by any other name
     "_post",
     "_put",
     "_delete",
@@ -138,31 +128,20 @@ CAPITAL_MOVING_SDK_CALLS = (
 
 def _real_proxy():
     from kiteconnect import KiteConnect
-
     from data.kite_client import _GuardedKiteProxy
-
     return _GuardedKiteProxy(KiteConnect(api_key="interlock-test"))
 
 
 @pytest.mark.parametrize("method", CAPITAL_MOVING_SDK_CALLS)
 def test_every_capital_moving_sdk_call_is_denied(method):
     proxy = _real_proxy()
-
     with pytest.raises(LiveExecutionBlocked):
         getattr(proxy, method)()
 
 
 def test_unknown_sdk_callables_are_denied_by_default():
-    """Anything callable that is not explicitly read-only must fail closed.
-
-    This is the regression for the audit finding: the boundary used to
-    enumerate mutations, so seven capital-moving calls the list had never
-    heard of reached the broker while the interlock reported LOCKED.
-    """
     import inspect
-
     from kiteconnect import KiteConnect
-
     from data.kite_client import _BROKER_READS
 
     proxy = _real_proxy()
@@ -181,7 +160,7 @@ def test_unknown_sdk_callables_are_denied_by_default():
             getattr(proxy, name)()
         except LiveExecutionBlocked:
             continue
-        except Exception:  # noqa: BLE001 - reached the body, so the guard missed it
+        except Exception:
             unguarded.append(name)
         else:
             unguarded.append(name)
@@ -190,11 +169,8 @@ def test_unknown_sdk_callables_are_denied_by_default():
 
 
 def test_read_allowlist_only_names_calls_the_sdk_actually_has():
-    """A stale allowlist entry would silently widen the boundary later."""
     import inspect
-
     from kiteconnect import KiteConnect
-
     from data.kite_client import _BROKER_READS
 
     known = {
@@ -204,18 +180,14 @@ def test_read_allowlist_only_names_calls_the_sdk_actually_has():
 
 
 def test_session_mutators_are_not_reachable_through_the_escape_hatch():
-    """Invalidating or replacing a session is not a read."""
     proxy = _real_proxy()
-
     for name in ("set_access_token", "generate_session", "invalidate_access_token"):
         with pytest.raises(LiveExecutionBlocked):
             getattr(proxy, name)()
 
 
 def test_sdk_constants_still_pass_through():
-    """GTT/variety constants are data; guarding them would break order plans."""
     proxy = _real_proxy()
-
     assert proxy.GTT_TYPE_OCO
     assert proxy.VARIETY_REGULAR
     assert proxy.TRANSACTION_TYPE_BUY
@@ -223,20 +195,13 @@ def test_sdk_constants_still_pass_through():
 
 def test_guarded_call_cannot_be_replaced_on_the_proxy():
     proxy = _real_proxy()
-
     for name in ("place_order", "exit_order", "place_mf_order"):
         with pytest.raises(AttributeError):
             setattr(proxy, name, lambda *a, **k: "unguarded")
 
 
 def test_proxy_refuses_all_assignment_not_just_guarded_names():
-    """A read-only facade: no attribute may be installed through the proxy.
-
-    Per-name refusal would still let a caller add a new attribute and build a
-    second policy path beside the interlock.
-    """
     proxy = _real_proxy()
-
     for name in ("quote", "root", "brand_new_attribute", "_post"):
         with pytest.raises(AttributeError):
             setattr(proxy, name, "anything")
@@ -245,7 +210,6 @@ def test_proxy_refuses_all_assignment_not_just_guarded_names():
 def test_raw_read_only_methods_remain_available():
     fake = FakeKite()
     client = _client(fake)
-
     assert client.raw.orders() == []
     assert fake.reads == ["orders"]
     assert fake.mutations == []
@@ -300,8 +264,8 @@ def test_startup_verification_failure_is_not_a_green_lock(monkeypatch):
     monkeypatch.setattr(interlock, "get_live_execution_state", broken_state)
     locked, verified, detail, payload = _live_lock_readiness()
 
-    assert locked is True  # physical policy remains fail-closed
-    assert verified is False  # but readiness cannot claim positive evidence
+    assert locked is True
+    assert verified is False
     assert payload == {}
     assert "could not be verified" in detail.lower()
 
