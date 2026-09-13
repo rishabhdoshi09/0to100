@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+
 def _action(control: str = "", *, label: str, kind: str = "control", instruction: str = "") -> dict[str, str]:
     return {
         "id": control or kind,
@@ -16,6 +17,7 @@ def _action(control: str = "", *, label: str, kind: str = "control", instruction
         "kind": kind,
         "instruction": instruction,
     }
+
 
 SAFE_CONTROLS = frozenset({
     "REFRESH_DATA_NOW",
@@ -258,7 +260,6 @@ def _lane(
         "full_details_page": page,
         "full_details_label": page_label,
         "technical": _scrub_technical(technical),
-        "live_locked": True,
     }
     if extra:
         row.update(extra)
@@ -283,7 +284,8 @@ def build_system_lanes(
     scan_failed: bool,
     scan_ok: bool,
     paper_enabled: bool,
-    live_locked: bool,
+    live_locked: bool | None,
+    live_lock_verified: bool = False,
     taken: Sequence[Mapping[str, Any]],
     opens: Sequence[Mapping[str, Any]],
     closed: Sequence[Mapping[str, Any]],
@@ -313,25 +315,33 @@ def build_system_lanes(
     paper_lane = _paper_lane(
         auto=auto, paper_d=paper_d, why_d=why_d,
         paper_enabled=paper_enabled, live_locked=live_locked,
+        live_lock_verified=live_lock_verified,
         taken=taken, opens=opens, closed=closed,
         valid_no_trade=valid_no_trade, cycle_reasons=cycle_reasons,
         last_decision=last_decision, why_plain=why_plain, next_line=next_line,
     )
     learning_lane = _learning_lane(
         soak_d=soak_d, verify=verify, learning_simple=learning_simple, n_real=n_real,
+        live_locked=live_locked, live_lock_verified=live_lock_verified,
     )
-    system = {
+    return {
         "data": data_lane,
         "zerodha": zerodha_lane,
         "automation": automation_lane,
         "paper_bot": paper_lane,
         "learning": learning_lane,
     }
-    return system
 
 
-def build_check_system(system: Mapping[str, Any], *, live_locked: bool = True) -> dict[str, Any]:
-    """Read-only snapshot of the same Home lanes. Not a second health source."""
+def build_check_system(
+    system: Mapping[str, Any],
+    *,
+    live_locked: bool | None = None,
+    live_lock_verified: bool = False,
+    live_lock_reason: str = "",
+    live_lock_source: str = "product.live_execution_interlock",
+) -> dict[str, Any]:
+    """Read-only snapshot of the same Home lanes. Never invent broker-lock proof."""
     labels = {
         "data": "Data",
         "zerodha": "Zerodha",
@@ -355,15 +365,35 @@ def build_check_system(system: Mapping[str, Any], *, live_locked: bool = True) -
             "status": shown,
             "detail": lane.get("summary") or lane.get("detail") or "",
         })
+
+    if live_lock_verified is not True:
+        live_status = "Unverified"
+        live_detail = live_lock_reason or "Canonical broker-boundary lock could not be verified."
+        projected_lock: bool | None = None
+    elif live_locked is True:
+        live_status = "Locked"
+        live_detail = "Canonical broker boundary verified locked. Paper only."
+        projected_lock = True
+    else:
+        live_status = "Must stay locked"
+        live_detail = live_lock_reason or "Canonical broker boundary is not locked."
+        projected_lock = False
+
     rows.append({
         "id": "live_money",
         "label": "Live Money",
-        "status": "Locked" if live_locked else "Must stay locked",
-        "detail": "Paper only. No live buy button.",
+        "status": live_status,
+        "detail": live_detail,
+        "live_locked": projected_lock,
+        "live_lock_verified": live_lock_verified is True,
+        "source": live_lock_source,
     })
     return {
         "read_only": True,
         "source": "home_os.system",
+        "live_locked": projected_lock,
+        "live_lock_verified": live_lock_verified is True,
+        "live_lock_source": live_lock_source,
         "lanes": rows,
         "action": _safe_action("CHECK_SYSTEM", label="Check system", kind="refresh"),
     }
@@ -470,7 +500,6 @@ def _data_lane(
         action = _safe_action("REFRESH_DATA_NOW", label="Refresh")
         if action:
             secondary.append(action)
-    # Working / Waiting: no duplicate refresh.
 
     last_fail_reason = str(failed.get("error") or failed.get("message") or failed.get("last_error") or "")
     if data_failed and not last_fail_reason:
@@ -662,7 +691,6 @@ def _automation_lane(
     genuine_failure = bool(current_failed_jobs or current_blocked or (
         current_failures and operator_state == "DEGRADED"
     ))
-    # Historical ledger B/F totals are audit only — never treat as current failure.
     historical_failed = int(historical_counts.get("FAILED", 0) or 0) + int(historical_counts.get("PERMANENT_FAILED", 0) or 0)
 
     if genuine_failure and not refresh_bg:
@@ -713,7 +741,7 @@ def _automation_lane(
         "operator_state": operator_state or None,
         "heartbeat": auto.get("heartbeat_ist") or None,
         "current_job": job_type or None,
-        "job_id": active_job.get("job_id") or active_job.get("id") or scan_op.get("operation_id") or prepare.get("operation_id"),
+        "job_id": active_job.get("job_id") or scan_op.get("operation_id") or prepare.get("operation_id"),
         "job_type": job_type or None,
         "scheduled_for": active_job.get("scheduled_for"),
         "started_at": active_job.get("started_at") or active_job.get("started_monotonic"),
@@ -780,7 +808,8 @@ def _paper_lane(
     paper_d: Mapping[str, Any],
     why_d: Mapping[str, Any],
     paper_enabled: bool,
-    live_locked: bool,
+    live_locked: bool | None,
+    live_lock_verified: bool,
     taken: Sequence[Mapping[str, Any]],
     opens: Sequence[Mapping[str, Any]],
     closed: Sequence[Mapping[str, Any]],
@@ -792,10 +821,15 @@ def _paper_lane(
 ) -> dict[str, Any]:
     last_cycle = _as_dict(paper_d.get("last_cycle") or auto.get("last_cycle"))
     positions = _position_rows(opens)
-    if not live_locked:
+    if live_lock_verified is not True:
+        status, status_code = "Problem", "LIVE_LOCK_UNVERIFIED"
+        summary = "Live-money safety is unverified."
+        meaning = "The paper path remains fail-closed, but Home will not claim the broker lock was verified."
+        primary = None
+    elif live_locked is not True:
         status, status_code = "Problem", "LIVE_UNLOCKED"
         summary = "Live money must stay locked."
-        meaning = "The paper path is the only money path. Home cannot unlock live trading."
+        meaning = "The paper path is the only accepted money path. Home cannot unlock live trading."
         primary = None
     elif not paper_enabled:
         status, status_code = "Needs you", "PAUSED"
@@ -814,7 +848,7 @@ def _paper_lane(
         primary = None
 
     secondary: list[dict[str, str]] = []
-    if paper_enabled and live_locked and status != "Problem":
+    if paper_enabled and live_lock_verified is True and live_locked is True and status != "Problem":
         pause = _safe_action("PAUSE_NEW_PAPER_ENTRIES", label="Pause new entries")
         cycle = _safe_action("RUN_CYCLE_NOW", label="Run paper cycle now")
         if pause:
@@ -845,7 +879,8 @@ def _paper_lane(
         "decision_id": last_cycle.get("decision_id") or why_d.get("decision"),
         "machine_reason_codes": list(cycle_reasons)[:12] or why_d.get("reasons"),
         "entries_allowed": paper_enabled,
-        "live_locked": True,
+        "live_locked": live_locked if live_lock_verified else None,
+        "live_lock_verified": live_lock_verified is True,
     }
     extra = {
         "on": paper_enabled,
@@ -855,6 +890,8 @@ def _paper_lane(
         "todays_entries": len(taken),
         "last_decision": last_decision,
         "why": why_plain,
+        "live_locked": live_locked if live_lock_verified else None,
+        "live_lock_verified": live_lock_verified is True,
     }
     return _lane(
         "paper_bot",
@@ -883,6 +920,8 @@ def _learning_lane(
     verify: Mapping[str, Any],
     learning_simple: str,
     n_real: int,
+    live_locked: bool | None,
+    live_lock_verified: bool,
 ) -> dict[str, Any]:
     status_name = str(soak_d.get("FORWARD_SOAK_STATUS") or "NOT_STARTED")
     insufficient = bool(soak_d.get("insufficient_evidence", True))
@@ -926,8 +965,9 @@ def _learning_lane(
         "latest_learning_update": latest or None,
         "insufficient_evidence": insufficient,
         "evidence_label": soak_d.get("evidence_label"),
-        "note": "Gross-only numbers are never proven alpha. Live money stays locked.",
-        "live_locked": True,
+        "note": "Gross-only numbers are never proven alpha. Live execution safety is reported separately.",
+        "live_locked": live_locked if live_lock_verified else None,
+        "live_lock_verified": live_lock_verified is True,
     }
     extra = {
         "real_forward_observations": n_real,
@@ -936,6 +976,8 @@ def _learning_lane(
         "execution_adjusted_coverage_pct": coverage,
         "insufficient_evidence": insufficient,
         "forward_soak_status": status_name,
+        "live_locked": live_locked if live_lock_verified else None,
+        "live_lock_verified": live_lock_verified is True,
     }
     return _lane(
         "learning",
