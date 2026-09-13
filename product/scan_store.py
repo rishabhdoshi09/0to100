@@ -26,6 +26,16 @@ def _value(obj: Any, name: str, default: Any = None) -> Any:
     return getattr(obj, name, default)
 
 
+def _as_float(raw: Any) -> float | None:
+    """Coerce an already-persisted value, keeping missing as missing."""
+    if raw is None or raw == "":
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def _opt_float(obj: Any, name: str) -> float | None:
     """Persist a number only when the scanner actually set it. Missing stays missing."""
     if isinstance(obj, Mapping) and name not in obj:
@@ -75,14 +85,23 @@ def _record(signal: Any, names: Mapping[str, str], fno_symbols: set[str]) -> dic
         "company": str(names.get(symbol, symbol)),
         "status": status,
         "verdict": verdict,
-        "price": float(_value(signal, "price", 0.0) or 0.0),
+        # A trade level the scanner never produced is missing, not zero. Coercing
+        # to 0.0 rendered "Stop Rs0.00" in the desk, which is a fabricated trade
+        # plan rather than an absent one.
+        "price": _opt_float(signal, "price"),
         "momentum_5d": float(_value(signal, "momentum_5d", 0.0) or 0.0),
         "score": float(_value(signal, "score", 0.0) or 0.0),
         "rsi": float(_value(signal, "rsi", 0.0) or 0.0),
         "volume_ratio": float(_value(signal, "volume_ratio", 0.0) or 0.0),
-        "entry": float(_value(signal, "entry", 0.0) or 0.0),
-        "stop": float(_value(signal, "stop", 0.0) or 0.0),
-        "target": float(_value(signal, "target", 0.0) or 0.0),
+        "entry": _opt_float(signal, "entry"),
+        "stop": _opt_float(signal, "stop"),
+        "target": _opt_float(signal, "target"),
+        **derive_trade_plan({
+            "entry": _opt_float(signal, "entry"),
+            "stop": _opt_float(signal, "stop"),
+            "target": _opt_float(signal, "target"),
+            "price": _opt_float(signal, "price"),
+        }),
         "chase_risk": chase,
         "fno_available": symbol in fno_symbols,
         "signals": signals,
@@ -177,6 +196,51 @@ def scan_provenance(
         "universe_failed": int(universe_failed) if universe_failed is not None else None,
         "provenance_available": bool(session),
         "provenance_reason": reason,
+    }
+
+
+def derive_trade_plan(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Deterministic plan geometry from levels the scanner actually produced.
+
+    Every value here is arithmetic over real persisted levels. Nothing is
+    invented: if a level is missing the derived field stays None and
+    ``plan_missing`` names exactly which input was absent, so the desk can say
+    why a plan is incomplete instead of printing a zero.
+    """
+    entry = _as_float(row.get("entry"))
+    stop = _as_float(row.get("stop"))
+    target = _as_float(row.get("target"))
+    price = _as_float(row.get("price"))
+    reference = entry if entry is not None else price
+
+    missing = [name for name, value in
+               (("entry", entry), ("stop", stop), ("target", target)) if value is None]
+
+    risk_per_share = None
+    if reference is not None and stop is not None and reference > stop:
+        risk_per_share = reference - stop
+    reward_per_share = None
+    if reference is not None and target is not None and target > reference:
+        reward_per_share = target - reference
+
+    def _pct(numerator: float | None) -> float | None:
+        if numerator is None or not reference:
+            return None
+        return round(numerator / reference * 100.0, 2)
+
+    rr = None
+    if risk_per_share and reward_per_share:
+        rr = round(reward_per_share / risk_per_share, 2)
+
+    return {
+        "plan_reference_price": reference,
+        "risk_per_share": round(risk_per_share, 2) if risk_per_share is not None else None,
+        "reward_per_share": round(reward_per_share, 2) if reward_per_share is not None else None,
+        "upside_pct": _pct(reward_per_share),
+        "downside_pct": _pct(risk_per_share),
+        "reward_risk": rr,
+        "plan_complete": not missing,
+        "plan_missing": missing,
     }
 
 
