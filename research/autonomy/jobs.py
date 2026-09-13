@@ -446,23 +446,29 @@ def _auth_health(deps):
     return AUTH.AuthHealth(AUTH.SESSION_VALID if valid else AUTH.TOKEN_MISSING, "test")
 
 
+def _paper_entry_allowed_for(*failures: str) -> bool:
+    return H.capabilities(set(failures))["new_paper_entries"] != H.BLOCKED
+
+
 def run_auth_health(ctx) -> JobResult:
     health = _auth_health(ctx.deps)
     if health.status == AUTH.SESSION_VALID:
         return JobResult(JS.SUCCEEDED, "AUTH_READY", clears={H.AUTH_MISSING, H.AUTH_EXPIRED,
-                         H.PROVIDER_UNAVAILABLE}, state_hint=ST.DATA_REFRESHING,
+                         H.BROKER_PROVIDER_UNAVAILABLE}, state_hint=ST.DATA_REFRESHING,
                          unblocks=(DEP_AUTH,), metadata=health.as_dict())
     if health.status == AUTH.PROVIDER_UNAVAILABLE:
+        failure = H.BROKER_PROVIDER_UNAVAILABLE
         return JobResult(JS.RETRYABLE_FAILED, "Zerodha provider temporarily unavailable",
                          error_code=health.error_code or "PROVIDER_UNAVAILABLE",
-                         error_message=health.reason, failures={H.PROVIDER_UNAVAILABLE},
-                         state_hint=ST.DEGRADED, new_entries_allowed=False)
+                         error_message=health.reason, failures={failure},
+                         state_hint=ST.DEGRADED,
+                         new_entries_allowed=_paper_entry_allowed_for(failure))
     failure = H.AUTH_MISSING if health.status == AUTH.TOKEN_MISSING else H.AUTH_EXPIRED
     return JobResult(JS.BLOCKED, health.reason or "daily Zerodha login required",
                      error_code=health.error_code, failures={failure},
-                     clears={H.PROVIDER_UNAVAILABLE}, state_hint=ST.AUTH_REQUIRED,
-                     new_entries_allowed=False, blocked_on="CREDENTIAL_UPDATE",
-                     metadata=health.as_dict())
+                     clears={H.BROKER_PROVIDER_UNAVAILABLE}, state_hint=ST.AUTH_REQUIRED,
+                     new_entries_allowed=_paper_entry_allowed_for(failure),
+                     blocked_on="CREDENTIAL_UPDATE", metadata=health.as_dict())
 
 
 def run_instrument_refresh(ctx) -> JobResult:
@@ -475,7 +481,8 @@ def run_instrument_refresh(ctx) -> JobResult:
         return JobResult(JS.SUCCEEDED,
                          f"instrument master current · {info.get('rows', 0)} rows · "
                          f"{info.get('fno_underlyings', 0)} F&O underlyings",
-                         clears={H.AUTH_MISSING, H.AUTH_EXPIRED}, unblocks=(DEP_AUTH,), metadata=info)
+                         clears={H.AUTH_MISSING, H.AUTH_EXPIRED, H.BROKER_PROVIDER_UNAVAILABLE},
+                         unblocks=(DEP_AUTH,), metadata=info)
     except Exception as exc:
         return JobResult(JS.RETRYABLE_FAILED, "instrument refresh failed",
                          error_code="INSTRUMENT_REFRESH_ERROR", error_message=str(exc))
@@ -504,7 +511,8 @@ def _kite_live_ready_result(ctx, *, sid=None, quality=None, live=None) -> JobRes
         f"Kite latest session ready · {int(live.get('symbols') or 0)} symbols · "
         f"{live.get('source') or 'kite_quotes'}",
         output_snapshot_id=sid,
-        clears={H.SNAPSHOT_STALE, H.AUTH_MISSING, H.AUTH_EXPIRED, H.PROVIDER_UNAVAILABLE,
+        clears={H.SNAPSHOT_STALE, H.AUTH_MISSING, H.AUTH_EXPIRED,
+                H.BROKER_PROVIDER_UNAVAILABLE, H.PROVIDER_UNAVAILABLE,
                 H.OPTIONS_HISTORY_INCOMPLETE},
         state_hint=ST.DATA_READY,
         unblocks=tuple(unblocks),
@@ -554,7 +562,8 @@ def run_data_refresh(ctx) -> JobResult:
             unblocks.append(f"EOD_DATA_READY:{latest}")
         return JobResult(JS.SUCCEEDED, "genuine snapshot active", output_snapshot_id=sid,
                          clears={H.SNAPSHOT_STALE, H.AUTH_MISSING, H.AUTH_EXPIRED,
-                                 H.PROVIDER_UNAVAILABLE, H.OPTIONS_HISTORY_INCOMPLETE}, state_hint=ST.DATA_READY,
+                                 H.BROKER_PROVIDER_UNAVAILABLE, H.PROVIDER_UNAVAILABLE,
+                                 H.OPTIONS_HISTORY_INCOMPLETE}, state_hint=ST.DATA_READY,
                          unblocks=tuple(unblocks), metadata={**quality, "latest_date": latest})
     kite = _kite_live_ready_result(
         ctx,
@@ -730,9 +739,10 @@ def run_market_scan(ctx) -> JobResult:
         except Exception:
             telegram = {"error": "notification_failed"}
             print("[TELEGRAM] scan alert send failed", flush=True)
+    clears = {H.SNAPSHOT_STALE} if official.get("current") or live.get("ready") else set()
     return JobResult(JS.SUCCEEDED,
                      f"scan complete · {n} setups · {summary.get('momentum', 0)} momentum",
-                     state_hint=ST.OBSERVING, unblocks=(DEP_SCAN,),
+                     clears=clears, state_hint=ST.OBSERVING, unblocks=(DEP_SCAN,),
                      metadata={**summary, "telegram": telegram})
 
 
@@ -746,16 +756,36 @@ def _entry_reason(now, holidays, ctx) -> tuple[bool, str, str]:
     return True, "", phase
 
 
+def _paper_market_data_source(ctx) -> tuple[bool, str]:
+    """Return whether paper has a trusted source already accepted by market scan.
+
+    Paper fills consume the persisted recommendation/scan prices.  A Kite-created
+    snapshot is one valid provenance source, not a structural requirement.  Current
+    official NSE completed-session history is equally valid for the paper path; an
+    explicitly ready live source is the final fallback.  Broker probing is skipped
+    entirely when either durable source is available.
+    """
+    snapshot_id = ctx.deps.active_snapshot_id()
+    if snapshot_id:
+        return True, f"snapshot:{snapshot_id}"
+    official = _official_ready(ctx)
+    if official.get("current"):
+        return True, str(official.get("source") or "official_nse")
+    live = _live_market(ctx)
+    if live.get("ready"):
+        return True, str(live.get("source") or "live_market")
+    return False, "unavailable"
+
+
 def run_paper_cycle(ctx) -> JobResult:
     now = ctx.deps.now_ist()
     holidays = ctx.deps.holidays()
     entries_ok, reason, phase = _entry_reason(now, holidays, ctx)
-    if not ctx.deps.active_snapshot_id():
-        # An absent data snapshot is a DATA problem, not a broker one. Reporting
-        # it as BROKER_LOGIN_REQUIRED sent the operator to log into Zerodha,
-        # which never fixed it, so the desk sat blocked with a plausible-looking
-        # but wrong instruction. Still consume recommendations and persist the
-        # intents; just name the real cause.
+    data_ready, data_source = _paper_market_data_source(ctx)
+    if not data_ready:
+        # Missing trustworthy market data is still a hard paper-entry block.  Do
+        # not translate it into a broker-login problem: official NSE history can
+        # drive paper entries without any daily Zerodha session.
         entries_ok = False
         reason = reason or "NO_DATA_SNAPSHOT"
     try:
@@ -769,7 +799,7 @@ def run_paper_cycle(ctx) -> JobResult:
     eligibility = (result or {}).get("eligibility", "")
     hint = ST.PAPER_ACTIVE if entries_ok else ST.OBSERVING
     metadata = {"eligibility": eligibility, "entry_block_reason": reason,
-                "session_phase": phase}
+                "session_phase": phase, "market_data_source": data_source}
     if not os.environ.get("PYTEST_CURRENT_TEST"):
         try:
             from product.paper_self_feed import ingest_paper_cycle

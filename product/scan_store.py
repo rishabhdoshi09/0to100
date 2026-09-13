@@ -358,7 +358,12 @@ def scan_age_hours(payload: Mapping[str, Any] | None, *, now: datetime | None = 
         current = now or datetime.now(timezone.utc)
         if current.tzinfo is None:
             current = current.replace(tzinfo=timezone.utc)
-        return max(0.0, (current - stamp).total_seconds() / 3600.0)
+        age_seconds = (current - stamp).total_seconds()
+        # Clock-corrupt/future timestamps are not fresh zero-age artifacts.
+        # Their age is unknown, which makes every freshness gate fail closed.
+        if age_seconds < 0:
+            return None
+        return age_seconds / 3600.0
     except Exception:
         return None
 

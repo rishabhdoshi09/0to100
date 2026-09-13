@@ -245,7 +245,17 @@ def radar_home_workspace() -> dict[str, Any]:
             autonomy=autonomy,
         )
     except Exception as exc:
-        home["home_os"] = {"state": "PROBLEM", "headline": "Home status unavailable", "subtext": str(exc)[:160], "live_locked": True}
+        home["home_os"] = {
+            "state": "PROBLEM",
+            "headline": "Home status unavailable",
+            "subtext": str(exc)[:160],
+            "live_locked": None,
+            "live_lock_verified": False,
+            "live_execution_authorized": None,
+            "live_lock_status": "UNVERIFIED",
+            "live_lock_reason": "Home safety projection failed before canonical lock proof could be returned.",
+            "live_lock_source": "product.live_execution_interlock",
+        }
     return home
 
 

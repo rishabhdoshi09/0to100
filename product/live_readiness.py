@@ -1,13 +1,17 @@
-"""Fail-closed live-money readiness contract.
+"""Live-money readiness and execution-safety projection.
 
-Paper trading is the training ground. This module never enables live orders.
-Live mode stays locked until an owner explicitly flips a separate control after
-the statistical contract is met — the bot cannot open that door.
+Paper trading is the training ground. Statistical readiness and broker-boundary
+execution authorization are separate facts. This module never treats an
+unverified interlock as proof that live money is locked, and it never enables
+live orders unless the canonical execution boundary explicitly verifies both
+unlocking and authorization.
 """
 from __future__ import annotations
 
 from typing import Any, Mapping
 
+# Backward-compatible policy default only. Runtime truth comes from
+# product.live_execution_interlock.get_live_execution_state().
 LIVE_LOCKED = True
 
 # These floors are justified as *minimum evidence*, not as a promise of profit.
@@ -26,6 +30,39 @@ DEFAULT_FLOORS = {
 }
 
 
+def _execution_interlock_truth() -> dict[str, Any]:
+    """Read canonical broker-boundary truth without inventing positive safety.
+
+    Verification failure is fail-closed for *permission* (``live_enabled`` can
+    never become true), but it is deliberately reported as ``live_locked=None``
+    rather than fabricating proof that the lock was successfully verified.
+    """
+    try:
+        from product.live_execution_interlock import get_live_execution_state
+
+        state = get_live_execution_state()
+        verified = bool(state.verified)
+        locked = bool(state.locked) if verified else None
+        authorized = bool(state.authorized) if verified else None
+        return {
+            "live_locked": locked,
+            "live_lock_verified": verified,
+            "live_execution_authorized": authorized,
+            "live_lock_status": str(state.status or ("LOCKED" if locked else "UNLOCKED")),
+            "live_lock_reason": str(state.reason or ""),
+            "live_lock_source": str(state.source or "product.live_execution_interlock"),
+        }
+    except Exception as exc:
+        return {
+            "live_locked": None,
+            "live_lock_verified": False,
+            "live_execution_authorized": None,
+            "live_lock_status": "UNVERIFIED",
+            "live_lock_reason": f"Canonical live-execution interlock could not be verified: {exc}",
+            "live_lock_source": "product.live_execution_interlock",
+        }
+
+
 def evaluate_live_readiness(
     *,
     settled_trades: int = 0,
@@ -38,7 +75,7 @@ def evaluate_live_readiness(
     rules_hash_stable: bool = False,
     floors: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Return a fail-closed readiness verdict. Never sets live_enabled=True."""
+    """Return evidence readiness plus canonical live-execution safety truth."""
     req = {**DEFAULT_FLOORS, **dict(floors or {})}
     unmet: list[str] = []
     if int(settled_trades) < int(req["min_settled_trades"]):
@@ -59,16 +96,32 @@ def evaluate_live_readiness(
         unmet.append("a critical health lane is not healthy")
     if req["require_stable_rules_hash"] and not rules_hash_stable:
         unmet.append("rules hash not stable")
-    ready = not unmet
+
+    contract_ready = not unmet
+    execution = _execution_interlock_truth()
+    lock_verified = execution["live_lock_verified"] is True
+    locked = execution["live_locked"]
+    authorized = execution["live_execution_authorized"]
+
+    # Readiness evidence alone can never open the broker boundary. Live mode is
+    # possible only when the canonical interlock itself verifies an authorized,
+    # unlocked state. Under the current production contract this remains false.
+    live_enabled = bool(
+        contract_ready
+        and lock_verified
+        and locked is False
+        and authorized is True
+    )
+
     return {
-        "live_enabled": False,
-        "live_locked": True,
-        "contract_ready": ready,
+        "live_enabled": live_enabled,
+        "contract_ready": contract_ready,
         "unmet": unmet,
         "floors": dict(req),
+        **execution,
         "note": (
-            "Live money is fail-closed. Meeting this contract does not turn live "
-            "trading on — an owner must enable a separate live adapter later. "
-            "The decision object is identical for paper and future live adapters."
+            "Statistical readiness does not authorize live money. Broker execution "
+            "is controlled only by the canonical live-execution interlock; missing "
+            "verification is reported as UNVERIFIED rather than as a positive lock."
         ),
     }

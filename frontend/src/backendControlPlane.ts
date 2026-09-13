@@ -69,7 +69,8 @@ export type SystemLane = {
   full_details_page?: string
   full_details_label?: string
   technical?: Record<string, unknown>
-  live_locked?: boolean
+  live_locked?: boolean | null
+  live_lock_verified?: boolean
   positions?: Array<{
     symbol?: string
     entry?: number
@@ -95,6 +96,8 @@ export type SystemLane = {
 export type CheckSystemSnapshot = {
   read_only?: boolean
   source?: string
+  live_locked?: boolean | null
+  live_lock_verified?: boolean
   lanes?: Array<{ id?: string; label?: string; status?: string; detail?: string }>
   action?: HomeAction | null
 }
@@ -201,6 +204,27 @@ export function laneAriaLabel(id: string, lane?: SystemLane): string {
   return `${title}: ${status}.${suffix}`
 }
 
+export function liveMoneyStillLocked(
+  osLiveLocked: boolean | null | undefined,
+  lane?: SystemLane,
+): boolean | null {
+  const values = [osLiveLocked, lane?.live_locked].filter((value) => value !== undefined && value !== null)
+  if (!values.length) return null
+  if (values.some((value) => value === false)) return false
+  if (values.some((value) => value === true)) return true
+  return null
+}
+
+export function liveMoneyStatus(
+  osLiveLocked: boolean | null | undefined,
+  lane?: SystemLane,
+): 'Locked' | 'Not locked' | 'Unverified' {
+  const locked = liveMoneyStillLocked(osLiveLocked, lane)
+  if (locked === true) return 'Locked'
+  if (locked === false) return 'Not locked'
+  return 'Unverified'
+}
+
 export function checkSystemRows(snapshot: CheckSystemSnapshot | undefined, fallback: Record<string, SystemLane>): Array<{ id: string; label: string; status: string }> {
   if (snapshot?.lanes?.length) {
     return snapshot.lanes.map((row) => ({
@@ -215,12 +239,12 @@ export function checkSystemRows(snapshot: CheckSystemSnapshot | undefined, fallb
       label: LANE_TITLE[id],
       status: fallback[id]?.status || 'Waiting',
     })),
-    { id: 'live_money', label: 'Live Money', status: 'Locked' },
+    {
+      id: 'live_money',
+      label: 'Live Money',
+      status: snapshot?.live_lock_verified === true
+        ? liveMoneyStatus(snapshot.live_locked)
+        : 'Unverified',
+    },
   ]
-}
-
-export function liveMoneyStillLocked(osLiveLocked: boolean | undefined, lane?: SystemLane): boolean {
-  if (osLiveLocked === false) return false
-  if (lane?.live_locked === false) return false
-  return true
 }

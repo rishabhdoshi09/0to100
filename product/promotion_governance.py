@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+from product.live_safety import live_safety_projection
+
 MIN_EXECUTION_COVERAGE = 0.80
 MIN_EXECUTION_ADJUSTED_N = 30
 
@@ -88,16 +90,19 @@ def assess_component(
         "decision": decision,
         "blockers": list(dict.fromkeys(blockers)),
         "explicit_promotion_required": bool(explicit_promotion_required),
-        "live_locked": True,
+        **live_safety_projection(),
         "notes": list(notes or []),
     }
 
 
 def promotion_board(components: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     rows = [assess_component(**dict(component)) for component in components]
+    safety = live_safety_projection()
+    for row in rows:
+        row.update(safety)
     return {
         "schema_version": 1,
-        "live_locked": True,
+        **safety,
         "components": rows,
         "eligible": [r["component"] for r in rows if r["decision"] == "ELIGIBLE"],
         "shadow": [r["component"] for r in rows if r["decision"] != "ELIGIBLE"],

@@ -119,6 +119,34 @@ function dataCopy(dashboard: DashboardPayload): string {
   return busy ? 'Preparing official history…' : 'Starting official prices…'
 }
 
+export function scanOperationState(dashboard: DashboardPayload): {
+  label: string
+  healthy: boolean
+} {
+  const active = (dashboard.operations.active || []).find(
+    operation => operation.kind === 'MARKET_SCAN' && ['PENDING', 'RUNNING'].includes(operation.status),
+  )
+  if (active) {
+    return {
+      label: active.status === 'PENDING' ? 'QUEUED' : 'RUNNING',
+      healthy: true,
+    }
+  }
+
+  const latest = dashboard.operations.latest?.MARKET_SCAN
+  if (latest?.status) {
+    return {
+      label: latest.status,
+      healthy: latest.status === 'SUCCEEDED',
+    }
+  }
+
+  if (dashboard.scan.scanned_at) {
+    return { label: 'RECORDED', healthy: true }
+  }
+  return { label: 'WAITING', healthy: false }
+}
+
 export function MarketSidebar({
   active,
   setActive,
@@ -128,7 +156,7 @@ export function MarketSidebar({
   setActive: (value: string) => void
   dashboard: DashboardPayload
 }) {
-  const operations = dashboard.operations.running
+  const scanState = scanOperationState(dashboard)
   const current = ROUTE_ALIAS[active] || active
   const advancedActive = ADVANCED_NAV.some(([, route]) => route === current)
   return (
@@ -170,9 +198,9 @@ export function MarketSidebar({
       <div className="reco-telemetry broker-card compact-service-card">
         <div className="broker-row">
           <strong>AUTONOMOUS SCAN</strong>
-          <span className={operations ? 'status-dot' : 'status-dot status-dot-off'} />
+          <span className={scanState.healthy ? 'status-dot' : 'status-dot status-dot-off'} />
         </div>
-        <small>{operations ? 'WORKING' : 'IDLE'}</small>
+        <small>{scanState.label}</small>
         <dl className="scan-provenance">
           <div>
             <dt>Scan ran</dt>

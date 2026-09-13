@@ -6,6 +6,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: product-acceptance-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   product-acceptance:
     runs-on: ubuntu-latest
@@ -76,7 +80,9 @@ jobs:
               and p.get("operational_ready") is True
               and p.get("evidence_ready") is True
               and p.get("lifecycle") == "READY"
+              and p.get("live_lock_verified") is True
               and p.get("live_locked") is True
+              and p.get("live_execution_authorized") is False
           ) else 1)
           PY
               then health=1; fi
@@ -186,7 +192,9 @@ jobs:
           payload=json.loads(path.read_text(encoding='utf-8'))
           assert payload.get('code_sha') == os.environ['EXPECTED_SHA'], (payload.get('code_sha'), os.environ['EXPECTED_SHA'])
           assert payload.get('verdict') == 'PRODUCT ACCEPTANCE PASS', payload.get('verdict_reason')
+          assert payload.get('live_lock_verified') is True
           assert payload.get('live_locked') is True
+          assert payload.get('live_execution_authorized') is False
           rows={str(r.get('feature')):r for r in payload.get('features',[]) if isinstance(r,dict)}
           strict=[
               'Canonical stack / readiness','UI + report endpoints','Market Scan','Recommendations',
@@ -233,7 +241,15 @@ jobs:
           import json
           from pathlib import Path
           p=json.loads(Path('logs/product/restart_health.json').read_text(encoding='utf-8'))
-          raise SystemExit(0 if p.get('ok') is True and p.get('operational_ready') is True and p.get('evidence_ready') is True and p.get('lifecycle')=='READY' and p.get('live_locked') is True else 1)
+          raise SystemExit(0 if (
+              p.get('ok') is True
+              and p.get('operational_ready') is True
+              and p.get('evidence_ready') is True
+              and p.get('lifecycle')=='READY'
+              and p.get('live_lock_verified') is True
+              and p.get('live_locked') is True
+              and p.get('live_execution_authorized') is False
+          ) else 1)
           PY
               then health=1; fi
             fi
@@ -257,10 +273,13 @@ jobs:
           assert sha == os.environ['EXPECTED_SHA']
           assert acceptance.get('code_sha') == sha
           assert acceptance.get('verdict') == 'PRODUCT ACCEPTANCE PASS'
+          assert acceptance.get('live_lock_verified') is True
+          assert acceptance.get('live_locked') is True
+          assert acceptance.get('live_execution_authorized') is False
           assert state.verified is True and state.locked is True and state.authorized is False
           evidence={
               'code_sha':sha,'expected_sha':os.environ['EXPECTED_SHA'],'recovered':True,
-              'health':{k:health.get(k) for k in ('ok','lifecycle','operational_ready','evidence_ready','live_locked')},
+              'health':{k:health.get(k) for k in ('ok','lifecycle','operational_ready','evidence_ready','live_lock_verified','live_locked','live_execution_authorized')},
               'live_interlock':{'verified':state.verified,'locked':state.locked,'authorized':state.authorized,'status':state.status,'source':state.source},
               'product_acceptance_verdict':acceptance.get('verdict'),'product_acceptance_code_sha':acceptance.get('code_sha'),
           }
