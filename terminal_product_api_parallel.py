@@ -458,6 +458,18 @@ def forward_soak_verify_now() -> dict:
     return board
 
 
+@product.app.get("/api/chain-status")
+def chain_status() -> dict:
+    """Where the decision chain is actually blocked, link by link.
+
+    An intentionally gated desk and a broken desk both render as an empty
+    screen. This is the endpoint that tells them apart.
+    """
+    from product.chain_status import build_chain_status
+
+    return build_chain_status()
+
+
 @product.app.get("/api/system-health-contract")
 def system_health_contract() -> dict:
     """Independent health lanes. No collapsed green light."""
