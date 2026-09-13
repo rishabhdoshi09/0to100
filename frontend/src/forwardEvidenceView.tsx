@@ -159,7 +159,7 @@ export function ForwardEvidenceView() {
       <footer className="forward-evidence__footer">
         <p>
           Replay cells: {board.non_market_evidence.historical_replay_cells} ·
-          fixture cells: {board.non_market_evidence.test_fixture_cells}
+          test-fixture rows excluded: {board.non_market_evidence.test_fixture_cells}
         </p>
         <p>{board.non_market_evidence.note}</p>
       </footer>

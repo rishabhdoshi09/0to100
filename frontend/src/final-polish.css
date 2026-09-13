@@ -173,3 +173,54 @@ table tbody tr:hover {
   line-height: 1.4;
   color: #a4571a;
 }
+
+/* ── Paper trading state ───────────────────────────────────────────────────
+   Automation is the default, so this states what the desk IS doing and why.
+   Manual controls are secondary, not the primary affordance. */
+.paper-state {
+  border: 1px solid #dfe3e8;
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+.paper-state-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.paper-state-label {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  color: #5b6472;
+  font-weight: 600;
+}
+.paper-state-head strong { font-size: 13px; letter-spacing: 0.04em; }
+.paper-state-active  { color: #17795e; }
+.paper-state-limited { color: #a4571a; }
+.paper-state-blocked { color: #b3261e; }
+.paper-state-paused  { color: #5b6472; }
+.paper-state-why {
+  margin: 5px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #1d232b;
+}
+.paper-state-notes {
+  margin: 5px 0 0;
+  padding-left: 16px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: #5b6472;
+}
+.paper-state-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 9px;
+  flex-wrap: wrap;
+}
+.paper-state-actions button {
+  font-size: 11.5px;
+  padding: 5px 10px;
+}
+.paper-state-secondary { opacity: 0.78; }

@@ -62,6 +62,71 @@ function EquityCurve({ values }: { values?: number[] }) {
   )
 }
 
+
+/**
+ * Paper trading runs on a schedule; it is not something the operator starts.
+ * The old control row implied the opposite -- "Request paper cycle" beside
+ * "Resume new entries" -- so a desk blocked by a data failure looked like a
+ * desk waiting to be clicked. This states what the desk is actually doing and
+ * why, and keeps the manual controls as secondary actions.
+ */
+function PaperTradingStatus({
+  dashboard,
+  runControl,
+}: {
+  dashboard: DashboardPayload
+  runControl: (name: ControlName) => Promise<void> | void
+}) {
+  const a = dashboard.autonomy
+  const capability = a.new_entry_capability
+    || (a.new_paper_entries ? 'allowed' : 'blocked')
+  const ownerPaused = (a.active_failures || []).includes('owner_paused')
+  const label = ownerPaused
+    ? 'PAUSED BY YOU'
+    : capability === 'allowed'
+      ? 'ACTIVE'
+      : capability === 'limited'
+        ? 'LIMITED'
+        : 'BLOCKED'
+  const tone = ownerPaused ? 'paper-state-paused'
+    : capability === 'allowed' ? 'paper-state-active'
+      : capability === 'limited' ? 'paper-state-limited' : 'paper-state-blocked'
+  // Only the notes that explain the current entry state, never a generic banner.
+  const notes = (a.capability_notes || []).filter(Boolean)
+  const why = ownerPaused
+    ? 'You paused new entries. Position management continues.'
+    : capability === 'allowed'
+      ? 'Evaluating candidates automatically inside the 09:30-15:15 IST entry window.'
+      : notes[0] || 'New paper entries are paused by a subsystem the desk depends on.'
+
+  return (
+    <div className="paper-state">
+      <div className="paper-state-head">
+        <span className="paper-state-label">PAPER TRADING</span>
+        <strong className={tone}>{label}</strong>
+      </div>
+      <p className="paper-state-why">{why}</p>
+      {notes.length > 1 ? (
+        <ul className="paper-state-notes">
+          {notes.slice(1).map((note) => <li key={note}>{note}</li>)}
+        </ul>
+      ) : null}
+      <div className="paper-state-actions">
+        <button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>
+          Run paper evaluation now
+        </button>
+        <button
+          type="button"
+          className="paper-state-secondary"
+          onClick={() => void runControl(a.new_paper_entries ? 'PAUSE_NEW_PAPER_ENTRIES' : 'RESUME_NEW_PAPER_ENTRIES')}
+        >
+          {a.new_paper_entries ? 'Pause paper trading' : 'Resume paper trading'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function DataReadinessPanel({ dashboard }: { dashboard: DashboardPayload }) {
   const data = dashboard.data
   const history = data.bhavcopy
@@ -271,9 +336,9 @@ export function PortfolioView({ dashboard, runControl }: ViewProps) {
     return (
       <section className="workspace-view">
         <div className="large-empty">
-          Paper book is not available yet. QuantTerm has not loaded a paper ledger. This is empty, not a live account.
-          <div className="inline-actions" style={{ marginTop: 12 }}>
-            <button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Request paper cycle</button>
+          No paper ledger has been written yet. This is empty, not a live account.
+          <div style={{ marginTop: 12 }}>
+            <PaperTradingStatus dashboard={dashboard} runControl={runControl} />
           </div>
         </div>
       </section>
@@ -281,7 +346,7 @@ export function PortfolioView({ dashboard, runControl }: ViewProps) {
   }
   return (
     <section className="workspace-view">
-      <div className="inline-actions"><button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Request paper cycle</button><button type="button" onClick={() => void runControl(dashboard.autonomy.new_paper_entries ? 'PAUSE_NEW_PAPER_ENTRIES' : 'RESUME_NEW_PAPER_ENTRIES')}>{dashboard.autonomy.new_paper_entries ? 'Pause new entries' : 'Resume new entries'}</button></div>
+      <PaperTradingStatus dashboard={dashboard} runControl={runControl} />
       <div className="view-metrics"><MetricCard label="PAPER CAPITAL" value={money(dashboard.paper.capital)} /><MetricCard label="PAPER EQUITY" value={money(dashboard.paper.equity)} detail={pct(paperReturn)} tone="green" /><MetricCard label="OPEN RISK" value={money(dashboard.paper.open_risk)} detail={`${(dashboard.paper.risk_per_trade_pct * 100).toFixed(1)}% risk/trade`} tone="amber" /><MetricCard label="POSITIONS" value={String(dashboard.paper.open_positions.length)} detail={`Max ${dashboard.paper.max_positions}`} tone="purple" /></div>
       <BotLearningPanel dashboard={dashboard} />
       <div className="portfolio-workspace">
@@ -446,7 +511,7 @@ export function AutomationView({ dashboard, runControl }: ViewProps) {
   const activeJob = a.active_job || {}
   return (
     <section className="workspace-view">
-      <div className="inline-actions"><button type="button" onClick={() => void runControl('RUN_SCAN_NOW')}>Start market scan</button><button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Request paper cycle</button><button type="button" onClick={() => void runControl('REFRESH_DATA_NOW')}>Prepare market data</button><button type="button" onClick={() => void runControl(a.new_paper_entries ? 'PAUSE_NEW_PAPER_ENTRIES' : 'RESUME_NEW_PAPER_ENTRIES')}>{a.new_paper_entries ? 'Pause entries' : 'Resume entries'}</button></div>
+      <div className="inline-actions"><button type="button" onClick={() => void runControl('RUN_SCAN_NOW')}>Start market scan</button><button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Run paper evaluation now</button><button type="button" onClick={() => void runControl('REFRESH_DATA_NOW')}>Refresh market data</button><button type="button" onClick={() => void runControl(a.new_paper_entries ? 'PAUSE_NEW_PAPER_ENTRIES' : 'RESUME_NEW_PAPER_ENTRIES')}>{a.new_paper_entries ? 'Pause paper trading' : 'Resume paper trading'}</button></div>
       <div className="view-metrics"><MetricCard label="PAPER SUPERVISOR" value={a.running ? 'ONLINE' : 'OFFLINE'} detail={`PID ${a.scheduler_owner_pid || '—'}`} tone={a.running ? 'green' : 'amber'} /><MetricCard label="STATE" value={a.state} detail={a.plain_state} /><MetricCard label="ACTIVE PAPER JOB" value={String(activeJob.job_type || 'IDLE').toUpperCase()} detail={activeJob.elapsed_s ? `${activeJob.elapsed_s}s elapsed` : 'No paper worker job reported'} tone="cyan" /><MetricCard label="FAILURES" value={String(a.active_failures?.length || 0)} detail={(a.active_failures || []).join(', ') || 'None active'} tone="purple" /></div>
       <BotLearningPanel dashboard={dashboard} />
       <div className="automation-grid">
