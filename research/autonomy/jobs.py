@@ -629,7 +629,7 @@ def run_index_warmup(ctx) -> JobResult:
         return JobResult(JS.RETRYABLE_FAILED, "index warm-up failed", error_code="INDEX_WARMUP_ERROR",
                          error_message=str(exc))
     if int(info.get("indices", 0)) <= 0:
-        return JobResult(JS.RETRYABLE_FAILED, "official index store unavailable",
+        return JobResult(JS.RETRYABLE_FAILED, "index store unavailable",
                          error_code="INDEX_DATA_UNAVAILABLE")
     return JobResult(JS.SUCCEEDED, f"index store warm · {info.get('indices')} indices", metadata=info)
 
@@ -746,16 +746,36 @@ def _entry_reason(now, holidays, ctx) -> tuple[bool, str, str]:
     return True, "", phase
 
 
+def _paper_market_data_source(ctx) -> tuple[bool, str]:
+    """Return whether paper has a trusted source already accepted by market scan.
+
+    Paper fills consume the persisted recommendation/scan prices.  A Kite-created
+    snapshot is one valid provenance source, not a structural requirement.  Current
+    official NSE completed-session history is equally valid for the paper path; an
+    explicitly ready live source is the final fallback.  Broker probing is skipped
+    entirely when either durable source is available.
+    """
+    snapshot_id = ctx.deps.active_snapshot_id()
+    if snapshot_id:
+        return True, f"snapshot:{snapshot_id}"
+    official = _official_ready(ctx)
+    if official.get("current"):
+        return True, str(official.get("source") or "official_nse")
+    live = _live_market(ctx)
+    if live.get("ready"):
+        return True, str(live.get("source") or "live_market")
+    return False, "unavailable"
+
+
 def run_paper_cycle(ctx) -> JobResult:
     now = ctx.deps.now_ist()
     holidays = ctx.deps.holidays()
     entries_ok, reason, phase = _entry_reason(now, holidays, ctx)
-    if not ctx.deps.active_snapshot_id():
-        # An absent data snapshot is a DATA problem, not a broker one. Reporting
-        # it as BROKER_LOGIN_REQUIRED sent the operator to log into Zerodha,
-        # which never fixed it, so the desk sat blocked with a plausible-looking
-        # but wrong instruction. Still consume recommendations and persist the
-        # intents; just name the real cause.
+    data_ready, data_source = _paper_market_data_source(ctx)
+    if not data_ready:
+        # Missing trustworthy market data is still a hard paper-entry block.  Do
+        # not translate it into a broker-login problem: official NSE history can
+        # drive paper entries without any daily Zerodha session.
         entries_ok = False
         reason = reason or "NO_DATA_SNAPSHOT"
     try:
@@ -769,7 +789,7 @@ def run_paper_cycle(ctx) -> JobResult:
     eligibility = (result or {}).get("eligibility", "")
     hint = ST.PAPER_ACTIVE if entries_ok else ST.OBSERVING
     metadata = {"eligibility": eligibility, "entry_block_reason": reason,
-                "session_phase": phase}
+                "session_phase": phase, "market_data_source": data_source}
     if not os.environ.get("PYTEST_CURRENT_TEST"):
         try:
             from product.paper_self_feed import ingest_paper_cycle
