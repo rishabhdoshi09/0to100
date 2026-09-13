@@ -751,9 +751,13 @@ def run_paper_cycle(ctx) -> JobResult:
     holidays = ctx.deps.holidays()
     entries_ok, reason, phase = _entry_reason(now, holidays, ctx)
     if not ctx.deps.active_snapshot_id():
-        # Still consume recommendations and persist BLOCKED_BROKER intents.
+        # An absent data snapshot is a DATA problem, not a broker one. Reporting
+        # it as BROKER_LOGIN_REQUIRED sent the operator to log into Zerodha,
+        # which never fixed it, so the desk sat blocked with a plausible-looking
+        # but wrong instruction. Still consume recommendations and persist the
+        # intents; just name the real cause.
         entries_ok = False
-        reason = reason or "BROKER_LOGIN_REQUIRED"
+        reason = reason or "NO_DATA_SNAPSHOT"
     try:
         try:
             result = ctx.deps.run_paper_cycle(entries_ok, reason, phase, ctx.active_failures)
