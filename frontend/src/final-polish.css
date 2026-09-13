@@ -224,3 +224,38 @@ table tbody tr:hover {
   padding: 5px 10px;
 }
 .paper-state-secondary { opacity: 0.78; }
+
+/* ── Pipeline / decision chain ─────────────────────────────────────────────
+   Names the first link that stopped and what clears it, so an empty desk is
+   never ambiguous between "gated on purpose" and "broken". */
+.chain-card {
+  border: 1px solid #dfe3e8; border-radius: 8px; background: #fff;
+  padding: 10px 12px; margin-bottom: 12px;
+}
+.chain-head { display: flex; justify-content: space-between; align-items: baseline; }
+.chain-head strong { font-size: 10.5px; letter-spacing: 0.08em; color: #5b6472; }
+.chain-links { list-style: none; margin: 8px 0 0; padding: 0; font-size: 11.5px; }
+.chain-links li {
+  display: grid; grid-template-columns: 10px 150px 1fr;
+  gap: 8px; align-items: baseline; padding: 2px 0; line-height: 1.4;
+}
+.chain-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+.chain-ok      { color: #17795e; background: currentColor; }
+.chain-wait    { color: #a4571a; background: currentColor; }
+.chain-stop    { color: #b3261e; background: currentColor; }
+.chain-unknown { color: #6b7280; background: currentColor; }
+.chain-head span { background: none !important; font-size: 11px; font-weight: 700; }
+.chain-name { color: #1d232b; font-weight: 600; }
+.chain-detail { color: #5b6472; }
+.chain-stop-box {
+  margin-top: 9px; padding: 8px 10px; border-radius: 6px;
+  background: #fdf6ec; border: 1px solid #f0dcc0;
+}
+.chain-stop-box strong { font-size: 11.5px; color: #8a4a12; }
+.chain-stop-box p { margin: 3px 0 0; font-size: 11.5px; line-height: 1.45; color: #4a3418; }
+.chain-action { font-weight: 600; }
+.chain-why { margin: 6px 0 0; font-size: 11.5px; color: #5b6472; }
+@media (max-width: 720px) {
+  .chain-links li { grid-template-columns: 10px 1fr; }
+  .chain-detail { grid-column: 2; }
+}

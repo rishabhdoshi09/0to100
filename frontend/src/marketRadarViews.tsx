@@ -25,6 +25,7 @@ import {
   type TradePlan,
   type WatchlistPayload,
 } from './productApi'
+import { ChainStatusCard } from './chainStatusCard'
 import { RiskLensCard } from './productViews'
 import type { ControlName, DashboardPayload } from './types'
 import { LiveScanBanner, type ExperienceViewProps } from './experience'
@@ -1016,6 +1017,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
       </div>
       {deskNote ? <p className="radar-desk-note">{deskNote}</p> : null}
 
+      <ChainStatusCard />
       <div className="radar-market-strip">
         <div><span>NIFTY 1D</span><strong>{pct(radar?.nifty_change_1d ?? dashboard.market.nifty_change_1d)}</strong></div>
         <div><span>BREADTH</span><strong>{radar?.breadth || dashboard.market.breadth}</strong></div>

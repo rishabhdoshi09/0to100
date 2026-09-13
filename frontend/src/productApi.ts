@@ -162,6 +162,29 @@ function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 
+export type ChainLink = {
+  link: string
+  state: 'FLOWING' | 'BLOCKED' | 'WAITING' | 'UNKNOWN'
+  detail: string
+  unblock: string
+  evidence?: Record<string, unknown>
+}
+
+export type ChainStatus = {
+  schema_version: number
+  generated_at: string
+  links: ChainLink[]
+  flowing: number
+  total: number
+  first_stop: string
+  first_stop_detail: string
+  first_stop_unblock: string
+  chain_complete: boolean
+}
+
+export const fetchChainStatus = (): Promise<ChainStatus> =>
+  request('/api/chain-status')
+
 export const fetchProductReadiness = (): Promise<ProductReadiness> =>
   request('/api/product-readiness', { headers: { Accept: 'application/json' } })
 
