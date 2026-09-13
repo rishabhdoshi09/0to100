@@ -1,3 +1,8 @@
+.reco-sidebar {
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
 .reco-sidebar details.nav-advanced {
   margin-top: 10px;
   border-top: 1px solid var(--qt-border, rgba(255,255,255,.07));
