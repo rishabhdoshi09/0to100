@@ -71,12 +71,9 @@ export function activeOperation(dashboard: DashboardPayload, kind: string): Oper
 }
 
 export function operatorState(dashboard: DashboardPayload): OperatorState {
-  const runtimeOnline = Boolean(
-    dashboard.operations.running
-    || dashboard.autonomy.running
-    || dashboard.autonomy.process_running,
-  )
-  if (!runtimeOnline) return 'ATTENTION'
+  const operationsOnline = dashboard.operations.running === true
+  const autonomyOnline = Boolean(dashboard.autonomy.running || dashboard.autonomy.process_running)
+  if (!operationsOnline || !autonomyOnline) return 'ATTENTION'
   if ((dashboard.operations.active || []).length > 0) return 'REFRESHING'
   return 'RUNNING'
 }
