@@ -37,6 +37,37 @@
   line-height: 1.35;
 }
 
+.scan-truth-card {
+  gap: 7px;
+}
+
+.scan-truth-list {
+  display: grid;
+  gap: 5px;
+  margin-top: 3px;
+}
+
+.scan-truth-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 8px;
+  font-size: .66rem;
+  line-height: 1.25;
+}
+
+.scan-truth-row span {
+  color: var(--qt-text-muted, #6c7585);
+}
+
+.scan-truth-row strong {
+  color: var(--qt-text-secondary, #8b94a7);
+  font-size: .66rem;
+  font-weight: 700;
+  text-align: right;
+  white-space: nowrap;
+}
+
 /*
  * The paid-product Home surface is an operator desk, not a second Scanner.
  * Raw ranking widgets remain available in Advanced > Scanner; Home leads with
