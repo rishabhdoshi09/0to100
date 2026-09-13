@@ -33,6 +33,30 @@ PYTHON_BIN="${QT_PYTHON:-$APP_DIR/venv/bin/python}"
 [ -f "$APP_DIR/.env" ] || { cp "$APP_DIR/.env.example" "$APP_DIR/.env" 2>/dev/null || touch "$APP_DIR/.env"; }
 chmod 600 "$APP_DIR/.env" 2>/dev/null || true
 
+# Resolve npm while we are still in the user's interactive shell.  launchd does
+# not source shell profiles, so nvm/Volta/asdf installs can otherwise disappear
+# from PATH at reboot even though `npm` works in Terminal.
+NPM_BIN="${QT_NPM_BIN:-$(command -v npm 2>/dev/null || true)}"
+if [[ -z "$NPM_BIN" || ! -x "$NPM_BIN" ]]; then
+  for candidate in \
+    "$HOME"/.nvm/versions/node/*/bin/npm \
+    "$HOME"/.volta/bin/npm \
+    "$HOME"/.asdf/shims/npm
+  do
+    if [[ -x "$candidate" ]]; then
+      NPM_BIN="$candidate"
+      break
+    fi
+  done
+fi
+if [[ -z "$NPM_BIN" || ! -x "$NPM_BIN" ]]; then
+  echo "QuantTerm setup requires npm for the desk UI, but npm could not be resolved." >&2
+  echo "Install/activate Node.js, confirm 'command -v npm' works, then re-run setup." >&2
+  exit 1
+fi
+NPM_BIN_DIR="$(cd "$(dirname "$NPM_BIN")" && pwd -P)"
+LAUNCH_PATH="$NPM_BIN_DIR:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
 AGENTS="$HOME/Library/LaunchAgents"
 APP_PLIST="$AGENTS/com.quantterm.ui.plist"
 OLD_AUTO_PLIST="$AGENTS/com.quantterm.autonomy.plist"
@@ -63,7 +87,8 @@ cat > "$APP_PLIST" <<PLIST
 <key>QT_STORAGE_RUNTIME</key><string>$STORAGE_RUNTIME</string>
 <key>QT_RUNTIME_LINK</key><string>$RUNTIME_LINK</string>
 <key>QT_RUNTIME_ROOT</key><string>$RUNTIME_LINK</string>
-<key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+<key>QT_NPM_BIN</key><string>$NPM_BIN</string>
+<key>PATH</key><string>$LAUNCH_PATH</string>
 </dict>
 <key>RunAtLoad</key><true/>
 <key>KeepAlive</key><dict>
@@ -91,6 +116,7 @@ launchctl kickstart -k "gui/$(id -u)/com.quantterm.ui" || true
 
 echo "QuantTerm canonical macOS agent installed."
 echo "External runtime: $STORAGE_RUNTIME"
+echo "npm: $NPM_BIN"
 echo "Daily login: cd '$APP_DIR' && '$PYTHON_BIN' main.py login"
 echo "Desk: http://127.0.0.1:5173"
 echo "Launch log: $LAUNCH_LOG_DIR/launchd.log"
