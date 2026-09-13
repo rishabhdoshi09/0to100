@@ -70,6 +70,58 @@ def fundamentals_backfill_run(
     return run_fundamentals_backfill(scope=scope, force=force, limit=limit, resume=True)
 
 
+def scan_provenance_workspace() -> dict[str, Any]:
+    """Project persisted scan truth without rescanning or recomputing market state.
+
+    This route deliberately exposes metadata only. It reads the same canonical
+    ``latest_momentum_scan.json`` used by the scanner/dashboard and therefore
+    cannot become a parallel source of scan truth.
+    """
+    from product.scan_store import load_scan
+
+    payload = load_scan()
+    if not payload:
+        return {
+            "available": False,
+            "reason": "NO_SAVED_SCAN",
+            "source": "product.scan_store.load_scan",
+        }
+
+    keys = (
+        "schema_version",
+        "scan_id",
+        "scanned_at",
+        "scan_started_at",
+        "scan_completed_at",
+        "scan_duration_s",
+        "scan_duration_status",
+        "scan_duration_reason",
+        "market_session_date",
+        "price_data_as_of",
+        "expected_session_date",
+        "fundamental_data_as_of",
+        "news_data_as_of",
+        "freshness_state",
+        "provenance_reason",
+        "source_set",
+        "approved_universe",
+        "requested_universe",
+        "universe_requested",
+        "universe_loaded",
+        "universe_scanned",
+        "universe_failed",
+        "candidate_count",
+        "source_snapshot_id",
+        "coverage_state",
+        "scan_status",
+    )
+    return {
+        "available": True,
+        "source": "product.scan_store.load_scan",
+        **{key: payload.get(key) for key in keys},
+    }
+
+
 def install_data_routes(app) -> None:
     app.add_api_route("/api/data/providers", providers_workspace, methods=["GET"], name="data_providers")
     app.add_api_route("/api/data/coverage", coverage_workspace, methods=["GET"], name="data_coverage")
@@ -97,4 +149,10 @@ def install_data_routes(app) -> None:
         fundamentals_backfill_run,
         methods=["POST"],
         name="fundamentals_backfill_run",
+    )
+    app.add_api_route(
+        "/api/data/scan-provenance",
+        scan_provenance_workspace,
+        methods=["GET"],
+        name="data_scan_provenance",
     )
