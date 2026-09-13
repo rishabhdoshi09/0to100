@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Install/update QuantTerm as one canonical launchd agent on the current Mac.
+# Canonical chain: setup_mac.sh -> run_quantterm_mac.sh -> run_quantterm_complete.sh.
 # The complete launcher owns autonomy, market_ops, APIs and the desk; a second
 # autonomy LaunchAgent would create competing ownership/restart paths.
+# Legacy com.quantterm.autonomy used <string>autonomy</string>; setup removes it.
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
