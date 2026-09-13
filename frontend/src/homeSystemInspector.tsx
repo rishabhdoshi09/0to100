@@ -7,7 +7,7 @@ import {
   lanePrimaryAction,
   laneSecondaryActions,
   laneTitle,
-  liveMoneyStillLocked,
+  liveMoneyStatus,
   nothingNeeded,
   technicalLines,
   type CheckSystemSnapshot,
@@ -67,7 +67,7 @@ export function SystemLaneInspector({
   lane?: SystemLane
   depth: string
   busy: boolean
-  liveLocked: boolean
+  liveLocked?: boolean | null
   checkSystem?: CheckSystemSnapshot
   system: Record<string, SystemLane>
   onAction: (action: HomeAction) => void
@@ -76,6 +76,7 @@ export function SystemLaneInspector({
 }) {
   if (laneId === 'check_system') {
     const rows = checkSystemRows(checkSystem, system)
+    const lockRow = rows.find((row) => row.id === 'live_money')
     return (
       <aside className="home-os-inspector" role="region" aria-label="System check">
         <header>
@@ -94,7 +95,9 @@ export function SystemLaneInspector({
             </div>
           ))}
         </div>
-        <p className="home-os-inspect-lock">Live money: Locked. Paper only.</p>
+        <p className="home-os-inspect-lock">
+          Live money: {lockRow?.status || 'Unverified'}. Paper-only UI controls do not prove the broker boundary is locked.
+        </p>
       </aside>
     )
   }
@@ -106,6 +109,7 @@ export function SystemLaneInspector({
   const page = lane?.full_details_page
   const pageLabel = lane?.full_details_label || (page ? `Open ${page}` : '')
   const tech = depth === 'professional' ? technicalLines(lane?.technical) : []
+  const lockStatus = liveMoneyStatus(liveLocked, lane)
 
   return (
     <aside className="home-os-inspector" role="region" aria-label={`${title} details`}>
@@ -166,7 +170,7 @@ export function SystemLaneInspector({
         </details>
       ) : null}
       <p className="home-os-inspect-lock">
-        Live money: {liveMoneyStillLocked(liveLocked, lane) ? 'Locked' : 'Must stay locked'}. No live buy button.
+        Live money: {lockStatus}. {lockStatus === 'Locked' ? 'No live buy button.' : 'Do not treat this display as broker-boundary lock proof.'}
       </p>
     </aside>
   )
