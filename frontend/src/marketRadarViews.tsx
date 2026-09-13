@@ -26,7 +26,7 @@ import {
   type WatchlistPayload,
 } from './productApi'
 import { RiskLensCard } from './productViews'
-import type { ControlName } from './types'
+import type { ControlName, DashboardPayload } from './types'
 import { LiveScanBanner, type ExperienceViewProps } from './experience'
 import { keepRicher, markInvestigate, recall, remember } from './sessionMemory'
 import { SystemLaneInspector, SystemLaneStrip } from './homeSystemInspector'
@@ -445,6 +445,30 @@ function DenseTable({
       </table>
     </div>
   )
+}
+
+
+/**
+ * SCAN AGE answers "how long since the job ran". It does not answer "how old
+ * are the prices". Those diverge every weekend and every holiday, so the Desk
+ * shows the market session the scan actually read, beside it and never merged.
+ */
+function sessionText(dashboard: DashboardPayload): string {
+  const prov = dashboard.scan.provenance
+  const session = prov?.market_session_date
+  if (!session) return 'unavailable'
+  const label = new Date(`${session}T00:00:00`).toLocaleDateString('en-IN', {
+    day: '2-digit', month: 'short',
+  })
+  if (prov?.data_current) return label
+  const behind = prov?.sessions_behind
+  return typeof behind === 'number' && behind > 0 ? `${label} (-${behind})` : `${label} (stale)`
+}
+
+function sessionTone(dashboard: DashboardPayload): string {
+  const prov = dashboard.scan.provenance
+  if (!prov?.market_session_date) return 'scan-session-unknown'
+  return prov.data_current ? 'scan-session-current' : 'scan-session-stale'
 }
 
 function HomeOsCard({
@@ -998,6 +1022,10 @@ export function RadarHomeView(props: ExperienceViewProps & {
         <div><span>VIX</span><strong>{radar?.vix ?? dashboard.market.vix ?? '—'}</strong></div>
         <div><span>LEADERS</span><strong>{(radar?.leaders || dashboard.market.leaders).slice(0, 3).join(', ') || '—'}</strong></div>
         <div><span>SCAN AGE</span><strong>{relativeAge(scanAt)}</strong></div>
+        <div>
+          <span>MARKET SESSION</span>
+          <strong className={sessionTone(dashboard)}>{sessionText(dashboard)}</strong>
+        </div>
         <div><span>STANCE</span><strong>{dashboard.market.trade_stance?.split(';')[0] || '—'}</strong></div>
       </div>
 
