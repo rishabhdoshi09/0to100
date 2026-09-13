@@ -115,15 +115,18 @@ def test_forward_soak_requires_verified_locked_unauthorized_truth():
 
 def _paper(**overrides):
     payload = {
-        "available": True,
-        "open_positions": [],
-        "last_cycle": {},
+        "schema_version": 1,
+        "paper": {"open_positions": []},
+        "latest": {},
+        "live_locked": True,
+        "live_lock_verified": True,
+        "live_execution_authorized": False,
     }
     payload.update(overrides)
     return payload
 
 
-def test_paper_status_uses_canonical_safety_without_inventing_endpoint_claims():
+def test_paper_status_uses_canonical_and_endpoint_safety_truth():
     result = acceptance.grade_paper_status(
         _paper(),
         live_locked=True,
@@ -137,4 +140,19 @@ def test_paper_status_uses_canonical_safety_without_inventing_endpoint_claims():
     )["status"] == "FAIL"
     assert acceptance.grade_paper_status(
         _paper(), live_locked=True, live_lock_verified=True, live_execution_authorized=True
+    )["status"] == "FAIL"
+    assert acceptance.grade_paper_status(
+        _paper(live_lock_verified=False),
+        live_locked=True,
+        live_lock_verified=True,
+        live_execution_authorized=False,
+    )["status"] == "FAIL"
+
+    missing_auth = _paper()
+    missing_auth.pop("live_execution_authorized")
+    assert acceptance.grade_paper_status(
+        missing_auth,
+        live_locked=True,
+        live_lock_verified=True,
+        live_execution_authorized=False,
     )["status"] == "FAIL"
