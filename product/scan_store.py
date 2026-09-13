@@ -1,7 +1,9 @@
-"""Persistent retail scan results and tomorrow-watchlist projection.
+"""Persistent whole-market scan results with explicit provenance.
 
-The scanner remains the source of truth. This module only serializes its output
-so the UI opens instantly instead of rescanning the full market on every rerun.
+The scanner remains the source of truth. This module serializes its output so
+UI/API consumers can distinguish *when a scan executed* from *which market
+session its data represents*. Unknown facts stay unknown; timestamp corruption
+must never be normalized into plausible-looking zeroes.
 """
 from __future__ import annotations
 
@@ -10,13 +12,16 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
-from core.runtime_paths import logs_dir, logs_path
+
+from core.runtime_paths import logs_path
+
 
 def default_scan_path() -> Path:
     return logs_path("product", "latest_momentum_scan.json")
 
 
 DEFAULT_SCAN_PATH = default_scan_path()
+_SUPPORTED_SCHEMA_VERSIONS = {1, 2}
 
 
 def _value(obj: Any, name: str, default: Any = None) -> Any:
@@ -48,6 +53,74 @@ def _opt_bool(obj: Any, name: str) -> bool | None:
     if not hasattr(obj, name):
         return None
     return bool(getattr(obj, name))
+
+
+def _as_utc(value: datetime | str | None) -> datetime | None:
+    if value is None or value == "":
+        return None
+    try:
+        if isinstance(value, datetime):
+            moment = value
+        else:
+            moment = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+        return moment.astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _duration_truth(
+    started_at: datetime | str | None,
+    completed_at: datetime | str | None,
+) -> tuple[float | None, str, str]:
+    """Return duration only for a provable, correctly ordered interval."""
+    start = _as_utc(started_at)
+    completed = _as_utc(completed_at)
+    if start is None:
+        return None, "UNAVAILABLE", "SCAN_START_TIME_UNAVAILABLE"
+    if completed is None:
+        return None, "UNAVAILABLE", "SCAN_COMPLETION_TIME_UNAVAILABLE"
+    delta = (completed - start).total_seconds()
+    if delta < 0:
+        return None, "UNAVAILABLE", "SCAN_TIMESTAMP_ORDER_INVALID"
+    return round(delta, 3), "AVAILABLE", ""
+
+
+def _history_provenance() -> dict[str, Any]:
+    """Read canonical official-history session truth without acquiring data."""
+    try:
+        from data.bhavcopy_runtime import official_history_freshness
+
+        raw = dict(official_history_freshness(load_cache=True) or {})
+    except Exception as exc:
+        return {
+            "market_session_date": None,
+            "price_data_as_of": None,
+            "expected_session_date": None,
+            "freshness_state": "UNAVAILABLE",
+            "provenance_reason": f"HISTORY_PROVENANCE_UNAVAILABLE:{type(exc).__name__}",
+        }
+
+    available = str(raw.get("available_session") or "")[:10] or None
+    expected = str(raw.get("expected_latest_completed_session") or "")[:10] or None
+    reason = str(raw.get("reason_code") or "").strip()
+    current = bool(raw.get("current"))
+    if current:
+        state = "CURRENT"
+    elif available:
+        state = "STALE"
+    else:
+        state = "UNAVAILABLE"
+    if not reason:
+        reason = "CURRENT" if current else "HISTORY_NOT_READY"
+    return {
+        "market_session_date": available,
+        "price_data_as_of": available,
+        "expected_session_date": expected,
+        "freshness_state": state,
+        "provenance_reason": reason,
+    }
 
 
 def _record(signal: Any, names: Mapping[str, str], fno_symbols: set[str]) -> dict[str, Any]:
@@ -109,26 +182,75 @@ def build_scan_payload(
     fno_symbols: Iterable[str] = (),
     *,
     scanned_at: datetime | None = None,
+    scan_started_at: datetime | str | None = None,
+    scan_completed_at: datetime | str | None = None,
     scanned: int | None = None,
     approved_universe: int | None = None,
+    requested_universe: int | None = None,
+    universe_failed: int | None = None,
+    history_provenance: Mapping[str, Any] | None = None,
+    fundamental_data_as_of: str | None = None,
+    news_data_as_of: str | None = None,
+    source_set: Iterable[str] = (),
 ) -> dict[str, Any]:
+    """Build schema-v2 scan state from real scan output and explicit provenance.
+
+    ``scanned_at`` is kept as a backward-compatible alias for completion time.
+    Duration is emitted only when both endpoints are known and ordered.
+    """
     fno = {str(s).upper() for s in fno_symbols}
     records = [_record(row, names, fno) for row in results]
-    # deterministic ranking: score descending, symbol as the stable secondary key for ties
     records.sort(key=lambda row: (-float(row["score"] or 0.0), row["symbol"]))
     momentum = [r for r in records if "MOMENTUM" in r["signals"]]
     near = [r for r in records if "PRE_BREAKOUT" in r["signals"] and "MOMENTUM" not in r["signals"]]
     ready = [r for r in records if r["status"] == "Ready to trade"]
-    now = scanned_at or datetime.now(timezone.utc)
+
+    completed = _as_utc(scan_completed_at) or _as_utc(scanned_at) or datetime.now(timezone.utc)
+    start = _as_utc(scan_started_at)
+    duration_s, duration_status, duration_reason = _duration_truth(start, completed)
+    completed_iso = completed.isoformat()
+    start_iso = start.isoformat() if start is not None else None
+
     approved_n = int(approved_universe) if approved_universe is not None else len(names)
     normalized_n = len({str(s).strip().upper() for s in names if str(s).strip()})
+    requested_n = int(requested_universe) if requested_universe is not None else normalized_n
     scanned_n = int(scanned) if scanned is not None else normalized_n
+    failed_n = int(universe_failed) if universe_failed is not None else None
     qualified_n = len(records)
+
+    provenance = dict(history_provenance) if history_provenance is not None else _history_provenance()
+    market_session_date = str(provenance.get("market_session_date") or "")[:10] or None
+    price_data_as_of = str(provenance.get("price_data_as_of") or market_session_date or "")[:10] or None
+    expected_session_date = str(provenance.get("expected_session_date") or "")[:10] or None
+    freshness_state = str(provenance.get("freshness_state") or "UNAVAILABLE")
+    provenance_reason = str(provenance.get("provenance_reason") or "HISTORY_PROVENANCE_UNAVAILABLE")
+    sources = sorted({str(item).strip() for item in source_set if str(item).strip()})
+
     return {
-        "schema_version": 1,
-        "scanned_at": now.isoformat(),
+        "schema_version": 2,
+        "scan_id": f"scan:{completed_iso}",
+        "scanned_at": completed_iso,
+        "scan_started_at": start_iso,
+        "scan_completed_at": completed_iso,
+        "scan_duration_s": duration_s,
+        "scan_duration_status": duration_status,
+        "scan_duration_reason": duration_reason or None,
+        "market_session_date": market_session_date,
+        "price_data_as_of": price_data_as_of,
+        "expected_session_date": expected_session_date,
+        "fundamental_data_as_of": fundamental_data_as_of or None,
+        "news_data_as_of": news_data_as_of or None,
+        "freshness_state": freshness_state,
+        "provenance_reason": provenance_reason,
+        "source_set": sources,
         "approved_universe": approved_n,
+        "requested_universe": requested_n,
+        "universe_requested": requested_n,
+        "universe_loaded": normalized_n,
         "scanned": scanned_n,
+        "universe_scanned": scanned_n,
+        "universe_failed": failed_n,
+        "candidate_count": qualified_n,
         "qualified_rows": qualified_n,
         "universe_size": scanned_n,
         "records": records,
@@ -159,7 +281,9 @@ def load_scan(path: str | Path = DEFAULT_SCAN_PATH) -> dict[str, Any] | None:
         return None
     try:
         payload = json.loads(target.read_text(encoding="utf-8"))
-        if int(payload.get("schema_version", 0)) != 1 or not isinstance(payload.get("records"), list):
+        if int(payload.get("schema_version", 0)) not in _SUPPORTED_SCHEMA_VERSIONS:
+            return None
+        if not isinstance(payload.get("records"), list):
             return None
         return payload
     except Exception:
@@ -172,23 +296,21 @@ def watchlist_rows(payload: Mapping[str, Any] | None, limit: int = 25) -> list[d
     priority = {"Ready to trade": 0, "Watch for breakout": 1, "Wait for pullback": 2, "Watch": 3}
     rows = list(payload.get("records", []))
     rows.sort(key=lambda r: (priority.get(str(r.get("status")), 9), -float(r.get("score", 0) or 0),
-                             str(r.get("symbol", ""))))       # symbol tiebreak → deterministic
+                             str(r.get("symbol", ""))))
     return rows[: max(0, int(limit))]
 
 
 def scan_age_hours(payload: Mapping[str, Any] | None, *, now: datetime | None = None) -> float | None:
     if not payload or not payload.get("scanned_at"):
         return None
-    try:
-        stamp = datetime.fromisoformat(str(payload["scanned_at"]).replace("Z", "+00:00"))
-        if stamp.tzinfo is None:
-            stamp = stamp.replace(tzinfo=timezone.utc)
-        current = now or datetime.now(timezone.utc)
-        if current.tzinfo is None:
-            current = current.replace(tzinfo=timezone.utc)
-        return max(0.0, (current - stamp).total_seconds() / 3600.0)
-    except Exception:
+    stamp = _as_utc(str(payload["scanned_at"]))
+    current = _as_utc(now or datetime.now(timezone.utc))
+    if stamp is None or current is None:
         return None
+    seconds = (current - stamp).total_seconds()
+    if seconds < 0:
+        return None
+    return seconds / 3600.0
 
 
 def scan_artifact_is_fresh(
@@ -197,7 +319,7 @@ def scan_artifact_is_fresh(
     max_age_s: float,
     now: datetime | None = None,
 ) -> bool:
-    """True when the canonical scan JSON exists and scanned_at is within max_age_s."""
+    """True only when scan age is provable and within ``max_age_s``."""
     age_h = scan_age_hours(load_scan(path), now=now)
     if age_h is None:
         return False

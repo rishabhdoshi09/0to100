@@ -7,6 +7,7 @@ is reported as failure; a healthy scan with zero setups is a valid result.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Callable, Mapping, Any
 
 
@@ -225,6 +226,24 @@ def _coverage_exclusions(summary: Mapping[str, Any] | None) -> tuple[str, ...]:
     )
 
 
+def _coverage_failures(summary: Mapping[str, Any] | None) -> int | None:
+    """Names that could not complete scanner evaluation for non-policy reasons.
+
+    Policy exclusions are successful, explicit scanner outcomes. Data gaps,
+    analysis exceptions/skips, and unobserved names are failures to complete the
+    requested evaluation and are the only rows counted as ``universe_failed``.
+    """
+    if not isinstance(summary, Mapping):
+        return None
+    keys = ("data_unavailable", "analysis_errors", "analysis_skipped", "not_observed")
+    if not any(key in summary for key in keys):
+        return None
+    try:
+        return sum(int(summary.get(key) or 0) for key in keys)
+    except (TypeError, ValueError):
+        return None
+
+
 def run_whole_market_scan(
     *,
     universe_provider: Callable[[], Mapping[str, str]] | None = None,
@@ -241,6 +260,7 @@ def run_whole_market_scan(
     fail to qualify, be excluded by an explicit policy gate, lack enough data, or
     raise an analysis error, but it may no longer silently disappear.
     """
+    scan_started_at = datetime.now(timezone.utc)
     universe_provider = universe_provider or _default_universe
     prefetch_fn = prefetch_fn or _default_prefetch
     scanner = scanner or _default_scanner()
@@ -357,17 +377,21 @@ def run_whole_market_scan(
         scanned_n = int(coverage.get("checked") or 0)
     else:
         scanned_n = walked_total or requested_n
+    scan_completed_at = datetime.now(timezone.utc)
     payload = build_scan_payload(
         names,
         results,
         fno_symbols,
+        scan_started_at=scan_started_at,
+        scan_completed_at=scan_completed_at,
         scanned=scanned_n,
         approved_universe=approved_n,
+        requested_universe=requested_n,
+        universe_failed=_coverage_failures(coverage),
     )
     # Preserve the established `universe_size == actually checked` API contract
     # while exposing the full requested set separately. This is the distinction
     # the product previously lacked.
-    payload["requested_universe"] = requested_n
     payload["coverage"] = coverage
     payload["coverage_state"] = str(coverage.get("state") or "UNKNOWN")
     payload["coverage_warning"] = (
