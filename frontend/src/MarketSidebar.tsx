@@ -1,4 +1,7 @@
+import { useEffect, useState } from 'react'
 import './marketSidebar.css'
+import { fetchScanProvenance } from './api'
+import { scanTruthDetail, scanTruthRows, type ScanProvenance } from './scanTruth'
 import type { DashboardPayload } from './types'
 
 const PRIMARY_NAV = [
@@ -78,6 +81,29 @@ function dataCopy(dashboard: DashboardPayload): string {
   return busy ? 'Preparing official history…' : 'Starting official prices…'
 }
 
+function scanOperationState(dashboard: DashboardPayload, provenance: ScanProvenance | null): {
+  label: string
+  active: boolean
+  healthy: boolean
+} {
+  const activeScan = (dashboard.operations.active || []).find(
+    operation => operation.kind === 'MARKET_SCAN' && ['PENDING', 'RUNNING'].includes(operation.status),
+  )
+  if (activeScan) {
+    return { label: activeScan.status === 'PENDING' ? 'QUEUED' : 'RUNNING', active: true, healthy: true }
+  }
+  const latest = dashboard.operations.latest?.MARKET_SCAN
+  if (latest?.status) {
+    return {
+      label: latest.status,
+      active: false,
+      healthy: ['SUCCEEDED', 'CANCELLED'].includes(latest.status),
+    }
+  }
+  if (provenance?.available) return { label: 'RECORDED', active: false, healthy: true }
+  return { label: 'WAITING', active: false, healthy: false }
+}
+
 export function MarketSidebar({
   active,
   setActive,
@@ -87,9 +113,32 @@ export function MarketSidebar({
   setActive: (value: string) => void
   dashboard: DashboardPayload
 }) {
-  const operations = dashboard.operations.running
+  const [scanProvenance, setScanProvenance] = useState<ScanProvenance | null>(null)
   const current = ROUTE_ALIAS[active] || active
   const advancedActive = ADVANCED_NAV.some(([, route]) => route === current)
+
+  useEffect(() => {
+    let cancelled = false
+    fetchScanProvenance()
+      .then(payload => {
+        if (!cancelled) setScanProvenance(payload)
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setScanProvenance({
+            available: false,
+            reason: 'SCAN_PROVENANCE_API_UNAVAILABLE',
+          })
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [dashboard.scan.scanned_at])
+
+  const scanState = scanOperationState(dashboard, scanProvenance)
+  const scanRows = scanTruthRows(scanProvenance)
+
   return (
     <aside className="sidebar reco-sidebar">
       <div className="reco-brand">
@@ -126,17 +175,20 @@ export function MarketSidebar({
           </div>
         </div>
       </div>
-      <div className="reco-telemetry broker-card compact-service-card">
+      <div className="reco-telemetry broker-card compact-service-card scan-truth-card">
         <div className="broker-row">
           <strong>AUTONOMOUS SCAN</strong>
-          <span className={operations ? 'status-dot' : 'status-dot status-dot-off'} />
+          <span className={scanState.healthy ? 'status-dot' : 'status-dot status-dot-off'} />
         </div>
-        <small>
-          {operations ? 'WORKING' : 'READY'} · last scan{' '}
-          {dashboard.scan.scanned_at
-            ? new Date(dashboard.scan.scanned_at).toLocaleDateString('en-IN')
-            : 'queued'}
-        </small>
+        <small>{scanState.label} · {scanTruthDetail(scanProvenance)}</small>
+        <div className="scan-truth-list" aria-label="Scan provenance">
+          {scanRows.map(row => (
+            <div className="scan-truth-row" key={row.label}>
+              <span>{row.label}</span>
+              <strong>{row.value}</strong>
+            </div>
+          ))}
+        </div>
       </div>
     </aside>
   )
