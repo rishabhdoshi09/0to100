@@ -3,6 +3,7 @@ import type { DashboardPayload } from './types'
 
 const PRIMARY_NAV = [
   ['⌂', 'Home', 'Desk'],
+  ['⚙', 'Control Center', 'Control Center'],
   ['▣', 'Recommendations', 'Opportunities'],
   ['◉', 'Stock Intelligence', 'Stock Intelligence'],
   ['?', 'Why This Decision', 'Why This Decision'],
@@ -31,7 +32,7 @@ const ROUTE_ALIAS: Record<string, string> = {
   'Long-Term': 'Long-Term Picks',
   Portfolio: 'Paper Portfolio',
   'Market Internals': 'Market Overview',
-  Automation: 'System Health',
+  Automation: 'Control Center',
   Today: 'Home',
   Setups: 'Market Scanner',
   Desk: 'Home',
@@ -78,6 +79,17 @@ function dataCopy(dashboard: DashboardPayload): string {
   return busy ? 'Preparing official history…' : 'Starting official prices…'
 }
 
+function systemState(dashboard: DashboardPayload): 'RUNNING' | 'REFRESHING' | 'ATTENTION' {
+  const runtimeOnline = Boolean(
+    dashboard.operations.running
+    || dashboard.autonomy.running
+    || dashboard.autonomy.process_running,
+  )
+  if (!runtimeOnline) return 'ATTENTION'
+  if ((dashboard.operations.active || []).length > 0) return 'REFRESHING'
+  return 'RUNNING'
+}
+
 export function MarketSidebar({
   active,
   setActive,
@@ -90,6 +102,12 @@ export function MarketSidebar({
   const operations = dashboard.operations.running
   const current = ROUTE_ALIAS[active] || active
   const advancedActive = ADVANCED_NAV.some(([, route]) => route === current)
+  const runtimeState = systemState(dashboard)
+  const scanOperation = (dashboard.operations.active || []).find((row) => row.kind === 'MARKET_SCAN')
+  const scanCurrent = Number(scanOperation?.progress_current || dashboard.scan_progress?.current || 0)
+  const scanTotal = Number(scanOperation?.progress_total || dashboard.scan_progress?.total || 0)
+  const runtimeOnline = runtimeState !== 'ATTENTION'
+
   return (
     <aside className="sidebar reco-sidebar">
       <div className="reco-brand">
@@ -102,13 +120,36 @@ export function MarketSidebar({
       <nav aria-label="Primary navigation">
         <div className="nav-section-label">OPERATE</div>
         <NavigationRows rows={PRIMARY_NAV} active={current} setActive={setActive} />
-        <p className="nav-primary-note">Daily use stays here. Scanner, backtests and system plumbing are secondary tools.</p>
+        <p className="nav-primary-note">Daily use and safe manual controls stay here. Research plumbing remains under Advanced.</p>
         <details className="nav-advanced" open={advancedActive || undefined}>
           <summary>Advanced</summary>
           <NavigationRows rows={ADVANCED_NAV} active={current} setActive={setActive} />
         </details>
       </nav>
       <div className="sidebar-spacer" />
+      <div className="reco-telemetry broker-card compact-service-card">
+        <div className="broker-row">
+          <strong>SYSTEM</strong>
+          <span className={runtimeOnline ? 'status-dot' : 'status-dot status-dot-off'} />
+        </div>
+        <small>{runtimeState}</small>
+        <div className="broker-stats">
+          <div>
+            <span>Worker</span>
+            <strong>{dashboard.operations.worker_pid || '—'}</strong>
+          </div>
+          <div>
+            <span>Jobs</span>
+            <strong>{(dashboard.operations.active || []).length}</strong>
+          </div>
+        </div>
+        {scanOperation ? (
+          <small>
+            Scan {scanTotal > 0 ? `${scanCurrent.toLocaleString('en-IN')}/${scanTotal.toLocaleString('en-IN')}` : scanOperation.stage || scanOperation.status}
+          </small>
+        ) : null}
+        <button type="button" onClick={() => setActive('Control Center')}>Open controls</button>
+      </div>
       <div className="reco-telemetry broker-card">
         <div className="broker-row">
           <strong>MARKET DATA</strong>
@@ -128,14 +169,14 @@ export function MarketSidebar({
       </div>
       <div className="reco-telemetry broker-card compact-service-card">
         <div className="broker-row">
-          <strong>AUTONOMOUS SCAN</strong>
+          <strong>MARKET SCAN</strong>
           <span className={operations ? 'status-dot' : 'status-dot status-dot-off'} />
         </div>
         <small>
-          {operations ? 'WORKING' : 'READY'} · last scan{' '}
+          {scanOperation ? `RUNNING · ${scanTotal > 0 ? `${scanCurrent}/${scanTotal}` : scanOperation.stage}` : 'IDLE'} · last saved{' '}
           {dashboard.scan.scanned_at
             ? new Date(dashboard.scan.scanned_at).toLocaleDateString('en-IN')
-            : 'queued'}
+            : 'none'}
         </small>
       </div>
     </aside>
