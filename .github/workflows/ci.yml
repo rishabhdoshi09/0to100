@@ -62,7 +62,7 @@ jobs:
         # Compile before environment-dependent smoke so a slow provider test can
         # never prevent the deterministic import-safety gate from running.
         run: |
-          python -m compileall -q data scan risk execution ui reports ai core alerts news research product reporting operations fundamentals
+          python -m compileall -q data scan risk execution ui reports ai core alerts news research product reporting operations fundamentals expectancy
           python -m py_compile terminal_api.py terminal_product_api.py terminal_product_api_parallel.py report_api.py
           python -m py_compile scripts/run_product_acceptance.py scripts/_product_acceptance_core.py
           python -m py_compile product/paper_learning_loop.py product/_paper_learning_loop_core.py
@@ -70,12 +70,25 @@ jobs:
 
       - name: Integration gate — controlled external dependencies
         continue-on-error: true
+        shell: bash
         run: |
-          timeout 120s env QT_INTEGRATION=1 python -m pytest tests/integration -q --tb=short
+          set -o pipefail
+          timeout 120s env QT_INTEGRATION=1 python -m pytest tests/integration -q --tb=short 2>&1 | tee /tmp/quantterm-integration.log
         env:
           KITE_ACCESS_TOKEN: ""
           TELEGRAM_BOT_TOKEN: ""
           DEEPSEEK_API_KEY: ""
+
+      - name: Enforce no durable-state contamination
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f /tmp/quantterm-integration.log ] && grep -q "TEST CONTAMINATION:" /tmp/quantterm-integration.log; then
+            echo "::error::Integration execution changed protected checkout/runtime state."
+            cat /tmp/quantterm-integration.log
+            exit 1
+          fi
 
       - name: Live-source gate — real upstreams (never blocks the build)
         continue-on-error: true
