@@ -32,6 +32,14 @@ if ! python -c 'import reportlab, fastapi, uvicorn' >/dev/null 2>&1; then
   python -m pip install 'reportlab>=4.2.0' 'fastapi>=0.115.0' 'uvicorn>=0.30.0'
 fi
 
+RUNTIME_LOGS="$(python - <<'PY'
+from core.runtime_paths import logs_dir
+print(logs_dir())
+PY
+)"
+STACK_LOG_DIR="$RUNTIME_LOGS/stack"
+mkdir -p "$STACK_LOG_DIR"
+
 python - <<'PY' || true
 from product.sqlite_runtime import bootstrap_product_stores
 from product.pit_warehouse import DB_PATH, counts
@@ -253,9 +261,8 @@ start_report() {
     return 0
   fi
   echo "[COMPLETE STACK] Starting research-report API at http://127.0.0.1:8766 …"
-  mkdir -p "$ROOT/logs/stack"
   python -u -m uvicorn report_api:app --host 127.0.0.1 --port 8766 \
-    >>"$ROOT/logs/stack/report_api.log" 2>&1 200>&- &
+    >>"$STACK_LOG_DIR/report_api.log" 2>&1 200>&- &
   REPORT_PID=$!
   sleep 1 || true
   if alive "$REPORT_PID"; then
@@ -265,14 +272,14 @@ start_report() {
     echo "[COMPLETE STACK] Bind raced; reusing the report API that won :8766."
     return 0
   fi
-  echo "[COMPLETE STACK] Research-report API failed to start; will retry. See logs/stack/report_api.log." >&2
+  echo "[COMPLETE STACK] Research-report API failed to start; will retry. See $STACK_LOG_DIR/report_api.log." >&2
   REPORT_PID=""
   return 1
 }
 
 # The inner supervisor writes "<pid> <unix-seconds>" every loop. A heartbeat
 # older than this means it is no longer supervising even if the process exists.
-INNER_HEARTBEAT_FILE="$ROOT/logs/stack/inner_supervisor.heartbeat"
+INNER_HEARTBEAT_FILE="$STACK_LOG_DIR/inner_supervisor.heartbeat"
 INNER_HEARTBEAT_MAX_AGE_S="${QT_INNER_HEARTBEAT_MAX_AGE_S:-45}"
 
 inner_heartbeat_fresh() {
@@ -313,7 +320,6 @@ try_machine_lock() {
 }
 
 echo "[COMPLETE STACK] One command, one terminal. Machine-wide lock so a second checkout cannot kill a healthy desk."
-mkdir -p "$ROOT/logs/stack"
 STACK_LOCK="$(python scripts/local_stack.py machine-lock-path)"
 mkdir -p "$(dirname "$STACK_LOCK")"
 exec 200>"$STACK_LOCK"
@@ -377,9 +383,8 @@ start_vite_safety_net() {
     return 0
   fi
   echo "[COMPLETE STACK] Desk UI is not on :5173 yet; starting Vite from the complete launcher."
-  mkdir -p "$ROOT/logs/stack"
   setsid npm --prefix "$ROOT/frontend" run dev -- --host 127.0.0.1 --port 5173 \
-    >>"$ROOT/logs/stack/vite.log" 2>&1 200>&- &
+    >>"$STACK_LOG_DIR/vite.log" 2>&1 200>&- &
   VITE_PID=$!
   return 0
 }
@@ -438,7 +443,7 @@ while [[ "$STOP" != "1" ]]; do
       REPORT_PID=""
       REPORT_HEALTH_FAILS=0
     elif (( REPORT_HEALTH_FAILS >= 3 )); then
-      echo "[COMPLETE STACK] Report API health failed; restarting. See logs/stack/report_api.log."
+      echo "[COMPLETE STACK] Report API health failed; restarting. See $STACK_LOG_DIR/report_api.log."
       if [[ -n "${REPORT_PID:-}" ]]; then kill "$REPORT_PID" >/dev/null 2>&1 || true; fi
       REPORT_EXTERNAL=0
       REPORT_PID=""
