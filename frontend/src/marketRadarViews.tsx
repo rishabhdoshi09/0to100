@@ -252,7 +252,9 @@ function BestOfBestHero({
     )
   }
   const parts = row.best_of_best_parts || {}
-  const upside = row.upside_to_target_pct ?? row.upside_from_entry_pct
+  // Prefer the backend's deterministic geometry (computed from the persisted
+  // levels) over ad-hoc frontend fields, so one formula governs the desk.
+  const upside = row.upside_pct ?? row.upside_to_target_pct ?? row.upside_from_entry_pct
   const risk = String(row.risk_tier || 'Medium').toLowerCase()
   return (
     <article className="radar-bob-hero">
@@ -276,7 +278,20 @@ function BestOfBestHero({
             <span>Upside to target</span>
             <strong>{upside != null ? pct(upside) : '—'}</strong>
           </div>
+          <div>
+            <span>Reward : risk</span>
+            <strong>{row.reward_risk != null ? `${row.reward_risk.toFixed(2)}R` : '—'}</strong>
+          </div>
+          <div>
+            <span>Risk to stop</span>
+            <strong>{row.downside_pct != null ? pct(row.downside_pct) : '—'}</strong>
+          </div>
         </div>
+        {row.plan_complete === false && (row.plan_missing?.length ?? 0) > 0 ? (
+          <p className="radar-plan-gap">
+            Trade plan incomplete — no {row.plan_missing?.join(', ')} from this scan.
+          </p>
+        ) : null}
         <div className="radar-bob-weights">
           <span>SEPA {parts.sepa ?? '—'}</span>
           <span>Funds {parts.funds ?? '—'}</span>

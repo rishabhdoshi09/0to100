@@ -3,14 +3,24 @@ export type ScanRecord = {
   company?: string
   status?: string
   verdict?: string
-  price?: number
+  /** null means the scanner produced no level. Never render a null as 0. */
+  price?: number | null
   score?: number
   momentum_5d?: number
   volume_ratio?: number
   rsi?: number
-  entry?: number
-  stop?: number
-  target?: number
+  entry?: number | null
+  stop?: number | null
+  target?: number | null
+  /** Deterministic geometry derived from the levels above, when they exist. */
+  plan_reference_price?: number | null
+  risk_per_share?: number | null
+  reward_per_share?: number | null
+  upside_pct?: number | null
+  downside_pct?: number | null
+  reward_risk?: number | null
+  plan_complete?: boolean
+  plan_missing?: string[]
   sector?: string
   signals?: string[]
   reasons?: string[]

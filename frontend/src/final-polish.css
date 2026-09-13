@@ -165,3 +165,11 @@ table tbody tr:hover {
   color: #a4571a;
   line-height: 1.35;
 }
+
+/* An incomplete trade plan says which input is missing, never a zero level. */
+.radar-plan-gap {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: #a4571a;
+}
