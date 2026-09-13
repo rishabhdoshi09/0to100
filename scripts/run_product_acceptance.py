@@ -3,15 +3,14 @@
 
 The established operation-grading implementation lives in
 ``_product_acceptance_core``. This façade keeps the acceptance boundary small
-and explicit: broker safety must be verified, locked, and unauthorized, Paper
-acceptance exercises the real Paper Autopilot route, and Forward Soak uses its
-actual read endpoint.
+and explicit: broker safety must be verified, locked, and unauthorized. Paper
+acceptance exercises the real Paper Autopilot route, and Forward Soak retains
+its POST verify-now probe so acceptance validates fresh persisted evidence.
 """
 from __future__ import annotations
 
 import importlib.util
 import sys
-import urllib.parse
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -27,9 +26,6 @@ _SPEC.loader.exec_module(_core)
 for _name in dir(_core):
     if not _name.startswith("__"):
         globals()[_name] = getattr(_core, _name)
-
-_original_request_json = _core._request_json
-_original_row = _core._row
 
 
 def grade_learning_dashboard(payload: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -82,7 +78,7 @@ def grade_paper_status(
     live_lock_verified: bool,
     live_execution_authorized: bool | None = None,
 ) -> dict[str, Any]:
-    """Grade persisted Paper state while keeping broker safety authoritative."""
+    """Grade persisted Paper state and independently require canonical safety truth."""
     data = _core._as_dict(payload)
     if not data:
         return {"status": "FAIL", "blocker_reason": "empty Paper Autopilot projection", "count": 0}
@@ -103,34 +99,13 @@ def grade_paper_status(
     return {"status": "PASS", "blocker_reason": "", "count": len(_core._as_list(positions))}
 
 
-def _request_json(
-    url: str,
-    *,
-    method: str = "GET",
-    timeout: float = 12.0,
-    body: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Correct the legacy soak probe to the route's real read-only contract."""
-    parsed = urllib.parse.urlsplit(url)
-    if parsed.path.rstrip("/") == "/api/forward-soak" and method.upper() == "POST":
-        return _original_request_json(url, method="GET", timeout=timeout, body=None)
-    return _original_request_json(url, method=method, timeout=timeout, body=body)
-
-
-def _row(**kwargs: Any) -> dict[str, Any]:
-    if kwargs.get("feature") == "Forward soak verification":
-        kwargs["trigger_tested"] = "GET /api/forward-soak"
-    return _original_row(**kwargs)
-
-
 def run(args) -> int:
     # The core's run function resolves helpers in the core module namespace.
-    # Install strict boundary functions before executing it.
+    # Install strict boundary functions before executing it. Its original
+    # /api/forward-soak POST is intentionally preserved to force fresh proof.
     _core.grade_learning_dashboard = grade_learning_dashboard
     _core.grade_forward_soak = grade_forward_soak
     _core.grade_paper_status = grade_paper_status
-    _core._request_json = _request_json
-    _core._row = _row
     return _core.run(args)
 
 
