@@ -96,11 +96,21 @@ def _is_guarded_attribute(name: str, attr: Any) -> bool:
 class _GuardedKiteProxy:
     """Read-through KiteConnect proxy. Deny-by-default on everything callable."""
 
+    __slots__ = ("__raw",)
+
     def __init__(self, raw: KiteConnect) -> None:
-        object.__setattr__(self, "_raw", raw)
+        object.__setattr__(self, "_GuardedKiteProxy__raw", raw)
+
+    def __getattribute__(self, name: str):
+        # Do not leave the backing SDK reachable through the compatibility
+        # proxy.  object.__getattribute__ is used internally only in this file.
+        if name in {"_raw", "__raw", "_GuardedKiteProxy__raw"}:
+            raise AttributeError("Raw Kite SDK access is not exposed")
+        return object.__getattribute__(self, name)
 
     def __getattr__(self, name: str):
-        attr = getattr(object.__getattribute__(self, "_raw"), name)
+        raw = object.__getattribute__(self, "_GuardedKiteProxy__raw")
+        attr = getattr(raw, name)
         if not _is_guarded_attribute(name, attr):
             return attr
 
@@ -167,11 +177,30 @@ class KiteClient:
                               else _fresh_env("KITE_ACCESS_TOKEN", settings.kite_access_token))
         self._api_secret = (api_secret if api_secret is not None
                             else _fresh_env("KITE_API_SECRET", settings.kite_api_secret))
-        self._kite = KiteConnect(api_key=self._api_key)
+
+        # Keep the actual SDK object private to this class.  The historical
+        # ``_kite`` attribute remains available as a compatibility property,
+        # but it now returns only the guarded proxy so legacy callers cannot
+        # bypass the canonical live-execution interlock.
+        sdk = KiteConnect(api_key=self._api_key)
         if self._access_token:
-            self._kite.set_access_token(self._access_token)
+            sdk.set_access_token(self._access_token)
         else:
             log.warning("kite_access_token not set — run generate_session() first")
+        object.__setattr__(self, "_KiteClient__sdk", sdk)
+        object.__setattr__(self, "_KiteClient__broker_proxy", _GuardedKiteProxy(sdk))
+
+    def __getattribute__(self, name: str):
+        # Ordinary production code must never obtain the backing SDK object.
+        # Authentication methods below use object.__getattribute__ explicitly.
+        if name in {"__sdk", "_KiteClient__sdk"}:
+            raise AttributeError("Raw Kite SDK access is not exposed")
+        return object.__getattribute__(self, name)
+
+    @property
+    def _kite(self) -> _GuardedKiteProxy:
+        """Legacy compatibility handle; always guarded and read-only."""
+        return object.__getattribute__(self, "_KiteClient__broker_proxy")
 
     # -- Authentication -----------------------------------------------------
 
@@ -179,9 +208,10 @@ class KiteClient:
         return self._kite.login_url()
 
     def generate_session(self, request_token: str) -> str:
-        data = self._kite.generate_session(request_token, api_secret=self._api_secret)
+        sdk = object.__getattribute__(self, "_KiteClient__sdk")
+        data = sdk.generate_session(request_token, api_secret=self._api_secret)
         access_token: str = data["access_token"]
-        self._kite.set_access_token(access_token)
+        sdk.set_access_token(access_token)
         self._access_token = access_token
         log.info("kite_session_created")
         return access_token
@@ -334,4 +364,4 @@ class KiteClient:
     @property
     def raw(self) -> _GuardedKiteProxy:
         """Guarded escape hatch: reads pass through; broker mutations do not."""
-        return _GuardedKiteProxy(self._kite)
+        return self._kite

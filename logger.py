@@ -3,11 +3,20 @@
 from __future__ import annotations
 
 import logging
+from logging.handlers import RotatingFileHandler
 
 import structlog
 from rich.logging import RichHandler
 
 from config import settings
+
+
+# Keep the primary application log bounded.  The previous unbounded FileHandler
+# grew simplequant.log into multiple gigabytes on an always-on workstation.
+# Five 25 MiB archives plus the active file retain useful recent history while
+# preventing one logger from exhausting the runtime volume.
+_LOG_MAX_BYTES = 25 * 1024 * 1024
+_LOG_BACKUP_COUNT = 5
 
 
 def configure_logging() -> None:
@@ -19,7 +28,12 @@ def configure_logging() -> None:
         format="%(message)s",
         handlers=[
             RichHandler(rich_tracebacks=True, show_path=False),
-            logging.FileHandler(log_file, encoding="utf-8"),
+            RotatingFileHandler(
+                log_file,
+                maxBytes=_LOG_MAX_BYTES,
+                backupCount=_LOG_BACKUP_COUNT,
+                encoding="utf-8",
+            ),
         ],
     )
 

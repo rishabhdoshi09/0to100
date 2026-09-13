@@ -19,14 +19,18 @@ from product.startup_check import (
 )
 
 
-def _current_scan(*, hours_ago: float = 0.5, records=None) -> dict:
+def _current_scan(*, hours_ago: float = 0.5, records=None, as_of_session: str = "") -> dict:
     now = datetime.now(timezone.utc) - timedelta(hours=hours_ago)
-    return {
+    payload = {
         "schema_version": 1,
         "scanned_at": now.isoformat(),
         "records": records if records is not None else [{"symbol": "AAA"}],
         "available": True,
     }
+    if as_of_session:
+        payload["as_of_session"] = as_of_session
+        payload["history_latest_date"] = as_of_session
+    return payload
 
 
 def _patch_operational_healthy(monkeypatch, *, autonomy=True, ops=True, paper=True, live_locked=True):
@@ -320,3 +324,25 @@ def test_scan_evidence_status_invariants():
     assert _scan_evidence_status(stale)[0] == "STALE"
     empty = _current_scan(hours_ago=0.1, records=[])
     assert _scan_evidence_status(empty)[0] == "INCOMPLETE"
+
+
+def test_scan_evidence_current_session_survives_weekend_wall_clock_age():
+    payload = _current_scan(
+        hours_ago=72.0,
+        records=[{"symbol": "AAA"}],
+        as_of_session="2026-09-11",
+    )
+    status, detail = _scan_evidence_status(payload, expected_session="2026-09-11")
+    assert status == "READY"
+    assert "session 2026-09-11" in detail
+
+
+def test_scan_evidence_old_session_is_stale_even_when_recent():
+    payload = _current_scan(
+        hours_ago=0.1,
+        records=[{"symbol": "AAA"}],
+        as_of_session="2026-09-10",
+    )
+    status, detail = _scan_evidence_status(payload, expected_session="2026-09-11")
+    assert status == "STALE"
+    assert "behind expected 2026-09-11" in detail
