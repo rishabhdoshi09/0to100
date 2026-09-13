@@ -15,6 +15,14 @@ if [[ ! -d venv ]]; then
 fi
 source venv/bin/activate
 
+RUNTIME_LOGS="$(python - <<'PY'
+from core.runtime_paths import logs_dir
+print(logs_dir())
+PY
+)"
+STACK_LOG_DIR="$RUNTIME_LOGS/stack"
+mkdir -p "$STACK_LOG_DIR"
+
 if ! python -c 'import fastapi, uvicorn' >/dev/null 2>&1; then
   echo "[STACK] Installing local terminal API dependencies…"
   python -m pip install 'fastapi>=0.115.0' 'uvicorn>=0.30.0'
@@ -75,8 +83,8 @@ alive() {
 market_ops_healthy() {
   python - <<'PY' >/dev/null 2>&1
 import json, os, time
-from pathlib import Path
-lock = Path("logs/market_ops/worker.lock")
+from core.runtime_paths import logs_path
+lock = logs_path("market_ops", "worker.lock")
 try:
     lock_pid = int(lock.read_text(encoding="utf-8").strip().split()[0])
     if lock_pid > 1:
@@ -86,7 +94,7 @@ except SystemExit:
     raise
 except Exception:
     pass
-p = Path("logs/market_ops/runtime.json")
+p = logs_path("market_ops", "runtime.json")
 try:
     r = json.loads(p.read_text(encoding="utf-8"))
     pid = int(r.get("worker_pid") or 0)
@@ -103,8 +111,8 @@ PY
 stop_stale_market_ops() {
   python - <<'PY' >/dev/null 2>&1 || true
 import json, os, signal, subprocess, time
-from pathlib import Path
-lock = Path("logs/market_ops/worker.lock")
+from core.runtime_paths import logs_path
+lock = logs_path("market_ops", "worker.lock")
 try:
     lock_pid = int(lock.read_text(encoding="utf-8").strip().split()[0])
     if lock_pid > 1:
@@ -114,7 +122,7 @@ except SystemExit:
     raise
 except Exception:
     pass
-p = Path("logs/market_ops/runtime.json")
+p = logs_path("market_ops", "runtime.json")
 try:
     r = json.loads(p.read_text(encoding="utf-8"))
     pid = int(r.get("worker_pid") or 0)
@@ -289,11 +297,11 @@ start_api() {
     return 0
   fi
   echo "[STACK] Starting local API at http://127.0.0.1:8765 …"
-  mkdir -p "$ROOT/logs/stack"
+  mkdir -p "$STACK_LOG_DIR"
   # terminal_product_api_parallel imports the canonical terminal_product_api:app
   # and only corrects performance-safe operation routing.
   python -u -m uvicorn terminal_product_api_parallel:app --host 127.0.0.1 --port 8765 \
-    >>"$ROOT/logs/stack/api.log" 2>&1 &
+    >>"$STACK_LOG_DIR/api.log" 2>&1 &
   API_PID=$!
   sleep 0.5 || true
   if ! alive "$API_PID"; then
@@ -301,7 +309,7 @@ start_api() {
       echo "[STACK] Bind raced; reusing the API that won :8765."
       return 0
     fi
-    echo "[STACK] Market API exited before becoming healthy; will retry. See logs/stack/api.log." >&2
+    echo "[STACK] Market API exited before becoming healthy; will retry. See $STACK_LOG_DIR/api.log." >&2
     API_PID=""; return 1
   fi
   return 0
@@ -309,13 +317,13 @@ start_api() {
 
 start_frontend() {
   echo "[STACK] Starting dedicated terminal at http://127.0.0.1:5173 …"
-  mkdir -p "$ROOT/logs/stack"
+  mkdir -p "$STACK_LOG_DIR"
   # Own process group. `npm run dev` is a wrapper chain (npm -> sh -> node ->
   # esbuild); signalling only the npm PID left the node server still serving
   # :5173 after the API was gone — a healthy-looking desk with no backend.
   # setsid makes the PID a group leader so the whole tree can be stopped.
   setsid npm --prefix "$ROOT/frontend" run dev -- --host 127.0.0.1 --port 5173 \
-    >>"$ROOT/logs/stack/vite.log" 2>&1 &
+    >>"$STACK_LOG_DIR/vite.log" 2>&1 &
   FRONTEND_PID=$!
 }
 
@@ -428,7 +436,7 @@ echo "[STACK] Ctrl-C is the stop signal. A child crash is restarted; it does not
 # Heartbeat so the outer supervisor can tell "alive" from "still supervising".
 # Process existence is not health: this loop can be alive and no longer doing
 # its job, and the outer launcher used to see only the PID.
-HEARTBEAT_FILE="$ROOT/logs/stack/inner_supervisor.heartbeat"
+HEARTBEAT_FILE="$STACK_LOG_DIR/inner_supervisor.heartbeat"
 mkdir -p "$(dirname "$HEARTBEAT_FILE")"
 beat() {
   printf '%s %s\n' "$$" "$(date -u +%s)" > "$HEARTBEAT_FILE" 2>/dev/null || true
@@ -493,7 +501,7 @@ while [[ "$STOP" != "1" ]]; do
       API_PID=""
       API_HEALTH_FAILS=0
     elif (( API_HEALTH_FAILS >= 3 )); then
-      echo "[STACK] Market API health failed ${API_HEALTH_FAILS} times; restarting. See logs/stack/api.log."
+      echo "[STACK] Market API health failed ${API_HEALTH_FAILS} times; restarting. See $STACK_LOG_DIR/api.log."
       if [[ -n "${API_PID:-}" ]]; then kill "$API_PID" >/dev/null 2>&1 || true; fi
       API_EXTERNAL=0
       API_PID=""
