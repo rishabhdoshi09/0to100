@@ -102,7 +102,6 @@ def collect_nested_blockers(result: Mapping[str, Any] | None) -> list[str]:
         token = f"missing_lanes={lane}"
         if token not in reasons and not any(lane in item for item in reasons):
             reasons.append(token)
-    # Deduplicate while preserving order.
     out: list[str] = []
     for item in reasons:
         if item not in out:
@@ -128,17 +127,7 @@ def _has_explicit_blocker(op: Mapping[str, Any], nested: Sequence[str]) -> bool:
 
 
 def classify_operation(op: Mapping[str, Any] | None) -> dict[str, str]:
-    """Grade a durable market-ops (or similar) record from status *and* result.
-
-    Contract:
-      SUCCEEDED + clean result → PASS
-      SUCCEEDED + result.degraded=true → DEGRADED
-      nested blocked lanes appear in blocker_reason
-      FAILED → FAIL
-      CANCELLED → FAIL
-      BLOCKED → BLOCKED only with an explicit blocker; otherwise FAIL
-      Internal exceptions are never silently turned into DEGRADED/BLOCKED.
-    """
+    """Grade a durable market-ops (or similar) record from status *and* result."""
     payload = _as_dict(op)
     status = str(payload.get("status") or "").upper()
     result = payload.get("result")
@@ -156,18 +145,12 @@ def classify_operation(op: Mapping[str, Any] | None) -> dict[str, str]:
     nested_reason = _join_reasons(*nested)
 
     if status in {"FAILED", "CANCELLED"}:
-        return {
-            "status": "FAIL",
-            "blocker_reason": _join_reasons(error_code, error_message, nested_reason) or status,
-        }
+        return {"status": "FAIL", "blocker_reason": _join_reasons(error_code, error_message, nested_reason) or status}
     if status == "BLOCKED":
         reason = _join_reasons(error_code, error_message, nested_reason) or status
         if _has_explicit_blocker(payload, nested):
             return {"status": "BLOCKED", "blocker_reason": reason}
-        return {
-            "status": "FAIL",
-            "blocker_reason": _join_reasons("BLOCKED without explicit blocker", reason),
-        }
+        return {"status": "FAIL", "blocker_reason": _join_reasons("BLOCKED without explicit blocker", reason)}
     if status == "SUCCEEDED":
         if degraded or nested:
             return {
@@ -199,15 +182,23 @@ def is_expected_external_blocker(row: Mapping[str, Any]) -> bool:
 
 
 def grade_canonical_health(payload: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Fail-closed canonical /api/health gate. Missing safety fields are never PASS."""
+    """Fail closed unless canonical health explicitly proves the broker boundary is verified and locked."""
     data = _as_dict(payload)
     reasons: list[str] = []
     if "ok" not in data or data.get("ok") is not True:
         reasons.append("health.ok is not True")
+    if "live_lock_verified" not in data:
+        reasons.append("missing live_lock_verified")
+    elif data.get("live_lock_verified") is not True:
+        reasons.append("live_lock_verified is not True")
     if "live_locked" not in data:
         reasons.append("missing live_locked")
     elif data.get("live_locked") is not True:
         reasons.append("live_locked is not True")
+    if "live_execution_authorized" not in data:
+        reasons.append("missing live_execution_authorized")
+    elif data.get("live_execution_authorized") is not False:
+        reasons.append("live_execution_authorized is not False")
     if "operational_ready" not in data:
         reasons.append("missing operational_ready")
     elif data.get("operational_ready") is not True:
@@ -220,22 +211,35 @@ def grade_canonical_health(payload: Mapping[str, Any] | None) -> dict[str, Any]:
         reasons.append("missing lifecycle")
     elif data.get("lifecycle") != "READY":
         reasons.append(f"lifecycle {data.get('lifecycle')!r} is not READY")
-    live_locked = data.get("live_locked") is True if "live_locked" in data else False
+
+    live_locked = data.get("live_locked") is True
+    live_lock_verified = data.get("live_lock_verified") is True
+    live_execution_authorized = data.get("live_execution_authorized") is True
+    result = {
+        "live_locked": live_locked,
+        "live_lock_verified": live_lock_verified,
+        "live_execution_authorized": live_execution_authorized,
+    }
     if reasons:
-        return {
-            "status": "FAIL",
-            "blocker_reason": _join_reasons(*reasons),
-            "live_locked": live_locked,
-        }
-    return {"status": "PASS", "blocker_reason": "", "live_locked": True}
+        result.update({"status": "FAIL", "blocker_reason": _join_reasons(*reasons)})
+        return result
+    result.update({"status": "PASS", "blocker_reason": ""})
+    return result
 
 
 def product_acceptance_verdict(
     rows: Sequence[Mapping[str, Any]],
     *,
     live_locked: bool,
+    live_lock_verified: bool,
 ) -> dict[str, Any]:
-    """Overall PASS is allowed with the known F&O login blocker, not arbitrary DEGRADED."""
+    """Overall PASS requires independently verified canonical live lock."""
+    if not live_lock_verified:
+        return {
+            "verdict": "PRODUCT ACCEPTANCE HOLD",
+            "exit_code": 1,
+            "reason": "canonical live-money lock was not verified",
+        }
     if not live_locked:
         return {
             "verdict": "PRODUCT ACCEPTANCE HOLD",
@@ -272,7 +276,7 @@ def product_acceptance_verdict(
         "reason": (
             "required features passed; expected external blocker: " + ", ".join(expected)
             if expected
-            else "required features passed; live money locked"
+            else "required features passed; canonical live-money lock verified"
         ),
     }
 
@@ -452,8 +456,12 @@ def grade_learning_dashboard(payload: Mapping[str, Any] | None) -> dict[str, Any
         return {"status": "FAIL", "blocker_reason": "empty learning dashboard", "count": 0}
     if data.get("schema_version") in {None, ""}:
         return {"status": "FAIL", "blocker_reason": "missing schema_version", "count": 0}
+    if data.get("live_lock_verified") is not True:
+        return {"status": "FAIL", "blocker_reason": "learning dashboard live lock is unverified", "count": 0}
     if data.get("live_locked") is not True:
-        return {"status": "FAIL", "blocker_reason": "learning dashboard did not lock live money", "count": 0}
+        return {"status": "FAIL", "blocker_reason": "learning dashboard did not prove live money locked", "count": 0}
+    if data.get("live_execution_authorized") is True:
+        return {"status": "FAIL", "blocker_reason": "learning dashboard reports live execution authorized", "count": 0}
     if "policies" not in data or "counterfactuals" not in data:
         return {"status": "FAIL", "blocker_reason": "missing policies/counterfactuals contract", "count": 0}
     count = len(_as_list(data.get("policies")))
@@ -468,15 +476,30 @@ def grade_forward_soak(payload: Mapping[str, Any] | None) -> dict[str, str]:
     lanes = verification.get("lanes") if isinstance(verification.get("lanes"), Mapping) else data.get("lanes")
     if not isinstance(lanes, Mapping):
         return {"status": "FAIL", "blocker_reason": "verification missing lanes"}
+    verified = verification.get("live_lock_verified")
+    if verified is None:
+        verified = data.get("live_lock_verified")
+    if verified is not True:
+        return {"status": "FAIL", "blocker_reason": "forward soak live lock is unverified"}
     live = verification.get("live_locked")
     if live is None:
         live = data.get("live_locked")
     if live is not True:
         return {"status": "FAIL", "blocker_reason": "forward soak did not prove live_locked"}
+    authorized = verification.get("live_execution_authorized")
+    if authorized is None:
+        authorized = data.get("live_execution_authorized")
+    if authorized is True:
+        return {"status": "FAIL", "blocker_reason": "forward soak reports live execution authorized"}
     return {"status": "PASS", "blocker_reason": ""}
 
 
-def grade_paper_status(payload: Mapping[str, Any] | None, *, live_locked: bool) -> dict[str, Any]:
+def grade_paper_status(
+    payload: Mapping[str, Any] | None,
+    *,
+    live_locked: bool,
+    live_lock_verified: bool,
+) -> dict[str, Any]:
     data = _as_dict(payload)
     if not data:
         return {"status": "FAIL", "blocker_reason": "empty paper-autopilot payload", "count": 0}
@@ -485,8 +508,12 @@ def grade_paper_status(payload: Mapping[str, Any] | None, *, live_locked: bool) 
     has_cycle = "last_cycle" in data or "latest" in data or "why_no_trade" in data
     if positions is None or not has_cycle:
         return {"status": "FAIL", "blocker_reason": "missing paper positions/cycle contract", "count": 0}
-    if data.get("live_locked") is False or not live_locked:
-        return {"status": "FAIL", "blocker_reason": "live money unlocked", "count": 0}
+    if not live_lock_verified or data.get("live_lock_verified") is not True:
+        return {"status": "FAIL", "blocker_reason": "paper execution live lock is unverified", "count": 0}
+    if not live_locked or data.get("live_locked") is not True:
+        return {"status": "FAIL", "blocker_reason": "paper execution did not prove live money locked", "count": 0}
+    if data.get("live_execution_authorized") is True:
+        return {"status": "FAIL", "blocker_reason": "paper execution reports live execution authorized", "count": 0}
     count = len(_as_list(positions))
     return {"status": "PASS", "blocker_reason": "", "count": count}
 
@@ -511,9 +538,7 @@ def _persisted_decision(symbol: str, as_of: str) -> dict[str, Any]:
         try:
             from product.decision_journal import _connect
             con = _connect()
-            raw = con.execute(
-                "SELECT * FROM decisions ORDER BY decision_time DESC LIMIT 1"
-            ).fetchone()
+            raw = con.execute("SELECT * FROM decisions ORDER BY decision_time DESC LIMIT 1").fetchone()
             con.close()
             if raw is not None:
                 rows = [hydrate(dict(raw))]
@@ -525,19 +550,15 @@ def _persisted_decision(symbol: str, as_of: str) -> dict[str, Any]:
 
 def _cycle_identity(cycle: Mapping[str, Any] | None) -> str:
     data = _as_dict(cycle)
-    return "|".join(
-        str(data.get(key) or "")
-        for key in ("cycle_id", "as_of_date", "as_of", "eligibility", "status", "finished_at")
-    )
+    return "|".join(str(data.get(key) or "") for key in ("cycle_id", "as_of_date", "as_of", "eligibility", "status", "finished_at"))
 
 
 def _paper_jobs(autonomy: Mapping[str, Any] | None) -> list[dict[str, Any]]:
-    jobs = [
+    return [
         dict(item)
         for item in _as_list(_as_dict(autonomy).get("jobs_recent"))
         if isinstance(item, Mapping) and str(item.get("job_type") or "") == "paper_cycle"
     ]
-    return jobs
 
 
 def grade_paper_cycle_execution(
@@ -549,17 +570,9 @@ def grade_paper_cycle_execution(
     job_d = _as_dict(job)
     cycle = _as_dict(last_cycle)
     job_status = str(job_d.get("status") or "").upper()
-    eligibility = str(
-        cycle.get("eligibility")
-        or cycle.get("decision")
-        or job_d.get("result_summary")
-        or ""
-    ).upper()
+    eligibility = str(cycle.get("eligibility") or cycle.get("decision") or job_d.get("result_summary") or "").upper()
     if job_status in {"FAILED", "CANCELLED"}:
-        return {
-            "status": "FAIL",
-            "blocker_reason": _join_reasons(job_d.get("error_code"), job_d.get("error_message"), job_status),
-        }
+        return {"status": "FAIL", "blocker_reason": _join_reasons(job_d.get("error_code"), job_d.get("error_message"), job_status)}
     if job_status == "BLOCKED":
         reason = _join_reasons(job_d.get("error_code"), job_d.get("blocked_reason"), job_d.get("blocked_on"))
         if _has_explicit_blocker(job_d, []):
@@ -571,15 +584,9 @@ def grade_paper_cycle_execution(
         if "TRADED" in eligibility:
             return {"status": "PASS", "blocker_reason": ""}
         if job_status == "SUCCEEDED":
-            return {
-                "status": "PASS",
-                "blocker_reason": str(job_d.get("result_summary") or eligibility or "paper_cycle SUCCEEDED"),
-            }
+            return {"status": "PASS", "blocker_reason": str(job_d.get("result_summary") or eligibility or "paper_cycle SUCCEEDED")}
         return {"status": "PASS", "blocker_reason": eligibility}
-    return {
-        "status": "DEGRADED",
-        "blocker_reason": "control accepted; durable cycle completion not observed",
-    }
+    return {"status": "DEGRADED", "blocker_reason": "control accepted; durable cycle completion not observed"}
 
 
 def run(args: argparse.Namespace) -> int:
@@ -590,7 +597,9 @@ def run(args: argparse.Namespace) -> int:
 
     health = _request_json(_url(api, "/api/health"), timeout=args.request_timeout)
     health_grade = grade_canonical_health(health)
-    live_locked = bool(health_grade.get("live_locked") is True)
+    live_locked = health_grade.get("live_locked") is True
+    live_lock_verified = health_grade.get("live_lock_verified") is True
+    live_execution_authorized = health_grade.get("live_execution_authorized") is True
     rows.append(_row(
         feature="Canonical stack / readiness",
         trigger_tested="GET /api/health",
@@ -604,18 +613,20 @@ def run(args: argparse.Namespace) -> int:
         finish_timestamp=_now(),
         code_sha=sha,
     ))
-    if not live_locked:
-        print("NOT WORKING: live money lock was not explicitly proven")
+    if not (live_locked and live_lock_verified and not live_execution_authorized):
+        print("NOT WORKING: canonical live-money lock was not explicitly verified locked/unauthorized")
         dest = Path(args.output)
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(json.dumps({
-            "schema_version": 2,
+            "schema_version": 3,
             "generated_at": _now(),
             "code_sha": sha,
             "api": api,
-            "live_locked": False,
+            "live_locked": live_locked,
+            "live_lock_verified": live_lock_verified,
+            "live_execution_authorized": live_execution_authorized,
             "verdict": "PRODUCT ACCEPTANCE HOLD",
-            "verdict_reason": health_grade["blocker_reason"] or "live money was not locked",
+            "verdict_reason": health_grade["blocker_reason"] or "canonical live-money lock was not verified locked/unauthorized",
             "features": rows,
         }, indent=2), encoding="utf-8")
         print(f"Wrote {dest}")
@@ -812,11 +823,7 @@ def run(args: argparse.Namespace) -> int:
     try:
         query = urllib.parse.urlencode({"symbol": symbol, "as_of": args.as_of})
         sim = _request_json(_url(api, f"/api/decision-simulator?{query}"), timeout=max(args.request_timeout, 60))
-        if str(sim.get("status") or "").upper() in {
-            "HISTORICAL_DECISION_UNAVAILABLE",
-            "AMBIGUOUS_HISTORICAL_DECISION",
-            "UNAVAILABLE",
-        }:
+        if str(sim.get("status") or "").upper() in {"HISTORICAL_DECISION_UNAVAILABLE", "AMBIGUOUS_HISTORICAL_DECISION", "UNAVAILABLE"}:
             persisted = _persisted_decision(symbol, str(args.as_of))
             if persisted.get("decision_id"):
                 query = urllib.parse.urlencode({
@@ -824,10 +831,7 @@ def run(args: argparse.Namespace) -> int:
                     "as_of": str(persisted.get("market_as_of") or args.as_of)[:10],
                     "decision_id": str(persisted.get("decision_id")),
                 })
-                sim = _request_json(
-                    _url(api, f"/api/decision-simulator?{query}"),
-                    timeout=max(args.request_timeout, 60),
-                )
+                sim = _request_json(_url(api, f"/api/decision-simulator?{query}"), timeout=max(args.request_timeout, 60))
         sim_grade = grade_simulator(sim)
         rows.append(_row(
             feature="Simulate Past Decision",
@@ -856,7 +860,7 @@ def run(args: argparse.Namespace) -> int:
         ))
 
     paper = _request_json(_url(api, "/api/paper-autopilot"), timeout=args.request_timeout)
-    paper_grade = grade_paper_status(paper, live_locked=live_locked)
+    paper_grade = grade_paper_status(paper, live_locked=live_locked, live_lock_verified=live_lock_verified)
     rows.append(_row(
         feature="Paper execution status",
         trigger_tested="GET /api/paper-autopilot",
@@ -989,13 +993,15 @@ def run(args: argparse.Namespace) -> int:
         code_sha=sha,
     ))
 
-    verdict = product_acceptance_verdict(rows, live_locked=live_locked)
+    verdict = product_acceptance_verdict(rows, live_locked=live_locked, live_lock_verified=live_lock_verified)
     out = {
-        "schema_version": 2,
+        "schema_version": 3,
         "generated_at": _now(),
         "code_sha": sha,
         "api": api,
         "live_locked": live_locked,
+        "live_lock_verified": live_lock_verified,
+        "live_execution_authorized": live_execution_authorized,
         "verdict": verdict["verdict"],
         "verdict_reason": verdict["reason"],
         "features": rows,
