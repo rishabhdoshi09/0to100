@@ -81,7 +81,7 @@ function dataCopy(dashboard: DashboardPayload): string {
   return busy ? 'Preparing official history…' : 'Starting official prices…'
 }
 
-function scanOperationState(dashboard: DashboardPayload, provenance: ScanProvenance | null): {
+export function scanOperationState(dashboard: DashboardPayload, provenance: ScanProvenance | null): {
   label: string
   active: boolean
   healthy: boolean
@@ -97,7 +97,7 @@ function scanOperationState(dashboard: DashboardPayload, provenance: ScanProvena
     return {
       label: latest.status,
       active: false,
-      healthy: ['SUCCEEDED', 'CANCELLED'].includes(latest.status),
+      healthy: latest.status === 'SUCCEEDED',
     }
   }
   if (provenance?.available) return { label: 'RECORDED', active: false, healthy: true }
