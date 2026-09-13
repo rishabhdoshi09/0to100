@@ -1,8 +1,9 @@
 """Canonical QuantTerm API façade with fail-closed live-safety projection.
 
 The established API implementation lives in ``_terminal_product_api_parallel_core``.
-This small boundary module replaces only the Paper Autopilot route that previously
-stamped ``live_locked=True``. All other routing/recovery behaviour is preserved.
+This small boundary module preserves its routing/recovery behaviour while replacing
+operator-facing routes that historically stamped or could retain ``live_locked=True``.
+Every exposed safety value comes from the canonical live-execution interlock.
 """
 from __future__ import annotations
 
@@ -23,28 +24,68 @@ for _name in dir(_core):
 app = _core.app
 
 
-def paper_autopilot() -> dict:
-    """Existing Paper Autopilot projection plus canonical broker-boundary truth."""
+def _with_live_safety(payload) -> dict:
+    """Overlay canonical broker-boundary truth on an existing API projection."""
     from product.live_safety import live_safety_projection
 
-    payload = dict(_core.paper_autopilot() or {})
-    payload.update(live_safety_projection())
-    return payload
+    out = dict(payload or {})
+    out.update(live_safety_projection())
+    return out
 
 
-def _replace_get_route(path: str, endpoint, name: str) -> None:
-    # Remove the previous route before adding the truthful projection. FastAPI
-    # resolves in registration order, so merely adding a duplicate would leave
-    # the old hard-coded endpoint reachable first.
+def paper_autopilot() -> dict:
+    """Existing Paper Autopilot projection plus canonical broker-boundary truth."""
+    return _with_live_safety(_core.paper_autopilot())
+
+
+def decision_simulator_get(
+    symbol: str = "",
+    as_of: str = "",
+    alternative: str = "",
+    decision_id: str = "",
+) -> dict:
+    """Decision-simulator read projection with canonical broker-boundary truth."""
+    return _with_live_safety(
+        _core.decision_simulator_get(
+            symbol=symbol,
+            as_of=as_of,
+            alternative=alternative,
+            decision_id=decision_id,
+        )
+    )
+
+
+def decision_simulator_run(
+    symbol: str = "",
+    as_of: str = "",
+    alternative: str = "",
+    decision_id: str = "",
+) -> dict:
+    """Decision-simulator trigger/result with canonical broker-boundary truth."""
+    return _with_live_safety(
+        _core.decision_simulator_run(
+            symbol=symbol,
+            as_of=as_of,
+            alternative=alternative,
+            decision_id=decision_id,
+        )
+    )
+
+
+def _replace_route(path: str, endpoint, *, method: str, name: str) -> None:
+    """Replace one method/path pair; duplicates would leave the legacy route first."""
+    wanted = method.upper()
     app.router.routes[:] = [
         route
         for route in app.router.routes
         if not (
             getattr(route, "path", None) == path
-            and "GET" in (getattr(route, "methods", set()) or set())
+            and wanted in (getattr(route, "methods", set()) or set())
         )
     ]
-    app.add_api_route(path, endpoint, methods=["GET"], name=name)
+    app.add_api_route(path, endpoint, methods=[wanted], name=name)
 
 
-_replace_get_route("/api/paper-autopilot", paper_autopilot, "paper_autopilot")
+_replace_route("/api/paper-autopilot", paper_autopilot, method="GET", name="paper_autopilot")
+_replace_route("/api/decision-simulator", decision_simulator_get, method="GET", name="decision_simulator_get")
+_replace_route("/api/decision-simulator", decision_simulator_run, method="POST", name="decision_simulator_run")
