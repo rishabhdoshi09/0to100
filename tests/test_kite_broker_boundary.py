@@ -5,12 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from data.kite_client import _BROKER_READS, _GuardedKiteProxy
+import data.kite_client as kite_client_module
+from data.kite_client import KiteClient, _BROKER_READS, _GuardedKiteProxy
 from product.live_execution_interlock import LiveExecutionBlocked
 
 
 class _FakeKite:
-    def __init__(self) -> None:
+    def __init__(self, *args, **kwargs) -> None:
         self.calls: list[tuple[str, tuple, dict]] = []
         self.CONSTANT = "safe"
 
@@ -64,6 +65,36 @@ def test_guarded_proxy_refuses_attribute_assignment() -> None:
         proxy.place_order = lambda **_: "bypass"  # type: ignore[method-assign]
 
 
+def test_guarded_proxy_hides_backing_sdk() -> None:
+    raw = _FakeKite()
+    proxy = _GuardedKiteProxy(raw)  # type: ignore[arg-type]
+
+    with pytest.raises(AttributeError):
+        _ = proxy._raw  # type: ignore[attr-defined]
+    with pytest.raises(AttributeError):
+        _ = proxy._GuardedKiteProxy__raw  # type: ignore[attr-defined]
+
+
+def test_legacy_private_kite_handle_is_guarded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Legacy ``client._kite`` callers must no longer receive the raw SDK."""
+    raw = _FakeKite()
+    monkeypatch.setattr(kite_client_module, "KiteConnect", lambda **_: raw)
+
+    client = KiteClient(api_key="test", access_token="", api_secret="")
+
+    assert client._kite.quote(["NSE:INFY"]) == {"ok": True}
+    assert raw.calls == [("quote", (["NSE:INFY"],), {})]
+
+    with pytest.raises(LiveExecutionBlocked):
+        client._kite.place_order(tradingsymbol="INFY")
+    assert raw.calls == [("quote", (["NSE:INFY"],), {})]
+
+    with pytest.raises(AttributeError):
+        client._kite = raw  # type: ignore[misc]
+    with pytest.raises(AttributeError):
+        _ = client._KiteClient__sdk  # type: ignore[attr-defined]
+
+
 def test_read_only_allowlist_contains_no_obvious_mutator_names() -> None:
     mutation_tokens = {
         "place",
@@ -105,7 +136,14 @@ def test_read_only_allowlist_contains_no_obvious_mutator_names() -> None:
     assert suspicious == [], f"broker read allowlist contains mutation-like methods: {suspicious}"
 
 
-def test_no_production_module_accesses_private_kite_sdk_or_constructs_parallel_client() -> None:
+def test_no_production_module_accesses_backing_kite_sdk_or_constructs_parallel_client() -> None:
+    """Only data.kite_client may own the actual KiteConnect object.
+
+    ``KiteClient._kite`` is intentionally retained as a guarded compatibility
+    property for older callers, so field-name scanning would produce false
+    positives.  The actual privileged handles are name-mangled and forbidden
+    everywhere else, while parallel KiteConnect construction remains banned.
+    """
     root = Path(__file__).resolve().parents[1]
     allowed = (root / "data" / "kite_client.py").resolve()
     violations: list[str] = []
@@ -118,6 +156,7 @@ def test_no_production_module_accesses_private_kite_sdk_or_constructs_parallel_c
         "__pycache__",
         "tests",
     }
+    forbidden_sdk_attrs = {"_KiteClient__sdk", "_GuardedKiteProxy__raw"}
 
     for path in root.rglob("*.py"):
         if any(part in ignored_parts for part in path.parts):
@@ -131,8 +170,10 @@ def test_no_production_module_accesses_private_kite_sdk_or_constructs_parallel_c
             continue
 
         for node in ast.walk(tree):
-            if isinstance(node, ast.Attribute) and node.attr == "_kite":
-                violations.append(f"{path.relative_to(root)}:{node.lineno}: private _kite access")
+            if isinstance(node, ast.Attribute) and node.attr in forbidden_sdk_attrs:
+                violations.append(
+                    f"{path.relative_to(root)}:{node.lineno}: backing Kite SDK access"
+                )
             if isinstance(node, ast.Call):
                 func = node.func
                 if isinstance(func, ast.Name) and func.id == "KiteConnect":
