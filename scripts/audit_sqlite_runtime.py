@@ -3,8 +3,20 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+import sys
 
-from product.sqlite_audit import audit_runtime, summary
+
+# When a script is executed as ``python scripts/foo.py``, Python puts the
+# ``scripts`` directory (not the repository root) on sys.path.  QuantTerm's
+# application packages live at the repository root, so make that import root
+# explicit before importing product.*.  This keeps the CLI usable exactly the
+# way operators invoke it on macOS while remaining harmless under ``python -m``.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from product.sqlite_audit import audit_runtime, summary  # noqa: E402
 
 
 def main() -> int:

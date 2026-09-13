@@ -1,7 +1,11 @@
 from __future__ import annotations
 
-import sqlite3
+import json
+import os
 from pathlib import Path
+import sqlite3
+import subprocess
+import sys
 
 from product.sqlite_audit import audit_database, classify, discover_databases, summary
 
@@ -61,3 +65,25 @@ def test_summary_only_escalates_base_integrity_failures(tmp_path: Path):
     assert payload["databases"] == 1
     assert payload["needs_investigation"] == 0
     assert payload["immutable_base_failures"] == 0
+
+
+def test_audit_cli_runs_directly_from_repo_root(tmp_path: Path):
+    repo_root = Path(__file__).resolve().parents[1]
+    runtime_root = tmp_path / "runtime"
+    env = os.environ.copy()
+    env["QT_RUNTIME_ROOT"] = str(runtime_root)
+
+    result = subprocess.run(
+        [sys.executable, "scripts/audit_sqlite_runtime.py"],
+        cwd=repo_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["summary"]["databases"] == 0
+    assert payload["summary"]["needs_investigation"] == 0
