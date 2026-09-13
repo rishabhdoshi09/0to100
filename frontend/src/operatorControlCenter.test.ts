@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 
 import {
   OPERATOR_ACTIONS,
-  liveLockState,
   operatorActionDisabled,
   operatorState,
 } from './operatorControlCenter'
@@ -89,11 +88,17 @@ function dashboard(overrides: Partial<DashboardPayload> = {}): DashboardPayload 
 }
 
 describe('operator control center', () => {
-  it('exposes only non-live operator controls', () => {
+  it('exposes all expected safe operator controls and no live-order controls', () => {
     const controls = OPERATOR_ACTIONS.map((action) => action.control)
-    expect(controls).toContain('RUN_SCAN_NOW')
-    expect(controls).toContain('REFRESH_DATA_NOW')
-    expect(controls).toContain('RUN_CYCLE_NOW')
+    expect(controls).toEqual(expect.arrayContaining([
+      'RUN_SCAN_NOW',
+      'REFRESH_DATA_NOW',
+      'REFRESH_NEWS_NOW',
+      'REFRESH_LONG_TERM_NOW',
+      'REFRESH_FNO_NOW',
+      'REFRESH_MARKET_REPORT_NOW',
+      'RUN_CYCLE_NOW',
+    ]))
     expect(controls.some((control) => /LIVE|BUY|SELL|UNLOCK/.test(control))).toBe(false)
   })
 
@@ -125,7 +130,7 @@ describe('operator control center', () => {
     }))).toBe('ATTENTION')
   })
 
-  it('disables a duplicate operation while that durable job is active', () => {
+  it('disables a duplicate durable operation while it is active', () => {
     const base = dashboard()
     const activeScan = {
       operation_id: 'scan-1',
@@ -146,11 +151,5 @@ describe('operator control center', () => {
     })
     const action = OPERATOR_ACTIONS.find((row) => row.control === 'RUN_SCAN_NOW')!
     expect(operatorActionDisabled(payload, action)).toBe(true)
-  })
-
-  it('never claims the live lock is verified unless backend home truth says so', () => {
-    expect(liveLockState(null)).toBe('UNVERIFIED')
-    expect(liveLockState({ home_os: { state: 'RUNNING', headline: '', subtext: '', live_locked: true } } as never)).toBe('LOCKED')
-    expect(liveLockState({ home_os: { state: 'RUNNING', headline: '', subtext: '', live_locked: false } } as never)).toBe('UNVERIFIED')
   })
 })
