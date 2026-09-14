@@ -132,19 +132,30 @@ def test_mac_service_has_one_owner_and_storage_gate():
     setup = SETUP.read_text(encoding="utf-8")
     runner = MAC_RUNNER.read_text(encoding="utf-8")
 
-    assert "run_quantterm_mac.sh" in setup
-    assert "quantterm_storage_preflight.sh" in runner
-    assert runner.index("quantterm_storage_preflight.sh") < runner.index("run_quantterm_complete.sh")
-    assert "QT_STORAGE_PREFLIGHT_ATTACH=0" in runner
-    assert "stopping the complete stack" in runner
+    # The compatibility runner remains fail-closed, but setup no longer installs
+    # it as a second owner. setup_mac delegates to the canonical host installer.
+    assert "quantterm_storage_preflight.sh" in setup
+    assert setup.index("quantterm_storage_preflight.sh") < setup.index("pip install")
+    assert "install_quantterm_host.sh" in setup
+    assert "QT_RUNTIME_ROOT_REQUIRE_EXISTING=1" in setup
+    assert "--manager launchd" in setup
+    assert "run_quantterm_mac.sh" not in setup
 
-    # Historical autonomy plist is removed, never generated or kickstarted.
-    assert 'OLD_AUTO_PLIST="$AGENTS/com.quantterm.autonomy.plist"' in setup
+    # Every historical launchd owner is explicitly booted out/removed.
+    for label in ("com.quantterm.desk", "com.quantterm.ui", "com.quantterm.app", "com.quantterm.autonomy"):
+        assert label in setup
     assert 'cat > "$AUTO_PLIST"' not in setup
     assert "kickstart -k \"gui/$(id -u)/com.quantterm.autonomy\"" not in setup
-    assert "PathState" in setup
-    assert "ThrottleInterval</key><integer>60" in setup
-    assert "QT_RUNTIME_ROOT" in setup
+
+    # Storage/npm contract is persisted for host_entrypoint reboot/reconnect use.
+    assert '"QT_NPM_BIN=$NPM_BIN"' in setup
+    assert '"QT_STORAGE_PREFLIGHT_REQUIRED=1"' in setup
+    assert '"QT_STORAGE_BUNDLE=$STORAGE_BUNDLE"' in setup
+    assert '"QT_STORAGE_RUNTIME=$STORAGE_RUNTIME"' in setup
+
+    # The old manual runner itself still gates storage before launching its stack.
+    assert "quantterm_storage_preflight.sh" in runner
+    assert runner.index("quantterm_storage_preflight.sh") < runner.index("run_quantterm_complete.sh")
 
 
 def test_inner_supervisor_reads_market_ops_truth_from_runtime_root():
