@@ -2,17 +2,21 @@
 
 The legacy intelligence runtime is still valuable for position management and
 research evidence, but new paper entries are owned by the recommendation
-selection authority.  The management pass therefore runs with entries disabled
-on purpose.  Its mechanical ``BLOCKED_SAFETY`` eligibility must never overwrite
+selection authority. The management pass therefore runs with entries disabled
+on purpose. Its mechanical ``BLOCKED_SAFETY`` eligibility must never overwrite
 the later recommendation/PaperBook outcome.
 
-This installer follows QuantTerm's existing runtime-installer pattern.  It does
+This installer follows QuantTerm's existing runtime-installer pattern. It does
 not add a second execution path: it composes the two existing phases and keeps
 ``run_reco_paper_cycle -> brain.intel_book`` as the sole new-entry authority.
 """
 from __future__ import annotations
 
 from typing import Any, Mapping
+
+
+PAPER_EXECUTION_FAILED = "PAPER_EXECUTION_FAILED"
+EXECUTION_INCONSISTENT = "EXECUTION_INCONSISTENT"
 
 _INSTALLED = False
 
@@ -62,14 +66,11 @@ def merge_cycle_truth(
         if reco_opened:
             result["eligibility"] = "TRADED"
         else:
-            # Fail closed: an execution label without a persisted PaperBook fill
-            # is an integrity error, never a successful trade.
-            result["eligibility"] = "EXECUTION_INCONSISTENT"
+            result["eligibility"] = EXECUTION_INCONSISTENT
             result["execution_truth_error"] = "TRADED_WITHOUT_PERSISTED_POSITION"
     elif canonical:
         result["eligibility"] = canonical
 
-    # Top-level entry semantics describe the canonical recommendation phase.
     result["new_entries_allowed"] = bool(
         recommendation.get("entries_allowed", entries_allowed)
     )
@@ -106,8 +107,6 @@ def install_paper_cycle_truth() -> None:
         live = self.live_feed
         brain = get_brain()
 
-        # Phase 1 manages exits/evidence only.  RECO_SELECTION_AUTHORITY is an
-        # intentional internal block, not the final paper-entry outcome.
         management = brain.run_intelligence_cycle_day(
             new_entries_allowed=False,
             entry_block_reason=(
@@ -118,6 +117,8 @@ def install_paper_cycle_truth() -> None:
             fresh_live_symbols=(live.fresh_symbols() if live is not None else ()),
         )
         result = dict(management or {})
+        failure_message = ""
+        failure_cause: Exception | None = None
 
         try:
             from product.paper_autopilot import run_reco_paper_cycle
@@ -142,20 +143,61 @@ def install_paper_cycle_truth() -> None:
                 entry_block_reason=str(entry_block_reason or ""),
                 session_phase=str(session_phase or ""),
             )
-            # Supervisor status reads brain.state.last_intel_cycle.  Persist the
-            # combined truth so the UI cannot keep showing the management-only
-            # BLOCKED_SAFETY after the recommendation phase completed.
+
             brain.state.last_intel_cycle = dict(result)
             try:
                 brain._save_intel_book()
             except Exception:
                 pass
+
+            if str(result.get("eligibility") or "").upper() == EXECUTION_INCONSISTENT:
+                failure_message = (
+                    f"{EXECUTION_INCONSISTENT}: "
+                    f"{result.get('execution_truth_error') or 'canonical paper execution integrity failure'}"
+                )
         except Exception as exc:
+            # Phase 1 deliberately runs with entries disabled. If the canonical
+            # paper executor crashes, inheriting phase 1's BLOCKED_SAFETY would
+            # turn an execution failure into a fake safety/no-trade outcome.
             result.setdefault("reco_autopilot", {})
             result["reco_autopilot"]["error"] = str(exc)[:300]
+            result["reco_autopilot"]["eligibility"] = PAPER_EXECUTION_FAILED
+            result["management_eligibility"] = str(result.get("eligibility") or "")
+            result["management_entry_block_reason"] = str(
+                result.get("entry_block_reason") or ""
+            )
+            result["eligibility"] = PAPER_EXECUTION_FAILED
+            result["execution_truth_error"] = (
+                f"{type(exc).__name__}: canonical paper executor failed"
+            )
+            result["entry_block_reason"] = PAPER_EXECUTION_FAILED
+            result["new_entries_allowed"] = False
+            result["session_phase"] = str(session_phase or "")
 
-        # Notification must see the same final result the durable job records.
+            # Persist the failure projection before re-raising so the UI and the
+            # durable job ledger agree that execution failed rather than showing
+            # the management-only BLOCKED_SAFETY state.
+            brain.state.last_intel_cycle = dict(result)
+            try:
+                brain._save_intel_book()
+            except Exception:
+                pass
+
+            failure_message = f"{PAPER_EXECUTION_FAILED}: {type(exc).__name__}: {exc}"
+            failure_cause = exc
+
+        # Notification receives the same final truth projected by the brain.
         self.telegram.notify_paper_cycle(result, book=brain.intel_book)
+
+        # Do not let the durable PAPER_CYCLE job record SUCCEEDED for an executor
+        # crash or a TRADED-without-fill integrity violation. The existing job
+        # wrapper converts this raised error into RETRYABLE_FAILED/CYCLE_ERROR.
+        if failure_message:
+            failure = RuntimeError(failure_message)
+            if failure_cause is not None:
+                raise failure from failure_cause
+            raise failure
+
         return result
 
     run_paper_cycle._quantterm_paper_cycle_truth = True

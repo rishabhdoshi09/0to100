@@ -387,6 +387,26 @@ def run_whole_market_scan(
     )
     sid = snapshot_id if snapshot_id is not None else _active_snapshot_id()
     payload["source_snapshot_id"] = sid
+
+    # A pass that evaluated ZERO symbols is not "a healthy scan with no setups".
+    # It is a scan that never happened, and persisting it destroys the last real
+    # one: a background pass started before the OHLCV cache is warm silently
+    # replaced a full scan with an empty artifact, blanking the desk. A genuine
+    # zero-setup scan still has scanned_n > 0 and is saved as before.
+    if scanned_n <= 0:
+        return MarketScanReport(
+            DATA_UNAVAILABLE,
+            universe_size=0,
+            scanned=0,
+            approved_universe=approved_n,
+            requested_universe=requested_n,
+            exclusions=_coverage_exclusions(coverage),
+            error_code="NO_SYMBOL_EVALUATED",
+            error_message=("No symbol was evaluated, so the previous scan was kept "
+                           "rather than overwritten with an empty result."),
+            source_snapshot_id=sid,
+        )
+
     payload["scan_status"] = SUCCEEDED
     if save:
         try:

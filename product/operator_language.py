@@ -39,6 +39,8 @@ SIMPLE_REASONS: dict[str, str] = {
     "KITE_ACCESS_TOKEN_MISSING": "Zerodha login is needed.",
     "BROKER_LOGIN_REQUIRED": "The stock decision is ready; broker execution waits for Zerodha login.",
     "BLOCKED_BROKER_AUTH": "The stock decision is ready; broker execution waits for Zerodha login.",
+    "PAPER_EXECUTION_FAILED": "The paper executor did not complete. This is a failure to act on, not a decision not to trade.",
+    "EXECUTION_INCONSISTENT": "A trade was reported without a persisted paper fill. Treat as an integrity error, not a trade.",
     "NO_DATA_SNAPSHOT": "No market-data snapshot is active yet, so paper entries are paused. This is a data step, not a Zerodha login.",
     "CAPABILITY_BLOCKED": "A subsystem QuantTerm depends on is degraded, so new paper entries are paused.",
     "ENTRY_WINDOW_CLOSED": "Outside the 09:30-15:15 IST entry window, so no new paper entries are taken.",

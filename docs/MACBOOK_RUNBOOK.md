@@ -1,6 +1,6 @@
 # QuantTerm MacBook runbook
 
-This is the canonical operator path for the production branch on macOS Monterey.
+This is the canonical operator path for the production branch on macOS.
 
 ## 1. Pull the verified production branch
 
@@ -23,29 +23,39 @@ chmod 600 .env
 
 Edit `.env` and add the required Kite credentials. Never commit `.env`.
 
-## 3. Install the persistent host service
+## 3. Install/update the canonical Mac host
+
+Use the Mac deployment entrypoint, not the generic host installer:
 
 ```bash
-bash scripts/install_quantterm_host.sh
+bash deploy/setup_mac.sh
 ```
 
-The installer performs preflight checks, prepares the persistent runtime root, validates the exact checkout SHA, and installs the macOS launchd service. It must fail closed if the runtime root, permissions, live-execution interlock, or host prerequisites are unsafe.
+`deploy/setup_mac.sh` verifies or safely reattaches the configured external APFS sparsebundle, proves the existing durable runtime and canonical symlink, retires historical launchd owners, resolves npm for launchd, stops the old canonical owner before environment mutation, and then delegates to the strict existing-runtime host installer.
 
-The durable runtime lives outside the mutable Git checkout under:
+Production macOS must never create a replacement runtime when the external storage is missing. A missing/wrong external runtime is a blocker, not a reason to fall back to the internal disk.
+
+Default storage contract:
 
 ```text
-~/Library/Application Support/QuantTerm/runtime
+external volume:  /Volumes/Expansion
+sparsebundle:      /Volumes/Expansion/QuantTermStorage.sparsebundle
+mounted APFS:      /Volumes/QuantTermStorage
+durable runtime:   /Volumes/QuantTermStorage/QuantTerm/runtime
+canonical link:    ~/Library/Application Support/QuantTerm/runtime
 ```
 
-Do not delete that directory during upgrades. It contains durable operating state and evidence.
+Do not delete the durable runtime during upgrades. It contains operating state and evidence.
 
 ## 4. Check status
 
 ```bash
-bash scripts/quantterm_status.sh
+scripts/quantterm_status.sh \
+  --runtime-root "/Volumes/QuantTermStorage/QuantTerm/runtime" \
+  --manager launchd
 ```
 
-Healthy operation is not the same as "all market data exists". During startup or when NSE/Zerodha is unreachable, QuantTerm may truthfully show degraded, waiting, stale, or missing lanes. That is expected; do not treat a degraded status as a reason to bypass safety gates.
+Healthy operation is not the same as "all market data exists". During startup or when an upstream source is unavailable, QuantTerm may truthfully show degraded, waiting, stale, or missing lanes. That is expected; do not bypass safety gates to make the screen green.
 
 The desk is served at:
 
@@ -65,19 +75,23 @@ Do not start Streamlit or a second copy of the stack in another terminal.
 
 ## 6. After pulling a new production SHA
 
-Because deployment uses a mutable checkout, rollback is **not atomic**. The installed service is pinned to the SHA that was validated at install time. After pulling a new production commit, reinstall/validate it:
+Because deployment uses a mutable checkout, rollback is not atomic. After pulling a new known-good production commit, re-run the canonical Mac installer so storage preflight, exact SHA, service definition and health are revalidated:
 
 ```bash
-bash scripts/install_quantterm_host.sh
-bash scripts/quantterm_status.sh
+bash deploy/setup_mac.sh
+scripts/quantterm_status.sh \
+  --runtime-root "/Volumes/QuantTermStorage/QuantTerm/runtime" \
+  --manager launchd
 ```
 
-If an upgrade must be reverted, explicitly restore the old checkout first, then reinstall the service:
+If an upgrade must be reverted, explicitly restore the old checkout first, then reinstall:
 
 ```bash
 git checkout <previous-known-good-sha>
-bash scripts/install_quantterm_host.sh
-bash scripts/quantterm_status.sh
+bash deploy/setup_mac.sh
+scripts/quantterm_status.sh \
+  --runtime-root "/Volumes/QuantTermStorage/QuantTerm/runtime" \
+  --manager launchd
 ```
 
 Do not force the service to run when its pinned SHA differs from the checkout.
@@ -87,20 +101,20 @@ Do not force the service to run when its pinned SHA differs from the checkout.
 - Keep the Mac connected to power during market sessions and long first-history bootstrap work.
 - The service uses `caffeinate -i` to resist idle sleep, but closing the lid can still suspend the machine.
 - Leave the lid open during unattended market operation unless you have independently verified your clamshell/power setup.
-- Do not run memory-heavy parallel research jobs on the 8 GB machine while the live desk is operating.
-- Prefer one QuantTerm stack, one persistent runtime root, and one production checkout.
+- Avoid memory-heavy parallel research jobs on constrained hardware while the live desk is operating.
+- Keep one QuantTerm stack, one canonical launchd owner, one durable runtime root and one production checkout.
 
 ## 8. Safety contract
 
-The normal host remains PAPER/SHADOW only. The verified live-execution interlock must remain locked; broker mutations are not part of this deployment path. `MIN_SAMPLE=30` and the forward-evidence rules remain authoritative: no market evidence means no profitability claim.
+The installed host remains PAPER/SHADOW only. The verified live-execution interlock must remain locked and unauthorized; broker mutations are not part of this deployment path. Forward-evidence rules remain authoritative: missing evidence means no profitability claim.
 
 ## Morning smoke check
 
-After install or upgrade, these are the operator checks that matter:
-
 ```bash
 git rev-parse HEAD
-bash scripts/quantterm_status.sh
+scripts/quantterm_status.sh \
+  --runtime-root "/Volumes/QuantTermStorage/QuantTerm/runtime" \
+  --manager launchd
 ```
 
-Then open `http://127.0.0.1:5173` and confirm that the UI reports the same backend truth as the status command. Empty or unavailable market data must appear empty/degraded rather than be replaced with synthetic results.
+Then open `http://127.0.0.1:5173` and confirm the UI reports the same backend truth as the status command. Empty/unavailable market data must appear empty, stale, blocked or degraded rather than be replaced with synthetic success.
