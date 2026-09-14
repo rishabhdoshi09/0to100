@@ -183,6 +183,26 @@ def test_loss_event_stays_latched_across_fast_recovery_until_acknowledged(
     assert guard.lost.is_set() is False
 
 
+def test_recovery_prepares_mount_before_identity_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    root = _runtime(tmp_path / "runtime")
+    guard = RuntimeStorageGuard(root=root, interval_s=0.2)
+    guard.lost.set()
+    calls: list[str] = []
+
+    def prepare() -> None:
+        calls.append("prepare")
+
+    def check() -> bool:
+        calls.append("check")
+        return True
+
+    monkeypatch.setattr(guard, "check", check)
+
+    assert guard.wait_until_recovered(prepare=prepare) is True
+    assert calls == ["prepare", "check"]
+    assert guard.lost.is_set() is False
+
+
 def test_host_entrypoint_restarts_supervisor_after_latched_storage_loss(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ):
@@ -210,8 +230,10 @@ def test_host_entrypoint_restarts_supervisor_after_latched_storage_loss(
         def check(self) -> bool:
             return True
 
-        def wait_until_recovered(self, *, should_stop=None) -> bool:
+        def wait_until_recovered(self, *, should_stop=None, prepare=None) -> bool:
             assert self.lost.is_set() is True
+            assert callable(prepare)
+            prepare()
             self.recoveries += 1
             self.lost.clear()
             return not (should_stop and should_stop())
