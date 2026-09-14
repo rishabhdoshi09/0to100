@@ -279,14 +279,30 @@ def _append_final_contract_evidence(args, core_exit: int) -> int:
     return int(core_exit)
 
 
-def run(args) -> int:
-    # The core's run function resolves helpers in the core module namespace.
-    # Install strict boundary functions before executing it. Its original
-    # /api/forward-soak POST is intentionally preserved to force fresh proof.
+def _install_strict_core_contract() -> None:
+    """Install strict graders and require durable job completion before grading a cycle.
+
+    ``last_cycle`` is persisted by the paper runner before the autonomy job store
+    necessarily flips the same job to SUCCEEDED.  The legacy core can therefore
+    observe a truthful NO_ELIGIBLE_TRADE/TRADED cycle a fraction of a second
+    before terminal job state is visible.  Strict acceptance must not stop at
+    that projection; it waits for the durable terminal job and then grades both.
+    """
     _core.grade_learning_dashboard = grade_learning_dashboard
     _core.grade_forward_soak = grade_forward_soak
     _core.grade_paper_status = grade_paper_status
     _core.grade_paper_cycle_execution = grade_paper_cycle_execution
+    # The core polling loop only uses PAPER_CYCLE_DONE as an early-break hint.
+    # Clearing it here does not change runtime execution or the strict grader;
+    # it prevents last_cycle from racing ahead of jobs_recent terminal state.
+    _core.PAPER_CYCLE_DONE = set()
+
+
+def run(args) -> int:
+    # The core's run function resolves helpers in the core module namespace.
+    # Install strict boundary functions before executing it. Its original
+    # /api/forward-soak POST is intentionally preserved to force fresh proof.
+    _install_strict_core_contract()
     core_exit = _core.run(args)
     return _append_final_contract_evidence(args, core_exit)
 
