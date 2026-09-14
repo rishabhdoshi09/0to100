@@ -72,6 +72,67 @@ def decision_simulator_run(
     )
 
 
+def product_contract() -> dict:
+    """Extend the canonical contract with the operator surfaces required for FINAL."""
+    payload = dict(_core.product_contract() or {})
+    checks = dict(payload.get("checks") or {})
+    paths = {
+        str(getattr(route, "path", ""))
+        for route in app.routes
+        if getattr(route, "path", None)
+    }
+
+    required_controls = {
+        "REFRESH_DATA_NOW",
+        "RUN_SCAN_NOW",
+        "REFRESH_NEWS_NOW",
+        "REFRESH_LONG_TERM_NOW",
+        "REFRESH_FNO_NOW",
+        "REFRESH_MARKET_REPORT_NOW",
+        "RUN_CYCLE_NOW",
+    }
+    allowed_controls = {str(item).upper() for item in getattr(_core.core, "_ALLOWED_CONTROLS", set())}
+    forbidden_fragments = ("LIVE", "BUY", "SELL", "UNLOCK", "BROKER")
+    exposed_live_controls = sorted(
+        control
+        for control in allowed_controls
+        if any(fragment in control for fragment in forbidden_fragments)
+    )
+
+    checks["operator_control_center"] = {
+        "route_registered": "/api/controls/{control_name}" in paths,
+        "required_controls": sorted(required_controls),
+        "required_controls_available": sorted(required_controls & allowed_controls),
+        "all_required_controls_available": required_controls <= allowed_controls,
+        "live_money_controls_exposed": exposed_live_controls,
+    }
+    checks["forward_evidence_console"] = {
+        "forward_evidence_route_registered": "/api/forward-evidence" in paths,
+        "forward_soak_route_registered": "/api/forward-soak" in paths,
+        "decision_simulator_route_registered": "/api/decision-simulator" in paths,
+        "simulation_evidence_class": "HISTORICAL_REPLAY",
+        "forward_evidence_class": "PAPER_FORWARD",
+    }
+
+    operator_ok = (
+        checks["operator_control_center"]["route_registered"]
+        and checks["operator_control_center"]["all_required_controls_available"]
+        and not checks["operator_control_center"]["live_money_controls_exposed"]
+    )
+    evidence_ok = all(
+        bool(value)
+        for key, value in checks["forward_evidence_console"].items()
+        if key.endswith("route_registered")
+    )
+    payload["checks"] = checks
+    payload["wired"] = bool(payload.get("wired") and operator_ok and evidence_ok)
+    payload["note"] = (
+        "wired=true now also proves the operator Control Center and Forward Evidence console are registered, "
+        "their safe controls are backed by the canonical allow-list, and no live-money mutation control is exposed."
+    )
+    return payload
+
+
 def _replace_route(path: str, endpoint, *, method: str, name: str) -> None:
     """Replace one method/path pair; duplicates would leave the legacy route first."""
     wanted = method.upper()
@@ -89,3 +150,4 @@ def _replace_route(path: str, endpoint, *, method: str, name: str) -> None:
 _replace_route("/api/paper-autopilot", paper_autopilot, method="GET", name="paper_autopilot")
 _replace_route("/api/decision-simulator", decision_simulator_get, method="GET", name="decision_simulator_get")
 _replace_route("/api/decision-simulator", decision_simulator_run, method="POST", name="decision_simulator_run")
+_replace_route("/api/product-contract", product_contract, method="GET", name="product_contract")
