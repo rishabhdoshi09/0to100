@@ -101,6 +101,119 @@ def grade_paper_status(
     return {"status": "PASS", "blocker_reason": "", "count": len(_core._as_list(positions))}
 
 
+_PAPER_FAILURE_TOKENS = (
+    "BLOCKED_BROKER",
+    "BLOCKED_BROKER_AUTH",
+    "BROKER_LOGIN_REQUIRED",
+    "LOGIN_REQUIRED",
+    "LOGIN REQUIRED",
+    "NO_DATA",
+    "DATA_UNAVAILABLE",
+    "MARKET_NOT_READY",
+    "PAPER_TRADING_DISABLED",
+    "BLOCKED_SAFETY",
+    "SAFETY_BLOCK",
+)
+_PAPER_VALID_NO_ENTRY_TOKENS = (
+    "ENTRY_WINDOW_CLOSED",
+    "OUTSIDE_ENTRY_WINDOW",
+    "BLOCKED_ENTRY_WINDOW",
+)
+
+
+def grade_paper_cycle_execution(
+    *,
+    job: Mapping[str, Any] | None = None,
+    last_cycle: Mapping[str, Any] | None = None,
+    observed: bool = False,
+) -> dict[str, str]:
+    """Fail closed unless a real paper-cycle terminal outcome is demonstrated.
+
+    Broker/data/safety failures are never a successful paper cycle.  Off-session
+    entry-window closure is valid behavior.  A TRADED claim additionally needs a
+    persisted ``positions_opened`` record so a judgment/intent cannot masquerade
+    as a PaperBook fill.
+    """
+    job_d = _core._as_dict(job)
+    cycle = _core._as_dict(last_cycle)
+    job_status = str(job_d.get("status") or "").upper()
+    eligibility = str(
+        cycle.get("eligibility")
+        or cycle.get("decision")
+        or job_d.get("result_summary")
+        or ""
+    ).upper()
+    reason_blob = " ".join(
+        str(value or "")
+        for value in (
+            eligibility,
+            job_d.get("result_summary"),
+            job_d.get("error_code"),
+            job_d.get("error_message"),
+            job_d.get("blocked_reason"),
+            job_d.get("blocked_on"),
+            cycle.get("reason"),
+            cycle.get("entry_block_reason"),
+        )
+    ).upper()
+
+    if job_status in {"FAILED", "CANCELLED"}:
+        return {
+            "status": "FAIL",
+            "blocker_reason": _core._join_reasons(
+                job_d.get("error_code"), job_d.get("error_message"), job_status
+            ),
+        }
+    if any(token in reason_blob for token in _PAPER_FAILURE_TOKENS):
+        return {
+            "status": "FAIL",
+            "blocker_reason": "paper cycle unavailable: " + (eligibility or str(job_d.get("result_summary") or "unknown")),
+        }
+    if job_status == "BLOCKED":
+        return {
+            "status": "FAIL",
+            "blocker_reason": _core._join_reasons(
+                "paper_cycle BLOCKED",
+                job_d.get("error_code"),
+                job_d.get("blocked_reason"),
+                job_d.get("blocked_on"),
+            ),
+        }
+    if not observed:
+        return {
+            "status": "DEGRADED",
+            "blocker_reason": "control accepted; durable cycle completion not observed",
+        }
+    if job_status != "SUCCEEDED":
+        return {
+            "status": "FAIL",
+            "blocker_reason": f"observed paper cycle has non-success status {job_status or 'UNKNOWN'}",
+        }
+
+    if "TRADED" in eligibility:
+        opened = _core._as_list(cycle.get("positions_opened"))
+        if not opened:
+            return {
+                "status": "FAIL",
+                "blocker_reason": "TRADED claimed without persisted positions_opened evidence",
+            }
+        return {"status": "PASS", "blocker_reason": ""}
+    if "NO_ELIGIBLE_TRADE" in eligibility:
+        return {
+            "status": "PASS",
+            "blocker_reason": "NO_ELIGIBLE_TRADE after completed cycle",
+        }
+    if any(token in reason_blob for token in _PAPER_VALID_NO_ENTRY_TOKENS):
+        return {
+            "status": "PASS",
+            "blocker_reason": str(job_d.get("result_summary") or eligibility or "entry window closed"),
+        }
+    return {
+        "status": "FAIL",
+        "blocker_reason": "paper_cycle SUCCEEDED without a recognized truthful terminal outcome",
+    }
+
+
 def grade_final_product_contract(payload: Mapping[str, Any] | None) -> dict[str, str]:
     data = _core._as_dict(payload)
     if data.get("wired") is not True:
@@ -173,6 +286,7 @@ def run(args) -> int:
     _core.grade_learning_dashboard = grade_learning_dashboard
     _core.grade_forward_soak = grade_forward_soak
     _core.grade_paper_status = grade_paper_status
+    _core.grade_paper_cycle_execution = grade_paper_cycle_execution
     core_exit = _core.run(args)
     return _append_final_contract_evidence(args, core_exit)
 
