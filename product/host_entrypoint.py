@@ -66,13 +66,22 @@ def _read_scheduler_status() -> dict[str, Any]:
 
 
 def _write_scheduler_status(payload: dict[str, Any]) -> None:
-    from core.runtime_paths import runtime_path
+    from core.runtime_paths import REQUIRE_EXISTING_ENV, runtime_path
+
     path = runtime_path(REPORT_SCHEDULER_REL)
-    # An installed runtime already owns state/. Never recreate parent paths here:
-    # if external storage vanished, mkdir could silently create split state on the
-    # system disk before the storage watchdog fires.
+    # Installed-host strict mode means the adopted runtime already owns state/.
+    # Never recreate that directory: if external storage vanished, mkdir could
+    # silently create split state on the system disk before the watchdog fires.
+    strict = str(os.environ.get(REQUIRE_EXISTING_ENV, "")).strip().lower() in {
+        "1", "true", "yes", "on",
+    }
     if not path.parent.is_dir():
-        raise RuntimeError(f"runtime state directory is unavailable: {path.parent}")
+        if strict:
+            raise RuntimeError(f"runtime state directory is unavailable: {path.parent}")
+        # Unit/dev callers are allowed to initialise an ephemeral runtime tree.
+        # product.host_entrypoint.main() always enables strict mode before this
+        # scheduler starts, so this branch is unreachable on the installed host.
+        path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
     os.replace(tmp, path)
