@@ -777,6 +777,35 @@ def _paper_market_data_source(ctx) -> tuple[bool, str]:
     return False, "unavailable"
 
 
+def _accepts_full_paper_cycle_signature(fn) -> bool:
+    """True when ``fn`` can take the four-argument canonical paper-cycle call.
+
+    Legacy injected fakes accept only ``entries_allowed``. Deciding that by
+    inspection keeps the decision side-effect free: the previous probe called
+    the real cycle and treated any TypeError as an arity mismatch, so a genuine
+    TypeError raised after a paper position had already been persisted caused
+    the entire cycle -- management pass and canonical executor -- to run a
+    second time.
+    """
+    import inspect
+
+    try:
+        signature = inspect.signature(fn)
+    except (TypeError, ValueError):
+        # Un-introspectable callable: prefer the full call, which is canonical.
+        return True
+    parameters = list(signature.parameters.values())
+    if any(p.kind is inspect.Parameter.VAR_POSITIONAL for p in parameters):
+        return True
+    positional = [
+        p for p in parameters
+        if p.kind in (inspect.Parameter.POSITIONAL_ONLY,
+                      inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    ]
+    # ``fn`` is already bound, so ``self`` is not counted here.
+    return len(positional) >= 4
+
+
 def run_paper_cycle(ctx) -> JobResult:
     now = ctx.deps.now_ist()
     holidays = ctx.deps.holidays()
@@ -789,9 +818,14 @@ def run_paper_cycle(ctx) -> JobResult:
         entries_ok = False
         reason = reason or "NO_DATA_SNAPSHOT"
     try:
-        try:
+        # Arity is resolved by inspection, never by calling and catching TypeError.
+        # The canonical cycle opens real paper positions before it can raise, so a
+        # TypeError from INSIDE the cycle is indistinguishable from a signature
+        # mismatch under a try/except probe -- and the retry re-ran the whole
+        # cycle, producing a second paper position from one job run.
+        if _accepts_full_paper_cycle_signature(ctx.deps.run_paper_cycle):
             result = ctx.deps.run_paper_cycle(entries_ok, reason, phase, ctx.active_failures)
-        except TypeError:  # legacy injected fakes
+        else:
             result = ctx.deps.run_paper_cycle(entries_ok)
     except Exception as exc:
         return JobResult(JS.RETRYABLE_FAILED, "paper cycle error", error_code="CYCLE_ERROR",
