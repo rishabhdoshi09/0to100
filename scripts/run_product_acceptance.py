@@ -4,12 +4,14 @@
 The established operation-grading implementation lives in
 ``_product_acceptance_core``. This façade keeps the acceptance boundary small
 and explicit: broker safety must be verified, locked, and unauthorized. Paper
-acceptance exercises the real Paper Autopilot route, and Forward Soak retains
-its POST verify-now probe so acceptance validates fresh persisted evidence.
+acceptance exercises the real Paper Autopilot route, Forward Soak retains its
+POST verify-now probe, and the FINAL product contract must prove the operator
+Control Center and Forward Evidence console remain genuinely wired.
 """
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from typing import Any, Mapping
@@ -99,6 +101,71 @@ def grade_paper_status(
     return {"status": "PASS", "blocker_reason": "", "count": len(_core._as_list(positions))}
 
 
+def grade_final_product_contract(payload: Mapping[str, Any] | None) -> dict[str, str]:
+    data = _core._as_dict(payload)
+    if data.get("wired") is not True:
+        return {"status": "FAIL", "blocker_reason": "product-contract wired is not true"}
+    checks = _core._as_dict(data.get("checks"))
+    operator = _core._as_dict(checks.get("operator_control_center"))
+    evidence = _core._as_dict(checks.get("forward_evidence_console"))
+    if operator.get("route_registered") is not True:
+        return {"status": "FAIL", "blocker_reason": "Control Center control route is not registered"}
+    if operator.get("all_required_controls_available") is not True:
+        return {"status": "FAIL", "blocker_reason": "Control Center is missing required safe controls"}
+    if _core._as_list(operator.get("live_money_controls_exposed")):
+        return {"status": "FAIL", "blocker_reason": "Control Center exposes live-money mutation controls"}
+    for key in (
+        "forward_evidence_route_registered",
+        "forward_soak_route_registered",
+        "decision_simulator_route_registered",
+    ):
+        if evidence.get(key) is not True:
+            return {"status": "FAIL", "blocker_reason": f"Forward Evidence contract missing {key}"}
+    if evidence.get("simulation_evidence_class") != "HISTORICAL_REPLAY":
+        return {"status": "FAIL", "blocker_reason": "simulator evidence is not isolated as HISTORICAL_REPLAY"}
+    if evidence.get("forward_evidence_class") != "PAPER_FORWARD":
+        return {"status": "FAIL", "blocker_reason": "forward evidence is not isolated as PAPER_FORWARD"}
+    return {"status": "PASS", "blocker_reason": ""}
+
+
+def _append_final_contract_evidence(args, core_exit: int) -> int:
+    """Make the final operator contract part of the persisted acceptance verdict."""
+    try:
+        contract = _core._request_json(
+            _core._url(args.api, "/api/product-contract"),
+            timeout=args.request_timeout,
+        )
+        grade = grade_final_product_contract(contract)
+    except Exception as exc:
+        contract = {}
+        grade = {"status": "FAIL", "blocker_reason": str(exc)[:300]}
+
+    path = Path(args.output)
+    if not path.exists():
+        return 1
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    rows = [row for row in payload.get("features", []) if isinstance(row, dict)]
+    rows.append(_core._row(
+        feature="Final product contract",
+        trigger_tested="GET /api/product-contract",
+        backend_path="terminal_product_api_parallel.product_contract",
+        durable_artifact="registered API routes + canonical control allow-list",
+        result_count=len(_core._as_dict(contract.get("checks"))),
+        status=grade["status"],
+        blocker_reason=grade["blocker_reason"],
+        start_timestamp=_core._now(),
+        finish_timestamp=_core._now(),
+        code_sha=_core._sha(),
+    ))
+    payload["features"] = rows
+    if grade["status"] != "PASS":
+        payload["verdict"] = "PRODUCT ACCEPTANCE HOLD"
+        payload["verdict_reason"] = "final product contract failed: " + grade["blocker_reason"]
+        core_exit = 1
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return int(core_exit)
+
+
 def run(args) -> int:
     # The core's run function resolves helpers in the core module namespace.
     # Install strict boundary functions before executing it. Its original
@@ -106,7 +173,8 @@ def run(args) -> int:
     _core.grade_learning_dashboard = grade_learning_dashboard
     _core.grade_forward_soak = grade_forward_soak
     _core.grade_paper_status = grade_paper_status
-    return _core.run(args)
+    core_exit = _core.run(args)
+    return _append_final_contract_evidence(args, core_exit)
 
 
 if __name__ == "__main__":
