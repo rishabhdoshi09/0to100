@@ -175,9 +175,10 @@ def ensure_existing_persistent_runtime_root(
 def _read_json_relative(parts: Sequence[str]) -> dict[str, Any]:
     if not parts:
         raise HI.HostInstallError("strict JSON read requires a relative file path")
-    parent_fd = _open_relative_dir(parts[:-1])
+    parent_fd = -1
     fd = -1
     try:
+        parent_fd = _open_relative_dir(parts[:-1])
         fd = os.open(parts[-1], os.O_RDONLY, dir_fd=parent_fd)
         with os.fdopen(fd, "r", encoding="utf-8") as handle:
             fd = -1
@@ -190,7 +191,8 @@ def _read_json_relative(parts: Sequence[str]) -> dict[str, Any]:
     finally:
         if fd >= 0:
             os.close(fd)
-        os.close(parent_fd)
+        if parent_fd >= 0:
+            os.close(parent_fd)
 
 
 def strict_atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
