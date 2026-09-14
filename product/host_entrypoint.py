@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import signal
 import sys
 import threading
@@ -53,6 +54,55 @@ def load_env_file(path: str | os.PathLike[str] | None) -> list[str]:
             os.environ[key] = value
             loaded.append(key)
     return loaded
+
+
+def prepare_frontend_toolchain() -> str:
+    """Resolve npm before host-supervisor child specs are constructed.
+
+    launchd does not source the user's interactive shell configuration, so npm
+    installed by Homebrew/nvm/Volta/asdf can disappear even though it works in
+    Terminal.  Prefer an explicitly pinned QT_NPM_BIN, then the current PATH,
+    then common per-user/macOS locations.  The npm directory is prepended to
+    PATH so npm's ``/usr/bin/env node`` shebang resolves the matching node too.
+    """
+    candidates: list[Path] = []
+    configured = str(os.environ.get("QT_NPM_BIN") or "").strip()
+    if configured:
+        candidates.append(Path(configured).expanduser())
+    discovered = shutil.which("npm")
+    if discovered:
+        candidates.append(Path(discovered))
+
+    home = Path.home()
+    nvm_root = home / ".nvm" / "versions" / "node"
+    if nvm_root.is_dir():
+        candidates.extend(sorted(nvm_root.glob("*/bin/npm"), reverse=True))
+    candidates.extend((
+        home / ".volta" / "bin" / "npm",
+        home / ".asdf" / "shims" / "npm",
+        Path("/opt/homebrew/bin/npm"),
+        Path("/usr/local/bin/npm"),
+    ))
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        text = str(candidate)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        if not candidate.is_file() or not os.access(candidate, os.X_OK):
+            continue
+        absolute = candidate.absolute()
+        bin_dir = str(absolute.parent)
+        current = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p]
+        os.environ["PATH"] = os.pathsep.join([bin_dir, *[p for p in current if p != bin_dir]])
+        os.environ["QT_NPM_BIN"] = str(absolute)
+        return str(absolute)
+
+    raise RuntimeError(
+        "installed QuantTerm requires npm for the frontend, but launchd could not resolve it; "
+        "set QT_NPM_BIN to the absolute npm executable and reinstall the host"
+    )
 
 
 def _read_scheduler_status() -> dict[str, Any]:
@@ -143,6 +193,8 @@ def _report_loop(storage_guard) -> None:
 
 def main() -> int:
     load_env_file(os.environ.get("QT_HOST_ENV_FILE"))
+    npm = prepare_frontend_toolchain()
+    print(f"[HOST TOOLCHAIN] npm={npm}", flush=True)
     if not os.environ.get("QT_RUNTIME_ROOT", "").strip():
         raise RuntimeError("installed QuantTerm requires QT_RUNTIME_ROOT")
     if not os.environ.get("QT_BUILD_SHA", "").strip():
