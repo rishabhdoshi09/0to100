@@ -10,8 +10,11 @@ from product import host_install_existing as HIE
 
 
 @pytest.fixture(autouse=True)
-def _not_ephemeral(monkeypatch):
+def _strict_test_isolation(monkeypatch):
+    HIE._close_pinned_root()
     monkeypatch.setattr(HI, "EPHEMERAL_PREFIXES", ("/definitely-not-this-prefix/",))
+    yield
+    HIE._close_pinned_root()
 
 
 def _initialised_runtime(root: Path) -> Path:
@@ -42,7 +45,7 @@ def test_missing_strict_runtime_is_never_created(tmp_path: Path):
     assert not missing.parent.exists()
 
 
-def test_existing_strict_runtime_is_verified_without_creating_probe_residue(tmp_path: Path):
+def test_existing_strict_runtime_is_pinned_and_probe_leaves_no_residue(tmp_path: Path):
     repo = tmp_path / "repo"
     repo.mkdir()
     runtime = tmp_path / "external" / "QuantTerm" / "runtime"
@@ -51,6 +54,8 @@ def test_existing_strict_runtime_is_verified_without_creating_probe_residue(tmp_
     resolved = HIE.ensure_existing_persistent_runtime_root(runtime, repo_root=repo)
 
     assert resolved == runtime.resolve(strict=True)
+    assert HIE._PINNED_ROOT == resolved
+    assert HIE._PINNED_ROOT_FD is not None
     assert not list(runtime.glob(".quantterm-install-probe.*"))
 
 
@@ -69,7 +74,7 @@ def test_strict_adoption_requires_existing_manifest_and_never_initialises(tmp_pa
     runtime = tmp_path / "external" / "QuantTerm" / "runtime"
     runtime.mkdir(parents=True)
 
-    with pytest.raises(HI.HostInstallError, match="requires existing runtime manifest"):
+    with pytest.raises(HI.HostInstallError, match="strict runtime file is unreadable"):
         HIE.adopt_existing_runtime(runtime, repo_root=repo, build_sha="new-sha")
 
     assert not (runtime / HI.MANIFEST_REL).exists()
@@ -89,38 +94,84 @@ def test_strict_adoption_accepts_only_existing_initialised_runtime(tmp_path: Pat
     assert (repo / ".quantterm_runtime_root").read_text(encoding="utf-8").strip() == str(runtime.resolve())
 
 
-def test_strict_adoption_rechecks_storage_before_persisting_pointer(tmp_path: Path, monkeypatch):
+def test_strict_adoption_reprobes_pinned_storage_before_pointer(tmp_path: Path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
     runtime = _initialised_runtime(tmp_path / "external" / "QuantTerm" / "runtime")
     calls = {"count": 0}
-    original = HIE.ensure_existing_persistent_runtime_root
+    original = HIE._anchored_probe
 
-    def disappearing(path, *, repo_root=HI.REPO_ROOT):
+    def disappearing(prefix=".quantterm-install-probe"):
         calls["count"] += 1
         if calls["count"] == 1:
-            return original(path, repo_root=repo_root)
+            return original(prefix)
         raise HI.HostInstallError("runtime disappeared during strict adoption")
 
-    monkeypatch.setattr(HIE, "ensure_existing_persistent_runtime_root", disappearing)
+    monkeypatch.setattr(HIE, "_anchored_probe", disappearing)
 
     with pytest.raises(HI.HostInstallError, match="disappeared"):
         HIE.adopt_existing_runtime(runtime, repo_root=repo)
 
+    assert calls["count"] == 2
     assert not (repo / ".quantterm_runtime_root").exists()
 
 
-def test_strict_adapter_routes_install_through_fail_closed_root_and_adoption(monkeypatch):
+def test_strict_atomic_json_writes_inside_pin_without_creating_missing_parent(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    runtime = _initialised_runtime(tmp_path / "external" / "QuantTerm" / "runtime")
+    HIE.ensure_existing_persistent_runtime_root(runtime, repo_root=repo)
+
+    target = runtime / "state" / "host_deployment.json"
+    HIE.strict_atomic_json(target, {"build_sha": "abc"})
+    assert json.loads(target.read_text(encoding="utf-8"))["build_sha"] == "abc"
+
+    missing_parent = runtime / "never-create-me"
+    with pytest.raises(Exception):
+        HIE.strict_atomic_json(missing_parent / "state.json", {"x": 1})
+    assert not missing_parent.exists()
+
+
+def test_strict_service_definition_creates_runtime_logs_via_pinned_descriptor(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    runtime = _initialised_runtime(tmp_path / "external" / "QuantTerm" / "runtime")
+    home = tmp_path / "home"
+
+    result = HIE.strict_install_service_definition(
+        runtime_root=runtime,
+        build_sha="deadbeef",
+        repo_root=repo,
+        python="/usr/bin/python3",
+        manager="launchd",
+        home=home,
+    )
+
+    assert (runtime / "logs" / "service").is_dir()
+    plist = Path(result["path"])
+    assert plist.is_file()
+    assert HI.LAUNCHD_LABEL in plist.read_text(encoding="utf-8")
+
+
+def test_strict_adapter_routes_all_runtime_mutation_surfaces(monkeypatch):
     observed = {}
 
     def fake_main(argv):
         observed["argv"] = argv
         observed["root_fn"] = HI.ensure_persistent_runtime_root
         observed["migrate_fn"] = HI.migrate_repo_runtime
+        observed["atomic_fn"] = HI._atomic_json
+        observed["service_fn"] = HI.install_service_definition
+        observed["preflight_fn"] = HI.run_required_preflight
         return 17
 
-    original_root = HI.ensure_persistent_runtime_root
-    original_migrate = HI.migrate_repo_runtime
+    originals = {
+        "root": HI.ensure_persistent_runtime_root,
+        "migrate": HI.migrate_repo_runtime,
+        "atomic": HI._atomic_json,
+        "service": HI.install_service_definition,
+        "preflight": HI.run_required_preflight,
+    }
     monkeypatch.setattr(HI, "main", fake_main)
 
     rc = HIE.main(["--runtime-root", "/already-mounted/runtime", "--manager", "launchd"])
@@ -135,5 +186,12 @@ def test_strict_adapter_routes_install_through_fail_closed_root_and_adoption(mon
     ]
     assert observed["root_fn"] is HIE.ensure_existing_persistent_runtime_root
     assert observed["migrate_fn"] is HIE.adopt_existing_runtime
-    assert HI.ensure_persistent_runtime_root is original_root
-    assert HI.migrate_repo_runtime is original_migrate
+    assert observed["atomic_fn"] is HIE.strict_atomic_json
+    assert observed["service_fn"] is HIE.strict_install_service_definition
+    assert observed["preflight_fn"] is HIE.strict_run_required_preflight
+    assert HI.ensure_persistent_runtime_root is originals["root"]
+    assert HI.migrate_repo_runtime is originals["migrate"]
+    assert HI._atomic_json is originals["atomic"]
+    assert HI.install_service_definition is originals["service"]
+    assert HI.run_required_preflight is originals["preflight"]
+    assert HIE._PINNED_ROOT_FD is None
