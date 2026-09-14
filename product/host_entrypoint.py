@@ -139,6 +139,12 @@ def main() -> int:
     if not os.environ.get("QT_BUILD_SHA", "").strip():
         raise RuntimeError("installed QuantTerm requires QT_BUILD_SHA")
 
+    # This invariant is inherited by every child. Once the installed service is
+    # running, a vanished configured runtime is an error at path resolution
+    # time; helpers such as ensure_logs_path are never allowed to mkdir a fresh
+    # replacement tree on another filesystem while the watchdog is reacting.
+    os.environ["QT_RUNTIME_ROOT_REQUIRE_EXISTING"] = "1"
+
     from product.runtime_storage_guard import RuntimeStorageGuard
 
     guard_interval = float(os.environ.get("QT_RUNTIME_STORAGE_WATCH_S", "15") or 15)
