@@ -136,6 +136,21 @@ def test_setup_mac_delegates_to_single_canonical_host_installer():
     ):
         assert key in script
 
+    # This existing external runtime is adopted, never created. If the volume
+    # disappears after preflight, the strict installer must block instead of
+    # recreating /Volumes/... on the internal disk.
+    assert "export QT_RUNTIME_ROOT_REQUIRE_EXISTING=1" in script
+    assert script.index("export QT_RUNTIME_ROOT_REQUIRE_EXISTING=1") < script.index(
+        'exec "$APP_DIR/scripts/install_quantterm_host.sh"'
+    )
+
+
+def test_install_wrapper_routes_strict_runtime_to_fail_closed_adapter():
+    script = Path("scripts/install_quantterm_host.sh").read_text(encoding="utf-8")
+    assert "QT_RUNTIME_ROOT_REQUIRE_EXISTING" in script
+    assert "product.host_install_existing" in script
+    assert "product.host_install install" in script
+
 
 def test_setup_server_delegates_to_single_canonical_host_installer():
     script = Path("deploy/setup_server.sh").read_text(encoding="utf-8")
