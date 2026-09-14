@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import shutil
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -54,6 +55,55 @@ def load_env_file(path: str | os.PathLike[str] | None) -> list[str]:
             os.environ[key] = value
             loaded.append(key)
     return loaded
+
+
+def _truthy(value: object) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def prepare_runtime_storage_for_startup() -> str:
+    """Attach/verify the configured macOS APFS runtime before strict path use.
+
+    The shell preflight is deliberately the one existing storage authority: it
+    may attach the already-configured sparsebundle, but it never creates or
+    repairs a missing canonical runtime path.  Non-macOS hosts and macOS hosts
+    that have not explicitly opted into the external-storage contract are left
+    unchanged.
+    """
+    if sys.platform != "darwin" or not _truthy(os.environ.get("QT_STORAGE_PREFLIGHT_REQUIRED")):
+        return "NOT_REQUIRED"
+
+    from core.runtime_paths import REPO_ROOT
+
+    script = REPO_ROOT / "scripts" / "quantterm_storage_preflight.sh"
+    if not script.is_file():
+        raise RuntimeError(f"required macOS storage preflight is missing: {script}")
+
+    env = os.environ.copy()
+    env["QT_STORAGE_PREFLIGHT_REQUIRED"] = "1"
+    env["QT_STORAGE_PREFLIGHT_ATTACH"] = "1"
+    try:
+        completed = subprocess.run(
+            ["/bin/bash", str(script)],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=90,
+            check=False,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"macOS storage preflight could not run: {type(exc).__name__}: {exc}"
+        ) from exc
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "storage preflight failed").strip()
+        if "\n" in detail:
+            detail = detail.splitlines()[-1]
+        raise RuntimeError(
+            f"macOS storage preflight failed with rc={completed.returncode}: {detail[:500]}"
+        )
+    return (completed.stdout or "[STORAGE PREFLIGHT] PASS").strip().splitlines()[-1]
 
 
 def prepare_frontend_toolchain() -> str:
@@ -193,6 +243,9 @@ def _report_loop(storage_guard) -> None:
 
 def main() -> int:
     load_env_file(os.environ.get("QT_HOST_ENV_FILE"))
+    storage = prepare_runtime_storage_for_startup()
+    if storage != "NOT_REQUIRED":
+        print(f"[HOST STORAGE] {storage}", flush=True)
     npm = prepare_frontend_toolchain()
     print(f"[HOST TOOLCHAIN] npm={npm}", flush=True)
     if not os.environ.get("QT_RUNTIME_ROOT", "").strip():
@@ -255,7 +308,10 @@ def main() -> int:
                 file=sys.stderr,
                 flush=True,
             )
-            if not storage_guard.wait_until_recovered(should_stop=outer_shutdown.is_set):
+            if not storage_guard.wait_until_recovered(
+                should_stop=outer_shutdown.is_set,
+                prepare=prepare_runtime_storage_for_startup,
+            ):
                 return 0
             print(
                 "[HOST STORAGE] Runtime recovered. Re-starting the canonical supervisor; safety and exact-SHA checks will run again.",
