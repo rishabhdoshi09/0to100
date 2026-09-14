@@ -290,12 +290,20 @@ def strict_install_service_definition(
     python = python or sys.executable
     path, label = HI._service_paths(selected, home=home)
     path.parent.mkdir(parents=True, exist_ok=True)  # local LaunchAgents path, not runtime state
+    # launchd opens StandardOutPath/StandardErrorPath before it execs the
+    # entrypoint, so those targets must exist on the always-available internal
+    # user volume -- and this installer, not launchd, has to materialize the
+    # parent. Resolve it against the same home used for the LaunchAgents path
+    # so the plist and its log targets can never disagree.
+    bootstrap_log_dir = HI._launchd_bootstrap_log_dir(home=home)
+    bootstrap_log_dir.mkdir(parents=True, exist_ok=True)
     content = HI.render_launchd_plist(
         repo_root=repo_root,
         runtime_root=root,
         python=python,
         build_sha=build_sha,
         env_file=env_file,
+        bootstrap_log_dir=bootstrap_log_dir,
     )
     previous = path.read_text(encoding="utf-8") if path.exists() else None
     backup = path.with_suffix(path.suffix + ".previous")
@@ -309,6 +317,7 @@ def strict_install_service_definition(
         "path": str(path),
         "label": label,
         "backup": str(backup) if previous is not None else "",
+        "bootstrap_log_dir": str(bootstrap_log_dir),
     }
 
 
