@@ -114,6 +114,10 @@ chmod 600 "$APP_DIR/.env"
 
 export PYTHON="$PYTHON_BIN"
 export QT_NPM_BIN="$NPM_BIN"
+# The macOS runtime is already adopted and verified by preflight. The strict
+# installer adapter must never mkdir this path if the removable volume vanishes
+# during the update window; it fails closed instead.
+export QT_RUNTIME_ROOT_REQUIRE_EXISTING=1
 exec "$APP_DIR/scripts/install_quantterm_host.sh" \
   --runtime-root "$STORAGE_RUNTIME" \
   --env-file "$APP_DIR/.env" \
