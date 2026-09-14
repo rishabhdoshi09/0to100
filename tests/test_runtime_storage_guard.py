@@ -192,6 +192,10 @@ def test_host_entrypoint_restarts_supervisor_after_latched_storage_loss(
 
     monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path / "runtime"))
     monkeypatch.setenv("QT_BUILD_SHA", "exact-test-sha")
+    # entrypoint.main intentionally overwrites this to 1. Register the key with
+    # monkeypatch first so pytest restores the pre-test process environment even
+    # though the production assignment itself is direct os.environ mutation.
+    monkeypatch.setenv("QT_RUNTIME_ROOT_REQUIRE_EXISTING", "0")
 
     class FakeGuard:
         def __init__(self, *, interval_s: float):
@@ -244,4 +248,4 @@ def test_host_entrypoint_restarts_supervisor_after_latched_storage_loss(
     assert rc == 7
     assert calls["count"] == 2
     assert guard.recoveries == 1
-    assert "QT_RUNTIME_ROOT_REQUIRE_EXISTING" in __import__("os").environ
+    assert __import__("os").environ["QT_RUNTIME_ROOT_REQUIRE_EXISTING"] == "1"
