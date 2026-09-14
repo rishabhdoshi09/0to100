@@ -1,16 +1,22 @@
 """Installed-host entrypoint for the QuantTerm paper/shadow desk.
 
 The service manager starts this module, not the interactive launcher. It loads an
-optional operator-owned environment file, starts one low-frequency post-session
-report scheduler, then hands process ownership to the canonical host supervisor.
-Scheduler failures are persisted and alert at most once per IST date instead of
-being silently swallowed.
+optional operator-owned environment file, guards the already-adopted durable
+runtime, starts one low-frequency post-session report scheduler, then hands child
+ownership to the canonical host supervisor.
+
+Runtime loss is fail-closed: the storage guard signals the supervisor to stop all
+children, report generation pauses, and the entrypoint waits without creating a
+replacement path. If the same runtime returns, the canonical supervisor is
+started again and re-verifies the exact SHA and live-money interlock.
 """
 from __future__ import annotations
 
 import json
 import os
 from pathlib import Path
+import signal
+import sys
 import threading
 import time
 from typing import Any
@@ -62,7 +68,11 @@ def _read_scheduler_status() -> dict[str, Any]:
 def _write_scheduler_status(payload: dict[str, Any]) -> None:
     from core.runtime_paths import runtime_path
     path = runtime_path(REPORT_SCHEDULER_REL)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    # An installed runtime already owns state/. Never recreate parent paths here:
+    # if external storage vanished, mkdir could silently create split state on the
+    # system disk before the storage watchdog fires.
+    if not path.parent.is_dir():
+        raise RuntimeError(f"runtime state directory is unavailable: {path.parent}")
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
     os.replace(tmp, path)
@@ -109,10 +119,17 @@ def _report_iteration() -> dict[str, Any]:
     return payload
 
 
-def _report_loop() -> None:
-    while True:
-        _report_iteration()
-        time.sleep(REPORT_POLL_SECONDS)
+def _report_loop(storage_guard) -> None:
+    while not storage_guard.shutdown.is_set():
+        if storage_guard.check():
+            try:
+                _report_iteration()
+            except Exception:
+                # Scheduler failures are persisted by _report_iteration when the
+                # runtime is available. Storage loss is owned by the guard and
+                # must not create a fallback state tree here.
+                pass
+        storage_guard.shutdown.wait(REPORT_POLL_SECONDS)
 
 
 def main() -> int:
@@ -122,14 +139,66 @@ def main() -> int:
     if not os.environ.get("QT_BUILD_SHA", "").strip():
         raise RuntimeError("installed QuantTerm requires QT_BUILD_SHA")
 
+    from product.runtime_storage_guard import RuntimeStorageGuard
+
+    guard_interval = float(os.environ.get("QT_RUNTIME_STORAGE_WATCH_S", "15") or 15)
+    storage_guard = RuntimeStorageGuard(interval_s=guard_interval)
+    outer_shutdown = threading.Event()
+    loss_reason = {"detail": ""}
+
+    def storage_lost(reason: str) -> None:
+        loss_reason["detail"] = str(reason or "runtime storage unavailable")[:500]
+        print(
+            f"[HOST STORAGE] LOST: {loss_reason['detail']} · stopping all QuantTerm children",
+            file=sys.stderr,
+            flush=True,
+        )
+        # host_supervisor.main owns SIGTERM while it is running. Its handler only
+        # requests shutdown, so the supervisor's finally block still reaps every
+        # child and releases the machine lock cleanly.
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    def outer_stop(_signum, _frame) -> None:
+        outer_shutdown.set()
+        storage_guard.close()
+
+    storage_guard.start(storage_lost)
     threading.Thread(
         target=_report_loop,
+        args=(storage_guard,),
         name="quantterm-post-session-report-scheduler",
         daemon=True,
     ).start()
 
-    from product.host_supervisor import main as supervisor_main
-    return int(supervisor_main())
+    try:
+        from product.host_supervisor import main as supervisor_main
+
+        while not outer_shutdown.is_set():
+            rc = int(supervisor_main())
+            if not storage_guard.lost.is_set():
+                return rc
+
+            # supervisor_main installed its own signal handlers. While children
+            # are down and storage is absent, restore an outer handler so a real
+            # service stop does not get mistaken for storage recovery.
+            signal.signal(signal.SIGTERM, outer_stop)
+            signal.signal(signal.SIGINT, outer_stop)
+            print(
+                "[HOST STORAGE] QuantTerm is paused. Waiting for the same durable runtime to return; no fallback directory will be created.",
+                file=sys.stderr,
+                flush=True,
+            )
+            if not storage_guard.wait_until_recovered(should_stop=outer_shutdown.is_set):
+                return 0
+            print(
+                "[HOST STORAGE] Runtime recovered. Re-starting the canonical supervisor; safety and exact-SHA checks will run again.",
+                file=sys.stderr,
+                flush=True,
+            )
+            loss_reason["detail"] = ""
+        return 0
+    finally:
+        storage_guard.close()
 
 
 if __name__ == "__main__":
