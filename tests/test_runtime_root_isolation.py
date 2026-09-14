@@ -31,19 +31,12 @@ _SELF_RESOLVED = re.compile(
     r'/\s*["\']logs["\']|Path\(\s*["\']logs[/"\']|\.joinpath\(\s*["\']logs["\']'
 )
 
-# These two installer lines build paths beneath the explicit destination root
-# passed by the caller. They are not process-state path resolution. Keep the
-# exemption exact so any new use of joinpath("logs", ...) still fails the guard.
-_EXPLICIT_TARGET_PATHS = {
-    (
-        "product/host_install.py",
-        'service_logs = _resolved(runtime_root).joinpath("logs", "service")',
-    ),
-    (
-        "product/host_install.py",
-        '_resolved(runtime_root).joinpath("logs", "service").mkdir(parents=True, exist_ok=True)',
-    ),
-}
+# There are no longer any exemptions. The two installer lines that used to be
+# listed here built launchd's stdout/stderr targets beneath QT_RUNTIME_ROOT;
+# they were removed because launchd opens those paths before the entrypoint can
+# attach the external runtime. Keep this set empty: every remaining
+# joinpath("logs", ...) in production code must fail the guard above.
+_EXPLICIT_TARGET_PATHS: set[tuple[str, str]] = set()
 
 
 def _production_sources() -> list[Path]:

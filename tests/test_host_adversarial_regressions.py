@@ -175,16 +175,26 @@ def test_failed_first_install_stops_unmanifested_service(tmp_path, monkeypatch):
     assert not (root / HI.DEPLOYMENT_REL).exists()
 
 
-def test_launchd_definition_materializes_log_parent(tmp_path):
+def test_launchd_definition_materializes_bootstrap_log_parent(tmp_path):
+    """launchd's own log parent must exist, and must not be the runtime.
+
+    This assertion was inverted deliberately. It previously required the
+    installer to mkdir ``<runtime>/logs/service``, which is the reboot deadlock:
+    launchd opens those paths before exec, so a detached external volume stopped
+    the entrypoint from ever running its APFS preflight.
+    """
     runtime = tmp_path / "persistent"
     home = tmp_path / "home"
     repo = tmp_path / "repo"
     repo.mkdir()
-    HI.install_service_definition(
+    definition = HI.install_service_definition(
         runtime_root=runtime, build_sha="abc", manager="launchd",
         repo_root=repo, python=sys.executable, home=home,
     )
-    assert runtime.joinpath("logs", "service").is_dir()
+    bootstrap = (home / "Library" / "Logs" / "QuantTerm").resolve()
+    assert bootstrap.is_dir()
+    assert definition["bootstrap_log_dir"] == str(bootstrap)
+    assert not runtime.exists()
 
 
 def test_launchd_plist_has_bounded_success_semantics_and_caffeinate(tmp_path):
