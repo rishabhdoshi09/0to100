@@ -18,6 +18,7 @@ import time
 import terminal_api as core
 import terminal_product_api as product
 from operations.store import pid_is_alive
+from product.live_safety import live_safety_projection
 from product.operator_health import enrich_autonomy_payload
 
 # Keep terminal_api's canonical control registry untouched. One whole-market scan
@@ -353,6 +354,7 @@ def paper_autopilot() -> dict:
     closed = list(paper.get("closed_trades") or [])
     days = {str(t.get("exit_date") or t.get("entry_date") or "")[:10] for t in closed if isinstance(t, dict)}
     days.discard("")
+    safety = live_safety_projection()
     return {
         "schema_version": 1,
         "why_no_trade": why,
@@ -374,7 +376,7 @@ def paper_autopilot() -> dict:
             critical_lanes_broken=not bool(paper.get("supervisor_running")),
             rules_hash_stable=False,
         ),
-        "live_locked": True,
+        **safety,
     }
 
 
@@ -415,17 +417,21 @@ def decision_simulator_get(
 ) -> dict:
     """Batch report, or one persisted decision when symbol/decision_id is given."""
     from product.decision_simulator import load_latest, simulate_past_decision
+    safety = live_safety_projection()
     if str(symbol or "").strip() or str(decision_id or "").strip():
-        return simulate_past_decision(
+        payload = simulate_past_decision(
             symbol=symbol,
             as_of=as_of,
             alternative=alternative,
             decision_id=decision_id,
         )
+        payload.update(safety)
+        return payload
     payload = load_latest()
     if not payload:
-        return {"available": False, "provenance": "BACKTEST", "live_locked": True, "cache_hit": True}
+        return {"available": False, "provenance": "BACKTEST", "cache_hit": True, **safety}
     payload["available"] = True
+    payload.update(safety)
     return payload
 
 
@@ -438,14 +444,20 @@ def decision_simulator_run(
 ) -> dict:
     """Single-decision counterfactual when addressed; otherwise start the batch replay."""
     from product.decision_simulator import run_decision_simulator, simulate_past_decision
+    safety = live_safety_projection()
     if str(symbol or "").strip() or str(decision_id or "").strip():
-        return simulate_past_decision(
+        payload = simulate_past_decision(
             symbol=symbol,
             as_of=as_of,
             alternative=alternative,
             decision_id=decision_id,
         )
-    return run_decision_simulator(async_job=True)
+        payload.update(safety)
+        return payload
+    payload = run_decision_simulator(async_job=True)
+    if isinstance(payload, dict):
+        payload.update(safety)
+    return payload
 
 
 @product.app.post("/api/forward-soak")
@@ -518,6 +530,8 @@ def market_reports_workspace() -> dict:
         persist_today=True,
         news_payload=core._news_payload(),
         scan_payload=core._scan_payload(),
+        long_term_payload=core._long_term_payload(),
+        market_payload=core._market_payload(),
         rebuild=False,
     )
     if payload.get("needs_refresh") and not payload.get("empty_detail"):
