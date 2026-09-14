@@ -1,12 +1,14 @@
 """One Research / Learning projection from systems that already exist.
 
 Does not start research jobs. Does not invent sample sizes or 'AI is learning'.
+Broker-boundary safety is projected only from the canonical live interlock.
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
+from product.live_safety import live_safety_projection
 from product.strategy_catalog import production_registry, research_only_strategies
 
 
@@ -41,6 +43,7 @@ def build_research_status(
     perf = dict(journal.get("performance") or {})
     learning_status = str((autonomy or {}).get("learning_status") or "UNKNOWN")
     closed = int((paper_learning or {}).get("closed_trades") or 0)
+    safety = live_safety_projection()
 
     lines: list[str] = []
     ensemble = production["ensemble"]
@@ -64,9 +67,18 @@ def build_research_status(
     else:
         lines.append("No settled tracked outcomes yet. QuantTerm makes no performance claim.")
     if closed:
-        lines.append(f"Paper book: {closed} closed trades in local memory. Live orders stay locked.")
+        lines.append(f"Paper book: {closed} closed trades in local memory.")
     else:
         lines.append("Paper book has no closed trades in local memory.")
+
+    if safety.get("live_lock_verified") is True and safety.get("live_locked") is True:
+        lines.append("Live execution boundary: VERIFIED / LOCKED.")
+    elif safety.get("live_lock_verified") is True:
+        status = str(safety.get("live_lock_status") or "UNLOCKED")
+        lines.append(f"Live execution boundary: VERIFIED / {status}.")
+    else:
+        lines.append("Live execution boundary: UNVERIFIED. No positive lock claim is made.")
+
     if learning_status and learning_status != "UNKNOWN":
         lines.append(f"Autonomy learning status: {learning_status}.")
     try:
@@ -101,7 +113,12 @@ def build_research_status(
             "candidate_tests": tests[:20],
             "cooldown": list((paper_learning or {}).get("cooldown") or [])[:12],
             "summary": (paper_learning or {}).get("summary") or "",
-            "live_locked": True,
+            "live_locked": safety.get("live_locked"),
+            "live_lock_verified": safety.get("live_lock_verified"),
+            "live_execution_authorized": safety.get("live_execution_authorized"),
+            "live_lock_status": safety.get("live_lock_status"),
+            "live_lock_reason": safety.get("live_lock_reason"),
+            "live_lock_source": safety.get("live_lock_source"),
         },
         "decision_journal": {
             "generated_at": journal.get("generated_at"),
