@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import sys
 import threading
 from pathlib import Path
 
@@ -82,6 +81,68 @@ def test_broken_runtime_symlink_detects_loss_and_same_runtime_can_recover(tmp_pa
     offline.rename(runtime)
     ok, reason = verify_runtime_storage(identity)
     assert ok is True, reason
+
+
+def test_installed_runtime_path_resolution_fails_before_mkdir_on_storage_loss(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    from core import runtime_paths
+
+    external = tmp_path / "external"
+    runtime = _runtime(external / "QuantTerm" / "runtime")
+    canonical = tmp_path / "Application Support" / "QuantTerm" / "runtime"
+    canonical.parent.mkdir(parents=True)
+    canonical.symlink_to(runtime, target_is_directory=True)
+    monkeypatch.setenv(runtime_paths.ENV_VAR, str(canonical))
+    monkeypatch.setenv(runtime_paths.REQUIRE_EXISTING_ENV, "1")
+
+    assert runtime_paths.runtime_root() == runtime.resolve()
+    assert runtime_paths.ensure_logs_path("probe", "ok.json") == runtime.resolve() / "logs" / "probe" / "ok.json"
+
+    # Simulate the external runtime disappearing while the canonical symlink
+    # remains. Shared path helpers must fail before mkdir can create anything.
+    offline = external / "QuantTerm" / "runtime.offline"
+    runtime.rename(offline)
+    with pytest.raises(RuntimeError, match="runtime root is missing"):
+        runtime_paths.ensure_logs_path("would-be-split", "state.json")
+    assert canonical.is_symlink()
+    assert not runtime.exists()
+
+    offline.rename(runtime)
+    assert runtime_paths.runtime_root() == runtime.resolve()
+
+
+def test_strict_runtime_requires_configuration_and_non_strict_dev_mode_is_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    from core import runtime_paths
+
+    missing = tmp_path / "not-mounted" / "runtime"
+    monkeypatch.setenv(runtime_paths.ENV_VAR, str(missing))
+    monkeypatch.delenv(runtime_paths.REQUIRE_EXISTING_ENV, raising=False)
+
+    # Ordinary developer/test callers still receive the configured path; only
+    # the installed host opts into fail-closed existence enforcement.
+    assert runtime_paths.runtime_root() == missing
+    assert not missing.exists()
+
+    monkeypatch.setenv(runtime_paths.REQUIRE_EXISTING_ENV, "true")
+    with pytest.raises(RuntimeError, match="runtime root is missing"):
+        runtime_paths.runtime_root()
+    assert not missing.exists()
+
+
+def test_strict_runtime_without_override_or_pointer_has_no_repo_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from core import runtime_paths
+
+    monkeypatch.delenv(runtime_paths.ENV_VAR, raising=False)
+    monkeypatch.setenv(runtime_paths.REQUIRE_EXISTING_ENV, "1")
+    monkeypatch.setattr(runtime_paths, "read_runtime_pointer", lambda: None)
+
+    with pytest.raises(RuntimeError, match="requires an existing configured persistent runtime root"):
+        runtime_paths.runtime_root()
 
 
 def test_loss_event_stays_latched_across_fast_recovery_until_acknowledged(
@@ -183,3 +244,4 @@ def test_host_entrypoint_restarts_supervisor_after_latched_storage_loss(
     assert rc == 7
     assert calls["count"] == 2
     assert guard.recoveries == 1
+    assert "QT_RUNTIME_ROOT_REQUIRE_EXISTING" in __import__("os").environ
