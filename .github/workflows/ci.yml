@@ -56,6 +56,13 @@ jobs:
         run: |
           bash -n scripts/run_quantterm_complete.sh
           bash -n scripts/run_quantterm.sh
+          bash -n scripts/run_quantterm_mac.sh
+          bash -n scripts/quantterm_storage_preflight.sh
+          bash -n scripts/install_quantterm_host.sh
+          bash -n scripts/quantterm_status.sh
+          bash -n scripts/quantterm_restart.sh
+          bash -n deploy/setup_mac.sh
+          bash -n deploy/setup_server.sh
           python -m py_compile scripts/local_stack.py
 
       - name: Compile every module (import-safety net)
