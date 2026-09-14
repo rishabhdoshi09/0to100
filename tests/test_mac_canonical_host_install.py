@@ -41,7 +41,9 @@ def test_setup_mac_delegates_to_single_canonical_host_installer():
     assert "<key>Label</key>" not in script
 
     # Historical labels may appear only so setup can stop/remove them.  The
-    # compatibility installer must not load or kickstart any of them again.
+    # compatibility installer must evict orphaned jobs by service target and
+    # must never load/kickstart those historical owners again.
     assert "com.quantterm.ui.plist" in script
+    assert 'launchctl bootout "gui/$UID_VALUE/$label"' in script
     assert 'launchctl kickstart -k "gui/$(id -u)/com.quantterm.ui"' not in script
     assert "run_quantterm_mac.sh" not in script
