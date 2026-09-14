@@ -309,21 +309,29 @@ def test_ui_source_does_not_start_workers():
         assert "start_worker=True" not in text, rel
 
 
-def test_deployment_installs_two_services_and_current_branch():
+def test_deployment_installs_one_canonical_host_owner():
     root = Path(__file__).resolve().parents[1]
     linux = (root / "deploy/setup_server.sh").read_text(encoding="utf-8")
     mac = (root / "deploy/setup_mac.sh").read_text(encoding="utf-8")
+    installer = (root / "scripts/install_quantterm_host.sh").read_text(encoding="utf-8")
+
     assert "overhaul/evidence-lab" not in linux
-    assert 'QT_BRANCH:-overhaul/evidence-lab' not in linux
-    assert "run_quantterm_complete.sh" in linux
-    assert "run_quantterm_complete.sh" in mac
+    assert 'BRANCH="${QT_BRANCH:-claude/build-ai-trading-system-miHHd}"' in linux
+    assert "install_quantterm_host.sh" in linux
+    assert "install_quantterm_host.sh" in mac
+    assert "--manager systemd" in linux
+    assert "--manager launchd" in mac
+    assert "product.host_install" in installer
+    assert "product.host_install_existing" in installer
+
+    # Historical split owners appear only in explicit retirement cleanup.
     assert "quantterm-ui.service" in linux and "quantterm-autonomy.service" in linux
-    assert 'git clone --branch cursor/live-terminal-contract-858e "$REPO_URL"' in linux
+    assert "disable --now \"$legacy\"" in linux
     assert "com.quantterm.ui" in mac and "com.quantterm.autonomy" in mac
-    assert "main.py autonomy" in linux
-    assert "<string>autonomy</string>" in mac
-    assert "QT_NONINTERACTIVE" in linux
-    assert "QT_NONINTERACTIVE" in mac
+    assert "launchctl bootout" in mac
+    assert "QT_RUNTIME_ROOT_REQUIRE_EXISTING=1" in mac
+    assert "run_quantterm_complete.sh" not in linux
+    assert "run_quantterm_complete.sh" not in mac
 
 
 # ══ Dialogue & research ══════════════════════════════════════════════════════════
