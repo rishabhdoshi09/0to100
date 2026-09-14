@@ -72,6 +72,30 @@ def decision_simulator_run(
     )
 
 
+def market_reports_workspace() -> dict:
+    """Canonical Market Reports projection using the builder's current contract.
+
+    The legacy core route still supplied removed ``long_term_payload`` and
+    ``market_payload`` kwargs.  Keep the public route at this façade and pass only
+    sourced inputs that the current builder actually accepts.  Market context is
+    resolved by the builder itself; no compatibility filler is invented here.
+    """
+    from product.recommendations_workspace import build_market_reports_workspace
+
+    payload = build_market_reports_workspace(
+        persist_today=True,
+        news_payload=_core.core._news_payload(),
+        scan_payload=_core.core._scan_payload(),
+        rebuild=False,
+    )
+    if payload.get("needs_refresh") and not payload.get("empty_detail"):
+        payload["empty_detail"] = (
+            "Today's sourced market report is incomplete. Missing scan/news evidence "
+            "stays empty; QuantTerm does not invent headlines, prices, or market facts."
+        )
+    return payload
+
+
 def product_contract() -> dict:
     """Extend the canonical contract with the operator surfaces required for FINAL."""
     payload = dict(_core.product_contract() or {})
@@ -150,4 +174,5 @@ def _replace_route(path: str, endpoint, *, method: str, name: str) -> None:
 _replace_route("/api/paper-autopilot", paper_autopilot, method="GET", name="paper_autopilot")
 _replace_route("/api/decision-simulator", decision_simulator_get, method="GET", name="decision_simulator_get")
 _replace_route("/api/decision-simulator", decision_simulator_run, method="POST", name="decision_simulator_run")
+_replace_route("/api/market-reports-workspace", market_reports_workspace, method="GET", name="market_reports_workspace")
 _replace_route("/api/product-contract", product_contract, method="GET", name="product_contract")
