@@ -96,6 +96,13 @@ def run_supervisor(*, root=None, interval_s: float = 15.0, max_iterations=None) 
     from research.autonomy.outcome_integrity import install_outcome_integrity
     install_outcome_integrity()
 
+    # PAPER_CYCLE has two phases: management/evidence and the recommendation
+    # selection authority. The first intentionally disables new entries, so its
+    # mechanical BLOCKED_SAFETY must never overwrite the later canonical PaperBook
+    # result. Install the composer before Supervisor imports/constructs Deps.
+    from research.autonomy.paper_cycle_truth import install_paper_cycle_truth
+    install_paper_cycle_truth()
+
     # The legacy lock unlinked its flock path on release. A waiting process can acquire
     # the old inode between unlock and unlink while a third process creates a new inode,
     # producing two apparent owners. Install the non-unlinking flock before Supervisor
