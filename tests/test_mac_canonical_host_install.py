@@ -47,3 +47,27 @@ def test_setup_mac_delegates_to_single_canonical_host_installer():
     assert 'launchctl bootout "gui/$UID_VALUE/$label"' in script
     assert 'launchctl kickstart -k "gui/$(id -u)/com.quantterm.ui"' not in script
     assert "run_quantterm_mac.sh" not in script
+
+
+def test_setup_server_delegates_to_single_canonical_host_installer():
+    script = Path("deploy/setup_server.sh").read_text(encoding="utf-8")
+
+    assert "scripts/install_quantterm_host.sh" in script
+    assert "--manager systemd" in script
+    assert "product.host_entrypoint" in script
+    assert "quantterm-autonomy.service" in script  # cleanup only
+    assert "quantterm-ui.service" in script        # cleanup only
+    assert "ExecStart=" not in script
+    assert "main.py autonomy --interval" not in script
+    assert "cursor/live-terminal-contract-858e" not in script
+
+
+def test_legacy_split_service_templates_are_not_shippable():
+    retired = (
+        "deploy/com.quantterm.autonomy.plist",
+        "deploy/com.quantterm.ui.plist",
+        "deploy/quantterm-autonomy.service",
+        "deploy/quantterm-ui.service",
+        "deploy/quantterm.service",
+    )
+    assert not [path for path in retired if Path(path).exists()]
