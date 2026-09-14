@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 
+import scripts.run_product_acceptance as acceptance
 from scripts.run_product_acceptance import grade_paper_cycle_execution
 
 
@@ -48,6 +49,26 @@ def test_no_eligible_trade_can_pass_only_after_observed_succeeded_cycle():
         last_cycle={"cycle_id": "c1", "eligibility": "NO_ELIGIBLE_TRADE"},
         observed=False,
     )["status"] != "PASS"
+
+
+def test_strict_acceptance_waits_for_terminal_autonomy_job():
+    """A persisted last_cycle may appear just before jobs_recent becomes SUCCEEDED."""
+    old_tokens = set(acceptance._core.PAPER_CYCLE_DONE)
+    old_learning = acceptance._core.grade_learning_dashboard
+    old_soak = acceptance._core.grade_forward_soak
+    old_paper = acceptance._core.grade_paper_status
+    old_cycle = acceptance._core.grade_paper_cycle_execution
+    try:
+        acceptance._core.PAPER_CYCLE_DONE = {"TRADED", "NO_ELIGIBLE_TRADE"}
+        acceptance._install_strict_core_contract()
+        assert acceptance._core.PAPER_CYCLE_DONE == set()
+        assert acceptance._core.grade_paper_cycle_execution is acceptance.grade_paper_cycle_execution
+    finally:
+        acceptance._core.PAPER_CYCLE_DONE = old_tokens
+        acceptance._core.grade_learning_dashboard = old_learning
+        acceptance._core.grade_forward_soak = old_soak
+        acceptance._core.grade_paper_status = old_paper
+        acceptance._core.grade_paper_cycle_execution = old_cycle
 
 
 def test_traded_without_persisted_opened_position_is_rejected():
