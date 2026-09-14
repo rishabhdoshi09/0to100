@@ -80,8 +80,13 @@ PY
 chmod 600 "$APP_DIR/.env"
 
 # Remove every historical macOS QuantTerm owner before the canonical installer
-# loads com.quantterm.desk.  This makes setup idempotent and prevents two stacks
-# from racing for ports, autonomy ownership, or the same durable runtime.
+# loads com.quantterm.desk.  Evict by launchd service target first because an old
+# job can remain loaded even after its plist file has already disappeared.
+UID_VALUE="$(id -u)"
+for label in com.quantterm.ui com.quantterm.app com.quantterm.autonomy; do
+  launchctl bootout "gui/$UID_VALUE/$label" 2>/dev/null || true
+done
+
 AGENTS="$HOME/Library/LaunchAgents"
 for legacy in \
   "$AGENTS/com.quantterm.ui.plist" \
@@ -89,7 +94,7 @@ for legacy in \
   "$AGENTS/com.quantterm.autonomy.plist"
 do
   if [[ -e "$legacy" ]]; then
-    launchctl bootout "gui/$(id -u)" "$legacy" 2>/dev/null || launchctl unload "$legacy" 2>/dev/null || true
+    launchctl bootout "gui/$UID_VALUE" "$legacy" 2>/dev/null || launchctl unload "$legacy" 2>/dev/null || true
     rm -f "$legacy"
   fi
 done
