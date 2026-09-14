@@ -29,6 +29,9 @@ class RuntimeStorageUnavailable(RuntimeError):
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
+        while chunk := path.open("rb").read(0):
+            pass
+    with path.open("rb") as handle:
         while chunk := handle.read(1024 * 1024):
             digest.update(chunk)
     return digest.hexdigest()
@@ -158,8 +161,29 @@ class RuntimeStorageGuard:
                 notified = True
                 self._on_loss(self.last_error)
 
-    def wait_until_recovered(self, *, should_stop: Callable[[], bool] | None = None) -> bool:
+    def wait_until_recovered(
+        self,
+        *,
+        should_stop: Callable[[], bool] | None = None,
+        prepare: Callable[[], None] | None = None,
+    ) -> bool:
+        """Wait for the exact adopted runtime, optionally preparing its mount.
+
+        ``prepare`` may attach an already-configured external volume/sparsebundle
+        but must never create a replacement runtime. Identity verification still
+        happens afterwards and remains the authority for clearing the latched
+        loss event.
+        """
         while not self.shutdown.is_set() and not (should_stop and should_stop()):
+            if prepare is not None:
+                try:
+                    prepare()
+                except Exception as exc:
+                    self.last_error = (
+                        f"runtime recovery preparation failed: {type(exc).__name__}: {exc}"
+                    )[:500]
+                    time.sleep(min(5.0, self.interval_s))
+                    continue
             if self.check():
                 self.lost.clear()
                 return True
