@@ -2,8 +2,8 @@
 
 The installed host must never keep trading/research children alive after its
 runtime disappears, and it must never create a replacement directory on the
-system disk.  The guard therefore performs only existence/identity/write-through
-checks against the already-adopted runtime root.  It creates no parent paths.
+system disk. The guard therefore performs only existence/identity/write-through
+checks against the already-adopted runtime root. It creates no parent paths.
 """
 from __future__ import annotations
 
@@ -120,6 +120,9 @@ class RuntimeStorageGuard:
     def __init__(self, *, root: Path | None = None, interval_s: float = DEFAULT_INTERVAL_S):
         self.identity = establish_runtime_storage_identity(root)
         self.interval_s = max(0.2, float(interval_s))
+        # Deliberately latched until wait_until_recovered() acknowledges the
+        # recovery. A very fast remount must not erase the loss event before
+        # the supervisor has stopped every child.
         self.lost = threading.Event()
         self.shutdown = threading.Event()
         self.last_error = ""
@@ -147,9 +150,8 @@ class RuntimeStorageGuard:
         while not self.shutdown.wait(self.interval_s):
             ok = self.check()
             if ok:
-                if self.lost.is_set():
-                    self.lost.clear()
-                notified = False
+                if not self.lost.is_set():
+                    notified = False
                 continue
             self.lost.set()
             if not notified and self._on_loss is not None:
