@@ -1,6 +1,7 @@
 """Official-data autonomous loop: no Kite required for post-market work."""
 from __future__ import annotations
 
+import inspect
 import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -67,8 +68,7 @@ def test_official_outcome_settles_without_kite(tmp_path, monkeypatch):
     assert out["settled"][0]["symbol"] == "HAL"
 
 
-def test_paper_consume_keeps_broker_on_execution_only(monkeypatch, tmp_path):
-    from product import autonomous_loop as LOOP
+def _isolate_committee_state(monkeypatch, tmp_path):
     from product import decision_journal as DJ
     from product import opportunity_memory as OM
 
@@ -76,12 +76,20 @@ def test_paper_consume_keeps_broker_on_execution_only(monkeypatch, tmp_path):
     monkeypatch.setattr(DJ, "DB_PATH", tmp_path / "d.db")
     monkeypatch.setattr(DJ, "JSONL_PATH", tmp_path / "d.jsonl")
     monkeypatch.setattr(OM, "DB_PATH", tmp_path / "o.db")
+    monkeypatch.setattr("product.forward_evidence.freeze_observation", lambda *a, **k: None)
+    monkeypatch.setattr("product.counterfactual_learning.freeze_decision", lambda *a, **k: None)
+    monkeypatch.setattr("product.portfolio_committee.evaluate_portfolio", lambda *a, **k: {})
+    monkeypatch.setattr("product.portfolio_committee.apply_overlay", lambda rec, overlay: rec)
+
+
+def test_paper_consume_keeps_broker_on_execution_only(monkeypatch, tmp_path):
+    from product import autonomous_loop as LOOP
+
+    _isolate_committee_state(monkeypatch, tmp_path)
     monkeypatch.setattr(
         RDY, "inspect_readiness",
         lambda: {"capabilities": {RDY.BROKER_LIVE_DATA_READY: False}},
     )
-    monkeypatch.setattr("product.forward_evidence.freeze_observation", lambda *a, **k: None)
-    monkeypatch.setattr("product.counterfactual_learning.freeze_decision", lambda *a, **k: None)
     rec = {
         "symbol": "INFY",
         "decision": "BUY",
@@ -99,16 +107,66 @@ def test_paper_consume_keeps_broker_on_execution_only(monkeypatch, tmp_path):
         {}, "2026-09-02", "scan-1", committee=[rec],
     )
     assert paper["broker_ok"] is False
+    assert paper["taken"] == []
     assert paper["intents"]
     assert paper["intents"][0]["decision"] == "BUY"
     assert paper["intents"][0]["reason_code"] == "COMMITTEE_BUY"
     assert paper["intents"][0]["execution_state"] == "BLOCKED_BROKER_AUTH"
+    assert paper["intents"][0]["execution_proven"] is False
     assert paper["eligibility"] == "BLOCKED_BROKER"
     got = CL.get(CL.candidate_id("INFY", "2026-09-02"), path=tmp_path / "c.db")
     assert got["state"] == "READY"
     assert got["decision"] == "BUY"
     assert got["execution_state"] == "BLOCKED_BROKER_AUTH"
     assert got["reason"] != "BROKER_LOGIN_REQUIRED"
+
+
+def test_paper_consume_never_claims_trade_without_canonical_fill(monkeypatch, tmp_path):
+    from product import autonomous_loop as LOOP
+
+    _isolate_committee_state(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        RDY, "inspect_readiness",
+        lambda: {"capabilities": {RDY.BROKER_LIVE_DATA_READY: True}},
+    )
+    rec = {
+        "symbol": "INFY",
+        "decision": "BUY",
+        "candidate_state": "READY",
+        "entry_state": "ENTER_NOW",
+        "execution_state": "READY",
+        "reason_code": "COMMITTEE_BUY",
+        "reason": "families justify taking risk",
+        "tier": "high_conviction",
+        "vetoes": [],
+        "wait_trigger": {},
+    }
+    paper = LOOP._consume_paper(
+        [{"symbol": "INFY", "reco_tier": "high_conviction", "entry": 100, "stop": 90, "target": 120}],
+        {}, "2026-09-02", "scan-1", committee=[rec],
+    )
+    assert paper["broker_ok"] is True
+    assert paper["taken"] == []
+    assert len(paper["intents"]) == 1
+    assert paper["intents"][0]["execution_proven"] is False
+    assert paper["eligibility"] == "PAPER_EXECUTION_PENDING"
+    assert paper["execution_authority"] == "canonical_paper_autopilot"
+    assert paper["eligibility"] != "TRADED"
+
+
+def test_autonomous_live_safety_projection_is_canonical(monkeypatch):
+    from product import autonomous_loop as LOOP
+
+    expected = {
+        "live_lock_verified": False,
+        "live_locked": False,
+        "live_execution_authorized": False,
+        "live_lock_status": "UNVERIFIED",
+    }
+    monkeypatch.setattr("product.live_safety.live_safety_projection", lambda: dict(expected))
+    assert LOOP._live_safety() == expected
+    source = inspect.getsource(LOOP)
+    assert '"live_locked": True' not in source
 
 
 def test_acquire_without_download_marks_wait_evidence(monkeypatch, tmp_path):
