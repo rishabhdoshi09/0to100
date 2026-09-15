@@ -159,11 +159,16 @@ def official_history_freshness(
     A large store that ends on an old session is stale. Missing dates stay
     missing — this never invents bars.
     """
-    from research.intelligence.data.nse_calendar import load_holidays, sessions_gap
+    from research.intelligence.data.nse_calendar import (
+        load_holidays, publication_window, sessions_gap,
+    )
 
     current = dict(history) if history is not None else status(load_cache=load_cache)
     hols = holidays if holidays is not None else load_holidays()
-    expected = expected_latest_completed_session(now=now, holidays=hols)
+    window = publication_window(now, hols)
+    completed = window["completed_session"]
+    minimum_required = window["minimum_required_official_session"]
+    expected = completed
     latest_raw = str(current.get("latest_date") or current.get("csv_latest_date") or "")[:10]
     try:
         latest = date.fromisoformat(latest_raw) if latest_raw else None
@@ -171,34 +176,46 @@ def official_history_freshness(
         latest = None
     sessions = int(current.get("sessions", 0) or 0)
     ready = bool(current.get("ready"))
-    stale_sessions = sessions_gap(latest, expected, hols) if latest is not None else None
+    stale_sessions = sessions_gap(latest, completed, hols) if latest is not None else None
     try:
         from research.intelligence.data.nse_calendar import _now_ist
         today = (now or _now_ist()).date()
     except Exception:
-        today = expected
+        today = completed
+
+    # Four truths, deliberately not collapsed into one boolean:
+    #   current           -- we hold the latest CLOSED session. Never true just
+    #                        because a clock crossed the publication cutoff.
+    #   usable_for_scan   -- we hold everything that is MANDATORY right now.
+    #   publication_pending -- the completed session's archive has not landed,
+    #                        and is not yet mandatory.
+    #   stale             -- something mandatory is missing. Fail closed.
+    publication_pending = False
     if not ready:
-        reason_code = "HISTORY_NOT_READY"
-        current_ok = False
+        reason_code, current_ok, usable = "HISTORY_NOT_READY", False, False
     elif sessions < 60:
-        reason_code = "HISTORY_TOO_SHALLOW"
-        current_ok = False
+        reason_code, current_ok, usable = "HISTORY_TOO_SHALLOW", False, False
     elif latest is None:
-        reason_code = "HISTORY_DATE_MISSING"
-        current_ok = False
+        reason_code, current_ok, usable = "HISTORY_DATE_MISSING", False, False
     elif latest > today:
-        reason_code = "HISTORY_FUTURE_DATED"
-        current_ok = False
-    elif latest < expected:
-        reason_code = "HISTORY_STALE"
-        current_ok = False
+        reason_code, current_ok, usable = "HISTORY_FUTURE_DATED", False, False
+    elif latest >= completed:
+        reason_code, current_ok, usable = "HISTORY_CURRENT", True, True
+    elif latest >= minimum_required:
+        reason_code, current_ok, usable = "HISTORY_PUBLICATION_PENDING", False, True
+        publication_pending = True
     else:
-        reason_code = "HISTORY_CURRENT"
-        current_ok = True
+        reason_code, current_ok, usable = "HISTORY_STALE", False, False
     return {
         **current,
         "current": current_ok,
+        "usable_for_scan": usable,
+        "publication_pending": publication_pending,
         "expected_latest_completed_session": expected.isoformat(),
+        "completed_session": completed.isoformat(),
+        "minimum_required_official_session": minimum_required.isoformat(),
+        "publication_deadline": window["publication_deadline"].isoformat(),
+        "in_publication_grace": bool(window["in_publication_grace"]),
         "available_session": latest.isoformat() if latest is not None else latest_raw,
         "stale_sessions": 0 if current_ok else (stale_sessions if stale_sessions is not None else None),
         "reason_code": reason_code,

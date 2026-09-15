@@ -3,14 +3,24 @@ export type ScanRecord = {
   company?: string
   status?: string
   verdict?: string
-  price?: number
+  /** null means the scanner produced no level. Never render a null as 0. */
+  price?: number | null
   score?: number
   momentum_5d?: number
   volume_ratio?: number
   rsi?: number
-  entry?: number
-  stop?: number
-  target?: number
+  entry?: number | null
+  stop?: number | null
+  target?: number | null
+  /** Deterministic geometry derived from the levels above, when they exist. */
+  plan_reference_price?: number | null
+  risk_per_share?: number | null
+  reward_per_share?: number | null
+  upside_pct?: number | null
+  downside_pct?: number | null
+  reward_risk?: number | null
+  plan_complete?: boolean
+  plan_missing?: string[]
   sector?: string
   signals?: string[]
   reasons?: string[]
@@ -201,6 +211,24 @@ export type BrokerReadiness = {
   snapshot_id: string
 }
 
+/** When a scan RAN vs which market session it READ. Never the same fact. */
+export type ScanProvenance = {
+  scan_id?: string
+  scan_started_at?: string
+  scan_completed_at?: string
+  scan_duration_s?: number | null
+  market_session_date?: string
+  price_data_as_of?: string
+  expected_session_date?: string
+  sessions_behind?: number | null
+  data_freshness?: string
+  data_current?: boolean
+  price_source?: string
+  universe_failed?: number | null
+  provenance_available?: boolean
+  provenance_reason?: string
+}
+
 export type DashboardPayload = {
   generated_at: string
   market: {
@@ -233,6 +261,7 @@ export type DashboardPayload = {
     records: ScanRecord[]
     dashboard_record_limit?: number
     dashboard_records_shown?: number
+    provenance?: ScanProvenance
   }
   long_term: {
     available: boolean

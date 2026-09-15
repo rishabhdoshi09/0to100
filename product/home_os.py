@@ -36,6 +36,34 @@ def _action(control: str = "", *, label: str, kind: str = "control", instruction
     }
 
 
+def _live_safety_projection() -> dict[str, Any]:
+    """Project canonical broker-boundary safety without inventing proof."""
+    try:
+        from product.live_readiness import evaluate_live_readiness
+
+        result = dict(evaluate_live_readiness() or {})
+        verified = result.get("live_lock_verified") is True
+        locked = result.get("live_locked") if verified else None
+        authorized = result.get("live_execution_authorized") if verified else None
+        return {
+            "live_locked": locked,
+            "live_lock_verified": verified,
+            "live_execution_authorized": authorized,
+            "live_lock_status": str(result.get("live_lock_status") or ("LOCKED" if locked is True else "UNLOCKED" if locked is False else "UNVERIFIED")),
+            "live_lock_reason": str(result.get("live_lock_reason") or ""),
+            "live_lock_source": str(result.get("live_lock_source") or "product.live_execution_interlock"),
+        }
+    except Exception as exc:
+        return {
+            "live_locked": None,
+            "live_lock_verified": False,
+            "live_execution_authorized": None,
+            "live_lock_status": "UNVERIFIED",
+            "live_lock_reason": f"Canonical live-execution interlock could not be verified: {exc}",
+            "live_lock_source": "product.live_execution_interlock",
+        }
+
+
 def _session_phase(now: datetime | None = None) -> str:
     try:
         from zoneinfo import ZoneInfo
@@ -123,8 +151,6 @@ def broker_session_usable(auto: Mapping[str, Any] | None) -> bool:
     auto = _as_dict(auto)
     if not auto:
         return False
-    # Prefer the canonical broker readiness projection when present. Fall back
-    # to legacy autonomy fields for older saved runtime snapshots.
     broker = _as_dict(auto.get("broker"))
     if broker:
         return bool(broker.get("ready") or broker.get("live_data_ready"))
@@ -228,7 +254,6 @@ def build_home_os(
     closed = list(paper_d.get("closed_trades") or [])
     active_ops = [o for o in list(ops.get("active") or []) if isinstance(o, Mapping)]
     active_kinds = {str(o.get("kind") or "") for o in active_ops}
-    # News / long-term overlays are not "official prices are missing".
     preparing = bool(active_kinds & {"DATA_PREPARE", "MARKET_SCAN"})
     data_failed = any(str(o.get("kind")) == "DATA_PREPARE" and str(o.get("status")) == "FAILED" for o in list(ops.get("recent") or []))
     scan_failed = any(str(o.get("kind")) == "MARKET_SCAN" and str(o.get("status")) == "FAILED" for o in list(ops.get("recent") or []))
@@ -237,12 +262,10 @@ def build_home_os(
     eod_done = bool(verify.get("lanes") or soak_d.get("FORWARD_SOAK_STATUS")) and str(
         (verify.get("lanes") or {}).get("FORWARD SETTLEMENT") or soak_d.get("FORWARD_SOAK_STATUS") or ""
     ) not in {"", "FAIL"}
-    live_locked = True
-    try:
-        from product.live_readiness import evaluate_live_readiness
-        live_locked = not bool(evaluate_live_readiness().get("live_enabled"))
-    except Exception:
-        live_locked = True
+
+    live_safety = _live_safety_projection()
+    live_locked = live_safety.get("live_locked")
+    live_lock_verified = live_safety.get("live_lock_verified") is True
 
     primary_action = None
     secondary: list[dict[str, str]] = []
@@ -253,10 +276,6 @@ def build_home_os(
     next_line = "Next automatic paper decision after the scan"
 
     broker_login_required = not kite_ok
-    # Missing broker auth is not a system-health failure, but during an active
-    # paper session it is the one legitimate human action because broker-live
-    # quotes/entry cannot proceed without it. Observe-only and closed-market
-    # operation remain fully autonomous without a login.
     broker_action_required = bool(
         broker_login_required and paper_enabled and not observe_only and not market_closed
     )
@@ -269,12 +288,18 @@ def build_home_os(
         ),
     )
 
-    if not live_locked:
+    if not live_lock_verified:
+        state = PROBLEM
+        headline = "Live-money safety could not be verified."
+        subtext = live_safety.get("live_lock_reason") or "The canonical broker-boundary interlock is unverified."
+        now_line = "Live execution safety unverified"
+        next_line = "Verify the canonical broker-boundary lock before accepting the system"
+    elif live_locked is not True:
         state = PROBLEM
         headline = "Live money must stay locked."
-        subtext = "The paper path is the only money path. Do not trade live from Home."
+        subtext = "The canonical broker boundary is not locked. The paper path is the only accepted money path."
         now_line = "Paper bot only"
-        next_line = "Keep live money locked"
+        next_line = "Restore the canonical live-execution lock"
     elif data_failed and not data_ready:
         state = FAILED_RECOVERABLE
         headline = "Market data needs another try."
@@ -374,9 +399,7 @@ def build_home_os(
                 "Live money stays locked. You are not participating."
             )
         else:
-            subtext = (
-                f"{subtext} Observe only today — paper still records the day."
-            )
+            subtext = f"{subtext} Observe only today — paper still records the day."
 
     if state == NORMAL and not primary_action:
         primary_action = None
@@ -430,6 +453,7 @@ def build_home_os(
         scan_ok=scan_ok,
         paper_enabled=paper_enabled,
         live_locked=live_locked,
+        live_lock_verified=live_lock_verified,
         taken=taken,
         opens=opens,
         closed=closed,
@@ -442,10 +466,6 @@ def build_home_os(
         learning_simple=learning_simple,
         n_real=n_real,
     )
-    # The broker lane is a capability lane, not autonomy health. During an
-    # active paper session, however, login is the one expected human action.
-    # Keep that distinction explicit instead of making the whole system look
-    # degraded or pretending paper entry can proceed without broker auth.
     if broker_action_required:
         zerodha = dict(system.get("zerodha") or {})
         zerodha.update({
@@ -461,12 +481,17 @@ def build_home_os(
             "primary_action": broker_action,
         })
         system["zerodha"] = zerodha
-    check_system = build_check_system(system, live_locked=live_locked)
+    check_system = build_check_system(
+        system,
+        live_locked=live_locked,
+        live_lock_verified=live_lock_verified,
+        live_lock_reason=str(live_safety.get("live_lock_reason") or ""),
+        live_lock_source=str(live_safety.get("live_lock_source") or "product.live_execution_interlock"),
+    )
 
     runtime: dict[str, Any] = {}
     try:
         from product.runtime_lifecycle import inspect_runtime
-
         runtime = inspect_runtime(api_serving=True)
     except Exception as exc:
         runtime = {
@@ -493,14 +518,11 @@ def build_home_os(
         if runtime.get("reason") and state == NORMAL:
             subtext = str(runtime.get("reason"))
 
-    activity = _activity(
-        scan_d, why_d, latest, ops, verify, taken, recovered=list(recovered or []),
-    )
-    yesterday = _yesterday(verify, soak_d, why_d, scan_ok, reco_ok)
+    activity = _activity(scan_d, why_d, latest, ops, verify, taken, recovered=list(recovered or []))
+    yesterday = _yesterday(verify, soak_d, why_d, scan_ok, reco_ok, live_safety)
     readiness: dict[str, Any] = {}
     try:
         from product.readiness import inspect_readiness
-
         readiness = inspect_readiness()
     except Exception:
         readiness = {}
@@ -559,7 +581,7 @@ def build_home_os(
         "primary_action": primary_action,
         "secondary_actions": (secondary + [_action("SIMULATE_PAST_DECISIONS", label="Simulate past decisions")])[:4],
         "simulate_action": _action("SIMULATE_PAST_DECISIONS", label="Simulate past decisions"),
-        "past_decisions": _past_decisions(),
+        "past_decisions": _past_decisions(live_safety),
         "now": now_line,
         "next": next_line,
         "progress": progress,
@@ -598,14 +620,15 @@ def build_home_os(
             "insufficient_evidence": bool(soak_d.get("insufficient_evidence", True)),
             "forward_soak_status": soak_d.get("FORWARD_SOAK_STATUS") or "NOT_STARTED",
             "promotion_blockers": soak_d.get("promotion_blockers"),
-            "live_locked": True,
+            "live_locked": live_locked,
+            "live_lock_verified": live_lock_verified,
         },
         "system": system,
         "check_system": check_system,
         "recent_activity": activity,
         "yesterday": yesterday,
         "recovered": list(recovered or []),
-        "live_locked": True,
+        **live_safety,
         "broker": {
             "status": (
                 "LOGIN_REQUIRED" if broker_action_required
@@ -714,7 +737,6 @@ def _activity(
         rows.append({"at": str(verify.get("generated_at") or ""), "text": "Learning journal updated"})
     for item in recovered:
         rows.append({"at": "", "text": f"Recovered {item} — one owner, no duplicate work"})
-    # Keep persisted-only; drop empty timestamps to the end.
     rows.sort(key=lambda r: r.get("at") or "", reverse=True)
     return rows[:12]
 
@@ -725,6 +747,7 @@ def _yesterday(
     why: Mapping[str, Any],
     scan_ok: bool,
     reco_ok: bool,
+    live_safety: Mapping[str, Any],
 ) -> dict[str, Any]:
     lanes = dict(verify.get("lanes") or {})
     return {
@@ -734,18 +757,23 @@ def _yesterday(
         "settlement_pending": lanes.get("FORWARD SETTLEMENT") == "PENDING",
         "learning": lanes.get("LEARNING INGESTION") in {"PASS", "PENDING"},
         "forward_evidence": lanes.get("FORWARD SETTLEMENT") == "PASS" or bool(soak.get("real_forward_observations")),
-        "live_locked": True,
+        "live_locked": live_safety.get("live_locked"),
+        "live_lock_verified": live_safety.get("live_lock_verified") is True,
     }
 
 
-def _past_decisions() -> dict[str, Any]:
+def _past_decisions(live_safety: Mapping[str, Any]) -> dict[str, Any]:
     try:
         from product.decision_simulator import load_latest
         report = load_latest()
     except Exception:
         report = {}
+    safety = {
+        "live_locked": live_safety.get("live_locked"),
+        "live_lock_verified": live_safety.get("live_lock_verified") is True,
+    }
     if not report:
-        return {"available": False, "provenance": "BACKTEST", "live_locked": True}
+        return {"available": False, "provenance": "BACKTEST", **safety}
     return {
         "available": True,
         "provenance": report.get("provenance") or "BACKTEST",
@@ -780,6 +808,6 @@ def _past_decisions() -> dict[str, Any]:
         "PIT_PARTIAL": report.get("PIT_PARTIAL"),
         "PIT_MARKET_ONLY": report.get("PIT_MARKET_ONLY"),
         "scorecards_note": "Method/family scorecards stay inspect-only until sample floors.",
-        "live_locked": True,
+        **safety,
         "not_promotion_evidence": True,
     }

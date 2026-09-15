@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Install/update QuantTerm as one canonical launchd agent on the current Mac.
-# Canonical chain: setup_mac.sh -> run_quantterm_mac.sh -> run_quantterm_complete.sh.
-# The complete launcher owns autonomy, market_ops, APIs and the desk; a second
-# autonomy LaunchAgent would create competing ownership/restart paths.
-# Legacy com.quantterm.autonomy used <string>autonomy</string>; setup removes it.
+# Install/update QuantTerm through the one canonical installed-host path.
+#
+# This compatibility entrypoint prepares Python/npm on macOS, verifies the
+# external APFS runtime, removes historical competing launchd agents, and then
+# delegates service ownership to product.host_install -> product.host_entrypoint
+# -> product.host_supervisor.  It never creates a second QuantTerm supervisor.
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -15,9 +16,9 @@ STORAGE_MOUNT="${QT_STORAGE_MOUNT:-/Volumes/QuantTermStorage}"
 STORAGE_RUNTIME="${QT_STORAGE_RUNTIME:-$STORAGE_MOUNT/QuantTerm/runtime}"
 RUNTIME_LINK="${QT_RUNTIME_LINK:-$HOME/Library/Application Support/QuantTerm/runtime}"
 
-# Refuse installation against an absent/wrong runtime. This is intentionally
-# before dependency installation or launchd mutation so setup cannot create a
-# half-installed service while the durable store is unavailable.
+# Fail closed before dependency or launchd mutation. The preflight may attach
+# the already-configured sparsebundle, but it never creates/repairs a missing
+# canonical runtime path and therefore cannot create split durable state.
 QT_STORAGE_PREFLIGHT_REQUIRED=1 \
 QT_STORAGE_EXTERNAL_VOLUME="$EXTERNAL_VOLUME" \
 QT_STORAGE_BUNDLE="$STORAGE_BUNDLE" \
@@ -26,22 +27,45 @@ QT_STORAGE_RUNTIME="$STORAGE_RUNTIME" \
 QT_RUNTIME_LINK="$RUNTIME_LINK" \
   bash "$APP_DIR/scripts/quantterm_storage_preflight.sh"
 
+# Stop the canonical host and every historical owner before mutating the shared
+# Python environment. Updating packages underneath a running supervisor can
+# produce an internally mixed process tree even when the source SHA is clean.
+UID_VALUE="$(id -u)"
+for label in com.quantterm.desk com.quantterm.ui com.quantterm.app com.quantterm.autonomy; do
+  launchctl bootout "gui/$UID_VALUE/$label" 2>/dev/null || true
+done
+
+AGENTS="$HOME/Library/LaunchAgents"
+for legacy in \
+  "$AGENTS/com.quantterm.ui.plist" \
+  "$AGENTS/com.quantterm.app.plist" \
+  "$AGENTS/com.quantterm.autonomy.plist"
+do
+  if [[ -e "$legacy" ]]; then
+    launchctl bootout "gui/$UID_VALUE" "$legacy" 2>/dev/null || launchctl unload "$legacy" 2>/dev/null || true
+    rm -f "$legacy"
+  fi
+done
+
 [ -d "$APP_DIR/venv" ] || "$SYSTEM_PYTHON" -m venv "$APP_DIR/venv"
 PYTHON_BIN="${QT_PYTHON:-$APP_DIR/venv/bin/python}"
 "$PYTHON_BIN" -m pip install --upgrade pip wheel
 "$PYTHON_BIN" -m pip install -r "$APP_DIR/requirements.txt"
-[ -f "$APP_DIR/.env" ] || { cp "$APP_DIR/.env.example" "$APP_DIR/.env" 2>/dev/null || touch "$APP_DIR/.env"; }
-chmod 600 "$APP_DIR/.env" 2>/dev/null || true
 
-# Resolve npm while we are still in the user's interactive shell.  launchd does
-# not source shell profiles, so nvm/Volta/asdf installs can otherwise disappear
-# from PATH at reboot even though `npm` works in Terminal.
+[ -f "$APP_DIR/.env" ] || { cp "$APP_DIR/.env.example" "$APP_DIR/.env" 2>/dev/null || touch "$APP_DIR/.env"; }
+chmod 600 "$APP_DIR/.env"
+
+# Resolve npm while an interactive shell is available.  The absolute executable
+# is persisted into the secure host env file; product.host_entrypoint validates
+# it again and prepends its directory to PATH before constructing child specs.
 NPM_BIN="${QT_NPM_BIN:-$(command -v npm 2>/dev/null || true)}"
 if [[ -z "$NPM_BIN" || ! -x "$NPM_BIN" ]]; then
   for candidate in \
     "$HOME"/.nvm/versions/node/*/bin/npm \
     "$HOME"/.volta/bin/npm \
-    "$HOME"/.asdf/shims/npm
+    "$HOME"/.asdf/shims/npm \
+    /opt/homebrew/bin/npm \
+    /usr/local/bin/npm
   do
     if [[ -x "$candidate" ]]; then
       NPM_BIN="$candidate"
@@ -54,69 +78,48 @@ if [[ -z "$NPM_BIN" || ! -x "$NPM_BIN" ]]; then
   echo "Install/activate Node.js, confirm 'command -v npm' works, then re-run setup." >&2
   exit 1
 fi
-NPM_BIN_DIR="$(cd "$(dirname "$NPM_BIN")" && pwd -P)"
-LAUNCH_PATH="$NPM_BIN_DIR:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+NPM_BIN="$(cd "$(dirname "$NPM_BIN")" && pwd -P)/$(basename "$NPM_BIN")"
 
-AGENTS="$HOME/Library/LaunchAgents"
-APP_PLIST="$AGENTS/com.quantterm.ui.plist"
-OLD_AUTO_PLIST="$AGENTS/com.quantterm.autonomy.plist"
-OLD_COMBINED_PLIST="$AGENTS/com.quantterm.app.plist"
-LAUNCH_LOG_DIR="$HOME/Library/Logs/QuantTerm"
-mkdir -p "$AGENTS" "$LAUNCH_LOG_DIR"
+# Persist every value required to re-establish the APFS runtime after login,
+# reboot, or a removable-disk disconnect. host_entrypoint reads this secure file
+# before touching strict runtime paths and invokes the same fail-closed preflight
+# used above. Values are replaced atomically by key; unrelated operator secrets
+# and configuration remain untouched.
+"$PYTHON_BIN" - "$APP_DIR/.env" \
+  "QT_NPM_BIN=$NPM_BIN" \
+  "QT_STORAGE_PREFLIGHT_REQUIRED=1" \
+  "QT_STORAGE_EXTERNAL_VOLUME=$EXTERNAL_VOLUME" \
+  "QT_STORAGE_BUNDLE=$STORAGE_BUNDLE" \
+  "QT_STORAGE_MOUNT=$STORAGE_MOUNT" \
+  "QT_STORAGE_RUNTIME=$STORAGE_RUNTIME" \
+  "QT_RUNTIME_LINK=$RUNTIME_LINK" <<'PY'
+from pathlib import Path
+import sys
 
-sudo pmset -a sleep 0 displaysleep 10 || true
+path = Path(sys.argv[1])
+updates = dict(item.split("=", 1) for item in sys.argv[2:])
+rows = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+kept = []
+for row in rows:
+    stripped = row.strip()
+    candidate = stripped[7:].lstrip() if stripped.startswith("export ") else stripped
+    key = candidate.split("=", 1)[0].strip() if "=" in candidate else ""
+    if key in updates:
+        continue
+    kept.append(row)
+kept.extend(f"{key}={value}" for key, value in updates.items())
+path.write_text("\n".join(kept).rstrip() + "\n", encoding="utf-8")
+PY
+chmod 600 "$APP_DIR/.env"
 
-cat > "$APP_PLIST" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-<key>Label</key><string>com.quantterm.ui</string>
-<key>ProgramArguments</key><array>
-<string>/bin/bash</string>
-<string>$APP_DIR/scripts/run_quantterm_mac.sh</string>
-</array>
-<key>WorkingDirectory</key><string>$APP_DIR</string>
-<key>EnvironmentVariables</key><dict>
-<key>TZ</key><string>Asia/Kolkata</string>
-<key>PYTHONPATH</key><string>$APP_DIR</string>
-<key>QT_NONINTERACTIVE</key><string>1</string>
-<key>QT_STORAGE_PREFLIGHT_REQUIRED</key><string>1</string>
-<key>QT_STORAGE_EXTERNAL_VOLUME</key><string>$EXTERNAL_VOLUME</string>
-<key>QT_STORAGE_BUNDLE</key><string>$STORAGE_BUNDLE</string>
-<key>QT_STORAGE_MOUNT</key><string>$STORAGE_MOUNT</string>
-<key>QT_STORAGE_RUNTIME</key><string>$STORAGE_RUNTIME</string>
-<key>QT_RUNTIME_LINK</key><string>$RUNTIME_LINK</string>
-<key>QT_RUNTIME_ROOT</key><string>$RUNTIME_LINK</string>
-<key>QT_NPM_BIN</key><string>$NPM_BIN</string>
-<key>PATH</key><string>$LAUNCH_PATH</string>
-</dict>
-<key>RunAtLoad</key><true/>
-<key>KeepAlive</key><dict>
-  <key>PathState</key><dict>
-    <key>$EXTERNAL_VOLUME</key><true/>
-  </dict>
-</dict>
-<key>ThrottleInterval</key><integer>60</integer>
-<key>StandardOutPath</key><string>$LAUNCH_LOG_DIR/launchd.log</string>
-<key>StandardErrorPath</key><string>$LAUNCH_LOG_DIR/launchd.log</string>
-</dict></plist>
-PLIST
-
-plutil -lint "$APP_PLIST" >/dev/null
-
-# Remove historical competing service definitions before loading the one owner.
-for old in "$OLD_COMBINED_PLIST" "$OLD_AUTO_PLIST"; do
-  launchctl bootout "gui/$(id -u)" "$old" 2>/dev/null || launchctl unload "$old" 2>/dev/null || true
-  rm -f "$old"
-done
-
-launchctl bootout "gui/$(id -u)" "$APP_PLIST" 2>/dev/null || launchctl unload "$APP_PLIST" 2>/dev/null || true
-launchctl bootstrap "gui/$(id -u)" "$APP_PLIST" 2>/dev/null || launchctl load -w "$APP_PLIST"
-launchctl kickstart -k "gui/$(id -u)/com.quantterm.ui" || true
-
-echo "QuantTerm canonical macOS agent installed."
-echo "External runtime: $STORAGE_RUNTIME"
-echo "npm: $NPM_BIN"
-echo "Daily login: cd '$APP_DIR' && '$PYTHON_BIN' main.py login"
-echo "Desk: http://127.0.0.1:5173"
-echo "Launch log: $LAUNCH_LOG_DIR/launchd.log"
+export PYTHON="$PYTHON_BIN"
+export QT_NPM_BIN="$NPM_BIN"
+# The macOS runtime is already adopted and verified by preflight. The strict
+# installer adapter must never mkdir this path if the removable volume vanishes
+# during the update window; it fails closed instead.
+export QT_RUNTIME_ROOT_REQUIRE_EXISTING=1
+exec "$APP_DIR/scripts/install_quantterm_host.sh" \
+  --runtime-root "$STORAGE_RUNTIME" \
+  --env-file "$APP_DIR/.env" \
+  --manager launchd \
+  "$@"

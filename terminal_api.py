@@ -393,12 +393,16 @@ def _scan_payload() -> dict:
         from product.scan_store import load_scan
         payload = load_scan() or {}
         records = [dict(row) for row in (payload.get("records", []) or []) if isinstance(row, dict)]
+        provenance = payload.get("provenance")
         return {
             "available": bool(payload),
             "scanned_at": payload.get("scanned_at", ""),
             "universe_size": int(payload.get("universe_size", 0) or 0),
             "summary": dict(payload.get("summary", {}) or {}),
             "records": records,
+            # WHEN THE SCAN RAN vs WHICH SESSION IT READ are different facts.
+            # The desk must be able to render them separately.
+            "provenance": dict(provenance) if isinstance(provenance, dict) else {},
         }
     except Exception as exc:
         return {
@@ -407,6 +411,7 @@ def _scan_payload() -> dict:
             "universe_size": 0,
             "summary": {},
             "records": [],
+            "provenance": {},
             "error": str(exc),
         }
 
@@ -489,7 +494,10 @@ def _paper_learning_payload() -> dict:
             "shadow_prefer": [],
             "self_feed": {},
             "summary": "Paper memory unavailable.",
-            "live_locked": True,
+            "live_locked": None,
+            "live_lock_verified": False,
+            "live_lock_status": "UNVERIFIED",
+            "live_lock_source": "product.live_execution_interlock",
             "disclaimer": str(exc),
             "ladder": "",
         }
@@ -884,7 +892,16 @@ def health() -> dict:
             "checked_at": runtime.get("checked_at"),
         })
         # Copy inspect_runtime safety/readiness only. Never invent a positive value.
-        for key in ("operational_ready", "evidence_ready", "live_locked"):
+        for key in (
+            "operational_ready",
+            "evidence_ready",
+            "live_locked",
+            "live_lock_verified",
+            "live_execution_authorized",
+            "live_lock_status",
+            "live_lock_reason",
+            "live_lock_source",
+        ):
             if key in runtime:
                 payload[key] = runtime[key]
         payload["ok"] = payload["lifecycle"] != "FAILED"
@@ -894,6 +911,12 @@ def health() -> dict:
             "lifecycle": "DEGRADED",
             "reason": f"Runtime probe failed: {exc}"[:240],
             "reasons": [str(exc)[:240]],
+            "live_locked": None,
+            "live_lock_verified": False,
+            "live_execution_authorized": None,
+            "live_lock_status": "UNVERIFIED",
+            "live_lock_reason": f"Runtime probe failed before live-execution safety could be verified: {exc}"[:240],
+            "live_lock_source": "product.live_execution_interlock",
         })
     return payload
 
@@ -910,6 +933,7 @@ def dashboard() -> dict:
             "universe_size": 0,
             "summary": {},
             "records": [],
+            "provenance": {},
             "error": str(exc),
         }
     try:

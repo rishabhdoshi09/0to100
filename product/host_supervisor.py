@@ -102,16 +102,53 @@ def _tcp_port_open(host: str, port: int, timeout: float = 1.0) -> bool:
         return False
 
 
-def _market_ops_health() -> bool:
-    path = logs_path("market_ops", "runtime.json")
+#: Unchanged. The heartbeat is published by a thread that does nothing else, so
+#: this age measures the worker process, not database contention. Raising it
+#: would only hide a real stall.
+MARKET_OPS_HEARTBEAT_MAX_AGE_S = 15.0
+
+
+def _market_ops_runtime() -> dict[str, Any]:
+    return json.loads(logs_path("market_ops", "runtime.json").read_text(encoding="utf-8"))
+
+
+def _market_ops_alive(payload: dict[str, Any]) -> bool:
+    """Process liveness: is the worker there and still beating?"""
+    pid = int(payload.get("worker_pid") or 0)
+    heartbeat = float(payload.get("heartbeat_epoch") or 0)
+    if not payload.get("process_running") or pid <= 1:
+        return False
+    if time.time() - heartbeat > MARKET_OPS_HEARTBEAT_MAX_AGE_S:
+        return False
+    os.kill(pid, 0)
+    return True
+
+
+def _market_ops_liveness() -> bool:
+    """What the RESTART decision is allowed to use.
+
+    A worker whose operation store is struggling is degraded, not dead. Killing
+    it would abandon in-flight scan work and change nothing about the database,
+    so liveness deliberately excludes operational health.
+    """
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        pid = int(payload.get("worker_pid") or 0)
-        heartbeat = float(payload.get("heartbeat_epoch") or 0)
-        if not payload.get("process_running") or pid <= 1 or time.time() - heartbeat > 15:
+        return _market_ops_alive(_market_ops_runtime())
+    except Exception:
+        return False
+
+
+def _market_ops_health() -> bool:
+    """What gets REPORTED: liveness plus operational health.
+
+    The worker marks maintenance degraded only after sustained failure, so a
+    slow or busy pass reads as healthy here while a genuinely broken store does
+    not. Either way this answer is reported; only _market_ops_liveness restarts.
+    """
+    try:
+        payload = _market_ops_runtime()
+        if not _market_ops_alive(payload):
             return False
-        os.kill(pid, 0)
-        return True
+        return payload.get("maintenance_ok", True) is not False
     except Exception:
         return False
 
@@ -155,7 +192,8 @@ def child_specs() -> tuple[ChildSpec, ...]:
     npm = shutil.which("npm") or "npm"
     return (
         ChildSpec("autonomy", (python, "-u", "main.py", "autonomy"), _autonomy_health),
-        ChildSpec("market_ops", (python, "-u", "-m", "operations.market_ops"), _market_ops_health),
+        ChildSpec("market_ops", (python, "-u", "-m", "operations.market_ops"), _market_ops_health,
+                  liveness=_market_ops_liveness),
         ChildSpec(
             "market_api",
             (python, "-u", "-m", "uvicorn", "terminal_product_api_parallel:app",

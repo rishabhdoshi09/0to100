@@ -96,19 +96,22 @@ def test_systemd_unit_is_pinned_to_exact_sha_and_persistent_root(tmp_path):
 def test_launchd_plist_is_pinned_without_embedding_secret_values(tmp_path):
     repo = tmp_path / "repo"
     runtime = tmp_path / "persistent"
+    bootstrap_logs = tmp_path / "home" / "Library" / "Logs" / "QuantTerm"
     plist = HI.render_launchd_plist(
         repo_root=repo,
         runtime_root=runtime,
         python="/usr/bin/python3",
         build_sha="deadbeef",
         env_file="/secure/quantterm.env",
+        bootstrap_log_dir=bootstrap_logs,
     )
     assert HI.LAUNCHD_LABEL in plist
     assert "product.host_entrypoint" in plist
     assert "deadbeef" in plist
     assert str(runtime.resolve()) in plist
-    assert str(runtime.resolve() / "logs" / "service" / "launchd.out.log") in plist
-    assert str(runtime.resolve() / "logs" / "service" / "launchd.err.log") in plist
+    assert str(bootstrap_logs.resolve() / "launchd.out.log") in plist
+    assert str(bootstrap_logs.resolve() / "launchd.err.log") in plist
+    assert str(runtime.resolve() / "logs" / "service") not in plist
     assert str(repo.resolve() / "logs") not in plist
     assert "KITE_API_SECRET" not in plist
 

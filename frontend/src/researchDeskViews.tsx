@@ -116,6 +116,16 @@ function metricText(value: number | null | undefined, fallback = 'INSUFFICIENT E
   return String(value)
 }
 
+export function liveSafetyLabel(state?: {
+  live_locked?: boolean | null
+  live_lock_verified?: boolean
+} | null): string {
+  if (!state || state.live_lock_verified !== true) return 'UNVERIFIED'
+  if (state.live_locked === true) return 'VERIFIED / LOCKED'
+  if (state.live_locked === false) return 'VERIFIED / UNLOCKED'
+  return 'UNVERIFIED'
+}
+
 export function LearningJournalView() {
   const [data, setData] = useState<ResearchStatus | null>(null)
   const [learning, setLearning] = useState<LearningDashboard | null>(null)
@@ -175,7 +185,7 @@ export function LearningJournalView() {
               <div><span>Active policies</span><strong>{board.active_policies}</strong></div>
               <div><span>Eligible policies</span><strong>{board.eligible_policies}</strong></div>
               <div><span>Challengers under evaluation</span><strong>{board.challengers_under_evaluation}</strong></div>
-              <div><span>Live locked</span><strong>yes</strong></div>
+              <div><span>Live lock</span><strong>{liveSafetyLabel(board)}</strong></div>
             </div>
             <p className="panel-copy">{board.soak_detail || board.note || evidenceLabel}</p>
             {Object.keys(board.setup_level_evidence || {}).length ? (
@@ -286,7 +296,7 @@ export function LearningJournalView() {
           <div><span>Missed winners</span><strong>{recent?.missed_winners ?? 0}</strong></div>
           <div><span>Avoided losers</span><strong>{recent?.avoided_losers ?? 0}</strong></div>
           <div><span>Good waits</span><strong>{recent?.good_waits ?? 0}</strong></div>
-          <div><span>Live locked</span><strong>yes</strong></div>
+          <div><span>Live lock</span><strong>{liveSafetyLabel(learning)}</strong></div>
         </div>
         <p className="panel-copy">{learning?.note || ''}</p>
       </Panel>
@@ -441,7 +451,7 @@ export function SystemHealthView({ dashboard, runControl }: ViewProps) {
     <section className="workspace-view">
       <div className="inline-actions">
         <button type="button" onClick={() => void runControl('RUN_SCAN_NOW')}>Start market scan</button>
-        <button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Request paper cycle</button>
+        <button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Run paper evaluation now</button>
         <button type="button" onClick={() => void runControl('REFRESH_DATA_NOW')}>Prepare market data</button>
         <button type="button" onClick={() => void runControl(a.new_paper_entries ? 'PAUSE_NEW_PAPER_ENTRIES' : 'RESUME_NEW_PAPER_ENTRIES')}>
           {a.new_paper_entries ? 'Pause entries' : 'Resume entries'}

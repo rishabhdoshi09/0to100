@@ -15,7 +15,7 @@ import sqlite3
 import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -34,12 +34,40 @@ MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024
 MIN_AVAILABLE_MEMORY_BYTES = 4 * 1024 * 1024 * 1024
 DESK_PORTS = (8765, 8766, 5173)
 EPHEMERAL_PREFIXES = ("/tmp/", "/var/tmp/", "/dev/shm/")
-MARKET_ENDPOINTS: tuple[tuple[str, str, str], ...] = (
-    ("nse_official", "https://www.nseindia.com", "NSE website"),
-    ("nse_archive", "https://nsearchives.nseindia.com", "NSE archives (bhavcopy)"),
-    ("zerodha", "https://api.kite.trade", "Zerodha Kite API"),
-    ("control", "https://pypi.org", "unrelated control endpoint"),
-)
+# A probe answers two different questions and conflating them is how a working
+# host gets declared unreachable. TRANSPORT asks whether this machine can reach
+# the provider at all; CAPABILITY asks whether QuantTerm can actually obtain the
+# data it needs. NSE answers a bare root GET with 403 (www) and 404 (archives)
+# even when both production data routes serve perfectly, so a root status can
+# never be the verdict.
+CAPABILITY_USABLE = "USABLE"
+CAPABILITY_REJECTED = "REJECTED"
+CAPABILITY_ENDPOINT_INVALID = "ENDPOINT_INVALID"
+CAPABILITY_UNREACHABLE = "UNREACHABLE"
+
+#: How far back the archive probe will walk looking for a published bhavcopy.
+#: 404 means holiday/weekend, not a broken provider, so it keeps walking; a long
+#: NSE break plus the current day is covered well inside this bound.
+ARCHIVE_PROBE_LOOKBACK_DAYS = 6
+
+#: Intraday pricing is a COMPOSITE capability, because production sourcing is a
+#: chain, not a single provider: data.live_quotes tries Kite first and falls
+#: back to the NSE public API. Requiring each leg independently would block an
+#: install on a host whose real intraday path works -- exactly what happened on
+#: the owner's Mac, where authenticated Kite quotes were flowing while NSE's
+#: public route answered 404.
+INTRADAY_CAPABILITY = "intraday_market_data"
+INTRADAY_SOURCES = ("kite_intraday", "nse_live")
+
+#: Symbols used to exercise the production quote path. Index heavyweights, so a
+#: single usable quote is meaningful; the probe reads and never writes.
+KITE_PROBE_SYMBOLS = ("RELIANCE", "INFY", "HDFCBANK")
+
+#: Independently REQUIRED. Bhavcopy is the documented PRIMARY history source and
+#: has no alternative route -- without it there is no scan, whatever intraday
+#: does. The composite above is required too; the control endpoint only
+#: separates "unplugged" from "selective egress" and gates nothing.
+REQUIRED_CAPABILITIES = frozenset({"nse_archive"})
 REQUIRED_SECRETS = ("KITE_API_KEY", "KITE_API_SECRET")
 OPTIONAL_SECRETS = (
     "KITE_ACCESS_TOKEN", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "DEEPSEEK_API_KEY",
@@ -419,37 +447,371 @@ def check_power_management() -> Check:
     )
 
 
-def _default_probe(url: str, timeout: float = 8.0) -> ProbeResult:
+@dataclass(frozen=True)
+class CapabilityProbe:
+    """One endpoint's answer to both questions.
+
+    ``result.ok`` is TRANSPORT only -- any HTTP response at all proves this
+    machine can reach the provider, which is what the egress classifier needs.
+    ``state`` is the capability: whether QuantTerm could actually obtain data.
+    """
+
+    result: ProbeResult
+    state: str
+    evidence: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def usable(self) -> bool:
+        return self.state == CAPABILITY_USABLE
+
+
+def _transport_ok(host: str, detail: str) -> ProbeResult:
+    """A provider that answered is reachable, whatever it answered.
+
+    403 and 404 are the provider talking to us. Only DNS/TLS/timeout/proxy
+    failures mean this machine cannot get out, and only those may feed the
+    selective-egress verdict.
+    """
+    return ProbeResult(host, host, True, "", detail[:200])
+
+
+def _transport_failed(host: str, exc: BaseException) -> ProbeResult:
+    detail = f"{type(exc).__name__}: {exc}"
+    return ProbeResult(host, host, False, classify_failure(detail), detail[:200])
+
+
+def _capability_from_status(status: int) -> str:
+    if status in (401, 403, 429):
+        return CAPABILITY_REJECTED
+    if status == 404:
+        return CAPABILITY_ENDPOINT_INVALID
+    if status >= 400:
+        return CAPABILITY_REJECTED
+    return CAPABILITY_USABLE
+
+
+def _reachability_probe(url: str, timeout: float = 8.0) -> CapabilityProbe:
+    """For non-NSE endpoints, where reaching the host IS the whole question.
+
+    The control endpoint exists to separate "unplugged" from "the firewall
+    allows the internet but not the exchanges", and Zerodha credentials are
+    proven by check_secrets, not here. So any HTTP response is a usable answer;
+    only a 5xx says the provider itself is down.
+    """
     from urllib.parse import urlsplit
     host = urlsplit(url).hostname or url
     try:
         import requests
         response = requests.get(url, timeout=timeout, headers={"User-Agent": "QuantTerm-preflight/1"})
-        if response.status_code >= 400:
-            return ProbeResult(
-                host, host, False,
-                classify_failure(f"{response.status_code} response", status_code=response.status_code),
-                f"HTTP {response.status_code}",
-            )
-        return ProbeResult(host, host, True, "", f"HTTP {response.status_code}")
     except Exception as exc:
-        return ProbeResult(
-            host, host, False, classify_failure(f"{type(exc).__name__}: {exc}"),
-            f"{type(exc).__name__}: {exc}"[:200],
+        return CapabilityProbe(
+            _transport_failed(host, exc), CAPABILITY_UNREACHABLE,
+            {"url": url, "transport": "FAILED"},
         )
+    status = int(response.status_code)
+    state = CAPABILITY_REJECTED if status >= 500 else CAPABILITY_USABLE
+    return CapabilityProbe(
+        _transport_ok(host, f"HTTP {status}"), state,
+        {"url": url, "http_status": status, "transport": "OK"},
+    )
+
+
+def _nse_live_probe(url: str, timeout: float = 12.0) -> CapabilityProbe:
+    """Exercise the real live route: cookie-primed session, production headers.
+
+    ``data.nse_live.fetch_live_snapshot`` primes cookies with a root GET and
+    then reads the equity-stockIndices API. The root GET is a cookie step, never
+    a verdict -- NSE answers it 403 for plenty of clients that then get a
+    perfectly good 200 from the API. Headers come from the acquisition module
+    itself so the probe cannot drift away from what production sends.
+    """
+    from urllib.parse import urlsplit
+    host = urlsplit(url).hostname or url
+    try:
+        import requests
+        from data.nse_live import _HEADERS as NSE_LIVE_HEADERS
+    except Exception as exc:
+        return CapabilityProbe(
+            _transport_failed(host, exc), CAPABILITY_UNREACHABLE,
+            {"url": url, "transport": "NOT_ATTEMPTED",
+             "note": "QuantTerm's own NSE live acquisition module could not be imported"},
+        )
+    session = requests.Session()
+    priming_status: int | str = "not-attempted"
+    try:
+        session.headers.update(NSE_LIVE_HEADERS)
+        try:
+            priming_status = int(session.get(
+                "https://www.nseindia.com", timeout=timeout).status_code)
+        except Exception as exc:                      # priming is best-effort
+            priming_status = f"{type(exc).__name__}"
+        response = session.get(url, timeout=timeout)
+    except Exception as exc:
+        return CapabilityProbe(
+            _transport_failed(host, exc), CAPABILITY_UNREACHABLE,
+            {"url": url, "cookie_priming_status": priming_status, "transport": "FAILED"},
+        )
+    finally:
+        try:
+            session.close()
+        except Exception:
+            pass
+
+    status = int(response.status_code)
+    evidence: dict[str, Any] = {
+        "url": url, "http_status": status, "transport": "OK",
+        "cookie_priming_status": priming_status,
+    }
+    state = _capability_from_status(status)
+    detail = f"HTTP {status}"
+    if state == CAPABILITY_USABLE:
+        try:
+            rows = response.json().get("data") or []
+        except Exception as exc:
+            state, detail = CAPABILITY_REJECTED, f"HTTP 200 but unparseable: {type(exc).__name__}"
+            rows = []
+        else:
+            evidence["rows"] = len(rows)
+            if rows:
+                detail = f"HTTP 200 with {len(rows)} live rows"
+            else:
+                state, detail = CAPABILITY_REJECTED, "HTTP 200 but no live rows returned"
+    evidence["capability"] = state
+    return CapabilityProbe(_transport_ok(host, detail), state, evidence)
+
+
+def _archive_candidate_days(lookback: int = ARCHIVE_PROBE_LOOKBACK_DAYS) -> list[date]:
+    """Recent candidate sessions, newest first, excluding today.
+
+    Today's bhavcopy is not published until the evening, so asking for it would
+    read as a holiday. Dates come from the IST clock like every other NSE gate.
+    """
+    from datetime import timedelta
+    from core.market_clock import today_ist
+    today = today_ist()
+    return [today - timedelta(days=offset) for offset in range(1, lookback + 1)]
+
+
+def _nse_archive_probe(url: str, timeout: float = 12.0) -> CapabilityProbe:
+    """Exercise the real bhavcopy route: the exact URL and headers production uses.
+
+    ``data.bhavcopy_store._download_day`` treats 404 as holiday/weekend and 200
+    with >= 1000 bytes as a real file. The archive ROOT is not a route at all --
+    it 404s permanently -- so this walks recent sessions instead and only calls
+    the capability invalid when every candidate day 404s.
+    """
+    from urllib.parse import urlsplit
+    host = urlsplit(url).hostname or url
+    try:
+        import requests
+        from data.bhavcopy_store import _HEADERS as BHAV_HEADERS, _URL as BHAV_URL
+    except Exception as exc:
+        return CapabilityProbe(
+            _transport_failed(host, exc), CAPABILITY_UNREACHABLE,
+            {"transport": "NOT_ATTEMPTED",
+             "note": "QuantTerm's own bhavcopy acquisition module could not be imported"},
+        )
+
+    attempts: list[dict[str, Any]] = []
+    holidays = 0
+    last_exc: BaseException | None = None
+    for day in _archive_candidate_days():
+        day_url = BHAV_URL.format(d=day.strftime("%d%m%Y"))
+        try:
+            response = requests.get(day_url, headers=BHAV_HEADERS, timeout=timeout)
+        except Exception as exc:
+            # Transport failure says nothing about this particular date, so
+            # walking further would only multiply the timeout on a host that
+            # cannot reach NSE at all.
+            last_exc = exc
+            attempts.append({"day": str(day), "error": f"{type(exc).__name__}"})
+            break
+        status = int(response.status_code)
+        size = len(response.content or b"")
+        attempts.append({"day": str(day), "http_status": status, "bytes": size})
+        if status == 404:                              # holiday/weekend, keep walking
+            holidays += 1
+            continue
+        if status == 200 and size >= 1000:
+            return CapabilityProbe(
+                _transport_ok(host, f"HTTP 200, {size} bytes"),
+                CAPABILITY_USABLE,
+                {"session": str(day), "url": day_url, "bytes": size,
+                 "http_status": 200, "transport": "OK", "attempts": attempts,
+                 "capability": CAPABILITY_USABLE},
+            )
+        state = CAPABILITY_REJECTED
+        detail = (f"HTTP {status}" if status != 200
+                  else f"HTTP 200 but only {size} bytes, not a bhavcopy")
+        return CapabilityProbe(
+            _transport_ok(host, detail), state,
+            {"session": str(day), "url": day_url, "http_status": status,
+             "bytes": size, "transport": "OK", "attempts": attempts, "capability": state},
+        )
+
+    if holidays and last_exc is None:
+        # Every candidate answered, every answer was 404. The host is reachable;
+        # the route did not serve a file. Truthfully invalid, not unreachable.
+        return CapabilityProbe(
+            _transport_ok(host, f"no bhavcopy published in the last {len(attempts)} days"),
+            CAPABILITY_ENDPOINT_INVALID,
+            {"transport": "OK", "attempts": attempts,
+             "capability": CAPABILITY_ENDPOINT_INVALID},
+        )
+    exc = last_exc or RuntimeError("no bhavcopy candidate could be requested")
+    return CapabilityProbe(
+        _transport_failed(host, exc), CAPABILITY_UNREACHABLE,
+        {"transport": "FAILED", "attempts": attempts, "capability": CAPABILITY_UNREACHABLE},
+    )
+
+
+def _kite_intraday_probe(url: str, timeout: float = 12.0) -> CapabilityProbe:
+    """Exercise the real Kite quote path -- the PRIMARY intraday source.
+
+    ``data.live_quotes._kite_quotes`` gates on an access token and then calls
+    ``KiteClient.batch_quotes``, which is exactly what this runs. That method is
+    a read; it cannot place, modify or cancel anything, and the only fallback
+    call used to classify an empty result is ``kite.raw.quote``, which the
+    guarded proxy lists under _BROKER_READS. No mutation method is reachable
+    from here, and none is named.
+    """
+    from urllib.parse import urlsplit
+    host = urlsplit(url).hostname or url
+
+    try:
+        from config import settings
+    except Exception as exc:
+        return CapabilityProbe(
+            _transport_failed(host, exc), CAPABILITY_UNREACHABLE,
+            {"transport": "NOT_ATTEMPTED", "note": "QuantTerm settings could not be loaded"},
+        )
+
+    if not getattr(settings, "kite_access_token", ""):
+        # No session today. That is a REJECTED capability, never an unreachable
+        # host -- and the machine's egress still deserves an honest datapoint,
+        # so fall back to plain reachability for the transport signal only.
+        reach = _reachability_probe(url, timeout)
+        return CapabilityProbe(
+            reach.result, CAPABILITY_REJECTED,
+            {**reach.evidence, "capability": CAPABILITY_REJECTED,
+             "reason": "no Zerodha access token; run `python main.py login`",
+             "quotes": 0},
+        )
+
+    try:
+        from data.kite_client import KiteClient
+        client = KiteClient()
+        quotes = client.batch_quotes(list(KITE_PROBE_SYMBOLS))
+    except Exception as exc:
+        return CapabilityProbe(
+            _transport_failed(host, exc), CAPABILITY_UNREACHABLE,
+            {"transport": "FAILED", "symbols": list(KITE_PROBE_SYMBOLS)},
+        )
+
+    priced = {sym: q for sym, q in (quotes or {}).items() if float(q.get("ltp") or 0) > 0}
+    if priced:
+        return CapabilityProbe(
+            _transport_ok(host, f"{len(priced)} live quotes via the production path"),
+            CAPABILITY_USABLE,
+            {"transport": "OK", "quotes": len(priced), "symbols": sorted(priced),
+             "path": "KiteClient.batch_quotes", "capability": CAPABILITY_USABLE},
+        )
+
+    # batch_quotes swallows its own errors, so ask the guarded READ proxy once
+    # more to find out whether the session was refused or the host unreachable.
+    try:
+        client.raw.quote([f"{settings.exchange}:{KITE_PROBE_SYMBOLS[0]}"])
+    except Exception as exc:
+        detail = f"{type(exc).__name__}: {exc}"
+        failure = classify_failure(detail)
+        if failure in ("DNS_FAILURE", "TIMEOUT", "ENVIRONMENT_EGRESS_BLOCKED"):
+            return CapabilityProbe(
+                _transport_failed(host, exc), CAPABILITY_UNREACHABLE,
+                {"transport": "FAILED", "quotes": 0, "path": "KiteClient.batch_quotes"},
+            )
+        return CapabilityProbe(
+            _transport_ok(host, detail[:200]), CAPABILITY_REJECTED,
+            {"transport": "OK", "quotes": 0, "failure_class": failure,
+             "path": "KiteClient.batch_quotes", "capability": CAPABILITY_REJECTED},
+        )
+    return CapabilityProbe(
+        _transport_ok(host, "the quote call answered but priced nothing"),
+        CAPABILITY_REJECTED,
+        {"transport": "OK", "quotes": 0, "path": "KiteClient.batch_quotes",
+         "capability": CAPABILITY_REJECTED},
+    )
+
+
+#: Production data routes, not liveness pings. Each is the endpoint QuantTerm
+#: actually reads in production, requested the way production requests it.
+def market_endpoints() -> tuple[tuple[str, str, str], ...]:
+    from urllib.parse import quote
+    return (
+        ("kite_intraday", "https://api.kite.trade",
+         "Zerodha Kite quotes (primary intraday)"),
+        ("nse_live",
+         f"https://www.nseindia.com/api/equity-stockIndices?index={quote('NIFTY TOTAL MARKET')}",
+         "NSE live equity API (intraday fallback)"),
+        ("nse_archive",
+         "https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_<session>.csv",
+         "NSE bhavcopy archive (primary history)"),
+        ("control", "https://pypi.org", "unrelated control endpoint"),
+    )
+
+
+_CAPABILITY_RUNNERS: dict[str, Callable[[str], CapabilityProbe]] = {
+    "kite_intraday": _kite_intraday_probe,
+    "nse_live": _nse_live_probe,
+    "nse_archive": _nse_archive_probe,
+}
+
+
+def _default_probe(url: str, timeout: float = 8.0) -> ProbeResult:
+    """Back-compatible single-URL probe.
+
+    Kept because callers and tests may still hand :func:`probe_market_access` a
+    plain ``probe(url) -> ProbeResult``. Root-status semantics are gone here
+    too: an answered request means the host is reachable.
+    """
+    return _reachability_probe(url, timeout).result
+
+
+def _run_capability(
+    name: str, url: str, probe: Callable[[str], ProbeResult] | None
+) -> CapabilityProbe:
+    """One endpoint's probe, honouring an injected single-URL probe if given."""
+    if probe is not None:
+        result = probe(url)
+        if isinstance(result, CapabilityProbe):
+            return result
+        return CapabilityProbe(
+            result,
+            CAPABILITY_USABLE if result.ok else CAPABILITY_UNREACHABLE,
+            {"url": url, "injected": True},
+        )
+    return _CAPABILITY_RUNNERS.get(name, _reachability_probe)(url)
 
 
 def probe_market_access(
     probe: Callable[[str], ProbeResult] | None = None,
-    endpoints: Sequence[tuple[str, str, str]] = MARKET_ENDPOINTS,
+    endpoints: Sequence[tuple[str, str, str]] | None = None,
 ) -> tuple[list[Check], dict[str, Any]]:
-    runner = probe or _default_probe
+    """Prove QuantTerm can obtain real market data, not that a root URL is up.
+
+    Each endpoint reports transport and capability separately. The egress
+    classifier only ever sees transport, so a provider that answers 403 or 404
+    can no longer masquerade as a firewall. Capability then decides the check
+    status, and a required capability that is not USABLE still blocks.
+    """
+    resolved = tuple(endpoints) if endpoints is not None else market_endpoints()
     results: list[ProbeResult] = []
     labels: dict[str, tuple[str, str]] = {}
-    for name, url, description in endpoints:
-        result = runner(url)
-        results.append(result)
-        labels[result.host] = (name, description)
+    probes: dict[str, CapabilityProbe] = {}
+    for name, url, description in resolved:
+        capability = _run_capability(name, url, probe)
+        results.append(capability.result)
+        labels[capability.result.host] = (name, description)
+        probes[name] = capability
     controls = [host for host, (name, _desc) in labels.items() if name == "control"]
     verdict = classify_environment(results, control_hosts=controls)
     checks: list[Check] = []
@@ -464,16 +826,60 @@ def probe_market_access(
             },
         ))
         return checks, verdict.as_dict()
-    for result in results:
-        name, description = labels.get(result.host, (result.host, result.host))
-        required = name != "control"
-        if result.ok:
-            checks.append(Check(name, PASS, f"{description} reachable", required, {"host": result.host}))
+    intraday_source = next(
+        (name for name in INTRADAY_SOURCES
+         if name in probes and probes[name].usable),
+        "",
+    )
+    for name, _url, description in resolved:
+        capability = probes[name]
+        # Only bhavcopy gates on its own. Each intraday leg reports its own
+        # truth but the COMPOSITE below is what the install stands or falls on,
+        # so a dead fallback beside a working primary is degraded, not fatal.
+        required = name in REQUIRED_CAPABILITIES
+        evidence = {
+            "host": capability.result.host,
+            "capability": capability.state,
+            **capability.evidence,
+        }
+        if name in INTRADAY_SOURCES:
+            evidence["intraday_role"] = (
+                "satisfies intraday" if name == intraday_source else "alternate intraday source"
+            )
+        if capability.usable:
+            checks.append(Check(
+                name, PASS, f"{description} usable: {capability.result.detail}"[:200],
+                required, evidence,
+            ))
+            continue
+        evidence["failure_class"] = capability.result.failure_class
+        degraded = name in INTRADAY_SOURCES and bool(intraday_source)
+        checks.append(Check(
+            name,
+            FAIL if (required and not degraded) else WARN,
+            (f"{description} {capability.state}: {capability.result.detail}"
+             + (f" (degraded only: {intraday_source} is serving intraday)" if degraded else ""))[:200],
+            required, evidence,
+        ))
+
+    present = [n for n in INTRADAY_SOURCES if n in probes]
+    if present:
+        states = {n: probes[n].state for n in present}
+        if intraday_source:
+            checks.append(Check(
+                INTRADAY_CAPABILITY, PASS,
+                f"intraday pricing available via {intraday_source}", True,
+                {"satisfied_by": intraday_source, "sources": states,
+                 "capability": CAPABILITY_USABLE,
+                 "note": "production sourcing is Kite first, NSE public API fallback"},
+            ))
         else:
             checks.append(Check(
-                name, FAIL if required else WARN,
-                f"{description} unreachable: {result.detail}"[:200], required,
-                {"host": result.host, "failure_class": result.failure_class},
+                INTRADAY_CAPABILITY, FAIL,
+                "no usable intraday price source: "
+                + ", ".join(f"{n}={states[n]}" for n in present), True,
+                {"satisfied_by": "", "sources": states,
+                 "note": "both the Kite quote path and the NSE public API are unusable"},
             ))
     return checks, verdict.as_dict()
 

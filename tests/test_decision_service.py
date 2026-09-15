@@ -85,9 +85,21 @@ def test_expected_R_is_computed_from_the_levels_not_taken_on_trust():
 
 
 def test_why_for_a_name_the_desk_never_decided():
+    """Absent from the shortlist is still an answer, and it must be a specific one.
+
+    This used to assert a single dead sentence for every unshortlisted name.
+    The page now has to say WHICH kind of absence it is, so the assertion is
+    tightened to the stance rather than relaxed.
+    """
     payload = decision_why("ZZZZ", workspace=_workspace(_card("INFY")))
     assert payload["available"] is False
-    assert "not in the last saved scan" in payload["reason"]
+    assert payload["symbol"] == "ZZZZ"
+    assert payload["stance"] in {
+        "NOT_SHORTLISTED", "NOT_EVALUATED", "NOT_A_TRADABLE_SYMBOL",
+    }
+    assert payload["reason"]
+    # the old behaviour claimed nothing was known; the new one must be explicit
+    assert "in_latest_scan" in payload
 
 
 def test_why_carries_the_ranking_and_the_unfilled_sections():

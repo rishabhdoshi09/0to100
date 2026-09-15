@@ -16,6 +16,7 @@ from pathlib import Path
 # failure codes
 AUTH_MISSING = "auth_missing"
 AUTH_EXPIRED = "auth_expired"
+BROKER_PROVIDER_UNAVAILABLE = "broker_provider_unavailable"
 PROVIDER_UNAVAILABLE = "provider_unavailable"
 SNAPSHOT_STALE = "snapshot_stale"
 NEWS_UNAVAILABLE = "news_unavailable"
@@ -30,10 +31,10 @@ OWNER_PAUSED = "owner_paused"
 OPTIONS_HISTORY_INCOMPLETE = "options_history_incomplete"
 
 KNOWN_FAILURES = frozenset({
-    AUTH_MISSING, AUTH_EXPIRED, PROVIDER_UNAVAILABLE, SNAPSHOT_STALE, NEWS_UNAVAILABLE,
-    CA_INCOMPLETE, LIVE_FEED_STALE, EVENT_STORE_FAILURE, RISK_GOVERNOR_UNHEALTHY,
-    UNRECONCILED, UNIVERSE_INCOMPLETE, LEARNING_FAILED, OWNER_PAUSED,
-    OPTIONS_HISTORY_INCOMPLETE,
+    AUTH_MISSING, AUTH_EXPIRED, BROKER_PROVIDER_UNAVAILABLE, PROVIDER_UNAVAILABLE,
+    SNAPSHOT_STALE, NEWS_UNAVAILABLE, CA_INCOMPLETE, LIVE_FEED_STALE,
+    EVENT_STORE_FAILURE, RISK_GOVERNOR_UNHEALTHY, UNRECONCILED,
+    UNIVERSE_INCOMPLETE, LEARNING_FAILED, OWNER_PAUSED, OPTIONS_HISTORY_INCOMPLETE,
 })
 # Leftover snapshot blockers that cash scans do not need. Dropped on load.
 STALE_FAILURES = frozenset({OPTIONS_HISTORY_INCOMPLETE})
@@ -44,8 +45,14 @@ LIMITED = "limited"
 BLOCKED = "blocked"
 READ_ONLY = "read_only"
 
-# which failures block / limit NEW paper entries
-_ENTRY_BLOCK = {AUTH_MISSING, AUTH_EXPIRED, PROVIDER_UNAVAILABLE, SNAPSHOT_STALE,
+# Broker session/provider state gates LIVE order placement. It must not gate
+# PAPER entries: paper fills are priced from the official bhavcopy-derived scan,
+# the paper autopilot never calls the broker, and the live-execution interlock
+# makes a real order structurally impossible.
+_LIVE_ONLY_ENTRY_BLOCK = {AUTH_MISSING, AUTH_EXPIRED, BROKER_PROVIDER_UNAVAILABLE}
+# Data trustworthiness is the real prerequisite for a paper entry, and these
+# still block it outright.
+_ENTRY_BLOCK = {PROVIDER_UNAVAILABLE, SNAPSHOT_STALE,
                 EVENT_STORE_FAILURE, RISK_GOVERNOR_UNHEALTHY, UNRECONCILED, OWNER_PAUSED}
 _ENTRY_LIMIT = {CA_INCOMPLETE, LIVE_FEED_STALE}
 # which failures limit existing-position management (exits are almost never fully blocked)
@@ -60,18 +67,40 @@ def canonicalize_failures(active_failures) -> set:
     return (set(active_failures or ()) & KNOWN_FAILURES) - STALE_FAILURES
 
 
-def capabilities(active_failures) -> dict:
-    """Most-restrictive-wins capability matrix. Returns a plain dict the UI can render."""
+def live_execution_authorized() -> bool:
+    """True only when the interlock actually authorizes real-money execution."""
+    try:
+        from product.live_execution_interlock import get_live_execution_state
+
+        return bool(get_live_execution_state().authorized)
+    except Exception:
+        # Unreadable interlock is treated as NOT authorized: paper keeps running
+        # and no real order is possible anyway.
+        return False
+
+
+def capabilities(active_failures, *, live_authorized: bool | None = None) -> dict:
+    """Most-restrictive-wins capability matrix. Returns a plain dict the UI can render.
+
+    ``live_authorized`` defaults to reading the interlock, so broker-session and
+    broker-provider failures gate entries exactly when a real order could be
+    placed and never when the desk is paper-only.
+    """
     f = canonicalize_failures(active_failures)
-    new_entries = BLOCKED if (f & _ENTRY_BLOCK) else (LIMITED if (f & _ENTRY_LIMIT) else ALLOWED)
+    if live_authorized is None:
+        live_authorized = live_execution_authorized()
+    entry_block = _ENTRY_BLOCK | (_LIVE_ONLY_ENTRY_BLOCK if live_authorized else set())
+    new_entries = BLOCKED if (f & entry_block) else (LIMITED if (f & _ENTRY_LIMIT) else ALLOWED)
     exits = LIMITED if (f & _EXIT_LIMIT) else ALLOWED
     research = BLOCKED if (f & _RESEARCH_BLOCK) else (LIMITED if (f & _RESEARCH_LIMIT) else ALLOWED)
     ui = READ_ONLY if (EVENT_STORE_FAILURE in f) else ALLOWED
     notes = []
     if AUTH_MISSING in f:
-        notes.append("Zerodha login required — new entries paused; safe exits continue.")
+        notes.append("Zerodha login required for live execution. Paper entries continue on official prices.")
     if AUTH_EXPIRED in f:
-        notes.append("Zerodha session expired — re-login required; historical research remains available.")
+        notes.append("Zerodha session expired. Live execution needs re-login; paper entries continue.")
+    if BROKER_PROVIDER_UNAVAILABLE in f:
+        notes.append("Zerodha is temporarily unreachable. Live execution is unavailable; paper entries continue on trusted official prices.")
     if PROVIDER_UNAVAILABLE in f:
         notes.append("Market-data provider unavailable — new entries paused until current data is trustworthy.")
     if SNAPSHOT_STALE in f:

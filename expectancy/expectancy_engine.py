@@ -15,7 +15,9 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Optional
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs", "expectancy.db")
+from core.runtime_paths import logs_path
+
+DB_PATH = str(logs_path("expectancy.db"))
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS setup_outcomes (
@@ -127,9 +129,10 @@ def _compute_expectancy(rows: list) -> tuple[float, float, float, float]:
 class ExpectancyEngine:
     """Tracks per-setup, per-playbook performance and computes evidence-based EV."""
 
-    def __init__(self, db_path: str = DB_PATH):
-        self._db_path = db_path
-        self._conn = _connect(db_path)
+    def __init__(self, db_path: Optional[str] = None):
+        resolved_db_path = str(db_path) if db_path is not None else str(logs_path("expectancy.db"))
+        self._db_path = resolved_db_path
+        self._conn = _connect(resolved_db_path)
         self._conn.execute(_CREATE_TABLE)
         self._conn.commit()
 

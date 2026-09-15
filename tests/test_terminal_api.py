@@ -50,7 +50,7 @@ def test_paper_payload_exposes_daily_learning_and_keeps_live_locked(tmp_path, mo
     assert learning["live_locked"] is True
     assert learning["closed_trades"] == 2
     assert learning["cooldown"][0]["symbol"] == "TCS"
-    assert "owner approval" in learning["disclaimer"].lower()
+    assert "explicit deployment authorization" in learning["disclaimer"].lower()
 
 
 def test_market_controls_are_dispatched_outside_paper_autonomy():
@@ -115,6 +115,8 @@ def test_health_surfaces_inspect_runtime_ready_flags_without_inventing_them(monk
             "operational_ready": True,
             "evidence_ready": True,
             "live_locked": True,
+            "live_lock_verified": True,
+            "live_execution_authorized": False,
         },
     )
     payload = terminal_api.health()
@@ -123,11 +125,14 @@ def test_health_surfaces_inspect_runtime_ready_flags_without_inventing_them(monk
     assert payload["operational_ready"] is True
     assert payload["evidence_ready"] is True
     assert payload["live_locked"] is True
+    assert payload["live_lock_verified"] is True
+    assert payload["live_execution_authorized"] is False
     graded = grade_canonical_health(payload)
     assert graded["status"] == "PASS"
     assert product_acceptance_verdict(
         [{"feature": "Canonical stack / readiness", "status": graded["status"]}],
         live_locked=graded["live_locked"],
+        live_lock_verified=graded["live_lock_verified"],
     )["verdict"] == "PRODUCT ACCEPTANCE PASS"
 
     monkeypatch.setattr(
@@ -150,6 +155,7 @@ def test_health_surfaces_inspect_runtime_ready_flags_without_inventing_them(monk
     assert product_acceptance_verdict(
         [{"feature": "Canonical stack / readiness", "status": omitted_grade["status"]}],
         live_locked=omitted_grade["live_locked"],
+        live_lock_verified=omitted_grade["live_lock_verified"],
     )["verdict"] == "PRODUCT ACCEPTANCE HOLD"
 
 

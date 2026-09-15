@@ -126,6 +126,98 @@ def decision_board(
     }
 
 
+def _scan_membership(symbol: str) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """The whole-market scan record for a symbol, plus that scan's provenance."""
+    try:
+        from product.scan_store import load_scan
+
+        payload = load_scan() or {}
+    except Exception:
+        return None, {}
+    provenance = payload.get("provenance")
+    provenance = dict(provenance) if isinstance(provenance, Mapping) else {}
+    for row in payload.get("records") or []:
+        if isinstance(row, Mapping) and str(row.get("symbol", "")).upper() == symbol:
+            return dict(row), provenance
+    return None, provenance
+
+
+def _is_known_equity(symbol: str) -> bool | None:
+    """True/False when the approved NSE universe can be read, else None."""
+    try:
+        from data.nse_universe import get_nse_universe
+
+        return symbol in {str(s).upper() for s in (get_nse_universe() or [])}
+    except Exception:
+        return None
+
+
+def _unshortlisted_view(symbol: str) -> dict[str, Any]:
+    """Everything genuinely known about a name outside the shortlist.
+
+    This is deliberately not a decision. It reports scan membership, the levels
+    the scanner actually produced, and the session those prices came from, so
+    the page can distinguish "evaluated and passed over" from "never looked at"
+    from "not a tradable symbol" — three very different answers that all used
+    to render as the same dead end.
+    """
+    row, provenance = _scan_membership(symbol)
+    known = _is_known_equity(symbol)
+
+    if row is not None:
+        levels = {k: row.get(k) for k in
+                  ("price", "entry", "stop", "target", "reward_risk",
+                   "upside_pct", "downside_pct", "plan_complete", "plan_missing")}
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "available": False,
+            "symbol": symbol,
+            "stance": "NOT_SHORTLISTED",
+            "in_latest_scan": True,
+            "known_equity": True,
+            "reason": (
+                "This name was evaluated in the latest whole-market scan but did "
+                "not reach the shortlist."
+            ),
+            "scan_status": row.get("status") or "",
+            "scan_verdict": row.get("verdict") or "",
+            "score": row.get("score"),
+            "signals": list(row.get("signals") or []),
+            "scan_reasons": list(row.get("reasons") or []),
+            "why": row.get("why") or "",
+            "levels": levels,
+            "provenance": provenance,
+        }
+
+    if known is False:
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "available": False,
+            "symbol": symbol,
+            "stance": "NOT_A_TRADABLE_SYMBOL",
+            "in_latest_scan": False,
+            "known_equity": False,
+            "reason": "This symbol is not in the approved NSE equity universe.",
+            "provenance": provenance,
+        }
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "available": False,
+        "symbol": symbol,
+        "stance": "NOT_EVALUATED",
+        "in_latest_scan": False,
+        "known_equity": known,
+        "reason": (
+            "This name is in the approved universe but is absent from the latest "
+            "whole-market scan, so nothing has been evaluated for it yet."
+            if known
+            else "The approved NSE universe could not be read, so membership is unknown."
+        ),
+        "provenance": provenance,
+    }
+
+
 def decision_why(
     symbol: str,
     *,
@@ -151,15 +243,11 @@ def decision_why(
     )
     match = next((d for d in decisions if d.symbol == wanted), None)
     if match is None:
-        return {
-            "schema_version": SCHEMA_VERSION,
-            "available": False,
-            "symbol": wanted,
-            "reason": (
-                "This name is not in the last saved scan, so the desk has not "
-                "decided anything about it."
-            ),
-        }
+        # The recommendations workspace is a filtered shortlist. A name absent
+        # from it may still have been fully evaluated by the whole-market scan,
+        # in which case the desk knows its levels, score and signals. Reporting
+        # "nothing decided" there discards real evidence the system holds.
+        return _unshortlisted_view(wanted)
 
     ranked = rank([match])[0]
     payload = explain(match)

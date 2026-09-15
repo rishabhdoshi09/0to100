@@ -1,5 +1,45 @@
 /* Forward evidence — the empty state is a first-class rendering, not a gap. */
 .forward-evidence { display: flex; flex-direction: column; gap: 18px; }
+.forward-evidence__toolbar {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(128, 128, 128, 0.25);
+  border-radius: 8px;
+  background: rgba(255,255,255,.02);
+}
+.forward-evidence__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.forward-evidence__actions button {
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  border-radius: 6px;
+  background: rgba(255,255,255,.035);
+  color: inherit;
+  cursor: pointer;
+}
+.forward-evidence__actions button:hover:not(:disabled) { background: rgba(255,255,255,.075); }
+.forward-evidence__actions button:disabled { cursor: not-allowed; opacity: .55; }
+.forward-evidence__toolbar label {
+  display: grid;
+  gap: 5px;
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  opacity: .8;
+}
+.forward-evidence__toolbar input {
+  width: min(520px, 100%);
+  min-height: 34px;
+  padding: 7px 9px;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  border-radius: 6px;
+  background: rgba(0,0,0,.16);
+  color: inherit;
+}
+.forward-evidence__toolbar small { opacity: .65; }
+.forward-evidence__toolbar p[role="status"] { margin: 0; font-size: .8rem; }
 .forward-evidence__state { border-radius: 8px; padding: 12px 14px; border: 1px solid; }
 .forward-evidence__state h2 { margin: 0 0 4px; font-size: 0.95rem; letter-spacing: 0.06em; }
 .forward-evidence__state p { margin: 0; }
@@ -20,19 +60,25 @@
 .forward-evidence__groups {
   display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
 }
-.forward-evidence__group {
+.forward-evidence__group,
+.forward-evidence__explorer {
   border: 1px solid rgba(128, 128, 128, 0.25); border-radius: 8px; padding: 10px 12px;
 }
+.forward-evidence__explorer { display: grid; gap: 18px; overflow-x: auto; }
 .forward-evidence__group h3,
 .forward-evidence__distribution h3,
-.forward-evidence__unresolved h3 {
+.forward-evidence__unresolved h3,
+.forward-evidence__explorer h3 {
   margin: 0 0 8px; font-size: 0.78rem; text-transform: uppercase; opacity: 0.7;
 }
 .forward-evidence table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
 .forward-evidence th { text-align: left; font-weight: 600; opacity: 0.6; font-size: 0.72rem; }
-.forward-evidence td { padding: 2px 0; font-variant-numeric: tabular-nums; }
+.forward-evidence td { padding: 3px 5px 3px 0; font-variant-numeric: tabular-nums; vertical-align: top; }
 .forward-evidence tr.is-thin { opacity: 0.6; }
 .forward-evidence__floor { font-size: 0.72rem; opacity: 0.7; text-align: right; }
+.forward-evidence__context-key,
+.forward-evidence__decision-id { max-width: 300px; overflow-wrap: anywhere; }
+.forward-evidence__decision-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .74rem; }
 .forward-evidence__none { margin: 0; font-style: italic; opacity: 0.7; font-size: 0.85rem; }
 .forward-evidence__distribution ul { list-style: none; margin: 0; padding: 0; }
 .forward-evidence__distribution li {

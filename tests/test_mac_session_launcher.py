@@ -25,15 +25,25 @@ def test_mac_wrapper_resolves_npm_without_shell_profile():
     assert 'export PATH="$NPM_BIN_DIR:' in src
 
 
-def test_mac_launchagent_enters_through_compatibility_wrapper():
+def test_mac_installer_delegates_to_canonical_host_owner():
     setup = (ROOT / "deploy" / "setup_mac.sh").read_text(encoding="utf-8")
-    assert "scripts/run_quantterm_mac.sh" in setup
-    assert "scripts/run_quantterm_complete.sh" not in setup.split("cat > \"$APP_PLIST\"", 1)[1].split("PLIST", 1)[0]
+    assert "install_quantterm_host.sh" in setup
+    assert "--manager launchd" in setup
+    assert "QT_RUNTIME_ROOT_REQUIRE_EXISTING=1" in setup
+    assert "product.host_install" in setup
+    assert "product.host_supervisor" in setup
+    assert "run_quantterm_mac.sh" not in setup
+    assert "run_quantterm_complete.sh" not in setup
 
 
-def test_mac_installer_pins_npm_and_node_directory_into_launchd_environment():
+def test_mac_installer_persists_npm_and_storage_contract_for_launchd():
     setup = (ROOT / "deploy" / "setup_mac.sh").read_text(encoding="utf-8")
     assert 'NPM_BIN="${QT_NPM_BIN:-$(command -v npm' in setup
-    assert '<key>QT_NPM_BIN</key><string>$NPM_BIN</string>' in setup
-    assert 'LAUNCH_PATH="$NPM_BIN_DIR:' in setup
-    assert '<key>PATH</key><string>$LAUNCH_PATH</string>' in setup
+    assert '"QT_NPM_BIN=$NPM_BIN"' in setup
+    assert '"QT_STORAGE_PREFLIGHT_REQUIRED=1"' in setup
+    assert '"QT_STORAGE_EXTERNAL_VOLUME=$EXTERNAL_VOLUME"' in setup
+    assert '"QT_STORAGE_BUNDLE=$STORAGE_BUNDLE"' in setup
+    assert '"QT_STORAGE_MOUNT=$STORAGE_MOUNT"' in setup
+    assert '"QT_STORAGE_RUNTIME=$STORAGE_RUNTIME"' in setup
+    assert '"QT_RUNTIME_LINK=$RUNTIME_LINK"' in setup
+    assert "chmod 600 \"$APP_DIR/.env\"" in setup
