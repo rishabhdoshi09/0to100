@@ -56,11 +56,21 @@ def _history_readiness() -> tuple[str, str]:
     except Exception as exc:
         return "MISSING", f"Official NSE history unavailable: {str(exc)[:160]}"
     current = bool(freshness.get("current"))
+    usable = bool(freshness.get("usable_for_scan"))
+    pending = bool(freshness.get("publication_pending"))
     available = str(freshness.get("available_session") or "").strip()
     expected = str(freshness.get("expected_latest_completed_session") or "").strip()
     reason = str(freshness.get("reason_code") or "").strip()
     if current:
         return "READY", f"Current through {available}" if available else "Official NSE history is current"
+    if usable and pending:
+        # Ready to work, and honest about what is missing. The lane never claims
+        # the completed session is in hand when it is not.
+        deadline = str(freshness.get("publication_deadline") or "").strip()
+        detail = f"Usable through {available} · {expected} archive publishing"
+        if deadline:
+            detail += f" · mandatory by {deadline[:16].replace('T', ' ')}"
+        return "READY", detail
     parts = [reason or "HISTORY_NOT_READY"]
     if available:
         parts.append(f"available {available}")

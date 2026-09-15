@@ -383,10 +383,17 @@ class MarketOperationsWorker:
             _emit("PROGRESS", f"{operation_id[:8]} · {stage} · {message}")
 
     def _history_ready(self, snapshot: dict[str, Any] | None = None) -> tuple[bool, dict[str, Any]]:
+        """Can we scan? That is usable_for_scan, NOT exact currency.
+
+        Between a session's close and the next session's pre-open deadline the
+        completed session's bhavcopy may not exist yet. Holding the previous
+        official session is enough to scan during that window; demanding exact
+        currency paralysed the desk every evening at 18:00 IST.
+        """
         from data.bhavcopy_runtime import official_history_freshness
 
         freshness = official_history_freshness(snapshot, load_cache=True)
-        return bool(freshness.get("current")), freshness
+        return bool(freshness.get("usable_for_scan")), freshness
 
     def _ensure_history(self, operation_id: str, *, days: int = HISTORY_DAYS,
                         blocking: bool = True) -> dict[str, Any]:
@@ -511,11 +518,16 @@ class MarketOperationsWorker:
         operation_id = str(operation["operation_id"])
         ready, freshness = self._history_ready()
         if ready:
+            pending = bool(freshness.get("publication_pending"))
             self._progress(
                 operation_id,
-                "HISTORY_READY",
-                f"Official history current · {freshness.get('sessions', 0)} sessions · "
-                f"{freshness.get('available_session') or 'unknown'} session",
+                "HISTORY_PUBLICATION_PENDING" if pending else "HISTORY_READY",
+                (f"Official history usable · {freshness.get('sessions', 0)} sessions · "
+                 f"{freshness.get('available_session') or 'unknown'} session · "
+                 f"{freshness.get('completed_session') or 'unknown'} archive still publishing"
+                 if pending else
+                 f"Official history current · {freshness.get('sessions', 0)} sessions · "
+                 f"{freshness.get('available_session') or 'unknown'} session"),
                 current=0,
                 total=0,
             )
