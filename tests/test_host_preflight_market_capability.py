@@ -27,6 +27,7 @@ from product.host_preflight import (
     FAIL,
     PASS,
     READY,
+    WARN,
     probe_market_access,
     run_host_preflight,
 )
@@ -79,6 +80,21 @@ def _install_fake_http(monkeypatch, router):
     monkeypatch.setattr(requests, "Session", _Session)
 
 
+def _kite_probe(state: str):
+    """Stub the Kite leg at an exact capability, for composite policy tests."""
+    from data.egress import ProbeResult
+    from product.host_preflight import CapabilityProbe
+
+    def _runner(url: str, timeout: float = 12.0) -> CapabilityProbe:
+        host = "api.kite.trade"
+        ok = state != CAPABILITY_UNREACHABLE
+        return CapabilityProbe(
+            ProbeResult(host, host, ok, "" if ok else "TIMEOUT", state),
+            state, {"capability": state, "stubbed": True},
+        )
+    return _runner
+
+
 def _live_rows(n: int = 750):
     return {"data": [{"symbol": f"SYM{i}", "lastPrice": 100.0} for i in range(n)]}
 
@@ -101,24 +117,26 @@ def _real_mac_router(url: str):
 
 def test_real_mac_case_hostile_roots_but_working_data_routes_passes(monkeypatch):
     _install_fake_http(monkeypatch, _real_mac_router)
+    monkeypatch.setattr(HP, "_kite_intraday_probe", _kite_probe(CAPABILITY_USABLE))
 
     checks, environment = probe_market_access()
     by_name = {c.name: c for c in checks}
 
     assert "market_access" not in by_name, "a working host must not be called egress-blocked"
     assert environment["market_blocked"] is False
-    for name in ("nse_official", "nse_archive", "zerodha", "control"):
+    for name in ("nse_live", "nse_archive", "control"):
         assert by_name[name].status == PASS, (name, by_name[name].detail)
         assert by_name[name].evidence["capability"] == CAPABILITY_USABLE
 
     # The live probe reached the API despite the root refusing it.
-    assert by_name["nse_official"].evidence["cookie_priming_status"] == 403
-    assert by_name["nse_official"].evidence["rows"] == 750
+    assert by_name["nse_live"].evidence["cookie_priming_status"] == 403
+    assert by_name["nse_live"].evidence["rows"] == 750
     assert by_name["nse_archive"].evidence["bytes"] == len(BHAV_CSV)
 
 
 def test_real_mac_case_reaches_ready(monkeypatch):
     _install_fake_http(monkeypatch, _real_mac_router)
+    monkeypatch.setattr(HP, "_kite_intraday_probe", _kite_probe(CAPABILITY_USABLE))
     report = run_host_preflight()
     assert report["verdict"] == READY, report["blockers"]
     assert report["blockers"] == []
@@ -136,17 +154,20 @@ def test_responding_roots_do_not_rescue_a_dead_data_route(monkeypatch):
         return _response(200)
 
     _install_fake_http(monkeypatch, router)
+    monkeypatch.setattr(HP, "_kite_intraday_probe", _kite_probe(CAPABILITY_REJECTED))
 
     checks, environment = probe_market_access()
     by_name = {c.name: c for c in checks}
     assert by_name["nse_archive"].status == FAIL
     assert by_name["nse_archive"].evidence["capability"] == CAPABILITY_REJECTED
-    assert by_name["nse_official"].status == FAIL
+    assert by_name["nse_live"].evidence["capability"] == CAPABILITY_REJECTED
     assert environment["market_blocked"] is False   # transport works; capability does not
 
     report = run_host_preflight()
     assert report["verdict"] == BLOCKED
-    assert {b["check"] for b in report["blockers"]} >= {"nse_official", "nse_archive"}
+    assert {b["check"] for b in report["blockers"]} >= {
+        "nse_archive", HP.INTRADAY_CAPABILITY,
+    }
 
 
 # ── the four states are distinguished ──────────────────────────────────────
@@ -207,10 +228,10 @@ def test_probes_use_the_real_acquisition_routes_and_headers():
     from data.nse_live import _HEADERS as LIVE_HEADERS
 
     names = {name: url for name, url, _d in HP.market_endpoints()}
-    assert names["nse_official"].startswith(LIVE_API)
+    assert names["nse_live"].startswith(LIVE_API)
     assert names["nse_archive"].startswith(BHAV_URL.split("{d}")[0])
     # No bare root is probed as a verdict any more.
-    assert names["nse_official"] != NSE_ROOT
+    assert names["nse_live"] != NSE_ROOT
     assert names["nse_archive"] != ARCHIVE_ROOT
     # Headers are taken from the acquisition modules, never re-invented here.
     assert "Mozilla/5.0" in LIVE_HEADERS["User-Agent"]

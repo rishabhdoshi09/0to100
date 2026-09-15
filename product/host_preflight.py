@@ -50,11 +50,24 @@ CAPABILITY_UNREACHABLE = "UNREACHABLE"
 #: NSE break plus the current day is covered well inside this bound.
 ARCHIVE_PROBE_LOOKBACK_DAYS = 6
 
-#: Only the control endpoint is optional -- it exists to separate "unplugged"
-#: from "selective egress", not to gate anything. Every market provider stays
-#: REQUIRED exactly as before: this change fixes how capability is determined,
-#: never what the install is allowed to proceed without.
-OPTIONAL_CAPABILITIES = frozenset({"control"})
+#: Intraday pricing is a COMPOSITE capability, because production sourcing is a
+#: chain, not a single provider: data.live_quotes tries Kite first and falls
+#: back to the NSE public API. Requiring each leg independently would block an
+#: install on a host whose real intraday path works -- exactly what happened on
+#: the owner's Mac, where authenticated Kite quotes were flowing while NSE's
+#: public route answered 404.
+INTRADAY_CAPABILITY = "intraday_market_data"
+INTRADAY_SOURCES = ("kite_intraday", "nse_live")
+
+#: Symbols used to exercise the production quote path. Index heavyweights, so a
+#: single usable quote is meaningful; the probe reads and never writes.
+KITE_PROBE_SYMBOLS = ("RELIANCE", "INFY", "HDFCBANK")
+
+#: Independently REQUIRED. Bhavcopy is the documented PRIMARY history source and
+#: has no alternative route -- without it there is no scan, whatever intraday
+#: does. The composite above is required too; the control endpoint only
+#: separates "unplugged" from "selective egress" and gates nothing.
+REQUIRED_CAPABILITIES = frozenset({"nse_archive"})
 REQUIRED_SECRETS = ("KITE_API_KEY", "KITE_API_SECRET")
 OPTIONAL_SECRETS = (
     "KITE_ACCESS_TOKEN", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "DEEPSEEK_API_KEY",
@@ -652,24 +665,103 @@ def _nse_archive_probe(url: str, timeout: float = 12.0) -> CapabilityProbe:
     )
 
 
+def _kite_intraday_probe(url: str, timeout: float = 12.0) -> CapabilityProbe:
+    """Exercise the real Kite quote path -- the PRIMARY intraday source.
+
+    ``data.live_quotes._kite_quotes`` gates on an access token and then calls
+    ``KiteClient.batch_quotes``, which is exactly what this runs. That method is
+    a read; it cannot place, modify or cancel anything, and the only fallback
+    call used to classify an empty result is ``kite.raw.quote``, which the
+    guarded proxy lists under _BROKER_READS. No mutation method is reachable
+    from here, and none is named.
+    """
+    from urllib.parse import urlsplit
+    host = urlsplit(url).hostname or url
+
+    try:
+        from config import settings
+    except Exception as exc:
+        return CapabilityProbe(
+            _transport_failed(host, exc), CAPABILITY_UNREACHABLE,
+            {"transport": "NOT_ATTEMPTED", "note": "QuantTerm settings could not be loaded"},
+        )
+
+    if not getattr(settings, "kite_access_token", ""):
+        # No session today. That is a REJECTED capability, never an unreachable
+        # host -- and the machine's egress still deserves an honest datapoint,
+        # so fall back to plain reachability for the transport signal only.
+        reach = _reachability_probe(url, timeout)
+        return CapabilityProbe(
+            reach.result, CAPABILITY_REJECTED,
+            {**reach.evidence, "capability": CAPABILITY_REJECTED,
+             "reason": "no Zerodha access token; run `python main.py login`",
+             "quotes": 0},
+        )
+
+    try:
+        from data.kite_client import KiteClient
+        client = KiteClient()
+        quotes = client.batch_quotes(list(KITE_PROBE_SYMBOLS))
+    except Exception as exc:
+        return CapabilityProbe(
+            _transport_failed(host, exc), CAPABILITY_UNREACHABLE,
+            {"transport": "FAILED", "symbols": list(KITE_PROBE_SYMBOLS)},
+        )
+
+    priced = {sym: q for sym, q in (quotes or {}).items() if float(q.get("ltp") or 0) > 0}
+    if priced:
+        return CapabilityProbe(
+            _transport_ok(host, f"{len(priced)} live quotes via the production path"),
+            CAPABILITY_USABLE,
+            {"transport": "OK", "quotes": len(priced), "symbols": sorted(priced),
+             "path": "KiteClient.batch_quotes", "capability": CAPABILITY_USABLE},
+        )
+
+    # batch_quotes swallows its own errors, so ask the guarded READ proxy once
+    # more to find out whether the session was refused or the host unreachable.
+    try:
+        client.raw.quote([f"{settings.exchange}:{KITE_PROBE_SYMBOLS[0]}"])
+    except Exception as exc:
+        detail = f"{type(exc).__name__}: {exc}"
+        failure = classify_failure(detail)
+        if failure in ("DNS_FAILURE", "TIMEOUT", "ENVIRONMENT_EGRESS_BLOCKED"):
+            return CapabilityProbe(
+                _transport_failed(host, exc), CAPABILITY_UNREACHABLE,
+                {"transport": "FAILED", "quotes": 0, "path": "KiteClient.batch_quotes"},
+            )
+        return CapabilityProbe(
+            _transport_ok(host, detail[:200]), CAPABILITY_REJECTED,
+            {"transport": "OK", "quotes": 0, "failure_class": failure,
+             "path": "KiteClient.batch_quotes", "capability": CAPABILITY_REJECTED},
+        )
+    return CapabilityProbe(
+        _transport_ok(host, "the quote call answered but priced nothing"),
+        CAPABILITY_REJECTED,
+        {"transport": "OK", "quotes": 0, "path": "KiteClient.batch_quotes",
+         "capability": CAPABILITY_REJECTED},
+    )
+
+
 #: Production data routes, not liveness pings. Each is the endpoint QuantTerm
 #: actually reads in production, requested the way production requests it.
 def market_endpoints() -> tuple[tuple[str, str, str], ...]:
     from urllib.parse import quote
     return (
-        ("nse_official",
+        ("kite_intraday", "https://api.kite.trade",
+         "Zerodha Kite quotes (primary intraday)"),
+        ("nse_live",
          f"https://www.nseindia.com/api/equity-stockIndices?index={quote('NIFTY TOTAL MARKET')}",
-         "NSE live equity API (intraday overlay)"),
+         "NSE live equity API (intraday fallback)"),
         ("nse_archive",
          "https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_<session>.csv",
          "NSE bhavcopy archive (primary history)"),
-        ("zerodha", "https://api.kite.trade", "Zerodha Kite API"),
         ("control", "https://pypi.org", "unrelated control endpoint"),
     )
 
 
 _CAPABILITY_RUNNERS: dict[str, Callable[[str], CapabilityProbe]] = {
-    "nse_official": _nse_live_probe,
+    "kite_intraday": _kite_intraday_probe,
+    "nse_live": _nse_live_probe,
     "nse_archive": _nse_archive_probe,
 }
 
@@ -734,14 +826,26 @@ def probe_market_access(
             },
         ))
         return checks, verdict.as_dict()
+    intraday_source = next(
+        (name for name in INTRADAY_SOURCES
+         if name in probes and probes[name].usable),
+        "",
+    )
     for name, _url, description in resolved:
         capability = probes[name]
-        required = name not in OPTIONAL_CAPABILITIES
+        # Only bhavcopy gates on its own. Each intraday leg reports its own
+        # truth but the COMPOSITE below is what the install stands or falls on,
+        # so a dead fallback beside a working primary is degraded, not fatal.
+        required = name in REQUIRED_CAPABILITIES
         evidence = {
             "host": capability.result.host,
             "capability": capability.state,
             **capability.evidence,
         }
+        if name in INTRADAY_SOURCES:
+            evidence["intraday_role"] = (
+                "satisfies intraday" if name == intraday_source else "alternate intraday source"
+            )
         if capability.usable:
             checks.append(Check(
                 name, PASS, f"{description} usable: {capability.result.detail}"[:200],
@@ -749,11 +853,34 @@ def probe_market_access(
             ))
             continue
         evidence["failure_class"] = capability.result.failure_class
+        degraded = name in INTRADAY_SOURCES and bool(intraday_source)
         checks.append(Check(
-            name, FAIL if required else WARN,
-            f"{description} {capability.state}: {capability.result.detail}"[:200],
+            name,
+            FAIL if (required and not degraded) else WARN,
+            (f"{description} {capability.state}: {capability.result.detail}"
+             + (f" (degraded only: {intraday_source} is serving intraday)" if degraded else ""))[:200],
             required, evidence,
         ))
+
+    present = [n for n in INTRADAY_SOURCES if n in probes]
+    if present:
+        states = {n: probes[n].state for n in present}
+        if intraday_source:
+            checks.append(Check(
+                INTRADAY_CAPABILITY, PASS,
+                f"intraday pricing available via {intraday_source}", True,
+                {"satisfied_by": intraday_source, "sources": states,
+                 "capability": CAPABILITY_USABLE,
+                 "note": "production sourcing is Kite first, NSE public API fallback"},
+            ))
+        else:
+            checks.append(Check(
+                INTRADAY_CAPABILITY, FAIL,
+                "no usable intraday price source: "
+                + ", ".join(f"{n}={states[n]}" for n in present), True,
+                {"satisfied_by": "", "sources": states,
+                 "note": "both the Kite quote path and the NSE public API are unusable"},
+            ))
     return checks, verdict.as_dict()
 
 
