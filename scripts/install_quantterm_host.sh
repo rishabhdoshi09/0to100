@@ -19,6 +19,9 @@ fi
 
 case "$REQUIRE_EXISTING" in
   1|true|TRUE|yes|YES|on|ON)
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+      exec "$PY" -m product.host_install_existing_v2 "$@"
+    fi
     exec "$PY" -m product.host_install_existing "$@"
     ;;
   0|false|FALSE|no|NO|off|OFF)

@@ -27,11 +27,16 @@ QT_STORAGE_RUNTIME="$STORAGE_RUNTIME" \
 QT_RUNTIME_LINK="$RUNTIME_LINK" \
   bash "$APP_DIR/scripts/quantterm_storage_preflight.sh"
 
-# Stop the canonical host and every historical owner before mutating the shared
-# Python environment. Updating packages underneath a running supervisor can
-# produce an internally mixed process tree even when the source SHA is clean.
+# Stop the canonical host and PROVE launchd no longer owns it before mutating
+# the shared Python environment. A best-effort bootout is not enough: the old
+# implementation could continue with an exact-SHA host still running.
+PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+  "$SYSTEM_PYTHON" -m product.launchd_control stop --label com.quantterm.desk
+
+# Historical one-off agents are not canonical owners. They remain best-effort
+# cleanup after the canonical service has been proved absent.
 UID_VALUE="$(id -u)"
-for label in com.quantterm.desk com.quantterm.ui com.quantterm.app com.quantterm.autonomy; do
+for label in com.quantterm.ui com.quantterm.app com.quantterm.autonomy; do
   launchctl bootout "gui/$UID_VALUE/$label" 2>/dev/null || true
 done
 
