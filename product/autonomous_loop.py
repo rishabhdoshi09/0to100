@@ -717,11 +717,13 @@ def _reassess_reasons(prev: Mapping[str, Any], scan_run_id: str, session: str, t
 
 
 def _should_download(trigger: str, prev: Mapping[str, Any], scan_run_id: str) -> bool:
-    if trigger == "MARKET_SCAN":
+    # MARKET_SCAN and a completed due-diligence acquire already have fresh evidence
+    # for the loop to consume. Never recursively download again from the market-ops lane.
+    if trigger in {"MARKET_SCAN", "DUE_DILIGENCE_ACQUIRE"}:
         return False
     if trigger == "outcome_resolution" and str(prev.get("scan_run_id") or "") == str(scan_run_id):
         return False
-    return trigger in {"DUE_DILIGENCE_ACQUIRE", "research_cycle", "pipeline", "manual"}
+    return trigger in {"research_cycle", "pipeline", "manual"}
 
 
 def project_events(limit: int = 40) -> list[dict[str, Any]]:
