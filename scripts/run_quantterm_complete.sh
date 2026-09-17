@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 export PYTHONPATH="$ROOT"
+# shellcheck disable=SC1091
+source "$ROOT/scripts/_setsid_compat.sh"
 
 if [[ "${1:-}" == "--restart" || "${1:-}" == "--reuse" ]]; then
   shift || true
@@ -371,7 +373,7 @@ if owner_root and owner_root != root:
   fi
 fi
 
-echo "[COMPLETE STACK] Running in this terminal: desk http://127.0.0.1:5173  · API :8765  · reports :8766  · autonomy  · market scan"
+echo "[COMPLETE STACK] Starting in this terminal: desk http://127.0.0.1:5173  · API :8765  · reports :8766  · autonomy  · market scan"
 echo "[COMPLETE STACK] Leave this terminal open. Ctrl-C stops everything. Do not start a second terminal."
 
 HOME_OPENED=0
@@ -415,6 +417,7 @@ wait_for_desk() {
 }
 
 if wait_for_desk; then
+  echo "[COMPLETE STACK] Ready: desk http://127.0.0.1:5173 answered HTTP and API :8765/api/health succeeded."
   python - <<'PY' || true
 from product.startup_check import print_startup_summary
 raise SystemExit(print_startup_summary())

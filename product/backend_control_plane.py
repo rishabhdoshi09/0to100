@@ -30,6 +30,8 @@ SAFE_CONTROLS = frozenset({
     "SIMULATE_PAST_DECISIONS",
     "OBSERVE_ONLY_TODAY",
     "CLEAR_OBSERVE_ONLY",
+    "RUN_HISTORICAL_REPLAY",
+    "RUN_LEARNING_NOW",
 })
 
 FORBIDDEN_CONTROLS = frozenset({
@@ -441,23 +443,35 @@ def _data_lane(
         waiting_for = waiting_for or "Later official bars"
         dependencies.append("later_official_bars")
 
+    from product.data_readiness import project_official_data_readiness
+
+    data_truth = project_official_data_readiness(
+        freshness=freshness,
+        data=data_d,
+        bhav=bhav,
+        preparing=bool(prepare or (preparing and not history_current) or (refresh_bg and not history_current)),
+        data_failed=data_failed,
+    )
+    history_current = bool(data_truth["history_current"])
+    data_ready = bool(data_truth["data_ready"])
+
     current = ""
     next_step = "Run the market scan" if history_current or data_ready else "Finish official prices, then scan"
-    if prepare or (job_is_data and not data_ready):
+    if prepare and not history_current:
         current = "Checking the latest market snapshot"
         if prepare.get("message") or prepare.get("stage"):
             current = str(prepare.get("message") or prepare.get("stage"))
     elif data_ready and history_current:
         current = "Market data is ready."
         next_step = next_line or "Market scan"
-    elif not data_ready:
+    elif not history_current:
         current = "Getting the latest market data"
 
-    status = "Waiting"
-    status_code = "WAITING"
+    status = str(data_truth["lane_status"])
+    status_code = str(data_truth["lane_status_code"])
     summary = "Official NSE prices"
     meaning = "QuantTerm uses official NSE history for scans and paper learning."
-    if recovering:
+    if recovering and not history_current:
         status, status_code = "Working", "RECOVERING"
         summary = "QuantTerm is trying to recover market data."
         meaning = "A data job failed, and the same data lane is running again."
@@ -466,7 +480,7 @@ def _data_lane(
         summary = "Market data stopped progressing."
         meaning = "Official prices did not finish. One Retry uses the same data lane."
         current = current or "No data job is making progress"
-    elif prepare or (preparing and not history_current) or (refresh_bg and not data_ready):
+    elif (prepare or (refresh_bg and job_is_data)) and not history_current:
         status, status_code = "Working", "WORKING"
         summary = "Updating today's prices."
         meaning = "Nothing needed from you. The delayed market scan will start afterward."
@@ -474,7 +488,7 @@ def _data_lane(
         status, status_code = "Waiting", "WAITING_DEPENDENCY"
         summary = "Today's first scan is waiting for market data."
         meaning = "QuantTerm is still working on official prices. This is a normal dependency."
-    elif data_ready and history_current:
+    elif history_current:
         status, status_code = "Ready", "READY"
         if symbols:
             summary = f"{int(symbols):,} stocks have usable history.".replace(",", ",")
@@ -485,7 +499,7 @@ def _data_lane(
         meaning = "You do not need to do anything."
         if available:
             current = current or f"Last updated: {_fmt_date(available)}"
-    elif not data_ready:
+    else:
         status, status_code = "Waiting", "WAITING"
         summary = "Official prices are not ready yet."
         meaning = "QuantTerm will use them as soon as the official file is current."
@@ -545,7 +559,7 @@ def _data_lane(
         current_job_id=prepare.get("operation_id") or (active_job.get("job_id") if job_is_data else None),
         current_job_started_at=prepare.get("started_at") or (active_job.get("started_at") if job_is_data else None),
         next_check_at=prepare.get("next_check_at") or (active_job.get("next_check_at") if job_is_data else None),
-        freshness="current" if history_current and data_ready else (reason.lower() if reason else "unknown"),
+        freshness="current" if history_current else (reason.lower() if reason else "unknown"),
         source=source,
         dependencies=dependencies,
         needs_user=status == "Problem",

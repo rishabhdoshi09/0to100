@@ -23,7 +23,7 @@ from product.counterfactual_learning import (
     RAN_AWAY,
     classify_forward,
 )
-from product.forward_evidence import BACKTEST
+from product.evidence_class import HISTORICAL_REPLAY
 from product.paper_autopilot import (
     BLOCK,
     ENTER_NOW,
@@ -472,7 +472,7 @@ def decide_session(
             "pit_sector": card.get("pit_sector"),
             "pit_downgrade": downgrade,
             "versions": versions,
-            "provenance": BACKTEST,
+            "provenance": HISTORICAL_REPLAY,
             "not_pnl": True,
             "live_locked": True,
         })
@@ -603,7 +603,7 @@ def run_historical_replay(
             "schema_version": SCHEMA_VERSION,
             "available": False,
             "status": _STATUS_DEGRADED,
-            "provenance": BACKTEST,
+            "provenance": HISTORICAL_REPLAY,
             "live_locked": True,
             "not_promotion_evidence": True,
             "engine": ENGINE,
@@ -643,7 +643,7 @@ def run_historical_replay(
         "run_id": run_id,
         "status": _STATUS_RUNNING,
         "phase": "HISTORICAL_REPLAY",
-        "provenance": BACKTEST,
+        "provenance": HISTORICAL_REPLAY,
         "engine": ENGINE,
         "period_start": window[0],
         "period_end": window[-1],
@@ -755,7 +755,7 @@ def run_historical_replay(
         "job": "HISTORICAL_REPLAY",
         "status": status,
         "cache_hit": False,
-        "provenance": BACKTEST,
+        "provenance": HISTORICAL_REPLAY,
         "live_locked": True,
         "not_promotion_evidence": True,
         "engine": ENGINE,
@@ -879,7 +879,7 @@ def run_walk_forward_sample(
     )
     payload["walk_forward_sample"] = True
     payload["not_promotion_evidence"] = True
-    payload["provenance"] = BACKTEST
+    payload["provenance"] = HISTORICAL_REPLAY
     return payload
 
 
@@ -899,7 +899,7 @@ def start_replay_async(**kwargs: Any) -> dict[str, Any]:
                     "status": _STATUS_FAILED,
                     "message": str(exc)[:300],
                     "finished_at": _now(),
-                    "provenance": BACKTEST,
+                    "provenance": HISTORICAL_REPLAY,
                     "live_locked": True,
                     "engine": ENGINE,
                 })
@@ -910,7 +910,7 @@ def start_replay_async(**kwargs: Any) -> dict[str, Any]:
         "accepted": True,
         "status": _STATUS_RUNNING,
         "message": "Historical replay started",
-        "provenance": BACKTEST,
+        "provenance": HISTORICAL_REPLAY,
         "live_locked": True,
         "engine": ENGINE,
         "started_at": _now(),

@@ -1581,6 +1581,29 @@ export type LearningPolicy = {
   evidence_source?: string
 }
 
+export type AutonomousLearningDashboard = {
+  available?: boolean
+  enabled?: boolean
+  mode?: 'AUTO' | 'FORWARD_PAPER' | 'HISTORICAL_REPLAY' | 'PAUSED' | string
+  activity?: string
+  current_activity?: string
+  evidence_lane?: string
+  market_closed?: boolean
+  counts?: Record<string, number>
+  champion?: Record<string, unknown>
+  challenger?: Record<string, unknown>
+  promotion_eligible?: boolean
+  promotion_blocked_reason?: string
+  last_learning_cycle?: string
+  next_learning_action?: string
+  latest_persisted_evidence?: Record<string, unknown>
+  missing?: string[]
+  note?: string
+  error?: string
+  live_locked?: boolean | null
+  live_lock_verified?: boolean
+}
+
 export type LearningDashboard = {
   schema_version: number
   live_locked: boolean
@@ -1609,6 +1632,7 @@ export type LearningDashboard = {
   }
   live_readiness?: { live_enabled: boolean; live_locked: boolean; contract_ready?: boolean; unmet?: string[] }
   forward_soak?: ForwardSoakScoreboard | null
+  autonomous_learning?: AutonomousLearningDashboard | null
 }
 
 export type ForwardSoakScoreboard = {
@@ -1655,6 +1679,23 @@ export type ForwardSoakScoreboard = {
 
 export const fetchLearningDashboard = (): Promise<LearningDashboard> =>
   request('/api/learning-dashboard', { headers: { Accept: 'application/json' } })
+
+export const fetchAutonomousLearning = (): Promise<AutonomousLearningDashboard> =>
+  request('/api/autonomous-learning', { headers: { Accept: 'application/json' } })
+
+export const setAutonomousLearning = (enabled?: boolean, mode?: string): Promise<AutonomousLearningDashboard> => {
+  const params = new URLSearchParams()
+  if (enabled !== undefined) params.set('enabled', enabled ? 'true' : 'false')
+  if (mode) params.set('mode', mode)
+  const query = params.toString()
+  return request(`/api/autonomous-learning${query ? `?${query}` : ''}`, {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  })
+}
+
+export const runHistoricalReplayNow = (): Promise<Record<string, unknown>> =>
+  request('/api/autonomous-learning/replay', { method: 'POST', headers: { Accept: 'application/json' } })
 
 export const fetchForwardSoak = (): Promise<ForwardSoakScoreboard> =>
   request('/api/forward-soak', { headers: { Accept: 'application/json' } })

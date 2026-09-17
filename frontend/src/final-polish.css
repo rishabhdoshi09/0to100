@@ -1,10 +1,10 @@
 /* Final presentation layer: visual refinement only; no state semantics. */
 
 :root {
-  --qt-glow-cyan: rgba(56, 189, 248, 0.14);
-  --qt-surface-glass: rgba(13, 20, 32, 0.82);
-  --qt-shadow-soft: 0 10px 30px rgba(0, 0, 0, 0.22);
-  --qt-shadow-focus: 0 0 0 3px rgba(56, 189, 248, 0.14);
+  --qt-glow-cyan: rgba(27, 107, 69, 0.14);
+  --qt-surface-glass: #ffffff;
+  --qt-shadow-soft: 0 10px 30px rgba(20, 32, 26, 0.08);
+  --qt-shadow-focus: 0 0 0 3px rgba(27, 107, 69, 0.14);
 }
 
 body {
@@ -55,7 +55,7 @@ body {
 
 .panel:hover,
 .metric:hover {
-  border-color: rgba(255,255,255,.11);
+  border-color: rgba(27, 107, 69, .22);
 }
 
 button,
@@ -224,3 +224,63 @@ table tbody tr:hover {
   padding: 5px 10px;
 }
 .paper-state-secondary { opacity: 0.78; }
+
+/* Central remainder: leftover dark-terminal surfaces inherit light tokens. */
+.timeframes span,
+.timeframes b,
+.ohlc-strip div,
+.automation-grid div,
+.ops-worker,
+.ops-last-failure,
+.operation-chip,
+.inline-search,
+.evidence-list,
+.research-data-view .evidence-summary > div,
+.research-data-view .evidence-panel,
+.research-data-view .requirement-card,
+.research-data-view .runtime-grid article,
+.research-data-view .upload-ledger article,
+.research-data-view .evidence-empty,
+.display-depth-toggle,
+.experience-help-trigger,
+.experience-help,
+.loading-overlay {
+  background: var(--panel, #ffffff) !important;
+  color: var(--text, #14201a) !important;
+  border-color: var(--border, #d8e2db) !important;
+}
+
+.table-row,
+.table-row strong,
+.compact-row,
+.compact-row strong,
+.positions-row,
+.positions-row strong,
+.fno-row,
+.fno-row strong,
+.ops-worker strong,
+.operation-chip strong,
+.news-card p,
+.evidence-summary strong,
+.evidence-panel h2,
+.requirement-card h3 {
+  color: var(--text, #14201a) !important;
+}
+
+.empty-row,
+.panel footer,
+.insight span,
+.automation-grid span,
+.news-card header span,
+.source-health-list span {
+  color: var(--muted, #5c6b63) !important;
+}
+
+.loading-overlay {
+  background: rgba(244, 247, 245, 0.86) !important;
+}
+
+::selection {
+  background: rgba(27, 107, 69, 0.18);
+  color: var(--text, #14201a);
+}

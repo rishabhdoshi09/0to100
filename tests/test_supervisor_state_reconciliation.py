@@ -61,7 +61,23 @@ def test_idle_tick_reconciles_latched_refreshing_to_ready(tmp_path):
     sup.shutdown()
 
 
-def test_idle_reconcile_keeps_real_pending_data_refresh_active(tmp_path):
+def test_idle_reconcile_keeps_due_data_refresh_active(tmp_path):
+    sup = _sup(tmp_path)
+    assert sup.start() is True
+    sup._transition(ST.DATA_REFRESHING, "fixture", "refresh is genuinely queued", "test")
+    sup.jobs.enqueue(
+        SCH.DATA_REFRESH,
+        idempotency_key="data:due",
+        scheduled_for=sup.clock() - 1.0,
+        critical=True,
+    )
+
+    sup._reconcile_idle_state()
+    assert sup.state.state == ST.DATA_REFRESHING
+    sup.shutdown()
+
+
+def test_future_scheduled_data_refresh_does_not_latch_refreshing(tmp_path):
     sup = _sup(tmp_path)
     assert sup.start() is True
     sup._transition(ST.DATA_REFRESHING, "fixture", "refresh is genuinely queued", "test")
@@ -73,7 +89,7 @@ def test_idle_reconcile_keeps_real_pending_data_refresh_active(tmp_path):
     )
 
     sup._reconcile_idle_state()
-    assert sup.state.state == ST.DATA_REFRESHING
+    assert sup.state.state == ST.DATA_READY
     sup.shutdown()
 
 

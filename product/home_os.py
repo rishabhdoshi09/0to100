@@ -130,7 +130,7 @@ def _load_defaults() -> dict[str, Any]:
         out["operations"] = {"active": [], "recent": []}
     try:
         from data.bhavcopy_runtime import official_history_freshness
-        out["history_freshness"] = official_history_freshness()
+        out["history_freshness"] = official_history_freshness(require_store=False)
     except Exception:
         out["history_freshness"] = {}
     return out
@@ -230,31 +230,24 @@ def build_home_os(
     observe_only = bool(observe_date and observe_date == today_ist)
     bhav = dict(data_d.get("bhavcopy") or {})
     freshness = _history_freshness(data_d, loaded.get("history_freshness"), now)
-    history_current = bool(freshness.get("current", True))
+    from product.data_readiness import project_official_data_readiness
+    data_truth = project_official_data_readiness(
+        freshness=freshness,
+        data=data_d,
+        bhav=bhav,
+    )
+    history_current = bool(data_truth["history_current"])
+    known_reason = str(freshness.get("reason_code") or bhav.get("reason_code") or "")
     has_session = bool(
         bhav.get("latest_date")
         or freshness.get("available_session")
         or freshness.get("expected_latest_completed_session")
-        or freshness.get("reason_code")
+        or (known_reason and known_reason != "HISTORY_UNKNOWN")
     )
-    # An explicit "ready" flag from the caller's data payload takes precedence.
-    # When no caller supplies `data=` (the real production call from
-    # radar_home_workspace passes only scan/radar/autonomy), `data_d` and
-    # `bhav` are structurally empty and this must NOT silently default to
-    # "not ready" forever -- that produced the observed contradiction where
-    # reason_code=HISTORY_CURRENT / history_current=True coexisted with a
-    # permanently-false data_ready and a stuck "Waiting" / "Getting the
-    # latest market data" UI. Fall back to the already-reconciled freshness
-    # truth (which itself falls back to the real persisted official history
-    # freshness via `loaded`) instead of an unset payload field.
-    explicit_ready = data_d.get("ready")
-    if explicit_ready is None:
-        explicit_ready = bhav.get("ready")
-    if explicit_ready is None:
-        explicit_ready = freshness.get("ready", history_current)
-    data_ready = bool(explicit_ready)
-    if has_session:
-        data_ready = data_ready and history_current
+    # Official HISTORY_CURRENT is the DATA lane. radar_home_workspace calls
+    # without a data= payload, so empty data_d/bhav must not default to not-ready.
+    # The projector equals history_current; pickle/store "ready" is a different plane.
+    data_ready = bool(data_truth["data_ready"])
     scan_ok = bool(scan_d.get("records") or scan_d.get("available") or scan_d.get("scanned_at"))
     if has_session and not history_current:
         scan_ok = False
@@ -693,26 +686,30 @@ def _history_freshness(
     if isinstance(data_d.get("history_freshness"), Mapping):
         return dict(data_d.get("history_freshness") or {})
     if bhav.get("reason_code") or "current" in bhav or bhav.get("expected_latest_completed_session"):
+        current_flag = bhav.get("current")
+        reason = str(bhav.get("reason_code") or "")
+        if current_flag is None:
+            current_flag = reason == "HISTORY_CURRENT"
         return {
-            "current": bool(bhav.get("current", True)),
+            "current": bool(current_flag),
             "expected_latest_completed_session": bhav.get("expected_latest_completed_session") or "",
             "available_session": bhav.get("available_session") or bhav.get("latest_date") or "",
             "stale_sessions": bhav.get("stale_sessions"),
-            "reason_code": bhav.get("reason_code") or "",
+            "reason_code": reason,
         }
     if bhav.get("latest_date"):
         try:
             from data.bhavcopy_runtime import official_history_freshness
-            return official_history_freshness(bhav, now=now, load_cache=False)
+            return official_history_freshness(bhav, now=now, load_cache=False, require_store=False)
         except Exception:
-            return {"current": True, "available_session": bhav.get("latest_date"), "reason_code": ""}
+            return {"current": False, "available_session": bhav.get("latest_date"), "reason_code": "HISTORY_PROBE_FAILED"}
     if isinstance(loaded, Mapping) and (
         "current" in loaded or loaded.get("reason_code") or loaded.get("expected_latest_completed_session")
     ):
         return dict(loaded)
     if isinstance(loaded, Mapping) and loaded.get("history_freshness"):
         return dict(loaded.get("history_freshness") or {})
-    return {"current": True, "reason_code": ""}
+    return {"current": False, "reason_code": "HISTORY_UNKNOWN"}
 
 
 def _activity(

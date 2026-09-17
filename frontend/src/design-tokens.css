@@ -1,18 +1,18 @@
 /* QuantTerm design tokens — professional terminal surfaces */
 :root {
-  --qt-bg-base: #0a0e17;
-  --qt-bg-surface: #0d1420;
-  --qt-bg-elevated: #111827;
-  --qt-border: rgba(255, 255, 255, 0.07);
-  --qt-border-accent: rgba(56, 189, 248, 0.28);
-  --qt-text-primary: #e6e9ef;
-  --qt-text-secondary: #8b94a7;
-  --qt-text-muted: #525c6e;
-  --qt-accent-cyan: #38bdf8;
-  --qt-accent-violet: #2dd4bf;
-  --qt-positive: #34d399;
-  --qt-negative: #fb7185;
-  --qt-warning: #fbbf24;
+  --qt-bg-base: #f4f7f5;
+  --qt-bg-surface: #ffffff;
+  --qt-bg-elevated: #eef2ee;
+  --qt-border: #d8e2db;
+  --qt-border-accent: rgba(27, 107, 69, 0.35);
+  --qt-text-primary: #14201a;
+  --qt-text-secondary: #5c6b63;
+  --qt-text-muted: #8a9690;
+  --qt-accent-cyan: #1b6b45;
+  --qt-accent-violet: #0f8a4b;
+  --qt-positive: #16a34a;
+  --qt-negative: #b42318;
+  --qt-warning: #d97706;
   --qt-radius-sm: 6px;
   --qt-radius-md: 10px;
   --qt-radius-lg: 14px;
@@ -21,7 +21,7 @@
   --qt-space-md: 16px;
   --qt-space-lg: 24px;
   --qt-font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
-  --qt-shadow-panel: 0 4px 24px rgba(0, 0, 0, 0.35);
+  --qt-shadow-panel: 0 4px 24px rgba(20, 32, 26, 0.08);
   --qt-motion-fast: 140ms ease;
 }
 

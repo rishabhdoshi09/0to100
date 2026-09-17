@@ -376,15 +376,15 @@
 .risk-lens {
   margin: 0.75rem 0 1rem;
   padding: 0.85rem 1rem;
-  border: 1px solid var(--border, #22344a);
+  border: 1px solid var(--border, #d8e2db);
   border-radius: 12px;
-  background: var(--panel, #0e1826);
+  background: var(--panel, #ffffff);
 }
 .risk-lens h3 { margin: 0 0 0.6rem; font-size: 0.95rem; display: flex; align-items: baseline; gap: 0.5rem; }
 .risk-lens h3 small { font-weight: 400; color: var(--muted, #8ba0b8); font-size: 0.68rem; letter-spacing: 0.02em; }
 .risk-lens-empty { color: var(--muted, #8ba0b8); margin: 0; font-size: 0.85rem; }
 .risk-lens-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.6rem; }
-.risk-lens-grid > div { display: flex; flex-direction: column; gap: 0.1rem; padding: 0.5rem 0.6rem; border-radius: 9px; background: var(--panel-2, #0b1420); border: 1px solid var(--border, #1c2c40); }
+.risk-lens-grid > div { display: flex; flex-direction: column; gap: 0.1rem; padding: 0.5rem 0.6rem; border-radius: 9px; background: var(--panel-2, #fbfdfc); border: 1px solid var(--border, #d8e2db); }
 .risk-lens-grid span { font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted, #8ba0b8); }
 .risk-lens-grid strong { font-size: 1.05rem; font-variant-numeric: tabular-nums; }
 .risk-lens-grid small { font-size: 0.72rem; color: var(--muted, #8ba0b8); font-variant-numeric: tabular-nums; }

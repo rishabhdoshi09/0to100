@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 export PYTHONPATH="$ROOT"
+# macOS has no util-linux setsid. Canonical launchers must still start Vite.
+# shellcheck disable=SC1091
+source "$ROOT/scripts/_setsid_compat.sh"
 
 if [[ "${1:-}" == "--restart" || "${1:-}" == "--reuse" ]]; then
   shift || true
@@ -315,6 +318,22 @@ start_api() {
   return 0
 }
 
+wait_for_frontend() {
+  local tries="${1:-60}"; local i=0
+  while (( i < tries )); do
+    if url_ok "http://127.0.0.1:5173/"; then
+      echo "[STACK] Desk UI is answering on http://127.0.0.1:5173"
+      return 0
+    fi
+    if (( i % 8 == 7 )); then
+      echo "[STACK] Waiting for desk UI on :5173 …" >&2
+    fi
+    sleep 0.5 || true; i=$((i + 1))
+  done
+  echo "[STACK] Frontend process started but http://127.0.0.1:5173/ did not respond. See $STACK_LOG_DIR/vite.log" >&2
+  return 1
+}
+
 start_frontend() {
   echo "[STACK] Starting dedicated terminal at http://127.0.0.1:5173 …"
   mkdir -p "$STACK_LOG_DIR"
@@ -322,9 +341,15 @@ start_frontend() {
   # esbuild); signalling only the npm PID left the node server still serving
   # :5173 after the API was gone — a healthy-looking desk with no backend.
   # setsid makes the PID a group leader so the whole tree can be stopped.
+  # On macOS the canonical _setsid_compat.sh shim supplies setsid via Python.
   setsid npm --prefix "$ROOT/frontend" run dev -- --host 127.0.0.1 --port 5173 \
     >>"$STACK_LOG_DIR/vite.log" 2>&1 &
   FRONTEND_PID=$!
+  if wait_for_frontend 80; then
+    return 0
+  fi
+  echo "[STACK] Desk UI is not answering yet; supervisor will keep probing. See $STACK_LOG_DIR/vite.log" >&2
+  return 0
 }
 
 kick_scan() {

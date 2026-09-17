@@ -460,6 +460,12 @@ class Supervisor:
                     from core.long_term_tracker import record_picks
                     record_picks([{**row, "score": row.get("combined_score"),
                                    "thesis": "; ".join(row.get("quality_factors", [])[:3])}])
+                elif ctype == CTRL.RUN_LEARNING_NOW:
+                    self.jobs.enqueue(SCH.LEARNING_CYCLE,
+                                      idempotency_key=f"manual:learning:{control.control_id}")
+                elif ctype == CTRL.RUN_HISTORICAL_REPLAY:
+                    from product.autonomous_learning import maybe_run_closed_market_replay
+                    maybe_run_closed_market_replay(now=now, force=True)
                 elif ctype == CTRL.HALT_AUTONOMY:
                     self.owner_state["halted"] = True
                     self.owner_state["new_entries_paused"] = True
@@ -545,23 +551,38 @@ class Supervisor:
             self.heartbeat()
             return None
         self._execute(job)
+        # Non-data jobs must not leave a stale DATA_REFRESHING activity label.
+        if job.job_type != SCH.DATA_REFRESH:
+            self._reconcile_idle_state()
         self.heartbeat()
         return job
+
+    def _refresh_activity_active(self) -> bool:
+        """True only when a data refresh is running or actually due now.
+
+        A future-scheduled DATA_REFRESH is the normal recurring schedule. Treating
+        those PENDING rows as live activity latched DATA_REFRESHING forever.
+        """
+        now = float(self.clock())
+        for job in self.jobs.list(limit=1000):
+            if job.job_type != SCH.DATA_REFRESH:
+                continue
+            if job.status == JS.RUNNING:
+                return True
+            if job.status == JS.PENDING and float(job.scheduled_for or 0.0) <= now:
+                return True
+        return False
 
     def _reconcile_idle_state(self) -> None:
         """Repair a latched refresh state from durable queue and failure truth.
 
         DATA_REFRESHING is an activity state, not a sticky readiness label. If no
-        DATA_REFRESH job is pending/running, an idle tick must converge to the
+        DATA_REFRESH job is running or due, an idle tick must converge to the
         durable data truth instead of preserving a stale hint forever.
         """
         if self.owner_state.get("halted") or self.state.state != ST.DATA_REFRESHING:
             return
-        refresh_active = any(
-            job.job_type == SCH.DATA_REFRESH and job.status in (JS.PENDING, JS.RUNNING)
-            for job in self.jobs.list(limit=1000)
-        )
-        if refresh_active:
+        if self._refresh_activity_active():
             return
         if H.SNAPSHOT_STALE in self.failures:
             self._transition(
