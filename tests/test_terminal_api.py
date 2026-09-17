@@ -396,7 +396,12 @@ def test_data_payload_does_not_unpickle_bhavcopy_inline(monkeypatch):
     )
     assert seen == [False]
     assert payload["scan_records"] == 2
-    assert any("still loading" in item.lower() for item in payload["blockers"])
+    assert payload["ready"] is True
+    assert payload["history_current"] is True
+    assert payload["ready"] == payload["history_current"]
+    blockers = " ".join(payload["blockers"]).lower()
+    assert "not loaded the bhavcopy store" in blockers
+    assert "history is not ready" not in blockers
 
 
 def test_peek_cached_regime_is_missing_until_computed():
