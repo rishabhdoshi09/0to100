@@ -39,4 +39,23 @@ export const compactDateTime = (value?: string | number | null): string => {
   return Number.isNaN(d.getTime()) ? String(value).slice(0, 19) : d.toLocaleString('en-IN')
 }
 
+export const istDateTime = (value?: string | number | null): string => {
+  if (value == null || value === '') return '—'
+  const numeric = Number(value)
+  const d = Number.isFinite(numeric)
+    ? new Date(numeric < 1_000_000_000_000 ? numeric * 1000 : numeric)
+    : new Date(String(value))
+  if (Number.isNaN(d.getTime())) return String(value).slice(0, 19)
+  return `${d.toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  })} IST`
+}
+
 export const boolLabel = (value?: boolean): string => value ? 'ON' : 'OFF'
