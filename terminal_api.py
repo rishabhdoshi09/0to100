@@ -805,8 +805,19 @@ def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news
                 bhavcopy[key] = freshness[key]
     except Exception:
         freshness = {}
+    from product.data_readiness import project_official_data_readiness
+    data_truth = project_official_data_readiness(
+        freshness=freshness,
+        data={"ready": bhavcopy.get("ready"), "bhavcopy": bhavcopy},
+        bhav=bhavcopy,
+        operations_running=bool(operations.get("running")),
+    )
     if not bhavcopy.get("ready"):
-        if bhavcopy.get("cache_exists"):
+        if data_truth.get("history_current"):
+            blockers.append(
+                "Official session files are current; this API process has not loaded the bhavcopy store yet. Scans will use the same official files once the pickle is in memory."
+            )
+        elif bhavcopy.get("cache_exists"):
             blockers.append("Official NSE bhavcopy cache is on disk and still loading into the desk API.")
         else:
             blockers.append("Official NSE bhavcopy history is not ready; direct scans will prepare it first.")
@@ -826,13 +837,6 @@ def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news
         blockers.append("Current F&O instrument universe is unavailable; refresh instruments after Zerodha login.")
     if not news.get("available"):
         blockers.append("Curated news store is empty; run a news refresh to inspect source health.")
-    from product.data_readiness import project_official_data_readiness
-    data_truth = project_official_data_readiness(
-        freshness=freshness,
-        data={"ready": bhavcopy.get("ready"), "bhavcopy": bhavcopy},
-        bhav=bhavcopy,
-        operations_running=bool(operations.get("running")),
-    )
     return {
         "ready": bool(data_truth["data_ready"]),
         "history_current": bool(data_truth["history_current"]),

@@ -330,6 +330,11 @@ def build_home_os(
             subtext = "Getting the latest market data before scanning."
             now_line = "Preparing official data"
             next_line = "Shared market scan after current prices"
+        elif preparing and history_current:
+            headline = "Official prices are current. QuantTerm is finishing the next automatic step."
+            subtext = "The DATA lane is ready. A background job is still running and will show its own progress."
+            now_line = "Market scan running" if any(str(o.get("kind")) == "MARKET_SCAN" for o in active_ops) else "Finishing the official data store"
+            next_line = "Recommendations and paper decision"
         else:
             headline = "QuantTerm is getting today's market ready."
             subtext = "No extra click is needed. Progress is the desk pipeline you already have."
@@ -342,7 +347,7 @@ def build_home_os(
             if cur and tot:
                 now_line = f"Market scan running · {cur} / {tot}"
         elif any(str(o.get("kind")) == "DATA_PREPARE" for o in active_ops):
-            now_line = "Preparing official data"
+            now_line = "Preparing official data" if not history_current else "Finishing the official data store"
     elif not paper_enabled:
         state = PAUSED
         headline = "The paper bot is paused."

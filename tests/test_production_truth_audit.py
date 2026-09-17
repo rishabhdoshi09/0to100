@@ -85,6 +85,38 @@ def test_home_os_does_not_wait_when_official_history_is_current():
     assert os["state"] != PREPARING
 
 
+def test_home_does_not_claim_waiting_for_data_when_history_is_current_during_prepare():
+    os = build_home_os(
+        dashboard={
+            "autonomy": {"state": "OBSERVING", "running": True},
+            "data": {
+                "ready": True,
+                "history_current": True,
+                "bhavcopy": {
+                    "ready": False,
+                    "latest_date": "2026-09-17",
+                    "current": True,
+                    "reason_code": "HISTORY_CURRENT",
+                    "expected_latest_completed_session": "2026-09-17",
+                    "available_session": "2026-09-17",
+                    "stale_sessions": 0,
+                },
+            },
+        },
+        paper={"enabled": True, "open_positions": [], "closed_trades": []},
+        why={"available": False},
+        soak={"real_forward_observations": 0, "insufficient_evidence": True},
+        scan={},
+        operations={"active": [{"kind": "DATA_PREPARE", "status": "RUNNING", "message": "Downloading"}], "recent": []},
+        reco={"schema_version": 4, "categories": []},
+        now=IST_OPEN,
+    )
+    assert os["system"]["data"]["status"] == "Ready"
+    assert os["history_freshness"]["reason_code"] == "HISTORY_CURRENT"
+    assert "getting the latest market data" not in (os.get("subtext") or "").lower()
+    assert "official prices are current" in (os.get("headline") or "").lower()
+
+
 def test_disk_session_date_can_be_current_without_in_memory_store():
     from data.bhavcopy_runtime import official_history_freshness
 
@@ -168,6 +200,7 @@ def test_api_data_ready_matches_history_current_when_pickle_unloaded(monkeypatch
     assert payload["store_loaded"] is False
     assert payload["operations_running"] is False
     assert payload["lane_status"] == "Ready"
+    assert all("history is not ready" not in str(item).lower() for item in payload.get("blockers") or [])
 
 
 class _PaperDeps:

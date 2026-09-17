@@ -178,7 +178,7 @@ def inspect_runtime(*, api_serving: bool = True) -> dict[str, Any]:
     try:
         from data.bhavcopy_runtime import official_history_freshness, status as history_status
 
-        history = dict(official_history_freshness(history_status(load_cache=True)))
+        history = dict(official_history_freshness(history_status(load_cache=False), require_store=False))
     except Exception as exc:
         history = {"current": False, "ready": False, "reason_code": "HISTORY_PROBE_FAILED", "error": str(exc)[:200]}
 

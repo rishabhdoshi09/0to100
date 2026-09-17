@@ -276,7 +276,7 @@ def load_latest(path: str | Path | None = None) -> dict[str, Any]:
         merged = dict(local)
         merged.update(replay)
         merged["available"] = True
-        merged["provenance"] = BACKTEST
+        merged["provenance"] = replay.get("provenance") or "HISTORICAL_REPLAY"
         merged["live_locked"] = True
         return merged
     if local:
@@ -332,7 +332,7 @@ def run_decision_simulator(
         and int(cached.get("decisions_tested") or 0) == expected_n
     ):
         cached["cache_hit"] = True
-        cached["provenance"] = BACKTEST
+        cached["provenance"] = replay.get("provenance") or "HISTORICAL_REPLAY"
         cached["live_locked"] = True
         return cached
 
@@ -378,7 +378,7 @@ def run_decision_simulator(
         "schema_version": SCHEMA_VERSION,
         "generated_at": _now(),
         "version": version,
-        "provenance": BACKTEST,
+        "provenance": replay.get("provenance") if replay.get("engine") else BACKTEST,
         "cache_hit": False,
         "live_locked": True,
         "not_promotion_evidence": True,
@@ -401,6 +401,7 @@ def run_decision_simulator(
         "session_summaries": replay.get("session_summaries") or [],
         "decisions": replay.get("decisions") or replay.get("rows") or [],
         "journal_overlay": {
+            "provenance": BACKTEST,
             "decisions_tested": len(rows),
             "would_take": counts["TAKEN"],
             "rejected": counts["REJECTED"],
