@@ -20,28 +20,28 @@ export function PriceChart({ symbol, bars }: Props) {
       height: 360,
       layout: {
         background: { type: ColorType.Solid, color: 'transparent' },
-        textColor: '#8390a8',
+        textColor: '#66758a',
         fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
       },
       grid: {
-        vertLines: { color: 'rgba(46, 62, 91, .38)' },
-        horzLines: { color: 'rgba(46, 62, 91, .38)' },
+        vertLines: { color: 'rgba(148, 163, 184, .22)' },
+        horzLines: { color: 'rgba(148, 163, 184, .22)' },
       },
-      rightPriceScale: { borderColor: '#24314b' },
-      timeScale: { borderColor: '#24314b', timeVisible: true },
+      rightPriceScale: { borderColor: '#cbd5e1' },
+      timeScale: { borderColor: '#cbd5e1', timeVisible: true },
       crosshair: {
-        vertLine: { color: '#24d6ff', labelBackgroundColor: '#0d2031' },
-        horzLine: { color: '#24d6ff', labelBackgroundColor: '#0d2031' },
+        vertLine: { color: '#087ea4', labelBackgroundColor: '#087ea4' },
+        horzLine: { color: '#087ea4', labelBackgroundColor: '#087ea4' },
       },
     })
 
     const candles = chart.addCandlestickSeries({
-      upColor: '#31e981',
-      downColor: '#ff667f',
-      borderUpColor: '#31e981',
-      borderDownColor: '#ff667f',
-      wickUpColor: '#31e981',
-      wickDownColor: '#ff667f',
+      upColor: '#17795e',
+      downColor: '#b42318',
+      borderUpColor: '#17795e',
+      borderDownColor: '#b42318',
+      wickUpColor: '#17795e',
+      wickDownColor: '#b42318',
     })
     candles.setData(bars.map(({ time, open, high, low, close }) => ({
       time,
@@ -52,7 +52,7 @@ export function PriceChart({ symbol, bars }: Props) {
     })))
 
     const volume = chart.addHistogramSeries({
-      color: '#24d6ff',
+      color: '#087ea4',
       priceFormat: { type: 'volume' },
       priceScaleId: '',
     })
@@ -60,7 +60,7 @@ export function PriceChart({ symbol, bars }: Props) {
     volume.setData(bars.map((bar) => ({
       time: bar.time,
       value: bar.volume,
-      color: bar.close >= bar.open ? 'rgba(49,233,129,.45)' : 'rgba(255,102,127,.45)',
+      color: bar.close >= bar.open ? 'rgba(23,121,94,.35)' : 'rgba(180,35,24,.30)',
     })))
 
     chart.timeScale().fitContent()
