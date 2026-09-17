@@ -1,0 +1,391 @@
+/* QuantTerm light-only presentation contract.
+   This file is deliberately loaded last. It removes the legacy dark terminal
+   presentation without changing market, trading, learning, or status semantics. */
+
+:root {
+  color-scheme: light only;
+
+  --bg: #f4f7fb;
+  --bg-soft: #eef3f8;
+  --panel: #ffffff;
+  --panel-2: #f8fafc;
+  --border: #d9e2ec;
+  --border-hot: #0f84a7;
+  --text: #17212f;
+  --muted: #66758a;
+  --cyan: #087ea4;
+  --cyan-soft: rgba(8, 126, 164, 0.10);
+  --green: #17795e;
+  --red: #b42318;
+  --purple: #0f766e;
+  --amber: #9a5b00;
+  --qt-dim: #7b8798;
+
+  --qt-bg-base: #f4f7fb;
+  --qt-bg-surface: #ffffff;
+  --qt-bg-elevated: #f8fafc;
+  --qt-border: #d9e2ec;
+  --qt-border-accent: rgba(8, 126, 164, 0.30);
+  --qt-text-primary: #17212f;
+  --qt-text-secondary: #66758a;
+  --qt-text-muted: #8a96a7;
+  --qt-accent-cyan: #087ea4;
+  --qt-accent-violet: #0f766e;
+  --qt-positive: #17795e;
+  --qt-negative: #b42318;
+  --qt-warning: #9a5b00;
+  --qt-shadow-panel: 0 8px 24px rgba(38, 55, 77, 0.08);
+
+  --qt-glow-cyan: rgba(8, 126, 164, 0.10);
+  --qt-surface-glass: rgba(255, 255, 255, 0.94);
+  --qt-shadow-soft: 0 8px 24px rgba(38, 55, 77, 0.08);
+  --qt-shadow-focus: 0 0 0 3px rgba(8, 126, 164, 0.14);
+
+  --qt-polish-line: rgba(93, 112, 136, 0.24);
+  --qt-polish-soft: #f8fafc;
+  --qt-polish-raised: #ffffff;
+  --qt-polish-focus: rgba(8, 126, 164, 0.82);
+}
+
+html,
+body,
+#root,
+.terminal-root,
+.workspace {
+  background: #f4f7fb !important;
+  color: var(--text) !important;
+}
+
+body {
+  background:
+    radial-gradient(1000px 520px at 15% -10%, rgba(8, 126, 164, 0.06), transparent 62%),
+    radial-gradient(900px 460px at 100% 0%, rgba(15, 118, 110, 0.045), transparent 58%),
+    #f4f7fb !important;
+}
+
+.sidebar {
+  background: rgba(255, 255, 255, 0.96) !important;
+  border-right-color: #d9e2ec !important;
+  box-shadow: 10px 0 28px rgba(38, 55, 77, 0.06) !important;
+}
+
+.topbar {
+  background: rgba(255, 255, 255, 0.94) !important;
+  border-bottom-color: #d9e2ec !important;
+  box-shadow: 0 6px 20px rgba(38, 55, 77, 0.06) !important;
+}
+
+.brand strong,
+.page-title h1,
+.panel h1,
+.panel h2,
+.panel h3,
+.panel strong,
+.metric strong,
+table,
+th,
+td,
+label {
+  color: var(--text);
+}
+
+.brand small,
+.nav-section-label,
+.page-title p,
+.panel-copy,
+small,
+.muted,
+.top-status,
+.metric > span,
+.metric small {
+  color: var(--muted) !important;
+}
+
+.brand-mark {
+  background: #e9f5f8 !important;
+  border-color: #bddde5 !important;
+  color: #087ea4 !important;
+  box-shadow: none !important;
+}
+
+.nav-item {
+  color: #243244 !important;
+}
+
+.nav-item span {
+  color: #77869a !important;
+}
+
+.nav-item:hover {
+  background: #eef7f9 !important;
+}
+
+.nav-item.active {
+  background: #e4f3f7 !important;
+  color: #076b8a !important;
+  border-color: #c9e4eb !important;
+}
+
+.broker-card,
+.system-mini,
+.panel,
+.metric,
+.search-box,
+.paper-state,
+.home-os-card,
+.home-os-past,
+.home-os-grid > div,
+.home-os-opps > div,
+.home-os-now-next > div,
+.home-os-lane,
+.forward-evidence-card,
+.reco-card,
+.recommendation-card,
+.strategy-card,
+.learning-card,
+.health-card,
+.data-card,
+.coverage-card,
+.stock-card,
+.watchlist-card {
+  background: #ffffff !important;
+  color: var(--text) !important;
+  border-color: #d9e2ec !important;
+  box-shadow: 0 8px 24px rgba(38, 55, 77, 0.06) !important;
+}
+
+.metric {
+  background: linear-gradient(155deg, #ffffff, #f8fafc) !important;
+}
+
+.workspace,
+.home-os-card,
+.home-os-hero {
+  background-image: none !important;
+}
+
+.home-os-card {
+  border-color: #cad7e4 !important;
+}
+
+.home-os-hero {
+  background: #f8fbfd !important;
+  border-bottom-color: #d9e2ec !important;
+}
+
+.home-os-now-next > div,
+.home-os-grid > div,
+.home-os-opps > div,
+.home-os-past,
+.home-os-actions button.secondary,
+.home-os-quick-link,
+button.home-os-quick-link {
+  background: #f8fafc !important;
+  border-color: #d9e2ec !important;
+  color: #243244 !important;
+}
+
+.home-os-grid > div small,
+.home-os-past,
+.home-os-activity,
+.home-os-opps > div,
+.home-os-card .panel-copy {
+  color: #66758a !important;
+}
+
+.search-box,
+input,
+select,
+textarea {
+  background: #ffffff !important;
+  color: #17212f !important;
+  border-color: #cfd9e5 !important;
+}
+
+.search-box input::placeholder,
+input::placeholder,
+textarea::placeholder {
+  color: #94a0b1 !important;
+}
+
+button,
+.page-actions button,
+.panel button,
+.automation-actions button {
+  background: #ffffff;
+  color: #076b8a;
+  border-color: #b9d8e2;
+}
+
+button:hover,
+.page-actions button:hover,
+.panel button:hover {
+  background: #eef7f9 !important;
+  border-color: #79b9ca !important;
+  color: #065f78 !important;
+}
+
+button.primary,
+.primary-action,
+.home-os-actions button:not(.secondary) {
+  background: #087ea4 !important;
+  color: #ffffff !important;
+  border-color: #087ea4 !important;
+}
+
+button.primary:hover,
+.primary-action:hover,
+.home-os-actions button:not(.secondary):hover {
+  background: #066f91 !important;
+  color: #ffffff !important;
+}
+
+.live-pill,
+.offline-pill,
+.work-pill,
+.status-badge,
+.badge,
+.pill,
+.chip {
+  background: #ffffff !important;
+  border-color: #d9e2ec !important;
+}
+
+.live-pill { color: #17795e !important; }
+.offline-pill { color: #b42318 !important; }
+.work-pill { color: #9a5b00 !important; }
+
+.api-warning,
+.warning,
+.warning-card,
+.lane-needs-you {
+  background: #fff8e8 !important;
+  border-color: #e6c981 !important;
+  color: #805000 !important;
+}
+
+.error,
+.error-card,
+.lane-problem {
+  background: #fff1f0 !important;
+  border-color: #e6b7b2 !important;
+  color: #9f231a !important;
+}
+
+.success,
+.success-card,
+.state-normal,
+.state-market_closed_complete {
+  border-color: #b9dacd !important;
+}
+
+table {
+  background: #ffffff !important;
+  border-color: #d9e2ec !important;
+}
+
+thead,
+th {
+  background: #f3f6fa !important;
+  color: #46566a !important;
+  border-color: #d9e2ec !important;
+}
+
+td,
+tr {
+  border-color: #e4eaf1 !important;
+}
+
+table tbody tr:hover {
+  background: #f4f9fb !important;
+}
+
+hr,
+.section-tabs,
+.page-title,
+.home-os-activity li {
+  border-color: #d9e2ec !important;
+}
+
+.section-tabs button {
+  color: #66758a !important;
+}
+
+.section-tabs button:hover {
+  background: #eef7f9 !important;
+  color: #17212f !important;
+}
+
+.section-tabs button.active,
+.display-depth-toggle button.active {
+  background: #e4f3f7 !important;
+  color: #076b8a !important;
+  border-color: #b9d8e2 !important;
+}
+
+.display-depth-toggle {
+  background: #f3f6fa !important;
+  border-color: #d9e2ec !important;
+}
+
+.health-track {
+  background: #e8eef4 !important;
+}
+
+.status-dot,
+.live-pill i,
+.offline-pill i,
+.work-pill i {
+  box-shadow: none !important;
+}
+
+code,
+pre,
+.mono,
+pre code {
+  background: #f3f6fa !important;
+  color: #243244 !important;
+  border-color: #d9e2ec !important;
+}
+
+.chart-canvas,
+.chart-wrap,
+.chart-panel {
+  background: #ffffff !important;
+}
+
+.scan-provenance dt { color: #66758a !important; }
+.scan-provenance dd { color: #17212f !important; }
+.scan-session-current { color: #17795e !important; }
+.scan-session-stale,
+.scan-provenance-note,
+.radar-plan-gap { color: #9a5b00 !important; }
+.scan-session-unknown { color: #66758a !important; }
+
+.paper-state {
+  background: #ffffff !important;
+}
+.paper-state-label,
+.paper-state-notes { color: #66758a !important; }
+.paper-state-why { color: #17212f !important; }
+.paper-state-active { color: #17795e !important; }
+.paper-state-limited { color: #9a5b00 !important; }
+.paper-state-blocked { color: #b42318 !important; }
+.paper-state-paused { color: #66758a !important; }
+
+::selection {
+  background: #ccecf3;
+  color: #17212f;
+}
+
+* {
+  scrollbar-color: #bcc8d5 transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #c3ced9 !important;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #aebbc9 !important;
+}
