@@ -17,6 +17,7 @@ import './operator-polish.css'
 import './home-calm.css'
 import './clarity.css'
 import './final-polish.css'
+import './light-only.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
