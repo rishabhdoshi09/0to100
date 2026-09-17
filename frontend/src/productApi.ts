@@ -1716,6 +1716,14 @@ export type HistoricalDecisionRow = {
   entry?: number | null
   stop?: number | null
   target?: number | null
+  setup?: string
+  tier?: string
+  regime?: string
+  data_cutoff?: string
+  decision_timestamp?: string
+  mfe_pct?: number | null
+  mae_pct?: number | null
+  rejection_reasons?: string[]
   pit?: { as_of?: string; max_bar_date?: string; future_evidence_used?: boolean; degraded?: string[] }
   engine?: string
 }

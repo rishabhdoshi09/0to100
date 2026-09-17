@@ -93,6 +93,30 @@ def test_future_scheduled_data_refresh_does_not_latch_refreshing(tmp_path):
     sup.shutdown()
 
 
+def test_restart_retains_persisted_data_ready(tmp_path):
+    first = _sup(tmp_path)
+    assert first.start() is True
+    first._transition(ST.DATA_READY, "fixture", "data is already accepted", "test")
+    first.shutdown()
+
+    second = _sup(tmp_path)
+    assert second.start() is True
+    assert second.state.state == ST.DATA_READY
+    assert second.state.reason_code == "owner_resume"
+    second.shutdown()
+
+
+def test_idle_tick_reconciles_starting_to_ready(tmp_path):
+    sup = _sup(tmp_path)
+    assert sup.start() is True
+    assert sup.state.state == ST.STARTING
+    sup.enqueue_due = lambda *_args, **_kwargs: None
+    assert sup.tick(_NOW) is None
+    assert sup.state.state == ST.DATA_READY
+    assert sup.state.reason_code == "idle_reconcile"
+    sup.shutdown()
+
+
 def test_idle_reconcile_blocks_when_snapshot_is_stale(tmp_path):
     sup = _sup(tmp_path)
     assert sup.start() is True

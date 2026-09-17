@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from product import operator_health
 from product import readiness
+from datetime import datetime, timezone
 
 
 def test_valid_auth_and_snapshot_is_broker_ready(monkeypatch):
@@ -161,3 +162,38 @@ def test_operator_health_keeps_broker_login_as_separate_lane(monkeypatch):
     assert out["broker"]["state"] == "LOGIN_REQUIRED"
     assert out["broker"]["live_data_ready"] is False
     assert out["active_failures"] == []
+
+
+def test_auth_expired_does_not_degrade_operator_health(monkeypatch):
+    monkeypatch.setattr(operator_health, "_today", lambda: "2026-09-03")
+    monkeypatch.setattr(
+        operator_health,
+        "_broker_lane",
+        lambda: {
+            "state": "LOGIN_REQUIRED",
+            "ready": False,
+            "live_data_ready": False,
+            "execution_ready": False,
+            "auth_ready": False,
+            "login_required": True,
+            "auth_status": "SESSION_EXPIRED",
+            "reason_code": "AUTH_EXPIRED",
+            "detail": "Zerodha session expired",
+            "snapshot_id": "",
+        },
+    )
+    out = operator_health.enrich_autonomy_payload({
+        "running": True,
+        "active_failures": ["auth_expired"],
+        "jobs_recent": [{
+            "job_type": "auth_health",
+            "status": "BLOCKED",
+            "scheduled_for": datetime(2026, 9, 3, 12, 0, tzinfo=timezone.utc).timestamp(),
+            "critical": True,
+            "blocked_on": "CREDENTIAL_UPDATE",
+        }],
+        "active_job": {},
+    })
+    assert out["operator_state"] == "HEALTHY"
+    assert out["current_blocked_critical_jobs"] == []
+    assert "auth_expired" not in out["active_failures"]

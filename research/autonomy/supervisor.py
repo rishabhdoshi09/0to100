@@ -88,6 +88,7 @@ class Supervisor:
         self._stop = False
         self._running = False
         self._started_at = None
+        self._boot_retained_state = False
 
     def _load_failures(self) -> set:
         try:
@@ -135,7 +136,20 @@ class Supervisor:
         os.environ["QT_AUTONOMY_OWNER"] = "1"
         self._running = True
         self._started_at = self.clock()
-        self._transition(ST.STARTING, "boot", "Supervisor acquired the single mutation-owner lock.", "start")
+        persisted = str(self.state.state or ST.STARTING)
+        # Restart must not wipe a durable operational state back to STARTING.
+        # AUTH_HEALTH is a broker probe; it is not a reason to forget DATA_READY.
+        if persisted in ST.STATES and persisted != ST.STARTING:
+            self._boot_retained_state = True
+            self._transition(
+                persisted,
+                "owner_resume",
+                "Supervisor re-acquired the lock and retained the last persisted operational state.",
+                "start",
+            )
+        else:
+            self._boot_retained_state = False
+            self._transition(ST.STARTING, "boot", "Supervisor acquired the single mutation-owner lock.", "start")
         # Leftover BLOCKED CA/universe rows from when the ledger files were
         # missing must retry now that the jobs actually fetch official NSE data.
         try:
@@ -574,15 +588,25 @@ class Supervisor:
         return False
 
     def _reconcile_idle_state(self) -> None:
-        """Repair a latched refresh state from durable queue and failure truth.
+        """Repair a latched activity/boot state from durable queue and failure truth.
 
-        DATA_REFRESHING is an activity state, not a sticky readiness label. If no
-        DATA_REFRESH job is running or due, an idle tick must converge to the
-        durable data truth instead of preserving a stale hint forever.
+        DATA_REFRESHING is an activity state, not a sticky readiness label. STARTING
+        is a boot label. If no DATA_REFRESH job is running or due, an idle tick must
+        converge to the durable data truth instead of preserving a stale hint forever.
         """
-        if self.owner_state.get("halted") or self.state.state != ST.DATA_REFRESHING:
+        if self.owner_state.get("halted"):
+            return
+        current = self.state.state
+        if current not in (ST.DATA_REFRESHING, ST.STARTING):
             return
         if self._refresh_activity_active():
+            if current == ST.STARTING:
+                self._transition(
+                    ST.DATA_REFRESHING,
+                    "idle_reconcile",
+                    "Boot finished and a data refresh is running or due.",
+                    "idle_tick",
+                )
             return
         if H.SNAPSHOT_STALE in self.failures:
             self._transition(

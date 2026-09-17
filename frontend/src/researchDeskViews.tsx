@@ -702,7 +702,7 @@ export function ProductionBacktestView({ dashboard, setActive }: ViewProps) {
           evaluated, the page says BACKTEST PARITY: UNVERIFIED. Paper diary rows below are outcomes, not a substitute backtest.
         </p>
       </div>
-      <Panel title="HISTORICAL REPLAY" subtitle="Production scanner + evaluate_candidate · BACKTEST · never writes REAL_FORWARD_MARKET">
+      <Panel title="HISTORICAL REPLAY" subtitle={`${sim?.engine || 'Production scanner + evaluate_candidate'} · ${sim?.provenance || 'HISTORICAL_REPLAY'} · never writes REAL_FORWARD_MARKET`}>
         {simError ? (
           <p className="panel-copy">
             {simError}
@@ -818,15 +818,27 @@ export function ProductionBacktestView({ dashboard, setActive }: ViewProps) {
             </button>
             {openDecision === index ? (
               <div>
-                <p className="panel-copy">Decision: {row.decision} · {row.reason_code}</p>
-                <p className="panel-copy">Reasons: {(row.reasons || []).join(' · ') || '—'}</p>
+                <div className="fact-grid">
+                  <div><span>Symbol</span><strong>{row.symbol || 'unavailable'}</strong></div>
+                  <div><span>Simulation date</span><strong>{row.as_of || 'unavailable'}</strong></div>
+                  <div><span>Decision timestamp</span><strong>{row.decision_timestamp ? compactDateTime(row.decision_timestamp) : (row.as_of || 'unavailable')}</strong></div>
+                  <div><span>Data cutoff</span><strong>{row.data_cutoff || row.pit?.max_bar_date || row.as_of || 'unavailable'}</strong></div>
+                  <div><span>Market regime</span><strong>{row.regime || 'unavailable'}</strong></div>
+                  <div><span>Stock setup</span><strong>{row.setup || row.tier || 'unavailable'}</strong></div>
+                  <div><span>Decision</span><strong>{row.decision || 'unavailable'}</strong></div>
+                  <div><span>Entry</span><strong>{row.entry == null ? 'unavailable' : String(row.entry)}</strong></div>
+                  <div><span>Stop</span><strong>{row.stop == null ? 'unavailable' : String(row.stop)}</strong></div>
+                  <div><span>Target</span><strong>{row.target == null ? 'unavailable' : String(row.target)}</strong></div>
+                  <div><span>MFE</span><strong>{row.mfe_pct == null ? 'unresolved' : `${row.mfe_pct}%`}</strong></div>
+                  <div><span>MAE</span><strong>{row.mae_pct == null ? 'unresolved' : `${row.mae_pct}%`}</strong></div>
+                  <div><span>Realized / simulated return</span><strong>{row.forward_return_pct == null ? 'unresolved' : `${row.forward_return_pct}%`}</strong></div>
+                  <div><span>Classification</span><strong>{row.classification || row.outcome_status || 'INCONCLUSIVE'}</strong></div>
+                </div>
+                <p className="panel-copy">Reasons: {(row.reasons || []).join(' · ') || 'No reasons were persisted.'}</p>
+                <p className="panel-copy">Rejection reasons: {(row.rejection_reasons || []).join(' · ') || row.reason_code || 'None recorded.'}</p>
                 <p className="panel-copy">
                   Data available at decision date: {row.pit?.max_bar_date || row.as_of || 'unknown'}
                   {row.pit?.future_evidence_used ? ' · LOOKAHEAD FLAG' : ' · no future bars'}
-                </p>
-                <p className="panel-copy">
-                  Subsequent outcome: {row.forward_return_pct == null ? 'unresolved' : `${row.forward_return_pct}%`}
-                  {' · '}{row.classification || row.outcome_status || 'INCONCLUSIVE'}
                 </p>
                 {(row.pit?.degraded || []).length ? <p className="panel-copy">Degraded: {(row.pit?.degraded || []).join(' · ')}</p> : null}
                 {row.symbol && row.as_of ? (

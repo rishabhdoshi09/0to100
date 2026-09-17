@@ -85,6 +85,14 @@ def test_home_os_does_not_wait_when_official_history_is_current():
     assert os["state"] != PREPARING
 
 
+def test_replay_does_not_hardcode_risk_on_regime():
+    from pathlib import Path
+    src = Path(__file__).resolve().parents[1] / "product" / "historical_replay.py"
+    text = src.read_text(encoding="utf-8")
+    assert 'regime="RISK_ON"' not in text
+    assert "UNKNOWN" in text
+
+
 def test_home_does_not_claim_waiting_for_data_when_history_is_current_during_prepare():
     os = build_home_os(
         dashboard={
@@ -115,6 +123,55 @@ def test_home_does_not_claim_waiting_for_data_when_history_is_current_during_pre
     assert os["history_freshness"]["reason_code"] == "HISTORY_CURRENT"
     assert "getting the latest market data" not in (os.get("subtext") or "").lower()
     assert "official prices are current" in (os.get("headline") or "").lower()
+
+
+def test_auth_expired_does_not_fail_automation_lane_when_history_is_current():
+    os = build_home_os(
+        dashboard={
+            "autonomy": {
+                "state": "OBSERVING",
+                "running": True,
+                "operator_state": "DEGRADED",
+                "plain_state": "QuantTerm is running, but a current-session capability or critical job needs attention.",
+                "active_failures": ["auth_expired"],
+                "current_failed_jobs": [],
+                "current_blocked_critical_jobs": [{
+                    "job_type": "auth_health",
+                    "status": "BLOCKED",
+                    "critical": True,
+                    "blocked_on": "CREDENTIAL_UPDATE",
+                }],
+                "broker": {
+                    "state": "LOGIN_REQUIRED",
+                    "ready": False,
+                    "live_data_ready": False,
+                    "login_required": True,
+                },
+            },
+            "data": {
+                "ready": True,
+                "history_current": True,
+                "bhavcopy": {
+                    "ready": True,
+                    "latest_date": "2026-09-17",
+                    "current": True,
+                    "reason_code": "HISTORY_CURRENT",
+                    "expected_latest_completed_session": "2026-09-17",
+                    "available_session": "2026-09-17",
+                    "stale_sessions": 0,
+                },
+            },
+        },
+        paper={"enabled": True, "open_positions": [], "closed_trades": []},
+        why={"available": False},
+        soak={"real_forward_observations": 15, "insufficient_evidence": True},
+        scan={"scanned_at": "2026-09-17T05:00:00+00:00", "records": [{"symbol": "TCS"}]},
+        reco={"schema_version": 4, "categories": []},
+        now=IST_CLOSED,
+    )
+    auto = os["system"]["automation"]
+    assert auto["status"] != "Problem"
+    assert os["system"]["data"]["status"] == "Ready"
 
 
 def test_disk_session_date_can_be_current_without_in_memory_store():

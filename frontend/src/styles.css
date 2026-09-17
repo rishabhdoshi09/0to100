@@ -231,7 +231,7 @@ body {
 .panel {
   border: 1px solid var(--border);
   border-radius: 14px;
-  background: rgba(13, 20, 33, .92);
+  background: var(--panel);
   overflow: hidden;
 }
 .panel-title {

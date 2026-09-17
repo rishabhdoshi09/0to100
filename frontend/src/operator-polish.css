@@ -4,7 +4,7 @@
 :root {
   --qt-polish-line: rgba(135, 158, 188, 0.22);
   --qt-polish-soft: rgba(255, 255, 255, 0.035);
-  --qt-polish-raised: rgba(15, 27, 44, 0.88);
+  --qt-polish-raised: #ffffff;
   --qt-polish-focus: rgba(76, 201, 240, 0.82);
 }
 

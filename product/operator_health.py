@@ -29,6 +29,14 @@ except Exception:  # pragma: no cover
 
 _FAILURE = {"PERMANENT_FAILED", "FAILED"}
 _ACTIVE = {"PENDING", "RUNNING", "RETRYABLE_FAILED"}
+# Broker-session codes belong on the Zerodha lane. They must not mark the
+# whole supervisor DEGRADED / FAILED while official-data work continues.
+_BROKER_ONLY_FAILURES = frozenset({
+    "auth_missing",
+    "auth_expired",
+    "broker_provider_unavailable",
+})
+_BROKER_ONLY_JOBS = frozenset({"auth_health", "instrument_refresh"})
 
 
 def _today() -> str:
@@ -173,10 +181,16 @@ def enrich_autonomy_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
     current_counts = _counts(current)
     historical_counts = _counts(historical)
-    current_failed = [job for job in current if str(job.get("status") or "") in _FAILURE]
+    current_failed = [
+        job for job in current
+        if str(job.get("status") or "") in _FAILURE
+        and str(job.get("job_type") or "") not in _BROKER_ONLY_JOBS
+    ]
     current_blocked_critical = [
         job for job in current
-        if str(job.get("status") or "") == "BLOCKED" and bool(job.get("critical"))
+        if str(job.get("status") or "") == "BLOCKED"
+        and bool(job.get("critical"))
+        and str(job.get("job_type") or "") not in _BROKER_ONLY_JOBS
     ]
     current_active = [job for job in current if str(job.get("status") or "") in _ACTIVE]
 
@@ -200,7 +214,10 @@ def enrich_autonomy_payload(payload: dict[str, Any]) -> dict[str, Any]:
     else:
         learning_status = "NO_EOD_LEARNING_YET"
 
-    capability_failures = [str(item) for item in list(out.get("active_failures") or []) if str(item)]
+    capability_failures = [
+        str(item) for item in list(out.get("active_failures") or [])
+        if str(item) and str(item).lower() not in _BROKER_ONLY_FAILURES
+    ]
     job_failures = [
         f"JOB_FAILED:{job.get('job_type')}:{job.get('error_code') or 'UNKNOWN'}"
         for job in current_failed

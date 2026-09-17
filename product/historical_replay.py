@@ -410,7 +410,7 @@ def decide_session(
                     paper_enabled=True,
                     workspace=workspace,
                     now=clock,
-                    regime="RISK_ON",
+                    regime=str(scan_payload.get("regime") or scan_payload.get("market_regime") or "UNKNOWN"),
                 )
                 raw = decision.as_dict() if hasattr(decision, "as_dict") else dict(decision)
         except Exception as exc:
@@ -446,6 +446,9 @@ def decide_session(
             "target": raw.get("target") if raw.get("target") is not None else card.get("target"),
             "sector": raw.get("sector") or card.get("sector") or "",
             "setup": raw.get("setup_label") or card.get("setup_label") or "",
+            "regime": raw.get("regime") or scan_payload.get("regime") or scan_payload.get("market_regime") or "UNKNOWN",
+            "data_cutoff": max_bar,
+            "decision_timestamp": f"{str(as_of)[:10]}T15:30:00+05:30",
             "engine": ENGINE,
             "method_votes": raw.get("method_votes") or raw.get("methods_buy") or [],
             "evidence_family_votes": raw.get("evidence_family_votes") or raw.get("families") or {},
