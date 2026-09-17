@@ -1,4 +1,5 @@
 import type { HomeAction } from './productApi'
+import { istDateTime } from './format'
 import {
   LANE_TITLE,
   SYSTEM_LANE_ORDER,
@@ -110,6 +111,9 @@ export function SystemLaneInspector({
   const pageLabel = lane?.full_details_label || (page ? `Open ${page}` : '')
   const tech = depth === 'professional' ? technicalLines(lane?.technical) : []
   const lockStatus = liveMoneyStatus(liveLocked, lane)
+  const lastGood = lane?.last_success_at != null ? istDateTime(lane.last_success_at) : null
+  const lastProblem = lane?.last_failure_reason
+    || (lane?.last_failure_at != null ? istDateTime(lane.last_failure_at) : null)
 
   return (
     <aside className="home-os-inspector" role="region" aria-label={`${title} details`}>
@@ -129,8 +133,8 @@ export function SystemLaneInspector({
         <Field label="Waiting for" value={lane?.waiting_for} />
         <Field label="Next" value={lane?.next} />
         <Field label="After that" value={lane?.after_that} />
-        <Field label="Last good" value={lane?.last_success_at} />
-        <Field label="Last problem" value={lane?.last_failure_reason || lane?.last_failure_at} />
+        <Field label="Last good" value={lastGood} />
+        <Field label="Last problem" value={lastProblem} />
       </div>
       {laneId === 'paper_bot' && (lane?.positions || []).length ? (
         <ul className="home-os-inspect-positions">
