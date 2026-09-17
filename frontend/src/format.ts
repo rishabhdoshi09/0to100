@@ -41,14 +41,16 @@ export const formatIst = (value?: string | number | null): string => {
   const parts = new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Asia/Kolkata',
     day: '2-digit',
-    month: 'short',
+    month: 'numeric',
     year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
     hour12: false,
   }).formatToParts(date)
   const get = (type: string) => parts.find((part) => part.type === type)?.value || ''
-  return `${Number(get('day'))} ${get('month')} ${get('year')} · ${get('hour')}:${get('minute')} IST`
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  const month = months[Math.max(0, Number(get('month')) - 1)] || get('month')
+  return `${Number(get('day'))} ${month} ${get('year')} · ${get('hour')}:${get('minute')} IST`
 }
 
 export const relativeAge = (value?: string | number | null, nowMs = Date.now()): string => {

@@ -29,6 +29,8 @@ def test_terminal_controls_have_no_live_broker_or_order_action():
         "RESUME_NEW_PAPER_ENTRIES",
         "OBSERVE_ONLY_TODAY",
         "CLEAR_OBSERVE_ONLY",
+        "RUN_HISTORICAL_REPLAY",
+        "RUN_LEARNING_NOW",
     }
     source = inspect.getsource(terminal_api.control).lower()
     assert "broker" not in source
@@ -69,6 +71,8 @@ def test_market_controls_are_dispatched_outside_paper_autonomy():
         "RESUME_NEW_PAPER_ENTRIES",
         "OBSERVE_ONLY_TODAY",
         "CLEAR_OBSERVE_ONLY",
+        "RUN_HISTORICAL_REPLAY",
+        "RUN_LEARNING_NOW",
     }
 
 

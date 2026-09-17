@@ -645,13 +645,13 @@ class Supervisor:
 
         target = self._gated_state(result.state_hint)
         # A successful auth probe proves only broker-session health. It must not
-        # downgrade an already productive desk into a fake data-refresh activity.
+        # move an already productive desk into OBSERVING or a fake data-refresh.
         if (
             job.job_type == SCH.AUTH_HEALTH
             and result.status == JS.SUCCEEDED
-            and target == ST.DATA_REFRESHING
             and self.state.state in (
-                ST.DATA_READY, ST.OBSERVING, ST.PAPER_ACTIVE, ST.RESEARCHING, ST.DEGRADED
+                ST.DATA_READY, ST.OBSERVING, ST.PAPER_ACTIVE, ST.RESEARCHING,
+                ST.DEGRADED, ST.DATA_REFRESHING,
             )
         ):
             target = self.state.state
