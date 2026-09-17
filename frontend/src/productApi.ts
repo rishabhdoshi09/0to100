@@ -1688,7 +1688,7 @@ export const setAutonomousLearning = (enabled?: boolean, mode?: string): Promise
   if (enabled !== undefined) params.set('enabled', enabled ? 'true' : 'false')
   if (mode) params.set('mode', mode)
   const query = params.toString()
-  return request(`/api/autonomous-learning${query ? `?${query}` : ''}`, {
+  return request('/api/autonomous-learning' + (query ? '?' + query : ''), {
     method: 'POST',
     headers: { Accept: 'application/json' },
   })
