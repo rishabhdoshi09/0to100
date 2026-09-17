@@ -226,10 +226,17 @@ def _kind_for_step(
         kind = DUE_DILIGENCE_ACQUIRE if (not state.get("fresh") and state.get("retry_due")) else None
     else:
         kind = None
+
+    # Official-session freshness is an identity boundary, not a wall-clock TTL.
+    # Once prices_kind_due() proves that the required exchange session is absent,
+    # an earlier successful DATA_PREPARE/FNO_REFRESH cannot make those prices
+    # current. OperationStore.enqueue still deduplicates an active DATA_PREPARE.
+    bypass_success_ttl = step_id == "prices" and kind == DATA_PREPARE
     if (
         kind
         and store is not None
         and step_id != "investigate"
+        and not bypass_success_ttl
         and _recently_succeeded(store, _kinds_for_id(step_id), _fresh_s(step_id))
     ):
         return None
