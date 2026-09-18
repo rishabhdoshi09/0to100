@@ -75,6 +75,14 @@ def _f(value: Any) -> float | None:
     return None if out != out else out
 
 
+def _first(card: Mapping[str, Any], *keys: str) -> Any:
+    """First present value; preserves legitimate numeric zero."""
+    for key in keys:
+        value = card.get(key)
+        if value is not None and value != "":
+            return value
+    return None
+
 def _direction(status: Any) -> str:
     text = str(status or "").strip().lower()
     if text in _NEUTRAL:
@@ -188,36 +196,36 @@ def decision_from_card(
         symbol=str(card.get("symbol") or ""),
         state=_state(card),
         setup=str(card.get("primary_thesis") or card.get("setup_label") or ""),
-        score=_f(card.get("score") or card.get("conviction")),
+        score=_f(_first(card, "score", "conviction")),
         calibrated_confidence=_f(card.get("calibrated_confidence")),
-        expected_value=_f(card.get("expected_value") or card.get("ev_pct")),
+        expected_value=_f(_first(card, "expected_value", "ev_pct")),
         market_state=market_state or str(card.get("market_state") or ""),
         sector_state=sector_state or str(card.get("sector_state") or ""),
         technical_evidence={
             "atr_pct": _f(card.get("atr_pct")),
             "pct_from_pivot": _f(card.get("pct_from_pivot")),
             "rsi": _f(card.get("rsi")),
-            "dist_from_high_pct": _f(card.get("dist_from_high_pct") or card.get("distance_from_high_pct")),
-            "rel_strength": _f(card.get("rel_strength") or card.get("relative_strength")),
+            "dist_from_high_pct": _f(_first(card, "dist_from_high_pct", "distance_from_high_pct")),
+            "rel_strength": _f(_first(card, "rel_strength", "relative_strength")),
             "clv": _f(card.get("clv")),
             "volume_z": _f(card.get("volume_z")),
             "delivery_pct": _f(card.get("delivery_pct")),
             "adr_pct": _f(card.get("adr_pct")),
             "liquidity_cr": _f(card.get("liquidity_cr")),
-            "dist_20ema_pct": _f(card.get("dist_20ema_pct") or card.get("distance_20ema_pct")),
-            "dist_50dma_pct": _f(card.get("dist_50dma_pct") or card.get("distance_50dma_pct")),
+            "dist_20ema_pct": _f(_first(card, "dist_20ema_pct", "distance_20ema_pct")),
+            "dist_50dma_pct": _f(_first(card, "dist_50dma_pct", "distance_50dma_pct")),
             "base_depth_pct": _f(card.get("base_depth_pct")),
             "base_days": _f(card.get("base_days")),
-            "volume_ratio": _f(card.get("volume_ratio") or card.get("relative_volume")),
+            "volume_ratio": _f(_first(card, "volume_ratio", "relative_volume")),
             "contraction_ratio": _f(card.get("contraction_ratio")),
             "rs_percentile": _f(card.get("rs_percentile")),
             "sector_rank_percentile": _f(card.get("sector_rank_percentile")),
             "volatility_percentile": _f(card.get("volatility_percentile")),
             "reward_risk": _f(card.get("reward_risk")),
-            "quality_score": _f(card.get("quality_score") or card.get("score")),
+            "quality_score": _f(_first(card, "quality_score", "score")),
             "accum_score": _f(card.get("accum_score")),
             "regime": card.get("regime") or market_state or card.get("market_state"),
-            "breadth_pct_above_50dma": _f(card.get("breadth_pct_above_50dma") or card.get("breadth")),
+            "breadth_pct_above_50dma": _f(_first(card, "breadth_pct_above_50dma", "breadth")),
             "sector_strength": _f(card.get("sector_strength")),
             "index_trend": card.get("index_trend"),
             "correlation_regime": card.get("correlation_regime"),
