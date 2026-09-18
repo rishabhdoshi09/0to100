@@ -4,6 +4,17 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 export PYTHONPATH="$ROOT"
+# One complete-stack launch = one operator approval scope. Child process restarts
+# inherit this id, so the user is not asked again unless the whole stack restarts
+# or the canonical production thesis changes.
+if [[ -z "${QT_STARTUP_ID:-}" ]]; then
+  QT_STARTUP_ID="$(python3 - <<'PY'
+import uuid
+print(uuid.uuid4().hex)
+PY
+)"
+  export QT_STARTUP_ID
+fi
 # shellcheck disable=SC1091
 source "$ROOT/scripts/_setsid_compat.sh"
 
