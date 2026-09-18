@@ -1073,16 +1073,17 @@ class MarketOperationsWorker:
                         _emit("INFO", f"desk pipeline advance skipped · {type(exc).__name__}: {exc}")
 
     def _bootstrap(self) -> list[str]:
-        try:
-            from product.desk_pipeline import advance_desk_pipeline
+        """Passive worker bootstrap.
 
-            result = advance_desk_pipeline(self.store, requested_by="bootstrap")
-        except Exception as exc:
-            _emit("INFO", f"desk pipeline bootstrap skipped · {type(exc).__name__}: {exc}")
-            return []
-        kind = result.get("queued_kind")
-        if kind and result.get("queued_created"):
-            return [str(kind)]
+        The autonomy supervisor is the single scheduling authority. market_ops
+        only executes operations explicitly queued by that authority or a manual
+        operator request; it does not invent the next autonomous step on boot.
+        """
+        try:
+            from product.desk_pipeline import refresh_desk_pipeline_snapshot
+            refresh_desk_pipeline_snapshot(self.store)
+        except Exception:
+            pass
         return []
 
     def run(self) -> int:
