@@ -184,6 +184,32 @@ def selection_score(card: Mapping[str, Any], policy: Mapping[str, Any] | None = 
         return base
 
 
+def carried_sector_risk(book) -> tuple[dict[str, float], dict[str, float]]:
+    """Risk already carried by the persisted paper book, keyed by sector.
+
+    Both the family and current correlation-cluster fallback use sector until a
+    stronger persisted cluster identity is available. Keeping this calculation
+    in one seam prevents discovery, present paper and historical paper from
+    disagreeing after restart.
+    """
+    family: dict[str, float] = {}
+    cluster: dict[str, float] = {}
+    if book is None:
+        return family, cluster
+    cap = float(getattr(book, "capital", 0.0) or 0.0)
+    for pos in (getattr(book, "open", {}) or {}).values():
+        sector = str(getattr(pos, "sector", "") or "")
+        if not sector:
+            continue
+        approved = _f(getattr(pos, "approved_risk_pct", None))
+        if approved is None and cap > 0:
+            approved = float(getattr(pos, "risk_amount", 0.0) or 0.0) / cap * 100.0
+        risk_pct = float(approved or 0.0)
+        family[sector] = family.get(sector, 0.0) + risk_pct
+        cluster[sector] = cluster.get(sector, 0.0) + risk_pct
+    return family, cluster
+
+
 def _group_for(decision: str) -> str:
     if decision == ENTER_NOW:
         return "TAKEN"
@@ -651,22 +677,7 @@ def run_reco_paper_cycle(
     waits: list[dict[str, Any]] = []
     not_surfaced: list[dict[str, Any]] = []
     opened: list[Any] = []
-    family_risk: dict[str, float] = {}
-    cluster_risk: dict[str, float] = {}
-    # Carry existing paper exposure into this cycle's family/cluster gates.
-    # PaperPosition.sector is persisted, so this remains true after restart.
-    if book is not None:
-        cap = float(getattr(book, "capital", 0.0) or 0.0)
-        for pos in (getattr(book, "open", {}) or {}).values():
-            sector = str(getattr(pos, "sector", "") or "")
-            if not sector:
-                continue
-            approved = _f(getattr(pos, "approved_risk_pct", None))
-            if approved is None and cap > 0:
-                approved = float(getattr(pos, "risk_amount", 0.0) or 0.0) / cap * 100.0
-            risk_pct = float(approved or 0.0)
-            family_risk[sector] = family_risk.get(sector, 0.0) + risk_pct
-            cluster_risk[sector] = cluster_risk.get(sector, 0.0) + risk_pct
+    family_risk, cluster_risk = carried_sector_risk(book)
     cycle_reasons: list[str] = []
 
     if not paper_enabled:
