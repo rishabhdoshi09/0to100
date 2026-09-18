@@ -834,6 +834,26 @@ def _run_batch(
     )
     trades = list(paper_sim.get("trades") or [])
 
+    # The paper-book pass can be materially heavier than decision replay. Refuse
+    # to persist its evidence if effective selection behavior changed while it
+    # was running; the next supervisor tick will create a new thesis-versioned
+    # batch instead of mixing versions.
+    try:
+        from product.trading_thesis import manifest as thesis_manifest
+        post_sim_thesis_hash = str(thesis_manifest().get("thesis_hash") or "")
+    except Exception:
+        post_sim_thesis_hash = ""
+    if expected_thesis_hash and post_sim_thesis_hash != expected_thesis_hash:
+        return {
+            "status": "OBSOLETE_THESIS",
+            "batch_id": bid,
+            "thesis_hash": expected_thesis_hash,
+            "current_thesis_hash": post_sim_thesis_hash,
+            "message": "production thesis changed during paper-book replay; evidence not persisted",
+            "not_real_pnl": True,
+            "not_promotion_evidence": True,
+        }
+
     ledger = Path(ledger_path) if ledger_path is not None else DEFAULT_LEDGER
     appended = _append_unique(ledger, trades)
     all_trades = _load_ledger(ledger)
