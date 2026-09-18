@@ -495,6 +495,28 @@ def decide_session(
             out[-1]["freeze_id"] = ""
             out[-1]["evidence_fingerprint"] = ""
         try:
+            # Historical replay is a real learning lane, but never forward P&L.
+            # Freeze the exact decision-time feature vector so model training can
+            # consume it later with an explicit HISTORICAL_REPLAY outcome label.
+            from product.decision_adapter import decision_from_card
+            from product.evidence_intelligence import freeze_decision as freeze_feature_decision
+
+            canonical = decision_from_card(
+                card,
+                source_scan_id=f"historical:{str(as_of)[:10]}",
+                market_state=str(out[-1].get("regime") or "UNKNOWN"),
+                sector_state=str(out[-1].get("sector") or ""),
+                evidence_snapshot_id=f"historical:{str(as_of)[:10]}",
+                evidence_class=HISTORICAL_REPLAY,
+                generated_at=out[-1]["decision_timestamp"],
+            )
+            frozen_feature = freeze_feature_decision(canonical)
+            out[-1]["canonical_decision_id"] = canonical.decision_id
+            out[-1]["feature_observation_status"] = frozen_feature.get("status")
+        except Exception as exc:
+            out[-1]["canonical_decision_id"] = ""
+            out[-1]["feature_observation_error"] = str(exc)[:160]
+        try:
             from product.event_intelligence import catalyst_notes
 
             out[-1]["catalyst"] = catalyst_notes(symbol, as_of=as_of)
@@ -548,6 +570,22 @@ def evaluate_outcomes(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]
             item["attribution"] = attribute_outcome(item)
         except Exception:
             item["attribution"] = {"updates_policy": False}
+        try:
+            decision_id = str(item.get("canonical_decision_id") or "")
+            realized_r = item.get("r_multiple")
+            if decision_id and realized_r is not None and item.get("outcome_status") == "MATURED":
+                from product.evidence_intelligence import record_resolved_prediction
+
+                item["feature_outcome"] = record_resolved_prediction(
+                    decision_id,
+                    float(realized_r),
+                    evidence_class=HISTORICAL_REPLAY,
+                    not_pnl=True,
+                    classification=str(item.get("classification") or ""),
+                    resolved_at=str(item.get("outcome_resolved_at") or ""),
+                )
+        except Exception as exc:
+            item["feature_outcome_error"] = str(exc)[:160]
         classified.append(item)
     return classified
 
@@ -877,7 +915,8 @@ def run_historical_replay(
         "note": (
             "Decisions used official bars available at each session close. "
             "Later prices are used only for outcome classification. "
-            "This does not change REAL_FORWARD_MARKET promotion stats and does not open paper trades."
+            "Historical decisions are settled into a separate virtual-paper learning lane. "
+            "They never count as REAL_FORWARD_MARKET promotion evidence or real P&L."
         ),
         "inputs": {
             "sessions": window,
