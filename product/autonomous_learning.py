@@ -310,7 +310,9 @@ def _next_action(control: Mapping[str, Any], *, market_closed: bool, activity: s
     if lane == EVIDENCE_FORWARD:
         return "Next: REAL_FORWARD_PAPER cycle after the shared market scan (no live orders)."
     if lane == EVIDENCE_REPLAY:
-        return "Next: HISTORICAL_REPLAY of a completed session. Replay is not forward evidence."
+        if not market_closed:
+            return "Historical replay is deferred until the cash session closes."
+        return "Next: HISTORICAL_REPLAY only if replay inputs changed."
     return "No next learning action while the control is off."
 
 
@@ -428,6 +430,15 @@ def maybe_run_closed_market_replay(*, now: datetime | None = None, force: bool =
     lane = intended_evidence_lane(control, now=now)
     if lane != EVIDENCE_REPLAY and not force:
         return {"skipped": True, "reason": "forward_paper_lane_active", "lane": lane}
+    if not force and not _market_closed(now):
+        return {
+            "skipped": True,
+            "reason": "market_open_replay_deferred",
+            "lane": EVIDENCE_REPLAY,
+            "next_action": "WAIT_FOR_MARKET_CLOSE",
+            "opens_paper_trades": False,
+            "not_promotion_evidence": True,
+        }
     try:
         from product.historical_replay import start_replay_async, load_latest
         latest = load_latest()
