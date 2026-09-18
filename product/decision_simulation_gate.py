@@ -3,9 +3,10 @@
 Startup order is explicit:
     discover/rank current best trades -> ask once -> simulate/learn.
 
-The approval is scoped to both the complete-stack startup id and the exact
-production thesis hash. A material thesis change invalidates approval and
-requires another explicit operator action.
+The approval is scoped to the complete-stack startup id. The operator approves
+the autonomous learning process once per startup; thesis versions remain strict
+evidence/batch identities but may evolve inside that approved process without
+stopping for another click.
 """
 from __future__ import annotations
 
@@ -65,14 +66,13 @@ def begin_startup(startup_id: str | None = None, *, path: str | Path | None = No
     thesis_hash = str(thesis.get("thesis_hash") or "")
     state = _read(path)
     same_startup = str(state.get("startup_id") or "") == sid
-    same_thesis = str(state.get("approved_thesis_hash") or "") == thesis_hash
-    approved = bool(state.get("approved")) and same_startup and same_thesis
+    approved = bool(state.get("approved")) and same_startup
     return _write({
         "startup_id": sid,
         "startup_started_at": state.get("startup_started_at") if same_startup else _now(),
         "approved": approved,
         "approved_at": state.get("approved_at") if approved else "",
-        "approved_thesis_hash": thesis_hash if approved else "",
+        "approved_thesis_hash": str(state.get("approved_thesis_hash") or "") if approved else "",
         "approved_scan_id": state.get("approved_scan_id") if approved else "",
         "approved_symbols": list(state.get("approved_symbols") or []) if approved else [],
         "thesis_hash": thesis_hash,
@@ -140,8 +140,12 @@ def status(*, path: str | Path | None = None) -> dict[str, Any]:
     discovery_ready = bool(board.get("available")) and bool(scan_id) and scan_fresh
     approved = bool(
         state.get("approved")
+        and startup_id
         and str(state.get("startup_id") or "") == startup_id
-        and str(state.get("approved_thesis_hash") or "") == thesis_hash
+    )
+    approved_thesis_hash = str(state.get("approved_thesis_hash") or "")
+    thesis_changed_since_approval = bool(
+        approved and approved_thesis_hash and approved_thesis_hash != thesis_hash
     )
     if approved:
         phase = "APPROVED"
@@ -171,6 +175,9 @@ def status(*, path: str | Path | None = None) -> dict[str, Any]:
         "startup_id": startup_id,
         "approved": approved,
         "approved_at": str(state.get("approved_at") or "") if approved else "",
+        "approved_thesis_hash": approved_thesis_hash if approved else "",
+        "current_thesis_hash": thesis_hash,
+        "thesis_changed_since_approval": thesis_changed_since_approval,
         "approval_required": not approved,
         "discovery_ready": discovery_ready,
         "scan_scanned_at": scan_id,
@@ -227,18 +234,9 @@ def approve(*, path: str | Path | None = None) -> dict[str, Any]:
 
 
 def is_approved(*, path: str | Path | None = None) -> bool:
-    """Cheap hot-path approval check; no recommendation workspace rebuild."""
+    """Cheap hot-path startup approval check; thesis may evolve autonomously."""
     state = _read(path)
     startup_id = current_startup_id()
     if not startup_id or str(state.get("startup_id") or "") != startup_id:
         return False
-    try:
-        from product.trading_thesis import manifest
-        thesis_hash = str(manifest().get("thesis_hash") or "")
-    except Exception:
-        return False
-    return bool(
-        state.get("approved")
-        and thesis_hash
-        and str(state.get("approved_thesis_hash") or "") == thesis_hash
-    )
+    return bool(state.get("approved"))
