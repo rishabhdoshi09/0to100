@@ -5,8 +5,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 export PYTHONPATH="$ROOT"
 # One complete-stack launch = one operator approval scope. Child process restarts
-# inherit this id, so the user is not asked again unless the whole stack restarts
-# or the canonical production thesis changes.
+# inherit this id, so autonomous thesis learning never creates another prompt.
+# A new complete-stack launch creates a new id and asks once again.
 if [[ -z "${QT_STARTUP_ID:-}" ]]; then
   QT_STARTUP_ID="$(python3 - <<'PY'
 import uuid
