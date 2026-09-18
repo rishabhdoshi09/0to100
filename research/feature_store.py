@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS observations (
     symbol TEXT,
     kind TEXT NOT NULL,
     outcome REAL,                   -- realised label (R or %), filled later
+    outcome_meta TEXT,              -- json provenance for the settled label
     schema_version TEXT NOT NULL,   -- which schema froze this vector
     features TEXT NOT NULL,         -- json canonical vector
     validation TEXT,                -- json problems list
@@ -66,7 +67,7 @@ CREATE INDEX IF NOT EXISTS idx_obs_reason ON observations(kind, reason);
 
 # Columns added after the table's first release — migrated in on connect so an
 # existing store keeps working without a manual step.
-_MIGRATIONS = (("reason", "TEXT"), ("subtype", "TEXT"), ("meta", "TEXT"))
+_MIGRATIONS = (("reason", "TEXT"), ("subtype", "TEXT"), ("meta", "TEXT"), ("outcome_meta", "TEXT"))
 
 
 def _conn() -> sqlite3.Connection:
@@ -136,23 +137,49 @@ def snapshot(observation_id: str, symbol: str, kind: str, raw_features: dict,
                 "schema_version": _S.SCHEMA_VERSION, "problems": []}
 
 
-def set_outcome(observation_id: str, outcome: float) -> dict:
-    """Settle the realised label on a frozen observation. This is NOT a
-    recomputation — the features stay exactly as frozen; only the after-the-fact
-    result is attached. Fail-open."""
+def set_outcome(
+    observation_id: str,
+    outcome: float,
+    *,
+    outcome_meta: dict | None = None,
+) -> dict:
+    """Settle the realised label without rewriting decision-time features.
+
+    outcome_meta records whether the label came from a taken paper trade,
+    counterfactual forward path, replay, or another explicit evidence lane.
+    Re-setting the exact same value is idempotent; a conflicting rewrite is
+    refused because history must not change after learning has consumed it.
+    """
     try:
         c = _conn()
         try:
-            row = c.execute("SELECT 1 FROM observations WHERE observation_id=?",
-                            (observation_id,)).fetchone()
+            row = c.execute(
+                "SELECT outcome, outcome_meta FROM observations WHERE observation_id=?",
+                (observation_id,),
+            ).fetchone()
             if not row:
                 return {"status": "not_found"}
-            c.execute("UPDATE observations SET outcome=? WHERE observation_id=?",
-                      (float(outcome), observation_id))
+            if row["outcome"] is not None:
+                if abs(float(row["outcome"]) - float(outcome)) <= 1e-12:
+                    return {"status": "exists", "outcome": float(row["outcome"])}
+                return {
+                    "status": "conflict",
+                    "reason": "settled outcome is immutable",
+                    "existing": float(row["outcome"]),
+                    "attempted": float(outcome),
+                }
+            c.execute(
+                "UPDATE observations SET outcome=?, outcome_meta=? WHERE observation_id=?",
+                (
+                    float(outcome),
+                    json.dumps(dict(outcome_meta or {}), default=str),
+                    observation_id,
+                ),
+            )
             c.commit()
         finally:
             c.close()
-        return {"status": "settled"}
+        return {"status": "settled", "outcome": float(outcome)}
     except Exception as exc:
         return {"status": "error", "reason": str(exc)}
 
@@ -173,6 +200,9 @@ def get_observation(observation_id: str) -> dict | None:
             d["features"] = json.loads(d["features"] or "{}")
             d["validation"] = json.loads(d["validation"] or "[]")
             d["meta"] = json.loads(d["meta"]) if d.get("meta") else None
+            d["outcome_meta"] = (
+                json.loads(d["outcome_meta"]) if d.get("outcome_meta") else {}
+            )
             return d
         finally:
             c.close()
@@ -242,7 +272,7 @@ def load_observations(
         c = _conn()
         try:
             q = (
-                "SELECT observation_id, ts, symbol, kind, outcome, schema_version, "
+                "SELECT observation_id, ts, symbol, kind, outcome, outcome_meta, schema_version, "
                 "features, validation, reason, subtype, meta, created_at "
                 "FROM observations"
             )
@@ -286,6 +316,10 @@ def load_observations(
             item["meta"] = json.loads(item.get("meta") or "{}")
         except Exception:
             item["meta"] = {}
+        try:
+            item["outcome_meta"] = json.loads(item.get("outcome_meta") or "{}")
+        except Exception:
+            item["outcome_meta"] = {}
         out.append(item)
     return out
 
