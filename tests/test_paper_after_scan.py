@@ -1,4 +1,4 @@
-"""Successful shared scan enqueues the existing paper cycle."""
+"""Automatic scheduler is one data->scan->paper transaction and then stops."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -63,7 +63,7 @@ def test_paper_does_not_enqueue_before_entry_window():
     assert jobs.enqueued == []
 
 
-def test_off_session_after_close_enqueues_outcome_not_scan():
+def test_off_session_after_close_enqueues_nothing_automatically():
     jobs = _Jobs()
     jobs.cancel_superseded_pending = lambda *_a, **_k: None
     supervisor = Supervisor.__new__(Supervisor)
@@ -75,10 +75,7 @@ def test_off_session_after_close_enqueues_outcome_not_scan():
     )
     supervisor._enqueue_daily_foundation = lambda *_a, **_k: None
     supervisor.enqueue_due()
-    types = [job_type for job_type, _kwargs in jobs.enqueued]
-    assert SCH.OUTCOME_RESOLUTION in types
-    assert SCH.MARKET_SCAN not in types
-    assert SCH.PAPER_CYCLE not in types
+    assert jobs.enqueued == []
 
 
 def test_intraday_enqueue_does_not_start_post_market_grind():
@@ -128,7 +125,7 @@ def test_blocked_data_ready_outcome_is_requeued():
     assert supervisor.jobs.requeued == ["out-1"]
 
 
-def test_overnight_after_midnight_settles_previous_session():
+def test_overnight_after_midnight_waits_for_next_explicit_or_market_window_action():
     jobs = _Jobs()
     jobs.cancel_superseded_pending = lambda *_a, **_k: None
     supervisor = Supervisor.__new__(Supervisor)
@@ -140,14 +137,10 @@ def test_overnight_after_midnight_settles_previous_session():
     )
     supervisor._enqueue_daily_foundation = lambda *_a, **_k: None
     supervisor.enqueue_due()
-    outcomes = [kwargs for job_type, kwargs in jobs.enqueued if job_type == SCH.OUTCOME_RESOLUTION]
-    assert outcomes
-    assert outcomes[0]["idempotency_key"] == SCH.outcome_key("2026-09-02")
-    types = [job_type for job_type, _kwargs in jobs.enqueued]
-    assert SCH.MARKET_SCAN not in types
+    assert jobs.enqueued == []
 
 
-def test_eod_without_kite_snapshot_still_enqueues_official_work():
+def test_eod_without_kite_snapshot_does_not_start_a_second_automatic_pipeline():
     jobs = _Jobs()
     jobs.cancel_superseded_pending = lambda *_a, **_k: None
 
@@ -167,11 +160,7 @@ def test_eod_without_kite_snapshot_still_enqueues_official_work():
     supervisor._enqueue_daily_foundation = lambda *_a, **_k: None
     supervisor._enqueue_post_market_grind = Supervisor._enqueue_post_market_grind.__get__(supervisor)
     supervisor.enqueue_due()
-    types = [job_type for job_type, _kwargs in jobs.enqueued]
-    assert SCH.BHAVCOPY_UPDATE in types
-    assert SCH.MARKET_SCAN in types
-    assert SCH.OUTCOME_RESOLUTION in types
-    assert SCH.DATA_REFRESH in types
+    assert jobs.enqueued == []
 
 
 def test_successful_data_refresh_enqueues_current_scan_slot():
