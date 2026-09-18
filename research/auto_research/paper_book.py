@@ -46,6 +46,9 @@ class PaperPosition:
     # time. Re-deriving it at settlement would key the outcome by a regime that
     # has since changed, so the trade would update a cell it was never ranked in.
     context_key: str = ""
+    # Persisted portfolio context used by next-cycle sector concentration gates.
+    # Default keeps old snapshots backward-compatible.
+    sector: str = ""
 
     @property
     def r_unit(self) -> float:
