@@ -395,6 +395,15 @@ def test_canonical_launchers_source_setsid_compat_and_wait_for_http():
     assert "answered HTTP" in complete
 
 
+def test_session_exec_restores_terminal_signals_before_exec():
+    root = Path(__file__).resolve().parents[1]
+    src = (root / "scripts" / "session_exec.py").read_text(encoding="utf-8")
+    assert "os.setsid()" in src
+    assert "signal.SIGINT" in src
+    assert "signal.SIG_DFL" in src
+    assert "os.execvpe" in src
+
+
 def test_complete_launcher_starts_inner_stack_in_its_own_process_group():
     root = Path(__file__).resolve().parents[1]
     complete = (root / "scripts" / "run_quantterm_complete.sh").read_text(encoding="utf-8")
