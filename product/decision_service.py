@@ -185,8 +185,8 @@ def decision_board(
 
     counts: dict[str, int] = {}
     gaps: dict[str, int] = {}
-    rows: list[dict[str, Any]] = []
-    for row in ranked[: max(0, int(limit))]:
+    all_rows: list[dict[str, Any]] = []
+    for row in ranked:
         decision = row.decision
         counts[decision.state] = counts.get(decision.state, 0) + 1
         for item in decision.missing_evidence:
@@ -211,7 +211,8 @@ def decision_board(
             )
         except Exception:
             payload["trade_quality"] = {}
-        rows.append(payload)
+        all_rows.append(payload)
+    rows = all_rows[: max(0, int(limit))]
 
     try:
         from product.trading_thesis import manifest as thesis_manifest
@@ -225,7 +226,7 @@ def decision_board(
     # history-bootstrap prerequisite; it does not relax strategy/risk gates.
     best_trades, best_trade_errors = _best_trades_from_production_thesis(
         workspace,
-        rows,
+        all_rows,
         market_state=market_state,
         limit=5,
     )
