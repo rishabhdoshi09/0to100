@@ -433,11 +433,20 @@ def maybe_run_closed_market_replay(*, now: datetime | None = None, force: bool =
         latest = load_latest()
         if str(latest.get("status") or "").upper() == "RUNNING" and not force:
             return {"skipped": True, "reason": "replay_already_running", "status": latest.get("status")}
-        started = start_replay_async(sessions=8, universe_limit=40, persist_live_reco=False)
-        save_control({"last_replay_at": _now(), "last_cycle_at": _now()})
+        started = start_replay_async(
+            force=force,
+            sessions=8,
+            universe_limit=40,
+            persist_live_reco=False,
+        )
+        if not started.get("skipped"):
+            stamp = _now()
+            save_control({"last_replay_at": stamp, "last_cycle_at": stamp})
         started["evidence_class"] = EVIDENCE_REPLAY
         started["not_promotion_evidence"] = True
         started["opens_paper_trades"] = False
+        if started.get("skipped"):
+            started.setdefault("next_action", "WAIT_FOR_NEW_EVIDENCE")
         return started
     except Exception as exc:
         save_control({"last_error": str(exc)[:240]})
