@@ -117,12 +117,29 @@ def settle(
         forward_return_pct=forward_return_pct,
         later_entered=later_entered,
     )
+    resolved_at = datetime.now(timezone.utc).isoformat()
     out["outcome"] = {
         "forward_return_pct": forward_return_pct,
         "later_entered": later_entered,
         "not_pnl": True,
+        "resolved_at": resolved_at,
     }
     out["classification"] = classification
+
+    # A rejected/waited decision still has a frozen entry and stop. Express its
+    # hypothetical forward move in R so it can train selection without ever
+    # being booked as P&L. Missing/invalid levels stay unlabelled.
+    entry_f = _f(row.get("hypothetical_entry"))
+    stop_f = _f(row.get("hypothetical_stop"))
+    if entry_f is not None and stop_f is not None and forward_return_pct is not None:
+        risk = abs(entry_f - stop_f)
+        if risk > 0:
+            move = entry_f * (float(forward_return_pct) / 100.0)
+            out["counterfactual_R"] = round(move / risk, 6)
+        else:
+            out["counterfactual_R"] = None
+    else:
+        out["counterfactual_R"] = None
     return out
 
 

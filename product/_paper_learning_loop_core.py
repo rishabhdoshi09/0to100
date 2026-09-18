@@ -168,6 +168,18 @@ def record_conditional_evidence(row: Mapping[str, Any]) -> dict[str, Any] | None
         )
         update = record_outcome(outcome, context_key=context_key,
                                 evidence_class=PAPER_FORWARD)
+        learning_observation = None
+        try:
+            from product.evidence_intelligence import record_resolved_prediction
+            learning_observation = record_resolved_prediction(
+                decision_id,
+                float(row.get("realized_R")),
+                evidence_class=PAPER_FORWARD,
+                not_pnl=False,
+                resolved_at=outcome.resolved_at,
+            )
+        except Exception as exc:
+            learning_observation = {"error": str(exc)[:200]}
         return {
             "decision_id": decision_id,
             "outcome_id": outcome.outcome_id,
@@ -176,6 +188,7 @@ def record_conditional_evidence(row: Mapping[str, Any]) -> dict[str, Any] | None
             "before": update.before,
             "after": update.after,
             "changed": update.changed,
+            "learning_observation": learning_observation,
         }
     except Exception as exc:
         log_note = str(exc)[:200]
@@ -347,6 +360,25 @@ def ingest_counterfactual(
     """
     classification = str(settled.get("classification") or "")
     reason = str(settled.get("reason_code") or "REJECTED")
+    evidence = dict(settled.get("evidence") or {})
+    decision_id = str(evidence.get("decision_id") or settled.get("decision_id") or "")
+    counterfactual_r = settled.get("counterfactual_R")
+    if decision_id and counterfactual_r is not None:
+        try:
+            from product.evidence_intelligence import record_resolved_prediction
+            record_resolved_prediction(
+                decision_id,
+                float(counterfactual_r),
+                evidence_class="FORWARD_COUNTERFACTUAL",
+                not_pnl=True,
+                classification=classification,
+                resolved_at=str(
+                    (settled.get("outcome") or {}).get("resolved_at")
+                    or datetime.now(timezone.utc).isoformat()
+                ),
+            )
+        except Exception:
+            pass
     mapped = {
         CORRECT_REJECTION: 0.40,
         AVOIDED_LOSER: 0.40,
@@ -390,7 +422,6 @@ def ingest_counterfactual(
             **historical_bridge,
         },
     )
-    evidence = dict(settled.get("evidence") or {})
     setup = str(evidence.get("setup_label") or settled.get("setup") or "")
     # Learned setup overlay can be weakened by missed winners; hard gates cannot.
     if classification == MISSED_WINNER and setup and reason == "EVIDENCE_POLICY_BLOCK":
@@ -534,10 +565,16 @@ def learning_dashboard(
         "live_readiness": evaluate_live_readiness(),
         "forward_soak": soak,
         "autonomous_learning": None,
+        "challenger_learning": None,
     }
     try:
         from product.autonomous_learning import dashboard as autonomous_dashboard
         out["autonomous_learning"] = autonomous_dashboard()
     except Exception as exc:
         out["autonomous_learning"] = {"available": False, "error": str(exc)[:200]}
+    try:
+        from product.challenger_learning import dashboard as challenger_dashboard
+        out["challenger_learning"] = challenger_dashboard()
+    except Exception as exc:
+        out["challenger_learning"] = {"available": False, "error": str(exc)[:200]}
     return out

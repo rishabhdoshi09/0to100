@@ -173,9 +173,15 @@ def _empirical_fail(card: Mapping[str, Any]) -> bool:
 
 
 def selection_score(card: Mapping[str, Any], policy: Mapping[str, Any] | None = None) -> float:
-    """Rank among already-eligible names. Not a BUY oracle."""
+    """Rank among already-eligible names. The learner can only reorder them."""
     from product.decision_context import score_breakdown
-    return float(score_breakdown(card, policy).get("selection_rank") or 0.0)
+    base = float(score_breakdown(card, policy).get("selection_rank") or 0.0)
+    try:
+        from product.challenger_learning import paper_selection_adjustment
+        learned = paper_selection_adjustment(card)
+        return base + float(learned.get("adjustment") or 0.0)
+    except Exception:
+        return base
 
 
 def _group_for(decision: str) -> str:
@@ -195,7 +201,19 @@ def _decorate(decision: AutopilotDecision, *, policy: Mapping[str, Any] | None, 
     decision.context = dict(context or {})
     decision.policy_effect = str((policy or {}).get("final_effect") or decision.policy_effect or "NEUTRAL")
     decision.breakdown = score_breakdown(decision.card, policy, context)
-    decision.selection_score = float(decision.breakdown.get("selection_rank") or 0.0)
+    base_rank = float(decision.breakdown.get("selection_rank") or 0.0)
+    try:
+        from product.challenger_learning import paper_selection_adjustment
+        learned = paper_selection_adjustment(decision.card)
+    except Exception:
+        learned = {
+            "available": False,
+            "affects_selection": False,
+            "adjustment": 0.0,
+            "live_locked": True,
+        }
+    decision.breakdown["learning_challenger"] = learned
+    decision.selection_score = base_rank + float(learned.get("adjustment") or 0.0)
     decision.why = explain(
         decision=decision.decision,
         reason_code=decision.reason_code,
@@ -424,8 +442,13 @@ def _canonical_decision(decision: AutopilotDecision, *, as_of: str, snapshot_id:
             market_state=str(decision.card.get("market_state") or ""),
             sector_state=str(decision.card.get("sector_state") or ""),
             evidence_class=PAPER_FORWARD,
-            generated_at=str(as_of or ""),
+            generated_at=str(snapshot_id or as_of or ""),
         )
+        try:
+            from product.evidence_intelligence import enrich
+            canonical = enrich(canonical)
+        except Exception:
+            pass
         return canonical.decision_id, decision_context_key(canonical)
     except Exception:
         return "", ""
@@ -576,6 +599,11 @@ def run_reco_paper_cycle(
             from product.counterfactual_learning import freeze_decision
             if is_non_judgment(decision.decision, decision.reason_code):
                 return
+            canonical_id, canonical_context = _canonical_decision(
+                decision,
+                as_of=day,
+                snapshot_id=str(payload.get("scan_scanned_at") or day),
+            )
             evidence = {
                 **dict(decision.context or {}),
                 "rules_hash": ident.get("rules_hash"),
@@ -585,6 +613,8 @@ def run_reco_paper_cycle(
                 "setup_label": decision.card.get("setup_label"),
                 "sector": decision.card.get("sector"),
                 "regime": regime,
+                "decision_id": canonical_id,
+                "context_key": canonical_context,
             }
             freeze_decision(
                 symbol=decision.symbol,

@@ -119,6 +119,18 @@ def run_learning(brain, *, session_date: str, dialogue=None) -> dict:
         except Exception:
             pass
 
+    challenger: dict = {}
+    try:
+        from product.challenger_learning import train as train_challenger
+        challenger = train_challenger()
+    except Exception as exc:
+        challenger = {
+            "status": "ERROR",
+            "error": str(exc)[:200],
+            "affects_selection": False,
+            "live_locked": True,
+        }
+
     gaps = HYP.plan_gaps(diagnostics)
     for gap in gaps:
         _append(dialogue, Record(
@@ -133,12 +145,16 @@ def run_learning(brain, *, session_date: str, dialogue=None) -> dict:
         as_of=session_date, claim=f"Derived {len(diagnostics)} diagnostics and {len(gaps)} evidence gaps.",
         evidence={"diagnostics": len(diagnostics), "gaps": len(gaps),
                   "paper_cooldown": paper_cooldown, "paper_prefer": paper_prefer,
-                  "paper_closed": paper_closed},
+                  "paper_closed": paper_closed,
+                  "challenger_status": challenger.get("status"),
+                  "challenger_version": challenger.get("model_version"),
+                  "challenger_affects_selection": bool(challenger.get("affects_selection"))},
         decision="LEARNING_COMPLETE"))
     return {"session_date": session_date, "diagnostics": len(diagnostics), "gaps": len(gaps),
             "ranked_gaps": [asdict(g) for g in gaps],
             "paper_cooldown": paper_cooldown, "paper_prefer": paper_prefer,
-            "paper_closed": paper_closed}
+            "paper_closed": paper_closed,
+            "challenger": challenger}
 
 
 def _changes_for(parent, gap: HYP.EvidenceGap) -> dict:
