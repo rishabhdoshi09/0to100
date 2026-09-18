@@ -254,8 +254,16 @@ def _policy_prior(setup: str) -> dict[str, Any]:
         policies = load_policies().get("policies") or []
     except Exception:
         policies = []
-    wanted = f"HIST_SETUP::{setup}"
-    row = next((dict(p) for p in policies if str(p.get("policy_id") or "") == wanted), {})
+    try:
+        from product.trading_thesis import manifest as thesis_manifest
+        thesis_hash = str(thesis_manifest().get("thesis_hash") or "")
+    except Exception:
+        thesis_hash = ""
+    wanted = f"HIST_SETUP::{thesis_hash}::{setup}" if thesis_hash else ""
+    row = next(
+        (dict(p) for p in policies if wanted and str(p.get("policy_id") or "") == wanted),
+        {},
+    )
     return {
         "policy_id": str(row.get("policy_id") or ""),
         "n": int(row.get("sample_size") or 0),
