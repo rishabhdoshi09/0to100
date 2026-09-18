@@ -511,14 +511,20 @@ def ensure_next_batch_started(
 
 def mark_learning_complete(batch_id: str, *, state_path: str | Path | None = None) -> dict[str, Any]:
     state = load_state(state_path)
-    if state["current_batch_id"] != str(batch_id):
+    if (
+        state["current_batch_id"] != str(batch_id)
+        or state["phase"] != PHASE_AWAITING_LEARNING
+    ):
         return state
     return _save_state({"phase": PHASE_AWAITING_RESEARCH}, state_path)
 
 
 def mark_research_complete(batch_id: str, *, state_path: str | Path | None = None) -> dict[str, Any]:
     state = load_state(state_path)
-    if state["current_batch_id"] != str(batch_id):
+    if (
+        state["current_batch_id"] != str(batch_id)
+        or state["phase"] != PHASE_AWAITING_RESEARCH
+    ):
         return state
     sessions = list(state.get("current_sessions") or [])
     return _save_state({
