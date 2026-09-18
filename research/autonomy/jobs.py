@@ -957,6 +957,72 @@ def run_outcome_resolution(ctx) -> JobResult:
     )
 
 
+def run_historical_paper_cycle(ctx) -> JobResult:
+    """Poll/start one closed-market historical virtual-paper batch."""
+    now = ctx.deps.now_ist()
+    holidays = ctx.deps.holidays() if hasattr(ctx.deps, "holidays") else None
+    if SCH.market_is_open(now, holidays):
+        return JobResult(
+            JS.SKIPPED_IDEMPOTENT,
+            "historical paper deferred while cash market is open",
+            state_hint=ST.OBSERVING,
+            metadata={"reason": "market_open"},
+        )
+
+    expected = str(getattr(getattr(ctx, "job", None), "input_snapshot_id", "") or "")
+    try:
+        from product.historical_paper_loop import ensure_next_batch_started
+
+        result = ensure_next_batch_started(expected_batch_id=expected)
+    except Exception as exc:
+        return JobResult(
+            JS.RETRYABLE_FAILED,
+            "historical paper batch failed to start",
+            error_code="HISTORICAL_PAPER_ERROR",
+            error_message=str(exc),
+            failures={H.LEARNING_FAILED},
+            state_hint=ST.DEGRADED,
+        )
+
+    status = str(result.get("status") or "").upper()
+    if status == "RUNNING":
+        return JobResult(
+            JS.RETRYABLE_FAILED,
+            f"historical paper batch {result.get('batch_id') or expected} running",
+            error_code="HISTORICAL_PAPER_IN_PROGRESS",
+            error_message="historical replay/virtual-paper worker is still running",
+            state_hint=ST.RESEARCHING,
+            metadata=result,
+        )
+    if status == "FAILED":
+        return JobResult(
+            JS.RETRYABLE_FAILED,
+            "historical paper batch failed",
+            error_code="HISTORICAL_PAPER_ERROR",
+            error_message=str(result.get("error") or "unknown historical paper failure"),
+            failures={H.LEARNING_FAILED},
+            state_hint=ST.DEGRADED,
+            metadata=result,
+        )
+    if status == "IDLE":
+        return JobResult(
+            JS.SKIPPED_IDEMPOTENT,
+            f"historical paper idle: {result.get('reason') or 'no new settleable history'}",
+            state_hint=ST.OBSERVING,
+            metadata=result,
+        )
+    return JobResult(
+        JS.SUCCEEDED,
+        (
+            f"historical paper complete · {int(result.get('historical_paper_trades') or 0)} trades · "
+            f"{result.get('period_start') or ''}→{result.get('period_end') or ''}"
+        ),
+        clears={H.LEARNING_FAILED},
+        state_hint=ST.RESEARCHING,
+        metadata=result,
+    )
+
+
 def run_learning_cycle(ctx) -> JobResult:
     now = ctx.deps.now_ist()
     holidays = ctx.deps.holidays() if hasattr(ctx.deps, "holidays") else None
