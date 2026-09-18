@@ -498,6 +498,8 @@ def decide_session(
             # Historical replay is a real learning lane, but never forward P&L.
             # Freeze the exact decision-time feature vector so model training can
             # consume it later with an explicit HISTORICAL_REPLAY outcome label.
+            from dataclasses import replace
+            from product.decision import AVOID as D_AVOID, BUY as D_BUY, WAIT as D_WAIT
             from product.decision_adapter import decision_from_card
             from product.evidence_intelligence import freeze_decision as freeze_feature_decision
 
@@ -509,6 +511,22 @@ def decide_session(
                 evidence_snapshot_id=f"historical:{str(as_of)[:10]}",
                 evidence_class=HISTORICAL_REPLAY,
                 generated_at=out[-1]["decision_timestamp"],
+            )
+            actual_state = {
+                BUY: D_BUY,
+                WAIT_D: D_WAIT,
+                AVOID: D_AVOID,
+                REJECT: D_AVOID,
+            }.get(str(out[-1].get("decision") or ""), D_AVOID)
+            canonical = replace(
+                canonical,
+                state=actual_state,
+                decision_id="",
+                provenance={
+                    **dict(canonical.provenance or {}),
+                    "historical_committee_decision": str(out[-1].get("decision") or ""),
+                    "historical_reason_code": str(out[-1].get("reason_code") or ""),
+                },
             )
             frozen_feature = freeze_feature_decision(canonical)
             out[-1]["canonical_decision_id"] = canonical.decision_id
