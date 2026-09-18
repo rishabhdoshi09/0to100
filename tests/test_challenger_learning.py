@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from product import challenger_learning as CL
 from research import feature_store as FS
+from research import scientific_memory as SM
 
 
 def _seed(
@@ -12,6 +13,8 @@ def _seed(
     db,
     model_version: str = "",
     forward_compare: bool = False,
+    tag: str = "",
+    invert_challenger: bool = False,
 ):
     base = datetime(2026, 1, 1, tzinfo=timezone.utc)
     for i in range(n):
@@ -19,7 +22,12 @@ def _seed(
         outcome = 1.0 if strong else -1.0
         rs = 90.0 if strong else 35.0
         champion_p = 0.50
-        challenger_p = (0.90 if strong else 0.10) if forward_compare else None
+        if forward_compare:
+            challenger_p = (0.10 if strong else 0.90) if invert_challenger else (
+                0.90 if strong else 0.10
+            )
+        else:
+            challenger_p = None
         meta = {
             "setup": "VCP_BREAKOUT",
             "market_state": "TRENDING_BULL",
@@ -28,7 +36,7 @@ def _seed(
             "challenger_predicted_p": challenger_p,
             "challenger_model_version": model_version if forward_compare else "",
         }
-        oid = f"decision::seed-{model_version or 'train'}-{i}"
+        oid = f"decision::seed-{tag or model_version or 'train'}-{i}"
         frozen = FS.snapshot(
             oid,
             f"S{i:03d}",
@@ -98,6 +106,7 @@ def test_challenger_is_shadow_until_forward_proof(tmp_path, monkeypatch):
 
 def test_exact_version_forward_evidence_can_promote_paper_only(tmp_path, monkeypatch):
     monkeypatch.setattr(FS, "_DB_PATH", tmp_path / "features.db")
+    monkeypatch.setattr(SM, "_DB_PATH", tmp_path / "scientific_memory.db")
     path = tmp_path / "challenger.json"
     _seed(n=110, db=tmp_path)
     model = CL.train(path=path)
@@ -105,7 +114,7 @@ def test_exact_version_forward_evidence_can_promote_paper_only(tmp_path, monkeyp
     version = model["model_version"]
 
     # Forward observations freeze both champion and exact challenger predictions.
-    _seed(n=40, db=tmp_path, model_version=version, forward_compare=True)
+    _seed(n=40, db=tmp_path, model_version=version, forward_compare=True, tag="good-forward")
 
     promoted_store = CL.maybe_promote(path=path)
     current = promoted_store["current"]
@@ -136,3 +145,59 @@ def test_exact_version_forward_evidence_can_promote_paper_only(tmp_path, monkeyp
     adj = CL.paper_selection_adjustment(card, path=path)
     assert adj["affects_selection"] is True
     assert -5.0 <= adj["adjustment"] <= 3.0
+
+
+def test_active_challenger_demotes_after_robust_forward_decay(tmp_path, monkeypatch):
+    monkeypatch.setattr(FS, "_DB_PATH", tmp_path / "features.db")
+    monkeypatch.setattr(SM, "_DB_PATH", tmp_path / "scientific_memory.db")
+    path = tmp_path / "challenger.json"
+    _seed(n=110, db=tmp_path)
+    model = CL.train(path=path)
+    assert model["status"] == CL.SHADOW_CANDIDATE
+    version = model["model_version"]
+
+    _seed(
+        n=40, db=tmp_path, model_version=version, forward_compare=True,
+        tag="promotion-forward",
+    )
+    store = CL.maybe_promote(path=path)
+    assert store["current"]["status"] == CL.PAPER_ACTIVE
+
+    # Add enough exact-version observations where the challenger is
+    # systematically worse than the frozen champion.
+    _seed(
+        n=80, db=tmp_path, model_version=version, forward_compare=True,
+        tag="decay-forward", invert_challenger=True,
+    )
+    reviewed = CL.maybe_promote(path=path)
+    current = reviewed["current"]
+    assert current["status"] == CL.DEMOTED
+    assert current["affects_selection"] is False
+    assert current["forward_validation"]["n"] >= CL.DEMOTION_FORWARD_COMPARE
+    assert current["forward_validation"]["improvement_upper_95"] < 0
+
+
+def test_learning_score_cannot_bypass_hard_paper_gate(monkeypatch):
+    from product import paper_autopilot as PA
+
+    def forbidden_adjustment(*args, **kwargs):
+        raise AssertionError("learning rank must not run before hard eligibility gates")
+
+    monkeypatch.setattr(CL, "paper_selection_adjustment", forbidden_adjustment)
+    decision = PA.evaluate_candidate(
+        {
+            "symbol": "RELIANCE",
+            "reco_tier": "high_conviction",
+            "entry_state": "enter_now",
+            "entry": 100.0,
+            "stop": 101.0,
+            "target": 112.0,
+            "volume_ratio": 1.5,
+        },
+        book=None,
+        paper_enabled=True,
+        entries_allowed=True,
+        regime="RISK_ON",
+    )
+    assert decision.decision == PA.BLOCK
+    assert decision.reason_code == PA.INVALID_STOP
