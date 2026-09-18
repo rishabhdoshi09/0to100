@@ -3,12 +3,16 @@ import {
   fetchDecisionSimulator,
   fetchForwardSoak,
   fetchLearningDashboard,
+  fetchAutonomousLearning,
   fetchResearchStatus,
   fetchScanAudit,
   fetchStrategyCatalog,
   fetchSystemHealthContract,
+  runHistoricalReplayNow,
+  setAutonomousLearning,
   simulatePastDecision,
   simulatePastDecisions,
+  type AutonomousLearningDashboard,
   type DecisionSimulatorReport,
   type PastDecisionSimulation,
   type ForwardSoakScoreboard,
@@ -19,6 +23,8 @@ import {
   type StrategyCatalog,
   type SystemHealthContract,
 } from './productApi'
+import { compactDateTime } from './format'
+import { sendControl } from './api'
 import { originalVsSimulated, simulationUiState, displayHonest } from './pastDecisionSimulation'
 import { pageHealth, pageStatusLabel } from './pageRequest'
 import { Panel } from './components'
@@ -126,12 +132,123 @@ export function liveSafetyLabel(state?: {
   return 'UNVERIFIED'
 }
 
+function countValue(counts: Record<string, number> | undefined, key: string): string {
+  if (!counts || counts[key] === undefined || counts[key] === null) return 'No data'
+  return String(counts[key])
+}
+
+function AutonomousLearningPanel({
+  data,
+  onRefresh,
+}: {
+  data: AutonomousLearningDashboard | null
+  onRefresh: () => void
+}) {
+  const [busy, setBusy] = useState('')
+  const [error, setError] = useState('')
+  const apply = (enabled?: boolean, mode?: string) => {
+    setBusy(mode || (enabled === false ? 'off' : 'on'))
+    setError('')
+    setAutonomousLearning(enabled, mode)
+      .then(() => onRefresh())
+      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'Control failed'))
+      .finally(() => setBusy(''))
+  }
+  const runReplay = () => {
+    setBusy('replay')
+    setError('')
+    runHistoricalReplayNow()
+      .then(() => onRefresh())
+      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'Replay failed'))
+      .finally(() => setBusy(''))
+  }
+  const runLearning = () => {
+    setBusy('learning')
+    setError('')
+    sendControl('RUN_LEARNING_NOW')
+      .then(() => onRefresh())
+      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'Learning cycle failed'))
+      .finally(() => setBusy(''))
+  }
+  const counts = data?.counts || {}
+  const champion = data?.champion || {}
+  const challenger = data?.challenger || {}
+  return (
+    <Panel title="AUTONOMOUS LEARNING" subtitle={data?.enabled ? `ON · ${data.mode || 'AUTO'}` : 'OFF'}>
+      {!data ? (
+        <div className="empty-row">Autonomous learning state has not been loaded. Missing stays missing.</div>
+      ) : (
+        <>
+          <p className="panel-copy">{data.note || 'Replay evidence never counts as forward paper evidence. Live money stays locked.'}</p>
+          {error ? <p className="panel-copy">{error}</p> : null}
+          <div className="inline-actions" style={{ padding: '12px', gap: 8 }}>
+            <button type="button" disabled={!!busy} onClick={() => apply(true)}>{data.enabled ? 'ON' : 'Turn ON'}</button>
+            <button type="button" className="secondary" disabled={!!busy} onClick={() => apply(false)}>Turn OFF</button>
+            {['AUTO', 'FORWARD_PAPER', 'HISTORICAL_REPLAY', 'PAUSED'].map((mode) => (
+              <button key={mode} type="button" className={data.mode === mode ? '' : 'secondary'} disabled={!!busy} onClick={() => apply(true, mode)}>
+                {mode.replaceAll('_', ' ')}
+              </button>
+            ))}
+          </div>
+          <div className="fact-grid">
+            <div><span>Mode</span><strong>{data.mode || 'No data'}</strong></div>
+            <div><span>Current activity</span><strong>{data.current_activity || data.activity || 'idle'}</strong></div>
+            <div><span>Evidence lane</span><strong>{data.evidence_lane || 'NONE'}</strong></div>
+            <div><span>Market</span><strong>{data.market_closed ? 'Closed · replay lane' : 'Open · forward paper lane'}</strong></div>
+            <div><span>Historical decisions simulated</span><strong>{countValue(counts, 'historical_decisions_simulated')}</strong></div>
+            <div><span>Forward paper decisions</span><strong>{countValue(counts, 'forward_paper_decisions')}</strong></div>
+            <div><span>Paper trades opened</span><strong>{countValue(counts, 'paper_trades_opened')}</strong></div>
+            <div><span>Paper trades settled</span><strong>{countValue(counts, 'paper_trades_settled')}</strong></div>
+            <div><span>Correct rejects</span><strong>{countValue(counts, 'correct_rejects')}</strong></div>
+            <div><span>Avoided losers</span><strong>{countValue(counts, 'avoided_losers')}</strong></div>
+            <div><span>Missed winners</span><strong>{countValue(counts, 'missed_winners')}</strong></div>
+            <div><span>Good waits</span><strong>{countValue(counts, 'good_waits')}</strong></div>
+            <div><span>False positives</span><strong>{countValue(counts, 'false_positives')}</strong></div>
+            <div><span>False negatives</span><strong>{countValue(counts, 'false_negatives')}</strong></div>
+            <div><span>Challengers under evaluation</span><strong>{countValue(counts, 'challenger_policies_under_evaluation')}</strong></div>
+            <div><span>Active policies</span><strong>{countValue(counts, 'active_policies')}</strong></div>
+            <div><span>Rejected policies</span><strong>{countValue(counts, 'rejected_policies')}</strong></div>
+            <div><span>Forward evidence</span><strong>{countValue(counts, 'forward_evidence_count')}</strong></div>
+            <div><span>Replay evidence</span><strong>{countValue(counts, 'replay_evidence_count')}</strong></div>
+          </div>
+          <p className="panel-copy">
+            Champion: {String(champion.strategy_id || champion.status || 'unavailable')}
+            {champion.version ? ` v${String(champion.version)}` : ''}
+            {champion.rules_hash ? ` · ${String(champion.rules_hash)}` : ''}
+          </p>
+          <p className="panel-copy">
+            Challenger: {String(challenger.challenger_id || challenger.status || 'none')}
+            {data.promotion_eligible ? ' · promotion eligible' : ` · blocked: ${data.promotion_blocked_reason || 'no data'}`}
+          </p>
+          <p className="panel-copy">Last learning cycle: {data.last_learning_cycle ? compactDateTime(data.last_learning_cycle) : 'No learning cycle has been recorded.'}</p>
+          <p className="panel-copy">Next: {data.next_learning_action || 'No next action recorded.'}</p>
+          <p className="panel-copy">
+            Latest persisted evidence: {String(data.latest_persisted_evidence?.replay_status || 'NONE')}
+            {data.latest_persisted_evidence?.replay_period ? ` · ${String(data.latest_persisted_evidence.replay_period)}` : ''}
+          </p>
+          {(data.missing || []).map((line) => <p className="panel-copy" key={line}>{line}</p>)}
+          <div className="inline-actions" style={{ padding: '12px', gap: 8 }}>
+            <button type="button" disabled={!!busy} onClick={runReplay}>{busy === 'replay' ? 'Starting replay…' : 'Run historical replay'}</button>
+            <button type="button" className="secondary" disabled={!!busy} onClick={runLearning}>{busy === 'learning' ? 'Queueing…' : 'Run learning cycle'}</button>
+            <button type="button" className="secondary" disabled={!!busy} onClick={onRefresh}>Refresh</button>
+          </div>
+        </>
+      )}
+    </Panel>
+  )
+}
+
 export function LearningJournalView() {
   const [data, setData] = useState<ResearchStatus | null>(null)
   const [learning, setLearning] = useState<LearningDashboard | null>(null)
   const [soak, setSoak] = useState<ForwardSoakScoreboard | null>(null)
+  const [autoLearn, setAutoLearn] = useState<AutonomousLearningDashboard | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+  const refreshLearning = () => {
+    fetchAutonomousLearning().then(setAutoLearn).catch(() => undefined)
+    fetchLearningDashboard().then(setLearning).catch(() => undefined)
+  }
   useEffect(() => {
     let alive = true
     setLoading(true)
@@ -139,12 +256,14 @@ export function LearningJournalView() {
       fetchResearchStatus(),
       fetchLearningDashboard(),
       fetchForwardSoak(),
-    ]).then(([status, dash, soakRow]) => {
+      fetchAutonomousLearning(),
+    ]).then(([status, dash, soakRow, autoRow]) => {
       if (!alive) return
       if (status.status === 'fulfilled') setData(status.value)
       else setError(status.reason instanceof Error ? status.reason.message : 'Research status unavailable')
       if (dash.status === 'fulfilled') setLearning(dash.value)
       if (soakRow.status === 'fulfilled') setSoak(soakRow.value)
+      if (autoRow.status === 'fulfilled') setAutoLearn(autoRow.value)
     }).finally(() => { if (alive) setLoading(false) })
     return () => { alive = false }
   }, [])
@@ -160,6 +279,7 @@ export function LearningJournalView() {
       </div>
       {error ? <div className="api-warning">{error}</div> : null}
       {loading ? <p className="panel-copy">Loading learning journal…</p> : null}
+      <AutonomousLearningPanel data={autoLearn || learning?.autonomous_learning || null} onRefresh={refreshLearning} />
       <Panel title="FORWARD EVIDENCE SCOREBOARD" subtitle={board?.FORWARD_SOAK_STATUS || (loading ? 'Loading' : 'NOT_STARTED')}>
         {loading && !board ? (
           <div className="empty-row">Loading forward evidence…</div>
@@ -582,7 +702,7 @@ export function ProductionBacktestView({ dashboard, setActive }: ViewProps) {
           evaluated, the page says BACKTEST PARITY: UNVERIFIED. Paper diary rows below are outcomes, not a substitute backtest.
         </p>
       </div>
-      <Panel title="HISTORICAL REPLAY" subtitle="Production scanner + evaluate_candidate · BACKTEST · never writes REAL_FORWARD_MARKET">
+      <Panel title="HISTORICAL REPLAY" subtitle={`${sim?.engine || 'Production scanner + evaluate_candidate'} · ${sim?.provenance || 'HISTORICAL_REPLAY'} · never writes REAL_FORWARD_MARKET`}>
         {simError ? (
           <p className="panel-copy">
             {simError}
@@ -698,15 +818,27 @@ export function ProductionBacktestView({ dashboard, setActive }: ViewProps) {
             </button>
             {openDecision === index ? (
               <div>
-                <p className="panel-copy">Decision: {row.decision} · {row.reason_code}</p>
-                <p className="panel-copy">Reasons: {(row.reasons || []).join(' · ') || '—'}</p>
+                <div className="fact-grid">
+                  <div><span>Symbol</span><strong>{row.symbol || 'unavailable'}</strong></div>
+                  <div><span>Simulation date</span><strong>{row.as_of || 'unavailable'}</strong></div>
+                  <div><span>Decision timestamp</span><strong>{row.decision_timestamp ? compactDateTime(row.decision_timestamp) : (row.as_of || 'unavailable')}</strong></div>
+                  <div><span>Data cutoff</span><strong>{row.data_cutoff || row.pit?.max_bar_date || row.as_of || 'unavailable'}</strong></div>
+                  <div><span>Market regime</span><strong>{row.regime || 'unavailable'}</strong></div>
+                  <div><span>Stock setup</span><strong>{row.setup || row.tier || 'unavailable'}</strong></div>
+                  <div><span>Decision</span><strong>{row.decision || 'unavailable'}</strong></div>
+                  <div><span>Entry</span><strong>{row.entry == null ? 'unavailable' : String(row.entry)}</strong></div>
+                  <div><span>Stop</span><strong>{row.stop == null ? 'unavailable' : String(row.stop)}</strong></div>
+                  <div><span>Target</span><strong>{row.target == null ? 'unavailable' : String(row.target)}</strong></div>
+                  <div><span>MFE</span><strong>{row.mfe_pct == null ? 'unresolved' : `${row.mfe_pct}%`}</strong></div>
+                  <div><span>MAE</span><strong>{row.mae_pct == null ? 'unresolved' : `${row.mae_pct}%`}</strong></div>
+                  <div><span>Realized / simulated return</span><strong>{row.forward_return_pct == null ? 'unresolved' : `${row.forward_return_pct}%`}</strong></div>
+                  <div><span>Classification</span><strong>{row.classification || row.outcome_status || 'INCONCLUSIVE'}</strong></div>
+                </div>
+                <p className="panel-copy">Reasons: {(row.reasons || []).join(' · ') || 'No reasons were persisted.'}</p>
+                <p className="panel-copy">Rejection reasons: {(row.rejection_reasons || []).join(' · ') || row.reason_code || 'None recorded.'}</p>
                 <p className="panel-copy">
                   Data available at decision date: {row.pit?.max_bar_date || row.as_of || 'unknown'}
                   {row.pit?.future_evidence_used ? ' · LOOKAHEAD FLAG' : ' · no future bars'}
-                </p>
-                <p className="panel-copy">
-                  Subsequent outcome: {row.forward_return_pct == null ? 'unresolved' : `${row.forward_return_pct}%`}
-                  {' · '}{row.classification || row.outcome_status || 'INCONCLUSIVE'}
                 </p>
                 {(row.pit?.degraded || []).length ? <p className="panel-copy">Degraded: {(row.pit?.degraded || []).join(' · ')}</p> : null}
                 {row.symbol && row.as_of ? (

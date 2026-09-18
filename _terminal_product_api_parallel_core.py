@@ -399,6 +399,37 @@ def learning_dashboard_api() -> dict:
     return learning_dashboard()
 
 
+@product.app.get("/api/autonomous-learning")
+def autonomous_learning_get() -> dict:
+    from product.autonomous_learning import dashboard
+    payload = dashboard()
+    payload.update(live_safety_projection())
+    return payload
+
+
+@product.app.post("/api/autonomous-learning")
+def autonomous_learning_set(enabled: str = "", mode: str = "") -> dict:
+    from product.autonomous_learning import dashboard, set_control
+    kwargs: dict = {}
+    if str(enabled or "").strip() != "":
+        kwargs["enabled"] = str(enabled).strip().lower() in {"1", "true", "on", "yes"}
+    if str(mode or "").strip():
+        kwargs["mode"] = str(mode).strip().upper()
+    payload = set_control(**kwargs) if kwargs else dashboard()
+    payload.update(live_safety_projection())
+    return payload
+
+
+@product.app.post("/api/autonomous-learning/replay")
+def autonomous_learning_replay() -> dict:
+    from product.autonomous_learning import maybe_run_closed_market_replay
+    payload = maybe_run_closed_market_replay(force=True)
+    payload.update(live_safety_projection())
+    payload["opens_paper_trades"] = False
+    payload["evidence_class"] = payload.get("evidence_class") or "HISTORICAL_REPLAY"
+    return payload
+
+
 @product.app.get("/api/forward-soak")
 def forward_soak_api() -> dict:
     """Forward paper-trading soak scoreboard from persisted artifacts."""

@@ -183,7 +183,7 @@ def test_auth_required_when_session_invalid(tmp_path):
     r = JOBS.run_auth_health(JOBS._Ctx(FakeDeps(authed=False)))
     assert r.status == JS.BLOCKED and H.AUTH_MISSING in r.failures and r.state_hint == ST.AUTH_REQUIRED
     ok = JOBS.run_auth_health(JOBS._Ctx(FakeDeps(authed=True)))
-    assert ok.status == JS.SUCCEEDED and ok.state_hint == ST.DATA_REFRESHING   # re-probed, not cached
+    assert ok.status == JS.SUCCEEDED and ok.state_hint == ST.OBSERVING   # auth is not a data refresh
 
 
 def test_data_refresh_failure_preserves_and_blocks(tmp_path):

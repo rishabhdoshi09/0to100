@@ -127,3 +127,64 @@ def ensure_logs_path(*parts: str | os.PathLike[str]) -> Path:
 
 def is_redirected() -> bool:
     return runtime_root().resolve() != REPO_ROOT.resolve()
+
+
+class RuntimeLogsPath:
+    """A logs-relative path that is resolved on every use.
+
+    Module-level ``Path`` constants freeze ``logs_dir()`` at import time. Isolated
+    acquire children and tests that retarget ``QT_RUNTIME_ROOT`` after import then
+    write into the checkout ``logs/research_evidence`` tree. This object keeps the
+    same ``/`` and ``exists()`` surface so callers and monkeypatches keep working.
+    """
+
+    def __init__(self, *parts: str | os.PathLike[str]):
+        self._parts = tuple(str(part) for part in parts)
+
+    def resolve_path(self) -> Path:
+        return logs_path(*self._parts)
+
+    def __truediv__(self, other: str | os.PathLike[str]) -> Path:
+        return self.resolve_path() / other
+
+    def __fspath__(self) -> str:
+        return str(self.resolve_path())
+
+    def __str__(self) -> str:
+        return str(self.resolve_path())
+
+    def __repr__(self) -> str:
+        return f"RuntimeLogsPath{self._parts!r}"
+
+    def exists(self) -> bool:
+        return self.resolve_path().exists()
+
+    def is_dir(self) -> bool:
+        return self.resolve_path().is_dir()
+
+    def iterdir(self):
+        return self.resolve_path().iterdir()
+
+    def mkdir(self, *args, **kwargs):
+        self.resolve_path().mkdir(*args, **kwargs)
+
+    def joinpath(self, *others: str | os.PathLike[str]) -> Path:
+        return self.resolve_path().joinpath(*[str(part) for part in others])
+
+    @property
+    def parent(self) -> Path:
+        return self.resolve_path().parent
+
+    @property
+    def parents(self):
+        return self.resolve_path().parents
+
+    @property
+    def name(self) -> str:
+        return self.resolve_path().name
+
+    def __eq__(self, other: object) -> bool:
+        try:
+            return self.resolve_path() == Path(other)  # type: ignore[arg-type]
+        except TypeError:
+            return NotImplemented

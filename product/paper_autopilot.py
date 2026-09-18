@@ -804,6 +804,9 @@ def run_reco_paper_cycle(
         "cycle_reasons": cycle_reasons,
         "summary": summary,
         "eligibility": "TRADED" if taken else (
+            "DATA_UNAVAILABLE" if str(entry_block_reason or "") in {
+                "NO_DATA_SNAPSHOT", "DATA_UNAVAILABLE", "MARKET_NOT_READY", "NO_TRUSTED_MARKET_DATA",
+            } else
             "BLOCKED_SAFETY" if not entries_allowed or not paper_enabled else "NO_ELIGIBLE_TRADE"
         ),
         "source": "recommendation_selection_authority",

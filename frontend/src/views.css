@@ -5,7 +5,7 @@
 
 .search-box button {
   border: 0;
-  border-left: 1px solid #1c2b43;
+  border-left: 1px solid var(--border);
   background: transparent;
   color: var(--cyan);
   height: 100%;
@@ -36,24 +36,24 @@
 .inline-actions button,
 .mode-tabs button {
   min-height: 34px;
-  border: 1px solid #203550;
+  border: 1px solid var(--border);
   border-radius: 6px;
-  background: #091321;
-  color: #9aacC8;
+  background: var(--panel);
+  color: var(--text);
   padding: 0 12px;
   cursor: pointer;
 }
 
 .mode-tabs button:hover,
 .inline-actions button:hover {
-  border-color: #277a99;
-  color: #d7f8ff;
+  border-color: var(--cyan);
+  color: var(--text);
 }
 
 .mode-tabs button.active {
   border-color: var(--cyan);
   background: var(--cyan-soft);
-  color: #8cecff;
+  color: var(--cyan);
   box-shadow: inset 0 -2px 0 var(--cyan);
 }
 
@@ -87,7 +87,7 @@
   border: 1px solid #1d304a;
   border-radius: 7px;
   padding: 12px;
-  background: #08111f;
+  background: var(--panel);
 }
 
 .evidence-list > strong {
@@ -109,7 +109,7 @@
   gap: 8px;
   padding: 7px 0;
   border-top: 1px solid #16253b;
-  color: #c6d2e5;
+  color: var(--text, #14201a);
   font-size: 11px;
   line-height: 1.45;
 }
@@ -155,7 +155,7 @@
   border: 0;
   border-top: 1px solid #17263d;
   background: transparent;
-  color: #cfd9e8;
+  color: var(--text, #14201a);
   padding: 0 7px;
   text-align: left;
   font-size: 10px;
@@ -168,7 +168,7 @@
 }
 
 .lt-row.selected { box-shadow: inset 2px 0 0 var(--cyan); }
-.lt-row strong { color: #f0f6ff; }
+.lt-row strong { color: var(--text, #14201a); }
 .lt-row b { color: var(--green); }
 
 .portfolio-summary {
@@ -194,12 +194,12 @@
   display: block;
   width: 100%;
   height: 110px;
-  border: 1px solid #172944;
+  border: 1px solid var(--border, #d8e2db);
   border-radius: 6px;
   background:
-    linear-gradient(rgba(42, 67, 101, .17) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(42, 67, 101, .17) 1px, transparent 1px),
-    #07101d;
+    linear-gradient(rgba(27, 107, 69, .08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(27, 107, 69, .08) 1px, transparent 1px),
+    var(--panel, #ffffff);
   background-size: 42px 28px;
 }
 
@@ -215,10 +215,10 @@
   display: grid;
   place-items: center;
   padding: 18px;
-  border: 1px dashed #263a58;
+  border: 1px dashed var(--border, #d8e2db);
   border-radius: 6px;
-  color: #7585a0;
-  background: #07101d;
+  color: var(--muted, #5c6b63);
+  background: var(--panel, #ffffff);
   text-align: center;
   font-size: 10px;
 }
@@ -233,7 +233,7 @@
   gap: 9px;
   padding: 10px 0;
   border-top: 1px solid #17263d;
-  color: #bdcadf;
+  color: var(--text, #14201a);
   font-size: 11px;
   line-height: 1.45;
 }
@@ -253,18 +253,18 @@
   border: 1px solid #1c2d46;
   border-radius: 7px;
   padding: 11px;
-  background: #08111f;
+  background: var(--panel);
 }
 
 .sector-columns strong { font-size: 10px; letter-spacing: .05em; }
-.sector-columns span { color: #c5d0e2; font-size: 11px; }
+.sector-columns span { color: var(--muted, #5c6b63); font-size: 11px; }
 
 .stock-hero {
   min-height: 94px;
   margin-bottom: 10px;
-  border: 1px solid #1f344f;
+  border: 1px solid var(--border, #d8e2db);
   border-radius: 8px;
-  background: linear-gradient(100deg, #0b1728, #07101d);
+  background: linear-gradient(100deg, #f7fbf8, #eef3f0);
   padding: 16px 18px;
   display: flex;
   align-items: center;
@@ -315,9 +315,9 @@
 
 .fact-grid > div {
   min-height: 72px;
-  border: 1px solid #1d3049;
+  border: 1px solid var(--border, #d8e2db);
   border-radius: 6px;
-  background: #08111e;
+  background: var(--bg-soft, #eef2ee);
   padding: 10px;
 }
 
@@ -336,13 +336,13 @@
 .lead-copy {
   margin: 0;
   padding: 13px;
-  color: #b8c6db;
+  color: var(--text, #14201a);
   font-size: 11px;
   line-height: 1.65;
 }
 
 .lead-copy {
-  color: #e2ebf8;
+  color: var(--text, #14201a);
   font-size: 13px;
 }
 
@@ -396,11 +396,11 @@
   min-height: 43px;
   padding: 0 12px;
   border-top: 1px solid #17263d;
-  color: #c8d3e4;
+  color: var(--text, #14201a);
   font-size: 10px;
 }
 
-.position-row strong { color: #f0f6ff; }
+.position-row strong { color: var(--text, #14201a); }
 
 .market-grid .panel:first-child,
 .market-grid .panel:last-child {
@@ -447,7 +447,7 @@
 }
 
 .key-value-list span { color: var(--muted); }
-.key-value-list strong { text-align: right; color: #dce7f7; }
+.key-value-list strong { text-align: right; color: var(--text, #14201a); }
 
 .job-head,
 .job-row {

@@ -456,7 +456,7 @@ def test_replay_committee_path_does_not_load_today_research(monkeypatch):
     assert called["defaults"] == 0
     assert called["facts"] == 0
     assert rows
-    assert rows[0]["provenance"] == "BACKTEST"
+    assert rows[0]["provenance"] == "HISTORICAL_REPLAY"
     assert rows[0]["pit_grade"] in {PIT_MARKET_ONLY, PIT_PARTIAL, PIT_STRONG, PIT_UNVERIFIED, PIT_UNAVAILABLE}
     assert rows[0]["pit"]["future_evidence_used"] is False
     assert rows[0].get("versions")

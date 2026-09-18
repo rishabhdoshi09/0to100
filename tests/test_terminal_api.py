@@ -29,6 +29,8 @@ def test_terminal_controls_have_no_live_broker_or_order_action():
         "RESUME_NEW_PAPER_ENTRIES",
         "OBSERVE_ONLY_TODAY",
         "CLEAR_OBSERVE_ONLY",
+        "RUN_HISTORICAL_REPLAY",
+        "RUN_LEARNING_NOW",
     }
     source = inspect.getsource(terminal_api.control).lower()
     assert "broker" not in source
@@ -69,6 +71,8 @@ def test_market_controls_are_dispatched_outside_paper_autonomy():
         "RESUME_NEW_PAPER_ENTRIES",
         "OBSERVE_ONLY_TODAY",
         "CLEAR_OBSERVE_ONLY",
+        "RUN_HISTORICAL_REPLAY",
+        "RUN_LEARNING_NOW",
     }
 
 
@@ -392,7 +396,12 @@ def test_data_payload_does_not_unpickle_bhavcopy_inline(monkeypatch):
     )
     assert seen == [False]
     assert payload["scan_records"] == 2
-    assert any("still loading" in item.lower() for item in payload["blockers"])
+    assert payload["ready"] is True
+    assert payload["history_current"] is True
+    assert payload["ready"] == payload["history_current"]
+    blockers = " ".join(payload["blockers"]).lower()
+    assert "not loaded the bhavcopy store" in blockers
+    assert "history is not ready" not in blockers
 
 
 def test_peek_cached_regime_is_missing_until_computed():

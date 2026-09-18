@@ -454,7 +454,7 @@ def run_auth_health(ctx) -> JobResult:
     health = _auth_health(ctx.deps)
     if health.status == AUTH.SESSION_VALID:
         return JobResult(JS.SUCCEEDED, "AUTH_READY", clears={H.AUTH_MISSING, H.AUTH_EXPIRED,
-                         H.BROKER_PROVIDER_UNAVAILABLE}, state_hint=ST.DATA_REFRESHING,
+                         H.BROKER_PROVIDER_UNAVAILABLE}, state_hint=ST.OBSERVING,
                          unblocks=(DEP_AUTH,), metadata=health.as_dict())
     if health.status == AUTH.PROVIDER_UNAVAILABLE:
         failure = H.BROKER_PROVIDER_UNAVAILABLE
@@ -811,12 +811,14 @@ def run_paper_cycle(ctx) -> JobResult:
     holidays = ctx.deps.holidays()
     entries_ok, reason, phase = _entry_reason(now, holidays, ctx)
     data_ready, data_source = _paper_market_data_source(ctx)
+    data_failure = ""
     if not data_ready:
-        # Missing trustworthy market data is still a hard paper-entry block.  Do
-        # not translate it into a broker-login problem: official NSE history can
-        # drive paper entries without any daily Zerodha session.
+        # Missing trustworthy market data is still a hard paper-entry block.
+        # Surface it as a data/provider failure, never as "no eligible trade"
+        # and never as an entry-window or capability code.
         entries_ok = False
-        reason = reason or "NO_DATA_SNAPSHOT"
+        data_failure = "NO_DATA_SNAPSHOT"
+        reason = data_failure
     try:
         # Arity is resolved by inspection, never by calling and catching TypeError.
         # The canonical cycle opens real paper positions before it can raise, so a
@@ -831,9 +833,17 @@ def run_paper_cycle(ctx) -> JobResult:
         return JobResult(JS.RETRYABLE_FAILED, "paper cycle error", error_code="CYCLE_ERROR",
                          error_message=str(exc))
     eligibility = (result or {}).get("eligibility", "")
+    if data_failure:
+        eligibility = "DATA_UNAVAILABLE"
+        if isinstance(result, dict):
+            result = dict(result)
+            result["eligibility"] = eligibility
+            result["entry_block_reason"] = data_failure
+            result["failure_class"] = "DATA_OR_PROVIDER"
     hint = ST.PAPER_ACTIVE if entries_ok else ST.OBSERVING
     metadata = {"eligibility": eligibility, "entry_block_reason": reason,
-                "session_phase": phase, "market_data_source": data_source}
+                "session_phase": phase, "market_data_source": data_source,
+                "failure_class": "DATA_OR_PROVIDER" if data_failure else ""}
     if not os.environ.get("PYTEST_CURRENT_TEST"):
         try:
             from product.paper_self_feed import ingest_paper_cycle
@@ -851,7 +861,10 @@ def run_paper_cycle(ctx) -> JobResult:
             }
         except Exception:
             pass
-    return JobResult(JS.SUCCEEDED, f"paper cycle: {eligibility or 'no-op'}",
+    summary = f"paper cycle: {eligibility or 'no-op'}"
+    if data_failure:
+        summary = f"paper cycle: DATA_UNAVAILABLE ({data_failure})"
+    return JobResult(JS.SUCCEEDED, summary,
                      state_hint=hint, new_entries_allowed=entries_ok,
                      metadata=metadata)
 
@@ -970,6 +983,16 @@ def run_learning_cycle(ctx) -> JobResult:
             failures={H.LEARNING_FAILED}, state_hint=ST.RESEARCHING,
             unblocks=(f"{DEP_LEARNING}:{session_date}",), metadata=result,
         )
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        try:
+            from product.autonomous_learning import maybe_run_closed_market_replay, save_control
+
+            replay = maybe_run_closed_market_replay(now=now)
+            result["closed_market_replay"] = replay
+            if not replay.get("skipped"):
+                save_control({"last_cycle_at": now.isoformat() if hasattr(now, "isoformat") else str(now)})
+        except Exception as exc:
+            result["closed_market_replay"] = {"error": str(exc)[:200]}
     return JobResult(JS.SUCCEEDED, summary,
                      clears={H.LEARNING_FAILED}, state_hint=ST.RESEARCHING,
                      unblocks=(f"{DEP_LEARNING}:{session_date}",), metadata=result)

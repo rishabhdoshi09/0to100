@@ -24,10 +24,10 @@ import traceback
 import uuid
 from typing import Any, Mapping
 
-from core.runtime_paths import logs_dir
+from core.runtime_paths import logs_dir, RuntimeLogsPath
 
 ROOT = Path(__file__).resolve().parents[2]
-RUN_ROOT = logs_dir() / "research_evidence" / "_acquire_runs"
+RUN_ROOT = RuntimeLogsPath("research_evidence", "_acquire_runs")
 DEFAULT_SYMBOL_TIMEOUT_S = 90.0
 TERMINATE_GRACE_S = 2.0
 
@@ -208,6 +208,8 @@ def _run_child_request(
     ]
     env = dict(os.environ)
     env["QT_DD_ISOLATED_CHILD"] = "1"
+    from core.runtime_paths import runtime_root
+    env["QT_RUNTIME_ROOT"] = str(runtime_root())
     started = time.monotonic()
     with log_path.open("ab", buffering=0) as log_handle:
         proc = subprocess.Popen(

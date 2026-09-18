@@ -7,7 +7,7 @@
 .ops-worker, .ops-last-failure, .operation-chip {
   border: 1px solid #203550;
   border-radius: 7px;
-  background: #08111f;
+  background: var(--panel);
 }
 .ops-worker { min-height: 70px; padding: 11px; display: flex; align-items: center; gap: 10px; }
 .ops-worker i { width: 9px; height: 9px; border-radius: 50%; background: var(--red); box-shadow: 0 0 9px var(--red); }
@@ -52,7 +52,7 @@
 .source-health-list strong { font-size: 10px; }
 .source-health-list span { color: #8f9db5; font-size: 9px; }
 .source-health-list b, .source-health-list small { grid-column: 2 / -1; color: #74849e; font-size: 8px; font-weight: 500; }
-.inline-search { min-height: 34px; min-width: 230px; border: 1px solid #203550; border-radius: 6px; background: #091321; color: #dce7f7; padding: 0 10px; outline: none; }
+.inline-search { min-height: 34px; min-width: 230px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); padding: 0 10px; outline: none; }
 .fno-table { padding: 4px 10px 12px; }
 .fno-head, .fno-row { min-width: 830px; display: grid; grid-template-columns: 105px minmax(180px,1fr) 160px 110px 70px 80px; gap: 9px; align-items: center; }
 .fno-head { min-height: 34px; color: #71819e; font-size: 9px; padding: 0 7px; }

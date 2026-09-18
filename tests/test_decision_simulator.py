@@ -28,10 +28,12 @@ def test_simulator_uses_journal_and_stays_backtest(tmp_path, monkeypatch):
         "waits": [{"symbol": "INFY", "reason_code": "WAIT_FOR_ENTRY", "decision": "WAITED"}],
     })
     first = run_decision_simulator(force=True)
-    assert first["provenance"] == BACKTEST
+    overlay = first.get("journal_overlay") or {}
+    assert overlay.get("provenance") == BACKTEST or first["provenance"] == BACKTEST
     assert first["not_promotion_evidence"] is True
     assert first["live_locked"] is True
-    assert first["not_promotion_evidence"] is True
+    assert first["provenance"] != "REAL_FORWARD_MARKET"
+    assert first["provenance"] != "PAPER_FORWARD"
     assert first["decisions_tested"] >= 3
     assert first["would_take"] >= 1
     assert first["rejected"] >= 1

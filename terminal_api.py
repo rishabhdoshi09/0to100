@@ -790,20 +790,34 @@ def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news
     try:
         from data.bhavcopy_runtime import official_history_freshness
 
-        freshness = official_history_freshness(bhavcopy, load_cache=False)
+        freshness = official_history_freshness(
+            bhavcopy, load_cache=False, require_store=False,
+        )
         for key in (
             "current",
             "expected_latest_completed_session",
             "available_session",
             "stale_sessions",
             "reason_code",
+            "store_loaded",
         ):
             if key in freshness:
                 bhavcopy[key] = freshness[key]
     except Exception:
         freshness = {}
+    from product.data_readiness import project_official_data_readiness
+    data_truth = project_official_data_readiness(
+        freshness=freshness,
+        data={"ready": bhavcopy.get("ready"), "bhavcopy": bhavcopy},
+        bhav=bhavcopy,
+        operations_running=bool(operations.get("running")),
+    )
     if not bhavcopy.get("ready"):
-        if bhavcopy.get("cache_exists"):
+        if data_truth.get("history_current"):
+            blockers.append(
+                "Official session files are current; this API process has not loaded the bhavcopy store yet. Scans will use the same official files once the pickle is in memory."
+            )
+        elif bhavcopy.get("cache_exists"):
             blockers.append("Official NSE bhavcopy cache is on disk and still loading into the desk API.")
         else:
             blockers.append("Official NSE bhavcopy history is not ready; direct scans will prepare it first.")
@@ -824,7 +838,12 @@ def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news
     if not news.get("available"):
         blockers.append("Curated news store is empty; run a news refresh to inspect source health.")
     return {
-        "ready": bool(bhavcopy.get("ready") and bhavcopy.get("current", True) and operations.get("running")),
+        "ready": bool(data_truth["data_ready"]),
+        "history_current": bool(data_truth["history_current"]),
+        "store_loaded": bool(data_truth["store_loaded"]),
+        "operations_running": bool(operations.get("running")),
+        "lane_status": data_truth["lane_status"],
+        "lane_status_code": data_truth["lane_status_code"],
         "snapshot": snapshot,
         "bhavcopy": bhavcopy,
         "scan_saved": bool(scan.get("available")),
@@ -1077,6 +1096,8 @@ _AUTONOMY_CONTROLS = {
     "RESUME_NEW_PAPER_ENTRIES",
     "OBSERVE_ONLY_TODAY",
     "CLEAR_OBSERVE_ONLY",
+    "RUN_HISTORICAL_REPLAY",
+    "RUN_LEARNING_NOW",
 }
 _ALLOWED_CONTROLS = set(_OPERATION_CONTROLS) | _AUTONOMY_CONTROLS
 _USER_OPERATION_PRIORITY = 100

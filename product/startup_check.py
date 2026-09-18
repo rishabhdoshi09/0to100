@@ -52,7 +52,7 @@ def _lane(name: str, status: str, detail: str = "", *, required: bool = False,
 def _history_readiness() -> tuple[str, str]:
     try:
         from data.bhavcopy_runtime import official_history_freshness
-        freshness = official_history_freshness(load_cache=True)
+        freshness = official_history_freshness(load_cache=False, require_store=False)
     except Exception as exc:
         return "MISSING", f"Official NSE history unavailable: {str(exc)[:160]}"
     current = bool(freshness.get("current"))
@@ -243,7 +243,7 @@ def build_startup_check(*, probe_network: bool = True) -> dict[str, Any]:
     expected_scan_session = ""
     try:
         from data.bhavcopy_runtime import official_history_freshness
-        history_freshness = official_history_freshness(load_cache=True)
+        history_freshness = official_history_freshness(load_cache=False, require_store=False)
         expected_scan_session = str(
             history_freshness.get("expected_latest_completed_session")
             or history_freshness.get("available_session")

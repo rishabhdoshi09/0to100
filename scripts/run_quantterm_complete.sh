@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 export PYTHONPATH="$ROOT"
+# shellcheck disable=SC1091
+source "$ROOT/scripts/_setsid_compat.sh"
 
 if [[ "${1:-}" == "--restart" || "${1:-}" == "--reuse" ]]; then
   shift || true
@@ -306,7 +308,10 @@ start_stack() {
   echo "[COMPLETE STACK] Starting QuantTerm terminal, market operations, autonomy and market scan…"
   # Only this outer supervisor may retain FD 200. If the inner stack survives
   # this shell, it must not keep the machine-wide flock alive as an orphan.
-  bash scripts/run_quantterm.sh 200>&- &
+  # Own process group for the entire inner stack. If the inner shell exits or
+  # its trap is interrupted, the outer supervisor can still signal market_ops,
+  # autonomy and the API as one group instead of leaving reparented orphans.
+  setsid bash scripts/run_quantterm.sh 200>&- &
   STACK_PID=$!
 }
 
@@ -371,7 +376,7 @@ if owner_root and owner_root != root:
   fi
 fi
 
-echo "[COMPLETE STACK] Running in this terminal: desk http://127.0.0.1:5173  · API :8765  · reports :8766  · autonomy  · market scan"
+echo "[COMPLETE STACK] Starting in this terminal: desk http://127.0.0.1:5173  · API :8765  · reports :8766  · autonomy  · market scan"
 echo "[COMPLETE STACK] Leave this terminal open. Ctrl-C stops everything. Do not start a second terminal."
 
 HOME_OPENED=0
@@ -415,6 +420,7 @@ wait_for_desk() {
 }
 
 if wait_for_desk; then
+  echo "[COMPLETE STACK] Ready: desk http://127.0.0.1:5173 answered HTTP and API :8765/api/health succeeded."
   python - <<'PY' || true
 from product.startup_check import print_startup_summary
 raise SystemExit(print_startup_summary())

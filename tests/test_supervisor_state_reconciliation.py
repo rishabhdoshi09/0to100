@@ -61,7 +61,23 @@ def test_idle_tick_reconciles_latched_refreshing_to_ready(tmp_path):
     sup.shutdown()
 
 
-def test_idle_reconcile_keeps_real_pending_data_refresh_active(tmp_path):
+def test_idle_reconcile_keeps_due_data_refresh_active(tmp_path):
+    sup = _sup(tmp_path)
+    assert sup.start() is True
+    sup._transition(ST.DATA_REFRESHING, "fixture", "refresh is genuinely queued", "test")
+    sup.jobs.enqueue(
+        SCH.DATA_REFRESH,
+        idempotency_key="data:due",
+        scheduled_for=sup.clock() - 1.0,
+        critical=True,
+    )
+
+    sup._reconcile_idle_state()
+    assert sup.state.state == ST.DATA_REFRESHING
+    sup.shutdown()
+
+
+def test_future_scheduled_data_refresh_does_not_latch_refreshing(tmp_path):
     sup = _sup(tmp_path)
     assert sup.start() is True
     sup._transition(ST.DATA_REFRESHING, "fixture", "refresh is genuinely queued", "test")
@@ -73,7 +89,31 @@ def test_idle_reconcile_keeps_real_pending_data_refresh_active(tmp_path):
     )
 
     sup._reconcile_idle_state()
-    assert sup.state.state == ST.DATA_REFRESHING
+    assert sup.state.state == ST.DATA_READY
+    sup.shutdown()
+
+
+def test_restart_retains_persisted_data_ready(tmp_path):
+    first = _sup(tmp_path)
+    assert first.start() is True
+    first._transition(ST.DATA_READY, "fixture", "data is already accepted", "test")
+    first.shutdown()
+
+    second = _sup(tmp_path)
+    assert second.start() is True
+    assert second.state.state == ST.DATA_READY
+    assert second.state.reason_code == "owner_resume"
+    second.shutdown()
+
+
+def test_idle_tick_reconciles_starting_to_ready(tmp_path):
+    sup = _sup(tmp_path)
+    assert sup.start() is True
+    assert sup.state.state == ST.STARTING
+    sup.enqueue_due = lambda *_args, **_kwargs: None
+    assert sup.tick(_NOW) is None
+    assert sup.state.state == ST.DATA_READY
+    assert sup.state.reason_code == "idle_reconcile"
     sup.shutdown()
 
 

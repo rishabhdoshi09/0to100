@@ -1,10 +1,10 @@
 /* Final presentation layer: visual refinement only; no state semantics. */
 
 :root {
-  --qt-glow-cyan: rgba(56, 189, 248, 0.14);
-  --qt-surface-glass: rgba(13, 20, 32, 0.82);
-  --qt-shadow-soft: 0 10px 30px rgba(0, 0, 0, 0.22);
-  --qt-shadow-focus: 0 0 0 3px rgba(56, 189, 248, 0.14);
+  --qt-glow-cyan: rgba(27, 107, 69, 0.14);
+  --qt-surface-glass: #ffffff;
+  --qt-shadow-soft: 0 10px 30px rgba(20, 32, 26, 0.08);
+  --qt-shadow-focus: 0 0 0 3px rgba(27, 107, 69, 0.14);
 }
 
 body {
@@ -55,7 +55,7 @@ body {
 
 .panel:hover,
 .metric:hover {
-  border-color: rgba(255,255,255,.11);
+  border-color: rgba(27, 107, 69, .22);
 }
 
 button,
@@ -224,3 +224,135 @@ table tbody tr:hover {
   padding: 5px 10px;
 }
 .paper-state-secondary { opacity: 0.78; }
+
+/* Central remainder: leftover dark-terminal surfaces inherit light tokens. */
+.timeframes span,
+.timeframes b,
+.ohlc-strip div,
+.automation-grid div,
+.ops-worker,
+.ops-last-failure,
+.operation-chip,
+.inline-search,
+.evidence-list,
+.research-data-view .evidence-summary > div,
+.research-data-view .evidence-panel,
+.research-data-view .requirement-card,
+.research-data-view .runtime-grid article,
+.research-data-view .upload-ledger article,
+.research-data-view .evidence-empty,
+.display-depth-toggle,
+.experience-help-trigger,
+.experience-help,
+.loading-overlay {
+  background: var(--panel, #ffffff) !important;
+  color: var(--text, #14201a) !important;
+  border-color: var(--border, #d8e2db) !important;
+}
+
+.table-row,
+.table-row strong,
+.compact-row,
+.compact-row strong,
+.positions-row,
+.positions-row strong,
+.fno-row,
+.fno-row strong,
+.ops-worker strong,
+.operation-chip strong,
+.news-card p,
+.evidence-summary strong,
+.evidence-panel h2,
+.requirement-card h3 {
+  color: var(--text, #14201a) !important;
+}
+
+.empty-row,
+.panel footer,
+.insight span,
+.automation-grid span,
+.news-card header span,
+.source-health-list span {
+  color: var(--muted, #5c6b63) !important;
+}
+
+.experience-hero,
+.scanner-command-bar,
+.long-term-hero,
+.today-strip > div,
+.scanner-lane-cards article,
+.simple-decision-board article,
+.scan-progress,
+.scanner-mode-row button,
+.scanner-filter-row,
+.long-term-filter-row,
+.long-term-operation,
+.quality-overlay-grid > div,
+.evidence-stat-grid > div {
+  background: var(--panel, #ffffff) !important;
+  color: var(--text, #14201a) !important;
+  border-color: var(--border, #d8e2db) !important;
+}
+
+.experience-hero h2,
+.scanner-command-bar h2,
+.long-term-hero h2,
+.today-strip strong,
+.scanner-lane-cards strong,
+.simple-decision-board strong,
+.scan-progress strong,
+.evidence-stat-grid strong,
+.quality-overlay-grid strong,
+.long-term-operation strong {
+  color: var(--text, #14201a) !important;
+}
+
+.experience-hero p,
+.scanner-command-bar p,
+.long-term-hero p,
+.today-strip span,
+.today-strip small,
+.scanner-lane-cards span,
+.scanner-lane-cards small,
+.simple-decision-board p,
+.scan-progress span,
+.scan-progress p,
+.scan-progress small,
+.scanner-filter-row label,
+.long-term-filter-row label {
+  color: var(--muted, #5c6b63) !important;
+}
+
+.scanner-filter-row input,
+.scanner-filter-row select,
+.long-term-filter-row input,
+.long-term-filter-row select {
+  background: var(--bg-soft, #eef2ee) !important;
+  color: var(--text, #14201a) !important;
+  border-color: var(--border, #d8e2db) !important;
+}
+
+.experience-help {
+  background: var(--panel, #ffffff) !important;
+  color: var(--text, #14201a) !important;
+}
+
+.experience-help h2,
+.experience-help section > strong {
+  color: var(--text, #14201a) !important;
+}
+
+.experience-help-purpose,
+.experience-help section,
+.experience-help section p {
+  color: var(--muted, #5c6b63) !important;
+}
+
+.loading-overlay {
+  background: rgba(244, 247, 245, 0.86) !important;
+}
+
+::selection {
+  background: rgba(27, 107, 69, 0.18);
+  color: var(--text, #14201a);
+}

@@ -497,7 +497,7 @@ def learning_dashboard(
         soak = scoreboard()
     except Exception as exc:
         soak = {"error": str(exc)[:200], "live_locked": True}
-    return {
+    out = {
         "schema_version": 1,
         "live_locked": True,
         "note": (
@@ -533,4 +533,11 @@ def learning_dashboard(
         },
         "live_readiness": evaluate_live_readiness(),
         "forward_soak": soak,
+        "autonomous_learning": None,
     }
+    try:
+        from product.autonomous_learning import dashboard as autonomous_dashboard
+        out["autonomous_learning"] = autonomous_dashboard()
+    except Exception as exc:
+        out["autonomous_learning"] = {"available": False, "error": str(exc)[:200]}
+    return out

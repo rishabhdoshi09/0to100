@@ -153,11 +153,17 @@ def official_history_freshness(
     now: datetime | None = None,
     holidays: set | None = None,
     load_cache: bool = True,
+    require_store: bool = True,
 ) -> dict[str, Any]:
     """Compare official bhavcopy ``latest_date`` to the expected completed session.
 
     A large store that ends on an old session is stale. Missing dates stay
     missing — this never invents bars.
+
+    ``require_store=True`` (scan/ops default) fails closed until the in-memory
+    pickle is loaded. ``require_store=False`` is the DATA-lane date check: an
+    official CSV session on disk can be current even if this process has not
+    unpickled ``store_cache.pkl``.
     """
     from research.intelligence.data.nse_calendar import (
         load_holidays, publication_window, sessions_gap,
@@ -191,9 +197,14 @@ def official_history_freshness(
     #                        and is not yet mandatory.
     #   stale             -- something mandatory is missing. Fail closed.
     publication_pending = False
-    if not ready:
+    store_gate = bool(require_store)
+    if store_gate and not ready:
         reason_code, current_ok, usable = "HISTORY_NOT_READY", False, False
-    elif sessions < 60:
+    elif store_gate and sessions < 60:
+        reason_code, current_ok, usable = "HISTORY_TOO_SHALLOW", False, False
+    elif not store_gate and latest is None and not ready:
+        reason_code, current_ok, usable = "HISTORY_NOT_READY", False, False
+    elif not store_gate and ready and sessions < 60:
         reason_code, current_ok, usable = "HISTORY_TOO_SHALLOW", False, False
     elif latest is None:
         reason_code, current_ok, usable = "HISTORY_DATE_MISSING", False, False
@@ -219,5 +230,6 @@ def official_history_freshness(
         "available_session": latest.isoformat() if latest is not None else latest_raw,
         "stale_sessions": 0 if current_ok else (stale_sessions if stale_sessions is not None else None),
         "reason_code": reason_code,
+        "store_loaded": ready,
         "history": current,
     }

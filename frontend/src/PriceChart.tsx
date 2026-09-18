@@ -20,18 +20,18 @@ export function PriceChart({ symbol, bars }: Props) {
       height: 360,
       layout: {
         background: { type: ColorType.Solid, color: 'transparent' },
-        textColor: '#8390a8',
+        textColor: '#5c6b63',
         fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
       },
       grid: {
-        vertLines: { color: 'rgba(46, 62, 91, .38)' },
-        horzLines: { color: 'rgba(46, 62, 91, .38)' },
+        vertLines: { color: 'rgba(216, 226, 219, .9)' },
+        horzLines: { color: 'rgba(216, 226, 219, .9)' },
       },
-      rightPriceScale: { borderColor: '#24314b' },
-      timeScale: { borderColor: '#24314b', timeVisible: true },
+      rightPriceScale: { borderColor: '#d8e2db' },
+      timeScale: { borderColor: '#d8e2db', timeVisible: true },
       crosshair: {
-        vertLine: { color: '#24d6ff', labelBackgroundColor: '#0d2031' },
-        horzLine: { color: '#24d6ff', labelBackgroundColor: '#0d2031' },
+        vertLine: { color: '#1b6b45', labelBackgroundColor: '#e7f5ee' },
+        horzLine: { color: '#1b6b45', labelBackgroundColor: '#e7f5ee' },
       },
     })
 

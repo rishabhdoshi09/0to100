@@ -10,20 +10,20 @@
   padding: 16px 18px 12px;
   border: 1px solid var(--border);
   border-radius: 14px;
-  background: linear-gradient(180deg, rgba(16, 28, 46, .98), rgba(8, 14, 27, .96));
-  color: var(--text, #e6e9ef);
+  background: var(--panel);
+  color: var(--text);
 }
 .home-os-card.state-login_required,
 .home-os-card.state-failed_recoverable,
-.home-os-card.state-problem { border-color: rgba(255, 184, 77, .45); }
+.home-os-card.state-problem { border-color: rgba(217, 119, 6, .45); }
 .home-os-card.state-no_trade,
-.home-os-card.state-market_closed_complete { border-color: rgba(90, 196, 168, .35); }
+.home-os-card.state-market_closed_complete { border-color: rgba(22, 163, 74, .35); }
 .reco-desk .home-os-card h2,
-.home-os-hero h2 { margin: 6px 0 6px; font-size: 28px; line-height: 1.2; color: #f4f7fb; }
-.home-os-hero span { font-size: 10px; letter-spacing: .16em; color: #9aa8bd; }
+.home-os-hero h2 { margin: 6px 0 6px; font-size: 28px; line-height: 1.2; color: var(--text); }
+.home-os-hero span { font-size: 10px; letter-spacing: .16em; color: var(--muted); }
 .home-os-hero p,
-.reco-desk .home-os-card p { color: #c5d0de; margin: 0 0 10px; }
-.reco-desk .home-os-card strong { color: #f4f7fb; }
+.reco-desk .home-os-card p { color: var(--muted); margin: 0 0 10px; }
+.reco-desk .home-os-card strong { color: var(--text); }
 .home-os-now-next, .home-os-grid, .home-os-system, .home-os-opps {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -70,14 +70,14 @@ button.home-os-check {
 }
 .home-os-system > button.home-os-lane:hover,
 .home-os-system > button.home-os-lane:focus-visible {
-  border-color: rgba(154, 176, 204, .7);
-  background: rgba(20, 34, 54, .92);
+  border-color: rgba(27, 107, 69, .35);
+  background: #eef6f1;
   outline: none;
 }
 .home-os-system > button.home-os-lane.selected,
 .home-os-system > button.home-os-lane[aria-pressed="true"] {
-  border-color: rgba(122, 168, 214, .75);
-  background: rgba(24, 42, 66, .96);
+  border-color: rgba(27, 107, 69, .45);
+  background: #e7f5ee;
 }
 .home-os-system > button.home-os-lane em {
   display: block;
@@ -96,7 +96,7 @@ button.home-os-check {
   padding: 12px 14px;
   border: 1px solid var(--border);
   border-radius: 12px;
-  background: rgba(8, 14, 27, .72);
+  background: var(--panel);
 }
 .home-os-inspector header {
   display: flex;

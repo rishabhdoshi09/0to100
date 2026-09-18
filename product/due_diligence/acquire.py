@@ -18,10 +18,10 @@ from product.due_diligence.extract import (
     merge_kpi_maps,
 )
 from product.due_diligence.option_chain import summarize_option_chain
-from core.runtime_paths import logs_dir, logs_path
+from core.runtime_paths import logs_dir, logs_path, RuntimeLogsPath
 
 ROOT = Path(__file__).resolve().parents[2]
-EVIDENCE_ROOT = logs_dir() / "research_evidence"
+EVIDENCE_ROOT = RuntimeLogsPath("research_evidence")
 ACQUIRE_CAP = 6
 FACTS_NAME = "autonomy_facts.json"
 RESEARCH_QUEUE_PATH = logs_dir() / "product" / "research_queue.json"
