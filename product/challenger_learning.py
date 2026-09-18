@@ -151,9 +151,19 @@ def _lane_weight(row: Mapping[str, Any]) -> float:
 
 def _rows() -> list[dict[str, Any]]:
     from research.feature_store import load_observations
+    try:
+        from product.trading_thesis import manifest as thesis_manifest
+        current_thesis = str(thesis_manifest().get("thesis_hash") or "")
+    except Exception:
+        current_thesis = ""
 
     rows = load_observations(kind="DECISION", require_outcome=True)
-    return [r for r in rows if _lane_weight(r) > 0]
+    return [
+        r for r in rows
+        if _lane_weight(r) > 0
+        and current_thesis
+        and str((r.get("meta") or {}).get("thesis_hash") or "") == current_thesis
+    ]
 
 
 def _matrix(rows: list[dict[str, Any]]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
