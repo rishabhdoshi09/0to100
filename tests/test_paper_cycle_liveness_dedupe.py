@@ -478,3 +478,29 @@ def test_snapshot_paper_failure_is_terminal_and_never_auto_retried(tmp_path):
         assert again.status == JS.PERMANENT_FAILED
     finally:
         sup.shutdown()
+
+
+def test_completing_old_snapshot_does_not_cancel_newer_snapshot_work(tmp_path):
+    from tests.test_autonomy import FakeDeps
+
+    now = datetime(2026, 7, 31, 10, 0)
+    sup = Supervisor(tmp_path / "auto", deps=FakeDeps(now=now, data_ok=True))
+    assert sup.start() is True
+    try:
+        old_scan = sup.jobs.enqueue(
+            JOBS.SCH.MARKET_SCAN,
+            idempotency_key=JOBS.SCH.snapshot_scan_key("snap-old"),
+            input_snapshot_id="snap-old",
+        )
+        new_scan = sup.jobs.enqueue(
+            JOBS.SCH.MARKET_SCAN,
+            idempotency_key=JOBS.SCH.snapshot_scan_key("snap-new"),
+            input_snapshot_id="snap-new",
+        )
+
+        sup._mark_snapshot_complete("snap-old")
+
+        assert sup.jobs.get(old_scan.job_id).status == JS.CANCELLED
+        assert sup.jobs.get(new_scan.job_id).status == JS.PENDING
+    finally:
+        sup.shutdown()
