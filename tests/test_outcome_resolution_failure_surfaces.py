@@ -44,7 +44,8 @@ def _ctx(deps):
 def test_resolve_outcomes_exception_fails_the_job_not_a_fake_success(monkeypatch):
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     monkeypatch.setattr(
-        "product.autonomous_loop.advance_loop", lambda trigger: {"n_settled": 0}
+        "product.autonomous_loop.settle_official_outcomes",
+        lambda session: {"n_settled": 0},
     )
     monkeypatch.setattr(
         "product.paper_self_feed.ingest_paper_cycle", lambda *a, **k: None
@@ -63,7 +64,8 @@ def test_resolve_outcomes_exception_fails_the_job_not_a_fake_success(monkeypatch
 def test_successful_resolution_clears_unreconciled_and_reports_real_counts(monkeypatch):
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     monkeypatch.setattr(
-        "product.autonomous_loop.advance_loop", lambda trigger: {"n_settled": 1}
+        "product.autonomous_loop.settle_official_outcomes",
+        lambda session: {"n_settled": 1},
     )
     monkeypatch.setattr(
         "product.paper_self_feed.ingest_paper_cycle", lambda *a, **k: None
