@@ -215,7 +215,18 @@ class Supervisor:
                 if job.job_type == SCH.NEWS_REFRESH:
                     retire = True
                 elif job.job_type == SCH.MARKET_SCAN:
-                    retire = not key.startswith("snapshot_scan:")
+                    try:
+                        from product.decision_simulation_gate import current_startup_id
+                        current_startup = current_startup_id()
+                    except Exception:
+                        current_startup = ""
+                    retire = not (
+                        key.startswith("snapshot_scan:")
+                        or (
+                            current_startup
+                            and key.startswith(f"startup_discovery_scan:{current_startup}:")
+                        )
+                    )
                 elif job.job_type == SCH.PAPER_CYCLE:
                     retire = not key.startswith("snapshot_paper:")
                 elif job.job_type == SCH.OUTCOME_RESOLUTION:
@@ -302,6 +313,44 @@ class Supervisor:
             critical=True,
         )
 
+    def _ensure_startup_trade_discovery(self) -> None:
+        """Queue one current official-session scan before simulation approval.
+
+        This is discovery only. Its idempotency key is not a snapshot_scan key,
+        so scan completion cannot auto-enter PAPER_CYCLE.
+        """
+        try:
+            from product.decision_simulation_gate import current_startup_id, status
+
+            gate = status()
+            if gate.get("discovery_ready"):
+                return
+            startup_id = current_startup_id()
+            if not startup_id:
+                return
+            from product.readiness import official_history
+
+            history = dict(official_history() or {})
+            if not history.get("current"):
+                return
+            latest = str(
+                history.get("available_session")
+                or history.get("latest_date")
+                or ""
+            )[:10]
+            if not latest:
+                return
+            identity = str(self.deps.active_snapshot_id() or "").strip()
+            if not identity:
+                identity = f"market:official_nse:{latest}"
+            self.jobs.enqueue(
+                SCH.MARKET_SCAN,
+                idempotency_key=f"startup_discovery_scan:{startup_id}:{identity}",
+                input_snapshot_id=identity,
+            )
+        except Exception:
+            return
+
     @staticmethod
     def _news_bucket(now_ist, market_open: bool) -> str:
         size = 5 if market_open else 20
@@ -345,6 +394,10 @@ class Supervisor:
                 )
                 self._ensure_snapshot_pipeline(snap)
             return
+
+        # Closed market still starts by finding today's best available trades
+        # from the latest completed official session. Simulation remains gated.
+        self._ensure_startup_trade_discovery()
 
         # Closed market: keep official completed-session data current once the
         # exchange publication window opens. These jobs never auto-chain a scan.
