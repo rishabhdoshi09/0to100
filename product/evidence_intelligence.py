@@ -154,6 +154,7 @@ def freeze_decision(
         "challenger_status": (
             ((evidence or {}).get("challenger_shadow") or {}).get("status") or ""
         ),
+        "thesis_hash": str((decision.provenance or {}).get("thesis_hash") or ""),
         "not_live": True,
     }
     return snapshot(
