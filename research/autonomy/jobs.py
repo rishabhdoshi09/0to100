@@ -870,13 +870,15 @@ def run_outcome_resolution(ctx) -> JobResult:
             failures={H.SNAPSHOT_STALE},
         )
     result: dict = {}
+    resolve_error = ""
     try:
         if hasattr(ctx.deps, "resolve_outcomes"):
             result = ctx.deps.resolve_outcomes(session_date, ctx.active_failures) or {}
         else:
             result = ctx.deps.run_paper_cycle(False) or {}
     except Exception as exc:
-        result = {"paper_book_error": str(exc)[:240]}
+        resolve_error = str(exc)[:240]
+        result = {"paper_book_error": resolve_error}
     official_settle: dict = {}
     if not os.environ.get("PYTEST_CURRENT_TEST"):
         try:
@@ -903,9 +905,25 @@ def run_outcome_resolution(ctx) -> JobResult:
     closed = len((result or {}).get("positions_closed", []))
     recorded = len((result or {}).get("outcomes_recorded", []))
     matured = int((official_settle or {}).get("n_settled") or 0)
+    if resolve_error:
+        # resolve_outcomes/run_paper_cycle is this job's entire purpose. Its
+        # failure used to be swallowed here and the job still returned
+        # JS.SUCCEEDED with a summary literally claiming "outcomes resolved"
+        # -- indistinguishable from a genuine day with nothing to resolve.
+        # Fail the job for real so it retries and the failure is visible in
+        # the supervisor's active-failures set instead of only in metadata.
+        return JobResult(
+            JS.RETRYABLE_FAILED,
+            "outcome resolution failed",
+            error_code="OUTCOME_RESOLUTION_ERROR",
+            error_message=resolve_error,
+            failures={H.UNRECONCILED},
+            metadata=result or {},
+        )
     return JobResult(
         JS.SUCCEEDED,
         f"outcomes resolved · {closed} book closes · {recorded} decoded · {matured} official",
+        clears={H.UNRECONCILED},
         unblocks=(f"{DEP_OUTCOMES}:{session_date}",),
         metadata=result or {},
     )
