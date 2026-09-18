@@ -833,6 +833,39 @@ def run_paper_cycle(ctx) -> JobResult:
     now = ctx.deps.now_ist()
     holidays = ctx.deps.holidays()
     entries_ok, reason, phase = _entry_reason(now, holidays, ctx)
+    key = str(getattr(getattr(ctx, "job", None), "idempotency_key", "") or "")
+    management_only = key.startswith("snapshot_manage:")
+    automatic_entry = key.startswith("snapshot_paper:")
+    if management_only:
+        entries_ok = False
+        reason = "SIMULATION_APPROVAL_REQUIRED"
+    elif automatic_entry and entries_ok:
+        try:
+            from product.decision_simulation_gate import is_approved
+            if not is_approved():
+                return JobResult(
+                    JS.SKIPPED_IDEMPOTENT,
+                    "paper entries skipped because Decision Simulation approval is no longer valid",
+                    state_hint=ST.OBSERVING,
+                    new_entries_allowed=False,
+                    metadata={
+                        "eligibility": "WAITING_FOR_SIMULATION_APPROVAL",
+                        "entry_block_reason": "SIMULATION_APPROVAL_REQUIRED",
+                        "session_phase": phase,
+                    },
+                )
+        except Exception:
+            return JobResult(
+                JS.SKIPPED_IDEMPOTENT,
+                "paper entries skipped because Decision Simulation approval could not be verified",
+                state_hint=ST.OBSERVING,
+                new_entries_allowed=False,
+                metadata={
+                    "eligibility": "WAITING_FOR_SIMULATION_APPROVAL",
+                    "entry_block_reason": "SIMULATION_APPROVAL_REQUIRED",
+                    "session_phase": phase,
+                },
+            )
     data_ready, data_source = _paper_market_data_source(ctx)
     data_failure = ""
     if not data_ready:
@@ -866,6 +899,7 @@ def run_paper_cycle(ctx) -> JobResult:
     hint = ST.PAPER_ACTIVE if entries_ok else ST.OBSERVING
     metadata = {"eligibility": eligibility, "entry_block_reason": reason,
                 "session_phase": phase, "market_data_source": data_source,
+                "management_only": management_only,
                 "failure_class": "DATA_OR_PROVIDER" if data_failure else ""}
     if not os.environ.get("PYTEST_CURRENT_TEST"):
         try:
