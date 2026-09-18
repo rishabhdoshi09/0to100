@@ -541,11 +541,42 @@ class Supervisor:
         job = self.jobs.lease_due(self.owner, lease_seconds=300.0)
         self._check_overdue()
         if job is None:
+            self._reconcile_idle_state()
             self.heartbeat()
             return None
         self._execute(job)
         self.heartbeat()
         return job
+
+    def _reconcile_idle_state(self) -> None:
+        """Repair a latched refresh state from durable queue and failure truth.
+
+        DATA_REFRESHING is an activity state, not a sticky readiness label. If no
+        DATA_REFRESH job is pending/running, an idle tick must converge to the
+        durable data truth instead of preserving a stale hint forever.
+        """
+        if self.owner_state.get("halted") or self.state.state != ST.DATA_REFRESHING:
+            return
+        refresh_active = any(
+            job.job_type == SCH.DATA_REFRESH and job.status in (JS.PENDING, JS.RUNNING)
+            for job in self.jobs.list(limit=1000)
+        )
+        if refresh_active:
+            return
+        if H.SNAPSHOT_STALE in self.failures:
+            self._transition(
+                ST.DATA_BLOCKED,
+                "idle_reconcile",
+                "No data refresh is active and the accepted market snapshot is stale.",
+                "idle_tick",
+            )
+            return
+        self._transition(
+            ST.DATA_READY,
+            "idle_reconcile",
+            "No data refresh is active; the last accepted market data remains ready.",
+            "idle_tick",
+        )
 
     def _execute(self, job):
         handler = JOBS.HANDLERS.get(job.job_type)
@@ -592,6 +623,17 @@ class Supervisor:
                 self._enqueue_paper_after_scan(job)
 
         target = self._gated_state(result.state_hint)
+        # A successful auth probe proves only broker-session health. It must not
+        # downgrade an already productive desk into a fake data-refresh activity.
+        if (
+            job.job_type == SCH.AUTH_HEALTH
+            and result.status == JS.SUCCEEDED
+            and target == ST.DATA_REFRESHING
+            and self.state.state in (
+                ST.DATA_READY, ST.OBSERVING, ST.PAPER_ACTIVE, ST.RESEARCHING, ST.DEGRADED
+            )
+        ):
+            target = self.state.state
         if target and target != self.state.state:
             self._transition(target, reason=job.job_type,
                              explanation=result.summary or job.job_type, trigger=job.job_id,

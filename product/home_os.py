@@ -237,7 +237,22 @@ def build_home_os(
         or freshness.get("expected_latest_completed_session")
         or freshness.get("reason_code")
     )
-    data_ready = bool(data_d.get("ready") or bhav.get("ready"))
+    # An explicit "ready" flag from the caller's data payload takes precedence.
+    # When no caller supplies `data=` (the real production call from
+    # radar_home_workspace passes only scan/radar/autonomy), `data_d` and
+    # `bhav` are structurally empty and this must NOT silently default to
+    # "not ready" forever -- that produced the observed contradiction where
+    # reason_code=HISTORY_CURRENT / history_current=True coexisted with a
+    # permanently-false data_ready and a stuck "Waiting" / "Getting the
+    # latest market data" UI. Fall back to the already-reconciled freshness
+    # truth (which itself falls back to the real persisted official history
+    # freshness via `loaded`) instead of an unset payload field.
+    explicit_ready = data_d.get("ready")
+    if explicit_ready is None:
+        explicit_ready = bhav.get("ready")
+    if explicit_ready is None:
+        explicit_ready = freshness.get("ready", history_current)
+    data_ready = bool(explicit_ready)
     if has_session:
         data_ready = data_ready and history_current
     scan_ok = bool(scan_d.get("records") or scan_d.get("available") or scan_d.get("scanned_at"))

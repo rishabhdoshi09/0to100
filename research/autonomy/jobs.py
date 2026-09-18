@@ -870,13 +870,15 @@ def run_outcome_resolution(ctx) -> JobResult:
             failures={H.SNAPSHOT_STALE},
         )
     result: dict = {}
+    resolve_error = ""
     try:
         if hasattr(ctx.deps, "resolve_outcomes"):
             result = ctx.deps.resolve_outcomes(session_date, ctx.active_failures) or {}
         else:
             result = ctx.deps.run_paper_cycle(False) or {}
     except Exception as exc:
-        result = {"paper_book_error": str(exc)[:240]}
+        resolve_error = str(exc)[:240]
+        result = {"paper_book_error": resolve_error}
     official_settle: dict = {}
     if not os.environ.get("PYTEST_CURRENT_TEST"):
         try:
@@ -903,9 +905,25 @@ def run_outcome_resolution(ctx) -> JobResult:
     closed = len((result or {}).get("positions_closed", []))
     recorded = len((result or {}).get("outcomes_recorded", []))
     matured = int((official_settle or {}).get("n_settled") or 0)
+    if resolve_error:
+        # resolve_outcomes/run_paper_cycle is this job's entire purpose. Its
+        # failure used to be swallowed here and the job still returned
+        # JS.SUCCEEDED with a summary literally claiming "outcomes resolved"
+        # -- indistinguishable from a genuine day with nothing to resolve.
+        # Fail the job for real so it retries and the failure is visible in
+        # the supervisor's active-failures set instead of only in metadata.
+        return JobResult(
+            JS.RETRYABLE_FAILED,
+            "outcome resolution failed",
+            error_code="OUTCOME_RESOLUTION_ERROR",
+            error_message=resolve_error,
+            failures={H.UNRECONCILED},
+            metadata=result or {},
+        )
     return JobResult(
         JS.SUCCEEDED,
         f"outcomes resolved · {closed} book closes · {recorded} decoded · {matured} official",
+        clears={H.UNRECONCILED},
         unblocks=(f"{DEP_OUTCOMES}:{session_date}",),
         metadata=result or {},
     )
@@ -920,18 +938,39 @@ def run_learning_cycle(ctx) -> JobResult:
     except Exception as exc:
         return JobResult(JS.RETRYABLE_FAILED, "learning cycle failed", error_code="LEARNING_ERROR",
                          error_message=str(exc), failures={H.LEARNING_FAILED}, state_hint=ST.DEGRADED)
+    memory_error = ""
     if not os.environ.get("PYTEST_CURRENT_TEST"):
         try:
             from product.autonomous_loop import consume_learning_memory
 
             result["settled_memory"] = consume_learning_memory(session_date)
         except Exception as exc:
-            result["settled_memory"] = {"error": str(exc)[:200]}
-    return JobResult(JS.SUCCEEDED,
-                     f"learning complete · {result.get('diagnostics', 0)} diagnostics · "
-                     f"{result.get('paper_closed', 0)} paper trades · "
-                     f"{result.get('paper_cooldown', 0)} cooldown · "
-                     f"{result.get('paper_prefer', 0)} preferred",
+            memory_error = str(exc)[:200]
+            result["settled_memory"] = {"error": memory_error}
+    summary = (
+        f"learning complete · {result.get('diagnostics', 0)} diagnostics · "
+        f"{result.get('paper_closed', 0)} paper trades · "
+        f"{result.get('paper_cooldown', 0)} cooldown · "
+        f"{result.get('paper_prefer', 0)} preferred"
+    )
+    if memory_error:
+        # The primary learning cycle (run_learning) succeeded, but folding
+        # settled outcomes into calibrated memory failed. That is a real
+        # learning-ingestion failure, not a cosmetic detail buried in
+        # metadata -- surface it as LEARNING_FAILED and in the job's own
+        # error fields instead of unconditionally claiming "learning
+        # complete" and JS.SUCCEEDED with no visible trace of the failure.
+        summary = (
+            f"learning cycle ran but memory consolidation failed · "
+            f"{result.get('diagnostics', 0)} diagnostics"
+        )
+        return JobResult(
+            JS.SUCCEEDED, summary,
+            error_code="LEARNING_MEMORY_ERROR", error_message=memory_error,
+            failures={H.LEARNING_FAILED}, state_hint=ST.RESEARCHING,
+            unblocks=(f"{DEP_LEARNING}:{session_date}",), metadata=result,
+        )
+    return JobResult(JS.SUCCEEDED, summary,
                      clears={H.LEARNING_FAILED}, state_hint=ST.RESEARCHING,
                      unblocks=(f"{DEP_LEARNING}:{session_date}",), metadata=result)
 
