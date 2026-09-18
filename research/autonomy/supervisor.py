@@ -188,14 +188,45 @@ class Supervisor:
         self._write_status()
 
     def _retire_legacy_recurring_work(self) -> None:
-        """Remove old time-bucket auto work after recovery; manual jobs survive."""
+        """Retire automatic work from the old cascading scheduler.
+
+        Manual jobs, the current AUTH/DATA pair and new snapshot_scan/snapshot_paper
+        identities survive. Both PENDING and BLOCKED legacy rows are terminally
+        cancelled so dependency recovery cannot revive them later.
+        """
+        retired_types = {
+            SCH.NEWS_REFRESH,
+            SCH.OUTCOME_RESOLUTION,
+            SCH.LEARNING_CYCLE,
+            SCH.RESEARCH_CYCLE,
+            SCH.LONG_TERM_SCAN,
+            SCH.LONG_TERM_REFRESH,
+            SCH.INSTRUMENT_REFRESH,
+            SCH.BHAVCOPY_UPDATE,
+            SCH.CORPORATE_ACTIONS,
+            SCH.UNIVERSE_HISTORY,
+            SCH.INDEX_WARMUP,
+        }
         try:
-            self.jobs.cancel_pending_by_prefix(
-                "news_refresh:",
-                "market_scan:",
-                "paper_cycle:",
-                summary="retired by snapshot-terminal scheduler",
-            )
+            for job in self.jobs.list(limit=2000):
+                if job.status not in {JS.PENDING, JS.BLOCKED}:
+                    continue
+                key = str(job.idempotency_key or "")
+                if key.startswith("manual:"):
+                    continue
+                retire = job.job_type in retired_types
+                if job.job_type == SCH.MARKET_SCAN:
+                    retire = not key.startswith("snapshot_scan:")
+                elif job.job_type == SCH.PAPER_CYCLE:
+                    retire = not key.startswith("snapshot_paper:")
+                elif job.job_type == SCH.DATA_REFRESH:
+                    retire = key.endswith(":eod")
+                if retire:
+                    self.jobs.complete(
+                        job.job_id,
+                        JS.CANCELLED,
+                        result_summary="retired by snapshot-terminal scheduler",
+                    )
         except Exception:
             pass
 
