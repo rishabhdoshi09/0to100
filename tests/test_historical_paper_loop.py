@@ -80,6 +80,7 @@ def test_next_batch_uses_durable_cursor_and_does_not_repeat(tmp_path):
         {
             "phase": HPL.PHASE_IDLE,
             "last_completed_session": "2026-01-04",
+            "thesis_hash": first["thesis_hash"],
         },
         state,
     )
@@ -121,6 +122,7 @@ def test_historical_setup_confidence_policy_never_becomes_active(tmp_path):
             "setup": "VCP_BREAKOUT",
             "realized_R": 1.0,
             "evidence_class": "HISTORICAL_REPLAY",
+            "thesis_hash": "thesis-a",
             "not_real_pnl": True,
         }
         for i in range(30)
@@ -128,7 +130,7 @@ def test_historical_setup_confidence_policy_never_becomes_active(tmp_path):
     policies = HPL.update_historical_setup_policies(trades, path=policy_path)
     assert len(policies) == 1
     policy = policies[0]
-    assert policy["policy_id"] == "HIST_SETUP::VCP_BREAKOUT"
+    assert policy["policy_id"] == "HIST_SETUP::thesis-a::VCP_BREAKOUT"
     assert policy["sample_size"] == 30
     assert policy["historical_confidence_score"] == 95.0
     assert policy["historical_reproduced_positive"] is True
