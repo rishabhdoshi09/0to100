@@ -133,34 +133,38 @@ jobs:
           assert state.authorized is False
           PY
 
-      - name: Create genuine historical replay evidence for simulator
+      - name: Approve Decision Simulation and create explicit acceptance replay evidence
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsS --max-time 20 -X POST http://127.0.0.1:8765/api/decision-simulator > logs/product/simulator_replay_start.json
-          done_state=0
-          for _ in $(seq 1 400); do
-            curl -fsS --max-time 20 http://127.0.0.1:8765/api/decision-simulator > logs/product/simulator_replay.json
-            state="$(venv/bin/python - <<'PY'
-          import json
-          from pathlib import Path
-          p=json.loads(Path('logs/product/simulator_replay.json').read_text(encoding='utf-8'))
-          print(str(p.get('status') or '').upper())
-          PY
-          )"
-            if [[ "$state" = "SUCCEEDED" ]]; then done_state=1; break; fi
-            if [[ "$state" = "FAILED" || "$state" = "DEGRADED" ]]; then
-              echo "Historical replay ended in $state" >&2
-              cat logs/product/simulator_replay.json
-              exit 1
-            fi
-            sleep 3
-          done
-          test "$done_state" = 1
+          # Product behavior: the no-argument POST is approval only. It must not
+          # launch a second historical engine beside quantterm-autonomy.
+          curl -fsS --max-time 20 -X POST http://127.0.0.1:8765/api/decision-simulator > logs/product/simulator_approval.json
           venv/bin/python - <<'PY'
           import json
           from pathlib import Path
-          p=json.loads(Path('logs/product/simulator_replay.json').read_text(encoding='utf-8'))
+          p=json.loads(Path('logs/product/simulator_approval.json').read_text(encoding='utf-8'))
+          assert p.get('accepted') is True, p
+          assert str(p.get('status') or '').upper() == 'APPROVED', p
+          assert p.get('simulation_authority') == 'quantterm-autonomy', p
+          assert p.get('legacy_batch_started') is False, p
+          assert set(p.get('simulation_scope') or []) == {'PAPER_FORWARD','HISTORICAL_REPLAY'}, p
+          PY
+
+          # Acceptance-only fixture generation: explicitly create a genuine PIT
+          # replay so the one-decision counterfactual endpoint has a persisted
+          # historical decision to inspect. This is not an autonomous runtime
+          # scheduling path and does not open paper positions.
+          venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+          from product.decision_simulator import run_decision_simulator
+
+          p = run_decision_simulator(force=True, async_job=False)
+          Path('logs/product/simulator_replay.json').write_text(
+              json.dumps(p, indent=2, default=str), encoding='utf-8'
+          )
+          assert str(p.get('status') or '').upper() == 'SUCCEEDED', p.get('status')
           rows=[r for r in (p.get('decisions') or p.get('rows') or []) if isinstance(r,dict)]
           rows=[r for r in rows if r.get('symbol') and (r.get('as_of') or r.get('market_as_of')) and str(r.get('decision') or '').upper() != 'NO_JUDGMENT']
           assert rows, 'historical replay SUCCEEDED but produced no real judgment usable by Simulate Past Decision'
