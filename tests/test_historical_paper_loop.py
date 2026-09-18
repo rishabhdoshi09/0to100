@@ -136,3 +136,7 @@ def test_historical_setup_confidence_policy_never_becomes_active(tmp_path):
     assert policy["affects_selection"] is False
     assert policy["production_status"] != "ACTIVE"
     assert policy["not_promotion_evidence"] is True
+
+    again = HPL.update_historical_setup_policies(trades, path=policy_path)
+    assert again[0]["version"] == policy["version"]
+    assert again[0]["generation_fingerprint"] == policy["generation_fingerprint"]
