@@ -757,6 +757,33 @@ class OperationStore:
             ).fetchall()
         return {str(row["status"]): int(row["n"]) for row in rows}
 
+    def cancel_pending_ids(
+        self,
+        operation_ids: Iterable[str],
+        *,
+        message: str = "Cancelled before execution",
+    ) -> int:
+        ids = tuple(sorted({str(op) for op in operation_ids if str(op).strip()}))
+        if not ids:
+            return 0
+        placeholders = ",".join("?" for _ in ids)
+        now = time.time()
+        with self._connect() as con:
+            cur = con.execute(
+                f"UPDATE operations SET status=?,finished_at=?,updated_at=?,stage=?,message=? "
+                f"WHERE status=? AND operation_id IN ({placeholders})",
+                (
+                    CANCELLED,
+                    now,
+                    now,
+                    CANCELLED,
+                    str(message or "Cancelled before execution"),
+                    PENDING,
+                    *ids,
+                ),
+            )
+        return int(cur.rowcount or 0)
+
     def cancel_pending(self, kinds: Iterable[str]) -> int:
         normalised = tuple(sorted({str(kind).upper() for kind in kinds if str(kind).strip()}))
         if not normalised:
