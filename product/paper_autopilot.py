@@ -533,11 +533,20 @@ def run_reco_paper_cycle(
     payload = dict(workspace or {})
     if cards is None:
         if not payload:
-            try:
-                from product.recommendations_store import load_recommendations
-                payload = load_recommendations() or {}
-            except Exception:
-                payload = {}
+            # load_recommendations() already fails closed to None for the normal
+            # "no file yet" / corrupt-JSON / schema-mismatch cases -- it never
+            # raises for those. Do NOT also swallow a genuine exception here
+            # (e.g. a broken import, a real code bug): callers of
+            # run_reco_paper_cycle (research/autonomy/jobs.py,
+            # research/autonomy/paper_cycle_truth.py) are specifically built to
+            # catch that and classify it as a system/execution failure rather
+            # than a quiet no-opportunity day. Catching it here first used to
+            # turn a provider/code failure into an indistinguishable
+            # NO_ELIGIBLE_TRADE cycle with an empty card_list -- exactly the
+            # "system failure disguised as a valid decision" this pipeline is
+            # supposed to prevent.
+            from product.recommendations_store import load_recommendations
+            payload = load_recommendations() or {}
         card_list = flatten_cards(payload)
     else:
         card_list = [dict(c) for c in cards if isinstance(c, Mapping)]
