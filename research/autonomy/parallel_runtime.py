@@ -26,7 +26,7 @@ OPS_DB = logs_dir() / "market_ops" / "jobs.db"
 OPS_RUNTIME = logs_dir() / "market_ops" / "runtime.json"
 CA_RUNTIME = logs_dir() / "ca_refresh_runtime.json"
 
-_BRIDGE_PENDING = {"MARKET_OP_IN_PROGRESS", "LONG_TERM_OP_IN_PROGRESS"}
+_BRIDGE_PENDING = {"MARKET_OP_IN_PROGRESS", "LONG_TERM_OP_IN_PROGRESS", "HISTORICAL_PAPER_IN_PROGRESS"}
 # Autonomy scans are 15-minute observations. Reuse any successful scan from
 # the current slot so a 2-3 minute DATA_REFRESH cannot cause a second full scan
 # after the market-ops lane already finished the first one in parallel.
