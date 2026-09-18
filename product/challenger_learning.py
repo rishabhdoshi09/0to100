@@ -312,17 +312,23 @@ def forward_comparison(model_version: str, rows: list[dict[str, Any]] | None = N
             "champion_brier": None,
             "challenger_brier": None,
             "improvement": None,
+            "improvement_lower_95": None,
         }
     cp = np.asarray([x[0] for x in chosen], dtype=float)
     xp = np.asarray([x[1] for x in chosen], dtype=float)
     y = np.asarray([x[2] for x in chosen], dtype=float)
     cb = _brier(cp, y)
     xb = _brier(xp, y)
+    paired = (cp - y) ** 2 - (xp - y) ** 2
+    improvement = float(np.mean(paired))
+    se = float(np.std(paired, ddof=1) / math.sqrt(len(paired))) if len(paired) > 1 else 1.0
+    lower = improvement - 1.96 * se
     return {
         "n": len(chosen),
         "champion_brier": round(cb, 6),
         "challenger_brier": round(xb, 6),
-        "improvement": round(cb - xb, 6),
+        "improvement": round(improvement, 6),
+        "improvement_lower_95": round(lower, 6),
     }
 
 
@@ -442,13 +448,28 @@ def maybe_promote(*, path: str | Path | None = None) -> dict[str, Any]:
         and int(forward.get("n") or 0) >= MIN_FORWARD_COMPARE
     )
     improvement = _f(forward.get("improvement"))
-    if enough and improvement is not None and improvement >= MIN_BRIER_IMPROVEMENT:
-        current["status"] = PAPER_ACTIVE
-        current["affects_selection"] = True
-        current["promoted_at"] = datetime.now(timezone.utc).isoformat()
-        current["promotion_reason"] = (
-            "Purged challenger validation plus exact-version forward Brier improvement."
-        )
+    lower = _f(forward.get("improvement_lower_95"))
+    if enough and improvement is not None:
+        if (
+            improvement >= MIN_BRIER_IMPROVEMENT
+            and lower is not None
+            and lower > 0.0
+        ):
+            current["status"] = PAPER_ACTIVE
+            current["affects_selection"] = True
+            current["promoted_at"] = datetime.now(timezone.utc).isoformat()
+            current["promotion_reason"] = (
+                "Purged validation plus exact-version forward Brier improvement "
+                "with a positive 95% lower bound."
+            )
+        else:
+            current["status"] = REJECTED
+            current["affects_selection"] = False
+            current["rejected_at"] = datetime.now(timezone.utc).isoformat()
+            current["rejection_reason"] = (
+                "Forward comparison reached the sample floor without a robust "
+                "positive challenger improvement."
+            )
     store["current"] = current
     save(store, path)
     return store
