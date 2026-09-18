@@ -851,6 +851,21 @@ class Supervisor:
         return hint
 
     def _retry_or_fail(self, job, *, error_code, error_message, summary=""):
+        if (
+            job.job_type == SCH.PAPER_CYCLE
+            and str(job.idempotency_key or "").startswith("snapshot_paper:")
+        ):
+            # Automatic paper execution is a once-per-data-identity mutation.
+            # Never replay it after an exception; surface the failure and wait
+            # for a new data identity or an explicit manual control.
+            self.jobs.complete(
+                job.job_id,
+                JS.PERMANENT_FAILED,
+                result_summary=summary or "automatic paper cycle failed; not retried",
+                error_code=error_code,
+                error_message=error_message,
+            )
+            return
         eod_pending = error_code == "EOD_DATA_PENDING"
         max_attempts = 12 if eod_pending else _MAX_ATTEMPTS
         if job.attempt >= max_attempts:
