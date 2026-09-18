@@ -659,7 +659,9 @@ export function RecommendationsView({
           {simulationGate?.phase === 'APPROVED'
             ? 'Decision Simulation approved'
             : simulationGate?.phase === 'AWAITING_APPROVAL'
-              ? 'Best trades found — approve simulation once'
+              ? (simulationGate?.best_trades || []).length > 0
+                ? 'Best trades found — approve simulation once'
+                : 'Trade search complete — no eligible trade'
               : 'Searching current best trades first'}
         </strong>
         <p>
@@ -702,7 +704,8 @@ export function RecommendationsView({
         </div>
         {simulationError ? <p className="reco-scan-meta">{simulationError}</p> : null}
         <p className="reco-scan-meta">
-          Same thesis hash is used for current suggestions, present paper decisions, and historical PIT simulation.
+          Current suggestions, present paper decisions, and historical PIT simulation use the same versioned selection thesis.
+          Strategy rules, active learned policies, and any forward-proven selection model are part of its thesis hash.
           Historical evidence trains challengers but cannot promote itself into production.
         </p>
       </section>
