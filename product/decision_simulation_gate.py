@@ -82,7 +82,10 @@ def begin_startup(startup_id: str | None = None, *, path: str | Path | None = No
 
 def _board() -> dict[str, Any]:
     try:
-        from product.decision_discovery_store import load as load_discovery
+        from product.decision_discovery_store import (
+            load as load_discovery,
+            save as save_discovery,
+        )
         from product.decision_service import decision_board
         from product.recommendations_store import (
             load_recommendations,
@@ -139,7 +142,17 @@ def _board() -> dict[str, Any]:
                 deep_confirm=False,
                 persist_ledger=False,
             )
-        return dict(decision_board(workspace=workspace, limit=40) or {})
+        board = dict(decision_board(workspace=workspace, limit=40) or {})
+        try:
+            save_discovery(
+                board,
+                scan_scanned_at=scan_at,
+                long_term_scanned_at=long_term_at,
+                thesis_hash=thesis_hash,
+            )
+        except Exception:
+            pass
+        return board
     except Exception as exc:
         return {
             "available": False,
