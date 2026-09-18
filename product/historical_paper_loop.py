@@ -184,6 +184,27 @@ def peek_next_batch(
     }
 
 
+def reset_for_thesis(
+    thesis_hash: str,
+    *,
+    state_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Start a clean historical cursor for a newly approved production thesis.
+
+    Any old daemon may finish its computation, but _run_batch/_background guard
+    against writing terminal state or confidence for a no-longer-current thesis.
+    """
+    return _save_state({
+        "phase": PHASE_IDLE,
+        "current_batch_id": "",
+        "current_sessions": [],
+        "last_completed_session": "",
+        "thesis_hash": str(thesis_hash or ""),
+        "last_result": {},
+        "last_error": "",
+    }, state_path)
+
+
 def pending_stage(*, state_path: str | Path | None = None) -> dict[str, Any]:
     state = load_state(state_path)
     return {
@@ -511,6 +532,22 @@ def _run_batch(
             "historical replay thesis mismatch; batch evidence refused"
         )
 
+    try:
+        from product.trading_thesis import manifest as thesis_manifest
+        current_thesis_hash = str(thesis_manifest().get("thesis_hash") or "")
+    except Exception:
+        current_thesis_hash = ""
+    if expected_thesis_hash and current_thesis_hash != expected_thesis_hash:
+        return {
+            "status": "OBSOLETE_THESIS",
+            "batch_id": bid,
+            "thesis_hash": expected_thesis_hash,
+            "current_thesis_hash": current_thesis_hash,
+            "message": "production thesis changed while historical batch was running; evidence not applied",
+            "not_real_pnl": True,
+            "not_promotion_evidence": True,
+        }
+
     # Present paper opens only a bounded number of new positions. Mirror that
     # choice per historical session: same thesis, same production selection
     # score, max three BUYs. WAIT/AVOID rows remain in the feature store for
@@ -631,13 +668,16 @@ def _background_batch_runner(
             _thread_result = dict(result or {})
             _thread_error = ""
     except Exception as exc:
-        _save_state({
-            "phase": PHASE_FAILED,
-            "current_batch_id": str(batch.get("batch_id") or ""),
-            "current_sessions": list(batch.get("sessions") or []),
-            "thesis_hash": str(batch.get("thesis_hash") or ""),
-            "last_error": str(exc)[:300],
-        }, state_path)
+        current_state = load_state(state_path)
+        # Do not let a stale old-thesis daemon overwrite a reset/new-thesis state.
+        if str(current_state.get("thesis_hash") or "") == str(batch.get("thesis_hash") or ""):
+            _save_state({
+                "phase": PHASE_FAILED,
+                "current_batch_id": str(batch.get("batch_id") or ""),
+                "current_sessions": list(batch.get("sessions") or []),
+                "thesis_hash": str(batch.get("thesis_hash") or ""),
+                "last_error": str(exc)[:300],
+            }, state_path)
         with _lock:
             _thread_result = None
             _thread_error = str(exc)[:300]
