@@ -1079,12 +1079,35 @@ class MarketOperationsWorker:
                         _emit("INFO", f"desk pipeline advance skipped · {type(exc).__name__}: {exc}")
 
     def _bootstrap(self) -> list[str]:
-        """Passive worker bootstrap.
+        """Passive worker bootstrap with legacy-queue retirement.
 
-        The autonomy supervisor is the single scheduling authority. market_ops
-        only executes operations explicitly queued by that authority or a manual
-        operator request; it does not invent the next autonomous step on boot.
+        The autonomy supervisor is the single scheduling authority. Old pipeline
+        rows created by the retired cascading scheduler must not execute after an
+        upgrade/restart. A new snapshot-bound MARKET_SCAN is preserved, as are
+        manual/operator requests.
         """
+        stale: list[str] = []
+        try:
+            for operation in self.store.active():
+                if str(operation.get("status") or "") != PENDING:
+                    continue
+                requested_by = str(operation.get("requested_by") or "").lower()
+                if requested_by not in {"pipeline", "bootstrap", "autonomy"}:
+                    continue
+                kind = str(operation.get("kind") or "")
+                snapshot_id = str((operation.get("payload") or {}).get("snapshot_id") or "")
+                if kind == MARKET_SCAN and snapshot_id:
+                    continue
+                stale.append(str(operation.get("operation_id") or ""))
+            cancelled = self.store.cancel_pending_ids(
+                stale,
+                message="Retired legacy automatic continuation after one-shot scheduler upgrade",
+            )
+            if cancelled:
+                _emit("CLEANUP", f"retired {cancelled} legacy automatic operation(s)")
+        except Exception as exc:
+            _emit("INFO", f"legacy operation cleanup skipped · {type(exc).__name__}: {exc}")
+
         try:
             from product.desk_pipeline import refresh_desk_pipeline_snapshot
             refresh_desk_pipeline_snapshot(self.store)
