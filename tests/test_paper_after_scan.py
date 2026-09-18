@@ -134,7 +134,7 @@ def test_intraday_enqueue_does_not_start_post_market_grind():
     assert SCH.OUTCOME_RESOLUTION not in types
 
 
-def test_blocked_data_ready_outcome_is_requeued():
+def test_blocked_data_ready_outcome_is_requeued(monkeypatch):
     class Jobs:
         def __init__(self):
             self.requeued = []
@@ -160,6 +160,10 @@ def test_blocked_data_ready_outcome_is_requeued():
     supervisor.deps = SimpleNamespace(
         now_ist=lambda: datetime(2026, 9, 3, 0, 5, tzinfo=IST),
         holidays=lambda: set(),
+    )
+    monkeypatch.setattr(
+        "product.readiness.official_history",
+        lambda: {"current": True, "available_session": "2026-09-02", "latest_date": "2026-09-02"},
     )
     supervisor._enqueue_post_market_grind(session_date="2026-09-02")
     assert supervisor.jobs.requeued == ["out-1"]
@@ -298,3 +302,20 @@ def test_restart_reconciles_finished_historical_poll_before_learning(monkeypatch
             "input_snapshot_id": "hist-restart",
         },
     )
+
+
+
+def test_forward_settlement_waits_for_required_official_session(monkeypatch):
+    jobs = _Jobs()
+    supervisor = Supervisor.__new__(Supervisor)
+    supervisor.jobs = jobs
+    supervisor.deps = SimpleNamespace(
+        now_ist=lambda: datetime(2026, 9, 18, 15, 45, tzinfo=IST),
+        holidays=lambda: set(),
+    )
+    monkeypatch.setattr(
+        "product.readiness.official_history",
+        lambda: {"current": False, "available_session": "2026-09-17", "latest_date": "2026-09-17"},
+    )
+    supervisor._enqueue_post_market_grind(session_date="2026-09-18")
+    assert jobs.enqueued == []
