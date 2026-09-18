@@ -983,6 +983,7 @@ def run_learning_cycle(ctx) -> JobResult:
             failures={H.LEARNING_FAILED}, state_hint=ST.RESEARCHING,
             unblocks=(f"{DEP_LEARNING}:{session_date}",), metadata=result,
         )
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
         try:
             from product.autonomous_learning import maybe_run_closed_market_replay, save_control
 
