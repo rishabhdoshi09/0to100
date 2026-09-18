@@ -101,8 +101,10 @@ def decision_board(
             "reason": "No saved whole-market scan — nothing has been decided yet.",
             "scan_scanned_at": "",
             "decisions": [],
+            "best_trades": [],
             "counts": {},
             "evidence_gaps": {},
+            "thesis": {},
         }
 
     decisions = decisions_from_workspace(
@@ -130,7 +132,26 @@ def decision_board(
         payload["evidence_intelligence"] = dict(
             (decision.historical_evidence or {}).get("evidence_intelligence") or {}
         )
+        try:
+            from product.trading_thesis import decision_quality
+            payload["trade_quality"] = decision_quality(
+                decision,
+                ranking_score=float(row.ranking_score),
+            )
+        except Exception:
+            payload["trade_quality"] = {}
         rows.append(payload)
+
+    try:
+        from product.trading_thesis import manifest as thesis_manifest
+        thesis = thesis_manifest()
+    except Exception:
+        thesis = {}
+
+    # "Best" means current BUY thesis first, with the same canonical ordering
+    # used by paper selection. WAIT/AVOID names remain visible in decisions but
+    # are never presented as trades merely because a probability looks high.
+    best_trades = [row for row in rows if str(row.get("state") or "") == BUY][:5]
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -139,6 +160,8 @@ def decision_board(
         "reason": "" if rows else "The scan completed and nothing qualified.",
         "scan_scanned_at": str(workspace.get("scan_scanned_at") or ""),
         "decisions": rows,
+        "best_trades": best_trades,
+        "thesis": thesis,
         "counts": counts,
         "actionable": sum(1 for r in ranked if r.decision.state == BUY),
         "evidence_gaps": dict(sorted(gaps.items(), key=lambda kv: -kv[1])),
