@@ -1051,28 +1051,26 @@ class MarketOperationsWorker:
             finally:
                 self._set_active(lane, None)
                 _atomic_json(RUNTIME_PATH, self._runtime_payload(running=True))
-                try:
-                    from product.desk_pipeline import advance_desk_pipeline
-
-                    nxt = advance_desk_pipeline(self.store, requested_by="pipeline")
-                    kind = nxt.get("queued_kind")
-                    if kind and nxt.get("queued_created"):
-                        _emit("QUEUE", f"next desk step {kind} · {nxt.get('message', '')}")
-                except Exception as exc:
-                    _emit("INFO", f"desk pipeline advance skipped · {type(exc).__name__}: {exc}")
-                if completed_kind in {MARKET_SCAN, DUE_DILIGENCE_ACQUIRE}:
+                if completed_kind == MARKET_SCAN:
+                    # MARKET_SCAN is terminal for market_ops. The durable autonomy
+                    # supervisor is the sole authority allowed to enqueue PAPER_CYCLE.
+                    # Do not auto-chain news, research, due diligence, or a second
+                    # paper loop from this worker.
+                    _emit(
+                        "IDLE",
+                        "MARKET_SCAN complete · handed off to autonomy supervisor · "
+                        "no automatic continuation",
+                    )
+                else:
                     try:
-                        from product.autonomous_loop import advance_loop
+                        from product.desk_pipeline import advance_desk_pipeline
 
-                        loop = advance_loop(trigger=str(completed_kind))
-                        _emit(
-                            "LOOP",
-                            f"autonomous loop · candidates={loop.get('candidates_touched')} · "
-                            f"research={((loop.get('research') or {}).get('n_ok'))} · "
-                            f"paper={((loop.get('paper') or {}).get('eligibility'))}",
-                        )
+                        nxt = advance_desk_pipeline(self.store, requested_by="pipeline")
+                        kind = nxt.get("queued_kind")
+                        if kind and nxt.get("queued_created"):
+                            _emit("QUEUE", f"next desk step {kind} · {nxt.get('message', '')}")
                     except Exception as exc:
-                        _emit("INFO", f"autonomous loop skipped · {type(exc).__name__}: {exc}")
+                        _emit("INFO", f"desk pipeline advance skipped · {type(exc).__name__}: {exc}")
 
     def _bootstrap(self) -> list[str]:
         try:
