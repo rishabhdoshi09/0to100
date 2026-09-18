@@ -1042,6 +1042,21 @@ def run_historical_paper_cycle(ctx) -> JobResult:
             state_hint=ST.DEGRADED,
             metadata=result,
         )
+    if status == "OBSOLETE_THESIS":
+        # This job belongs to an older effective selection thesis. It is
+        # terminal by identity: do not retry it, do not enqueue learning, and
+        # let the next supervisor tick discover the first batch for the current
+        # thesis.
+        return JobResult(
+            JS.SKIPPED_IDEMPOTENT,
+            (
+                f"historical paper retired: thesis changed "
+                f"{result.get('thesis_hash') or '?'}→{result.get('current_thesis_hash') or '?'}"
+            ),
+            clears={H.LEARNING_FAILED},
+            state_hint=ST.OBSERVING,
+            metadata=result,
+        )
     if status == "IDLE":
         return JobResult(
             JS.SKIPPED_IDEMPOTENT,
