@@ -1057,26 +1057,14 @@ class MarketOperationsWorker:
             finally:
                 self._set_active(lane, None)
                 _atomic_json(RUNTIME_PATH, self._runtime_payload(running=True))
-                if completed_kind == MARKET_SCAN:
-                    # MARKET_SCAN is terminal for market_ops. The durable autonomy
-                    # supervisor is the sole authority allowed to enqueue PAPER_CYCLE.
-                    # Do not auto-chain news, research, due diligence, or a second
-                    # paper loop from this worker.
-                    _emit(
-                        "IDLE",
-                        "MARKET_SCAN complete · handed off to autonomy supervisor · "
-                        "no automatic continuation",
-                    )
-                else:
-                    try:
-                        from product.desk_pipeline import advance_desk_pipeline
-
-                        nxt = advance_desk_pipeline(self.store, requested_by="pipeline")
-                        kind = nxt.get("queued_kind")
-                        if kind and nxt.get("queued_created"):
-                            _emit("QUEUE", f"next desk step {kind} · {nxt.get('message', '')}")
-                    except Exception as exc:
-                        _emit("INFO", f"desk pipeline advance skipped · {type(exc).__name__}: {exc}")
+                # Execution worker only: finishing any operation must never invent
+                # the next one. Supervisor/manual controls are the sole scheduling
+                # authorities. This is especially important after PAPER_CYCLE has
+                # terminally completed its data identity.
+                _emit(
+                    "IDLE",
+                    f"{completed_kind} complete · no automatic continuation",
+                )
 
     def _bootstrap(self) -> list[str]:
         """Passive worker bootstrap with legacy-queue retirement.
