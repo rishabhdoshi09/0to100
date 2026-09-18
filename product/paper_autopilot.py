@@ -442,7 +442,7 @@ def _canonical_decision(decision: AutopilotDecision, *, as_of: str, snapshot_id:
             market_state=str(decision.card.get("market_state") or ""),
             sector_state=str(decision.card.get("sector_state") or ""),
             evidence_class=PAPER_FORWARD,
-            generated_at=str(as_of or ""),
+            generated_at=str(snapshot_id or as_of or ""),
         )
         try:
             from product.evidence_intelligence import enrich
