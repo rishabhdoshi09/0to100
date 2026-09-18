@@ -129,7 +129,8 @@ _FEATURES: tuple[Feature, ...] = (
     # ── market context ──
     Feature("regime", 1, "categorical", "market regime label", categories=(
         "TRENDING_BULL", "EXPANSION", "MIXED", "RANGE", "CONTRACTION",
-        "DISTRIBUTION", "TRENDING_BEAR", "BEAR", "UNKNOWN")),
+        "DISTRIBUTION", "TRENDING_BEAR", "BEAR", "RISK_ON", "RISK_OFF",
+        "NEUTRAL", "UNKNOWN")),
     Feature("breadth_pct_above_50dma", 1, "float",
             "% of market above its 50-DMA (breadth)", 0, 100),
     Feature("sector_strength", 1, "float",
