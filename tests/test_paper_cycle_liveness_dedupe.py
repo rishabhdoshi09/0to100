@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime
 
 from product import historical_replay as HR
 from research.auto_research.scheduler import AutoResearchBrain
+from research.autonomy import jobs as JOBS
+from research.autonomy import job_store as JS
+from research.autonomy.console_runtime import run_visible_loop
+from research.autonomy.supervisor import Supervisor
 from research.intelligence.runtime.cycle_context import CycleContext
 
 
@@ -108,3 +113,94 @@ def test_forced_replay_can_still_run_even_when_cache_is_current(monkeypatch):
     out = HR.start_replay_async(force=True, sessions=8, universe_limit=40)
     assert out["status"] == "RUNNING"
     assert "started" in calls
+
+
+class _Deps:
+    def now_ist(self):
+        return datetime(2026, 9, 18, 12, 30)
+    def holidays(self):
+        return set()
+    def active_snapshot_id(self):
+        return None
+
+
+class _LeaseSupervisor(Supervisor):
+    def tick(self, now_ist=None):
+        job = self.jobs.lease_due(self.owner, lease_seconds=0.4)
+        if job is not None:
+            self._execute(job)
+        self.stop()
+        return job
+
+
+def test_runtime_heartbeat_renews_long_job_lease(tmp_path):
+    sup = _LeaseSupervisor(tmp_path / "auto", deps=_Deps())
+    assert sup.start()
+    job_type = "LEASE_RENEWAL_TEST"
+    original = JOBS.HANDLERS.get(job_type)
+    renewals = []
+    real_renew = sup.jobs.renew_lease
+
+    def tracked_renew(job_id, owner, *, lease_seconds=300.0):
+        renewals.append((job_id, owner, lease_seconds))
+        return real_renew(job_id, owner, lease_seconds=lease_seconds)
+
+    sup.jobs.renew_lease = tracked_renew
+    JOBS.HANDLERS[job_type] = lambda ctx: (
+        time.sleep(1.25)
+        or JOBS.JobResult(JS.SUCCEEDED, "long work complete")
+    )
+    job = sup.jobs.enqueue(job_type, idempotency_key="lease-renewal-test")
+    try:
+        run_visible_loop(
+            sup,
+            interval_s=0,
+            max_iterations=1,
+            sleep_fn=lambda _seconds: None,
+            heartbeat_s=0.2,
+        )
+        final = sup.jobs.get(job.job_id)
+        assert final is not None
+        assert final.status == JS.SUCCEEDED
+        assert renewals
+        assert all(item[0] == job.job_id for item in renewals)
+    finally:
+        if original is None:
+            JOBS.HANDLERS.pop(job_type, None)
+        else:
+            JOBS.HANDLERS[job_type] = original
+        sup.shutdown()
+
+
+def test_autonomous_replay_cache_hit_is_not_recorded_as_new_cycle(tmp_path, monkeypatch):
+    from product import autonomous_learning as AL
+
+    control_path = tmp_path / "autonomous_learning.json"
+    monkeypatch.setenv("QT_AUTONOMOUS_LEARNING", str(control_path))
+    AL.save_control({
+        "enabled": True,
+        "mode": AL.MODE_HISTORICAL_REPLAY,
+        "last_cycle_at": "2026-09-17T20:00:00+00:00",
+        "last_replay_at": "2026-09-17T20:00:00+00:00",
+    })
+    monkeypatch.setattr(
+        HR,
+        "load_latest",
+        lambda: {"status": "SUCCEEDED"},
+    )
+    monkeypatch.setattr(
+        HR,
+        "start_replay_async",
+        lambda **kwargs: {
+            "status": "SUCCEEDED",
+            "skipped": True,
+            "reason": "replay_inputs_unchanged",
+            "cache_hit": True,
+        },
+    )
+    out = AL.maybe_run_closed_market_replay(force=False)
+    after = AL.load_control()
+    assert out["skipped"] is True
+    assert out["next_action"] == "WAIT_FOR_NEW_EVIDENCE"
+    assert after["last_cycle_at"] == "2026-09-17T20:00:00+00:00"
+    assert after["last_replay_at"] == "2026-09-17T20:00:00+00:00"
