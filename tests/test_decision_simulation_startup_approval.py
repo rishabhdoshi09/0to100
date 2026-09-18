@@ -137,3 +137,34 @@ def test_gate_board_uses_precomputed_discovery_projection(monkeypatch):
     monkeypatch.setattr(workspace_mod, "build_recommendations_workspace", forbidden)
 
     assert G._board() == cached
+
+
+
+def test_stale_gate_never_rebuilds_decision_board(tmp_path, monkeypatch):
+    state = tmp_path / "gate.json"
+    monkeypatch.setenv("QT_STARTUP_ID", "startup-stale")
+    monkeypatch.setattr(
+        "product.trading_thesis.manifest",
+        lambda: {"thesis_hash": "thesis-a", "objective_id": "test"},
+    )
+    monkeypatch.setattr("product.desk_pipeline.scan_is_fresh", lambda: False)
+    monkeypatch.setattr(
+        "product.scan_store.load_scan",
+        lambda: {
+            "scanned_at": "2026-09-17T10:00:00+00:00",
+            "records": [{"symbol": "INFY"}],
+        },
+    )
+
+    def forbidden():
+        raise AssertionError("stale gate must not rebuild/rank a decision board")
+
+    monkeypatch.setattr(G, "_board", forbidden)
+
+    G.begin_startup("startup-stale", path=state)
+    payload = G.status(path=state)
+
+    assert payload["scan_fresh"] is False
+    assert payload["discovery_ready"] is False
+    assert payload["best_trades"] == []
+    assert payload["phase"] == "SEARCHING_BEST_TRADES"
