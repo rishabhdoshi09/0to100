@@ -142,3 +142,105 @@ def test_historical_setup_confidence_policy_never_becomes_active(tmp_path):
     again = HPL.update_historical_setup_policies(trades, path=policy_path)
     assert again[0]["version"] == policy["version"]
     assert again[0]["generation_fingerprint"] == policy["generation_fingerprint"]
+
+
+
+def test_historical_sequence_enforces_real_paper_book_overlap_caps(monkeypatch):
+    from types import SimpleNamespace
+    import product.paper_autopilot as PA
+
+    days = [f"2026-01-{day:02d}" for day in range(5, 28)]
+    decisions = []
+    for index in range(6):
+        day = days[0] if index < 3 else days[1]
+        symbol = f"S{index}"
+        decisions.append({
+            "decision": "BUY",
+            "symbol": symbol,
+            "as_of": day,
+            "entry": 100.0,
+            "stop": 95.0,
+            "target": 200.0,
+            "sector": f"SEC{index}",
+            "setup": "VCP",
+            "regime": "RISK_ON",
+            "thesis_hash": "thesis-1",
+            "selection_score": 100.0 - index,
+            "canonical_decision_id": f"d-{index}",
+            "selection_card": {
+                "symbol": symbol,
+                "reco_tier": "high_conviction",
+                "entry_state": "enter_now",
+                "entry": 100.0,
+                "stop": 95.0,
+                "target": 200.0,
+                "sector": f"SEC{index}",
+                "setup_label": "VCP",
+                "dd_status": "PASS",
+                "volume_ratio": 1.2,
+            },
+        })
+
+    class FakeDecision:
+        def __init__(self, card):
+            self.symbol = card["symbol"]
+            self.decision = PA.ENTER_NOW
+            self.reason_code = "ELIGIBLE"
+            self.detail = "passed"
+            self.card = dict(card)
+            self.selection_score = 100.0 - int(self.symbol[1:])
+            self.context = {}
+            self.portfolio = {}
+            self.policy_effect = "NEUTRAL"
+
+        def as_dict(self):
+            return {
+                "symbol": self.symbol,
+                "decision": self.decision,
+                "reason_code": self.reason_code,
+                "entry": self.card["entry"],
+                "stop": self.card["stop"],
+                "target": self.card["target"],
+            }
+
+    monkeypatch.setattr(
+        PA,
+        "evaluate_selection_candidate",
+        lambda card, **_kwargs: FakeDecision(card),
+    )
+
+    def later(symbol, as_of, *, horizon):
+        start = days.index(as_of)
+        out = []
+        for day in days[start + 1:start + 1 + horizon]:
+            out.append({
+                "date": day,
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.0,
+            })
+        return out
+
+    result = HPL.simulate_paper_book_sequence(
+        decisions,
+        official_sessions=days,
+        later_bars_fn=later,
+        horizon=20,
+        max_new_per_session=3,
+    )
+
+    # Day 1 opens three. Day 2 can add only two because the real PaperBook caps
+    # simultaneous positions at five. Independent per-trade backtesting would
+    # incorrectly count all six.
+    assert len(result["trades"]) == 5
+    assert any(
+        str(row.get("reason_code") or "") == "BOOK_REFUSED"
+        or "MAX" in str(row.get("reason_code") or "")
+        for row in result["rejections"]
+    )
+    assert result["open_unresolved"] == 0
+    assert result["execution_model"] == "PaperBook"
+    assert all(row["cost_model"] == "india_cash_costs" for row in result["trades"])
+    assert all(row["slippage_bps"] == 3.0 for row in result["trades"])
+    assert all(row["not_real_pnl"] is True for row in result["trades"])
