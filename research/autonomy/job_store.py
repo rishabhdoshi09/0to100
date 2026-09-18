@@ -182,7 +182,7 @@ class JobStore:
                     row = self._db.execute(
                         "SELECT * FROM jobs WHERE status=? AND scheduled_for<=? "
                         "ORDER BY CASE WHEN error_code IN "
-                        "('DATA_REFRESH_IN_PROGRESS','MARKET_OP_IN_PROGRESS','LONG_TERM_OP_IN_PROGRESS') "
+                        "('DATA_REFRESH_IN_PROGRESS','MARKET_OP_IN_PROGRESS','LONG_TERM_OP_IN_PROGRESS','HISTORICAL_PAPER_IN_PROGRESS') "
                         "THEN 0 ELSE 1 END DESC, critical DESC, scheduled_for, created_at LIMIT 1",
                         (PENDING, now)).fetchone()
                 if row is None:
