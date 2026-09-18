@@ -249,3 +249,52 @@ def test_manual_data_refresh_does_not_auto_enqueue_scan():
         output_snapshot_id="snap-1",
     ))
     assert jobs.enqueued == []
+
+
+
+def test_restart_reconciles_finished_historical_poll_before_learning(monkeypatch):
+    class Jobs(_Jobs):
+        def __init__(self):
+            super().__init__()
+            self.completed = []
+            self.poll = SimpleNamespace(
+                job_id="hist-poll-1",
+                status=JS.PENDING,
+                job_type=SCH.HISTORICAL_PAPER_CYCLE,
+                idempotency_key=SCH.historical_paper_key("hist-restart"),
+            )
+
+        def find_by_type_and_key(self, job_type, key):
+            assert job_type == SCH.HISTORICAL_PAPER_CYCLE
+            assert key == SCH.historical_paper_key("hist-restart")
+            return self.poll
+
+        def complete(self, job_id, status, **kwargs):
+            self.completed.append((job_id, status, kwargs))
+
+    jobs = Jobs()
+    supervisor = Supervisor.__new__(Supervisor)
+    supervisor.jobs = jobs
+    supervisor.deps = SimpleNamespace(
+        now_ist=lambda: datetime(2026, 9, 3, 0, 5, tzinfo=IST),
+        holidays=lambda: set(),
+        active_snapshot_id=lambda: "snap-1",
+    )
+    supervisor._enqueue_post_market_grind = lambda *_a, **_k: None
+    monkeypatch.setattr(
+        "product.historical_paper_loop.pending_stage",
+        lambda: {"phase": "AWAITING_LEARNING", "batch_id": "hist-restart"},
+    )
+
+    supervisor.enqueue_due()
+
+    assert jobs.completed
+    assert jobs.completed[0][0] == "hist-poll-1"
+    assert jobs.completed[0][1] == JS.SKIPPED_IDEMPOTENT
+    assert jobs.enqueued[-1] == (
+        SCH.LEARNING_CYCLE,
+        {
+            "idempotency_key": SCH.historical_learning_key("hist-restart"),
+            "input_snapshot_id": "hist-restart",
+        },
+    )
