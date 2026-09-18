@@ -59,7 +59,7 @@ jobs:
           set -euo pipefail
           # Own a session so the restart gate can reproduce a terminal Ctrl-C
           # by signalling the launcher's foreground process group.
-          nohup setsid bash scripts/run_quantterm_complete.sh --restart > logs/product/complete_stack.log 2>&1 &
+          nohup python scripts/session_exec.py bash scripts/run_quantterm_complete.sh --restart > logs/product/complete_stack.log 2>&1 &
           echo $! > logs/product/complete_stack.pid
 
       - name: Wait for automated bootstrap and complete desk readiness
@@ -267,7 +267,7 @@ jobs:
           assert not any(live_ports.values()), f'listeners survived Ctrl-C: {live_ports}'
           PY
           fi
-          nohup setsid bash scripts/run_quantterm_complete.sh --restart > logs/product/restart_stack.log 2>&1 &
+          nohup python scripts/session_exec.py bash scripts/run_quantterm_complete.sh --restart > logs/product/restart_stack.log 2>&1 &
           echo $! > logs/product/restart_stack.pid
           recovered=0
           for _ in $(seq 1 300); do
