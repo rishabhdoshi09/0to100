@@ -209,4 +209,18 @@ def approve(*, path: str | Path | None = None) -> dict[str, Any]:
 
 
 def is_approved(*, path: str | Path | None = None) -> bool:
-    return bool(status(path=path).get("approved"))
+    """Cheap hot-path approval check; no recommendation workspace rebuild."""
+    state = _read(path)
+    startup_id = current_startup_id()
+    if not startup_id or str(state.get("startup_id") or "") != startup_id:
+        return False
+    try:
+        from product.trading_thesis import manifest
+        thesis_hash = str(manifest().get("thesis_hash") or "")
+    except Exception:
+        return False
+    return bool(
+        state.get("approved")
+        and thesis_hash
+        and str(state.get("approved_thesis_hash") or "") == thesis_hash
+    )
