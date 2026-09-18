@@ -226,3 +226,78 @@ def test_automatic_historical_replay_is_deferred_while_market_is_open(tmp_path, 
     assert out["reason"] == "market_open_replay_deferred"
     assert out["next_action"] == "WAIT_FOR_MARKET_CLOSE"
     assert called == []
+
+
+def test_snapshot_pipeline_runs_once_then_stops(tmp_path):
+    from tests.test_autonomy import FakeDeps
+
+    now = datetime(2026, 7, 31, 10, 0)
+    root = tmp_path / "auto"
+    sup = Supervisor(root, deps=FakeDeps(now=now, data_ok=True))
+    assert sup.start() is True
+    try:
+        for _ in range(12):
+            sup.tick(now)
+
+        rows = sup.jobs.list(limit=200)
+        by_type = {}
+        for row in rows:
+            by_type.setdefault(row.job_type, []).append(row)
+
+        assert len(by_type.get(JOBS.SCH.AUTH_HEALTH, [])) == 1
+        assert len(by_type.get(JOBS.SCH.DATA_REFRESH, [])) == 1
+        assert len(by_type.get(JOBS.SCH.MARKET_SCAN, [])) == 1
+        assert len(by_type.get(JOBS.SCH.PAPER_CYCLE, [])) == 1
+        assert len(by_type.get(JOBS.SCH.NEWS_REFRESH, [])) == 0
+
+        assert by_type[JOBS.SCH.DATA_REFRESH][0].status == JS.SUCCEEDED
+        assert by_type[JOBS.SCH.MARKET_SCAN][0].status == JS.SUCCEEDED
+        assert by_type[JOBS.SCH.PAPER_CYCLE][0].status == JS.SUCCEEDED
+        assert sup.owner_state["completed_snapshot_id"] == "snap1"
+
+        before = [(j.job_id, j.job_type, j.status) for j in sup.jobs.list(limit=200)]
+        for _ in range(8):
+            assert sup.tick(now) is None
+        after = [(j.job_id, j.job_type, j.status) for j in sup.jobs.list(limit=200)]
+        assert after == before
+    finally:
+        sup.shutdown()
+
+
+def test_completed_snapshot_does_not_restart_pipeline_after_supervisor_restart(tmp_path):
+    from tests.test_autonomy import FakeDeps
+
+    now = datetime(2026, 7, 31, 10, 0)
+    root = tmp_path / "auto"
+    first = Supervisor(root, deps=FakeDeps(now=now, data_ok=True))
+    assert first.start() is True
+    for _ in range(12):
+        first.tick(now)
+    first_rows = first.jobs.list(limit=200)
+    first_paper_ids = [j.job_id for j in first_rows if j.job_type == JOBS.SCH.PAPER_CYCLE]
+    assert len(first_paper_ids) == 1
+    assert first.owner_state["completed_snapshot_id"] == "snap1"
+    first.shutdown()
+
+    second = Supervisor(root, deps=FakeDeps(now=now, data_ok=True))
+    assert second.start() is True
+    try:
+        for _ in range(8):
+            assert second.tick(now) is None
+        rows = second.jobs.list(limit=200)
+        paper_ids = [j.job_id for j in rows if j.job_type == JOBS.SCH.PAPER_CYCLE]
+        assert paper_ids == first_paper_ids
+        assert second.owner_state["completed_snapshot_id"] == "snap1"
+    finally:
+        second.shutdown()
+
+
+def test_market_ops_scan_cannot_invoke_autonomous_paper_loop():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "operations" / "market_ops.py").read_text(
+        encoding="utf-8"
+    )
+    assert "from product.autonomous_loop import advance_loop" not in source
+    assert "autonomous loop · candidates=" not in source
+    assert "MARKET_SCAN complete · handed off to autonomy supervisor" in source
