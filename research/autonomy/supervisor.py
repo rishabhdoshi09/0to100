@@ -365,6 +365,27 @@ class Supervisor:
             batch_id = str(stage.get("batch_id") or "")
 
             if phase == "AWAITING_LEARNING" and batch_id:
+                # The worker may have finished and persisted this phase just
+                # before a process restart, before the polling job got one last
+                # chance to record SUCCEEDED. State is authoritative: retire
+                # that stale poll row so it can never re-run an already-finished
+                # historical batch after the cursor moves on.
+                try:
+                    completed_poll = self.jobs.find_by_type_and_key(
+                        SCH.HISTORICAL_PAPER_CYCLE,
+                        SCH.historical_paper_key(batch_id),
+                    )
+                    if (
+                        completed_poll is not None
+                        and completed_poll.status in {JS.PENDING, JS.BLOCKED}
+                    ):
+                        self.jobs.complete(
+                            completed_poll.job_id,
+                            JS.SKIPPED_IDEMPOTENT,
+                            result_summary="historical worker completed before supervisor poll reconciliation",
+                        )
+                except Exception:
+                    pass
                 self.jobs.enqueue(
                     SCH.LEARNING_CYCLE,
                     idempotency_key=SCH.historical_learning_key(batch_id),
