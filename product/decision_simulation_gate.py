@@ -195,6 +195,15 @@ def approve(*, path: str | Path | None = None) -> dict[str, Any]:
         }
 
     best = list(current.get("best_trades") or [])
+    try:
+        from product.historical_paper_loop import load_state as load_historical_state, reset_for_thesis
+
+        hist = load_historical_state()
+        if str(hist.get("thesis_hash") or "") != str(current.get("thesis_hash") or ""):
+            reset_for_thesis(str(current.get("thesis_hash") or ""))
+    except Exception:
+        pass
+
     _write({
         "startup_id": startup_id,
         "startup_started_at": _read(path).get("startup_started_at") or _now(),
