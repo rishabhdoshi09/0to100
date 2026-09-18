@@ -422,6 +422,62 @@ def evaluate_candidate(
     )
 
 
+def evaluate_selection_candidate(
+    card: Mapping[str, Any],
+    *,
+    book=None,
+    workspace: Mapping[str, Any] | None = None,
+    now: datetime | None = None,
+    entries_allowed: bool = True,
+    entry_block_reason: str = "",
+    paper_enabled: bool = True,
+    regime: str = "RISK_ON",
+    policy_path=None,
+    policies: Sequence[Mapping[str, Any]] | None = None,
+    enforce_history: bool | None = None,
+    family_risk: dict | None = None,
+    cluster_risk: dict | None = None,
+) -> AutopilotDecision:
+    """Canonical selection-thesis evaluation without execution.
+
+    Current best-trade discovery, historical PIT replay and present paper
+    trading all call this seam. enforce_history=False is reserved for
+    discovery/replay because those lanes produce the prerequisite historical
+    evidence; PAPER_FORWARD uses the production default (history gate on).
+    """
+    from product.decision_context import snapshot
+    from product.evidence_policy_engine import evaluate_policies
+
+    ctx = snapshot(card, book=book, regime=regime)
+    merged = dict(card)
+    for key, value in ctx.items():
+        if key == "methods":
+            continue
+        merged.setdefault(key, value)
+    policy = evaluate_policies(
+        merged,
+        policies=policies,
+        path=policy_path,
+        regime=regime,
+        book=book,
+        enforce_history=enforce_history,
+    )
+    decision = evaluate_candidate(
+        merged,
+        book=book,
+        entries_allowed=entries_allowed,
+        entry_block_reason=entry_block_reason,
+        paper_enabled=paper_enabled,
+        workspace=workspace,
+        now=now,
+        regime=regime,
+        policy=policy,
+        family_risk=family_risk,
+        cluster_risk=cluster_risk,
+    )
+    return _decorate(decision, policy=policy, context=ctx)
+
+
 def _canonical_decision(decision: AutopilotDecision, *, as_of: str, snapshot_id: str):
     """The canonical Decision behind this autopilot decision.
 
@@ -559,8 +615,6 @@ def run_reco_paper_cycle(
     Does not mock or bypass risk. Returns a cycle dict the supervisor can merge.
     """
     from product.autopilot_journal import flatten_cards, record_cycle
-    from product.decision_context import snapshot
-    from product.evidence_policy_engine import evaluate_policies
 
     clock = now or datetime.now(timezone.utc)
     day = as_of or clock.date().isoformat()
@@ -648,34 +702,21 @@ def run_reco_paper_cycle(
 
     ranked: list[tuple[float, AutopilotDecision]] = []
     for card in card_list:
-        ctx = snapshot(card, book=book, regime=regime)
-        merged = dict(card)
-        for key, value in ctx.items():
-            if key == "methods":
-                continue
-            merged.setdefault(key, value)
-        policy = evaluate_policies(
-            merged,
-            policies=policies,
-            path=policy_path,
-            regime=regime,
+        decision = evaluate_selection_candidate(
+            card,
             book=book,
-            enforce_history=enforce_history,
-        )
-        decision = evaluate_candidate(
-            merged,
-            book=book,
+            workspace=payload or None,
+            now=clock,
             entries_allowed=entries_allowed,
             entry_block_reason=entry_block_reason,
             paper_enabled=paper_enabled,
-            workspace=payload or None,
-            now=clock,
             regime=regime,
-            policy=policy,
+            policy_path=policy_path,
+            policies=policies,
+            enforce_history=enforce_history,
             family_risk=family_risk,
             cluster_risk=cluster_risk,
         )
-        _decorate(decision, policy=policy, context=ctx)
         decisions.append(decision)
         from product.decision_taxonomy import is_non_judgment
         if is_non_judgment(decision.decision, decision.reason_code):
