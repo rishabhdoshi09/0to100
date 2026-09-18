@@ -617,12 +617,57 @@ def _write_progress(directory: Path, payload: Mapping[str, Any]) -> None:
     _atomic_json(directory / PROGRESS_NAME, payload)
 
 
+def _ledger_row_key(row: Mapping[str, Any]) -> str:
+    stable = str(
+        row.get("canonical_decision_id")
+        or row.get("freeze_id")
+        or ""
+    )
+    if stable:
+        return stable
+    material = {
+        "run_id": row.get("run_id"),
+        "as_of": row.get("as_of"),
+        "symbol": row.get("symbol"),
+        "decision": row.get("decision"),
+        "entry": row.get("entry"),
+        "stop": row.get("stop"),
+        "target": row.get("target"),
+    }
+    return hashlib.sha256(
+        json.dumps(material, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()[:24]
+
+
 def _append_ledger(directory: Path, rows: Iterable[Mapping[str, Any]]) -> None:
+    """Append historical evidence idempotently across restart/forced reruns."""
     path = directory / LEDGER_NAME
     path.parent.mkdir(parents=True, exist_ok=True)
+    existing: set[str] = set()
+    if path.exists():
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                item = json.loads(line)
+                if isinstance(item, Mapping):
+                    existing.add(_ledger_row_key(item))
+        except Exception:
+            # Do not destroy or rewrite an unreadable evidence ledger.
+            existing = set()
+    fresh: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        key = _ledger_row_key(item)
+        if key in existing:
+            continue
+        existing.add(key)
+        fresh.append(item)
+    if not fresh:
+        return
     with path.open("a", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(dict(row), default=str) + "\n")
+        for row in fresh:
+            handle.write(json.dumps(row, default=str) + "\n")
 
 
 def load_latest(directory: str | Path | None = None) -> dict[str, Any]:
