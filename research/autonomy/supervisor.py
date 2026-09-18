@@ -188,25 +188,16 @@ class Supervisor:
         self._write_status()
 
     def _retire_legacy_recurring_work(self) -> None:
-        """Retire automatic work from the old cascading scheduler.
+        """Retire only rows owned by the superseded recurring scheduler.
 
-        Manual jobs, the current AUTH/DATA pair and new snapshot_scan/snapshot_paper
-        identities survive. Both PENDING and BLOCKED legacy rows are terminally
-        cancelled so dependency recovery cannot revive them later.
+        New durable identities survive restart:
+          snapshot_*         -> one real forward scan/paper transaction
+          forward_*          -> once/session forward settlement/learning/research
+          hist_*             -> closed-market historical paper/learning/research
+          *:eod              -> once/session official-data recovery
+
+        Manual controls always survive.
         """
-        retired_types = {
-            SCH.NEWS_REFRESH,
-            SCH.OUTCOME_RESOLUTION,
-            SCH.LEARNING_CYCLE,
-            SCH.RESEARCH_CYCLE,
-            SCH.LONG_TERM_SCAN,
-            SCH.LONG_TERM_REFRESH,
-            SCH.INSTRUMENT_REFRESH,
-            SCH.BHAVCOPY_UPDATE,
-            SCH.CORPORATE_ACTIONS,
-            SCH.UNIVERSE_HISTORY,
-            SCH.INDEX_WARMUP,
-        }
         try:
             for job in self.jobs.list(limit=2000):
                 if job.status not in {JS.PENDING, JS.BLOCKED}:
@@ -214,21 +205,51 @@ class Supervisor:
                 key = str(job.idempotency_key or "")
                 if key.startswith("manual:"):
                     continue
-                retire = job.job_type in retired_types
-                if job.job_type == SCH.MARKET_SCAN:
+
+                retire = False
+                if job.job_type == SCH.NEWS_REFRESH:
+                    retire = True
+                elif job.job_type == SCH.MARKET_SCAN:
                     retire = not key.startswith("snapshot_scan:")
                 elif job.job_type == SCH.PAPER_CYCLE:
                     retire = not key.startswith("snapshot_paper:")
+                elif job.job_type == SCH.OUTCOME_RESOLUTION:
+                    retire = not key.startswith("forward_outcome:")
+                elif job.job_type == SCH.LEARNING_CYCLE:
+                    retire = not (
+                        key.startswith("forward_learning:")
+                        or key.startswith("hist_learning:")
+                    )
+                elif job.job_type == SCH.RESEARCH_CYCLE:
+                    retire = not (
+                        key.startswith("forward_research:")
+                        or key.startswith("hist_research:")
+                    )
+                elif job.job_type == SCH.HISTORICAL_PAPER_CYCLE:
+                    retire = not key.startswith("hist_paper:")
                 elif job.job_type == SCH.DATA_REFRESH:
-                    retire = key.endswith(":eod")
+                    retire = False  # current session + eod refresh are both valid
+                elif job.job_type == SCH.BHAVCOPY_UPDATE:
+                    retire = not key.endswith(":eod")
+                elif job.job_type in {
+                    SCH.LONG_TERM_SCAN,
+                    SCH.LONG_TERM_REFRESH,
+                    SCH.INSTRUMENT_REFRESH,
+                    SCH.CORPORATE_ACTIONS,
+                    SCH.UNIVERSE_HISTORY,
+                    SCH.INDEX_WARMUP,
+                }:
+                    retire = True
+
                 if retire:
                     self.jobs.complete(
                         job.job_id,
                         JS.CANCELLED,
-                        result_summary="retired by snapshot-terminal scheduler",
+                        result_summary="retired legacy recurring scheduler row",
                     )
         except Exception:
             pass
+
 
     def _write_status(self):
         caps = H.capabilities(self.failures)
@@ -278,39 +299,110 @@ class Supervisor:
         return f"{bucket // 60:02d}{bucket % 60:02d}"
 
     def enqueue_due(self, now_ist=None):
-        """Schedule one automatic data->scan->paper transaction, then stop.
+        """Keep QuantTerm productive in both live and closed-market regimes.
 
-        Automatic contract:
-            AUTH once/session -> DATA_REFRESH once/session
-            -> MARKET_SCAN once/data-identity -> PAPER_CYCLE once/data-identity
-            -> OBSERVING.
+        Cash market / entry window:
+            AUTH -> DATA_REFRESH -> MARKET_SCAN -> real PAPER_CYCLE.
 
-        Outside the entry/scan window this method queues nothing. Settlement,
-        learning, research, news and historical replay are explicit/manual jobs;
-        none is an automatic continuation of PAPER_CYCLE.
+        Market closed (including weekends/holidays):
+            current forward-paper settlement -> learning -> research, once/session;
+            plus durable historical batches:
+            PIT replay -> virtual historical paper -> learning -> research -> next batch.
+
+        Historical evidence is explicitly HISTORICAL_REPLAY and cannot satisfy
+        real-forward promotion requirements.
         """
         now_ist = now_ist or self.deps.now_ist()
         holidays = self.deps.holidays()
         self._release_stale_official_blocks()
 
-        if not SCH._is_session_day(now_ist, holidays):
-            return
-        if not SCH.in_scan_window(now_ist, holidays):
+        # Never let historical backfill compete with the live cash session.
+        if SCH.market_is_open(now_ist, holidays):
+            if not SCH.in_scan_window(now_ist, holidays):
+                return
+            session_date = now_ist.date().isoformat()
+            self.jobs.enqueue(
+                SCH.AUTH_HEALTH,
+                idempotency_key=f"auth:{session_date}",
+                critical=True,
+            )
+            data_job = self._enqueue_daily_foundation(now_ist, session_date)
+            if getattr(data_job, "status", None) == JS.SUCCEEDED:
+                snap = self._snapshot_token(
+                    getattr(data_job, "output_snapshot_id", None),
+                    None,
+                )
+                self._ensure_snapshot_pipeline(snap)
             return
 
-        session_date = now_ist.date().isoformat()
-        self.jobs.enqueue(
-            SCH.AUTH_HEALTH,
-            idempotency_key=f"auth:{session_date}",
-            critical=True,
-        )
-        data_job = self._enqueue_daily_foundation(now_ist, session_date)
-        if getattr(data_job, "status", None) == JS.SUCCEEDED:
-            snap = self._snapshot_token(
-                getattr(data_job, "output_snapshot_id", None),
-                None,
+        # Closed market: keep official completed-session data current once the
+        # exchange publication window opens. These jobs never auto-chain a scan.
+        if SCH.in_eod_window(now_ist, holidays):
+            session_date = now_ist.date().isoformat()
+            self.jobs.enqueue(
+                SCH.BHAVCOPY_UPDATE,
+                idempotency_key=SCH.eod_bhavcopy_key(session_date),
             )
-            self._ensure_snapshot_pipeline(snap)
+            self.jobs.enqueue(
+                SCH.DATA_REFRESH,
+                idempotency_key=SCH.eod_data_refresh_key(session_date),
+                critical=True,
+            )
+
+        # First preserve the genuine forward-paper learning loop once per session.
+        # A BLOCKED outcome job does not prevent historical backfill from running.
+        last_session = SCH.last_completed_session_date(now_ist, holidays)
+        if last_session:
+            self._enqueue_post_market_grind(now_ist, session_date=last_session)
+
+        # Then run historical virtual-paper batches whenever the cash market is
+        # closed. Each batch has a durable cursor and cannot silently repeat.
+        try:
+            from product.historical_paper_loop import pending_stage, peek_next_batch
+
+            stage = pending_stage()
+            phase = str(stage.get("phase") or "IDLE")
+            batch_id = str(stage.get("batch_id") or "")
+
+            if phase == "AWAITING_LEARNING" and batch_id:
+                self.jobs.enqueue(
+                    SCH.LEARNING_CYCLE,
+                    idempotency_key=SCH.historical_learning_key(batch_id),
+                    input_snapshot_id=batch_id,
+                )
+                return
+            if phase == "AWAITING_RESEARCH" and batch_id:
+                self.jobs.enqueue(
+                    SCH.RESEARCH_CYCLE,
+                    idempotency_key=SCH.historical_research_key(batch_id),
+                    input_snapshot_id=batch_id,
+                )
+                return
+            if phase == "RUNNING" and batch_id:
+                self.jobs.enqueue(
+                    SCH.HISTORICAL_PAPER_CYCLE,
+                    idempotency_key=SCH.historical_paper_key(batch_id),
+                    input_snapshot_id=batch_id,
+                )
+                return
+            if phase == "FAILED":
+                # Do not skip a failed historical batch and create fake progress.
+                return
+
+            nxt = peek_next_batch()
+            if nxt.get("available"):
+                bid = str(nxt.get("batch_id") or "")
+                if bid:
+                    self.jobs.enqueue(
+                        SCH.HISTORICAL_PAPER_CYCLE,
+                        idempotency_key=SCH.historical_paper_key(bid),
+                        input_snapshot_id=bid,
+                    )
+        except Exception as exc:
+            self._incident(
+                "HISTORICAL_SCHEDULER_ERROR",
+                f"Closed-market historical scheduler: {type(exc).__name__}: {exc}",
+            )
 
 
     _OFFICIAL_BLOCKERS = frozenset({
@@ -381,19 +473,19 @@ class Supervisor:
         self._release_stale_official_blocks()
         outcome = self._requeue_if_official_blocked(self.jobs.enqueue(
             SCH.OUTCOME_RESOLUTION,
-            idempotency_key=SCH.outcome_key(session_date),
+            idempotency_key=SCH.forward_outcome_key(session_date),
             critical=True,
         ))
         if getattr(outcome, "status", None) != JS.SUCCEEDED:
             return
         learning = self.jobs.enqueue(
             SCH.LEARNING_CYCLE,
-            idempotency_key=SCH.learning_key(session_date),
+            idempotency_key=SCH.forward_learning_key(session_date),
         )
         if getattr(learning, "status", None) == JS.SUCCEEDED:
             self.jobs.enqueue(
                 SCH.RESEARCH_CYCLE,
-                idempotency_key=SCH.research_key(session_date),
+                idempotency_key=SCH.forward_research_key(session_date),
             )
 
     def _snapshot_token(
