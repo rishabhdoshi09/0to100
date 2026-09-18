@@ -32,13 +32,18 @@ def _f(value: Any) -> float | None:
 
 
 def _selection_policy_identity() -> dict[str, Any]:
-    """Stable identity for learned policies that can affect paper selection.
+    """Stable identity for the *effective* learned selection behavior.
 
-    Timestamps and dashboard-only metadata are intentionally excluded. A policy
-    version/edge/status change must invalidate the approved thesis; an observing
-    or explicitly non-selection policy must not create approval churn.
+    Sample counts, timestamps, raw edges and storage versions are evidence state,
+    not thesis identity. Hashing them made every new observation look like a new
+    strategy and could restart historical replay from the beginning forever.
+
+    The identity changes only when a policy's actual production-selection effect
+    changes (SUPPORT/PENALIZE/BLOCK/NEUTRAL), appears, disappears, or changes
+    bucket/dimension. That is the behavioral contract the simulator must match.
     """
     try:
+        from product.evidence_policy_engine import HARD_REASON_CODES
         from product.learning_policy_store import (
             ACTIVE,
             ELIGIBLE,
@@ -54,43 +59,56 @@ def _selection_policy_identity() -> dict[str, Any]:
             status = str(raw.get("production_status") or "")
             if status not in accepted:
                 continue
+            source = str(raw.get("evidence_source") or "")
+            effective_status = ELIGIBLE if source.startswith("backtest") and status == ACTIVE else status
+            dimension = str(raw.get("dimension") or "")
+            bucket = str(raw.get("bucket") or "")
+            confidence = str(raw.get("confidence") or "")
+            edge = _f(raw.get("expectancy_difference_R")) or 0.0
+
+            if dimension == "reason_code" and bucket in HARD_REASON_CODES:
+                effect = "NEUTRAL"
+            elif confidence == "INSUFFICIENT_EVIDENCE" and effective_status != ACTIVE:
+                effect = "NEUTRAL"
+            elif effective_status == ACTIVE and edge <= -0.40:
+                effect = "BLOCK"
+            elif effective_status in {ACTIVE, ELIGIBLE} and edge <= -0.20:
+                effect = "PENALIZE"
+            elif effective_status in {ACTIVE, ELIGIBLE} and edge >= 0.25:
+                effect = "SUPPORT"
+            else:
+                effect = "NEUTRAL"
+
+            # A neutral exploratory row does not alter ordering or hard gates, so
+            # it is evidence state rather than production-thesis behavior.
+            if effect == "NEUTRAL":
+                continue
             rows.append({
                 "policy_id": str(raw.get("policy_id") or ""),
-                "version": int(raw.get("version") or 0),
-                "dimension": str(raw.get("dimension") or ""),
-                "bucket": str(raw.get("bucket") or ""),
-                "production_status": status,
-                "evidence_source": str(raw.get("evidence_source") or ""),
-                "confidence": str(raw.get("confidence") or ""),
-                "sample_size": int(raw.get("sample_size") or 0),
-                "expectancy_difference_R": _f(raw.get("expectancy_difference_R")),
-                "shrunk_expectancy_R": _f(raw.get("shrunk_expectancy_R")),
+                "dimension": dimension,
+                "bucket": bucket,
+                "effective_status": effective_status,
+                "effect": effect,
             })
+
         rows.sort(key=lambda row: (
-            row["policy_id"], row["version"], row["dimension"], row["bucket"]
+            row["policy_id"], row["dimension"], row["bucket"], row["effect"]
         ))
         raw = json.dumps(rows, sort_keys=True, separators=(",", ":"), default=str)
         fingerprint = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
         return {
             "fingerprint": fingerprint,
             "count": len(rows),
-            "versions": [
-                {
-                    "policy_id": row["policy_id"],
-                    "version": row["version"],
-                    "status": row["production_status"],
-                }
-                for row in rows
-            ],
+            "effective_policies": rows,
         }
     except Exception:
-        # Fail closed to a stable unavailable identity. The thesis remains
-        # inspectable, but a later healthy policy load changes its hash and
-        # therefore requires fresh operator approval.
+        # A later healthy load changes this fingerprint once effective policy
+        # behavior is known. Startup approval remains valid; batch/thesis
+        # versioning prevents mixed evidence.
         return {
             "fingerprint": "UNAVAILABLE",
             "count": 0,
-            "versions": [],
+            "effective_policies": [],
         }
 
 
