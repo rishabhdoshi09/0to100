@@ -122,7 +122,7 @@ def test_decision_simulation_approval_does_not_start_legacy_batch(monkeypatch):
     assert payload["thesis_hash"] == "thesis-1"
 
 
-def test_addressed_counterfactual_cannot_implicitly_approve(monkeypatch):
+def test_addressed_counterfactual_is_inspection_only_and_does_not_approve(monkeypatch):
     import product.decision_simulation_gate as gate
 
     monkeypatch.setattr(
@@ -134,14 +134,23 @@ def test_addressed_counterfactual_cannot_implicitly_approve(monkeypatch):
             "thesis_hash": "thesis-1",
         },
     )
-    monkeypatch.setattr(gate, "is_approved", lambda: False)
     monkeypatch.setattr(api, "_with_live_safety", lambda payload: dict(payload))
+    monkeypatch.setattr(
+        api._core,
+        "decision_simulator_run",
+        lambda **kwargs: {
+            "status": "SUCCEEDED",
+            "kind": "PAST_DECISION_SIMULATION",
+            "symbol": kwargs.get("symbol"),
+            "fingerprint": "fp-1",
+        },
+    )
 
-    def forbidden(*args, **kwargs):
-        raise AssertionError("counterfactual inspection must not bypass approval")
-
-    monkeypatch.setattr(api._core, "decision_simulator_run", forbidden)
     payload = api.decision_simulator_run(symbol="RELIANCE")
 
-    assert payload["accepted"] is False
-    assert payload["status"] == "AWAITING_APPROVAL"
+    assert payload["status"] == "SUCCEEDED"
+    assert payload["fingerprint"] == "fp-1"
+    assert payload["autonomy_approved"] is False
+    assert payload["simulation_authority"] == "operator-inspection"
+    assert payload["simulation_scope"] == ["EXPLICIT_COUNTERFACTUAL_ONLY"]
+
