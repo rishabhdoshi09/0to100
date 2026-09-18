@@ -34,6 +34,7 @@ PHASE_FAILED = "FAILED"
 DEFAULT_STATE = logs_path("product/historical_paper_loop.json")
 DEFAULT_LEDGER = logs_path("product/historical_paper_trades.jsonl")
 DEFAULT_MEMORY = logs_path("product/historical_paper_memory.json")
+DEFAULT_REPLAY_ROOT = logs_path("product/historical_paper_replays")
 
 DEFAULT_BATCH_SIZE = 8
 DEFAULT_WARMUP_SESSIONS = 60
@@ -449,10 +450,16 @@ def _run_batch(
 
     if replay_fn is None:
         from product.historical_replay import run_historical_replay as replay_fn
+    # Autonomous historical-paper replay has its own batch workspace. The
+    # operator Decision Simulator uses the default historical_replay directory;
+    # keeping these artifacts separate prevents cross-process progress/report/
+    # ledger races while both may legitimately run at the same time.
+    replay_directory = Path(DEFAULT_REPLAY_ROOT) / bid
     report = dict(replay_fn(
         sessions=len(sessions),
         universe_limit=universe_limit,
         force=True,
+        directory=replay_directory,
         dates_fn=lambda: replay_dates,
         persist_live_reco=False,
     ) or {})
@@ -497,6 +504,7 @@ def _run_batch(
         "period_end": sessions[-1],
         "sessions": sessions,
         "replay_status": status,
+        "replay_workspace": str(replay_directory),
         "decisions": int(report.get("decisions_tested") or len(report.get("decisions") or [])),
         "historical_paper_trades": len(trades),
         "trades_appended": appended,
