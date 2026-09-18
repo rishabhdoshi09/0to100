@@ -204,3 +204,25 @@ def test_autonomous_replay_cache_hit_is_not_recorded_as_new_cycle(tmp_path, monk
     assert out["next_action"] == "WAIT_FOR_NEW_EVIDENCE"
     assert after["last_cycle_at"] == "2026-09-17T20:00:00+00:00"
     assert after["last_replay_at"] == "2026-09-17T20:00:00+00:00"
+
+
+def test_automatic_historical_replay_is_deferred_while_market_is_open(tmp_path, monkeypatch):
+    from product import autonomous_learning as AL
+    from zoneinfo import ZoneInfo
+
+    control_path = tmp_path / "autonomous_learning.json"
+    monkeypatch.setenv("QT_AUTONOMOUS_LEARNING", str(control_path))
+    AL.save_control({"enabled": True, "mode": AL.MODE_HISTORICAL_REPLAY})
+
+    called = []
+    monkeypatch.setattr(
+        HR,
+        "start_replay_async",
+        lambda **kwargs: called.append(kwargs) or {"status": "RUNNING"},
+    )
+    market_open = datetime(2026, 9, 18, 12, 30, tzinfo=ZoneInfo("Asia/Kolkata"))
+    out = AL.maybe_run_closed_market_replay(now=market_open, force=False)
+    assert out["skipped"] is True
+    assert out["reason"] == "market_open_replay_deferred"
+    assert out["next_action"] == "WAIT_FOR_MARKET_CLOSE"
+    assert called == []
