@@ -95,3 +95,53 @@ def test_market_reports_route_returns_structured_empty_state(monkeypatch, tmp_pa
     assert isinstance(payload["missing_lanes"], list)
     assert payload["needs_refresh"] is True
     assert "invent" in (payload.get("empty_detail") or "").lower()
+
+
+def test_decision_simulation_approval_does_not_start_legacy_batch(monkeypatch):
+    import product.decision_simulation_gate as gate
+
+    approval = {
+        "accepted": True,
+        "phase": "APPROVED",
+        "thesis_hash": "thesis-1",
+        "simulation_scope": ["PAPER_FORWARD", "HISTORICAL_REPLAY"],
+    }
+    monkeypatch.setattr(gate, "approve", lambda: dict(approval))
+    monkeypatch.setattr(api, "_with_live_safety", lambda payload: dict(payload))
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("approval must not launch the legacy batch simulator")
+
+    monkeypatch.setattr(api._core, "decision_simulator_run", forbidden)
+    payload = api.decision_simulator_run()
+
+    assert payload["accepted"] is True
+    assert payload["status"] == "APPROVED"
+    assert payload["simulation_authority"] == "quantterm-autonomy"
+    assert payload["legacy_batch_started"] is False
+    assert payload["thesis_hash"] == "thesis-1"
+
+
+def test_addressed_counterfactual_cannot_implicitly_approve(monkeypatch):
+    import product.decision_simulation_gate as gate
+
+    monkeypatch.setattr(
+        gate,
+        "status",
+        lambda: {
+            "phase": "AWAITING_APPROVAL",
+            "approved": False,
+            "thesis_hash": "thesis-1",
+        },
+    )
+    monkeypatch.setattr(gate, "is_approved", lambda: False)
+    monkeypatch.setattr(api, "_with_live_safety", lambda payload: dict(payload))
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("counterfactual inspection must not bypass approval")
+
+    monkeypatch.setattr(api._core, "decision_simulator_run", forbidden)
+    payload = api.decision_simulator_run(symbol="RELIANCE")
+
+    assert payload["accepted"] is False
+    assert payload["status"] == "AWAITING_APPROVAL"
