@@ -426,6 +426,11 @@ def _canonical_decision(decision: AutopilotDecision, *, as_of: str, snapshot_id:
             evidence_class=PAPER_FORWARD,
             generated_at=str(as_of or ""),
         )
+        try:
+            from product.evidence_intelligence import enrich
+            canonical = enrich(canonical)
+        except Exception:
+            pass
         return canonical.decision_id, decision_context_key(canonical)
     except Exception:
         return "", ""
@@ -576,6 +581,11 @@ def run_reco_paper_cycle(
             from product.counterfactual_learning import freeze_decision
             if is_non_judgment(decision.decision, decision.reason_code):
                 return
+            canonical_id, canonical_context = _canonical_decision(
+                decision,
+                as_of=day,
+                snapshot_id=str(payload.get("scan_scanned_at") or day),
+            )
             evidence = {
                 **dict(decision.context or {}),
                 "rules_hash": ident.get("rules_hash"),
@@ -585,6 +595,8 @@ def run_reco_paper_cycle(
                 "setup_label": decision.card.get("setup_label"),
                 "sector": decision.card.get("sector"),
                 "regime": regime,
+                "decision_id": canonical_id,
+                "context_key": canonical_context,
             }
             freeze_decision(
                 symbol=decision.symbol,
