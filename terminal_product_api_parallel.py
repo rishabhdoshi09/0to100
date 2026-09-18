@@ -38,6 +38,12 @@ def paper_autopilot() -> dict:
     return _with_live_safety(_core.paper_autopilot())
 
 
+def decision_simulation_gate() -> dict:
+    """Startup discovery/approval truth plus the current canonical best trades."""
+    from product.decision_simulation_gate import status
+    return _with_live_safety(status())
+
+
 def decision_simulator_get(
     symbol: str = "",
     as_of: str = "",
@@ -61,15 +67,71 @@ def decision_simulator_run(
     alternative: str = "",
     decision_id: str = "",
 ) -> dict:
-    """Decision-simulator trigger/result with canonical broker-boundary truth."""
-    return _with_live_safety(
-        _core.decision_simulator_run(
+    """One approval action; autonomy owns the actual present/historical loops.
+
+    Starting Decision Simulation must not launch a second legacy batch replay in
+    parallel with the supervisor's historical-paper loop. The no-argument POST
+    is therefore approval only. After approval, the autonomy supervisor runs
+    snapshot-bound PAPER_FORWARD decisions when entries are allowed and
+    HISTORICAL_REPLAY virtual-paper batches while the cash market is closed.
+
+    Addressed requests remain explicit one-decision counterfactual inspections,
+    but they cannot implicitly approve the production thesis.
+    """
+    addressed = bool(str(symbol or "").strip() or str(decision_id or "").strip())
+
+    if addressed:
+        # An explicitly addressed counterfactual is an inspection tool, not the
+        # switch that starts autonomous Decision Simulation. It must remain
+        # available before approval so operators/tests can inspect a historical
+        # decision and PIT integrity without implicitly authorising any new
+        # PAPER_FORWARD or autonomous HISTORICAL_REPLAY work.
+        result = dict(_core.decision_simulator_run(
             symbol=symbol,
             as_of=as_of,
             alternative=alternative,
             decision_id=decision_id,
-        )
-    )
+        ) or {})
+        try:
+            from product.decision_simulation_gate import status
+            approval = status()
+        except Exception:
+            approval = {}
+        result["approval"] = approval
+        result["autonomy_approved"] = bool(approval.get("approved"))
+        result["thesis_hash"] = str(approval.get("thesis_hash") or "")
+        result["simulation_scope"] = ["EXPLICIT_COUNTERFACTUAL_ONLY"]
+        result["simulation_authority"] = "operator-inspection"
+        return _with_live_safety(result)
+
+    from product.decision_simulation_gate import approve
+
+    approval = approve()
+    if not approval.get("accepted"):
+        return _with_live_safety({
+            "status": "WAITING_FOR_BEST_TRADES",
+            "accepted": False,
+            "approval": approval,
+            "message": approval.get("message") or "Best-trade discovery is not ready.",
+            "provenance": "HISTORICAL_REPLAY",
+        })
+
+    # Do not call _core.decision_simulator_run() here. That legacy endpoint
+    # starts an independent batch replay and would duplicate the supervisor's
+    # canonical historical-paper engine after this approval unlocks it.
+    return _with_live_safety({
+        "status": "APPROVED",
+        "accepted": True,
+        "approval": approval,
+        "thesis_hash": str(approval.get("thesis_hash") or ""),
+        "simulation_scope": ["PAPER_FORWARD", "HISTORICAL_REPLAY"],
+        "simulation_authority": "quantterm-autonomy",
+        "legacy_batch_started": False,
+        "message": (
+            "Decision Simulation approved. QuantTerm autonomy now owns the "
+            "present PAPER_FORWARD pass and historical PIT virtual-paper loop."
+        ),
+    })
 
 
 def market_reports_workspace() -> dict:
@@ -134,6 +196,7 @@ def product_contract() -> dict:
         "forward_evidence_route_registered": "/api/forward-evidence" in paths,
         "forward_soak_route_registered": "/api/forward-soak" in paths,
         "decision_simulator_route_registered": "/api/decision-simulator" in paths,
+        "decision_simulation_gate_route_registered": "/api/decision-simulation-gate" in paths,
         "simulation_evidence_class": "HISTORICAL_REPLAY",
         "forward_evidence_class": "PAPER_FORWARD",
     }
@@ -172,6 +235,7 @@ def _replace_route(path: str, endpoint, *, method: str, name: str) -> None:
 
 
 _replace_route("/api/paper-autopilot", paper_autopilot, method="GET", name="paper_autopilot")
+_replace_route("/api/decision-simulation-gate", decision_simulation_gate, method="GET", name="decision_simulation_gate")
 _replace_route("/api/decision-simulator", decision_simulator_get, method="GET", name="decision_simulator_get")
 _replace_route("/api/decision-simulator", decision_simulator_run, method="POST", name="decision_simulator_run")
 _replace_route("/api/market-reports-workspace", market_reports_workspace, method="GET", name="market_reports_workspace")

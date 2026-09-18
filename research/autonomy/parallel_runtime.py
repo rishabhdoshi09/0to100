@@ -26,7 +26,7 @@ OPS_DB = logs_dir() / "market_ops" / "jobs.db"
 OPS_RUNTIME = logs_dir() / "market_ops" / "runtime.json"
 CA_RUNTIME = logs_dir() / "ca_refresh_runtime.json"
 
-_BRIDGE_PENDING = {"MARKET_OP_IN_PROGRESS", "LONG_TERM_OP_IN_PROGRESS"}
+_BRIDGE_PENDING = {"MARKET_OP_IN_PROGRESS", "LONG_TERM_OP_IN_PROGRESS", "HISTORICAL_PAPER_IN_PROGRESS"}
 # Autonomy scans are 15-minute observations. Reuse any successful scan from
 # the current slot so a 2-3 minute DATA_REFRESH cannot cause a second full scan
 # after the market-ops lane already finished the first one in parallel.
@@ -91,40 +91,71 @@ def _ensure_ops_worker() -> None:
         _ops_process = None
 
 
-def _queue_operation(kind: str, *, requested_by: str = "autonomy", priority: int = 40,
-                     reuse_s: float = 0.0) -> dict[str, Any]:
+def _queue_operation(
+    kind: str,
+    *,
+    requested_by: str = "autonomy",
+    priority: int = 40,
+    reuse_s: float = 0.0,
+    identity: str = "",
+) -> dict[str, Any]:
     from operations import market_ops as MOPS
     from operations.store import PENDING, RUNNING, SUCCEEDED
 
     store = _ops_store()
-    latest = store.latest(kind)
+    wanted = str(identity or "")
     now = time.time()
-    if latest:
-        status = str(latest.get("status") or "")
-        if status in {PENDING, RUNNING}:
-            _ensure_ops_worker()
-            return latest
-        if status == SUCCEEDED and reuse_s > 0:
-            finished = float(latest.get("finished_at") or latest.get("updated_at") or 0.0)
-            if finished and 0 <= now - finished <= float(reuse_s):
+
+    # Snapshot-bound autonomy operations may only reuse the exact operation that
+    # was created for that snapshot. A recent scan from another snapshot is not
+    # evidence for the current DATA_REFRESH transaction.
+    if wanted:
+        for row in store.recent_full(limit=250):
+            if str(row.get("kind") or "") != str(kind).upper():
+                continue
+            if str((row.get("payload") or {}).get("snapshot_id") or "") != wanted:
+                continue
+            status = str(row.get("status") or "")
+            if status in {PENDING, RUNNING, SUCCEEDED}:
+                if status in {PENDING, RUNNING}:
+                    _ensure_ops_worker()
+                return row
+    else:
+        latest = store.latest(kind)
+        if latest:
+            status = str(latest.get("status") or "")
+            if status in {PENDING, RUNNING}:
+                _ensure_ops_worker()
                 return latest
+            if status == SUCCEEDED and reuse_s > 0:
+                finished = float(latest.get("finished_at") or latest.get("updated_at") or 0.0)
+                if finished and 0 <= now - finished <= float(reuse_s):
+                    return latest
+
     operation, _created = store.enqueue(
         kind,
         lane=MOPS.LANES[kind],
         requested_by=requested_by,
+        payload={"snapshot_id": wanted} if wanted else None,
+        deduplicate=not bool(wanted),
         priority=int(priority),
     )
     _ensure_ops_worker()
     return operation
 
 
-def ensure_market_scan_started(*, requested_by: str = "autonomy") -> dict[str, Any]:
+def ensure_market_scan_started(
+    *,
+    requested_by: str = "autonomy",
+    snapshot_id: str = "",
+) -> dict[str, Any]:
     from operations.market_ops import MARKET_SCAN
     return _queue_operation(
         MARKET_SCAN,
         requested_by=requested_by,
         priority=60 if requested_by == "autonomy" else 100,
-        reuse_s=_SCAN_REUSE_S,
+        reuse_s=0.0 if snapshot_id else _SCAN_REUSE_S,
+        identity=str(snapshot_id or ""),
     )
 
 
@@ -156,8 +187,18 @@ def _delegated_market_scan(ctx):
     from research.autonomy import jobs as JOBS
     from research.autonomy import supervisor_state as ST
 
+    active_fn = getattr(ctx.deps, "active_snapshot_id", None)
+    active_snapshot = active_fn() if callable(active_fn) else ""
+    requested_snapshot = str(
+        getattr(getattr(ctx, "job", None), "input_snapshot_id", None)
+        or active_snapshot
+        or ""
+    )
     try:
-        operation = ensure_market_scan_started(requested_by="autonomy")
+        operation = ensure_market_scan_started(
+            requested_by="autonomy",
+            snapshot_id=requested_snapshot,
+        )
         operation = _operation_result(operation)
     except Exception as exc:
         return JOBS.JobResult(
@@ -175,6 +216,8 @@ def _delegated_market_scan(ctx):
         "progress_current": int(operation.get("progress_current") or 0),
         "progress_total": int(operation.get("progress_total") or 0),
         "execution_plane": "market_ops",
+        "requested_snapshot_id": requested_snapshot,
+        "operation_snapshot_id": str((operation.get("payload") or {}).get("snapshot_id") or ""),
     }
     if status in {PENDING, RUNNING}:
         return JOBS.JobResult(
@@ -187,6 +230,19 @@ def _delegated_market_scan(ctx):
         )
     if status == SUCCEEDED:
         payload = _saved_scan_payload()
+        persisted_snapshot = str(payload.get("source_snapshot_id") or "")
+        if requested_snapshot and persisted_snapshot != requested_snapshot:
+            return JOBS.JobResult(
+                JS.RETRYABLE_FAILED,
+                "dedicated market scan snapshot mismatch",
+                error_code="MARKET_SCAN_SNAPSHOT_MISMATCH",
+                error_message=(
+                    f"requested {requested_snapshot}, persisted "
+                    f"{persisted_snapshot or 'none'}"
+                ),
+                state_hint=ST.OBSERVING,
+                metadata={**metadata, "persisted_snapshot_id": persisted_snapshot},
+            )
         summary = dict(payload.get("summary") or {})
         if not summary:
             summary = dict((operation.get("result") or {}).get("summary") or {})
@@ -394,26 +450,15 @@ def install_parallel_runtime() -> None:
             _installed = True
             return
 
-        original_enqueue_due = Supervisor.enqueue_due
         original_retry_or_fail = Supervisor._retry_or_fail
         original_incident = Supervisor._incident
 
-        def enqueue_due_parallel(self, now_ist=None):
-            result = original_enqueue_due(self, now_ist)
-            current = now_ist or self.deps.now_ist()
-            # Launch the market scan before the serial autonomy worker leases a
-            # potentially multi-minute DATA_REFRESH. The dedicated lane can then
-            # scan in parallel while snapshot reconciliation continues.
-            try:
-                if SCH.scan_slot(current, self.deps.holidays()):
-                    ensure_market_scan_started(requested_by="autonomy")
-            except Exception:
-                pass
-            try:
-                _reconcile_ca_failure(self)
-            except Exception:
-                pass
-            return result
+        # Do NOT patch Supervisor.enqueue_due here. The supervisor's snapshot
+        # transaction is the sole automatic scheduling authority:
+        # DATA_REFRESH -> MARKET_SCAN -> PAPER_CYCLE -> OBSERVING.
+        # MARKET_SCAN is delegated to this execution plane only after the
+        # supervisor explicitly leases that durable scan job. Corporate-action
+        # background refresh likewise runs only when its explicit job is queued.
 
         def retry_or_fail_parallel(self, job, *, error_code, error_message, summary=""):
             if error_code in _BRIDGE_PENDING:
@@ -439,7 +484,6 @@ def install_parallel_runtime() -> None:
                 return None
             return original_incident(self, code, message, job)
 
-        Supervisor.enqueue_due = enqueue_due_parallel
         Supervisor._retry_or_fail = retry_or_fail_parallel
         Supervisor._incident = incident_parallel
         Supervisor._parallel_runtime_installed = True

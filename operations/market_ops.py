@@ -711,11 +711,15 @@ class MarketOperationsWorker:
             total=0,
         )
         write_progress(current=0, total=0, stage="STARTING", source="market_ops")
+        requested_snapshot = str(
+            (operation.get("payload") or {}).get("snapshot_id") or ""
+        )
         try:
             report = run_whole_market_scan(
                 prefetch_fn=prepared_prefetch,
                 progress_callback=scan_progress,
                 save=True,
+                snapshot_id=requested_snapshot or None,
             )
         except Exception:
             finish_progress(error="scan_failed")
@@ -735,6 +739,8 @@ class MarketOperationsWorker:
         result["summary"] = summary
         result["records"] = len(payload.get("records", []) or [])
         result["history"] = history
+        result["source_snapshot_id"] = str(payload.get("source_snapshot_id") or "")
+        result["requested_snapshot_id"] = requested_snapshot
         as_of_session = str(
             history.get("available_session") or history.get("latest_date") or ""
         )[:10]
@@ -1051,40 +1057,50 @@ class MarketOperationsWorker:
             finally:
                 self._set_active(lane, None)
                 _atomic_json(RUNTIME_PATH, self._runtime_payload(running=True))
-                try:
-                    from product.desk_pipeline import advance_desk_pipeline
-
-                    nxt = advance_desk_pipeline(self.store, requested_by="pipeline")
-                    kind = nxt.get("queued_kind")
-                    if kind and nxt.get("queued_created"):
-                        _emit("QUEUE", f"next desk step {kind} · {nxt.get('message', '')}")
-                except Exception as exc:
-                    _emit("INFO", f"desk pipeline advance skipped · {type(exc).__name__}: {exc}")
-                if completed_kind in {MARKET_SCAN, DUE_DILIGENCE_ACQUIRE}:
-                    try:
-                        from product.autonomous_loop import advance_loop
-
-                        loop = advance_loop(trigger=str(completed_kind))
-                        _emit(
-                            "LOOP",
-                            f"autonomous loop · candidates={loop.get('candidates_touched')} · "
-                            f"research={((loop.get('research') or {}).get('n_ok'))} · "
-                            f"paper={((loop.get('paper') or {}).get('eligibility'))}",
-                        )
-                    except Exception as exc:
-                        _emit("INFO", f"autonomous loop skipped · {type(exc).__name__}: {exc}")
+                # Execution worker only: finishing any operation must never invent
+                # the next one. Supervisor/manual controls are the sole scheduling
+                # authorities. This is especially important after PAPER_CYCLE has
+                # terminally completed its data identity.
+                _emit(
+                    "IDLE",
+                    f"{completed_kind} complete · no automatic continuation",
+                )
 
     def _bootstrap(self) -> list[str]:
-        try:
-            from product.desk_pipeline import advance_desk_pipeline
+        """Passive worker bootstrap with legacy-queue retirement.
 
-            result = advance_desk_pipeline(self.store, requested_by="bootstrap")
+        The autonomy supervisor is the single scheduling authority. Old pipeline
+        rows created by the retired cascading scheduler must not execute after an
+        upgrade/restart. A new snapshot-bound MARKET_SCAN is preserved, as are
+        manual/operator requests.
+        """
+        stale: list[str] = []
+        try:
+            for operation in self.store.active():
+                if str(operation.get("status") or "") != PENDING:
+                    continue
+                requested_by = str(operation.get("requested_by") or "").lower()
+                if requested_by not in {"pipeline", "bootstrap", "autonomy"}:
+                    continue
+                kind = str(operation.get("kind") or "")
+                snapshot_id = str((operation.get("payload") or {}).get("snapshot_id") or "")
+                if kind == MARKET_SCAN and snapshot_id:
+                    continue
+                stale.append(str(operation.get("operation_id") or ""))
+            cancelled = self.store.cancel_pending_ids(
+                stale,
+                message="Retired legacy automatic continuation after one-shot scheduler upgrade",
+            )
+            if cancelled:
+                _emit("CLEANUP", f"retired {cancelled} legacy automatic operation(s)")
         except Exception as exc:
-            _emit("INFO", f"desk pipeline bootstrap skipped · {type(exc).__name__}: {exc}")
-            return []
-        kind = result.get("queued_kind")
-        if kind and result.get("queued_created"):
-            return [str(kind)]
+            _emit("INFO", f"legacy operation cleanup skipped · {type(exc).__name__}: {exc}")
+
+        try:
+            from product.desk_pipeline import refresh_desk_pipeline_snapshot
+            refresh_desk_pipeline_snapshot(self.store)
+        except Exception:
+            pass
         return []
 
     def run(self) -> int:

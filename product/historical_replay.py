@@ -30,7 +30,7 @@ from product.paper_autopilot import (
     PORTFOLIO_BLOCK,
     WAIT,
     WATCH,
-    evaluate_candidate,
+    evaluate_selection_candidate,
 )
 from core.runtime_paths import logs_dir
 
@@ -40,7 +40,7 @@ REPORT_NAME = "latest.json"
 PROGRESS_NAME = "progress.json"
 LEDGER_NAME = "decisions.jsonl"
 SCHEMA_VERSION = 1
-ENGINE = "UnifiedScanner._analyze + build_recommendations_workspace + evaluate_candidate"
+ENGINE = "UnifiedScanner._analyze + build_recommendations_workspace + production paper_autopilot.evaluate_candidate"
 
 BUY = "BUY"
 WAIT_D = "WAIT"
@@ -341,11 +341,15 @@ def decide_session(
     use_committee: bool | None = None,
     company_evidence: Sequence[Mapping[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Run the production recommendation + gate path on a PIT scan payload.
+    """Run the production recommendation + paper gate on a PIT scan payload.
 
-    Default path uses the independence-aware committee. Today's research
-    snapshots are refused; warehouse evidence available at T is supplied
-    through the same StockResearchEngine. Tests may inject decide_fn.
+    The default decision authority is the same paper_autopilot.evaluate_candidate
+    used by present PAPER_FORWARD decisions. Historical replay disables only the
+    circular "history must already exist" bootstrap prerequisite because this
+    replay is what produces that history; active learned selection policies,
+    strategy/risk gates, and ordering logic still apply. Tests may inject a
+    custom decide_fn, and committee evaluation is available only when explicitly
+    requested.
     """
     from product.recommendations_workspace import build_recommendations_workspace
     from product.pit_availability import grade_replay
@@ -365,15 +369,25 @@ def decide_session(
     )
     cards = _strongest_cards(workspace)
     if use_committee is None:
-        use_committee = decide_fn is None
+        use_committee = False
     clock = datetime.fromisoformat(f"{as_of}T15:30:00+05:30")
     max_bar = str(scan_payload.get("as_of_session") or as_of)[:10]
     future_bar = max_bar > str(as_of)[:10]
     versions = current_versions().as_dict()
+    try:
+        from product.trading_thesis import manifest as thesis_manifest
+        thesis = thesis_manifest()
+    except Exception:
+        thesis = {}
     out: list[dict[str, Any]] = []
     for card in cards:
         symbol = str(card.get("symbol") or "").upper()
         card = attach_pit_to_card(dict(card), as_of=as_of)
+        # Carry the historical decision-time anchor through the exact production
+        # selection/portfolio path (notably PIT correlation lookup).
+        card["as_of"] = str(as_of)[:10]
+        card["decision_as_of"] = str(as_of)[:10]
+        card.setdefault("scan_scanned_at", f"{str(as_of)[:10]}T15:30:00+05:30")
         if company_evidence is not None:
             pit_grade = grade_replay(
                 as_of=as_of,
@@ -387,6 +401,7 @@ def decide_session(
             pit_grade = overall_replay_grade(
                 symbol, as_of=as_of, market_bars_ok=not future_bar,
             )
+        selection_rank = None
         try:
             if use_committee:
                 from product.decision_committee import evaluate_committee
@@ -401,9 +416,9 @@ def decide_session(
                     as_of=str(as_of)[:10],
                 )
                 raw = rec.as_dict()
-            else:
-                decide = decide_fn or evaluate_candidate
-                decision = decide(
+            elif decide_fn is not None:
+                # Preserve the narrow test/research injection seam unchanged.
+                decision = decide_fn(
                     card,
                     book=None,
                     entries_allowed=True,
@@ -413,6 +428,27 @@ def decide_session(
                     regime=str(scan_payload.get("regime") or scan_payload.get("market_regime") or "UNKNOWN"),
                 )
                 raw = decision.as_dict() if hasattr(decision, "as_dict") else dict(decision)
+            else:
+                # Exact same non-executing selection seam as current discovery
+                # and PAPER_FORWARD. Only the circular historical-bootstrap
+                # prerequisite is disabled because this replay produces it.
+                replay_regime = str(
+                    scan_payload.get("regime")
+                    or scan_payload.get("market_regime")
+                    or "UNKNOWN"
+                )
+                decision = evaluate_selection_candidate(
+                    card,
+                    book=None,
+                    workspace=workspace,
+                    now=clock,
+                    entries_allowed=True,
+                    paper_enabled=True,
+                    regime=replay_regime,
+                    enforce_history=False,
+                )
+                raw = decision.as_dict() if hasattr(decision, "as_dict") else dict(decision)
+                selection_rank = decision.selection_score
         except Exception as exc:
             raw = {
                 "symbol": symbol,
@@ -433,6 +469,12 @@ def decide_session(
             decision=mapped,
             reason_code=str(raw.get("reason_code") or ""),
         )
+        if selection_rank is None:
+            try:
+                from product.paper_autopilot import selection_score as production_selection_score
+                selection_rank = production_selection_score(card)
+            except Exception:
+                selection_rank = None
         out.append({
             "symbol": symbol,
             "as_of": str(as_of)[:10],
@@ -464,6 +506,8 @@ def decide_session(
                 "grade_reason": pit_grade.get("reason"),
                 "comparable_to_forward": pit_grade.get("comparable_to_forward"),
                 "production_comparable": pit_grade.get("production_comparable"),
+                "history_bootstrap_gate_applied": False,
+                "history_bootstrap_gate_reason": "replay generates the prerequisite evidence",
                 "missing": downgrade.get("unavailable"),
                 "unverified": downgrade.get("unverified"),
                 "available_categories": downgrade.get("available"),
@@ -475,6 +519,14 @@ def decide_session(
             "pit_sector": card.get("pit_sector"),
             "pit_downgrade": downgrade,
             "versions": versions,
+            "thesis_hash": str(thesis.get("thesis_hash") or ""),
+            "thesis": thesis,
+            "selection_score": selection_rank,
+            # Frozen PIT card is the input required to re-run the same
+            # production selection authority against an evolving historical
+            # PaperBook (open positions/capital/risk). It contains only evidence
+            # attached at T; later bars remain outcome-only.
+            "selection_card": dict(card),
             "provenance": HISTORICAL_REPLAY,
             "not_pnl": True,
             "live_locked": True,
@@ -494,6 +546,47 @@ def decide_session(
         except Exception:
             out[-1]["freeze_id"] = ""
             out[-1]["evidence_fingerprint"] = ""
+        try:
+            # Historical replay is a real learning lane, but never forward P&L.
+            # Freeze the exact decision-time feature vector so model training can
+            # consume it later with an explicit HISTORICAL_REPLAY outcome label.
+            from dataclasses import replace
+            from product.decision import AVOID as D_AVOID, BUY as D_BUY, WAIT as D_WAIT
+            from product.decision_adapter import decision_from_card
+            from product.evidence_intelligence import freeze_decision as freeze_feature_decision
+
+            canonical = decision_from_card(
+                card,
+                source_scan_id=f"historical:{str(as_of)[:10]}",
+                market_state=str(out[-1].get("regime") or "UNKNOWN"),
+                sector_state=str(out[-1].get("sector") or ""),
+                evidence_snapshot_id=f"historical:{str(as_of)[:10]}",
+                evidence_class=HISTORICAL_REPLAY,
+                generated_at=out[-1]["decision_timestamp"],
+            )
+            actual_state = {
+                BUY: D_BUY,
+                WAIT_D: D_WAIT,
+                AVOID: D_AVOID,
+                REJECT: D_AVOID,
+            }.get(str(out[-1].get("decision") or ""), D_AVOID)
+            canonical = replace(
+                canonical,
+                state=actual_state,
+                decision_id="",
+                provenance={
+                    **dict(canonical.provenance or {}),
+                    "historical_committee_decision": str(out[-1].get("decision") or ""),
+                    "historical_reason_code": str(out[-1].get("reason_code") or ""),
+                    "thesis_hash": str(out[-1].get("thesis_hash") or ""),
+                },
+            )
+            frozen_feature = freeze_feature_decision(canonical)
+            out[-1]["canonical_decision_id"] = canonical.decision_id
+            out[-1]["feature_observation_status"] = frozen_feature.get("status")
+        except Exception as exc:
+            out[-1]["canonical_decision_id"] = ""
+            out[-1]["feature_observation_error"] = str(exc)[:160]
         try:
             from product.event_intelligence import catalyst_notes
 
@@ -548,6 +641,22 @@ def evaluate_outcomes(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]
             item["attribution"] = attribute_outcome(item)
         except Exception:
             item["attribution"] = {"updates_policy": False}
+        try:
+            decision_id = str(item.get("canonical_decision_id") or "")
+            realized_r = item.get("r_multiple")
+            if decision_id and realized_r is not None and item.get("outcome_status") == "MATURED":
+                from product.evidence_intelligence import record_resolved_prediction
+
+                item["feature_outcome"] = record_resolved_prediction(
+                    decision_id,
+                    float(realized_r),
+                    evidence_class=HISTORICAL_REPLAY,
+                    not_pnl=True,
+                    classification=str(item.get("classification") or ""),
+                    resolved_at=str(item.get("outcome_resolved_at") or ""),
+                )
+        except Exception as exc:
+            item["feature_outcome_error"] = str(exc)[:160]
         classified.append(item)
     return classified
 
@@ -561,12 +670,57 @@ def _write_progress(directory: Path, payload: Mapping[str, Any]) -> None:
     _atomic_json(directory / PROGRESS_NAME, payload)
 
 
+def _ledger_row_key(row: Mapping[str, Any]) -> str:
+    stable = str(
+        row.get("canonical_decision_id")
+        or row.get("freeze_id")
+        or ""
+    )
+    if stable:
+        return stable
+    material = {
+        "run_id": row.get("run_id"),
+        "as_of": row.get("as_of"),
+        "symbol": row.get("symbol"),
+        "decision": row.get("decision"),
+        "entry": row.get("entry"),
+        "stop": row.get("stop"),
+        "target": row.get("target"),
+    }
+    return hashlib.sha256(
+        json.dumps(material, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()[:24]
+
+
 def _append_ledger(directory: Path, rows: Iterable[Mapping[str, Any]]) -> None:
+    """Append historical evidence idempotently across restart/forced reruns."""
     path = directory / LEDGER_NAME
     path.parent.mkdir(parents=True, exist_ok=True)
+    existing: set[str] = set()
+    if path.exists():
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                item = json.loads(line)
+                if isinstance(item, Mapping):
+                    existing.add(_ledger_row_key(item))
+        except Exception:
+            # Do not destroy or rewrite an unreadable evidence ledger.
+            existing = set()
+    fresh: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        key = _ledger_row_key(item)
+        if key in existing:
+            continue
+        existing.add(key)
+        fresh.append(item)
+    if not fresh:
+        return
     with path.open("a", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(dict(row), default=str) + "\n")
+        for row in fresh:
+            handle.write(json.dumps(row, default=str) + "\n")
 
 
 def load_latest(directory: str | Path | None = None) -> dict[str, Any]:
@@ -584,6 +738,68 @@ def load_latest(directory: str | Path | None = None) -> dict[str, Any]:
     return report or progress
 
 
+def replay_identity(
+    *,
+    sessions: int = 8,
+    universe_limit: int = 40,
+    symbols: Sequence[str] | None = None,
+    dates_fn: Callable[[], Sequence[Any]] | None = None,
+) -> dict[str, Any]:
+    """Deterministic identity for the exact replay inputs available now."""
+    all_sessions = official_sessions(dates_fn=dates_fn)
+    if len(all_sessions) < 2:
+        return {"available": False, "reason": "insufficient_sessions"}
+    usable = all_sessions[:-1] if len(all_sessions) > 1 else all_sessions
+    window = usable[-max(1, int(sessions)) :]
+    run_id = _fingerprint(
+        window,
+        [str(s).upper() for s in (symbols or [])] + [str(universe_limit)],
+    )
+    try:
+        from product.pit_versions import current_versions
+        versions = current_versions().as_dict()
+    except Exception:
+        versions = {}
+    try:
+        from product.pit_warehouse import warehouse_fingerprint
+        data_fingerprint = warehouse_fingerprint()
+    except Exception:
+        data_fingerprint = ""
+    return {
+        "available": True,
+        "run_id": run_id,
+        "period_start": window[0],
+        "period_end": window[-1],
+        "sessions": list(window),
+        "versions": versions,
+        "data_fingerprint": data_fingerprint,
+        "engine": ENGINE,
+    }
+
+
+def replay_is_current(
+    *,
+    sessions: int = 8,
+    universe_limit: int = 40,
+    symbols: Sequence[str] | None = None,
+    directory: str | Path | None = None,
+    dates_fn: Callable[[], Sequence[Any]] | None = None,
+) -> bool:
+    """True only when persisted replay already covers the exact current inputs."""
+    ident = replay_identity(
+        sessions=sessions, universe_limit=universe_limit, symbols=symbols, dates_fn=dates_fn
+    )
+    if not ident.get("available"):
+        return False
+    latest = _read_json(report_path(directory))
+    return bool(
+        latest.get("status") == _STATUS_SUCCEEDED
+        and latest.get("run_id") == ident.get("run_id")
+        and latest.get("engine") == ident.get("engine")
+        and latest.get("data_fingerprint") == ident.get("data_fingerprint")
+        and latest.get("versions") == ident.get("versions")
+    )
+
 def run_historical_replay(
     *,
     sessions: int = 8,
@@ -600,6 +816,12 @@ def run_historical_replay(
     """Replay production decisions on official sessions. Bounded and PIT-safe."""
     target = _root(directory)
     target.mkdir(parents=True, exist_ok=True)
+    identity = replay_identity(
+        sessions=sessions,
+        universe_limit=universe_limit,
+        symbols=symbols,
+        dates_fn=dates_fn,
+    )
     all_sessions = official_sessions(dates_fn=dates_fn)
     if len(all_sessions) < 2:
         payload = {
@@ -621,12 +843,12 @@ def run_historical_replay(
 
     usable = all_sessions[:-1] if len(all_sessions) > 1 else all_sessions
     window = usable[-max(1, int(sessions)) :]
-    run_id = _fingerprint(window, [str(s).upper() for s in (symbols or [])] + [str(universe_limit)])
+    run_id = str(identity.get("run_id") or "")
     from product.pit_versions import current_versions
     from product.pit_warehouse import warehouse_fingerprint
 
-    experiment_versions = current_versions().as_dict()
-    data_fp = warehouse_fingerprint()
+    experiment_versions = dict(identity.get("versions") or current_versions().as_dict())
+    data_fp = str(identity.get("data_fingerprint") or warehouse_fingerprint())
     cached = _read_json(target / REPORT_NAME)
     if (
         not force
@@ -809,7 +1031,8 @@ def run_historical_replay(
         "note": (
             "Decisions used official bars available at each session close. "
             "Later prices are used only for outcome classification. "
-            "This does not change REAL_FORWARD_MARKET promotion stats and does not open paper trades."
+            "Historical decisions are settled into a separate virtual-paper learning lane. "
+            "They never count as REAL_FORWARD_MARKET promotion evidence or real P&L."
         ),
         "inputs": {
             "sessions": window,
@@ -887,10 +1110,27 @@ def run_walk_forward_sample(
 
 
 def start_replay_async(**kwargs: Any) -> dict[str, Any]:
-    """Start a replay in a daemon thread so the HTTP server stays responsive."""
+    """Start only when replay inputs changed; otherwise return the persisted result."""
     latest = load_latest(kwargs.get("directory"))
     if latest.get("status") == _STATUS_RUNNING:
         return latest
+    force = bool(kwargs.get("force", False))
+    if not force and replay_is_current(
+        sessions=int(kwargs.get("sessions", 8)),
+        universe_limit=int(kwargs.get("universe_limit", 40)),
+        symbols=kwargs.get("symbols"),
+        directory=kwargs.get("directory"),
+        dates_fn=kwargs.get("dates_fn"),
+    ):
+        cached = dict(latest)
+        cached.update({
+            "accepted": False,
+            "skipped": True,
+            "reason": "replay_inputs_unchanged",
+            "cache_hit": True,
+            "live_locked": True,
+        })
+        return cached
 
     def _runner() -> None:
         with _lock:

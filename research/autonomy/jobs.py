@@ -15,6 +15,10 @@ from pathlib import Path
 
 from research.autonomy import job_store as JS
 from research.autonomy import schedules as SCH
+
+# The old report-only historical replay is never an automatic scheduler cascade.
+# Autonomous closed-market work now uses the separate durable HISTORICAL_PAPER_CYCLE lane.
+LEGACY_CLOSED_MARKET_REPLAY_POLICY = "explicit_replay_only"
 from research.autonomy import supervisor_state as ST
 from research.autonomy import health as H
 from research.autonomy import auth as AUTH
@@ -50,11 +54,20 @@ class JobResult:
 
 
 class _Ctx:
-    def __init__(self, deps, *, active_failures=(), owner_paused=False, root=None):
+    def __init__(
+        self,
+        deps,
+        *,
+        active_failures=(),
+        owner_paused=False,
+        root=None,
+        job=None,
+    ):
         self.deps = deps
         self.active_failures = set(active_failures or ())
         self.owner_paused = bool(owner_paused)
         self.root = Path(root) if root else None
+        self.job = job
 
 
 class Deps:
@@ -503,6 +516,11 @@ def _kite_live_ready_result(ctx, *, sid=None, quality=None, live=None) -> JobRes
         return None
     quality = dict(quality or {})
     latest = str(live.get("session_date") or quality.get("latest_date") or "")
+    source = str(live.get("source") or "kite_quotes").strip().lower()
+    safe_source = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in source)
+    data_identity = str(sid or "").strip() or (
+        f"market:{safe_source}:{latest[:10]}" if latest else ""
+    )
     unblocks = [DEP_DATA, DEP_CA_SOURCE, DEP_UNIVERSE_SOURCE]
     if latest:
         unblocks.append(f"EOD_DATA_READY:{latest}")
@@ -510,13 +528,18 @@ def _kite_live_ready_result(ctx, *, sid=None, quality=None, live=None) -> JobRes
         JS.SUCCEEDED,
         f"Kite latest session ready · {int(live.get('symbols') or 0)} symbols · "
         f"{live.get('source') or 'kite_quotes'}",
-        output_snapshot_id=sid,
+        output_snapshot_id=data_identity or None,
         clears={H.SNAPSHOT_STALE, H.AUTH_MISSING, H.AUTH_EXPIRED,
                 H.BROKER_PROVIDER_UNAVAILABLE, H.PROVIDER_UNAVAILABLE,
                 H.OPTIONS_HISTORY_INCOMPLETE},
         state_hint=ST.DATA_READY,
         unblocks=tuple(unblocks),
-        metadata={**quality, **live, "latest_date": latest or live.get("session_date", "")},
+        metadata={
+            **quality,
+            **live,
+            "latest_date": latest or live.get("session_date", ""),
+            "data_identity": data_identity,
+        },
     )
 
 
@@ -725,6 +748,56 @@ def run_market_scan(ctx) -> JobResult:
         payload = report or {}
     summary = dict(payload.get("summary", {}))
     n = int(summary.get("with_any_setup", 0) or 0)
+
+    # Persist the complete startup trade-discovery projection as part of the
+    # scan transaction. Decision Simulation GET/POST then remains a cheap,
+    # deterministic read path instead of rebuilding the desk/ranking engine
+    # inside an HTTP request.
+    discovery_projection: dict = {}
+    if isinstance(ctx.deps, Deps):
+        try:
+            from product.decision_discovery_store import save as save_discovery
+            from product.decision_service import decision_board
+            from product.long_term_store import load_long_term_scan
+            from product.recommendations_store import save_recommendations
+            from product.recommendations_workspace import build_recommendations_workspace
+            from product.trading_thesis import manifest as thesis_manifest
+
+            long_term = dict(load_long_term_scan() or {})
+            workspace = build_recommendations_workspace(
+                scan_payload=payload,
+                long_term_payload=long_term,
+                refresh_technicals=False,
+                settle_cases=False,
+                deep_confirm=False,
+                persist_ledger=False,
+            )
+            save_recommendations(workspace)
+            board = dict(decision_board(workspace=workspace, limit=40) or {})
+            thesis_hash = str(thesis_manifest().get("thesis_hash") or "")
+            save_discovery(
+                board,
+                scan_scanned_at=str(payload.get("scanned_at") or ""),
+                long_term_scanned_at=str(long_term.get("scanned_at") or ""),
+                thesis_hash=thesis_hash,
+            )
+            discovery_projection = {
+                "status": "READY",
+                "scan_scanned_at": str(payload.get("scanned_at") or ""),
+                "thesis_hash": thesis_hash,
+                "best_trades": len(list(board.get("best_trades") or [])),
+                "decision_count": len(list(board.get("decisions") or [])),
+            }
+        except Exception as exc:
+            return JobResult(
+                JS.RETRYABLE_FAILED,
+                "scan completed but startup trade discovery projection failed",
+                error_code="DISCOVERY_PROJECTION_ERROR",
+                error_message=str(exc)[:300],
+                state_hint=ST.OBSERVING,
+                metadata={**summary, "discovery_projection": {"status": "ERROR", "error": str(exc)[:240]}},
+            )
+
     telegram = {}
     if hasattr(ctx.deps, "notify_scan"):
         try:
@@ -743,7 +816,8 @@ def run_market_scan(ctx) -> JobResult:
     return JobResult(JS.SUCCEEDED,
                      f"scan complete · {n} setups · {summary.get('momentum', 0)} momentum",
                      clears=clears, state_hint=ST.OBSERVING, unblocks=(DEP_SCAN,),
-                     metadata={**summary, "telegram": telegram})
+                     metadata={**summary, "telegram": telegram,
+                               "discovery_projection": discovery_projection})
 
 
 def _entry_reason(now, holidays, ctx) -> tuple[bool, str, str]:
@@ -810,6 +884,39 @@ def run_paper_cycle(ctx) -> JobResult:
     now = ctx.deps.now_ist()
     holidays = ctx.deps.holidays()
     entries_ok, reason, phase = _entry_reason(now, holidays, ctx)
+    key = str(getattr(getattr(ctx, "job", None), "idempotency_key", "") or "")
+    management_only = key.startswith("snapshot_manage:")
+    automatic_entry = key.startswith("snapshot_paper:")
+    if management_only:
+        entries_ok = False
+        reason = "SIMULATION_APPROVAL_REQUIRED"
+    elif automatic_entry and entries_ok:
+        try:
+            from product.decision_simulation_gate import is_approved
+            if not is_approved():
+                return JobResult(
+                    JS.SKIPPED_IDEMPOTENT,
+                    "paper entries skipped because Decision Simulation approval is no longer valid",
+                    state_hint=ST.OBSERVING,
+                    new_entries_allowed=False,
+                    metadata={
+                        "eligibility": "WAITING_FOR_SIMULATION_APPROVAL",
+                        "entry_block_reason": "SIMULATION_APPROVAL_REQUIRED",
+                        "session_phase": phase,
+                    },
+                )
+        except Exception:
+            return JobResult(
+                JS.SKIPPED_IDEMPOTENT,
+                "paper entries skipped because Decision Simulation approval could not be verified",
+                state_hint=ST.OBSERVING,
+                new_entries_allowed=False,
+                metadata={
+                    "eligibility": "WAITING_FOR_SIMULATION_APPROVAL",
+                    "entry_block_reason": "SIMULATION_APPROVAL_REQUIRED",
+                    "session_phase": phase,
+                },
+            )
     data_ready, data_source = _paper_market_data_source(ctx)
     data_failure = ""
     if not data_ready:
@@ -843,6 +950,7 @@ def run_paper_cycle(ctx) -> JobResult:
     hint = ST.PAPER_ACTIVE if entries_ok else ST.OBSERVING
     metadata = {"eligibility": eligibility, "entry_block_reason": reason,
                 "session_phase": phase, "market_data_source": data_source,
+                "management_only": management_only,
                 "failure_class": "DATA_OR_PROVIDER" if data_failure else ""}
     if not os.environ.get("PYTEST_CURRENT_TEST"):
         try:
@@ -893,26 +1001,22 @@ def run_outcome_resolution(ctx) -> JobResult:
         resolve_error = str(exc)[:240]
         result = {"paper_book_error": resolve_error}
     official_settle: dict = {}
-    if not os.environ.get("PYTEST_CURRENT_TEST"):
-        try:
-            from product.autonomous_loop import advance_loop
+    try:
+        # Settlement is deliberately narrow. Do not call autonomous_loop.advance_loop
+        # here: that legacy helper also re-evaluates committee/research/paper and
+        # turns one OUTCOME_RESOLUTION job into a hidden second autonomy cycle.
+        from product.autonomous_loop import settle_official_outcomes
 
-            official_settle = advance_loop(trigger="outcome_resolution")
-        except Exception as exc:
-            official_settle = {"error": str(exc)[:240]}
+        official_settle = settle_official_outcomes(session_date)
+    except Exception as exc:
+        official_settle = {"error": str(exc)[:240]}
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
         try:
             from product.paper_self_feed import ingest_paper_cycle
 
             ingest_paper_cycle(result or {}, as_of=session_date, slot="eod")
         except Exception:
             pass
-    else:
-        try:
-            from product.autonomous_loop import settle_official_outcomes
-
-            official_settle = settle_official_outcomes(session_date)
-        except Exception as exc:
-            official_settle = {"error": str(exc)[:240]}
     if isinstance(result, dict):
         result["official_settlement"] = official_settle
     closed = len((result or {}).get("positions_closed", []))
@@ -942,17 +1046,138 @@ def run_outcome_resolution(ctx) -> JobResult:
     )
 
 
+def run_historical_paper_cycle(ctx) -> JobResult:
+    """Poll/start one closed-market historical virtual-paper batch."""
+    now = ctx.deps.now_ist()
+    holidays = ctx.deps.holidays() if hasattr(ctx.deps, "holidays") else None
+    if SCH.market_is_open(now, holidays):
+        return JobResult(
+            JS.SKIPPED_IDEMPOTENT,
+            "historical paper deferred while cash market is open",
+            state_hint=ST.OBSERVING,
+            metadata={"reason": "market_open"},
+        )
+
+    expected = str(getattr(getattr(ctx, "job", None), "input_snapshot_id", "") or "")
+    try:
+        from product.historical_paper_loop import ensure_next_batch_started
+
+        result = ensure_next_batch_started(expected_batch_id=expected)
+    except Exception as exc:
+        return JobResult(
+            JS.RETRYABLE_FAILED,
+            "historical paper batch failed to start",
+            error_code="HISTORICAL_PAPER_ERROR",
+            error_message=str(exc),
+            failures={H.LEARNING_FAILED},
+            state_hint=ST.DEGRADED,
+        )
+
+    status = str(result.get("status") or "").upper()
+    if status == "RUNNING":
+        return JobResult(
+            JS.RETRYABLE_FAILED,
+            f"historical paper batch {result.get('batch_id') or expected} running",
+            error_code="HISTORICAL_PAPER_IN_PROGRESS",
+            error_message="historical replay/virtual-paper worker is still running",
+            state_hint=ST.RESEARCHING,
+            metadata=result,
+        )
+    if status == "FAILED":
+        return JobResult(
+            JS.RETRYABLE_FAILED,
+            "historical paper batch failed",
+            error_code="HISTORICAL_PAPER_ERROR",
+            error_message=str(result.get("error") or "unknown historical paper failure"),
+            failures={H.LEARNING_FAILED},
+            state_hint=ST.DEGRADED,
+            metadata=result,
+        )
+    if status == "OBSOLETE_THESIS":
+        # This job belongs to an older effective selection thesis. It is
+        # terminal by identity: do not retry it, do not enqueue learning, and
+        # let the next supervisor tick discover the first batch for the current
+        # thesis.
+        return JobResult(
+            JS.SKIPPED_IDEMPOTENT,
+            (
+                f"historical paper retired: thesis changed "
+                f"{result.get('thesis_hash') or '?'}→{result.get('current_thesis_hash') or '?'}"
+            ),
+            clears={H.LEARNING_FAILED},
+            state_hint=ST.OBSERVING,
+            metadata=result,
+        )
+    if status == "IDLE":
+        return JobResult(
+            JS.SKIPPED_IDEMPOTENT,
+            f"historical paper idle: {result.get('reason') or 'no new settleable history'}",
+            state_hint=ST.OBSERVING,
+            metadata=result,
+        )
+    return JobResult(
+        JS.SUCCEEDED,
+        (
+            f"historical paper complete · {int(result.get('historical_paper_trades') or 0)} trades · "
+            f"{result.get('period_start') or ''}→{result.get('period_end') or ''}"
+        ),
+        clears={H.LEARNING_FAILED},
+        state_hint=ST.RESEARCHING,
+        metadata=result,
+    )
+
+
 def run_learning_cycle(ctx) -> JobResult:
     now = ctx.deps.now_ist()
     holidays = ctx.deps.holidays() if hasattr(ctx.deps, "holidays") else None
+    job = getattr(ctx, "job", None)
+    key = str(getattr(job, "idempotency_key", "") or "")
+    historical = key.startswith("hist_learning:")
+    batch_id = str(getattr(job, "input_snapshot_id", "") or "") if historical else ""
     session_date = SCH.last_completed_session_date(now, holidays) or now.date().isoformat()
+    if historical:
+        try:
+            from product.historical_paper_loop import pending_stage
+
+            stage = pending_stage()
+            sessions = list(stage.get("sessions") or [])
+            if batch_id and str(stage.get("batch_id") or "") != batch_id:
+                return JobResult(
+                    JS.PERMANENT_FAILED,
+                    "historical learning batch identity mismatch",
+                    error_code="HISTORICAL_LEARNING_IDENTITY_MISMATCH",
+                    error_message=f"expected {batch_id}, found {stage.get('batch_id') or 'none'}",
+                    failures={H.LEARNING_FAILED},
+                    state_hint=ST.DEGRADED,
+                )
+            if sessions:
+                session_date = str(sessions[-1])[:10]
+        except Exception as exc:
+            return JobResult(
+                JS.RETRYABLE_FAILED,
+                "historical learning state unavailable",
+                error_code="HISTORICAL_LEARNING_STATE_ERROR",
+                error_message=str(exc),
+                failures={H.LEARNING_FAILED},
+                state_hint=ST.DEGRADED,
+            )
     try:
         result = ctx.deps.run_learning(session_date, getattr(ctx, "dialogue", None)) or {}
     except Exception as exc:
         return JobResult(JS.RETRYABLE_FAILED, "learning cycle failed", error_code="LEARNING_ERROR",
                          error_message=str(exc), failures={H.LEARNING_FAILED}, state_hint=ST.DEGRADED)
+
     memory_error = ""
-    if not os.environ.get("PYTEST_CURRENT_TEST"):
+    if historical:
+        result["learning_lane"] = "HISTORICAL_REPLAY"
+        result["historical_batch_id"] = batch_id
+        # Historical decisions were already settled into the immutable feature
+        # store by historical_replay. Do not fold forward-paper memory again here.
+        result["settled_memory"] = {
+            "skipped": True,
+            "reason": "historical_feature_store_is_learning_source",
+        }
+    elif not os.environ.get("PYTEST_CURRENT_TEST"):
         try:
             from product.autonomous_loop import consume_learning_memory
 
@@ -960,19 +1185,22 @@ def run_learning_cycle(ctx) -> JobResult:
         except Exception as exc:
             memory_error = str(exc)[:200]
             result["settled_memory"] = {"error": memory_error}
+
     summary = (
         f"learning complete · {result.get('diagnostics', 0)} diagnostics · "
         f"{result.get('paper_closed', 0)} paper trades · "
         f"{result.get('paper_cooldown', 0)} cooldown · "
         f"{result.get('paper_prefer', 0)} preferred"
     )
+    if historical:
+        challenger = dict(result.get("challenger") or {})
+        summary = (
+            f"historical learning complete · batch {batch_id} · "
+            f"challenger {challenger.get('status') or 'UNKNOWN'} · "
+            f"trained_n {int(challenger.get('trained_n') or 0)} · "
+            f"historical_n {int(challenger.get('historical_n') or 0)}"
+        )
     if memory_error:
-        # The primary learning cycle (run_learning) succeeded, but folding
-        # settled outcomes into calibrated memory failed. That is a real
-        # learning-ingestion failure, not a cosmetic detail buried in
-        # metadata -- surface it as LEARNING_FAILED and in the job's own
-        # error fields instead of unconditionally claiming "learning
-        # complete" and JS.SUCCEEDED with no visible trace of the failure.
         summary = (
             f"learning cycle ran but memory consolidation failed · "
             f"{result.get('diagnostics', 0)} diagnostics"
@@ -983,31 +1211,57 @@ def run_learning_cycle(ctx) -> JobResult:
             failures={H.LEARNING_FAILED}, state_hint=ST.RESEARCHING,
             unblocks=(f"{DEP_LEARNING}:{session_date}",), metadata=result,
         )
-    if not os.environ.get("PYTEST_CURRENT_TEST"):
-        try:
-            from product.autonomous_learning import maybe_run_closed_market_replay, save_control
-
-            replay = maybe_run_closed_market_replay(now=now)
-            result["closed_market_replay"] = replay
-            if not replay.get("skipped"):
-                save_control({"last_cycle_at": now.isoformat() if hasattr(now, "isoformat") else str(now)})
-        except Exception as exc:
-            result["closed_market_replay"] = {"error": str(exc)[:200]}
+    result["closed_market_replay"] = {
+        "skipped": True,
+        "reason": "historical_replay_has_dedicated_durable_job",
+        "next_action": "RESEARCH" if historical else "WAIT_FOR_EXPLICIT_REPLAY_OR_NEW_EVIDENCE",
+    }
     return JobResult(JS.SUCCEEDED, summary,
                      clears={H.LEARNING_FAILED}, state_hint=ST.RESEARCHING,
                      unblocks=(f"{DEP_LEARNING}:{session_date}",), metadata=result)
 
-
 def run_research_cycle(ctx) -> JobResult:
+    job = getattr(ctx, "job", None)
+    key = str(getattr(job, "idempotency_key", "") or "")
+    historical = key.startswith("hist_research:")
+    batch_id = str(getattr(job, "input_snapshot_id", "") or "") if historical else ""
     session_date = ctx.deps.now_ist().date().isoformat()
+    if historical:
+        try:
+            from product.historical_paper_loop import pending_stage
+
+            stage = pending_stage()
+            sessions = list(stage.get("sessions") or [])
+            if batch_id and str(stage.get("batch_id") or "") != batch_id:
+                return JobResult(
+                    JS.PERMANENT_FAILED,
+                    "historical research batch identity mismatch",
+                    error_code="HISTORICAL_RESEARCH_IDENTITY_MISMATCH",
+                    error_message=f"expected {batch_id}, found {stage.get('batch_id') or 'none'}",
+                    failures={H.LEARNING_FAILED},
+                    state_hint=ST.DEGRADED,
+                )
+            if sessions:
+                session_date = str(sessions[-1])[:10]
+        except Exception as exc:
+            return JobResult(
+                JS.RETRYABLE_FAILED,
+                "historical research state unavailable",
+                error_code="HISTORICAL_RESEARCH_STATE_ERROR",
+                error_message=str(exc),
+                failures={H.LEARNING_FAILED},
+                state_hint=ST.DEGRADED,
+            )
     try:
-        result = ctx.deps.run_research(session_date, getattr(ctx, "dialogue", None))
+        result = ctx.deps.run_research(session_date, getattr(ctx, "dialogue", None)) or {}
     except Exception as exc:
         return JobResult(JS.RETRYABLE_FAILED, "research cycle failed", error_code="RESEARCH_ERROR",
                          error_message=str(exc), failures={H.LEARNING_FAILED}, state_hint=ST.DEGRADED)
+    if historical:
+        result["research_lane"] = "HISTORICAL_REPLAY"
+        result["historical_batch_id"] = batch_id
     return JobResult(JS.SUCCEEDED, f"research cycle: {result.get('decision', 'no action')}",
                      clears={H.LEARNING_FAILED}, state_hint=ST.OBSERVING, metadata=result)
-
 
 def run_news_refresh(ctx) -> JobResult:
     try:
@@ -1045,4 +1299,5 @@ HANDLERS = {
     SCH.RESEARCH_CYCLE: run_research_cycle,
     SCH.LONG_TERM_SCAN: run_long_term_scan_job,
     SCH.LONG_TERM_REFRESH: run_long_term_refresh_job,
+    SCH.HISTORICAL_PAPER_CYCLE: run_historical_paper_cycle,
 }

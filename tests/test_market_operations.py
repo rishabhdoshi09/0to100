@@ -241,10 +241,11 @@ def test_bootstrap_queues_missing_product_inputs_without_network(tmp_path: Path,
     worker = MO.MarketOperationsWorker(store)
     queued = set(worker._bootstrap())
 
-    assert queued == {MO.FNO_REFRESH}
-    # A restart/click must reuse the pending work rather than duplicate it.
+    # Bootstrap is passive: it may clean legacy continuation rows, but it does
+    # not invent fresh data/F&O/scan work. Supervisor/manual controls own queueing.
+    assert queued == set()
     assert worker._bootstrap() == []
-    assert len(store.active()) == 1
+    assert store.active() == []
 
 
 def test_bootstrap_skips_market_scan_when_momentum_artifact_is_fresh(tmp_path: Path, monkeypatch):
@@ -295,7 +296,8 @@ def test_bootstrap_skips_market_scan_when_momentum_artifact_is_fresh(tmp_path: P
     worker = MO.MarketOperationsWorker(store)
     queued = set(worker._bootstrap())
     assert MO.MARKET_SCAN not in queued
-    assert queued == {MO.LONG_TERM_REFRESH}
+    assert queued == set()
+    assert store.active() == []
 
 
 def test_begin_immediate_retries_database_locked(tmp_path: Path, monkeypatch):

@@ -182,7 +182,7 @@ class JobStore:
                     row = self._db.execute(
                         "SELECT * FROM jobs WHERE status=? AND scheduled_for<=? "
                         "ORDER BY CASE WHEN error_code IN "
-                        "('DATA_REFRESH_IN_PROGRESS','MARKET_OP_IN_PROGRESS','LONG_TERM_OP_IN_PROGRESS') "
+                        "('DATA_REFRESH_IN_PROGRESS','MARKET_OP_IN_PROGRESS','LONG_TERM_OP_IN_PROGRESS','HISTORICAL_PAPER_IN_PROGRESS') "
                         "THEN 0 ELSE 1 END DESC, critical DESC, scheduled_for, created_at LIMIT 1",
                         (PENDING, now)).fetchone()
                 if row is None:
@@ -320,6 +320,33 @@ class JobStore:
                 f"UPDATE jobs SET status=?, finished_at=?, result_summary=?, lease_owner=NULL, "
                 f"lease_expires_at=NULL WHERE job_id IN ({placeholders})",
                 (CANCELLED, now, "superseded by a newer recurring job", *stale),
+            )
+            self._db.commit()
+            return cur.rowcount
+
+    def cancel_pending_by_prefix(self, *prefixes: str, summary: str = "automatic pipeline stopped") -> int:
+        """Cancel queued automatic work by idempotency prefix, leaving manual jobs intact."""
+        wanted = tuple(str(p) for p in prefixes if str(p))
+        if not wanted:
+            return 0
+        now = self.clock()
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT job_id, idempotency_key FROM jobs WHERE status=?",
+                (PENDING,),
+            ).fetchall()
+            stale = [
+                row["job_id"]
+                for row in rows
+                if str(row["idempotency_key"] or "").startswith(wanted)
+            ]
+            if not stale:
+                return 0
+            placeholders = ",".join("?" for _ in stale)
+            cur = self._db.execute(
+                f"UPDATE jobs SET status=?, finished_at=?, result_summary=?, "
+                f"lease_owner=NULL, lease_expires_at=NULL WHERE job_id IN ({placeholders})",
+                (CANCELLED, now, summary, *stale),
             )
             self._db.commit()
             return cur.rowcount

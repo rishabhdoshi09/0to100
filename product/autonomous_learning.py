@@ -310,7 +310,9 @@ def _next_action(control: Mapping[str, Any], *, market_closed: bool, activity: s
     if lane == EVIDENCE_FORWARD:
         return "Next: REAL_FORWARD_PAPER cycle after the shared market scan (no live orders)."
     if lane == EVIDENCE_REPLAY:
-        return "Next: HISTORICAL_REPLAY of a completed session. Replay is not forward evidence."
+        if not market_closed:
+            return "Historical replay is deferred until the cash session closes."
+        return "Next: historical virtual-paper batch from the next unprocessed PIT sessions."
     return "No next learning action while the control is off."
 
 
@@ -323,6 +325,7 @@ def dashboard(*, path: str | Path | None = None) -> dict[str, Any]:
     auto: dict[str, Any] = {}
     ops: dict[str, Any] = {}
     replay: dict[str, Any] = {}
+    historical_paper: dict[str, Any] = {}
     try:
         from product.autonomy_status import read_autonomy_status
         auto = read_autonomy_status()
@@ -343,8 +346,24 @@ def dashboard(*, path: str | Path | None = None) -> dict[str, Any]:
             replay = {**replay, **progress}
     except Exception:
         replay = {}
+    try:
+        from product.historical_paper_loop import DEFAULT_LEDGER, load_state
+
+        historical_paper = load_state()
+        ledger = Path(DEFAULT_LEDGER)
+        historical_paper["virtual_trades"] = _count_jsonl(ledger)
+    except Exception:
+        historical_paper = {}
     market_closed = _market_closed()
     activity = ACTIVITY_IDLE if (not control.get("enabled") or control.get("mode") == MODE_PAUSED) else _activity(auto, ops, replay)
+    historical_phase = str(historical_paper.get("phase") or "").upper()
+    if control.get("enabled") and control.get("mode") != MODE_PAUSED:
+        if historical_phase == "RUNNING":
+            activity = ACTIVITY_SIMULATING
+        elif historical_phase == "AWAITING_LEARNING":
+            activity = ACTIVITY_LEARNING
+        elif historical_phase == "AWAITING_RESEARCH":
+            activity = ACTIVITY_RESEARCHING
     evidence = _evidence_counts()
     paper = _paper_counts()
     policies = _policy_projection()
@@ -372,6 +391,7 @@ def dashboard(*, path: str | Path | None = None) -> dict[str, Any]:
         "current_activity": activity,
         "counts": {
             "historical_decisions_simulated": sim_n,
+            "historical_virtual_paper_trades": int(historical_paper.get("virtual_trades") or 0),
             "forward_paper_decisions": evidence["forward_evidence_count"],
             **paper,
             "correct_rejects": evidence["correct_rejects"],
@@ -393,6 +413,17 @@ def dashboard(*, path: str | Path | None = None) -> dict[str, Any]:
         "promotion_blocked_reason": policies["promotion_blocked_reason"],
         "last_learning_cycle": last_cycle or "No learning cycle has been recorded.",
         "next_learning_action": _next_action(control, market_closed=market_closed, activity=activity),
+        "historical_virtual_paper": {
+            "phase": historical_paper.get("phase") or "IDLE",
+            "batch_id": historical_paper.get("current_batch_id") or "",
+            "current_sessions": list(historical_paper.get("current_sessions") or []),
+            "last_completed_session": historical_paper.get("last_completed_session") or "",
+            "virtual_trades": int(historical_paper.get("virtual_trades") or 0),
+            "last_result": dict(historical_paper.get("last_result") or {}),
+            "last_error": historical_paper.get("last_error") or "",
+            "provenance": EVIDENCE_REPLAY,
+            "not_real_pnl": True,
+        },
         "latest_persisted_evidence": {
             "replay_status": replay.get("status") or "NONE",
             "replay_period": (
@@ -421,23 +452,41 @@ def set_control(*, enabled: bool | None = None, mode: str | None = None, path: s
 
 
 def maybe_run_closed_market_replay(*, now: datetime | None = None, force: bool = False) -> dict[str, Any]:
-    """When the cash session is closed, replay history. Never open paper trades."""
+    """Manual report-only replay. Never opens the real/forward paper book."""
     control = load_control()
     if not control.get("enabled") or control.get("mode") == MODE_PAUSED:
         return {"skipped": True, "reason": "autonomous_learning_paused"}
     lane = intended_evidence_lane(control, now=now)
     if lane != EVIDENCE_REPLAY and not force:
         return {"skipped": True, "reason": "forward_paper_lane_active", "lane": lane}
+    if not force and not _market_closed(now):
+        return {
+            "skipped": True,
+            "reason": "market_open_replay_deferred",
+            "lane": EVIDENCE_REPLAY,
+            "next_action": "WAIT_FOR_MARKET_CLOSE",
+            "opens_paper_trades": False,
+            "not_promotion_evidence": True,
+        }
     try:
         from product.historical_replay import start_replay_async, load_latest
         latest = load_latest()
         if str(latest.get("status") or "").upper() == "RUNNING" and not force:
             return {"skipped": True, "reason": "replay_already_running", "status": latest.get("status")}
-        started = start_replay_async(sessions=8, universe_limit=40, persist_live_reco=False)
-        save_control({"last_replay_at": _now(), "last_cycle_at": _now()})
+        started = start_replay_async(
+            force=force,
+            sessions=8,
+            universe_limit=40,
+            persist_live_reco=False,
+        )
+        if not started.get("skipped"):
+            stamp = _now()
+            save_control({"last_replay_at": stamp, "last_cycle_at": stamp})
         started["evidence_class"] = EVIDENCE_REPLAY
         started["not_promotion_evidence"] = True
         started["opens_paper_trades"] = False
+        if started.get("skipped"):
+            started.setdefault("next_action", "WAIT_FOR_NEW_EVIDENCE")
         return started
     except Exception as exc:
         save_control({"last_error": str(exc)[:240]})

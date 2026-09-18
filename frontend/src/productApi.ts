@@ -1935,6 +1935,7 @@ export type RankedDecisionRow = {
   setup: string
   base_score: number
   evidence_adjustment: number
+  learning_adjustment?: number
   ranking_score: number
   entry: number | null
   stop: number | null
@@ -1943,6 +1944,19 @@ export type RankedDecisionRow = {
   context_key: string
   evidence_counts: Record<string, number>
   evidence: Record<string, unknown>
+  learning?: Record<string, unknown>
+  trade_quality?: {
+    thesis_hash?: string
+    win_probability?: number | null
+    win_probability_source?: string
+    win_probability_lower_95?: number | null
+    shrunk_expectancy_R?: number | null
+    lower_95_R?: number | null
+    reward_risk_R?: number | null
+    effective_n?: number
+    decision_confidence?: number | null
+    ranking_score?: number | null
+  }
   why: string
 }
 
@@ -1953,6 +1967,8 @@ export type DecisionBoard = {
   reason: string
   scan_scanned_at: string
   decisions: RankedDecisionRow[]
+  best_trades?: RankedDecisionRow[]
+  thesis?: Record<string, unknown>
   counts: Record<string, number>
   actionable?: number
   evidence_gaps: Record<string, number>
@@ -1962,6 +1978,29 @@ export const fetchDecisionBoard = (limit = 40): Promise<DecisionBoard> =>
   request(`/api/decisions?limit=${encodeURIComponent(String(limit))}`, {
     headers: { Accept: 'application/json' },
   })
+
+export type DecisionSimulationGate = {
+  schema_version?: number
+  phase?: 'SEARCHING_BEST_TRADES' | 'AWAITING_APPROVAL' | 'APPROVED' | string
+  startup_id?: string
+  approved?: boolean
+  approved_at?: string
+  approval_required?: boolean
+  discovery_ready?: boolean
+  scan_scanned_at?: string
+  scan_fresh?: boolean
+  best_trades?: RankedDecisionRow[]
+  decision_count?: number
+  actionable?: number
+  thesis?: Record<string, unknown>
+  thesis_hash?: string
+  message?: string
+  live_locked?: boolean
+  simulation_scope?: string[]
+}
+
+export const fetchDecisionSimulationGate = (): Promise<DecisionSimulationGate> =>
+  request('/api/decision-simulation-gate', { headers: { Accept: 'application/json' } })
 
 export const fetchDecisionWhy = (symbol: string): Promise<DecisionWhy> =>
   request(`/api/decisions/${encodeURIComponent(symbol)}/why`, {

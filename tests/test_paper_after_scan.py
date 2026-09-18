@@ -1,4 +1,4 @@
-"""Successful shared scan enqueues the existing paper cycle."""
+"""Automatic scheduler is one data->scan->paper transaction and then stops."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -22,7 +22,7 @@ class _Jobs:
         return SimpleNamespace(status=JS.PENDING, job_type=job_type)
 
 
-def test_successful_intraday_scan_enqueues_paper_cycle():
+def test_successful_intraday_scan_enqueues_paper_cycle(monkeypatch):
     jobs = _Jobs()
     supervisor = Supervisor.__new__(Supervisor)
     supervisor.jobs = jobs
@@ -31,10 +31,79 @@ def test_successful_intraday_scan_enqueues_paper_cycle():
         holidays=lambda: set(),
         active_snapshot_id=lambda: "snap-1",
     )
-    supervisor._enqueue_paper_after_scan(SimpleNamespace(job_type=SCH.MARKET_SCAN))
+    monkeypatch.setattr("product.decision_simulation_gate.is_approved", lambda: True)
+    supervisor._enqueue_paper_after_scan(SimpleNamespace(
+        job_type=SCH.MARKET_SCAN,
+        idempotency_key=SCH.snapshot_scan_key("snap-1"),
+        input_snapshot_id="snap-1",
+    ))
     assert jobs.enqueued
     assert jobs.enqueued[0][0] == SCH.PAPER_CYCLE
     assert jobs.enqueued[0][1]["critical"] is True
+
+
+def test_intraday_scan_waits_for_simulation_approval(monkeypatch):
+    jobs = _Jobs()
+    supervisor = Supervisor.__new__(Supervisor)
+    supervisor.jobs = jobs
+    supervisor.deps = SimpleNamespace(
+        now_ist=lambda: datetime(2026, 9, 1, 10, 45, tzinfo=IST),
+        holidays=lambda: set(),
+        active_snapshot_id=lambda: "snap-1",
+    )
+    supervisor._has_open_paper_positions = lambda: False
+    monkeypatch.setattr("product.decision_simulation_gate.is_approved", lambda: False)
+    supervisor._enqueue_paper_after_scan(SimpleNamespace(
+        job_type=SCH.MARKET_SCAN,
+        idempotency_key=SCH.snapshot_scan_key("snap-1"),
+        input_snapshot_id="snap-1",
+    ))
+    assert jobs.enqueued == []
+
+
+def test_preapproval_open_positions_get_management_only_pass(monkeypatch):
+    jobs = _Jobs()
+    supervisor = Supervisor.__new__(Supervisor)
+    supervisor.jobs = jobs
+    supervisor.deps = SimpleNamespace(
+        now_ist=lambda: datetime(2026, 9, 1, 10, 45, tzinfo=IST),
+        holidays=lambda: set(),
+        active_snapshot_id=lambda: "snap-1",
+    )
+    supervisor._has_open_paper_positions = lambda: True
+    monkeypatch.setattr("product.decision_simulation_gate.is_approved", lambda: False)
+    supervisor._enqueue_paper_after_scan(SimpleNamespace(
+        job_type=SCH.MARKET_SCAN,
+        idempotency_key=SCH.snapshot_scan_key("snap-1"),
+        input_snapshot_id="snap-1",
+    ))
+    assert jobs.enqueued == [
+        (
+            SCH.PAPER_CYCLE,
+            {
+                "idempotency_key": "snapshot_manage:snap-1",
+                "input_snapshot_id": "snap-1",
+                "critical": True,
+            },
+        )
+    ]
+
+
+def test_manual_scan_does_not_auto_enqueue_paper():
+    jobs = _Jobs()
+    supervisor = Supervisor.__new__(Supervisor)
+    supervisor.jobs = jobs
+    supervisor.deps = SimpleNamespace(
+        now_ist=lambda: datetime(2026, 9, 1, 10, 45, tzinfo=IST),
+        holidays=lambda: set(),
+        active_snapshot_id=lambda: "snap-1",
+    )
+    supervisor._enqueue_paper_after_scan(SimpleNamespace(
+        job_type=SCH.MARKET_SCAN,
+        idempotency_key="manual:scan:snap-1:control-1",
+        input_snapshot_id="snap-1",
+    ))
+    assert jobs.enqueued == []
 
 
 def test_data_refresh_success_does_not_enqueue_paper():
@@ -59,13 +128,17 @@ def test_paper_does_not_enqueue_before_entry_window():
         holidays=lambda: set(),
         active_snapshot_id=lambda: "snap-1",
     )
-    supervisor._enqueue_paper_after_scan(SimpleNamespace(job_type=SCH.MARKET_SCAN))
+    supervisor._enqueue_paper_after_scan(SimpleNamespace(
+        job_type=SCH.MARKET_SCAN,
+        idempotency_key=SCH.snapshot_scan_key("snap-1"),
+        input_snapshot_id="snap-1",
+    ))
     assert jobs.enqueued == []
 
 
-def test_off_session_after_close_enqueues_outcome_not_scan():
+
+def test_off_session_historical_paper_waits_for_approval(monkeypatch):
     jobs = _Jobs()
-    jobs.cancel_superseded_pending = lambda *_a, **_k: None
     supervisor = Supervisor.__new__(Supervisor)
     supervisor.jobs = jobs
     supervisor.deps = SimpleNamespace(
@@ -73,12 +146,50 @@ def test_off_session_after_close_enqueues_outcome_not_scan():
         holidays=lambda: set(),
         active_snapshot_id=lambda: "snap-1",
     )
-    supervisor._enqueue_daily_foundation = lambda *_a, **_k: None
+    supervisor._enqueue_post_market_grind = lambda *_a, **_k: None
+    supervisor._ensure_startup_trade_discovery = lambda: None
+    monkeypatch.setattr("product.decision_simulation_gate.is_approved", lambda: False)
+
+    def forbidden(*_a, **_k):
+        raise AssertionError("historical simulation must not inspect or enqueue a batch before approval")
+
+    monkeypatch.setattr("product.historical_paper_loop.pending_stage", forbidden)
+    monkeypatch.setattr("product.historical_paper_loop.peek_next_batch", forbidden)
+
     supervisor.enqueue_due()
-    types = [job_type for job_type, _kwargs in jobs.enqueued]
-    assert SCH.OUTCOME_RESOLUTION in types
-    assert SCH.MARKET_SCAN not in types
-    assert SCH.PAPER_CYCLE not in types
+    assert jobs.enqueued == []
+
+
+def test_off_session_after_close_enqueues_historical_paper(monkeypatch):
+    jobs = _Jobs()
+    supervisor = Supervisor.__new__(Supervisor)
+    supervisor.jobs = jobs
+    supervisor.deps = SimpleNamespace(
+        now_ist=lambda: datetime(2026, 9, 1, 23, 50, tzinfo=IST),
+        holidays=lambda: set(),
+        active_snapshot_id=lambda: "snap-1",
+    )
+    supervisor._enqueue_post_market_grind = lambda *_a, **_k: None
+    supervisor._ensure_startup_trade_discovery = lambda: None
+    monkeypatch.setattr("product.decision_simulation_gate.is_approved", lambda: True)
+    monkeypatch.setattr(
+        "product.historical_paper_loop.pending_stage",
+        lambda: {"phase": "IDLE", "batch_id": ""},
+    )
+    monkeypatch.setattr(
+        "product.historical_paper_loop.peek_next_batch",
+        lambda: {"available": True, "batch_id": "hist-1"},
+    )
+    supervisor.enqueue_due()
+    assert jobs.enqueued == [
+        (
+            SCH.HISTORICAL_PAPER_CYCLE,
+            {
+                "idempotency_key": SCH.historical_paper_key("hist-1"),
+                "input_snapshot_id": "hist-1",
+            },
+        )
+    ]
 
 
 def test_intraday_enqueue_does_not_start_post_market_grind():
@@ -97,7 +208,7 @@ def test_intraday_enqueue_does_not_start_post_market_grind():
     assert SCH.OUTCOME_RESOLUTION not in types
 
 
-def test_blocked_data_ready_outcome_is_requeued():
+def test_blocked_data_ready_outcome_is_requeued(monkeypatch):
     class Jobs:
         def __init__(self):
             self.requeued = []
@@ -124,13 +235,16 @@ def test_blocked_data_ready_outcome_is_requeued():
         now_ist=lambda: datetime(2026, 9, 3, 0, 5, tzinfo=IST),
         holidays=lambda: set(),
     )
+    monkeypatch.setattr(
+        "product.readiness.official_history",
+        lambda: {"current": True, "available_session": "2026-09-02", "latest_date": "2026-09-02"},
+    )
     supervisor._enqueue_post_market_grind(session_date="2026-09-02")
     assert supervisor.jobs.requeued == ["out-1"]
 
 
-def test_overnight_after_midnight_settles_previous_session():
+def test_overnight_after_midnight_continues_historical_learning(monkeypatch):
     jobs = _Jobs()
-    jobs.cancel_superseded_pending = lambda *_a, **_k: None
     supervisor = Supervisor.__new__(Supervisor)
     supervisor.jobs = jobs
     supervisor.deps = SimpleNamespace(
@@ -138,25 +252,27 @@ def test_overnight_after_midnight_settles_previous_session():
         holidays=lambda: set(),
         active_snapshot_id=lambda: "snap-1",
     )
-    supervisor._enqueue_daily_foundation = lambda *_a, **_k: None
+    supervisor._enqueue_post_market_grind = lambda *_a, **_k: None
+    supervisor._ensure_startup_trade_discovery = lambda: None
+    monkeypatch.setattr("product.decision_simulation_gate.is_approved", lambda: True)
+    monkeypatch.setattr(
+        "product.historical_paper_loop.pending_stage",
+        lambda: {"phase": "AWAITING_LEARNING", "batch_id": "hist-2"},
+    )
     supervisor.enqueue_due()
-    outcomes = [kwargs for job_type, kwargs in jobs.enqueued if job_type == SCH.OUTCOME_RESOLUTION]
-    assert outcomes
-    assert outcomes[0]["idempotency_key"] == SCH.outcome_key("2026-09-02")
-    types = [job_type for job_type, _kwargs in jobs.enqueued]
-    assert SCH.MARKET_SCAN not in types
+    assert jobs.enqueued == [
+        (
+            SCH.LEARNING_CYCLE,
+            {
+                "idempotency_key": SCH.historical_learning_key("hist-2"),
+                "input_snapshot_id": "hist-2",
+            },
+        )
+    ]
 
 
-def test_eod_without_kite_snapshot_still_enqueues_official_work():
+def test_eod_refreshes_official_data_without_starting_live_scan_pipeline(monkeypatch):
     jobs = _Jobs()
-    jobs.cancel_superseded_pending = lambda *_a, **_k: None
-
-    def enqueue(job_type, **kwargs):
-        jobs.enqueued.append((job_type, kwargs))
-        status = JS.BLOCKED if job_type == SCH.DATA_REFRESH else JS.SUCCEEDED
-        return SimpleNamespace(status=status, job_type=job_type)
-
-    jobs.enqueue = enqueue
     supervisor = Supervisor.__new__(Supervisor)
     supervisor.jobs = jobs
     supervisor.deps = SimpleNamespace(
@@ -164,14 +280,22 @@ def test_eod_without_kite_snapshot_still_enqueues_official_work():
         holidays=lambda: set(),
         active_snapshot_id=lambda: None,
     )
-    supervisor._enqueue_daily_foundation = lambda *_a, **_k: None
-    supervisor._enqueue_post_market_grind = Supervisor._enqueue_post_market_grind.__get__(supervisor)
+    supervisor._enqueue_post_market_grind = lambda *_a, **_k: None
+    supervisor._ensure_startup_trade_discovery = lambda: None
+    monkeypatch.setattr("product.decision_simulation_gate.is_approved", lambda: True)
+    monkeypatch.setattr(
+        "product.historical_paper_loop.pending_stage",
+        lambda: {"phase": "IDLE", "batch_id": ""},
+    )
+    monkeypatch.setattr(
+        "product.historical_paper_loop.peek_next_batch",
+        lambda: {"available": False, "reason": "caught_up"},
+    )
     supervisor.enqueue_due()
     types = [job_type for job_type, _kwargs in jobs.enqueued]
-    assert SCH.BHAVCOPY_UPDATE in types
-    assert SCH.MARKET_SCAN in types
-    assert SCH.OUTCOME_RESOLUTION in types
-    assert SCH.DATA_REFRESH in types
+    assert types == [SCH.BHAVCOPY_UPDATE, SCH.DATA_REFRESH]
+    assert SCH.MARKET_SCAN not in types
+    assert SCH.PAPER_CYCLE not in types
 
 
 def test_successful_data_refresh_enqueues_current_scan_slot():
@@ -183,6 +307,112 @@ def test_successful_data_refresh_enqueues_current_scan_slot():
         holidays=lambda: set(),
         active_snapshot_id=lambda: "snap-1",
     )
-    supervisor._enqueue_scan_after_refresh(SimpleNamespace(job_type=SCH.DATA_REFRESH))
+    supervisor._enqueue_scan_after_refresh(SimpleNamespace(
+        job_type=SCH.DATA_REFRESH,
+        idempotency_key=SCH.data_refresh_key("2026-09-01"),
+        output_snapshot_id="snap-1",
+    ))
     assert jobs.enqueued
     assert jobs.enqueued[0][0] == SCH.MARKET_SCAN
+
+
+def test_manual_data_refresh_does_not_auto_enqueue_scan():
+    jobs = _Jobs()
+    supervisor = Supervisor.__new__(Supervisor)
+    supervisor.jobs = jobs
+    supervisor.deps = SimpleNamespace(
+        now_ist=lambda: datetime(2026, 9, 1, 10, 45, tzinfo=IST),
+        holidays=lambda: set(),
+        active_snapshot_id=lambda: "snap-1",
+    )
+    supervisor._enqueue_scan_after_refresh(SimpleNamespace(
+        job_type=SCH.DATA_REFRESH,
+        idempotency_key="manual:data:2026-09-01",
+        output_snapshot_id="snap-1",
+    ))
+    assert jobs.enqueued == []
+
+
+
+def test_restart_reconciles_finished_historical_poll_before_learning(monkeypatch):
+    class Jobs(_Jobs):
+        def __init__(self):
+            super().__init__()
+            self.completed = []
+            self.poll = SimpleNamespace(
+                job_id="hist-poll-1",
+                status=JS.PENDING,
+                job_type=SCH.HISTORICAL_PAPER_CYCLE,
+                idempotency_key=SCH.historical_paper_key("hist-restart"),
+            )
+
+        def find_by_type_and_key(self, job_type, key):
+            assert job_type == SCH.HISTORICAL_PAPER_CYCLE
+            assert key == SCH.historical_paper_key("hist-restart")
+            return self.poll
+
+        def complete(self, job_id, status, **kwargs):
+            self.completed.append((job_id, status, kwargs))
+
+    jobs = Jobs()
+    supervisor = Supervisor.__new__(Supervisor)
+    supervisor.jobs = jobs
+    supervisor.deps = SimpleNamespace(
+        now_ist=lambda: datetime(2026, 9, 3, 0, 5, tzinfo=IST),
+        holidays=lambda: set(),
+        active_snapshot_id=lambda: "snap-1",
+    )
+    supervisor._enqueue_post_market_grind = lambda *_a, **_k: None
+    supervisor._ensure_startup_trade_discovery = lambda: None
+    monkeypatch.setattr("product.decision_simulation_gate.is_approved", lambda: True)
+    monkeypatch.setattr(
+        "product.historical_paper_loop.pending_stage",
+        lambda: {"phase": "AWAITING_LEARNING", "batch_id": "hist-restart"},
+    )
+
+    supervisor.enqueue_due()
+
+    assert jobs.completed
+    assert jobs.completed[0][0] == "hist-poll-1"
+    assert jobs.completed[0][1] == JS.SKIPPED_IDEMPOTENT
+    assert jobs.enqueued[-1] == (
+        SCH.LEARNING_CYCLE,
+        {
+            "idempotency_key": SCH.historical_learning_key("hist-restart"),
+            "input_snapshot_id": "hist-restart",
+        },
+    )
+
+
+
+def test_forward_settlement_waits_for_required_official_session(monkeypatch):
+    jobs = _Jobs()
+    supervisor = Supervisor.__new__(Supervisor)
+    supervisor.jobs = jobs
+    supervisor.deps = SimpleNamespace(
+        now_ist=lambda: datetime(2026, 9, 18, 15, 45, tzinfo=IST),
+        holidays=lambda: set(),
+    )
+    monkeypatch.setattr(
+        "product.readiness.official_history",
+        lambda: {"current": False, "available_session": "2026-09-17", "latest_date": "2026-09-17"},
+    )
+    supervisor._enqueue_post_market_grind(session_date="2026-09-18")
+    assert jobs.enqueued == []
+
+
+
+def test_closed_market_does_not_start_historical_simulation_before_approval(monkeypatch):
+    jobs = _Jobs()
+    supervisor = Supervisor.__new__(Supervisor)
+    supervisor.jobs = jobs
+    supervisor.deps = SimpleNamespace(
+        now_ist=lambda: datetime(2026, 9, 1, 23, 50, tzinfo=IST),
+        holidays=lambda: set(),
+        active_snapshot_id=lambda: "snap-1",
+    )
+    supervisor._enqueue_post_market_grind = lambda *_a, **_k: None
+    supervisor._ensure_startup_trade_discovery = lambda: None
+    monkeypatch.setattr("product.decision_simulation_gate.is_approved", lambda: False)
+    supervisor.enqueue_due()
+    assert all(job_type != SCH.HISTORICAL_PAPER_CYCLE for job_type, _ in jobs.enqueued)

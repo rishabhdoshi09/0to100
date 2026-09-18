@@ -54,7 +54,8 @@ class AutoResearchBrain:
                  regime_fn=None, paper_state_path=None,
                  intel_registry_fn=None, event_store_path=None,
                  runtime_state_path=None, mode="PAPER_AUTO",
-                 intel_book_path=None, paper_config_path=None):
+                 intel_book_path=None, paper_config_path=None,
+                 insample_cache_path=None):
         self.thread = (ResearchThread(thread_path, clock=clock) if clock
                        else ResearchThread(thread_path))
         self.ledger = LearningLedger()
@@ -92,6 +93,7 @@ class AutoResearchBrain:
         self.intel_book = _PB(slippage_bps=3.0, cost_model=_costs)
         self.intel_book_path = intel_book_path
         self.paper_config_path = paper_config_path
+        self.insample_cache_path = insample_cache_path
         # persistent PAPER_AUTO enablement: survives restart, so ordinary restart never
         # reverts it or asks for a new click. Paper config is NOT real-money authorization.
         self.paper_auto_enabled = self._load_paper_config()
@@ -108,7 +110,7 @@ class AutoResearchBrain:
             except Exception:
                 pass
         self._intel_lock = _th.Lock()                # prevents overlapping mutation jobs
-        self._insample_cache: dict = {}              # (snapshot_id, strategy_id) -> (R, n)
+        self._insample_cache: dict[str, tuple[float, int]] = self._load_insample_cache()
         self.state = BrainState()
         self._specs_by_family: dict = {}
         self._thread_obj: threading.Thread | None = None
@@ -179,6 +181,51 @@ class AutoResearchBrain:
             _os.replace(tmp, p)                       # atomic (crash-safe)
         except Exception:
             pass
+
+    def _load_insample_cache(self) -> dict[str, tuple[float, int]]:
+        if not self.insample_cache_path:
+            return {}
+        try:
+            import json as _json
+            from pathlib import Path as _P
+            p = _P(self.insample_cache_path)
+            payload = _json.loads(p.read_text()) if p.exists() else {}
+            rows = payload.get("entries") if isinstance(payload, dict) else {}
+            out: dict[str, tuple[float, int]] = {}
+            for key, value in dict(rows or {}).items():
+                if not isinstance(value, (list, tuple)) or len(value) != 2:
+                    continue
+                out[str(key)] = (float(value[0]), int(value[1]))
+            return out
+        except Exception:
+            return {}
+
+    def _save_insample_cache(self) -> None:
+        if not self.insample_cache_path:
+            return
+        try:
+            import json as _json, os as _os
+            from pathlib import Path as _P
+            p = _P(self.insample_cache_path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "schema_version": 1,
+                "entries": {k: [float(v[0]), int(v[1])] for k, v in self._insample_cache.items()},
+            }
+            tmp = p.with_suffix(p.suffix + ".tmp")
+            tmp.write_text(_json.dumps(payload, sort_keys=True))
+            _os.replace(tmp, p)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _insample_cache_key(provider, spec) -> str:
+        snapshot_id = str(getattr(provider, "snapshot_id", "") or "")
+        try:
+            rules_hash = str(spec.config_hash())
+        except Exception:
+            rules_hash = str(getattr(spec, "version", "") or "")
+        return "|".join([snapshot_id, str(spec.strategy_id), rules_hash])
 
     # ── one synchronous cycle (deterministic; safe for tests + UI button) ────────
     def run_once(self, dataset_status=None, date=None, family_weights=None,
@@ -320,9 +367,17 @@ class AutoResearchBrain:
             if session_phase:
                 ctx.session_phase = str(session_phase)
 
-            # establish IN-SAMPLE evidence per strategy from its OWN rules on the snapshot
+            # Do not rebuild historical evidence for a cycle the durable runtime has
+            # already completed. The base runtime remains the idempotency authority;
+            # this pre-check only avoids expensive work before that authority returns
+            # ALREADY_DONE.
             bt_R, bt_n = {}, {}
-            if provider is not None:
+            cycle_done = False
+            try:
+                cycle_done = bool(self.runtime_state.is_cycle_done(ctx.cycle_id()))
+            except Exception:
+                cycle_done = False
+            if provider is not None and not cycle_done:
                 for spec in ctx.strategies:
                     r, n = self._insample_evidence(spec, provider, ctx.as_of_date)
                     bt_R[spec.strategy_id] = r
@@ -403,7 +458,7 @@ class AutoResearchBrain:
         up to (but excluding) `as_of`, simulated in a scratch realistic PaperBook. Returns
         (expectancy_R, n_trades). Cached per (snapshot, strategy). Reuses the runtime + book —
         no new research system, no fabricated evidence."""
-        key = (provider.snapshot_id, spec.strategy_id)
+        key = self._insample_cache_key(provider, spec)
         if key in self._insample_cache:
             return self._insample_cache[key]
         from research.intelligence import strategy_runtime as RT
@@ -433,6 +488,7 @@ class AutoResearchBrain:
         st = book.stats()
         res = (float(st["expectancy_R"]), int(st["n_trades"]))
         self._insample_cache[key] = res
+        self._save_insample_cache()
         return res
 
     def _run_paper_day(self, cyc: int, date=None) -> None:
@@ -521,6 +577,10 @@ def get_brain(**kwargs) -> AutoResearchBrain:
             # PAPER_AUTO operational persistence: the paper book + the enable flag survive restart
             kwargs.setdefault("intel_book_path", _logs / "intelligence" / "intel_book.json")
             kwargs.setdefault("paper_config_path", _logs / "intelligence" / "paper_config.json")
+            kwargs.setdefault(
+                "insample_cache_path",
+                _logs / "intelligence" / "insample_evidence_cache.json",
+            )
         except Exception:
             pass
         _BRAIN = AutoResearchBrain(**kwargs)

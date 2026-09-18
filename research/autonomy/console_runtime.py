@@ -166,6 +166,24 @@ def run_visible_loop(
         next_console = time.monotonic() + max(1.0, float(heartbeat_s or 30.0))
         while not runtime_stop.wait(runtime_interval):
             current = active_snapshot()
+            if current.get("job_id"):
+                try:
+                    renewed = supervisor.jobs.renew_lease(
+                        str(current["job_id"]),
+                        supervisor.owner,
+                        lease_seconds=300.0,
+                    )
+                    if not renewed:
+                        _emit(
+                            "LEASE WARN",
+                            f"could not renew {current.get('job_type') or 'job'} "
+                            f"id={current.get('job_id')}",
+                        )
+                except Exception as exc:
+                    _emit(
+                        "LEASE WARN",
+                        f"lease renewal failed: {type(exc).__name__}: {exc}",
+                    )
             try:
                 _write_runtime_status(
                     supervisor,

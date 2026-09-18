@@ -25,6 +25,7 @@ PRIMARY_PATHS = {
     "/api/learning-dashboard",
     "/api/forward-soak",
     "/api/decision-simulator",
+    "/api/decision-simulation-gate",
 }
 
 
@@ -94,3 +95,62 @@ def test_market_reports_route_returns_structured_empty_state(monkeypatch, tmp_pa
     assert isinstance(payload["missing_lanes"], list)
     assert payload["needs_refresh"] is True
     assert "invent" in (payload.get("empty_detail") or "").lower()
+
+
+def test_decision_simulation_approval_does_not_start_legacy_batch(monkeypatch):
+    import product.decision_simulation_gate as gate
+
+    approval = {
+        "accepted": True,
+        "phase": "APPROVED",
+        "thesis_hash": "thesis-1",
+        "simulation_scope": ["PAPER_FORWARD", "HISTORICAL_REPLAY"],
+    }
+    monkeypatch.setattr(gate, "approve", lambda: dict(approval))
+    monkeypatch.setattr(api, "_with_live_safety", lambda payload: dict(payload))
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("approval must not launch the legacy batch simulator")
+
+    monkeypatch.setattr(api._core, "decision_simulator_run", forbidden)
+    payload = api.decision_simulator_run()
+
+    assert payload["accepted"] is True
+    assert payload["status"] == "APPROVED"
+    assert payload["simulation_authority"] == "quantterm-autonomy"
+    assert payload["legacy_batch_started"] is False
+    assert payload["thesis_hash"] == "thesis-1"
+
+
+def test_addressed_counterfactual_is_inspection_only_and_does_not_approve(monkeypatch):
+    import product.decision_simulation_gate as gate
+
+    monkeypatch.setattr(
+        gate,
+        "status",
+        lambda: {
+            "phase": "AWAITING_APPROVAL",
+            "approved": False,
+            "thesis_hash": "thesis-1",
+        },
+    )
+    monkeypatch.setattr(api, "_with_live_safety", lambda payload: dict(payload))
+    monkeypatch.setattr(
+        api._core,
+        "decision_simulator_run",
+        lambda **kwargs: {
+            "status": "SUCCEEDED",
+            "kind": "PAST_DECISION_SIMULATION",
+            "symbol": kwargs.get("symbol"),
+            "fingerprint": "fp-1",
+        },
+    )
+
+    payload = api.decision_simulator_run(symbol="RELIANCE")
+
+    assert payload["status"] == "SUCCEEDED"
+    assert payload["fingerprint"] == "fp-1"
+    assert payload["autonomy_approved"] is False
+    assert payload["simulation_authority"] == "operator-inspection"
+    assert payload["simulation_scope"] == ["EXPLICIT_COUNTERFACTUAL_ONLY"]
+

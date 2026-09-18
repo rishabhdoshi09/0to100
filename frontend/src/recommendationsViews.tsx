@@ -4,6 +4,8 @@ import { money, pct, relativeAge, words } from './format'
 import {
   fetchMarketReportsWorkspace,
   fetchRecommendationsWorkspace,
+  fetchDecisionSimulationGate,
+  simulatePastDecisions,
   bootstrapProduct,
   type DeskNote,
   type DeskNoteCompany,
@@ -12,6 +14,7 @@ import {
   type RecommendationCase,
   type RecommendationsWorkspace,
   type MarketReportsWorkspace,
+  type DecisionSimulationGate,
 } from './productApi'
 import type { ExperienceViewProps } from './experience'
 import { LiveScanBanner } from './experience'
@@ -474,6 +477,9 @@ export function RecommendationsView({
   const [lifecycle, setLifecycle] = useState<'Active' | 'Closed'>('Active')
   const [query, setQuery] = useState('')
   const [selectedCard, setSelectedCard] = useState<RecommendationCard | null>(null)
+  const [simulationGate, setSimulationGate] = useState<DecisionSimulationGate | null>(null)
+  const [simulationBusy, setSimulationBusy] = useState(false)
+  const [simulationError, setSimulationError] = useState('')
   const autoPrep = useRef(false)
 
   useEffect(() => {
@@ -490,6 +496,28 @@ export function RecommendationsView({
       })
       .catch(() => { autoPrep.current = false })
   }, [dashboard.scan.scanned_at, dashboard.scan.records.length, marketScan.isActive, marketScan.isBusy, marketScan.start])
+
+  useEffect(() => {
+    let cancelled = false
+    const loadGate = () => {
+      fetchDecisionSimulationGate()
+        .then((payload) => {
+          if (!cancelled) {
+            setSimulationGate(payload)
+            setSimulationError('')
+          }
+        })
+        .catch((reason: unknown) => {
+          if (!cancelled) setSimulationError(reason instanceof Error ? reason.message : 'Decision Simulation status unavailable')
+        })
+    }
+    loadGate()
+    const timer = window.setInterval(loadGate, 5000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [dashboard.scan.scanned_at, marketScan.succeeded])
 
   useEffect(() => {
     let cancelled = false
@@ -558,6 +586,23 @@ export function RecommendationsView({
     setActive('Stock Intelligence')
   }
 
+  const startDecisionSimulation = () => {
+    setSimulationBusy(true)
+    setSimulationError('')
+    simulatePastDecisions()
+      .then((payload) => {
+        if (payload.accepted === false) {
+          throw new Error(payload.message || 'Best-trade discovery is not ready yet.')
+        }
+        return fetchDecisionSimulationGate()
+      })
+      .then((gate) => setSimulationGate(gate))
+      .catch((reason: unknown) => {
+        setSimulationError(reason instanceof Error ? reason.message : 'Decision Simulation failed to start')
+      })
+      .finally(() => setSimulationBusy(false))
+  }
+
   if (loading && !data) {
     return (
       <div className="reco-light">
@@ -608,6 +653,62 @@ export function RecommendationsView({
     <div className="reco-light">
       <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
       <LiveScanBanner scan={longTermScan} depth={depth} label="Funds refresh" />
+
+      <section className="reco-empty" aria-label="Decision Simulation startup gate">
+        <strong>
+          {simulationGate?.phase === 'APPROVED'
+            ? 'Decision Simulation approved'
+            : simulationGate?.phase === 'AWAITING_APPROVAL'
+              ? (simulationGate?.best_trades || []).length > 0
+                ? 'Best trades found — approve simulation once'
+                : 'Trade search complete — no eligible trade'
+              : 'Searching current best trades first'}
+        </strong>
+        <p>
+          {simulationGate?.message
+            || 'QuantTerm ranks the latest verified scan first. Historical and present paper simulation stays paused until you approve it.'}
+        </p>
+        {(simulationGate?.best_trades || []).length > 0 ? (
+          <div className="reco-card-stack">
+            {(simulationGate?.best_trades || []).slice(0, 3).map((trade) => {
+              const quality = trade.trade_quality || {}
+              const p = quality.win_probability
+              const pText = p == null ? 'Unproven' : `${Math.round(p * 100)}%`
+              return (
+                <div key={trade.decision_id || trade.symbol} className="reco-scan-meta">
+                  <strong>{trade.symbol}</strong>
+                  {' · '}{trade.setup || 'Setup'}
+                  {' · '}Win probability: {pText}
+                  {' · '}Lower-bound EV: {quality.lower_95_R == null ? 'Unproven' : `${Number(quality.lower_95_R).toFixed(2)}R`}
+                  {' · '}Plan R:R: {trade.expected_R == null ? '—' : `${Number(trade.expected_R).toFixed(2)}R`}
+                </div>
+              )
+            })}
+          </div>
+        ) : simulationGate?.discovery_ready ? (
+          <p className="reco-scan-meta">Fresh scan completed, but no BUY-qualified trade is being presented. No-trade is a valid result.</p>
+        ) : null}
+        <div className="reco-hero-actions">
+          <button
+            type="button"
+            className="reco-primary"
+            disabled={simulationBusy || simulationGate?.phase !== 'AWAITING_APPROVAL'}
+            onClick={startDecisionSimulation}
+          >
+            {simulationBusy
+              ? 'Starting Decision Simulation…'
+              : simulationGate?.phase === 'APPROVED'
+                ? 'Decision Simulation active'
+                : 'Start Decision Simulation'}
+          </button>
+        </div>
+        {simulationError ? <p className="reco-scan-meta">{simulationError}</p> : null}
+        <p className="reco-scan-meta">
+          Current suggestions, present paper decisions, and historical PIT simulation use the same versioned selection thesis.
+          Strategy rules, active learned policies, and any forward-proven selection model are part of its thesis hash.
+          Historical evidence trains challengers but cannot promote itself into production.
+        </p>
+      </section>
 
       <nav className="reco-crumb" aria-label="Breadcrumb">
         <button type="button" onClick={() => setActive('Home')}>Home</button>

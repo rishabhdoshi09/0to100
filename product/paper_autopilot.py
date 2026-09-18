@@ -184,6 +184,32 @@ def selection_score(card: Mapping[str, Any], policy: Mapping[str, Any] | None = 
         return base
 
 
+def carried_sector_risk(book) -> tuple[dict[str, float], dict[str, float]]:
+    """Risk already carried by the persisted paper book, keyed by sector.
+
+    Both the family and current correlation-cluster fallback use sector until a
+    stronger persisted cluster identity is available. Keeping this calculation
+    in one seam prevents discovery, present paper and historical paper from
+    disagreeing after restart.
+    """
+    family: dict[str, float] = {}
+    cluster: dict[str, float] = {}
+    if book is None:
+        return family, cluster
+    cap = float(getattr(book, "capital", 0.0) or 0.0)
+    for pos in (getattr(book, "open", {}) or {}).values():
+        sector = str(getattr(pos, "sector", "") or "")
+        if not sector:
+            continue
+        approved = _f(getattr(pos, "approved_risk_pct", None))
+        if approved is None and cap > 0:
+            approved = float(getattr(pos, "risk_amount", 0.0) or 0.0) / cap * 100.0
+        risk_pct = float(approved or 0.0)
+        family[sector] = family.get(sector, 0.0) + risk_pct
+        cluster[sector] = cluster.get(sector, 0.0) + risk_pct
+    return family, cluster
+
+
 def _group_for(decision: str) -> str:
     if decision == ENTER_NOW:
         return "TAKEN"
@@ -383,6 +409,7 @@ def evaluate_candidate(
             requested_risk_pct=DEFAULT_RISK_PCT,
             max_risk_fraction=float(getattr(book, "risk_per_trade_pct", 0.01) or 0.01),
             max_position_fraction=float(getattr(book, "max_position_pct", 0.10) or 0.10),
+            slippage_bps=float(getattr(book, "slippage_bps", 0.0) or 0.0),
         )
         if not sizing.ok:
             code = {
@@ -422,6 +449,62 @@ def evaluate_candidate(
     )
 
 
+def evaluate_selection_candidate(
+    card: Mapping[str, Any],
+    *,
+    book=None,
+    workspace: Mapping[str, Any] | None = None,
+    now: datetime | None = None,
+    entries_allowed: bool = True,
+    entry_block_reason: str = "",
+    paper_enabled: bool = True,
+    regime: str = "RISK_ON",
+    policy_path=None,
+    policies: Sequence[Mapping[str, Any]] | None = None,
+    enforce_history: bool | None = None,
+    family_risk: dict | None = None,
+    cluster_risk: dict | None = None,
+) -> AutopilotDecision:
+    """Canonical selection-thesis evaluation without execution.
+
+    Current best-trade discovery, historical PIT replay and present paper
+    trading all call this seam. enforce_history=False is reserved for
+    discovery/replay because those lanes produce the prerequisite historical
+    evidence; PAPER_FORWARD uses the production default (history gate on).
+    """
+    from product.decision_context import snapshot
+    from product.evidence_policy_engine import evaluate_policies
+
+    ctx = snapshot(card, book=book, regime=regime)
+    merged = dict(card)
+    for key, value in ctx.items():
+        if key == "methods":
+            continue
+        merged.setdefault(key, value)
+    policy = evaluate_policies(
+        merged,
+        policies=policies,
+        path=policy_path,
+        regime=regime,
+        book=book,
+        enforce_history=enforce_history,
+    )
+    decision = evaluate_candidate(
+        merged,
+        book=book,
+        entries_allowed=entries_allowed,
+        entry_block_reason=entry_block_reason,
+        paper_enabled=paper_enabled,
+        workspace=workspace,
+        now=now,
+        regime=regime,
+        policy=policy,
+        family_risk=family_risk,
+        cluster_risk=cluster_risk,
+    )
+    return _decorate(decision, policy=policy, context=ctx)
+
+
 def _canonical_decision(decision: AutopilotDecision, *, as_of: str, snapshot_id: str):
     """The canonical Decision behind this autopilot decision.
 
@@ -444,6 +527,18 @@ def _canonical_decision(decision: AutopilotDecision, *, as_of: str, snapshot_id:
             evidence_class=PAPER_FORWARD,
             generated_at=str(snapshot_id or as_of or ""),
         )
+        try:
+            from dataclasses import replace
+            from product.trading_thesis import manifest as thesis_manifest
+            canonical = replace(
+                canonical,
+                provenance={
+                    **dict(canonical.provenance or {}),
+                    "thesis_hash": str(thesis_manifest().get("thesis_hash") or ""),
+                },
+            )
+        except Exception:
+            pass
         try:
             from product.evidence_intelligence import enrich
             canonical = enrich(canonical)
@@ -547,12 +642,15 @@ def run_reco_paper_cycle(
     Does not mock or bypass risk. Returns a cycle dict the supervisor can merge.
     """
     from product.autopilot_journal import flatten_cards, record_cycle
-    from product.decision_context import snapshot
-    from product.evidence_policy_engine import evaluate_policies
 
     clock = now or datetime.now(timezone.utc)
     day = as_of or clock.date().isoformat()
     ident = _identity()
+    try:
+        from product.trading_thesis import manifest as thesis_manifest
+        thesis = thesis_manifest()
+    except Exception:
+        thesis = {}
     payload = dict(workspace or {})
     if cards is None:
         if not payload:
@@ -580,8 +678,7 @@ def run_reco_paper_cycle(
     waits: list[dict[str, Any]] = []
     not_surfaced: list[dict[str, Any]] = []
     opened: list[Any] = []
-    family_risk: dict[str, float] = {}
-    cluster_risk: dict[str, float] = {}
+    family_risk, cluster_risk = carried_sector_risk(book)
     cycle_reasons: list[str] = []
 
     if not paper_enabled:
@@ -631,34 +728,21 @@ def run_reco_paper_cycle(
 
     ranked: list[tuple[float, AutopilotDecision]] = []
     for card in card_list:
-        ctx = snapshot(card, book=book, regime=regime)
-        merged = dict(card)
-        for key, value in ctx.items():
-            if key == "methods":
-                continue
-            merged.setdefault(key, value)
-        policy = evaluate_policies(
-            merged,
-            policies=policies,
-            path=policy_path,
-            regime=regime,
+        decision = evaluate_selection_candidate(
+            card,
             book=book,
-            enforce_history=enforce_history,
-        )
-        decision = evaluate_candidate(
-            merged,
-            book=book,
+            workspace=payload or None,
+            now=clock,
             entries_allowed=entries_allowed,
             entry_block_reason=entry_block_reason,
             paper_enabled=paper_enabled,
-            workspace=payload or None,
-            now=clock,
             regime=regime,
-            policy=policy,
+            policy_path=policy_path,
+            policies=policies,
+            enforce_history=enforce_history,
             family_risk=family_risk,
             cluster_risk=cluster_risk,
         )
-        _decorate(decision, policy=policy, context=ctx)
         decisions.append(decision)
         from product.decision_taxonomy import is_non_judgment
         if is_non_judgment(decision.decision, decision.reason_code):
@@ -729,11 +813,16 @@ def run_reco_paper_cycle(
             continue
         entered += 1
         sector = str(decision.card.get("sector") or "")
+        try:
+            pos.sector = sector
+        except Exception:
+            pass
         family_risk[sector] = family_risk.get(sector, 0.0) + DEFAULT_RISK_PCT
         cluster_risk[sector] = cluster_risk.get(sector, 0.0) + DEFAULT_RISK_PCT
         opened.append((ENSEMBLE_ID, decision.symbol))
         taken_row = {
             **decision.as_dict(),
+            "thesis_hash": str(thesis.get("thesis_hash") or ""),
             "qty": getattr(pos, "qty", None),
             "entry_fill": getattr(pos, "entry_price", None),
             "status": "TAKEN",
@@ -842,6 +931,8 @@ def run_reco_paper_cycle(
         "source": "recommendation_selection_authority",
         "adapter": "paper",
         "rules_hash": ident.get("rules_hash"),
+        "thesis_hash": str(thesis.get("thesis_hash") or ""),
+        "thesis": thesis,
         "execution_reality": {
             "shadow_mode": True,
             "affects_paper_orders": False,

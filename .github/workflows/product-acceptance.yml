@@ -133,34 +133,73 @@ jobs:
           assert state.authorized is False
           PY
 
-      - name: Create genuine historical replay evidence for simulator
+      - name: Validate Decision Simulation gate and create explicit replay evidence
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsS --max-time 20 -X POST http://127.0.0.1:8765/api/decision-simulator > logs/product/simulator_replay_start.json
-          done_state=0
-          for _ in $(seq 1 400); do
-            curl -fsS --max-time 20 http://127.0.0.1:8765/api/decision-simulator > logs/product/simulator_replay.json
-            state="$(venv/bin/python - <<'PY'
-          import json
-          from pathlib import Path
-          p=json.loads(Path('logs/product/simulator_replay.json').read_text(encoding='utf-8'))
-          print(str(p.get('status') or '').upper())
-          PY
-          )"
-            if [[ "$state" = "SUCCEEDED" ]]; then done_state=1; break; fi
-            if [[ "$state" = "FAILED" || "$state" = "DEGRADED" ]]; then
-              echo "Historical replay ended in $state" >&2
-              cat logs/product/simulator_replay.json
-              exit 1
-            fi
-            sleep 3
-          done
-          test "$done_state" = 1
+          # The autonomous switch is allowed only after authoritative current
+          # discovery. A CI fixture may be operationally READY while official
+          # history is intentionally not current; in that case the correct
+          # product behavior is to refuse approval, not to weaken freshness.
+          curl -fsS --max-time 20 http://127.0.0.1:8765/api/decision-simulation-gate > logs/product/simulator_gate.json
           venv/bin/python - <<'PY'
           import json
           from pathlib import Path
-          p=json.loads(Path('logs/product/simulator_replay.json').read_text(encoding='utf-8'))
+          gate=json.loads(Path('logs/product/simulator_gate.json').read_text(encoding='utf-8'))
+          if gate.get('discovery_ready'):
+              assert gate.get('scan_fresh') is True, gate
+              assert str(gate.get('phase') or '').upper() == 'AWAITING_APPROVAL', gate
+          else:
+              assert gate.get('approved') is False, gate
+              assert str(gate.get('phase') or '').upper() == 'SEARCHING_BEST_TRADES', gate
+              assert gate.get('scan_fresh') is False or not gate.get('scan_scanned_at'), gate
+          PY
+
+          ready="$(venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+          p=json.loads(Path('logs/product/simulator_gate.json').read_text(encoding='utf-8'))
+          print('1' if p.get('discovery_ready') else '0')
+          PY
+          )"
+          if [[ "$ready" = 1 ]]; then
+            curl -fsS --max-time 20 -X POST http://127.0.0.1:8765/api/decision-simulator > logs/product/simulator_approval.json
+            venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+          p=json.loads(Path('logs/product/simulator_approval.json').read_text(encoding='utf-8'))
+          assert p.get('accepted') is True, p
+          assert str(p.get('status') or '').upper() == 'APPROVED', p
+          assert p.get('simulation_authority') == 'quantterm-autonomy', p
+          assert p.get('legacy_batch_started') is False, p
+          assert set(p.get('simulation_scope') or []) == {'PAPER_FORWARD','HISTORICAL_REPLAY'}, p
+          PY
+          else
+            # Prove the stale/not-current environment cannot bypass the gate.
+            curl -fsS --max-time 20 -X POST http://127.0.0.1:8765/api/decision-simulator > logs/product/simulator_approval.json
+            venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+          p=json.loads(Path('logs/product/simulator_approval.json').read_text(encoding='utf-8'))
+          assert p.get('accepted') is False, p
+          assert str(p.get('status') or '').upper() == 'WAITING_FOR_BEST_TRADES', p
+          assert str((p.get('approval') or {}).get('reason') or '').upper() == 'BEST_TRADE_DISCOVERY_NOT_READY', p
+          PY
+          fi
+
+          # Explicit historical inspection is intentionally independent of the
+          # autonomous approval switch. Generate genuine PIT evidence directly;
+          # this never opens PAPER_FORWARD positions or starts a duplicate loop.
+          venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+          from product.decision_simulator import run_decision_simulator
+
+          p = run_decision_simulator(force=True, async_job=False)
+          Path('logs/product/simulator_replay.json').write_text(
+              json.dumps(p, indent=2, default=str), encoding='utf-8'
+          )
+          assert str(p.get('status') or '').upper() == 'SUCCEEDED', p.get('status')
           rows=[r for r in (p.get('decisions') or p.get('rows') or []) if isinstance(r,dict)]
           rows=[r for r in rows if r.get('symbol') and (r.get('as_of') or r.get('market_as_of')) and str(r.get('decision') or '').upper() != 'NO_JUDGMENT']
           assert rows, 'historical replay SUCCEEDED but produced no real judgment usable by Simulate Past Decision'
@@ -338,7 +377,8 @@ jobs:
             logs/product/live_interlock_evidence.json
             logs/product/pre_acceptance_health.json
             logs/product/pre_acceptance_report_health.json
-            logs/product/simulator_replay_start.json
+            logs/product/simulator_gate.json
+            logs/product/simulator_approval.json
             logs/product/simulator_replay.json
             logs/product/simulator_seed.json
             logs/product/restart_health.json

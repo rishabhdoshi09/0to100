@@ -52,8 +52,10 @@ class RankedDecision:
     decision: Decision
     base_score: float
     evidence_adjustment: float
+    learning_adjustment: float
     ranking_score: float
     evidence: dict[str, Any]
+    learning: dict[str, Any]
 
     @property
     def symbol(self) -> str:
@@ -66,8 +68,10 @@ class RankedDecision:
             "state": self.decision.state,
             "base_score": self.base_score,
             "evidence_adjustment": self.evidence_adjustment,
+            "learning_adjustment": self.learning_adjustment,
             "ranking_score": self.ranking_score,
             "evidence": dict(self.evidence),
+            "learning": dict(self.learning),
         }
 
 
@@ -91,12 +95,20 @@ def rank(
         )
         base = float(decision.score if decision.score is not None else 0.0)
         adjustment = float(evidence.get("adjustment") or 0.0)
+        try:
+            from product.trading_thesis import active_learning_adjustment
+            learning = active_learning_adjustment(decision)
+        except Exception:
+            learning = {"adjustment": 0.0, "affects_selection": False}
+        learning_adjustment = float(learning.get("adjustment") or 0.0)
         ranked.append(RankedDecision(
             decision=decision,
             base_score=base,
             evidence_adjustment=adjustment,
-            ranking_score=round(base + adjustment, 6),
+            learning_adjustment=learning_adjustment,
+            ranking_score=round(base + adjustment + learning_adjustment, 6),
             evidence=evidence,
+            learning=learning,
         ))
     ranked.sort(key=lambda r: (-r.ranking_score, r.symbol))
     return ranked
@@ -105,18 +117,25 @@ def rank(
 def ranking_explanation(row: RankedDecision) -> str:
     """One line a human can check, rendered from the record, not narrated."""
     reason = str(row.evidence.get("reason") or "")
+    learned = ""
+    if row.learning_adjustment:
+        learned = (
+            f" Active forward-proven learner adjusted rank by "
+            f"{row.learning_adjustment:+g}."
+        )
     if reason == "INSUFFICIENT_EVIDENCE":
         have = row.evidence.get("count", 0)
         need = row.evidence.get("min_sample", MIN_SAMPLE)
         return (
             f"{row.symbol}: scored {row.base_score:g}; no measured edge for this "
-            f"context yet ({have}/{need} settled trades), so the score stands."
+            f"context yet ({have}/{need} settled trades), so measured context "
+            f"evidence adds no promotion.{learned}"
         )
     if reason == "MEASURED_NOT_NEGATIVE":
         return (
             f"{row.symbol}: scored {row.base_score:g}; measured over "
             f"{row.evidence.get('count')} settled trades and not losing, which "
-            "earns no bonus."
+            f"earns no evidence bonus.{learned}"
         )
     if reason == "MEASURED_NEGATIVE_EXPECTANCY":
         return (
@@ -124,10 +143,11 @@ def ranking_explanation(row: RankedDecision) -> str:
             f"{abs(row.evidence_adjustment):g} to {row.ranking_score:g} — this "
             f"setup has lost {abs(float(row.evidence.get('expectancy_R') or 0)):.2f}R "
             f"on average over {row.evidence.get('count')} settled trades in this context."
+            f"{learned}"
         )
     if reason == "NOT_MARKET_EVIDENCE":
         return (
             f"{row.symbol}: scored {row.base_score:g}; the only evidence for this "
-            "context is not market evidence, so ranking ignores it."
+            f"context is not market evidence, so ranking ignores it.{learned}"
         )
-    return f"{row.symbol}: scored {row.base_score:g}."
+    return f"{row.symbol}: scored {row.base_score:g}.{learned}"

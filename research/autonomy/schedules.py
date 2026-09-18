@@ -23,11 +23,13 @@ LEARNING_CYCLE = "learning_cycle"
 RESEARCH_CYCLE = "research_cycle"
 LONG_TERM_SCAN = "long_term_scan"
 LONG_TERM_REFRESH = "long_term_refresh"
+HISTORICAL_PAPER_CYCLE = "historical_paper_cycle"
 
 ALL_JOB_TYPES = (
     AUTH_HEALTH, INSTRUMENT_REFRESH, DATA_REFRESH, BHAVCOPY_UPDATE, CORPORATE_ACTIONS,
     UNIVERSE_HISTORY, INDEX_WARMUP, MARKET_SCAN, NEWS_REFRESH, PAPER_CYCLE,
     OUTCOME_RESOLUTION, LEARNING_CYCLE, RESEARCH_CYCLE, LONG_TERM_SCAN, LONG_TERM_REFRESH,
+    HISTORICAL_PAPER_CYCLE,
 )
 CRITICAL_JOBS = {AUTH_HEALTH, DATA_REFRESH, PAPER_CYCLE, OUTCOME_RESOLUTION}
 
@@ -172,6 +174,16 @@ def paper_cycle_key(snapshot_id: str, session_and_slot: str) -> str:
     return f"paper_cycle:{snapshot_id}:{session_and_slot}"
 
 
+def snapshot_scan_key(snapshot_id: str) -> str:
+    """Automatic scan identity: exactly once for one immutable data snapshot."""
+    return f"snapshot_scan:{snapshot_id}"
+
+
+def snapshot_paper_key(snapshot_id: str) -> str:
+    """Automatic paper identity: exactly once for one immutable data snapshot."""
+    return f"snapshot_paper:{snapshot_id}"
+
+
 def scan_key(snapshot_id: str, slot: str, session_date: str | None = None) -> str:
     suffix = f":{session_date}" if session_date else ""
     return f"market_scan:{snapshot_id}:{slot}{suffix}"
@@ -223,6 +235,30 @@ def outcome_key(session_date: str) -> str:
 
 def research_key(session_date: str) -> str:
     return f"research_cycle:{session_date}"
+
+
+def historical_paper_key(batch_id: str) -> str:
+    return f"hist_paper:{batch_id}"
+
+
+def historical_learning_key(batch_id: str) -> str:
+    return f"hist_learning:{batch_id}"
+
+
+def historical_research_key(batch_id: str) -> str:
+    return f"hist_research:{batch_id}"
+
+
+def forward_outcome_key(session_date: str) -> str:
+    return f"forward_outcome:{session_date}"
+
+
+def forward_learning_key(session_date: str) -> str:
+    return f"forward_learning:{session_date}"
+
+
+def forward_research_key(session_date: str) -> str:
+    return f"forward_research:{session_date}"
 
 
 def last_completed_session_date(now_ist, holidays=None):

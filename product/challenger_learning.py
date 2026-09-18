@@ -73,6 +73,7 @@ MODEL_FEATURES = (
 
 REAL_LANES = {"PAPER_FORWARD", "REAL_FORWARD_PAPER"}
 COUNTERFACTUAL_LANES = {"FORWARD_COUNTERFACTUAL", "COUNTERFACTUAL_FORWARD"}
+HISTORICAL_LANES = {"HISTORICAL_REPLAY", "BACKTEST"}
 
 
 def store_path(path: str | Path | None = None) -> Path:
@@ -143,14 +144,26 @@ def _lane_weight(row: Mapping[str, Any]) -> float:
         return 1.0
     if lane in COUNTERFACTUAL_LANES:
         return 0.65
+    if lane in HISTORICAL_LANES:
+        return 0.35
     return 0.0
 
 
 def _rows() -> list[dict[str, Any]]:
     from research.feature_store import load_observations
+    try:
+        from product.trading_thesis import manifest as thesis_manifest
+        current_thesis = str(thesis_manifest().get("thesis_hash") or "")
+    except Exception:
+        current_thesis = ""
 
     rows = load_observations(kind="DECISION", require_outcome=True)
-    return [r for r in rows if _lane_weight(r) > 0]
+    return [
+        r for r in rows
+        if _lane_weight(r) > 0
+        and current_thesis
+        and str((r.get("meta") or {}).get("thesis_hash") or "") == current_thesis
+    ]
 
 
 def _matrix(rows: list[dict[str, Any]]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -355,6 +368,10 @@ def _serialize_model(
         1 for r in rows
         if str((r.get("outcome_meta") or {}).get("evidence_class") or "").upper() in COUNTERFACTUAL_LANES
     )
+    historical_n = sum(
+        1 for r in rows
+        if str((r.get("outcome_meta") or {}).get("evidence_class") or "").upper() in HISTORICAL_LANES
+    )
     version = _model_version(rows)
     return {
         "model_version": version,
@@ -363,6 +380,7 @@ def _serialize_model(
         "trained_n": len(rows),
         "real_forward_n": real_n,
         "counterfactual_n": cf_n,
+        "historical_n": historical_n,
         "features": list(MODEL_FEATURES),
         "coef": [round(float(x), 10) for x in coef],
         "intercept": round(float(intercept), 10),
