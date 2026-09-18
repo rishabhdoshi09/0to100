@@ -370,6 +370,11 @@ def decide_session(
     max_bar = str(scan_payload.get("as_of_session") or as_of)[:10]
     future_bar = max_bar > str(as_of)[:10]
     versions = current_versions().as_dict()
+    try:
+        from product.trading_thesis import manifest as thesis_manifest
+        thesis = thesis_manifest()
+    except Exception:
+        thesis = {}
     out: list[dict[str, Any]] = []
     for card in cards:
         symbol = str(card.get("symbol") or "").upper()
@@ -433,6 +438,11 @@ def decide_session(
             decision=mapped,
             reason_code=str(raw.get("reason_code") or ""),
         )
+        try:
+            from product.paper_autopilot import selection_score as production_selection_score
+            selection_rank = production_selection_score(card)
+        except Exception:
+            selection_rank = None
         out.append({
             "symbol": symbol,
             "as_of": str(as_of)[:10],
@@ -475,6 +485,9 @@ def decide_session(
             "pit_sector": card.get("pit_sector"),
             "pit_downgrade": downgrade,
             "versions": versions,
+            "thesis_hash": str(thesis.get("thesis_hash") or ""),
+            "thesis": thesis,
+            "selection_score": selection_rank,
             "provenance": HISTORICAL_REPLAY,
             "not_pnl": True,
             "live_locked": True,
@@ -526,6 +539,7 @@ def decide_session(
                     **dict(canonical.provenance or {}),
                     "historical_committee_decision": str(out[-1].get("decision") or ""),
                     "historical_reason_code": str(out[-1].get("reason_code") or ""),
+                    "thesis_hash": str(out[-1].get("thesis_hash") or ""),
                 },
             )
             frozen_feature = freeze_feature_decision(canonical)
