@@ -715,7 +715,7 @@ export function ProductionBacktestView({ dashboard, setActive }: ViewProps) {
           {sim?.period_start ? ` · Period ${sim.period_start} → ${sim.period_end}` : ''}
           {sim?.sessions_total ? ` · Sessions ${sim.sessions_done ?? 0}/${sim.sessions_total}` : ''}
         </p>
-        {sim?.simple ? <p className="panel-copy">{sim.simple}</p> : <p className="panel-copy">No historical replay yet. This button runs the production decision path on official past sessions.</p>}
+        {sim?.simple ? <p className="panel-copy">{sim.simple}</p> : <p className="panel-copy">Decision Simulation has not been approved for this startup yet. Start it once after reviewing the current best-trade shortlist; the same production thesis is then replayed on historical sessions and used for present paper decisions.</p>}
         <p className="panel-copy">{sim?.engine || ''}</p>
         <div className="fact-grid">
           <div><span>Trading sessions</span><strong>{sim?.trading_sessions ?? '—'}</strong></div>
@@ -732,7 +732,7 @@ export function ProductionBacktestView({ dashboard, setActive }: ViewProps) {
           <div><span>Open / unresolved</span><strong>{sim?.open_unresolved ?? '—'}</strong></div>
         </div>
         <div className="inline-actions" style={{ padding: '12px' }}>
-          <button type="button" disabled={simBusy} onClick={runSim}>{simBusy ? (sim?.message || 'Replaying…') : 'Simulate past decisions'}</button>
+          <button type="button" disabled={simBusy} onClick={runSim}>{simBusy ? (sim?.message || 'Starting simulation…') : 'Start Decision Simulation'}</button>
         </div>
         <p className="panel-copy">{sim?.note || 'Later prices are used only for outcome classification.'}</p>
         <Panel title="ONE PAST DECISION" subtitle="Original decision vs simulated alternative · PIT at T · subsequent bars only for outcome">
