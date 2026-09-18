@@ -144,5 +144,6 @@ def settle_frozen(row: Mapping[str, Any], *, horizon: int = 10) -> dict[str, Any
     out["r_multiple"] = metrics.get("r_multiple")
     out["mfe_pct"] = metrics.get("mfe_pct")
     out["mae_pct"] = metrics.get("mae_pct")
+    out["outcome_resolved_at"] = str((bars[-1] if bars else {}).get("date") or "")[:10]
     out["outcome_rewrote_freeze"] = False
     return out
