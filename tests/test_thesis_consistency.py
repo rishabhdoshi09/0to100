@@ -110,19 +110,11 @@ def test_historical_replay_defaults_to_present_paper_decider(monkeypatch):
         lambda: {"thesis_hash": "thesis-1", "objective_id": "test"},
     )
 
-    policy = {"final_effect": "NEUTRAL", "marker": "same-policy"}
-    monkeypatch.setattr(
-        "product.evidence_policy_engine.evaluate_policies",
-        lambda candidate, **kwargs: (
-            policy
-            if kwargs.get("enforce_history") is False
-            else (_ for _ in ()).throw(AssertionError("historical replay must only relax the circular history bootstrap gate"))
-        ),
-    )
-
     calls = []
 
     class Decision:
+        selection_score = 91.5
+
         def as_dict(self):
             return {
                 "symbol": "INFY",
@@ -130,20 +122,15 @@ def test_historical_replay_defaults_to_present_paper_decider(monkeypatch):
                 "reason_code": "NO_ELIGIBLE_TRADE",
             }
 
-    def paper_decider(candidate, **kwargs):
+    def production_selection(candidate, **kwargs):
         calls.append((dict(candidate), dict(kwargs)))
-        assert kwargs["policy"] is policy
+        assert kwargs["enforce_history"] is False
         assert kwargs["entries_allowed"] is True
         assert kwargs["paper_enabled"] is True
+        assert kwargs["regime"] == "RISK_ON"
         return Decision()
 
-    monkeypatch.setattr(HR, "evaluate_candidate", paper_decider)
-    monkeypatch.setattr(
-        "product.paper_autopilot.selection_score",
-        lambda candidate, selected_policy=None: (
-            91.5 if selected_policy is policy else (_ for _ in ()).throw(AssertionError("selection score must use the same replay policy"))
-        ),
-    )
+    monkeypatch.setattr(HR, "evaluate_selection_candidate", production_selection)
 
     rows = HR.decide_session("2026-09-01", scan)
 
@@ -152,3 +139,4 @@ def test_historical_replay_defaults_to_present_paper_decider(monkeypatch):
     assert rows[0]["selection_score"] == 91.5
     assert rows[0]["thesis_hash"] == "thesis-1"
     assert rows[0]["pit"]["history_bootstrap_gate_applied"] is False
+
