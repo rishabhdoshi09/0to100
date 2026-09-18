@@ -592,12 +592,6 @@ def replay_identity(
     dates_fn: Callable[[], Sequence[Any]] | None = None,
 ) -> dict[str, Any]:
     """Deterministic identity for the exact replay inputs available now."""
-    identity = replay_identity(
-        sessions=sessions,
-        universe_limit=universe_limit,
-        symbols=symbols,
-        dates_fn=dates_fn,
-    )
     all_sessions = official_sessions(dates_fn=dates_fn)
     if len(all_sessions) < 2:
         return {"available": False, "reason": "insufficient_sessions"}
@@ -668,6 +662,12 @@ def run_historical_replay(
     """Replay production decisions on official sessions. Bounded and PIT-safe."""
     target = _root(directory)
     target.mkdir(parents=True, exist_ok=True)
+    identity = replay_identity(
+        sessions=sessions,
+        universe_limit=universe_limit,
+        symbols=symbols,
+        dates_fn=dates_fn,
+    )
     all_sessions = official_sessions(dates_fn=dates_fn)
     if len(all_sessions) < 2:
         payload = {
