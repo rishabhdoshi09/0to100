@@ -132,7 +132,12 @@ def status(*, path: str | Path | None = None) -> dict[str, Any]:
     thesis_hash = str(thesis.get("thesis_hash") or "")
     board = _board()
     scan_id = str(board.get("scan_scanned_at") or "")
-    discovery_ready = bool(board.get("available")) and bool(scan_id)
+    try:
+        from product.desk_pipeline import scan_is_fresh
+        scan_fresh = bool(scan_is_fresh())
+    except Exception:
+        scan_fresh = False
+    discovery_ready = bool(board.get("available")) and bool(scan_id) and scan_fresh
     approved = bool(
         state.get("approved")
         and str(state.get("startup_id") or "") == startup_id
@@ -160,6 +165,7 @@ def status(*, path: str | Path | None = None) -> dict[str, Any]:
         "approval_required": not approved,
         "discovery_ready": discovery_ready,
         "scan_scanned_at": scan_id,
+        "scan_fresh": scan_fresh,
         "best_trades": list(board.get("best_trades") or []),
         "decision_count": len(list(board.get("decisions") or [])),
         "actionable": int(board.get("actionable") or 0),
