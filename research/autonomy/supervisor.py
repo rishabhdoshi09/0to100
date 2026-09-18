@@ -696,8 +696,13 @@ class Supervisor:
                                error_message=f"no handler for {job.job_type}")
             self._incident("NO_HANDLER", f"No handler for job {job.job_type}", job)
             return
-        ctx = JOBS._Ctx(self.deps, active_failures=self.failures,
-                        owner_paused=self.owner_state.get("new_entries_paused", False), root=self.root)
+        ctx = JOBS._Ctx(
+            self.deps,
+            active_failures=self.failures,
+            owner_paused=self.owner_state.get("new_entries_paused", False),
+            root=self.root,
+            job=job,
+        )
         ctx.dialogue = self.dialogue
         if job.job_type == SCH.DATA_REFRESH and str(job.idempotency_key or "").endswith(":eod"):
             ctx.required_session_date = self.deps.now_ist().date().isoformat()
