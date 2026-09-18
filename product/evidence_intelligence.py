@@ -145,6 +145,15 @@ def freeze_decision(
         "prediction_source": (evidence or {}).get("formula_version") or "",
         "historical_confidence": (evidence or {}).get("historical_confidence"),
         "decision_confidence": (evidence or {}).get("decision_confidence"),
+        "challenger_predicted_p": (
+            ((evidence or {}).get("challenger_shadow") or {}).get("p_positive_R")
+        ),
+        "challenger_model_version": (
+            ((evidence or {}).get("challenger_shadow") or {}).get("model_version") or ""
+        ),
+        "challenger_status": (
+            ((evidence or {}).get("challenger_shadow") or {}).get("status") or ""
+        ),
         "not_live": True,
     }
     return snapshot(
@@ -538,6 +547,15 @@ def evidence_read(decision: Decision, *, k: int = DEFAULT_K) -> dict[str, Any]:
 def enrich(decision: Decision) -> Decision:
     """Attach evidence intelligence and freeze its pre-outcome prediction."""
     evidence = evidence_read(decision)
+    try:
+        from product.challenger_learning import score_decision
+        evidence["challenger_shadow"] = score_decision(decision)
+    except Exception:
+        evidence["challenger_shadow"] = {
+            "available": False,
+            "affects_selection": False,
+            "live_locked": True,
+        }
     freeze_decision(decision, evidence=evidence)
     historical = dict(decision.historical_evidence or {})
     historical["evidence_intelligence"] = evidence
