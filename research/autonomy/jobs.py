@@ -512,6 +512,11 @@ def _kite_live_ready_result(ctx, *, sid=None, quality=None, live=None) -> JobRes
         return None
     quality = dict(quality or {})
     latest = str(live.get("session_date") or quality.get("latest_date") or "")
+    source = str(live.get("source") or "kite_quotes").strip().lower()
+    safe_source = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in source)
+    data_identity = str(sid or "").strip() or (
+        f"market:{safe_source}:{latest[:10]}" if latest else ""
+    )
     unblocks = [DEP_DATA, DEP_CA_SOURCE, DEP_UNIVERSE_SOURCE]
     if latest:
         unblocks.append(f"EOD_DATA_READY:{latest}")
@@ -519,13 +524,18 @@ def _kite_live_ready_result(ctx, *, sid=None, quality=None, live=None) -> JobRes
         JS.SUCCEEDED,
         f"Kite latest session ready · {int(live.get('symbols') or 0)} symbols · "
         f"{live.get('source') or 'kite_quotes'}",
-        output_snapshot_id=sid,
+        output_snapshot_id=data_identity or None,
         clears={H.SNAPSHOT_STALE, H.AUTH_MISSING, H.AUTH_EXPIRED,
                 H.BROKER_PROVIDER_UNAVAILABLE, H.PROVIDER_UNAVAILABLE,
                 H.OPTIONS_HISTORY_INCOMPLETE},
         state_hint=ST.DATA_READY,
         unblocks=tuple(unblocks),
-        metadata={**quality, **live, "latest_date": latest or live.get("session_date", "")},
+        metadata={
+            **quality,
+            **live,
+            "latest_date": latest or live.get("session_date", ""),
+            "data_identity": data_identity,
+        },
     )
 
 
