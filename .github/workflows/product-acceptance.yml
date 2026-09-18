@@ -57,7 +57,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          nohup bash scripts/run_quantterm_complete.sh --restart > logs/product/complete_stack.log 2>&1 &
+          # Own a session so the restart gate can reproduce a terminal Ctrl-C
+          # by signalling the launcher's foreground process group.
+          nohup setsid bash scripts/run_quantterm_complete.sh --restart > logs/product/complete_stack.log 2>&1 &
           echo $! > logs/product/complete_stack.pid
 
       - name: Wait for automated bootstrap and complete desk readiness
@@ -222,13 +224,50 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -f logs/product/complete_stack.pid ]]; then
-            kill -TERM "$(cat logs/product/complete_stack.pid)" 2>/dev/null || true
+            launcher_pid="$(cat logs/product/complete_stack.pid)"
+            # Reproduce terminal Ctrl-C: SIGINT goes to the launcher's process
+            # group. The inner stack is intentionally in its own process group,
+            # so the outer trap must shut it down deliberately and no worker may
+            # survive by being reparented to PID 1.
+            kill -INT "-$launcher_pid" 2>/dev/null || kill -INT "$launcher_pid" 2>/dev/null || true
             for _ in $(seq 1 40); do
-              if ! kill -0 "$(cat logs/product/complete_stack.pid)" 2>/dev/null; then break; fi
+              if ! kill -0 "$launcher_pid" 2>/dev/null; then break; fi
               sleep 1
             done
+            if kill -0 "$launcher_pid" 2>/dev/null; then
+              echo "Complete launcher survived Ctrl-C shutdown budget" >&2
+              exit 1
+            fi
+            # Give child traps a short final window, then prove the specific
+            # production regression: no orphan market_ops and no desk/API ports.
+            for _ in $(seq 1 20); do
+              if ! pgrep -f '[o]perations[.]market_ops' >/dev/null 2>&1 \
+                 && ! pgrep -f '[m]ain[.]py autonomy' >/dev/null 2>&1 \
+                 && ! python scripts/local_stack.py ports-healthy --ports 5173,8765 >/dev/null 2>&1; then
+                break
+              fi
+              sleep 0.25
+            done
+            python scripts/local_stack.py pids --ports 5173,8765,8766 > logs/product/post_sigint_pids.json || true
+            if pgrep -af '[o]perations[.]market_ops' > logs/product/post_sigint_market_ops.txt 2>/dev/null; then
+              echo "Orphan operations.market_ops survived Ctrl-C" >&2
+              cat logs/product/post_sigint_market_ops.txt >&2
+              exit 1
+            fi
+            if pgrep -af '[m]ain[.]py autonomy' > logs/product/post_sigint_autonomy.txt 2>/dev/null; then
+              echo "Orphan autonomy supervisor survived Ctrl-C" >&2
+              cat logs/product/post_sigint_autonomy.txt >&2
+              exit 1
+            fi
+            venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+          payload=json.loads(Path('logs/product/post_sigint_pids.json').read_text(encoding='utf-8'))
+          live_ports={p:payload.get(p) or [] for p in ('5173','8765','8766')}
+          assert not any(live_ports.values()), f'listeners survived Ctrl-C: {live_ports}'
+          PY
           fi
-          nohup bash scripts/run_quantterm_complete.sh --restart > logs/product/restart_stack.log 2>&1 &
+          nohup setsid bash scripts/run_quantterm_complete.sh --restart > logs/product/restart_stack.log 2>&1 &
           echo $! > logs/product/restart_stack.pid
           recovered=0
           for _ in $(seq 1 300); do
@@ -304,5 +343,8 @@ jobs:
             logs/product/simulator_seed.json
             logs/product/restart_health.json
             logs/product/restart_recovery_evidence.json
+            logs/product/post_sigint_pids.json
+            logs/product/post_sigint_market_ops.txt
+            logs/product/post_sigint_autonomy.txt
             logs/product/complete_stack.log
             logs/product/restart_stack.log
