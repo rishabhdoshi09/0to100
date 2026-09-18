@@ -565,10 +565,16 @@ def learning_dashboard(
         "live_readiness": evaluate_live_readiness(),
         "forward_soak": soak,
         "autonomous_learning": None,
+        "challenger_learning": None,
     }
     try:
         from product.autonomous_learning import dashboard as autonomous_dashboard
         out["autonomous_learning"] = autonomous_dashboard()
     except Exception as exc:
         out["autonomous_learning"] = {"available": False, "error": str(exc)[:200]}
+    try:
+        from product.challenger_learning import dashboard as challenger_dashboard
+        out["challenger_learning"] = challenger_dashboard()
+    except Exception as exc:
+        out["challenger_learning"] = {"available": False, "error": str(exc)[:200]}
     return out
