@@ -94,3 +94,46 @@ def test_new_complete_stack_startup_requires_one_new_approval(tmp_path, monkeypa
     assert fresh["approved"] is False
     assert fresh["approval_required"] is True
     assert G.is_approved(path=state) is False
+
+
+
+def test_gate_board_uses_precomputed_discovery_projection(monkeypatch):
+    import product.decision_discovery_store as discovery
+    import product.recommendations_workspace as workspace_mod
+    import product.scan_store as scan_store
+    import product.long_term_store as long_term_store
+    import product.trading_thesis as thesis_mod
+
+    monkeypatch.setattr(
+        scan_store,
+        "load_scan",
+        lambda: {
+            "scanned_at": "2026-09-18T10:00:00+00:00",
+            "records": [{"symbol": "INFY"}],
+        },
+    )
+    monkeypatch.setattr(
+        long_term_store,
+        "load_long_term_scan",
+        lambda: {"scanned_at": "2026-09-18T09:00:00+00:00", "records": []},
+    )
+    monkeypatch.setattr(
+        thesis_mod,
+        "manifest",
+        lambda: {"thesis_hash": "thesis-a"},
+    )
+    cached = {
+        "available": True,
+        "scan_scanned_at": "2026-09-18T10:00:00+00:00",
+        "best_trades": [{"symbol": "INFY"}],
+        "decisions": [{"symbol": "INFY"}],
+        "actionable": 1,
+    }
+    monkeypatch.setattr(discovery, "load", lambda **_kwargs: dict(cached))
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("gate must not rebuild recommendations when discovery cache matches")
+
+    monkeypatch.setattr(workspace_mod, "build_recommendations_workspace", forbidden)
+
+    assert G._board() == cached
