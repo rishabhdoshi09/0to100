@@ -395,6 +395,13 @@ def test_canonical_launchers_source_setsid_compat_and_wait_for_http():
     assert "answered HTTP" in complete
 
 
+def test_complete_launcher_starts_inner_stack_in_its_own_process_group():
+    root = Path(__file__).resolve().parents[1]
+    complete = (root / "scripts" / "run_quantterm_complete.sh").read_text(encoding="utf-8")
+    assert "setsid bash scripts/run_quantterm.sh 200>&- &" in complete
+    assert 'kill "-$sig" "-$pid"' in complete
+
+
 def test_setsid_shim_is_a_function_when_setsid_is_missing(tmp_path):
     import os
     import shutil
