@@ -31,10 +31,31 @@ def test_successful_intraday_scan_enqueues_paper_cycle():
         holidays=lambda: set(),
         active_snapshot_id=lambda: "snap-1",
     )
-    supervisor._enqueue_paper_after_scan(SimpleNamespace(job_type=SCH.MARKET_SCAN))
+    supervisor._enqueue_paper_after_scan(SimpleNamespace(
+        job_type=SCH.MARKET_SCAN,
+        idempotency_key=SCH.snapshot_scan_key("snap-1"),
+        input_snapshot_id="snap-1",
+    ))
     assert jobs.enqueued
     assert jobs.enqueued[0][0] == SCH.PAPER_CYCLE
     assert jobs.enqueued[0][1]["critical"] is True
+
+
+def test_manual_scan_does_not_auto_enqueue_paper():
+    jobs = _Jobs()
+    supervisor = Supervisor.__new__(Supervisor)
+    supervisor.jobs = jobs
+    supervisor.deps = SimpleNamespace(
+        now_ist=lambda: datetime(2026, 9, 1, 10, 45, tzinfo=IST),
+        holidays=lambda: set(),
+        active_snapshot_id=lambda: "snap-1",
+    )
+    supervisor._enqueue_paper_after_scan(SimpleNamespace(
+        job_type=SCH.MARKET_SCAN,
+        idempotency_key="manual:scan:snap-1:control-1",
+        input_snapshot_id="snap-1",
+    ))
+    assert jobs.enqueued == []
 
 
 def test_data_refresh_success_does_not_enqueue_paper():
@@ -59,7 +80,11 @@ def test_paper_does_not_enqueue_before_entry_window():
         holidays=lambda: set(),
         active_snapshot_id=lambda: "snap-1",
     )
-    supervisor._enqueue_paper_after_scan(SimpleNamespace(job_type=SCH.MARKET_SCAN))
+    supervisor._enqueue_paper_after_scan(SimpleNamespace(
+        job_type=SCH.MARKET_SCAN,
+        idempotency_key=SCH.snapshot_scan_key("snap-1"),
+        input_snapshot_id="snap-1",
+    ))
     assert jobs.enqueued == []
 
 
@@ -172,6 +197,27 @@ def test_successful_data_refresh_enqueues_current_scan_slot():
         holidays=lambda: set(),
         active_snapshot_id=lambda: "snap-1",
     )
-    supervisor._enqueue_scan_after_refresh(SimpleNamespace(job_type=SCH.DATA_REFRESH))
+    supervisor._enqueue_scan_after_refresh(SimpleNamespace(
+        job_type=SCH.DATA_REFRESH,
+        idempotency_key=SCH.data_refresh_key("2026-09-01"),
+        output_snapshot_id="snap-1",
+    ))
     assert jobs.enqueued
     assert jobs.enqueued[0][0] == SCH.MARKET_SCAN
+
+
+def test_manual_data_refresh_does_not_auto_enqueue_scan():
+    jobs = _Jobs()
+    supervisor = Supervisor.__new__(Supervisor)
+    supervisor.jobs = jobs
+    supervisor.deps = SimpleNamespace(
+        now_ist=lambda: datetime(2026, 9, 1, 10, 45, tzinfo=IST),
+        holidays=lambda: set(),
+        active_snapshot_id=lambda: "snap-1",
+    )
+    supervisor._enqueue_scan_after_refresh(SimpleNamespace(
+        job_type=SCH.DATA_REFRESH,
+        idempotency_key="manual:data:2026-09-01",
+        output_snapshot_id="snap-1",
+    ))
+    assert jobs.enqueued == []
