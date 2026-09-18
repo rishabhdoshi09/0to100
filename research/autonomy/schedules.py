@@ -249,6 +249,18 @@ def historical_research_key(batch_id: str) -> str:
     return f"hist_research:{batch_id}"
 
 
+def forward_outcome_key(session_date: str) -> str:
+    return f"forward_outcome:{session_date}"
+
+
+def forward_learning_key(session_date: str) -> str:
+    return f"forward_learning:{session_date}"
+
+
+def forward_research_key(session_date: str) -> str:
+    return f"forward_research:{session_date}"
+
+
 def last_completed_session_date(now_ist, holidays=None):
     """Most recent cash session that has already closed (today after 15:30, else prior)."""
     if holidays is None:
