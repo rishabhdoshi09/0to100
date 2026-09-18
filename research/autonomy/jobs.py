@@ -748,6 +748,56 @@ def run_market_scan(ctx) -> JobResult:
         payload = report or {}
     summary = dict(payload.get("summary", {}))
     n = int(summary.get("with_any_setup", 0) or 0)
+
+    # Persist the complete startup trade-discovery projection as part of the
+    # scan transaction. Decision Simulation GET/POST then remains a cheap,
+    # deterministic read path instead of rebuilding the desk/ranking engine
+    # inside an HTTP request.
+    discovery_projection: dict = {}
+    if isinstance(ctx.deps, Deps):
+        try:
+            from product.decision_discovery_store import save as save_discovery
+            from product.decision_service import decision_board
+            from product.long_term_store import load_long_term_scan
+            from product.recommendations_store import save_recommendations
+            from product.recommendations_workspace import build_recommendations_workspace
+            from product.trading_thesis import manifest as thesis_manifest
+
+            long_term = dict(load_long_term_scan() or {})
+            workspace = build_recommendations_workspace(
+                scan_payload=payload,
+                long_term_payload=long_term,
+                refresh_technicals=False,
+                settle_cases=False,
+                deep_confirm=False,
+                persist_ledger=False,
+            )
+            save_recommendations(workspace)
+            board = dict(decision_board(workspace=workspace, limit=40) or {})
+            thesis_hash = str(thesis_manifest().get("thesis_hash") or "")
+            save_discovery(
+                board,
+                scan_scanned_at=str(payload.get("scanned_at") or ""),
+                long_term_scanned_at=str(long_term.get("scanned_at") or ""),
+                thesis_hash=thesis_hash,
+            )
+            discovery_projection = {
+                "status": "READY",
+                "scan_scanned_at": str(payload.get("scanned_at") or ""),
+                "thesis_hash": thesis_hash,
+                "best_trades": len(list(board.get("best_trades") or [])),
+                "decision_count": len(list(board.get("decisions") or [])),
+            }
+        except Exception as exc:
+            return JobResult(
+                JS.RETRYABLE_FAILED,
+                "scan completed but startup trade discovery projection failed",
+                error_code="DISCOVERY_PROJECTION_ERROR",
+                error_message=str(exc)[:300],
+                state_hint=ST.OBSERVING,
+                metadata={**summary, "discovery_projection": {"status": "ERROR", "error": str(exc)[:240]}},
+            )
+
     telegram = {}
     if hasattr(ctx.deps, "notify_scan"):
         try:
@@ -766,7 +816,8 @@ def run_market_scan(ctx) -> JobResult:
     return JobResult(JS.SUCCEEDED,
                      f"scan complete · {n} setups · {summary.get('momentum', 0)} momentum",
                      clears=clears, state_hint=ST.OBSERVING, unblocks=(DEP_SCAN,),
-                     metadata={**summary, "telegram": telegram})
+                     metadata={**summary, "telegram": telegram,
+                               "discovery_projection": discovery_projection})
 
 
 def _entry_reason(now, holidays, ctx) -> tuple[bool, str, str]:
