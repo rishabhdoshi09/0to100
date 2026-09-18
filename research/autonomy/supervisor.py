@@ -228,7 +228,10 @@ class Supervisor:
                         )
                     )
                 elif job.job_type == SCH.PAPER_CYCLE:
-                    retire = not key.startswith("snapshot_paper:")
+                    retire = not (
+                        key.startswith("snapshot_paper:")
+                        or key.startswith("snapshot_manage:")
+                    )
                 elif job.job_type == SCH.OUTCOME_RESOLUTION:
                     retire = not key.startswith("forward_outcome:")
                 elif job.job_type == SCH.LEARNING_CYCLE:
@@ -666,6 +669,15 @@ class Supervisor:
         except Exception:
             pass
 
+    def _has_open_paper_positions(self) -> bool:
+        try:
+            payload = json.loads(
+                logs_path("intelligence", "intel_book.json").read_text(encoding="utf-8")
+            )
+            return bool(payload.get("open") or payload.get("open_positions"))
+        except Exception:
+            return False
+
     def _paper_for_snapshot(self, snapshot_id: str) -> None:
         """Enqueue the terminal paper pass for an already-successful scan."""
         snap = str(snapshot_id or "")
@@ -677,9 +689,20 @@ class Supervisor:
             return
         try:
             from product.decision_simulation_gate import is_approved
-            if not is_approved():
-                return
+            approved = bool(is_approved())
         except Exception:
+            approved = False
+        if not approved:
+            # Existing paper positions must still be managed truthfully. This
+            # distinct idempotency key can never become a new-entry pass and
+            # does not mark the snapshot transaction complete.
+            if self._has_open_paper_positions():
+                self.jobs.enqueue(
+                    SCH.PAPER_CYCLE,
+                    idempotency_key=f"snapshot_manage:{snap}",
+                    input_snapshot_id=snap,
+                    critical=True,
+                )
             return
         paper = self.jobs.enqueue(
             SCH.PAPER_CYCLE,
