@@ -23,11 +23,13 @@ LEARNING_CYCLE = "learning_cycle"
 RESEARCH_CYCLE = "research_cycle"
 LONG_TERM_SCAN = "long_term_scan"
 LONG_TERM_REFRESH = "long_term_refresh"
+HISTORICAL_PAPER_CYCLE = "historical_paper_cycle"
 
 ALL_JOB_TYPES = (
     AUTH_HEALTH, INSTRUMENT_REFRESH, DATA_REFRESH, BHAVCOPY_UPDATE, CORPORATE_ACTIONS,
     UNIVERSE_HISTORY, INDEX_WARMUP, MARKET_SCAN, NEWS_REFRESH, PAPER_CYCLE,
     OUTCOME_RESOLUTION, LEARNING_CYCLE, RESEARCH_CYCLE, LONG_TERM_SCAN, LONG_TERM_REFRESH,
+    HISTORICAL_PAPER_CYCLE,
 )
 CRITICAL_JOBS = {AUTH_HEALTH, DATA_REFRESH, PAPER_CYCLE, OUTCOME_RESOLUTION}
 
@@ -233,6 +235,18 @@ def outcome_key(session_date: str) -> str:
 
 def research_key(session_date: str) -> str:
     return f"research_cycle:{session_date}"
+
+
+def historical_paper_key(batch_id: str) -> str:
+    return f"hist_paper:{batch_id}"
+
+
+def historical_learning_key(batch_id: str) -> str:
+    return f"hist_learning:{batch_id}"
+
+
+def historical_research_key(batch_id: str) -> str:
+    return f"hist_research:{batch_id}"
 
 
 def last_completed_session_date(now_ist, holidays=None):
