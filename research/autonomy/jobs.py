@@ -50,11 +50,20 @@ class JobResult:
 
 
 class _Ctx:
-    def __init__(self, deps, *, active_failures=(), owner_paused=False, root=None):
+    def __init__(
+        self,
+        deps,
+        *,
+        active_failures=(),
+        owner_paused=False,
+        root=None,
+        job=None,
+    ):
         self.deps = deps
         self.active_failures = set(active_failures or ())
         self.owner_paused = bool(owner_paused)
         self.root = Path(root) if root else None
+        self.job = job
 
 
 class Deps:
