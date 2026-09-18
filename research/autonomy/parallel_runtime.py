@@ -394,26 +394,15 @@ def install_parallel_runtime() -> None:
             _installed = True
             return
 
-        original_enqueue_due = Supervisor.enqueue_due
         original_retry_or_fail = Supervisor._retry_or_fail
         original_incident = Supervisor._incident
 
-        def enqueue_due_parallel(self, now_ist=None):
-            result = original_enqueue_due(self, now_ist)
-            current = now_ist or self.deps.now_ist()
-            # Launch the market scan before the serial autonomy worker leases a
-            # potentially multi-minute DATA_REFRESH. The dedicated lane can then
-            # scan in parallel while snapshot reconciliation continues.
-            try:
-                if SCH.scan_slot(current, self.deps.holidays()):
-                    ensure_market_scan_started(requested_by="autonomy")
-            except Exception:
-                pass
-            try:
-                _reconcile_ca_failure(self)
-            except Exception:
-                pass
-            return result
+        # Do NOT patch Supervisor.enqueue_due here. The supervisor's snapshot
+        # transaction is the sole automatic scheduling authority:
+        # DATA_REFRESH -> MARKET_SCAN -> PAPER_CYCLE -> OBSERVING.
+        # MARKET_SCAN is delegated to this execution plane only after the
+        # supervisor explicitly leases that durable scan job. Corporate-action
+        # background refresh likewise runs only when its explicit job is queued.
 
         def retry_or_fail_parallel(self, job, *, error_code, error_message, summary=""):
             if error_code in _BRIDGE_PENDING:
@@ -439,7 +428,6 @@ def install_parallel_runtime() -> None:
                 return None
             return original_incident(self, code, message, job)
 
-        Supervisor.enqueue_due = enqueue_due_parallel
         Supervisor._retry_or_fail = retry_or_fail_parallel
         Supervisor._incident = incident_parallel
         Supervisor._parallel_runtime_installed = True
