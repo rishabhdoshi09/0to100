@@ -42,7 +42,7 @@ _DB_PATH = logs_path("feature_store.db")
 
 # observation kinds — the whole point is that a REJECTION or NEAR_MISS is as much
 # an observation as a TRADE (non-event learning needs them on equal footing).
-KINDS = ("SCAN", "TRADE", "REJECTION", "NEAR_MISS")
+KINDS = ("SCAN", "TRADE", "REJECTION", "NEAR_MISS", "DECISION")
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS observations (
@@ -222,6 +222,72 @@ def load_matrix(kind: str | None = None, feature_names=None,
             "y": np.array(y, dtype=float) if (require_outcome and y) else None,
             "schema_versions": versions}
 
+
+def load_observations(
+    *,
+    kind: str | None = None,
+    require_outcome: bool = False,
+    before_ts: str | None = None,
+    schema_version: str | None = None,
+    limit: int | None = None,
+) -> list[dict]:
+    """Return immutable observations with provenance for evidence research.
+
+    Unlike load_matrix this preserves timestamp, symbol, meta, validation and
+    schema identity. before_ts is a strict point-in-time cutoff: rows at or
+    after the query decision are excluded so a historical analogue can never
+    look into its own future.
+    """
+    try:
+        c = _conn()
+        try:
+            q = (
+                "SELECT observation_id, ts, symbol, kind, outcome, schema_version, "
+                "features, validation, reason, subtype, meta, created_at "
+                "FROM observations"
+            )
+            clauses: list[str] = []
+            args: list = []
+            if kind:
+                clauses.append("kind=?")
+                args.append(kind)
+            if require_outcome:
+                clauses.append("outcome IS NOT NULL")
+            if before_ts:
+                clauses.append("ts < ?")
+                args.append(str(before_ts))
+            if schema_version:
+                clauses.append("schema_version=?")
+                args.append(str(schema_version))
+            if clauses:
+                q += " WHERE " + " AND ".join(clauses)
+            q += " ORDER BY ts ASC"
+            if limit is not None:
+                q += " LIMIT ?"
+                args.append(max(0, int(limit)))
+            rows = c.execute(q, tuple(args)).fetchall()
+        finally:
+            c.close()
+    except Exception:
+        return []
+
+    out: list[dict] = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["features"] = json.loads(item.get("features") or "{}")
+        except Exception:
+            item["features"] = {}
+        try:
+            item["validation"] = json.loads(item.get("validation") or "[]")
+        except Exception:
+            item["validation"] = []
+        try:
+            item["meta"] = json.loads(item.get("meta") or "{}")
+        except Exception:
+            item["meta"] = {}
+        out.append(item)
+    return out
 
 def _as_float(v) -> float:
     try:
