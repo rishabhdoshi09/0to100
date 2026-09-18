@@ -347,3 +347,82 @@ def test_parallel_runtime_cannot_prelaunch_scan_before_data():
     assert "def enqueue_due_parallel(" not in source
     assert "Launch the market scan before" not in source
     assert "DATA_REFRESH -> MARKET_SCAN -> PAPER_CYCLE -> OBSERVING" in source
+
+
+def test_snapshot_bound_market_operation_never_reuses_other_snapshot(monkeypatch):
+    from research.autonomy import parallel_runtime as PR
+
+    created = []
+    class _Store:
+        def recent_full(self, limit=250):
+            return [{
+                "operation_id": "old-op",
+                "kind": "MARKET_SCAN",
+                "status": "SUCCEEDED",
+                "payload": {"snapshot_id": "snap-old"},
+            }]
+        def enqueue(self, kind, **kwargs):
+            created.append((kind, kwargs))
+            return {
+                "operation_id": "new-op",
+                "kind": kind,
+                "status": "PENDING",
+                "payload": kwargs.get("payload") or {},
+            }, True
+        def latest(self, kind):
+            raise AssertionError("snapshot-bound operation must not use latest(kind)")
+
+    monkeypatch.setattr(PR, "_ops_store", lambda: _Store())
+    monkeypatch.setattr(PR, "_ensure_ops_worker", lambda: None)
+    op = PR._queue_operation(
+        "MARKET_SCAN",
+        requested_by="autonomy",
+        identity="snap-new",
+    )
+    assert op["operation_id"] == "new-op"
+    assert created[0][1]["payload"]["snapshot_id"] == "snap-new"
+    assert created[0][1]["deduplicate"] is False
+
+
+def test_snapshot_bound_market_operation_reuses_exact_identity(monkeypatch):
+    from research.autonomy import parallel_runtime as PR
+
+    class _Store:
+        def recent_full(self, limit=250):
+            return [{
+                "operation_id": "same-op",
+                "kind": "MARKET_SCAN",
+                "status": "SUCCEEDED",
+                "payload": {"snapshot_id": "snap-1"},
+            }]
+        def enqueue(self, *args, **kwargs):
+            raise AssertionError("exact completed snapshot operation must be reused")
+
+    monkeypatch.setattr(PR, "_ops_store", lambda: _Store())
+    monkeypatch.setattr(PR, "_ensure_ops_worker", lambda: None)
+    op = PR._queue_operation(
+        "MARKET_SCAN",
+        requested_by="autonomy",
+        identity="snap-1",
+    )
+    assert op["operation_id"] == "same-op"
+
+
+def test_live_ready_data_without_broker_snapshot_gets_stable_identity():
+    from research.autonomy.jobs import _kite_live_ready_result
+
+    class _D:
+        def live_market_ready(self):
+            return {
+                "ready": True,
+                "session_date": "2026-09-18",
+                "source": "kite_quotes",
+                "symbols": 200,
+            }
+
+    ctx = type("Ctx", (), {"deps": _D()})()
+    result = _kite_live_ready_result(ctx, sid=None)
+    assert result is not None
+    assert result.status == JS.SUCCEEDED
+    assert result.output_snapshot_id == "market:kite_quotes:2026-09-18"
+    assert result.metadata["data_identity"] == result.output_snapshot_id
