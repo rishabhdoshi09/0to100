@@ -77,6 +77,77 @@ def decisions_from_workspace(
     return enriched
 
 
+
+def _best_trades_from_production_thesis(
+    workspace: Mapping[str, Any],
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    market_state: str = "",
+    limit: int = 5,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """Return only names the canonical paper-selection thesis would enter.
+
+    This is pre-approval discovery, so the circular historical-bootstrap
+    prerequisite is disabled. Strategy, learned overlays, hard risk/evidence
+    gates and selection scoring are otherwise the same seam used by historical
+    PIT replay and present PAPER_FORWARD.
+    """
+    from product.paper_autopilot import ENTER_NOW, evaluate_selection_candidate
+
+    regime = str(
+        market_state
+        or workspace.get("regime")
+        or workspace.get("market_regime")
+        or "RISK_ON"
+    )
+    row_by_symbol: dict[str, dict[str, Any]] = {}
+    for raw in rows:
+        symbol = str(raw.get("symbol") or "").upper()
+        if not symbol:
+            continue
+        prior = row_by_symbol.get(symbol)
+        if prior is None or float(raw.get("ranking_score") or 0.0) > float(prior.get("ranking_score") or 0.0):
+            row_by_symbol[symbol] = dict(raw)
+
+    best_by_symbol: dict[str, tuple[float, dict[str, Any]]] = {}
+    errors: list[dict[str, str]] = []
+    for card in _cards(workspace):
+        symbol = str(card.get("symbol") or "").upper()
+        if not symbol or symbol not in row_by_symbol:
+            continue
+        try:
+            decision = evaluate_selection_candidate(
+                card,
+                book=None,
+                workspace=workspace,
+                entries_allowed=True,
+                paper_enabled=True,
+                regime=regime,
+                enforce_history=False,
+            )
+        except Exception as exc:
+            errors.append({"symbol": symbol, "error": str(exc)[:180]})
+            continue
+        if str(decision.decision or "") != ENTER_NOW:
+            continue
+        score = float(decision.selection_score or 0.0)
+        payload = dict(row_by_symbol[symbol])
+        payload["production_selection_score"] = score
+        payload["production_reason_code"] = str(decision.reason_code or "")
+        payload["production_policy_effect"] = str(decision.policy_effect or "NEUTRAL")
+        payload["discovery_decision"] = ENTER_NOW
+        payload["history_bootstrap_gate_applied"] = False
+        prior = best_by_symbol.get(symbol)
+        if prior is None or score > prior[0]:
+            best_by_symbol[symbol] = (score, payload)
+
+    ordered = sorted(
+        best_by_symbol.values(),
+        key=lambda item: (-item[0], str(item[1].get("symbol") or "")),
+    )
+    return [row for _score, row in ordered[: max(0, int(limit))]], errors
+
+
 def decision_board(
     *,
     workspace: Mapping[str, Any] | None = None,
@@ -148,10 +219,16 @@ def decision_board(
     except Exception:
         thesis = {}
 
-    # "Best" means current BUY thesis first, with the same canonical ordering
-    # used by paper selection. WAIT/AVOID names remain visible in decisions but
-    # are never presented as trades merely because a probability looks high.
-    best_trades = [row for row in rows if str(row.get("state") or "") == BUY][:5]
+    # Best trades are not inferred from tier labels alone. They are re-evaluated
+    # through the exact non-executing production selection seam used by replay
+    # and PAPER_FORWARD. Pre-approval discovery relaxes only the circular
+    # history-bootstrap prerequisite; it does not relax strategy/risk gates.
+    best_trades, best_trade_errors = _best_trades_from_production_thesis(
+        workspace,
+        rows,
+        market_state=market_state,
+        limit=5,
+    )
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -161,6 +238,8 @@ def decision_board(
         "scan_scanned_at": str(workspace.get("scan_scanned_at") or ""),
         "decisions": rows,
         "best_trades": best_trades,
+        "best_trades_mode": "PRODUCTION_THESIS_DISCOVERY",
+        "best_trades_errors": best_trade_errors,
         "thesis": thesis,
         "counts": counts,
         "actionable": sum(1 for r in ranked if r.decision.state == BUY),
