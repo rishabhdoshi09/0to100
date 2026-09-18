@@ -500,6 +500,10 @@ class Supervisor:
     def _enqueue_paper_after_scan(self, scan_job) -> None:
         if str(getattr(scan_job, "job_type", "") or "") != SCH.MARKET_SCAN:
             return
+        if not str(getattr(scan_job, "idempotency_key", "") or "").startswith("snapshot_scan:"):
+            # Manual RUN_SCAN_NOW is scan-only. Only the automatic snapshot
+            # transaction is authorised to continue into PAPER_CYCLE.
+            return
         active_fn = getattr(self.deps, "active_snapshot_id", None)
         active = active_fn() if callable(active_fn) else ""
         snap = str(
@@ -516,6 +520,11 @@ class Supervisor:
         metadata: dict | None = None,
     ) -> None:
         if str(getattr(refresh_job, "job_type", "") or "") != SCH.DATA_REFRESH:
+            return
+        key = str(getattr(refresh_job, "idempotency_key", "") or "")
+        if not key.startswith("data_refresh:") or key.endswith(":eod"):
+            # Manual REFRESH_DATA_NOW is data-only. The automatic per-session
+            # DATA_REFRESH identity is the only source of the auto scan->paper chain.
             return
         snap = self._snapshot_token(
             output_snapshot_id or getattr(refresh_job, "output_snapshot_id", None),
