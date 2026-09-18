@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -295,6 +296,90 @@ def simulate_virtual_trade(
     }
 
 
+def _normal_cdf(z: float) -> float:
+    return 0.5 * (1.0 + math.erf(float(z) / math.sqrt(2.0)))
+
+
+def update_historical_setup_policies(
+    trades: Sequence[Mapping[str, Any]],
+    *,
+    path: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """Persist setup-level historical priors with explicit uncertainty.
+
+    Historical-only evidence may inform shadow confidence, but it is written as
+    backtest_historical_replay and affects_selection=False. Therefore the policy
+    store can never make it ACTIVE from this lane alone.
+    """
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for raw in trades:
+        row = dict(raw)
+        setup = str(row.get("setup") or "").strip()
+        r = _f(row.get("realized_R"))
+        if not setup or r is None:
+            continue
+        grouped.setdefault(setup, []).append(row)
+
+    out: list[dict[str, Any]] = []
+    for setup, rows in sorted(grouped.items()):
+        rs = [float(_f(r.get("realized_R")) or 0.0) for r in rows]
+        n = len(rs)
+        mean = sum(rs) / n
+        if n > 1:
+            variance = sum((x - mean) ** 2 for x in rs) / (n - 1)
+            std = math.sqrt(max(variance, 0.0))
+            se = std / math.sqrt(n)
+        else:
+            std = 0.0
+            se = float("inf")
+
+        shrinkage_k = 8.0
+        shrunk = (n / (n + shrinkage_k)) * mean
+        if math.isfinite(se) and se > 0:
+            lower = shrunk - 1.96 * se
+            upper = shrunk + 1.96 * se
+            p_edge = _normal_cdf(shrunk / se)
+        elif n > 0:
+            lower = upper = shrunk
+            p_edge = 1.0 if shrunk > 0 else (0.0 if shrunk < 0 else 0.5)
+        else:
+            lower = upper = 0.0
+            p_edge = 0.5
+
+        sample_cap = 49.0 if n < 8 else (69.0 if n < 20 else (79.0 if n < 30 else 95.0))
+        confidence_score = round(max(0.0, min(sample_cap, p_edge * 100.0)), 1)
+        reproduced_positive = bool(n >= 20 and lower > 0.0)
+        generation_fingerprint = hashlib.sha256(
+            "|".join(sorted(str(r.get("trade_id") or "") for r in rows)).encode("utf-8")
+        ).hexdigest()[:16]
+
+        from product.learning_policy_store import upsert_policy
+
+        policy = upsert_policy(
+            policy_id=f"HIST_SETUP::{setup}",
+            dimension="historical_setup",
+            bucket=setup,
+            sample_size=n,
+            expectancy_R=mean,
+            source="backtest_historical_replay",
+            path=path,
+            extra={
+                "affects_selection": False,
+                "historical_confidence_score": confidence_score,
+                "historical_reproduced_positive": reproduced_positive,
+                "historical_shrunk_mean_R": round(shrunk, 4),
+                "historical_lower_95_R": round(lower, 4),
+                "historical_upper_95_R": round(upper, 4),
+                "historical_p_edge_positive": round(p_edge, 4),
+                "generation_fingerprint": generation_fingerprint,
+                "not_promotion_evidence": True,
+                "not_real_pnl": True,
+            },
+        )
+        out.append(policy)
+    return out
+
+
 def _load_ledger(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
@@ -384,6 +469,11 @@ def _run_batch(
     except Exception as exc:
         memory = {"error": str(exc)[:240]}
 
+    try:
+        setup_policies = update_historical_setup_policies(all_trades)
+    except Exception as exc:
+        setup_policies = [{"error": str(exc)[:240]}]
+
     result = {
         "status": "SUCCEEDED",
         "batch_id": bid,
@@ -395,6 +485,8 @@ def _run_batch(
         "historical_paper_trades": len(trades),
         "trades_appended": appended,
         "historical_paper_total": len(all_trades),
+        "historical_setup_policies": len([p for p in setup_policies if not p.get("error")]),
+        "setup_policy_errors": [p.get("error") for p in setup_policies if p.get("error")],
         "memory": {
             "closed_trades": int(memory.get("closed_trades") or 0) if isinstance(memory, dict) else 0,
             "cooldown": len(memory.get("cooldown") or []) if isinstance(memory, dict) else 0,
