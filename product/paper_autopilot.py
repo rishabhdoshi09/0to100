@@ -445,6 +445,18 @@ def _canonical_decision(decision: AutopilotDecision, *, as_of: str, snapshot_id:
             generated_at=str(snapshot_id or as_of or ""),
         )
         try:
+            from dataclasses import replace
+            from product.trading_thesis import manifest as thesis_manifest
+            canonical = replace(
+                canonical,
+                provenance={
+                    **dict(canonical.provenance or {}),
+                    "thesis_hash": str(thesis_manifest().get("thesis_hash") or ""),
+                },
+            )
+        except Exception:
+            pass
+        try:
             from product.evidence_intelligence import enrich
             canonical = enrich(canonical)
         except Exception:
