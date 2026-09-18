@@ -31,6 +31,69 @@ def _f(value: Any) -> float | None:
         return None
 
 
+def _selection_policy_identity() -> dict[str, Any]:
+    """Stable identity for learned policies that can affect paper selection.
+
+    Timestamps and dashboard-only metadata are intentionally excluded. A policy
+    version/edge/status change must invalidate the approved thesis; an observing
+    or explicitly non-selection policy must not create approval churn.
+    """
+    try:
+        from product.learning_policy_store import (
+            ACTIVE,
+            ELIGIBLE,
+            EXPERIMENTAL,
+            load_policies,
+        )
+
+        accepted = {ACTIVE, ELIGIBLE, EXPERIMENTAL}
+        rows: list[dict[str, Any]] = []
+        for raw in (load_policies() or {}).get("policies") or []:
+            if not isinstance(raw, Mapping) or raw.get("affects_selection") is False:
+                continue
+            status = str(raw.get("production_status") or "")
+            if status not in accepted:
+                continue
+            rows.append({
+                "policy_id": str(raw.get("policy_id") or ""),
+                "version": int(raw.get("version") or 0),
+                "dimension": str(raw.get("dimension") or ""),
+                "bucket": str(raw.get("bucket") or ""),
+                "production_status": status,
+                "evidence_source": str(raw.get("evidence_source") or ""),
+                "confidence": str(raw.get("confidence") or ""),
+                "sample_size": int(raw.get("sample_size") or 0),
+                "expectancy_difference_R": _f(raw.get("expectancy_difference_R")),
+                "shrunk_expectancy_R": _f(raw.get("shrunk_expectancy_R")),
+            })
+        rows.sort(key=lambda row: (
+            row["policy_id"], row["version"], row["dimension"], row["bucket"]
+        ))
+        raw = json.dumps(rows, sort_keys=True, separators=(",", ":"), default=str)
+        fingerprint = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
+        return {
+            "fingerprint": fingerprint,
+            "count": len(rows),
+            "versions": [
+                {
+                    "policy_id": row["policy_id"],
+                    "version": row["version"],
+                    "status": row["production_status"],
+                }
+                for row in rows
+            ],
+        }
+    except Exception:
+        # Fail closed to a stable unavailable identity. The thesis remains
+        # inspectable, but a later healthy policy load changes its hash and
+        # therefore requires fresh operator approval.
+        return {
+            "fingerprint": "UNAVAILABLE",
+            "count": 0,
+            "versions": [],
+        }
+
+
 def manifest() -> dict[str, Any]:
     from product.pit_versions import current_versions
     from product.strategy_catalog import ensemble_identity
@@ -63,6 +126,7 @@ def manifest() -> dict[str, Any]:
         "rules_hash": ensemble.get("rules_hash"),
         "decision_versions": current_versions().as_dict(),
         "active_selection_learner": learner,
+        "selection_policy_set": _selection_policy_identity(),
         "hard_invariants": [
             "hard risk and evidence vetoes remain authoritative",
             "historical-only evidence cannot promote production selection",
