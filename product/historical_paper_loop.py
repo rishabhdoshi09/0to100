@@ -347,6 +347,9 @@ def update_historical_setup_policies(
 
     out: list[dict[str, Any]] = []
     for setup, rows in sorted(grouped.items()):
+        thesis_hash = str((rows[0] if rows else {}).get("thesis_hash") or "")
+        if not thesis_hash:
+            continue
         rs = [float(_f(r.get("realized_R")) or 0.0) for r in rows]
         n = len(rs)
         mean = sum(rs) / n
@@ -384,7 +387,7 @@ def update_historical_setup_policies(
             (
                 dict(p)
                 for p in (load_policies(path).get("policies") or [])
-                if str(p.get("policy_id") or "") == f"HIST_SETUP::{setup}"
+                if str(p.get("policy_id") or "") == f"HIST_SETUP::{thesis_hash}::{setup}"
             ),
             None,
         )
@@ -397,7 +400,7 @@ def update_historical_setup_policies(
             continue
 
         policy = upsert_policy(
-            policy_id=f"HIST_SETUP::{setup}",
+            policy_id=f"HIST_SETUP::{thesis_hash}::{setup}",
             dimension="historical_setup",
             bucket=setup,
             sample_size=n,
@@ -413,6 +416,7 @@ def update_historical_setup_policies(
                 "historical_upper_95_R": round(upper, 4),
                 "historical_p_edge_positive": round(p_edge, 4),
                 "generation_fingerprint": generation_fingerprint,
+                "thesis_hash": thesis_hash,
                 "not_promotion_evidence": True,
                 "not_real_pnl": True,
             },
@@ -676,6 +680,7 @@ def ensure_next_batch_started(
                 "sessions": state["current_sessions"],
                 "period_start": (state["current_sessions"] or [""])[0],
                 "period_end": (state["current_sessions"] or [""])[-1],
+                "thesis_hash": str(state.get("thesis_hash") or ""),
                 "universe_limit": universe_limit,
                 "horizon_sessions": horizon_sessions,
             }
