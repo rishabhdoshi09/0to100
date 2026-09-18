@@ -117,7 +117,11 @@ def _observation_id(decision_id: str) -> str:
     return f"decision::{decision_id}"
 
 
-def freeze_decision(decision: Decision) -> dict[str, Any]:
+def freeze_decision(
+    decision: Decision,
+    *,
+    evidence: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Write-once decision observation. Repeated reads are idempotent."""
     from product.decision_ranking import decision_context_key
     from research.feature_store import snapshot
@@ -136,8 +140,11 @@ def freeze_decision(decision: Decision) -> dict[str, Any]:
         "evidence_snapshot_id": decision.evidence_snapshot_id,
         "evidence_class": decision.evidence_class,
         "context_key": decision_context_key(decision),
-        "predicted_p": None,
-        "prediction_source": "",
+        "predicted_p": (evidence or {}).get("calibrated_p_positive_R"),
+        "raw_predicted_p": (evidence or {}).get("p_positive_R"),
+        "prediction_source": (evidence or {}).get("formula_version") or "",
+        "historical_confidence": (evidence or {}).get("historical_confidence"),
+        "decision_confidence": (evidence or {}).get("decision_confidence"),
         "not_live": True,
     }
     return snapshot(
@@ -434,9 +441,9 @@ def evidence_read(decision: Decision, *, k: int = DEFAULT_K) -> dict[str, Any]:
 
 
 def enrich(decision: Decision) -> Decision:
-    """Freeze and attach evidence intelligence without changing trade state/rank."""
-    freeze_decision(decision)
+    """Attach evidence intelligence and freeze its pre-outcome prediction."""
     evidence = evidence_read(decision)
+    freeze_decision(decision, evidence=evidence)
     historical = dict(decision.historical_evidence or {})
     historical["evidence_intelligence"] = evidence
     provenance = dict(decision.provenance or {})
