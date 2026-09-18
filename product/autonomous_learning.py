@@ -312,7 +312,7 @@ def _next_action(control: Mapping[str, Any], *, market_closed: bool, activity: s
     if lane == EVIDENCE_REPLAY:
         if not market_closed:
             return "Historical replay is deferred until the cash session closes."
-        return "Next: HISTORICAL_REPLAY only if replay inputs changed."
+        return "Next: historical virtual-paper batch from the next unprocessed PIT sessions."
     return "No next learning action while the control is off."
 
 
@@ -325,6 +325,7 @@ def dashboard(*, path: str | Path | None = None) -> dict[str, Any]:
     auto: dict[str, Any] = {}
     ops: dict[str, Any] = {}
     replay: dict[str, Any] = {}
+    historical_paper: dict[str, Any] = {}
     try:
         from product.autonomy_status import read_autonomy_status
         auto = read_autonomy_status()
@@ -345,8 +346,24 @@ def dashboard(*, path: str | Path | None = None) -> dict[str, Any]:
             replay = {**replay, **progress}
     except Exception:
         replay = {}
+    try:
+        from product.historical_paper_loop import DEFAULT_LEDGER, load_state
+
+        historical_paper = load_state()
+        ledger = Path(DEFAULT_LEDGER)
+        historical_paper["virtual_trades"] = _count_jsonl(ledger)
+    except Exception:
+        historical_paper = {}
     market_closed = _market_closed()
     activity = ACTIVITY_IDLE if (not control.get("enabled") or control.get("mode") == MODE_PAUSED) else _activity(auto, ops, replay)
+    historical_phase = str(historical_paper.get("phase") or "").upper()
+    if control.get("enabled") and control.get("mode") != MODE_PAUSED:
+        if historical_phase == "RUNNING":
+            activity = ACTIVITY_SIMULATING
+        elif historical_phase == "AWAITING_LEARNING":
+            activity = ACTIVITY_LEARNING
+        elif historical_phase == "AWAITING_RESEARCH":
+            activity = ACTIVITY_RESEARCHING
     evidence = _evidence_counts()
     paper = _paper_counts()
     policies = _policy_projection()
@@ -374,6 +391,7 @@ def dashboard(*, path: str | Path | None = None) -> dict[str, Any]:
         "current_activity": activity,
         "counts": {
             "historical_decisions_simulated": sim_n,
+            "historical_virtual_paper_trades": int(historical_paper.get("virtual_trades") or 0),
             "forward_paper_decisions": evidence["forward_evidence_count"],
             **paper,
             "correct_rejects": evidence["correct_rejects"],
@@ -395,6 +413,17 @@ def dashboard(*, path: str | Path | None = None) -> dict[str, Any]:
         "promotion_blocked_reason": policies["promotion_blocked_reason"],
         "last_learning_cycle": last_cycle or "No learning cycle has been recorded.",
         "next_learning_action": _next_action(control, market_closed=market_closed, activity=activity),
+        "historical_virtual_paper": {
+            "phase": historical_paper.get("phase") or "IDLE",
+            "batch_id": historical_paper.get("current_batch_id") or "",
+            "current_sessions": list(historical_paper.get("current_sessions") or []),
+            "last_completed_session": historical_paper.get("last_completed_session") or "",
+            "virtual_trades": int(historical_paper.get("virtual_trades") or 0),
+            "last_result": dict(historical_paper.get("last_result") or {}),
+            "last_error": historical_paper.get("last_error") or "",
+            "provenance": EVIDENCE_REPLAY,
+            "not_real_pnl": True,
+        },
         "latest_persisted_evidence": {
             "replay_status": replay.get("status") or "NONE",
             "replay_period": (
@@ -423,7 +452,7 @@ def set_control(*, enabled: bool | None = None, mode: str | None = None, path: s
 
 
 def maybe_run_closed_market_replay(*, now: datetime | None = None, force: bool = False) -> dict[str, Any]:
-    """When the cash session is closed, replay history. Never open paper trades."""
+    """Manual report-only replay. Never opens the real/forward paper book."""
     control = load_control()
     if not control.get("enabled") or control.get("mode") == MODE_PAUSED:
         return {"skipped": True, "reason": "autonomous_learning_paused"}
