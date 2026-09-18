@@ -58,6 +58,7 @@ def decisions_from_workspace(
         decision_engine_version=str(workspace.get("engine_version") or ""),
         feature_schema_version=str(workspace.get("schema_version") or ""),
         strategy_version=str(workspace.get("strategy_version") or ""),
+        generated_at=str(workspace.get("scan_scanned_at") or ""),
     )
     # Evidence intelligence is an enrichment layer, never the source of the
     # decision state. Fail-open: a research-store issue must not erase the desk's
