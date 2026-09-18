@@ -133,14 +133,38 @@ jobs:
           assert state.authorized is False
           PY
 
-      - name: Approve Decision Simulation and create explicit acceptance replay evidence
+      - name: Validate Decision Simulation gate and create explicit replay evidence
         shell: bash
         run: |
           set -euo pipefail
-          # Product behavior: the no-argument POST is approval only. It must not
-          # launch a second historical engine beside quantterm-autonomy.
-          curl -fsS --max-time 20 -X POST http://127.0.0.1:8765/api/decision-simulator > logs/product/simulator_approval.json
+          # The autonomous switch is allowed only after authoritative current
+          # discovery. A CI fixture may be operationally READY while official
+          # history is intentionally not current; in that case the correct
+          # product behavior is to refuse approval, not to weaken freshness.
+          curl -fsS --max-time 20 http://127.0.0.1:8765/api/decision-simulation-gate > logs/product/simulator_gate.json
           venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+          gate=json.loads(Path('logs/product/simulator_gate.json').read_text(encoding='utf-8'))
+          if gate.get('discovery_ready'):
+              assert gate.get('scan_fresh') is True, gate
+              assert str(gate.get('phase') or '').upper() == 'AWAITING_APPROVAL', gate
+          else:
+              assert gate.get('approved') is False, gate
+              assert str(gate.get('phase') or '').upper() == 'SEARCHING_BEST_TRADES', gate
+              assert gate.get('scan_fresh') is False or not gate.get('scan_scanned_at'), gate
+          PY
+
+          ready="$(venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+          p=json.loads(Path('logs/product/simulator_gate.json').read_text(encoding='utf-8'))
+          print('1' if p.get('discovery_ready') else '0')
+          PY
+          )"
+          if [[ "$ready" = 1 ]]; then
+            curl -fsS --max-time 20 -X POST http://127.0.0.1:8765/api/decision-simulator > logs/product/simulator_approval.json
+            venv/bin/python - <<'PY'
           import json
           from pathlib import Path
           p=json.loads(Path('logs/product/simulator_approval.json').read_text(encoding='utf-8'))
@@ -150,11 +174,22 @@ jobs:
           assert p.get('legacy_batch_started') is False, p
           assert set(p.get('simulation_scope') or []) == {'PAPER_FORWARD','HISTORICAL_REPLAY'}, p
           PY
+          else
+            # Prove the stale/not-current environment cannot bypass the gate.
+            curl -fsS --max-time 20 -X POST http://127.0.0.1:8765/api/decision-simulator > logs/product/simulator_approval.json
+            venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+          p=json.loads(Path('logs/product/simulator_approval.json').read_text(encoding='utf-8'))
+          assert p.get('accepted') is False, p
+          assert str(p.get('status') or '').upper() == 'WAITING_FOR_BEST_TRADES', p
+          assert str((p.get('approval') or {}).get('reason') or '').upper() == 'BEST_TRADE_DISCOVERY_NOT_READY', p
+          PY
+          fi
 
-          # Acceptance-only fixture generation: explicitly create a genuine PIT
-          # replay so the one-decision counterfactual endpoint has a persisted
-          # historical decision to inspect. This is not an autonomous runtime
-          # scheduling path and does not open paper positions.
+          # Explicit historical inspection is intentionally independent of the
+          # autonomous approval switch. Generate genuine PIT evidence directly;
+          # this never opens PAPER_FORWARD positions or starts a duplicate loop.
           venv/bin/python - <<'PY'
           import json
           from pathlib import Path
@@ -342,7 +377,8 @@ jobs:
             logs/product/live_interlock_evidence.json
             logs/product/pre_acceptance_health.json
             logs/product/pre_acceptance_report_health.json
-            logs/product/simulator_replay_start.json
+            logs/product/simulator_gate.json
+            logs/product/simulator_approval.json
             logs/product/simulator_replay.json
             logs/product/simulator_seed.json
             logs/product/restart_health.json
