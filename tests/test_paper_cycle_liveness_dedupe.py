@@ -334,3 +334,16 @@ def test_reclaimed_legacy_recurring_job_is_cancelled_before_it_can_run(tmp_path)
         assert executed is None or executed.job_id != legacy.job_id
     finally:
         sup.shutdown()
+
+
+def test_parallel_runtime_cannot_prelaunch_scan_before_data():
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "research" / "autonomy" / "parallel_runtime.py"
+    ).read_text(encoding="utf-8")
+    assert "Supervisor.enqueue_due = enqueue_due_parallel" not in source
+    assert "def enqueue_due_parallel(" not in source
+    assert "Launch the market scan before" not in source
+    assert "DATA_REFRESH -> MARKET_SCAN -> PAPER_CYCLE -> OBSERVING" in source
