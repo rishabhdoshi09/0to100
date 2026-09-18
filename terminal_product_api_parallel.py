@@ -81,31 +81,27 @@ def decision_simulator_run(
     addressed = bool(str(symbol or "").strip() or str(decision_id or "").strip())
 
     if addressed:
-        from product.decision_simulation_gate import is_approved, status
-
-        approval = status()
-        if not is_approved():
-            return _with_live_safety({
-                "status": "AWAITING_APPROVAL",
-                "accepted": False,
-                "approval": approval,
-                "message": (
-                    "Approve Decision Simulation once after reviewing the current "
-                    "best-trade shortlist before running counterfactual inspection."
-                ),
-                "provenance": "HISTORICAL_REPLAY",
-            })
+        # An explicitly addressed counterfactual is an inspection tool, not the
+        # switch that starts autonomous Decision Simulation. It must remain
+        # available before approval so operators/tests can inspect a historical
+        # decision and PIT integrity without implicitly authorising any new
+        # PAPER_FORWARD or autonomous HISTORICAL_REPLAY work.
         result = dict(_core.decision_simulator_run(
             symbol=symbol,
             as_of=as_of,
             alternative=alternative,
             decision_id=decision_id,
         ) or {})
-        result["accepted"] = True
+        try:
+            from product.decision_simulation_gate import status
+            approval = status()
+        except Exception:
+            approval = {}
         result["approval"] = approval
+        result["autonomy_approved"] = bool(approval.get("approved"))
         result["thesis_hash"] = str(approval.get("thesis_hash") or "")
-        result["simulation_scope"] = ["PAPER_FORWARD", "HISTORICAL_REPLAY"]
-        result["simulation_authority"] = "quantterm-autonomy"
+        result["simulation_scope"] = ["EXPLICIT_COUNTERFACTUAL_ONLY"]
+        result["simulation_authority"] = "operator-inspection"
         return _with_live_safety(result)
 
     from product.decision_simulation_gate import approve
