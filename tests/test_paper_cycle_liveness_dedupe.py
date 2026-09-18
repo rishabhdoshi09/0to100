@@ -301,3 +301,36 @@ def test_market_ops_scan_cannot_invoke_autonomous_paper_loop():
     assert "from product.autonomous_loop import advance_loop" not in source
     assert "autonomous loop · candidates=" not in source
     assert "MARKET_SCAN complete · handed off to autonomy supervisor" in source
+
+
+def test_reclaimed_legacy_recurring_job_is_cancelled_before_it_can_run(tmp_path):
+    from tests.test_autonomy import FakeDeps
+
+    clock = [1000.0]
+    now = datetime(2026, 7, 31, 10, 0)
+    root = tmp_path / "auto"
+    sup = Supervisor(
+        root,
+        deps=FakeDeps(now=now, data_ok=True),
+        clock=lambda: clock[0],
+    )
+    assert sup.start() is True
+    try:
+        legacy = sup.jobs.enqueue(
+            JOBS.SCH.PAPER_CYCLE,
+            idempotency_key="paper_cycle:snap1:2026-07-31:intraday-1000",
+            critical=True,
+        )
+        leased = sup.jobs.lease_due("dead-old-owner", lease_seconds=1.0)
+        assert leased is not None and leased.job_id == legacy.job_id
+        clock[0] += 10.0
+
+        # tick() reclaims the dead lease, then retires the legacy recurring row
+        # before lease_due() can execute it again.
+        executed = sup.tick(now)
+        final = sup.jobs.get(legacy.job_id)
+        assert final is not None
+        assert final.status == JS.CANCELLED
+        assert executed is None or executed.job_id != legacy.job_id
+    finally:
+        sup.shutdown()
