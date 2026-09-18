@@ -906,6 +906,17 @@ class Supervisor:
                         or ""
                     )
                     self._mark_snapshot_complete(snap)
+                key = str(job.idempotency_key or "")
+                if job.job_type == SCH.LEARNING_CYCLE and key.startswith("hist_learning:"):
+                    batch_id = str(getattr(job, "input_snapshot_id", None) or key.split(":", 1)[1])
+                    from product.historical_paper_loop import mark_learning_complete
+
+                    mark_learning_complete(batch_id)
+                elif job.job_type == SCH.RESEARCH_CYCLE and key.startswith("hist_research:"):
+                    batch_id = str(getattr(job, "input_snapshot_id", None) or key.split(":", 1)[1])
+                    from product.historical_paper_loop import mark_research_complete
+
+                    mark_research_complete(batch_id)
 
         target = self._gated_state(result.state_hint)
         if (
