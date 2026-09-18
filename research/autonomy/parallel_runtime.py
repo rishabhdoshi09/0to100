@@ -187,9 +187,11 @@ def _delegated_market_scan(ctx):
     from research.autonomy import jobs as JOBS
     from research.autonomy import supervisor_state as ST
 
+    active_fn = getattr(ctx.deps, "active_snapshot_id", None)
+    active_snapshot = active_fn() if callable(active_fn) else ""
     requested_snapshot = str(
         getattr(getattr(ctx, "job", None), "input_snapshot_id", None)
-        or ctx.deps.active_snapshot_id()
+        or active_snapshot
         or ""
     )
     try:
