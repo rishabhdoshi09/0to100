@@ -711,11 +711,15 @@ class MarketOperationsWorker:
             total=0,
         )
         write_progress(current=0, total=0, stage="STARTING", source="market_ops")
+        requested_snapshot = str(
+            (operation.get("payload") or {}).get("snapshot_id") or ""
+        )
         try:
             report = run_whole_market_scan(
                 prefetch_fn=prepared_prefetch,
                 progress_callback=scan_progress,
                 save=True,
+                snapshot_id=requested_snapshot or None,
             )
         except Exception:
             finish_progress(error="scan_failed")
@@ -735,6 +739,8 @@ class MarketOperationsWorker:
         result["summary"] = summary
         result["records"] = len(payload.get("records", []) or [])
         result["history"] = history
+        result["source_snapshot_id"] = str(payload.get("source_snapshot_id") or "")
+        result["requested_snapshot_id"] = requested_snapshot
         as_of_session = str(
             history.get("available_session") or history.get("latest_date") or ""
         )[:10]
