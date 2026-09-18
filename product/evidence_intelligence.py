@@ -407,6 +407,20 @@ def _weighted_stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
     upper = shrunk + 1.96 * se
     p_edge = _normal_cdf(shrunk / se) if se > 0 else (1.0 if shrunk > 0 else 0.0)
     positives = float(np.sum(w * (y > 0).astype(float)))
+    # Individual-outcome probability is a different estimand from P(true mean R > 0).
+    # Use a small symmetric Beta prior to shrink thin/weighted samples toward 50%.
+    prior_alpha = 2.0
+    prior_beta = 2.0
+    effective_wins = positives * effective_n
+    outcome_p = (effective_wins + prior_alpha) / (
+        effective_n + prior_alpha + prior_beta
+    )
+    outcome_se = math.sqrt(
+        max(outcome_p * (1.0 - outcome_p), 1e-12)
+        / max(effective_n + prior_alpha + prior_beta + 1.0, 1.0)
+    )
+    outcome_lower = max(0.0, outcome_p - 1.96 * outcome_se)
+    outcome_upper = min(1.0, outcome_p + 1.96 * outcome_se)
     sims = np.asarray([float(r["similarity"]) for r in rows], dtype=float)
     return {
         "raw_n": int(len(rows)),
@@ -416,7 +430,10 @@ def _weighted_stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "median_R": round(float(np.median(y)), 4),
         "lower_95_R": round(lower, 4),
         "upper_95_R": round(upper, 4),
-        "p_positive_R": round(p_edge, 4),
+        "p_edge_positive": round(p_edge, 4),
+        "outcome_p_posterior": round(outcome_p, 4),
+        "outcome_p_lower_95": round(outcome_lower, 4),
+        "outcome_p_upper_95": round(outcome_upper, 4),
         "positive_rate": round(positives, 4),
         "mean_similarity": round(float(np.sum(w * sims)), 4),
     }
@@ -440,9 +457,9 @@ def evidence_read(decision: Decision, *, k: int = DEFAULT_K) -> dict[str, Any]:
     eff = float(stats.get("effective_n") or 0.0)
 
     analog_score = 0.0
-    raw_p = stats.get("p_positive_R")
-    if raw_p is not None:
-        analog_score = min(_sample_cap(eff), max(0.0, float(raw_p) * 100.0))
+    edge_p = stats.get("p_edge_positive")
+    if edge_p is not None:
+        analog_score = min(_sample_cap(eff), max(0.0, float(edge_p) * 100.0))
 
     prior_score = float(prior.get("confidence_score") or 0.0)
     prior_ready = bool(prior.get("reproduced_positive"))
@@ -466,7 +483,12 @@ def evidence_read(decision: Decision, *, k: int = DEFAULT_K) -> dict[str, Any]:
 
     historical_confidence = round(max(0.0, min(95.0, historical_confidence)), 1)
     similarity_score = round(float(stats.get("mean_similarity") or 0.0) * 100.0, 1)
-    measured_probability = float(raw_p) if raw_p is not None and eff >= CLAIM_MIN_EFFECTIVE_N else None
+    raw_outcome_p = stats.get("outcome_p_posterior")
+    measured_probability = (
+        float(raw_outcome_p)
+        if raw_outcome_p is not None and eff >= CLAIM_MIN_EFFECTIVE_N
+        else None
+    )
     calibrated = measured_probability
     calibration = {
         "status": "INSUFFICIENT_EVIDENCE",
@@ -514,7 +536,14 @@ def evidence_read(decision: Decision, *, k: int = DEFAULT_K) -> dict[str, Any]:
         "lower_95_R": stats.get("lower_95_R"),
         "upper_95_R": stats.get("upper_95_R"),
         "positive_rate": stats.get("positive_rate"),
+        "p_edge_positive": stats.get("p_edge_positive"),
         "p_positive_R": measured_probability,
+        "p_positive_R_lower_95": (
+            stats.get("outcome_p_lower_95") if measured_probability is not None else None
+        ),
+        "p_positive_R_upper_95": (
+            stats.get("outcome_p_upper_95") if measured_probability is not None else None
+        ),
         "calibrated_p_positive_R": None if calibrated is None else round(calibrated, 4),
         "calibration": calibration,
         "historical_prior": prior,
