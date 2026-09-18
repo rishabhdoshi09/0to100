@@ -300,7 +300,8 @@ def test_market_ops_scan_cannot_invoke_autonomous_paper_loop():
     )
     assert "from product.autonomous_loop import advance_loop" not in source
     assert "autonomous loop · candidates=" not in source
-    assert "MARKET_SCAN complete · handed off to autonomy supervisor" in source
+    assert "from product.desk_pipeline import advance_desk_pipeline" not in source
+    assert "complete · no automatic continuation" in source
 
 
 def test_reclaimed_legacy_recurring_job_is_cancelled_before_it_can_run(tmp_path):
