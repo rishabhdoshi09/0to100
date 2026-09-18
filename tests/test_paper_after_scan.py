@@ -136,6 +136,30 @@ def test_paper_does_not_enqueue_before_entry_window():
     assert jobs.enqueued == []
 
 
+
+def test_off_session_historical_paper_waits_for_approval(monkeypatch):
+    jobs = _Jobs()
+    supervisor = Supervisor.__new__(Supervisor)
+    supervisor.jobs = jobs
+    supervisor.deps = SimpleNamespace(
+        now_ist=lambda: datetime(2026, 9, 1, 23, 50, tzinfo=IST),
+        holidays=lambda: set(),
+        active_snapshot_id=lambda: "snap-1",
+    )
+    supervisor._enqueue_post_market_grind = lambda *_a, **_k: None
+    supervisor._ensure_startup_trade_discovery = lambda: None
+    monkeypatch.setattr("product.decision_simulation_gate.is_approved", lambda: False)
+
+    def forbidden(*_a, **_k):
+        raise AssertionError("historical simulation must not inspect or enqueue a batch before approval")
+
+    monkeypatch.setattr("product.historical_paper_loop.pending_stage", forbidden)
+    monkeypatch.setattr("product.historical_paper_loop.peek_next_batch", forbidden)
+
+    supervisor.enqueue_due()
+    assert jobs.enqueued == []
+
+
 def test_off_session_after_close_enqueues_historical_paper(monkeypatch):
     jobs = _Jobs()
     supervisor = Supervisor.__new__(Supervisor)
