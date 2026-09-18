@@ -584,6 +584,74 @@ def load_latest(directory: str | Path | None = None) -> dict[str, Any]:
     return report or progress
 
 
+def replay_identity(
+    *,
+    sessions: int = 8,
+    universe_limit: int = 40,
+    symbols: Sequence[str] | None = None,
+    dates_fn: Callable[[], Sequence[Any]] | None = None,
+) -> dict[str, Any]:
+    """Deterministic identity for the exact replay inputs available now."""
+    identity = replay_identity(
+        sessions=sessions,
+        universe_limit=universe_limit,
+        symbols=symbols,
+        dates_fn=dates_fn,
+    )
+    all_sessions = official_sessions(dates_fn=dates_fn)
+    if len(all_sessions) < 2:
+        return {"available": False, "reason": "insufficient_sessions"}
+    usable = all_sessions[:-1] if len(all_sessions) > 1 else all_sessions
+    window = usable[-max(1, int(sessions)) :]
+    run_id = _fingerprint(
+        window,
+        [str(s).upper() for s in (symbols or [])] + [str(universe_limit)],
+    )
+    try:
+        from product.pit_versions import current_versions
+        versions = current_versions().as_dict()
+    except Exception:
+        versions = {}
+    try:
+        from product.pit_warehouse import warehouse_fingerprint
+        data_fingerprint = warehouse_fingerprint()
+    except Exception:
+        data_fingerprint = ""
+    return {
+        "available": True,
+        "run_id": run_id,
+        "period_start": window[0],
+        "period_end": window[-1],
+        "sessions": list(window),
+        "versions": versions,
+        "data_fingerprint": data_fingerprint,
+        "engine": ENGINE,
+    }
+
+
+def replay_is_current(
+    *,
+    sessions: int = 8,
+    universe_limit: int = 40,
+    symbols: Sequence[str] | None = None,
+    directory: str | Path | None = None,
+    dates_fn: Callable[[], Sequence[Any]] | None = None,
+) -> bool:
+    """True only when persisted replay already covers the exact current inputs."""
+    ident = replay_identity(
+        sessions=sessions, universe_limit=universe_limit, symbols=symbols, dates_fn=dates_fn
+    )
+    if not ident.get("available"):
+        return False
+    latest = _read_json(report_path(directory))
+    return bool(
+        latest.get("status") == _STATUS_SUCCEEDED
+        and latest.get("run_id") == ident.get("run_id")
+        and latest.get("engine") == ident.get("engine")
+        and latest.get("data_fingerprint") == ident.get("data_fingerprint")
+        and latest.get("versions") == ident.get("versions")
+    )
+
 def run_historical_replay(
     *,
     sessions: int = 8,
@@ -621,12 +689,12 @@ def run_historical_replay(
 
     usable = all_sessions[:-1] if len(all_sessions) > 1 else all_sessions
     window = usable[-max(1, int(sessions)) :]
-    run_id = _fingerprint(window, [str(s).upper() for s in (symbols or [])] + [str(universe_limit)])
+    run_id = str(identity.get("run_id") or "")
     from product.pit_versions import current_versions
     from product.pit_warehouse import warehouse_fingerprint
 
-    experiment_versions = current_versions().as_dict()
-    data_fp = warehouse_fingerprint()
+    experiment_versions = dict(identity.get("versions") or current_versions().as_dict())
+    data_fp = str(identity.get("data_fingerprint") or warehouse_fingerprint())
     cached = _read_json(target / REPORT_NAME)
     if (
         not force
@@ -887,10 +955,27 @@ def run_walk_forward_sample(
 
 
 def start_replay_async(**kwargs: Any) -> dict[str, Any]:
-    """Start a replay in a daemon thread so the HTTP server stays responsive."""
+    """Start only when replay inputs changed; otherwise return the persisted result."""
     latest = load_latest(kwargs.get("directory"))
     if latest.get("status") == _STATUS_RUNNING:
         return latest
+    force = bool(kwargs.get("force", False))
+    if not force and replay_is_current(
+        sessions=int(kwargs.get("sessions", 8)),
+        universe_limit=int(kwargs.get("universe_limit", 40)),
+        symbols=kwargs.get("symbols"),
+        directory=kwargs.get("directory"),
+        dates_fn=kwargs.get("dates_fn"),
+    ):
+        cached = dict(latest)
+        cached.update({
+            "accepted": False,
+            "skipped": True,
+            "reason": "replay_inputs_unchanged",
+            "cache_hit": True,
+            "live_locked": True,
+        })
+        return cached
 
     def _runner() -> None:
         with _lock:
