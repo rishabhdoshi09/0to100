@@ -172,6 +172,16 @@ def paper_cycle_key(snapshot_id: str, session_and_slot: str) -> str:
     return f"paper_cycle:{snapshot_id}:{session_and_slot}"
 
 
+def snapshot_scan_key(snapshot_id: str) -> str:
+    """Automatic scan identity: exactly once for one immutable data snapshot."""
+    return f"snapshot_scan:{snapshot_id}"
+
+
+def snapshot_paper_key(snapshot_id: str) -> str:
+    """Automatic paper identity: exactly once for one immutable data snapshot."""
+    return f"snapshot_paper:{snapshot_id}"
+
+
 def scan_key(snapshot_id: str, slot: str, session_date: str | None = None) -> str:
     suffix = f":{session_date}" if session_date else ""
     return f"market_scan:{snapshot_id}:{slot}{suffix}"
