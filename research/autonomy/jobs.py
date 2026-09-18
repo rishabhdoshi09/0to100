@@ -920,18 +920,39 @@ def run_learning_cycle(ctx) -> JobResult:
     except Exception as exc:
         return JobResult(JS.RETRYABLE_FAILED, "learning cycle failed", error_code="LEARNING_ERROR",
                          error_message=str(exc), failures={H.LEARNING_FAILED}, state_hint=ST.DEGRADED)
+    memory_error = ""
     if not os.environ.get("PYTEST_CURRENT_TEST"):
         try:
             from product.autonomous_loop import consume_learning_memory
 
             result["settled_memory"] = consume_learning_memory(session_date)
         except Exception as exc:
-            result["settled_memory"] = {"error": str(exc)[:200]}
-    return JobResult(JS.SUCCEEDED,
-                     f"learning complete · {result.get('diagnostics', 0)} diagnostics · "
-                     f"{result.get('paper_closed', 0)} paper trades · "
-                     f"{result.get('paper_cooldown', 0)} cooldown · "
-                     f"{result.get('paper_prefer', 0)} preferred",
+            memory_error = str(exc)[:200]
+            result["settled_memory"] = {"error": memory_error}
+    summary = (
+        f"learning complete · {result.get('diagnostics', 0)} diagnostics · "
+        f"{result.get('paper_closed', 0)} paper trades · "
+        f"{result.get('paper_cooldown', 0)} cooldown · "
+        f"{result.get('paper_prefer', 0)} preferred"
+    )
+    if memory_error:
+        # The primary learning cycle (run_learning) succeeded, but folding
+        # settled outcomes into calibrated memory failed. That is a real
+        # learning-ingestion failure, not a cosmetic detail buried in
+        # metadata -- surface it as LEARNING_FAILED and in the job's own
+        # error fields instead of unconditionally claiming "learning
+        # complete" and JS.SUCCEEDED with no visible trace of the failure.
+        summary = (
+            f"learning cycle ran but memory consolidation failed · "
+            f"{result.get('diagnostics', 0)} diagnostics"
+        )
+        return JobResult(
+            JS.SUCCEEDED, summary,
+            error_code="LEARNING_MEMORY_ERROR", error_message=memory_error,
+            failures={H.LEARNING_FAILED}, state_hint=ST.RESEARCHING,
+            unblocks=(f"{DEP_LEARNING}:{session_date}",), metadata=result,
+        )
+    return JobResult(JS.SUCCEEDED, summary,
                      clears={H.LEARNING_FAILED}, state_hint=ST.RESEARCHING,
                      unblocks=(f"{DEP_LEARNING}:{session_date}",), metadata=result)
 
