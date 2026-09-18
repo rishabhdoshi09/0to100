@@ -367,9 +367,17 @@ class AutoResearchBrain:
             if session_phase:
                 ctx.session_phase = str(session_phase)
 
-            # establish IN-SAMPLE evidence per strategy from its OWN rules on the snapshot
+            # Do not rebuild historical evidence for a cycle the durable runtime has
+            # already completed. The base runtime remains the idempotency authority;
+            # this pre-check only avoids expensive work before that authority returns
+            # ALREADY_DONE.
             bt_R, bt_n = {}, {}
-            if provider is not None:
+            cycle_done = False
+            try:
+                cycle_done = bool(self.runtime_state.is_cycle_done(ctx.cycle_id()))
+            except Exception:
+                cycle_done = False
+            if provider is not None and not cycle_done:
                 for spec in ctx.strategies:
                     r, n = self._insample_evidence(spec, provider, ctx.as_of_date)
                     bt_R[spec.strategy_id] = r
