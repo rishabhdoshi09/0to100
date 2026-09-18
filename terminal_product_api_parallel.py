@@ -67,11 +67,47 @@ def decision_simulator_run(
     alternative: str = "",
     decision_id: str = "",
 ) -> dict:
-    """Explicit operator approval + simulator trigger.
+    """One approval action; autonomy owns the actual present/historical loops.
 
-    The POST itself is the one-time approval action. It is refused until the
-    startup best-trade discovery has produced a dated decision board.
+    Starting Decision Simulation must not launch a second legacy batch replay in
+    parallel with the supervisor's historical-paper loop. The no-argument POST
+    is therefore approval only. After approval, the autonomy supervisor runs
+    snapshot-bound PAPER_FORWARD decisions when entries are allowed and
+    HISTORICAL_REPLAY virtual-paper batches while the cash market is closed.
+
+    Addressed requests remain explicit one-decision counterfactual inspections,
+    but they cannot implicitly approve the production thesis.
     """
+    addressed = bool(str(symbol or "").strip() or str(decision_id or "").strip())
+
+    if addressed:
+        from product.decision_simulation_gate import is_approved, status
+
+        approval = status()
+        if not is_approved():
+            return _with_live_safety({
+                "status": "AWAITING_APPROVAL",
+                "accepted": False,
+                "approval": approval,
+                "message": (
+                    "Approve Decision Simulation once after reviewing the current "
+                    "best-trade shortlist before running counterfactual inspection."
+                ),
+                "provenance": "HISTORICAL_REPLAY",
+            })
+        result = dict(_core.decision_simulator_run(
+            symbol=symbol,
+            as_of=as_of,
+            alternative=alternative,
+            decision_id=decision_id,
+        ) or {})
+        result["accepted"] = True
+        result["approval"] = approval
+        result["thesis_hash"] = str(approval.get("thesis_hash") or "")
+        result["simulation_scope"] = ["PAPER_FORWARD", "HISTORICAL_REPLAY"]
+        result["simulation_authority"] = "quantterm-autonomy"
+        return _with_live_safety(result)
+
     from product.decision_simulation_gate import approve
 
     approval = approve()
@@ -84,16 +120,22 @@ def decision_simulator_run(
             "provenance": "HISTORICAL_REPLAY",
         })
 
-    result = dict(_core.decision_simulator_run(
-        symbol=symbol,
-        as_of=as_of,
-        alternative=alternative,
-        decision_id=decision_id,
-    ) or {})
-    result["approval"] = approval
-    result["thesis_hash"] = str(approval.get("thesis_hash") or "")
-    result["simulation_scope"] = ["PAPER_FORWARD", "HISTORICAL_REPLAY"]
-    return _with_live_safety(result)
+    # Do not call _core.decision_simulator_run() here. That legacy endpoint
+    # starts an independent batch replay and would duplicate the supervisor's
+    # canonical historical-paper engine after this approval unlocks it.
+    return _with_live_safety({
+        "status": "APPROVED",
+        "accepted": True,
+        "approval": approval,
+        "thesis_hash": str(approval.get("thesis_hash") or ""),
+        "simulation_scope": ["PAPER_FORWARD", "HISTORICAL_REPLAY"],
+        "simulation_authority": "quantterm-autonomy",
+        "legacy_batch_started": False,
+        "message": (
+            "Decision Simulation approved. QuantTerm autonomy now owns the "
+            "present PAPER_FORWARD pass and historical PIT virtual-paper loop."
+        ),
+    })
 
 
 def market_reports_workspace() -> dict:
