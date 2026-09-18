@@ -158,10 +158,83 @@ def freeze_decision(
     )
 
 
-def settle_decision(decision_id: str, realized_R: float) -> dict[str, Any]:
-    """Attach the after-the-fact label; features/meta remain immutable."""
+def settle_decision(
+    decision_id: str,
+    realized_R: float,
+    *,
+    evidence_class: str,
+    not_pnl: bool = False,
+    classification: str = "",
+    resolved_at: str = "",
+) -> dict[str, Any]:
+    """Attach an immutable labelled outcome with explicit evidence provenance."""
     from research.feature_store import set_outcome
-    return set_outcome(_observation_id(decision_id), float(realized_R))
+    return set_outcome(
+        _observation_id(decision_id),
+        float(realized_R),
+        outcome_meta={
+            "evidence_class": str(evidence_class or ""),
+            "not_pnl": bool(not_pnl),
+            "classification": str(classification or ""),
+            "resolved_at": str(resolved_at or ""),
+        },
+    )
+
+
+def record_resolved_prediction(
+    decision_id: str,
+    realized_R: float,
+    *,
+    evidence_class: str,
+    not_pnl: bool = False,
+    classification: str = "",
+    resolved_at: str = "",
+) -> dict[str, Any]:
+    """Settle the feature observation and, for real taken paper, calibration.
+
+    Counterfactual labels improve the selection corpus but never enter the
+    probability calibration ledger as if they were executed trades.
+    """
+    settled = settle_decision(
+        decision_id,
+        realized_R,
+        evidence_class=evidence_class,
+        not_pnl=not_pnl,
+        classification=classification,
+        resolved_at=resolved_at,
+    )
+    out: dict[str, Any] = {"feature_store": settled, "calibration": None}
+    if not_pnl:
+        return out
+    if str(evidence_class or "").upper() not in {"PAPER_FORWARD", "REAL_FORWARD_PAPER"}:
+        return out
+    try:
+        from research.feature_store import get_observation
+        row = get_observation(_observation_id(decision_id)) or {}
+        meta = dict(row.get("meta") or {})
+        predicted_p = _f(meta.get("predicted_p"))
+        if predicted_p is None:
+            return out
+        if predicted_p >= 0.70:
+            tier = "high"
+        elif predicted_p >= 0.55:
+            tier = "good"
+        else:
+            tier = "watch"
+        from product.decision_calibration import DecisionCalibrationEngine
+        out["calibration"] = DecisionCalibrationEngine().record(
+            predicted_confidence=tier,
+            predicted_p=predicted_p,
+            realized_win=float(realized_R) > 0.0,
+            setup=str(meta.get("setup") or ""),
+            regime=str(meta.get("market_state") or ""),
+            sector=str(meta.get("sector_state") or ""),
+            decision_as_of=str(row.get("ts") or ""),
+            outcome_as_of=str(resolved_at or datetime.now(timezone.utc).isoformat()),
+        )
+    except Exception as exc:
+        out["calibration"] = {"error": str(exc)[:200]}
+    return out
 
 
 def _policy_prior(setup: str) -> dict[str, Any]:
@@ -268,7 +341,20 @@ def _analogs(decision: Decision, *, k: int = DEFAULT_K) -> list[dict[str, Any]]:
         recency = 0.5 ** (age_days / HALF_LIFE_DAYS)
         problems = list(row.get("validation") or [])
         quality = max(0.55, 1.0 - min(0.45, len(problems) * 0.05))
-        weight = similarity * setup_weight * regime_weight * sector_weight * recency * quality
+        outcome_meta = dict(row.get("outcome_meta") or {})
+        lane = str(outcome_meta.get("evidence_class") or "").upper()
+        if lane in {"PAPER_FORWARD", "REAL_FORWARD_PAPER"}:
+            lane_weight = 1.0
+        elif lane in {"FORWARD_COUNTERFACTUAL", "COUNTERFACTUAL_FORWARD"}:
+            lane_weight = 0.65
+        elif lane in {"HISTORICAL_REPLAY", "BACKTEST"}:
+            lane_weight = 0.35
+        else:
+            lane_weight = 0.50
+        weight = (
+            similarity * setup_weight * regime_weight * sector_weight
+            * recency * quality * lane_weight
+        )
         if weight <= 0:
             continue
         ranked.append({
@@ -281,6 +367,8 @@ def _analogs(decision: Decision, *, k: int = DEFAULT_K) -> list[dict[str, Any]]:
             "same_setup": same_setup,
             "same_regime": old_regime == now_regime if old_regime and now_regime else False,
             "shared_features": len(shared),
+            "evidence_class": lane,
+            "not_pnl": bool(outcome_meta.get("not_pnl")),
         })
 
     ranked.sort(key=lambda r: (-float(r["weight"]), -float(r["similarity"]), str(r["ts"])))
@@ -395,6 +483,10 @@ def evidence_read(decision: Decision, *, k: int = DEFAULT_K) -> dict[str, Any]:
 
     match_factor = 0.60 + 0.40 * min(1.0, max(0.0, similarity_score / 100.0))
     decision_confidence = round(historical_confidence * match_factor, 1)
+    lane_counts: dict[str, int] = {}
+    for row in analogs:
+        lane = str(row.get("evidence_class") or "UNKNOWN")
+        lane_counts[lane] = lane_counts.get(lane, 0) + 1
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -406,6 +498,7 @@ def evidence_read(decision: Decision, *, k: int = DEFAULT_K) -> dict[str, Any]:
         "decision_confidence": decision_confidence,
         "raw_n": stats.get("raw_n", 0),
         "effective_n": stats.get("effective_n", 0.0),
+        "evidence_lane_counts": lane_counts,
         "mean_R": stats.get("mean_R"),
         "shrunk_mean_R": stats.get("shrunk_mean_R"),
         "median_R": stats.get("median_R"),
@@ -426,6 +519,8 @@ def evidence_read(decision: Decision, *, k: int = DEFAULT_K) -> dict[str, Any]:
                 "weight": round(float(r["weight"]), 6),
                 "same_setup": bool(r["same_setup"]),
                 "same_regime": bool(r["same_regime"]),
+                "evidence_class": str(r.get("evidence_class") or ""),
+                "not_pnl": bool(r.get("not_pnl")),
             }
             for r in analogs[:10]
         ],
