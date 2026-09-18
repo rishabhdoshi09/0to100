@@ -308,7 +308,10 @@ start_stack() {
   echo "[COMPLETE STACK] Starting QuantTerm terminal, market operations, autonomy and market scan…"
   # Only this outer supervisor may retain FD 200. If the inner stack survives
   # this shell, it must not keep the machine-wide flock alive as an orphan.
-  bash scripts/run_quantterm.sh 200>&- &
+  # Own process group for the entire inner stack. If the inner shell exits or
+  # its trap is interrupted, the outer supervisor can still signal market_ops,
+  # autonomy and the API as one group instead of leaving reparented orphans.
+  setsid bash scripts/run_quantterm.sh 200>&- &
   STACK_PID=$!
 }
 
