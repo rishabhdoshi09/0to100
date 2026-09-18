@@ -165,15 +165,7 @@ class Supervisor:
             pass
         # Legacy recurring rows from the old time-bucket scheduler must not fire
         # after an upgrade. Manual controls use "manual:" keys and are preserved.
-        try:
-            self.jobs.cancel_pending_by_prefix(
-                "news_refresh:",
-                "market_scan:",
-                "paper_cycle:",
-                summary="retired by snapshot-terminal scheduler",
-            )
-        except Exception:
-            pass
+        self._retire_legacy_recurring_work()
         if hasattr(self.deps, "notify_online"):
             try:
                 self.deps.notify_online()
@@ -194,6 +186,18 @@ class Supervisor:
 
     def heartbeat(self):
         self._write_status()
+
+    def _retire_legacy_recurring_work(self) -> None:
+        """Remove old time-bucket auto work after recovery; manual jobs survive."""
+        try:
+            self.jobs.cancel_pending_by_prefix(
+                "news_refresh:",
+                "market_scan:",
+                "paper_cycle:",
+                summary="retired by snapshot-terminal scheduler",
+            )
+        except Exception:
+            pass
 
     def _write_status(self):
         caps = H.capabilities(self.failures)
@@ -605,6 +609,9 @@ class Supervisor:
 
     def tick(self, now_ist=None):
         self.jobs.reclaim_expired()
+        # A dead old worker may have left RUNNING recurring work. Reclaim first,
+        # then retire those rows before anything can lease them again.
+        self._retire_legacy_recurring_work()
         self._process_controls()
         current = now_ist or self.deps.now_ist()
         self._manage_live_feed(current)
