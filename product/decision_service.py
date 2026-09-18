@@ -78,6 +78,23 @@ def decisions_from_workspace(
 
 
 
+def _read_only_paper_book():
+    """Restore the persisted PAPER_FORWARD book without starting the research brain."""
+    try:
+        import json
+        from core.runtime_paths import logs_path
+        from research.auto_research.costs import india_cash_costs
+        from research.auto_research.paper_book import PaperBook
+
+        book = PaperBook(slippage_bps=3.0, cost_model=india_cash_costs)
+        target = logs_path("intelligence/intel_book.json")
+        if target.exists():
+            book.restore(json.loads(target.read_text(encoding="utf-8")))
+        return book
+    except Exception:
+        return None
+
+
 def _best_trades_from_production_thesis(
     workspace: Mapping[str, Any],
     rows: Sequence[Mapping[str, Any]],
@@ -85,14 +102,18 @@ def _best_trades_from_production_thesis(
     market_state: str = "",
     limit: int = 5,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
-    """Return only names the canonical paper-selection thesis would enter.
+    """Return trades actionable under the same thesis + restored paper portfolio.
 
-    This is pre-approval discovery, so the circular historical-bootstrap
-    prerequisite is disabled. Strategy, learned overlays, hard risk/evidence
-    gates and selection scoring are otherwise the same seam used by historical
-    PIT replay and present PAPER_FORWARD.
+    Discovery is read-only. It disables only the circular historical-bootstrap
+    prerequisite, then applies the same candidate gates, carried sector risk,
+    portfolio authority and max-three-new-positions rule as PAPER_FORWARD.
     """
-    from product.paper_autopilot import ENTER_NOW, evaluate_selection_candidate
+    from product.paper_autopilot import (
+        ENTER_NOW,
+        carried_sector_risk,
+        evaluate_selection_candidate,
+    )
+    from product.portfolio_selection_authority import apply_portfolio_authority
 
     regime = str(
         market_state
@@ -109,7 +130,9 @@ def _best_trades_from_production_thesis(
         if prior is None or float(raw.get("ranking_score") or 0.0) > float(prior.get("ranking_score") or 0.0):
             row_by_symbol[symbol] = dict(raw)
 
-    best_by_symbol: dict[str, tuple[float, dict[str, Any]]] = {}
+    book = _read_only_paper_book()
+    family_risk, cluster_risk = carried_sector_risk(book)
+    eligible: dict[str, tuple[float, Any]] = {}
     errors: list[dict[str, str]] = []
     for card in _cards(workspace):
         symbol = str(card.get("symbol") or "").upper()
@@ -118,12 +141,14 @@ def _best_trades_from_production_thesis(
         try:
             decision = evaluate_selection_candidate(
                 card,
-                book=None,
+                book=book,
                 workspace=workspace,
                 entries_allowed=True,
                 paper_enabled=True,
                 regime=regime,
                 enforce_history=False,
+                family_risk=family_risk,
+                cluster_risk=cluster_risk,
             )
         except Exception as exc:
             errors.append({"symbol": symbol, "error": str(exc)[:180]})
@@ -131,21 +156,44 @@ def _best_trades_from_production_thesis(
         if str(decision.decision or "") != ENTER_NOW:
             continue
         score = float(decision.selection_score or 0.0)
-        payload = dict(row_by_symbol[symbol])
-        payload["production_selection_score"] = score
+        prior = eligible.get(symbol)
+        if prior is None or score > prior[0]:
+            eligible[symbol] = (score, decision)
+
+    ranked = sorted(
+        eligible.values(),
+        key=lambda item: (-item[0], str(item[1].symbol or "")),
+    )
+    try:
+        kept, _diverted = apply_portfolio_authority(
+            ranked,
+            book=book,
+            max_new=min(3, max(0, int(limit))),
+            regime=regime,
+        )
+    except Exception as exc:
+        errors.append({"symbol": "", "error": f"portfolio authority: {str(exc)[:160]}"})
+        kept = []
+
+    best: list[dict[str, Any]] = []
+    for score, decision in kept:
+        symbol = str(decision.symbol or "").upper()
+        base = row_by_symbol.get(symbol)
+        if base is None:
+            continue
+        payload = dict(base)
+        payload["production_selection_score"] = float(score)
         payload["production_reason_code"] = str(decision.reason_code or "")
         payload["production_policy_effect"] = str(decision.policy_effect or "NEUTRAL")
+        payload["production_portfolio_authority"] = dict(decision.portfolio or {})
         payload["discovery_decision"] = ENTER_NOW
         payload["history_bootstrap_gate_applied"] = False
-        prior = best_by_symbol.get(symbol)
-        if prior is None or score > prior[0]:
-            best_by_symbol[symbol] = (score, payload)
+        payload["restored_paper_positions_considered"] = bool(
+            book is not None and getattr(book, "open", {})
+        )
+        best.append(payload)
 
-    ordered = sorted(
-        best_by_symbol.values(),
-        key=lambda item: (-item[0], str(item[1].get("symbol") or "")),
-    )
-    return [row for _score, row in ordered[: max(0, int(limit))]], errors
+    return best[: max(0, int(limit))], errors
 
 
 def decision_board(
