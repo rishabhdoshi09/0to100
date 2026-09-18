@@ -28,7 +28,9 @@ def _seed(
             )
         else:
             challenger_p = None
+        from product.trading_thesis import manifest as thesis_manifest
         meta = {
+            "thesis_hash": str(thesis_manifest().get("thesis_hash") or ""),
             "setup": "VCP_BREAKOUT",
             "market_state": "TRENDING_BULL",
             "sector_state": "STRONG",
