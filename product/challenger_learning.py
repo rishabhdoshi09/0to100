@@ -32,6 +32,7 @@ DEFAULT_PATH = logs_dir() / "product" / "challenger_learning.json"
 OBSERVING = "OBSERVING"
 SHADOW_CANDIDATE = "SHADOW_CANDIDATE"
 PAPER_ACTIVE = "PAPER_ACTIVE"
+DEMOTED = "DEMOTED"
 REJECTED = "REJECTED"
 
 MIN_TOTAL = 60
@@ -39,6 +40,7 @@ MIN_REAL_FORWARD = 20
 PROMOTION_TOTAL = 100
 PROMOTION_REAL_FORWARD = 30
 MIN_FORWARD_COMPARE = 30
+DEMOTION_FORWARD_COMPARE = 60
 MIN_BRIER_IMPROVEMENT = 0.01
 
 MODEL_FEATURES = (
@@ -313,6 +315,7 @@ def forward_comparison(model_version: str, rows: list[dict[str, Any]] | None = N
             "challenger_brier": None,
             "improvement": None,
             "improvement_lower_95": None,
+            "improvement_upper_95": None,
         }
     cp = np.asarray([x[0] for x in chosen], dtype=float)
     xp = np.asarray([x[1] for x in chosen], dtype=float)
@@ -323,12 +326,14 @@ def forward_comparison(model_version: str, rows: list[dict[str, Any]] | None = N
     improvement = float(np.mean(paired))
     se = float(np.std(paired, ddof=1) / math.sqrt(len(paired))) if len(paired) > 1 else 1.0
     lower = improvement - 1.96 * se
+    upper = improvement + 1.96 * se
     return {
         "n": len(chosen),
         "champion_brier": round(cb, 6),
         "challenger_brier": round(xb, 6),
         "improvement": round(improvement, 6),
         "improvement_lower_95": round(lower, 6),
+        "improvement_upper_95": round(upper, 6),
     }
 
 
@@ -430,25 +435,87 @@ def train(*, path: str | Path | None = None, force: bool = False) -> dict[str, A
     return model
 
 
+def _remember_transition(model: Mapping[str, Any], status: str, reason: str) -> None:
+    """Persist model success/failure as scientific memory; never gates runtime."""
+    try:
+        from research.scientific_memory import (
+            ACTIVE as BELIEF_ACTIVE,
+            RETIRED as BELIEF_RETIRED,
+            REJECTED as BELIEF_REJECTED,
+            record_belief,
+        )
+        mapped = {
+            PAPER_ACTIVE: BELIEF_ACTIVE,
+            DEMOTED: BELIEF_RETIRED,
+            REJECTED: BELIEF_REJECTED,
+        }.get(status)
+        if mapped is None:
+            return
+        version = str(model.get("model_version") or "unknown")
+        forward = dict(model.get("forward_validation") or {})
+        n = int(forward.get("n") or 0)
+        confidence = "HIGH" if n >= DEMOTION_FORWARD_COMPARE else "MEDIUM"
+        record_belief(
+            statement=f"Paper selection challenger {version} calibration edge",
+            signal="paper_selection_classifier",
+            status=mapped,
+            evidence_n=n,
+            confidence=confidence,
+            ev_r=None,
+            drift_status="DECAYING" if status == DEMOTED else "STABLE",
+            dependencies=("decision_feature_store", "paper_forward_outcomes"),
+            notes=reason,
+        )
+    except Exception:
+        pass
+
+
 def maybe_promote(*, path: str | Path | None = None) -> dict[str, Any]:
     store = load(path)
     current = dict(store.get("current") or {})
     if not current:
         return store
-    if current.get("status") == PAPER_ACTIVE:
-        return store
-    if current.get("status") != SHADOW_CANDIDATE:
+    status = str(current.get("status") or "")
+    if status not in {SHADOW_CANDIDATE, PAPER_ACTIVE}:
         return store
 
     forward = forward_comparison(str(current.get("model_version") or ""))
     current["forward_validation"] = forward
-    enough = (
-        int(current.get("trained_n") or 0) >= PROMOTION_TOTAL
-        and int(current.get("real_forward_n") or 0) >= PROMOTION_REAL_FORWARD
-        and int(forward.get("n") or 0) >= MIN_FORWARD_COMPARE
-    )
+    forward_n = int(forward.get("n") or 0)
     improvement = _f(forward.get("improvement"))
     lower = _f(forward.get("improvement_lower_95"))
+    upper = _f(forward.get("improvement_upper_95"))
+
+    if status == PAPER_ACTIVE:
+        # An active learner is not immortal.  Once enough fresh exact-version
+        # outcomes accumulate, robust under-performance demotes it immediately.
+        if (
+            forward_n >= DEMOTION_FORWARD_COMPARE
+            and improvement is not None
+            and improvement <= -MIN_BRIER_IMPROVEMENT
+            and upper is not None
+            and upper < 0.0
+        ):
+            current["status"] = DEMOTED
+            current["affects_selection"] = False
+            current["demoted_at"] = datetime.now(timezone.utc).isoformat()
+            current["demotion_reason"] = (
+                "Exact-version forward calibration deteriorated with a negative "
+                "95% upper bound versus the champion."
+            )
+            _remember_transition(current, DEMOTED, current["demotion_reason"])
+        store["current"] = current
+        save(store, path)
+        return store
+
+    # The training set is intentionally frozen while shadowing.  Graduation
+    # therefore counts that frozen evidence plus fresh exact-version forward
+    # observations; requiring the frozen count itself to grow would be impossible.
+    enough = (
+        int(current.get("trained_n") or 0) + forward_n >= PROMOTION_TOTAL
+        and int(current.get("real_forward_n") or 0) + forward_n >= PROMOTION_REAL_FORWARD
+        and forward_n >= MIN_FORWARD_COMPARE
+    )
     if enough and improvement is not None:
         if (
             improvement >= MIN_BRIER_IMPROVEMENT
@@ -462,6 +529,7 @@ def maybe_promote(*, path: str | Path | None = None) -> dict[str, Any]:
                 "Purged validation plus exact-version forward Brier improvement "
                 "with a positive 95% lower bound."
             )
+            _remember_transition(current, PAPER_ACTIVE, current["promotion_reason"])
         else:
             current["status"] = REJECTED
             current["affects_selection"] = False
@@ -470,6 +538,7 @@ def maybe_promote(*, path: str | Path | None = None) -> dict[str, Any]:
                 "Forward comparison reached the sample floor without a robust "
                 "positive challenger improvement."
             )
+            _remember_transition(current, REJECTED, current["rejection_reason"])
     store["current"] = current
     save(store, path)
     return store
