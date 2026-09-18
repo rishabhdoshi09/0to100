@@ -49,7 +49,7 @@ def decisions_from_workspace(
 ) -> list[Decision]:
     if not workspace:
         return []
-    return decisions_from_cards(
+    decisions = decisions_from_cards(
         _cards(workspace),
         source_scan_id=str(workspace.get("scan_scanned_at") or ""),
         market_state=market_state,
@@ -59,6 +59,21 @@ def decisions_from_workspace(
         feature_schema_version=str(workspace.get("schema_version") or ""),
         strategy_version=str(workspace.get("strategy_version") or ""),
     )
+    # Evidence intelligence is an enrichment layer, never the source of the
+    # decision state. Fail-open: a research-store issue must not erase the desk's
+    # canonical decision or fabricate an alternative one.
+    try:
+        from product.evidence_intelligence import enrich
+    except Exception:
+        return decisions
+
+    enriched: list[Decision] = []
+    for decision in decisions:
+        try:
+            enriched.append(enrich(decision))
+        except Exception:
+            enriched.append(decision)
+    return enriched
 
 
 def decision_board(
@@ -111,6 +126,9 @@ def decision_board(
         payload["context_key"] = decision_context_key(decision)
         payload["evidence_counts"] = decision.evidence_counts()
         payload["why"] = ranking_explanation(row)
+        payload["evidence_intelligence"] = dict(
+            (decision.historical_evidence or {}).get("evidence_intelligence") or {}
+        )
         rows.append(payload)
 
     return {
@@ -257,6 +275,9 @@ def decision_why(
         "scan_scanned_at": str((workspace or {}).get("scan_scanned_at") or ""),
         "ranking": ranked.to_dict(),
         "ranking_explanation": ranking_explanation(ranked),
+        "evidence_intelligence": dict(
+            (match.historical_evidence or {}).get("evidence_intelligence") or {}
+        ),
         "unfilled_sections": missing_sections(payload),
     })
     return payload
