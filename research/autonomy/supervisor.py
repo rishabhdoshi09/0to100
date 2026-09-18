@@ -232,11 +232,17 @@ class Supervisor:
                 elif job.job_type == SCH.BHAVCOPY_UPDATE:
                     retire = not key.endswith(":eod")
                 elif job.job_type in {
+                    SCH.CORPORATE_ACTIONS,
+                    SCH.UNIVERSE_HISTORY,
+                }:
+                    # start() deliberately unblocks these durable official-data
+                    # recovery jobs. Cancelling them here would undo recovery in
+                    # the same startup transaction.
+                    retire = False
+                elif job.job_type in {
                     SCH.LONG_TERM_SCAN,
                     SCH.LONG_TERM_REFRESH,
                     SCH.INSTRUMENT_REFRESH,
-                    SCH.CORPORATE_ACTIONS,
-                    SCH.UNIVERSE_HISTORY,
                     SCH.INDEX_WARMUP,
                 }:
                     retire = True
