@@ -383,6 +383,11 @@ def decide_session(
     for card in cards:
         symbol = str(card.get("symbol") or "").upper()
         card = attach_pit_to_card(dict(card), as_of=as_of)
+        # Carry the historical decision-time anchor through the exact production
+        # selection/portfolio path (notably PIT correlation lookup).
+        card["as_of"] = str(as_of)[:10]
+        card["decision_as_of"] = str(as_of)[:10]
+        card.setdefault("scan_scanned_at", f"{str(as_of)[:10]}T15:30:00+05:30")
         if company_evidence is not None:
             pit_grade = grade_replay(
                 as_of=as_of,
