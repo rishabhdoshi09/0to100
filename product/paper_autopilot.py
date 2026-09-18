@@ -653,6 +653,20 @@ def run_reco_paper_cycle(
     opened: list[Any] = []
     family_risk: dict[str, float] = {}
     cluster_risk: dict[str, float] = {}
+    # Carry existing paper exposure into this cycle's family/cluster gates.
+    # PaperPosition.sector is persisted, so this remains true after restart.
+    if book is not None:
+        cap = float(getattr(book, "capital", 0.0) or 0.0)
+        for pos in (getattr(book, "open", {}) or {}).values():
+            sector = str(getattr(pos, "sector", "") or "")
+            if not sector:
+                continue
+            approved = _f(getattr(pos, "approved_risk_pct", None))
+            if approved is None and cap > 0:
+                approved = float(getattr(pos, "risk_amount", 0.0) or 0.0) / cap * 100.0
+            risk_pct = float(approved or 0.0)
+            family_risk[sector] = family_risk.get(sector, 0.0) + risk_pct
+            cluster_risk[sector] = cluster_risk.get(sector, 0.0) + risk_pct
     cycle_reasons: list[str] = []
 
     if not paper_enabled:
@@ -787,6 +801,10 @@ def run_reco_paper_cycle(
             continue
         entered += 1
         sector = str(decision.card.get("sector") or "")
+        try:
+            pos.sector = sector
+        except Exception:
+            pass
         family_risk[sector] = family_risk.get(sector, 0.0) + DEFAULT_RISK_PCT
         cluster_risk[sector] = cluster_risk.get(sector, 0.0) + DEFAULT_RISK_PCT
         opened.append((ENSEMBLE_ID, decision.symbol))
