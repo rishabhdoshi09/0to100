@@ -247,63 +247,39 @@ class Supervisor:
         return f"{bucket // 60:02d}{bucket % 60:02d}"
 
     def enqueue_due(self, now_ist=None):
-        """Schedule one automatic snapshot transaction, then remain idle.
+        """Schedule one automatic data->scan->paper transaction, then stop.
 
-        Automatic intraday contract:
+        Automatic contract:
             AUTH once/session -> DATA_REFRESH once/session
-            -> MARKET_SCAN once/snapshot -> PAPER_CYCLE once/snapshot -> STOP.
+            -> MARKET_SCAN once/data-identity -> PAPER_CYCLE once/data-identity
+            -> OBSERVING.
 
-        There are deliberately no recurring news/scan/paper buckets here.
-        Post-market settlement is a separate once-per-session event.
+        Outside the entry/scan window this method queues nothing. Settlement,
+        learning, research, news and historical replay are explicit/manual jobs;
+        none is an automatic continuation of PAPER_CYCLE.
         """
         now_ist = now_ist or self.deps.now_ist()
         holidays = self.deps.holidays()
         self._release_stale_official_blocks()
-        session_date = now_ist.date().isoformat()
 
         if not SCH._is_session_day(now_ist, holidays):
-            last = SCH.last_completed_session_date(now_ist, holidays)
-            if last:
-                self._enqueue_post_market_grind(now_ist, session_date=last)
+            return
+        if not SCH.in_scan_window(now_ist, holidays):
             return
 
-        # One auth health check per session is sufficient for this pipeline.
-        if now_ist.time() >= SCH.AUTH_WINDOW_START:
-            self.jobs.enqueue(
-                SCH.AUTH_HEALTH,
-                idempotency_key=f"auth:{session_date}",
-                critical=True,
+        session_date = now_ist.date().isoformat()
+        self.jobs.enqueue(
+            SCH.AUTH_HEALTH,
+            idempotency_key=f"auth:{session_date}",
+            critical=True,
+        )
+        data_job = self._enqueue_daily_foundation(now_ist, session_date)
+        if getattr(data_job, "status", None) == JS.SUCCEEDED:
+            snap = self._snapshot_token(
+                getattr(data_job, "output_snapshot_id", None),
+                None,
             )
-
-        if SCH.in_scan_window(now_ist, holidays):
-            data_job = self._enqueue_daily_foundation(now_ist, session_date)
-            if getattr(data_job, "status", None) == JS.SUCCEEDED:
-                snap = self._snapshot_token(
-                    getattr(data_job, "output_snapshot_id", None),
-                    None,
-                )
-                self._ensure_snapshot_pipeline(snap)
-            return
-
-        if SCH.in_eod_window(now_ist, holidays):
-            self.jobs.enqueue(
-                SCH.BHAVCOPY_UPDATE,
-                idempotency_key=SCH.eod_bhavcopy_key(session_date),
-            )
-            eod = self.jobs.enqueue(
-                SCH.DATA_REFRESH,
-                idempotency_key=SCH.eod_data_refresh_key(session_date),
-                critical=True,
-            )
-            if getattr(eod, "status", None) == JS.SUCCEEDED:
-                self._enqueue_post_market_grind(now_ist, session_date=session_date)
-            return
-
-        # Between active windows, do not invent work. The supervisor remains
-        # alive and observable but waits for the next real scheduling boundary.
-        last = SCH.last_completed_session_date(now_ist, holidays)
-        if last and now_ist.time() > SCH.MARKET_CLOSE:
-            self._enqueue_post_market_grind(now_ist, session_date=last)
+            self._ensure_snapshot_pipeline(snap)
 
 
     _OFFICIAL_BLOCKERS = frozenset({
@@ -419,22 +395,26 @@ class Supervisor:
 
     def _pipeline_complete(self, snapshot_id: str) -> bool:
         snap = str(snapshot_id or "")
+        owner_state = getattr(self, "owner_state", {}) or {}
         return bool(
             snap
-            and snap == str(self.owner_state.get("completed_snapshot_id") or "")
+            and snap == str(owner_state.get("completed_snapshot_id") or "")
         )
 
     def _mark_snapshot_complete(self, snapshot_id: str) -> None:
         snap = str(snapshot_id or "")
         if not snap:
             return
+        if not hasattr(self, "owner_state") or self.owner_state is None:
+            self.owner_state = {}
         now = self.deps.now_ist()
         self.owner_state["completed_snapshot_id"] = snap
         self.owner_state["completed_snapshot_at"] = (
             now.isoformat() if hasattr(now, "isoformat") else str(now)
         )
         self.owner_state["completed_session_date"] = str(now.date().isoformat())
-        self._save_owner_state()
+        if hasattr(self, "_save_owner_state"):
+            self._save_owner_state()
         # Retire only automatic rows. Manual controls have manual:* identities.
         try:
             self.jobs.cancel_pending_by_prefix(
@@ -448,8 +428,26 @@ class Supervisor:
         except Exception:
             pass
 
+    def _paper_for_snapshot(self, snapshot_id: str) -> None:
+        """Enqueue the terminal paper pass for an already-successful scan."""
+        snap = str(snapshot_id or "")
+        if not snap or self._pipeline_complete(snap):
+            return
+        now_ist = self.deps.now_ist()
+        holidays = self.deps.holidays()
+        if not SCH.entries_allowed_by_clock(now_ist, holidays):
+            return
+        paper = self.jobs.enqueue(
+            SCH.PAPER_CYCLE,
+            idempotency_key=SCH.snapshot_paper_key(snap),
+            input_snapshot_id=snap,
+            critical=True,
+        )
+        if getattr(paper, "status", None) == JS.SUCCEEDED:
+            self._mark_snapshot_complete(snap)
+
     def _ensure_snapshot_pipeline(self, snapshot_id: str) -> None:
-        """Resume or create exactly one scan->paper chain for a data snapshot."""
+        """Enqueue exactly one MARKET_SCAN for a fresh data identity."""
         snap = str(snapshot_id or "")
         if not snap or self._pipeline_complete(snap):
             return
@@ -463,27 +461,22 @@ class Supervisor:
             idempotency_key=SCH.snapshot_scan_key(snap),
             input_snapshot_id=snap,
         )
-        if getattr(scan, "status", None) != JS.SUCCEEDED:
-            return
-
-        paper = self.jobs.enqueue(
-            SCH.PAPER_CYCLE,
-            idempotency_key=SCH.snapshot_paper_key(snap),
-            input_snapshot_id=snap,
-            critical=True,
-        )
-        if getattr(paper, "status", None) == JS.SUCCEEDED:
-            self._mark_snapshot_complete(snap)
+        # A recovered/reused scan may already be terminal; continue directly to
+        # paper without scheduling another scan.
+        if getattr(scan, "status", None) == JS.SUCCEEDED:
+            self._paper_for_snapshot(snap)
 
     def _enqueue_paper_after_scan(self, scan_job) -> None:
         if str(getattr(scan_job, "job_type", "") or "") != SCH.MARKET_SCAN:
             return
+        active_fn = getattr(self.deps, "active_snapshot_id", None)
+        active = active_fn() if callable(active_fn) else ""
         snap = str(
             getattr(scan_job, "input_snapshot_id", None)
-            or self.deps.active_snapshot_id()
+            or active
             or ""
         )
-        self._ensure_snapshot_pipeline(snap)
+        self._paper_for_snapshot(snap)
 
     def _enqueue_scan_after_refresh(
         self,
