@@ -71,6 +71,7 @@ def begin_startup(startup_id: str | None = None, *, path: str | Path | None = No
         "startup_id": sid,
         "startup_started_at": state.get("startup_started_at") if same_startup else _now(),
         "approved": approved,
+        "approval_required": not approved,
         "approved_at": state.get("approved_at") if approved else "",
         "approved_thesis_hash": str(state.get("approved_thesis_hash") or "") if approved else "",
         "approved_scan_id": state.get("approved_scan_id") if approved else "",
@@ -82,6 +83,10 @@ def begin_startup(startup_id: str | None = None, *, path: str | Path | None = No
 def _board() -> dict[str, Any]:
     try:
         from product.decision_service import decision_board
+        from product.recommendations_store import (
+            load_recommendations,
+            reco_matches_scan,
+        )
         from product.recommendations_workspace import build_recommendations_workspace
         from product.scan_store import load_scan
 
@@ -103,14 +108,26 @@ def _board() -> dict[str, Any]:
                 "thesis": {},
             }
 
-        workspace = build_recommendations_workspace(
-            scan_payload=scan,
-            long_term_payload=long_term,
-            refresh_technicals=False,
-            settle_cases=False,
-            deep_confirm=False,
-            persist_ledger=False,
-        )
+        # A whole-market scan persists this projection once. Gate GET/POST must
+        # read that artifact instead of rebuilding hundreds of desk rows inside
+        # an HTTP request (which previously exceeded the 20s acceptance timeout).
+        workspace = load_recommendations()
+        if not reco_matches_scan(
+            workspace,
+            scan_scanned_at=str(scan.get("scanned_at") or ""),
+            long_term_scanned_at=str(long_term.get("scanned_at") or ""),
+        ):
+            # Compatibility/recovery path for older runtimes whose latest scan
+            # predates projection persistence. This is intentionally a fallback;
+            # normal startup discovery never pays this cost in the API path.
+            workspace = build_recommendations_workspace(
+                scan_payload=scan,
+                long_term_payload=long_term,
+                refresh_technicals=False,
+                settle_cases=False,
+                deep_confirm=False,
+                persist_ledger=False,
+            )
         return dict(decision_board(workspace=workspace, limit=40) or {})
     except Exception as exc:
         return {
