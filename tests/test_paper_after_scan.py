@@ -88,9 +88,8 @@ def test_paper_does_not_enqueue_before_entry_window():
     assert jobs.enqueued == []
 
 
-def test_off_session_after_close_enqueues_nothing_automatically():
+def test_off_session_after_close_enqueues_historical_paper(monkeypatch):
     jobs = _Jobs()
-    jobs.cancel_superseded_pending = lambda *_a, **_k: None
     supervisor = Supervisor.__new__(Supervisor)
     supervisor.jobs = jobs
     supervisor.deps = SimpleNamespace(
@@ -98,9 +97,25 @@ def test_off_session_after_close_enqueues_nothing_automatically():
         holidays=lambda: set(),
         active_snapshot_id=lambda: "snap-1",
     )
-    supervisor._enqueue_daily_foundation = lambda *_a, **_k: None
+    supervisor._enqueue_post_market_grind = lambda *_a, **_k: None
+    monkeypatch.setattr(
+        "product.historical_paper_loop.pending_stage",
+        lambda: {"phase": "IDLE", "batch_id": ""},
+    )
+    monkeypatch.setattr(
+        "product.historical_paper_loop.peek_next_batch",
+        lambda: {"available": True, "batch_id": "hist-1"},
+    )
     supervisor.enqueue_due()
-    assert jobs.enqueued == []
+    assert jobs.enqueued == [
+        (
+            SCH.HISTORICAL_PAPER_CYCLE,
+            {
+                "idempotency_key": SCH.historical_paper_key("hist-1"),
+                "input_snapshot_id": "hist-1",
+            },
+        )
+    ]
 
 
 def test_intraday_enqueue_does_not_start_post_market_grind():
@@ -150,9 +165,8 @@ def test_blocked_data_ready_outcome_is_requeued():
     assert supervisor.jobs.requeued == ["out-1"]
 
 
-def test_overnight_after_midnight_waits_for_next_explicit_or_market_window_action():
+def test_overnight_after_midnight_continues_historical_learning(monkeypatch):
     jobs = _Jobs()
-    jobs.cancel_superseded_pending = lambda *_a, **_k: None
     supervisor = Supervisor.__new__(Supervisor)
     supervisor.jobs = jobs
     supervisor.deps = SimpleNamespace(
@@ -160,21 +174,25 @@ def test_overnight_after_midnight_waits_for_next_explicit_or_market_window_actio
         holidays=lambda: set(),
         active_snapshot_id=lambda: "snap-1",
     )
-    supervisor._enqueue_daily_foundation = lambda *_a, **_k: None
+    supervisor._enqueue_post_market_grind = lambda *_a, **_k: None
+    monkeypatch.setattr(
+        "product.historical_paper_loop.pending_stage",
+        lambda: {"phase": "AWAITING_LEARNING", "batch_id": "hist-2"},
+    )
     supervisor.enqueue_due()
-    assert jobs.enqueued == []
+    assert jobs.enqueued == [
+        (
+            SCH.LEARNING_CYCLE,
+            {
+                "idempotency_key": SCH.historical_learning_key("hist-2"),
+                "input_snapshot_id": "hist-2",
+            },
+        )
+    ]
 
 
-def test_eod_without_kite_snapshot_does_not_start_a_second_automatic_pipeline():
+def test_eod_refreshes_official_data_without_starting_live_scan_pipeline(monkeypatch):
     jobs = _Jobs()
-    jobs.cancel_superseded_pending = lambda *_a, **_k: None
-
-    def enqueue(job_type, **kwargs):
-        jobs.enqueued.append((job_type, kwargs))
-        status = JS.BLOCKED if job_type == SCH.DATA_REFRESH else JS.SUCCEEDED
-        return SimpleNamespace(status=status, job_type=job_type)
-
-    jobs.enqueue = enqueue
     supervisor = Supervisor.__new__(Supervisor)
     supervisor.jobs = jobs
     supervisor.deps = SimpleNamespace(
@@ -182,10 +200,20 @@ def test_eod_without_kite_snapshot_does_not_start_a_second_automatic_pipeline():
         holidays=lambda: set(),
         active_snapshot_id=lambda: None,
     )
-    supervisor._enqueue_daily_foundation = lambda *_a, **_k: None
-    supervisor._enqueue_post_market_grind = Supervisor._enqueue_post_market_grind.__get__(supervisor)
+    supervisor._enqueue_post_market_grind = lambda *_a, **_k: None
+    monkeypatch.setattr(
+        "product.historical_paper_loop.pending_stage",
+        lambda: {"phase": "IDLE", "batch_id": ""},
+    )
+    monkeypatch.setattr(
+        "product.historical_paper_loop.peek_next_batch",
+        lambda: {"available": False, "reason": "caught_up"},
+    )
     supervisor.enqueue_due()
-    assert jobs.enqueued == []
+    types = [job_type for job_type, _kwargs in jobs.enqueued]
+    assert types == [SCH.BHAVCOPY_UPDATE, SCH.DATA_REFRESH]
+    assert SCH.MARKET_SCAN not in types
+    assert SCH.PAPER_CYCLE not in types
 
 
 def test_successful_data_refresh_enqueues_current_scan_slot():
