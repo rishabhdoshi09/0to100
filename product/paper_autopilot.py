@@ -173,9 +173,15 @@ def _empirical_fail(card: Mapping[str, Any]) -> bool:
 
 
 def selection_score(card: Mapping[str, Any], policy: Mapping[str, Any] | None = None) -> float:
-    """Rank among already-eligible names. Not a BUY oracle."""
+    """Rank among already-eligible names. The learner can only reorder them."""
     from product.decision_context import score_breakdown
-    return float(score_breakdown(card, policy).get("selection_rank") or 0.0)
+    base = float(score_breakdown(card, policy).get("selection_rank") or 0.0)
+    try:
+        from product.challenger_learning import paper_selection_adjustment
+        learned = paper_selection_adjustment(card)
+        return base + float(learned.get("adjustment") or 0.0)
+    except Exception:
+        return base
 
 
 def _group_for(decision: str) -> str:
@@ -195,7 +201,19 @@ def _decorate(decision: AutopilotDecision, *, policy: Mapping[str, Any] | None, 
     decision.context = dict(context or {})
     decision.policy_effect = str((policy or {}).get("final_effect") or decision.policy_effect or "NEUTRAL")
     decision.breakdown = score_breakdown(decision.card, policy, context)
-    decision.selection_score = float(decision.breakdown.get("selection_rank") or 0.0)
+    base_rank = float(decision.breakdown.get("selection_rank") or 0.0)
+    try:
+        from product.challenger_learning import paper_selection_adjustment
+        learned = paper_selection_adjustment(decision.card)
+    except Exception:
+        learned = {
+            "available": False,
+            "affects_selection": False,
+            "adjustment": 0.0,
+            "live_locked": True,
+        }
+    decision.breakdown["learning_challenger"] = learned
+    decision.selection_score = base_rank + float(learned.get("adjustment") or 0.0)
     decision.why = explain(
         decision=decision.decision,
         reason_code=decision.reason_code,
