@@ -18,7 +18,6 @@ import json
 import math
 import os
 import threading
-from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -41,10 +40,11 @@ DEFAULT_WARMUP_SESSIONS = 60
 DEFAULT_HORIZON_SESSIONS = 10
 DEFAULT_UNIVERSE_LIMIT = 40
 
-_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="qt-historical-paper")
 _lock = threading.Lock()
-_future: Future | None = None
-_future_batch_id = ""
+_thread: threading.Thread | None = None
+_thread_batch_id = ""
+_thread_result: dict[str, Any] | None = None
+_thread_error = ""
 
 
 def _now() -> str:
@@ -524,6 +524,48 @@ def _run_batch(
     return result
 
 
+def _background_batch_runner(
+    batch: Mapping[str, Any],
+    *,
+    state_path: str | Path | None,
+    ledger_path: str | Path | None,
+    memory_path: str | Path | None,
+    replay_fn: Callable[..., Mapping[str, Any]] | None,
+    later_bars_fn: Callable[..., list[dict[str, Any]]] | None,
+    sessions_fn: Callable[[], Sequence[Any]] | None,
+) -> None:
+    """Run one heavy historical batch in a daemon thread.
+
+    Daemon ownership is deliberate: launcher Ctrl+C must be able to terminate
+    the autonomy process immediately instead of waiting for an offline replay.
+    Durable phase state makes the same batch restart-safe on the next launch.
+    """
+    global _thread_result, _thread_error
+    try:
+        result = _run_batch(
+            batch,
+            state_path=state_path,
+            ledger_path=ledger_path,
+            memory_path=memory_path,
+            replay_fn=replay_fn,
+            later_bars_fn=later_bars_fn,
+            sessions_fn=sessions_fn,
+        )
+        with _lock:
+            _thread_result = dict(result or {})
+            _thread_error = ""
+    except Exception as exc:
+        _save_state({
+            "phase": PHASE_FAILED,
+            "current_batch_id": str(batch.get("batch_id") or ""),
+            "current_sessions": list(batch.get("sessions") or []),
+            "last_error": str(exc)[:300],
+        }, state_path)
+        with _lock:
+            _thread_result = None
+            _thread_error = str(exc)[:300]
+
+
 def ensure_next_batch_started(
     *,
     expected_batch_id: str = "",
@@ -539,7 +581,7 @@ def ensure_next_batch_started(
     universe_limit: int = DEFAULT_UNIVERSE_LIMIT,
 ) -> dict[str, Any]:
     """Start/poll one historical batch without blocking the supervisor."""
-    global _future, _future_batch_id
+    global _thread, _thread_batch_id, _thread_result, _thread_error
     state = load_state(state_path)
     if state["phase"] in {PHASE_AWAITING_LEARNING, PHASE_AWAITING_RESEARCH}:
         if not expected_batch_id or state["current_batch_id"] == expected_batch_id:
@@ -576,44 +618,49 @@ def ensure_next_batch_started(
         }
 
     with _lock:
-        if _future is not None and _future_batch_id == bid:
-            if not _future.done():
+        if _thread is not None and _thread_batch_id == bid:
+            if _thread.is_alive():
                 return {"status": "RUNNING", "batch_id": bid, "sessions": list(batch["sessions"])}
-            try:
-                result = dict(_future.result() or {})
-            except Exception as exc:
-                _save_state({
-                    "phase": PHASE_FAILED,
-                    "current_batch_id": bid,
-                    "current_sessions": list(batch["sessions"]),
-                    "last_error": str(exc)[:300],
-                }, state_path)
-                _future = None
-                _future_batch_id = ""
-                return {"status": "FAILED", "batch_id": bid, "error": str(exc)[:300]}
-            _future = None
-            _future_batch_id = ""
-            return result
+            if _thread_error:
+                error = _thread_error
+                _thread = None
+                _thread_batch_id = ""
+                _thread_result = None
+                _thread_error = ""
+                return {"status": "FAILED", "batch_id": bid, "error": error}
+            if _thread_result is not None:
+                result = dict(_thread_result)
+                _thread = None
+                _thread_batch_id = ""
+                _thread_result = None
+                return result
 
-        # A RUNNING persisted state with no live Future means the process was
-        # restarted. Re-submit exactly the same batch; ledger writes are idempotent.
+        # A RUNNING persisted state with no live daemon means the process was
+        # restarted. Re-submit exactly the same batch; all ledgers are idempotent.
         _save_state({
             "phase": PHASE_RUNNING,
             "current_batch_id": bid,
             "current_sessions": list(batch["sessions"]),
             "last_error": "",
         }, state_path)
-        _future_batch_id = bid
-        _future = _executor.submit(
-            _run_batch,
-            batch,
-            state_path=state_path,
-            ledger_path=ledger_path,
-            memory_path=memory_path,
-            replay_fn=replay_fn,
-            later_bars_fn=later_bars_fn,
-            sessions_fn=sessions_fn,
+        _thread_batch_id = bid
+        _thread_result = None
+        _thread_error = ""
+        _thread = threading.Thread(
+            target=_background_batch_runner,
+            kwargs={
+                "batch": batch,
+                "state_path": state_path,
+                "ledger_path": ledger_path,
+                "memory_path": memory_path,
+                "replay_fn": replay_fn,
+                "later_bars_fn": later_bars_fn,
+                "sessions_fn": sessions_fn,
+            },
+            name="qt-historical-paper",
+            daemon=True,
         )
+        _thread.start()
         return {"status": "RUNNING", "batch_id": bid, "sessions": list(batch["sessions"])}
 
 
