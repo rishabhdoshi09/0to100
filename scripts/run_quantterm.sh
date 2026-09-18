@@ -111,6 +111,36 @@ raise SystemExit(0)
 PY
 }
 
+market_ops_owner_pid() {
+  python - <<'PY'
+import json, os
+from core.runtime_paths import logs_path
+
+candidates = []
+lock = logs_path("market_ops", "worker.lock")
+try:
+    candidates.append(int(lock.read_text(encoding="utf-8").strip().split()[0]))
+except Exception:
+    pass
+runtime = logs_path("market_ops", "runtime.json")
+try:
+    payload = json.loads(runtime.read_text(encoding="utf-8"))
+    candidates.append(int(payload.get("worker_pid") or 0))
+except Exception:
+    pass
+for pid in candidates:
+    if pid <= 1:
+        continue
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        continue
+    print(pid)
+    raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
 stop_stale_market_ops() {
   python - <<'PY' >/dev/null 2>&1 || true
 import json, os, signal, subprocess, time
@@ -259,17 +289,39 @@ PY
 start_market_ops() {
   echo "[STACK] Starting market-operations worker (scan/news/long-term/data lanes)…"
   python -u -m operations.market_ops &
-  MARKET_OPS_PID=$!
+  local launched_pid=$!
+  MARKET_OPS_PID="$launched_pid"
   local i=0
   while (( i < 30 )); do
     if market_ops_healthy; then
-      echo "[STACK] Market operations READY · pid=${MARKET_OPS_PID}"
-      return 0
+      local owner_pid
+      owner_pid="$(market_ops_owner_pid 2>/dev/null || true)"
+      if [[ -n "$owner_pid" ]]; then
+        # The API/autonomy bootstrap can race this explicit start. The worker
+        # that wins the single-worker lock is authoritative. While this script
+        # is the machine-lock owner it is part of OUR stack, not an external
+        # service, so adopt its real PID and guarantee cleanup owns it.
+        MARKET_OPS_PID="$owner_pid"
+        MARKET_OPS_EXTERNAL=0
+        if [[ "$owner_pid" != "$launched_pid" ]] && alive "$launched_pid"; then
+          stop_pid "$launched_pid" "market-operations lock loser"
+        fi
+        echo "[STACK] Market operations READY · pid=${MARKET_OPS_PID}"
+        return 0
+      fi
     fi
-    if ! alive "$MARKET_OPS_PID"; then break; fi
+    if ! alive "$launched_pid"; then break; fi
     sleep 0.1 || true; i=$((i + 1))
   done
   if market_ops_healthy; then
+    local owner_pid
+    owner_pid="$(market_ops_owner_pid 2>/dev/null || true)"
+    if [[ -n "$owner_pid" && "${QT_MACHINE_OWNER:-}" == "1" ]]; then
+      MARKET_OPS_PID="$owner_pid"
+      MARKET_OPS_EXTERNAL=0
+      echo "[STACK] Adopted authoritative market-operations worker · pid=${MARKET_OPS_PID}"
+      return 0
+    fi
     MARKET_OPS_PID=""; MARKET_OPS_EXTERNAL=1
     echo "[STACK] Another healthy market-operations worker owns the lock; reusing it."
     return 0
@@ -423,8 +475,15 @@ else
 fi
 
 if market_ops_healthy; then
-  MARKET_OPS_EXTERNAL=1
-  echo "[STACK] A healthy market-operations worker is already running; reusing it."
+  existing_market_ops_pid="$(market_ops_owner_pid 2>/dev/null || true)"
+  if [[ "${QT_MACHINE_OWNER:-}" == "1" && -n "$existing_market_ops_pid" ]]; then
+    MARKET_OPS_PID="$existing_market_ops_pid"
+    MARKET_OPS_EXTERNAL=0
+    echo "[STACK] Adopting healthy market-operations worker into this machine-owned stack · pid=${MARKET_OPS_PID}"
+  else
+    MARKET_OPS_EXTERNAL=1
+    echo "[STACK] A healthy market-operations worker is already running; reusing it."
+  fi
 else
   stop_stale_market_ops
   start_market_ops || true
@@ -500,7 +559,14 @@ while [[ "$STOP" != "1" ]]; do
   if [[ "$MARKET_OPS_EXTERNAL" != "1" ]]; then
     if [[ -z "${MARKET_OPS_PID:-}" ]] || ! alive "$MARKET_OPS_PID" || ! market_ops_healthy; then
       if market_ops_healthy; then
-        MARKET_OPS_EXTERNAL=1; MARKET_OPS_PID=""
+        replacement_pid="$(market_ops_owner_pid 2>/dev/null || true)"
+        if [[ "${QT_MACHINE_OWNER:-}" == "1" && -n "$replacement_pid" ]]; then
+          MARKET_OPS_PID="$replacement_pid"
+          MARKET_OPS_EXTERNAL=0
+          echo "[STACK] Adopted authoritative market-operations worker · pid=${MARKET_OPS_PID}"
+        else
+          MARKET_OPS_EXTERNAL=1; MARKET_OPS_PID=""
+        fi
       else
         echo "[STACK] Market operations is down/stale; restarting."
         stop_stale_market_ops
