@@ -452,8 +452,8 @@ class Supervisor:
                 "news_refresh:",
                 "market_scan:",
                 "paper_cycle:",
-                "snapshot_scan:",
-                "snapshot_paper:",
+                f"snapshot_scan:{snap}",
+                f"snapshot_paper:{snap}",
                 summary=f"snapshot {snap} terminal paper cycle completed",
             )
         except Exception:
