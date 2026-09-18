@@ -154,7 +154,16 @@ def status(*, path: str | Path | None = None) -> dict[str, Any]:
         )
     else:
         phase = "SEARCHING_BEST_TRADES"
-        message = str(board.get("reason") or "Searching and ranking current trade candidates first.")
+        if board.get("available") and scan_id and not scan_fresh:
+            message = (
+                "A scan artifact exists, but authoritative market history is not "
+                "current enough to present it as today's best trades. Refreshing "
+                "data/search remains required before approval."
+            )
+        else:
+            message = str(board.get("reason") or "Searching and ranking current trade candidates first.")
+
+    visible_best_trades = list(board.get("best_trades") or []) if scan_fresh else []
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -166,7 +175,7 @@ def status(*, path: str | Path | None = None) -> dict[str, Any]:
         "discovery_ready": discovery_ready,
         "scan_scanned_at": scan_id,
         "scan_fresh": scan_fresh,
-        "best_trades": list(board.get("best_trades") or []),
+        "best_trades": visible_best_trades,
         "decision_count": len(list(board.get("decisions") or [])),
         "actionable": int(board.get("actionable") or 0),
         "thesis": thesis,
