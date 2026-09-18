@@ -82,6 +82,7 @@ def begin_startup(startup_id: str | None = None, *, path: str | Path | None = No
 
 def _board() -> dict[str, Any]:
     try:
+        from product.decision_discovery_store import load as load_discovery
         from product.decision_service import decision_board
         from product.recommendations_store import (
             load_recommendations,
@@ -89,6 +90,7 @@ def _board() -> dict[str, Any]:
         )
         from product.recommendations_workspace import build_recommendations_workspace
         from product.scan_store import load_scan
+        from product.trading_thesis import manifest as thesis_manifest
 
         scan = dict(load_scan() or {})
         long_term: dict[str, Any] = {}
@@ -108,18 +110,27 @@ def _board() -> dict[str, Any]:
                 "thesis": {},
             }
 
-        # A whole-market scan persists this projection once. Gate GET/POST must
-        # read that artifact instead of rebuilding hundreds of desk rows inside
-        # an HTTP request (which previously exceeded the 20s acceptance timeout).
+        scan_at = str(scan.get("scanned_at") or "")
+        long_term_at = str(long_term.get("scanned_at") or "")
+        thesis_hash = str(thesis_manifest().get("thesis_hash") or "")
+
+        cached = load_discovery(
+            scan_scanned_at=scan_at,
+            long_term_scanned_at=long_term_at,
+            thesis_hash=thesis_hash,
+        )
+        if cached is not None:
+            return cached
+
+        # Compatibility/recovery path for older runtimes whose latest scan
+        # predates discovery persistence. Normal startup discovery never pays
+        # this cost in the HTTP path because run_market_scan writes the board.
         workspace = load_recommendations()
         if not reco_matches_scan(
             workspace,
-            scan_scanned_at=str(scan.get("scanned_at") or ""),
-            long_term_scanned_at=str(long_term.get("scanned_at") or ""),
+            scan_scanned_at=scan_at,
+            long_term_scanned_at=long_term_at,
         ):
-            # Compatibility/recovery path for older runtimes whose latest scan
-            # predates projection persistence. This is intentionally a fallback;
-            # normal startup discovery never pays this cost in the API path.
             workspace = build_recommendations_workspace(
                 scan_payload=scan,
                 long_term_payload=long_term,
