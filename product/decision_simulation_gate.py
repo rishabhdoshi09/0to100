@@ -82,7 +82,36 @@ def begin_startup(startup_id: str | None = None, *, path: str | Path | None = No
 def _board() -> dict[str, Any]:
     try:
         from product.decision_service import decision_board
-        return dict(decision_board(limit=40) or {})
+        from product.recommendations_workspace import build_recommendations_workspace
+        from product.scan_store import load_scan
+
+        scan = dict(load_scan() or {})
+        long_term: dict[str, Any] = {}
+        try:
+            from product.long_term_store import load_long_term_scan
+            long_term = dict(load_long_term_scan() or {})
+        except Exception:
+            long_term = {}
+
+        if not scan or not list(scan.get("records") or []):
+            return {
+                "available": False,
+                "state": "SEARCHING_BEST_TRADES",
+                "reason": "Whole-market scan has not produced current candidates yet.",
+                "scan_scanned_at": str(scan.get("scanned_at") or ""),
+                "best_trades": [],
+                "thesis": {},
+            }
+
+        workspace = build_recommendations_workspace(
+            scan_payload=scan,
+            long_term_payload=long_term,
+            refresh_technicals=False,
+            settle_cases=False,
+            deep_confirm=False,
+            persist_ledger=False,
+        )
+        return dict(decision_board(workspace=workspace, limit=40) or {})
     except Exception as exc:
         return {
             "available": False,
