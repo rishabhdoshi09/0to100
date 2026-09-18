@@ -174,6 +174,59 @@ def test_auth_expired_does_not_fail_automation_lane_when_history_is_current():
     assert os["system"]["data"]["status"] == "Ready"
 
 
+def test_auth_blocked_data_refresh_does_not_fail_automation_when_history_is_current():
+    os = build_home_os(
+        dashboard={
+            "autonomy": {
+                "state": "DATA_READY",
+                "running": True,
+                "operator_state": "DEGRADED",
+                "plain_state": "QuantTerm is running, but a current-session capability or critical job needs attention.",
+                "active_failures": ["JOB_BLOCKED:data_refresh:AUTH_READY"],
+                "current_failed_jobs": [],
+                "current_blocked_critical_jobs": [{
+                    "job_type": "data_refresh",
+                    "status": "BLOCKED",
+                    "critical": True,
+                    "blocked_on": "AUTH_READY",
+                    "error_code": "DATA_REFRESH_IN_PROGRESS",
+                }],
+                "data_refresh_background": True,
+                "broker": {
+                    "state": "LOGIN_REQUIRED",
+                    "ready": False,
+                    "live_data_ready": False,
+                    "login_required": True,
+                },
+            },
+            "data": {
+                "ready": True,
+                "history_current": True,
+                "bhavcopy": {
+                    "ready": True,
+                    "latest_date": "2026-09-17",
+                    "current": True,
+                    "reason_code": "HISTORY_CURRENT",
+                    "expected_latest_completed_session": "2026-09-17",
+                    "available_session": "2026-09-17",
+                    "stale_sessions": 0,
+                },
+            },
+        },
+        paper={"enabled": True, "open_positions": [], "closed_trades": []},
+        why={"available": False},
+        soak={"real_forward_observations": 15, "insufficient_evidence": True},
+        scan={"scanned_at": "2026-09-17T05:00:00+00:00", "records": [{"symbol": "TCS"}]},
+        reco={"schema_version": 4, "categories": []},
+        now=IST_CLOSED,
+    )
+    auto = os["system"]["automation"]
+    assert auto["status"] != "Problem"
+    assert auto["status_code"] != "FAILED"
+    assert os["system"]["data"]["status"] == "Ready"
+    assert os["system"]["zerodha"]["status_code"] != "FAILED"
+
+
 def test_disk_session_date_can_be_current_without_in_memory_store():
     from data.bhavcopy_runtime import official_history_freshness
 

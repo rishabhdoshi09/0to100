@@ -661,17 +661,21 @@ def _automation_lane(
     operator_state = str(auto.get("operator_state") or "")
     active_job = _as_dict(auto.get("active_job"))
     job_type = str(active_job.get("job_type") or "")
+    from product.operator_health import is_broker_scoped_job
+
     current_failures = [
         str(x) for x in _as_list(auto.get("active_failures"))
         if str(x).lower() not in {"auth_missing", "auth_expired", "broker_provider_unavailable"}
+        and "AUTH_READY" not in str(x).upper()
+        and "KITE_" not in str(x).upper()
     ]
     current_failed_jobs = [
         job for job in _as_list(auto.get("current_failed_jobs"))
-        if str(job.get("job_type") if isinstance(job, Mapping) else "") not in {"auth_health", "instrument_refresh"}
+        if isinstance(job, Mapping) and not is_broker_scoped_job(dict(job))
     ]
     current_blocked = [
         job for job in _as_list(auto.get("current_blocked_critical_jobs"))
-        if str(job.get("job_type") if isinstance(job, Mapping) else "") not in {"auth_health", "instrument_refresh"}
+        if isinstance(job, Mapping) and not is_broker_scoped_job(dict(job))
     ]
     current_counts = _as_dict(auto.get("current_job_counts"))
     historical_counts = _as_dict(auto.get("historical_job_counts"))

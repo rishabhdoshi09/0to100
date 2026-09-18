@@ -37,6 +37,31 @@ _BROKER_ONLY_FAILURES = frozenset({
     "broker_provider_unavailable",
 })
 _BROKER_ONLY_JOBS = frozenset({"auth_health", "instrument_refresh"})
+_BROKER_BLOCKERS = frozenset({
+    "AUTH_READY",
+    "CREDENTIAL_UPDATE",
+    "SESSION_VALID",
+    "KITE_TOKEN_MISSING",
+    "KITE_API_KEY_MISSING",
+    "AUTH_EXPIRED",
+    "AUTH_MISSING",
+})
+
+
+def is_broker_scoped_job(job: dict[str, Any] | None) -> bool:
+    """True when a job is a Zerodha-lane wait/failure, not a whole-system fault.
+
+    ``data_refresh`` blocked on AUTH_READY is still a broker-capability gate.
+    Official NSE history can be HISTORY_CURRENT while snapshot refresh waits
+    for an optional login; that must not mark Automation DEGRADED/FAILED.
+    """
+    if not isinstance(job, dict):
+        return False
+    if str(job.get("job_type") or "") in _BROKER_ONLY_JOBS:
+        return True
+    blocked_on = str(job.get("blocked_on") or "").upper()
+    error_code = str(job.get("error_code") or "").upper()
+    return blocked_on in _BROKER_BLOCKERS or error_code in _BROKER_BLOCKERS
 
 
 def _today() -> str:
@@ -184,13 +209,13 @@ def enrich_autonomy_payload(payload: dict[str, Any]) -> dict[str, Any]:
     current_failed = [
         job for job in current
         if str(job.get("status") or "") in _FAILURE
-        and str(job.get("job_type") or "") not in _BROKER_ONLY_JOBS
+        and not is_broker_scoped_job(job)
     ]
     current_blocked_critical = [
         job for job in current
         if str(job.get("status") or "") == "BLOCKED"
         and bool(job.get("critical"))
-        and str(job.get("job_type") or "") not in _BROKER_ONLY_JOBS
+        and not is_broker_scoped_job(job)
     ]
     current_active = [job for job in current if str(job.get("status") or "") in _ACTIVE]
 

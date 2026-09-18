@@ -197,3 +197,42 @@ def test_auth_expired_does_not_degrade_operator_health(monkeypatch):
     assert out["operator_state"] == "HEALTHY"
     assert out["current_blocked_critical_jobs"] == []
     assert "auth_expired" not in out["active_failures"]
+
+
+def test_auth_blocked_data_refresh_does_not_degrade_operator_health(monkeypatch):
+    """Snapshot refresh waiting on optional Zerodha login is broker-lane scoped."""
+    monkeypatch.setattr(operator_health, "_today", lambda: "2026-09-18")
+    monkeypatch.setattr(
+        operator_health,
+        "_broker_lane",
+        lambda: {
+            "state": "LOGIN_REQUIRED",
+            "ready": False,
+            "live_data_ready": False,
+            "execution_ready": False,
+            "auth_ready": False,
+            "login_required": True,
+            "auth_status": "TOKEN_MISSING",
+            "reason_code": "KITE_API_KEY_MISSING",
+            "detail": "Zerodha API key is not configured",
+            "snapshot_id": "",
+        },
+    )
+    out = operator_health.enrich_autonomy_payload({
+        "running": True,
+        "active_failures": [],
+        "jobs_recent": [{
+            "job_type": "data_refresh",
+            "status": "BLOCKED",
+            "scheduled_for": datetime(2026, 9, 18, 3, 0, tzinfo=timezone.utc).timestamp(),
+            "critical": True,
+            "error_code": "DATA_REFRESH_IN_PROGRESS",
+            "blocked_on": "AUTH_READY",
+            "blocked_reason": "auth required before data refresh",
+        }],
+        "active_job": {},
+    })
+    assert out["current_blocked_critical_jobs"] == []
+    assert not any("data_refresh" in str(item) for item in out["active_failures"])
+    assert out["operator_state"] in {"WORKING", "HEALTHY"}
+    assert out["operator_state"] != "DEGRADED"
