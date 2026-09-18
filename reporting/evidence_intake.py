@@ -17,10 +17,10 @@ import re
 import sqlite3
 from typing import Any, Iterable, Mapping
 from urllib.parse import urlparse
-from core.runtime_paths import logs_dir, logs_path
+from core.runtime_paths import logs_dir, logs_path, RuntimeLogsPath
 
 ROOT = Path(__file__).resolve().parents[1]
-EVIDENCE_ROOT = logs_dir() / "research_evidence"
+EVIDENCE_ROOT = RuntimeLogsPath("research_evidence")
 FUNDAMENTALS_DB = ROOT / "data" / "fundamentals_cache.db"
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
