@@ -182,3 +182,37 @@ def test_the_regime_actually_conditions_the_evidence_cell():
     assert decision_context_key(healthy[0]) != decision_context_key(narrow[0])
     assert "regime=HEALTHY" in decision_context_key(healthy[0])
     assert "regime=NARROW" in decision_context_key(narrow[0])
+
+
+def test_best_trades_use_the_same_production_selection_seam(monkeypatch):
+    import product.paper_autopilot as PA
+
+    calls = []
+
+    class Result:
+        def __init__(self, symbol, decision, score):
+            self.symbol = symbol
+            self.decision = decision
+            self.selection_score = score
+            self.reason_code = "ELIGIBLE" if decision == PA.ENTER_NOW else "WAIT_FOR_ENTRY"
+            self.policy_effect = "NEUTRAL"
+
+    def select(card, **kwargs):
+        calls.append((card["symbol"], dict(kwargs)))
+        if card["symbol"] == "INFY":
+            return Result("INFY", PA.ENTER_NOW, 97.0)
+        return Result("TCS", PA.WAIT, 99.0)
+
+    monkeypatch.setattr(PA, "evaluate_selection_candidate", select)
+    board = decision_board(
+        workspace=_workspace(
+            _card("INFY", score=70),
+            _card("TCS", score=95),
+        )
+    )
+
+    assert [row["symbol"] for row in board["best_trades"]] == ["INFY"]
+    assert board["best_trades"][0]["production_selection_score"] == 97.0
+    assert board["best_trades"][0]["discovery_decision"] == PA.ENTER_NOW
+    assert board["best_trades_mode"] == "PRODUCTION_THESIS_DISCOVERY"
+    assert all(kwargs["enforce_history"] is False for _symbol, kwargs in calls)
