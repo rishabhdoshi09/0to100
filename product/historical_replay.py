@@ -30,7 +30,7 @@ from product.paper_autopilot import (
     PORTFOLIO_BLOCK,
     WAIT,
     WATCH,
-    evaluate_candidate,
+    evaluate_selection_candidate,
 )
 from core.runtime_paths import logs_dir
 
@@ -396,7 +396,7 @@ def decide_session(
             pit_grade = overall_replay_grade(
                 symbol, as_of=as_of, market_bars_ok=not future_bar,
             )
-        selection_policy: dict[str, Any] = {}
+        selection_rank = None
         try:
             if use_committee:
                 from product.decision_committee import evaluate_committee
@@ -424,34 +424,26 @@ def decide_session(
                 )
                 raw = decision.as_dict() if hasattr(decision, "as_dict") else dict(decision)
             else:
-                # Apply the same current learned overlays as PAPER_FORWARD while
-                # excluding only the circular prerequisite that historical
-                # evidence must already exist before historical evidence can be
-                # generated.
-                from product.evidence_policy_engine import evaluate_policies
-
+                # Exact same non-executing selection seam as current discovery
+                # and PAPER_FORWARD. Only the circular historical-bootstrap
+                # prerequisite is disabled because this replay produces it.
                 replay_regime = str(
                     scan_payload.get("regime")
                     or scan_payload.get("market_regime")
                     or "UNKNOWN"
                 )
-                selection_policy = evaluate_policies(
-                    card,
-                    regime=replay_regime,
-                    book=None,
-                    enforce_history=False,
-                )
-                decision = evaluate_candidate(
+                decision = evaluate_selection_candidate(
                     card,
                     book=None,
-                    entries_allowed=True,
-                    paper_enabled=True,
                     workspace=workspace,
                     now=clock,
+                    entries_allowed=True,
+                    paper_enabled=True,
                     regime=replay_regime,
-                    policy=selection_policy,
+                    enforce_history=False,
                 )
                 raw = decision.as_dict() if hasattr(decision, "as_dict") else dict(decision)
+                selection_rank = decision.selection_score
         except Exception as exc:
             raw = {
                 "symbol": symbol,
@@ -472,11 +464,12 @@ def decide_session(
             decision=mapped,
             reason_code=str(raw.get("reason_code") or ""),
         )
-        try:
-            from product.paper_autopilot import selection_score as production_selection_score
-            selection_rank = production_selection_score(card, selection_policy)
-        except Exception:
-            selection_rank = None
+        if selection_rank is None:
+            try:
+                from product.paper_autopilot import selection_score as production_selection_score
+                selection_rank = production_selection_score(card)
+            except Exception:
+                selection_rank = None
         out.append({
             "symbol": symbol,
             "as_of": str(as_of)[:10],
