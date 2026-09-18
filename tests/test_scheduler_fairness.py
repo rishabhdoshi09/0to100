@@ -34,3 +34,26 @@ def test_lease_still_polls_refresh_when_it_is_the_only_due_job(tmp_path):
     leased = store.lease_due("owner")
     assert leased is not None
     assert leased.job_type == SCH.DATA_REFRESH
+
+
+
+def test_historical_poll_does_not_starve_learning_job(tmp_path):
+    clk = [75.0]
+    store = JS.JobStore(tmp_path / "jobs.db", clock=lambda: clk[0])
+    historical = store.enqueue(
+        SCH.HISTORICAL_PAPER_CYCLE,
+        idempotency_key="hist_paper:batch-1",
+    )
+    store.reschedule_retry(
+        historical.job_id,
+        when=clk[0] - 1,
+        error_code="HISTORICAL_PAPER_IN_PROGRESS",
+        error_message="historical worker still running",
+    )
+    store.enqueue(
+        SCH.LEARNING_CYCLE,
+        idempotency_key="forward_learning:2026-09-18",
+    )
+    leased = store.lease_due("owner")
+    assert leased is not None
+    assert leased.job_type == SCH.LEARNING_CYCLE
