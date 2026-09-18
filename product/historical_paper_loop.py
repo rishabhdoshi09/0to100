@@ -353,7 +353,23 @@ def update_historical_setup_policies(
             "|".join(sorted(str(r.get("trade_id") or "") for r in rows)).encode("utf-8")
         ).hexdigest()[:16]
 
-        from product.learning_policy_store import upsert_policy
+        from product.learning_policy_store import load_policies, upsert_policy
+
+        existing = next(
+            (
+                dict(p)
+                for p in (load_policies(path).get("policies") or [])
+                if str(p.get("policy_id") or "") == f"HIST_SETUP::{setup}"
+            ),
+            None,
+        )
+        if (
+            existing
+            and str(existing.get("generation_fingerprint") or "") == generation_fingerprint
+            and int(existing.get("sample_size") or 0) == n
+        ):
+            out.append(existing)
+            continue
 
         policy = upsert_policy(
             policy_id=f"HIST_SETUP::{setup}",
