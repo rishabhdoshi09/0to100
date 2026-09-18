@@ -278,10 +278,9 @@ class Supervisor:
         if SCH.in_scan_window(now_ist, holidays):
             data_job = self._enqueue_daily_foundation(now_ist, session_date)
             if getattr(data_job, "status", None) == JS.SUCCEEDED:
-                snap = str(
-                    getattr(data_job, "output_snapshot_id", None)
-                    or self.deps.active_snapshot_id()
-                    or ""
+                snap = self._snapshot_token(
+                    getattr(data_job, "output_snapshot_id", None),
+                    None,
                 )
                 self._ensure_snapshot_pipeline(snap)
             return
@@ -390,6 +389,34 @@ class Supervisor:
                 idempotency_key=SCH.research_key(session_date),
             )
 
+    def _snapshot_token(
+        self,
+        snapshot_id: str | None = None,
+        metadata: dict | None = None,
+    ) -> str:
+        """Stable identity for one authoritative data state.
+
+        Prefer the genuine snapshot id. If the canonical refresh succeeded from
+        an authoritative session without a broker snapshot, derive a namespaced
+        token from its latest official/live session date. This token is identity
+        only; it never pretends an official session is a broker snapshot.
+        """
+        sid = str(snapshot_id or self.deps.active_snapshot_id() or "").strip()
+        if sid:
+            return sid
+        meta = dict(metadata or {})
+        latest = str(
+            meta.get("latest_date")
+            or meta.get("session_date")
+            or meta.get("available_session")
+            or ""
+        )[:10]
+        if not latest:
+            return ""
+        source = str(meta.get("source") or "official_market").strip().lower()
+        safe_source = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in source)
+        return f"market:{safe_source}:{latest}"
+
     def _pipeline_complete(self, snapshot_id: str) -> bool:
         snap = str(snapshot_id or "")
         return bool(
@@ -458,14 +485,17 @@ class Supervisor:
         )
         self._ensure_snapshot_pipeline(snap)
 
-    def _enqueue_scan_after_refresh(self, refresh_job, output_snapshot_id: str | None = None) -> None:
+    def _enqueue_scan_after_refresh(
+        self,
+        refresh_job,
+        output_snapshot_id: str | None = None,
+        metadata: dict | None = None,
+    ) -> None:
         if str(getattr(refresh_job, "job_type", "") or "") != SCH.DATA_REFRESH:
             return
-        snap = str(
-            output_snapshot_id
-            or getattr(refresh_job, "output_snapshot_id", None)
-            or self.deps.active_snapshot_id()
-            or ""
+        snap = self._snapshot_token(
+            output_snapshot_id or getattr(refresh_job, "output_snapshot_id", None),
+            metadata,
         )
         self._ensure_snapshot_pipeline(snap)
 
@@ -735,7 +765,11 @@ class Supervisor:
             if result.status == JS.SUCCEEDED:
                 for dependency in result.unblocks:
                     self.jobs.unblock_dependency(dependency)
-                self._enqueue_scan_after_refresh(job, result.output_snapshot_id)
+                self._enqueue_scan_after_refresh(
+                    job,
+                    result.output_snapshot_id,
+                    result.metadata,
+                )
                 self._enqueue_paper_after_scan(job)
                 if (
                     job.job_type == SCH.PAPER_CYCLE
