@@ -25,6 +25,7 @@ PRIMARY_PATHS = {
     "/api/learning-dashboard",
     "/api/forward-soak",
     "/api/decision-simulator",
+    "/api/decision-simulation-gate",
 }
 
 
