@@ -142,6 +142,11 @@ class Supervisor:
         os.environ["QT_AUTONOMY_OWNER"] = "1"
         self._running = True
         self._started_at = self.clock()
+        try:
+            from product.decision_simulation_gate import begin_startup
+            begin_startup()
+        except Exception:
+            pass
         persisted = str(self.state.state or ST.STARTING)
         # Restart must not wipe a durable operational state back to STARTING.
         # AUTH_HEALTH is a broker probe; it is not a reason to forget DATA_READY.
@@ -360,6 +365,16 @@ class Supervisor:
         last_session = SCH.last_completed_session_date(now_ist, holidays)
         if last_session:
             self._enqueue_post_market_grind(now_ist, session_date=last_session)
+
+        # Historical/present decision simulation is operator-approved once per
+        # startup+thesis. Existing forward positions may still settle above,
+        # but no new historical learning work starts before that approval.
+        try:
+            from product.decision_simulation_gate import is_approved
+            if not is_approved():
+                return
+        except Exception:
+            return
 
         # Then run historical virtual-paper batches whenever the cash market is
         # closed. Each batch has a durable cursor and cannot silently repeat.
@@ -607,6 +622,12 @@ class Supervisor:
         holidays = self.deps.holidays()
         if not SCH.entries_allowed_by_clock(now_ist, holidays):
             return
+        try:
+            from product.decision_simulation_gate import is_approved
+            if not is_approved():
+                return
+        except Exception:
+            return
         paper = self.jobs.enqueue(
             SCH.PAPER_CYCLE,
             idempotency_key=SCH.snapshot_paper_key(snap),
@@ -709,8 +730,22 @@ class Supervisor:
                     self.jobs.enqueue(SCH.MARKET_SCAN,
                                       idempotency_key=f"manual:scan:{snap}:{control.control_id}")
                 elif ctype == CTRL.RUN_CYCLE_NOW:
-                    self.jobs.enqueue(SCH.PAPER_CYCLE,
-                                      idempotency_key=f"manual:cycle:{snap}:{control.control_id}", critical=True)
+                    try:
+                        from product.decision_simulation_gate import approve
+                        approval = approve()
+                        if not approval.get("accepted"):
+                            raise ValueError(
+                                "best-trade discovery must complete before paper simulation"
+                            )
+                    except ValueError:
+                        raise
+                    except Exception as exc:
+                        raise ValueError(f"decision simulation approval failed: {exc}")
+                    self.jobs.enqueue(
+                        SCH.PAPER_CYCLE,
+                        idempotency_key=f"manual:cycle:{snap}:{control.control_id}",
+                        critical=True,
+                    )
                 elif ctype == CTRL.REFRESH_NEWS_NOW:
                     self.jobs.enqueue(SCH.NEWS_REFRESH,
                                       idempotency_key=f"manual:news:{control.control_id}")
