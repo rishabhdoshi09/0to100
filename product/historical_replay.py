@@ -40,7 +40,7 @@ REPORT_NAME = "latest.json"
 PROGRESS_NAME = "progress.json"
 LEDGER_NAME = "decisions.jsonl"
 SCHEMA_VERSION = 1
-ENGINE = "UnifiedScanner._analyze + build_recommendations_workspace + evaluate_candidate"
+ENGINE = "UnifiedScanner._analyze + build_recommendations_workspace + production paper_autopilot.evaluate_candidate"
 
 BUY = "BUY"
 WAIT_D = "WAIT"
@@ -341,11 +341,15 @@ def decide_session(
     use_committee: bool | None = None,
     company_evidence: Sequence[Mapping[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Run the production recommendation + gate path on a PIT scan payload.
+    """Run the production recommendation + paper gate on a PIT scan payload.
 
-    Default path uses the independence-aware committee. Today's research
-    snapshots are refused; warehouse evidence available at T is supplied
-    through the same StockResearchEngine. Tests may inject decide_fn.
+    The default decision authority is the same paper_autopilot.evaluate_candidate
+    used by present PAPER_FORWARD decisions. Historical replay disables only the
+    circular "history must already exist" bootstrap prerequisite because this
+    replay is what produces that history; active learned selection policies,
+    strategy/risk gates, and ordering logic still apply. Tests may inject a
+    custom decide_fn, and committee evaluation is available only when explicitly
+    requested.
     """
     from product.recommendations_workspace import build_recommendations_workspace
     from product.pit_availability import grade_replay
@@ -365,7 +369,7 @@ def decide_session(
     )
     cards = _strongest_cards(workspace)
     if use_committee is None:
-        use_committee = decide_fn is None
+        use_committee = False
     clock = datetime.fromisoformat(f"{as_of}T15:30:00+05:30")
     max_bar = str(scan_payload.get("as_of_session") or as_of)[:10]
     future_bar = max_bar > str(as_of)[:10]
@@ -392,6 +396,7 @@ def decide_session(
             pit_grade = overall_replay_grade(
                 symbol, as_of=as_of, market_bars_ok=not future_bar,
             )
+        selection_policy: dict[str, Any] = {}
         try:
             if use_committee:
                 from product.decision_committee import evaluate_committee
@@ -406,9 +411,9 @@ def decide_session(
                     as_of=str(as_of)[:10],
                 )
                 raw = rec.as_dict()
-            else:
-                decide = decide_fn or evaluate_candidate
-                decision = decide(
+            elif decide_fn is not None:
+                # Preserve the narrow test/research injection seam unchanged.
+                decision = decide_fn(
                     card,
                     book=None,
                     entries_allowed=True,
@@ -416,6 +421,35 @@ def decide_session(
                     workspace=workspace,
                     now=clock,
                     regime=str(scan_payload.get("regime") or scan_payload.get("market_regime") or "UNKNOWN"),
+                )
+                raw = decision.as_dict() if hasattr(decision, "as_dict") else dict(decision)
+            else:
+                # Apply the same current learned overlays as PAPER_FORWARD while
+                # excluding only the circular prerequisite that historical
+                # evidence must already exist before historical evidence can be
+                # generated.
+                from product.evidence_policy_engine import evaluate_policies
+
+                replay_regime = str(
+                    scan_payload.get("regime")
+                    or scan_payload.get("market_regime")
+                    or "UNKNOWN"
+                )
+                selection_policy = evaluate_policies(
+                    card,
+                    regime=replay_regime,
+                    book=None,
+                    enforce_history=False,
+                )
+                decision = evaluate_candidate(
+                    card,
+                    book=None,
+                    entries_allowed=True,
+                    paper_enabled=True,
+                    workspace=workspace,
+                    now=clock,
+                    regime=replay_regime,
+                    policy=selection_policy,
                 )
                 raw = decision.as_dict() if hasattr(decision, "as_dict") else dict(decision)
         except Exception as exc:
@@ -440,7 +474,7 @@ def decide_session(
         )
         try:
             from product.paper_autopilot import selection_score as production_selection_score
-            selection_rank = production_selection_score(card)
+            selection_rank = production_selection_score(card, selection_policy)
         except Exception:
             selection_rank = None
         out.append({
@@ -474,6 +508,8 @@ def decide_session(
                 "grade_reason": pit_grade.get("reason"),
                 "comparable_to_forward": pit_grade.get("comparable_to_forward"),
                 "production_comparable": pit_grade.get("production_comparable"),
+                "history_bootstrap_gate_applied": False,
+                "history_bootstrap_gate_reason": "replay generates the prerequisite evidence",
                 "missing": downgrade.get("unavailable"),
                 "unverified": downgrade.get("unverified"),
                 "available_categories": downgrade.get("available"),
