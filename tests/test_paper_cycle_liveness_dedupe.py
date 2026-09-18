@@ -426,3 +426,16 @@ def test_live_ready_data_without_broker_snapshot_gets_stable_identity():
     assert result.status == JS.SUCCEEDED
     assert result.output_snapshot_id == "market:kite_quotes:2026-09-18"
     assert result.metadata["data_identity"] == result.output_snapshot_id
+
+
+def test_eod_jobs_do_not_call_legacy_autonomous_cascade():
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "research" / "autonomy" / "jobs.py"
+    ).read_text(encoding="utf-8")
+    assert 'advance_loop(trigger="outcome_resolution")' not in source
+    assert "from product.autonomous_loop import advance_loop" not in source
+    assert "maybe_run_closed_market_replay(now=now)" not in source
+    assert "explicit_replay_only" in source
