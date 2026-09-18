@@ -171,13 +171,35 @@ def status(*, path: str | Path | None = None) -> dict[str, Any]:
     startup_id = current_startup_id() or str(state.get("startup_id") or "")
     thesis = manifest()
     thesis_hash = str(thesis.get("thesis_hash") or "")
-    board = _board()
-    scan_id = str(board.get("scan_scanned_at") or "")
     try:
         from product.desk_pipeline import scan_is_fresh
         scan_fresh = bool(scan_is_fresh())
     except Exception:
         scan_fresh = False
+
+    if scan_fresh:
+        board = _board()
+    else:
+        # Freshness is a prerequisite, so do not spend seconds rebuilding and
+        # ranking a scan that is forbidden from being shown/approved anyway.
+        # This keeps the gate responsive during stale-data recovery.
+        try:
+            from product.scan_store import load_scan
+            scan = dict(load_scan() or {})
+        except Exception:
+            scan = {}
+        board = {
+            "available": bool(list(scan.get("records") or [])),
+            "state": "SEARCHING_BEST_TRADES",
+            "reason": "Authoritative market history is not current enough for trade discovery.",
+            "scan_scanned_at": str(scan.get("scanned_at") or ""),
+            "best_trades": [],
+            "decisions": [],
+            "actionable": 0,
+            "thesis": thesis,
+        }
+
+    scan_id = str(board.get("scan_scanned_at") or "")
     discovery_ready = bool(board.get("available")) and bool(scan_id) and scan_fresh
     approved = bool(
         state.get("approved")
