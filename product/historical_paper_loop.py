@@ -434,6 +434,17 @@ def simulate_paper_book_sequence(
         ranked = []
         family_risk: dict[str, float] = {}
         cluster_risk: dict[str, float] = {}
+        cap = float(getattr(book, "capital", 0.0) or 0.0)
+        for pos in (getattr(book, "open", {}) or {}).values():
+            sector = str(getattr(pos, "sector", "") or "")
+            if not sector:
+                continue
+            approved = _f(getattr(pos, "approved_risk_pct", None))
+            if approved is None and cap > 0:
+                approved = float(getattr(pos, "risk_amount", 0.0) or 0.0) / cap * 100.0
+            risk_pct = float(approved or 0.0)
+            family_risk[sector] = family_risk.get(sector, 0.0) + risk_pct
+            cluster_risk[sector] = cluster_risk.get(sector, 0.0) + risk_pct
         clock = datetime.fromisoformat(f"{day}T15:30:00+05:30")
         for row in raw_day:
             card = row.get("selection_card")
