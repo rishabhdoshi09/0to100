@@ -492,6 +492,26 @@ class Supervisor:
         if not session_date:
             return
         self._release_stale_official_blocks()
+
+        # Do not manufacture a failure while the exchange's completed-session
+        # bar is not available yet. That is a structural publication wait, not
+        # stale/corrupt runtime data. EOD refresh and historical learning may
+        # continue; forward settlement starts only when its required session is
+        # actually present.
+        try:
+            from product.readiness import official_history
+
+            hist = official_history()
+            available = str(
+                hist.get("available_session")
+                or hist.get("latest_date")
+                or ""
+            )[:10]
+            if not available or available < str(session_date)[:10]:
+                return
+        except Exception:
+            return
+
         outcome = self._requeue_if_official_blocked(self.jobs.enqueue(
             SCH.OUTCOME_RESOLUTION,
             idempotency_key=SCH.forward_outcome_key(session_date),
