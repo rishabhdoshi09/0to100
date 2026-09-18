@@ -404,6 +404,16 @@ def test_session_exec_restores_terminal_signals_before_exec():
     assert "os.execvpe" in src
 
 
+def test_machine_owner_adopts_authoritative_market_ops_pid():
+    root = Path(__file__).resolve().parents[1]
+    src = (root / "scripts" / "run_quantterm.sh").read_text(encoding="utf-8")
+    assert "market_ops_owner_pid()" in src
+    assert 'MARKET_OPS_PID="$owner_pid"' in src
+    assert "MARKET_OPS_EXTERNAL=0" in src
+    assert "Adopted authoritative market-operations worker" in src
+    assert 'MARKET_OPS_PID=""; MARKET_OPS_EXTERNAL=1' in src  # follower/external fallback only
+
+
 def test_complete_launcher_starts_inner_stack_in_its_own_process_group():
     root = Path(__file__).resolve().parents[1]
     complete = (root / "scripts" / "run_quantterm_complete.sh").read_text(encoding="utf-8")
