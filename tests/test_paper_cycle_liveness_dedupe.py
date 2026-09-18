@@ -440,3 +440,41 @@ def test_eod_jobs_do_not_call_legacy_autonomous_cascade():
     assert "from product.autonomous_loop import advance_loop" not in source
     assert "maybe_run_closed_market_replay(now=now)" not in source
     assert "explicit_replay_only" in source
+
+
+def test_snapshot_paper_failure_is_terminal_and_never_auto_retried(tmp_path):
+    from tests.test_autonomy import FakeDeps
+
+    now = datetime(2026, 7, 31, 10, 0)
+    sup = Supervisor(tmp_path / "auto", deps=FakeDeps(now=now, data_ok=True))
+    assert sup.start() is True
+    try:
+        paper = sup.jobs.enqueue(
+            JOBS.SCH.PAPER_CYCLE,
+            idempotency_key=JOBS.SCH.snapshot_paper_key("snap-fail"),
+            input_snapshot_id="snap-fail",
+            critical=True,
+        )
+        leased = sup.jobs.lease_due(sup.owner, lease_seconds=300)
+        assert leased is not None and leased.job_id == paper.job_id
+        sup._retry_or_fail(
+            leased,
+            error_code="CYCLE_ERROR",
+            error_message="simulated failure",
+            summary="paper failed",
+        )
+        final = sup.jobs.get(paper.job_id)
+        assert final is not None
+        assert final.status == JS.PERMANENT_FAILED
+        assert final.next_retry_at is None
+
+        again = sup.jobs.enqueue(
+            JOBS.SCH.PAPER_CYCLE,
+            idempotency_key=JOBS.SCH.snapshot_paper_key("snap-fail"),
+            input_snapshot_id="snap-fail",
+            critical=True,
+        )
+        assert again.job_id == paper.job_id
+        assert again.status == JS.PERMANENT_FAILED
+    finally:
+        sup.shutdown()
