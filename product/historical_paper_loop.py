@@ -741,6 +741,49 @@ def _append_unique(path: Path, rows: Sequence[Mapping[str, Any]]) -> int:
     return len(fresh)
 
 
+
+def _retire_obsolete_batch(
+    *,
+    batch_id: str,
+    expected_thesis_hash: str,
+    current_thesis_hash: str,
+    message: str,
+    state_path: str | Path | None,
+) -> dict[str, Any]:
+    """Retire an old-thesis batch without advancing its historical cursor.
+
+    Only the daemon that still owns the exact old batch may clear RUNNING state.
+    If another process has already reset the loop for the new thesis, this
+    function leaves that newer state untouched.
+    """
+    result = {
+        "status": "OBSOLETE_THESIS",
+        "batch_id": str(batch_id or ""),
+        "thesis_hash": str(expected_thesis_hash or ""),
+        "current_thesis_hash": str(current_thesis_hash or ""),
+        "message": str(message or "production thesis changed"),
+        "not_real_pnl": True,
+        "not_promotion_evidence": True,
+    }
+    state = load_state(state_path)
+    if (
+        state.get("phase") == PHASE_RUNNING
+        and str(state.get("current_batch_id") or "") == str(batch_id or "")
+        and str(state.get("thesis_hash") or "") == str(expected_thesis_hash or "")
+    ):
+        _save_state({
+            "phase": PHASE_IDLE,
+            "current_batch_id": "",
+            "current_sessions": [],
+            # A new behavioral thesis must earn history from the beginning.
+            "last_completed_session": "",
+            "thesis_hash": str(current_thesis_hash or ""),
+            "last_result": result,
+            "last_error": "",
+        }, state_path)
+    return result
+
+
 def _run_batch(
     batch: Mapping[str, Any],
     *,
@@ -802,18 +845,18 @@ def _run_batch(
     try:
         from product.trading_thesis import manifest as thesis_manifest
         current_thesis_hash = str(thesis_manifest().get("thesis_hash") or "")
-    except Exception:
-        current_thesis_hash = ""
+    except Exception as exc:
+        raise RuntimeError(f"current thesis identity unavailable: {type(exc).__name__}") from exc
+    if expected_thesis_hash and not current_thesis_hash:
+        raise RuntimeError("current thesis identity unavailable")
     if expected_thesis_hash and current_thesis_hash != expected_thesis_hash:
-        return {
-            "status": "OBSOLETE_THESIS",
-            "batch_id": bid,
-            "thesis_hash": expected_thesis_hash,
-            "current_thesis_hash": current_thesis_hash,
-            "message": "production thesis changed while historical batch was running; evidence not applied",
-            "not_real_pnl": True,
-            "not_promotion_evidence": True,
-        }
+        return _retire_obsolete_batch(
+            batch_id=bid,
+            expected_thesis_hash=expected_thesis_hash,
+            current_thesis_hash=current_thesis_hash,
+            message="production thesis changed while historical batch was running; evidence not applied",
+            state_path=state_path,
+        )
 
     # Replay the BUY lane through the same persistent-risk mechanics as
     # present paper trading instead of treating every candidate as an independent
@@ -841,18 +884,18 @@ def _run_batch(
     try:
         from product.trading_thesis import manifest as thesis_manifest
         post_sim_thesis_hash = str(thesis_manifest().get("thesis_hash") or "")
-    except Exception:
-        post_sim_thesis_hash = ""
+    except Exception as exc:
+        raise RuntimeError(f"current thesis identity unavailable after paper replay: {type(exc).__name__}") from exc
+    if expected_thesis_hash and not post_sim_thesis_hash:
+        raise RuntimeError("current thesis identity unavailable after paper replay")
     if expected_thesis_hash and post_sim_thesis_hash != expected_thesis_hash:
-        return {
-            "status": "OBSOLETE_THESIS",
-            "batch_id": bid,
-            "thesis_hash": expected_thesis_hash,
-            "current_thesis_hash": post_sim_thesis_hash,
-            "message": "production thesis changed during paper-book replay; evidence not persisted",
-            "not_real_pnl": True,
-            "not_promotion_evidence": True,
-        }
+        return _retire_obsolete_batch(
+            batch_id=bid,
+            expected_thesis_hash=expected_thesis_hash,
+            current_thesis_hash=post_sim_thesis_hash,
+            message="production thesis changed during paper-book replay; evidence not persisted",
+            state_path=state_path,
+        )
 
     ledger = Path(ledger_path) if ledger_path is not None else DEFAULT_LEDGER
     appended = _append_unique(ledger, trades)
