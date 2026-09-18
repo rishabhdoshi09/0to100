@@ -38,6 +38,12 @@ def paper_autopilot() -> dict:
     return _with_live_safety(_core.paper_autopilot())
 
 
+def decision_simulation_gate() -> dict:
+    """Startup discovery/approval truth plus the current canonical best trades."""
+    from product.decision_simulation_gate import status
+    return _with_live_safety(status())
+
+
 def decision_simulator_get(
     symbol: str = "",
     as_of: str = "",
@@ -61,15 +67,33 @@ def decision_simulator_run(
     alternative: str = "",
     decision_id: str = "",
 ) -> dict:
-    """Decision-simulator trigger/result with canonical broker-boundary truth."""
-    return _with_live_safety(
-        _core.decision_simulator_run(
-            symbol=symbol,
-            as_of=as_of,
-            alternative=alternative,
-            decision_id=decision_id,
-        )
-    )
+    """Explicit operator approval + simulator trigger.
+
+    The POST itself is the one-time approval action. It is refused until the
+    startup best-trade discovery has produced a dated decision board.
+    """
+    from product.decision_simulation_gate import approve
+
+    approval = approve()
+    if not approval.get("accepted"):
+        return _with_live_safety({
+            "status": "WAITING_FOR_BEST_TRADES",
+            "accepted": False,
+            "approval": approval,
+            "message": approval.get("message") or "Best-trade discovery is not ready.",
+            "provenance": "HISTORICAL_REPLAY",
+        })
+
+    result = dict(_core.decision_simulator_run(
+        symbol=symbol,
+        as_of=as_of,
+        alternative=alternative,
+        decision_id=decision_id,
+    ) or {})
+    result["approval"] = approval
+    result["thesis_hash"] = str(approval.get("thesis_hash") or "")
+    result["simulation_scope"] = ["PAPER_FORWARD", "HISTORICAL_REPLAY"]
+    return _with_live_safety(result)
 
 
 def market_reports_workspace() -> dict:
@@ -134,6 +158,7 @@ def product_contract() -> dict:
         "forward_evidence_route_registered": "/api/forward-evidence" in paths,
         "forward_soak_route_registered": "/api/forward-soak" in paths,
         "decision_simulator_route_registered": "/api/decision-simulator" in paths,
+        "decision_simulation_gate_route_registered": "/api/decision-simulation-gate" in paths,
         "simulation_evidence_class": "HISTORICAL_REPLAY",
         "forward_evidence_class": "PAPER_FORWARD",
     }
@@ -172,6 +197,7 @@ def _replace_route(path: str, endpoint, *, method: str, name: str) -> None:
 
 
 _replace_route("/api/paper-autopilot", paper_autopilot, method="GET", name="paper_autopilot")
+_replace_route("/api/decision-simulation-gate", decision_simulation_gate, method="GET", name="decision_simulation_gate")
 _replace_route("/api/decision-simulator", decision_simulator_get, method="GET", name="decision_simulator_get")
 _replace_route("/api/decision-simulator", decision_simulator_run, method="POST", name="decision_simulator_run")
 _replace_route("/api/market-reports-workspace", market_reports_workspace, method="GET", name="market_reports_workspace")
