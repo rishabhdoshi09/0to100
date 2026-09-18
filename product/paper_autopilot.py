@@ -553,6 +553,11 @@ def run_reco_paper_cycle(
     clock = now or datetime.now(timezone.utc)
     day = as_of or clock.date().isoformat()
     ident = _identity()
+    try:
+        from product.trading_thesis import manifest as thesis_manifest
+        thesis = thesis_manifest()
+    except Exception:
+        thesis = {}
     payload = dict(workspace or {})
     if cards is None:
         if not payload:
@@ -734,6 +739,7 @@ def run_reco_paper_cycle(
         opened.append((ENSEMBLE_ID, decision.symbol))
         taken_row = {
             **decision.as_dict(),
+            "thesis_hash": str(thesis.get("thesis_hash") or ""),
             "qty": getattr(pos, "qty", None),
             "entry_fill": getattr(pos, "entry_price", None),
             "status": "TAKEN",
@@ -842,6 +848,8 @@ def run_reco_paper_cycle(
         "source": "recommendation_selection_authority",
         "adapter": "paper",
         "rules_hash": ident.get("rules_hash"),
+        "thesis_hash": str(thesis.get("thesis_hash") or ""),
+        "thesis": thesis,
         "execution_reality": {
             "shadow_mode": True,
             "affects_paper_orders": False,
