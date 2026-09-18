@@ -109,3 +109,30 @@ def test_historical_virtual_ledger_is_idempotent_across_restart(tmp_path):
     persisted = [json.loads(x) for x in ledger.read_text().splitlines() if x.strip()]
     assert len(persisted) == 1
     assert persisted[0]["trade_id"] == "hist-paper:abc"
+
+
+
+def test_historical_setup_confidence_policy_never_becomes_active(tmp_path):
+    policy_path = tmp_path / "policies.json"
+    trades = [
+        {
+            "trade_id": f"hist-paper-{i}",
+            "symbol": f"S{i}",
+            "setup": "VCP_BREAKOUT",
+            "realized_R": 1.0,
+            "evidence_class": "HISTORICAL_REPLAY",
+            "not_real_pnl": True,
+        }
+        for i in range(30)
+    ]
+    policies = HPL.update_historical_setup_policies(trades, path=policy_path)
+    assert len(policies) == 1
+    policy = policies[0]
+    assert policy["policy_id"] == "HIST_SETUP::VCP_BREAKOUT"
+    assert policy["sample_size"] == 30
+    assert policy["historical_confidence_score"] == 95.0
+    assert policy["historical_reproduced_positive"] is True
+    assert policy["evidence_source"] == "backtest_historical_replay"
+    assert policy["affects_selection"] is False
+    assert policy["production_status"] != "ACTIVE"
+    assert policy["not_promotion_evidence"] is True
