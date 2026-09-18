@@ -216,3 +216,33 @@ def test_best_trades_use_the_same_production_selection_seam(monkeypatch):
     assert board["best_trades"][0]["discovery_decision"] == PA.ENTER_NOW
     assert board["best_trades_mode"] == "PRODUCTION_THESIS_DISCOVERY"
     assert all(kwargs["enforce_history"] is False for _symbol, kwargs in calls)
+
+
+def test_best_trade_search_is_not_limited_by_board_display_limit(monkeypatch):
+    import product.paper_autopilot as PA
+
+    cards = [
+        _card(f"S{i:02d}", score=100 - i)
+        for i in range(45)
+    ]
+    cards.append(_card("ZZBEST", score=1))
+
+    class Result:
+        def __init__(self, card):
+            self.symbol = card["symbol"]
+            self.decision = PA.ENTER_NOW if card["symbol"] == "ZZBEST" else PA.WAIT
+            self.selection_score = 999.0 if card["symbol"] == "ZZBEST" else 0.0
+            self.reason_code = "ELIGIBLE" if self.decision == PA.ENTER_NOW else "WAIT_FOR_ENTRY"
+            self.policy_effect = "NEUTRAL"
+
+    monkeypatch.setattr(
+        PA,
+        "evaluate_selection_candidate",
+        lambda card, **_kwargs: Result(card),
+    )
+
+    board = decision_board(workspace=_workspace(*cards), limit=40)
+
+    assert len(board["decisions"]) == 40
+    assert [row["symbol"] for row in board["best_trades"]] == ["ZZBEST"]
+    assert board["best_trades"][0]["production_selection_score"] == 999.0
