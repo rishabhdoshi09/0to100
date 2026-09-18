@@ -42,8 +42,9 @@ def test_selection_affecting_policy_change_invalidates_thesis_hash(tmp_path, mon
     observing = TT.manifest()
     assert observing["thesis_hash"] == empty["thesis_hash"]
 
-    # Once the exact policy is allowed to affect paper selection it is part of
-    # the production thesis identity, so one fresh operator approval is needed.
+    # Once the policy has a real selection effect it becomes part of the
+    # versioned thesis identity. Startup permission is separate and remains
+    # one-time; this hash is for evidence/batch comparability.
     payload = json.loads(policy_path.read_text(encoding="utf-8"))
     payload["policies"][0]["version"] = 2
     payload["policies"][0]["sample_size"] = 35
@@ -54,11 +55,33 @@ def test_selection_affecting_policy_change_invalidates_thesis_hash(tmp_path, mon
     active = TT.manifest()
     assert active["thesis_hash"] != observing["thesis_hash"]
     assert active["selection_policy_set"]["count"] == 1
-    assert active["selection_policy_set"]["versions"] == [{
+    assert active["selection_policy_set"]["effective_policies"] == [{
         "policy_id": "SETUP::VCP",
-        "version": 2,
-        "status": "ACTIVE",
+        "dimension": "setup",
+        "bucket": "VCP",
+        "effective_status": "ACTIVE",
+        "effect": "SUPPORT",
     }]
+
+    # More observations inside the same effective SUPPORT region do not create
+    # a new thesis generation or force historical replay back to session one.
+    stable_hash = active["thesis_hash"]
+    payload["policies"][0]["version"] = 3
+    payload["policies"][0]["sample_size"] = 48
+    payload["policies"][0]["expectancy_difference_R"] = 0.31
+    payload["policies"][0]["shrunk_expectancy_R"] = 0.27
+    policy_path.write_text(json.dumps(payload), encoding="utf-8")
+    same_effect = TT.manifest()
+    assert same_effect["thesis_hash"] == stable_hash
+
+    # Crossing an actual selection-behavior threshold is a real thesis change.
+    payload["policies"][0]["version"] = 4
+    payload["policies"][0]["expectancy_difference_R"] = -0.45
+    payload["policies"][0]["shrunk_expectancy_R"] = -0.40
+    policy_path.write_text(json.dumps(payload), encoding="utf-8")
+    blocked = TT.manifest()
+    assert blocked["thesis_hash"] != stable_hash
+    assert blocked["selection_policy_set"]["effective_policies"][0]["effect"] == "BLOCK"
 
 
 def test_historical_replay_defaults_to_present_paper_decider(monkeypatch):
