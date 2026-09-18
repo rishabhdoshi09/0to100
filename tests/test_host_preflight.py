@@ -18,6 +18,7 @@ from product.host_preflight import (
     FAIL,
     PASS,
     READY,
+    INTRADAY_CAPABILITY,
     UNKNOWN,
     WARN,
     check_clock,
@@ -102,10 +103,15 @@ def test_individual_providers_are_listed_when_the_failure_is_not_uniform():
         return ProbeResult(host, host, True, "", "HTTP 200")
 
     checks, _ = probe_market_access(probe=one_down)
-    names = {c.name for c in checks}
-    assert "market_access" not in names
-    assert "zerodha" in names
-    assert next(c for c in checks if c.name == "zerodha").status == FAIL
+    by_name = {c.name: c for c in checks}
+    assert "market_access" not in by_name
+    # Kite is named and its state is truthful, but it is one leg of the
+    # intraday chain: the NSE fallback is serving, so this is degraded, not
+    # fatal, and the composite is what the install stands on.
+    assert by_name["kite_intraday"].status == WARN
+    assert by_name["kite_intraday"].required is False
+    assert by_name[INTRADAY_CAPABILITY].status == PASS
+    assert by_name[INTRADAY_CAPABILITY].evidence["satisfied_by"] == "nse_live"
 
 
 def test_skipping_the_network_can_never_be_ready():

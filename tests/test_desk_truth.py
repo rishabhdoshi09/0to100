@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 from product.counterfactual_learning import CORRECT_REJECTION, MISSED_WINNER
-from product.forward_evidence import BACKTEST
+from product.evidence_class import HISTORICAL_REPLAY
 from product.historical_replay import (
     ENGINE,
     decide_session,
@@ -238,7 +238,7 @@ def test_g_replay_persists_decision_records(tmp_path):
     assert first["status"] in {"SUCCEEDED", "DEGRADED"}
     assert first["run_id"]
     assert first["engine"] == ENGINE
-    assert first["provenance"] == BACKTEST
+    assert first["provenance"] == HISTORICAL_REPLAY
     assert Path(tmp_path / "latest.json").exists()
     assert first["decisions_tested"] >= 1
     ledger = (tmp_path / "decisions.jsonl").read_text(encoding="utf-8").strip().splitlines()

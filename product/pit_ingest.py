@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from product.pit_availability import PIT_UNVERIFIED
-from core.runtime_paths import logs_dir, logs_path
+from core.runtime_paths import logs_dir, logs_path, RuntimeLogsPath
 from product.pit_warehouse import (
     DOC_ANNUAL_REPORT,
     DOC_QUARTERLY_RESULT,
@@ -22,7 +22,7 @@ from product.pit_warehouse import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-EVIDENCE_ROOT = logs_dir() / "research_evidence"
+EVIDENCE_ROOT = RuntimeLogsPath("research_evidence")
 PARSER_VERSION = "pit_ingest.v1"
 
 _MONTHS = {

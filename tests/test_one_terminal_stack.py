@@ -82,15 +82,28 @@ def test_complete_script_always_stops_old_stack_then_starts_everything():
     assert "Missing venv. Create the QuantTerm Python environment first." not in complete
 
 
-def test_deploy_services_own_the_complete_stack():
+def test_deploy_services_use_one_canonical_host_owner():
     server = (ROOT / "deploy" / "setup_server.sh").read_text(encoding="utf-8")
     mac = (ROOT / "deploy" / "setup_mac.sh").read_text(encoding="utf-8")
-    unit = (ROOT / "deploy" / "quantterm-ui.service").read_text(encoding="utf-8")
-    for blob, name in ((server, "setup_server.sh"), (mac, "setup_mac.sh"), (unit, "quantterm-ui.service")):
-        assert "run_quantterm_complete.sh" in blob, name
-        assert "QT_NONINTERACTIVE" in blob, name
-    assert "report_api:app" in (ROOT / "scripts" / "run_quantterm_complete.sh").read_text(encoding="utf-8")
-    assert 'BRANCH="${QT_BRANCH:-overhaul/evidence-lab}"' not in server
+    installer = (ROOT / "scripts" / "install_quantterm_host.sh").read_text(encoding="utf-8")
+    host = (ROOT / "product" / "host_install.py").read_text(encoding="utf-8")
+
+    assert "install_quantterm_host.sh" in server
+    assert "install_quantterm_host.sh" in mac
+    assert "--manager systemd" in server
+    assert "--manager launchd" in mac
+    assert "product.host_install" in installer
+    assert "product.host_install_existing" in installer
+    assert "product.host_entrypoint" in host
+    assert "EXPECTED_CHILDREN" in host
+
+    # Historical split-service templates must stay retired; setup scripts only
+    # mention their names while explicitly disabling/removing old installations.
+    assert not (ROOT / "deploy" / "quantterm-ui.service").exists()
+    assert not (ROOT / "deploy" / "quantterm-autonomy.service").exists()
+    assert "disable --now \"$legacy\"" in server
+    assert "com.quantterm.ui" in mac and "com.quantterm.autonomy" in mac
+    assert 'BRANCH="${QT_BRANCH:-claude/build-ai-trading-system-miHHd}"' in server
     assert "overhaul/evidence-lab" not in server
 
 
@@ -129,26 +142,27 @@ def test_how_to_docs_do_not_checkout_historical_branch():
         text = (ROOT / rel).read_text(encoding="utf-8")
         assert "git checkout overhaul/evidence-lab" not in text, rel
         assert "git pull origin overhaul/evidence-lab" not in text, rel
+        assert "cursor/live-terminal-contract-858e" not in text, rel
 
 
-def test_fresh_server_clone_pins_accepted_product_branch():
-    """A brand-new Oracle/VPS clone must not land on GitHub's historical default."""
-    import re
-
-    accepted = "cursor/live-terminal-contract-858e"
+def test_fresh_server_clone_pins_production_branch_and_canonical_service():
+    """A brand-new VPS clone must land on the production branch and one host service."""
+    production = "claude/build-ai-trading-system-miHHd"
     always_on = (ROOT / "docs" / "ALWAYS_ON.md").read_text(encoding="utf-8")
     oracle = (ROOT / "docs" / "ORACLE_SETUP.md").read_text(encoding="utf-8")
     setup = (ROOT / "deploy" / "setup_server.sh").read_text(encoding="utf-8")
-    clone_pin = f"git clone --branch {accepted}"
+    clone_pin = f"git clone --branch {production}"
+
     assert clone_pin in always_on
     assert clone_pin in oracle
-    assert f'git clone --branch {accepted} "$REPO_URL"' in setup
-    # Obsolete single-unit restart: setup_server.sh removes quantterm.service.
-    assert not re.search(
-        r"systemctl restart quantterm(?:\.service)?(?:\s|$)",
-        oracle,
-    )
-    assert "sudo systemctl restart quantterm-ui.service quantterm-autonomy.service" in oracle
+    assert f'BRANCH="${{QT_BRANCH:-{production}}}"' in setup
+    assert 'git clone --branch "$BRANCH" "$REPO_URL" "$APP_DIR"' in setup
+    assert "cursor/live-terminal-contract-858e" not in always_on
+    assert "cursor/live-terminal-contract-858e" not in oracle
+    assert "quantterm-ui.service" not in oracle
+    assert "quantterm-autonomy.service" not in oracle
+    assert "scripts/quantterm_restart.sh" in oracle
+    assert "scripts/quantterm_status.sh" in oracle
 
 
 def test_issue92_dod_verifier_is_checked_in():

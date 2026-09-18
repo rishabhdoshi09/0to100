@@ -382,14 +382,27 @@ def test_data_prepare_keeps_history_when_fno_is_blocked(monkeypatch, tmp_path: P
 
 
 def test_runtime_payload_includes_rss_mb():
+    import threading
+    import time as _time
+
     from operations.market_ops import MarketOperationsWorker, _process_rss_mb
 
     rss = _process_rss_mb()
     assert rss is None or rss > 0
     worker = MarketOperationsWorker.__new__(MarketOperationsWorker)
-    worker._active_lock = __import__("threading").Lock()
+    worker._active_lock = threading.Lock()
     worker._active = {}
+    worker._maint_lock = threading.Lock()
+    worker._maint_last_ok = _time.time()
+    worker._maint_last_error = ""
+    worker._maint_in_flight = False
+    worker._maint_started_at = 0.0
     payload = MarketOperationsWorker._runtime_payload(worker, running=True)
     assert "rss_mb" in payload
     assert payload["worker_pid"] > 1
+    # Liveness and operational health are published as separate facts, so the
+    # supervisor can tell a busy operation store from a dead worker.
+    assert payload["heartbeat_epoch"] > 0
+    assert payload["maintenance_ok"] is True
+    assert payload["maintenance_in_flight"] is False
 

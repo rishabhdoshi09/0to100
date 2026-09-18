@@ -398,7 +398,8 @@ def test_daily_report_json_and_markdown_are_written():
     assert payload["live_locked"] is True
     text = md_path.read_text(encoding="utf-8")
     assert "rules_hash" in text
-    assert "live_locked: true" in text
+    assert "live_locked: True" in text
+    assert "live_lock_verified: True" in text
 
 
 def test_settle_and_report_is_idempotent_eod_hook():

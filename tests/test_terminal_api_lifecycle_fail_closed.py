@@ -12,8 +12,17 @@ def _assert_hold(payload: dict) -> None:
     verdict = product_acceptance_verdict(
         [{"feature": "Canonical stack / readiness", "status": graded["status"]}],
         live_locked=graded["live_locked"],
+        live_lock_verified=graded["live_lock_verified"],
     )
     assert verdict["verdict"] == "PRODUCT ACCEPTANCE HOLD"
+
+
+def _safety() -> dict:
+    return {
+        "live_locked": True,
+        "live_lock_verified": True,
+        "live_execution_authorized": False,
+    }
 
 
 def test_health_does_not_invent_ready_when_runtime_omits_lifecycle(monkeypatch):
@@ -27,7 +36,7 @@ def test_health_does_not_invent_ready_when_runtime_omits_lifecycle(monkeypatch):
             "resources": {},
             "operational_ready": True,
             "evidence_ready": True,
-            "live_locked": True,
+            **_safety(),
         },
     )
     payload = terminal_api.health()
@@ -48,7 +57,7 @@ def test_health_does_not_invent_ready_for_blank_runtime_lifecycle(monkeypatch, l
             "resources": {},
             "operational_ready": True,
             "evidence_ready": True,
-            "live_locked": True,
+            **_safety(),
         },
     )
     payload = terminal_api.health()
@@ -68,10 +77,16 @@ def test_health_preserves_explicit_ready_runtime(monkeypatch):
             "resources": {},
             "operational_ready": True,
             "evidence_ready": True,
-            "live_locked": True,
+            **_safety(),
         },
     )
     payload = terminal_api.health()
     assert payload["lifecycle"] == "READY"
     graded = grade_canonical_health(payload)
-    assert graded == {"status": "PASS", "blocker_reason": "", "live_locked": True}
+    assert graded == {
+        "status": "PASS",
+        "blocker_reason": "",
+        "live_locked": True,
+        "live_lock_verified": True,
+        "live_execution_authorized": False,
+    }

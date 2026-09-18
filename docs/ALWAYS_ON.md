@@ -1,117 +1,167 @@
 # QuantTerm ko 24/7 Chalana (Always-On Setup)
 
-Canonical product: the **Vite/React desk**. One command owns the local stack:
-`bash scripts/run_quantterm_complete.sh` → http://127.0.0.1:5173.
-Streamlit is not the product path. Historical research branches such as
-`overhaul/evidence-lab` are not the current checkout.
+Canonical product: the **Vite/React desk**. Local interactive use is still one
+command: `bash scripts/run_quantterm_complete.sh` → http://127.0.0.1:5173.
 
-Mac sleep hote hi background scans, Telegram alerts, breakout sniper —
-sab ruk jaata hai. Full-time trading ke liye system ko hamesha jaagna
-chahiye. Do raste:
+Installed/always-on operation is different by design: both Linux and macOS now
+use one canonical lifecycle:
+
+`product.host_install → product.host_entrypoint → product.host_supervisor`
+
+That supervisor owns exactly the required QuantTerm children. Historical split
+UI/autonomy services are retired and must not be installed again.
 
 ---
 
-## Option A: Sasta VPS (recommended, ~₹300-500/month)
+## Option A: Linux VPS / always-on server
 
-Koi bhi 2GB-RAM Ubuntu VPS chalega (Hetzner/DigitalOcean/Oracle
-free-tier bhi).
+Use a normal login user with sudo access. `deploy/setup_server.sh` deliberately
+refuses to run as root because the canonical service is a user-level systemd
+service with reboot persistence verified through user lingering.
 
-> **Oracle Always Free (₹0) chuna hai?** Poora step-by-step —
-> account → Ampere A1 VM → ek-command setup script → Tailscale —
-> **[docs/ORACLE_SETUP.md](ORACLE_SETUP.md)** mein hai.
-> Server-side sab kuch `deploy/setup_server.sh` automate karta hai.
+### 1. Server par login karo
 
-### 1. Server taiyaar karo
 ```bash
-ssh root@YOUR_SERVER_IP
-apt update && apt install -y python3.11 python3.11-venv git
+ssh ubuntu@YOUR_SERVER_IP
 ```
 
-### 2. Project daalo
+### 2. Production checkout clone karo
+
 ```bash
-git clone --branch cursor/live-terminal-contract-858e https://github.com/rishabhdoshi09/0to100.git
+git clone --branch claude/build-ai-trading-system-miHHd https://github.com/rishabhdoshi09/0to100.git
 cd 0to100
 ```
 
-This clone is the accepted Issue #92 product branch, not GitHub's default
-`claude/build-ai-trading-system-miHHd`. The install script then deploys **this**
-checkout. Do not check out historical research branches such as
-`overhaul/evidence-lab`.
+`claude/build-ai-trading-system-miHHd` is the production branch. Do not deploy a
+historical research/integration branch from old notes or screenshots.
 
-### 3. systemd services (complete stack + autonomy)
+### 3. Canonical installed host
+
 ```bash
 bash deploy/setup_server.sh
 ```
-That installs `quantterm-ui` (`bash scripts/run_quantterm_complete.sh` —
-desk :5173, API :8765, reports :8766, market-ops) and `quantterm-autonomy`.
+
+The installer prepares Python/Node, retires historical system-level QuantTerm
+units, then delegates to `scripts/install_quantterm_host.sh`. The resulting
+**single** user service is `quantterm.service`, whose process is
+`product.host_entrypoint`; it owns the supervisor and the desk/API/report/
+market-ops/autonomy children.
+
+Status:
+
+```bash
+scripts/quantterm_status.sh \
+  --runtime-root "$HOME/.local/state/quantterm/runtime" \
+  --manager systemd
+```
 
 ### 4. Phone/laptop se kholo
-`http://YOUR_SERVER_IP:5173` — ya Tailscale laga lo (free) taaki
-sirf tumhare devices se khule:
-```bash
-curl -fsSL https://tailscale.com/install.sh | sh && tailscale up
-```
+
+Desk default: `http://YOUR_SERVER_IP:5173`. For remote private access, use your
+preferred VPN/private-network setup instead of exposing the desk publicly.
 
 ---
 
-## Option B: Apna Mac hi 24/7 (₹0, koi credit card nahi)
+## Option B: Apna Mac always-on
 
-> Oracle/AWS/GCP sab **credit card maangte hain** — card nahi hai toh
-> yeh sabse practical rasta hai. Ek command:
+This repository's Mac deployment is intentionally tied to the configured
+external APFS runtime. `deploy/setup_mac.sh` verifies/attaches the existing
+sparsebundle, refuses to create a missing runtime, retires historical launchd
+owners, resolves npm for launchd, and installs exactly one canonical launchd
+service (`com.quantterm.desk`).
+
 ```bash
-cd ~/0to100 && bash deploy/setup_mac.sh
+cd ~/0to100
+bash deploy/setup_mac.sh
 ```
-Script karta hai: Mac ki sleep band + **launchd service** (login/boot pe
-khud start, crash pe 10s mein khud restart — systemd jaisa hi). Phone se
-bahar se dekhna ho toh Tailscale (free) laga lo.
-- MacBook: charger + dhakkan khula, ya `sudo pmset -a disablesleep 1`
-- Kharcha: ~₹100-150/month bijli. Limitation: bijli/net gaya = system gaya.
 
-### 🍃 Mac garam ho raha hai? (business software saath chal raha?)
+The default storage contract is:
 
-Eco mode chalao — **wahi signals, wahi gates, bas thandi machine**:
+- external volume: `/Volumes/Expansion`
+- sparsebundle: `/Volumes/Expansion/QuantTermStorage.sparsebundle`
+- mounted APFS volume: `/Volumes/QuantTermStorage`
+- durable runtime: `/Volumes/QuantTermStorage/QuantTerm/runtime`
+- canonical symlink: `~/Library/Application Support/QuantTerm/runtime`
+
+Override only through the documented `QT_STORAGE_*` variables when the physical
+layout is intentionally different. Missing/wrong storage is a blocker, not a
+reason to fall back to the internal disk.
+
+Status:
+
 ```bash
-QT_ECO=1 bash deploy/setup_mac.sh     # service eco mein reinstall
+scripts/quantterm_status.sh \
+  --runtime-root "/Volumes/QuantTermStorage/QuantTerm/runtime" \
+  --manager launchd
 ```
-Eco kya karta hai: **off-hours full-market scan bilkul band** (raat ko
-scan pure heat tha — EOD data badalta hi nahi), scan threads 8→2,
-market-hours cadence 30 min. Sniper (instant breakouts) websocket hai —
-woh waise hi chalta rehta hai. Briefing/outcomes/backtest sab normal.
 
-MacBook **Air** (fanless) + doosra software 24/7 = long-term sahi nahi.
-Sasta permanent fix: **Raspberry Pi 4/5 (₹5-8k one-time, UPI se milta
-hai, 5W, silent)** — usi pe `deploy/setup_server.sh` chala do, Mac
-business ke liye free.
-
-**Baad mein card ke bina VPS chahiye ho toh:** Hostinger VPS (~₹350/mo)
-**UPI accept karta hai** — phir `deploy/setup_server.sh` wahi ek-command
-setup wahan chala dena.
-
-## Option C: Ghar ka Raspberry Pi / purana laptop
-
-Wahi Linux steps (`deploy/setup_server.sh`) — bas machine ghar pe.
-Bijli + internet stable ho toh kaafi hai.
+For unattended operation keep the Mac powered and configured so lid/sleep does
+not suspend the machine. The host preflight reports power-management risk rather
+than silently claiming readiness.
 
 ---
 
-## Roz ka ritual (server pe bhi wahi)
+## Option C: Raspberry Pi / old Linux laptop
 
-Kite token roz subah chahiye. Server pe:
-```bash
-ssh root@YOUR_SERVER_IP
-cd 0to100 && source venv/bin/activate && python main.py login
-```
-Token daalte hi service khud naya token utha legi (`.env` reload
-next cycle pe). 8:30 baje Telegram reminder waise bhi aayega agar
-bhool gaye.
+Use the same Linux flow and `deploy/setup_server.sh`. The deployment invariant is
+unchanged: one installed-host supervisor, one durable runtime, no split service
+owners.
 
-## Updates lena
+---
+
+## Roz ka broker login (jab required ho)
+
 ```bash
-cd 0to100 && git pull
-sudo systemctl restart quantterm-ui quantterm-autonomy
+cd ~/0to100
+./venv/bin/python main.py login
 ```
 
-## Health check
-- Telegram pe subah Pulse aa raha hai? → scans chal rahe hain
-- App ke scanner header pe sab dots green? → data sources theek
-- `journalctl -u quantterm-ui -f` → live desk logs
+Paper operation must remain broker-independent where designed; broker login
+state is still surfaced truthfully and remains mandatory for broker-bound data or
+future live capabilities.
+
+## Updates
+
+Production branch update ke baad canonical lifecycle ko use karo:
+
+```bash
+cd ~/0to100
+git checkout claude/build-ai-trading-system-miHHd
+git pull --ff-only origin claude/build-ai-trading-system-miHHd
+scripts/quantterm_restart.sh --manager systemd   # Linux
+# or: scripts/quantterm_restart.sh --manager launchd   # Mac
+```
+
+For a release installation, prefer rerunning the platform installer so exact-SHA
+preflight, service definition, runtime identity, and startup health are all
+revalidated.
+
+## Health / verification
+
+Read-only product surface verification:
+
+```bash
+python scripts/verify_quantterm_stack.py
+```
+
+Real safe-action verification (no broker order, no live unlock):
+
+```bash
+python scripts/verify_quantterm_actions.py
+```
+
+Canonical product acceptance, including the durable paper-cycle path:
+
+```bash
+python scripts/run_product_acceptance.py
+```
+
+Linux service logs:
+
+```bash
+journalctl --user -u quantterm.service -f
+```
+
+A green UI alone is not acceptance. The installed host is healthy only when the
+service/supervisor heartbeat, all required children, persistent runtime and
+canonical verified live-money lock agree.

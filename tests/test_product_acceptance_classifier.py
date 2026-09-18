@@ -170,30 +170,58 @@ def test_learning_and_soak_require_contracts():
     assert grade_learning_dashboard({
         "schema_version": 1,
         "live_locked": True,
+        "live_lock_verified": True,
+        "live_execution_authorized": False,
         "policies": [],
         "counterfactuals": {"frozen": 0},
     })["status"] == "PASS"
     assert grade_forward_soak({"ok": True})["status"] == "FAIL"
     assert grade_forward_soak({
-        "verification": {"lanes": {"SCAN": "PASS"}, "live_locked": True},
+        "verification": {
+            "lanes": {"SCAN": "PASS"},
+            "live_locked": True,
+            "live_lock_verified": True,
+            "live_execution_authorized": False,
+        },
         "live_locked": True,
+        "live_lock_verified": True,
+        "live_execution_authorized": False,
     })["status"] == "PASS"
 
 
 def test_paper_cycle_request_is_not_execution():
-    assert grade_paper_status({"available": True}, live_locked=True)["status"] == "FAIL"
+    safety = {
+        "live_locked": True,
+        "live_lock_verified": True,
+        "live_execution_authorized": False,
+    }
+    kwargs = {
+        "live_locked": True,
+        "live_lock_verified": True,
+        "live_execution_authorized": False,
+    }
+    assert grade_paper_status({"available": True}, **kwargs)["status"] == "FAIL"
     assert grade_paper_status({
         "available": True,
         "last_cycle": {},
         "open_positions": [],
-    }, live_locked=True)["status"] == "PASS"
+        **safety,
+    }, **kwargs)["status"] == "PASS"
     assert grade_paper_status({
         "schema_version": 1,
         "why_no_trade": {"available": False, "reasons": ["NO_CYCLE_RECORDED"]},
         "latest": {},
         "paper": {"enabled": True, "open_positions": []},
+        **safety,
+    }, **kwargs)["status"] == "PASS"
+    assert grade_paper_status({
+        "schema_version": 1,
+        "latest": {},
+        "paper": {"open_positions": []},
         "live_locked": True,
-    }, live_locked=True)["status"] == "PASS"
+        "live_lock_verified": False,
+        "live_execution_authorized": False,
+    }, **kwargs)["status"] == "FAIL"
     unobserved = grade_paper_cycle_execution(observed=False)
     assert unobserved["status"] == "DEGRADED"
     assert "not observed" in unobserved["blocker_reason"]
@@ -222,26 +250,37 @@ def test_verdict_allows_only_expected_fno_blocker():
         },
         {"feature": "Recommendations", "status": "PASS"},
     ]
-    assert product_acceptance_verdict(rows, live_locked=True)["verdict"] == "PRODUCT ACCEPTANCE PASS"
+    assert product_acceptance_verdict(
+        rows, live_locked=True, live_lock_verified=True
+    )["verdict"] == "PRODUCT ACCEPTANCE PASS"
     assert is_expected_external_blocker(rows[2]) is True
 
     hold_degraded = product_acceptance_verdict(
         rows + [{"feature": "News refresh", "status": "DEGRADED", "blocker_reason": "timeout"}],
         live_locked=True,
+        live_lock_verified=True,
     )
     assert hold_degraded["verdict"] == "PRODUCT ACCEPTANCE HOLD"
 
     hold_fail = product_acceptance_verdict(
         [{"feature": "Market Scan", "status": "FAIL", "blocker_reason": "boom"}],
         live_locked=True,
+        live_lock_verified=True,
     )
     assert hold_fail["verdict"] == "PRODUCT ACCEPTANCE HOLD"
-    assert product_acceptance_verdict(rows, live_locked=False)["verdict"] == "PRODUCT ACCEPTANCE HOLD"
+    assert product_acceptance_verdict(
+        rows, live_locked=False, live_lock_verified=True
+    )["verdict"] == "PRODUCT ACCEPTANCE HOLD"
+    assert product_acceptance_verdict(
+        rows, live_locked=True, live_lock_verified=False
+    )["verdict"] == "PRODUCT ACCEPTANCE HOLD"
 
 
 _READY_HEALTH = {
     "ok": True,
     "live_locked": True,
+    "live_lock_verified": True,
+    "live_execution_authorized": False,
     "operational_ready": True,
     "evidence_ready": True,
     "lifecycle": "READY",
@@ -252,6 +291,8 @@ def test_canonical_health_explicit_ready_pass():
     graded = grade_canonical_health(_READY_HEALTH)
     assert graded["status"] == "PASS"
     assert graded["live_locked"] is True
+    assert graded["live_lock_verified"] is True
+    assert graded["live_execution_authorized"] is False
     assert graded["blocker_reason"] == ""
 
 
@@ -265,6 +306,7 @@ def test_canonical_health_missing_live_locked_fail():
     assert product_acceptance_verdict(
         [{"feature": "Canonical stack / readiness", "status": graded["status"]}],
         live_locked=graded["live_locked"],
+        live_lock_verified=graded["live_lock_verified"],
     )["verdict"] == "PRODUCT ACCEPTANCE HOLD"
 
 
@@ -306,12 +348,20 @@ def test_canonical_health_lifecycle_ready_with_all_explicit_invariants_pass():
     graded = grade_canonical_health({
         "ok": True,
         "live_locked": True,
+        "live_lock_verified": True,
+        "live_execution_authorized": False,
         "operational_ready": True,
         "evidence_ready": True,
         "lifecycle": "READY",
         "components": [{"name": "api", "status": "READY"}],
     })
-    assert graded == {"status": "PASS", "blocker_reason": "", "live_locked": True}
+    assert graded == {
+        "status": "PASS",
+        "blocker_reason": "",
+        "live_locked": True,
+        "live_lock_verified": True,
+        "live_execution_authorized": False,
+    }
     for lifecycle in ("STARTING", "BLOCKED", "FAILED", "", None):
         payload = dict(_READY_HEALTH)
         payload["lifecycle"] = lifecycle

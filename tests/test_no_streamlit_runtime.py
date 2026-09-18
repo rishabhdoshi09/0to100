@@ -29,7 +29,9 @@ RUNTIME_FILES = (
 DEPLOY_FILES = (
     "deploy/setup_mac.sh",
     "deploy/setup_server.sh",
-    "deploy/quantterm-ui.service",
+    "scripts/install_quantterm_host.sh",
+    "scripts/quantterm_status.sh",
+    "scripts/quantterm_restart.sh",
     "scripts/run_desk.sh",
     "scripts/run_quantterm.sh",
     "scripts/run_quantterm_complete.sh",

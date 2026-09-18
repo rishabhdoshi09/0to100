@@ -1,112 +1,128 @@
-# Oracle Cloud Free Tier pe QuantTerm 24/7 (₹0/month)
+# Oracle/VPS par QuantTerm 24/7
 
-> ⚠️ **Oracle signup ke liye credit card zaroori hai** (verification —
-> charge nahi hota, par card ke bina account banta hi nahi). Card nahi
-> hai? **[ALWAYS_ON.md](ALWAYS_ON.md) → Option B**: apna Mac ek command
-> mein 24/7 (`deploy/setup_mac.sh`, ₹0) — ya UPI-waala VPS (Hostinger).
+This guide covers the QuantTerm side of the deployment. Cloud-provider account,
+pricing and free-tier rules can change, so verify those directly with the
+provider before creating infrastructure.
 
-Oracle ka **Always Free** tier hamesha free hai (trial nahi):
-**Ampere A1 (ARM): 4 OCPU + 24GB RAM tak** — QuantTerm ke liye kaafi se zyada.
-Mumbai region NSE ke liye best latency deta hai.
+The QuantTerm deployment invariant is fixed: one production checkout, one
+durable runtime, and one canonical installed-host supervisor.
 
----
+## Step 1 — VM
 
-## Step 1 — Account (10 min, browser)
+Use a supported Linux VM with enough disk/RAM for the full market data and
+research workload. Create a normal login user with sudo access; do **not** run the
+QuantTerm installer as root.
 
-1. <https://oracle.com/cloud/free> → Sign up.
-2. **Home region: India West (Mumbai)** chuno — baad mein badal NAHI sakte.
-3. Card verification hota hai (charge nahi) — Always Free pe kabhi bill
-   nahi banta jab tak tum khud paid upgrade na karo.
-
-## Step 2 — VM banao (5 min)
-
-1. Console → **Compute → Instances → Create Instance**.
-2. Image: **Ubuntu 24.04** (aarch64).
-3. Shape: **Ampere → VM.Standard.A1.Flex → 4 OCPU / 24 GB** ("Always Free
-   eligible" tag dikhna chahiye).
-4. SSH key: apni public key daalo (ya download karo jo woh banaye).
-5. Create. Public IP note kar lo.
-
-> **"Out of capacity" aaye toh:** Mumbai mein A1 kabhi-kabhi full hota
-> hai. (a) 2 OCPU / 12GB try karo, (b) doosri Availability Domain,
-> (c) thodi der baad retry — 1-2 din mein mil hi jaata hai. Impatient ho
-> toh VM.Standard.E2.1.Micro (x86, 1GB) se shuru karo — swap script
-> laga deta hai, chal jayega (dheema).
-
-## Step 3 — Server setup (ek command)
+## Step 2 — Production checkout
 
 ```bash
 ssh ubuntu@YOUR_PUBLIC_IP
 
-# private repo hai, isliye GitHub token ke saath (Settings → Developer
-# settings → Personal access tokens → repo read):
-export QT_REPO_URL=https://YOUR_TOKEN@github.com/rishabhdoshi09/0to100.git
-git clone --branch cursor/live-terminal-contract-858e "$QT_REPO_URL" ~/0to100
+# If the repository requires credentials, configure Git access first.
+git clone --branch claude/build-ai-trading-system-miHHd \
+  https://github.com/rishabhdoshi09/0to100.git ~/0to100
+cd ~/0to100
+```
+
+`claude/build-ai-trading-system-miHHd` is the production branch. Historical
+integration/research branches are not deployment targets.
+
+## Step 3 — Canonical server installer
+
+```bash
+bash deploy/setup_server.sh
+```
+
+`setup_server.sh` installs OS/runtime dependencies, prepares the venv, retires
+historical split QuantTerm units, and delegates to
+`scripts/install_quantterm_host.sh`.
+
+The resulting systemd user unit is **`quantterm.service`**. It starts
+`product.host_entrypoint`, which owns exactly one `product.host_supervisor`; the
+supervisor owns the required autonomy, market-ops, market API, report API and
+frontend children.
+
+No separate UI/autonomy service should be installed.
+
+## Step 4 — Credentials and exact host re-install
+
+Edit the secure env file:
+
+```bash
+nano ~/0to100/.env
+chmod 600 ~/0to100/.env
+```
+
+Then rerun the installer so preflight, exact SHA, service definition and startup
+health are all revalidated:
+
+```bash
 cd ~/0to100
 bash deploy/setup_server.sh
 ```
 
-This clone is the accepted Issue #92 product branch, not GitHub's default
-`claude/build-ai-trading-system-miHHd`. `setup_server.sh` then deploys **that**
-checkout. Canonical product after setup: the **same complete stack** as a
-local desk — `quantterm-ui` runs `bash scripts/run_quantterm_complete.sh`
-(Vite :5173, API :8765, reports :8766). Streamlit is not started.
-
-Script khud karta hai: packages → 2G swap → clone/pull → venv →
-`pip install` → **systemd service** (crash pe 10s mein auto-restart,
-reboot pe auto-start).
-
-## Step 4 — Keys + restart
+## Step 5 — Status
 
 ```bash
-nano ~/0to100/.env          # KITE_*, TELEGRAM_*, DEEPSEEK_API_KEY
-sudo systemctl restart quantterm-ui.service quantterm-autonomy.service
+cd ~/0to100
+scripts/quantterm_status.sh \
+  --runtime-root "$HOME/.local/state/quantterm/runtime" \
+  --manager systemd
 ```
 
-## Step 5 — Access: Tailscale (recommended)
+Healthy means the service is active, supervisor heartbeat is fresh, all required
+children are alive+healthy, and the canonical live-execution interlock is
+verified locked and unauthorized.
 
-Oracle ke firewall/security-list mein kuch kholne ki zaroorat nahi —
-Tailscale private network bana deta hai (free, 2 min):
+## Access
+
+Desk default: `http://<server-ip>:5173`. Prefer a private VPN/network path rather
+than exposing the desk directly to the public internet.
+
+## Broker login when required
 
 ```bash
-curl -fsSL https://tailscale.com/install.sh | sh
-sudo tailscale up          # login link kholo
-tailscale ip -4            # yeh IP note karo
+cd ~/0to100
+./venv/bin/python main.py login
 ```
 
-Phone/Mac pe bhi Tailscale app → phir kahin se bhi:
-`http://<tailscale-ip>:5173`
+Paper-only paths must remain independent of live broker authorization where the
+product contract says so; broker-bound functionality still reports login/capability
+blockers truthfully.
 
-<details>
-<summary>Public port kholna ho toh (kam secure — avoid)</summary>
-
-1. Console → VCN → Security List → Ingress rule: TCP 5173, source 0.0.0.0/0
-2. Server pe Oracle ka baked-in iptables bhi kholo:
-   ```bash
-   sudo iptables -I INPUT -p tcp --dport 5173 -j ACCEPT
-   sudo netfilter-persistent save
-   ```
-</details>
-
-## Roz ka ritual
-
-- **Kite token (sirf NSE live ke liye):**
-  `ssh ubuntu@IP` → `cd 0to100 && ./venv/bin/python main.py login`
-  Bhool jao toh 8:30 pe Telegram reminder aata hai. Paper mode + US
-  scanning + EOD data token ke **bina bhi** chalte hain.
-- **Zinda hai?** Subah Brain briefing + Pulse Telegram pe aaye = daemons
-  zinda. App → Diagnostics → System Pulse dots green.
-
-## Maintenance
+## Updates
 
 ```bash
-# update
-cd ~/0to100 && git pull
-sudo systemctl restart quantterm-ui.service quantterm-autonomy.service
-
-# logs
-journalctl -u quantterm-ui -f
-
-# service control
-sudo systemctl status quantterm-ui quantterm-autonomy
+cd ~/0to100
+git checkout claude/build-ai-trading-system-miHHd
+git pull --ff-only origin claude/build-ai-trading-system-miHHd
+bash deploy/setup_server.sh
 ```
+
+For a pure service restart without changing the deployment:
+
+```bash
+scripts/quantterm_restart.sh --manager systemd
+scripts/quantterm_status.sh \
+  --runtime-root "$HOME/.local/state/quantterm/runtime" \
+  --manager systemd
+```
+
+## Logs
+
+```bash
+journalctl --user -u quantterm.service -f
+```
+
+## Product verification
+
+```bash
+python scripts/verify_quantterm_stack.py
+python scripts/verify_quantterm_actions.py
+python scripts/run_product_acceptance.py
+```
+
+The safe-action verifier can trigger real non-money research/data operations but
+never unlocks live capital or submits broker orders. Product acceptance includes
+the canonical durable paper-cycle decision path and accepts an evidence-backed
+no-trade when the rules legitimately produce one.

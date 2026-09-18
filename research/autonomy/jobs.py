@@ -446,23 +446,29 @@ def _auth_health(deps):
     return AUTH.AuthHealth(AUTH.SESSION_VALID if valid else AUTH.TOKEN_MISSING, "test")
 
 
+def _paper_entry_allowed_for(*failures: str) -> bool:
+    return H.capabilities(set(failures))["new_paper_entries"] != H.BLOCKED
+
+
 def run_auth_health(ctx) -> JobResult:
     health = _auth_health(ctx.deps)
     if health.status == AUTH.SESSION_VALID:
         return JobResult(JS.SUCCEEDED, "AUTH_READY", clears={H.AUTH_MISSING, H.AUTH_EXPIRED,
-                         H.PROVIDER_UNAVAILABLE}, state_hint=ST.DATA_REFRESHING,
+                         H.BROKER_PROVIDER_UNAVAILABLE}, state_hint=ST.OBSERVING,
                          unblocks=(DEP_AUTH,), metadata=health.as_dict())
     if health.status == AUTH.PROVIDER_UNAVAILABLE:
+        failure = H.BROKER_PROVIDER_UNAVAILABLE
         return JobResult(JS.RETRYABLE_FAILED, "Zerodha provider temporarily unavailable",
                          error_code=health.error_code or "PROVIDER_UNAVAILABLE",
-                         error_message=health.reason, failures={H.PROVIDER_UNAVAILABLE},
-                         state_hint=ST.DEGRADED, new_entries_allowed=False)
+                         error_message=health.reason, failures={failure},
+                         state_hint=ST.DEGRADED,
+                         new_entries_allowed=_paper_entry_allowed_for(failure))
     failure = H.AUTH_MISSING if health.status == AUTH.TOKEN_MISSING else H.AUTH_EXPIRED
     return JobResult(JS.BLOCKED, health.reason or "daily Zerodha login required",
                      error_code=health.error_code, failures={failure},
-                     clears={H.PROVIDER_UNAVAILABLE}, state_hint=ST.AUTH_REQUIRED,
-                     new_entries_allowed=False, blocked_on="CREDENTIAL_UPDATE",
-                     metadata=health.as_dict())
+                     clears={H.BROKER_PROVIDER_UNAVAILABLE}, state_hint=ST.AUTH_REQUIRED,
+                     new_entries_allowed=_paper_entry_allowed_for(failure),
+                     blocked_on="CREDENTIAL_UPDATE", metadata=health.as_dict())
 
 
 def run_instrument_refresh(ctx) -> JobResult:
@@ -475,7 +481,8 @@ def run_instrument_refresh(ctx) -> JobResult:
         return JobResult(JS.SUCCEEDED,
                          f"instrument master current · {info.get('rows', 0)} rows · "
                          f"{info.get('fno_underlyings', 0)} F&O underlyings",
-                         clears={H.AUTH_MISSING, H.AUTH_EXPIRED}, unblocks=(DEP_AUTH,), metadata=info)
+                         clears={H.AUTH_MISSING, H.AUTH_EXPIRED, H.BROKER_PROVIDER_UNAVAILABLE},
+                         unblocks=(DEP_AUTH,), metadata=info)
     except Exception as exc:
         return JobResult(JS.RETRYABLE_FAILED, "instrument refresh failed",
                          error_code="INSTRUMENT_REFRESH_ERROR", error_message=str(exc))
@@ -504,7 +511,8 @@ def _kite_live_ready_result(ctx, *, sid=None, quality=None, live=None) -> JobRes
         f"Kite latest session ready · {int(live.get('symbols') or 0)} symbols · "
         f"{live.get('source') or 'kite_quotes'}",
         output_snapshot_id=sid,
-        clears={H.SNAPSHOT_STALE, H.AUTH_MISSING, H.AUTH_EXPIRED, H.PROVIDER_UNAVAILABLE,
+        clears={H.SNAPSHOT_STALE, H.AUTH_MISSING, H.AUTH_EXPIRED,
+                H.BROKER_PROVIDER_UNAVAILABLE, H.PROVIDER_UNAVAILABLE,
                 H.OPTIONS_HISTORY_INCOMPLETE},
         state_hint=ST.DATA_READY,
         unblocks=tuple(unblocks),
@@ -554,7 +562,8 @@ def run_data_refresh(ctx) -> JobResult:
             unblocks.append(f"EOD_DATA_READY:{latest}")
         return JobResult(JS.SUCCEEDED, "genuine snapshot active", output_snapshot_id=sid,
                          clears={H.SNAPSHOT_STALE, H.AUTH_MISSING, H.AUTH_EXPIRED,
-                                 H.PROVIDER_UNAVAILABLE, H.OPTIONS_HISTORY_INCOMPLETE}, state_hint=ST.DATA_READY,
+                                 H.BROKER_PROVIDER_UNAVAILABLE, H.PROVIDER_UNAVAILABLE,
+                                 H.OPTIONS_HISTORY_INCOMPLETE}, state_hint=ST.DATA_READY,
                          unblocks=tuple(unblocks), metadata={**quality, "latest_date": latest})
     kite = _kite_live_ready_result(
         ctx,
@@ -730,9 +739,10 @@ def run_market_scan(ctx) -> JobResult:
         except Exception:
             telegram = {"error": "notification_failed"}
             print("[TELEGRAM] scan alert send failed", flush=True)
+    clears = {H.SNAPSHOT_STALE} if official.get("current") or live.get("ready") else set()
     return JobResult(JS.SUCCEEDED,
                      f"scan complete · {n} setups · {summary.get('momentum', 0)} momentum",
-                     state_hint=ST.OBSERVING, unblocks=(DEP_SCAN,),
+                     clears=clears, state_hint=ST.OBSERVING, unblocks=(DEP_SCAN,),
                      metadata={**summary, "telegram": telegram})
 
 
@@ -746,26 +756,94 @@ def _entry_reason(now, holidays, ctx) -> tuple[bool, str, str]:
     return True, "", phase
 
 
+def _paper_market_data_source(ctx) -> tuple[bool, str]:
+    """Return whether paper has a trusted source already accepted by market scan.
+
+    Paper fills consume the persisted recommendation/scan prices.  A Kite-created
+    snapshot is one valid provenance source, not a structural requirement.  Current
+    official NSE completed-session history is equally valid for the paper path; an
+    explicitly ready live source is the final fallback.  Broker probing is skipped
+    entirely when either durable source is available.
+    """
+    snapshot_id = ctx.deps.active_snapshot_id()
+    if snapshot_id:
+        return True, f"snapshot:{snapshot_id}"
+    official = _official_ready(ctx)
+    if official.get("current"):
+        return True, str(official.get("source") or "official_nse")
+    live = _live_market(ctx)
+    if live.get("ready"):
+        return True, str(live.get("source") or "live_market")
+    return False, "unavailable"
+
+
+def _accepts_full_paper_cycle_signature(fn) -> bool:
+    """True when ``fn`` can take the four-argument canonical paper-cycle call.
+
+    Legacy injected fakes accept only ``entries_allowed``. Deciding that by
+    inspection keeps the decision side-effect free: the previous probe called
+    the real cycle and treated any TypeError as an arity mismatch, so a genuine
+    TypeError raised after a paper position had already been persisted caused
+    the entire cycle -- management pass and canonical executor -- to run a
+    second time.
+    """
+    import inspect
+
+    try:
+        signature = inspect.signature(fn)
+    except (TypeError, ValueError):
+        # Un-introspectable callable: prefer the full call, which is canonical.
+        return True
+    parameters = list(signature.parameters.values())
+    if any(p.kind is inspect.Parameter.VAR_POSITIONAL for p in parameters):
+        return True
+    positional = [
+        p for p in parameters
+        if p.kind in (inspect.Parameter.POSITIONAL_ONLY,
+                      inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    ]
+    # ``fn`` is already bound, so ``self`` is not counted here.
+    return len(positional) >= 4
+
+
 def run_paper_cycle(ctx) -> JobResult:
     now = ctx.deps.now_ist()
     holidays = ctx.deps.holidays()
     entries_ok, reason, phase = _entry_reason(now, holidays, ctx)
-    if not ctx.deps.active_snapshot_id():
-        # Still consume recommendations and persist BLOCKED_BROKER intents.
+    data_ready, data_source = _paper_market_data_source(ctx)
+    data_failure = ""
+    if not data_ready:
+        # Missing trustworthy market data is still a hard paper-entry block.
+        # Surface it as a data/provider failure, never as "no eligible trade"
+        # and never as an entry-window or capability code.
         entries_ok = False
-        reason = reason or "BROKER_LOGIN_REQUIRED"
+        data_failure = "NO_DATA_SNAPSHOT"
+        reason = data_failure
     try:
-        try:
+        # Arity is resolved by inspection, never by calling and catching TypeError.
+        # The canonical cycle opens real paper positions before it can raise, so a
+        # TypeError from INSIDE the cycle is indistinguishable from a signature
+        # mismatch under a try/except probe -- and the retry re-ran the whole
+        # cycle, producing a second paper position from one job run.
+        if _accepts_full_paper_cycle_signature(ctx.deps.run_paper_cycle):
             result = ctx.deps.run_paper_cycle(entries_ok, reason, phase, ctx.active_failures)
-        except TypeError:  # legacy injected fakes
+        else:
             result = ctx.deps.run_paper_cycle(entries_ok)
     except Exception as exc:
         return JobResult(JS.RETRYABLE_FAILED, "paper cycle error", error_code="CYCLE_ERROR",
                          error_message=str(exc))
     eligibility = (result or {}).get("eligibility", "")
+    if data_failure:
+        eligibility = "DATA_UNAVAILABLE"
+        if isinstance(result, dict):
+            result = dict(result)
+            result["eligibility"] = eligibility
+            result["entry_block_reason"] = data_failure
+            result["failure_class"] = "DATA_OR_PROVIDER"
     hint = ST.PAPER_ACTIVE if entries_ok else ST.OBSERVING
     metadata = {"eligibility": eligibility, "entry_block_reason": reason,
-                "session_phase": phase}
+                "session_phase": phase, "market_data_source": data_source,
+                "failure_class": "DATA_OR_PROVIDER" if data_failure else ""}
     if not os.environ.get("PYTEST_CURRENT_TEST"):
         try:
             from product.paper_self_feed import ingest_paper_cycle
@@ -783,7 +861,10 @@ def run_paper_cycle(ctx) -> JobResult:
             }
         except Exception:
             pass
-    return JobResult(JS.SUCCEEDED, f"paper cycle: {eligibility or 'no-op'}",
+    summary = f"paper cycle: {eligibility or 'no-op'}"
+    if data_failure:
+        summary = f"paper cycle: DATA_UNAVAILABLE ({data_failure})"
+    return JobResult(JS.SUCCEEDED, summary,
                      state_hint=hint, new_entries_allowed=entries_ok,
                      metadata=metadata)
 
@@ -802,13 +883,15 @@ def run_outcome_resolution(ctx) -> JobResult:
             failures={H.SNAPSHOT_STALE},
         )
     result: dict = {}
+    resolve_error = ""
     try:
         if hasattr(ctx.deps, "resolve_outcomes"):
             result = ctx.deps.resolve_outcomes(session_date, ctx.active_failures) or {}
         else:
             result = ctx.deps.run_paper_cycle(False) or {}
     except Exception as exc:
-        result = {"paper_book_error": str(exc)[:240]}
+        resolve_error = str(exc)[:240]
+        result = {"paper_book_error": resolve_error}
     official_settle: dict = {}
     if not os.environ.get("PYTEST_CURRENT_TEST"):
         try:
@@ -835,9 +918,25 @@ def run_outcome_resolution(ctx) -> JobResult:
     closed = len((result or {}).get("positions_closed", []))
     recorded = len((result or {}).get("outcomes_recorded", []))
     matured = int((official_settle or {}).get("n_settled") or 0)
+    if resolve_error:
+        # resolve_outcomes/run_paper_cycle is this job's entire purpose. Its
+        # failure used to be swallowed here and the job still returned
+        # JS.SUCCEEDED with a summary literally claiming "outcomes resolved"
+        # -- indistinguishable from a genuine day with nothing to resolve.
+        # Fail the job for real so it retries and the failure is visible in
+        # the supervisor's active-failures set instead of only in metadata.
+        return JobResult(
+            JS.RETRYABLE_FAILED,
+            "outcome resolution failed",
+            error_code="OUTCOME_RESOLUTION_ERROR",
+            error_message=resolve_error,
+            failures={H.UNRECONCILED},
+            metadata=result or {},
+        )
     return JobResult(
         JS.SUCCEEDED,
         f"outcomes resolved · {closed} book closes · {recorded} decoded · {matured} official",
+        clears={H.UNRECONCILED},
         unblocks=(f"{DEP_OUTCOMES}:{session_date}",),
         metadata=result or {},
     )
@@ -852,18 +951,49 @@ def run_learning_cycle(ctx) -> JobResult:
     except Exception as exc:
         return JobResult(JS.RETRYABLE_FAILED, "learning cycle failed", error_code="LEARNING_ERROR",
                          error_message=str(exc), failures={H.LEARNING_FAILED}, state_hint=ST.DEGRADED)
+    memory_error = ""
     if not os.environ.get("PYTEST_CURRENT_TEST"):
         try:
             from product.autonomous_loop import consume_learning_memory
 
             result["settled_memory"] = consume_learning_memory(session_date)
         except Exception as exc:
-            result["settled_memory"] = {"error": str(exc)[:200]}
-    return JobResult(JS.SUCCEEDED,
-                     f"learning complete · {result.get('diagnostics', 0)} diagnostics · "
-                     f"{result.get('paper_closed', 0)} paper trades · "
-                     f"{result.get('paper_cooldown', 0)} cooldown · "
-                     f"{result.get('paper_prefer', 0)} preferred",
+            memory_error = str(exc)[:200]
+            result["settled_memory"] = {"error": memory_error}
+    summary = (
+        f"learning complete · {result.get('diagnostics', 0)} diagnostics · "
+        f"{result.get('paper_closed', 0)} paper trades · "
+        f"{result.get('paper_cooldown', 0)} cooldown · "
+        f"{result.get('paper_prefer', 0)} preferred"
+    )
+    if memory_error:
+        # The primary learning cycle (run_learning) succeeded, but folding
+        # settled outcomes into calibrated memory failed. That is a real
+        # learning-ingestion failure, not a cosmetic detail buried in
+        # metadata -- surface it as LEARNING_FAILED and in the job's own
+        # error fields instead of unconditionally claiming "learning
+        # complete" and JS.SUCCEEDED with no visible trace of the failure.
+        summary = (
+            f"learning cycle ran but memory consolidation failed · "
+            f"{result.get('diagnostics', 0)} diagnostics"
+        )
+        return JobResult(
+            JS.SUCCEEDED, summary,
+            error_code="LEARNING_MEMORY_ERROR", error_message=memory_error,
+            failures={H.LEARNING_FAILED}, state_hint=ST.RESEARCHING,
+            unblocks=(f"{DEP_LEARNING}:{session_date}",), metadata=result,
+        )
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        try:
+            from product.autonomous_learning import maybe_run_closed_market_replay, save_control
+
+            replay = maybe_run_closed_market_replay(now=now)
+            result["closed_market_replay"] = replay
+            if not replay.get("skipped"):
+                save_control({"last_cycle_at": now.isoformat() if hasattr(now, "isoformat") else str(now)})
+        except Exception as exc:
+            result["closed_market_replay"] = {"error": str(exc)[:200]}
+    return JobResult(JS.SUCCEEDED, summary,
                      clears={H.LEARNING_FAILED}, state_hint=ST.RESEARCHING,
                      unblocks=(f"{DEP_LEARNING}:{session_date}",), metadata=result)
 

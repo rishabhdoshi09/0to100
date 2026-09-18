@@ -270,15 +270,30 @@ def render_systemd_unit(
     return "\n".join(lines)
 
 
+def _launchd_bootstrap_log_dir(*, home: Path | None = None) -> Path:
+    """Return an always-available user-local log path for launchd itself.
+
+    launchd opens StandardOutPath/StandardErrorPath before starting our Python
+    entrypoint. Those paths therefore cannot live on the detachable QuantTerm
+    runtime: after reboot the entrypoint must be able to start first and attach
+    that runtime through the storage preflight.
+    """
+    base = Path(home or Path.home()).expanduser()
+    return _resolved(base / "Library" / "Logs" / "QuantTerm")
+
+
 def render_launchd_plist(
     *, repo_root: Path, runtime_root: Path, python: str, build_sha: str, env_file: str = "",
+    bootstrap_log_dir: Path | None = None,
 ) -> str:
     def esc(value: str) -> str:
         return html.escape(value, quote=True)
 
-    # Explicit target path, not this process's runtime resolution. The installer
-    # materializes this directory before launchd is asked to spawn the process.
-    service_logs = _resolved(runtime_root).joinpath("logs", "service")
+    # These are bootstrap/service-manager diagnostics only. Durable QuantTerm
+    # state and evidence remain under QT_RUNTIME_ROOT. Keeping launchd's own log
+    # targets on the internal user volume lets the entrypoint start when the
+    # external APFS runtime is initially absent and then attach/verify it.
+    service_logs = _resolved(bootstrap_log_dir or _launchd_bootstrap_log_dir())
     env_entries = {
         "PYTHONPATH": str(_resolved(repo_root)),
         "QT_RUNTIME_ROOT": str(_resolved(runtime_root)),
@@ -344,15 +359,20 @@ def install_service_definition(
     python = python or sys.executable
     path, label = _service_paths(manager, home=home)
     path.parent.mkdir(parents=True, exist_ok=True)
+    bootstrap_log_dir: Path | None = None
     if manager == "launchd":
-        # This is an explicit destination root; it is intentionally not logs_path().
-        _resolved(runtime_root).joinpath("logs", "service").mkdir(parents=True, exist_ok=True)
+        # launchd must be able to open stdout/stderr before the detachable
+        # runtime exists. Never mkdir QT_RUNTIME_ROOT merely to bootstrap the
+        # service; the entrypoint owns attach + identity verification.
+        bootstrap_log_dir = _launchd_bootstrap_log_dir(home=home)
+        bootstrap_log_dir.mkdir(parents=True, exist_ok=True)
     content = (
         render_systemd_unit(repo_root=repo_root, runtime_root=runtime_root, python=python,
                             build_sha=build_sha, env_file=env_file)
         if manager == "systemd"
         else render_launchd_plist(repo_root=repo_root, runtime_root=runtime_root, python=python,
-                                  build_sha=build_sha, env_file=env_file)
+                                  build_sha=build_sha, env_file=env_file,
+                                  bootstrap_log_dir=bootstrap_log_dir)
     )
     previous = path.read_text(encoding="utf-8") if path.exists() else None
     backup = path.with_suffix(path.suffix + ".previous")
@@ -364,6 +384,7 @@ def install_service_definition(
     return {
         "manager": manager, "path": str(path), "label": label,
         "backup": str(backup) if previous is not None else "",
+        "bootstrap_log_dir": str(bootstrap_log_dir) if bootstrap_log_dir is not None else "",
     }
 
 

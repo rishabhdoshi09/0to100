@@ -55,6 +55,17 @@ RUNTIME_PATH = OPS_ROOT / "runtime.json"
 LOCK_PATH = OPS_ROOT / "worker.lock"
 RSS_PATH = OPS_ROOT / "rss.jsonl"
 _RSS_SAMPLE_EVERY_S = 30.0
+#: Liveness cadence. The heartbeat thread does nothing but publish this, so the
+#: age of heartbeat_epoch measures whether the worker process is alive -- never
+#: whether SQLite happens to be busy.
+HEARTBEAT_EVERY_S = 2.0
+#: Store maintenance runs on its own thread at its own pace. It may block for as
+#: long as the database makes it block; that is a database fact, not a liveness
+#: fact.
+MAINTENANCE_EVERY_S = 5.0
+#: Maintenance is only called degraded once it has been failing for this long.
+#: One busy-timeout does not mean the operation store is unhealthy.
+MAINTENANCE_DEGRADED_AFTER_S = 120.0
 _RSS_KEEP_LINES = 2000
 
 NEWS_FRESH_S = 20 * 60
@@ -228,6 +239,14 @@ class MarketOperationsWorker:
         self._history_lock = threading.Lock()
         self._last_rss_sample = 0.0
         self._last_pipeline_snapshot = 0.0
+        # Operational (database) health, published alongside liveness but never
+        # gating it. Start optimistic: a worker that has not yet run a pass has
+        # not yet failed one.
+        self._maint_lock = threading.Lock()
+        self._maint_last_ok = time.time()
+        self._maint_last_error = ""
+        self._maint_in_flight = False
+        self._maint_started_at = 0.0
 
     def _set_active(self, lane: str, operation: dict[str, Any] | None) -> None:
         with self._active_lock:
@@ -261,35 +280,92 @@ class MarketOperationsWorker:
             "active": active,
             "rss_mb": rss_mb,
             "fd_count": fd_count,
+            **self._maintenance_snapshot(),
+        }
+
+    def _maintenance_snapshot(self) -> dict[str, Any]:
+        """Operational health, reported separately from liveness.
+
+        A pass still running is slow, not broken, so it is never reported as a
+        failure. Only sustained failure -- nothing succeeding for
+        MAINTENANCE_DEGRADED_AFTER_S -- marks the store degraded.
+        """
+        with self._maint_lock:
+            last_ok = self._maint_last_ok
+            error = self._maint_last_error
+            in_flight = self._maint_in_flight
+            started = self._maint_started_at
+        now = time.time()
+        degraded = bool(error) and (now - last_ok) > MAINTENANCE_DEGRADED_AFTER_S
+        return {
+            "maintenance_ok": not degraded,
+            "maintenance_last_ok_epoch": last_ok,
+            "maintenance_last_error": error,
+            "maintenance_in_flight": bool(in_flight),
+            "maintenance_in_flight_for_s": round(now - started, 3) if in_flight else 0.0,
         }
 
     def _heartbeat_loop(self) -> None:
-        while not self.stop_event.wait(2.0):
+        """Publish liveness, and nothing else.
+
+        This loop must never touch the operation store, the filesystem beyond
+        one atomic write, or anything else that can block on a busy database.
+        It used to run recover_dead_running/recover_stale_running first, so a
+        legitimately contended SQLite file aged the heartbeat past the
+        supervisor's threshold and a live worker -- same pid, same start count,
+        still scanning -- was reported unhealthy.
+        """
+        while not self.stop_event.wait(HEARTBEAT_EVERY_S):
             try:
-                self.store.recover_dead_running(keep_pid=os.getpid())
+                _atomic_json(RUNTIME_PATH, self._runtime_payload(running=True))
             except Exception:
+                # A transient write failure must not kill the liveness thread;
+                # the next beat is two seconds away.
                 pass
+
+    def _maintenance_loop(self) -> None:
+        """Store upkeep, on its own thread and its own clock."""
+        while not self.stop_event.wait(MAINTENANCE_EVERY_S):
+            self._run_maintenance_pass()
+
+    def _run_maintenance_pass(self) -> None:
+        with self._maint_lock:
+            self._maint_in_flight = True
+            self._maint_started_at = time.time()
+        errors: list[str] = []
+
+        def _attempt(label: str, fn) -> None:
             try:
-                self.store.recover_stale_running()
-            except Exception:
-                pass
-            payload = self._runtime_payload(running=True)
-            _atomic_json(RUNTIME_PATH, payload)
+                fn()
+            except Exception as exc:
+                errors.append(f"{label}: {type(exc).__name__}")
+
+        try:
+            _attempt("recover_dead_running",
+                     lambda: self.store.recover_dead_running(keep_pid=os.getpid()))
+            _attempt("recover_stale_running", self.store.recover_stale_running)
             now = time.time()
             if now - self._last_pipeline_snapshot >= PIPELINE_SNAPSHOT_EVERY_S:
                 self._last_pipeline_snapshot = now
-                try:
+
+                def _snapshot() -> None:
                     from product.desk_pipeline import refresh_desk_pipeline_snapshot
 
                     refresh_desk_pipeline_snapshot(self.store)
-                except Exception:
-                    pass
+
+                _attempt("desk_pipeline_snapshot", _snapshot)
             if now - self._last_rss_sample >= _RSS_SAMPLE_EVERY_S:
                 self._last_rss_sample = now
                 try:
-                    _append_rss_sample(payload.get("rss_mb"))
+                    _append_rss_sample(_process_rss_mb())
                 except Exception:
-                    pass
+                    pass          # sampling is telemetry, not store health
+        finally:
+            with self._maint_lock:
+                self._maint_in_flight = False
+                self._maint_last_error = "; ".join(errors)[:300]
+                if not errors:
+                    self._maint_last_ok = time.time()
 
     def _progress(self, operation_id: str, stage: str, message: str,
                   current: int | None = None, total: int | None = None) -> None:
@@ -307,10 +383,17 @@ class MarketOperationsWorker:
             _emit("PROGRESS", f"{operation_id[:8]} · {stage} · {message}")
 
     def _history_ready(self, snapshot: dict[str, Any] | None = None) -> tuple[bool, dict[str, Any]]:
+        """Can we scan? That is usable_for_scan, NOT exact currency.
+
+        Between a session's close and the next session's pre-open deadline the
+        completed session's bhavcopy may not exist yet. Holding the previous
+        official session is enough to scan during that window; demanding exact
+        currency paralysed the desk every evening at 18:00 IST.
+        """
         from data.bhavcopy_runtime import official_history_freshness
 
         freshness = official_history_freshness(snapshot, load_cache=True)
-        return bool(freshness.get("current")), freshness
+        return bool(freshness.get("usable_for_scan")), freshness
 
     def _ensure_history(self, operation_id: str, *, days: int = HISTORY_DAYS,
                         blocking: bool = True) -> dict[str, Any]:
@@ -435,11 +518,16 @@ class MarketOperationsWorker:
         operation_id = str(operation["operation_id"])
         ready, freshness = self._history_ready()
         if ready:
+            pending = bool(freshness.get("publication_pending"))
             self._progress(
                 operation_id,
-                "HISTORY_READY",
-                f"Official history current · {freshness.get('sessions', 0)} sessions · "
-                f"{freshness.get('available_session') or 'unknown'} session",
+                "HISTORY_PUBLICATION_PENDING" if pending else "HISTORY_READY",
+                (f"Official history usable · {freshness.get('sessions', 0)} sessions · "
+                 f"{freshness.get('available_session') or 'unknown'} session · "
+                 f"{freshness.get('completed_session') or 'unknown'} archive still publishing"
+                 if pending else
+                 f"Official history current · {freshness.get('sessions', 0)} sessions · "
+                 f"{freshness.get('available_session') or 'unknown'} session"),
                 current=0,
                 total=0,
             )
@@ -1008,7 +1096,10 @@ class MarketOperationsWorker:
         _atomic_json(RUNTIME_PATH, self._runtime_payload(running=True))
         heartbeat = threading.Thread(target=self._heartbeat_loop, name="market-ops-heartbeat", daemon=True)
         heartbeat.start()
-        self._threads = [heartbeat]
+        maintenance = threading.Thread(
+            target=self._maintenance_loop, name="market-ops-maintenance", daemon=True)
+        maintenance.start()
+        self._threads = [heartbeat, maintenance]
         recovered = self.store.recover_orphans()
         bootstrap = self._bootstrap()
         _emit(

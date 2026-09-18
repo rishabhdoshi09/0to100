@@ -24,6 +24,7 @@ from product.forward_evidence import (
     load_ledger,
     real_forward_only,
 )
+from product.live_safety import live_safety_projection
 from product.promotion_governance import assess_component, promotion_board
 from core.runtime_paths import logs_dir
 
@@ -110,6 +111,11 @@ def persist_soak_verification(*, min_interval_s: int = VERIFY_MIN_INTERVAL_S, fo
         "real_forward_n": result.get("real_forward_n"),
         "valid_no_trade": result.get("valid_no_trade"),
         "live_locked": result.get("live_locked"),
+        "live_lock_verified": result.get("live_lock_verified") is True,
+        "live_execution_authorized": result.get("live_execution_authorized"),
+        "live_lock_status": result.get("live_lock_status") or "UNVERIFIED",
+        "live_lock_reason": result.get("live_lock_reason") or "",
+        "live_lock_source": result.get("live_lock_source") or "product.live_execution_interlock",
         "source": "verify_persisted_soak",
     }
     _write_json(verify_state_path(), payload)
@@ -244,7 +250,6 @@ def settle_pending_from_market(
         updated += 1
         cls = str(settled.get("classification") or "")
         classifications[cls] = classifications.get(cls, 0) + 1
-    # Keep the existing counterfactual jsonl in sync for operators who already read it.
     _ = cf_path
     return {"updated": updated, "pending": pending_n, "classifications": classifications}
 
@@ -338,7 +343,7 @@ def settle_and_report(
         "daily_report": str(report.get("json_path") or ""),
         "soak_status": status.get("status"),
         "soak_verification": verified.get("lanes") or {},
-        "live_locked": True,
+        **live_safety_projection(),
     }
 
 
@@ -358,9 +363,6 @@ def build_runtime_journey(*, cycle: Mapping[str, Any] | None = None) -> dict[str
     ingested = _read_json(Path(os.environ.get("QT_LEARNING_INGESTED") or logs_dir() / "product" / "learning_ingested.json"))
     cycle_id = str(latest.get("cycle_id") or "")
     scan_ok = bool((scan["payload"] or {}).get("records") or (scan["payload"] or {}).get("available"))
-    reco_cards = 0
-    for cat in list((reco["payload"] or {}).get("categories") or []):
-        reco_cards += len(list(cat.get("cards") or []))
     reco_ok = bool(reco["payload"])
     cycle_ok = bool(latest)
     taken = list(latest.get("taken") or [])
@@ -439,14 +441,13 @@ def build_runtime_journey(*, cycle: Mapping[str, Any] | None = None) -> dict[str
         "rules_hash": latest.get("rules_hash") or "",
         "stages": stages,
         "summary": {s["name"]: s["status"] for s in stages},
-        "live_locked": True,
+        **live_safety_projection(),
         "valid_no_trade": valid_no_trade,
     }
 
 
 def soak_status() -> dict[str, Any]:
     journey = build_runtime_journey()
-    stages = {s["name"]: s for s in journey.get("stages") or []}
     from product.autonomy_status import read_autonomy_status
     from product.paper_autopilot import reco_is_stale
 
@@ -480,7 +481,6 @@ def soak_status() -> dict[str, Any]:
         status = BLOCKED
         detail = "; ".join(blockers)
     elif scheduler and summary.get("SELECTION_AUTHORITY") == "PASS" and summary.get("PAPER_EXECUTION") == "PASS" and not stale:
-        # Process alive is not enough — scan/reco/cycle/execution must have artifacts.
         if summary.get("MARKET_SCAN") == "FAIL":
             status = DEGRADED
             detail = "Autopilot ran but saved scan artifact is missing"
@@ -497,7 +497,6 @@ def soak_status() -> dict[str, Any]:
         status = DEGRADED
         detail = "Partial runtime artifacts"
 
-    # HEALTHY cannot be granted for process-alive alone.
     if status == HEALTHY and not (
         summary.get("RECOMMENDATIONS") == "PASS"
         and summary.get("SELECTION_AUTHORITY") == "PASS"
@@ -516,7 +515,7 @@ def soak_status() -> dict[str, Any]:
         "ledger_n": len(ledger),
         "stages": summary,
         "blockers": blockers,
-        "live_locked": True,
+        **live_safety_projection(),
         "process_alive_is_not_healthy": True,
     }
 
@@ -586,6 +585,14 @@ def scoreboard() -> dict[str, Any]:
         peak = max(peak, eq)
         dd = max(dd, peak - eq)
     insufficient = len(use) < MIN_SCOREBOARD_N
+    safety = live_safety_projection()
+    live_component_status = (
+        "LOCKED"
+        if safety.get("live_lock_verified") is True and safety.get("live_locked") is True
+        else "UNVERIFIED"
+        if safety.get("live_lock_verified") is not True
+        else "UNLOCKED"
+    )
     board = promotion_board([
         {"component": "execution_reality_fills", "status": "SHADOW", "forward_n": len(adj),
          "gross_expectancy": _expectancy(gross_vals), "execution_adjusted_expectancy": _expectancy(adj_vals),
@@ -594,18 +601,18 @@ def scoreboard() -> dict[str, Any]:
          "notes": ["shadow only; production still RISK_ON/RISK_OFF"]},
         {"component": "ml_challenger", "status": "SHADOW", "forward_n": 0,
          "notes": ["ML cannot execute"]},
-        {"component": "live_money", "status": "LOCKED", "forward_n": len(settled_taken),
+        {"component": "live_money", "status": live_component_status, "forward_n": len(settled_taken),
          "gross_expectancy": _expectancy(gross_vals),
          "execution_adjusted_expectancy": _expectancy(adj_vals),
          "execution_adjusted_coverage": coverage if settled_taken else None,
-         "notes": ["fail-closed"]},
+         "notes": [safety.get("live_lock_reason") or "canonical broker-boundary safety"]},
     ])
     soak = soak_status()
     return {
         "schema_version": SCHEMA_VERSION,
         "FORWARD_SOAK_STATUS": soak.get("status"),
         "soak_detail": soak.get("detail"),
-        "live_locked": True,
+        **safety,
         "provenance_filter": REAL_FORWARD_MARKET,
         "real_forward_observations": len(use),
         "paper_trades_taken": len(taken),
@@ -665,6 +672,7 @@ def write_daily_report(as_of: str, *, book=None) -> dict[str, Any]:
     policies = load_policies().get("policies") or []
     soak = soak_status()
     errors = [s for s in (build_runtime_journey().get("stages") or []) if s.get("status") in {"FAIL", "DEGRADED"}]
+    safety = live_safety_projection()
     payload = {
         "schema_version": SCHEMA_VERSION,
         "market_date": day,
@@ -684,7 +692,7 @@ def write_daily_report(as_of: str, *, book=None) -> dict[str, Any]:
         "rules_hash": ident.get("rules_hash"),
         "strategy_id": ident.get("strategy_id"),
         "soak_status": soak.get("status"),
-        "live_locked": True,
+        **safety,
         "provenance": current_provenance(),
     }
     folder = daily_dir()
@@ -705,7 +713,9 @@ def write_daily_report(as_of: str, *, book=None) -> dict[str, Any]:
         f"- execution_adjusted_evidence_added: {payload['execution_adjusted_evidence_added']}",
         f"- soak_status: {payload['soak_status']}",
         f"- rules_hash: {payload['rules_hash']}",
-        f"- live_locked: true",
+        f"- live_locked: {payload['live_locked']}",
+        f"- live_lock_verified: {payload['live_lock_verified']}",
+        f"- live_lock_status: {payload['live_lock_status']}",
         "",
     ]
     md_path.write_text("\n".join(lines), encoding="utf-8")
@@ -713,21 +723,19 @@ def write_daily_report(as_of: str, *, book=None) -> dict[str, Any]:
 
 
 def verify_persisted_soak() -> dict[str, Any]:
-    """Operator + test entry: judge persisted artifacts only."""
-    from product.live_readiness import evaluate_live_readiness
-    from product.execution_adapter import LiveExecutionAdapter, LiveMoneyLocked
-
+    """Operator + test entry: judge persisted artifacts and canonical safety only."""
     journey = build_runtime_journey()
     summary = journey.get("summary") or {}
     soak = soak_status()
     board = scoreboard()
-    live = evaluate_live_readiness()
-    locked = True
-    try:
-        LiveExecutionAdapter().submit(object())
-        locked = False
-    except LiveMoneyLocked:
-        locked = True
+    safety = live_safety_projection()
+    verified_locked = safety.get("live_lock_verified") is True and safety.get("live_locked") is True
+    if verified_locked:
+        live_lane = "LOCKED"
+    elif safety.get("live_lock_verified") is not True:
+        live_lane = "UNVERIFIED"
+    else:
+        live_lane = "UNLOCKED"
     paper_exec = summary.get("PAPER_EXECUTION") or "FAIL"
     if paper_exec == "PASS" and journey.get("valid_no_trade"):
         paper_label = "NO_ELIGIBLE_TRADE"
@@ -745,7 +753,7 @@ def verify_persisted_soak() -> dict[str, Any]:
         "FORWARD SETTLEMENT": summary.get("COUNTERFACTUAL_SETTLEMENT") or "PENDING",
         "LEARNING INGESTION": summary.get("POLICY_LEARNING") or "PENDING",
         "EXECUTION REALITY": summary.get("EXECUTION_ADJUSTED_EVIDENCE") or "PENDING",
-        "LIVE MONEY": "LOCKED" if locked and not live.get("live_enabled") else "UNLOCKED",
+        "LIVE MONEY": live_lane,
     }
     return {
         "lanes": lanes,
@@ -754,6 +762,6 @@ def verify_persisted_soak() -> dict[str, Any]:
         "real_forward_n": board.get("real_forward_observations"),
         "execution_adjusted_coverage_pct": board.get("execution_adjusted_coverage_pct"),
         "valid_no_trade": journey.get("valid_no_trade"),
-        "live_locked": locked,
+        **safety,
         "journey": journey,
     }

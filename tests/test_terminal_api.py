@@ -29,6 +29,8 @@ def test_terminal_controls_have_no_live_broker_or_order_action():
         "RESUME_NEW_PAPER_ENTRIES",
         "OBSERVE_ONLY_TODAY",
         "CLEAR_OBSERVE_ONLY",
+        "RUN_HISTORICAL_REPLAY",
+        "RUN_LEARNING_NOW",
     }
     source = inspect.getsource(terminal_api.control).lower()
     assert "broker" not in source
@@ -50,7 +52,7 @@ def test_paper_payload_exposes_daily_learning_and_keeps_live_locked(tmp_path, mo
     assert learning["live_locked"] is True
     assert learning["closed_trades"] == 2
     assert learning["cooldown"][0]["symbol"] == "TCS"
-    assert "owner approval" in learning["disclaimer"].lower()
+    assert "explicit deployment authorization" in learning["disclaimer"].lower()
 
 
 def test_market_controls_are_dispatched_outside_paper_autonomy():
@@ -69,6 +71,8 @@ def test_market_controls_are_dispatched_outside_paper_autonomy():
         "RESUME_NEW_PAPER_ENTRIES",
         "OBSERVE_ONLY_TODAY",
         "CLEAR_OBSERVE_ONLY",
+        "RUN_HISTORICAL_REPLAY",
+        "RUN_LEARNING_NOW",
     }
 
 
@@ -115,6 +119,8 @@ def test_health_surfaces_inspect_runtime_ready_flags_without_inventing_them(monk
             "operational_ready": True,
             "evidence_ready": True,
             "live_locked": True,
+            "live_lock_verified": True,
+            "live_execution_authorized": False,
         },
     )
     payload = terminal_api.health()
@@ -123,11 +129,14 @@ def test_health_surfaces_inspect_runtime_ready_flags_without_inventing_them(monk
     assert payload["operational_ready"] is True
     assert payload["evidence_ready"] is True
     assert payload["live_locked"] is True
+    assert payload["live_lock_verified"] is True
+    assert payload["live_execution_authorized"] is False
     graded = grade_canonical_health(payload)
     assert graded["status"] == "PASS"
     assert product_acceptance_verdict(
         [{"feature": "Canonical stack / readiness", "status": graded["status"]}],
         live_locked=graded["live_locked"],
+        live_lock_verified=graded["live_lock_verified"],
     )["verdict"] == "PRODUCT ACCEPTANCE PASS"
 
     monkeypatch.setattr(
@@ -150,6 +159,7 @@ def test_health_surfaces_inspect_runtime_ready_flags_without_inventing_them(monk
     assert product_acceptance_verdict(
         [{"feature": "Canonical stack / readiness", "status": omitted_grade["status"]}],
         live_locked=omitted_grade["live_locked"],
+        live_lock_verified=omitted_grade["live_lock_verified"],
     )["verdict"] == "PRODUCT ACCEPTANCE HOLD"
 
 
@@ -386,7 +396,12 @@ def test_data_payload_does_not_unpickle_bhavcopy_inline(monkeypatch):
     )
     assert seen == [False]
     assert payload["scan_records"] == 2
-    assert any("still loading" in item.lower() for item in payload["blockers"])
+    assert payload["ready"] is True
+    assert payload["history_current"] is True
+    assert payload["ready"] == payload["history_current"]
+    blockers = " ".join(payload["blockers"]).lower()
+    assert "not loaded the bhavcopy store" in blockers
+    assert "history is not ready" not in blockers
 
 
 def test_peek_cached_regime_is_missing_until_computed():

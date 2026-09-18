@@ -1,7 +1,8 @@
 """Connect scan → candidates → research → recommendation → paper → outcome → learning.
 
 Uses existing engines. Does not start a fourth scheduler. Official bhavcopy is
-enough for post-market work. Kite is required only for live paper entry.
+enough for post-market work. Committee judgment may be produced without broker
+login; actual paper execution remains owned by the canonical paper autopilot.
 """
 from __future__ import annotations
 
@@ -28,6 +29,13 @@ SERIOUS_CANDIDATE_CAP = 15
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _live_safety() -> dict[str, Any]:
+    """Return the canonical, fail-closed live-money safety projection."""
+    from product.live_safety import live_safety_projection
+
+    return dict(live_safety_projection() or {})
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -358,7 +366,12 @@ def _consume_paper(
     committee: list[dict[str, Any]] | None = None,
     extra_symbols: set[str] | None = None,
 ) -> dict[str, Any]:
-    """Persist committee judgment. Broker login is execution-only."""
+    """Persist committee judgment and paper intent; never claim execution.
+
+    The canonical paper executor lives in ``research.autonomy.jobs.Deps.run_paper_cycle``
+    and writes through ``brain.intel_book``. This loop records intent/lineage only so
+    a committee BUY can never be mistaken for a persisted paper fill.
+    """
     readiness = RDY.inspect_readiness()
     broker_ok = bool(readiness["capabilities"].get(RDY.BROKER_LIVE_DATA_READY))
     window = _entry_window()
@@ -400,25 +413,26 @@ def _consume_paper(
         row["recommendation_id"] = rid
         row["candidate_id"] = CL.candidate_id(symbol, session)
         row["execution_block"] = rec.get("execution_state")
+        row["paper_intent_id"] = intent_id
+        row["execution_proven"] = False
         prev = CL.get(CL.candidate_id(symbol, session))
         already = bool(prev and prev.get("decision_id") == did)
         from product.decision_taxonomy import is_judgment_row
 
         judgment = is_judgment_row(rec)
         if rec.get("decision") == "BUY" and rec.get("candidate_state") == CL.READY:
-            if str(rec.get("execution_state") or "").startswith("BLOCKED"):
-                intents.append(row)
-                if str(rec.get("execution_state") or "") == "BLOCKED_BROKER_AUTH":
-                    try:
-                        from product.shadow_execution import SHADOW_NOT_EXECUTED, freeze_shadow
+            # A committee BUY is an intent, never a fill. The canonical paper
+            # autopilot is the only authority that may later report TRADED.
+            intents.append(row)
+            if str(rec.get("execution_state") or "") == "BLOCKED_BROKER_AUTH":
+                try:
+                    from product.shadow_execution import SHADOW_NOT_EXECUTED, freeze_shadow
 
-                        shadow = freeze_shadow({**row, "shadow_status": SHADOW_NOT_EXECUTED})
-                        row["shadow_status"] = shadow.get("status")
-                        rec["shadow_status"] = shadow.get("status")
-                    except Exception:
-                        pass
-            else:
-                taken.append(row)
+                    shadow = freeze_shadow({**row, "shadow_status": SHADOW_NOT_EXECUTED})
+                    row["shadow_status"] = shadow.get("status")
+                    rec["shadow_status"] = shadow.get("status")
+                except Exception:
+                    pass
         elif rec.get("decision") == "WAIT":
             waits.append(row)
         elif judgment:
@@ -492,15 +506,27 @@ def _consume_paper(
                 )
             except Exception:
                 pass
+    blocked_broker = any(
+        str(row.get("execution_state") or "") == "BLOCKED_BROKER_AUTH"
+        for row in intents
+    ) and not broker_ok
+    blocked_execution = any(
+        str(row.get("execution_state") or "").startswith("BLOCKED")
+        for row in intents
+    )
+    eligibility = (
+        "BLOCKED_BROKER" if blocked_broker else (
+            "BLOCKED_EXECUTION" if blocked_execution else (
+                "PAPER_EXECUTION_PENDING" if intents else "NO_ELIGIBLE_TRADE"
+            )
+        )
+    )
     return {
         "taken": taken, "waits": waits, "rejections": rejections, "intents": intents,
         "committee": records,
         "broker_ok": broker_ok, "entry_window": window,
-        "eligibility": (
-            "TRADED" if taken else (
-                "BLOCKED_BROKER" if intents and not broker_ok else "NO_ELIGIBLE_TRADE"
-            )
-        ),
+        "execution_authority": "canonical_paper_autopilot",
+        "eligibility": eligibility,
     }
 
 
@@ -862,8 +888,8 @@ def advance_loop(*, trigger: str = "pipeline") -> dict[str, Any]:
     )
     emit(
         "COMMITTEE",
-        f"committee · buy={len(paper.get('taken') or [])} wait={len(paper.get('waits') or [])} "
-        f"avoid={len(paper.get('rejections') or [])} exec_blocked={len(paper.get('intents') or [])}",
+        f"committee · buy_intent={len(paper.get('intents') or [])} executed={len(paper.get('taken') or [])} "
+        f"wait={len(paper.get('waits') or [])} avoid={len(paper.get('rejections') or [])}",
     )
 
     outcomes = {"settled": [], "pending": [], "failed": [], "n_settled": 0}
@@ -911,6 +937,7 @@ def advance_loop(*, trigger: str = "pipeline") -> dict[str, Any]:
             "intents": paper.get("intents") or [],
             "broker_ok": paper.get("broker_ok"),
             "entry_window": paper.get("entry_window"),
+            "execution_authority": paper.get("execution_authority"),
             "committee": paper.get("committee") or [],
         },
         "outcomes": outcomes,
@@ -919,7 +946,7 @@ def advance_loop(*, trigger: str = "pipeline") -> dict[str, Any]:
         "operator_metrics": metrics,
         "candidates_touched": len(ingested),
         "duration_s": round(time.time() - started, 3),
-        "live_locked": True,
+        **_live_safety(),
     }
     if trigger in {"outcome_resolution", "learning_cycle"} and not _entry_window():
         try:
@@ -1067,5 +1094,5 @@ def desk_projection() -> dict[str, Any]:
         "next_session_set": summary.get("next_session_set") or {},
         "next_session_watch": summary.get("next_session_watch") or [],
         "historical_replay": replay_compatible_rows(),
-        "live_locked": True,
+        **_live_safety(),
     }

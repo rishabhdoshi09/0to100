@@ -371,3 +371,42 @@ def test_radar_home_uses_autonomy_payload_for_broker_status(monkeypatch):
     payload = observer.radar_home_workspace()
     assert payload["home_os"]["broker"]["login_required"] is True
     assert payload["home_os"]["broker"]["status"] != "READY"
+
+
+def test_data_ready_reconciles_from_real_history_when_no_data_payload_is_wired(monkeypatch):
+    """Reproduces the reported readiness contradiction.
+
+    ``radar_home_workspace`` (the real production caller) invokes
+    ``build_home_os`` without a ``data=`` payload -- only ``scan``, ``radar``
+    and ``autonomy`` are passed. That left ``data_d``/``bhav`` structurally
+    empty, so the old ``data_ready = bool(data_d.get("ready") or
+    bhav.get("ready"))`` computation was permanently False no matter what the
+    real, already-persisted official history freshness said -- producing
+    reason_code=HISTORY_CURRENT / history_current=True alongside a stuck
+    data_ready=False and "Waiting" / "Getting the latest market data" UI.
+    """
+    import data.bhavcopy_runtime as bhav_runtime
+
+    current_freshness = {
+        "current": True,
+        "usable_for_scan": True,
+        "publication_pending": False,
+        "expected_latest_completed_session": "2026-09-17",
+        "available_session": "2026-09-17",
+        "stale_sessions": 0,
+        "reason_code": "HISTORY_CURRENT",
+        "ready": True,
+    }
+    monkeypatch.setattr(
+        bhav_runtime, "official_history_freshness", lambda *a, **k: dict(current_freshness)
+    )
+
+    # Mirrors the real call shape: no dashboard/data/paper/why/soak payload.
+    os = build_home_os(now=_open())
+
+    data_lane = os["system"]["data"]
+    assert data_lane["technical"]["reason_code"] == "HISTORY_CURRENT"
+    assert data_lane["technical"]["history_current"] is True
+    assert data_lane["technical"]["data_ready"] is True
+    assert data_lane["status_code"] != "WAITING"
+    assert data_lane["current"] != "Getting the latest market data"

@@ -533,11 +533,20 @@ def run_reco_paper_cycle(
     payload = dict(workspace or {})
     if cards is None:
         if not payload:
-            try:
-                from product.recommendations_store import load_recommendations
-                payload = load_recommendations() or {}
-            except Exception:
-                payload = {}
+            # load_recommendations() already fails closed to None for the normal
+            # "no file yet" / corrupt-JSON / schema-mismatch cases -- it never
+            # raises for those. Do NOT also swallow a genuine exception here
+            # (e.g. a broken import, a real code bug): callers of
+            # run_reco_paper_cycle (research/autonomy/jobs.py,
+            # research/autonomy/paper_cycle_truth.py) are specifically built to
+            # catch that and classify it as a system/execution failure rather
+            # than a quiet no-opportunity day. Catching it here first used to
+            # turn a provider/code failure into an indistinguishable
+            # NO_ELIGIBLE_TRADE cycle with an empty card_list -- exactly the
+            # "system failure disguised as a valid decision" this pipeline is
+            # supposed to prevent.
+            from product.recommendations_store import load_recommendations
+            payload = load_recommendations() or {}
         card_list = flatten_cards(payload)
     else:
         card_list = [dict(c) for c in cards if isinstance(c, Mapping)]
@@ -775,6 +784,9 @@ def run_reco_paper_cycle(
         f"taken={len(taken)} rejected={len(rejections)} wait={len(waits)} "
         f"seen={len(card_list)} not_surfaced={len(not_surfaced)}"
     )
+    from product.live_safety import live_safety_projection
+
+    safety = live_safety_projection()
     cycle = {
         "as_of": day,
         "session_phase": session_phase,
@@ -792,10 +804,12 @@ def run_reco_paper_cycle(
         "cycle_reasons": cycle_reasons,
         "summary": summary,
         "eligibility": "TRADED" if taken else (
+            "DATA_UNAVAILABLE" if str(entry_block_reason or "") in {
+                "NO_DATA_SNAPSHOT", "DATA_UNAVAILABLE", "MARKET_NOT_READY", "NO_TRUSTED_MARKET_DATA",
+            } else
             "BLOCKED_SAFETY" if not entries_allowed or not paper_enabled else "NO_ELIGIBLE_TRADE"
         ),
         "source": "recommendation_selection_authority",
-        "live_locked": True,
         "adapter": "paper",
         "rules_hash": ident.get("rules_hash"),
         "execution_reality": {
@@ -808,6 +822,7 @@ def run_reco_paper_cycle(
         "regime_intelligence_shadow": None,
         "portfolio_authority": "after_selection_authority",
         "cycle_id": f"{day}:{ident.get('rules_hash') or ''}:{clock.isoformat()}",
+        **safety,
     }
     try:
         from product.regime_intelligence import shadow_classify

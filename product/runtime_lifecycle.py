@@ -59,6 +59,33 @@ def _port_open(port: int) -> bool:
         sock.close()
 
 
+def _live_safety() -> dict[str, Any]:
+    """Return canonical execution-boundary truth; unknown never becomes locked."""
+    try:
+        from product.live_execution_interlock import get_live_execution_state
+
+        state = get_live_execution_state()
+        verified = bool(state.verified)
+        locked = bool(state.locked and not state.authorized) if verified else None
+        return {
+            "live_locked": locked,
+            "live_lock_verified": verified,
+            "live_execution_authorized": bool(state.authorized) if verified else None,
+            "live_lock_status": str(state.status or ("LOCKED" if locked else "UNLOCKED")),
+            "live_lock_reason": str(state.reason or ""),
+            "live_lock_source": str(state.source or "product.live_execution_interlock"),
+        }
+    except Exception as exc:
+        return {
+            "live_locked": None,
+            "live_lock_verified": False,
+            "live_execution_authorized": None,
+            "live_lock_status": "UNVERIFIED",
+            "live_lock_reason": f"Canonical live-execution interlock could not be verified: {exc}",
+            "live_lock_source": "product.live_execution_interlock",
+        }
+
+
 # The autonomy supervisor's own states, mapped once. Liveness is not
 # capability: a supervisor can be running perfectly while unable to do
 # anything, and the component must report the second, not the first.
@@ -151,7 +178,7 @@ def inspect_runtime(*, api_serving: bool = True) -> dict[str, Any]:
     try:
         from data.bhavcopy_runtime import official_history_freshness, status as history_status
 
-        history = dict(official_history_freshness(history_status(load_cache=True)))
+        history = dict(official_history_freshness(history_status(load_cache=False), require_store=False))
     except Exception as exc:
         history = {"current": False, "ready": False, "reason_code": "HISTORY_PROBE_FAILED", "error": str(exc)[:200]}
 
@@ -343,6 +370,24 @@ def inspect_runtime(*, api_serving: bool = True) -> dict[str, Any]:
     except Exception as exc:
         resources = {"state": "UNKNOWN", "reason": f"resource probe failed: {exc}"[:200]}
 
+    live_safety = _live_safety()
+    live_lock_verified = live_safety.get("live_lock_verified") is True
+    live_locked = live_safety.get("live_locked") if live_lock_verified else None
+    if not live_lock_verified:
+        lifecycle = FAILED
+        operational_ready = False
+        operational_status = FAILED
+        if "live_execution_interlock" not in operational_blockers:
+            operational_blockers.append("live_execution_interlock")
+        reasons.insert(0, str(live_safety.get("live_lock_reason") or "Live execution interlock is unverified"))
+    elif live_locked is not True:
+        lifecycle = FAILED
+        operational_ready = False
+        operational_status = FAILED
+        if "live_execution_interlock" not in operational_blockers:
+            operational_blockers.append("live_execution_interlock")
+        reasons.insert(0, str(live_safety.get("live_lock_reason") or "Live money is not locked"))
+
     if operational_ready and evidence_ready:
         reason = "Required services are alive and official history is current"
     elif operational_ready and not evidence_ready:
@@ -353,7 +398,7 @@ def inspect_runtime(*, api_serving: bool = True) -> dict[str, Any]:
         reason = reasons[0] if reasons else "Desk is still coming up"
 
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "lifecycle": lifecycle,
         "checked_at": _now(),
         "reason": reason,
@@ -378,5 +423,5 @@ def inspect_runtime(*, api_serving: bool = True) -> dict[str, Any]:
             "reason_code": history.get("reason_code") or "",
         },
         "resources": resources,
-        "live_locked": True,
+        **live_safety,
     }

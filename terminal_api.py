@@ -393,12 +393,16 @@ def _scan_payload() -> dict:
         from product.scan_store import load_scan
         payload = load_scan() or {}
         records = [dict(row) for row in (payload.get("records", []) or []) if isinstance(row, dict)]
+        provenance = payload.get("provenance")
         return {
             "available": bool(payload),
             "scanned_at": payload.get("scanned_at", ""),
             "universe_size": int(payload.get("universe_size", 0) or 0),
             "summary": dict(payload.get("summary", {}) or {}),
             "records": records,
+            # WHEN THE SCAN RAN vs WHICH SESSION IT READ are different facts.
+            # The desk must be able to render them separately.
+            "provenance": dict(provenance) if isinstance(provenance, dict) else {},
         }
     except Exception as exc:
         return {
@@ -407,6 +411,7 @@ def _scan_payload() -> dict:
             "universe_size": 0,
             "summary": {},
             "records": [],
+            "provenance": {},
             "error": str(exc),
         }
 
@@ -489,7 +494,10 @@ def _paper_learning_payload() -> dict:
             "shadow_prefer": [],
             "self_feed": {},
             "summary": "Paper memory unavailable.",
-            "live_locked": True,
+            "live_locked": None,
+            "live_lock_verified": False,
+            "live_lock_status": "UNVERIFIED",
+            "live_lock_source": "product.live_execution_interlock",
             "disclaimer": str(exc),
             "ladder": "",
         }
@@ -782,20 +790,34 @@ def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news
     try:
         from data.bhavcopy_runtime import official_history_freshness
 
-        freshness = official_history_freshness(bhavcopy, load_cache=False)
+        freshness = official_history_freshness(
+            bhavcopy, load_cache=False, require_store=False,
+        )
         for key in (
             "current",
             "expected_latest_completed_session",
             "available_session",
             "stale_sessions",
             "reason_code",
+            "store_loaded",
         ):
             if key in freshness:
                 bhavcopy[key] = freshness[key]
     except Exception:
         freshness = {}
+    from product.data_readiness import project_official_data_readiness
+    data_truth = project_official_data_readiness(
+        freshness=freshness,
+        data={"ready": bhavcopy.get("ready"), "bhavcopy": bhavcopy},
+        bhav=bhavcopy,
+        operations_running=bool(operations.get("running")),
+    )
     if not bhavcopy.get("ready"):
-        if bhavcopy.get("cache_exists"):
+        if data_truth.get("history_current"):
+            blockers.append(
+                "Official session files are current; this API process has not loaded the bhavcopy store yet. Scans will use the same official files once the pickle is in memory."
+            )
+        elif bhavcopy.get("cache_exists"):
             blockers.append("Official NSE bhavcopy cache is on disk and still loading into the desk API.")
         else:
             blockers.append("Official NSE bhavcopy history is not ready; direct scans will prepare it first.")
@@ -816,7 +838,12 @@ def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news
     if not news.get("available"):
         blockers.append("Curated news store is empty; run a news refresh to inspect source health.")
     return {
-        "ready": bool(bhavcopy.get("ready") and bhavcopy.get("current", True) and operations.get("running")),
+        "ready": bool(data_truth["data_ready"]),
+        "history_current": bool(data_truth["history_current"]),
+        "store_loaded": bool(data_truth["store_loaded"]),
+        "operations_running": bool(operations.get("running")),
+        "lane_status": data_truth["lane_status"],
+        "lane_status_code": data_truth["lane_status_code"],
         "snapshot": snapshot,
         "bhavcopy": bhavcopy,
         "scan_saved": bool(scan.get("available")),
@@ -884,7 +911,16 @@ def health() -> dict:
             "checked_at": runtime.get("checked_at"),
         })
         # Copy inspect_runtime safety/readiness only. Never invent a positive value.
-        for key in ("operational_ready", "evidence_ready", "live_locked"):
+        for key in (
+            "operational_ready",
+            "evidence_ready",
+            "live_locked",
+            "live_lock_verified",
+            "live_execution_authorized",
+            "live_lock_status",
+            "live_lock_reason",
+            "live_lock_source",
+        ):
             if key in runtime:
                 payload[key] = runtime[key]
         payload["ok"] = payload["lifecycle"] != "FAILED"
@@ -894,6 +930,12 @@ def health() -> dict:
             "lifecycle": "DEGRADED",
             "reason": f"Runtime probe failed: {exc}"[:240],
             "reasons": [str(exc)[:240]],
+            "live_locked": None,
+            "live_lock_verified": False,
+            "live_execution_authorized": None,
+            "live_lock_status": "UNVERIFIED",
+            "live_lock_reason": f"Runtime probe failed before live-execution safety could be verified: {exc}"[:240],
+            "live_lock_source": "product.live_execution_interlock",
         })
     return payload
 
@@ -910,6 +952,7 @@ def dashboard() -> dict:
             "universe_size": 0,
             "summary": {},
             "records": [],
+            "provenance": {},
             "error": str(exc),
         }
     try:
@@ -1053,6 +1096,8 @@ _AUTONOMY_CONTROLS = {
     "RESUME_NEW_PAPER_ENTRIES",
     "OBSERVE_ONLY_TODAY",
     "CLEAR_OBSERVE_ONLY",
+    "RUN_HISTORICAL_REPLAY",
+    "RUN_LEARNING_NOW",
 }
 _ALLOWED_CONTROLS = set(_OPERATION_CONTROLS) | _AUTONOMY_CONTROLS
 _USER_OPERATION_PRIORITY = 100

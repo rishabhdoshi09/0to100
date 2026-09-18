@@ -28,17 +28,16 @@ PREFER_MIN_TRADES = 3
 DEFAULT_PATH = logs_path("product/paper_memory.json")
 
 LIVE_STILL_LOCKED = (
-    "Live orders stay locked. Paper memory only changes which PAPER names "
-    "are skipped or preferred. Real-money automation requires owner approval "
-    "after the paper book is proven — the bot cannot open that door itself."
+    "Live orders stay locked only when the canonical execution interlock verifies that state. "
+    "Paper memory only changes which PAPER names are skipped or preferred. Real-money automation "
+    "requires explicit deployment authorization and cannot be opened by the learning loop."
 )
 
 PROMOTION_LADDER = (
     "Paper auto is on. Each day the bot folds closed paper trades into memory, "
     "then the next paper cycle skips cooldown names and prefers proven ones. "
     "Brain 1 still needs a larger sample before a family is evidence-qualified. "
-    "Live execution stays locked until the owner approves a capital envelope — "
-    "the bot cannot open that door."
+    "Live execution remains governed only by the canonical execution interlock."
 )
 
 EMPTY_MEMORY: dict[str, Any] = {
@@ -51,9 +50,39 @@ EMPTY_MEMORY: dict[str, Any] = {
     "self_feed": {},
     "closed_trades": 0,
     "summary": "No closed paper trades yet — nothing to learn.",
-    "live_locked": True,
+    "live_locked": None,
+    "live_lock_verified": False,
+    "live_lock_status": "UNVERIFIED",
+    "live_lock_source": "product.live_execution_interlock",
     "disclaimer": LIVE_STILL_LOCKED,
 }
+
+
+def _live_safety() -> dict[str, Any]:
+    """Current broker-boundary truth. Unknown must never become positive proof."""
+    try:
+        from product.live_execution_interlock import get_live_execution_state
+
+        state = get_live_execution_state()
+        verified = bool(state.verified)
+        locked = bool(state.locked and not state.authorized) if verified else None
+        return {
+            "live_locked": locked,
+            "live_lock_verified": verified,
+            "live_execution_authorized": bool(state.authorized) if verified else None,
+            "live_lock_status": str(state.status or ("LOCKED" if locked else "UNLOCKED")),
+            "live_lock_reason": str(state.reason or ""),
+            "live_lock_source": str(state.source or "product.live_execution_interlock"),
+        }
+    except Exception as exc:
+        return {
+            "live_locked": None,
+            "live_lock_verified": False,
+            "live_execution_authorized": None,
+            "live_lock_status": "UNVERIFIED",
+            "live_lock_reason": f"Canonical live-execution interlock could not be verified: {exc}",
+            "live_lock_source": "product.live_execution_interlock",
+        }
 
 
 def memory_path(path: str | Path | None = None) -> Path:
@@ -88,7 +117,7 @@ def _realized_r(trade: Any) -> float:
 
 def build_paper_memory(closed_trades: Iterable[Any], *, as_of: str,
                        cooldown_days: int = COOLDOWN_DAYS) -> dict[str, Any]:
-    """Fold closed paper trades into cooldown / prefer lists. Pure; no I/O."""
+    """Fold closed paper trades into cooldown / prefer lists."""
     as_of_d = _as_date(as_of) or date.today()
     by_symbol: dict[str, list[Any]] = defaultdict(list)
     for trade in closed_trades or ():
@@ -147,8 +176,7 @@ def build_paper_memory(closed_trades: Iterable[Any], *, as_of: str,
     else:
         summary = (
             f"{n_closed} closed paper trade(s) across {len(symbols)} name(s). "
-            f"{len(cooldown)} on cooldown, {len(prefer)} preferred. "
-            + LIVE_STILL_LOCKED
+            f"{len(cooldown)} on cooldown, {len(prefer)} preferred."
         )
     return {
         "schema_version": SCHEMA_VERSION,
@@ -158,7 +186,7 @@ def build_paper_memory(closed_trades: Iterable[Any], *, as_of: str,
         "prefer": prefer,
         "closed_trades": n_closed,
         "summary": summary,
-        "live_locked": True,
+        **_live_safety(),
         "disclaimer": LIVE_STILL_LOCKED,
     }
 
@@ -175,20 +203,21 @@ def save_paper_memory(memory: Mapping[str, Any], path: str | Path | None = None)
 def load_paper_memory(path: str | Path | None = None) -> dict[str, Any]:
     target = memory_path(path)
     if not target.exists():
-        return dict(EMPTY_MEMORY)
+        return {**EMPTY_MEMORY, **_live_safety()}
     try:
         payload = json.loads(target.read_text(encoding="utf-8"))
         if int(payload.get("schema_version", 0)) != SCHEMA_VERSION:
-            return dict(EMPTY_MEMORY)
+            return {**EMPTY_MEMORY, **_live_safety()}
         payload.setdefault("cooldown", [])
         payload.setdefault("prefer", [])
         payload.setdefault("shadow_prefer", [])
         payload.setdefault("self_feed", {})
         payload.setdefault("symbols", [])
-        payload.setdefault("live_locked", True)
+        # Stored safety metadata is never authoritative for the current process.
+        payload.update(_live_safety())
         return payload
     except Exception:
-        return dict(EMPTY_MEMORY)
+        return {**EMPTY_MEMORY, **_live_safety()}
 
 
 def remember_paper_book(closed_trades: Iterable[Any], *, as_of: str,
@@ -204,11 +233,12 @@ def remember_paper_book(closed_trades: Iterable[Any], *, as_of: str,
 
 
 def public_memory(memory: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """Safe payload for the terminal API and bash-stack UI. Fail-open."""
+    """Safe payload for the terminal API and bash-stack UI. Fail closed on safety proof."""
     try:
         payload = dict(memory) if memory is not None else load_paper_memory()
     except Exception:
         payload = dict(EMPTY_MEMORY)
+    safety = _live_safety()
     return {
         "available": True,
         "as_of": str(payload.get("as_of") or ""),
@@ -218,7 +248,7 @@ def public_memory(memory: Mapping[str, Any] | None = None) -> dict[str, Any]:
         "shadow_prefer": [str(s) for s in (payload.get("shadow_prefer") or [])],
         "self_feed": dict(payload.get("self_feed") or {}),
         "summary": str(payload.get("summary") or EMPTY_MEMORY["summary"]),
-        "live_locked": True,
+        **safety,
         "disclaimer": LIVE_STILL_LOCKED,
         "ladder": PROMOTION_LADDER,
     }

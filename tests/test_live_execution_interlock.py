@@ -264,7 +264,7 @@ def test_startup_verification_failure_is_not_a_green_lock(monkeypatch):
     monkeypatch.setattr(interlock, "get_live_execution_state", broken_state)
     locked, verified, detail, payload = _live_lock_readiness()
 
-    assert locked is True
+    assert locked is None
     assert verified is False
     assert payload == {}
     assert "could not be verified" in detail.lower()

@@ -52,15 +52,25 @@ def _lane(name: str, status: str, detail: str = "", *, required: bool = False,
 def _history_readiness() -> tuple[str, str]:
     try:
         from data.bhavcopy_runtime import official_history_freshness
-        freshness = official_history_freshness(load_cache=True)
+        freshness = official_history_freshness(load_cache=False, require_store=False)
     except Exception as exc:
         return "MISSING", f"Official NSE history unavailable: {str(exc)[:160]}"
     current = bool(freshness.get("current"))
+    usable = bool(freshness.get("usable_for_scan"))
+    pending = bool(freshness.get("publication_pending"))
     available = str(freshness.get("available_session") or "").strip()
     expected = str(freshness.get("expected_latest_completed_session") or "").strip()
     reason = str(freshness.get("reason_code") or "").strip()
     if current:
         return "READY", f"Current through {available}" if available else "Official NSE history is current"
+    if usable and pending:
+        # Ready to work, and honest about what is missing. The lane never claims
+        # the completed session is in hand when it is not.
+        deadline = str(freshness.get("publication_deadline") or "").strip()
+        detail = f"Usable through {available} · {expected} archive publishing"
+        if deadline:
+            detail += f" · mandatory by {deadline[:16].replace('T', ' ')}"
+        return "READY", detail
     parts = [reason or "HISTORY_NOT_READY"]
     if available:
         parts.append(f"available {available}")
@@ -125,25 +135,25 @@ def _paper_readiness() -> tuple[str, str]:
     return "READY", "Paper supervisor running · new paper entries paused"
 
 
-def _live_lock_readiness() -> tuple[bool, bool, str, dict[str, Any]]:
+def _live_lock_readiness() -> tuple[bool | None, bool, str, dict[str, Any]]:
     """Read the same canonical state enforced at the broker mutation boundary.
 
-    Verification failure is deliberately distinct from LOCKED.  It keeps startup
-    NOT READY instead of turning an exception into positive safety evidence.
+    Verification failure is deliberately distinct from LOCKED. It keeps startup
+    NOT READY and returns an unknown lock value rather than positive safety proof.
     """
     try:
         from product.live_execution_interlock import get_live_execution_state
         state = get_live_execution_state()
         payload = state.as_dict()
         verified = bool(state.verified)
-        locked = bool(state.locked and not state.authorized)
         if not verified:
-            return locked, False, "Canonical live interlock reported unverified state", payload
+            return None, False, "Canonical live interlock reported unverified state", payload
+        locked = bool(state.locked and not state.authorized)
         if not locked:
             return False, True, "Canonical live interlock is not locked", payload
         return True, True, state.reason, payload
     except Exception as exc:
-        return True, False, f"Canonical live interlock could not be verified: {str(exc)[:160]}", {}
+        return None, False, f"Canonical live interlock could not be verified: {str(exc)[:160]}", {}
 
 
 def _required_waiting(lanes: list[dict[str, Any]], *, domain: str | None = None,
@@ -160,7 +170,7 @@ def _required_waiting(lanes: list[dict[str, Any]], *, domain: str | None = None,
     return out
 
 
-def _aggregate_operational(lanes: list[dict[str, Any]], *, live_locked: bool,
+def _aggregate_operational(lanes: list[dict[str, Any]], *, live_locked: bool | None,
                            live_lock_verified: bool = True) -> dict[str, Any]:
     waiting = _required_waiting(lanes, domain=DOMAIN_OPERATIONAL,
                                 ready_statuses=_OPERATIONAL_READY_STATUSES)
@@ -170,7 +180,7 @@ def _aggregate_operational(lanes: list[dict[str, Any]], *, live_locked: bool,
             blockers.append("LIVE MONEY")
         return {"ready": False, "status": "FAILED", "blockers": blockers,
                 "reasons": ["Live-money interlock could not be verified — startup fails closed"]}
-    if not live_locked:
+    if live_locked is not True:
         if "LIVE MONEY" not in blockers:
             blockers.append("LIVE MONEY")
         return {"ready": False, "status": "FAILED", "blockers": blockers,
@@ -233,7 +243,7 @@ def build_startup_check(*, probe_network: bool = True) -> dict[str, Any]:
     expected_scan_session = ""
     try:
         from data.bhavcopy_runtime import official_history_freshness
-        history_freshness = official_history_freshness(load_cache=True)
+        history_freshness = official_history_freshness(load_cache=False, require_store=False)
         expected_scan_session = str(
             history_freshness.get("expected_latest_completed_session")
             or history_freshness.get("available_session")
@@ -265,7 +275,7 @@ def build_startup_check(*, probe_network: bool = True) -> dict[str, Any]:
         kite_ok = False
 
     live_locked, live_lock_verified, live_detail, live_interlock = _live_lock_readiness()
-    live_status = "LOCKED" if live_lock_verified and live_locked else ("UNVERIFIED" if not live_lock_verified else "UNLOCKED")
+    live_status = "LOCKED" if live_lock_verified and live_locked is True else ("UNVERIFIED" if not live_lock_verified else "UNLOCKED")
 
     lanes = [
         _lane("UI", "READY" if ui else "WAITING", "http://127.0.0.1:5173", required=True),
@@ -287,7 +297,12 @@ def build_startup_check(*, probe_network: bool = True) -> dict[str, Any]:
                                             ready_statuses=_OPERATIONAL_READY_STATUSES)
     evidence_waiting = _required_waiting(lanes, domain=DOMAIN_EVIDENCE,
                                          ready_statuses=_EVIDENCE_READY_STATUSES)
-    fully_ready = bool(operational["ready"] and evidence["ready"] and live_locked and live_lock_verified)
+    fully_ready = bool(
+        operational["ready"]
+        and evidence["ready"]
+        and live_locked is True
+        and live_lock_verified
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "ready": fully_ready,
@@ -340,7 +355,7 @@ def print_startup_summary(*, probe_network: bool = True) -> int:
     if not payload.get("live_lock_verified"):
         print("LIVE MONEY INTERLOCK UNVERIFIED — startup not ready")
         return 2
-    if not payload["live_locked"]:
+    if payload.get("live_locked") is not True:
         print("LIVE MONEY UNLOCKED — fail-closed contract broken")
         return 2
     return 0

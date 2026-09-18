@@ -5,10 +5,14 @@ on:
     branches: ["**"]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Checkout exact source SHA
         uses: actions/checkout@v4
@@ -44,7 +48,6 @@ jobs:
         run: |
           python -m pytest
         env:
-          # Tests must never touch real accounts even if secrets leak into env
           KITE_ACCESS_TOKEN: ""
           TELEGRAM_BOT_TOKEN: ""
           DEEPSEEK_API_KEY: ""
@@ -53,31 +56,48 @@ jobs:
         run: |
           bash -n scripts/run_quantterm_complete.sh
           bash -n scripts/run_quantterm.sh
+          bash -n scripts/run_quantterm_mac.sh
+          bash -n scripts/quantterm_storage_preflight.sh
+          bash -n scripts/install_quantterm_host.sh
+          bash -n scripts/quantterm_status.sh
+          bash -n scripts/quantterm_restart.sh
+          bash -n deploy/setup_mac.sh
+          bash -n deploy/setup_server.sh
           python -m py_compile scripts/local_stack.py
 
       - name: Compile every module (import-safety net)
         # Compile before environment-dependent smoke so a slow provider test can
         # never prevent the deterministic import-safety gate from running.
         run: |
-          python -m compileall -q data scan risk execution ui reports ai core alerts news research product reporting operations fundamentals
-          python -m py_compile terminal_api.py terminal_product_api.py report_api.py
+          python -m compileall -q data scan risk execution ui reports ai core alerts news research product reporting operations fundamentals expectancy
+          python -m py_compile terminal_api.py terminal_product_api.py terminal_product_api_parallel.py report_api.py
+          python -m py_compile scripts/run_product_acceptance.py scripts/_product_acceptance_core.py
+          python -m py_compile product/paper_learning_loop.py product/_paper_learning_loop_core.py
+          python -m py_compile _terminal_product_api_parallel_core.py
 
       - name: Integration gate — controlled external dependencies
-        # Explicitly NOT the canonical gate: heavy import chains and real
-        # sources. Bounded and non-blocking so an upstream outage cannot fail
-        # a deterministic build.
         continue-on-error: true
+        shell: bash
         run: |
-          timeout 120s env QT_INTEGRATION=1 python -m pytest tests/integration -q --tb=short
+          set -o pipefail
+          timeout 120s env QT_INTEGRATION=1 python -m pytest tests/integration -q --tb=short 2>&1 | tee /tmp/quantterm-integration.log
         env:
           KITE_ACCESS_TOKEN: ""
           TELEGRAM_BOT_TOKEN: ""
           DEEPSEEK_API_KEY: ""
 
+      - name: Enforce no durable-state contamination
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f /tmp/quantterm-integration.log ] && grep -q "TEST CONTAMINATION:" /tmp/quantterm-integration.log; then
+            echo "::error::Integration execution changed protected checkout/runtime state."
+            cat /tmp/quantterm-integration.log
+            exit 1
+          fi
+
       - name: Live-source gate — real upstreams (never blocks the build)
-        # The only place a test is allowed off the machine. Deselected from the
-        # canonical run by classification; surfaced here so an upstream that has
-        # changed shape is visible rather than silently untested.
         continue-on-error: true
         run: |
           timeout 300s env QT_LIVE_SOURCE=1 python -m pytest -m live_source -q --tb=short
