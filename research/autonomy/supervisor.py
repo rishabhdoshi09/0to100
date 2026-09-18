@@ -737,6 +737,15 @@ class Supervisor:
                     self._mark_snapshot_complete(snap)
 
         target = self._gated_state(result.state_hint)
+        if (
+            job.job_type == SCH.PAPER_CYCLE
+            and result.status == JS.SUCCEEDED
+            and str(job.idempotency_key or "").startswith("snapshot_paper:")
+        ):
+            # The automatic snapshot transaction is terminal after one paper
+            # decision pass. Keep durable positions intact, but the scheduler
+            # returns to OBSERVING and waits for new data.
+            target = ST.OBSERVING
         # A successful auth probe proves only broker-session health. It must not
         # move an already productive desk into OBSERVING or a fake data-refresh.
         if (
