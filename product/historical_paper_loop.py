@@ -76,6 +76,7 @@ def load_state(path: str | Path | None = None) -> dict[str, Any]:
         "current_batch_id": str(payload.get("current_batch_id") or ""),
         "current_sessions": list(payload.get("current_sessions") or []),
         "last_completed_session": str(payload.get("last_completed_session") or ""),
+        "thesis_hash": str(payload.get("thesis_hash") or ""),
         "last_result": dict(payload.get("last_result") or {}),
         "last_error": str(payload.get("last_error") or ""),
         "updated_at": str(payload.get("updated_at") or ""),
@@ -103,8 +104,15 @@ def _official_sessions(sessions_fn: Callable[[], Sequence[Any]] | None = None) -
     return sorted(out)
 
 
-def _batch_id(sessions: Sequence[str], universe_limit: int) -> str:
-    raw = json.dumps({"sessions": list(sessions), "universe_limit": int(universe_limit)}, sort_keys=True)
+def _batch_id(sessions: Sequence[str], universe_limit: int, thesis_hash: str = "") -> str:
+    raw = json.dumps(
+        {
+            "sessions": list(sessions),
+            "universe_limit": int(universe_limit),
+            "thesis_hash": str(thesis_hash or ""),
+        },
+        sort_keys=True,
+    )
     return "hist_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -119,6 +127,11 @@ def peek_next_batch(
 ) -> dict[str, Any]:
     """Return the next unprocessed fully-settleable historical batch."""
     state = load_state(state_path)
+    try:
+        from product.trading_thesis import manifest as thesis_manifest
+        thesis_hash = str(thesis_manifest().get("thesis_hash") or "")
+    except Exception:
+        thesis_hash = ""
     if state["phase"] in {PHASE_RUNNING, PHASE_AWAITING_LEARNING, PHASE_AWAITING_RESEARCH}:
         return {
             "available": False,
@@ -135,7 +148,14 @@ def peek_next_batch(
         return {"available": False, "reason": "insufficient_settleable_history", "sessions_total": len(sessions)}
 
     eligible = sessions[warmup: len(sessions) - horizon]
-    last = state["last_completed_session"]
+    # A materially new thesis must earn its own historical evidence. Once the
+    # previous batch is terminal/idle, restart the historical cursor for the new
+    # thesis instead of inheriting old-policy confidence.
+    last = (
+        state["last_completed_session"]
+        if str(state.get("thesis_hash") or "") == thesis_hash
+        else ""
+    )
     start = 0
     if last:
         try:
@@ -154,8 +174,9 @@ def peek_next_batch(
         }
     return {
         "available": True,
-        "batch_id": _batch_id(batch, universe_limit),
+        "batch_id": _batch_id(batch, universe_limit, thesis_hash),
         "sessions": batch,
+        "thesis_hash": thesis_hash,
         "period_start": batch[0],
         "period_end": batch[-1],
         "universe_limit": int(universe_limit),
@@ -169,6 +190,7 @@ def pending_stage(*, state_path: str | Path | None = None) -> dict[str, Any]:
         "phase": state["phase"],
         "batch_id": state["current_batch_id"],
         "sessions": state["current_sessions"],
+        "thesis_hash": state["thesis_hash"],
         "last_result": state["last_result"],
         "last_error": state["last_error"],
     }
@@ -267,7 +289,7 @@ def simulate_virtual_trade(
     realized_r = (exit_price - entry) / risk
     return_pct = (exit_price - entry) / entry * 100.0
     trade_id = "hist-paper:" + hashlib.sha256(
-        f"{row.get('run_id')}|{row.get('as_of')}|{row.get('symbol')}|{entry}|{stop}|{target}".encode("utf-8")
+        f"{row.get('thesis_hash')}|{row.get('run_id')}|{row.get('as_of')}|{row.get('symbol')}|{entry}|{stop}|{target}".encode("utf-8")
     ).hexdigest()[:20]
     return {
         "trade_id": trade_id,
@@ -289,6 +311,8 @@ def simulate_virtual_trade(
         "source_run_id": str(row.get("run_id") or ""),
         "source_freeze_id": str(row.get("freeze_id") or ""),
         "source_decision_id": str(row.get("canonical_decision_id") or row.get("decision_id") or ""),
+        "thesis_hash": str(row.get("thesis_hash") or ""),
+        "selection_score": _f(row.get("selection_score")),
         "evidence_class": "HISTORICAL_REPLAY",
         "paper_lane": "HISTORICAL_VIRTUAL_PAPER",
         "not_real_pnl": True,
@@ -437,6 +461,7 @@ def _run_batch(
 ) -> dict[str, Any]:
     bid = str(batch["batch_id"])
     sessions = list(batch["sessions"])
+    expected_thesis_hash = str(batch.get("thesis_hash") or "")
     horizon = int(batch.get("horizon_sessions") or DEFAULT_HORIZON_SESSIONS)
     universe_limit = int(batch.get("universe_limit") or DEFAULT_UNIVERSE_LIMIT)
     all_sessions = _official_sessions(sessions_fn)
@@ -467,11 +492,43 @@ def _run_batch(
     if status not in {"SUCCEEDED", "DEGRADED"}:
         raise RuntimeError(f"historical replay did not complete: {status or 'UNKNOWN'}")
 
-    trades: list[dict[str, Any]] = []
-    for raw in report.get("decisions") or report.get("rows") or []:
-        if not isinstance(raw, Mapping):
+    decisions = [
+        dict(raw)
+        for raw in (report.get("decisions") or report.get("rows") or [])
+        if isinstance(raw, Mapping)
+    ]
+    mismatched = [
+        row for row in decisions
+        if expected_thesis_hash
+        and str(row.get("thesis_hash") or "") != expected_thesis_hash
+    ]
+    if mismatched:
+        raise RuntimeError(
+            "historical replay thesis mismatch; batch evidence refused"
+        )
+
+    # Present paper opens only a bounded number of new positions. Mirror that
+    # choice per historical session: same thesis, same production selection
+    # score, max three BUYs. WAIT/AVOID rows remain in the feature store for
+    # counterfactual learning but do not become fake virtual fills.
+    selected: list[dict[str, Any]] = []
+    by_day: dict[str, list[dict[str, Any]]] = {}
+    for row in decisions:
+        if str(row.get("decision") or "").upper() != "BUY":
             continue
-        row = dict(raw)
+        by_day.setdefault(str(row.get("as_of") or "")[:10], []).append(row)
+    for day in sorted(by_day):
+        day_rows = sorted(
+            by_day[day],
+            key=lambda row: (
+                -float(_f(row.get("selection_score")) or 0.0),
+                str(row.get("symbol") or ""),
+            ),
+        )
+        selected.extend(day_rows[:3])
+
+    trades: list[dict[str, Any]] = []
+    for row in selected:
         row.setdefault("run_id", report.get("run_id"))
         trade = simulate_virtual_trade(row, later_bars_fn=later_bars_fn, horizon=horizon)
         if trade is not None:
@@ -480,10 +537,15 @@ def _run_batch(
     ledger = Path(ledger_path) if ledger_path is not None else DEFAULT_LEDGER
     appended = _append_unique(ledger, trades)
     all_trades = _load_ledger(ledger)
+    thesis_trades = [
+        row for row in all_trades
+        if not expected_thesis_hash
+        or str(row.get("thesis_hash") or "") == expected_thesis_hash
+    ]
     memory_target = Path(memory_path) if memory_path is not None else DEFAULT_MEMORY
     try:
         from product.paper_learning import build_paper_memory
-        memory = build_paper_memory(all_trades, as_of=sessions[-1])
+        memory = build_paper_memory(thesis_trades, as_of=sessions[-1])
         memory["evidence_class"] = "HISTORICAL_REPLAY"
         memory["paper_lane"] = "HISTORICAL_VIRTUAL_PAPER"
         memory["not_promotion_evidence"] = True
@@ -493,13 +555,14 @@ def _run_batch(
         memory = {"error": str(exc)[:240]}
 
     try:
-        setup_policies = update_historical_setup_policies(all_trades)
+        setup_policies = update_historical_setup_policies(thesis_trades)
     except Exception as exc:
         setup_policies = [{"error": str(exc)[:240]}]
 
     result = {
         "status": "SUCCEEDED",
         "batch_id": bid,
+        "thesis_hash": expected_thesis_hash,
         "period_start": sessions[0],
         "period_end": sessions[-1],
         "sessions": sessions,
@@ -508,7 +571,7 @@ def _run_batch(
         "decisions": int(report.get("decisions_tested") or len(report.get("decisions") or [])),
         "historical_paper_trades": len(trades),
         "trades_appended": appended,
-        "historical_paper_total": len(all_trades),
+        "historical_paper_total": len(thesis_trades),
         "historical_setup_policies": len([p for p in setup_policies if not p.get("error")]),
         "setup_policy_errors": [p.get("error") for p in setup_policies if p.get("error")],
         "memory": {
@@ -526,6 +589,7 @@ def _run_batch(
         "phase": PHASE_AWAITING_LEARNING,
         "current_batch_id": bid,
         "current_sessions": sessions,
+        "thesis_hash": expected_thesis_hash,
         "last_result": result,
         "last_error": "",
     }, state_path)
@@ -567,6 +631,7 @@ def _background_batch_runner(
             "phase": PHASE_FAILED,
             "current_batch_id": str(batch.get("batch_id") or ""),
             "current_sessions": list(batch.get("sessions") or []),
+            "thesis_hash": str(batch.get("thesis_hash") or ""),
             "last_error": str(exc)[:300],
         }, state_path)
         with _lock:
@@ -649,6 +714,7 @@ def ensure_next_batch_started(
             "phase": PHASE_RUNNING,
             "current_batch_id": bid,
             "current_sessions": list(batch["sessions"]),
+            "thesis_hash": str(batch.get("thesis_hash") or ""),
             "last_error": "",
         }, state_path)
         _thread_batch_id = bid
