@@ -15,6 +15,10 @@ from pathlib import Path
 
 from research.autonomy import job_store as JS
 from research.autonomy import schedules as SCH
+
+# The old report-only historical replay is never an automatic scheduler cascade.
+# Autonomous closed-market work now uses the separate durable HISTORICAL_PAPER_CYCLE lane.
+LEGACY_CLOSED_MARKET_REPLAY_POLICY = "explicit_replay_only"
 from research.autonomy import supervisor_state as ST
 from research.autonomy import health as H
 from research.autonomy import auth as AUTH
