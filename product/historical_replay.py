@@ -517,6 +517,11 @@ def decide_session(
             "thesis_hash": str(thesis.get("thesis_hash") or ""),
             "thesis": thesis,
             "selection_score": selection_rank,
+            # Frozen PIT card is the input required to re-run the same
+            # production selection authority against an evolving historical
+            # PaperBook (open positions/capital/risk). It contains only evidence
+            # attached at T; later bars remain outcome-only.
+            "selection_card": dict(card),
             "provenance": HISTORICAL_REPLAY,
             "not_pnl": True,
             "live_locked": True,
