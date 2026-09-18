@@ -409,6 +409,7 @@ def evaluate_candidate(
             requested_risk_pct=DEFAULT_RISK_PCT,
             max_risk_fraction=float(getattr(book, "risk_per_trade_pct", 0.01) or 0.01),
             max_position_fraction=float(getattr(book, "max_position_pct", 0.10) or 0.10),
+            slippage_bps=float(getattr(book, "slippage_bps", 0.0) or 0.0),
         )
         if not sizing.ok:
             code = {
