@@ -912,26 +912,22 @@ def run_outcome_resolution(ctx) -> JobResult:
         resolve_error = str(exc)[:240]
         result = {"paper_book_error": resolve_error}
     official_settle: dict = {}
-    if not os.environ.get("PYTEST_CURRENT_TEST"):
-        try:
-            from product.autonomous_loop import advance_loop
+    try:
+        # Settlement is deliberately narrow. Do not call autonomous_loop.advance_loop
+        # here: that legacy helper also re-evaluates committee/research/paper and
+        # turns one OUTCOME_RESOLUTION job into a hidden second autonomy cycle.
+        from product.autonomous_loop import settle_official_outcomes
 
-            official_settle = advance_loop(trigger="outcome_resolution")
-        except Exception as exc:
-            official_settle = {"error": str(exc)[:240]}
+        official_settle = settle_official_outcomes(session_date)
+    except Exception as exc:
+        official_settle = {"error": str(exc)[:240]}
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
         try:
             from product.paper_self_feed import ingest_paper_cycle
 
             ingest_paper_cycle(result or {}, as_of=session_date, slot="eod")
         except Exception:
             pass
-    else:
-        try:
-            from product.autonomous_loop import settle_official_outcomes
-
-            official_settle = settle_official_outcomes(session_date)
-        except Exception as exc:
-            official_settle = {"error": str(exc)[:240]}
     if isinstance(result, dict):
         result["official_settlement"] = official_settle
     closed = len((result or {}).get("positions_closed", []))
@@ -1002,16 +998,14 @@ def run_learning_cycle(ctx) -> JobResult:
             failures={H.LEARNING_FAILED}, state_hint=ST.RESEARCHING,
             unblocks=(f"{DEP_LEARNING}:{session_date}",), metadata=result,
         )
-    if not os.environ.get("PYTEST_CURRENT_TEST"):
-        try:
-            from product.autonomous_learning import maybe_run_closed_market_replay, save_control
-
-            replay = maybe_run_closed_market_replay(now=now)
-            result["closed_market_replay"] = replay
-            if not replay.get("skipped"):
-                save_control({"last_cycle_at": now.isoformat() if hasattr(now, "isoformat") else str(now)})
-        except Exception as exc:
-            result["closed_market_replay"] = {"error": str(exc)[:200]}
+    # Historical replay is not a side effect of learning. It has an explicit
+    # operator/control path and its own input identity. A learning job must stop
+    # after learning instead of spawning another long-running simulation.
+    result["closed_market_replay"] = {
+        "skipped": True,
+        "reason": "explicit_replay_only",
+        "next_action": "WAIT_FOR_EXPLICIT_REPLAY_OR_NEW_EVIDENCE",
+    }
     return JobResult(JS.SUCCEEDED, summary,
                      clears={H.LEARNING_FAILED}, state_hint=ST.RESEARCHING,
                      unblocks=(f"{DEP_LEARNING}:{session_date}",), metadata=result)
