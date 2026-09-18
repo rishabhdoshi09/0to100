@@ -38,7 +38,7 @@ DEFAULT_REPLAY_ROOT = logs_path("product/historical_paper_replays")
 
 DEFAULT_BATCH_SIZE = 8
 DEFAULT_WARMUP_SESSIONS = 60
-DEFAULT_HORIZON_SESSIONS = 10
+DEFAULT_HORIZON_SESSIONS = 20
 DEFAULT_UNIVERSE_LIMIT = 40
 
 _lock = threading.Lock()
@@ -342,6 +342,273 @@ def simulate_virtual_trade(
     }
 
 
+
+def _paper_bar(row: Mapping[str, Any]) -> tuple[float, ...] | None:
+    """Convert one official OHLC row to PaperBook's bar contract."""
+    def val(*keys: str) -> float | None:
+        for key in keys:
+            out = _f(row.get(key))
+            if out is not None:
+                return out
+        return None
+
+    op = val("open", "Open", "OPEN")
+    hi = val("high", "High", "HIGH")
+    lo = val("low", "Low", "LOW")
+    close = val("close", "Close", "CLOSE")
+    if hi is None or lo is None or close is None:
+        return None
+    return (op, hi, lo, close) if op is not None else (hi, lo, close)
+
+
+def simulate_paper_book_sequence(
+    decisions: Sequence[Mapping[str, Any]],
+    *,
+    official_sessions: Sequence[str],
+    later_bars_fn: Callable[..., list[dict[str, Any]]] | None = None,
+    horizon: int = DEFAULT_HORIZON_SESSIONS,
+    max_new_per_session: int = 3,
+) -> dict[str, Any]:
+    """Replay historical BUY decisions through the real PaperBook mechanics.
+
+    Unlike independent trade scoring, this preserves overlapping positions,
+    duplicate-name blocking, five-position / total-risk / per-name sizing caps,
+    realistic paper slippage + India cash costs, and the same portfolio
+    selection authority used by PAPER_FORWARD. New positions are opened only
+    after prior positions have been marked on that session, so a historical
+    entry never sees its own completed daily OHLC.
+
+    Historical evidence remains a separate non-P&L evidence class.
+    """
+    from product.paper_autopilot import (
+        DEFAULT_RISK_PCT,
+        ENTER_NOW,
+        evaluate_selection_candidate,
+    )
+    from product.portfolio_selection_authority import apply_portfolio_authority
+    from product.strategy_catalog import ENSEMBLE_ID
+    from research.auto_research.costs import india_cash_costs
+    from research.auto_research.paper_book import PaperBook
+
+    if later_bars_fn is None:
+        from product.decision_outcomes import later_bars as later_bars_fn
+
+    sessions = [str(day)[:10] for day in official_sessions if str(day)[:10]]
+    if not sessions:
+        return {
+            "trades": [],
+            "rejections": [],
+            "book": {},
+            "execution_model": "PaperBook",
+        }
+
+    candidates: dict[str, list[dict[str, Any]]] = {}
+    for raw in decisions:
+        row = dict(raw)
+        if str(row.get("decision") or "").upper() != "BUY":
+            continue
+        day = str(row.get("as_of") or "")[:10]
+        if day:
+            candidates.setdefault(day, []).append(row)
+
+    book = PaperBook(slippage_bps=3.0, cost_model=india_cash_costs)
+    bar_cache: dict[str, dict[str, tuple[float, ...]]] = {}
+    source_by_intent: dict[str, dict[str, Any]] = {}
+    rejections: list[dict[str, Any]] = []
+
+    for day in sessions:
+        # First settle/manage positions opened on earlier sessions using only
+        # this session's official bar.
+        bars: dict[str, tuple[float, ...]] = {}
+        for pos in list(book.open.values()):
+            bar = (bar_cache.get(str(pos.symbol).upper()) or {}).get(day)
+            if bar is not None:
+                bars[str(pos.symbol).upper()] = bar
+        if bars:
+            book.mark(bars, day, allow_entry_session=False)
+
+        raw_day = candidates.get(day) or []
+        if not raw_day:
+            continue
+
+        ranked = []
+        family_risk: dict[str, float] = {}
+        cluster_risk: dict[str, float] = {}
+        clock = datetime.fromisoformat(f"{day}T15:30:00+05:30")
+        for row in raw_day:
+            card = row.get("selection_card")
+            card = dict(card) if isinstance(card, Mapping) else {}
+            if not card:
+                # Compatibility for old persisted replays: do not fabricate
+                # missing PIT inputs. Such rows can be inspected but are not
+                # portfolio-comparable historical paper evidence.
+                rejections.append({
+                    "symbol": str(row.get("symbol") or "").upper(),
+                    "as_of": day,
+                    "reason_code": "MISSING_PIT_SELECTION_CARD",
+                })
+                continue
+            try:
+                decision = evaluate_selection_candidate(
+                    card,
+                    book=book,
+                    workspace={
+                        "point_in_time": True,
+                        "scan_scanned_at": f"{day}T15:30:00+05:30",
+                    },
+                    now=clock,
+                    entries_allowed=True,
+                    paper_enabled=True,
+                    regime=str(row.get("regime") or "UNKNOWN"),
+                    enforce_history=False,
+                    family_risk=family_risk,
+                    cluster_risk=cluster_risk,
+                )
+            except Exception as exc:
+                rejections.append({
+                    "symbol": str(row.get("symbol") or "").upper(),
+                    "as_of": day,
+                    "reason_code": "SELECTION_REPLAY_ERROR",
+                    "detail": str(exc)[:200],
+                })
+                continue
+            if decision.decision != ENTER_NOW:
+                rejected = decision.as_dict()
+                rejected["as_of"] = day
+                rejections.append(rejected)
+                continue
+            ranked.append((float(decision.selection_score or 0.0), decision))
+
+        ranked.sort(key=lambda item: (-item[0], item[1].symbol))
+        if not ranked:
+            continue
+
+        kept, diverted = apply_portfolio_authority(
+            ranked,
+            book=book,
+            max_new=max_new_per_session,
+            regime=str(raw_day[0].get("regime") or "UNKNOWN"),
+        )
+        for decision in diverted:
+            rejected = decision.as_dict()
+            rejected["as_of"] = day
+            rejections.append(rejected)
+
+        for _score, decision in kept:
+            row = next(
+                (
+                    candidate
+                    for candidate in raw_day
+                    if str(candidate.get("symbol") or "").upper() == decision.symbol
+                ),
+                {},
+            )
+            intent_id = "hist-paper-intent:" + hashlib.sha256(
+                f"{row.get('thesis_hash')}|{day}|{decision.symbol}|{row.get('canonical_decision_id')}".encode("utf-8")
+            ).hexdigest()[:20]
+            qty = int(_f(decision.card.get("approved_quantity")) or 0)
+            pos = book.open_position(
+                ENSEMBLE_ID,
+                decision.symbol,
+                float(_f(decision.card.get("entry")) or 0.0),
+                float(_f(decision.card.get("stop")) or 0.0),
+                float(_f(decision.card.get("target")) or 0.0),
+                day,
+                int(horizon),
+                risk_pct_of_capital=DEFAULT_RISK_PCT,
+                quantity=(qty if qty > 0 else None),
+                decision_id=str(row.get("canonical_decision_id") or ""),
+                paper_intent_id=intent_id,
+                context_key=str(row.get("context_key") or ""),
+            )
+            if pos is None:
+                reason = str((book.refusals[-1] if book.refusals else ("", "BOOK_REFUSED"))[1])
+                rejections.append({
+                    "symbol": decision.symbol,
+                    "as_of": day,
+                    "reason_code": "BOOK_REFUSED",
+                    "detail": reason,
+                })
+                continue
+
+            # PaperPosition is intentionally a normal dataclass (not slots), so
+            # sector can travel with the virtual book for portfolio concentration
+            # checks exactly as present selection authority expects.
+            pos.sector = str(decision.card.get("sector") or row.get("sector") or "")
+            family = str(pos.sector or "")
+            family_risk[family] = family_risk.get(family, 0.0) + DEFAULT_RISK_PCT
+            cluster_risk[family] = cluster_risk.get(family, 0.0) + DEFAULT_RISK_PCT
+            source_by_intent[intent_id] = dict(row)
+
+            future = list(
+                later_bars_fn(decision.symbol, day, horizon=int(horizon)) or []
+            )
+            by_date: dict[str, tuple[float, ...]] = {}
+            for raw_bar in future:
+                if not isinstance(raw_bar, Mapping):
+                    continue
+                bar_day = str(raw_bar.get("date") or "")[:10]
+                bar = _paper_bar(raw_bar)
+                if bar_day and bar is not None:
+                    by_date[bar_day] = bar
+            bar_cache[decision.symbol] = by_date
+
+    trades: list[dict[str, Any]] = []
+    for closed in book.closed:
+        source = source_by_intent.get(str(closed.paper_intent_id or "")) or {}
+        notional = float(closed.entry_price) * int(closed.qty or 0)
+        return_pct = (
+            float(closed.pnl) / notional * 100.0
+            if notional > 0
+            else 0.0
+        )
+        trade_id = "hist-paper-book:" + hashlib.sha256(
+            f"{closed.paper_intent_id}|{closed.exit_date}|{closed.exit_price}".encode("utf-8")
+        ).hexdigest()[:20]
+        trades.append({
+            "trade_id": trade_id,
+            "symbol": str(closed.symbol or "").upper(),
+            "entry_date": str(closed.entry_date or "")[:10],
+            "exit_date": str(closed.exit_date or "")[:10],
+            "entry_price": round(float(closed.entry_price), 6),
+            "stop_price": round(float(closed.stop_price), 6),
+            "target_price": _f(source.get("target")),
+            "exit_price": round(float(closed.exit_price), 6),
+            "exit_reason": str(closed.exit_reason or ""),
+            "realized_R": round(float(closed.realized_R), 6),
+            "return_pct": round(return_pct, 6),
+            "qty": int(closed.qty or 0),
+            "net_pnl": round(float(closed.pnl), 6),
+            "setup": str(source.get("setup") or ""),
+            "sector": str(source.get("sector") or ""),
+            "regime": str(source.get("regime") or "UNKNOWN"),
+            "decision_reason_code": str(source.get("reason_code") or ""),
+            "source_run_id": str(source.get("run_id") or ""),
+            "source_freeze_id": str(source.get("freeze_id") or ""),
+            "source_decision_id": str(source.get("canonical_decision_id") or source.get("decision_id") or ""),
+            "thesis_hash": str(source.get("thesis_hash") or ""),
+            "selection_score": _f(source.get("selection_score")),
+            "evidence_class": "HISTORICAL_REPLAY",
+            "paper_lane": "HISTORICAL_VIRTUAL_PAPER",
+            "execution_model": "PaperBook",
+            "slippage_bps": 3.0,
+            "cost_model": "india_cash_costs",
+            "not_real_pnl": True,
+            "not_promotion_evidence": True,
+            "live_locked": True,
+        })
+
+    return {
+        "trades": trades,
+        "rejections": rejections,
+        "open_unresolved": len(book.open),
+        "book": book.snapshot(),
+        "execution_model": "PaperBook",
+        "slippage_bps": 3.0,
+        "cost_model": "india_cash_costs",
+    }
+
+
 def _normal_cdf(z: float) -> float:
     return 0.5 * (1.0 + math.erf(float(z) / math.sqrt(2.0)))
 
@@ -548,32 +815,24 @@ def _run_batch(
             "not_promotion_evidence": True,
         }
 
-    # Present paper opens only a bounded number of new positions. Mirror that
-    # choice per historical session: same thesis, same production selection
-    # score, max three BUYs. WAIT/AVOID rows remain in the feature store for
-    # counterfactual learning but do not become fake virtual fills.
-    selected: list[dict[str, Any]] = []
-    by_day: dict[str, list[dict[str, Any]]] = {}
+    # Replay the BUY lane through the same persistent-risk mechanics as
+    # present paper trading instead of treating every candidate as an independent
+    # backtest. This prevents impossible overlapping positions from inflating
+    # historical confidence.
+    first_index = all_sessions.index(sessions[0])
+    last_index = all_sessions.index(sessions[-1])
+    timeline_end = min(len(all_sessions), last_index + horizon + 1)
+    paper_timeline = all_sessions[first_index:timeline_end]
     for row in decisions:
-        if str(row.get("decision") or "").upper() != "BUY":
-            continue
-        by_day.setdefault(str(row.get("as_of") or "")[:10], []).append(row)
-    for day in sorted(by_day):
-        day_rows = sorted(
-            by_day[day],
-            key=lambda row: (
-                -float(_f(row.get("selection_score")) or 0.0),
-                str(row.get("symbol") or ""),
-            ),
-        )
-        selected.extend(day_rows[:3])
-
-    trades: list[dict[str, Any]] = []
-    for row in selected:
         row.setdefault("run_id", report.get("run_id"))
-        trade = simulate_virtual_trade(row, later_bars_fn=later_bars_fn, horizon=horizon)
-        if trade is not None:
-            trades.append(trade)
+    paper_sim = simulate_paper_book_sequence(
+        decisions,
+        official_sessions=paper_timeline,
+        later_bars_fn=later_bars_fn,
+        horizon=horizon,
+        max_new_per_session=3,
+    )
+    trades = list(paper_sim.get("trades") or [])
 
     ledger = Path(ledger_path) if ledger_path is not None else DEFAULT_LEDGER
     appended = _append_unique(ledger, trades)
@@ -613,6 +872,11 @@ def _run_batch(
         "historical_paper_trades": len(trades),
         "trades_appended": appended,
         "historical_paper_total": len(thesis_trades),
+        "historical_paper_open_unresolved": int(paper_sim.get("open_unresolved") or 0),
+        "historical_paper_rejections": len(list(paper_sim.get("rejections") or [])),
+        "historical_execution_model": str(paper_sim.get("execution_model") or "PaperBook"),
+        "historical_slippage_bps": paper_sim.get("slippage_bps"),
+        "historical_cost_model": paper_sim.get("cost_model"),
         "historical_setup_policies": len([p for p in setup_policies if not p.get("error")]),
         "setup_policy_errors": [p.get("error") for p in setup_policies if p.get("error")],
         "memory": {
