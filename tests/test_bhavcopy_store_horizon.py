@@ -9,7 +9,7 @@ def test_bhavcopy_candidate_horizon_uses_calendar_allowance_not_weekday_multipli
     days = _trading_days_back(500)
 
     assert days
-    assert days[0] == date.today()
+    assert 0 <= (date.today() - days[0]).days <= 2
     assert all(day.weekday() < 5 for day in days)
     # 500 sessions need roughly 775 calendar days, which contains about 553
     # weekdays. The old bug produced 775 weekdays (~3 years) and hundreds of
