@@ -97,3 +97,34 @@ def test_dead_worker_is_reported_instead_of_polling_forever():
     result = handler(_Ctx())
     assert result.error_code == "DATA_REFRESH_WORKER_STUCK"
     assert result.status == JS.RETRYABLE_FAILED
+
+
+def test_poll_reschedule_does_not_inflate_durable_attempt_count(tmp_path):
+    store = JS.JobStore(tmp_path / "jobs.db")
+    job = store.enqueue("polling-test", idempotency_key="polling-test")
+
+    first = store.lease_due("owner")
+    assert first is not None
+    assert first.attempt == 1
+
+    store.reschedule_poll(
+        first.job_id,
+        when=store.clock(),
+        error_code=IN_PROGRESS,
+        error_message="still running",
+    )
+    after_first_poll = store.get(job.job_id)
+    assert after_first_poll is not None
+    assert after_first_poll.status == JS.PENDING
+    assert after_first_poll.attempt == 0
+
+    second = store.lease_due("owner")
+    assert second is not None
+    assert second.attempt == 1
+    store.reschedule_poll(
+        second.job_id,
+        when=store.clock(),
+        error_code=IN_PROGRESS,
+        error_message="still running",
+    )
+    assert store.get(job.job_id).attempt == 0
