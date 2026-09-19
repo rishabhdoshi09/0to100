@@ -125,16 +125,29 @@ def scan_is_fresh() -> bool:
         from data.bhavcopy_runtime import official_history_freshness
 
         freshness = official_history_freshness(load_cache=True)
-        if not freshness.get("usable_for_scan"):
+        # New freshness payloads expose usable_for_scan explicitly. Older/test
+        # payloads may only expose current; keep that compatibility without
+        # weakening the production publication-grace contract.
+        usable = freshness.get("usable_for_scan")
+        if usable is None:
+            usable = freshness.get("current")
+        if not usable:
             return False
         # Scan identity follows the latest authoritative session actually
         # available and mandatory now. During a bounded publication-grace
         # window the just-completed archive may truthfully be pending, so
         # expected_latest_completed_session must not invalidate a scan built
-        # from the latest usable official archive.
+        # from the latest usable official archive. Legacy current=True payloads
+        # may not carry available_session, so expected_latest_completed_session
+        # is safe only in that current-history compatibility case.
         expected = str(
             freshness.get("available_session")
             or freshness.get("minimum_required_official_session")
+            or (
+                freshness.get("expected_latest_completed_session")
+                if freshness.get("current")
+                else ""
+            )
             or ""
         )
     except Exception:
