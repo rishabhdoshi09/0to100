@@ -112,10 +112,11 @@ def inspect_readiness(*, now=None) -> dict[str, Any]:
     """Truthful capability matrix. Official work does not wait on Kite."""
     history = official_history()
     broker = broker_status()
-    official_ok = bool(history.get("current"))
+    current_ok = bool(history.get("current"))
+    official_ok = bool(history.get("usable_for_scan"))
     available = str(history.get("available_session") or history.get("latest_date") or "")[:10]
     expected = str(history.get("expected_latest_completed_session") or "")[:10]
-    outcome_ok = official_ok or (bool(available) and (not expected or available >= expected))
+    outcome_ok = current_ok or (bool(available) and (not expected or available >= expected))
     broker_ok = bool(broker.get("live_data_ready"))
     scan_ok = False
     try:

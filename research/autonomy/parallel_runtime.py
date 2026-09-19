@@ -189,8 +189,17 @@ def _delegated_market_scan(ctx):
 
     active_fn = getattr(ctx.deps, "active_snapshot_id", None)
     active_snapshot = active_fn() if callable(active_fn) else ""
-    requested_snapshot = str(
-        getattr(getattr(ctx, "job", None), "input_snapshot_id", None)
+    job = getattr(ctx, "job", None)
+    job_key = str(getattr(job, "idempotency_key", "") or "")
+    startup_discovery = job_key.startswith("startup_discovery_scan:")
+    # Startup discovery is intentionally scan-only and keyed by the official
+    # session in the autonomy ledger. It is not a portfolio snapshot
+    # transaction, so binding it to a synthetic snapshot_id would make the
+    # execution bridge ignore/requeue an already-running unbound whole-market
+    # scan. Reuse that operation instead; freshness/session identity remains the
+    # acceptance authority before the board is exposed.
+    requested_snapshot = "" if startup_discovery else str(
+        getattr(job, "input_snapshot_id", None)
         or active_snapshot
         or ""
     )
@@ -218,6 +227,7 @@ def _delegated_market_scan(ctx):
         "execution_plane": "market_ops",
         "requested_snapshot_id": requested_snapshot,
         "operation_snapshot_id": str((operation.get("payload") or {}).get("snapshot_id") or ""),
+        "startup_discovery_reuse": startup_discovery,
     }
     if status in {PENDING, RUNNING}:
         return JOBS.JobResult(
@@ -464,7 +474,7 @@ def install_parallel_runtime() -> None:
             if error_code in _BRIDGE_PENDING:
                 # Polling a durable external operation is not a failed attempt and
                 # must never exhaust the autonomy retry budget.
-                self.jobs.reschedule_retry(
+                self.jobs.reschedule_poll(
                     job.job_id,
                     when=self.clock() + 1.0,
                     error_code=error_code,

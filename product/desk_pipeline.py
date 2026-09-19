@@ -112,7 +112,7 @@ def prices_kind_due() -> str | None:
         freshness = official_history_freshness(load_cache=True)
     except Exception:
         freshness = {"current": False, "ready": False, "sessions": 0}
-    if not freshness.get("current"):
+    if not freshness.get("usable_for_scan"):
         return DATA_PREPARE
     if _stale(logs_dir() / "product" / "fno_universe.json", FNO_FRESH_S):
         return FNO_REFRESH
@@ -125,9 +125,31 @@ def scan_is_fresh() -> bool:
         from data.bhavcopy_runtime import official_history_freshness
 
         freshness = official_history_freshness(load_cache=True)
-        if not freshness.get("current"):
+        # New freshness payloads expose usable_for_scan explicitly. Older/test
+        # payloads may only expose current; keep that compatibility without
+        # weakening the production publication-grace contract.
+        usable = freshness.get("usable_for_scan")
+        if usable is None:
+            usable = freshness.get("current")
+        if not usable:
             return False
-        expected = str(freshness.get("expected_latest_completed_session") or "")
+        # Scan identity follows the latest authoritative session actually
+        # available and mandatory now. During a bounded publication-grace
+        # window the just-completed archive may truthfully be pending, so
+        # expected_latest_completed_session must not invalidate a scan built
+        # from the latest usable official archive. Legacy current=True payloads
+        # may not carry available_session, so expected_latest_completed_session
+        # is safe only in that current-history compatibility case.
+        expected = str(
+            freshness.get("available_session")
+            or freshness.get("minimum_required_official_session")
+            or (
+                freshness.get("expected_latest_completed_session")
+                if freshness.get("current")
+                else ""
+            )
+            or ""
+        )
     except Exception:
         expected = ""
     try:
@@ -136,7 +158,17 @@ def scan_is_fresh() -> bool:
         payload = load_scan(path)
         if not payload:
             return False
-        as_of = str(payload.get("as_of_session") or payload.get("history_latest_date") or "")[:10]
+        provenance = payload.get("provenance") if isinstance(payload.get("provenance"), dict) else {}
+        # Schema-v2 provenance is the authoritative identity of the official
+        # price session actually consumed. Legacy top-level fields remain a
+        # compatibility fallback for older persisted scans.
+        as_of = str(
+            provenance.get("market_session_date")
+            or provenance.get("price_data_as_of")
+            or payload.get("as_of_session")
+            or payload.get("history_latest_date")
+            or ""
+        )[:10]
         if expected and (not as_of or as_of < expected):
             return False
         if expected and as_of >= expected:

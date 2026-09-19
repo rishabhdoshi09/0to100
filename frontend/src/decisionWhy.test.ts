@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
   fieldLabel,
@@ -99,5 +100,14 @@ describe('WHY THIS DECISION rendering rules', () => {
     expect(isRenderable(null)).toBe(false)
     expect(isRenderable({ available: false, symbol: 'ZZZZ' } as DecisionWhy)).toBe(false)
     expect(isRenderable({ available: true, symbol: 'INFY' } as DecisionWhy)).toBe(true)
+  })
+
+  it('keeps Why This Decision actionable before another page selects a symbol', () => {
+    const view = readFileSync(new URL('./decisionWhyView.tsx', import.meta.url), 'utf8')
+    expect(view).toContain('Enter NSE symbol')
+    expect(view).toContain('Explain decision')
+    expect(view).toContain('Recent')
+    expect(view).toContain('Could not load the decision record')
+    expect(view).not.toContain('No evidence')
   })
 })

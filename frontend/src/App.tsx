@@ -636,7 +636,7 @@ function App() {
           newsRevision={dashboard.news.articles.length}
         />
       ))}
-      {keep(['Why This Decision', 'Why'], <DecisionWhyView symbol={selected} />)}
+      {keep(['Why This Decision', 'Why'], <DecisionWhyView symbol={selected} onSelect={setSelected} suggestions={symbols.slice(0, 6)} />)}
       {keep(['Forward Evidence', 'Evidence'], <ForwardEvidenceView />)}
       {keep(['Research Data', 'Data'], <ResearchDataView symbol={selected} />)}
       {keep(['Strategies'], <StrategiesView />)}

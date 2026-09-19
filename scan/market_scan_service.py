@@ -387,6 +387,20 @@ def run_whole_market_scan(
     )
     sid = snapshot_id if snapshot_id is not None else _active_snapshot_id()
     payload["source_snapshot_id"] = sid
+    # Publish the authoritative market-session identity together with the scan
+    # body, never in a later follow-up write. Readers such as the startup
+    # Decision Simulation gate must not observe a new scanned_at paired with a
+    # temporarily missing session identity while post-scan overlays are still
+    # being persisted.
+    provenance = dict(payload.get("provenance") or {})
+    as_of_session = str(
+        provenance.get("price_data_as_of")
+        or provenance.get("market_session_date")
+        or ""
+    )[:10]
+    if as_of_session:
+        payload["as_of_session"] = as_of_session
+        payload["history_latest_date"] = as_of_session
 
     # A pass that evaluated ZERO symbols is not "a healthy scan with no setups".
     # It is a scan that never happened, and persisting it destroys the last real
@@ -414,7 +428,6 @@ def run_whole_market_scan(
             save_audit(audit)
         except Exception:
             pass
-        save_scan(payload)
         try:
             from product.sepa_setup import persist_public_best_setups
             persist_public_best_setups(payload)
@@ -441,15 +454,23 @@ def run_whole_market_scan(
             payload["desk_overlays"] = persist_desks_from_market_scan(payload)
         except Exception as exc:
             payload["desk_overlays"] = {"error": type(exc).__name__}
+    summary = dict(payload.get("summary", {}))
+    n_setups = int(summary.get("with_any_setup", 0) or 0)
+    status = SUCCEEDED if n_setups else NO_SETUPS
+    payload["scan_status"] = status
+    # The canonical scan becomes visible only after all scan-derived overlays
+    # have finished. This prevents readers from observing a half-published scan
+    # and keeps scan identity + recommendation projection atomic at the product
+    # boundary. save_scan itself uses an atomic file replace.
+    if save:
+        save_scan(payload)
+        # Shadow learning must observe only the same fully-published canonical
+        # scan readers can see. It never participates in publication success.
         if _feature002_hook is not None:
             try:
                 _feature002_hook(payload.get("records") or [])
             except Exception:
                 pass
-    summary = dict(payload.get("summary", {}))
-    n_setups = int(summary.get("with_any_setup", 0) or 0)
-    status = SUCCEEDED if n_setups else NO_SETUPS
-    payload["scan_status"] = status
     return MarketScanReport(
         status=status,
         payload=payload,

@@ -77,11 +77,37 @@ jobs:
           import json
           from pathlib import Path
           p = json.loads(Path("logs/product/pre_acceptance_health.json").read_text(encoding="utf-8"))
+          components = {
+              str(row.get("name") or ""): str(row.get("status") or "")
+              for row in (p.get("components") or [])
+              if isinstance(row, dict)
+          }
+          full_ready = (
+              p.get("evidence_ready") is True
+              and p.get("lifecycle") == "READY"
+          )
+          # A clean runner may need to acquire hundreds of genuine NSE sessions
+          # before its first scan artifact exists. That is productive bootstrap,
+          # not a readiness failure, provided every non-scan component is READY,
+          # official history is already current, and the scan artifact is the only
+          # remaining STARTING component. The later acceptance gate still requires
+          # a real completed Market Scan, so this cannot manufacture evidence.
+          scan_bootstrap = (
+              p.get("evidence_ready") is False
+              and p.get("lifecycle") == "DEGRADED"
+              and bool((p.get("history") or {}).get("current"))
+              and components.get("official_history") == "READY"
+              and components.get("scan_artifact") == "STARTING"
+              and all(
+                  status == "READY"
+                  for name, status in components.items()
+                  if name != "scan_artifact"
+              )
+          )
           raise SystemExit(0 if (
               p.get("ok") is True
               and p.get("operational_ready") is True
-              and p.get("evidence_ready") is True
-              and p.get("lifecycle") == "READY"
+              and (full_ready or scan_bootstrap)
               and p.get("live_lock_verified") is True
               and p.get("live_locked") is True
               and p.get("live_execution_authorized") is False
@@ -137,45 +163,27 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # The autonomous switch is allowed only after authoritative current
-          # discovery. A CI fixture may be operationally READY while official
-          # history is intentionally not current; in that case the correct
-          # product behavior is to refuse approval, not to weaken freshness.
+          # Approval is impossible before the automatic startup discovery has
+          # produced a fresh best-trades board. If discovery is still running,
+          # prove the gate refuses approval, then wait for the autonomous scan
+          # instead of manufacturing/rebuilding recommendations in this workflow.
           curl -fsS --max-time 20 http://127.0.0.1:8765/api/decision-simulation-gate > logs/product/simulator_gate.json
-          venv/bin/python - <<'PY'
-          import json
-          from pathlib import Path
-          gate=json.loads(Path('logs/product/simulator_gate.json').read_text(encoding='utf-8'))
-          if gate.get('discovery_ready'):
-              assert gate.get('scan_fresh') is True, gate
-              assert str(gate.get('phase') or '').upper() == 'AWAITING_APPROVAL', gate
-          else:
-              assert gate.get('approved') is False, gate
-              assert str(gate.get('phase') or '').upper() == 'SEARCHING_BEST_TRADES', gate
-              assert gate.get('scan_fresh') is False or not gate.get('scan_scanned_at'), gate
-          PY
-
           ready="$(venv/bin/python - <<'PY'
           import json
           from pathlib import Path
           p=json.loads(Path('logs/product/simulator_gate.json').read_text(encoding='utf-8'))
-          print('1' if p.get('discovery_ready') else '0')
+          if p.get('discovery_ready'):
+              assert p.get('scan_fresh') is True, p
+              assert str(p.get('phase') or '').upper() == 'AWAITING_APPROVAL', p
+              print('1')
+          else:
+              assert p.get('approved') is False, p
+              assert str(p.get('phase') or '').upper() == 'SEARCHING_BEST_TRADES', p
+              print('0')
           PY
           )"
-          if [[ "$ready" = 1 ]]; then
-            curl -fsS --max-time 20 -X POST http://127.0.0.1:8765/api/decision-simulator > logs/product/simulator_approval.json
-            venv/bin/python - <<'PY'
-          import json
-          from pathlib import Path
-          p=json.loads(Path('logs/product/simulator_approval.json').read_text(encoding='utf-8'))
-          assert p.get('accepted') is True, p
-          assert str(p.get('status') or '').upper() == 'APPROVED', p
-          assert p.get('simulation_authority') == 'quantterm-autonomy', p
-          assert p.get('legacy_batch_started') is False, p
-          assert set(p.get('simulation_scope') or []) == {'PAPER_FORWARD','HISTORICAL_REPLAY'}, p
-          PY
-          else
-            # Prove the stale/not-current environment cannot bypass the gate.
+
+          if [[ "$ready" != 1 ]]; then
             curl -fsS --max-time 20 -X POST http://127.0.0.1:8765/api/decision-simulator > logs/product/simulator_approval.json
             venv/bin/python - <<'PY'
           import json
@@ -185,7 +193,56 @@ jobs:
           assert str(p.get('status') or '').upper() == 'WAITING_FOR_BEST_TRADES', p
           assert str((p.get('approval') or {}).get('reason') or '').upper() == 'BEST_TRADE_DISCOVERY_NOT_READY', p
           PY
+
+            ready=0
+            for _ in $(seq 1 480); do
+              curl -fsS --max-time 20 http://127.0.0.1:8765/api/decision-simulation-gate > logs/product/simulator_gate.json
+              if venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+          p=json.loads(Path('logs/product/simulator_gate.json').read_text(encoding='utf-8'))
+          raise SystemExit(0 if p.get('discovery_ready') else 1)
+          PY
+              then
+                ready=1
+                break
+              fi
+              if [[ -f logs/product/complete_stack.pid ]] && ! kill -0 "$(cat logs/product/complete_stack.pid)" 2>/dev/null; then
+                echo "Complete stack exited while waiting for startup best-trade discovery" >&2
+                tail -250 logs/product/complete_stack.log || true
+                exit 1
+              fi
+              sleep 5
+            done
+            if [[ "$ready" != 1 ]]; then
+              echo "Startup best-trade discovery did not become ready" >&2
+              cat logs/product/simulator_gate.json || true
+              tail -250 logs/product/complete_stack.log || true
+              exit 1
+            fi
           fi
+
+          venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+          p=json.loads(Path('logs/product/simulator_gate.json').read_text(encoding='utf-8'))
+          assert p.get('discovery_ready') is True, p
+          assert p.get('scan_fresh') is True, p
+          assert str(p.get('phase') or '').upper() == 'AWAITING_APPROVAL', p
+          assert p.get('approved') is False, p
+          PY
+
+          curl -fsS --max-time 20 -X POST http://127.0.0.1:8765/api/decision-simulator > logs/product/simulator_approval.json
+          venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+          p=json.loads(Path('logs/product/simulator_approval.json').read_text(encoding='utf-8'))
+          assert p.get('accepted') is True, p
+          assert str(p.get('status') or '').upper() == 'APPROVED', p
+          assert p.get('simulation_authority') == 'quantterm-autonomy', p
+          assert p.get('legacy_batch_started') is False, p
+          assert set(p.get('simulation_scope') or []) == {'PAPER_FORWARD','HISTORICAL_REPLAY'}, p
+          PY
 
           # Explicit historical inspection is intentionally independent of the
           # autonomous approval switch. Generate genuine PIT evidence directly;
@@ -217,7 +274,7 @@ jobs:
           AS_OF="$(venv/bin/python -c "import json; print(json.load(open('logs/product/simulator_seed.json'))['as_of'])")"
           venv/bin/python scripts/run_product_acceptance.py \
             --symbol "$SYMBOL" --as-of "$AS_OF" --acquire \
-            --operation-timeout 1200 --acquire-timeout 720 --cycle-timeout 240 \
+            --operation-timeout 2400 --acquire-timeout 1200 --cycle-timeout 240 \
             --output logs/product/product_acceptance.json \
             2>&1 | tee logs/product/product_acceptance.log
 
