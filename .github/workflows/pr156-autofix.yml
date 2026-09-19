@@ -1,0 +1,53 @@
+name: PR156 Exact Autofix
+on:
+  push:
+    branches: [chatgpt/fix-weekend-startup-discovery]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.event.head_commit.message == 'Bootstrap exact PR156 root-cause autofix'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/fix-weekend-startup-discovery
+          fetch-depth: 0
+      - name: Patch freshness identity and shadow ordering
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          desk = Path('product/desk_pipeline.py')
+          text = desk.read_text()
+          old = '        as_of = str(payload.get("as_of_session") or payload.get("history_latest_date") or "")[:10]\n'
+          new = '''        provenance = payload.get("provenance") if isinstance(payload.get("provenance"), dict) else {}\n        # Schema-v2 provenance is the authoritative identity of the official\n        # price session actually consumed. Legacy top-level fields remain a\n        # compatibility fallback for older persisted scans.\n        as_of = str(\n            provenance.get("market_session_date")\n            or provenance.get("price_data_as_of")\n            or payload.get("as_of_session")\n            or payload.get("history_latest_date")\n            or ""\n        )[:10]\n'''
+          if old not in text:
+              raise SystemExit('desk freshness target not found')
+          desk.write_text(text.replace(old, new, 1))
+
+          scan = Path('scan/market_scan_service.py')
+          text = scan.read_text()
+          hook = '''        if _feature002_hook is not None:\n            try:\n                _feature002_hook(payload.get("records") or [])\n            except Exception:\n                pass\n'''
+          if text.count(hook) != 1:
+              raise SystemExit(f'feature002 hook target count={text.count(hook)}')
+          text = text.replace(hook, '', 1)
+          save = '''    if save:\n        save_scan(payload)\n'''
+          moved = '''    if save:\n        save_scan(payload)\n        # Shadow learning must observe only the same fully-published canonical\n        # scan readers can see. It never participates in publication success.\n        if _feature002_hook is not None:\n            try:\n                _feature002_hook(payload.get("records") or [])\n            except Exception:\n                pass\n'''
+          if save not in text:
+              raise SystemExit('canonical save target not found')
+          scan.write_text(text.replace(save, moved, 1))
+
+          tests = Path('tests/test_decision_simulation_startup_approval.py')
+          text = tests.read_text()
+          marker = 'def test_scan_fresh_prefers_schema_v2_provenance_identity'
+          if marker not in text:
+              text += '''\n\ndef test_scan_fresh_prefers_schema_v2_provenance_identity(monkeypatch):\n    from product import desk_pipeline as desk\n\n    monkeypatch.setattr(\n        "data.bhavcopy_runtime.official_history_freshness",\n        lambda **_kwargs: {\n            "current": True,\n            "usable_for_scan": True,\n            "available_session": "2026-09-18",\n            "expected_latest_completed_session": "2026-09-18",\n        },\n    )\n    monkeypatch.setattr(\n        "product.scan_store.load_scan",\n        lambda *_a, **_k: {\n            "schema_version": 2,\n            "scanned_at": "2026-09-18T12:00:00+00:00",\n            "records": [{"symbol": "INFY"}],\n            "provenance": {\n                "market_session_date": "2026-09-18",\n                "price_data_as_of": "2026-09-18",\n            },\n        },\n    )\n\n    assert desk.scan_is_fresh() is True\n\n\ndef test_scan_fresh_rejects_stale_schema_v2_provenance_identity(monkeypatch):\n    from product import desk_pipeline as desk\n\n    monkeypatch.setattr(\n        "data.bhavcopy_runtime.official_history_freshness",\n        lambda **_kwargs: {\n            "current": True,\n            "usable_for_scan": True,\n            "available_session": "2026-09-18",\n            "expected_latest_completed_session": "2026-09-18",\n        },\n    )\n    monkeypatch.setattr(\n        "product.scan_store.load_scan",\n        lambda *_a, **_k: {\n            "schema_version": 2,\n            "scanned_at": "2026-09-18T12:00:00+00:00",\n            "records": [{"symbol": "INFY"}],\n            "provenance": {"market_session_date": "2026-09-17"},\n        },\n    )\n\n    assert desk.scan_is_fresh() is False\n'''
+              tests.write_text(text)
+          PY
+          git config user.name 'quantterm-autofix'
+          git config user.email 'actions@users.noreply.github.com'
+          git add product/desk_pipeline.py scan/market_scan_service.py tests/test_decision_simulation_startup_approval.py
+          git commit -m 'Fix authoritative scan freshness and shadow ordering'
+          git push origin HEAD:chatgpt/fix-weekend-startup-discovery
