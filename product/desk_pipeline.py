@@ -112,7 +112,7 @@ def prices_kind_due() -> str | None:
         freshness = official_history_freshness(load_cache=True)
     except Exception:
         freshness = {"current": False, "ready": False, "sessions": 0}
-    if not freshness.get("current"):
+    if not freshness.get("usable_for_scan"):
         return DATA_PREPARE
     if _stale(logs_dir() / "product" / "fno_universe.json", FNO_FRESH_S):
         return FNO_REFRESH
@@ -125,9 +125,18 @@ def scan_is_fresh() -> bool:
         from data.bhavcopy_runtime import official_history_freshness
 
         freshness = official_history_freshness(load_cache=True)
-        if not freshness.get("current"):
+        if not freshness.get("usable_for_scan"):
             return False
-        expected = str(freshness.get("expected_latest_completed_session") or "")
+        # Scan identity follows the latest authoritative session actually
+        # available and mandatory now. During a bounded publication-grace
+        # window the just-completed archive may truthfully be pending, so
+        # expected_latest_completed_session must not invalidate a scan built
+        # from the latest usable official archive.
+        expected = str(
+            freshness.get("available_session")
+            or freshness.get("minimum_required_official_session")
+            or ""
+        )
     except Exception:
         expected = ""
     try:
