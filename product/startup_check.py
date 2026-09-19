@@ -244,11 +244,18 @@ def build_startup_check(*, probe_network: bool = True) -> dict[str, Any]:
     try:
         from data.bhavcopy_runtime import official_history_freshness
         history_freshness = official_history_freshness(load_cache=False, require_store=False)
-        expected_scan_session = str(
-            history_freshness.get("expected_latest_completed_session")
-            or history_freshness.get("available_session")
-            or ""
-        )[:10]
+        if history_freshness.get("usable_for_scan"):
+            expected_scan_session = str(
+                history_freshness.get("available_session")
+                or history_freshness.get("minimum_required_official_session")
+                or ""
+            )[:10]
+        else:
+            expected_scan_session = str(
+                history_freshness.get("expected_latest_completed_session")
+                or history_freshness.get("available_session")
+                or ""
+            )[:10]
     except Exception:
         expected_scan_session = ""
     try:
