@@ -77,11 +77,37 @@ jobs:
           import json
           from pathlib import Path
           p = json.loads(Path("logs/product/pre_acceptance_health.json").read_text(encoding="utf-8"))
+          components = {
+              str(row.get("name") or ""): str(row.get("status") or "")
+              for row in (p.get("components") or [])
+              if isinstance(row, dict)
+          }
+          full_ready = (
+              p.get("evidence_ready") is True
+              and p.get("lifecycle") == "READY"
+          )
+          # A clean runner may need to acquire hundreds of genuine NSE sessions
+          # before its first scan artifact exists. That is productive bootstrap,
+          # not a readiness failure, provided every non-scan component is READY,
+          # official history is already current, and the scan artifact is the only
+          # remaining STARTING component. The later acceptance gate still requires
+          # a real completed Market Scan, so this cannot manufacture evidence.
+          scan_bootstrap = (
+              p.get("evidence_ready") is False
+              and p.get("lifecycle") == "DEGRADED"
+              and bool((p.get("history") or {}).get("current"))
+              and components.get("official_history") == "READY"
+              and components.get("scan_artifact") == "STARTING"
+              and all(
+                  status == "READY"
+                  for name, status in components.items()
+                  if name != "scan_artifact"
+              )
+          )
           raise SystemExit(0 if (
               p.get("ok") is True
               and p.get("operational_ready") is True
-              and p.get("evidence_ready") is True
-              and p.get("lifecycle") == "READY"
+              and (full_ready or scan_bootstrap)
               and p.get("live_lock_verified") is True
               and p.get("live_locked") is True
               and p.get("live_execution_authorized") is False
@@ -217,7 +243,7 @@ jobs:
           AS_OF="$(venv/bin/python -c "import json; print(json.load(open('logs/product/simulator_seed.json'))['as_of'])")"
           venv/bin/python scripts/run_product_acceptance.py \
             --symbol "$SYMBOL" --as-of "$AS_OF" --acquire \
-            --operation-timeout 1200 --acquire-timeout 720 --cycle-timeout 240 \
+            --operation-timeout 2400 --acquire-timeout 1200 --cycle-timeout 240 \
             --output logs/product/product_acceptance.json \
             2>&1 | tee logs/product/product_acceptance.log
 
