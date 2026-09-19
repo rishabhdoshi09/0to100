@@ -323,7 +323,7 @@ class Supervisor:
                 candidates = preferred or today_rows
                 candidates = sorted(
                     candidates,
-                    key=lambda j: (float(j.scheduled_for or 0.0), float(j.created_at or 0.0)),
+                    key=lambda j: (float(j.scheduled_for or 0.0), str(j.job_id)),
                     reverse=True,
                 )
                 keep_ids.add(candidates[0].job_id)
@@ -339,7 +339,7 @@ class Supervisor:
                     # freshness blocker.
                     newest = max(
                         rows,
-                        key=lambda j: (float(j.scheduled_for or 0.0), float(j.created_at or 0.0)),
+                        key=lambda j: (float(j.scheduled_for or 0.0), str(j.job_id)),
                     )
                     keep_ids.add(newest.job_id)
 
