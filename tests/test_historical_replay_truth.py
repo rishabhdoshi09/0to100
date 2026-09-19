@@ -134,3 +134,54 @@ def test_survivorship_incomplete_replay_is_degraded_even_with_observations(tmp_p
     assert result["status"] == "DEGRADED"
     assert result["evidence_ready"] is False
     assert result["blocker_reason"] == "UNIVERSE_HISTORY_INCOMPLETE"
+
+
+def test_explicit_symbol_scope_does_not_require_whole_market_membership(tmp_path, monkeypatch):
+    _patch_common(monkeypatch)
+    sessions = ["2026-09-08", "2026-09-09", "2026-09-10"]
+    monkeypatch.setattr(
+        "data.nse_universe.refresh_universe_history",
+        lambda **_k: (_ for _ in ()).throw(AssertionError("whole-market universe refresh must not run")),
+    )
+    monkeypatch.setattr(
+        HR,
+        "universe_as_of",
+        lambda *_a, **_k: {
+            "symbols": ["INFY"],
+            "survivorship_complete": False,
+        },
+    )
+    monkeypatch.setattr(
+        HR,
+        "scan_session",
+        lambda *_a, **_k: {
+            "scanned": 1,
+            "records": [],
+            "rejected_candidates": [],
+            "errors": [],
+        },
+    )
+    monkeypatch.setattr(HR, "decide_session", lambda *_a, **_k: [])
+
+    first = HR.run_historical_replay(
+        sessions=2,
+        universe_limit=1,
+        symbols=["INFY"],
+        force=True,
+        directory=tmp_path,
+        dates_fn=lambda: sessions,
+    )
+    second = HR.run_historical_replay(
+        sessions=2,
+        universe_limit=1,
+        symbols=["INFY"],
+        force=False,
+        directory=tmp_path,
+        dates_fn=lambda: sessions,
+    )
+
+    assert first["status"] == "SUCCEEDED"
+    assert first["universe_scope"] == "EXPLICIT_SYMBOLS"
+    assert first["evidence_ready"] is True
+    assert second["cache_hit"] is True
+    assert second["run_id"] == first["run_id"]
