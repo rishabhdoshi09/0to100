@@ -16,6 +16,7 @@ import {
   ExperienceHelpDrawer,
 } from './experience'
 import { MarketSidebar } from './MarketSidebar'
+import { pageMeta } from './navigation'
 import { EducationView } from './educationViews'
 import { NewsView, OperationsRibbon, FnoView } from './marketViews'
 import { ProductStockIntelligenceView, StockInvestigatorView } from './productViews'
@@ -216,61 +217,6 @@ function useIstClock() {
     return () => window.clearInterval(id)
   }, [])
   return now
-}
-
-const pageTitles: Record<string, string> = {
-  Home: 'Home',
-  'Market Scanner': 'Market Scanner',
-  Recommendations: 'Recommendations',
-  'Market Reports': 'Market Reports',
-  'Stock Intelligence': 'Company Intelligence',
-  'Stock Investigator': 'Company Intelligence',
-  'Company Intelligence': 'Company Intelligence',
-  Strategies: 'Strategies',
-  Learning: 'Learning / Decision Journal',
-  Coverage: 'Coverage',
-  'Long-Term Picks': 'Long-Term Picks',
-  Compare: 'Compare',
-  Watchlist: 'Watchlist',
-  'Market Overview': 'Market Overview',
-  'News & Events': 'News & Events',
-  Education: 'Education',
-  'Research Data': 'Research Data',
-  Backtest: 'Backtest',
-  'F&O Desk': 'F&O Desk',
-  'Paper Portfolio': 'My Holdings',
-  'System Health': 'System Health',
-  'Command Center': 'Home',
-  Scanner: 'Market Scanner',
-  'Long-Term': 'Long-Term Picks',
-  Portfolio: 'My Holdings',
-  'Market Internals': 'Market Overview',
-  Automation: 'System Health',
-}
-
-const pageSubtitles: Record<string, string> = {
-  Home: 'Daily command centre — one market scan fills Breakouts, Momentum, Long-Term and Recommendations.',
-  'Market Scanner': 'One saved scan, four lanes — Breakouts, Momentum, SEPA Best Setups and long-term.',
-  'Long-Term Picks': 'Quality overlay from the same market scan — Refresh funds only reloads Screener.',
-  Recommendations: 'Independent experts compete — only high-quality, evidence-backed setups; empty high-conviction is a valid day.',
-  'Market Reports': 'Daily Market Pulse archive — trends, sector movers and breakout context from live system state.',
-  'Stock Intelligence': 'Company workspace — business framework, quality, cash flow, thesis breakers and missing evidence.',
-  'Stock Investigator': 'Type any NSE ticker. Same Company Intelligence engine — not a second scanner.',
-  'Company Intelligence': 'Company workspace — business framework, quality, cash flow, thesis breakers and missing evidence.',
-  Strategies: 'Production recommendation methods with explicit strategy id, version and parity.',
-  Learning: 'What is being tested or learned — sample sizes, settled trades, rejected names. No “AI is learning”.',
-  Coverage: 'Requested vs checked vs qualified vs missing from the last whole-market scan.',
-  Compare: 'Side-by-side comparison across market, growth, quality and technical dimensions.',
-  Watchlist: 'Names you are tracking with latest scan context.',
-  'Market Overview': 'Regime, breadth, volatility and sector leadership.',
-  'News & Events': 'Dated market context with source health.',
-  Education: 'Crunched news + macro/micro teach-ins for the share market — never invented blogs, never a signal.',
-  'Research Data': 'Verified snapshots, data platform jobs, and evidence uploads.',
-  Backtest: 'Production-connected backtests only. Unproven hash stays BACKTEST PARITY: UNVERIFIED.',
-  'F&O Desk': 'Mapped futures, plus an acquired nearest-expiry OI / IV / PCR snapshot when present.',
-  'Paper Portfolio': 'Demat holdings + paper book — sync Zerodha or paste your shares.',
-  Portfolio: 'Demat holdings + paper book — sync Zerodha or paste your shares.',
-  'System Health': 'Independent health lanes — auth, data, scan, workers, contract. No single green light.',
 }
 
 function App() {
@@ -577,6 +523,7 @@ function App() {
             : 'ZERODHA CHECK'
   const brokerTitle = brokerState?.detail || 'Zerodha live-data readiness has not been reported yet.'
   const connectionBanner = error ? deskRefreshBanner(error, dashboardHasWork(dashboard)) : null
+  const activePage = pageMeta(active)
 
   const keep = (ids: string[], node: ReactNode) => (
     <KeepPage ids={ids} active={active} seen={seen}>{node}</KeepPage>
@@ -685,7 +632,7 @@ function App() {
         </header>
 
         <section className="page-title">
-          <div><h1>{pageTitles[active] || active}</h1><p>{pageSubtitles[active]}</p></div>
+          <div><h1>{activePage.title}</h1><p>{activePage.subtitle}</p></div>
           <div className="page-actions">
             {showReportActions && (
               <>

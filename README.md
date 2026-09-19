@@ -4,6 +4,17 @@
 
 > The edge is not a better breakout pattern. The edge is a system that **measures, allocates, and retires** its own strategies faster and more honestly than its operator's emotions would.
 
+## Start here
+
+QuantTerm is intentionally documented for handoff. A new engineer should read only these four root documents before touching code:
+
+- **README.md** — what the product does and how to start it.
+- **ARCHITECTURE.md** — canonical domains, authority boundaries, and data/decision flow.
+- **CONTRIBUTING.md** — how to change the system without creating parallel logic or code bloat.
+- **OPERATIONS.md** — the short runtime/recovery runbook.
+
+Historical design notes under `docs/` are supporting evidence, not competing architecture constitutions.
+
 ---
 
 ## What it does (one loop)
