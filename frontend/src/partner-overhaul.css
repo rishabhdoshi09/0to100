@@ -1,0 +1,429 @@
+/* QuantTerm partner overhaul — final product shell.
+   Visual hierarchy only. No trading/data semantics live in this file.
+   The design deliberately stays light, calm and information-dense. */
+
+:root {
+  --qt-app-bg: #f3f6f4;
+  --qt-app-surface: #ffffff;
+  --qt-app-surface-soft: #f8faf9;
+  --qt-app-surface-tint: #edf5f0;
+  --qt-app-line: #d8e2db;
+  --qt-app-line-strong: #c5d4ca;
+  --qt-app-ink: #132019;
+  --qt-app-muted: #627168;
+  --qt-app-faint: #87938c;
+  --qt-app-accent: #176b46;
+  --qt-app-accent-strong: #0f5738;
+  --qt-app-positive: #168447;
+  --qt-app-warning: #b66b0e;
+  --qt-app-negative: #b42318;
+  --qt-app-shadow-sm: 0 1px 2px rgba(19, 32, 25, 0.035);
+  --qt-app-shadow-md: 0 8px 24px rgba(19, 32, 25, 0.065);
+  --qt-app-shadow-lg: 0 16px 42px rgba(19, 32, 25, 0.085);
+}
+
+html:has(.terminal-root.reco-desk),
+body:has(.terminal-root.reco-desk) {
+  color-scheme: light;
+  background: var(--qt-app-bg);
+}
+
+body:has(.terminal-root.reco-desk)::before {
+  display: none !important;
+}
+
+.terminal-root.reco-desk {
+  min-height: 100vh;
+  grid-template-columns: 232px minmax(0, 1fr);
+  background: var(--qt-app-bg);
+  color: var(--qt-app-ink);
+}
+
+/* Sidebar: quiet, trustworthy, always legible. */
+.reco-desk .reco-sidebar {
+  padding: 18px 12px 14px;
+  border-right: 1px solid var(--qt-app-line);
+  background: rgba(250, 252, 251, 0.98) !important;
+  box-shadow: 8px 0 28px rgba(19, 32, 25, 0.035);
+  backdrop-filter: blur(18px);
+}
+
+.reco-desk .reco-brand {
+  margin: 0 4px 14px;
+  padding: 4px 4px 16px;
+  border-bottom: 1px solid #e4ebe6;
+}
+
+.reco-desk .reco-mark {
+  background: var(--qt-app-accent) !important;
+  color: #fff !important;
+  border-color: var(--qt-app-accent) !important;
+  box-shadow: none !important;
+}
+
+.reco-desk .reco-brand-copy strong {
+  color: var(--qt-app-ink);
+  letter-spacing: 0.10em;
+}
+
+.reco-desk .reco-brand-copy small,
+.reco-desk .nav-section-label,
+.reco-desk .nav-primary-note {
+  color: var(--qt-app-faint);
+}
+
+.reco-desk .nav-item {
+  min-height: 40px;
+  margin: 1px 0;
+  padding: 0 11px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent !important;
+  color: #34443b !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+.reco-desk .nav-item:hover {
+  border-color: #d7e3db;
+  background: #f2f7f4 !important;
+  color: var(--qt-app-ink) !important;
+}
+
+.reco-desk .nav-item.active {
+  border-color: #bfd5c7 !important;
+  background: var(--qt-app-surface-tint) !important;
+  color: var(--qt-app-accent-strong) !important;
+  box-shadow: inset 3px 0 0 var(--qt-app-accent) !important;
+}
+
+.reco-desk .nav-item.active::before {
+  display: none;
+}
+
+.reco-desk .nav-item .reco-ico {
+  color: #738178;
+}
+
+.reco-desk .nav-item.active .reco-ico {
+  color: var(--qt-app-accent);
+}
+
+.reco-desk .nav-advanced,
+.reco-desk .operator-quick-controls,
+.reco-desk .reco-telemetry {
+  border-color: var(--qt-app-line) !important;
+  background: var(--qt-app-surface) !important;
+  color: var(--qt-app-ink) !important;
+  box-shadow: var(--qt-app-shadow-sm) !important;
+}
+
+.reco-desk .reco-telemetry {
+  border-radius: 12px;
+}
+
+.reco-desk .reco-telemetry small,
+.reco-desk .reco-telemetry span {
+  color: var(--qt-app-muted);
+}
+
+/* Workspace chrome */
+.reco-desk .workspace {
+  background: var(--qt-app-bg) !important;
+}
+
+.reco-desk .topbar {
+  min-height: 68px;
+  padding: 11px 24px;
+  gap: 14px;
+  border-bottom: 1px solid var(--qt-app-line);
+  background: rgba(253, 254, 253, 0.95) !important;
+  box-shadow: 0 3px 16px rgba(19, 32, 25, 0.035) !important;
+}
+
+.reco-desk .search-box {
+  height: 42px;
+  border-color: var(--qt-app-line-strong);
+  background: #fff !important;
+  box-shadow: var(--qt-app-shadow-sm) !important;
+}
+
+.reco-desk .search-box:focus-within {
+  border-color: #8eb69f;
+  box-shadow: 0 0 0 3px rgba(23, 107, 70, 0.09) !important;
+}
+
+.reco-desk .search-box button {
+  border-left-color: var(--qt-app-line);
+  background: #f0f6f2 !important;
+  color: var(--qt-app-accent-strong) !important;
+}
+
+.reco-desk .top-status button,
+.reco-desk .experience-help-trigger,
+.reco-desk .display-depth-toggle,
+.reco-desk .live-pill,
+.reco-desk .work-pill,
+.reco-desk .offline-pill {
+  border-color: var(--qt-app-line) !important;
+  background: #fff !important;
+  box-shadow: none !important;
+}
+
+.reco-desk .page-title {
+  margin: 0;
+  padding: 23px 28px 17px;
+  border-bottom: 1px solid #e0e8e3;
+  background: linear-gradient(180deg, rgba(255,255,255,.88), rgba(248,250,249,.84));
+}
+
+.reco-desk .page-title h1 {
+  color: var(--qt-app-ink);
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: clamp(26px, 2.2vw, 34px);
+  font-weight: 650;
+  letter-spacing: -0.035em;
+}
+
+.reco-desk .page-title p {
+  max-width: 920px;
+  color: var(--qt-app-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.reco-desk .page-actions button,
+.reco-desk .panel button,
+.reco-desk .automation-actions button {
+  border-color: #c9d9cf !important;
+  background: #f5f9f6 !important;
+  color: var(--qt-app-accent-strong) !important;
+  box-shadow: none !important;
+}
+
+.reco-desk .page-actions button:hover,
+.reco-desk .panel button:hover,
+.reco-desk .automation-actions button:hover {
+  border-color: #9ebca9 !important;
+  background: #eaf4ee !important;
+}
+
+/* Shared content surfaces: no legacy dark-terminal islands. */
+.reco-desk .panel,
+.reco-desk .metric,
+.reco-desk .home-os-card,
+.reco-desk .home-os-now-next > div,
+.reco-desk .home-os-grid > div,
+.reco-desk .home-os-opps > div,
+.reco-desk .home-os-past,
+.reco-desk .home-os-inspector,
+.reco-desk .home-os-system > button.home-os-lane,
+.reco-desk .radar-pipeline-step,
+.reco-desk .radar-desk-strip > div,
+.reco-desk .radar-market-strip > div,
+.reco-desk .radar-lane-card,
+.reco-desk .today-strip > div,
+.reco-desk .scanner-lane-cards article,
+.reco-desk .quality-overlay-grid > div,
+.reco-desk .evidence-stat-grid > div,
+.reco-desk .long-term-metric-strip > div,
+.reco-desk .long-term-operation {
+  border-color: var(--qt-app-line) !important;
+  background: var(--qt-app-surface) !important;
+  color: var(--qt-app-ink) !important;
+  box-shadow: var(--qt-app-shadow-sm) !important;
+}
+
+.reco-desk .panel,
+.reco-desk .home-os-card,
+.reco-desk .daily-wrap,
+.reco-desk .reco-pick {
+  box-shadow: var(--qt-app-shadow-md) !important;
+}
+
+.reco-desk .panel:hover,
+.reco-desk .metric:hover,
+.reco-desk .reco-pick:hover {
+  transform: none !important;
+  border-color: #c4d7ca !important;
+  box-shadow: var(--qt-app-shadow-lg) !important;
+}
+
+.reco-desk .metric::after {
+  height: 3px;
+  opacity: .45;
+}
+
+.reco-desk .metric > span,
+.reco-desk .metric small,
+.reco-desk .panel-title small,
+.reco-desk .empty-row,
+.reco-desk .radar-pipeline-msg,
+.reco-desk .home-os-grid small {
+  color: var(--qt-app-muted) !important;
+}
+
+.reco-desk .metric strong,
+.reco-desk .panel-title strong,
+.reco-desk .home-os-card strong,
+.reco-desk .radar-pipeline-step strong,
+.reco-desk .radar-desk-strip strong,
+.reco-desk .today-strip strong {
+  color: var(--qt-app-ink) !important;
+  -webkit-text-fill-color: currentColor !important;
+  background: none !important;
+}
+
+/* Tables and list rows: dense but readable. */
+.reco-desk table,
+.reco-desk .table-shell,
+.reco-desk .compact-list {
+  color: var(--qt-app-ink);
+}
+
+.reco-desk .table-row,
+.reco-desk .compact-row,
+.reco-desk .positions-row,
+.reco-desk .fno-row,
+.reco-desk .insight {
+  border-color: #e6ece8 !important;
+  background: transparent !important;
+  color: #425149 !important;
+}
+
+.reco-desk .table-row:hover,
+.reco-desk .compact-row:hover,
+.reco-desk .positions-row:hover,
+.reco-desk .fno-row:hover {
+  background: #f4f8f5 !important;
+}
+
+.reco-desk .table-row strong,
+.reco-desk .compact-row strong,
+.reco-desk .positions-row strong,
+.reco-desk .fno-row strong {
+  color: var(--qt-app-ink) !important;
+}
+
+.reco-desk .panel footer,
+.reco-desk .ohlc-strip,
+.reco-desk .portfolio-stats {
+  border-color: #e4ebe6 !important;
+}
+
+/* Exception-first colors */
+.reco-desk .positive,
+.reco-desk .qt-status-fresh,
+.reco-desk .live-pill {
+  color: var(--qt-app-positive) !important;
+}
+
+.reco-desk .negative,
+.reco-desk .qt-status-error,
+.reco-desk .offline-pill {
+  color: var(--qt-app-negative) !important;
+}
+
+.reco-desk .qt-status-stale,
+.reco-desk .work-pill {
+  color: var(--qt-app-warning) !important;
+}
+
+/* Content width stays generous but not visually adrift on large monitors. */
+.reco-desk .workspace > .workspace-view,
+.reco-desk .workspace > .radar-home,
+.reco-desk .workspace > .market-scanner,
+.reco-desk .workspace > .reco-light,
+.reco-desk .workspace > .research-data-view {
+  width: min(100%, 1540px);
+}
+
+/* Controls */
+.reco-desk button:not(:disabled) {
+  cursor: pointer;
+}
+
+.reco-desk button:focus-visible,
+.reco-desk input:focus-visible,
+.reco-desk select:focus-visible,
+.reco-desk [role='button']:focus-visible {
+  outline: 2px solid rgba(23, 107, 70, .5);
+  outline-offset: 2px;
+  box-shadow: none !important;
+}
+
+::selection {
+  background: rgba(23, 107, 70, .16);
+  color: var(--qt-app-ink);
+}
+
+@media (max-width: 1180px) {
+  .terminal-root.reco-desk {
+    grid-template-columns: 208px minmax(0, 1fr);
+  }
+
+  .reco-desk .topbar {
+    padding-inline: 18px;
+  }
+
+  .reco-desk .page-title {
+    padding-inline: 20px;
+  }
+}
+
+@media (max-width: 920px) {
+  html:has(.terminal-root.reco-desk),
+  body:has(.terminal-root.reco-desk) {
+    min-width: 0 !important;
+  }
+
+  .terminal-root.reco-desk {
+    grid-template-columns: 1fr;
+  }
+
+  .reco-desk .reco-sidebar {
+    position: relative;
+    width: 100%;
+    height: auto;
+    max-height: none;
+    box-shadow: none;
+    border-right: 0;
+    border-bottom: 1px solid var(--qt-app-line);
+  }
+
+  .reco-desk .topbar {
+    position: relative;
+    flex-wrap: wrap;
+  }
+
+  .reco-desk .search-box {
+    flex-basis: 100%;
+    width: 100%;
+    max-width: none;
+  }
+
+  .reco-desk .top-status {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .reco-desk .page-title {
+    align-items: flex-start;
+    gap: 14px;
+    flex-direction: column;
+  }
+
+  .reco-desk .page-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reco-desk *,
+  .reco-desk *::before,
+  .reco-desk *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
