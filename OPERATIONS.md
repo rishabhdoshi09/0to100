@@ -2,14 +2,25 @@
 
 This is the short operator runbook. Detailed host procedures remain in `docs/MACBOOK_RUNBOOK.md`.
 
-## Start the complete stack
+## Start and stop the complete stack
+
+Start:
 
 ```bash
 cd ~/0to100
 bash scripts/run_quantterm_complete.sh
 ```
 
+Stop from any terminal:
+
+```bash
+cd ~/0to100
+bash scripts/stop_quantterm.sh
+```
+
 The canonical desk is served at `http://127.0.0.1:5173`.
+
+The stop command signals only the recorded complete-stack supervisor and lets that owner perform its bounded child cleanup. It deliberately refuses to kill arbitrary processes merely because they occupy QuantTerm's ports, and it fails closed if the recorded PID has been reused by a non-QuantTerm process.
 
 Do not start separate copies of the API, desk, supervisor, or market-ops worker in extra terminals. The complete-stack launcher owns the local process tree.
 
