@@ -5,6 +5,7 @@ import {
   WORKSPACE_NAV,
   canonicalNavRoute,
   isToolRoute,
+  pageMeta,
 } from './navigation'
 
 describe('product navigation contract', () => {
@@ -40,5 +41,11 @@ describe('product navigation contract', () => {
     expect(isToolRoute('Scanner')).toBe(true)
     expect(isToolRoute('Why')).toBe(true)
     expect(isToolRoute('Today')).toBe(false)
+  })
+
+  it('uses the same language for aliases and canonical routes', () => {
+    expect(pageMeta('Today')).toEqual(pageMeta('Home'))
+    expect(pageMeta('Research').title).toBe('Research')
+    expect(pageMeta('System').title).toBe('System')
   })
 })
