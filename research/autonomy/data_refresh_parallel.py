@@ -236,8 +236,9 @@ def install_parallel_data_refresh() -> None:
 
             def retry_or_fail_nonblocking(self, job, *, error_code, error_message, summary=""):
                 if error_code == IN_PROGRESS:
-                    # Polling background I/O is not a failed attempt. Attempt count
-                    # may increase when leased, but it must never exhaust the failure budget.
+                    # Polling background I/O is not a failed attempt. The job-store
+                    # poll reschedule reverses the lease increment so durable attempt
+                    # counts represent real executions/failures, never heartbeat polls.
                     self.jobs.reschedule_poll(
                         job.job_id,
                         when=self.clock() + 2.0,
