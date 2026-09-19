@@ -1,0 +1,136 @@
+from __future__ import annotations
+
+from product import historical_replay as HR
+
+
+class _Versions:
+    def as_dict(self):
+        return {"test": "v1"}
+
+
+def _patch_common(monkeypatch):
+    monkeypatch.setattr("data.bhavcopy_runtime.ensure_loaded", lambda **_k: {"ready": True})
+    monkeypatch.setattr(
+        "data.nse_universe.refresh_universe_history",
+        lambda **_k: {
+            "available": True,
+            "survivorship_complete": True,
+            "symbols": ["INFY"],
+        },
+    )
+    monkeypatch.setattr("product.pit_versions.current_versions", lambda: _Versions())
+    monkeypatch.setattr("product.pit_warehouse.warehouse_fingerprint", lambda: "warehouse-test")
+    monkeypatch.setattr(HR, "evaluate_outcomes", lambda rows: list(rows))
+
+
+def test_empty_replay_cannot_report_succeeded(tmp_path, monkeypatch):
+    _patch_common(monkeypatch)
+    sessions = ["2026-09-08", "2026-09-09", "2026-09-10"]
+    monkeypatch.setattr(
+        HR,
+        "universe_as_of",
+        lambda *_a, **_k: {
+            "symbols": [],
+            "survivorship_complete": False,
+        },
+    )
+    monkeypatch.setattr(
+        HR,
+        "scan_session",
+        lambda *_a, **_k: {
+            "scanned": 0,
+            "records": [],
+            "rejected_candidates": [],
+            "errors": [],
+        },
+    )
+    monkeypatch.setattr(HR, "decide_session", lambda *_a, **_k: [])
+
+    result = HR.run_historical_replay(
+        sessions=2,
+        universe_limit=40,
+        force=True,
+        directory=tmp_path,
+        dates_fn=lambda: sessions,
+    )
+
+    assert result["status"] == "DEGRADED"
+    assert result["evidence_ready"] is False
+    assert result["blocker_reason"] == "NO_HISTORICAL_MARKET_OBSERVATIONS"
+    assert result["universe_observations"] == 0
+    assert result["stocks_evaluated"] == 0
+
+
+def test_real_evaluated_no_setup_session_is_valid_success(tmp_path, monkeypatch):
+    _patch_common(monkeypatch)
+    sessions = ["2026-09-08", "2026-09-09", "2026-09-10"]
+    monkeypatch.setattr(
+        HR,
+        "universe_as_of",
+        lambda *_a, **_k: {
+            "symbols": ["INFY"],
+            "survivorship_complete": True,
+        },
+    )
+    monkeypatch.setattr(
+        HR,
+        "scan_session",
+        lambda *_a, **_k: {
+            "scanned": 1,
+            "records": [],
+            "rejected_candidates": [],
+            "errors": [],
+        },
+    )
+    monkeypatch.setattr(HR, "decide_session", lambda *_a, **_k: [])
+
+    result = HR.run_historical_replay(
+        sessions=2,
+        universe_limit=40,
+        force=True,
+        directory=tmp_path,
+        dates_fn=lambda: sessions,
+    )
+
+    assert result["status"] == "SUCCEEDED"
+    assert result["evidence_ready"] is True
+    assert result["blocker_reason"] == ""
+    assert result["universe_observations"] == 2
+    assert result["stocks_evaluated"] == 2
+    assert result["decisions_tested"] == 0
+
+
+def test_survivorship_incomplete_replay_is_degraded_even_with_observations(tmp_path, monkeypatch):
+    _patch_common(monkeypatch)
+    sessions = ["2026-09-08", "2026-09-09", "2026-09-10"]
+    monkeypatch.setattr(
+        HR,
+        "universe_as_of",
+        lambda *_a, **_k: {
+            "symbols": ["INFY"],
+            "survivorship_complete": False,
+        },
+    )
+    monkeypatch.setattr(
+        HR,
+        "scan_session",
+        lambda *_a, **_k: {
+            "scanned": 1,
+            "records": [],
+            "rejected_candidates": [],
+            "errors": [],
+        },
+    )
+    monkeypatch.setattr(HR, "decide_session", lambda *_a, **_k: [])
+
+    result = HR.run_historical_replay(
+        sessions=2,
+        universe_limit=40,
+        force=True,
+        directory=tmp_path,
+        dates_fn=lambda: sessions,
+    )
+
+    assert result["status"] == "DEGRADED"
+    assert result["evidence_ready"] is False
+    assert result["blocker_reason"] == "UNIVERSE_HISTORY_INCOMPLETE"
