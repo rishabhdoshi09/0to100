@@ -45,6 +45,38 @@ def test_queue_reuses_running_market_operation(monkeypatch):
     assert store.enqueued == []
 
 
+def test_startup_discovery_reuses_unbound_running_market_scan(monkeypatch):
+    latest = {
+        "operation_id": "scan-running",
+        "kind": "MARKET_SCAN",
+        "status": "RUNNING",
+        "requested_at": 1.0,
+        "payload": {},
+    }
+    store = _FakeStore(latest)
+    monkeypatch.setattr(PR, "_ops_store", lambda: store)
+    monkeypatch.setattr(PR, "_ensure_ops_worker", lambda: None)
+
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(active_snapshot_id=lambda: "portfolio-snapshot"),
+        job=SimpleNamespace(
+            idempotency_key=(
+                "startup_discovery_scan:startup-1:"
+                "market:official_nse:2026-09-18"
+            ),
+            input_snapshot_id="market:official_nse:2026-09-18",
+        ),
+    )
+    result = PR._delegated_market_scan(ctx)
+
+    assert result.status == JS.RETRYABLE_FAILED
+    assert result.error_code == "MARKET_OP_IN_PROGRESS"
+    assert result.metadata["operation_id"] == "scan-running"
+    assert result.metadata["requested_snapshot_id"] == ""
+    assert result.metadata["startup_discovery_reuse"] is True
+    assert store.enqueued == []
+
+
 def test_autonomy_market_scan_observes_market_ops_and_never_runs_duplicate(monkeypatch):
     operation = {
         "operation_id": "scan-ok",
