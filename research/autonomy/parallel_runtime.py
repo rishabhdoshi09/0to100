@@ -464,7 +464,7 @@ def install_parallel_runtime() -> None:
             if error_code in _BRIDGE_PENDING:
                 # Polling a durable external operation is not a failed attempt and
                 # must never exhaust the autonomy retry budget.
-                self.jobs.reschedule_retry(
+                self.jobs.reschedule_poll(
                     job.job_id,
                     when=self.clock() + 1.0,
                     error_code=error_code,
