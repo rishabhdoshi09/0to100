@@ -238,7 +238,7 @@ def install_parallel_data_refresh() -> None:
                 if error_code == IN_PROGRESS:
                     # Polling background I/O is not a failed attempt. Attempt count
                     # may increase when leased, but it must never exhaust the failure budget.
-                    self.jobs.reschedule_retry(
+                    self.jobs.reschedule_poll(
                         job.job_id,
                         when=self.clock() + 2.0,
                         error_code=error_code,
