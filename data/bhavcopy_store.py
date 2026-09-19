@@ -113,9 +113,18 @@ def _read_day(d: date) -> Optional[pd.DataFrame]:
 
 
 def _trading_days_back(n_days: int) -> list[date]:
-    """Candidate weekdays going back far enough to cover n_days sessions."""
-    out, d = [], date.today()
-    while len(out) < int(n_days * 1.55):
+    """Candidate weekdays across a calendar horizon large enough for n_days sessions.
+
+    The 1.55 safety factor is a *calendar-day* allowance for weekends and exchange
+    holidays. Counting 1.55x weekdays accidentally requested about 775 downloads
+    for a 500-session store, turning a cold bootstrap into a multi-year backfill.
+    """
+    target = max(1, int(n_days))
+    horizon_days = max(target, int(target * 1.55))
+    start = date.today()
+    floor = start - timedelta(days=horizon_days - 1)
+    out, d = [], start
+    while d >= floor:
         if d.weekday() < 5:
             out.append(d)
         d -= timedelta(days=1)

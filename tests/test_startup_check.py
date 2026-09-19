@@ -346,3 +346,41 @@ def test_scan_evidence_old_session_is_stale_even_when_recent():
     status, detail = _scan_evidence_status(payload, expected_session="2026-09-11")
     assert status == "STALE"
     assert "behind expected 2026-09-11" in detail
+
+
+def test_publication_pending_history_and_matching_scan_are_evidence_ready(monkeypatch):
+    _patch_operational_healthy(monkeypatch)
+    monkeypatch.setattr(
+        bhavcopy_runtime,
+        "official_history_freshness",
+        lambda **_kwargs: {
+            "current": False,
+            "usable_for_scan": True,
+            "publication_pending": True,
+            "reason_code": "HISTORY_PUBLICATION_PENDING",
+            "available_session": "2026-09-14",
+            "minimum_required_official_session": "2026-09-14",
+            "expected_latest_completed_session": "2026-09-15",
+            "publication_deadline": "2026-09-16T09:00:00+05:30",
+        },
+    )
+    _patch_scan(
+        monkeypatch,
+        _current_scan(
+            hours_ago=20.0,
+            records=[{"symbol": "AAA"}],
+            as_of_session="2026-09-14",
+        ),
+    )
+    _patch_soak(monkeypatch, "HEALTHY")
+    monkeypatch.setattr("data.kite_client._fresh_env", lambda *_a, **_k: "")
+
+    payload = build_startup_check(probe_network=False)
+
+    data = next(lane for lane in payload["lanes"] if lane["name"] == "DATA")
+    scan = next(lane for lane in payload["lanes"] if lane["name"] == "SCAN PIPELINE")
+    assert data["status"] == "READY"
+    assert "archive publishing" in data["detail"]
+    assert scan["status"] == "READY"
+    assert payload["evidence_ready"] is True
+    assert payload["ready"] is True

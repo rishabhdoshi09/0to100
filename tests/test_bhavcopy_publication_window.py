@@ -254,3 +254,107 @@ def test_the_two_freshness_functions_never_disagree(latest, when):
     assert (snapshot["minimum_required_official_session"]
             == official["minimum_required_official_session"])
     assert snapshot["publication_pending"] == official["publication_pending"]
+
+
+def test_J_desk_scan_freshness_accepts_latest_usable_archive_during_publication_grace(monkeypatch):
+    import product.desk_pipeline as DP
+
+    frozen = _freshness(MON, datetime(2026, 9, 15, 18, 30))
+    assert frozen["current"] is False
+    assert frozen["usable_for_scan"] is True
+    monkeypatch.setattr(
+        "data.bhavcopy_runtime.official_history_freshness",
+        lambda **_k: dict(frozen),
+    )
+    monkeypatch.setattr(
+        "product.scan_store.load_scan",
+        lambda *_a, **_k: {
+            "as_of_session": MON,
+            "scanned_at": "2026-09-15T18:20:00+05:30",
+            "records": [{"symbol": "INFY"}],
+        },
+    )
+    monkeypatch.setattr(
+        "product.scan_store.scan_artifact_is_fresh",
+        lambda *_a, **_k: True,
+    )
+
+    assert DP.scan_is_fresh() is True
+
+
+def test_J_desk_scan_freshness_still_blocks_genuinely_stale_history(monkeypatch):
+    import product.desk_pipeline as DP
+
+    frozen = _freshness(FRI, datetime(2026, 9, 15, 18, 30))
+    assert frozen["usable_for_scan"] is False
+    monkeypatch.setattr(
+        "data.bhavcopy_runtime.official_history_freshness",
+        lambda **_k: dict(frozen),
+    )
+    monkeypatch.setattr(
+        "product.scan_store.load_scan",
+        lambda *_a, **_k: {
+            "as_of_session": FRI,
+            "scanned_at": "2026-09-15T18:20:00+05:30",
+            "records": [{"symbol": "INFY"}],
+        },
+    )
+
+    assert DP.scan_is_fresh() is False
+
+
+def test_J_desk_price_prepare_does_not_loop_only_because_archive_is_pending(monkeypatch):
+    import product.desk_pipeline as DP
+
+    frozen = _freshness(MON, datetime(2026, 9, 15, 18, 30))
+    assert frozen["usable_for_scan"] is True
+    monkeypatch.setattr(
+        "data.bhavcopy_runtime.official_history_freshness",
+        lambda **_k: dict(frozen),
+    )
+    monkeypatch.setattr(DP, "_stale", lambda *_a, **_k: False)
+
+    assert DP.prices_kind_due() is None
+
+
+def test_K_capability_readiness_uses_scan_usability_but_keeps_outcome_currency_strict(monkeypatch):
+    import product.readiness as R
+
+    frozen = _freshness(MON, datetime(2026, 9, 15, 18, 30))
+    assert frozen["current"] is False
+    assert frozen["usable_for_scan"] is True
+    monkeypatch.setattr(R, "official_history", lambda: dict(frozen))
+    monkeypatch.setattr(
+        R,
+        "broker_status",
+        lambda: {
+            "live_data_ready": False,
+            "execution_ready": False,
+            "auth_ready": False,
+        },
+    )
+    monkeypatch.setattr(
+        "product.scan_store.load_scan",
+        lambda *_a, **_k: {"records": [{"symbol": "INFY"}]},
+    )
+    monkeypatch.setattr(
+        "product.scan_store.default_scan_path",
+        lambda: "unused.json",
+    )
+
+    payload = R.inspect_readiness()
+    assert payload["official_history"]["ready"] is True
+    assert payload["capabilities"][R.OFFICIAL_MARKET_DATA_READY] is True
+    # Outcome settlement still needs the completed session itself, not merely
+    # a scan-usable publication-grace archive.
+    assert payload["capabilities"][R.OUTCOME_DATA_READY] is False
+
+
+def test_K_runtime_lifecycle_evidence_gate_uses_canonical_history_usability():
+    import inspect
+    import product.runtime_lifecycle as RL
+
+    src = inspect.getsource(RL.inspect_runtime)
+    assert "history_usable = bool(history.get(\"usable_for_scan\"))" in src
+    assert "evidence_ready = history_usable and scan_ok" in src
+    assert 'if not history_usable:' in src

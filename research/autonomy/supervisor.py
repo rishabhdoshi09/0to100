@@ -171,6 +171,7 @@ class Supervisor:
         # Legacy recurring rows from the old time-bucket scheduler must not fire
         # after an upgrade. Manual controls use "manual:" keys and are preserved.
         self._retire_legacy_recurring_work()
+        self._retire_obsolete_data_refresh_work()
         if hasattr(self.deps, "notify_online"):
             try:
                 self.deps.notify_online()
@@ -276,6 +277,85 @@ class Supervisor:
             pass
 
 
+    def _retire_obsolete_data_refresh_work(self) -> None:
+        """Keep at most one relevant automatic DATA_REFRESH intent.
+
+        DATA_REFRESH is a canonical snapshot refresh, not an append-only queue.
+        Old session rows may survive an unclean shutdown. When official history
+        is already usable under the canonical freshness policy, those historical
+        intents are obsolete and must not keep the desk in DATA_REFRESHING.
+
+        If data is genuinely stale, preserve one newest recovery intent so the
+        safety gate remains fail-closed and the system can recover autonomously.
+        Manual refresh controls are never touched.
+        """
+        try:
+            now_ist = self.deps.now_ist()
+            today = now_ist.date().isoformat()
+            rows = [
+                job for job in self.jobs.list(limit=2000)
+                if job.job_type == SCH.DATA_REFRESH
+                and job.status in {JS.PENDING, JS.BLOCKED}
+                and not str(job.idempotency_key or "").startswith("manual:")
+            ]
+            if not rows:
+                return
+
+            def session_key(job):
+                key = str(job.idempotency_key or "")
+                parts = key.split(":")
+                return parts[1] if len(parts) >= 2 and parts[0] == "data_refresh" else ""
+
+            today_rows = [job for job in rows if session_key(job) == today]
+            keep_ids = set()
+
+            if today_rows:
+                # During the cash session the normal current-session refresh is
+                # authoritative. In the EOD publication window prefer the stricter
+                # :eod intent. Outside both, keep only the newest current-day row.
+                holidays = self.deps.holidays() if hasattr(self.deps, "holidays") else None
+                if SCH.in_eod_window(now_ist, holidays):
+                    preferred = [j for j in today_rows if str(j.idempotency_key or "").endswith(":eod")]
+                elif SCH.market_is_open(now_ist, holidays):
+                    preferred = [j for j in today_rows if not str(j.idempotency_key or "").endswith(":eod")]
+                else:
+                    preferred = []
+                candidates = preferred or today_rows
+                candidates = sorted(
+                    candidates,
+                    key=lambda j: (float(j.scheduled_for or 0.0), str(j.job_id)),
+                    reverse=True,
+                )
+                keep_ids.add(candidates[0].job_id)
+            else:
+                try:
+                    from product.readiness import official_history
+                    usable = bool((official_history() or {}).get("usable_for_scan"))
+                except Exception:
+                    usable = False
+                if not usable:
+                    # Genuine stale/missing data: preserve one newest recovery
+                    # intent. We do not cancel the only path that can clear the
+                    # freshness blocker.
+                    newest = max(
+                        rows,
+                        key=lambda j: (float(j.scheduled_for or 0.0), str(j.job_id)),
+                    )
+                    keep_ids.add(newest.job_id)
+
+            for job in rows:
+                if job.job_id in keep_ids:
+                    continue
+                self.jobs.complete(
+                    job.job_id,
+                    JS.CANCELLED,
+                    result_summary="obsolete data-refresh intent retired by canonical freshness truth",
+                )
+        except Exception:
+            # Scheduler cleanup must never weaken the underlying data gate.
+            return
+
+
     def _write_status(self):
         caps = H.capabilities(self.failures)
         d = self.state.as_dict()
@@ -334,7 +414,12 @@ class Supervisor:
             from product.readiness import official_history
 
             history = dict(official_history() or {})
-            if not history.get("current"):
+            # Discovery may use the latest official session while the next archive is
+            # still inside its explicit publication-grace window. Requiring
+            # current here deadlocked weekend/off-session startup even though
+            # the canonical freshness policy truthfully marked that history as
+            # usable_for_scan. Never bypass a genuinely stale history gate.
+            if not history.get("usable_for_scan"):
                 return
             latest = str(
                 history.get("available_session")
@@ -925,6 +1010,7 @@ class Supervisor:
         # A dead old worker may have left RUNNING recurring work. Reclaim first,
         # then retire those rows before anything can lease them again.
         self._retire_legacy_recurring_work()
+        self._retire_obsolete_data_refresh_work()
         self._process_controls()
         current = now_ist or self.deps.now_ist()
         self._manage_live_feed(current)

@@ -128,3 +128,70 @@ def test_idle_reconcile_blocks_when_snapshot_is_stale(tmp_path):
     assert sup.state.state == ST.DATA_BLOCKED
     assert sup.state.reason_code == "idle_reconcile"
     sup.shutdown()
+
+
+def test_publication_grace_retires_old_duplicate_data_refresh_intents(tmp_path, monkeypatch):
+    sup = _sup(tmp_path)
+    assert sup.start() is True
+    monkeypatch.setattr(
+        "product.readiness.official_history",
+        lambda: {
+            "usable_for_scan": True,
+            "current": False,
+            "publication_pending": True,
+            "reason_code": "HISTORY_PUBLICATION_PENDING",
+        },
+    )
+    old_a = sup.jobs.enqueue(
+        SCH.DATA_REFRESH,
+        idempotency_key="data_refresh:2026-09-16",
+        critical=True,
+    )
+    old_b = sup.jobs.enqueue(
+        SCH.DATA_REFRESH,
+        idempotency_key="data_refresh:2026-09-16:eod",
+        critical=True,
+    )
+
+    sup._retire_obsolete_data_refresh_work()
+
+    assert sup.jobs.get(old_a.job_id).status == JS.CANCELLED
+    assert sup.jobs.get(old_b.job_id).status == JS.CANCELLED
+    sup.shutdown()
+
+
+def test_genuinely_stale_history_preserves_exactly_one_refresh_recovery_intent(tmp_path, monkeypatch):
+    sup = _sup(tmp_path)
+    assert sup.start() is True
+    monkeypatch.setattr(
+        "product.readiness.official_history",
+        lambda: {
+            "usable_for_scan": False,
+            "current": False,
+            "publication_pending": False,
+            "reason_code": "HISTORY_STALE",
+        },
+    )
+    old_a = sup.jobs.enqueue(
+        SCH.DATA_REFRESH,
+        idempotency_key="data_refresh:2026-09-15",
+        scheduled_for=sup.clock() - 30,
+        critical=True,
+    )
+    old_b = sup.jobs.enqueue(
+        SCH.DATA_REFRESH,
+        idempotency_key="data_refresh:2026-09-16:eod",
+        scheduled_for=sup.clock() - 10,
+        critical=True,
+    )
+
+    sup._retire_obsolete_data_refresh_work()
+
+    states = {
+        old_a.job_id: sup.jobs.get(old_a.job_id).status,
+        old_b.job_id: sup.jobs.get(old_b.job_id).status,
+    }
+    assert list(states.values()).count(JS.PENDING) == 1
+    assert list(states.values()).count(JS.CANCELLED) == 1
+    assert states[old_b.job_id] == JS.PENDING
+    sup.shutdown()

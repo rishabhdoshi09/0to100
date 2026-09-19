@@ -1,22 +1,8 @@
-"""
-📄 PaperBook — a self-contained simulated ledger for full paper autonomy.
-
-This is where the autonomous brain is allowed to "blow up paper money": it opens and closes
-SIMULATED positions, marks them against real price bars, and books realized R. It exists so
-the system can trade its own approved strategies hands-off and learn from the outcomes.
-
-Safety by construction:
-  • It imports NOTHING from any real-order execution path. There is no code path from here
-    to a real order. It can only move numbers in memory.
-  • It enforces the house risk invariants (1% maximum risk/trade, 10% per name, 5% total
-    open risk, max open positions) and consumes Brain 2's smaller approved risk budgets.
-
-Pure and deterministic: given the same opens and the same price bars, the book is identical.
-"""
+"""Paper-only simulated ledger with durable risk/execution semantics."""
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
-
+from dataclasses import asdict, dataclass
+from math import isfinite
 from research.intelligence.runtime.position_sizing import size_long_cash
 
 
@@ -34,27 +20,18 @@ class PaperPosition:
     requested_risk_pct: float = 0.0
     approved_risk_pct: float = 0.0
     bars_held: int = 0
-    # One official session may be observed by several autonomy cycles. Persist the last
-    # session applied to this position so retries/restarts/cycle-id changes cannot age it twice.
     last_marked_session: str = ""
-    # Linkage back to the decision that opened this position. Empty for positions
-    # opened by the research simulators, which have no canonical decision behind
-    # them — and whose outcomes therefore cannot become conditional evidence.
     decision_id: str = ""
     paper_intent_id: str = ""
-    # The conditional cell this position's outcome will update, frozen at open
-    # time. Re-deriving it at settlement would key the outcome by a regime that
-    # has since changed, so the trade would update a cell it was never ranked in.
     context_key: str = ""
-    # Persisted portfolio context used by next-cycle sector concentration gates.
-    # Default keeps old snapshots backward-compatible.
     sector: str = ""
 
     @property
     def r_unit(self) -> float:
-        return max(1e-9, self.entry_price - self.stop_price)   # long only
+        return max(1e-9, self.entry_price - self.stop_price)
 
-    def as_dict(self): return asdict(self)
+    def as_dict(self):
+        return asdict(self)
 
 
 @dataclass
@@ -67,19 +44,65 @@ class ClosedTrade:
     qty: int
     entry_date: str
     exit_date: str
-    exit_reason: str            # STOP / TARGET / MAX_HOLD
+    exit_reason: str
     realized_R: float
     pnl: float
     decision_id: str = ""
     paper_intent_id: str = ""
     context_key: str = ""
 
-    def as_dict(self): return asdict(self)
+    def as_dict(self):
+        return asdict(self)
+
+
+def _cost_model_name(model) -> str:
+    if model is None:
+        return ""
+    module = str(getattr(model, "__module__", "") or "")
+    name = str(getattr(model, "__name__", "") or "")
+    if module == "research.auto_research.costs" and name == "india_cash_costs":
+        return "india_cash_costs"
+    return ""
+
+
+def _resolve_cost_model(name: str):
+    if not name:
+        return None
+    if name == "india_cash_costs":
+        from research.auto_research.costs import india_cash_costs
+        return india_cash_costs
+    raise ValueError("unsupported paper cost model")
+
+
+def _validated_risk_config(raw: dict) -> dict:
+    if not isinstance(raw, dict):
+        raise ValueError("risk_config must be an object")
+    risk = float(raw["risk_per_trade_pct"])
+    pos = float(raw["max_position_pct"])
+    total = float(raw["max_total_risk_pct"])
+    maximum = int(raw["max_positions"])
+    slip = float(raw["slippage_bps"])
+    if not all(isfinite(v) for v in (risk, pos, total, slip)):
+        raise ValueError("non-finite risk contract")
+    if not (0 < risk <= 1 and 0 < pos <= 1 and 0 < total <= 1):
+        raise ValueError("invalid risk fractions")
+    if maximum <= 0 or slip < 0:
+        raise ValueError("invalid execution contract")
+    model_name = str(raw.get("cost_model") or "")
+    model = _resolve_cost_model(model_name)
+    return {
+        "risk_per_trade_pct": risk,
+        "max_position_pct": pos,
+        "max_total_risk_pct": total,
+        "max_positions": maximum,
+        "slippage_bps": slip,
+        "cost_model": model,
+        "cost_model_name": model_name,
+    }
 
 
 class PaperBook:
-    """A simulated long-only book with real risk caps. Long-only mirrors the cash-equity
-    reality the rest of QuantTerm assumes (no overnight equity shorts in India)."""
+    """Simulated long-only cash-equity book. No live-order dependency exists here."""
 
     def __init__(self, capital: float = 100_000.0, *, risk_per_trade_pct: float = 0.01,
                  max_position_pct: float = 0.10, max_total_risk_pct: float = 0.05,
@@ -89,89 +112,51 @@ class PaperBook:
         self.max_position_pct = max_position_pct
         self.max_total_risk_pct = max_total_risk_pct
         self.max_positions = max_positions
-        # frictions — default OFF (frictionless) so direct unit tests stay exact; the paper
-        # autonomy manager turns them on with realistic India cash-equity values.
-        self.slippage_bps = float(slippage_bps)      # entry+exit slippage, basis points
-        self.cost_model = cost_model                 # callable(entry, exit, qty) -> ₹
+        self.slippage_bps = float(slippage_bps)
+        self.cost_model = cost_model
         self.open: dict[tuple, PaperPosition] = {}
         self.closed: list[ClosedTrade] = []
         self.realized_pnl = 0.0
         self.equity_curve: list[float] = [self.capital]
-        self.refusals: list[tuple] = []          # (symbol, reason) — auditable
+        self.refusals: list[tuple] = []
 
-    # ── sizing + open ────────────────────────────────────────────────────────────
     def open_position(self, strategy_id: str, symbol: str, entry: float, stop: float,
                       target: float, date: str, max_holding_days: int, *,
                       risk_pct_of_capital: float | None = None,
-                      quantity: int | None = None,
-                      decision_id: str = "",
-                      paper_intent_id: str = "",
-                      context_key: str = "") -> PaperPosition | None:
-        """Open a simulated long from an approved risk budget and optional exact quantity.
-
-        ``risk_pct_of_capital`` uses percentage points: ``1.0`` means one percent of
-        capital and ``0.25`` means a quarter percent. A Target Portfolio may provide an
-        exact quantity; the book revalidates it and refuses any quantity above house caps.
-        """
+                      quantity: int | None = None, decision_id: str = "",
+                      paper_intent_id: str = "", context_key: str = "") -> PaperPosition | None:
         key = (strategy_id, symbol)
         if key in self.open:
             self.refusals.append((symbol, "already open for this strategy")); return None
         if len(self.open) >= self.max_positions:
             self.refusals.append((symbol, "max open positions reached")); return None
-
-        requested_risk_pct = (
-            float(self.risk_per_trade_pct) * 100.0
-            if risk_pct_of_capital is None else risk_pct_of_capital
-        )
+        requested = self.risk_per_trade_pct * 100.0 if risk_pct_of_capital is None else risk_pct_of_capital
         sizing = size_long_cash(
-            capital=self.capital,
-            entry=entry,
-            stop=stop,
-            requested_risk_pct=requested_risk_pct,
-            max_risk_fraction=self.risk_per_trade_pct,
-            max_position_fraction=self.max_position_pct,
-            slippage_bps=self.slippage_bps,
-            requested_quantity=quantity,
+            capital=self.capital, entry=entry, stop=stop, requested_risk_pct=requested,
+            max_risk_fraction=self.risk_per_trade_pct, max_position_fraction=self.max_position_pct,
+            slippage_bps=self.slippage_bps, requested_quantity=quantity,
         )
         if not sizing.ok:
-            self.refusals.append((symbol, _sizing_refusal(sizing.reason_code)))
-            return None
-
+            self.refusals.append((symbol, _sizing_refusal(sizing.reason_code))); return None
         if self.open_risk() + sizing.risk_amount > self.capital * self.max_total_risk_pct + 1e-6:
             self.refusals.append((symbol, "total open risk cap (5%) reached")); return None
-
         pos = PaperPosition(
-            strategy_id=strategy_id,
-            symbol=symbol,
-            entry_price=sizing.effective_entry,
-            stop_price=float(stop),
-            target_price=float(target),
-            qty=sizing.quantity,
-            entry_date=date,
-            max_holding_days=max_holding_days,
-            risk_amount=sizing.risk_amount,
-            requested_risk_pct=sizing.requested_risk_pct,
-            approved_risk_pct=sizing.actual_risk_pct,
-            decision_id=str(decision_id or ""),
-            paper_intent_id=str(paper_intent_id or ""),
+            strategy_id=strategy_id, symbol=symbol, entry_price=sizing.effective_entry,
+            stop_price=float(stop), target_price=float(target), qty=sizing.quantity,
+            entry_date=date, max_holding_days=max_holding_days, risk_amount=sizing.risk_amount,
+            requested_risk_pct=sizing.requested_risk_pct, approved_risk_pct=sizing.actual_risk_pct,
+            decision_id=str(decision_id or ""), paper_intent_id=str(paper_intent_id or ""),
             context_key=str(context_key or ""),
         )
         self.open[key] = pos
         return pos
 
     def open_intent(self, intent, *, date: str) -> PaperPosition | None:
-        """Execute an exact Target Portfolio delta in PAPER after revalidation."""
-        required_quantity = int(getattr(intent, "required_quantity", 0) or 0)
+        q = int(getattr(intent, "required_quantity", 0) or 0)
         return self.open_position(
-            intent.strategy_id,
-            intent.symbol,
-            float(intent.intended_entry),
-            float(intent.stop_price),
-            float(intent.target_price),
-            date,
-            int(intent.holding_horizon_days),
-            risk_pct_of_capital=float(intent.intended_risk_pct),
-            quantity=(required_quantity if required_quantity > 0 else None),
+            intent.strategy_id, intent.symbol, float(intent.intended_entry), float(intent.stop_price),
+            float(intent.target_price), date, int(intent.holding_horizon_days),
+            risk_pct_of_capital=float(intent.intended_risk_pct), quantity=q if q > 0 else None,
             decision_id=str(getattr(intent, "decision_id", "") or ""),
             paper_intent_id=str(getattr(intent, "record_id", "") or ""),
             context_key=str(getattr(intent, "context_key", "") or ""),
@@ -180,49 +165,32 @@ class PaperBook:
     def open_risk(self) -> float:
         return sum(p.qty * p.r_unit for p in self.open.values())
 
-    # ── mark-to-market: advance one bar for every open position ──────────────────
     def mark(self, bars: dict, date: str, *, allow_entry_session: bool = True) -> list[ClosedTrade]:
-        """Advance at most one trading session per position.
-
-        ``bars`` maps symbol -> (high, low, close) OR (open, high, low, close). When an open is
-        given, a GAP THROUGH the stop fills at the gap price (worse than the stop) and a gap
-        through the target fills at the gap (better). Otherwise closes STOP-first
-        (conservative), then TARGET, then MAX_HOLD.
-
-        ``last_marked_session`` makes the operation idempotent across retries/restarts. The
-        generic research simulator historically models signals as known before the supplied bar,
-        so ``allow_entry_session`` defaults to True to preserve that contract. Production EOD
-        settlement passes False because an intraday paper entry must never be evaluated against
-        the completed full-day OHLC for its own entry session.
-        """
-        closed_now: list[ClosedTrade] = []
+        closed_now = []
         session = str(date or "")[:10]
         marked_any = False
         for key, pos in list(self.open.items()):
-            if not session:
+            if not session or (not allow_entry_session and str(pos.entry_date or "")[:10] >= session):
                 continue
-            if not allow_entry_session and str(pos.entry_date or "")[:10] >= session:
-                continue
-            if str(getattr(pos, "last_marked_session", "") or "")[:10] == session:
+            if str(pos.last_marked_session or "")[:10] == session:
                 continue
             bar = bars.get(pos.symbol)
             if bar is None:
                 continue
             if len(bar) >= 4:
-                op, high, low, close = (float(bar[0]), float(bar[1]), float(bar[2]), float(bar[3]))
+                op, high, low, close = map(float, bar[:4])
             else:
-                op, high, low, close = (None, float(bar[0]), float(bar[1]), float(bar[2]))
-            # Mark the session before applying exits. If later code raises in-process, a retry
-            # cannot age this same position twice; the caller persists the book atomically.
+                op = None
+                high, low, close = map(float, bar[:3])
             pos.last_marked_session = session
             pos.bars_held += 1
             marked_any = True
             exit_price = exit_reason = None
-            if op is not None and op <= pos.stop_price:      # gap DOWN through stop → worse fill
+            if op is not None and op <= pos.stop_price:
                 exit_price, exit_reason = op, "GAP_STOP"
-            elif op is not None and op >= pos.target_price:  # gap UP through target → better fill
+            elif op is not None and op >= pos.target_price:
                 exit_price, exit_reason = op, "GAP_TARGET"
-            elif low <= pos.stop_price:                      # stop-first (conservative)
+            elif low <= pos.stop_price:
                 exit_price, exit_reason = pos.stop_price, "STOP"
             elif high >= pos.target_price:
                 exit_price, exit_reason = pos.target_price, "TARGET"
@@ -234,9 +202,7 @@ class PaperBook:
             self.equity_curve.append(self.equity(bars))
         return closed_now
 
-    def _close(self, key, pos: PaperPosition, exit_price: float, reason: str,
-               date: str) -> ClosedTrade:
-        # exit slippage — a seller gets hit down
+    def _close(self, key, pos: PaperPosition, exit_price: float, reason: str, date: str) -> ClosedTrade:
         exit_fill = exit_price * (1.0 - self.slippage_bps / 1e4)
         gross = (exit_fill - pos.entry_price) * pos.qty
         cost = 0.0
@@ -245,22 +211,21 @@ class PaperBook:
                 cost = float(self.cost_model(pos.entry_price, exit_fill, pos.qty))
             except Exception:
                 cost = 0.0
-        pnl = gross - cost                                   # NET of frictions — honest
-        realized_R = pnl / (pos.qty * pos.r_unit)            # net R, comparable to expectancy
+        pnl = gross - cost
+        realized_R = pnl / (pos.qty * pos.r_unit)
         self.realized_pnl += pnl
-        t = ClosedTrade(strategy_id=pos.strategy_id, symbol=pos.symbol,
-                        entry_price=pos.entry_price, exit_price=exit_fill,
-                        stop_price=pos.stop_price, qty=pos.qty, entry_date=pos.entry_date,
-                        exit_date=date, exit_reason=reason, realized_R=realized_R, pnl=pnl,
-                        decision_id=getattr(pos, "decision_id", "") or "",
-                        paper_intent_id=getattr(pos, "paper_intent_id", "") or "",
-                        context_key=getattr(pos, "context_key", "") or "")
-        self.closed.append(t)
+        trade = ClosedTrade(
+            strategy_id=pos.strategy_id, symbol=pos.symbol, entry_price=pos.entry_price,
+            exit_price=exit_fill, stop_price=pos.stop_price, qty=pos.qty, entry_date=pos.entry_date,
+            exit_date=date, exit_reason=reason, realized_R=realized_R, pnl=pnl,
+            decision_id=pos.decision_id or "", paper_intent_id=pos.paper_intent_id or "",
+            context_key=pos.context_key or "",
+        )
+        self.closed.append(trade)
         del self.open[key]
-        return t
+        return trade
 
     def equity(self, bars: dict | None = None) -> float:
-        """Realized equity plus open mark-to-market against the latest close (if given)."""
         eq = self.capital + self.realized_pnl
         if bars:
             for pos in self.open.values():
@@ -270,92 +235,95 @@ class PaperBook:
                     eq += (close - pos.entry_price) * pos.qty
         return eq
 
-    # ── reporting ────────────────────────────────────────────────────────────────
     def stats(self, strategy_id: str | None = None) -> dict:
-        trades = ([t for t in self.closed if t.strategy_id == strategy_id]
-                  if strategy_id else self.closed)
+        trades = [t for t in self.closed if strategy_id is None or t.strategy_id == strategy_id]
         n = len(trades)
         wins = [t for t in trades if t.realized_R > 0]
         losses = [t for t in trades if t.realized_R <= 0]
         gross_win = sum(t.pnl for t in wins)
         gross_loss = -sum(t.pnl for t in losses)
-        expectancy_R = (sum(t.realized_R for t in trades) / n) if n else 0.0
-        pf = (gross_win / gross_loss) if gross_loss > 1e-9 else (float("inf") if gross_win else 0.0)
-        return {
-            "n_trades": n,
-            "win_rate": round(len(wins) / n, 4) if n else 0.0,
-            "expectancy_R": round(expectancy_R, 4),
-            "profit_factor": (round(pf, 3) if pf != float("inf") else None),
-            "net_pnl": round(sum(t.pnl for t in trades), 2),
-            "max_drawdown_pct": round(self._max_dd(), 4),
-            "equity": round(self.equity(), 2),
-            "open_positions": len([p for p in self.open.values()
-                                   if strategy_id is None or p.strategy_id == strategy_id]),
-        }
+        mean_r = sum(t.realized_R for t in trades) / n if n else 0.0
+        pf = gross_win / gross_loss if gross_loss > 1e-9 else (float("inf") if gross_win else 0.0)
+        return {"n_trades": n, "win_rate": round(len(wins) / n, 4) if n else 0.0,
+                "expectancy_R": round(mean_r, 4), "profit_factor": round(pf, 3) if pf != float("inf") else None,
+                "net_pnl": round(sum(t.pnl for t in trades), 2), "max_drawdown_pct": round(self._max_dd(), 4),
+                "equity": round(self.equity(), 2),
+                "open_positions": len([p for p in self.open.values() if strategy_id is None or p.strategy_id == strategy_id])}
 
     def r_stats(self, strategy_id: str | None = None) -> dict:
-        """Mean R, standard error of the mean, and a conservative lower estimate
-        (mean − 1·SE) of a strategy's realized R. The lower estimate is what noise-aware
-        calibration judges, so a couple of lucky trades can't fake an edge."""
-        rs = [t.realized_R for t in self.closed
-              if strategy_id is None or t.strategy_id == strategy_id]
+        rs = [t.realized_R for t in self.closed if strategy_id is None or t.strategy_id == strategy_id]
         n = len(rs)
-        if n == 0:
+        if not n:
             return {"n": 0, "mean_R": 0.0, "stderr_R": 0.0, "lower_R": 0.0}
         mean = sum(rs) / n
+        se = 0.0
         if n > 1:
             var = sum((r - mean) ** 2 for r in rs) / (n - 1)
             se = (var ** 0.5) / (n ** 0.5)
-        else:
-            se = 0.0
-        return {"n": n, "mean_R": round(mean, 4), "stderr_R": round(se, 4),
-                "lower_R": round(mean - se, 4)}
+        return {"n": n, "mean_R": round(mean, 4), "stderr_R": round(se, 4), "lower_R": round(mean - se, 4)}
 
     def _max_dd(self) -> float:
         peak = self.equity_curve[0] if self.equity_curve else self.capital
         mdd = 0.0
-        for v in self.equity_curve:
-            peak = max(peak, v)
+        for value in self.equity_curve:
+            peak = max(peak, value)
             if peak > 0:
-                mdd = max(mdd, (peak - v) / peak)
+                mdd = max(mdd, (peak - value) / peak)
         return mdd
+
+    def _risk_config(self) -> dict:
+        return {"risk_per_trade_pct": float(self.risk_per_trade_pct),
+                "max_position_pct": float(self.max_position_pct),
+                "max_total_risk_pct": float(self.max_total_risk_pct),
+                "max_positions": int(self.max_positions), "slippage_bps": float(self.slippage_bps),
+                "cost_model": _cost_model_name(self.cost_model)}
 
     def as_dict(self) -> dict:
         return {"capital": self.capital, "realized_pnl": round(self.realized_pnl, 2),
-                "equity": round(self.equity(), 2), "n_closed": len(self.closed),
-                "n_open": len(self.open), "stats": self.stats(),
-                "equity_curve": [round(v, 2) for v in self.equity_curve[-120:]]}
+                "equity": round(self.equity(), 2), "n_closed": len(self.closed), "n_open": len(self.open),
+                "stats": self.stats(), "equity_curve": [round(v, 2) for v in self.equity_curve[-120:]],
+                "risk_config": self._risk_config()}
 
-    # ── persistence (the book remembers its trades across restarts) ──────────────
     def snapshot(self) -> dict:
         return {"capital": self.capital, "realized_pnl": self.realized_pnl,
-                "equity_curve": self.equity_curve,
-                "closed": [t.as_dict() for t in self.closed],
-                "open": [p.as_dict() for p in self.open.values()]}
+                "equity_curve": self.equity_curve, "closed": [t.as_dict() for t in self.closed],
+                "open": [p.as_dict() for p in self.open.values()], "risk_config": self._risk_config()}
 
     def restore(self, snap: dict) -> None:
+        """Restore atomically. Corrupt/new risk contracts leave the current book untouched."""
         try:
-            self.capital = float(snap.get("capital", self.capital))
-            self.realized_pnl = float(snap.get("realized_pnl", 0.0))
-            self.equity_curve = list(snap.get("equity_curve", [self.capital])) or [self.capital]
-            self.closed = [ClosedTrade(**t) for t in snap.get("closed", [])]
-            self.open = {}
-            for p in snap.get("open", []):
-                pos = PaperPosition(**p)
-                self.open[(pos.strategy_id, pos.symbol)] = pos
+            capital = float(snap.get("capital", self.capital))
+            realized = float(snap.get("realized_pnl", 0.0))
+            curve = list(snap.get("equity_curve", [capital])) or [capital]
+            closed = [ClosedTrade(**t) for t in snap.get("closed", [])]
+            opened = {}
+            for raw in snap.get("open", []):
+                pos = PaperPosition(**raw)
+                opened[(pos.strategy_id, pos.symbol)] = pos
+            risk = _validated_risk_config(snap["risk_config"]) if "risk_config" in snap else None
         except Exception:
-            pass                                    # corrupt snapshot ⇒ keep fresh book
+            return
+        self.capital = capital
+        self.realized_pnl = realized
+        self.equity_curve = curve
+        self.closed = closed
+        self.open = opened
+        if risk is not None:
+            self.risk_per_trade_pct = risk["risk_per_trade_pct"]
+            self.max_position_pct = risk["max_position_pct"]
+            self.max_total_risk_pct = risk["max_total_risk_pct"]
+            self.max_positions = risk["max_positions"]
+            self.slippage_bps = risk["slippage_bps"]
+            self.cost_model = risk["cost_model"]
 
 
 def _sizing_refusal(reason_code: str) -> str:
-    return {
-        "INVALID_ENTRY_STOP": "invalid entry/stop (need entry>stop>0)",
-        "NON_POSITIVE_RISK": "approved risk percentage must be positive",
-        "RISK_BUDGET_TOO_SMALL": "risk unit too wide for approved sizing",
-        "POSITION_CAP_TOO_SMALL": "price too high for 10% cap",
-        "INVALID_REQUESTED_QUANTITY": "invalid target portfolio quantity",
-        "NON_POSITIVE_QUANTITY": "target portfolio quantity must be positive",
-        "QUANTITY_EXCEEDS_APPROVED_LIMIT": "target portfolio quantity exceeds house limits",
-        "INVALID_NUMERIC_INPUT": "invalid approved risk percentage",
-        "NON_FINITE_INPUT": "invalid approved risk percentage",
-    }.get(reason_code, f"position sizing refused: {reason_code}")
+    return {"INVALID_ENTRY_STOP": "invalid entry/stop (need entry>stop>0)",
+            "NON_POSITIVE_RISK": "approved risk percentage must be positive",
+            "RISK_BUDGET_TOO_SMALL": "risk unit too wide for approved sizing",
+            "POSITION_CAP_TOO_SMALL": "price too high for 10% cap",
+            "INVALID_REQUESTED_QUANTITY": "invalid target portfolio quantity",
+            "NON_POSITIVE_QUANTITY": "target portfolio quantity must be positive",
+            "QUANTITY_EXCEEDS_APPROVED_LIMIT": "target portfolio quantity exceeds house limits",
+            "INVALID_NUMERIC_INPUT": "invalid approved risk percentage",
+            "NON_FINITE_INPUT": "invalid approved risk percentage"}.get(reason_code, f"position sizing refused: {reason_code}")

@@ -168,3 +168,136 @@ def test_stale_gate_never_rebuilds_decision_board(tmp_path, monkeypatch):
     assert payload["discovery_ready"] is False
     assert payload["best_trades"] == []
     assert payload["phase"] == "SEARCHING_BEST_TRADES"
+
+
+def test_startup_discovery_runs_during_truthful_publication_grace(tmp_path, monkeypatch):
+    """Weekend/publication grace is usable official history, not a discovery deadlock."""
+    from research.autonomy import schedules as SCH
+    from research.autonomy.supervisor import Supervisor
+
+    class DiscoveryDeps:
+        def active_snapshot_id(self):
+            return ""
+
+    monkeypatch.setattr(
+        "product.decision_simulation_gate.status",
+        lambda: {"discovery_ready": False},
+    )
+    monkeypatch.setattr(
+        "product.decision_simulation_gate.current_startup_id",
+        lambda: "startup-weekend",
+    )
+    monkeypatch.setattr(
+        "product.readiness.official_history",
+        lambda: {
+            "current": False,
+            "usable_for_scan": True,
+            "publication_pending": True,
+            "reason_code": "HISTORY_PUBLICATION_PENDING",
+            "available_session": "2026-09-17",
+            "expected_latest_completed_session": "2026-09-18",
+        },
+    )
+
+    sup = Supervisor(tmp_path / "auto", deps=DiscoveryDeps())
+    sup._ensure_startup_trade_discovery()
+
+    queued = [
+        job for job in sup.jobs.list(limit=20)
+        if job.job_type == SCH.MARKET_SCAN
+    ]
+    assert len(queued) == 1
+    assert queued[0].idempotency_key == (
+        "startup_discovery_scan:startup-weekend:market:official_nse:2026-09-17"
+    )
+
+
+def test_startup_discovery_still_blocks_genuinely_stale_history(tmp_path, monkeypatch):
+    """The liveness fix must not weaken the canonical freshness safety gate."""
+    from research.autonomy import schedules as SCH
+    from research.autonomy.supervisor import Supervisor
+
+    class DiscoveryDeps:
+        def active_snapshot_id(self):
+            return ""
+
+    monkeypatch.setattr(
+        "product.decision_simulation_gate.status",
+        lambda: {"discovery_ready": False},
+    )
+    monkeypatch.setattr(
+        "product.decision_simulation_gate.current_startup_id",
+        lambda: "startup-stale",
+    )
+    monkeypatch.setattr(
+        "product.readiness.official_history",
+        lambda: {
+            "current": False,
+            "usable_for_scan": False,
+            "publication_pending": False,
+            "reason_code": "HISTORY_STALE",
+            "available_session": "2026-09-16",
+            "expected_latest_completed_session": "2026-09-18",
+        },
+    )
+
+    sup = Supervisor(tmp_path / "auto", deps=DiscoveryDeps())
+    sup._ensure_startup_trade_discovery()
+
+    assert not [
+        job for job in sup.jobs.list(limit=20)
+        if job.job_type == SCH.MARKET_SCAN
+    ]
+
+
+def test_scan_fresh_prefers_schema_v2_provenance_identity(monkeypatch):
+    from product import desk_pipeline as desk
+
+    monkeypatch.setattr(
+        "data.bhavcopy_runtime.official_history_freshness",
+        lambda **_kwargs: {
+            "current": True,
+            "usable_for_scan": True,
+            "available_session": "2026-09-18",
+            "expected_latest_completed_session": "2026-09-18",
+        },
+    )
+    monkeypatch.setattr(
+        "product.scan_store.load_scan",
+        lambda *_a, **_k: {
+            "schema_version": 2,
+            "scanned_at": "2026-09-18T12:00:00+00:00",
+            "records": [{"symbol": "INFY"}],
+            "provenance": {
+                "market_session_date": "2026-09-18",
+                "price_data_as_of": "2026-09-18",
+            },
+        },
+    )
+
+    assert desk.scan_is_fresh() is True
+
+
+def test_scan_fresh_rejects_stale_schema_v2_provenance_identity(monkeypatch):
+    from product import desk_pipeline as desk
+
+    monkeypatch.setattr(
+        "data.bhavcopy_runtime.official_history_freshness",
+        lambda **_kwargs: {
+            "current": True,
+            "usable_for_scan": True,
+            "available_session": "2026-09-18",
+            "expected_latest_completed_session": "2026-09-18",
+        },
+    )
+    monkeypatch.setattr(
+        "product.scan_store.load_scan",
+        lambda *_a, **_k: {
+            "schema_version": 2,
+            "scanned_at": "2026-09-18T12:00:00+00:00",
+            "records": [{"symbol": "INFY"}],
+            "provenance": {"market_session_date": "2026-09-17"},
+        },
+    )
+
+    assert desk.scan_is_fresh() is False
