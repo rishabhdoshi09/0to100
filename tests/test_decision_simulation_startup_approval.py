@@ -248,3 +248,56 @@ def test_startup_discovery_still_blocks_genuinely_stale_history(tmp_path, monkey
         job for job in sup.jobs.list(limit=20)
         if job.job_type == SCH.MARKET_SCAN
     ]
+
+
+def test_scan_fresh_prefers_schema_v2_provenance_identity(monkeypatch):
+    from product import desk_pipeline as desk
+
+    monkeypatch.setattr(
+        "data.bhavcopy_runtime.official_history_freshness",
+        lambda **_kwargs: {
+            "current": True,
+            "usable_for_scan": True,
+            "available_session": "2026-09-18",
+            "expected_latest_completed_session": "2026-09-18",
+        },
+    )
+    monkeypatch.setattr(
+        "product.scan_store.load_scan",
+        lambda *_a, **_k: {
+            "schema_version": 2,
+            "scanned_at": "2026-09-18T12:00:00+00:00",
+            "records": [{"symbol": "INFY"}],
+            "provenance": {
+                "market_session_date": "2026-09-18",
+                "price_data_as_of": "2026-09-18",
+            },
+        },
+    )
+
+    assert desk.scan_is_fresh() is True
+
+
+def test_scan_fresh_rejects_stale_schema_v2_provenance_identity(monkeypatch):
+    from product import desk_pipeline as desk
+
+    monkeypatch.setattr(
+        "data.bhavcopy_runtime.official_history_freshness",
+        lambda **_kwargs: {
+            "current": True,
+            "usable_for_scan": True,
+            "available_session": "2026-09-18",
+            "expected_latest_completed_session": "2026-09-18",
+        },
+    )
+    monkeypatch.setattr(
+        "product.scan_store.load_scan",
+        lambda *_a, **_k: {
+            "schema_version": 2,
+            "scanned_at": "2026-09-18T12:00:00+00:00",
+            "records": [{"symbol": "INFY"}],
+            "provenance": {"market_session_date": "2026-09-17"},
+        },
+    )
+
+    assert desk.scan_is_fresh() is False

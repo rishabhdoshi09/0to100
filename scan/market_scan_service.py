@@ -454,11 +454,6 @@ def run_whole_market_scan(
             payload["desk_overlays"] = persist_desks_from_market_scan(payload)
         except Exception as exc:
             payload["desk_overlays"] = {"error": type(exc).__name__}
-        if _feature002_hook is not None:
-            try:
-                _feature002_hook(payload.get("records") or [])
-            except Exception:
-                pass
     summary = dict(payload.get("summary", {}))
     n_setups = int(summary.get("with_any_setup", 0) or 0)
     status = SUCCEEDED if n_setups else NO_SETUPS
@@ -469,6 +464,13 @@ def run_whole_market_scan(
     # boundary. save_scan itself uses an atomic file replace.
     if save:
         save_scan(payload)
+        # Shadow learning must observe only the same fully-published canonical
+        # scan readers can see. It never participates in publication success.
+        if _feature002_hook is not None:
+            try:
+                _feature002_hook(payload.get("records") or [])
+            except Exception:
+                pass
     return MarketScanReport(
         status=status,
         payload=payload,

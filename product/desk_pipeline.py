@@ -158,7 +158,17 @@ def scan_is_fresh() -> bool:
         payload = load_scan(path)
         if not payload:
             return False
-        as_of = str(payload.get("as_of_session") or payload.get("history_latest_date") or "")[:10]
+        provenance = payload.get("provenance") if isinstance(payload.get("provenance"), dict) else {}
+        # Schema-v2 provenance is the authoritative identity of the official
+        # price session actually consumed. Legacy top-level fields remain a
+        # compatibility fallback for older persisted scans.
+        as_of = str(
+            provenance.get("market_session_date")
+            or provenance.get("price_data_as_of")
+            or payload.get("as_of_session")
+            or payload.get("history_latest_date")
+            or ""
+        )[:10]
         if expected and (not as_of or as_of < expected):
             return False
         if expected and as_of >= expected:
