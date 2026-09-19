@@ -32,4 +32,17 @@ describe('light theme contract', () => {
     expect(styles).not.toContain('rgba(13, 20, 33')
     expect(views).toContain('color: var(--text, #14201a)')
   })
+
+  it('loads the partner overhaul last and keeps it light-only', () => {
+    const main = readFileSync(new URL('./main.tsx', import.meta.url), 'utf8')
+    const partner = readFileSync(new URL('./partner-overhaul.css', import.meta.url), 'utf8')
+    expect(main.lastIndexOf("import './partner-overhaul.css'"))
+      .toBeGreaterThan(main.lastIndexOf("import './final-polish.css'"))
+    expect(partner).toContain('color-scheme: light')
+    expect(partner).toContain('--qt-app-bg: #f3f6f4')
+    expect(partner).toContain('--qt-app-surface: #ffffff')
+    expect(partner).not.toMatch(/#07101d|#08111e|rgba\(7,\s*12,\s*23|rgba\(8,\s*15,\s*28/)
+    expect(partner).toContain('body:has(.terminal-root.reco-desk)::before')
+    expect(partner).toContain('display: none !important')
+  })
 })
