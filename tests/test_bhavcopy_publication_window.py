@@ -254,3 +254,64 @@ def test_the_two_freshness_functions_never_disagree(latest, when):
     assert (snapshot["minimum_required_official_session"]
             == official["minimum_required_official_session"])
     assert snapshot["publication_pending"] == official["publication_pending"]
+
+
+def test_J_desk_scan_freshness_accepts_latest_usable_archive_during_publication_grace(monkeypatch):
+    import product.desk_pipeline as DP
+
+    frozen = _freshness(MON, datetime(2026, 9, 15, 18, 30))
+    assert frozen["current"] is False
+    assert frozen["usable_for_scan"] is True
+    monkeypatch.setattr(
+        "data.bhavcopy_runtime.official_history_freshness",
+        lambda **_k: dict(frozen),
+    )
+    monkeypatch.setattr(
+        "product.scan_store.load_scan",
+        lambda *_a, **_k: {
+            "as_of_session": MON,
+            "scanned_at": "2026-09-15T18:20:00+05:30",
+            "records": [{"symbol": "INFY"}],
+        },
+    )
+    monkeypatch.setattr(
+        "product.scan_store.scan_artifact_is_fresh",
+        lambda *_a, **_k: True,
+    )
+
+    assert DP.scan_is_fresh() is True
+
+
+def test_J_desk_scan_freshness_still_blocks_genuinely_stale_history(monkeypatch):
+    import product.desk_pipeline as DP
+
+    frozen = _freshness(FRI, datetime(2026, 9, 15, 18, 30))
+    assert frozen["usable_for_scan"] is False
+    monkeypatch.setattr(
+        "data.bhavcopy_runtime.official_history_freshness",
+        lambda **_k: dict(frozen),
+    )
+    monkeypatch.setattr(
+        "product.scan_store.load_scan",
+        lambda *_a, **_k: {
+            "as_of_session": FRI,
+            "scanned_at": "2026-09-15T18:20:00+05:30",
+            "records": [{"symbol": "INFY"}],
+        },
+    )
+
+    assert DP.scan_is_fresh() is False
+
+
+def test_J_desk_price_prepare_does_not_loop_only_because_archive_is_pending(monkeypatch):
+    import product.desk_pipeline as DP
+
+    frozen = _freshness(MON, datetime(2026, 9, 15, 18, 30))
+    assert frozen["usable_for_scan"] is True
+    monkeypatch.setattr(
+        "data.bhavcopy_runtime.official_history_freshness",
+        lambda **_k: dict(frozen),
+    )
+    monkeypatch.setattr(DP, "_stale", lambda *_a, **_k: False)
+
+    assert DP.prices_kind_due() is None
