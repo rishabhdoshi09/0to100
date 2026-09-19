@@ -20,33 +20,6 @@ from dataclasses import dataclass, asdict
 from research.intelligence.runtime.position_sizing import size_long_cash
 
 
-def _cost_model_name(model) -> str:
-    if model is None:
-        return "none"
-    module = str(getattr(model, "__module__", "") or "")
-    name = str(getattr(model, "__name__", "") or "")
-    if module == "research.auto_research.costs" && name == "india_cash_costs":
-        return "india_cash_costs"
-    return "custom_unpersisted"
-
-
-def _known_cost_model(name: str):
-    value = str(name or "").strip().lower()
-    if value == "none":
-        return None
-    if value == "india_cash_costs":
-        from research.auto_research.costs import india_cash_costs
-        return india_cash_costs
-    raise ValueError(f"unknown persisted paper cost model: {name}")
-
-
-def _bounded_float(value, *, low: float, high: float) -> float:
-    parsed = float(value)
-    if not (low <= parsed <= high):
-        raise ValueError(f"value {parsed} outside [{low}, {high}]")
-    return parsed
-
-
 @dataclass
 class PaperPosition:
     strategy_id: str
@@ -347,93 +320,29 @@ class PaperBook:
                 mdd = max(mdd, (peak - v) / peak)
         return mdd
 
-    def risk_config(self) -> dict:
-        return {
-            "risk_per_trade_pct": float(self.risk_per_trade_pct),
-            "max_position_pct": float(self.max_position_pct),
-            "max_total_risk_pct": float(self.max_total_risk_pct),
-            "max_positions": int(self.max_positions),
-            "slippage_bps": float(self.slippage_bps),
-            "cost_model": _cost_model_name(self.cost_model),
-        }
-
     def as_dict(self) -> dict:
         return {"capital": self.capital, "realized_pnl": round(self.realized_pnl, 2),
                 "equity": round(self.equity(), 2), "n_closed": len(self.closed),
                 "n_open": len(self.open), "stats": self.stats(),
-                "risk_config": self.risk_config(),
                 "equity_curve": [round(v, 2) for v in self.equity_curve[-120:]]}
 
-    # ── persistence (the book remembers its trades + risk contract across restarts) ──
+    # ── persistence (the book remembers its trades across restarts) ──────────────
     def snapshot(self) -> dict:
-        return {"schema_version": 2,
-                "capital": self.capital, "realized_pnl": self.realized_pnl,
+        return {"capital": self.capital, "realized_pnl": self.realized_pnl,
                 "equity_curve": self.equity_curve,
-                "risk_config": self.risk_config(),
                 "closed": [t.as_dict() for t in self.closed],
                 "open": [p.as_dict() for p in self.open.values()]}
 
     def restore(self, snap: dict) -> None:
-        # Parse into temporary values first. A corrupt snapshot must not leave a
-        # half-restored book with mismatched positions, risk caps, or costs.
         try:
-            capital = float(snap.get("capital", self.capital))
-            realized_pnl = float(snap.get("realized_pnl", 0.0))
-            equity_curve = list(snap.get("equity_curve", [capital])) or [capital]
-            closed = [ClosedTrade(**t) for t in snap.get("closed", [])]
-            opened: dict[tuple, PaperPosition] = {}
+            self.capital = float(snap.get("capital", self.capital))
+            self.realized_pnl = float(snap.get("realized_pnl", 0.0))
+            self.equity_curve = list(snap.get("equity_curve", [self.capital])) or [self.capital]
+            self.closed = [ClosedTrade(**t) for t in snap.get("closed", [])]
+            self.open = {}
             for p in snap.get("open", []):
                 pos = PaperPosition(**p)
-                opened[(pos.strategy_id, pos.symbol)] = pos
-
-            risk_config = snap.get("risk_config")
-            if isinstance(risk_config, dict):
-                risk_per_trade_pct = _bounded_float(
-                    risk_config.get("risk_per_trade_pct", self.risk_per_trade_pct),
-                    low=0.0, high=1.0,
-                )
-                max_position_pct = _bounded_float(
-                    risk_config.get("max_position_pct", self.max_position_pct),
-                    low=0.0, high=1.0,
-                )
-                max_total_risk_pct = _bounded_float(
-                    risk_config.get("max_total_risk_pct", self.max_total_risk_pct),
-                    low=0.0, high=1.0,
-                )
-                max_positions = int(risk_config.get("max_positions", self.max_positions))
-                if not (1 <= max_positions <= 100):
-                    raise ValueError("max_positions outside safe range")
-                slippage_bps = _bounded_float(
-                    risk_config.get("slippage_bps", self.slippage_bps),
-                    low=0.0, high=1000.0,
-                )
-                cost_name = str(risk_config.get("cost_model", _cost_model_name(self.cost_model)) or "")
-                if cost_name == "custom_unpersisted":
-                    cost_model = self.cost_model
-                else:
-                    cost_model = _known_cost_model(cost_name)
-            else:
-                # Version-1 snapshots never persisted the execution/risk contract.
-                # Preserve the constructor's configured contract rather than
-                # inventing historical settings.
-                risk_per_trade_pct = self.risk_per_trade_pct
-                max_position_pct = self.max_position_pct
-                max_total_risk_pct = self.max_total_risk_pct
-                max_positions = self.max_positions
-                slippage_bps = self.slippage_bps
-                cost_model = self.cost_model
-
-            self.capital = capital
-            self.realized_pnl = realized_pnl
-            self.equity_curve = equity_curve
-            self.closed = closed
-            self.open = opened
-            self.risk_per_trade_pct = risk_per_trade_pct
-            self.max_position_pct = max_position_pct
-            self.max_total_risk_pct = max_total_risk_pct
-            self.max_positions = max_positions
-            self.slippage_bps = slippage_bps
-            self.cost_model = cost_model
+                self.open[(pos.strategy_id, pos.symbol)] = pos
         except Exception:
             pass                                    # corrupt snapshot ⇒ keep fresh book
 
