@@ -334,9 +334,7 @@ class Supervisor:
             from product.readiness import official_history
 
             history = dict(official_history() or {})
-            if not history.get("current"):
-                return
-            latest = str(
+            # Discovery may use the latest official session while the next archive is\n            # still inside its explicit publication-grace window. Requiring\n            # `current` here deadlocked weekend/off-session startup even though\n            # the canonical freshness policy truthfully marked that history as\n            # usable_for_scan. Never bypass a genuinely stale history gate.\n            if not history.get("usable_for_scan"):\n                return\n            latest = str(
                 history.get("available_session")
                 or history.get("latest_date")
                 or ""
