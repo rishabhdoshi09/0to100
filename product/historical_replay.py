@@ -843,6 +843,27 @@ def run_historical_replay(
 
     usable = all_sessions[:-1] if len(all_sessions) > 1 else all_sessions
     window = usable[-max(1, int(sessions)) :]
+
+    # Historical replay must never silently fall back to today's survivors and
+    # call that production-quality evidence. Rebuild/load the canonical official
+    # store from already-downloaded bhavcopy files, then refresh point-in-time
+    # membership before replaying any session. No network is introduced here.
+    universe_history: dict[str, Any] = {}
+    try:
+        from data.bhavcopy_runtime import ensure_loaded
+        from data.nse_universe import refresh_universe_history
+
+        ensure_loaded(rebuild_from_local=True)
+        universe_history = dict(
+            refresh_universe_history(as_of=window[-1], force=False) or {}
+        )
+    except Exception as exc:
+        universe_history = {
+            "survivorship_complete": False,
+            "available": False,
+            "note": f"universe history refresh failed: {type(exc).__name__}: {exc}"[:240],
+        }
+
     run_id = str(identity.get("run_id") or "")
     from product.pit_versions import current_versions
     from product.pit_warehouse import warehouse_fingerprint
@@ -965,11 +986,28 @@ def run_historical_replay(
         "PIT_UNAVAILABLE": sum(1 for r in classified if r.get("pit_grade") == "PIT_UNAVAILABLE"),
         "PIT_UNVERIFIED": sum(1 for r in classified if r.get("pit_grade") == "PIT_UNVERIFIED"),
     }
-    status = _STATUS_SUCCEEDED if classified or session_summaries else _STATUS_DEGRADED
+    # A loop completing is not evidence. Zero evaluated stocks or an incomplete
+    # PIT universe must never be surfaced as SUCCEEDED; that would create fake
+    # confidence from an empty or survivorship-biased replay.
+    pit_universe_complete = bool(session_summaries) and all(
+        bool(row.get("survivorship_complete")) for row in session_summaries
+    )
+    has_market_evidence = universe_obs > 0 and stocks_evaluated > 0
+    blocker_reason = ""
     if errors and not classified:
         status = _STATUS_FAILED
+        blocker_reason = "REPLAY_EXECUTION_FAILED"
     elif errors:
         status = _STATUS_DEGRADED
+        blocker_reason = "REPLAY_PARTIAL_ERRORS"
+    elif not has_market_evidence:
+        status = _STATUS_DEGRADED
+        blocker_reason = "NO_HISTORICAL_MARKET_OBSERVATIONS"
+    elif not pit_universe_complete:
+        status = _STATUS_DEGRADED
+        blocker_reason = "UNIVERSE_HISTORY_INCOMPLETE"
+    else:
+        status = _STATUS_SUCCEEDED
     finished = _now()
     experiment_versions = current_versions().as_dict()
     data_fp = warehouse_fingerprint()
@@ -1019,6 +1057,9 @@ def run_historical_replay(
         "PIT_UNVERIFIED": counts["PIT_UNVERIFIED"],
         "session_summaries": session_summaries,
         "errors": errors,
+        "blocker_reason": blocker_reason,
+        "evidence_ready": status == _STATUS_SUCCEEDED,
+        "universe_history": universe_history,
         "decisions": classified[:400],
         "rows": classified[:400],
         "simple": (
