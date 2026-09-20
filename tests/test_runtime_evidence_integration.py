@@ -77,13 +77,13 @@ def test_startup_evidence_ready_does_not_skip_history_first_paper_gate(monkeypat
     _patch_operational_healthy(monkeypatch,tmp_path)
     monkeypatch.setattr(bhavcopy_runtime,"official_history_freshness",lambda **_k:{"current":True,"available_session":"2026-09-05","expected_latest_completed_session":"2026-09-05","reason_code":""})
     now=datetime.now(timezone.utc)-timedelta(hours=0.5)
-    monkeypatch.setattr("product.scan_store.load_scan",lambda *_a,**_k:{"schema_version":1,"scanned_at":now.isoformat(),"records":[{"symbol":"AAA"}],"available":True},raising=False)
+    monkeypatch.setattr("product.scan_store.load_scan",lambda *_a,**_k:{"schema_version":1,"scanned_at":now.isoformat(),"as_of_session":"2026-09-05","history_latest_date":"2026-09-05","records":[{"symbol":"AAA"}],"available":True},raising=False)
     # Forward Evidence became a required evidence lane after this integration test was
     # introduced. Make that independent prerequisite explicitly READY so this test
     # continues to isolate the history-first paper gate rather than silently relying
     # on ambient durable soak state.
     monkeypatch.setattr("product.forward_soak.persist_soak_verification",lambda **_k:None,raising=False)
-    monkeypatch.setattr("product.forward_soak.soak_status",lambda:{"status":"READY"},raising=False)
+    monkeypatch.setattr("product.forward_soak.soak_status",lambda:{"status":"HEALTHY"},raising=False)
     payload=build_startup_check(probe_network=False); assert payload["evidence_ready"] is True
     import product.autonomous_evolution as evolution
     monkeypatch.setattr(evolution,"bootstrap_status",lambda:{"status":"NOT_STARTED","analysis_complete":False,"paper_ready_setups":0}); monkeypatch.setattr(evolution,"ensure_started_async",lambda:{"status":"NOT_STARTED"})
