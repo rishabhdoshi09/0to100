@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Read-only QuantTerm runtime status for operators and automation.
 
-The probe reports only observable process/HTTP/runtime-file facts.  It never
-turns absence into success and never mutates product state.
+The probe reports only observable process/HTTP/runtime-file facts. It never
+turns absence or malformed persisted evidence into success and never mutates
+product state.
 """
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 import urllib.request
@@ -42,12 +44,30 @@ def _read_json(path: Path) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _safe_pid(value: Any) -> int:
+    """Parse persisted PID evidence without allowing malformed state to crash the probe."""
+    try:
+        pid = int(value or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return pid if pid > 1 else 0
+
+
+def _safe_epoch(value: Any) -> float:
+    """Parse a finite positive epoch; invalid persisted evidence means unknown."""
+    try:
+        epoch = float(value or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    return epoch if math.isfinite(epoch) and epoch > 0 else 0.0
+
+
 def runtime_status(now: float | None = None) -> dict[str, Any]:
     """Return deterministic status derived from live endpoints and persisted state."""
     now = time.time() if now is None else float(now)
     market_runtime = _read_json(logs_path("market_ops", "runtime.json"))
-    worker_pid = int(market_runtime.get("worker_pid") or 0)
-    heartbeat = float(market_runtime.get("heartbeat_epoch") or 0)
+    worker_pid = _safe_pid(market_runtime.get("worker_pid"))
+    heartbeat = _safe_epoch(market_runtime.get("heartbeat_epoch"))
     heartbeat_age = max(0.0, now - heartbeat) if heartbeat > 0 else None
     worker_alive = _pid_alive(worker_pid)
     worker_fresh = bool(worker_alive and heartbeat_age is not None and heartbeat_age <= 8.0)
