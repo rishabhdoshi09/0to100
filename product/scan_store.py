@@ -17,6 +17,16 @@ def default_scan_path() -> Path:
     return logs_path("product", "latest_momentum_scan.json")
 
 
+def resolved_scan_path() -> Path:
+    """One runtime scan-artifact identity for every reader.
+
+    QT_SCAN_PATH remains available for hermetic/test runtimes, but it must move
+    Home and verification together rather than creating two sources of truth.
+    """
+    override = str(os.environ.get("QT_SCAN_PATH") or "").strip()
+    return Path(override) if override else default_scan_path()
+
+
 DEFAULT_SCAN_PATH = default_scan_path()
 
 
