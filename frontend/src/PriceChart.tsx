@@ -36,12 +36,12 @@ export function PriceChart({ symbol, bars }: Props) {
     })
 
     const candles = chart.addCandlestickSeries({
-      upColor: '#31e981',
-      downColor: '#ff667f',
-      borderUpColor: '#31e981',
-      borderDownColor: '#ff667f',
-      wickUpColor: '#31e981',
-      wickDownColor: '#ff667f',
+      upColor: '#1b6b45',
+      downColor: '#b42318',
+      borderUpColor: '#1b6b45',
+      borderDownColor: '#b42318',
+      wickUpColor: '#1b6b45',
+      wickDownColor: '#b42318',
     })
     candles.setData(bars.map(({ time, open, high, low, close }) => ({
       time,
@@ -52,7 +52,7 @@ export function PriceChart({ symbol, bars }: Props) {
     })))
 
     const volume = chart.addHistogramSeries({
-      color: '#24d6ff',
+      color: '#1b6b45',
       priceFormat: { type: 'volume' },
       priceScaleId: '',
     })
@@ -60,7 +60,7 @@ export function PriceChart({ symbol, bars }: Props) {
     volume.setData(bars.map((bar) => ({
       time: bar.time,
       value: bar.volume,
-      color: bar.close >= bar.open ? 'rgba(49,233,129,.45)' : 'rgba(255,102,127,.45)',
+      color: bar.close >= bar.open ? 'rgba(27,107,69,.32)' : 'rgba(180,35,24,.28)',
     })))
 
     chart.timeScale().fitContent()

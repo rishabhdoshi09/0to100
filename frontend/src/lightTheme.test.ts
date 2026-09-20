@@ -45,4 +45,13 @@ describe('light theme contract', () => {
     expect(partner).toContain('body:has(.terminal-root.reco-desk)::before')
     expect(partner).toContain('display: none !important')
   })
+
+  it('keeps price charts on the professional light palette instead of legacy neon colors', () => {
+    const chart = readFileSync(new URL('./PriceChart.tsx', import.meta.url), 'utf8')
+    expect(chart).not.toContain('#31e981')
+    expect(chart).not.toContain('#ff667f')
+    expect(chart).not.toContain('#24d6ff')
+    expect(chart).toContain('#1b6b45')
+    expect(chart).toContain('#b42318')
+  })
 })
