@@ -112,11 +112,13 @@ def test_poll_reschedule_does_not_inflate_durable_attempt_count(tmp_path):
         when=store.clock(),
         error_code=IN_PROGRESS,
         error_message="still running",
+        result_summary="data refresh running in background · historical_sync · 45s",
     )
     after_first_poll = store.get(job.job_id)
     assert after_first_poll is not None
     assert after_first_poll.status == JS.PENDING
     assert after_first_poll.attempt == 0
+    assert after_first_poll.result_summary == "data refresh running in background · historical_sync · 45s"
 
     second = store.lease_due("owner")
     assert second is not None

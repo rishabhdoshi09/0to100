@@ -20,6 +20,18 @@ from research.autonomy import schedules as SCH
 from research.autonomy import supervisor_state as ST
 
 
+_POLL_ERROR_CODES = {
+    "DATA_REFRESH_IN_PROGRESS",
+    "MARKET_OP_IN_PROGRESS",
+    "LONG_TERM_OP_IN_PROGRESS",
+    "HISTORICAL_PAPER_IN_PROGRESS",
+}
+
+
+def _is_background_poll(job) -> bool:
+    return str(getattr(job, "error_code", "") or "") in _POLL_ERROR_CODES
+
+
 def _stamp() -> str:
     from core.market_clock import console_stamp
 
@@ -38,6 +50,9 @@ def _next_job(supervisor) -> str:
         pending = supervisor.jobs.list(status=JS.PENDING, limit=1)
         if pending:
             job = pending[0]
+            if _is_background_poll(job):
+                detail = str(job.result_summary or job.error_message or "background work in progress")
+                return f"{job.job_type} · {detail}"
             return f"{job.job_type} (attempt {job.attempt})"
     except Exception:
         pass
@@ -215,11 +230,13 @@ def run_visible_loop(
 
     def visible_execute(job):
         started = time.monotonic()
+        background_poll = _is_background_poll(job)
         current = {
             "job_id": job.job_id,
             "job_type": job.job_type,
             "attempt": job.attempt,
             "critical": bool(getattr(job, "critical", False)),
+            "background_poll": background_poll,
             "started_ist": ST._now_ist_iso(),
             "started_monotonic": started,
         }
@@ -230,11 +247,17 @@ def run_visible_loop(
             _write_runtime_status(supervisor, process_running=True, active_job=current)
         except Exception:
             pass
-        _emit(
-            "JOB START",
-            f"{job.job_type} · id={job.job_id} · attempt={job.attempt}"
-            + (" · critical" if getattr(job, "critical", False) else ""),
-        )
+        if background_poll:
+            _emit(
+                "JOB POLL",
+                f"{job.job_type} · id={job.job_id} · checking existing background worker",
+            )
+        else:
+            _emit(
+                "JOB START",
+                f"{job.job_type} · id={job.job_id} · attempt={job.attempt}"
+                + (" · critical" if getattr(job, "critical", False) else ""),
+            )
         try:
             return original_execute(job)
         finally:
@@ -263,11 +286,17 @@ def run_visible_loop(
                     final = final or job
                     summary = final.result_summary or final.error_message or "no summary"
                     elapsed = elapsed_by_job.pop(job.job_id, 0.0)
-                    _emit(
-                        "JOB DONE",
-                        f"{final.job_type} → {final.status} · {elapsed:.1f}s · "
-                        f"attempt={final.attempt} · {summary}",
-                    )
+                    if final.status == JS.PENDING and _is_background_poll(final):
+                        _emit(
+                            "JOB PROGRESS",
+                            f"{final.job_type} · {summary}",
+                        )
+                    else:
+                        _emit(
+                            "JOB DONE",
+                            f"{final.job_type} → {final.status} · {elapsed:.1f}s · "
+                            f"attempt={final.attempt} · {summary}",
+                        )
                     last_heartbeat = _heartbeat(
                         supervisor,
                         force=True,

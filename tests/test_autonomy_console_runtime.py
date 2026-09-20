@@ -66,6 +66,27 @@ class _BlockingSupervisor(Supervisor):
         return None
 
 
+class _PollingJobSupervisor(Supervisor):
+    """Lease one background-poll row and keep it pending without inventing a new attempt."""
+
+    def tick(self, now_ist=None):
+        job = self.jobs.lease_due(self.owner)
+        if job is not None:
+            self._execute(job)
+        self.stop()
+        self.heartbeat()
+        return job
+
+    def _execute(self, job):
+        self.jobs.reschedule_poll(
+            job.job_id,
+            when=self.jobs.clock(),
+            error_code="DATA_REFRESH_IN_PROGRESS",
+            error_message="snapshot refresh is still running; supervisor remains available",
+            result_summary="data refresh running in background · historical_sync · 45s",
+        )
+
+
 def test_visible_loop_recovers_from_tick_exception(tmp_path, capsys):
     sup = _ExplodingSupervisor(tmp_path / "auto")
     assert sup.start()
@@ -103,6 +124,37 @@ def test_visible_loop_reports_completed_job(tmp_path, capsys):
         output = capsys.readouterr().out
         assert "UNKNOWN_JOB_FOR_CONSOLE_TEST" in output
         assert "PERMANENT_FAILED" in output
+    finally:
+        sup.shutdown()
+
+
+def test_background_poll_is_reported_as_progress_not_restarted_job(tmp_path, capsys):
+    sup = _PollingJobSupervisor(tmp_path / "auto", deps=_Deps())
+    assert sup.start()
+    queued = sup.jobs.enqueue("data_refresh", idempotency_key="console-poll-test")
+    seeded = sup.jobs.lease_due(sup.owner)
+    assert seeded is not None and seeded.job_id == queued.job_id
+    sup.jobs.reschedule_poll(
+        seeded.job_id,
+        when=sup.jobs.clock(),
+        error_code="DATA_REFRESH_IN_PROGRESS",
+        error_message="snapshot refresh is still running; supervisor remains available",
+        result_summary="data refresh running in background · historical_sync · 30s",
+    )
+    try:
+        run_visible_loop(
+            sup,
+            interval_s=0,
+            max_iterations=1,
+            sleep_fn=lambda _seconds: None,
+            heartbeat_s=0,
+        )
+        output = capsys.readouterr().out
+        assert "JOB POLL" in output
+        assert "JOB PROGRESS" in output
+        assert "historical_sync" in output
+        assert "JOB START" not in output
+        assert "JOB DONE" not in output
     finally:
         sup.shutdown()
 

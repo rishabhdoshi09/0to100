@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from pathlib import Path
+import time
 
 from news.curator import EntityResolver, curate_articles
 from news.curator_models import FetchedNews
@@ -30,6 +31,40 @@ def test_entity_resolver_maps_full_symbol_and_fno():
     symbols, fno = resolver.resolve("Reliance Industries wins a large contract; TCS also rises")
     assert symbols == ("RELIANCE", "TCS")
     assert fno == ("RELIANCE",)
+
+
+def test_entity_resolver_preserves_symbol_boundaries_and_alias_matching():
+    resolver = EntityResolver(
+        {
+            "ABC": "Alpha Beta Corporation Limited",
+            "ABCD": "Another Business Company Limited",
+            "M&M": "Mahindra Mahindra Limited",
+        },
+        {"M&M"},
+    )
+    symbols, fno = resolver.resolve(
+        "Alpha Beta Corporation wins an order while ABCD rises; M&M also gains"
+    )
+    assert symbols == ("ABC", "ABCD", "M&M")
+    assert fno == ("M&M",)
+
+
+def test_entity_resolver_scales_to_production_sized_universe_without_per_symbol_regex_loop():
+    symbols = {f"SYM{i:05d}": f"Company {i:05d} Industries Limited" for i in range(10500)}
+    symbols["RELIANCE"] = "Reliance Industries Limited"
+    resolver = EntityResolver(symbols, {"RELIANCE"})
+
+    started = time.monotonic()
+    for _ in range(100):
+        found, fno = resolver.resolve("Reliance Industries wins a large order; RELIANCE rises")
+        assert "RELIANCE" in found
+        assert fno == ("RELIANCE",)
+    elapsed = time.monotonic() - started
+
+    # This is deliberately generous and only catches the old O(symbols x articles)
+    # implementation.  It is not a microbenchmark; it is a production-scale
+    # anti-regression budget for the operator-visible NEWS_REFRESH path.
+    assert elapsed < 5.0
 
 
 def test_curator_deduplicates_and_corroborates_same_story():
