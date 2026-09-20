@@ -710,7 +710,7 @@ function HomeOsCard({
       ) : null}
       {os.yesterday ? (
         <p className="panel-copy">
-          Yesterday:
+          Latest completed session{os.today?.available_session ? ` (${os.today.available_session})` : ''}:
           {os.yesterday.scan ? ' scan' : ' scan pending'}
           {os.yesterday.paper_decisions ? ' · paper decisions' : ' · paper pending'}
           {os.yesterday.settlement_pending ? ' · settlement pending' : os.yesterday.settlement ? ' · settlement' : ''}
