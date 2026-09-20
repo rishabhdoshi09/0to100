@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Locator } from '@playwright/test'
 
 const WORKSPACES = [
   ['Today', 'Today'],
@@ -42,11 +42,11 @@ const CRITICAL_READS = [
   '/api/product-contract',
 ] as const
 
-async function clickPrimaryNavButton(nav: ReturnType<Parameters<typeof test>[0]> extends never ? never : any, name: string) {
+async function clickPrimaryNavButton(nav: Locator, name: string) {
   const button = nav.getByRole('button', { name, exact: true })
   // The real sidebar is independently scrollable. Playwright's normal click
-  // cannot scroll an element that is clipped by that container, so explicitly
-  // scroll the requested operator control into the sidebar viewport first.
+  // cannot scroll an element clipped by that container, so explicitly bring
+  // the requested operator control into the sidebar viewport first.
   await button.evaluate((element: HTMLElement) => element.scrollIntoView({ block: 'center', inline: 'nearest' }))
   await expect(button).toBeVisible()
   await button.click()
