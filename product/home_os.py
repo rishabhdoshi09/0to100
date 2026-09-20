@@ -434,7 +434,7 @@ def build_home_os(
                 if verify_lanes.get(name) not in allowed
             ]
             state = NORMAL
-            headline = "Market is closed. Today's QuantTerm workflow is not complete yet."
+            headline = "Market is closed. The latest completed-session workflow is not complete yet."
             subtext = (
                 "Automation is still reconciling required day evidence"
                 + (f": {', '.join(unfinished[:4])}." if unfinished else ".")
@@ -444,7 +444,7 @@ def build_home_os(
             next_line = "Finish required scan, selection and paper verification"
         elif pending_settle and not verified_no_trade:
             state = NORMAL
-            headline = "Today's market is closed. Settlement is still finishing."
+            headline = "Market is closed. Settlement for the latest completed session is still finishing."
             subtext = "Leave QuantTerm running. End-of-day work is automatic."
             now_line = "End-of-day settlement"
             next_line = "Learning journal and forward evidence"
@@ -452,13 +452,13 @@ def build_home_os(
             no_trade_for_day = verified_no_trade if has_verification else valid_no_trade
             state = NO_TRADE if no_trade_for_day and not taken else MARKET_CLOSED_COMPLETE
             if no_trade_for_day and not taken:
-                headline = "No trade today — QuantTerm did not find a setup worth taking."
+                headline = "No paper trade for the latest completed market session — QuantTerm did not find a setup worth taking."
                 subtext = "The paper-decision lane is complete. Longer-horizon evidence can continue automatically."
             else:
-                headline = "Today's market work is complete."
-                subtext = "Required scan, selection and paper-decision lanes are verified for the day."
+                headline = "The latest completed market session is complete."
+                subtext = "Required scan, selection and paper-decision lanes are verified for the latest completed session."
             now_line = "Market closed"
-            next_line = "Tomorrow's official data, then scan"
+            next_line = "Next official NSE session, then scan"
     elif valid_no_trade:
         state = NO_TRADE
         headline = "No trade today — nothing was good enough."
