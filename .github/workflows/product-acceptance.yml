@@ -133,6 +133,21 @@ jobs:
             exit 1
           fi
 
+      - name: Prove operator status probe works exactly as documented
+        shell: bash
+        run: |
+          set -euo pipefail
+          venv/bin/python scripts/quantterm_status.py > logs/product/operator_status.json
+          venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+          p=json.loads(Path('logs/product/operator_status.json').read_text(encoding='utf-8'))
+          assert p.get('ready') is True, p
+          assert (p.get('market_api') or {}).get('healthy') is True, p
+          assert (p.get('desk') or {}).get('healthy') is True, p
+          assert (p.get('market_ops') or {}).get('healthy') is True, p
+          PY
+
       - name: Prove canonical live interlock is verified locked
         shell: bash
         run: |
