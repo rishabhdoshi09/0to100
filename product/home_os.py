@@ -806,7 +806,12 @@ def _activity(
     rows: list[dict[str, str]] = []
     scan_at = str(scan.get("scanned_at") or "")
     if scan_at:
-        n = len(list(scan.get("records") or []))
+        records_n = len(list(scan.get("records") or []))
+        try:
+            scanned_n = int(scan.get("scanned") or scan.get("universe_size") or 0)
+        except (TypeError, ValueError):
+            scanned_n = 0
+        n = scanned_n or records_n
         rows.append({"at": scan_at, "text": f"Market scan completed" + (f" · {n} names checked" if n else "")})
     if why.get("available"):
         stamp = str(latest.get("recorded_at") or latest.get("as_of") or why.get("as_of") or "")
