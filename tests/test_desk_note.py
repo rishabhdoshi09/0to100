@@ -121,8 +121,6 @@ def test_daily_wrap_uses_official_session_and_sourced_news(monkeypatch):
     assert "490 million" not in texts
     assert lines[0]["id"] == "session_indices"
     assert lines[0]["official"] is True
-    assert "2026-09-18" in lines[0]["source"]
-    assert lines[0]["as_of"] == "2026-09-18"
 
 
 def test_daily_wrap_magazine_tape_from_official_prints(monkeypatch):
@@ -178,6 +176,8 @@ def test_daily_wrap_magazine_tape_from_official_prints(monkeypatch):
     assert "Bank Nifty fell" in session
     assert "Pharma" in session and "ended positive" in session
     assert "Sensex dropped" not in session
+    assert "2026-09-18" in lines[0]["source"]
+    assert lines[0]["as_of"] == "2026-09-18"
     assert any("Happiest Minds fell 6%" in line for line in texts)
     assert texts[-1].startswith("US markets are set for a stronger open")
     assert "Last market scan" not in " ".join(texts)
