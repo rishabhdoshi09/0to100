@@ -50,6 +50,14 @@ jobs:
         with:
           node-version: "20.20.0"
 
+      - name: Install frontend and real-browser burn-in dependencies
+        working-directory: frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install
+          npx playwright install --with-deps chromium
+
       - name: Prepare evidence directory
         run: mkdir -p logs/product
 
@@ -132,6 +140,13 @@ jobs:
             tail -250 logs/product/complete_stack.log || true
             exit 1
           fi
+
+      - name: Run ten accelerated operator-hours across every mounted frontend view
+        working-directory: frontend
+        env:
+          QT_BURNIN_ROUNDS: "10"
+          QT_DESK_URL: "http://127.0.0.1:5173"
+        run: npm run test:e2e
 
       - name: Prove operator status probe works exactly as documented
         shell: bash
