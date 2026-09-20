@@ -209,6 +209,31 @@ def test_operational_and_evidence_ready_together(monkeypatch):
     assert payload["evidence"]["blockers"] == []
 
 
+def test_startup_surfaces_one_time_decision_approval_instead_of_forward_block(monkeypatch):
+    monkeypatch.setenv("QT_STARTUP_ID", "startup-test")
+    _patch_operational_healthy(monkeypatch)
+    _patch_history(monkeypatch, current=True, available="2026-09-18", expected="2026-09-18", reason="HISTORY_CURRENT")
+    _patch_scan(monkeypatch, _current_scan(hours_ago=0.1, as_of_session="2026-09-18"))
+    _patch_soak(monkeypatch, "BLOCKED")
+    monkeypatch.setattr("data.kite_client._fresh_env", lambda *_a, **_k: "")
+    monkeypatch.setattr(
+        "product.decision_simulation_gate.status",
+        lambda: {
+            "phase": "AWAITING_APPROVAL",
+            "message": "Current best-trade search is complete. Review the shortlist, then approve Decision Simulation once.",
+        },
+    )
+
+    payload = build_startup_check(probe_network=False)
+    by = {lane["name"]: lane for lane in payload["lanes"]}
+
+    assert by["DECISION SIMULATION"]["status"] == "AWAITING_APPROVAL"
+    assert by["FORWARD EVIDENCE"]["status"] == "WAITING"
+    assert "one-time Decision Simulation approval" in by["FORWARD EVIDENCE"]["detail"]
+    assert payload["operational_ready"] is True
+    assert payload["evidence_ready"] is False
+
+
 def test_operationally_healthy_with_evidence_not_ready(monkeypatch):
     _patch_operational_healthy(monkeypatch)
     _patch_history(monkeypatch, current=False, available="", expected="2026-09-05", reason="HISTORY_NOT_READY")
