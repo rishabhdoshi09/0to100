@@ -372,7 +372,7 @@ def print_startup_summary(*, probe_network: bool = True) -> int:
     print(f"Operational runtime: {operational.get('status') or 'UNKNOWN'}")
     if operational.get("blockers"):
         print("  blockers: " + ", ".join(operational["blockers"]))
-    print(f"Evidence: {evidence.get('status') or 'UNKNOWN'}")
+    print(f"Market evidence inputs: {evidence.get('status') or 'UNKNOWN'}")
     if evidence.get("blockers"):
         print("  blockers: " + ", ".join(evidence["blockers"]))
     if operational.get("ready") and evidence.get("ready"):
