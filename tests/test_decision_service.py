@@ -301,3 +301,53 @@ def test_best_trade_discovery_respects_restored_open_positions(monkeypatch):
     # not advertise a duplicate position as the next actionable best trade.
     assert [row["symbol"] for row in board["best_trades"]] == ["TCS"]
     assert board["best_trades"][0]["restored_paper_positions_considered"] is True
+
+
+def test_best_trade_discovery_exposes_capacity_only_reserves_without_relaxing_three_entry_cap(monkeypatch):
+    import product.paper_autopilot as PA
+    import product.portfolio_selection_authority as portfolio
+
+    class Result:
+        def __init__(self, card):
+            self.symbol = card["symbol"]
+            self.decision = PA.ENTER_NOW
+            self.selection_score = float(card.get("score") or 0.0)
+            self.reason_code = "ELIGIBLE"
+            self.policy_effect = "NEUTRAL"
+            self.card = dict(card)
+            self.context = {}
+            self.portfolio = {}
+
+    monkeypatch.setattr(
+        PA,
+        "evaluate_selection_candidate",
+        lambda card, **_kwargs: Result(card),
+    )
+
+    def capacity_three(ranked, **kwargs):
+        assert kwargs["max_new"] == 3
+        kept = list(ranked[:3])
+        diverted = []
+        for _score, decision in ranked[3:]:
+            decision.decision = PA.WAIT
+            decision.reason_code = "NOT_TOP_OF_PORTFOLIO"
+            decision.portfolio = {"decision": PA.WAIT, "reason_code": "NOT_TOP_OF_PORTFOLIO"}
+            diverted.append(decision)
+        return kept, diverted
+
+    monkeypatch.setattr(portfolio, "apply_portfolio_authority", capacity_three)
+
+    cards = [_card(f"S{i}", score=100 - i) for i in range(5)]
+    board = decision_board(workspace=_workspace(*cards))
+
+    assert [row["symbol"] for row in board["best_trades"]] == ["S0", "S1", "S2", "S3", "S4"]
+    assert [row["production_candidate_status"] for row in board["best_trades"]] == [
+        "ENTER_NOW", "ENTER_NOW", "ENTER_NOW", "RESERVE_CAPACITY", "RESERVE_CAPACITY"
+    ]
+    assert [row["production_execution_slot"] for row in board["best_trades"]] == [
+        True, True, True, False, False
+    ]
+    assert all(
+        row["production_reason_code"] == "NOT_TOP_OF_PORTFOLIO"
+        for row in board["best_trades"][3:]
+    )
