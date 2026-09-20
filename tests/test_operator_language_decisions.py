@@ -1,4 +1,4 @@
-from product.operator_language import explain_opportunity
+from product.operator_language import explain_opportunity, simple_reason
 
 
 def test_scanner_buy_verdict_stays_research_candidate_without_committee_decision():
@@ -37,3 +37,10 @@ def test_no_judgment_is_not_rendered_as_rejection():
     card = explain_opportunity({"symbol": "BAD", "decision": "NO_JUDGMENT", "reason_code": "INVALID_SYMBOL"})
     assert card["label"] == "NO JUDGMENT"
     assert "not a real stock" in card["meaning"]
+
+
+def test_session_status_language_does_not_assume_calendar_today_or_yesterday():
+    for code in ("NO_CYCLE_RECORDED", "NO_ELIGIBLE_TRADE", "NO_TRADE", "STALE_RECOMMENDATION"):
+        text = simple_reason(code).lower()
+        assert "today" not in text
+        assert "yesterday" not in text
