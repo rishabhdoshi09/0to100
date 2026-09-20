@@ -410,3 +410,82 @@ def test_data_ready_reconciles_from_real_history_when_no_data_payload_is_wired(m
     assert data_lane["technical"]["data_ready"] is True
     assert data_lane["status_code"] != "WAITING"
     assert data_lane["current"] != "Getting the latest market data"
+
+
+def test_home_best_trades_excludes_rejections_waits_and_non_buy_gate_rows(monkeypatch):
+    """Home's primary list is canonical production selection, never a mixed journal."""
+    import product.decision_simulation_gate as gate
+
+    monkeypatch.setattr(
+        gate,
+        "status",
+        lambda: {
+            "scan_fresh": True,
+            "discovery_ready": True,
+            "best_trades": [
+                {
+                    "symbol": "TCS",
+                    "setup_label": "Ready to trade",
+                    "decision": "BUY",
+                    "discovery_decision": "ENTER_NOW",
+                    "reason_code": "ELIGIBLE",
+                },
+                {
+                    "symbol": "BADWAIT",
+                    "setup_label": "Ready to trade",
+                    "decision": "WAIT",
+                    "discovery_decision": "ENTER_NOW",
+                    "reason_code": "ENTRY_TOO_EXTENDED",
+                },
+            ],
+        },
+    )
+
+    os = build_home_os(
+        dashboard={
+            "autonomy": {"state": "RUNNING", "running": True, "broker": {"ready": True}},
+            "data": {
+                "ready": True,
+                "bhavcopy": {
+                    "ready": True,
+                    "latest_date": "2026-09-01",
+                    "current": True,
+                    "reason_code": "HISTORY_CURRENT",
+                },
+            },
+        },
+        paper={"enabled": True, "open_positions": [], "closed_trades": []},
+        why={
+            "available": True,
+            "taken": [],
+            "rejections": [
+                {
+                    "symbol": "AUROPHARMA",
+                    "status": "Ready to trade",
+                    "reason_code": "ENTRY_TOO_EXTENDED",
+                }
+            ],
+            "waits": [
+                {
+                    "symbol": "EMIL",
+                    "status": "Ready to trade",
+                    "reason_code": "EVIDENCE_WEAK",
+                }
+            ],
+            "reasons": ["ENTRY_TOO_EXTENDED"],
+        },
+        soak={"real_forward_observations": 0, "insufficient_evidence": True},
+        scan={
+            "scanned_at": "2026-09-01T05:00:00+00:00",
+            "records": [{"symbol": "TCS"}],
+        },
+        reco={"schema_version": 4, "categories": []},
+        now=_open(),
+    )
+
+    assert [row["found"].split()[0] for row in os["opportunities"]] == ["TCS"]
+    assert os["opportunities"][0]["label"] == "BUY"
+    rendered = " ".join(str(row) for row in os["opportunities"])
+    assert "AUROPHARMA" not in rendered
+    assert "EMIL" not in rendered
+    assert "BADWAIT" not in rendered
