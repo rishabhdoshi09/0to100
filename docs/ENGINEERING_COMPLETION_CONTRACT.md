@@ -1,5 +1,9 @@
 # QuantTerm Engineering Completion Contract
 
+> **Authority note:** this contract is subordinate to the root
+> `ARCHITECTURE.md` for system ownership and dependency direction. It defines
+> completion/readiness gates; it does not create a separate architecture.
+
 ## Purpose
 
 QuantTerm must never use the word **complete** without naming the completion domain.

@@ -1,4 +1,9 @@
-# What Is QuantTerm? (Read this first — assumes you know nothing)
+# What Is QuantTerm?
+
+> **Orientation document.** For current engineering truth, start with
+> `README.md` and `ARCHITECTURE.md`. This file explains the product idea in
+> plain language; it does not override current runtime, safety, or live-execution
+> contracts.
 
 ## The one-line version
 
@@ -65,9 +70,10 @@ is lying.
 - **Risk layer — the gatekeepers.** Decides *how much*, if anything, to bet: position
   sizing, total portfolio risk, and correlation (are your five "different" bets
   actually the same bet?). This is where survival is enforced.
-- **Execution layer — trade with a seatbelt.** Every live trade ships with a
-  stop-loss placed *at the exchange*, so you are never holding a naked, unprotected
-  position — even if your laptop dies.
+- **Execution layer — prove the workflow safely first.** Production behavior is
+  paper-first. Position sizing, protection, reconciliation, and outcome tracking
+  are exercised without granting live-money authority. Any future live-capable
+  path remains separately certified, explicitly approved, and fail-closed.
 - **The Brain — one honest read.** Composes regime, edge health, risk, and news into
   a single posture (aggressive / normal / defensive / stand-aside) and a short list
   of directives. Read-only; it advises, it doesn't gamble.
