@@ -275,6 +275,25 @@ def build_startup_check(*, probe_network: bool = True) -> dict[str, Any]:
     except Exception:
         soak_status = "UNKNOWN"
 
+    decision_phase = ""
+    decision_detail = ""
+    # A complete-stack launch intentionally requires one operator approval after
+    # best-trade discovery.  That gate is not a forward-evidence failure.  When
+    # it is the reason selection has not run yet, say so explicitly instead of
+    # rendering the honest-but-misleading aggregate soak status as BLOCKED.
+    if str(os.environ.get("QT_STARTUP_ID") or "").strip():
+        try:
+            from product.decision_simulation_gate import status as decision_gate_status
+
+            gate = dict(decision_gate_status() or {})
+            decision_phase = str(gate.get("phase") or "")
+            decision_detail = str(gate.get("message") or "")
+            if decision_phase == "AWAITING_APPROVAL" and soak_status == "BLOCKED":
+                soak_status = "WAITING"
+        except Exception:
+            decision_phase = "UNKNOWN"
+            decision_detail = "Decision Simulation gate could not be read."
+
     try:
         from data.kite_client import _fresh_env
         kite_ok = bool(_fresh_env("KITE_ACCESS_TOKEN"))
@@ -293,7 +312,23 @@ def build_startup_check(*, probe_network: bool = True) -> dict[str, Any]:
         _lane("DATA", data_status, data_detail, required=True, domain=DOMAIN_EVIDENCE),
         _lane("SCAN PIPELINE", scan_status, scan_detail, required=True, domain=DOMAIN_EVIDENCE),
         _lane("PAPER BOT", paper_status, paper_detail, required=True),
-        _lane("FORWARD EVIDENCE", soak_status, domain=DOMAIN_EVIDENCE),
+        _lane(
+            "DECISION SIMULATION",
+            decision_phase or "NOT_STARTED",
+            decision_detail,
+            required=False,
+            domain=DOMAIN_CAPABILITY,
+        ),
+        _lane(
+            "FORWARD EVIDENCE",
+            soak_status,
+            (
+                "Waiting for the one-time Decision Simulation approval; no selection/paper cycle has been claimed yet."
+                if decision_phase == "AWAITING_APPROVAL"
+                else ""
+            ),
+            domain=DOMAIN_EVIDENCE,
+        ),
         _lane("ZERODHA", "READY" if kite_ok else "LOGIN NEEDED", required=False, domain=DOMAIN_CAPABILITY),
         _lane("LIVE MONEY", live_status, live_detail, required=True),
     ]
@@ -352,7 +387,10 @@ def print_startup_summary(*, probe_network: bool = True) -> int:
     print(f"Scan: {by['SCAN PIPELINE']['status']}" + (f" · {by['SCAN PIPELINE']['detail']}" if by['SCAN PIPELINE'].get("detail") else ""))
     print(f"Automation: {by['AUTONOMY']['status']}")
     print(f"Paper bot: {by['PAPER BOT']['status']}" + (f" · {by['PAPER BOT']['detail']}" if by['PAPER BOT'].get("detail") else ""))
-    print(f"Forward evidence: {by['FORWARD EVIDENCE']['status']}")
+    decision = by.get("DECISION SIMULATION", {})
+    if decision:
+        print(f"Decision simulation: {decision.get('status') or 'UNKNOWN'}" + (f" · {decision.get('detail')}" if decision.get("detail") else ""))
+    print(f"Forward evidence: {by['FORWARD EVIDENCE']['status']}" + (f" · {by['FORWARD EVIDENCE']['detail']}" if by['FORWARD EVIDENCE'].get("detail") else ""))
     print(f"Zerodha: {by['ZERODHA']['status']}")
     print(f"Live money: {by['LIVE MONEY']['status']}")
     if payload.get("operational_waiting"):
