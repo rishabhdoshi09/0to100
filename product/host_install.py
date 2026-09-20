@@ -46,6 +46,10 @@ EXPECTED_CHILDREN = ("autonomy", "market_ops", "market_api", "report_api", "fron
 HEARTBEAT_STALE_S = 10.0
 DEFAULT_STARTUP_TIMEOUT_S = 300.0
 DEFAULT_BOOTSTRAP_TIMEOUT_S = 1800.0
+MIGRATION_MIN_HEADROOM_BYTES = 1024 * 1024 * 1024
+MIGRATION_HEADROOM_RATIO = 0.10
+MIGRATION_MAX_RECONCILE_PASSES = 3
+MIGRATION_STAGING_DIR = ".quantterm-migration-staging"
 
 
 class HostInstallError(RuntimeError):
@@ -140,6 +144,136 @@ def inventory_digest(rows: Mapping[str, Mapping[str, Any]]) -> str:
     return hashlib.sha256(blob).hexdigest()
 
 
+def _inventory_bytes(rows: Mapping[str, Mapping[str, Any]]) -> int:
+    total = 0
+    for row in rows.values():
+        try:
+            total += max(0, int(row.get("size") or 0))
+        except (TypeError, ValueError, AttributeError):
+            continue
+    return total
+
+
+def _inventory_diff(
+    source_rows: Mapping[str, Mapping[str, Any]],
+    target_rows: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    src_keys = set(source_rows)
+    dst_keys = set(target_rows)
+    conflicts = sorted(
+        key for key in src_keys & dst_keys
+        if dict(source_rows[key]) != dict(target_rows[key])
+    )
+    source_bytes = _inventory_bytes(source_rows)
+    target_bytes = _inventory_bytes(target_rows)
+    return {
+        "source_only": sorted(src_keys - dst_keys),
+        "target_only": sorted(dst_keys - src_keys),
+        "conflicts": conflicts,
+        "source_bytes": source_bytes,
+        "target_bytes": target_bytes,
+        "byte_delta": target_bytes - source_bytes,
+        "conflict_bytes": {
+            key: {
+                "source": int(source_rows[key].get("size") or 0),
+                "target": int(target_rows[key].get("size") or 0),
+                "delta": int(target_rows[key].get("size") or 0)
+                - int(source_rows[key].get("size") or 0),
+            }
+            for key in conflicts[:10]
+        },
+    }
+
+
+def _migration_diff_detail(diff: Mapping[str, Any]) -> str:
+    return (
+        f"source_only={list(diff.get('source_only') or [])[:10]}, "
+        f"target_only={list(diff.get('target_only') or [])[:10]}, "
+        f"conflicts={list(diff.get('conflicts') or [])[:10]}, "
+        f"source_bytes={int(diff.get('source_bytes') or 0)}, "
+        f"target_bytes={int(diff.get('target_bytes') or 0)}, "
+        f"byte_delta={int(diff.get('byte_delta') or 0)}, "
+        f"conflict_bytes={dict(diff.get('conflict_bytes') or {})}"
+    )
+
+
+def _require_migration_capacity(
+    target: Path,
+    source_rows: Mapping[str, Mapping[str, Any]],
+    target_rows: Mapping[str, Mapping[str, Any]],
+) -> dict[str, int]:
+    diff = _inventory_diff(source_rows, target_rows)
+    copy_keys = set(diff["source_only"]) | set(diff["conflicts"])
+    bytes_to_copy = sum(
+        max(0, int(source_rows[key].get("size") or 0))
+        for key in copy_keys
+        if key in source_rows
+    )
+    source_bytes = int(diff["source_bytes"])
+    headroom = (
+        max(
+            int(MIGRATION_MIN_HEADROOM_BYTES),
+            int(source_bytes * float(MIGRATION_HEADROOM_RATIO)),
+        )
+        if bytes_to_copy > 0
+        else 0
+    )
+    required = bytes_to_copy + headroom
+    usage = shutil.disk_usage(target)
+    free = int(usage.free)
+    if free < required:
+        raise HostInstallError(
+            "insufficient disk space for runtime migration before copy: "
+            f"free_bytes={free} required_bytes={required} "
+            f"copy_bytes={bytes_to_copy} safety_headroom_bytes={headroom} "
+            f"source_bytes={source_bytes}"
+        )
+    return {
+        "free_bytes": free,
+        "required_bytes": required,
+        "copy_bytes": bytes_to_copy,
+        "safety_headroom_bytes": headroom,
+    }
+
+
+def _copy_runtime_file(repo_root: Path, target: Path, rel: str) -> None:
+    """Copy one durable file atomically through installer-owned staging.
+
+    Staging lives outside DURABLE_DIRS, so an interrupted copy never appears as
+    a valid durable target file on the next inventory. Completed files are
+    atomically replaced and therefore form a resumable exact subset.
+    """
+    src = repo_root / rel
+    dst = target / rel
+    staging = target / MIGRATION_STAGING_DIR
+    staging.mkdir(parents=True, exist_ok=True)
+    tmp = staging / f"{hashlib.sha256(rel.encode('utf-8')).hexdigest()}.{os.getpid()}.{time.time_ns()}.tmp"
+    try:
+        shutil.copy2(src, tmp)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(tmp, dst)
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _copy_runtime_paths(repo_root: Path, target: Path, paths: Iterable[str]) -> int:
+    copied = 0
+    for rel in sorted(set(str(path) for path in paths)):
+        try:
+            _copy_runtime_file(repo_root, target, rel)
+        except FileNotFoundError:
+            # A mutable source may remove/rotate a file after inventory. Do not
+            # fabricate a copy or abort without evidence; the next inventory
+            # classifies whether this was a harmless disappearance or created
+            # target-only divergence that must fail closed.
+            continue
+        copied += 1
+    return copied
+
+
 def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -150,7 +284,14 @@ def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
 def migrate_repo_runtime(
     target_root: Path, *, repo_root: Path = REPO_ROOT, build_sha: str = "",
 ) -> dict[str, Any]:
-    """Adopt one durable root without guessing between divergent histories."""
+    """Adopt one durable root without guessing between divergent histories.
+
+    Uninitialised targets may safely resume only when they are an exact subset
+    of the current repo-local durable state. Copying is capacity-gated and
+    atomic. A source that changes during a long copy is re-inventoried and
+    reconciled for a bounded number of passes; persistent mutation fails closed
+    with exact diagnostics instead of declaring false equivalence.
+    """
     target = ensure_persistent_runtime_root(target_root, repo_root=repo_root)
     marker = target / MANIFEST_REL
     if marker.exists():
@@ -166,30 +307,77 @@ def migrate_repo_runtime(
             raise HostInstallError(f"cannot persist runtime-root pointer: {exc}") from exc
         return {"state": "ADOPTED", "runtime_root": str(target), "manifest": payload}
 
+    staging = target / MIGRATION_STAGING_DIR
+    try:
+        if staging.exists():
+            shutil.rmtree(staging)
+    except OSError as exc:
+        raise HostInstallError(f"cannot clean interrupted migration staging: {staging}: {exc}") from exc
+
     source_rows = inventory(repo_root)
     target_rows = inventory(target)
-    if source_rows and target_rows and source_rows != target_rows:
-        src_only = sorted(set(source_rows) - set(target_rows))[:10]
-        dst_only = sorted(set(target_rows) - set(source_rows))[:10]
-        conflicts = sorted(
-            key for key in set(source_rows) & set(target_rows) if source_rows[key] != target_rows[key]
-        )[:10]
+    initial_target_files = len(target_rows)
+    initial_diff = _inventory_diff(source_rows, target_rows)
+
+    # Existing uninitialised data is resumable only when every target file is
+    # byte-for-byte represented by the authoritative source snapshot. Any
+    # target-only file or conflict is genuine split-brain until reconciled.
+    if initial_diff["target_only"] or initial_diff["conflicts"]:
         raise HostInstallError(
-            "split-brain runtime state: repo-local and persistent roots both contain "
-            f"different durable data (source_only={src_only}, target_only={dst_only}, "
-            f"conflicts={conflicts}); reconcile explicitly before install"
+            "split-brain runtime state: uninitialised persistent root is not an exact "
+            f"subset of repo-local durable state ({_migration_diff_detail(initial_diff)}); "
+            "quiesce writers and reconcile explicitly before install"
         )
 
-    copied = 0
-    if source_rows and not target_rows:
-        for rel in sorted(source_rows):
-            src = repo_root / rel
-            dst = target / rel
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
-            copied += 1
-        if inventory(target) != source_rows:
-            raise HostInstallError("runtime migration verification failed; source was left untouched")
+    capacity = _require_migration_capacity(target, source_rows, target_rows)
+    copied = _copy_runtime_paths(repo_root, target, initial_diff["source_only"])
+    reconcile_passes = 0
+    source_changed_during_copy = False
+    previous_source = source_rows
+
+    for pass_no in range(MIGRATION_MAX_RECONCILE_PASSES + 1):
+        current_source = inventory(repo_root)
+        current_target = inventory(target)
+        diff = _inventory_diff(current_source, current_target)
+        if current_source != previous_source:
+            source_changed_during_copy = True
+
+        if not diff["source_only"] and not diff["target_only"] and not diff["conflicts"]:
+            source_rows = current_source
+            target_rows = current_target
+            break
+
+        if diff["target_only"]:
+            raise HostInstallError(
+                "runtime migration source changed by deleting/moving durable files during copy; "
+                f"source was preserved and target left unmanifested ({_migration_diff_detail(diff)}). "
+                "Quiesce all writers, reconcile target-only files, then rerun."
+            )
+
+        if pass_no >= MIGRATION_MAX_RECONCILE_PASSES:
+            raise HostInstallError(
+                "runtime migration could not reach a stable source snapshot; source was preserved "
+                f"and target left unmanifested ({_migration_diff_detail(diff)}). "
+                "Quiesce all repo-local writers and rerun."
+            )
+
+        _require_migration_capacity(target, current_source, current_target)
+        copied += _copy_runtime_paths(
+            repo_root,
+            target,
+            list(diff["source_only"]) + list(diff["conflicts"]),
+        )
+        reconcile_passes += 1
+        previous_source = current_source
+    else:  # pragma: no cover - loop always breaks or raises
+        raise HostInstallError("runtime migration reconciliation exhausted unexpectedly")
+
+    final_diff = _inventory_diff(source_rows, target_rows)
+    if final_diff["source_only"] or final_diff["target_only"] or final_diff["conflicts"]:
+        raise HostInstallError(
+            "runtime migration verification failed; source was left untouched and target "
+            f"left unmanifested ({_migration_diff_detail(final_diff)})"
+        )
 
     payload = {
         "schema_version": SCHEMA_VERSION,
@@ -199,6 +387,11 @@ def migrate_repo_runtime(
         "build_sha": build_sha or git_sha(repo_root),
         "source_files": len(source_rows),
         "copied_files": copied,
+        "initial_target_files": initial_target_files,
+        "resumed_partial_migration": bool(initial_target_files),
+        "reconcile_passes": reconcile_passes,
+        "source_changed_during_copy": source_changed_during_copy,
+        "capacity_preflight": capacity,
         "source_inventory_sha256": inventory_digest(source_rows),
         "source_preserved": True,
     }
@@ -207,7 +400,8 @@ def migrate_repo_runtime(
         write_runtime_pointer(target, repo_root=repo_root)
     except Exception as exc:
         raise HostInstallError(f"cannot persist runtime-root pointer: {exc}") from exc
-    return {"state": "MIGRATED" if copied else "INITIALIZED", "runtime_root": str(target), "manifest": payload}
+    state = "MIGRATED" if source_rows else "INITIALIZED"
+    return {"state": state, "runtime_root": str(target), "manifest": payload}
 
 
 def _safe_env_file(path: Path | None) -> str:

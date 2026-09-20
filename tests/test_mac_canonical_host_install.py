@@ -116,6 +116,8 @@ def test_setup_mac_delegates_to_single_canonical_host_installer():
     # must never load/kickstart those historical owners again.
     assert "com.quantterm.ui.plist" in script
     assert 'launchctl bootout "gui/$UID_VALUE/$label"' in script
+    assert 'launchctl print "gui/$UID_VALUE/$label"' in script
+    assert "legacy launchd agent $label is still loaded" in script
     assert 'launchctl kickstart -k "gui/$(id -u)/com.quantterm.ui"' not in script
     assert "run_quantterm_mac.sh" not in script
 

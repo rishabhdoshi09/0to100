@@ -52,6 +52,17 @@ do
   fi
 done
 
+# The 2026-09 real-host migration proved that a legacy agent can respawn a
+# repo-local writer after a best-effort bootout. Do not touch durable state
+# until every historical QuantTerm launchd owner is proven absent.
+for label in com.quantterm.ui com.quantterm.app com.quantterm.autonomy; do
+  if launchctl print "gui/$UID_VALUE/$label" >/dev/null 2>&1; then
+    echo "QuantTerm setup blocked: legacy launchd agent $label is still loaded." >&2
+    echo "Stop/remove that agent before runtime migration; continuing could create split-brain state." >&2
+    exit 1
+  fi
+done
+
 [ -d "$APP_DIR/venv" ] || "$SYSTEM_PYTHON" -m venv "$APP_DIR/venv"
 PYTHON_BIN="${QT_PYTHON:-$APP_DIR/venv/bin/python}"
 "$PYTHON_BIN" -m pip install --upgrade pip wheel

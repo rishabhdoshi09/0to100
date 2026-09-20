@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -38,6 +39,103 @@ def test_first_migration_copies_and_verifies_without_deleting_source(tmp_path):
     assert manifest["source_preserved"] is True
     assert manifest["build_sha"] == "abc123"
     assert manifest["copied_files"] == 2
+
+
+def test_partial_uninitialised_destination_resumes_exact_subset(tmp_path):
+    repo = tmp_path / "repo"
+    runtime = tmp_path / "runtime"
+    _write(repo, "logs/product/evidence.json", "real-evidence")
+    _write(repo, "db/paper.sqlite", "db-bytes")
+    _write(runtime, "logs/product/evidence.json", "real-evidence")
+
+    out = HI.migrate_repo_runtime(runtime, repo_root=repo, build_sha="abc123")
+
+    assert out["state"] == "MIGRATED"
+    assert (runtime / "logs/product/evidence.json").read_text() == "real-evidence"
+    assert (runtime / "db/paper.sqlite").read_text() == "db-bytes"
+    manifest = json.loads((runtime / HI.MANIFEST_REL).read_text())
+    assert manifest["initial_target_files"] == 1
+    assert manifest["resumed_partial_migration"] is True
+    assert manifest["source_preserved"] is True
+
+
+def test_migration_disk_preflight_blocks_before_first_copy(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    runtime = tmp_path / "runtime"
+    _write(repo, "logs/product/evidence.json", "x" * 4096)
+
+    monkeypatch.setattr(
+        HI.shutil,
+        "disk_usage",
+        lambda _path: SimpleNamespace(total=8192, used=8191, free=1),
+    )
+
+    with pytest.raises(HI.HostInstallError, match="insufficient disk space") as err:
+        HI.migrate_repo_runtime(runtime, repo_root=repo, build_sha="abc")
+
+    assert "required_bytes=" in str(err.value)
+    assert "safety_headroom_bytes=" in str(err.value)
+    assert not (runtime / "logs/product/evidence.json").exists()
+    assert not (runtime / HI.MANIFEST_REL).exists()
+
+
+def test_source_mutation_during_copy_is_reinventoried_and_reconciled(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    runtime = tmp_path / "runtime"
+    source = _write(repo, "logs/product/state.json", "before-copy")
+    original_copy = HI._copy_runtime_file
+    mutated = {"done": False}
+
+    def mutating_copy(repo_root, target, rel):
+        original_copy(repo_root, target, rel)
+        if not mutated["done"] and rel == "logs/product/state.json":
+            source.write_text("after-copy", encoding="utf-8")
+            mutated["done"] = True
+
+    monkeypatch.setattr(HI, "_copy_runtime_file", mutating_copy)
+
+    out = HI.migrate_repo_runtime(runtime, repo_root=repo, build_sha="abc")
+
+    assert out["state"] == "MIGRATED"
+    assert source.read_text() == "after-copy"
+    assert (runtime / "logs/product/state.json").read_text() == "after-copy"
+    manifest = json.loads((runtime / HI.MANIFEST_REL).read_text())
+    assert manifest["source_changed_during_copy"] is True
+    assert manifest["reconcile_passes"] == 1
+    assert manifest["copied_files"] == 2
+
+
+def test_split_brain_diagnostics_include_file_and_byte_deltas(tmp_path):
+    repo = tmp_path / "repo"
+    runtime = tmp_path / "runtime"
+    _write(repo, "logs/product/state.json", "source-longer")
+    _write(runtime, "logs/product/state.json", "dst")
+
+    with pytest.raises(HI.HostInstallError, match="split-brain") as err:
+        HI.migrate_repo_runtime(runtime, repo_root=repo, build_sha="abc")
+
+    detail = str(err.value)
+    assert "conflicts=['logs/product/state.json']" in detail
+    assert "source_bytes=" in detail
+    assert "target_bytes=" in detail
+    assert "byte_delta=" in detail
+    assert "conflict_bytes=" in detail
+    assert not (runtime / HI.MANIFEST_REL).exists()
+
+
+def test_interrupted_staging_is_cleaned_and_does_not_poison_resume(tmp_path):
+    repo = tmp_path / "repo"
+    runtime = tmp_path / "runtime"
+    _write(repo, "logs/product/state.json", "authoritative")
+    staging = runtime / HI.MIGRATION_STAGING_DIR
+    staging.mkdir(parents=True)
+    (staging / "abandoned.tmp").write_text("partial-copy", encoding="utf-8")
+
+    out = HI.migrate_repo_runtime(runtime, repo_root=repo, build_sha="abc")
+
+    assert out["state"] == "MIGRATED"
+    assert (runtime / "logs/product/state.json").read_text() == "authoritative"
+    assert not (staging / "abandoned.tmp").exists()
 
 
 def test_divergent_uninitialised_roots_block_instead_of_guessing(tmp_path):
