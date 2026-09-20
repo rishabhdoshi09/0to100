@@ -84,7 +84,7 @@ def simple_term(term: str) -> str:
     return SIMPLE_TERMS.get(term, term)
 
 
-def explain_opportunity(row: Mapping[str, Any]) -> dict[str, str]:
+def explain_opportunity(row: Mapping[str, Any]) -> dict[str, Any]:
     """Four questions for a Home card. Does not change ranking or decisions.
 
     When a persisted committee decision is present, it is the headline truth.
@@ -98,8 +98,33 @@ def explain_opportunity(row: Mapping[str, Any]) -> dict[str, str]:
     decision = str(row.get("decision") or row.get("committee_decision") or "").upper()
     execution = str(row.get("execution_state") or "").upper()
     entry_state = str(row.get("entry_state") or "").upper()
+    candidate_status = str(row.get("home_candidate_status") or row.get("production_candidate_status") or "").upper()
+    quality = dict(row.get("trade_quality") or {}) if isinstance(row.get("trade_quality"), Mapping) else {}
 
-    if decision == "BUY":
+    confidence_score = quality.get("decision_confidence")
+    try:
+        confidence_score = round(float(confidence_score), 1) if confidence_score is not None else None
+    except (TypeError, ValueError):
+        confidence_score = None
+    win_probability = quality.get("win_probability")
+    try:
+        win_probability_pct = round(float(win_probability) * 100.0, 1) if win_probability is not None else None
+    except (TypeError, ValueError):
+        win_probability_pct = None
+    effective_n = quality.get("effective_n")
+    try:
+        effective_n = round(float(effective_n), 1) if effective_n is not None else 0.0
+    except (TypeError, ValueError):
+        effective_n = 0.0
+    confidence_source = str(quality.get("win_probability_source") or "INSUFFICIENT_EVIDENCE")
+
+    if candidate_status == "RESERVE_CAPACITY":
+        label = "RESERVE"
+        meaning = (
+            "Passed the production trade gates, but this cycle already allocated its "
+            "three new-entry slots. Kept as the next-best capacity reserve; no paper order is opened."
+        )
+    elif decision == "BUY":
         if execution.startswith("BLOCKED_"):
             label = "BUY — execution blocked"
             meaning = simple_reason(execution, fallback="The investment decision is BUY; execution is waiting on an operational gate.")
@@ -148,4 +173,14 @@ def explain_opportunity(row: Mapping[str, Any]) -> dict[str, str]:
         "label": label,
         "why": simple_reason(reason) if reason else meaning,
         "technical": reason or str(row.get("setup_label") or ""),
+        "candidate_status": candidate_status or ("ENTER_NOW" if decision == "BUY" else ""),
+        "confidence_score": confidence_score,
+        "win_probability_pct": win_probability_pct,
+        "confidence_source": confidence_source,
+        "effective_n": effective_n,
+        "confidence_note": (
+            f"Evidence confidence {confidence_score:.1f}/100"
+            if confidence_score is not None
+            else "Evidence confidence is still building"
+        ),
     }
