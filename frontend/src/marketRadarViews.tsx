@@ -766,10 +766,15 @@ export function RadarHomeView(props: ExperienceViewProps & {
             setRadarNote('')
           }
         })
-        .catch((reason: unknown) => {
+        .catch(() => {
           if (!alive) return
-          if (!recall('radar-home')) setRadar(null)
-          setRadarNote(reason instanceof Error ? reason.message : 'Home workspace timed out. Dashboard below still works.')
+          const cached = recall<RadarHome>('radar-home')
+          if (!cached) setRadar(null)
+          setRadarNote(
+            cached
+              ? `STALE CACHE · Home refresh failed. Showing the last saved workspace${cached.scan_scanned_at ? ` from ${cached.scan_scanned_at}` : ''}; verify timestamps before using market values.`
+              : 'Home workspace is unavailable. No cached Home values are being presented as current.'
+          )
         })
         .finally(() => { radarInFlight.current = false })
       fetchProductReadiness()
