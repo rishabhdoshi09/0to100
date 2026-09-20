@@ -165,18 +165,39 @@ def _best_trades_from_production_thesis(
         key=lambda item: (-item[0], str(item[1].symbol or "")),
     )
     try:
-        kept, _diverted = apply_portfolio_authority(
+        kept, diverted = apply_portfolio_authority(
             ranked,
             book=book,
+            # PAPER_FORWARD may open at most three new positions in one cycle.
+            # Discovery keeps that execution cap, then exposes up to two
+            # additional otherwise-eligible names as capacity reserves so Home
+            # can show a truthful Top 5 without pretending five orders can fire.
             max_new=min(3, max(0, int(limit))),
             regime=regime,
         )
     except Exception as exc:
         errors.append({"symbol": "", "error": f"portfolio authority: {str(exc)[:160]}"})
         kept = []
+        diverted = []
+
+    capacity_reserves: list[tuple[float, Any]] = []
+    for decision in diverted:
+        if str(getattr(decision, "reason_code", "") or "") != "NOT_TOP_OF_PORTFOLIO":
+            continue
+        symbol = str(getattr(decision, "symbol", "") or "").upper()
+        pair = eligible.get(symbol)
+        if pair is None:
+            continue
+        capacity_reserves.append((float(pair[0]), decision))
+    capacity_reserves.sort(key=lambda item: (-item[0], str(item[1].symbol or "")))
 
     best: list[dict[str, Any]] = []
-    for score, decision in kept:
+    discovery_rows = [
+        (score, decision, True) for score, decision in kept
+    ] + [
+        (score, decision, False) for score, decision in capacity_reserves
+    ]
+    for score, decision, execution_slot in discovery_rows:
         symbol = str(decision.symbol or "").upper()
         base = row_by_symbol.get(symbol)
         if base is None:
@@ -186,7 +207,11 @@ def _best_trades_from_production_thesis(
         payload["production_reason_code"] = str(decision.reason_code or "")
         payload["production_policy_effect"] = str(decision.policy_effect or "NEUTRAL")
         payload["production_portfolio_authority"] = dict(decision.portfolio or {})
-        payload["discovery_decision"] = ENTER_NOW
+        payload["production_execution_slot"] = bool(execution_slot)
+        payload["production_candidate_status"] = (
+            "ENTER_NOW" if execution_slot else "RESERVE_CAPACITY"
+        )
+        payload["discovery_decision"] = ENTER_NOW if execution_slot else "RESERVE_CAPACITY"
         payload["history_bootstrap_gate_applied"] = False
         payload["restored_paper_positions_considered"] = bool(
             book is not None and getattr(book, "open", {})
