@@ -42,6 +42,16 @@ const CRITICAL_READS = [
   '/api/product-contract',
 ] as const
 
+async function clickPrimaryNavButton(nav: ReturnType<Parameters<typeof test>[0]> extends never ? never : any, name: string) {
+  const button = nav.getByRole('button', { name, exact: true })
+  // The real sidebar is independently scrollable. Playwright's normal click
+  // cannot scroll an element that is clipped by that container, so explicitly
+  // scroll the requested operator control into the sidebar viewport first.
+  await button.evaluate((element: HTMLElement) => element.scrollIntoView({ block: 'center', inline: 'nearest' }))
+  await expect(button).toBeVisible()
+  await button.click()
+}
+
 test('10-hour accelerated full-desk burn-in keeps every visible tab and backend surface alive', async ({ page, request }) => {
   const rounds = Math.max(1, Number(process.env.QT_BURNIN_ROUNDS || '10'))
   const pageErrors: string[] = []
@@ -66,7 +76,7 @@ test('10-hour accelerated full-desk burn-in keeps every visible tab and backend 
     }
 
     for (const [button, title] of WORKSPACES) {
-      await nav.getByRole('button', { name: button, exact: true }).click()
+      await clickPrimaryNavButton(nav, button)
       await expect(page.getByRole('heading', { name: title, level: 1, exact: true })).toBeVisible()
       await expect(page.locator('.workspace')).toBeVisible()
       await page.waitForTimeout(100)
@@ -77,7 +87,7 @@ test('10-hour accelerated full-desk burn-in keeps every visible tab and backend 
       await tools.locator('summary').click()
     }
     for (const [button, title] of TOOLS) {
-      await nav.getByRole('button', { name: button, exact: true }).click()
+      await clickPrimaryNavButton(nav, button)
       await expect(page.getByRole('heading', { name: title, level: 1, exact: true })).toBeVisible()
       await expect(page.locator('.workspace')).toBeVisible()
       await page.waitForTimeout(100)
@@ -110,7 +120,7 @@ test('10-hour accelerated full-desk burn-in keeps every visible tab and backend 
     await page.getByRole('button', { name: 'Refresh dashboard' }).click()
     expect((await dashboardResponse).status()).toBeLessThan(500)
 
-    await nav.getByRole('button', { name: 'Today', exact: true }).click()
+    await clickPrimaryNavButton(nav, 'Today')
     await expect(page.getByRole('heading', { name: 'Today', level: 1, exact: true })).toBeVisible()
 
     const cards = page.locator('.home-os-best-trades > div')
