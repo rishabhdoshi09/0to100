@@ -213,19 +213,30 @@ def _canonical_best_trade_rows(*, history_current: bool) -> list[dict[str, Any]]
         if not symbol or symbol in seen:
             continue
         discovery = str(row.get("discovery_decision") or "").upper().strip()
+        candidate_status = str(row.get("production_candidate_status") or discovery).upper().strip()
         committee = str(row.get("decision") or row.get("committee_decision") or "").upper().strip()
-        if discovery and discovery != "ENTER_NOW":
-            continue
-        if committee and committee != "BUY":
-            continue
-        # ENTER_NOW is the production selection seam's actionable state. Give
-        # the Home language layer the matching canonical decision so it cannot
-        # fall back to scanner-only labels such as "research candidate".
-        if discovery == "ENTER_NOW" and not committee:
-            row["decision"] = "BUY"
+        reserve = candidate_status == "RESERVE_CAPACITY"
+        if reserve:
+            # This is not a generic WAIT. It passed the same production gates
+            # and was diverted only because PAPER_FORWARD can open at most three
+            # new positions in one cycle. Preserve that truth on Home.
+            if str(row.get("production_reason_code") or "").upper() != "NOT_TOP_OF_PORTFOLIO":
+                continue
+            row["decision"] = "WAIT"
+            row["reason_code"] = "NOT_TOP_OF_PORTFOLIO"
+            row["home_candidate_status"] = "RESERVE_CAPACITY"
+        else:
+            if discovery and discovery != "ENTER_NOW":
+                continue
+            if committee and committee != "BUY":
+                continue
+            # ENTER_NOW is the production selection seam's actionable state.
+            if discovery == "ENTER_NOW" and not committee:
+                row["decision"] = "BUY"
+            row["home_candidate_status"] = "ENTER_NOW"
         out.append(row)
         seen.add(symbol)
-        if len(out) >= 3:
+        if len(out) >= 5:
             break
     return out
 
