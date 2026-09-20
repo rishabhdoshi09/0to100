@@ -183,6 +183,53 @@ def broker_session_usable(auto: Mapping[str, Any] | None) -> bool:
     return True
 
 
+def _canonical_best_trade_rows(*, history_current: bool) -> list[dict[str, Any]]:
+    """Read only the canonical production-thesis discovery shortlist for Home.
+
+    Home's primary trade list must never mix scanner rankings, committee rejects,
+    WAIT rows or extended names into the same "opportunities" bucket. The
+    Decision Simulation gate already owns the current best-trade projection and
+    is tied to the fresh saved scan + production thesis, so Home consumes that
+    exact read-only output.
+    """
+    if not history_current:
+        return []
+    try:
+        from product.decision_simulation_gate import status as decision_simulation_status
+
+        gate = dict(decision_simulation_status() or {})
+    except Exception:
+        return []
+    if not gate.get("scan_fresh") or not gate.get("discovery_ready"):
+        return []
+
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in gate.get("best_trades") or []:
+        if not isinstance(raw, Mapping):
+            continue
+        row = dict(raw)
+        symbol = str(row.get("symbol") or "").upper().strip()
+        if not symbol or symbol in seen:
+            continue
+        discovery = str(row.get("discovery_decision") or "").upper().strip()
+        committee = str(row.get("decision") or row.get("committee_decision") or "").upper().strip()
+        if discovery and discovery != "ENTER_NOW":
+            continue
+        if committee and committee != "BUY":
+            continue
+        # ENTER_NOW is the production selection seam's actionable state. Give
+        # the Home language layer the matching canonical decision so it cannot
+        # fall back to scanner-only labels such as "research candidate".
+        if discovery == "ENTER_NOW" and not committee:
+            row["decision"] = "BUY"
+        out.append(row)
+        seen.add(symbol)
+        if len(out) >= 3:
+            break
+    return out
+
+
 def build_home_os(
     *,
     dashboard: Mapping[str, Any] | None = None,
@@ -428,11 +475,8 @@ def build_home_os(
                 "status": op.get("status"),
             }
 
-    best_rows = list((radar_d.get("best_of_best") or [])[:3]) if history_current else []
+    best_rows = _canonical_best_trade_rows(history_current=history_current)
     opportunities = [explain_opportunity(row) for row in best_rows]
-    for row in (rejections + waits)[:4]:
-        if isinstance(row, Mapping):
-            opportunities.append(explain_opportunity(row))
 
     n_real = int(soak_d.get("real_forward_observations") or 0)
     learning_simple = (
