@@ -22,6 +22,15 @@ const TOOLS = [
   ['Coverage', 'Coverage'],
 ] as const
 
+const SECONDARY_VIEWS = [
+  ['Market Overview', 'Market Overview'],
+  ['News & Events', 'News & Events'],
+  ['Education', 'Education'],
+  ['F&O Desk', 'F&O Desk'],
+  ['Long-Term Picks', 'Long-Term Picks'],
+  ['Stock Investigator', 'Company Intelligence'],
+] as const
+
 const CRITICAL_READS = [
   '/api/health',
   '/api/dashboard',
@@ -69,6 +78,24 @@ test('10-hour accelerated full-desk burn-in keeps every visible tab and backend 
     }
     for (const [button, title] of TOOLS) {
       await nav.getByRole('button', { name: button, exact: true }).click()
+      await expect(page.locator('h1')).toHaveText(title)
+      await expect(page.locator('.workspace')).toBeVisible()
+      await page.waitForTimeout(100)
+    }
+
+    // These views still exist in App.tsx even though the simplified daily
+    // sidebar no longer exposes them as peer tabs. Force-load each route from
+    // the same persisted navigation state App itself consumes.
+    for (const [route, title] of SECONDARY_VIEWS) {
+      await page.evaluate((nextRoute) => {
+        const current = JSON.parse(window.sessionStorage.getItem('quantterm-nav') || '{}')
+        window.sessionStorage.setItem('quantterm-nav', JSON.stringify({
+          active: nextRoute,
+          selected: current.selected || '',
+          compare: Array.isArray(current.compare) ? current.compare : [],
+        }))
+      }, route)
+      await page.reload()
       await expect(page.locator('h1')).toHaveText(title)
       await expect(page.locator('.workspace')).toBeVisible()
       await page.waitForTimeout(100)
