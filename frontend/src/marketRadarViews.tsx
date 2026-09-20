@@ -215,7 +215,7 @@ function RankingLegend({
   legend?: RadarHome['ranking_legend']
 }) {
   const items = [
-    { key: 'best_among_breakouts', title: 'Best among the best', body: legend?.best_among_breakouts || 'Sniper plus SEPA overlay and/or long-term funds. 0.45 SEPA · 0.30 funds · 0.25 tape.' },
+    { key: 'best_among_breakouts', title: 'Research ranking · not a trade', body: legend?.best_among_breakouts || 'Sniper plus SEPA overlay and/or long-term funds. 0.45 SEPA · 0.30 funds · 0.25 tape.' },
     { key: 'best_setups', title: 'SEPA overlay', body: legend?.best_setups || 'SEPA 7-rule overlay ≥40/100. Not a buy.' },
     { key: 'best_technical_breakout', title: 'Tape only', body: legend?.best_technical_breakout || 'Sniper tape rank. SEPA is not used here.' },
   ]
@@ -243,7 +243,7 @@ function BestOfBestHero({
   if (!row) {
     return (
       <div className="radar-bob-hero radar-best-empty">
-        <Panel title="BEST AMONG THE BEST" subtitle="Sniper plus SEPA overlay ≥40 and/or usable long-term funds. Not a buy.">
+        <Panel title="RESEARCH RANKING · NOT A TRADE" subtitle="Sniper plus SEPA overlay ≥40 and/or usable long-term funds. Research only.">
           <p className="radar-empty-li">
             {note || 'No sniper has a second screen yet. Tape lane below is independent.'}
           </p>
@@ -261,7 +261,7 @@ function BestOfBestHero({
       <button type="button" className="radar-bob-hit" onClick={() => onSelect(String(row.symbol || ''))}>
         <div className="radar-bob-row1">
           <span className="reco-buy is-watch">Candidate</span>
-          <span className="reco-opp">Best among the best</span>
+          <span className="reco-opp">Research ranking · not a trade</span>
           <span className={`reco-risk-chip ${risk}`}>{row.risk_tier || 'Medium'} Risk</span>
         </div>
         <h3>{row.company && row.company !== row.symbol ? row.company : row.symbol}</h3>
@@ -316,7 +316,7 @@ function TopStocksList({
   return (
     <section className="radar-top-stocks">
       <header>
-        <span>TOP STOCKS</span>
+        <span>RESEARCH SHORTLIST · NOT TRADES</span>
         <strong>{rows.length ? `${rows.length} ranked` : 'no second-screen names'}</strong>
       </header>
       <p className="radar-rank-note">
@@ -492,6 +492,40 @@ function HomeOsCard({
   const selectLane = (id: string) => setOpenLane(id || null)
   return (
     <section className={`home-os-card state-${(os.state || '').toLowerCase()}`}>
+      {(os.opportunities || []).length ? (
+        <div className="home-os-opps home-os-best-trades" aria-label="Best trades">
+          <span>BEST TRADES</span>
+          <strong>Production-thesis qualified · rejected and extended names excluded</strong>
+          {(os.opportunities || []).slice(0, 3).map((row, index) => {
+            const symbol = String(row.found || '').split(/\s+/)[0]
+            return (
+            <div key={`${row.found}-${index}`}>
+              <span>{row.label || 'BUY'}</span>
+              <strong>{row.found}</strong>
+              <small>{depth === 'professional' ? (row.technical || row.meaning) : row.meaning}</small>
+              {symbol && onOpenPage ? (
+                <button
+                  type="button"
+                  className="home-os-inspect-link"
+                  onClick={() => {
+                    setSelected?.(symbol)
+                    onOpenPage('Stock Intelligence')
+                  }}
+                >
+                  Research
+                </button>
+              ) : null}
+            </div>
+            )
+          })}
+        </div>
+      ) : (
+        <div className="home-os-past home-os-best-trades" aria-label="Best trades">
+          <span>BEST TRADES</span>
+          <strong>No eligible trade</strong>
+          <small>The production thesis did not qualify a trade. Rejected, extended and WAIT names are kept out of this list.</small>
+        </div>
+      )}
       <div className="home-os-hero">
         <span>WHAT SHOULD I DO?</span>
         {os.runtime?.lifecycle ? (
@@ -587,39 +621,6 @@ function HomeOsCard({
           </ul>
         </div>
       ) : null}
-      {(os.opportunities || []).length ? (
-        <div className="home-os-opps">
-          <span>OPPORTUNITIES</span>
-          {(os.opportunities || []).slice(0, 6).map((row, index) => {
-            const symbol = String(row.found || '').split(/\s+/)[0]
-            return (
-            <div key={`${row.found}-${index}`}>
-              <span>{row.label || row.action || 'WAIT / research'}</span>
-              <strong>{row.found}</strong>
-              <small>{depth === 'professional' ? (row.technical || row.meaning) : row.meaning}</small>
-              {symbol && onOpenPage ? (
-                <button
-                  type="button"
-                  className="home-os-inspect-link"
-                  onClick={() => {
-                    setSelected?.(symbol)
-                    onOpenPage('Stock Intelligence')
-                  }}
-                >
-                  Research
-                </button>
-              ) : null}
-            </div>
-            )
-          })}
-        </div>
-      ) : (
-        <div className="home-os-past">
-          <span>OPPORTUNITIES</span>
-          <strong>None ready</strong>
-          <small>No BUY / READY names. WAIT and research stay in the committee journal.</small>
-        </div>
-      )}
       <div className="home-os-grid">
         <div>
           <span>PORTFOLIO</span>
