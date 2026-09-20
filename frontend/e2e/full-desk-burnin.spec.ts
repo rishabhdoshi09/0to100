@@ -47,6 +47,7 @@ test('10-hour accelerated full-desk burn-in keeps every visible tab and backend 
 
   await page.goto('/')
   await expect(page.locator('h1')).toHaveText('Today')
+  const nav = page.getByRole('navigation', { name: 'Primary navigation' })
 
   for (let hour = 1; hour <= rounds; hour += 1) {
     for (const endpoint of CRITICAL_READS) {
@@ -56,7 +57,7 @@ test('10-hour accelerated full-desk burn-in keeps every visible tab and backend 
     }
 
     for (const [button, title] of WORKSPACES) {
-      await page.getByRole('button', { name: button, exact: true }).click()
+      await nav.getByRole('button', { name: button, exact: true }).click()
       await expect(page.locator('h1')).toHaveText(title)
       await expect(page.locator('.workspace')).toBeVisible()
       await page.waitForTimeout(100)
@@ -67,7 +68,7 @@ test('10-hour accelerated full-desk burn-in keeps every visible tab and backend 
       await tools.locator('summary').click()
     }
     for (const [button, title] of TOOLS) {
-      await page.getByRole('button', { name: button, exact: true }).click()
+      await nav.getByRole('button', { name: button, exact: true }).click()
       await expect(page.locator('h1')).toHaveText(title)
       await expect(page.locator('.workspace')).toBeVisible()
       await page.waitForTimeout(100)
@@ -82,7 +83,7 @@ test('10-hour accelerated full-desk burn-in keeps every visible tab and backend 
     await page.getByRole('button', { name: 'Refresh dashboard' }).click()
     expect((await dashboardResponse).status()).toBeLessThan(500)
 
-    await page.getByRole('button', { name: 'Today', exact: true }).click()
+    await nav.getByRole('button', { name: 'Today', exact: true }).click()
     await expect(page.locator('h1')).toHaveText('Today')
 
     const cards = page.locator('.home-os-best-trades > div')
