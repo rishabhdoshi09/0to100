@@ -362,7 +362,25 @@ def build_runtime_journey(*, cycle: Mapping[str, Any] | None = None) -> dict[str
     ledger = load_ledger()
     ingested = _read_json(Path(os.environ.get("QT_LEARNING_INGESTED") or logs_dir() / "product" / "learning_ingested.json"))
     cycle_id = str(latest.get("cycle_id") or "")
-    scan_ok = bool((scan["payload"] or {}).get("records") or (scan["payload"] or {}).get("available"))
+    scan_payload = dict(scan.get("payload") or {})
+    scan_records = scan_payload.get("records")
+    try:
+        scanned_count = int(
+            scan_payload.get("scanned")
+            or scan_payload.get("universe_size")
+            or scan_payload.get("approved_universe")
+            or 0
+        )
+    except (TypeError, ValueError):
+        scanned_count = 0
+    # A successful scan is an executed/ persisted market pass, not "at least
+    # one symbol qualified". Zero qualifying rows is a valid scan outcome.
+    # Legacy/test artifacts can still state available=True explicitly.
+    scan_ok = bool(
+        isinstance(scan_records, list)
+        and scan_payload.get("scanned_at")
+        and (scanned_count > 0 or scan_payload.get("available") is True)
+    )
     reco_ok = bool(reco["payload"])
     cycle_ok = bool(latest)
     taken = list(latest.get("taken") or [])
