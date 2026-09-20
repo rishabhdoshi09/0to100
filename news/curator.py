@@ -168,7 +168,26 @@ class EntityResolver:
         symbol_names = symbol_names or {}
         self.symbol_names = {str(k).upper(): str(v or k) for k, v in symbol_names.items()}
         self.fno_symbols = {str(s).upper() for s in fno_symbols}
-        self._name_aliases: list[tuple[str, str]] = []
+
+        # Build matching indexes once.  The previous resolver compiled and ran a
+        # fresh regex for every NSE symbol for every news cluster (~10k symbols
+        # x N articles), then linearly scanned every company alias again.  On a
+        # full instrument universe that could turn a bounded news fetch into
+        # minutes of CPU work and make NEWS_REFRESH look hung.
+        matchable_symbols = sorted(
+            (symbol for symbol in self.symbol_names if symbol not in _AMBIGUOUS_SYMBOLS),
+            key=lambda symbol: (-len(symbol), symbol),
+        )
+        self._symbol_pattern = (
+            re.compile(
+                r"(?<![A-Z0-9])(?:"
+                + "|".join(re.escape(symbol) for symbol in matchable_symbols)
+                + r")(?![A-Z0-9])"
+            )
+            if matchable_symbols
+            else None
+        )
+        self._aliases_by_first: dict[str, list[tuple[str, str]]] = {}
         for symbol, name in self.symbol_names.items():
             words = [
                 word for word in re.findall(r"[A-Z0-9]+", name.upper())
@@ -177,8 +196,9 @@ class EntityResolver:
             if words:
                 alias = " ".join(words[:3])
                 if len(alias) >= 5:
-                    self._name_aliases.append((alias, symbol))
-        self._name_aliases.sort(key=lambda pair: len(pair[0]), reverse=True)
+                    self._aliases_by_first.setdefault(words[0], []).append((alias, symbol))
+        for aliases in self._aliases_by_first.values():
+            aliases.sort(key=lambda pair: len(pair[0]), reverse=True)
 
     @classmethod
     def from_quantterm(cls) -> "EntityResolver":
@@ -203,15 +223,19 @@ class EntityResolver:
     def resolve(self, text: str, hinted_symbols: Iterable[str] = ()) -> tuple[tuple[str, ...], tuple[str, ...]]:
         upper = _clean_text(text).upper()
         found = {str(s).upper() for s in hinted_symbols if str(s).strip()}
-        for symbol in self.symbol_names:
-            if symbol in _AMBIGUOUS_SYMBOLS:
-                continue
-            pattern = rf"(?<![A-Z0-9]){re.escape(symbol)}(?![A-Z0-9])"
-            if re.search(pattern, upper):
-                found.add(symbol)
-        for alias, symbol in self._name_aliases:
-            if alias in upper:
-                found.add(symbol)
+
+        if self._symbol_pattern is not None:
+            found.update(match.group(0) for match in self._symbol_pattern.finditer(upper))
+
+        # Only inspect company aliases whose first meaningful word actually
+        # occurs in the article.  This preserves the old alias semantics while
+        # avoiding a full-universe substring scan for every cluster.
+        words_in_text = set(re.findall(r"[A-Z0-9]+", upper))
+        for first in words_in_text:
+            for alias, symbol in self._aliases_by_first.get(first, ()):
+                if alias in upper:
+                    found.add(symbol)
+
         valid = tuple(sorted(s for s in found if not self.symbol_names or s in self.symbol_names))
         return valid, tuple(sorted(set(valid).intersection(self.fno_symbols)))
 
