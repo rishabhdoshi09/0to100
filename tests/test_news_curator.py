@@ -32,6 +32,22 @@ def test_entity_resolver_maps_full_symbol_and_fno():
     assert fno == ("RELIANCE",)
 
 
+def test_entity_resolver_preserves_symbol_boundaries_and_alias_matching():
+    resolver = EntityResolver(
+        {
+            "ABC": "Alpha Beta Corporation Limited",
+            "ABCD": "Another Business Company Limited",
+            "M&M": "Mahindra Mahindra Limited",
+        },
+        {"M&M"},
+    )
+    symbols, fno = resolver.resolve(
+        "Alpha Beta Corporation wins an order while ABCD rises; M&M also gains"
+    )
+    assert symbols == ("ABC", "ABCD", "M&M")
+    assert fno == ("M&M",)
+
+
 def test_curator_deduplicates_and_corroborates_same_story():
     resolver = EntityResolver({"RELIANCE": "Reliance Industries Limited"}, {"RELIANCE"})
     rows = curate_articles([
