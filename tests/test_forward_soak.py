@@ -536,3 +536,42 @@ def test_forward_soak_api_is_registered():
     import terminal_product_api_parallel as api
     paths = {getattr(route, "path", "") for route in api.app.routes}
     assert "/api/forward-soak" in paths
+
+
+def test_completed_scan_with_zero_qualifiers_is_not_scan_failure(monkeypatch):
+    stamp = _now().isoformat()
+    Path(os.environ["QT_SCAN_PATH"]).write_text(
+        json.dumps({
+            "schema_version": 2,
+            "scanned_at": stamp,
+            "scanned": 598,
+            "universe_size": 598,
+            "records": [],
+            "summary": {"qualified": 0, "with_any_setup": 0},
+            "provenance": {
+                "market_session_date": "2026-09-01",
+                "data_current": True,
+            },
+        }),
+        encoding="utf-8",
+    )
+    Path(os.environ["QT_RECO_PATH"]).write_text(
+        json.dumps({
+            "schema_version": 4,
+            "generated_at": stamp,
+            "scan_scanned_at": stamp,
+            "categories": [],
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "product.autonomy_status.read_autonomy_status",
+        lambda *a, **k: {"running": True},
+    )
+
+    journey = build_runtime_journey()
+
+    assert journey["summary"]["MARKET_SCAN"] == "PASS"
+    assert journey["summary"]["RECOMMENDATIONS"] == "PASS"
+    verified = verify_persisted_soak()
+    assert verified["lanes"]["SCAN"] == "PASS"
