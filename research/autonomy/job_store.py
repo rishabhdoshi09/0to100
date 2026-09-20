@@ -274,21 +274,25 @@ class JobStore:
             self._db.commit()
 
     def reschedule_poll(self, job_id: str, *, when: float, error_code: str = "",
-                        error_message: str = "") -> None:
+                        error_message: str = "", result_summary: str = "") -> None:
         """Requeue a polling observation without counting it as a failed attempt.
 
         lease_due increments attempt when work is leased. For bridge jobs that
         merely observe a still-running background worker, that lease is not an
         execution attempt. Undo exactly that lease increment here so heartbeats
         and retry budgets reflect real launches/failures rather than poll count.
+
+        result_summary carries truthful operator-facing progress across the
+        durable poll boundary. Without it, a healthy background refresh looks
+        like repeated START/PENDING retries even though only one worker exists.
         """
         with self._lock:
             self._db.execute(
-                "UPDATE jobs SET status=?, scheduled_for=?, next_retry_at=?, error_code=?, "
-                "error_message=?, lease_owner=NULL, lease_expires_at=NULL, finished_at=NULL, "
-                "attempt=CASE WHEN attempt>0 THEN attempt-1 ELSE 0 END "
+                "UPDATE jobs SET status=?, scheduled_for=?, next_retry_at=?, result_summary=?, "
+                "error_code=?, error_message=?, lease_owner=NULL, lease_expires_at=NULL, "
+                "finished_at=NULL, attempt=CASE WHEN attempt>0 THEN attempt-1 ELSE 0 END "
                 "WHERE job_id=?",
-                (PENDING, when, when, error_code, error_message, job_id),
+                (PENDING, when, when, result_summary, error_code, error_message, job_id),
             )
             self._db.commit()
 
