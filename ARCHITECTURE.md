@@ -17,7 +17,7 @@ The user interface and scheduler are adapters around that flow. They do not get 
 ## Canonical product
 
 - UI: Vite/React desk in `frontend/`
-- API: FastAPI entrypoint `api/app.py` (`uvicorn api.app:app`)
+- API: FastAPI entrypoint `api/app.py` (`uvicorn api.app:app`); runtime wiring lives in `api/runtime.py`
 - Start command: `bash scripts/run_quantterm_complete.sh`
 - Persistent host install: `bash scripts/install_quantterm_host.sh`
 - Durable runtime state: outside the Git checkout under the QuantTerm runtime root

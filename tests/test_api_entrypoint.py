@@ -19,6 +19,11 @@ def test_launcher_uses_only_canonical_api_entrypoint():
     assert "uvicorn terminal_product_api:app" not in launcher
 
 
+def test_historical_parallel_api_modules_are_removed():
+    assert not (ROOT / "terminal_product_api_parallel.py").exists()
+    assert not (ROOT / "_terminal_product_api_parallel_core.py").exists()
+
+
 def test_handoff_docs_name_canonical_api_entrypoint():
     architecture = (ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")
     assert "api/app.py" in architecture

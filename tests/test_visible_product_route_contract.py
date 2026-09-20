@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 
 import terminal_api as core
-from terminal_product_api_parallel import app
+from api.app import app
 
 
 def _normalized_routes() -> set[tuple[str, str]]:

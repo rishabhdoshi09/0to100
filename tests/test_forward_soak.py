@@ -533,6 +533,6 @@ def test_operator_script_prints_required_lanes(monkeypatch, capsys):
 
 
 def test_forward_soak_api_is_registered():
-    import terminal_product_api_parallel as api
+    import api.app as api
     paths = {getattr(route, "path", "") for route in api.app.routes}
     assert "/api/forward-soak" in paths

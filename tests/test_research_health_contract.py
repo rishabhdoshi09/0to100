@@ -90,7 +90,7 @@ def test_offline_supervisor_does_not_green_auth_or_settlement():
 
 def test_system_health_contract_endpoint_uses_data_payload_signature(monkeypatch):
     """A green autonomy badge must not 500 the health contract, and lanes stay split."""
-    import terminal_product_api_parallel as api
+    import api.app as api
 
     monkeypatch.setattr(api.core, "_scan_payload", lambda: {
         "available": False, "records": [], "universe_size": 0, "scanned_at": "",

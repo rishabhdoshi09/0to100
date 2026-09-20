@@ -349,8 +349,8 @@ def build_fast_response(core, attach_authority=None) -> dict[str, Any]:
 
 def _replace_route() -> None:
     core = sys.modules.get("terminal_api")
-    parallel = sys.modules.get("terminal_product_api_parallel")
-    if core is None or parallel is None:
+    api_app = sys.modules.get("api.app")
+    if core is None or api_app is None:
         return
 
     app = core.app
@@ -364,7 +364,7 @@ def _replace_route() -> None:
     app.router.routes[:] = kept
 
     def _fast_recommendations_workspace() -> dict[str, Any]:
-        return build_fast_response(core, getattr(parallel, "_attach_authority", None))
+        return build_fast_response(core, getattr(api_app, "_attach_authority", None))
 
     app.add_api_route(
         path,

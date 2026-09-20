@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 def test_final_product_contract_requires_operator_and_forward_evidence_surfaces() -> None:
-    import terminal_product_api_parallel as terminal_api
+    import api.app as terminal_api
 
     payload = terminal_api.product_contract()
     checks = payload["checks"]
@@ -34,7 +34,7 @@ def test_final_product_contract_requires_operator_and_forward_evidence_surfaces(
 
 
 def test_product_contract_route_is_unique_and_points_to_final_wrapper() -> None:
-    import terminal_product_api_parallel as terminal_api
+    import api.app as terminal_api
 
     routes = [
         route

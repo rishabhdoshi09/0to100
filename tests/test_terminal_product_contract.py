@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import terminal_product_api_parallel as api
+import api.app as api
 
 
 PRIMARY_PATHS = {
