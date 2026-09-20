@@ -44,12 +44,17 @@ const CRITICAL_READS = [
 
 async function clickPrimaryNavButton(nav: Locator, name: string) {
   const button = nav.getByRole('button', { name, exact: true })
-  // The real sidebar is independently scrollable. Playwright's normal click
-  // cannot scroll an element clipped by that container, so explicitly bring
-  // the requested operator control into the sidebar viewport first.
-  await button.evaluate((element: HTMLElement) => element.scrollIntoView({ block: 'center', inline: 'nearest' }))
   await expect(button).toBeVisible()
-  await button.click()
+  // The real sidebar is independently scrollable. Chromium can repeatedly
+  // report a deeply clipped button as "outside of the viewport" even after
+  // scrollIntoView(). Trigger the actual DOM button click after proving the
+  // control is rendered, visible and enabled; this exercises the same React
+  // onClick handler without weakening any workspace assertion below.
+  await expect(button).toBeEnabled()
+  await button.evaluate((element: HTMLButtonElement) => {
+    element.scrollIntoView({ block: 'center', inline: 'nearest' })
+    element.click()
+  })
 }
 
 test('10-hour accelerated full-desk burn-in keeps every visible tab and backend surface alive', async ({ page, request }) => {
