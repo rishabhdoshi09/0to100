@@ -327,6 +327,7 @@ def build_startup_check(*, probe_network: bool = True) -> dict[str, Any]:
                 if decision_phase == "AWAITING_APPROVAL"
                 else ""
             ),
+            required=True,
             domain=DOMAIN_EVIDENCE,
         ),
         _lane("ZERODHA", "READY" if kite_ok else "LOGIN NEEDED", required=False, domain=DOMAIN_CAPABILITY),
@@ -372,7 +373,7 @@ def print_startup_summary(*, probe_network: bool = True) -> int:
     print(f"Operational runtime: {operational.get('status') or 'UNKNOWN'}")
     if operational.get("blockers"):
         print("  blockers: " + ", ".join(operational["blockers"]))
-    print(f"Market evidence inputs: {evidence.get('status') or 'UNKNOWN'}")
+    print(f"Evidence: {evidence.get('status') or 'UNKNOWN'}")
     if evidence.get("blockers"):
         print("  blockers: " + ", ".join(evidence["blockers"]))
     if operational.get("ready") and evidence.get("ready"):
