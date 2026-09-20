@@ -142,6 +142,8 @@ jobs:
           fi
 
       - name: Run ten accelerated operator-hours across every mounted frontend view
+        id: browser_burnin
+        continue-on-error: true
         working-directory: frontend
         env:
           QT_BURNIN_ROUNDS: "10"
@@ -313,8 +315,11 @@ jobs:
 
       - name: Enforce strict product-acceptance contract
         shell: bash
+        env:
+          BROWSER_BURNIN_OUTCOME: ${{ steps.browser_burnin.outcome }}
         run: |
           set -euo pipefail
+          test "$BROWSER_BURNIN_OUTCOME" = "success"
           venv/bin/python - <<'PY'
           import json, os
           from pathlib import Path
@@ -479,6 +484,8 @@ jobs:
             logs/product/post_sigint_autonomy.txt
             logs/product/complete_stack.log
             logs/product/restart_stack.log
+            frontend/test-results/
+            logs/product/frontend_burnin.json
 
 
   macos-runtime-smoke:
