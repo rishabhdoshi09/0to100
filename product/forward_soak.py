@@ -158,8 +158,8 @@ def _stage(name: str, *, status: str, input_artifact: str = "", output_artifact:
 
 
 def _scan_payload() -> dict[str, Any]:
-    from product.scan_store import default_scan_path
-    path = Path(os.environ["QT_SCAN_PATH"]) if os.environ.get("QT_SCAN_PATH") else default_scan_path()
+    from product.scan_store import resolved_scan_path
+    path = resolved_scan_path()
     payload = _read_json(path)
     return {"path": str(path), "payload": payload}
 
