@@ -63,7 +63,7 @@ test('10-hour accelerated full-desk burn-in keeps every visible tab and backend 
     }
 
     const tools = page.locator('details.nav-advanced')
-    if (!(await tools.getAttribute('open'))) {
+    if (!(await tools.evaluate((element) => (element as HTMLDetailsElement).open))) {
       await tools.locator('summary').click()
     }
     for (const [button, title] of TOOLS) {
