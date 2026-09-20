@@ -453,10 +453,10 @@ def build_home_os(
             state = NO_TRADE if no_trade_for_day and not taken else MARKET_CLOSED_COMPLETE
             if no_trade_for_day and not taken:
                 headline = "No paper trade for the latest completed market session — QuantTerm did not find a setup worth taking."
-                subtext = "The paper-decision lane is complete. Longer-horizon evidence can continue automatically."
+                subtext = "The paper-decision lane is complete. Forward settlement and learning can continue automatically as later-session evidence matures."
             else:
-                headline = "The latest completed market session is complete."
-                subtext = "Required scan, selection and paper-decision lanes are verified for the latest completed session."
+                headline = "Scan and paper decision are complete for the latest completed market session."
+                subtext = "The point-in-time decision cycle is verified. Forward settlement and learning may continue as later-session evidence matures."
             now_line = "Market closed"
             next_line = "Next official NSE session, then scan"
     elif valid_no_trade:
