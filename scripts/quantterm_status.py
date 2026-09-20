@@ -31,12 +31,23 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def _http_ok(url: str, timeout: float = 1.0) -> bool:
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:
-            return int(response.status) == 200
-    except Exception:
-        return False
+def _http_ok(url: str, timeout: float = 1.5, attempts: int = 2) -> bool:
+    """Bounded liveness probe tolerant of one transient busy response.
+
+    QuantTerm can be CPU/I/O busy during first-run history preparation.  A single
+    one-second timeout made the documented operator status command report DOWN
+    even while /api/health simultaneously reported the stack READY.  Retry once,
+    bounded, so a genuinely hung endpoint still fails closed within a few seconds.
+    """
+    tries = max(1, int(attempts))
+    for attempt in range(tries):
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as response:
+                return int(response.status) == 200
+        except Exception:
+            if attempt + 1 < tries:
+                time.sleep(0.1)
+    return False
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -55,7 +66,9 @@ def runtime_status(now: float | None = None) -> dict[str, Any]:
     heartbeat = float(market_runtime.get("heartbeat_epoch") or 0)
     heartbeat_age = max(0.0, now - heartbeat) if heartbeat > 0 else None
     worker_alive = _pid_alive(worker_pid)
-    worker_fresh = bool(worker_alive and heartbeat_age is not None and heartbeat_age <= 8.0)
+    # Canonical terminal_api uses a 10s freshness window. Keep the operator
+    # probe on the same contract so two official status surfaces cannot disagree.
+    worker_fresh = bool(worker_alive and heartbeat_age is not None and heartbeat_age <= 10.0)
 
     api_ok = _http_ok("http://127.0.0.1:8765/api/health")
     desk_ok = _http_ok("http://127.0.0.1:5173/")
