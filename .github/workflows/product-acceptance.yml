@@ -464,3 +464,151 @@ jobs:
             logs/product/post_sigint_autonomy.txt
             logs/product/complete_stack.log
             logs/product/restart_stack.log
+
+
+  macos-runtime-smoke:
+    name: macos-intel-runtime-smoke
+    runs-on: macos-15-intel
+    timeout-minutes: 35
+    env:
+      EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      QT_NONINTERACTIVE: "1"
+      QT_NO_BROWSER: "1"
+      KITE_ACCESS_TOKEN: ""
+      KITE_API_KEY: ""
+      KITE_API_SECRET: ""
+      TELEGRAM_BOT_TOKEN: ""
+      DEEPSEEK_API_KEY: ""
+      ANTHROPIC_API_KEY: ""
+      OPENAI_API_KEY: ""
+
+    steps:
+      - name: Checkout exact source SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify exact checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.20.0"
+
+      - name: Start real one-command QuantTerm stack on Intel macOS
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p logs/product
+          nohup python scripts/session_exec.py bash scripts/run_quantterm_complete.sh --restart             > logs/product/mac_complete_stack.log 2>&1 &
+          echo $! > logs/product/mac_complete_stack.pid
+
+      - name: Prove live endpoints and operator status stay healthy under bootstrap load
+        shell: bash
+        run: |
+          set -euo pipefail
+          ready=0
+          for _ in $(seq 1 600); do
+            if curl -fsS --max-time 5 http://127.0.0.1:8765/api/health > logs/product/mac_health.json 2>/dev/null               && curl -fsS --max-time 5 http://127.0.0.1:5173/ >/dev/null 2>&1               && curl -fsS --max-time 5 http://127.0.0.1:8766/health > logs/product/mac_report_health.json 2>/dev/null               && [[ -x venv/bin/python ]]               && venv/bin/python scripts/quantterm_status.py > logs/product/mac_operator_status.json 2>/dev/null; then
+              ready=1
+              break
+            fi
+            if [[ -f logs/product/mac_complete_stack.pid ]] && ! kill -0 "$(cat logs/product/mac_complete_stack.pid)" 2>/dev/null; then
+              echo "macOS launcher exited before runtime became healthy" >&2
+              tail -250 logs/product/mac_complete_stack.log || true
+              exit 1
+            fi
+            sleep 2
+          done
+          test "$ready" = 1
+
+          venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+          h=json.loads(Path('logs/product/mac_health.json').read_text())
+          s=json.loads(Path('logs/product/mac_operator_status.json').read_text())
+          assert h.get('ok') is True, h
+          assert h.get('operational_ready') is True, h
+          assert h.get('live_lock_verified') is True, h
+          assert h.get('live_locked') is True, h
+          assert h.get('live_execution_authorized') is False, h
+          assert s.get('ready') is True, s
+          assert (s.get('market_api') or {}).get('healthy') is True, s
+          assert (s.get('desk') or {}).get('healthy') is True, s
+          assert (s.get('market_ops') or {}).get('healthy') is True, s
+          PY
+
+          # Stay alive through active background work rather than accepting one lucky probe.
+          for sample in $(seq 1 6); do
+            sleep 10
+            venv/bin/python scripts/quantterm_status.py > "logs/product/mac_operator_status_${sample}.json"
+          done
+
+      - name: Inspect real Decision Simulation and Forward Evidence surfaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS --max-time 10 http://127.0.0.1:8765/api/decision-simulation-gate             > logs/product/mac_decision_gate.json
+          curl -fsS --max-time 10 http://127.0.0.1:8765/api/forward-evidence             > logs/product/mac_forward_evidence.json
+          venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+          gate=json.loads(Path('logs/product/mac_decision_gate.json').read_text())
+          forward=json.loads(Path('logs/product/mac_forward_evidence.json').read_text())
+          phase=str(gate.get('phase') or '')
+          assert phase in {'SEARCHING_BEST_TRADES','AWAITING_APPROVAL','APPROVED'}, gate
+          assert gate.get('approved') in {True, False}, gate
+          assert isinstance(forward, dict) and forward, forward
+          PY
+
+      - name: Reproduce Ctrl-C shutdown and prove no orphan desk survives
+        shell: bash
+        run: |
+          set -euo pipefail
+          pid="$(cat logs/product/mac_complete_stack.pid)"
+          kill -INT "-$pid" 2>/dev/null || kill -INT "$pid" 2>/dev/null || true
+          for _ in $(seq 1 60); do
+            if ! kill -0 "$pid" 2>/dev/null; then break; fi
+            sleep 1
+          done
+          if kill -0 "$pid" 2>/dev/null; then
+            echo "macOS complete launcher survived Ctrl-C shutdown budget" >&2
+            exit 1
+          fi
+          for _ in $(seq 1 40); do
+            if ! python scripts/local_stack.py ports-healthy --ports 5173,8765,8766 >/dev/null 2>&1; then
+              break
+            fi
+            sleep 0.25
+          done
+          python scripts/local_stack.py pids --ports 5173,8765,8766 > logs/product/mac_post_sigint_pids.json || true
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=json.loads(Path('logs/product/mac_post_sigint_pids.json').read_text())
+          live={port:p.get(port) or [] for port in ('5173','8765','8766')}
+          assert not any(live.values()), live
+          PY
+
+      - name: Upload macOS runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-runtime-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 30
+          path: |
+            logs/product/mac_complete_stack.log
+            logs/product/mac_health.json
+            logs/product/mac_report_health.json
+            logs/product/mac_operator_status*.json
+            logs/product/mac_decision_gate.json
+            logs/product/mac_forward_evidence.json
+            logs/product/mac_post_sigint_pids.json
