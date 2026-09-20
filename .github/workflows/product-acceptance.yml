@@ -137,7 +137,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          venv/bin/python scripts/quantterm_status.py > logs/product/operator_status.json
+          status_rc=0
+          venv/bin/python scripts/quantterm_status.py > logs/product/operator_status.json || status_rc=$?
+          cat logs/product/operator_status.json
+          test "$status_rc" = 0
           venv/bin/python - <<'PY'
           import json
           from pathlib import Path
@@ -449,6 +452,7 @@ jobs:
             logs/product/live_interlock_evidence.json
             logs/product/pre_acceptance_health.json
             logs/product/pre_acceptance_report_health.json
+            logs/product/operator_status.json
             logs/product/simulator_gate.json
             logs/product/simulator_approval.json
             logs/product/simulator_replay.json
