@@ -571,3 +571,35 @@ def test_market_closed_complete_requires_all_core_verifier_lanes():
 
     assert os["state"] == MARKET_CLOSED_COMPLETE
     assert "complete" in os["headline"].lower()
+
+
+def test_home_activity_reports_scanned_universe_not_qualified_row_count():
+    os = build_home_os(
+        dashboard={
+            "autonomy": {"state": "RUNNING", "running": True},
+            "data": {
+                "ready": True,
+                "bhavcopy": {
+                    "ready": True,
+                    "latest_date": "2026-09-01",
+                    "current": True,
+                    "reason_code": "HISTORY_CURRENT",
+                },
+            },
+        },
+        paper={"enabled": True, "open_positions": [], "closed_trades": []},
+        why={"available": False, "taken": [], "rejections": [], "waits": []},
+        scan={
+            "scanned_at": "2026-09-01T05:00:00+00:00",
+            "scanned": 598,
+            "universe_size": 598,
+            "records": [{"symbol": "AAA"}, {"symbol": "BBB"}, {"symbol": "CCC"}],
+        },
+        reco={"schema_version": 4, "categories": []},
+        soak_verify={"lanes": {}},
+        now=_eod(),
+    )
+
+    activity = " ".join(row.get("text", "") for row in os.get("recent_activity", []))
+    assert "598 names checked" in activity
+    assert "3 names checked" not in activity
