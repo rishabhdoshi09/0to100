@@ -489,3 +489,65 @@ def test_home_best_trades_excludes_rejections_waits_and_non_buy_gate_rows(monkey
     assert "AUROPHARMA" not in rendered
     assert "EMIL" not in rendered
     assert "BADWAIT" not in rendered
+
+
+def test_home_can_show_five_with_two_truthful_capacity_reserves_and_confidence(monkeypatch):
+    import product.decision_simulation_gate as gate
+
+    rows = []
+    for idx, symbol in enumerate(("A", "B", "C", "D", "E")):
+        reserve = idx >= 3
+        rows.append({
+            "symbol": symbol,
+            "setup_label": "Production setup",
+            "decision": "BUY" if not reserve else "WAIT",
+            "discovery_decision": "ENTER_NOW" if not reserve else "RESERVE_CAPACITY",
+            "production_candidate_status": "ENTER_NOW" if not reserve else "RESERVE_CAPACITY",
+            "production_reason_code": "ELIGIBLE" if not reserve else "NOT_TOP_OF_PORTFOLIO",
+            "trade_quality": {
+                "decision_confidence": 72.5 - idx,
+                "win_probability": 0.61,
+                "win_probability_source": "MEASURED_SHADOW_ONLY",
+                "effective_n": 24.0,
+            },
+        })
+    rows.append({
+        "symbol": "HARDWAIT",
+        "setup_label": "Production setup",
+        "decision": "WAIT",
+        "discovery_decision": "WAIT",
+        "production_candidate_status": "WAIT",
+        "production_reason_code": "CORRELATION_CAP",
+    })
+    monkeypatch.setattr(
+        gate,
+        "status",
+        lambda: {
+            "scan_fresh": True,
+            "discovery_ready": True,
+            "best_trades": rows,
+        },
+    )
+
+    os = build_home_os(
+        dashboard={
+            "autonomy": {"state": "RUNNING", "running": True, "broker": {"ready": True}},
+            "data": {"ready": True, "bhavcopy": {
+                "ready": True, "latest_date": "2026-09-01",
+                "current": True, "reason_code": "HISTORY_CURRENT",
+            }},
+        },
+        paper={"enabled": True, "open_positions": [], "closed_trades": []},
+        why={"available": False},
+        soak={"real_forward_observations": 0, "insufficient_evidence": True},
+        scan={"scanned_at": "2026-09-01T05:00:00+00:00", "records": [{"symbol": "A"}]},
+        reco={"schema_version": 4, "categories": []},
+        now=_open(),
+    )
+
+    assert [row["found"].split()[0] for row in os["opportunities"]] == ["A", "B", "C", "D", "E"]
+    assert [row["label"] for row in os["opportunities"][:3]] == ["BUY", "BUY", "BUY"]
+    assert [row["label"] for row in os["opportunities"][3:]] == ["RESERVE", "RESERVE"]
+    assert all(row["confidence_score"] is not None for row in os["opportunities"])
+    assert os["opportunities"][0]["win_probability_pct"] == 61.0
+    assert "HARDWAIT" not in " ".join(str(row) for row in os["opportunities"])
