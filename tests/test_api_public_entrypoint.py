@@ -21,8 +21,9 @@ def test_public_api_entrypoint_is_thin_alias_not_second_application() -> None:
         isinstance(call.func, ast.Name) and call.func.id == "FastAPI"
         for call in calls
     )
-    assert "from terminal_product_api_parallel import app as app" in source
-    assert '__all__ = ["app"]' in source
+    assert "from . import runtime as _core" in source
+    assert "app = _core.app" in source
+    assert "terminal_product_api_parallel" not in source
 
 
 def test_public_api_package_exists_at_stable_path() -> None:

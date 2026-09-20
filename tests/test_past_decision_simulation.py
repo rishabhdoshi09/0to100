@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timezone
 
 import pandas as pd
-import terminal_product_api_parallel as api
+import api.app as api
 from product.decision_journal import persist
 from product.decision_simulator import (
     AMBIGUOUS_HISTORICAL_DECISION,

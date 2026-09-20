@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
-from terminal_product_api_parallel import app
+from api.app import app
 
 
 ROOT = Path(__file__).resolve().parents[1]

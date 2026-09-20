@@ -91,9 +91,9 @@ def test_route_replacement_leaves_exactly_one_fast_get(monkeypatch):
     app.add_api_route("/api/recommendations-workspace", lambda: {"legacy": 1}, methods=["GET"], name="legacy_one")
     app.add_api_route("/api/recommendations-workspace", lambda: {"legacy": 2}, methods=["GET"], name="legacy_two")
     fake_core = SimpleNamespace(app=app)
-    fake_parallel = SimpleNamespace(_attach_authority=None)
+    fake_api_app = SimpleNamespace(_attach_authority=None)
     monkeypatch.setitem(sys.modules, "terminal_api", fake_core)
-    monkeypatch.setitem(sys.modules, "terminal_product_api_parallel", fake_parallel)
+    monkeypatch.setitem(sys.modules, "api.app", fake_api_app)
     monkeypatch.setattr(RL, "build_fast_response", lambda core, attach_authority=None: {"fast": True})
 
     RL._replace_route()

@@ -39,7 +39,7 @@ def test_learning_dashboard_overrides_legacy_positive_safety(monkeypatch):
 
 def test_paper_autopilot_route_overrides_legacy_positive_safety(monkeypatch):
     import product.live_safety as live_safety
-    import terminal_product_api_parallel as terminal_api
+    import api.app as terminal_api
 
     monkeypatch.setattr(
         terminal_api._core,
@@ -70,7 +70,7 @@ def test_paper_autopilot_route_overrides_legacy_positive_safety(monkeypatch):
 
 def test_decision_simulator_routes_override_legacy_positive_safety(monkeypatch):
     import product.live_safety as live_safety
-    import terminal_product_api_parallel as terminal_api
+    import api.app as terminal_api
 
     monkeypatch.setattr(
         terminal_api._core,
