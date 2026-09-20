@@ -13,6 +13,8 @@ def test_terminal_sidebar_is_quantterm_discovery_desk():
     assert "WORKSPACE_NAV" in sidebar
     assert "TOOL_GROUPS" in sidebar
     assert "Tools" in sidebar
+    for workspace in ("Today", "Opportunities", "Research", "Portfolio", "System"):
+        assert workspace in navigation
 
     # Route inventory belongs to navigation.ts. Keeping these assertions out of
     # MarketSidebar prevents tests from forcing a second navigation authority.

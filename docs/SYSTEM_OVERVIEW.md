@@ -1,11 +1,9 @@
 # QuantTerm — System Overview (AI Briefing)
 
-> **Purpose of this document.** A self-contained explanation of the QuantTerm
-> trading system for an AI assistant (or a new engineer) with no prior context.
-> It complements the terser `CLAUDE.md` in the repo root. Read this first to
-> understand *what* the system is and *why*; read `CLAUDE.md` for the exact
-> module map and coding invariants. If anything here conflicts with `CLAUDE.md`,
-> `CLAUDE.md` wins.
+> **Status:** detailed historical/system tour, not the architecture authority.
+> Start with `README.md`, `ARCHITECTURE.md`, `CONTRIBUTING.md`, and
+> `OPERATIONS.md`. If this document conflicts with those root contracts or
+> executable tests, the root contracts/tests win.
 
 ---
 
@@ -62,9 +60,10 @@ system loses money.
   score; they never add bonuses.
 - **Backward-compatible defaults.** New parameters get safe defaults (e.g.
   `rsi=0.0`, `chase_risk=False`) so old call sites behave exactly as before.
-- **Fail-open, never fake.** If a data source is down, the code fails open
-  (skips, returns empty) so it never *blocks* trading — but it never invents
-  data to fill the gap (invariant #1).
+- **Fail closed for new risk; degrade honestly for read-only views.** If required
+  data is stale, missing, or unverified, QuantTerm may show the last persisted
+  read-only state with an explicit freshness warning, but it must not create new
+  trading risk from that degraded input. Missing data is never invented.
 - **Env-tunable thresholds.** Numeric thresholds are exposed via
   `os.getenv("QT_...", default)` so they can be tuned without code changes.
 

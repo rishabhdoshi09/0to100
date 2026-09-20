@@ -28,7 +28,9 @@ def test_app_points_at_the_vite_desk():
     navigation = (ROOT / "frontend" / "src" / "navigation.ts").read_text(encoding="utf-8")
     assert "WORKSPACE_NAV" in sidebar and "TOOL_GROUPS" in sidebar
     assert "WORKSPACE_NAV" in navigation and "TOOL_GROUPS" in navigation
-    for route in ("Home", "Market Scanner", "Recommendations", "Market Reports", "Strategies", "Learning", "Coverage"):
+    for workspace in ("Today", "Opportunities", "Research", "Portfolio", "System"):
+        assert workspace in navigation
+    for route in ("Home", "Market Scanner", "Recommendations", "Market Reports", "Strategies", "Learning", "Coverage", "Backtest"):
         assert route in navigation
 
     desk = (ROOT / "scripts" / "run_desk.sh").read_text(encoding="utf-8")
