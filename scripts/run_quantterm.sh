@@ -353,9 +353,9 @@ start_api() {
   fi
   echo "[STACK] Starting local API at http://127.0.0.1:8765 …"
   mkdir -p "$STACK_LOG_DIR"
-  # terminal_product_api_parallel imports the canonical terminal_product_api:app
-  # and only corrects performance-safe operation routing.
-  python -u -m uvicorn terminal_product_api_parallel:app --host 127.0.0.1 --port 8765 \
+  # api.app is the stable public FastAPI entrypoint. Historical module names
+  # remain behind that boundary and are not part of the launcher contract.
+  python -u -m uvicorn api.app:app --host 127.0.0.1 --port 8765 \
     >>"$STACK_LOG_DIR/api.log" 2>&1 &
   API_PID=$!
   sleep 0.5 || true
