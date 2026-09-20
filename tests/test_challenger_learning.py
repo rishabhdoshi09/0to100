@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import warnings
+
+import numpy as np
 
 from product import challenger_learning as CL
 from research import feature_store as FS
@@ -203,3 +206,23 @@ def test_learning_score_cannot_bypass_hard_paper_gate(monkeypatch):
     )
     assert decision.decision == PA.BLOCK
     assert decision.reason_code == PA.INVALID_STOP
+
+
+def test_fit_transform_all_nan_feature_is_warning_free():
+    X = np.array(
+        [
+            [1.0, np.nan, 4.0],
+            [2.0, np.nan, np.nan],
+            [3.0, np.nan, 8.0],
+        ],
+        dtype=float,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        Z, medians, scales = CL._fit_transform(X)
+
+    assert np.all(np.isfinite(Z))
+    assert np.all(np.isfinite(medians))
+    assert np.all(np.isfinite(scales))
+    assert medians[1] == 0.0
+    assert np.all(Z[:, 1] == 0.0)
