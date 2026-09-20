@@ -15,7 +15,7 @@ def test_complete_script_starts_every_local_service_in_one_process_tree():
     assert "run_quantterm.sh" in complete
     assert "python main.py login" in complete
     assert "report_api:app" in complete
-    assert "terminal_product_api_parallel:app" in inner or "terminal_product_api:app" in inner
+    assert "api.app:app" in inner
     assert "npm --prefix" in inner and "run dev" in inner
     assert "python -u main.py autonomy" in inner
     assert "scripts/local_stack.py scan" in inner
