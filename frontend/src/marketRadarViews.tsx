@@ -490,6 +490,18 @@ function HomeOsCard({
   const [openLane, setOpenLane] = useState<string | null>(null)
   const checkAction = os.check_system?.action || { id: 'CHECK_SYSTEM', control: 'CHECK_SYSTEM', label: 'Check system', kind: 'refresh' }
   const selectLane = (id: string) => setOpenLane(id || null)
+  const dayTerminal = os.state === 'MARKET_CLOSED_COMPLETE' || os.state === 'NO_TRADE'
+  const autonomyLabel = dayTerminal
+    ? (os.runtime?.lifecycle || os.state)
+    : (os.now || os.runtime?.lifecycle || os.state)
+  const liveMoneyLabel = os.live_lock_verified === true
+    ? (os.live_locked === true ? 'Locked' : 'Not locked')
+    : 'Unverified'
+  const liveMoneyDetail = os.live_lock_verified === true && os.live_locked === true
+    ? 'Paper only. Canonical broker-boundary lock verified.'
+    : os.live_lock_verified === true
+      ? 'Canonical broker-boundary lock is not engaged.'
+      : 'Canonical broker-boundary lock has not been verified.'
   return (
     <section className={`home-os-card state-${(os.state || '').toLowerCase()}`}>
       {(os.opportunities || []).length ? (
@@ -589,7 +601,7 @@ function HomeOsCard({
         </div>
         <div>
           <span>AUTONOMY</span>
-          <strong>{os.runtime?.lifecycle || os.now || os.state}</strong>
+          <strong>{autonomyLabel}</strong>
           <small>{os.next || os.runtime?.reason || 'Leave it running'}</small>
         </div>
         <div>
@@ -603,8 +615,8 @@ function HomeOsCard({
         </div>
         <div>
           <span>LIVE MONEY</span>
-          <strong>Locked</strong>
-          <small>Paper only. No live buy button.</small>
+          <strong>{liveMoneyLabel}</strong>
+          <small>{liveMoneyDetail}</small>
         </div>
       </div>
       {(os.recent_activity || []).length ? (
@@ -688,7 +700,7 @@ function HomeOsCard({
           lane={openLane === 'check_system' ? undefined : system[openLane]}
           depth={depth}
           busy={busy}
-          liveLocked={os.live_locked !== false}
+          liveLocked={os.live_lock_verified === true ? os.live_locked : null}
           checkSystem={os.check_system as CheckSystemSnapshot | undefined}
           system={system}
           onAction={onAction}
