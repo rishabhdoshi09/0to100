@@ -244,6 +244,7 @@ def install_parallel_data_refresh() -> None:
                         when=self.clock() + 2.0,
                         error_code=error_code,
                         error_message=error_message,
+                        result_summary=summary or "data refresh running in background",
                     )
                     return
                 return original_retry(
