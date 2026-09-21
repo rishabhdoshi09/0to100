@@ -575,3 +575,40 @@ def test_completed_scan_with_zero_qualifiers_is_not_scan_failure(monkeypatch):
     assert journey["summary"]["RECOMMENDATIONS"] == "PASS"
     verified = verify_persisted_soak()
     assert verified["lanes"]["SCAN"] == "PASS"
+
+
+
+def test_rejection_gate_scorecard_keeps_counterfactuals_out_of_pnl():
+    from product.forward_soak import rejection_gate_scorecard
+
+    rows = [
+        {
+            "entered": False,
+            "reason_code": "ENTRY_TOO_EXTENDED",
+            "counterfactual_classification": "MISSED_WINNER",
+            "entry": 100.0,
+            "stop": 95.0,
+            "later_outcome": {"forward_return_pct": 10.0},
+        },
+        {
+            "entered": False,
+            "reason_code": "ENTRY_TOO_EXTENDED",
+            "counterfactual_classification": "CORRECT_REJECTION",
+            "entry": 100.0,
+            "stop": 95.0,
+            "later_outcome": {"forward_return_pct": -5.0},
+        },
+    ]
+
+    card = rejection_gate_scorecard(rows, min_n=2)["ENTRY_TOO_EXTENDED"]
+
+    assert card["n"] == 2
+    assert card["MISSED_WINNER"] == 1
+    assert card["CORRECT_REJECTION"] == 1
+    assert card["missed_winner_rate"] == 0.5
+    assert card["protective_rejection_rate"] == 0.5
+    assert card["sum_rejected_move_R"] == 1.0
+    assert card["mean_rejected_move_R"] == 0.5
+    assert card["r_coverage"] == 1.0
+    assert card["evidence"] == "MEASURED"
+    assert card["not_pnl"] is True
