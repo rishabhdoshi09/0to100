@@ -595,6 +595,9 @@ def test_closed_market_decision_only_cycle_closes_soak_gap_without_forward_evide
     assert out["decision_only"] is True
     assert out["not_forward_evidence"] is True
     assert out["taken"] == []
+    assert out["decision_only_selected"]
+    assert out["decision_only_selected"][0]["symbol"] == "TCS"
+    assert out["eligibility"] == "DECISION_ONLY_READY"
     assert not book.open
     assert load_ledger() == []
 
