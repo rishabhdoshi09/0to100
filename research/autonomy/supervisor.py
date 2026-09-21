@@ -356,6 +356,20 @@ class Supervisor:
             return
 
 
+    def _resource_budget(self) -> dict:
+        try:
+            from research.autonomy.resource_governor import assess
+            return assess(self.jobs.list(limit=2000), now_epoch=float(self.clock()))
+        except Exception as exc:
+            return {
+                "historical_replay_allowed": False,
+                "decision": "DEFER_HISTORICAL_REPLAY",
+                "reason": f"resource governor unavailable: {type(exc).__name__}",
+                "learning_allowed": True,
+                "research_allowed": True,
+                "live_money_unchanged": True,
+            }
+
     def _write_status(self):
         caps = H.capabilities(self.failures)
         d = self.state.as_dict()
@@ -373,6 +387,7 @@ class Supervisor:
             "scheduler_owner_pid": os.getpid(), "scheduler_of_record": "quantterm-autonomy",
             "process_running": bool(self._running), "last_cycle": last_cycle,
             "live_feed": self.live_feed.health(),
+            "resource_governor": self._resource_budget(),
         })
         tmp = self._status_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(d, indent=2, default=str), encoding="utf-8")
@@ -581,6 +596,17 @@ class Supervisor:
                     input_snapshot_id=batch_id,
                 )
                 return
+
+            # Resource Governor: learning/research above can consume already
+            # produced evidence, but heavy historical replay must yield to due
+            # or running official-data/current-market/forward-settlement work.
+            # This prevents EOD snapshot refresh and replay from fighting for the
+            # same disk/CPU on the operator's Mac while keeping the organisation
+            # productive instead of globally pausing autonomy.
+            budget = self._resource_budget()
+            if not budget.get("historical_replay_allowed"):
+                return
+
             if phase == "RUNNING" and batch_id:
                 self.jobs.enqueue(
                     SCH.HISTORICAL_PAPER_CYCLE,
