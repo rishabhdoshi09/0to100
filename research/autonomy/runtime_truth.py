@@ -21,6 +21,7 @@ ACTIVITY_IDLE = "IDLE"
 ACTIVITY_DATA = "DATA_REFRESH"
 ACTIVITY_SCAN = "CURRENT_SCAN"
 ACTIVITY_PAPER = "FORWARD_PAPER"
+ACTIVITY_DECISION = "DECISION_SIMULATION"
 ACTIVITY_SETTLEMENT = "SETTLEMENT"
 ACTIVITY_HISTORY = "HISTORICAL_REPLAY"
 ACTIVITY_LEARNING = "LEARNING"
@@ -31,6 +32,7 @@ _ACTIVITY_PRIORITY = (
     ACTIVITY_DATA,
     ACTIVITY_SCAN,
     ACTIVITY_PAPER,
+    ACTIVITY_DECISION,
     ACTIVITY_SETTLEMENT,
     ACTIVITY_HISTORY,
     ACTIVITY_LEARNING,
@@ -83,7 +85,7 @@ def _activity_for(row: Mapping[str, Any]) -> str:
         if key.startswith(("hist_", "hist-paper:", "historical:")):
             return ACTIVITY_HISTORY
         if key.startswith("snapshot_decision:"):
-            return ACTIVITY_RESEARCH
+            return ACTIVITY_DECISION
     return _JOB_ACTIVITY.get(job_type, ACTIVITY_MAINTENANCE)
 
 
@@ -111,10 +113,13 @@ def derive_activity(jobs: Iterable[Any], *, now_epoch: float) -> dict[str, Any]:
             priority = _ACTIVITY_PRIORITY.index(activity)
         except ValueError:
             priority = len(_ACTIVITY_PRIORITY)
+        # "What is running now?" and "what should run next?" are different
+        # questions. A genuinely RUNNING job is the primary current activity;
+        # priority only orders peers with the same running/due status.
         running_rank = 0 if row.get("status") == JS.RUNNING else 1
         return (
-            priority,
             running_rank,
+            priority,
             float(row.get("scheduled_for") or 0.0),
             str(row.get("job_id") or ""),
         )
