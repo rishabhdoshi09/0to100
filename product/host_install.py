@@ -313,6 +313,7 @@ def _macos_quantterm_processes(repo_root: Path) -> list[dict[str, Any]]:
         "product.host_",
         "operations.market_ops",
         "research.autonomy",
+        "main.py autonomy",
         "terminal_api",
     )
     repo_scoped_markers = ("streamlit", "uvicorn", "vite")
