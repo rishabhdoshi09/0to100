@@ -230,7 +230,11 @@ def request_from_gap(
     target = int(getattr(gap, "target_samples", 0) or 0)
     if target <= 0:
         target = max(30, current)
-    missing = missing_required_metrics(ctx) if ctx else ()
+    missing = (
+        missing_required_metrics(ctx)
+        if ctx and origin == "RESEARCH_VALIDATION"
+        else ()
+    )
     req = build_request(
         session_date=session_date,
         strategy_id=str(getattr(gap, "strategy_id", "") or ""),
