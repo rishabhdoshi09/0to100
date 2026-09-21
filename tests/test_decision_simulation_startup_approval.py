@@ -363,3 +363,30 @@ def test_supervisor_auto_authorizes_when_discovery_is_ready(tmp_path, monkeypatc
     sup._ensure_startup_trade_discovery()
 
     assert calls == ["auto"]
+
+
+
+def test_autonomous_approval_refuses_stale_or_unready_discovery(tmp_path, monkeypatch):
+    state = tmp_path / "gate.json"
+    monkeypatch.setenv("QT_STARTUP_ID", "startup-auto-stale")
+    monkeypatch.setattr(
+        "product.trading_thesis.manifest",
+        lambda: {"thesis_hash": "thesis-auto", "objective_id": "test"},
+    )
+    monkeypatch.setattr("product.desk_pipeline.scan_is_fresh", lambda: False)
+    monkeypatch.setattr(
+        "product.scan_store.load_scan",
+        lambda: {
+            "scanned_at": "2026-09-20T10:00:00+00:00",
+            "records": [{"symbol": "INFY"}],
+        },
+    )
+
+    G.begin_startup("startup-auto-stale", path=state)
+    result = G.ensure_autonomous_approval(path=state)
+
+    assert result["accepted"] is False
+    assert result["approved"] is False
+    assert result["reason"] == "BEST_TRADE_DISCOVERY_NOT_READY"
+    assert result["scan_fresh"] is False
+    assert G.is_approved(path=state) is False
