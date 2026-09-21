@@ -391,6 +391,7 @@ class Supervisor:
     def _write_status(self):
         caps = H.capabilities(self.failures)
         d = self.state.as_dict()
+        activity_truth = self._activity_truth()
         last_cycle = {}
         if isinstance(self.deps, JOBS.Deps):
             try:
@@ -406,8 +407,8 @@ class Supervisor:
             "process_running": bool(self._running), "last_cycle": last_cycle,
             "live_feed": self.live_feed.health(),
             "resource_governor": self._resource_budget(),
-            "activity_truth": self._activity_truth(),
-            "current_activity": self._activity_truth().get("activity", "UNKNOWN"),
+            "activity_truth": activity_truth,
+            "current_activity": activity_truth.get("activity", "UNKNOWN"),
         })
         tmp = self._status_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(d, indent=2, default=str), encoding="utf-8")
