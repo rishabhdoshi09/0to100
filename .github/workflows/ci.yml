@@ -83,7 +83,24 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t files < /tmp/quantterm-canonical-files.txt
-          python -m pytest "${files[@]}"
+          # Run each canonical file in a fresh interpreter.  This preserves the
+          # exact canonical file set while preventing process-global state from
+          # one test module (threads, monkeypatches, caches, event loops, DB
+          # handles) from poisoning an unrelated module later in the shard.
+          # The per-file watchdog is deliberately a hard failure, not a skip:
+          # a module that cannot terminate is a canonical gate failure and the
+          # printed filename makes the liveness defect actionable.
+          for file in "${files[@]}"; do
+            echo "::group::canonical file $file"
+            echo "CANONICAL_FILE_START=$file"
+            if ! timeout --signal=TERM --kill-after=30s 20m python -m pytest "$file" -q --tb=short; then
+              rc=$?
+              echo "::error file=$file::Canonical file failed or exceeded the 20-minute liveness budget (exit=$rc)"
+              exit "$rc"
+            fi
+            echo "CANONICAL_FILE_PASS=$file"
+            echo "::endgroup::"
+          done
         env:
           KITE_ACCESS_TOKEN: ""
           TELEGRAM_BOT_TOKEN: ""
