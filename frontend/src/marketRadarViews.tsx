@@ -773,10 +773,15 @@ export function RadarHomeView(props: ExperienceViewProps & {
             setRadarNote('')
           }
         })
-        .catch((reason: unknown) => {
+        .catch(() => {
           if (!alive) return
-          if (!recall('radar-home')) setRadar(null)
-          setRadarNote(reason instanceof Error ? reason.message : 'Home workspace timed out. Dashboard below still works.')
+          const cached = recall<RadarHome>('radar-home')
+          if (!cached) setRadar(null)
+          setRadarNote(
+            cached
+              ? `STALE CACHE · Home refresh failed. Showing the last saved workspace${cached.scan_scanned_at ? ` from ${cached.scan_scanned_at}` : ''}; verify timestamps before using market values.`
+              : 'Home workspace is unavailable. No cached Home values are being presented as current.'
+          )
         })
         .finally(() => { radarInFlight.current = false })
       fetchProductReadiness()
@@ -1025,9 +1030,19 @@ export function RadarHomeView(props: ExperienceViewProps & {
       {deskNote ? <p className="radar-desk-note">{deskNote}</p> : null}
 
       <div className="radar-market-strip">
-        <div><span>NIFTY 1D</span><strong>{pct(radar?.nifty_change_1d ?? dashboard.market.nifty_change_1d)}</strong></div>
-        <div><span>BREADTH</span><strong>{radar?.breadth || dashboard.market.breadth}</strong></div>
-        <div><span>VIX</span><strong>{radar?.vix ?? dashboard.market.vix ?? '—'}</strong></div>
+        <div>
+          <span>NIFTY 1D</span>
+          <strong>
+            {(radar?.nifty_change_1d ?? dashboard.market.nifty_change_1d) == null
+              ? 'Unavailable'
+              : pct(radar?.nifty_change_1d ?? dashboard.market.nifty_change_1d)}
+          </strong>
+        </div>
+        <div><span>BREADTH</span><strong>{radar?.breadth || dashboard.market.breadth || 'Unavailable'}</strong></div>
+        <div>
+          <span>VIX</span>
+          <strong>{(radar?.vix ?? dashboard.market.vix) == null ? 'Unavailable' : (radar?.vix ?? dashboard.market.vix)}</strong>
+        </div>
         <div><span>LEADERS</span><strong>{(radar?.leaders || dashboard.market.leaders).slice(0, 3).join(', ') || '—'}</strong></div>
         <div><span>SCAN AGE</span><strong>{relativeAge(scanAt)}</strong></div>
         <div>
