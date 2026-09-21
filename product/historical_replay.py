@@ -39,6 +39,7 @@ DEFAULT_DIR = logs_dir() / "product" / "historical_replay"
 REPORT_NAME = "latest.json"
 PROGRESS_NAME = "progress.json"
 LEDGER_NAME = "decisions.jsonl"
+UNIVERSE_SNAPSHOT_NAME = "universe_snapshot.json"
 SCHEMA_VERSION = 1
 ENGINE = "UnifiedScanner._analyze + build_recommendations_workspace + production paper_autopilot.evaluate_candidate"
 
@@ -138,6 +139,56 @@ def official_sessions(*, dates_fn: Callable[[], Sequence[Any]] | None = None) ->
     return out
 
 
+def _universe_cache_identity(
+    *,
+    data_fingerprint: str,
+    versions: Mapping[str, Any],
+    symbols: Sequence[str] | None,
+    universe_limit: int,
+) -> str:
+    material = {
+        "schema_version": SCHEMA_VERSION,
+        "data_fingerprint": str(data_fingerprint or ""),
+        "versions": dict(versions or {}),
+        "symbols": sorted(str(s).upper() for s in (symbols or []) if str(s).strip()),
+        "universe_limit": int(universe_limit),
+        "membership_rule": "official_bar_exactly_on_session",
+    }
+    return hashlib.sha256(
+        json.dumps(material, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()[:20]
+
+
+def _load_universe_snapshot(directory: Path, cache_id: str) -> dict[str, Any]:
+    payload = _read_json(directory / UNIVERSE_SNAPSHOT_NAME)
+    if str(payload.get("cache_id") or "") != str(cache_id or ""):
+        return {}
+    sessions = payload.get("sessions")
+    return dict(sessions) if isinstance(sessions, Mapping) else {}
+
+
+def _save_universe_snapshot(
+    directory: Path,
+    *,
+    cache_id: str,
+    data_fingerprint: str,
+    versions: Mapping[str, Any],
+    sessions: Mapping[str, Any],
+) -> None:
+    _atomic_json(
+        directory / UNIVERSE_SNAPSHOT_NAME,
+        {
+            "schema_version": SCHEMA_VERSION,
+            "cache_id": str(cache_id),
+            "data_fingerprint": str(data_fingerprint or ""),
+            "versions": dict(versions or {}),
+            "membership_rule": "official_bar_exactly_on_session",
+            "sessions": dict(sessions),
+            "updated_at": _now(),
+        },
+    )
+
+
 def universe_as_of(
     as_of: str,
     *,
@@ -188,8 +239,12 @@ def universe_as_of(
         if last > str(as_of)[:10]:
             degraded.append(f"{symbol}: future bar leaked")
             continue
-        if last == str(as_of)[:10] or True:
-            live.append(symbol)
+        if last != str(as_of)[:10]:
+            # Membership means the security actually printed an official bar
+            # on this session. A stale prior bar cannot prove it was tradable at T.
+            degraded.append(f"{symbol}: no official bar on {str(as_of)[:10]} (last={last})")
+            continue
+        live.append(symbol)
         if limit and len(live) >= int(limit):
             break
     return {
@@ -913,6 +968,20 @@ def run_historical_replay(
 
     experiment_versions = dict(identity.get("versions") or current_versions().as_dict())
     data_fp = str(identity.get("data_fingerprint") or warehouse_fingerprint())
+    universe_cache_id = _universe_cache_identity(
+        data_fingerprint=data_fp,
+        versions=experiment_versions,
+        symbols=symbols,
+        universe_limit=universe_limit,
+    )
+    universe_session_cache = (
+        _load_universe_snapshot(target, universe_cache_id)
+        if ohlcv_fn is None
+        else {}
+    )
+    universe_cache_hits = 0
+    universe_cache_misses = 0
+
     cached = _read_json(target / REPORT_NAME)
     if (
         not force
@@ -962,12 +1031,31 @@ def run_historical_replay(
         })
         _write_progress(target, progress)
         try:
-            uni = universe_as_of(
-                as_of,
-                symbols=symbols,
-                ohlcv_fn=ohlcv_fn,
-                limit=universe_limit,
-            )
+            cached_uni = universe_session_cache.get(str(as_of)[:10])
+            if isinstance(cached_uni, Mapping):
+                uni = dict(cached_uni)
+                uni["cache_hit"] = True
+                universe_cache_hits += 1
+            else:
+                uni = universe_as_of(
+                    as_of,
+                    symbols=symbols,
+                    ohlcv_fn=ohlcv_fn,
+                    limit=universe_limit,
+                )
+                uni["cache_hit"] = False
+                universe_cache_misses += 1
+                if ohlcv_fn is None:
+                    universe_session_cache[str(as_of)[:10]] = {
+                        k: v for k, v in dict(uni).items() if k != "cache_hit"
+                    }
+                    _save_universe_snapshot(
+                        target,
+                        cache_id=universe_cache_id,
+                        data_fingerprint=data_fp,
+                        versions=experiment_versions,
+                        sessions=universe_session_cache,
+                    )
             names = list(uni.get("symbols") or [])
             universe_obs += len(names)
             scan = scan_session(
@@ -995,6 +1083,7 @@ def run_historical_replay(
             session_summaries.append({
                 "as_of": as_of,
                 "universe": len(names),
+                "universe_cache_hit": bool(uni.get("cache_hit")),
                 "survivorship_complete": uni.get("survivorship_complete"),
                 "evaluated": int(scan.get("scanned") or 0),
                 "candidates": len(scan.get("records") or []),
@@ -1115,6 +1204,14 @@ def run_historical_replay(
         "evidence_ready": status == _STATUS_SUCCEEDED,
         "universe_history": universe_history,
         "universe_scope": "EXPLICIT_SYMBOLS" if explicit_universe else "POINT_IN_TIME_UNIVERSE",
+        "universe_snapshot": {
+            "cache_id": universe_cache_id,
+            "path": str(target / UNIVERSE_SNAPSHOT_NAME),
+            "cache_hits": universe_cache_hits,
+            "cache_misses": universe_cache_misses,
+            "membership_rule": "official_bar_exactly_on_session",
+            "immutable_while_data_fingerprint_unchanged": True,
+        },
         "decisions": classified[:400],
         "rows": classified[:400],
         "simple": (
