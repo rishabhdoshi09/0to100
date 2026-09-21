@@ -563,6 +563,81 @@ def _group_expectancy(rows: Sequence[Mapping[str, Any]], key: str) -> dict[str, 
     return out
 
 
+def _counterfactual_r(row: Mapping[str, Any]) -> float | None:
+    try:
+        entry = float(row.get("entry"))
+        stop = float(row.get("stop"))
+        later = dict(row.get("later_outcome") or {})
+        move_pct = float(later.get("forward_return_pct"))
+    except (TypeError, ValueError):
+        return None
+    risk = abs(entry - stop)
+    if entry <= 0 or risk <= 0:
+        return None
+    return (entry * move_pct / 100.0) / risk
+
+
+def rejection_gate_scorecard(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    min_n: int = MIN_SCOREBOARD_N,
+) -> dict[str, Any]:
+    """Descriptive counterfactual diagnostics by rejection gate; never P&L."""
+    buckets: dict[str, dict[str, Any]] = {}
+    for raw in rows:
+        row = dict(raw or {})
+        if row.get("entered"):
+            continue
+        classification = str(row.get("counterfactual_classification") or "")
+        if not classification:
+            continue
+        reason = str(row.get("reason_code") or "UNSPECIFIED_REJECTION")
+        bucket = buckets.setdefault(
+            reason,
+            {
+                "n": 0,
+                "MISSED_WINNER": 0,
+                "AVOIDED_LOSER": 0,
+                "CORRECT_REJECTION": 0,
+                "GOOD_WAIT": 0,
+                "RAN_AWAY_WITHOUT_ENTRY": 0,
+                "FLAT": 0,
+                "counterfactual_R_values": [],
+            },
+        )
+        bucket["n"] += 1
+        bucket[classification] = int(bucket.get(classification) or 0) + 1
+        r_value = _counterfactual_r(row)
+        if r_value is not None:
+            bucket["counterfactual_R_values"].append(float(r_value))
+
+    out: dict[str, Any] = {}
+    for reason, bucket in sorted(buckets.items()):
+        vals = list(bucket.pop("counterfactual_R_values") or [])
+        n = int(bucket.get("n") or 0)
+        missed = int(bucket.get("MISSED_WINNER") or 0)
+        protective = int(bucket.get("AVOIDED_LOSER") or 0) + int(
+            bucket.get("CORRECT_REJECTION") or 0
+        )
+        out[reason] = {
+            **bucket,
+            "evidence": "MEASURED" if n >= int(min_n) else "INSUFFICIENT EVIDENCE",
+            "missed_winner_rate": round(missed / n, 4) if n else None,
+            "protective_rejection_rate": round(protective / n, 4) if n else None,
+            "mean_rejected_move_R": (
+                round(sum(vals) / len(vals), 6) if vals else None
+            ),
+            "sum_rejected_move_R": round(sum(vals), 6) if vals else None,
+            "r_coverage": round(len(vals) / n, 4) if n else 0.0,
+            "not_pnl": True,
+            "interpretation": (
+                "Positive rejected-move R means the gate rejected subsequent upside; "
+                "negative R means it avoided subsequent downside. Counterfactual only."
+            ),
+        }
+    return out
+
+
 def scoreboard() -> dict[str, Any]:
     from product.learning_policy_store import load_policies
     from product.champion_challenger import load_store
@@ -635,6 +710,7 @@ def scoreboard() -> dict[str, Any]:
         "paper_trades_taken": len(taken),
         "settled_trades": len(settled_taken),
         "rejected_candidates_settled": len(rejected_settled),
+        "rejection_gate_evidence": rejection_gate_scorecard(rejected_settled),
         "missed_winners": counts.get("MISSED_WINNER", 0),
         "avoided_losers": counts.get("AVOIDED_LOSER", 0),
         "good_waits": counts.get("GOOD_WAIT", 0),
