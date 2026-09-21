@@ -789,6 +789,12 @@ export type HomeOperatingSystem = {
     label?: string
     why?: string
     technical?: string
+    candidate_status?: string
+    confidence_score?: number | null
+    win_probability_pct?: number | null
+    confidence_source?: string
+    effective_n?: number | null
+    confidence_note?: string
   }>
   paper_bot?: {
     on?: boolean

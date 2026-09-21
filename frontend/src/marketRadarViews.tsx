@@ -496,13 +496,20 @@ function HomeOsCard({
         <div className="home-os-opps home-os-best-trades" aria-label="Best trades">
           <span>BEST TRADES</span>
           <strong>Production-thesis qualified · rejected and extended names excluded</strong>
-          {(os.opportunities || []).slice(0, 3).map((row, index) => {
+          {(os.opportunities || []).slice(0, 5).map((row, index) => {
             const symbol = String(row.found || '').split(/\s+/)[0]
             return (
             <div key={`${row.found}-${index}`}>
               <span>{row.label || 'BUY'}</span>
               <strong>{row.found}</strong>
               <small>{depth === 'professional' ? (row.technical || row.meaning) : row.meaning}</small>
+              <small className="home-os-confidence">
+                {row.confidence_score != null
+                  ? `Evidence confidence ${Number(row.confidence_score).toFixed(1)}/100`
+                  : 'Evidence confidence building'}
+                {row.win_probability_pct != null ? ` · measured +R odds ${Number(row.win_probability_pct).toFixed(1)}%` : ''}
+                {depth === 'professional' && row.effective_n != null ? ` · effective n ${Number(row.effective_n).toFixed(1)}` : ''}
+              </small>
               {symbol && onOpenPage ? (
                 <button
                   type="button"
