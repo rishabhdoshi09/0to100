@@ -19,7 +19,7 @@ from typing import Any, Callable
 from core.runtime_paths import logs_dir, logs_path
 
 ROOT = Path(__file__).resolve().parents[2]
-PROGRESS_PATH = logs_path("kite_history", "progress.json")
+RUNTIME_PROGRESS_PATH = logs_path("kite_history", "runtime_progress.json")
 IN_PROGRESS = "DATA_REFRESH_IN_PROGRESS"
 _REUSE_SUCCESS_S = 15 * 60.0
 _STALL_WARN_S = 10 * 60.0
@@ -31,10 +31,33 @@ _installed = False
 
 def _progress_payload() -> dict[str, Any]:
     try:
-        payload = json.loads(PROGRESS_PATH.read_text(encoding="utf-8"))
+        payload = json.loads(RUNTIME_PROGRESS_PATH.read_text(encoding="utf-8"))
         return dict(payload) if isinstance(payload, dict) else {}
     except Exception:
         return {}
+
+
+def _progress_token(payload: dict[str, Any]) -> str:
+    if not payload:
+        return ""
+    keys = (
+        "stage", "status", "current", "total", "symbol", "cid",
+        "candles_fetched", "updated_epoch", "error",
+    )
+    return json.dumps([payload.get(key) for key in keys], separators=(",", ":"), default=str)
+
+
+def _format_eta(seconds: float | None) -> str:
+    if seconds is None or seconds < 0:
+        return ""
+    seconds_i = int(round(seconds))
+    if seconds_i < 60:
+        return f"{seconds_i}s"
+    minutes, sec = divmod(seconds_i, 60)
+    if minutes < 60:
+        return f"{minutes}m{sec:02d}s"
+    hours, minute = divmod(minutes, 60)
+    return f"{hours}h{minute:02d}m"
 
 
 def _required_date(ctx) -> str:
@@ -77,14 +100,26 @@ def make_parallel_data_refresh_handler(
         "required": "",
         "result": None,
         "thread": None,
+        "baseline_progress_token": "",
+        "last_progress_token": "",
+        "last_progress_at": 0.0,
+        "last_progress_current": -1,
+        "last_progress_observed_at": 0.0,
     }
 
     def launch(ctx, required: str) -> None:
+        started = float(clock())
+        baseline = _progress_token(_progress_payload())
         state["running"] = True
-        state["started_at"] = float(clock())
+        state["started_at"] = started
         state["finished_at"] = 0.0
         state["required"] = required
         state["result"] = None
+        state["baseline_progress_token"] = baseline
+        state["last_progress_token"] = ""
+        state["last_progress_at"] = started
+        state["last_progress_current"] = -1
+        state["last_progress_observed_at"] = started
 
         def worker() -> None:
             try:
@@ -118,19 +153,67 @@ def make_parallel_data_refresh_handler(
         from research.autonomy import jobs as JOBS
         from research.autonomy import supervisor_state as ST
 
-        with state_lock:
-            started = float(state.get("started_at") or clock())
-            worker_required = str(state.get("required") or "")
-        elapsed = max(0.0, float(clock()) - started)
+        now = float(clock())
         progress = _progress_payload()
-        stage = str(progress.get("stage") or progress.get("status") or "historical_sync")
-        warning = ""
-        if elapsed >= _STALL_WARN_S:
-            warning = " · slow/stall warning active"
+        token = _progress_token(progress)
+        with state_lock:
+            started = float(state.get("started_at") or now)
+            worker_required = str(state.get("required") or "")
+            baseline = str(state.get("baseline_progress_token") or "")
+            last_token = str(state.get("last_progress_token") or "")
+            progress_is_current = bool(progress and token and token != baseline)
+            if progress_is_current and token != last_token:
+                state["last_progress_token"] = token
+                state["last_progress_at"] = now
+                try:
+                    state["last_progress_current"] = int(progress.get("current") or 0)
+                except Exception:
+                    state["last_progress_current"] = -1
+                state["last_progress_observed_at"] = now
+            last_progress_at = float(state.get("last_progress_at") or started)
+
+        elapsed = max(0.0, now - started)
+        no_progress_s = max(0.0, now - last_progress_at)
+        stalled = bool(elapsed >= _STALL_WARN_S and no_progress_s >= _STALL_WARN_S)
+
+        stage = "starting"
+        current = total = 0
+        pct = 0.0
+        rate = 0.0
+        eta_s = None
+        symbol = ""
+        if progress_is_current:
+            stage = str(progress.get("stage") or progress.get("status") or "historical_sync")
+            try:
+                current = max(0, int(progress.get("current") or 0))
+                total = max(0, int(progress.get("total") or 0))
+            except Exception:
+                current = total = 0
+            symbol = str(progress.get("symbol") or "")
+            if total:
+                pct = min(100.0, max(0.0, (100.0 * current / total)))
+            if current > 0 and elapsed > 0:
+                rate = current / elapsed
+                if total > current and rate > 0:
+                    eta_s = (total - current) / rate
+
+        detail = stage
+        if total:
+            detail += f" · {current}/{total} ({pct:.1f}%)"
+        if rate > 0:
+            detail += f" · {rate:.2f} sym/s"
+        eta_text = _format_eta(eta_s)
+        if eta_text:
+            detail += f" · eta {eta_text}"
+        if symbol:
+            detail += f" · {symbol}"
+        if stalled:
+            detail += f" · stalled {no_progress_s:.0f}s without measurable progress"
+
         next_poll = 2.0
         return JOBS.JobResult(
             JS.RETRYABLE_FAILED,
-            f"data refresh running in background · {stage} · {elapsed:.0f}s{warning}",
+            f"data refresh running in background · {detail}",
             error_code=IN_PROGRESS,
             error_message="snapshot refresh is still running; supervisor remains available",
             state_hint=ST.DATA_REFRESHING,
@@ -140,9 +223,16 @@ def make_parallel_data_refresh_handler(
                 "elapsed_s": round(elapsed, 1),
                 "required_date": required,
                 "worker_required_date": worker_required,
-                "stall_warning": elapsed >= _STALL_WARN_S,
-                "next_poll_at": round(float(clock()) + next_poll, 1),
-                "progress": progress,
+                "stall_warning": stalled,
+                "stall_basis": "NO_MEASURABLE_PROGRESS" if stalled else "",
+                "no_progress_s": round(no_progress_s, 1),
+                "progress_current": current,
+                "progress_total": total,
+                "progress_pct": round(pct, 2),
+                "throughput_symbols_per_s": round(rate, 4),
+                "eta_s": round(float(eta_s), 1) if eta_s is not None else None,
+                "next_poll_at": round(now + next_poll, 1),
+                "progress": progress if progress_is_current else {},
             },
         )
 
