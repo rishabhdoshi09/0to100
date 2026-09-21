@@ -110,6 +110,7 @@ def persist_soak_verification(*, min_interval_s: int = VERIFY_MIN_INTERVAL_S, fo
         "scoreboard_evidence": result.get("scoreboard_evidence"),
         "real_forward_n": result.get("real_forward_n"),
         "valid_no_trade": result.get("valid_no_trade"),
+        "decision_only": result.get("decision_only") is True,
         "live_locked": result.get("live_locked"),
         "live_lock_verified": result.get("live_lock_verified") is True,
         "live_execution_authorized": result.get("live_execution_authorized"),
@@ -386,7 +387,12 @@ def build_runtime_journey(*, cycle: Mapping[str, Any] | None = None) -> dict[str
     rejections = list(latest.get("rejections") or [])
     waits = list(latest.get("waits") or [])
     reasons = [str(x) for x in (latest.get("cycle_reasons") or []) if x]
-    valid_no_trade = (not taken) and (bool(rejections) or bool(waits) or bool(reasons))
+    decision_only = bool(latest.get("decision_only"))
+    valid_no_trade = (
+        not decision_only
+        and (not taken)
+        and (bool(rejections) or bool(waits) or bool(reasons))
+    )
     opens = list(paper.open_positions or [])
     closed = list(paper.closed_trades or [])
     exec_rows = [r for r in ledger if r.get("entered") and r.get("execution_adjusted_R") is not None]
@@ -422,10 +428,23 @@ def build_runtime_journey(*, cycle: Mapping[str, Any] | None = None) -> dict[str
                reason_code=(reasons[0] if reasons and not taken else ""), cycle_id=cycle_id),
         _stage(
             "PAPER_EXECUTION",
-            status="PASS" if taken else ("PASS" if valid_no_trade else "FAIL"),
+            status=(
+                "NOT_APPLICABLE"
+                if decision_only
+                else "PASS" if taken
+                else "PASS" if valid_no_trade
+                else "FAIL"
+            ),
             input_artifact="TradeIntent",
             output_artifact="logs/intelligence/intel_book.json",
-            reason_code="" if taken else (reasons[0] if reasons else ("NO_ELIGIBLE_TRADE" if valid_no_trade else "NO_CYCLE")),
+            reason_code=(
+                "ENTRY_WINDOW_CLOSED_DECISION_ONLY"
+                if decision_only
+                else "" if taken
+                else reasons[0] if reasons
+                else "NO_ELIGIBLE_TRADE" if valid_no_trade
+                else "NO_CYCLE"
+            ),
             cycle_id=cycle_id,
         ),
         _stage("OPEN_POSITION", status="PASS" if opens or taken else ("PASS" if valid_no_trade else "PENDING"),
@@ -460,6 +479,7 @@ def build_runtime_journey(*, cycle: Mapping[str, Any] | None = None) -> dict[str
         "summary": {s["name"]: s["status"] for s in stages},
         **live_safety_projection(),
         "valid_no_trade": valid_no_trade,
+        "decision_only": decision_only,
     }
 
 
@@ -754,7 +774,9 @@ def verify_persisted_soak() -> dict[str, Any]:
     else:
         live_lane = "UNLOCKED"
     paper_exec = summary.get("PAPER_EXECUTION") or "FAIL"
-    if paper_exec == "PASS" and journey.get("valid_no_trade"):
+    if journey.get("decision_only") and paper_exec == "NOT_APPLICABLE":
+        paper_label = "MARKET_CLOSED_DECISION_ONLY"
+    elif paper_exec == "PASS" and journey.get("valid_no_trade"):
         paper_label = "NO_ELIGIBLE_TRADE"
     elif paper_exec == "PASS":
         paper_label = "PASS"
@@ -779,6 +801,7 @@ def verify_persisted_soak() -> dict[str, Any]:
         "real_forward_n": board.get("real_forward_observations"),
         "execution_adjusted_coverage_pct": board.get("execution_adjusted_coverage_pct"),
         "valid_no_trade": journey.get("valid_no_trade"),
+        "decision_only": journey.get("decision_only") is True,
         **safety,
         "journey": journey,
     }
