@@ -24,7 +24,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from core.runtime_paths import logs_path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 PHASE_IDLE = "IDLE"
 PHASE_RUNNING = "RUNNING"
 PHASE_AWAITING_LEARNING = "AWAITING_LEARNING"
@@ -76,11 +76,16 @@ def load_state(path: str | Path | None = None) -> dict[str, Any]:
         "current_batch_id": str(payload.get("current_batch_id") or ""),
         "current_sessions": list(payload.get("current_sessions") or []),
         "last_completed_session": str(payload.get("last_completed_session") or ""),
+        "processed_sessions": sorted({
+            str(x)[:10] for x in (payload.get("processed_sessions") or [])
+            if len(str(x)) >= 10
+        }),
         "thesis_hash": str(payload.get("thesis_hash") or ""),
         "last_result": dict(payload.get("last_result") or {}),
         "last_error": str(payload.get("last_error") or ""),
         "evidence_request_id": str(payload.get("evidence_request_id") or ""),
         "evidence_request": dict(payload.get("evidence_request") or {}),
+        "selection_details": dict(payload.get("selection_details") or {}),
         "updated_at": str(payload.get("updated_at") or ""),
     }
 
@@ -220,11 +225,13 @@ def reset_for_thesis(
         "current_batch_id": "",
         "current_sessions": [],
         "last_completed_session": "",
+        "processed_sessions": [],
         "thesis_hash": str(thesis_hash or ""),
         "last_result": {},
         "last_error": "",
         "evidence_request_id": "",
         "evidence_request": {},
+        "selection_details": {},
     }, state_path)
 
 
@@ -234,11 +241,13 @@ def pending_stage(*, state_path: str | Path | None = None) -> dict[str, Any]:
         "phase": state["phase"],
         "batch_id": state["current_batch_id"],
         "sessions": state["current_sessions"],
+        "processed_sessions": list(state.get("processed_sessions") or []),
         "thesis_hash": state["thesis_hash"],
         "last_result": state["last_result"],
         "last_error": state["last_error"],
         "evidence_request_id": state.get("evidence_request_id", ""),
         "evidence_request": dict(state.get("evidence_request") or {}),
+        "selection_details": dict(state.get("selection_details") or {}),
     }
 
 
@@ -1169,12 +1178,17 @@ def mark_research_complete(batch_id: str, *, state_path: str | Path | None = Non
     ):
         return state
     sessions = list(state.get("current_sessions") or [])
+    processed = set(state.get("processed_sessions") or [])
+    processed.update(str(day)[:10] for day in sessions if len(str(day)) >= 10)
+    latest = max(processed) if processed else state.get("last_completed_session", "")
     return _save_state({
         "phase": PHASE_IDLE,
-        "last_completed_session": sessions[-1] if sessions else state.get("last_completed_session", ""),
+        "last_completed_session": latest,
+        "processed_sessions": sorted(processed),
         "current_batch_id": "",
         "current_sessions": [],
         "last_error": "",
         "evidence_request_id": "",
         "evidence_request": {},
+        "selection_details": {},
     }, state_path)
