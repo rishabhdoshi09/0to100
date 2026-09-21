@@ -314,7 +314,6 @@ def _macos_quantterm_processes(repo_root: Path) -> list[dict[str, Any]]:
         "operations.market_ops",
         "research.autonomy",
         "terminal_api",
-        "quantterm",
     )
     repo_scoped_markers = ("streamlit", "uvicorn", "vite")
     rows: list[dict[str, Any]] = []
