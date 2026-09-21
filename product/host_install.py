@@ -214,15 +214,28 @@ def _format_migration_diff(diff: Mapping[str, Any]) -> str:
 def _ensure_migration_capacity(
     target: Path,
     source_rows: Mapping[str, Mapping[str, Any]],
+    target_rows: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, int]:
     source_bytes = _inventory_bytes(source_rows)
-    if source_bytes <= 0:
-        return {"source_bytes": 0, "headroom_bytes": 0, "required_free_bytes": 0, "free_bytes": 0}
+    target_rows = target_rows or {}
+    copy_bytes = sum(
+        int(row.get("size") or 0)
+        for rel, row in source_rows.items()
+        if target_rows.get(rel) != row
+    )
+    if copy_bytes <= 0:
+        return {
+            "source_bytes": source_bytes,
+            "copy_bytes": 0,
+            "headroom_bytes": 0,
+            "required_free_bytes": 0,
+            "free_bytes": int(shutil.disk_usage(target).free),
+        }
     headroom = max(
         MIGRATION_MIN_HEADROOM_BYTES,
-        int(source_bytes * MIGRATION_HEADROOM_FRACTION),
+        int(copy_bytes * MIGRATION_HEADROOM_FRACTION),
     )
-    required = source_bytes + headroom
+    required = copy_bytes + headroom
     try:
         free = int(shutil.disk_usage(target).free)
     except Exception as exc:
@@ -232,12 +245,13 @@ def _ensure_migration_capacity(
     if free < required:
         raise HostInstallError(
             "insufficient disk space for durable runtime migration: "
-            f"source_bytes={source_bytes} headroom_bytes={headroom} "
+            f"source_bytes={source_bytes} copy_bytes={copy_bytes} headroom_bytes={headroom} "
             f"required_free_bytes={required} free_bytes={free}; "
             "source was left untouched and no runtime manifest was written"
         )
     return {
         "source_bytes": source_bytes,
+        "copy_bytes": copy_bytes,
         "headroom_bytes": headroom,
         "required_free_bytes": required,
         "free_bytes": free,
@@ -490,7 +504,6 @@ def migrate_repo_runtime(
     # Checkpointing legitimately changes SQLite/WAL bytes. Freeze the source
     # only after that consistency step.
     source_rows = inventory(repo_root)
-    capacity = _ensure_migration_capacity(target, source_rows)
     target_rows = inventory(target)
 
     if not source_rows and target_rows:
@@ -511,6 +524,14 @@ def migrate_repo_runtime(
                 + _format_migration_diff(diff)
                 + "; source was left untouched and target was not adopted"
             )
+
+    # Preflight only the bytes that still need materializing. A verified partial
+    # target from an interrupted 16 GiB migration must be resumable without
+    # requiring another 16 GiB of free space.
+    capacity = _ensure_migration_capacity(target, source_rows, target_rows)
+
+    if source_rows and target_rows and source_rows != target_rows:
+        diff = _migration_diff(source_rows, target_rows)
         quarantine_path = _quarantine_target_paths(
             target,
             list(diff.get("_target_only_all") or []) + list(diff.get("_conflicts_all") or []),
