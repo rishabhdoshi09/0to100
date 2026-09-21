@@ -422,16 +422,21 @@ def _copy_snapshot_file(
     dst: Path,
     expected: Mapping[str, Any],
 ) -> None:
+    # The authoritative inventory already hashed the source. Do not hash every
+    # large source file a second time before copying: the copied temp file is
+    # hashed against that frozen digest below, and the entire source inventory
+    # is re-hashed once after migration to catch later mutations.
     try:
-        current = {"size": src.stat().st_size, "sha256": _sha256(src)}
+        if int(src.stat().st_size) != int(expected.get("size") or 0):
+            raise HostInstallError(
+                f"source size changed during runtime migration before copy: {src}"
+            )
+    except HostInstallError:
+        raise
     except Exception as exc:
         raise HostInstallError(
             f"source changed/disappeared during runtime migration: {src}: {type(exc).__name__}: {exc}"
         ) from exc
-    if current != dict(expected):
-        raise HostInstallError(
-            f"source changed during runtime migration before copy: {src}"
-        )
     dst.parent.mkdir(parents=True, exist_ok=True)
     tmp = dst.with_name(f".{dst.name}.migration.{os.getpid()}.tmp")
     try:
