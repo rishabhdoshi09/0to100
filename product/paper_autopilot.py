@@ -636,6 +636,7 @@ def run_reco_paper_cycle(
     policies: Sequence[Mapping[str, Any]] | None = None,
     enforce_history: bool | None = None,
     scan_records: Sequence[Mapping[str, Any]] | None = None,
+    decision_only: bool = False,
 ) -> dict[str, Any]:
     """Consume saved recommendations and open paper positions for ENTER_NOW names.
 
@@ -691,6 +692,8 @@ def run_reco_paper_cycle(
         cycle_reasons.append(NOT_SURFACED)
 
     def _freeze(decision: AutopilotDecision, *, group: str = "") -> None:
+        if decision_only:
+            return
         try:
             from product.decision_taxonomy import is_non_judgment
             from product.counterfactual_learning import freeze_decision
@@ -875,6 +878,8 @@ def run_reco_paper_cycle(
             "score": row.get("score"),
         }
         not_surfaced.append(miss)
+        if decision_only:
+            continue
         try:
             from product.counterfactual_learning import freeze_decision
             freeze_decision(
@@ -942,6 +947,9 @@ def run_reco_paper_cycle(
         },
         "regime_intelligence_shadow": None,
         "portfolio_authority": "after_selection_authority",
+        "decision_only": bool(decision_only),
+        "evidence_class": "OPERATIONAL_DECISION_ONLY" if decision_only else "PAPER_FORWARD",
+        "not_forward_evidence": bool(decision_only),
         "cycle_id": f"{day}:{ident.get('rules_hash') or ''}:{clock.isoformat()}",
         **safety,
     }
@@ -957,16 +965,17 @@ def run_reco_paper_cycle(
             record_cycle(cycle)
         except Exception:
             pass
-        try:
-            from product.paper_learning_loop import record_taken_evidence
-            record_taken_evidence(taken, as_of=day)
-        except Exception:
-            pass
-        try:
-            from product.forward_soak import record_cycle_evidence
-            record_cycle_evidence(cycle)
-        except Exception:
-            pass
+        if not decision_only:
+            try:
+                from product.paper_learning_loop import record_taken_evidence
+                record_taken_evidence(taken, as_of=day)
+            except Exception:
+                pass
+            try:
+                from product.forward_soak import record_cycle_evidence
+                record_cycle_evidence(cycle)
+            except Exception:
+                pass
     return cycle
 
 
