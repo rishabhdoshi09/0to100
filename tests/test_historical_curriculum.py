@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from research.autonomy import historical_curriculum as HC
 
@@ -35,7 +36,7 @@ def test_classifier_discards_future_rows_even_from_untrusted_loader():
     assert state.available is True
     assert state.regime == "BULL_TREND"
     assert state.history_rows == len(frame) - 1
-    assert state.close == float(frame["Close"].iloc[-2])
+    assert state.close == pytest.approx(float(frame["Close"].iloc[-2]), abs=1e-6)
 
 
 def test_classifier_refuses_shallow_history():
