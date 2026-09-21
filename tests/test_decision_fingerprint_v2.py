@@ -189,3 +189,73 @@ def test_paper_buy_never_opens_when_fingerprint_persistence_fails(monkeypatch):
     assert DECISION_FINGERPRINT_FAILED in out["cycle_reasons"]
     assert out["rejections"]
     assert out["rejections"][0]["reason_code"] == DECISION_FINGERPRINT_FAILED
+
+
+
+def test_successful_paper_buy_carries_freeze_reference(monkeypatch):
+    card = _eligible_card()
+    stamp = datetime(2026, 9, 21, 10, 0, tzinfo=timezone.utc).isoformat()
+    workspace = {
+        "schema_version": 4,
+        "generated_at": stamp,
+        "scan_scanned_at": stamp,
+        "categories": [{"id": "wealth_builders", "cards": [card]}],
+    }
+    monkeypatch.setattr(
+        "product.decision_freeze.freeze",
+        lambda rec, **_k: {
+            "freeze_id": str(rec.get("decision_id") or "freeze-test"),
+            "fingerprint": "fp-test",
+        },
+    )
+    book = PaperBook(capital=100_000)
+
+    out = run_reco_paper_cycle(
+        book=book,
+        cards=[card],
+        workspace=workspace,
+        as_of="2026-09-21",
+        now=datetime(2026, 9, 21, 10, 0, tzinfo=timezone.utc),
+        entries_allowed=True,
+        paper_enabled=True,
+        persist_journal=False,
+        enforce_history=False,
+    )
+
+    assert len(book.open) == 1
+    assert len(out["taken"]) == 1
+    assert out["taken"][0]["freeze_id"]
+    assert out["taken"][0]["evidence_fingerprint"] == "fp-test"
+
+
+def test_forward_observation_preserves_canonical_fingerprint_reference(tmp_path):
+    from product.forward_evidence import freeze_observation, load_ledger
+
+    path = tmp_path / "forward.jsonl"
+    frozen = freeze_observation(
+        {
+            "symbol": "TCS",
+            "decision": "ENTER_NOW",
+            "reason_code": "ELIGIBLE",
+            "entry": 100.0,
+            "stop": 94.0,
+            "target": 115.0,
+            "freeze_id": "freeze-1",
+            "evidence_fingerprint": "fp-1",
+            "thesis_hash": "thesis-a",
+            "calibration_snapshot_id": "cal-a",
+            "data_snapshot_id": "market:2026-09-21",
+        },
+        cycle_id="cycle-1",
+        as_of="2026-09-21",
+        rules_hash="rules-a",
+        group="TAKEN",
+        entered=True,
+        path=path,
+    )
+
+    assert frozen is not None
+    assert frozen["freeze_id"] == "freeze-1"
+    assert frozen["decision_fingerprint"] == "fp-1"
+    assert frozen["pit_proof"]["freeze_id"] == "freeze-1"
+    assert load_ledger(path)[0]["calibration_snapshot_id"] == "cal-a"
