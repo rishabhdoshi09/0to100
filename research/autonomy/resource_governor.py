@@ -55,8 +55,13 @@ def _is_due_or_running(row: Mapping[str, Any], now_epoch: float) -> bool:
 
 
 def _is_forward_paper_key(key: str) -> bool:
-    # Do not let an old historical poll classify itself as a preemptor.
-    return not str(key or "").startswith(("hist_", "hist-paper:", "historical:"))
+    # Do not let an old historical poll classify itself as a preemptor. A
+    # snapshot_decision pass is operational/decision-only (no fills, no forward
+    # evidence) and is intentionally lightweight, so it also need not preempt
+    # historical compute.
+    return not str(key or "").startswith(
+        ("hist_", "hist-paper:", "historical:", "snapshot_decision:")
+    )
 
 
 def assess(
