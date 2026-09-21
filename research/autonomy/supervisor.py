@@ -404,8 +404,13 @@ class Supervisor:
         freshness/discovery gate has succeeded.
         """
         try:
-            from product.decision_simulation_gate import ensure_autonomous_approval
+            from product.decision_simulation_gate import (
+                ensure_autonomous_approval,
+                is_approved,
+            )
 
+            if is_approved():
+                return True
             approval = ensure_autonomous_approval()
             return bool(approval.get("accepted") and approval.get("approved"))
         except Exception:
