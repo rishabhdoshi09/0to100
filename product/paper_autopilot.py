@@ -636,6 +636,7 @@ def run_reco_paper_cycle(
     policies: Sequence[Mapping[str, Any]] | None = None,
     enforce_history: bool | None = None,
     scan_records: Sequence[Mapping[str, Any]] | None = None,
+    decision_only: bool = False,
 ) -> dict[str, Any]:
     """Consume saved recommendations and open paper positions for ENTER_NOW names.
 
@@ -691,6 +692,8 @@ def run_reco_paper_cycle(
         cycle_reasons.append(NOT_SURFACED)
 
     def _freeze(decision: AutopilotDecision, *, group: str = "") -> None:
+        if decision_only:
+            return
         try:
             from product.decision_taxonomy import is_non_judgment
             from product.counterfactual_learning import freeze_decision
@@ -733,8 +736,12 @@ def run_reco_paper_cycle(
             book=book,
             workspace=payload or None,
             now=clock,
-            entries_allowed=entries_allowed,
-            entry_block_reason=entry_block_reason,
+            # Decision-only simulation evaluates the real thesis/risk gates as
+            # though entry authority were available, but execution below stays
+            # structurally disabled. This preserves decision usefulness without
+            # creating an after-hours paper fill.
+            entries_allowed=True if decision_only else entries_allowed,
+            entry_block_reason="" if decision_only else entry_block_reason,
             paper_enabled=paper_enabled,
             regime=regime,
             policy_path=policy_path,
@@ -773,6 +780,16 @@ def run_reco_paper_cycle(
     except Exception:
         diverted = []
     snapshot_id = str(payload.get("scan_scanned_at") or day)
+    decision_only_selected: list[dict[str, Any]] = []
+    if decision_only:
+        for _score, decision in ranked[: max(0, int(max_new))]:
+            row = decision.as_dict()
+            row["status"] = "WOULD_SELECT"
+            row["group"] = "DECISION_ONLY"
+            row["not_forward_evidence"] = True
+            decision_only_selected.append(row)
+        ranked = []
+
     entered = 0
     for _score, decision in ranked:
         if entered >= int(max_new):
@@ -875,6 +892,8 @@ def run_reco_paper_cycle(
             "score": row.get("score"),
         }
         not_surfaced.append(miss)
+        if decision_only:
+            continue
         try:
             from product.counterfactual_learning import freeze_decision
             freeze_decision(
@@ -896,11 +915,15 @@ def run_reco_paper_cycle(
         except Exception:
             pass
 
-    final = ENTER_NOW if taken else (WAIT if waits and not rejections else NO_TRADE)
-    if not card_list and not taken:
+    if decision_only and decision_only_selected:
+        final = "DECISION_ONLY_READY"
+    else:
+        final = ENTER_NOW if taken else (WAIT if waits and not rejections else NO_TRADE)
+    if not card_list and not taken and not decision_only_selected:
         final = NO_TRADE
     summary = (
-        f"taken={len(taken)} rejected={len(rejections)} wait={len(waits)} "
+        f"taken={len(taken)} simulated={len(decision_only_selected)} "
+        f"rejected={len(rejections)} wait={len(waits)} "
         f"seen={len(card_list)} not_surfaced={len(not_surfaced)}"
     )
     from product.live_safety import live_safety_projection
@@ -915,18 +938,23 @@ def run_reco_paper_cycle(
         "candidates_seen": len(card_list),
         "eligible_count": sum(1 for d in decisions if d.decision == ENTER_NOW) + len(taken),
         "taken": taken,
+        "decision_only_selected": decision_only_selected,
         "rejections": rejections,
         "waits": waits,
         "not_surfaced": not_surfaced,
         "positions_opened": opened,
-        "final_decision": final if taken else NO_TRADE,
+        "final_decision": final,
         "cycle_reasons": cycle_reasons,
         "summary": summary,
-        "eligibility": "TRADED" if taken else (
-            "DATA_UNAVAILABLE" if str(entry_block_reason or "") in {
+        "eligibility": (
+            "DECISION_ONLY_READY" if decision_only and decision_only_selected
+            else "DECISION_ONLY_NO_ELIGIBLE_TRADE" if decision_only
+            else "TRADED" if taken
+            else "DATA_UNAVAILABLE" if str(entry_block_reason or "") in {
                 "NO_DATA_SNAPSHOT", "DATA_UNAVAILABLE", "MARKET_NOT_READY", "NO_TRUSTED_MARKET_DATA",
-            } else
-            "BLOCKED_SAFETY" if not entries_allowed or not paper_enabled else "NO_ELIGIBLE_TRADE"
+            }
+            else "BLOCKED_SAFETY" if not entries_allowed or not paper_enabled
+            else "NO_ELIGIBLE_TRADE"
         ),
         "source": "recommendation_selection_authority",
         "adapter": "paper",
@@ -942,6 +970,9 @@ def run_reco_paper_cycle(
         },
         "regime_intelligence_shadow": None,
         "portfolio_authority": "after_selection_authority",
+        "decision_only": bool(decision_only),
+        "evidence_class": "OPERATIONAL_DECISION_ONLY" if decision_only else "PAPER_FORWARD",
+        "not_forward_evidence": bool(decision_only),
         "cycle_id": f"{day}:{ident.get('rules_hash') or ''}:{clock.isoformat()}",
         **safety,
     }
@@ -957,16 +988,17 @@ def run_reco_paper_cycle(
             record_cycle(cycle)
         except Exception:
             pass
-        try:
-            from product.paper_learning_loop import record_taken_evidence
-            record_taken_evidence(taken, as_of=day)
-        except Exception:
-            pass
-        try:
-            from product.forward_soak import record_cycle_evidence
-            record_cycle_evidence(cycle)
-        except Exception:
-            pass
+        if not decision_only:
+            try:
+                from product.paper_learning_loop import record_taken_evidence
+                record_taken_evidence(taken, as_of=day)
+            except Exception:
+                pass
+            try:
+                from product.forward_soak import record_cycle_evidence
+                record_cycle_evidence(cycle)
+            except Exception:
+                pass
     return cycle
 
 
