@@ -325,9 +325,26 @@ def build_home_os(
     scan_failed = any(str(o.get("kind")) == "MARKET_SCAN" and str(o.get("status")) == "FAILED" for o in list(ops.get("recent") or []))
     phase = _session_phase(now)
     market_closed = phase in {"eod", "off_session", "postmarket"}
-    eod_done = bool(verify.get("lanes") or soak_d.get("FORWARD_SOAK_STATUS")) and str(
-        (verify.get("lanes") or {}).get("FORWARD SETTLEMENT") or soak_d.get("FORWARD_SOAK_STATUS") or ""
-    ) not in {"", "FAIL"}
+    verify_lanes = {
+        str(name): str(status or "").upper()
+        for name, status in dict(verify.get("lanes") or {}).items()
+    }
+    has_verification = bool(verify_lanes)
+    core_lane_ok = {
+        "SCAN": {"PASS"},
+        "RECOMMENDATIONS": {"PASS"},
+        "SELECTION": {"PASS"},
+        "AUTOPILOT": {"PASS"},
+        "PAPER EXECUTION": {"PASS", "NO_ELIGIBLE_TRADE"},
+        "LIVE MONEY": {"LOCKED"},
+    }
+    eod_done = bool(has_verification) and all(
+        verify_lanes.get(name) in allowed
+        for name, allowed in core_lane_ok.items()
+    )
+    verified_no_trade = bool(
+        eod_done and verify_lanes.get("PAPER EXECUTION") == "NO_ELIGIBLE_TRADE"
+    )
 
     live_safety = _live_safety_projection()
     live_locked = live_safety.get("live_locked")
@@ -414,30 +431,45 @@ def build_home_os(
         secondary = [_action("RUN_SCAN_NOW", label="Scan now")]
         now_line = "Watching open paper positions" if opens else "Paper entries paused"
         next_line = "Resume when you want new paper trades"
-    elif market_closed and (eod_done or valid_no_trade or taken or closed):
+    elif market_closed and (has_verification or valid_no_trade or taken or closed):
         settle_job_active = bool(active_kinds & {"OUTCOME_RESOLUTION", "outcome_resolution"})
         pending_settle = (
-            str((verify.get("lanes") or {}).get("FORWARD SETTLEMENT") or "") == "PENDING"
+            verify_lanes.get("FORWARD SETTLEMENT") == "PENDING"
             and not closed
             and (phase == "eod" or settle_job_active)
         )
-        if pending_settle and not valid_no_trade:
+        if has_verification and not eod_done:
+            unfinished = [
+                f"{name} {verify_lanes.get(name) or 'UNKNOWN'}"
+                for name, allowed in core_lane_ok.items()
+                if verify_lanes.get(name) not in allowed
+            ]
             state = NORMAL
-            headline = "Today's market is closed. Settlement is still finishing."
+            headline = "Market is closed. The latest completed-session workflow is not complete yet."
+            subtext = (
+                "Automation is still reconciling required day evidence"
+                + (f": {', '.join(unfinished[:4])}." if unfinished else ".")
+                + " Leave QuantTerm running."
+            )
+            now_line = "Market closed · day workflow incomplete"
+            next_line = "Finish required scan, selection and paper verification"
+        elif pending_settle and not verified_no_trade:
+            state = NORMAL
+            headline = "Market is closed. Settlement for the latest completed session is still finishing."
             subtext = "Leave QuantTerm running. End-of-day work is automatic."
             now_line = "End-of-day settlement"
             next_line = "Learning journal and forward evidence"
         else:
-            state = MARKET_CLOSED_COMPLETE if not valid_no_trade or taken or closed else NO_TRADE
-            if valid_no_trade and not taken:
-                state = NO_TRADE
-                headline = "No trade today — QuantTerm did not find a setup worth taking."
-                subtext = "This is not an error. Tomorrow starts automatically."
+            no_trade_for_day = verified_no_trade if has_verification else valid_no_trade
+            state = NO_TRADE if no_trade_for_day and not taken else MARKET_CLOSED_COMPLETE
+            if no_trade_for_day and not taken:
+                headline = "No paper trade for the latest completed market session — QuantTerm did not find a setup worth taking."
+                subtext = "The paper-decision lane is complete. Forward settlement and learning can continue automatically as later-session evidence matures."
             else:
-                headline = "Today's market work is complete."
-                subtext = "Scan, paper decisions, settlement and learning are on the day sheet."
+                headline = "Scan and paper decision are complete for the latest completed market session."
+                subtext = "The point-in-time decision cycle is verified. Forward settlement and learning may continue as later-session evidence matures."
             now_line = "Market closed"
-            next_line = "Tomorrow's official data, then scan"
+            next_line = "Next official NSE session, then scan"
     elif valid_no_trade:
         state = NO_TRADE
         headline = "No trade today — nothing was good enough."
@@ -785,7 +817,12 @@ def _activity(
     rows: list[dict[str, str]] = []
     scan_at = str(scan.get("scanned_at") or "")
     if scan_at:
-        n = len(list(scan.get("records") or []))
+        records_n = len(list(scan.get("records") or []))
+        try:
+            scanned_n = int(scan.get("scanned") or scan.get("universe_size") or 0)
+        except (TypeError, ValueError):
+            scanned_n = 0
+        n = scanned_n or records_n
         rows.append({"at": scan_at, "text": f"Market scan completed" + (f" · {n} names checked" if n else "")})
     if why.get("available"):
         stamp = str(latest.get("recorded_at") or latest.get("as_of") or why.get("as_of") or "")
