@@ -194,67 +194,45 @@ jobs:
           assert state.authorized is False
           PY
 
-      - name: Validate Decision Simulation gate and create explicit replay evidence
+      - name: Validate autonomous Decision Simulation authority and create replay inspection evidence
         shell: bash
         run: |
           set -euo pipefail
-          # Approval is impossible before the automatic startup discovery has
-          # produced a fresh best-trades board. If discovery is still running,
-          # prove the gate refuses approval, then wait for the autonomous scan
-          # instead of manufacturing/rebuilding recommendations in this workflow.
-          curl -fsS --max-time 20 http://127.0.0.1:8765/api/decision-simulation-gate > logs/product/simulator_gate.json
-          ready="$(venv/bin/python - <<'PY'
+          # QuantTerm must not require an operator POST. Fresh startup discovery
+          # is the safety prerequisite; once it is ready, the single autonomy
+          # supervisor grants PAPER_FORWARD/HISTORICAL_REPLAY authority itself.
+          ready=0
+          approved=0
+          for _ in $(seq 1 480); do
+            curl -fsS --max-time 20 http://127.0.0.1:8765/api/decision-simulation-gate > logs/product/simulator_gate.json
+            read -r ready approved <<<"$(venv/bin/python - <<'PY'
           import json
           from pathlib import Path
           p=json.loads(Path('logs/product/simulator_gate.json').read_text(encoding='utf-8'))
-          if p.get('discovery_ready'):
-              assert p.get('scan_fresh') is True, p
-              assert str(p.get('phase') or '').upper() == 'AWAITING_APPROVAL', p
-              print('1')
-          else:
-              assert p.get('approved') is False, p
+          ready = 1 if p.get('discovery_ready') else 0
+          approved = 1 if p.get('approved') else 0
+          if not ready:
+              assert approved == 0, p
               assert str(p.get('phase') or '').upper() == 'SEARCHING_BEST_TRADES', p
-              print('0')
+          print(ready, approved)
           PY
           )"
-
-          if [[ "$ready" != 1 ]]; then
-            curl -fsS --max-time 20 -X POST http://127.0.0.1:8765/api/decision-simulator > logs/product/simulator_approval.json
-            venv/bin/python - <<'PY'
-          import json
-          from pathlib import Path
-          p=json.loads(Path('logs/product/simulator_approval.json').read_text(encoding='utf-8'))
-          assert p.get('accepted') is False, p
-          assert str(p.get('status') or '').upper() == 'WAITING_FOR_BEST_TRADES', p
-          assert str((p.get('approval') or {}).get('reason') or '').upper() == 'BEST_TRADE_DISCOVERY_NOT_READY', p
-          PY
-
-            ready=0
-            for _ in $(seq 1 480); do
-              curl -fsS --max-time 20 http://127.0.0.1:8765/api/decision-simulation-gate > logs/product/simulator_gate.json
-              if venv/bin/python - <<'PY'
-          import json
-          from pathlib import Path
-          p=json.loads(Path('logs/product/simulator_gate.json').read_text(encoding='utf-8'))
-          raise SystemExit(0 if p.get('discovery_ready') else 1)
-          PY
-              then
-                ready=1
-                break
-              fi
-              if [[ -f logs/product/complete_stack.pid ]] && ! kill -0 "$(cat logs/product/complete_stack.pid)" 2>/dev/null; then
-                echo "Complete stack exited while waiting for startup best-trade discovery" >&2
-                tail -250 logs/product/complete_stack.log || true
-                exit 1
-              fi
-              sleep 5
-            done
-            if [[ "$ready" != 1 ]]; then
-              echo "Startup best-trade discovery did not become ready" >&2
-              cat logs/product/simulator_gate.json || true
+            if [[ "$ready" == 1 && "$approved" == 1 ]]; then
+              break
+            fi
+            if [[ -f logs/product/complete_stack.pid ]] && ! kill -0 "$(cat logs/product/complete_stack.pid)" 2>/dev/null; then
+              echo "Complete stack exited while waiting for autonomous Decision Simulation authority" >&2
               tail -250 logs/product/complete_stack.log || true
               exit 1
             fi
+            sleep 5
+          done
+
+          if [[ "$ready" != 1 || "$approved" != 1 ]]; then
+            echo "Autonomous Decision Simulation authority did not become ready" >&2
+            cat logs/product/simulator_gate.json || true
+            tail -250 logs/product/complete_stack.log || true
+            exit 1
           fi
 
           venv/bin/python - <<'PY'
@@ -263,25 +241,20 @@ jobs:
           p=json.loads(Path('logs/product/simulator_gate.json').read_text(encoding='utf-8'))
           assert p.get('discovery_ready') is True, p
           assert p.get('scan_fresh') is True, p
-          assert str(p.get('phase') or '').upper() == 'AWAITING_APPROVAL', p
-          assert p.get('approved') is False, p
-          PY
-
-          curl -fsS --max-time 20 -X POST http://127.0.0.1:8765/api/decision-simulator > logs/product/simulator_approval.json
-          venv/bin/python - <<'PY'
-          import json
-          from pathlib import Path
-          p=json.loads(Path('logs/product/simulator_approval.json').read_text(encoding='utf-8'))
-          assert p.get('accepted') is True, p
-          assert str(p.get('status') or '').upper() == 'APPROVED', p
-          assert p.get('simulation_authority') == 'quantterm-autonomy', p
-          assert p.get('legacy_batch_started') is False, p
+          assert str(p.get('phase') or '').upper() == 'APPROVED', p
+          assert p.get('approved') is True, p
+          assert p.get('approval_required') is False, p
+          assert str(p.get('approval_source') or '').upper() == 'AUTONOMY', p
           assert set(p.get('simulation_scope') or []) == {'PAPER_FORWARD','HISTORICAL_REPLAY'}, p
+          assert p.get('live_locked') is True, p
+          assert p.get('live_execution_authorized') is False, p
+          Path('logs/product/simulator_approval.json').write_text(
+              json.dumps(p, indent=2), encoding='utf-8'
+          )
           PY
 
-          # Explicit historical inspection is intentionally independent of the
-          # autonomous approval switch. Generate genuine PIT evidence directly;
-          # this never opens PAPER_FORWARD positions or starts a duplicate loop.
+          # Explicit historical inspection remains a read/research validation
+          # surface. It is not used to authorize or start the autonomous loop.
           venv/bin/python - <<'PY'
           import json
           from pathlib import Path
