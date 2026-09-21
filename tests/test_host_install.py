@@ -317,3 +317,33 @@ def test_macos_first_migration_quiesces_canonical_and_legacy_launchd(monkeypatch
     assert set(stopped) == set(HI.LEGACY_LAUNCHD_LABELS)
     for label in HI.LEGACY_LAUNCHD_LABELS:
         assert ["launchctl", "bootout", f"gui/501/{label}"] in calls
+
+
+
+def test_macos_writer_probe_ignores_installer_shell_but_catches_runtime(monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setattr(HI.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(HI.os, "getpid", lambda: 999)
+    ps = "\n".join([
+        f"100 /bin/bash {repo}/scripts/install_quantterm_host.sh --runtime-root /Volumes/QuantTermStorage/QuantTerm/runtime",
+        f"101 /bin/bash {repo}/scripts/run_quantterm_complete.sh --restart",
+        f"102 {repo}/venv/bin/python -u -m operations.market_ops",
+        "103 /usr/bin/python3 some_unrelated_quantterm_notes.py",
+    ])
+
+    monkeypatch.setattr(
+        HI,
+        "_run",
+        lambda args, check=True, timeout=30.0: type(
+            "Proc", (), {"returncode": 0, "stdout": ps, "stderr": ""}
+        )(),
+    )
+
+    rows = HI._macos_quantterm_processes(repo)
+    pids = {row["pid"] for row in rows}
+
+    assert 100 not in pids
+    assert 101 in pids
+    assert 102 in pids
+    assert 103 not in pids
