@@ -190,7 +190,7 @@ def test_refresh_runtime_telemetry_is_separate_from_resume_state(tmp_path, monke
     assert runtime["status"] == "SUCCEEDED"
     assert runtime["current"] == runtime["total"]
     assert runtime["total"] == len(ds.master)
-    assert runtime["progress_pct"] if "progress_pct" in runtime else runtime["pct"] == 100.0
+    assert runtime["pct"] == 100.0
 
     resume = json.loads((tmp_path / "progress.json").read_text())
     assert "stage" not in resume
