@@ -18,6 +18,7 @@ import json
 import math
 import os
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -845,6 +846,39 @@ def _retire_obsolete_batch(
     return result
 
 
+def _throughput_metrics(
+    *,
+    replay_elapsed_s: float,
+    paper_elapsed_s: float,
+    batch_elapsed_s: float,
+    decisions: int,
+    useful_examples: int,
+) -> dict[str, Any]:
+    """Operator/research throughput, never a trading-quality metric."""
+    replay_s = max(0.0, float(replay_elapsed_s))
+    paper_s = max(0.0, float(paper_elapsed_s))
+    batch_s = max(0.0, float(batch_elapsed_s))
+    useful = max(0, int(useful_examples))
+    decision_n = max(0, int(decisions))
+    return {
+        "replay_elapsed_s": round(replay_s, 3),
+        "paper_sim_elapsed_s": round(paper_s, 3),
+        "batch_elapsed_s": round(batch_s, 3),
+        "decisions_evaluated": decision_n,
+        "useful_training_examples": useful,
+        "decisions_per_replay_second": (
+            round(decision_n / replay_s, 4) if replay_s > 0 else None
+        ),
+        "useful_examples_per_batch_second": (
+            round(useful / batch_s, 4) if batch_s > 0 else None
+        ),
+        "metric_note": (
+            "useful_training_examples are settled historical virtual-paper trades; "
+            "throughput is operational efficiency, not evidence of profitability"
+        ),
+    }
+
+
 def _run_batch(
     batch: Mapping[str, Any],
     *,
@@ -855,6 +889,7 @@ def _run_batch(
     later_bars_fn: Callable[..., list[dict[str, Any]]] | None,
     sessions_fn: Callable[[], Sequence[Any]] | None,
 ) -> dict[str, Any]:
+    batch_started = time.perf_counter()
     bid = str(batch["batch_id"])
     sessions = list(batch["sessions"])
     expected_thesis_hash = str(batch.get("thesis_hash") or "")
@@ -876,6 +911,7 @@ def _run_batch(
     # keeping these artifacts separate prevents cross-process progress/report/
     # ledger races while both may legitimately run at the same time.
     replay_directory = Path(DEFAULT_REPLAY_ROOT) / bid
+    replay_started = time.perf_counter()
     report = dict(replay_fn(
         sessions=len(sessions),
         universe_limit=universe_limit,
@@ -884,6 +920,7 @@ def _run_batch(
         dates_fn=lambda: replay_dates,
         persist_live_reco=False,
     ) or {})
+    replay_elapsed_s = max(0.0, time.perf_counter() - replay_started)
     status = str(report.get("status") or "").upper()
     if status not in {"SUCCEEDED", "DEGRADED"}:
         raise RuntimeError(f"historical replay did not complete: {status or 'UNKNOWN'}")
@@ -929,6 +966,7 @@ def _run_batch(
     paper_timeline = all_sessions[first_index:timeline_end]
     for row in decisions:
         row.setdefault("run_id", report.get("run_id"))
+    paper_started = time.perf_counter()
     paper_sim = simulate_paper_book_sequence(
         decisions,
         official_sessions=paper_timeline,
@@ -936,6 +974,7 @@ def _run_batch(
         horizon=horizon,
         max_new_per_session=3,
     )
+    paper_elapsed_s = max(0.0, time.perf_counter() - paper_started)
     trades = list(paper_sim.get("trades") or [])
 
     # The paper-book pass can be materially heavier than decision replay. Refuse
@@ -983,6 +1022,14 @@ def _run_batch(
     except Exception as exc:
         setup_policies = [{"error": str(exc)[:240]}]
 
+    throughput = _throughput_metrics(
+        replay_elapsed_s=replay_elapsed_s,
+        paper_elapsed_s=paper_elapsed_s,
+        batch_elapsed_s=max(0.0, time.perf_counter() - batch_started),
+        decisions=int(report.get("decisions_tested") or len(decisions)),
+        useful_examples=len(trades),
+    )
+
     result = {
         "status": "SUCCEEDED",
         "batch_id": bid,
@@ -1009,6 +1056,7 @@ def _run_batch(
         "selection_policy": str(batch.get("selection_policy") or "DURABLE_CURSOR"),
         "selection_details": dict(batch.get("selection_details") or {}),
         "processed_sessions_before": int(batch.get("processed_sessions_before") or 0),
+        "throughput": throughput,
         "memory": {
             "closed_trades": int(memory.get("closed_trades") or 0) if isinstance(memory, dict) else 0,
             "cooldown": len(memory.get("cooldown") or []) if isinstance(memory, dict) else 0,
