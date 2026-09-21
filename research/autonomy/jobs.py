@@ -402,6 +402,35 @@ class Deps:
         self.telegram.notify_paper_cycle(result, book=brain.intel_book)
         return result
 
+    def run_decision_only_cycle(self, entry_block_reason="ENTRY_WINDOW_CLOSED",
+                                session_phase="off_session"):
+        """Persist selection/autopilot truth with zero paper-entry authority.
+
+        This does not run the broader intelligence management loop, create paper
+        fills, freeze forward evidence, or feed learning. It exists so a fresh
+        after-hours recommendation set still receives one canonical selection
+        decision instead of appearing as an execution failure.
+        """
+        from research.auto_research.scheduler import get_brain
+        from product.paper_autopilot import run_reco_paper_cycle
+
+        brain = get_brain()
+        paper_on = True
+        try:
+            paper_on = bool(brain.is_paper_auto_enabled())
+        except Exception:
+            paper_on = True
+        cycle = run_reco_paper_cycle(
+            book=brain.intel_book,
+            as_of=str(self.now_ist().date().isoformat()),
+            entries_allowed=False,
+            entry_block_reason=str(entry_block_reason or "ENTRY_WINDOW_CLOSED"),
+            session_phase=session_phase,
+            paper_enabled=paper_on,
+            decision_only=True,
+        )
+        return cycle
+
     def resolve_outcomes(self, session_date: str, capability_failures=()):
         from research.auto_research.scheduler import get_brain
         brain = get_brain()
@@ -887,7 +916,11 @@ def run_paper_cycle(ctx) -> JobResult:
     key = str(getattr(getattr(ctx, "job", None), "idempotency_key", "") or "")
     management_only = key.startswith("snapshot_manage:")
     automatic_entry = key.startswith("snapshot_paper:")
-    if management_only:
+    decision_only = key.startswith("snapshot_decision:")
+    if decision_only:
+        entries_ok = False
+        reason = "ENTRY_WINDOW_CLOSED_DECISION_ONLY"
+    elif management_only:
         entries_ok = False
         reason = "SIMULATION_APPROVAL_REQUIRED"
     elif automatic_entry and entries_ok:
@@ -927,12 +960,14 @@ def run_paper_cycle(ctx) -> JobResult:
         data_failure = "NO_DATA_SNAPSHOT"
         reason = data_failure
     try:
+        if decision_only and hasattr(ctx.deps, "run_decision_only_cycle"):
+            result = ctx.deps.run_decision_only_cycle(reason, phase)
         # Arity is resolved by inspection, never by calling and catching TypeError.
         # The canonical cycle opens real paper positions before it can raise, so a
         # TypeError from INSIDE the cycle is indistinguishable from a signature
         # mismatch under a try/except probe -- and the retry re-ran the whole
         # cycle, producing a second paper position from one job run.
-        if _accepts_full_paper_cycle_signature(ctx.deps.run_paper_cycle):
+        elif _accepts_full_paper_cycle_signature(ctx.deps.run_paper_cycle):
             result = ctx.deps.run_paper_cycle(entries_ok, reason, phase, ctx.active_failures)
         else:
             result = ctx.deps.run_paper_cycle(entries_ok)
@@ -951,8 +986,10 @@ def run_paper_cycle(ctx) -> JobResult:
     metadata = {"eligibility": eligibility, "entry_block_reason": reason,
                 "session_phase": phase, "market_data_source": data_source,
                 "management_only": management_only,
+                "decision_only": decision_only,
+                "not_forward_evidence": decision_only,
                 "failure_class": "DATA_OR_PROVIDER" if data_failure else ""}
-    if not os.environ.get("PYTEST_CURRENT_TEST"):
+    if not decision_only and not os.environ.get("PYTEST_CURRENT_TEST"):
         try:
             from product.paper_self_feed import ingest_paper_cycle
 
@@ -969,7 +1006,11 @@ def run_paper_cycle(ctx) -> JobResult:
             }
         except Exception:
             pass
-    summary = f"paper cycle: {eligibility or 'no-op'}"
+    summary = (
+        f"decision-only cycle: {eligibility or 'no-op'}"
+        if decision_only
+        else f"paper cycle: {eligibility or 'no-op'}"
+    )
     if data_failure:
         summary = f"paper cycle: DATA_UNAVAILABLE ({data_failure})"
     return JobResult(JS.SUCCEEDED, summary,
