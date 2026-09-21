@@ -229,7 +229,7 @@ def _ensure_migration_capacity(
             "copy_bytes": 0,
             "headroom_bytes": 0,
             "required_free_bytes": 0,
-            "free_bytes": int(shutil.disk_usage(target).free),
+            "free_bytes": 0,
         }
     headroom = max(
         MIGRATION_MIN_HEADROOM_BYTES,
@@ -295,7 +295,7 @@ def _checkpoint_sqlite_sources(repo_root: Path) -> list[str]:
             continue
         rel = path.relative_to(root).as_posix()
         try:
-            conn = sqlite3.connect(str(path), timeout=1.0)
+            conn = sqlite3.connect(f"file:{path}?mode=rw", timeout=1.0, uri=True)
             try:
                 result = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
                 if result and int(result[0] or 0) != 0:
