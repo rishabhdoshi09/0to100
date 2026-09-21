@@ -1547,6 +1547,119 @@ export type ResearchStatus = {
 export const fetchResearchStatus = (): Promise<ResearchStatus> =>
   request('/api/research-status', { headers: { Accept: 'application/json' } })
 
+export type ResearchDirectorStatus = {
+  schema_version: number
+  generated_at: string
+  research_phase: string
+  current_activity: string
+  policy_state: string
+  current_question: string
+  state_truth?: {
+    mismatch?: boolean
+    policy_state?: string
+    activity?: string
+    recommended_transient_state?: string
+    reason?: string
+  }
+  evidence_request: {
+    request_id: string
+    status: string
+    gap_kind: string
+    evidence_origin: string
+    allowed_lanes: string[]
+    current_samples: number
+    target_samples: number
+    sample_deficit: number
+    missing_metrics: string[]
+    acquisition_tasks: string[]
+    stop_conditions: string[]
+  }
+  evidence_progress?: Record<string, unknown>
+  next_evidence_batch: {
+    batch_id: string
+    phase: string
+    sessions: string[]
+    selection_policy: string
+    selection_objective: string
+    outcome_blind_selection?: boolean | null
+    coverage_before?: Record<string, number>
+    coverage_after?: Record<string, number>
+  }
+  next_action: string
+  learning_delta: {
+    measurable_change_today: boolean
+    latest_evidence_event_at?: string
+    latest_event_is_today?: boolean
+    last_batch_evidence_added: number
+    sample_count: number
+    target_samples: number
+    sample_deficit: number
+    resolved_metrics: string[]
+    unresolved_metrics: string[]
+    stagnant_batches: number
+    knowledge_validated_1d: number
+    knowledge_retired_1d: number
+    note?: string
+  }
+  calibration: {
+    snapshot_id: string
+    identities?: Record<string, unknown>
+    immutable?: boolean
+  }
+  signals: {
+    registry_version?: string
+    scanner_catalog?: number
+    replay_eligible?: number
+    backtest_calibrated?: number
+    forward_calibrated?: number
+    effective_calibrated?: number
+    scanner_without_forward_calibration?: Array<{
+      signal_id?: string
+      forward_samples?: number
+      reason?: string
+    }>
+    count_difference_explained?: boolean
+  }
+  challengers: {
+    learned?: {
+      model_version?: string
+      status?: string
+      trained_n?: number
+      real_forward_n?: number
+      promotion_dossier?: Record<string, unknown>
+    }
+    rule?: {
+      under_evaluation?: number
+      rows?: Array<Record<string, unknown>>
+    }
+  }
+  research_health?: {
+    knowledge_growth?: Record<string, unknown>
+    edge_health?: Record<string, unknown>
+    gate_scorecard?: Array<Record<string, unknown>>
+    data_health?: Record<string, unknown>
+    research_debt?: Record<string, unknown>
+  }
+  forward_evidence?: {
+    status?: string
+    real_forward_observations?: number
+    settled_trades?: number
+    rejected_candidates_settled?: number
+    missed_winners?: number
+    avoided_losers?: number
+  }
+  resource_governor?: Record<string, unknown>
+  blockers: string[]
+  live_locked?: boolean | null
+  live_lock_verified?: boolean
+  live_execution_authorized?: boolean
+  truth_note?: string
+}
+
+export const fetchResearchDirector = (): Promise<ResearchDirectorStatus> =>
+  request('/api/research-director', { headers: { Accept: 'application/json' } })
+
+
 export type HealthLane = {
   key: string
   label: string
