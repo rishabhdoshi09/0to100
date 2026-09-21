@@ -17,6 +17,7 @@ Required client surface (data only):
 from __future__ import annotations
 
 import json
+import os
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -136,7 +137,8 @@ class KiteDataSource:
 
     def __init__(self, client, store: SnapshotStore | None = None, *, universe=None,
                  benchmark_name="NIFTY 50", history_dir=None, progress_path=None,
-                 rate_limiter: RateLimiter | None = None, sleep_fn=time.sleep, rng=None,
+                 telemetry_path=None, rate_limiter: RateLimiter | None = None,
+                 sleep_fn=time.sleep, rng=None,
                  max_retries: int = 4):
         self.client = client
         self.store = store or SnapshotStore()
@@ -144,6 +146,11 @@ class KiteDataSource:
         self.benchmark_name = benchmark_name
         self.history_dir = Path(history_dir) if history_dir else None
         self.progress_path = Path(progress_path) if progress_path else None
+        self.telemetry_path = (
+            Path(telemetry_path)
+            if telemetry_path
+            else (self.progress_path.with_name("runtime_progress.json") if self.progress_path else None)
+        )
         self.rl = rate_limiter or RateLimiter(sleep_fn=sleep_fn)
         self._sleep = sleep_fn
         import random as _r
@@ -155,6 +162,8 @@ class KiteDataSource:
         self._q_future = 0                              # future-dated candles this refresh
         self._progress: dict = self._load_progress()
         self._progress_dirty = 0
+        self._refresh_started_epoch = 0.0
+        self._refresh_target_session = ""
 
     # ── session ────────────────────────────────────────────────────────────────────
     def session_valid(self) -> bool:
@@ -240,32 +249,104 @@ class KiteDataSource:
             self._save_progress(force=persist_progress)
         return added
 
+    def _write_runtime_progress(
+        self,
+        stage: str,
+        *,
+        current: int = 0,
+        total: int = 0,
+        symbol: str = "",
+        extra: dict | None = None,
+    ) -> None:
+        """Publish atomic runtime telemetry without corrupting resume state.
+
+        progress_path is the durable security-to-last-session resume map. Runtime
+        liveness belongs in a separate file so supervisors can reason about real
+        movement instead of misreading the resume map as stage telemetry.
+        """
+        if not self.telemetry_path:
+            return
+        now = time.time()
+        started = float(self._refresh_started_epoch or now)
+        elapsed = max(0.0, now - started)
+        cur = max(0, int(current or 0))
+        tot = max(0, int(total or 0))
+        payload = {
+            "schema_version": 1,
+            "stage": str(stage or "unknown"),
+            "progress_current": cur,
+            "progress_total": tot,
+            "percent_complete": round((100.0 * cur / tot), 1) if tot else None,
+            "last_symbol": str(symbol or ""),
+            "target_session": str(self._refresh_target_session or ""),
+            "started_epoch": started,
+            "last_progress_epoch": now,
+            "elapsed_s": round(elapsed, 1),
+            "symbols_per_sec": round(cur / elapsed, 3) if cur and elapsed > 0 else 0.0,
+        }
+        if extra:
+            payload.update(dict(extra))
+        self.telemetry_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.telemetry_path.with_name(
+            f".{self.telemetry_path.name}.{os.getpid()}.{time.time_ns()}.tmp"
+        )
+        try:
+            tmp.write_text(json.dumps(payload, default=str), encoding="utf-8")
+            os.replace(tmp, self.telemetry_path)
+        finally:
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
+
     # ── daily refresh → snapshot commit + atomic activation ──────────────────────
     def daily_refresh(self, *, now: datetime | None = None, extra_manifest: dict | None = None
                       ) -> RefreshReport:
         rep = RefreshReport()
+        self._refresh_started_epoch = time.time()
+        self._refresh_target_session = ""
+        self._write_runtime_progress("session_check")
         if not self.session_valid():
             rep.status = "BLOCKED"; rep.reason = "kite session invalid"
+            self._write_runtime_progress("blocked", extra={"reason": rep.reason})
             rep.incidents.append({"severity": "CRITICAL", "code": "AUTH_INVALID"})
             return rep                                   # last active snapshot preserved untouched
         self._q_invalid = 0; self._q_future = 0          # per-refresh quality counters
+        self._write_runtime_progress("instrument_master")
         self.refresh_instruments()
         rep.token_changes = len(self.last_changes.get("token_changed", []))
         rep.symbol_changes = len(self.last_changes.get("symbol_changed", []))
         required = CAL.latest_required_session(now or CAL._now_ist(), CAL.load_holidays())
         want_to = required.isoformat()
         want_from = (required - timedelta(days=400)).isoformat()
+        self._refresh_target_session = want_to
 
         equity_rows, index_rows = [], []
         bench_token = self._benchmark_token()
-        for cid, rec in self.master.items():
+        master_items = list(self.master.items())
+        total_symbols = len(master_items)
+        self._write_runtime_progress("historical_sync", current=0, total=total_symbols)
+        fetch_failures = 0
+        for processed, (cid, rec) in enumerate(master_items, start=1):
             token = rec["instrument_token"]
             is_bench = (token == bench_token)
             try:
                 rep.candles_fetched += self.bootstrap_symbol(
                     cid, token, want_from, want_to, persist_progress=False)
             except Exception:
+                fetch_failures += 1
                 rep.incidents.append({"severity": "WARNING", "code": "FETCH_FAILED", "cid": cid})
+                if processed == total_symbols or processed % 25 == 0:
+                    self._write_runtime_progress(
+                        "historical_sync",
+                        current=processed,
+                        total=total_symbols,
+                        symbol=str(rec.get("tradingsymbol") or cid),
+                        extra={
+                            "candles_fetched": rep.candles_fetched,
+                            "fetch_failures": fetch_failures,
+                        },
+                    )
                 continue
             hist = self._load_history(cid)
             for d, (o, h, l, c, v) in hist.items():
@@ -273,6 +354,17 @@ class KiteDataSource:
                     index_rows.append(("NIFTY", d, o, h, l, c))
                 else:
                     equity_rows.append((rec["tradingsymbol"], d, o, h, l, c, v, "EQ"))
+            if processed == total_symbols or processed % 25 == 0:
+                self._write_runtime_progress(
+                    "historical_sync",
+                    current=processed,
+                    total=total_symbols,
+                    symbol=str(rec.get("tradingsymbol") or cid),
+                    extra={
+                        "candles_fetched": rep.candles_fetched,
+                        "fetch_failures": fetch_failures,
+                    },
+                )
         rep.symbols = len({r[0] for r in equity_rows})
         rep.unresolved = max(0, len(self.master) - rep.symbols - (1 if index_rows else 0))
         rep.invalid_ohlc = self._q_invalid
@@ -284,10 +376,24 @@ class KiteDataSource:
             _ds = [r[1] for r in equity_rows]
             rep.date_range = (min(_ds), max(_ds))
         if CAL.has_duplicate_sessions(equity_rows):
-            rep.status = "BLOCKED"; rep.reason = "duplicate sessions detected"; return rep
+            rep.status = "BLOCKED"; rep.reason = "duplicate sessions detected"
+            self._write_runtime_progress(
+                "blocked", current=total_symbols, total=total_symbols,
+                extra={"reason": rep.reason, "fetch_failures": fetch_failures},
+            )
+            return rep
         if not equity_rows:
-            rep.status = "BLOCKED"; rep.reason = "no valid equity history"; return rep
+            rep.status = "BLOCKED"; rep.reason = "no valid equity history"
+            self._write_runtime_progress(
+                "blocked", current=total_symbols, total=total_symbols,
+                extra={"reason": rep.reason, "fetch_failures": fetch_failures},
+            )
+            return rep
 
+        self._write_runtime_progress(
+            "snapshot_commit", current=total_symbols, total=total_symbols,
+            extra={"candles_fetched": rep.candles_fetched, "fetch_failures": fetch_failures},
+        )
         prev_active = self.store.get_active_snapshot()
         sid = self.store.commit_snapshot(
             equity_rows, index_rows=index_rows,
@@ -296,6 +402,10 @@ class KiteDataSource:
                             "missing_session_rate": 0.0, "validation_errors": 0,
                             **(extra_manifest or {})})
         rep.snapshot_id = sid
+        self._write_runtime_progress(
+            "snapshot_verify", current=total_symbols, total=total_symbols,
+            extra={"snapshot_id": sid, "fetch_failures": fetch_failures},
+        )
         ok, fails = self.store.verify_snapshot(sid)
         # activate ONLY when forward-eligible: verified + fresh + benchmark + CA coverage etc.
         from research.intelligence import data_state as DS
@@ -313,6 +423,19 @@ class KiteDataSource:
             # previous active snapshot is preserved (we never deactivated it)
             rep.incidents.append({"severity": "WARNING", "code": "REFRESH_NOT_ACTIVATED",
                                   "prev_active": prev_active, "tier": tier})
+        self._write_runtime_progress(
+            "complete",
+            current=total_symbols,
+            total=total_symbols,
+            extra={
+                "snapshot_id": rep.snapshot_id,
+                "activated": rep.activated,
+                "refresh_status": rep.status,
+                "tier": rep.tier,
+                "candles_fetched": rep.candles_fetched,
+                "fetch_failures": fetch_failures,
+            },
+        )
         return rep
 
     # ── persistence (resumable) ──────────────────────────────────────────────────

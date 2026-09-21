@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import dataclasses
 import inspect
+import json
 from datetime import date, datetime, timedelta
 
 import pytest
@@ -176,6 +177,26 @@ def test_valid_refresh_activates_new_snapshot(tmp_path, monkeypatch):
     rep = ds.daily_refresh(now=_NOW)
     assert rep.activated and rep.snapshot_id and rep.benchmark_ok
     assert ds.store.get_active_snapshot() == rep.snapshot_id
+
+
+def test_refresh_runtime_telemetry_is_separate_from_resume_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(CAL, "_now_ist", lambda: _NOW)
+    ds = _ds(tmp_path)
+    rep = ds.daily_refresh(now=_NOW)
+    assert rep.activated
+
+    resume = json.loads((tmp_path / "progress.json").read_text())
+    telemetry = json.loads((tmp_path / "runtime_progress.json").read_text())
+
+    assert "isin:INWIN01" in resume
+    assert "stage" not in resume
+    assert telemetry["stage"] == "complete"
+    assert telemetry["progress_current"] == telemetry["progress_total"]
+    assert telemetry["progress_total"] >= 3
+    assert telemetry["percent_complete"] == 100.0
+    assert telemetry["target_session"] == _NOW.date().isoformat()
+    assert telemetry["activated"] is True
+    assert telemetry["snapshot_id"] == rep.snapshot_id
 
 def test_missing_benchmark_blocks_forward_eligibility(tmp_path, monkeypatch):
     monkeypatch.setattr(CAL, "_now_ist", lambda: _NOW)

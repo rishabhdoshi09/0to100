@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
 
 from research.autonomy import job_store as JS
 from research.autonomy import jobs as JOBS
+from research.autonomy import data_refresh_parallel as DR
 from research.autonomy.data_refresh_parallel import IN_PROGRESS, make_parallel_data_refresh_handler
 
 
@@ -130,3 +132,111 @@ def test_poll_reschedule_does_not_inflate_durable_attempt_count(tmp_path):
         error_message="still running",
     )
     assert store.get(job.job_id).attempt == 0
+
+
+
+def test_long_refresh_is_not_called_stalled_when_progress_is_recent(tmp_path, monkeypatch):
+    class _Alive:
+        def is_alive(self):
+            return True
+
+    now = {"value": 1000.0}
+    telemetry = tmp_path / "runtime_progress.json"
+    monkeypatch.setattr(DR, "PROGRESS_PATH", telemetry)
+    telemetry.write_text(json.dumps({
+        "schema_version": 1,
+        "stage": "historical_sync",
+        "progress_current": 500,
+        "progress_total": 1000,
+        "percent_complete": 50.0,
+        "symbols_per_sec": 2.5,
+        "started_epoch": 100.0,
+        "last_progress_epoch": 995.0,
+    }))
+
+    handler = make_parallel_data_refresh_handler(
+        lambda _ctx: None,
+        clock=lambda: now["value"],
+    )
+    handler.runtime_state.update({
+        "running": True,
+        "started_at": 100.0,
+        "finished_at": 0.0,
+        "required": "2026-08-28",
+        "result": None,
+        "thread": _Alive(),
+    })
+
+    result = handler(_Ctx())
+    assert result.error_code == IN_PROGRESS
+    assert result.metadata["stall_warning"] is False
+    assert result.metadata["progress_current"] == 500
+    assert result.metadata["progress_total"] == 1000
+    assert "500/1000" in result.summary
+    assert "stall warning" not in result.summary
+
+
+def test_stall_warning_requires_no_measurable_progress(tmp_path, monkeypatch):
+    class _Alive:
+        def is_alive(self):
+            return True
+
+    telemetry = tmp_path / "runtime_progress.json"
+    monkeypatch.setattr(DR, "PROGRESS_PATH", telemetry)
+    telemetry.write_text(json.dumps({
+        "schema_version": 1,
+        "stage": "historical_sync",
+        "progress_current": 500,
+        "progress_total": 1000,
+        "percent_complete": 50.0,
+        "symbols_per_sec": 2.5,
+        "started_epoch": 100.0,
+        "last_progress_epoch": 300.0,
+    }))
+
+    handler = make_parallel_data_refresh_handler(lambda _ctx: None, clock=lambda: 1000.0)
+    handler.runtime_state.update({
+        "running": True,
+        "started_at": 100.0,
+        "finished_at": 0.0,
+        "required": "2026-08-28",
+        "result": None,
+        "thread": _Alive(),
+    })
+
+    result = handler(_Ctx())
+    assert result.metadata["stall_warning"] is True
+    assert result.metadata["progress_age_s"] == 700.0
+    assert "stall warning: no measurable progress for 700s" in result.summary
+
+
+def test_previous_worker_telemetry_cannot_trigger_false_stall(tmp_path, monkeypatch):
+    class _Alive:
+        def is_alive(self):
+            return True
+
+    telemetry = tmp_path / "runtime_progress.json"
+    monkeypatch.setattr(DR, "PROGRESS_PATH", telemetry)
+    telemetry.write_text(json.dumps({
+        "stage": "historical_sync",
+        "progress_current": 999,
+        "progress_total": 1000,
+        "started_epoch": 50.0,
+        "last_progress_epoch": 60.0,
+    }))
+
+    handler = make_parallel_data_refresh_handler(lambda _ctx: None, clock=lambda: 1000.0)
+    handler.runtime_state.update({
+        "running": True,
+        "started_at": 900.0,
+        "finished_at": 0.0,
+        "required": "2026-08-28",
+        "result": None,
+        "thread": _Alive(),
+    })
+
+    result = handler(_Ctx())
+    assert result.metadata["stall_warning"] is False
+    assert result.metadata["progress"] == {}
+    assert result.metadata["progress_total"] == 0
+    assert "progress telemetry starting" in result.summary
