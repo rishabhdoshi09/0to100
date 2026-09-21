@@ -330,6 +330,8 @@ def test_macos_writer_probe_ignores_installer_shell_but_catches_runtime(monkeypa
         f"101 /bin/bash {repo}/scripts/run_quantterm_complete.sh --restart",
         f"102 {repo}/venv/bin/python -u -m operations.market_ops",
         "104 /usr/bin/python3 -u main.py autonomy",
+        "105 /usr/bin/python3 -u -m uvicorn terminal_product_api_parallel:app --port 8765",
+        "106 /usr/bin/python3 -u -m uvicorn report_api:app --port 8766",
         "103 /usr/bin/python3 some_unrelated_quantterm_notes.py",
     ])
 
@@ -348,4 +350,6 @@ def test_macos_writer_probe_ignores_installer_shell_but_catches_runtime(monkeypa
     assert 101 in pids
     assert 102 in pids
     assert 104 in pids
+    assert 105 in pids
+    assert 106 in pids
     assert 103 not in pids
