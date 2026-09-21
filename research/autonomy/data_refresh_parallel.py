@@ -19,7 +19,7 @@ from typing import Any, Callable
 from core.runtime_paths import logs_dir, logs_path
 
 ROOT = Path(__file__).resolve().parents[2]
-PROGRESS_PATH = logs_path("kite_history", "progress.json")
+PROGRESS_PATH = logs_path("kite_history", "runtime_progress.json")
 IN_PROGRESS = "DATA_REFRESH_IN_PROGRESS"
 _REUSE_SUCCESS_S = 15 * 60.0
 _STALL_WARN_S = 10 * 60.0
@@ -123,14 +123,39 @@ def make_parallel_data_refresh_handler(
             worker_required = str(state.get("required") or "")
         elapsed = max(0.0, float(clock()) - started)
         progress = _progress_payload()
-        stage = str(progress.get("stage") or progress.get("status") or "historical_sync")
-        warning = ""
-        if elapsed >= _STALL_WARN_S:
-            warning = " · slow/stall warning active"
+        progress_started = float(progress.get("started_epoch") or 0.0)
+        # Ignore telemetry left behind by a previous worker. A stale file must
+        # never make a newly launched refresh look stalled.
+        if not progress_started or progress_started + 1.0 < started:
+            progress = {}
+        stage = str(progress.get("stage") or "starting")
+        current = int(progress.get("progress_current") or 0)
+        total = int(progress.get("progress_total") or 0)
+        pct = progress.get("percent_complete")
+        rate = float(progress.get("symbols_per_sec") or 0.0)
+        last_progress_epoch = float(progress.get("last_progress_epoch") or 0.0)
+        progress_age = (
+            max(0.0, float(clock()) - last_progress_epoch)
+            if last_progress_epoch
+            else None
+        )
+        stall_warning = bool(progress_age is not None and progress_age >= _STALL_WARN_S)
+        parts = [f"data refresh running in background · {stage}"]
+        if total > 0:
+            pct_text = f"{float(pct):.1f}%" if pct is not None else f"{(100.0 * current / total):.1f}%"
+            parts.append(f"{current}/{total} · {pct_text}")
+        if rate > 0:
+            parts.append(f"{rate:.2f} sym/s")
+        parts.append(f"{elapsed:.0f}s")
+        if stall_warning:
+            parts.append(f"stall warning: no measurable progress for {progress_age:.0f}s")
+        elif not progress:
+            parts.append("progress telemetry starting")
+        summary = " · ".join(parts)
         next_poll = 2.0
         return JOBS.JobResult(
             JS.RETRYABLE_FAILED,
-            f"data refresh running in background · {stage} · {elapsed:.0f}s{warning}",
+            summary,
             error_code=IN_PROGRESS,
             error_message="snapshot refresh is still running; supervisor remains available",
             state_hint=ST.DATA_REFRESHING,
@@ -140,7 +165,12 @@ def make_parallel_data_refresh_handler(
                 "elapsed_s": round(elapsed, 1),
                 "required_date": required,
                 "worker_required_date": worker_required,
-                "stall_warning": elapsed >= _STALL_WARN_S,
+                "stall_warning": stall_warning,
+                "progress_age_s": round(progress_age, 1) if progress_age is not None else None,
+                "progress_current": current,
+                "progress_total": total,
+                "percent_complete": pct,
+                "symbols_per_sec": rate,
                 "next_poll_at": round(float(clock()) + next_poll, 1),
                 "progress": progress,
             },
