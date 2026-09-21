@@ -261,6 +261,7 @@ def test_paused_paper_is_a_home_action():
 def test_simple_language_does_not_change_codes():
     assert "Waiting" in simple_reason("ENTRY_TOO_EXTENDED")
     assert "too much similar risk" in simple_reason("PORTFOLIO_BLOCK")
+    # Session wording remains truthful on weekends/holidays; "today" can imply a scan ran on a closed date.
     assert simple_reason("NO_TRADE") == "Nothing was good enough for this market session."
 
 
