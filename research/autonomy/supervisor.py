@@ -396,17 +396,39 @@ class Supervisor:
             critical=True,
         )
 
+    def _ensure_decision_simulation_authority(self) -> bool:
+        """Automatically authorize paper/history simulation after fresh discovery.
+
+        This grants no live-money authority. It only replaces the old per-startup
+        manual click for PAPER_FORWARD and HISTORICAL_REPLAY after the canonical
+        freshness/discovery gate has succeeded.
+        """
+        try:
+            from product.decision_simulation_gate import (
+                ensure_autonomous_approval,
+                is_approved,
+            )
+
+            if is_approved():
+                return True
+            approval = ensure_autonomous_approval()
+            return bool(approval.get("accepted") and approval.get("approved"))
+        except Exception:
+            return False
+
     def _ensure_startup_trade_discovery(self) -> None:
-        """Queue one current official-session scan before simulation approval.
+        """Queue one current official-session scan before autonomous simulation.
 
         This is discovery only. Its idempotency key is not a snapshot_scan key,
-        so scan completion cannot auto-enter PAPER_CYCLE.
+        so scan completion cannot auto-enter PAPER_CYCLE until discovery is
+        truthfully current and the simulation authority helper succeeds.
         """
         try:
             from product.decision_simulation_gate import current_startup_id, status
 
             gate = status()
             if gate.get("discovery_ready"):
+                self._ensure_decision_simulation_authority()
                 return
             startup_id = current_startup_id()
             if not startup_id:
@@ -483,8 +505,9 @@ class Supervisor:
                 self._ensure_snapshot_pipeline(snap)
             return
 
-        # Closed market still starts by finding today's best available trades
-        # from the latest completed official session. Simulation remains gated.
+        # Closed market starts by finding today's best available trades from the
+        # latest completed official session. Once fresh discovery is ready, the
+        # supervisor automatically authorizes paper/history simulation.
         self._ensure_startup_trade_discovery()
 
         # Closed market: keep official completed-session data current once the
@@ -507,14 +530,11 @@ class Supervisor:
         if last_session:
             self._enqueue_post_market_grind(now_ist, session_date=last_session)
 
-        # Historical/present decision simulation is operator-approved once per
-        # startup+thesis. Existing forward positions may still settle above,
-        # but no new historical learning work starts before that approval.
-        try:
-            from product.decision_simulation_gate import is_approved
-            if not is_approved():
-                return
-        except Exception:
+        # Historical/present decision simulation is automatically authorized
+        # only after fresh best-trade discovery. Existing forward positions may
+        # still settle above, but no new historical learning work starts before
+        # that freshness/discovery contract succeeds.
+        if not self._ensure_decision_simulation_authority():
             return
 
         # Then run historical virtual-paper batches whenever the cash market is
@@ -772,11 +792,7 @@ class Supervisor:
         holidays = self.deps.holidays()
         if not SCH.entries_allowed_by_clock(now_ist, holidays):
             return
-        try:
-            from product.decision_simulation_gate import is_approved
-            approved = bool(is_approved())
-        except Exception:
-            approved = False
+        approved = self._ensure_decision_simulation_authority()
         if not approved:
             # Existing paper positions must still be managed truthfully. This
             # distinct idempotency key can never become a new-entry pass and

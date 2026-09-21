@@ -1,12 +1,13 @@
-"""One-time startup approval gate for QuantTerm decision simulation.
+"""Startup authority gate for QuantTerm decision simulation.
 
 Startup order is explicit:
-    discover/rank current best trades -> ask once -> simulate/learn.
+    discover/rank current best trades -> authorize paper/history -> simulate/learn.
 
-The approval is scoped to the complete-stack startup id. The operator approves
-the autonomous learning process once per startup; thesis versions remain strict
-evidence/batch identities but may evolve inside that approved process without
-stopping for another click.
+Paper-forward and historical-replay authority may be granted automatically by
+the single QuantTerm autonomy supervisor once fresh discovery is ready. The
+approval source is persisted for provenance. This gate never authorizes live
+broker execution; the canonical live-money interlock remains independent and
+fail-closed.
 """
 from __future__ import annotations
 
@@ -76,6 +77,7 @@ def begin_startup(startup_id: str | None = None, *, path: str | Path | None = No
         "approved_thesis_hash": str(state.get("approved_thesis_hash") or "") if approved else "",
         "approved_scan_id": state.get("approved_scan_id") if approved else "",
         "approved_symbols": list(state.get("approved_symbols") or []) if approved else [],
+        "approval_source": str(state.get("approval_source") or "") if approved else "",
         "thesis_hash": thesis_hash,
     }, path)
 
@@ -239,6 +241,7 @@ def status(*, path: str | Path | None = None) -> dict[str, Any]:
         "approved": approved,
         "approved_at": str(state.get("approved_at") or "") if approved else "",
         "approved_thesis_hash": approved_thesis_hash if approved else "",
+        "approval_source": str(state.get("approval_source") or "") if approved else "",
         "current_thesis_hash": thesis_hash,
         "thesis_changed_since_approval": thesis_changed_since_approval,
         "approval_required": not approved,
@@ -256,7 +259,7 @@ def status(*, path: str | Path | None = None) -> dict[str, Any]:
     }
 
 
-def approve(*, path: str | Path | None = None) -> dict[str, Any]:
+def approve(*, path: str | Path | None = None, source: str = "OPERATOR") -> dict[str, Any]:
     current = status(path=path)
     if not current.get("discovery_ready"):
         return {
@@ -291,9 +294,29 @@ def approve(*, path: str | Path | None = None) -> dict[str, Any]:
         "approved_thesis_hash": str(current.get("thesis_hash") or ""),
         "approved_scan_id": str(current.get("scan_scanned_at") or ""),
         "approved_symbols": [str(row.get("symbol") or "") for row in best[:5]],
+        "approval_source": str(source or "OPERATOR").strip().upper(),
         "thesis_hash": str(current.get("thesis_hash") or ""),
     }, path)
     return {**status(path=path), "accepted": True, "reason": "APPROVED"}
+
+
+def ensure_autonomous_approval(*, path: str | Path | None = None) -> dict[str, Any]:
+    """Grant paper/history authority when fresh discovery is ready.
+
+    This is deliberately separate from is_approved so hot paths stay cheap and
+    side-effect free. The autonomy supervisor is the only automatic caller.
+    Live execution remains governed by the independent canonical interlock.
+    """
+    current = status(path=path)
+    if current.get("approved"):
+        return {**current, "accepted": True, "reason": "ALREADY_APPROVED"}
+    if not current.get("discovery_ready"):
+        return {
+            **current,
+            "accepted": False,
+            "reason": "BEST_TRADE_DISCOVERY_NOT_READY",
+        }
+    return approve(path=path, source="AUTONOMY")
 
 
 def is_approved(*, path: str | Path | None = None) -> bool:
