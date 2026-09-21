@@ -581,11 +581,15 @@ def test_completed_scan_with_zero_qualifiers_is_not_scan_failure(monkeypatch):
 def test_closed_market_decision_only_cycle_closes_soak_gap_without_forward_evidence(monkeypatch):
     from product.autopilot_journal import load_journal
 
-    _write_scan_reco()
+    clock = datetime.now(timezone.utc)
+    today = clock.date().isoformat()
+    _write_scan_reco(as_of=today)
     book = PaperBook(capital=100_000)
     out = _cycle(
         book,
         [_eligible_card()],
+        now=clock,
+        as_of=today,
         entries_allowed=False,
         entry_block_reason="ENTRY_WINDOW_CLOSED_DECISION_ONLY",
         session_phase="off_session",
