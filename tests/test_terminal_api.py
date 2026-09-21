@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import inspect
 import time
 
@@ -412,3 +413,37 @@ def test_peek_cached_regime_is_missing_until_computed():
     assert terminal_api._slim_ranked_records(
         {"universe_size": 3, "records": [{"symbol": "A", "score": 1}, {"symbol": "B", "score": 9}]}
     )["records"][0]["symbol"] == "B"
+
+
+def test_home_and_forward_verifier_share_scan_artifact_override(tmp_path, monkeypatch):
+    scan_path = tmp_path / "one-runtime-scan.json"
+    scan_path.write_text(
+        json.dumps({
+            "schema_version": 2,
+            "scanned_at": "2026-09-18T12:05:00+00:00",
+            "approved_universe": 598,
+            "scanned": 598,
+            "qualified_rows": 0,
+            "universe_size": 598,
+            "records": [],
+            "summary": {"qualified": 0, "with_any_setup": 0},
+            "provenance": {
+                "market_session_date": "2026-09-18",
+                "data_current": True,
+                "provenance_available": True,
+            },
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("QT_SCAN_PATH", str(scan_path))
+
+    home_scan = terminal_api._scan_payload()
+    from product import forward_soak
+    verifier_scan = forward_soak._scan_payload()
+
+    assert home_scan["scanned_at"] == "2026-09-18T12:05:00+00:00"
+    assert home_scan["universe_size"] == 598
+    assert home_scan["records"] == []
+    assert verifier_scan["path"] == str(scan_path)
+    assert verifier_scan["payload"]["scanned"] == 598
+    assert verifier_scan["payload"]["scanned_at"] == home_scan["scanned_at"]

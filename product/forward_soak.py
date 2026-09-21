@@ -158,8 +158,8 @@ def _stage(name: str, *, status: str, input_artifact: str = "", output_artifact:
 
 
 def _scan_payload() -> dict[str, Any]:
-    from product.scan_store import default_scan_path
-    path = Path(os.environ["QT_SCAN_PATH"]) if os.environ.get("QT_SCAN_PATH") else default_scan_path()
+    from product.scan_store import resolved_scan_path
+    path = resolved_scan_path()
     payload = _read_json(path)
     return {"path": str(path), "payload": payload}
 
@@ -362,7 +362,24 @@ def build_runtime_journey(*, cycle: Mapping[str, Any] | None = None) -> dict[str
     ledger = load_ledger()
     ingested = _read_json(Path(os.environ.get("QT_LEARNING_INGESTED") or logs_dir() / "product" / "learning_ingested.json"))
     cycle_id = str(latest.get("cycle_id") or "")
-    scan_ok = bool((scan["payload"] or {}).get("records") or (scan["payload"] or {}).get("available"))
+    scan_payload = dict(scan.get("payload") or {})
+    scan_records = scan_payload.get("records")
+    try:
+        scanned_count = int(
+            scan_payload.get("scanned")
+            or scan_payload.get("universe_size")
+            or scan_payload.get("approved_universe")
+            or 0
+        )
+    except (TypeError, ValueError):
+        scanned_count = 0
+    # A completed market pass can truthfully produce zero qualifying rows.
+    # Success is the persisted scan execution, not "at least one candidate".
+    scan_ok = bool(
+        isinstance(scan_records, list)
+        and scan_payload.get("scanned_at")
+        and (scanned_count > 0 or scan_payload.get("available") is True)
+    )
     reco_ok = bool(reco["payload"])
     cycle_ok = bool(latest)
     taken = list(latest.get("taken") or [])

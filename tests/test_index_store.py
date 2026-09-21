@@ -70,3 +70,20 @@ def test_health_access_log_filter_drops_watchdog_pings():
     assert filt.filter(_Rec('127.0.0.1:49657 - "GET /health HTTP/1.1" 200 OK')) is False
     assert filt.filter(_Rec('127.0.0.1:1 - "GET /api/health HTTP/1.1" 200 OK')) is False
     assert filt.filter(_Rec('127.0.0.1:1 - "GET /api/dashboard HTTP/1.1" 200 OK')) is True
+
+
+def test_latest_index_print_exposes_exact_session_date(monkeypatch):
+    frame = pd.DataFrame(
+        {"Close": [100.0, 101.0]},
+        index=pd.to_datetime(["2026-09-17", "2026-09-18"]),
+    )
+    monkeypatch.setattr(idx, "_store", {"Nifty 50": frame})
+    monkeypatch.setattr(idx, "_last_day", date(2026, 9, 18))
+    monkeypatch.setattr(idx, "load_index_store_from_cache", lambda: True)
+
+    got = idx.latest_index_print("^NSEI")
+
+    assert got is not None
+    assert got["price"] == 101.0
+    assert got["chg_pct"] == 1.0
+    assert got["as_of"] == "2026-09-18"

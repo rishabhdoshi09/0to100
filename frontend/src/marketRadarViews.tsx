@@ -490,6 +490,18 @@ function HomeOsCard({
   const [openLane, setOpenLane] = useState<string | null>(null)
   const checkAction = os.check_system?.action || { id: 'CHECK_SYSTEM', control: 'CHECK_SYSTEM', label: 'Check system', kind: 'refresh' }
   const selectLane = (id: string) => setOpenLane(id || null)
+  const dayTerminal = os.state === 'MARKET_CLOSED_COMPLETE' || os.state === 'NO_TRADE'
+  const autonomyLabel = dayTerminal
+    ? (os.runtime?.lifecycle || os.state)
+    : (os.now || os.runtime?.lifecycle || os.state)
+  const liveMoneyLabel = os.live_lock_verified === true
+    ? (os.live_locked === true ? 'Locked' : 'Not locked')
+    : 'Unverified'
+  const liveMoneyDetail = os.live_lock_verified === true && os.live_locked === true
+    ? 'Paper only. Canonical broker-boundary lock verified.'
+    : os.live_lock_verified === true
+      ? 'Canonical broker-boundary lock is not engaged.'
+      : 'Canonical broker-boundary lock has not been verified.'
   return (
     <section className={`home-os-card state-${(os.state || '').toLowerCase()}`}>
       {(os.opportunities || []).length ? (
@@ -596,7 +608,7 @@ function HomeOsCard({
         </div>
         <div>
           <span>AUTONOMY</span>
-          <strong>{os.runtime?.lifecycle || os.now || os.state}</strong>
+          <strong>{autonomyLabel}</strong>
           <small>{os.next || os.runtime?.reason || 'Leave it running'}</small>
         </div>
         <div>
@@ -610,8 +622,8 @@ function HomeOsCard({
         </div>
         <div>
           <span>LIVE MONEY</span>
-          <strong>Locked</strong>
-          <small>Paper only. No live buy button.</small>
+          <strong>{liveMoneyLabel}</strong>
+          <small>{liveMoneyDetail}</small>
         </div>
       </div>
       {(os.recent_activity || []).length ? (
@@ -695,7 +707,7 @@ function HomeOsCard({
           lane={openLane === 'check_system' ? undefined : system[openLane]}
           depth={depth}
           busy={busy}
-          liveLocked={os.live_locked !== false}
+          liveLocked={os.live_lock_verified === true ? os.live_locked : null}
           checkSystem={os.check_system as CheckSystemSnapshot | undefined}
           system={system}
           onAction={onAction}
@@ -705,7 +717,7 @@ function HomeOsCard({
       ) : null}
       {os.yesterday ? (
         <p className="panel-copy">
-          Yesterday:
+          Latest completed session{os.today?.available_session ? ` (${os.today.available_session})` : ''}:
           {os.yesterday.scan ? ' scan' : ' scan pending'}
           {os.yesterday.paper_decisions ? ' · paper decisions' : ' · paper pending'}
           {os.yesterday.settlement_pending ? ' · settlement pending' : os.yesterday.settlement ? ' · settlement' : ''}
@@ -773,10 +785,15 @@ export function RadarHomeView(props: ExperienceViewProps & {
             setRadarNote('')
           }
         })
-        .catch((reason: unknown) => {
+        .catch(() => {
           if (!alive) return
-          if (!recall('radar-home')) setRadar(null)
-          setRadarNote(reason instanceof Error ? reason.message : 'Home workspace timed out. Dashboard below still works.')
+          const cached = recall<RadarHome>('radar-home')
+          if (!cached) setRadar(null)
+          setRadarNote(
+            cached
+              ? `STALE CACHE · Home refresh failed. Showing the last saved workspace${cached.scan_scanned_at ? ` from ${cached.scan_scanned_at}` : ''}; verify timestamps before using market values.`
+              : 'Home workspace is unavailable. No cached Home values are being presented as current.'
+          )
         })
         .finally(() => { radarInFlight.current = false })
       fetchProductReadiness()
@@ -1025,9 +1042,19 @@ export function RadarHomeView(props: ExperienceViewProps & {
       {deskNote ? <p className="radar-desk-note">{deskNote}</p> : null}
 
       <div className="radar-market-strip">
-        <div><span>NIFTY 1D</span><strong>{pct(radar?.nifty_change_1d ?? dashboard.market.nifty_change_1d)}</strong></div>
-        <div><span>BREADTH</span><strong>{radar?.breadth || dashboard.market.breadth}</strong></div>
-        <div><span>VIX</span><strong>{radar?.vix ?? dashboard.market.vix ?? '—'}</strong></div>
+        <div>
+          <span>NIFTY 1D</span>
+          <strong>
+            {(radar?.nifty_change_1d ?? dashboard.market.nifty_change_1d) == null
+              ? 'Unavailable'
+              : pct(radar?.nifty_change_1d ?? dashboard.market.nifty_change_1d)}
+          </strong>
+        </div>
+        <div><span>BREADTH</span><strong>{radar?.breadth || dashboard.market.breadth || 'Unavailable'}</strong></div>
+        <div>
+          <span>VIX</span>
+          <strong>{(radar?.vix ?? dashboard.market.vix) == null ? 'Unavailable' : (radar?.vix ?? dashboard.market.vix)}</strong>
+        </div>
         <div><span>LEADERS</span><strong>{(radar?.leaders || dashboard.market.leaders).slice(0, 3).join(', ') || '—'}</strong></div>
         <div><span>SCAN AGE</span><strong>{relativeAge(scanAt)}</strong></div>
         <div>

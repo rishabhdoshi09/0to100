@@ -74,6 +74,19 @@ def _f(value: Any, default: float = 0.0) -> float:
         return float(default)
 
 
+def _optional_f(value: Any) -> float | None:
+    """Preserve missing market facts as missing instead of inventing zero."""
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed != parsed or parsed in (float("inf"), float("-inf")):
+        return None
+    return parsed
+
+
 def _volume_ratio(row: Mapping[str, Any]) -> float:
     return _volume_ratio_shared(row)
 
@@ -669,8 +682,16 @@ def build_radar_home(
         "market_session": str(getattr(market, "trade_stance", "") or (market or {}).get("trade_stance", "") if isinstance(market, Mapping) else ""),
         "market_health": health,
         "breadth": str(getattr(market, "breadth", "") or (market or {}).get("breadth", "") if isinstance(market, Mapping) else ""),
-        "nifty_change_1d": _f(getattr(market, "nifty_change_1d", 0) if not isinstance(market, Mapping) else market.get("nifty_change_1d")),
-        "vix": _f(getattr(market, "vix", 0) if not isinstance(market, Mapping) else market.get("vix")),
+        "nifty_change_1d": _optional_f(
+            getattr(market, "nifty_change_1d", None)
+            if not isinstance(market, Mapping)
+            else market.get("nifty_change_1d")
+        ),
+        "vix": _optional_f(
+            getattr(market, "vix", None)
+            if not isinstance(market, Mapping)
+            else market.get("vix")
+        ),
         "leaders": list(getattr(market, "leaders", ()) or (market or {}).get("leaders", []) if isinstance(market, Mapping) else []),
         "laggards": list(getattr(market, "laggards", ()) or (market or {}).get("laggards", []) if isinstance(market, Mapping) else []),
         "scan_scanned_at": scan_at,

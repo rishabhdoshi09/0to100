@@ -129,7 +129,7 @@ def test_daily_wrap_magazine_tape_from_official_prints(monkeypatch):
     from product.desk_note import daily_wrap
 
     prints = {
-        "^NSEI": {"price": 24087.0, "chg_pct": -0.5},
+        "^NSEI": {"price": 24087.0, "chg_pct": -0.5, "as_of": "2026-09-18"},
         "^NSEBANK": {"price": 51200.0, "chg_pct": -0.8},
         "^CNXPHARMA": {"price": 22100.0, "chg_pct": 0.6},
         "^CNXFMCG": {"price": 55000.0, "chg_pct": 0.4},
@@ -176,6 +176,8 @@ def test_daily_wrap_magazine_tape_from_official_prints(monkeypatch):
     assert "Bank Nifty fell" in session
     assert "Pharma" in session and "ended positive" in session
     assert "Sensex dropped" not in session
+    assert "2026-09-18" in lines[0]["source"]
+    assert lines[0]["as_of"] == "2026-09-18"
     assert any("Happiest Minds fell 6%" in line for line in texts)
     assert texts[-1].startswith("US markets are set for a stronger open")
     assert "Last market scan" not in " ".join(texts)
@@ -354,3 +356,39 @@ def test_market_reports_workspace_embeds_desk_note(tmp_path, monkeypatch):
     policy = next(b for b in note["wrap"] if b["id"] == "policy")
     assert policy["available"] is False
     assert note["places_orders"] is False
+
+
+def test_daily_wrap_news_source_keeps_publication_date(monkeypatch):
+    from types import SimpleNamespace
+    from product.desk_note import daily_wrap
+
+    monkeypatch.setattr(
+        "product.market_view.peek_cached_market_view",
+        lambda: SimpleNamespace(
+            nifty_change_1d=None,
+            nifty_price=0,
+            summary="",
+            leaders=(),
+            laggards=(),
+        ),
+    )
+    monkeypatch.setattr("data.index_store.latest_index_print", lambda *_a, **_k: None)
+    monkeypatch.setattr("data.index_store.recent_index_closes", lambda *_a, **_k: [])
+
+    lines = daily_wrap(
+        articles=[
+            _article(
+                article_id="dated-news",
+                headline="Company receives a new order",
+                source="NSE Corporate Announcements",
+                official=True,
+                published_at="2026-09-20T10:31:09+05:30",
+                mentioned_symbols=["ABC"],
+            )
+        ],
+        scan_payload={},
+    )
+    assert lines
+    item = next(row for row in lines if row["id"] == "dated-news")
+    assert "2026-09-20" in item["source"]
+    assert item["published_at"].startswith("2026-09-20")

@@ -430,13 +430,19 @@ def _line_from_article(
             name = str(row.get("company") or row.get("name") or "").strip() or symbols[0]
             if name.lower() not in text.lower():
                 prefix = f"{name} {_move_past(chg)}. "
+    published_at = str(article.get("published_at") or "").strip()
+    published_date = published_at[:10] if len(published_at) >= 10 else ""
+    source = str(article.get("source") or "Sourced news")
+    if published_date:
+        source = f"{source} · {published_date}"
     return {
         "id": str(article.get("article_id") or headline[:24]),
         "text": " ".join((prefix + text).split())[:480],
-        "source": str(article.get("source") or "Sourced news"),
+        "source": source,
         "official": bool(article.get("official")),
         "url": str(article.get("url") or ""),
         "symbols": symbols,
+        "published_at": published_at,
     }
 
 
@@ -536,13 +542,18 @@ def official_session_wrap(*, scan_payload: Mapping[str, Any] | None = None) -> l
     text = clause + "."
     if sector:
         text = f"{text} {sector}."
+    session_date = str((nifty or {}).get("as_of") or "").strip()
+    source = "Official NSE session"
+    if session_date:
+        source = f"{source} · {session_date}"
     return [{
         "id": "session_indices",
         "text": " ".join(text.split()),
-        "source": "Official NSE session",
+        "source": source,
         "official": True,
         "url": "",
         "symbols": [],
+        "as_of": session_date,
     }]
 
 

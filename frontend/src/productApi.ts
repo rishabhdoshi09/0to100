@@ -690,8 +690,8 @@ export type RadarHome = {
   market_session: string
   market_health: string
   breadth: string
-  nifty_change_1d: number
-  vix: number
+  nifty_change_1d: number | null
+  vix: number | null
   leaders: string[]
   laggards: string[]
   scan_scanned_at: string
@@ -884,7 +884,10 @@ export type HomeOperatingSystem = {
     forward_evidence?: boolean
   }
   recovered?: string[]
-  live_locked?: boolean
+  live_locked?: boolean | null
+  live_lock_verified?: boolean
+  live_lock_status?: string
+  live_lock_reason?: string
   history_freshness?: {
     current?: boolean
     expected_latest_completed_session?: string

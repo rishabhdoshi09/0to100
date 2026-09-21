@@ -524,6 +524,75 @@ jobs:
         with:
           node-version: "20.20.0"
 
+      - name: Prove first-runtime migration on real Intel macOS
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p logs/product
+          python - <<'PY'
+          import json
+          import os
+          import sqlite3
+          from pathlib import Path
+
+          from product import host_install as HI
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "quantterm-migration-smoke"
+          repo = root / "repo"
+          runtime = root / "runtime"
+          if root.exists():
+              import shutil
+              shutil.rmtree(root)
+          (repo / "logs").mkdir(parents=True)
+          (runtime / "logs").mkdir(parents=True)
+
+          # Interrupted/live-copy shape reproduced from the real Mac incident:
+          # one conflicting SQLite DB plus stale WAL/SHM target-only sidecars.
+          db = repo / "logs" / "news_curator.sqlite3"
+          conn = sqlite3.connect(db)
+          conn.execute("CREATE TABLE proof(id INTEGER PRIMARY KEY, value TEXT)")
+          conn.execute("INSERT INTO proof(value) VALUES ('source-authoritative')")
+          conn.commit()
+          conn.close()
+          (repo / "logs" / "cron.log").write_text("source-log\n", encoding="utf-8")
+
+          (runtime / "logs" / "news_curator.sqlite3").write_bytes(b"stale-target-db")
+          (runtime / "logs" / "news_curator.sqlite3-wal").write_bytes(b"stale-wal")
+          (runtime / "logs" / "news_curator.sqlite3-shm").write_bytes(b"stale-shm")
+          (runtime / "logs" / "cron.log").write_text("stale-target-log\n", encoding="utf-8")
+
+          result = HI.migrate_repo_runtime(runtime, repo_root=repo, build_sha=os.environ["EXPECTED_SHA"])
+          manifest = json.loads((runtime / HI.MANIFEST_REL).read_text(encoding="utf-8"))
+          assert result["state"] == "MIGRATED", result
+          assert manifest["build_sha"] == os.environ["EXPECTED_SHA"], manifest
+          assert manifest["source_preserved"] is True, manifest
+          assert manifest["quarantine_path"], manifest
+          assert not (runtime / "logs" / "news_curator.sqlite3-wal").exists()
+          assert not (runtime / "logs" / "news_curator.sqlite3-shm").exists()
+          conn = sqlite3.connect(runtime / "logs" / "news_curator.sqlite3")
+          try:
+              value = conn.execute("SELECT value FROM proof").fetchone()[0]
+          finally:
+              conn.close()
+          assert value == "source-authoritative"
+          assert (repo / "logs" / "news_curator.sqlite3").exists()
+          assert (repo / "logs" / "cron.log").read_text(encoding="utf-8") == "source-log\n"
+          evidence = {
+              "code_sha": os.environ["EXPECTED_SHA"],
+              "platform": "macos-15-intel",
+              "migration_state": result["state"],
+              "source_preserved": manifest["source_preserved"],
+              "copied_files": manifest["copied_files"],
+              "checkpointed_sqlite": manifest["checkpointed_sqlite"],
+              "quiesced_launchd_services": manifest["quiesced_launchd_services"],
+              "quarantine_created": bool(manifest["quarantine_path"]),
+              "live_execution_changed": False,
+          }
+          Path("logs/product/mac_runtime_migration_smoke.json").write_text(
+              json.dumps(evidence, indent=2), encoding="utf-8"
+          )
+          PY
+
       - name: Start real one-command QuantTerm stack on Intel macOS
         shell: bash
         run: |
@@ -628,6 +697,7 @@ jobs:
           retention-days: 30
           path: |
             logs/product/mac_complete_stack.log
+            logs/product/mac_runtime_migration_smoke.json
             logs/product/mac_health.json
             logs/product/mac_report_health.json
             logs/product/mac_operator_status*.json

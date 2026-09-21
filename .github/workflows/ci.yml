@@ -10,13 +10,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  canonical:
+    name: canonical-hermetic-${{ matrix.shard }}
     runs-on: ubuntu-latest
-    # The canonical hermetic suite is intentionally exhaustive and has grown
-    # beyond the old 60-minute runner envelope. Keep the complete suite intact;
-    # give it enough wall-clock budget to finish rather than skipping/sharding
-    # away coverage after an otherwise healthy exact-head run hit 60 minutes.
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+
     steps:
       - name: Checkout exact source SHA
         uses: actions/checkout@v4
@@ -43,19 +45,116 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Canonical gate — hermetic, zero external network
-        # NETWORK = FORBIDDEN. tests/conftest.py installs a socket-level policy:
-        # anything off this machine is refused AND recorded, and the attempt
-        # alone fails the test, so a module that swallows the error cannot hide.
-        # tests/integration and any live_source test are excluded BY
-        # CLASSIFICATION, not by an ad-hoc --ignore.
+      - name: Build deterministic canonical shard
+        shell: bash
+        env:
+          SHARD_INDEX: ${{ matrix.shard }}
+          SHARD_COUNT: "12"
         run: |
-          python -m pytest
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+          index=int(os.environ["SHARD_INDEX"])
+          count=int(os.environ["SHARD_COUNT"])
+          files=sorted(p.as_posix() for p in Path("tests").rglob("test_*.py") if "integration" not in p.parts)
+          chosen=[path for path in files if int.from_bytes(hashlib.sha256(path.encode()).digest()[:8], "big") % count == index]
+          if not chosen:
+              raise SystemExit(f"canonical shard {index}/{count} is empty")
+          Path("/tmp/quantterm-canonical-files.txt").write_text("\n".join(chosen) + "\n", encoding="utf-8")
+          print(f"canonical shard {index}/{count}: {len(chosen)} files")
+          for path in chosen:
+              print(path)
+          PY
+
+      - name: Canonical gate — hermetic, zero external network
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < /tmp/quantterm-canonical-files.txt
+          # Fresh interpreter per file prevents process-global state leakage
+          # between unrelated modules. The watchdog is a hard failure, never a
+          # skip, and identifies the exact non-terminating file in CI output.
+          for file in "${files[@]}"; do
+            echo "::group::canonical file $file"
+            echo "CANONICAL_FILE_START=$file"
+            set +e
+            timeout --signal=TERM --kill-after=30s 20m python -m pytest "$file" -q --tb=short
+            rc=$?
+            set -e
+            if [ "$rc" -ne 0 ]; then
+              echo "::error file=$file::Canonical file failed or exceeded the 20-minute liveness budget (exit=$rc)"
+              exit "$rc"
+            fi
+            echo "CANONICAL_FILE_PASS=$file"
+            echo "::endgroup::"
+          done
         env:
           KITE_ACCESS_TOKEN: ""
           TELEGRAM_BOT_TOKEN: ""
           DEEPSEEK_API_KEY: ""
 
+  canonical-partition-audit:
+    name: canonical-partition-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout exact source SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - name: Prove canonical test-file partition is complete and unique
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          from collections import Counter
+          from pathlib import Path
+          count=12
+          files=sorted(p.as_posix() for p in Path("tests").rglob("test_*.py") if "integration" not in p.parts)
+          assigned=[]
+          per_shard={i:[] for i in range(count)}
+          for path in files:
+              shard=int.from_bytes(hashlib.sha256(path.encode()).digest()[:8], "big") % count
+              per_shard[shard].append(path)
+              assigned.append(path)
+          duplicates=[path for path,n in Counter(assigned).items() if n != 1]
+          assert assigned == files, "partition does not preserve canonical file set"
+          assert not duplicates, f"duplicate/missing assignments: {duplicates[:20]}"
+          assert all(per_shard[i] for i in range(count)), per_shard
+          print(f"partition audit PASS: {len(files)} canonical test files exactly once")
+          for i in range(count): print(f"  shard {i}: {len(per_shard[i])} files")
+          PY
+
+  deterministic-safety:
+    name: deterministic-safety
+    needs: [canonical, canonical-partition-audit]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact source SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          expected="${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}"
+          echo "actual=$actual"
+          echo "expected=$expected"
+          test "$actual" = "$expected"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
       - name: Validate launch and supervisor scripts
         run: |
           bash -n scripts/run_quantterm_complete.sh
@@ -68,17 +167,13 @@ jobs:
           bash -n deploy/setup_mac.sh
           bash -n deploy/setup_server.sh
           python -m py_compile scripts/local_stack.py
-
       - name: Compile every module (import-safety net)
-        # Compile before environment-dependent smoke so a slow provider test can
-        # never prevent the deterministic import-safety gate from running.
         run: |
           python -m compileall -q data scan risk execution ui reports ai core alerts news research product reporting operations fundamentals expectancy
           python -m py_compile api/app.py terminal_api.py terminal_product_api.py terminal_product_api_parallel.py report_api.py
           python -m py_compile scripts/run_product_acceptance.py scripts/_product_acceptance_core.py
           python -m py_compile product/paper_learning_loop.py product/_paper_learning_loop_core.py
           python -m py_compile _terminal_product_api_parallel_core.py
-
       - name: Integration gate — controlled external dependencies
         continue-on-error: true
         shell: bash
@@ -89,7 +184,6 @@ jobs:
           KITE_ACCESS_TOKEN: ""
           TELEGRAM_BOT_TOKEN: ""
           DEEPSEEK_API_KEY: ""
-
       - name: Enforce no durable-state contamination
         if: always()
         shell: bash
@@ -100,7 +194,6 @@ jobs:
             cat /tmp/quantterm-integration.log
             exit 1
           fi
-
       - name: Live-source gate — real upstreams (never blocks the build)
         continue-on-error: true
         run: |
