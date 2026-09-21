@@ -390,8 +390,8 @@ def _market_payload() -> dict:
 
 def _scan_payload() -> dict:
     try:
-        from product.scan_store import load_scan
-        payload = load_scan() or {}
+        from product.scan_store import load_scan, resolved_scan_path
+        payload = load_scan(resolved_scan_path()) or {}
         records = [dict(row) for row in (payload.get("records", []) or []) if isinstance(row, dict)]
         provenance = payload.get("provenance")
         return {
