@@ -257,10 +257,28 @@ def live_calibration(min_n: int = _MIN_N) -> dict[str, float]:
     (see UnifiedScanner) so live data can demote a leaky signal but never
     inflate one the backtest already distrusts."""
     prof = profile_edge()
+    try:
+        from scan.signal_registry import signal_ids
+        canonical = set(signal_ids())
+    except Exception:
+        canonical = set(prof.get("signals") or {})
     out: dict[str, float] = {}
     for sig, a in prof["signals"].items():
+        if sig not in canonical:
+            continue
         if a["n"] >= min_n:
             out[sig] = _bucket(a["expectancy_r"])
     if out:
-        log.info("live_calibration_ready", signals=len(out))
+        excluded = []
+        for sig in sorted(canonical):
+            n = int((prof.get("signals", {}).get(sig) or {}).get("n") or 0)
+            if n < min_n:
+                excluded.append({"signal_id": sig, "n": n, "min_n": int(min_n)})
+        log.info(
+            "live_calibration_ready",
+            signals=len(out),
+            scanner_catalog=len(canonical),
+            min_n=int(min_n),
+            excluded=excluded,
+        )
     return out
