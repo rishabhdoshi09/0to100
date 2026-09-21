@@ -198,7 +198,12 @@ def test_missing_institutional_evidence_cannot_promote(tmp_path):
     result = RL.execute_pipeline(brain, gap=gap, parent=parent, session_date="2026-07-31",
                                  memory=HYP.ResearchMemory(backend=None),
                                  experiment_runner=lambda child: weak)
-    assert result["decision"] == CH.RETEST_WITH_MORE_DATA
+    assert result["decision"] == "EVIDENCE_ACQUISITION"
+    request = dict(result.get("evidence_request") or {})
+    assert request["status"] == "OPEN"
+    assert request["evidence_origin"] == "RESEARCH_VALIDATION"
+    assert "HISTORICAL_REPLAY" in request["allowed_lanes"]
+    assert request["missing_metrics"]
     assert brain.strategy_registry.by_id[parent.strategy_id].spec.version == parent.version
 
 
