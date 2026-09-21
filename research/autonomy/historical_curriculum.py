@@ -57,6 +57,13 @@ def classify_session(
         )
     if frame is None or getattr(frame, "empty", True):
         return HistoricalMarketState(str(as_of)[:10], False, reason="official index history unavailable")
+    # Defence in depth: even injected/test loaders are not trusted to pre-slice.
+    try:
+        cutoff = np.datetime64(str(as_of)[:10])
+        idx = np.asarray(frame.index.values, dtype="datetime64[D]")
+        frame = frame.loc[idx <= cutoff]
+    except Exception:
+        return HistoricalMarketState(str(as_of)[:10], False, reason="index date axis unavailable")
     rows = int(len(frame))
     if rows < int(min_history):
         return HistoricalMarketState(
