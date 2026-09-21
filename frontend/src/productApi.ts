@@ -690,8 +690,8 @@ export type RadarHome = {
   market_session: string
   market_health: string
   breadth: string
-  nifty_change_1d: number
-  vix: number
+  nifty_change_1d: number | null
+  vix: number | null
   leaders: string[]
   laggards: string[]
   scan_scanned_at: string
