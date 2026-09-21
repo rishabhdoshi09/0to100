@@ -15,6 +15,7 @@ import json
 import os
 import platform
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
@@ -46,6 +47,17 @@ EXPECTED_CHILDREN = ("autonomy", "market_ops", "market_api", "report_api", "fron
 HEARTBEAT_STALE_S = 10.0
 DEFAULT_STARTUP_TIMEOUT_S = 300.0
 DEFAULT_BOOTSTRAP_TIMEOUT_S = 1800.0
+MIGRATION_MIN_HEADROOM_BYTES = 512 * 1024 * 1024
+MIGRATION_HEADROOM_FRACTION = 0.10
+SQLITE_DATABASE_SUFFIXES = {".db", ".sqlite", ".sqlite3"}
+SQLITE_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
+MIGRATION_RECOVERABLE_CONFLICT_SUFFIXES = (".log", ".db", ".sqlite", ".sqlite3")
+LEGACY_LAUNCHD_LABELS = (
+    LAUNCHD_LABEL,
+    "com.quantterm.app",
+    "com.quantterm.ui",
+    "com.quantterm.autonomy",
+)
 
 
 class HostInstallError(RuntimeError):
@@ -147,10 +159,290 @@ def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
     os.replace(tmp, path)
 
 
+def _inventory_bytes(rows: Mapping[str, Mapping[str, Any]]) -> int:
+    return sum(int(row.get("size") or 0) for row in rows.values())
+
+
+def _migration_diff(
+    source_rows: Mapping[str, Mapping[str, Any]],
+    target_rows: Mapping[str, Mapping[str, Any]],
+    *,
+    limit: int = 20,
+) -> dict[str, Any]:
+    source_keys = set(source_rows)
+    target_keys = set(target_rows)
+    source_only_all = sorted(source_keys - target_keys)
+    target_only_all = sorted(target_keys - source_keys)
+    conflicts_all = sorted(
+        key for key in source_keys & target_keys if source_rows[key] != target_rows[key]
+    )
+    return {
+        "source_files": len(source_rows),
+        "target_files": len(target_rows),
+        "source_bytes": _inventory_bytes(source_rows),
+        "target_bytes": _inventory_bytes(target_rows),
+        "source_only_count": len(source_only_all),
+        "target_only_count": len(target_only_all),
+        "conflict_count": len(conflicts_all),
+        "source_only": source_only_all[:limit],
+        "target_only": target_only_all[:limit],
+        "conflicts": conflicts_all[:limit],
+        "_source_only_all": source_only_all,
+        "_target_only_all": target_only_all,
+        "_conflicts_all": conflicts_all,
+    }
+
+
+def _public_migration_diff(diff: Mapping[str, Any]) -> dict[str, Any]:
+    return {str(k): v for k, v in diff.items() if not str(k).startswith("_")}
+
+
+def _format_migration_diff(diff: Mapping[str, Any]) -> str:
+    public = _public_migration_diff(diff)
+    return (
+        f"source_files={public.get('source_files')} target_files={public.get('target_files')} "
+        f"source_bytes={public.get('source_bytes')} target_bytes={public.get('target_bytes')} "
+        f"source_only_count={public.get('source_only_count')} "
+        f"target_only_count={public.get('target_only_count')} "
+        f"conflict_count={public.get('conflict_count')} "
+        f"source_only={public.get('source_only')} "
+        f"target_only={public.get('target_only')} "
+        f"conflicts={public.get('conflicts')}"
+    )
+
+
+def _ensure_migration_capacity(
+    target: Path,
+    source_rows: Mapping[str, Mapping[str, Any]],
+) -> dict[str, int]:
+    source_bytes = _inventory_bytes(source_rows)
+    if source_bytes <= 0:
+        return {"source_bytes": 0, "headroom_bytes": 0, "required_free_bytes": 0, "free_bytes": 0}
+    headroom = max(
+        MIGRATION_MIN_HEADROOM_BYTES,
+        int(source_bytes * MIGRATION_HEADROOM_FRACTION),
+    )
+    required = source_bytes + headroom
+    try:
+        free = int(shutil.disk_usage(target).free)
+    except Exception as exc:
+        raise HostInstallError(
+            f"cannot establish free space before runtime migration: {type(exc).__name__}: {exc}"
+        ) from exc
+    if free < required:
+        raise HostInstallError(
+            "insufficient disk space for durable runtime migration: "
+            f"source_bytes={source_bytes} headroom_bytes={headroom} "
+            f"required_free_bytes={required} free_bytes={free}; "
+            "source was left untouched and no runtime manifest was written"
+        )
+    return {
+        "source_bytes": source_bytes,
+        "headroom_bytes": headroom,
+        "required_free_bytes": required,
+        "free_bytes": free,
+    }
+
+
+def _looks_like_sqlite(path: Path) -> bool:
+    if path.suffix.lower() not in SQLITE_DATABASE_SUFFIXES or not path.is_file():
+        return False
+    try:
+        with path.open("rb") as handle:
+            return handle.read(16) == b"SQLite format 3\x00"
+    except OSError:
+        return False
+
+
+def _checkpoint_sqlite_sources(
+    repo_root: Path,
+    rows: Mapping[str, Mapping[str, Any]],
+) -> list[str]:
+    """Checkpoint WAL-backed SQLite files after writers have been quiesced.
+
+    WAL/SHM files are not copied as independent durable histories. A successful
+    checkpoint folds committed WAL state into the database file before the
+    authoritative inventory is frozen. A busy database fails closed.
+    """
+    checkpointed: list[str] = []
+    for rel in sorted(rows):
+        path = Path(repo_root) / rel
+        if not _looks_like_sqlite(path):
+            continue
+        try:
+            conn = sqlite3.connect(str(path), timeout=1.0)
+            try:
+                result = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+                if result and int(result[0] or 0) != 0:
+                    raise HostInstallError(
+                        f"SQLite source is still busy during migration checkpoint: {rel}"
+                    )
+            finally:
+                conn.close()
+        except HostInstallError:
+            raise
+        except sqlite3.Error as exc:
+            raise HostInstallError(
+                f"cannot checkpoint SQLite source before migration: {rel}: {exc}"
+            ) from exc
+        checkpointed.append(rel)
+    return checkpointed
+
+
+def _macos_quantterm_processes(repo_root: Path) -> list[dict[str, Any]]:
+    if platform.system().lower() != "darwin":
+        return []
+    try:
+        proc = _run(["ps", "-axo", "pid=,command="], check=False, timeout=10)
+    except Exception:
+        return []
+    repo_text = str(_resolved(repo_root))
+    markers = (
+        "run_quantterm", "product.host_", "terminal_api", "market_ops",
+        "autonomy", "streamlit", "uvicorn", "vite",
+    )
+    rows: list[dict[str, Any]] = []
+    for raw in proc.stdout.splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        parts = raw.split(None, 1)
+        if len(parts) != 2:
+            continue
+        try:
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        command = parts[1]
+        if pid == os.getpid() or repo_text not in command:
+            continue
+        if not any(marker in command for marker in markers):
+            continue
+        rows.append({"pid": pid, "command": command[:400]})
+    return rows
+
+
+def _quiesce_macos_quantterm_writers(repo_root: Path) -> list[str]:
+    """Stop canonical + legacy launchd owners before first runtime migration."""
+    if platform.system().lower() != "darwin":
+        return []
+    stopped: list[str] = []
+    uid = os.getuid()
+    domain = f"gui/{uid}"
+    home = Path.home()
+    for label in LEGACY_LAUNCHD_LABELS:
+        target = f"{domain}/{label}"
+        before = _run(["launchctl", "print", target], check=False, timeout=10)
+        if before.returncode == 0:
+            _run(["launchctl", "bootout", target], check=False, timeout=15)
+            stopped.append(label)
+        plist = home / "Library" / "LaunchAgents" / f"{label}.plist"
+        if plist.exists():
+            _run(["launchctl", "bootout", domain, str(plist)], check=False, timeout=15)
+            _run(["launchctl", "unload", str(plist)], check=False, timeout=15)
+    # Give launchd-owned children a moment to exit, then prove no known writer
+    # rooted in this checkout remains. Do not kill arbitrary processes.
+    deadline = time.time() + 5.0
+    active: list[dict[str, Any]] = []
+    while time.time() < deadline:
+        active = _macos_quantterm_processes(repo_root)
+        if not active:
+            break
+        time.sleep(0.2)
+    if active:
+        raise HostInstallError(
+            "repo-local QuantTerm writers are still active after launchd quiescence: "
+            f"{active[:10]}; stop these processes before migration"
+        )
+    return stopped
+
+
+def _is_sqlite_sidecar(rel: str) -> bool:
+    lower = rel.lower()
+    return lower.endswith(SQLITE_SIDECAR_SUFFIXES)
+
+
+def _recoverable_unmanifested_target(diff: Mapping[str, Any]) -> bool:
+    """Allow only recognizable interrupted/live-copy residue to self-heal.
+
+    The repo-local source remains authoritative until a valid target manifest
+    exists. We can therefore resume a subset copy, and we can quarantine stale
+    SQLite sidecars plus DB/log conflicts produced by a previously live copy.
+    Arbitrary target-only evidence still fails closed as split-brain.
+    """
+    target_only = list(diff.get("_target_only_all") or [])
+    conflicts = list(diff.get("_conflicts_all") or [])
+    if any(not _is_sqlite_sidecar(rel) for rel in target_only):
+        return False
+    for rel in conflicts:
+        lower = rel.lower()
+        if _is_sqlite_sidecar(rel):
+            continue
+        if not lower.endswith(MIGRATION_RECOVERABLE_CONFLICT_SUFFIXES):
+            return False
+    return True
+
+
+def _quarantine_target_paths(target: Path, rels: Iterable[str]) -> str:
+    rels = sorted({str(rel) for rel in rels if rel})
+    if not rels:
+        return ""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    quarantine = target.parent / f"{target.name}.migration-quarantine-{stamp}-{os.getpid()}"
+    for rel in rels:
+        src = target / rel
+        if not src.exists():
+            continue
+        dst = quarantine / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(src, dst)
+    return str(quarantine) if quarantine.exists() else ""
+
+
+def _copy_snapshot_file(
+    src: Path,
+    dst: Path,
+    expected: Mapping[str, Any],
+) -> None:
+    try:
+        current = {"size": src.stat().st_size, "sha256": _sha256(src)}
+    except Exception as exc:
+        raise HostInstallError(
+            f"source changed/disappeared during runtime migration: {src}: {type(exc).__name__}: {exc}"
+        ) from exc
+    if current != dict(expected):
+        raise HostInstallError(
+            f"source changed during runtime migration before copy: {src}"
+        )
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(f".{dst.name}.migration.{os.getpid()}.tmp")
+    try:
+        shutil.copy2(src, tmp)
+        copied = {"size": tmp.stat().st_size, "sha256": _sha256(tmp)}
+        if copied != dict(expected):
+            raise HostInstallError(
+                f"runtime migration copy verification failed for {src.name}: "
+                f"expected={dict(expected)} copied={copied}"
+            )
+        os.replace(tmp, dst)
+    finally:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def migrate_repo_runtime(
     target_root: Path, *, repo_root: Path = REPO_ROOT, build_sha: str = "",
 ) -> dict[str, Any]:
-    """Adopt one durable root without guessing between divergent histories."""
+    """Adopt one durable root without guessing between divergent histories.
+
+    Before the first migration, known macOS launchd writers are stopped, SQLite
+    WAL state is checkpointed, disk capacity is proven, and the source inventory
+    is frozen. Interrupted copies can resume. Residue from an old live copy is
+    quarantined only when it is limited to SQLite sidecars and DB/log conflicts;
+    arbitrary divergent durable evidence still blocks as split-brain.
+    """
     target = ensure_persistent_runtime_root(target_root, repo_root=repo_root)
     marker = target / MANIFEST_REL
     if marker.exists():
@@ -166,30 +458,70 @@ def migrate_repo_runtime(
             raise HostInstallError(f"cannot persist runtime-root pointer: {exc}") from exc
         return {"state": "ADOPTED", "runtime_root": str(target), "manifest": payload}
 
+    stopped_services = _quiesce_macos_quantterm_writers(Path(repo_root))
+    preliminary_rows = inventory(repo_root)
+    checkpointed_sqlite = _checkpoint_sqlite_sources(Path(repo_root), preliminary_rows)
+    # Checkpointing legitimately changes SQLite/WAL bytes. Freeze the source
+    # only after that consistency step.
     source_rows = inventory(repo_root)
+    capacity = _ensure_migration_capacity(target, source_rows)
     target_rows = inventory(target)
-    if source_rows and target_rows and source_rows != target_rows:
-        src_only = sorted(set(source_rows) - set(target_rows))[:10]
-        dst_only = sorted(set(target_rows) - set(source_rows))[:10]
-        conflicts = sorted(
-            key for key in set(source_rows) & set(target_rows) if source_rows[key] != target_rows[key]
-        )[:10]
+
+    if not source_rows and target_rows:
+        diff = _migration_diff(source_rows, target_rows)
         raise HostInstallError(
-            "split-brain runtime state: repo-local and persistent roots both contain "
-            f"different durable data (source_only={src_only}, target_only={dst_only}, "
-            f"conflicts={conflicts}); reconcile explicitly before install"
+            "unmanifested persistent runtime contains durable data while the repo-local "
+            "source is empty; refusing to guess authority. "
+            + _format_migration_diff(diff)
         )
 
+    quarantine_path = ""
+    if source_rows and target_rows and source_rows != target_rows:
+        diff = _migration_diff(source_rows, target_rows)
+        if not _recoverable_unmanifested_target(diff):
+            raise HostInstallError(
+                "split-brain runtime state: repo-local and persistent roots contain "
+                "unreconciled durable data; "
+                + _format_migration_diff(diff)
+                + "; source was left untouched and target was not adopted"
+            )
+        quarantine_path = _quarantine_target_paths(
+            target,
+            list(diff.get("_target_only_all") or []) + list(diff.get("_conflicts_all") or []),
+        )
+        target_rows = inventory(target)
+
     copied = 0
-    if source_rows and not target_rows:
+    if source_rows:
         for rel in sorted(source_rows):
-            src = repo_root / rel
-            dst = target / rel
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
+            if target_rows.get(rel) == source_rows[rel]:
+                continue
+            _copy_snapshot_file(Path(repo_root) / rel, target / rel, source_rows[rel])
             copied += 1
-        if inventory(target) != source_rows:
-            raise HostInstallError("runtime migration verification failed; source was left untouched")
+
+        source_after = inventory(repo_root)
+        if source_after != source_rows:
+            # No manifest exists yet, so target is not authoritative. Quarantine
+            # the unaccepted copy so a subsequent run can restart from a fresh,
+            # quiesced source without deleting evidence.
+            target_after = inventory(target)
+            rollback_quarantine = _quarantine_target_paths(target, target_after.keys())
+            diff = _migration_diff(source_rows, source_after)
+            raise HostInstallError(
+                "repo-local durable source changed during migration after writers were "
+                "supposed to be quiesced; no manifest was written. "
+                + _format_migration_diff(diff)
+                + (f"; unaccepted target copy quarantined at {rollback_quarantine}" if rollback_quarantine else "")
+            )
+
+        target_after = inventory(target)
+        if target_after != source_rows:
+            diff = _migration_diff(source_rows, target_after)
+            raise HostInstallError(
+                "runtime migration verification failed; source was left untouched and "
+                "no manifest was written. "
+                + _format_migration_diff(diff)
+            )
 
     payload = {
         "schema_version": SCHEMA_VERSION,
@@ -200,14 +532,23 @@ def migrate_repo_runtime(
         "source_files": len(source_rows),
         "copied_files": copied,
         "source_inventory_sha256": inventory_digest(source_rows),
+        "target_inventory_sha256": inventory_digest(inventory(target)),
         "source_preserved": True,
+        "migration_capacity": capacity,
+        "checkpointed_sqlite": checkpointed_sqlite,
+        "quiesced_launchd_services": stopped_services,
+        "quarantine_path": quarantine_path,
     }
     _atomic_json(marker, payload)
     try:
         write_runtime_pointer(target, repo_root=repo_root)
     except Exception as exc:
         raise HostInstallError(f"cannot persist runtime-root pointer: {exc}") from exc
-    return {"state": "MIGRATED" if copied else "INITIALIZED", "runtime_root": str(target), "manifest": payload}
+    return {
+        "state": "MIGRATED" if copied or quarantine_path else "INITIALIZED",
+        "runtime_root": str(target),
+        "manifest": payload,
+    }
 
 
 def _safe_env_file(path: Path | None) -> str:
