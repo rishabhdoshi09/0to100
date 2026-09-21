@@ -551,3 +551,117 @@ def test_home_can_show_five_with_two_truthful_capacity_reserves_and_confidence(m
     assert all(row["confidence_score"] is not None for row in os["opportunities"])
     assert os["opportunities"][0]["win_probability_pct"] == 61.0
     assert "HARDWAIT" not in " ".join(str(row) for row in os["opportunities"])
+
+
+def test_market_closed_never_claims_complete_when_required_verifier_lanes_fail():
+    lanes = {
+        "SCAN": "FAIL",
+        "RECOMMENDATIONS": "PASS",
+        "SELECTION": "FAIL",
+        "AUTOPILOT": "FAIL",
+        "PAPER EXECUTION": "FAIL",
+        "EXIT SUPERVISION": "UNKNOWN",
+        "FORWARD SETTLEMENT": "PENDING",
+        "LEARNING INGESTION": "PENDING",
+        "EXECUTION REALITY": "PENDING",
+        "LIVE MONEY": "LOCKED",
+    }
+    os = build_home_os(
+        dashboard={
+            "autonomy": {"state": "RUNNING", "running": True},
+            "data": {
+                "ready": True,
+                "bhavcopy": {
+                    "ready": True,
+                    "latest_date": "2026-09-01",
+                    "current": True,
+                    "reason_code": "HISTORY_CURRENT",
+                },
+            },
+        },
+        paper={"enabled": True, "open_positions": [], "closed_trades": []},
+        why={"available": False, "taken": [], "rejections": [], "waits": []},
+        soak={"real_forward_observations": 0, "insufficient_evidence": True},
+        soak_verify={"lanes": lanes},
+        scan={"scanned_at": "2026-09-01T05:00:00+00:00", "records": [{"symbol": "TCS"}]},
+        reco={"schema_version": 4, "categories": []},
+        now=_eod(),
+    )
+
+    assert os["state"] != MARKET_CLOSED_COMPLETE
+    assert "not complete" in os["headline"].lower()
+    assert "scan fail" in os["subtext"].lower()
+    assert os["need_me"] is False
+    assert os["verify"]["lanes"] == lanes
+
+
+def test_market_closed_complete_requires_all_core_verifier_lanes():
+    lanes = {
+        "SCAN": "PASS",
+        "RECOMMENDATIONS": "PASS",
+        "SELECTION": "PASS",
+        "AUTOPILOT": "PASS",
+        "PAPER EXECUTION": "PASS",
+        "EXIT SUPERVISION": "PASS",
+        "FORWARD SETTLEMENT": "PASS",
+        "LEARNING INGESTION": "PASS",
+        "EXECUTION REALITY": "PASS",
+        "LIVE MONEY": "LOCKED",
+    }
+    os = build_home_os(
+        dashboard={
+            "autonomy": {"state": "RUNNING", "running": True},
+            "data": {
+                "ready": True,
+                "bhavcopy": {
+                    "ready": True,
+                    "latest_date": "2026-09-01",
+                    "current": True,
+                    "reason_code": "HISTORY_CURRENT",
+                },
+            },
+        },
+        paper={"enabled": True, "open_positions": [], "closed_trades": [{"symbol": "TCS"}]},
+        why={"available": True, "taken": [{"symbol": "TCS"}], "rejections": [], "waits": []},
+        journal={"latest": {"taken": [{"symbol": "TCS"}], "as_of": "2026-09-01"}},
+        soak={"real_forward_observations": 1, "insufficient_evidence": True},
+        soak_verify={"lanes": lanes},
+        scan={"scanned_at": "2026-09-01T05:00:00+00:00", "records": [{"symbol": "TCS"}]},
+        reco={"schema_version": 4, "categories": []},
+        now=_eod(),
+    )
+
+    assert os["state"] == MARKET_CLOSED_COMPLETE
+    assert "complete" in os["headline"].lower()
+
+
+def test_home_activity_reports_scanned_universe_not_qualified_row_count():
+    os = build_home_os(
+        dashboard={
+            "autonomy": {"state": "RUNNING", "running": True},
+            "data": {
+                "ready": True,
+                "bhavcopy": {
+                    "ready": True,
+                    "latest_date": "2026-09-01",
+                    "current": True,
+                    "reason_code": "HISTORY_CURRENT",
+                },
+            },
+        },
+        paper={"enabled": True, "open_positions": [], "closed_trades": []},
+        why={"available": False, "taken": [], "rejections": [], "waits": []},
+        scan={
+            "scanned_at": "2026-09-01T05:00:00+00:00",
+            "scanned": 598,
+            "universe_size": 598,
+            "records": [{"symbol": "AAA"}, {"symbol": "BBB"}, {"symbol": "CCC"}],
+        },
+        reco={"schema_version": 4, "categories": []},
+        soak_verify={"lanes": {}},
+        now=_eod(),
+    )
+
+    activity = " ".join(row.get("text", "") for row in os.get("recent_activity", []))
+    assert "598 names checked" in activity
+    assert "3 names checked" not in activity
