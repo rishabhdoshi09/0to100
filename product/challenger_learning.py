@@ -314,9 +314,62 @@ def _model_version(rows: list[dict[str, Any]]) -> str:
     return "clf_" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:12]
 
 
+def _outcome_metrics(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
+    vals = [
+        float(r.get("outcome"))
+        for r in rows
+        if _f(r.get("outcome")) is not None
+    ]
+    if not vals:
+        return {
+            "n": 0,
+            "expectancy": None,
+            "hit_rate": None,
+            "drawdown": None,
+            "outcome_unit": "feature_store_outcome",
+        }
+    equity = 0.0
+    peak = 0.0
+    drawdown = 0.0
+    for value in vals:
+        equity += value
+        peak = max(peak, equity)
+        drawdown = max(drawdown, peak - equity)
+    return {
+        "n": len(vals),
+        "expectancy": round(sum(vals) / len(vals), 6),
+        "hit_rate": round(sum(1 for v in vals if v > 0.0) / len(vals), 4),
+        "drawdown": round(drawdown, 6),
+        "outcome_unit": "feature_store_outcome",
+        "unit_note": "Feature-store outcomes may be R or percent by producer; this dossier does not relabel them.",
+    }
+
+
+def _outcome_breakdown(
+    rows: list[Mapping[str, Any]],
+    *,
+    keys: tuple[str, ...],
+) -> dict[str, Any]:
+    grouped: dict[str, list[Mapping[str, Any]]] = {}
+    for row in rows:
+        meta = dict(row.get("meta") or {})
+        label = ""
+        for key in keys:
+            value = str(meta.get(key) or "").strip()
+            if value:
+                label = value
+                break
+        label = label or "UNKNOWN"
+        grouped.setdefault(label, []).append(row)
+    return {
+        label: _outcome_metrics(group)
+        for label, group in sorted(grouped.items())
+    }
+
+
 def forward_comparison(model_version: str, rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     rows = list(rows if rows is not None else _rows())
-    chosen = []
+    chosen: list[dict[str, Any]] = []
     for row in rows:
         lane = str((row.get("outcome_meta") or {}).get("evidence_class") or "").upper()
         meta = dict(row.get("meta") or {})
@@ -326,21 +379,37 @@ def forward_comparison(model_version: str, rows: list[dict[str, Any]] | None = N
             continue
         cp = _f(meta.get("predicted_p"))
         xp = _f(meta.get("challenger_predicted_p"))
-        if cp is None or xp is None:
+        outcome = _f(row.get("outcome"))
+        if cp is None or xp is None or outcome is None:
             continue
-        chosen.append((cp, xp, 1.0 if float(row.get("outcome") or 0.0) > 0 else 0.0))
+        chosen.append({
+            "champion_p": cp,
+            "challenger_p": xp,
+            "label": 1.0 if outcome > 0.0 else 0.0,
+            "outcome": outcome,
+            "meta": meta,
+        })
     if not chosen:
         return {
             "n": 0,
+            "forward_n": 0,
+            "oos_n": 0,
             "champion_brier": None,
             "challenger_brier": None,
             "improvement": None,
             "improvement_lower_95": None,
             "improvement_upper_95": None,
+            "expectancy": None,
+            "hit_rate": None,
+            "drawdown": None,
+            "regime_breakdown": {},
+            "sector_breakdown": {},
+            "exact_version_evidence": False,
+            "outcome_unit": "feature_store_outcome",
         }
-    cp = np.asarray([x[0] for x in chosen], dtype=float)
-    xp = np.asarray([x[1] for x in chosen], dtype=float)
-    y = np.asarray([x[2] for x in chosen], dtype=float)
+    cp = np.asarray([x["champion_p"] for x in chosen], dtype=float)
+    xp = np.asarray([x["challenger_p"] for x in chosen], dtype=float)
+    y = np.asarray([x["label"] for x in chosen], dtype=float)
     cb = _brier(cp, y)
     xb = _brier(xp, y)
     paired = (cp - y) ** 2 - (xp - y) ** 2
@@ -348,13 +417,34 @@ def forward_comparison(model_version: str, rows: list[dict[str, Any]] | None = N
     se = float(np.std(paired, ddof=1) / math.sqrt(len(paired))) if len(paired) > 1 else 1.0
     lower = improvement - 1.96 * se
     upper = improvement + 1.96 * se
+    outcome_rows = [
+        {"outcome": row["outcome"], "meta": row["meta"]}
+        for row in chosen
+    ]
+    metrics = _outcome_metrics(outcome_rows)
     return {
         "n": len(chosen),
+        "forward_n": len(chosen),
+        "oos_n": len(chosen),
         "champion_brier": round(cb, 6),
         "challenger_brier": round(xb, 6),
         "improvement": round(improvement, 6),
         "improvement_lower_95": round(lower, 6),
         "improvement_upper_95": round(upper, 6),
+        "expectancy": metrics["expectancy"],
+        "hit_rate": metrics["hit_rate"],
+        "drawdown": metrics["drawdown"],
+        "outcome_unit": metrics["outcome_unit"],
+        "outcome_unit_note": metrics.get("unit_note"),
+        "regime_breakdown": _outcome_breakdown(
+            outcome_rows,
+            keys=("market_state", "regime"),
+        ),
+        "sector_breakdown": _outcome_breakdown(
+            outcome_rows,
+            keys=("sector_state", "sector"),
+        ),
+        "exact_version_evidence": True,
     }
 
 
@@ -505,8 +595,29 @@ def maybe_promote(*, path: str | Path | None = None) -> dict[str, Any]:
     if status not in {SHADOW_CANDIDATE, PAPER_ACTIVE}:
         return store
 
-    forward = forward_comparison(str(current.get("model_version") or ""))
+    model_version = str(current.get("model_version") or "")
+    forward = forward_comparison(model_version)
     current["forward_validation"] = forward
+    try:
+        from product.promotion_governance import promotion_dossier
+        dossier = promotion_dossier(
+            forward,
+            component=f"paper_selection_classifier:{model_version or 'unknown'}",
+            adversarial_status="SURVIVED",
+            require_calibration_edge=True,
+            require_positive_expectancy=True,
+            require_execution_adjusted_edge=False,
+            min_oos_n=MIN_FORWARD_COMPARE,
+            min_forward_n=MIN_FORWARD_COMPARE,
+            min_calibration_improvement=MIN_BRIER_IMPROVEMENT,
+        )
+    except Exception as exc:
+        dossier = {
+            "decision": "KEEP_SHADOW",
+            "blockers": [f"PROMOTION_DOSSIER_UNAVAILABLE:{type(exc).__name__}"],
+            "live_locked": True,
+        }
+    current["promotion_dossier"] = dossier
     forward_n = int(forward.get("n") or 0)
     improvement = _f(forward.get("improvement"))
     lower = _f(forward.get("improvement_lower_95"))
@@ -547,6 +658,7 @@ def maybe_promote(*, path: str | Path | None = None) -> dict[str, Any]:
             improvement >= MIN_BRIER_IMPROVEMENT
             and lower is not None
             and lower > 0.0
+            and str(dossier.get("decision") or "") == "ELIGIBLE"
         ):
             current["status"] = PAPER_ACTIVE
             current["affects_selection"] = True
@@ -560,9 +672,11 @@ def maybe_promote(*, path: str | Path | None = None) -> dict[str, Any]:
             current["status"] = REJECTED
             current["affects_selection"] = False
             current["rejected_at"] = datetime.now(timezone.utc).isoformat()
+            blockers = list(dossier.get("blockers") or [])
             current["rejection_reason"] = (
                 "Forward comparison reached the sample floor without a robust "
-                "positive challenger improvement."
+                "institutional promotion dossier."
+                + (f" blockers={','.join(blockers)}" if blockers else "")
             )
             _remember_transition(current, REJECTED, current["rejection_reason"])
     store["current"] = current
