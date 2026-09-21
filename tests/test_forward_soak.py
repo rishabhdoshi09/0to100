@@ -575,3 +575,46 @@ def test_completed_scan_with_zero_qualifiers_is_not_scan_failure(monkeypatch):
     assert journey["summary"]["RECOMMENDATIONS"] == "PASS"
     verified = verify_persisted_soak()
     assert verified["lanes"]["SCAN"] == "PASS"
+
+
+
+def test_closed_market_decision_only_cycle_closes_soak_gap_without_forward_evidence(monkeypatch):
+    from product.autopilot_journal import load_journal
+
+    _write_scan_reco()
+    book = PaperBook(capital=100_000)
+    out = _cycle(
+        book,
+        [_eligible_card()],
+        entries_allowed=False,
+        entry_block_reason="ENTRY_WINDOW_CLOSED_DECISION_ONLY",
+        session_phase="off_session",
+        decision_only=True,
+    )
+
+    assert out["decision_only"] is True
+    assert out["not_forward_evidence"] is True
+    assert out["taken"] == []
+    assert not book.open
+    assert load_ledger() == []
+
+    latest = load_journal()["latest"]
+    assert latest["decision_only"] is True
+    assert latest["entry_block_reason"] == "ENTRY_WINDOW_CLOSED_DECISION_ONLY"
+
+    monkeypatch.setattr(
+        "product.autonomy_status.read_autonomy_status",
+        lambda *a, **k: {"running": True},
+    )
+    journey = build_runtime_journey()
+    assert journey["decision_only"] is True
+    assert journey["summary"]["SELECTION_AUTHORITY"] == "PASS"
+    assert journey["summary"]["PAPER_EXECUTION"] == "NOT_APPLICABLE"
+
+    verified = verify_persisted_soak()
+    assert verified["lanes"]["SELECTION"] == "PASS"
+    assert verified["lanes"]["AUTOPILOT"] == "PASS"
+    assert verified["lanes"]["PAPER EXECUTION"] == "MARKET_CLOSED_DECISION_ONLY"
+    assert verified["decision_only"] is True
+    assert verified["lanes"]["LIVE MONEY"] == "LOCKED"
+    assert soak_status()["status"] == COLLECTING
