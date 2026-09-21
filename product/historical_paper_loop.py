@@ -79,6 +79,8 @@ def load_state(path: str | Path | None = None) -> dict[str, Any]:
         "thesis_hash": str(payload.get("thesis_hash") or ""),
         "last_result": dict(payload.get("last_result") or {}),
         "last_error": str(payload.get("last_error") or ""),
+        "evidence_request_id": str(payload.get("evidence_request_id") or ""),
+        "evidence_request": dict(payload.get("evidence_request") or {}),
         "updated_at": str(payload.get("updated_at") or ""),
     }
 
@@ -124,6 +126,7 @@ def peek_next_batch(
     warmup_sessions: int = DEFAULT_WARMUP_SESSIONS,
     horizon_sessions: int = DEFAULT_HORIZON_SESSIONS,
     universe_limit: int = DEFAULT_UNIVERSE_LIMIT,
+    evidence_request_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Return the next unprocessed fully-settleable historical batch."""
     state = load_state(state_path)
@@ -139,7 +142,18 @@ def peek_next_batch(
             "phase": state["phase"],
             "batch_id": state["current_batch_id"],
             "sessions": state["current_sessions"],
+            "evidence_request_id": state.get("evidence_request_id", ""),
+            "evidence_request": dict(state.get("evidence_request") or {}),
         }
+
+    try:
+        from research.autonomy.evidence_acquisition import open_request_for_lane
+        evidence_request = open_request_for_lane(
+            "HISTORICAL_REPLAY",
+            path=evidence_request_path,
+        )
+    except Exception:
+        evidence_request = {}
 
     sessions = _official_sessions(sessions_fn)
     warmup = max(0, int(warmup_sessions))
@@ -181,6 +195,13 @@ def peek_next_batch(
         "period_end": batch[-1],
         "universe_limit": int(universe_limit),
         "horizon_sessions": horizon,
+        "evidence_request_id": str(evidence_request.get("request_id") or ""),
+        "evidence_request": evidence_request,
+        "selection_policy": (
+            "DURABLE_CURSOR_WITH_EVIDENCE_REQUEST"
+            if evidence_request
+            else "DURABLE_CURSOR"
+        ),
     }
 
 
@@ -202,6 +223,8 @@ def reset_for_thesis(
         "thesis_hash": str(thesis_hash or ""),
         "last_result": {},
         "last_error": "",
+        "evidence_request_id": "",
+        "evidence_request": {},
     }, state_path)
 
 
@@ -214,6 +237,8 @@ def pending_stage(*, state_path: str | Path | None = None) -> dict[str, Any]:
         "thesis_hash": state["thesis_hash"],
         "last_result": state["last_result"],
         "last_error": state["last_error"],
+        "evidence_request_id": state.get("evidence_request_id", ""),
+        "evidence_request": dict(state.get("evidence_request") or {}),
     }
 
 
@@ -942,6 +967,9 @@ def _run_batch(
         "historical_cost_model": paper_sim.get("cost_model"),
         "historical_setup_policies": len([p for p in setup_policies if not p.get("error")]),
         "setup_policy_errors": [p.get("error") for p in setup_policies if p.get("error")],
+        "evidence_request_id": str(batch.get("evidence_request_id") or ""),
+        "evidence_request": dict(batch.get("evidence_request") or {}),
+        "selection_policy": str(batch.get("selection_policy") or "DURABLE_CURSOR"),
         "memory": {
             "closed_trades": int(memory.get("closed_trades") or 0) if isinstance(memory, dict) else 0,
             "cooldown": len(memory.get("cooldown") or []) if isinstance(memory, dict) else 0,
@@ -960,6 +988,8 @@ def _run_batch(
         "thesis_hash": expected_thesis_hash,
         "last_result": result,
         "last_error": "",
+        "evidence_request_id": str(batch.get("evidence_request_id") or ""),
+        "evidence_request": dict(batch.get("evidence_request") or {}),
     }, state_path)
     return result
 
@@ -1023,6 +1053,7 @@ def ensure_next_batch_started(
     warmup_sessions: int = DEFAULT_WARMUP_SESSIONS,
     horizon_sessions: int = DEFAULT_HORIZON_SESSIONS,
     universe_limit: int = DEFAULT_UNIVERSE_LIMIT,
+    evidence_request_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Start/poll one historical batch without blocking the supervisor."""
     global _thread, _thread_batch_id, _thread_result, _thread_error
@@ -1038,6 +1069,7 @@ def ensure_next_batch_started(
         warmup_sessions=warmup_sessions,
         horizon_sessions=horizon_sessions,
         universe_limit=universe_limit,
+        evidence_request_path=evidence_request_path,
     )
     if not batch.get("available"):
         if state["phase"] == PHASE_RUNNING and state["current_batch_id"]:
@@ -1050,6 +1082,13 @@ def ensure_next_batch_started(
                 "thesis_hash": str(state.get("thesis_hash") or ""),
                 "universe_limit": universe_limit,
                 "horizon_sessions": horizon_sessions,
+                "evidence_request_id": str(state.get("evidence_request_id") or ""),
+                "evidence_request": dict(state.get("evidence_request") or {}),
+                "selection_policy": (
+                    "DURABLE_CURSOR_WITH_EVIDENCE_REQUEST"
+                    if state.get("evidence_request_id")
+                    else "DURABLE_CURSOR"
+                ),
             }
         else:
             return {"status": "IDLE", **batch}
@@ -1088,6 +1127,8 @@ def ensure_next_batch_started(
             "current_sessions": list(batch["sessions"]),
             "thesis_hash": str(batch.get("thesis_hash") or ""),
             "last_error": "",
+            "evidence_request_id": str(batch.get("evidence_request_id") or ""),
+            "evidence_request": dict(batch.get("evidence_request") or {}),
         }, state_path)
         _thread_batch_id = bid
         _thread_result = None
@@ -1134,4 +1175,6 @@ def mark_research_complete(batch_id: str, *, state_path: str | Path | None = Non
         "current_batch_id": "",
         "current_sessions": [],
         "last_error": "",
+        "evidence_request_id": "",
+        "evidence_request": {},
     }, state_path)
