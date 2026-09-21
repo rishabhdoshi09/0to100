@@ -33,7 +33,7 @@ def test_future_pending_work_is_queue_not_current_activity():
     assert out["next_pending"]["job_type"] == SCH.DATA_REFRESH
 
 
-def test_due_data_refresh_outranks_running_research():
+def test_running_work_is_current_even_when_higher_priority_work_is_due():
     out = RT.derive_activity(
         [
             _job(SCH.RESEARCH_CYCLE, status=JS.RUNNING, scheduled_for=1.0, key="hist_research:b1"),
@@ -41,8 +41,8 @@ def test_due_data_refresh_outranks_running_research():
         ],
         now_epoch=100.0,
     )
-    assert out["activity"] == RT.ACTIVITY_DATA
-    assert out["primary_job"]["job_type"] == SCH.DATA_REFRESH
+    assert out["activity"] == RT.ACTIVITY_RESEARCH
+    assert out["primary_job"]["job_type"] == SCH.RESEARCH_CYCLE
     assert out["current_count"] == 2
 
 
@@ -55,13 +55,14 @@ def test_running_historical_replay_is_research_activity():
     assert out["research_activity"] is True
 
 
-def test_snapshot_decision_is_not_reported_as_forward_paper():
+def test_snapshot_decision_is_not_reported_as_forward_paper_or_research_learning():
     out = RT.derive_activity(
         [_job(SCH.PAPER_CYCLE, status=JS.RUNNING, key="snapshot_decision:s1:t1")],
         now_epoch=100.0,
     )
-    assert out["activity"] == RT.ACTIVITY_RESEARCH
+    assert out["activity"] == RT.ACTIVITY_DECISION
     assert out["activity"] != RT.ACTIVITY_PAPER
+    assert out["research_activity"] is False
 
 
 def test_stale_researching_state_is_detected_but_idle_paper_policy_is_not():
