@@ -254,21 +254,32 @@ def _looks_like_sqlite(path: Path) -> bool:
         return False
 
 
-def _checkpoint_sqlite_sources(
-    repo_root: Path,
-    rows: Mapping[str, Mapping[str, Any]],
-) -> list[str]:
+def _sqlite_source_paths(repo_root: Path) -> list[Path]:
+    root = Path(repo_root)
+    paths: list[Path] = []
+    for dirname in DURABLE_DIRS:
+        base = root / dirname
+        if not base.exists():
+            continue
+        for path in base.rglob("*"):
+            if path.is_file() and not path.is_symlink() and path.suffix.lower() in SQLITE_DATABASE_SUFFIXES:
+                paths.append(path)
+    return sorted(paths)
+
+
+def _checkpoint_sqlite_sources(repo_root: Path) -> list[str]:
     """Checkpoint WAL-backed SQLite files after writers have been quiesced.
 
-    WAL/SHM files are not copied as independent durable histories. A successful
-    checkpoint folds committed WAL state into the database file before the
-    authoritative inventory is frozen. A busy database fails closed.
+    Discovering SQLite candidates is intentionally cheap: the 10+ GiB durable
+    runtime must not be fully hashed once merely to discover DB filenames and
+    then hashed again for the authoritative migration snapshot.
     """
+    root = Path(repo_root)
     checkpointed: list[str] = []
-    for rel in sorted(rows):
-        path = Path(repo_root) / rel
+    for path in _sqlite_source_paths(root):
         if not _looks_like_sqlite(path):
             continue
+        rel = path.relative_to(root).as_posix()
         try:
             conn = sqlite3.connect(str(path), timeout=1.0)
             try:
@@ -297,10 +308,15 @@ def _macos_quantterm_processes(repo_root: Path) -> list[dict[str, Any]]:
     except Exception:
         return []
     repo_text = str(_resolved(repo_root))
-    markers = (
-        "run_quantterm", "product.host_", "terminal_api", "market_ops",
-        "autonomy", "streamlit", "uvicorn", "vite",
+    strong_markers = (
+        "run_quantterm",
+        "product.host_",
+        "operations.market_ops",
+        "research.autonomy",
+        "terminal_api",
+        "quantterm",
     )
+    repo_scoped_markers = ("streamlit", "uvicorn", "vite")
     rows: list[dict[str, Any]] = []
     for raw in proc.stdout.splitlines():
         raw = raw.strip()
@@ -314,9 +330,12 @@ def _macos_quantterm_processes(repo_root: Path) -> list[dict[str, Any]]:
         except ValueError:
             continue
         command = parts[1]
-        if pid == os.getpid() or repo_text not in command:
+        if pid == os.getpid():
             continue
-        if not any(marker in command for marker in markers):
+        lower = command.lower()
+        strong = any(marker in lower for marker in strong_markers)
+        scoped = repo_text in command and any(marker in lower for marker in repo_scoped_markers)
+        if not strong and not scoped:
             continue
         rows.append({"pid": pid, "command": command[:400]})
     return rows
@@ -459,8 +478,7 @@ def migrate_repo_runtime(
         return {"state": "ADOPTED", "runtime_root": str(target), "manifest": payload}
 
     stopped_services = _quiesce_macos_quantterm_writers(Path(repo_root))
-    preliminary_rows = inventory(repo_root)
-    checkpointed_sqlite = _checkpoint_sqlite_sources(Path(repo_root), preliminary_rows)
+    checkpointed_sqlite = _checkpoint_sqlite_sources(Path(repo_root))
     # Checkpointing legitimately changes SQLite/WAL bytes. Freeze the source
     # only after that consistency step.
     source_rows = inventory(repo_root)
