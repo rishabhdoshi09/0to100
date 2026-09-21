@@ -95,6 +95,8 @@ def test_evidence_request_id_is_deterministic_for_same_gap():
     )
     a = EA.build_request(**kwargs)
     b = EA.build_request(**{**kwargs, "session_date": "2026-09-22"})
-    assert a.request_id == b.request_id
+    progressed = EA.build_request(**{**kwargs, "current_samples": 20})
+    assert a.request_id == b.request_id == progressed.request_id
     assert a.sample_deficit == 18
+    assert progressed.sample_deficit == 10
     assert "HISTORICAL_REPLAY" in a.allowed_lanes
