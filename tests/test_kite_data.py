@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import dataclasses
 import inspect
+import json
 from datetime import date, datetime, timedelta
 
 import pytest
@@ -176,6 +177,25 @@ def test_valid_refresh_activates_new_snapshot(tmp_path, monkeypatch):
     rep = ds.daily_refresh(now=_NOW)
     assert rep.activated and rep.snapshot_id and rep.benchmark_ok
     assert ds.store.get_active_snapshot() == rep.snapshot_id
+
+
+def test_refresh_runtime_telemetry_is_separate_from_resume_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(CAL, "_now_ist", lambda: _NOW)
+    ds = _ds(tmp_path)
+    rep = ds.daily_refresh(now=_NOW)
+    assert rep.activated
+
+    runtime = json.loads((tmp_path / "runtime_progress.json").read_text())
+    assert runtime["stage"] == "complete"
+    assert runtime["status"] == "SUCCEEDED"
+    assert runtime["current"] == runtime["total"]
+    assert runtime["total"] == len(ds.master)
+    assert runtime["progress_pct"] if "progress_pct" in runtime else runtime["pct"] == 100.0
+
+    resume = json.loads((tmp_path / "progress.json").read_text())
+    assert "stage" not in resume
+    assert "status" not in resume
+    assert all(isinstance(value, str) for value in resume.values())
 
 def test_missing_benchmark_blocks_forward_eligibility(tmp_path, monkeypatch):
     monkeypatch.setattr(CAL, "_now_ist", lambda: _NOW)
