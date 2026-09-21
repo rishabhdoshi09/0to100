@@ -147,5 +147,7 @@ def test_production_rules_hash_changes_only_after_explicit_promotion(tmp_path):
     assert result["champion_rules_hash"] != before
     assert eng.champion()["version"] == result["version"]
     assert eng.get("ready")["status"] == PROMOTED
+    assert eng.get("ready")["promotion_dossier"]["decision"] == "ELIGIBLE"
+    assert eng.get("ready")["promotion_dossier"]["live_locked"] is True
     # Ensemble production identity file is NOT silently rewritten
     assert ensemble_identity()["rules_hash"] == before
