@@ -144,16 +144,22 @@ def record_historical_batch(
         {
             "sample": capped_sample,
             "resolved_metrics": sorted(resolved),
-            "research_decision": decision.upper(),
         },
         sort_keys=True,
     )
     previous_token = str(previous.get("progress_token") or "")
     stagnant = int(previous.get("stagnant_batches") or 0)
-    if previous and progress_token == previous_token:
-        stagnant += 1
+    if previous:
+        stagnant = stagnant + 1 if progress_token == previous_token else 0
     else:
-        stagnant = 0
+        baseline_token = json.dumps(
+            {
+                "sample": min(baseline, target) if target else baseline,
+                "resolved_metrics": [],
+            },
+            sort_keys=True,
+        )
+        stagnant = 1 if progress_token == baseline_token else 0
 
     sample_done = current >= target if target else True
     metrics_done = not unresolved
