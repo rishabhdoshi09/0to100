@@ -49,6 +49,7 @@ NO_TRADE = "NO_TRADE"
 WAIT_FOR_ENTRY = "WAIT_FOR_ENTRY"
 NOT_SURFACED = "NOT_SURFACED"
 BROKER_LOGIN_REQUIRED = "BROKER_LOGIN_REQUIRED"
+DECISION_FINGERPRINT_FAILED = "DECISION_FINGERPRINT_FAILED"
 
 ENTER_NOW = "ENTER_NOW"
 WAIT = "WAIT"
@@ -833,11 +834,11 @@ def run_reco_paper_cycle(
         if decision.decision == ENTER_NOW:
             ranked.append((float(decision.selection_score or 0.0), decision))
         elif decision.decision == WAIT:
-            waits.append(decision.as_dict())
             _freeze(decision, group="RECOMMENDED_BUT_NOT_FILLED")
+            waits.append(decision.as_dict())
         else:
-            rejections.append(decision.as_dict())
             _freeze(decision, group="REJECTED")
+            rejections.append(decision.as_dict())
 
     ranked.sort(key=lambda item: (-item[0], item[1].symbol))
     try:
@@ -846,29 +847,51 @@ def run_reco_paper_cycle(
             ranked, book=book, max_new=max_new, regime=regime,
         )
         for decision in diverted:
-            row = decision.as_dict() if hasattr(decision, "as_dict") else dict(decision)
-            if str(getattr(decision, "decision", row.get("decision"))) == WAIT:
-                waits.append(row)
+            if str(getattr(decision, "decision", "")) == WAIT:
                 _freeze(decision, group="RECOMMENDED_BUT_NOT_FILLED")
+                row = decision.as_dict() if hasattr(decision, "as_dict") else dict(decision)
+                waits.append(row)
             else:
-                rejections.append(row)
                 _freeze(decision, group="REJECTED")
+                row = decision.as_dict() if hasattr(decision, "as_dict") else dict(decision)
+                rejections.append(row)
     except Exception:
         diverted = []
     snapshot_id = str(payload.get("scan_scanned_at") or day)
     entered = 0
     for _score, decision in ranked:
         if entered >= int(max_new):
-            leftover = dict(decision.as_dict())
-            leftover["reason_code"] = NO_TRADE
-            leftover["detail"] = "not top-of-the-top this cycle"
-            leftover["decision"] = NO_TRADE
-            leftover["group"] = "REJECTED"
-            rejections.append(leftover)
             decision.decision = NO_TRADE
             decision.reason_code = NO_TRADE
+            decision.detail = "not top-of-the-top this cycle"
             _freeze(decision, group="REJECTED")
+            leftover = dict(decision.as_dict())
+            leftover["group"] = "REJECTED"
+            rejections.append(leftover)
             continue
+
+        # Every BUY must have a durable immutable fingerprint before the
+        # PaperBook can be mutated. Identity/provenance failure is therefore a
+        # real safety block, not a warning attached after the fill.
+        try:
+            _freeze_taken_decision(
+                decision,
+                as_of=day,
+                snapshot_id=snapshot_id,
+                regime=regime,
+                thesis_hash=str(thesis.get("thesis_hash") or ""),
+            )
+        except Exception as exc:
+            if DECISION_FINGERPRINT_FAILED not in cycle_reasons:
+                cycle_reasons.append(DECISION_FINGERPRINT_FAILED)
+            fail = decision.as_dict()
+            fail["decision"] = BLOCK
+            fail["reason_code"] = DECISION_FINGERPRINT_FAILED
+            fail["detail"] = f"{type(exc).__name__}: {exc}"[:200]
+            fail["group"] = "REJECTED"
+            rejections.append(fail)
+            continue
+
         try:
             pos = _execute(decision, book=book, as_of=day, snapshot_id=snapshot_id)
         except Exception as exc:
