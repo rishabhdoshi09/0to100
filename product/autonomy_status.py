@@ -88,5 +88,6 @@ def read_autonomy_status(root=None) -> dict:
         "owner_state": raw.get("owner_state", {}),
         "scheduler_of_record": raw.get("scheduler_of_record", ""),
         "last_cycle": raw.get("last_cycle", {}),
+        "resource_governor": dict(raw.get("resource_governor", {}) or {}),
         "broker": _broker_status(),
     }
