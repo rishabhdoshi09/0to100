@@ -1005,6 +1005,8 @@ def _run_batch(
         "evidence_request_id": str(batch.get("evidence_request_id") or ""),
         "evidence_request": dict(batch.get("evidence_request") or {}),
         "selection_policy": str(batch.get("selection_policy") or "DURABLE_CURSOR"),
+        "selection_details": dict(batch.get("selection_details") or {}),
+        "processed_sessions_before": int(batch.get("processed_sessions_before") or 0),
         "memory": {
             "closed_trades": int(memory.get("closed_trades") or 0) if isinstance(memory, dict) else 0,
             "cooldown": len(memory.get("cooldown") or []) if isinstance(memory, dict) else 0,
@@ -1025,6 +1027,7 @@ def _run_batch(
         "last_error": "",
         "evidence_request_id": str(batch.get("evidence_request_id") or ""),
         "evidence_request": dict(batch.get("evidence_request") or {}),
+        "selection_details": dict(batch.get("selection_details") or {}),
     }, state_path)
     return result
 
@@ -1119,11 +1122,12 @@ def ensure_next_batch_started(
                 "horizon_sessions": horizon_sessions,
                 "evidence_request_id": str(state.get("evidence_request_id") or ""),
                 "evidence_request": dict(state.get("evidence_request") or {}),
-                "selection_policy": (
-                    "DURABLE_CURSOR_WITH_EVIDENCE_REQUEST"
-                    if state.get("evidence_request_id")
-                    else "DURABLE_CURSOR"
+                "selection_policy": str(
+                    (state.get("selection_details") or {}).get("selection_policy")
+                    or ("DURABLE_CURSOR_WITH_EVIDENCE_REQUEST" if state.get("evidence_request_id") else "DURABLE_CURSOR")
                 ),
+                "selection_details": dict(state.get("selection_details") or {}),
+                "processed_sessions_before": len(state.get("processed_sessions") or []),
             }
         else:
             return {"status": "IDLE", **batch}
@@ -1164,6 +1168,7 @@ def ensure_next_batch_started(
             "last_error": "",
             "evidence_request_id": str(batch.get("evidence_request_id") or ""),
             "evidence_request": dict(batch.get("evidence_request") or {}),
+            "selection_details": dict(batch.get("selection_details") or {}),
         }, state_path)
         _thread_batch_id = bid
         _thread_result = None
