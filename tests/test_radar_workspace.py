@@ -345,3 +345,44 @@ def test_best_of_best_composite_uses_existing_screens_only():
     assert ranked[1]["change_5d_pct"] == 3.2
     assert ranked[1]["risk_tier"] in {"Low", "Medium", "High"}
 
+
+
+def test_radar_home_preserves_missing_market_metrics_as_missing():
+    market = {
+        "available": False,
+        "health": "Unavailable",
+        "breadth": "Unavailable",
+        "trade_stance": "Do not infer a market stance from missing data.",
+        "nifty_change_1d": None,
+        "vix": None,
+        "leaders": [],
+        "laggards": [],
+    }
+    payload = build_radar_home(
+        scan_payload={"records": []},
+        long_term_payload={"records": []},
+        market=market,
+    )
+    assert payload["nifty_change_1d"] is None
+    assert payload["vix"] is None
+    assert payload["breadth"] == "Unavailable"
+
+
+def test_radar_home_keeps_real_zero_nifty_change_if_source_reports_it():
+    market = {
+        "available": True,
+        "health": "Quiet",
+        "breadth": "50% adv",
+        "trade_stance": "Neutral",
+        "nifty_change_1d": 0.0,
+        "vix": 12.5,
+        "leaders": [],
+        "laggards": [],
+    }
+    payload = build_radar_home(
+        scan_payload={"records": []},
+        long_term_payload={"records": []},
+        market=market,
+    )
+    assert payload["nifty_change_1d"] == 0.0
+    assert payload["vix"] == 12.5
