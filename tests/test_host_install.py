@@ -353,3 +353,32 @@ def test_macos_writer_probe_ignores_installer_shell_but_catches_runtime(monkeypa
     assert 105 in pids
     assert 106 in pids
     assert 103 not in pids
+
+
+
+def test_partial_resume_capacity_counts_only_bytes_still_to_copy(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    runtime = tmp_path / "runtime"
+    _write(repo, "logs/already.bin", "a" * 1024)
+    _write(repo, "logs/remaining.bin", "b" * 1024)
+    _write(runtime, "logs/already.bin", "a" * 1024)
+
+    monkeypatch.setattr(HI, "MIGRATION_MIN_HEADROOM_BYTES", 512)
+    monkeypatch.setattr(HI, "MIGRATION_HEADROOM_FRACTION", 0.0)
+    # Enough for the 1 KiB remaining file + 512 B headroom, but deliberately
+    # not enough for the entire 2 KiB source + headroom.
+    monkeypatch.setattr(
+        HI.shutil,
+        "disk_usage",
+        lambda _path: type("Usage", (), {"free": 1536})(),
+    )
+
+    out = HI.migrate_repo_runtime(runtime, repo_root=repo, build_sha="abc")
+
+    assert out["state"] == "MIGRATED"
+    assert (runtime / "logs/already.bin").read_text() == "a" * 1024
+    assert (runtime / "logs/remaining.bin").read_text() == "b" * 1024
+    capacity = out["manifest"]["migration_capacity"]
+    assert capacity["source_bytes"] == 2048
+    assert capacity["copy_bytes"] == 1024
+    assert capacity["required_free_bytes"] == 1536
