@@ -371,6 +371,35 @@ def latest_index_print(ticker: str) -> Optional[dict]:
     }
 
 
+def get_index_ohlcv_as_of_cached(ticker: str, as_of: str) -> Optional[pd.DataFrame]:
+    """Return official index OHLC known on or before as_of without network I/O.
+
+    Historical replay/research must not ask today's regime engine for a past
+    market state. This reader loads only the already-persisted official NSE
+    index cache (or local CSVs when available), then slices away every future
+    row before returning a private copy.
+    """
+    name = TICKER_MAP.get((ticker or "").upper())
+    if not name:
+        return None
+    if not load_index_store_from_cache():
+        # Local rebuild parses files already on disk; it performs no download.
+        try:
+            build_from_local()
+        except Exception:
+            return None
+    with _lock:
+        df = _store.get(name)
+        frame = df.copy() if df is not None else None
+    if frame is None or getattr(frame, "empty", True):
+        return None
+    try:
+        cutoff = pd.Timestamp(str(as_of)[:10]).normalize()
+        frame = frame.loc[frame.index.normalize() <= cutoff]
+    except Exception:
+        return None
+    return frame.copy() if frame is not None and not frame.empty else None
+
 def get_index_ohlcv(ticker: str) -> Optional[pd.DataFrame]:
     """yfinance-shaped OHLC for a ^TICKER with regime-safe bootstrap depth.
 
