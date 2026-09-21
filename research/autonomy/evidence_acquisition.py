@@ -149,7 +149,6 @@ def build_request(
         "strategy_id": str(strategy_id or ""),
         "gap_kind": str(gap_kind or ""),
         "evidence_origin": str(evidence_origin or ""),
-        "current_samples": current,
         "target_samples": target,
         "missing_metrics": list(missing),
         "thesis_hash": str(thesis_hash or ""),
