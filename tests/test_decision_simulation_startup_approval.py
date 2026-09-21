@@ -301,3 +301,65 @@ def test_scan_fresh_rejects_stale_schema_v2_provenance_identity(monkeypatch):
     )
 
     assert desk.scan_is_fresh() is False
+
+
+
+def test_autonomous_approval_persists_provenance(tmp_path, monkeypatch):
+    state = tmp_path / "gate.json"
+    monkeypatch.setenv("QT_STARTUP_ID", "startup-auto")
+    monkeypatch.setattr(
+        "product.trading_thesis.manifest",
+        lambda: {"thesis_hash": "thesis-auto", "objective_id": "test"},
+    )
+    monkeypatch.setattr(
+        G,
+        "_board",
+        lambda: {
+            "available": True,
+            "scan_scanned_at": "2026-09-21T16:22:28+00:00",
+            "best_trades": [{"symbol": "INFY"}],
+            "decisions": [{"symbol": "INFY"}],
+            "actionable": 1,
+        },
+    )
+    monkeypatch.setattr("product.desk_pipeline.scan_is_fresh", lambda: True)
+    monkeypatch.setattr(
+        "product.historical_paper_loop.load_state",
+        lambda: {"thesis_hash": "thesis-auto"},
+    )
+
+    G.begin_startup("startup-auto", path=state)
+    approved = G.ensure_autonomous_approval(path=state)
+
+    assert approved["accepted"] is True
+    assert approved["approved"] is True
+    assert approved["approval_source"] == "AUTONOMY"
+    assert approved["approval_required"] is False
+    assert G.is_approved(path=state) is True
+
+
+def test_supervisor_auto_authorizes_when_discovery_is_ready(tmp_path, monkeypatch):
+    from research.autonomy.supervisor import Supervisor
+
+    class DiscoveryDeps:
+        def active_snapshot_id(self):
+            return ""
+
+    calls = []
+    monkeypatch.setattr(
+        "product.decision_simulation_gate.status",
+        lambda: {"discovery_ready": True, "approved": False},
+    )
+    monkeypatch.setattr(
+        "product.decision_simulation_gate.ensure_autonomous_approval",
+        lambda: calls.append("auto") or {
+            "accepted": True,
+            "approved": True,
+            "approval_source": "AUTONOMY",
+        },
+    )
+
+    sup = Supervisor(tmp_path / "auto", deps=DiscoveryDeps())
+    sup._ensure_startup_trade_discovery()
+
+    assert calls == ["auto"]
