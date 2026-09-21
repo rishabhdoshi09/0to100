@@ -14,6 +14,7 @@ import os
 
 from research.autonomy import hypotheses as HYP
 from research.autonomy import challenge as CH
+from research.autonomy import evidence_acquisition as EA
 from research.autonomy.dialogue import (
     DialogueLog, Record, OBSERVATION, EVIDENCE_GAP, HYPOTHESIS, CHALLENGE_REQUEST,
     CHALLENGE_REPORT, EXPERIMENT_REGISTRATION, EXPERIMENT_RESULT, PROMOTION_PROPOSAL,
@@ -25,6 +26,14 @@ def _append(dialogue, record):
     if dialogue is not None:
         return dialogue.append(record)
     return record
+
+
+def _thesis_hash() -> str:
+    try:
+        from product.trading_thesis import manifest
+        return str(manifest().get("thesis_hash") or "")
+    except Exception:
+        return ""
 
 
 def _registered_specs(brain):
@@ -52,11 +61,13 @@ def derive_diagnostics(brain) -> list[dict]:
             "family": spec.family, "n_trades": n, "forward_expectancy_R": mean,
             "forward_lower_R": lower, "current_drawdown_pct": float(st.get("max_drawdown_pct", 0.0)),
             "data_available": True,
+            "evidence_origin": "FORWARD_PAPER",
         }
         if n < 10:
             diagnostics.append({**base, "kind": "insufficient_sample",
                 "diagnosis": f"Only {n} resolved forward trades; no reliable adaptation claim yet.",
-                "economic_impact": 0.25, "confidence": 1.0, "data_mining_risk": 0.8})
+                "economic_impact": 0.25, "confidence": 1.0, "data_mining_risk": 0.8,
+                "target_samples": 30})
             continue
         if mean <= 0:
             diagnostics.append({**base, "kind": "negative_forward_expectancy",
@@ -184,10 +195,12 @@ def _evidence_context(report) -> dict:
     data = report.as_dict() if hasattr(report, "as_dict") else dict(report or {})
     # StrategyStudio EvidenceReport does not claim DSR/Reality-Check/walk-forward.  Do not fill
     # those fields with optimistic defaults; the committee will request more evidence.
-    required = all(k in data for k in (
+    required_fields = (
         "deflated_sharpe", "reality_check_p", "walk_forward_ok",
         "fdr_significant", "benchmark_available",
-    ))
+    )
+    missing_required = tuple(k for k in required_fields if k not in data or data.get(k) is None)
+    required = not missing_required
     return {
         "forward_eligible": not bool(data.get("invalid_data", False)) and not bool(data.get("is_synthetic", True)),
         "benchmark_available": bool(data.get("benchmark_available", False)),
@@ -205,6 +218,8 @@ def _evidence_context(report) -> dict:
         "parameter_count": int(data.get("parameter_count", 0)),
         "fdr_significant": bool(data.get("fdr_significant", False)),
         "required_evidence_complete": required,
+        "missing_required_evidence": missing_required,
+        "evidence_origin": "RESEARCH_VALIDATION",
         "raw": data,
     }
 
@@ -226,10 +241,33 @@ def execute_pipeline(brain, *, gap: HYP.EvidenceGap, parent, session_date: str,
                      dialogue=None, memory=None, experiment_runner: Callable | None = None) -> dict:
     """Execute one preregistered research proposal end-to-end."""
     if gap.recommended_action == "data_task":
-        return {"decision": "DATA_TASK", "reason": gap.diagnosis}
+        request = EA.request_from_gap(
+            gap,
+            session_date=session_date,
+            context={"evidence_origin": gap.evidence_origin},
+            thesis_hash=_thesis_hash(),
+        )
+        return {
+            "decision": "EVIDENCE_ACQUISITION",
+            "reason": gap.diagnosis,
+            "evidence_request": request,
+        }
     changes = _changes_for(parent, gap)
     if not changes:
-        return {"decision": "RETEST_WITH_MORE_DATA", "reason": "no justified material mutation"}
+        request = EA.request_from_gap(
+            gap,
+            session_date=session_date,
+            context={
+                "evidence_origin": gap.evidence_origin,
+                "n_trades": gap.current_samples,
+            },
+            thesis_hash=_thesis_hash(),
+        )
+        return {
+            "decision": "EVIDENCE_ACQUISITION",
+            "reason": "no justified material mutation; acquire the missing evidence instead",
+            "evidence_request": request,
+        }
     memory = memory or HYP.ResearchMemory()
     proposal, child_or_reason = HYP.propose_hypothesis(
         parent, gap, changes, memory=memory,
@@ -282,6 +320,23 @@ def execute_pipeline(brain, *, gap: HYP.EvidenceGap, parent, session_date: str,
         memory.record_dead(proposal.semantic_hash, decision.rationale)
     elif decision.decision == CH.PAPER_NOMINATED:
         _nominate_successor(brain, child)
+    if decision.decision == CH.RETEST_WITH_MORE_DATA:
+        request = EA.request_from_gap(
+            gap,
+            session_date=session_date,
+            context=context,
+            thesis_hash=_thesis_hash(),
+        )
+        return {
+            "decision": "EVIDENCE_ACQUISITION",
+            "committee_decision": decision.decision,
+            "rationale": decision.rationale,
+            "hypothesis_id": proposal.hypothesis_id,
+            "strategy_id": child.strategy_id,
+            "child_version": child.version,
+            "config_hash": child.config_hash(),
+            "evidence_request": request,
+        }
     return {"decision": decision.decision, "rationale": decision.rationale,
             "hypothesis_id": proposal.hypothesis_id, "strategy_id": child.strategy_id,
             "child_version": child.version, "config_hash": child.config_hash()}
@@ -295,7 +350,18 @@ def run_research_cycle(brain, *, session_date: str, dialogue=None) -> dict:
     # Highest-priority gap only: bounded research budget, no indiscriminate parameter mining.
     gap = gaps[0]
     if gap.recommended_action == "data_task":
-        return {"decision": "DATA_TASK", "reason": gap.diagnosis, "kind": gap.kind}
+        request = EA.request_from_gap(
+            gap,
+            session_date=session_date,
+            context={"evidence_origin": gap.evidence_origin},
+            thesis_hash=_thesis_hash(),
+        )
+        return {
+            "decision": "EVIDENCE_ACQUISITION",
+            "reason": gap.diagnosis,
+            "kind": gap.kind,
+            "evidence_request": request,
+        }
     parent = next((s for s in _registered_specs(brain) if s.strategy_id == gap.strategy_id), None)
     if parent is None:
         return {"decision": "NO_PARENT_STRATEGY", "strategy_id": gap.strategy_id}
