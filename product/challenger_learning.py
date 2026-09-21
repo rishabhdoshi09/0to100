@@ -191,8 +191,16 @@ def _fit_transform(
         d = X.shape[1] if X.ndim == 2 else len(MODEL_FEATURES)
         return X, np.zeros(d), np.ones(d)
     if medians is None:
-        medians = np.nanmedian(X, axis=0)
-        medians = np.where(np.isnan(medians), 0.0, medians)
+        # Missing optional features are legitimate in early/historical batches.
+        # Avoid np.nanmedian on all-NaN columns: that warning used to let a
+        # "successful" learning job finish with a hidden data-quality defect.
+        finite_columns = np.any(np.isfinite(X), axis=0)
+        medians = np.zeros(X.shape[1], dtype=float)
+        if np.any(finite_columns):
+            medians[finite_columns] = np.nanmedian(X[:, finite_columns], axis=0)
+    else:
+        medians = np.asarray(medians, dtype=float)
+        medians = np.where(np.isfinite(medians), medians, 0.0)
     filled = np.where(np.isnan(X), medians, X)
     if scales is None:
         q25 = np.nanpercentile(filled, 25, axis=0)
