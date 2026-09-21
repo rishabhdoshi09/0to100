@@ -16,7 +16,7 @@ from core.runtime_paths import logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PATH = logs_dir() / "product" / "counterfactuals.jsonl"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 CORRECT_REJECTION = "CORRECT_REJECTION"
 MISSED_WINNER = "MISSED_WINNER"
@@ -34,6 +34,28 @@ def ledger_path(path: str | Path | None = None) -> Path:
         return Path(override)
     return DEFAULT_PATH
 
+
+def _read_ledger(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    out: list[dict[str, Any]] = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if isinstance(row, dict):
+                out.append(row)
+    except Exception:
+        return []
+    return out
+
+
+def _counterfactual_freeze_path(path: str | Path | None) -> Path | None:
+    if path is None:
+        return None
+    target = Path(path)
+    return target.with_suffix(target.suffix + ".freeze.db")
 
 def freeze_decision(
     *,
