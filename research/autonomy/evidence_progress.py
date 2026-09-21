@@ -120,8 +120,8 @@ def record_historical_batch(
     batch_id = str(batch.get("batch_id") or research.get("historical_batch_id") or "")
     target_path = Path(path) if path is not None else DEFAULT_PROGRESS_PATH
     store = _read(target_path)
-    requests = dict(store.get("requests") or {})
-    previous = dict(requests.get(request_id) or {})
+    request_rows = dict(store.get("requests") or {})
+    previous = dict(request_rows.get(request_id) or {})
     seen = list(previous.get("seen_batch_ids") or [])
     if batch_id and batch_id in seen:
         return previous
@@ -215,8 +215,8 @@ def record_historical_batch(
         ),
         "updated_at": _now(),
     }
-    requests[request_id] = progress
-    store["requests"] = requests
+    request_rows[request_id] = progress
+    store["requests"] = request_rows
     store["schema_version"] = SCHEMA_VERSION
     _write(target_path, store)
     _update_request_file(request_id, status, progress, request_path=request_path)
