@@ -347,6 +347,7 @@ def decide_session(
     persist_ledger: bool = False,
     use_committee: bool | None = None,
     company_evidence: Sequence[Mapping[str, Any]] | None = None,
+    calibration_snapshot_id: str = "",
 ) -> list[dict[str, Any]]:
     """Run the production recommendation + paper gate on a PIT scan payload.
 
@@ -526,6 +527,7 @@ def decide_session(
             "pit_sector": card.get("pit_sector"),
             "pit_downgrade": downgrade,
             "versions": versions,
+            "calibration_snapshot_id": str(calibration_snapshot_id or ""),
             "thesis_hash": str(thesis.get("thesis_hash") or ""),
             "thesis": thesis,
             "selection_score": selection_rank,
@@ -586,6 +588,7 @@ def decide_session(
                     "historical_committee_decision": str(out[-1].get("decision") or ""),
                     "historical_reason_code": str(out[-1].get("reason_code") or ""),
                     "thesis_hash": str(out[-1].get("thesis_hash") or ""),
+                    "calibration_snapshot_id": str(calibration_snapshot_id or ""),
                 },
             )
             frozen_feature = freeze_feature_decision(canonical)
@@ -980,6 +983,7 @@ def run_historical_replay(
                 scan,
                 decide_fn=decide_fn,
                 persist_ledger=persist_live_reco,
+                calibration_snapshot_id=str(identity.get("calibration_snapshot_id") or ""),
             )
             decisions = evaluate_outcomes(decisions)
             for row in decisions:
