@@ -43,4 +43,4 @@ jobs:
         run: python -m py_compile product/host_install.py product/host_entrypoint.py core/runtime_paths.py
 
       - name: Run focused host migration regressions
-        run: python -m pytest tests/test_host_install.py -q
+        run: python -m pytest --noconftest tests/test_host_install.py -q
