@@ -69,8 +69,45 @@ def freeze_decision(
     evidence: Mapping[str, Any] | None = None,
     path: str | Path | None = None,
 ) -> dict[str, Any]:
+    evidence_map = dict(evidence or {})
+    freeze_input = {
+        "decision_id": str(evidence_map.get("decision_id") or ""),
+        "symbol": str(symbol).upper(),
+        "as_of": str(as_of or "")[:10],
+        "decision": decision,
+        "reason_code": reason_code,
+        "entry": entry,
+        "stop": stop,
+        "target": target,
+        "setup_label": evidence_map.get("setup_label") or evidence_map.get("setup"),
+        "sector": evidence_map.get("sector"),
+        "regime": evidence_map.get("regime"),
+        "families": evidence_map.get("families"),
+        "method_votes": evidence_map.get("method_votes"),
+        "vetoes": evidence_map.get("vetoes"),
+        "portfolio": evidence_map.get("portfolio"),
+        "selection_score": evidence_map.get("selection_score"),
+        "policy_effect": evidence_map.get("policy_effect"),
+        "thesis_hash": evidence_map.get("thesis_hash"),
+        "calibration_snapshot_id": evidence_map.get("calibration_snapshot_id"),
+        "data_snapshot_id": evidence_map.get("data_snapshot_id"),
+        "source_scan_id": evidence_map.get("source_scan_id") or evidence_map.get("scan_scanned_at"),
+        "evidence_class": evidence_map.get("evidence_class") or "COUNTERFACTUAL",
+        "versions": evidence_map.get("versions"),
+    }
+    from product.decision_freeze import freeze as freeze_canonical
+
+    canonical = freeze_canonical(
+        freeze_input,
+        path=_counterfactual_freeze_path(path),
+    )
+    counterfactual_id = str(canonical.get("freeze_id") or "")
     row = {
         "schema_version": SCHEMA_VERSION,
+        "counterfactual_id": counterfactual_id,
+        "canonical_freeze_id": counterfactual_id,
+        "decision_fingerprint": str(canonical.get("fingerprint") or ""),
+        "fingerprint_schema_version": canonical.get("fingerprint_schema_version"),
         "recorded_at": datetime.now(timezone.utc).isoformat(),
         "symbol": str(symbol).upper(),
         "decision": decision,
@@ -79,22 +116,28 @@ def freeze_decision(
         "hypothetical_stop": stop,
         "hypothetical_target": target,
         "as_of": as_of,
-        "evidence": dict(evidence or {}),
-        "rules_hash": str((evidence or {}).get("rules_hash") or ""),
-        "regime": str((evidence or {}).get("regime") or ""),
-        "sector": str((evidence or {}).get("sector") or ""),
-        "setup": str((evidence or {}).get("setup_label") or (evidence or {}).get("setup") or ""),
-        "group": str((evidence or {}).get("group") or ""),
+        "evidence": evidence_map,
+        "rules_hash": str(evidence_map.get("rules_hash") or ""),
+        "thesis_hash": str(evidence_map.get("thesis_hash") or ""),
+        "calibration_snapshot_id": str(evidence_map.get("calibration_snapshot_id") or ""),
+        "data_snapshot_id": str(evidence_map.get("data_snapshot_id") or ""),
+        "regime": str(evidence_map.get("regime") or ""),
+        "sector": str(evidence_map.get("sector") or ""),
+        "setup": str(evidence_map.get("setup_label") or evidence_map.get("setup") or ""),
+        "group": str(evidence_map.get("group") or ""),
+        "evidence_class": str(evidence_map.get("evidence_class") or "COUNTERFACTUAL"),
         "outcome": None,
         "classification": None,
         "not_pnl": True,
     }
     target_path = ledger_path(path)
     target_path.parent.mkdir(parents=True, exist_ok=True)
+    for existing in _read_ledger(target_path):
+        if counterfactual_id and str(existing.get("counterfactual_id") or "") == counterfactual_id:
+            return existing
     with target_path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(row, default=str) + "\n")
     return row
-
 
 def classify_forward(
     *,
