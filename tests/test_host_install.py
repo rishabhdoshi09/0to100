@@ -329,6 +329,7 @@ def test_macos_writer_probe_ignores_installer_shell_but_catches_runtime(monkeypa
         f"100 /bin/bash {repo}/scripts/install_quantterm_host.sh --runtime-root /Volumes/QuantTermStorage/QuantTerm/runtime",
         f"101 /bin/bash {repo}/scripts/run_quantterm_complete.sh --restart",
         f"102 {repo}/venv/bin/python -u -m operations.market_ops",
+        "104 /usr/bin/python3 -u main.py autonomy",
         "103 /usr/bin/python3 some_unrelated_quantterm_notes.py",
     ])
 
@@ -346,4 +347,5 @@ def test_macos_writer_probe_ignores_installer_shell_but_catches_runtime(monkeypa
     assert 100 not in pids
     assert 101 in pids
     assert 102 in pids
+    assert 104 in pids
     assert 103 not in pids
