@@ -346,6 +346,8 @@ class ChampionChallengerEngine:
         for o in evidence_rows:
             regimes.setdefault(str(o.get("regime") or "UNKNOWN"), []).append(float(o["pnl"]))
             sectors.setdefault(str(o.get("sector") or "UNKNOWN"), []).append(float(o["pnl"]))
+        regime_breakdown = {k: _metrics(v) for k, v in regimes.items() if v}
+        sector_breakdown = {k: _metrics(v) for k, v in sectors.items() if v}
         missed = sum(1 for o in obs if o.get("missed"))
         avoided = sum(1 for o in obs if o.get("avoided_loss"))
         turnover = len(obs)
@@ -374,10 +376,13 @@ class ChampionChallengerEngine:
             "sector_stability": {
                 k: round(sum(v) / len(v), 6) for k, v in sectors.items() if v
             },
+            "regime_breakdown": regime_breakdown,
+            "sector_breakdown": sector_breakdown,
             "missed_opportunity_rate": round(missed / turnover, 4) if turnover else None,
             "avoided_loss_rate": round(avoided / turnover, 4) if turnover else None,
             "calibration": None,
             "sample_size": m["sample_size"],
+            "forward_n": len(evidence_rows),
             "confidence_interval": m["confidence_interval"],
             "oos_n": len(oos),
             "in_sample_n": len(ins),
@@ -428,9 +433,28 @@ class ChampionChallengerEngine:
             reasons.append("ADVERSARIAL_FAILED")
         if adversarial_status == "FRAGILE":
             reasons.append("ADVERSARIAL_FRAGILE")
+        dossier = {
+            "decision": "KEEP_SHADOW",
+            "blockers": ["PROMOTION_DOSSIER_UNAVAILABLE"],
+            "live_locked": True,
+        }
         try:
-            from product.promotion_governance import challenger_promotion_reasons
+            from product.promotion_governance import (
+                challenger_promotion_reasons,
+                promotion_dossier,
+            )
             reasons.extend(challenger_promotion_reasons(comparison, adversarial_status=adversarial_status))
+            dossier = promotion_dossier(
+                comparison,
+                component=f"rule_challenger:{challenger_id}",
+                adversarial_status=adversarial_status,
+                require_calibration_edge=False,
+                require_positive_expectancy=True,
+                require_execution_adjusted_edge=True,
+                min_oos_n=MIN_OOS_N,
+                min_forward_n=MIN_FORWARD_N,
+            )
+            reasons.extend(list(dossier.get("blockers") or []))
         except Exception:
             # Governance import failure is itself not a bypass: for a promotion-sized
             # sample require execution evidence directly here.
@@ -447,6 +471,7 @@ class ChampionChallengerEngine:
             ch["status"] = ch.get("status") if ch.get("status") == REJECTED else SHADOW
             ch["promotion_blocked"] = reasons
             ch["last_promotion_comparison"] = comparison
+            ch["promotion_dossier"] = dossier
             self._put(ch)
             return {
                 "promoted": False,
@@ -471,6 +496,7 @@ class ChampionChallengerEngine:
         ch["promoted_at"] = _now()
         ch["promoted_version"] = new_version
         ch["promoted_rules_hash"] = new_hash
+        ch["promotion_dossier"] = dossier
         ch["promotion_evidence"] = {
             "gross_expectancy": comparison.get("expectancy"),
             "execution_adjusted_expectancy": comparison.get("execution_adjusted_expectancy"),
