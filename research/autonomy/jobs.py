@@ -420,9 +420,11 @@ class Deps:
             paper_on = bool(brain.is_paper_auto_enabled())
         except Exception:
             paper_on = True
+        now_ist = self.now_ist()
+        as_of = SCH.last_completed_session_date(now_ist, self.holidays()) or now_ist.date().isoformat()
         cycle = run_reco_paper_cycle(
             book=brain.intel_book,
-            as_of=str(self.now_ist().date().isoformat()),
+            as_of=str(as_of),
             entries_allowed=False,
             entry_block_reason=str(entry_block_reason or "ENTRY_WINDOW_CLOSED"),
             session_phase=session_phase,
