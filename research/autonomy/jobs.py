@@ -1225,12 +1225,14 @@ def run_research_cycle(ctx) -> JobResult:
     key = str(getattr(job, "idempotency_key", "") or "")
     historical = key.startswith("hist_research:")
     batch_id = str(getattr(job, "input_snapshot_id", "") or "") if historical else ""
+    historical_stage: dict[str, Any] = {}
     session_date = ctx.deps.now_ist().date().isoformat()
     if historical:
         try:
             from product.historical_paper_loop import pending_stage
 
             stage = pending_stage()
+            historical_stage = dict(stage or {})
             sessions = list(stage.get("sessions") or [])
             if batch_id and str(stage.get("batch_id") or "") != batch_id:
                 return JobResult(
@@ -1260,6 +1262,26 @@ def run_research_cycle(ctx) -> JobResult:
     if historical:
         result["research_lane"] = "HISTORICAL_REPLAY"
         result["historical_batch_id"] = batch_id
+        request = dict(historical_stage.get("evidence_request") or {})
+        if request:
+            try:
+                from research.autonomy.evidence_progress import record_historical_batch
+
+                result["evidence_progress"] = record_historical_batch(
+                    request,
+                    dict(historical_stage.get("last_result") or {}),
+                    result,
+                )
+            except Exception as exc:
+                return JobResult(
+                    JS.RETRYABLE_FAILED,
+                    "historical evidence progress could not be persisted",
+                    error_code="EVIDENCE_PROGRESS_WRITE_FAILED",
+                    error_message=str(exc),
+                    failures={H.LEARNING_FAILED},
+                    state_hint=ST.DEGRADED,
+                    metadata=result,
+                )
     return JobResult(JS.SUCCEEDED, f"research cycle: {result.get('decision', 'no action')}",
                      clears={H.LEARNING_FAILED}, state_hint=ST.OBSERVING, metadata=result)
 
