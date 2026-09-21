@@ -356,6 +356,24 @@ class Supervisor:
             return
 
 
+    def _activity_truth(self) -> dict:
+        try:
+            from research.autonomy.runtime_truth import derive_activity
+            return derive_activity(
+                self.jobs.list(limit=2000),
+                now_epoch=float(self.clock()),
+            )
+        except Exception as exc:
+            return {
+                "activity": "UNKNOWN",
+                "busy": False,
+                "current_jobs": [],
+                "current_count": 0,
+                "primary_job": {},
+                "source": "runtime_truth_error",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
     def _resource_budget(self) -> dict:
         try:
             from research.autonomy.resource_governor import assess
@@ -388,6 +406,8 @@ class Supervisor:
             "process_running": bool(self._running), "last_cycle": last_cycle,
             "live_feed": self.live_feed.health(),
             "resource_governor": self._resource_budget(),
+            "activity_truth": self._activity_truth(),
+            "current_activity": self._activity_truth().get("activity", "UNKNOWN"),
         })
         tmp = self._status_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(d, indent=2, default=str), encoding="utf-8")
@@ -1095,15 +1115,43 @@ class Supervisor:
         return False
 
     def _reconcile_idle_state(self) -> None:
-        """Repair a latched activity/boot state from durable queue and failure truth.
+        """Repair transient labels from durable queue/failure truth.
 
-        DATA_REFRESHING is an activity state, not a sticky readiness label. STARTING
-        is a boot label. If no DATA_REFRESH job is running or due, an idle tick must
-        converge to the durable data truth instead of preserving a stale hint forever.
+        PAPER_ACTIVE remains a policy/capability state and is not collapsed merely
+        because no job runs this instant. DATA_REFRESHING, STARTING and RESEARCHING
+        are transient activity labels: once their authoritative work disappears,
+        the supervisor must converge instead of leaving a stale UI/runtime claim.
         """
         if self.owner_state.get("halted"):
             return
         current = self.state.state
+        activity_truth = self._activity_truth()
+        activity = str(activity_truth.get("activity") or "IDLE")
+
+        if current == ST.RESEARCHING:
+            try:
+                from research.autonomy.runtime_truth import research_activities
+                research_active = activity in research_activities()
+            except Exception:
+                research_active = activity in {"HISTORICAL_REPLAY", "LEARNING", "RESEARCH"}
+            if research_active:
+                return
+            if activity == "DATA_REFRESH":
+                self._transition(
+                    ST.DATA_REFRESHING,
+                    "activity_reconcile",
+                    "Research work ended; official-data refresh is now the authoritative active work.",
+                    "activity_truth",
+                )
+                return
+            self._transition(
+                ST.OBSERVING,
+                "activity_reconcile",
+                "Research work ended; no due or running research job remains.",
+                "activity_truth",
+            )
+            return
+
         if current not in (ST.DATA_REFRESHING, ST.STARTING):
             return
         if self._refresh_activity_active():
