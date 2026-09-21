@@ -184,6 +184,11 @@ def snapshot_paper_key(snapshot_id: str) -> str:
     return f"snapshot_paper:{snapshot_id}"
 
 
+def snapshot_decision_key(snapshot_id: str) -> str:
+    """Closed-market selection/autopilot decision with no execution authority."""
+    return f"snapshot_decision:{snapshot_id}"
+
+
 def scan_key(snapshot_id: str, slot: str, session_date: str | None = None) -> str:
     suffix = f":{session_date}" if session_date else ""
     return f"market_scan:{snapshot_id}:{slot}{suffix}"
