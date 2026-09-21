@@ -356,10 +356,19 @@ def latest_index_print(ticker: str) -> Optional[dict]:
             return None
         close = float(df["Close"].iloc[-1])
         prev = float(df["Close"].iloc[-2])
+        try:
+            as_of = str(pd.Timestamp(df.index[-1]).date())
+        except Exception:
+            as_of = ""
     if close <= 0:
         return None
     chg = (close / prev - 1.0) * 100.0 if prev else 0.0
-    return {"price": close, "chg_pct": round(chg, 2), "source": "nse_index_store"}
+    return {
+        "price": close,
+        "chg_pct": round(chg, 2),
+        "source": "nse_index_store",
+        "as_of": as_of,
+    }
 
 
 def get_index_ohlcv(ticker: str) -> Optional[pd.DataFrame]:
