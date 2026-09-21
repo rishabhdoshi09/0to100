@@ -42,6 +42,27 @@ const CRITICAL_READS = [
   '/api/product-contract',
 ] as const
 
+async function loadPersistedSecondaryRoute(page: import('@playwright/test').Page, route: string) {
+  // Write the persisted nav state and trigger reload inside the SAME browser task.
+  // If the test writes sessionStorage and then yields back to React, App's own
+  // navigation persistence effect can truthfully overwrite that test-only write
+  // with the currently active route before a later page.reload() runs. That race
+  // produced false burn-in failures where the app was healthy but still on the
+  // previous Coverage view. Atomic browser-side reload proves the real persisted
+  // navigation contract without weakening any rendered-workspace assertion.
+  await page.evaluate((nextRoute) => {
+    const current = JSON.parse(window.sessionStorage.getItem('quantterm-nav') || '{}')
+    window.sessionStorage.setItem('quantterm-nav', JSON.stringify({
+      active: nextRoute,
+      selected: current.selected || '',
+      compare: Array.isArray(current.compare) ? current.compare : [],
+    }))
+    window.location.reload()
+  }, route)
+  await page.waitForLoadState('domcontentloaded')
+}
+
+
 async function clickPrimaryNavButton(nav: Locator, name: string) {
   const button = nav.getByRole('button', { name, exact: true })
   await expect(button).toBeVisible()
@@ -102,15 +123,7 @@ test('10-hour accelerated full-desk burn-in keeps every visible tab and backend 
     // sidebar no longer exposes them as peer tabs. Force-load each route from
     // the same persisted navigation state App itself consumes.
     for (const [route, title] of SECONDARY_VIEWS) {
-      await page.evaluate((nextRoute) => {
-        const current = JSON.parse(window.sessionStorage.getItem('quantterm-nav') || '{}')
-        window.sessionStorage.setItem('quantterm-nav', JSON.stringify({
-          active: nextRoute,
-          selected: current.selected || '',
-          compare: Array.isArray(current.compare) ? current.compare : [],
-        }))
-      }, route)
-      await page.reload()
+      await loadPersistedSecondaryRoute(page, route)
       await expect(page.getByRole('heading', { name: title, level: 1, exact: true })).toBeVisible()
       await expect(page.locator('.workspace')).toBeVisible()
       await page.waitForTimeout(100)
