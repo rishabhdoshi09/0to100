@@ -85,3 +85,19 @@ def test_priority_order_is_explicit_and_live_authority_unchanged():
         "RESEARCH",
     ]
     assert out["live_money_unchanged"] is True
+
+
+
+def test_decision_only_paper_identity_does_not_preempt_heavy_history():
+    out = RG.assess(
+        [
+            _job(
+                SCH.PAPER_CYCLE,
+                status=JS.PENDING,
+                scheduled_for=1,
+                key="snapshot_decision:snap:thesis",
+            )
+        ],
+        now_epoch=100,
+    )
+    assert out["historical_replay_allowed"] is True
