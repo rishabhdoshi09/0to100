@@ -1145,6 +1145,14 @@ class Supervisor:
                     "activity_truth",
                 )
                 return
+            if activity == "FORWARD_PAPER":
+                self._transition(
+                    ST.PAPER_ACTIVE,
+                    "activity_reconcile",
+                    "Research work ended; a real forward-paper cycle is now the authoritative active work.",
+                    "activity_truth",
+                )
+                return
             self._transition(
                 ST.OBSERVING,
                 "activity_reconcile",
