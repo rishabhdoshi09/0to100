@@ -234,6 +234,7 @@ class Supervisor:
                     retire = not (
                         key.startswith("snapshot_paper:")
                         or key.startswith("snapshot_manage:")
+                        or key.startswith("snapshot_decision:")
                     )
                 elif job.job_type == SCH.OUTCOME_RESOLUTION:
                     retire = not key.startswith("forward_outcome:")
@@ -499,6 +500,55 @@ class Supervisor:
         except Exception:
             return
 
+    def _ensure_closed_market_decision_cycle(self) -> None:
+        """Persist one current selector judgment set while cash entries are closed.
+
+        Identity includes data, thesis and immutable calibration. The job cannot
+        open a paper position and cannot create forward/counterfactual evidence.
+        A changed thesis/calibration therefore earns a new audit judgment, while
+        unchanged repeated supervisor ticks stay idempotent.
+        """
+        now_ist = self.deps.now_ist()
+        holidays = self.deps.holidays()
+        if SCH.market_is_open(now_ist, holidays):
+            return
+        try:
+            from product.decision_simulation_gate import status
+
+            gate = dict(status() or {})
+        except Exception:
+            return
+        if not gate.get("discovery_ready"):
+            return
+        if not self._ensure_decision_simulation_authority():
+            return
+
+        scan_id = str(gate.get("scan_scanned_at") or "").strip()
+        thesis_hash = str(gate.get("thesis_hash") or "").strip()
+        snap = self._snapshot_token()
+        if not snap:
+            snap = f"scan:{scan_id}" if scan_id else ""
+        if not snap:
+            return
+
+        calibration_id = ""
+        try:
+            from scan.calibration_snapshot import load_current
+            calibration_id = str((load_current() or {}).get("snapshot_id") or "")
+        except Exception:
+            calibration_id = ""
+        identity = ":".join((
+            snap,
+            thesis_hash or "thesis-unknown",
+            calibration_id or "calibration-unknown",
+        ))
+        self.jobs.enqueue(
+            SCH.PAPER_CYCLE,
+            idempotency_key=SCH.snapshot_decision_key(identity),
+            input_snapshot_id=snap,
+            critical=False,
+        )
+
     @staticmethod
     def _news_bucket(now_ist, market_open: bool) -> str:
         size = 5 if market_open else 20
@@ -547,6 +597,11 @@ class Supervisor:
         # latest completed official session. Once fresh discovery is ready, the
         # supervisor automatically authorizes paper/history simulation.
         self._ensure_startup_trade_discovery()
+
+        # Persist one canonical selector judgment for the current data/thesis/
+        # calibration identity. This is operational truth only: no fill, no
+        # forward evidence and no learning ingestion.
+        self._ensure_closed_market_decision_cycle()
 
         # Closed market: keep official completed-session data current once the
         # exchange publication window opens. These jobs never auto-chain a scan.
@@ -818,6 +873,7 @@ class Supervisor:
                 "paper_cycle:",
                 f"snapshot_scan:{snap}",
                 f"snapshot_paper:{snap}",
+                f"snapshot_decision:{snap}",
                 summary=f"snapshot {snap} terminal paper cycle completed",
             )
         except Exception:
