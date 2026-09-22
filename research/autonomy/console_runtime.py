@@ -435,3 +435,5 @@ def run_visible_loop(
             )
         except Exception:
             pass
+        with _HEARTBEAT_CONSOLE_LOCK:
+            _HEARTBEAT_CONSOLE_STATE.pop(id(supervisor), None)
