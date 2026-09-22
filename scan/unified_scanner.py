@@ -318,27 +318,11 @@ def is_beaten_down(df, max_drop: float = _MAX_DROP) -> bool:
         return False
 
 
-# Signal metadata: label shown to user, category for filtering, base score
-SIGNAL_META = {
-    "BREAKOUT_52W":    ("52-week high breakout",       "Breakout",    30),
-    "BREAKOUT_RES":    ("Resistance break on volume",  "Breakout",    26),
-    "GOLDEN_CROSS":    ("Golden cross (50/200 SMA)",   "Breakout",    22),
-    "VOL_SQUEEZE":     ("Squeeze breakout",            "Breakout",    22),
-    "VCP":             ("VCP — tightening base",       "Pattern",     28),
-    "FLAT_BASE":       ("Flat base near breakout",     "Pattern",     24),
-    "CUP_HANDLE":      ("Cup & handle",                "Pattern",     24),
-    "HIGH_TIGHT_FLAG": ("High tight flag",             "Pattern",     30),
-    "ASC_TRIANGLE":    ("Ascending triangle",          "Pattern",     24),
-    "DOUBLE_BOTTOM":   ("Double bottom",               "Pattern",     22),
-    "PRE_BREAKOUT":    ("Breakout ke kareeb",          "PreBreakout", 26),
-    "ACCUMULATION":    ("Smart-money accumulation",    "PreBreakout", 24),
-    "DELIVERY_SPIKE":  ("Delivery buying rising",      "PreBreakout", 18),
-    "NR7_COIL":        ("Coiled — tightest day in 7",  "PreBreakout", 14),
-    "POCKET_PIVOT":    ("Pocket pivot volume",         "PreBreakout", 20),
-    "MOMENTUM":        ("Strong momentum",             "Momentum",    20),
-    "PULLBACK_SUPPORT": ("Uptrend pullback to support", "Pullback",   26),
-}
+# Signal metadata is canonicalized in one registry so scanner/calibration/replay
+# counts cannot silently diverge.
+from scan.signal_registry import signal_meta as _registry_signal_meta
 
+SIGNAL_META = _registry_signal_meta()
 
 @dataclass
 class StockSignal:
@@ -393,6 +377,8 @@ def _load_calibration() -> dict[str, float]:
         if not rep:
             return mult
         for sig, s in rep.get("signals", {}).items():
+            if sig not in SIGNAL_META:
+                continue                       # legacy/unknown IDs cannot affect production
             if s.get("trades", 0) < 20:
                 continue                       # not enough evidence — leave at 1.0
             exp = s.get("expectancy_r", 0.0)
@@ -421,9 +407,14 @@ class UnifiedScanner:
         # one the backtest already distrusts. Evidence-gated (≥30 outcomes);
         # no tracked data → no change. This is what actually lifts expectancy:
         # proven-negative signals stop earning BUY weight.
+        live_mult: dict[str, float] = {}
         try:
             from scan.live_edge import live_calibration
-            for sig, m in live_calibration().items():
+            live_mult = {
+                sig: m for sig, m in live_calibration().items()
+                if sig in SIGNAL_META
+            }
+            for sig, m in live_mult.items():
                 self._calib[sig] = min(self._calib.get(sig, 1.0), m)
         except Exception as exc:
             log.debug("live_calibration_skip", error=str(exc))
@@ -433,8 +424,26 @@ class UnifiedScanner:
         # never inherit an NSE regime or pay for computing one.
         self._regime = ""
         self._regime_calib: dict[str, float] = {}
-        if self._calib:
-            log.info("scanner_calibrated", signals=len(self._calib))
+        self._signal_registry: dict = {}
+        try:
+            from scan.signal_registry import build_registry, save_registry
+            self._signal_registry = save_registry(build_registry())
+            summary = dict(self._signal_registry.get("summary") or {})
+            missing = list(summary.get("scanner_without_forward_calibration") or [])
+            log.info(
+                "scanner_calibrated",
+                signals=len(self._calib),
+                scanner_catalog=int(summary.get("scanner_catalog") or len(SIGNAL_META)),
+                backtest_calibrated=int(summary.get("backtest_calibrated") or 0),
+                live_calibrated=int(summary.get("forward_calibrated") or 0),
+                effective_calibrated=int(summary.get("effective_calibrated") or len(self._calib)),
+                scanner_without_live=[x.get("signal_id") for x in missing],
+                registry_version=self._signal_registry.get("registry_version"),
+            )
+        except Exception as exc:
+            log.debug("signal_registry_skip", error=str(exc))
+            if self._calib:
+                log.info("scanner_calibrated", signals=len(self._calib))
 
     def scan(self, symbols: list[str], progress=None, *, prefetch: bool = True) -> list[StockSignal]:
         from scan.bulk_fetcher import prefetch as do_prefetch, get_cached, cached_symbols

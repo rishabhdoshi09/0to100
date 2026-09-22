@@ -351,3 +351,27 @@ def test_unified_scanner_has_no_feature002_import():
     assert "feature002" not in ticket.read_text()
     ap = Path(__file__).resolve().parents[1] / "execution" / "autopilot.py"
     assert "feature002" not in ap.read_text()
+
+
+
+def test_shadow_regime_is_cache_only(monkeypatch):
+    from types import SimpleNamespace
+    import core.regime_engine as regime_engine
+    import research.feature002.observe as observe
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("Feature-002 shadow hook must never compute/fetch regime")
+
+    monkeypatch.setattr(regime_engine, "compute_regime", forbidden)
+    monkeypatch.setattr(
+        regime_engine,
+        "peek_cached_regime",
+        lambda: SimpleNamespace(
+            market_regime="TRENDING_BULL",
+            data_available=True,
+        ),
+    )
+    assert observe._regime() == "TRENDING_BULL"
+
+    monkeypatch.setattr(regime_engine, "peek_cached_regime", lambda: None)
+    assert observe._regime() == ""
