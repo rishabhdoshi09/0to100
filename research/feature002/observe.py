@@ -107,9 +107,16 @@ def _sector_map() -> tuple[dict[str, str], str]:
 
 
 def _regime() -> str:
+    """Read cached regime only; shadow observation must never trigger live fetches."""
     try:
-        from core.regime_engine import compute_regime
-        return str(getattr(compute_regime(), "market_regime", "") or "")
+        from core.regime_engine import peek_cached_regime
+
+        state = peek_cached_regime()
+        if state is None:
+            return ""
+        if getattr(state, "data_available", True) is False:
+            return ""
+        return str(getattr(state, "market_regime", "") or "")
     except Exception:
         return ""
 
