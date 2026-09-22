@@ -165,12 +165,20 @@ def radar_home_workspace() -> dict[str, Any]:
     except Exception:
         scan = {}
     try:
-        from product.sepa_setup import public_best_setups
+        from product.sepa_setup import load_persisted_best_setups
 
-        sepa_cards, sepa_note = public_best_setups(scan, limit=8, score_cap=24, max_seconds=2.0)
+        persisted = load_persisted_best_setups(str((scan or {}).get("scanned_at") or ""))
+        if persisted is None:
+            sepa_cards = []
+            sepa_note = (
+                "Persisted SEPA ranking is not ready for this scan yet. "
+                "Home does not recompute historical rankings inside a GET request."
+            )
+        else:
+            sepa_cards, sepa_note = persisted
     except Exception:
         sepa_cards = []
-        sepa_note = "SEPA ranking is temporarily unavailable."
+        sepa_note = "Persisted SEPA ranking is temporarily unavailable."
     try:
         market = core._market_payload()
         if not scan:
@@ -182,6 +190,7 @@ def radar_home_workspace() -> dict[str, Any]:
             long_term_payload=long_term,
             market=market,
             sepa_cards=sepa_cards,
+            refresh_technicals=False,
         )
     except Exception as exc:
         home = {
