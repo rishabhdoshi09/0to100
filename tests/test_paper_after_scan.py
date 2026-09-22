@@ -21,6 +21,12 @@ class _Jobs:
         self.enqueued.append((job_type, kwargs))
         return SimpleNamespace(status=JS.PENDING, job_type=job_type)
 
+    def list(self, limit=2000):
+        # Minimal durable-store contract for resource-governor tests. The
+        # lightweight scheduler tests below only need to express that no
+        # higher-priority persisted job is currently due/running.
+        return []
+
 
 def test_successful_intraday_scan_enqueues_paper_cycle(monkeypatch):
     jobs = _Jobs()
@@ -141,6 +147,7 @@ def test_off_session_historical_paper_waits_for_approval(monkeypatch):
     jobs = _Jobs()
     supervisor = Supervisor.__new__(Supervisor)
     supervisor.jobs = jobs
+    supervisor.clock = lambda: 0.0
     supervisor.deps = SimpleNamespace(
         now_ist=lambda: datetime(2026, 9, 1, 23, 50, tzinfo=IST),
         holidays=lambda: set(),
@@ -164,6 +171,7 @@ def test_off_session_after_close_enqueues_historical_paper(monkeypatch):
     jobs = _Jobs()
     supervisor = Supervisor.__new__(Supervisor)
     supervisor.jobs = jobs
+    supervisor.clock = lambda: 0.0
     supervisor.deps = SimpleNamespace(
         now_ist=lambda: datetime(2026, 9, 1, 23, 50, tzinfo=IST),
         holidays=lambda: set(),
@@ -406,6 +414,7 @@ def test_closed_market_does_not_start_historical_simulation_before_approval(monk
     jobs = _Jobs()
     supervisor = Supervisor.__new__(Supervisor)
     supervisor.jobs = jobs
+    supervisor.clock = lambda: 0.0
     supervisor.deps = SimpleNamespace(
         now_ist=lambda: datetime(2026, 9, 1, 23, 50, tzinfo=IST),
         holidays=lambda: set(),
