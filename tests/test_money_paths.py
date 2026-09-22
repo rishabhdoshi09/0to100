@@ -3170,36 +3170,36 @@ class TestLiveEdge:
         from scan.live_edge import live_calibration
         # GOOD: 40 winners (+2R) → boost 1.25; BAD: 40 losers (-1R) → 0.45;
         # THIN: 5 outcomes → no claim (absent)
-        rows = ([("GOOD", 6.0, 1)] * 40 + [("BAD", -3.0, 0)] * 40
-                + [("THIN", 6.0, 1)] * 5)
+        rows = ([("MOMENTUM", 6.0, 1)] * 40 + [("PULLBACK_SUPPORT", -3.0, 0)] * 40
+                + [("VCP", 6.0, 1)] * 5)
         self._seed(tmp_path, monkeypatch, rows)
         calib = live_calibration()
-        assert calib["GOOD"] == 1.25
-        assert calib["BAD"] == 0.45                    # proven loser demoted
-        assert "THIN" not in calib                     # <30 = no claim
+        assert calib["MOMENTUM"] == 1.25
+        assert calib["PULLBACK_SUPPORT"] == 0.45                    # proven loser demoted
+        assert "VCP" not in calib                     # <30 = no claim
 
     def test_scanner_blend_is_conservative(self, tmp_path, monkeypatch):
         """Live data may DEMOTE but never inflate past the backtest's view."""
         import scan.unified_scanner as us
         # backtest already distrusts SIG (0.75); live is euphoric (would be 1.25)
-        monkeypatch.setattr(us, "_load_calibration", lambda: {"SIG": 0.75})
-        self._seed(tmp_path, monkeypatch, [("SIG", 6.0, 1)] * 40)   # live → 1.25
+        monkeypatch.setattr(us, "_load_calibration", lambda: {"MOMENTUM": 0.75})
+        self._seed(tmp_path, monkeypatch, [("MOMENTUM", 6.0, 1)] * 40)   # live → 1.25
         sc = us.UnifiedScanner()
-        assert sc._calib["SIG"] == 0.75                # min(0.75, 1.25) — no inflation
+        assert sc._calib["MOMENTUM"] == 0.75                # min(0.75, 1.25) — no inflation
         # and a live-proven loser pulls a trusted signal DOWN
-        monkeypatch.setattr(us, "_load_calibration", lambda: {"SIG2": 1.0})
-        self._seed(tmp_path, monkeypatch, [("SIG2", -3.0, 0)] * 40)  # live → 0.45
+        monkeypatch.setattr(us, "_load_calibration", lambda: {"PULLBACK_SUPPORT": 1.0})
+        self._seed(tmp_path, monkeypatch, [("PULLBACK_SUPPORT", -3.0, 0)] * 40)  # live → 0.45
         sc2 = us.UnifiedScanner()
-        assert sc2._calib["SIG2"] == 0.45              # demoted by live evidence
+        assert sc2._calib["PULLBACK_SUPPORT"] == 0.45              # demoted by live evidence
 
     def test_no_data_no_change(self, tmp_path, monkeypatch):
         """Fresh install (no outcomes) → calibration untouched, nothing breaks."""
         import scan.unified_scanner as us
-        monkeypatch.setattr(us, "_load_calibration", lambda: {"SIG": 1.1})
+        monkeypatch.setattr(us, "_load_calibration", lambda: {"MOMENTUM": 1.1})
         import core.signal_outcome_tracker as tk
         monkeypatch.setattr(tk, "_DB_PATH", str(tmp_path / "empty.db"))
         sc = us.UnifiedScanner()
-        assert sc._calib.get("SIG") == 1.1
+        assert sc._calib.get("MOMENTUM") == 1.1
 
     def test_edge_split_by_regime(self, tmp_path, monkeypatch):
         """Same signal can be gold in one tape, poison in another — the
