@@ -171,8 +171,9 @@ def radar_home_workspace() -> dict[str, Any]:
         if persisted is None:
             sepa_cards = []
             sepa_note = (
-                "Persisted SEPA ranking is not ready for this scan yet. "
-                "Home does not recompute historical rankings inside a GET request."
+                "Persisted SEPA ranking is temporarily unavailable for this scan because the "
+                "worker has not published it yet. Home does not recompute historical "
+                "rankings inside a GET request."
             )
         else:
             sepa_cards, sepa_note = persisted
