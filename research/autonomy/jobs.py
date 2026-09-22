@@ -958,6 +958,28 @@ def run_paper_cycle(ctx) -> JobResult:
         entries_ok = False
         data_failure = "NO_DATA_SNAPSHOT"
         reason = data_failure
+    if decision_only and data_failure:
+        return JobResult(
+            JS.BLOCKED,
+            "decision-only cycle deferred until trusted current market data is available",
+            error_code=data_failure,
+            error_message="canonical selector judgment requires accepted market data",
+            failures={H.SNAPSHOT_STALE},
+            state_hint=ST.DATA_BLOCKED,
+            new_entries_allowed=False,
+            blocked_on=DEP_DATA,
+            metadata={
+                "eligibility": "DATA_UNAVAILABLE",
+                "entry_block_reason": data_failure,
+                "session_phase": phase,
+                "market_data_source": data_source,
+                "decision_only": True,
+                "not_forward_evidence": True,
+                "decision_only_valid": False,
+                "judgment_count": 0,
+                "failure_class": "DATA_OR_PROVIDER",
+            },
+        )
     try:
         if decision_only:
             if not hasattr(ctx.deps, "run_decision_only_cycle"):
