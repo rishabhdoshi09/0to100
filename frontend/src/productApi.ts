@@ -949,6 +949,114 @@ export type RecommendationEvidencePanel = {
   provenance?: string
 }
 
+export type RecommendationConfidenceBreakdown = {
+  schema_version?: number
+  available?: boolean
+  reason?: string
+  setup?: string
+  components?: {
+    setup_quality?: {
+      status?: string
+      value?: number | null
+      unit?: string
+      label?: string
+      is_win_probability?: boolean
+      source?: string
+    }
+    regime_support?: {
+      status?: string
+      regime?: string
+      market_support?: string
+      detail?: string
+      source?: string
+      note?: string
+    }
+    sector_support?: {
+      status?: string
+      sector?: string
+      leadership_score?: number | null
+      leadership_label?: string
+      breadth?: string
+      momentum?: string
+      source?: string
+    }
+    extension?: {
+      status?: string
+      entry_state?: string
+      chase_risk?: boolean
+      extension_pct?: number | null
+      rsi?: number | null
+      impact?: string
+      numeric_penalty?: number | null
+      note?: string
+    }
+    production_history?: {
+      status?: string
+      sample_size?: number
+      mean_R?: number | null
+      splits_tested?: number
+      positive_splits?: number
+      confidence_score?: number | null
+      generation_fingerprint?: string
+      generation_match?: boolean
+      source?: string
+    }
+    forward_evidence?: {
+      available?: boolean
+      trusted_sample_size?: number
+      observed_sample_size?: number
+      mean_R?: number | null
+      confidence_score?: number | null
+      source?: string
+      trusted_positive?: boolean
+      trusted_negative?: boolean
+      policy_id?: string
+      evidence_source?: string
+      exact_current_version_proven?: boolean
+      version_status?: string
+      note?: string
+    }
+    research_historical_replay?: {
+      available?: boolean
+      policy_id?: string
+      sample_size?: number
+      expectancy_R?: number | null
+      historical_confidence_score?: number | null
+      lower_95_R?: number | null
+      upper_95_R?: number | null
+      not_promotion_evidence?: boolean
+      not_real_pnl?: boolean
+      affects_final_confidence?: boolean
+      reason?: string
+    }
+    calibration?: {
+      snapshot_id?: string
+      immutable?: boolean
+      data_identity?: string
+      thesis_hash?: string
+      feature_version?: string
+      model_version?: string
+      signal_registry_version?: string
+      scanner_catalog?: number | null
+      forward_calibrated?: number | null
+    }
+  }
+  final?: {
+    evidence_strength_score?: number | null
+    stage?: string
+    paper_eligible?: boolean
+    is_win_probability?: boolean
+    basis?: string
+  }
+  identities?: {
+    generation_fingerprint?: string
+    thesis_hash?: string
+    calibration_snapshot_id?: string
+  }
+  truth_note?: string
+  live_locked?: boolean
+}
+
 export type RecommendationCard = {
   symbol: string
   company: string
@@ -993,6 +1101,7 @@ export type RecommendationCard = {
   what_changes_mind?: string[]
   next_step?: string
   evidence_panel?: RecommendationEvidencePanel
+  confidence_breakdown?: RecommendationConfidenceBreakdown
   case?: RecommendationCase
   methods?: RecoMethod[]
   method_confirms?: number
