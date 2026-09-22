@@ -83,17 +83,14 @@ def begin_startup(startup_id: str | None = None, *, path: str | Path | None = No
 
 
 def _board() -> dict[str, Any]:
+    """Cheap persisted discovery read. Never rank/build inside a status request.
+
+    Whole-market scan/publication workers own discovery computation and persist the
+    result in decision_discovery_store. A missing cache is truthful SEARCHING state,
+    not permission for an HTTP GET to perform seconds/minutes of synchronous work.
+    """
     try:
-        from product.decision_discovery_store import (
-            load as load_discovery,
-            save as save_discovery,
-        )
-        from product.decision_service import decision_board
-        from product.recommendations_store import (
-            load_recommendations,
-            reco_matches_scan,
-        )
-        from product.recommendations_workspace import build_recommendations_workspace
+        from product.decision_discovery_store import load as load_discovery
         from product.scan_store import load_scan
         from product.trading_thesis import manifest as thesis_manifest
 
@@ -112,49 +109,41 @@ def _board() -> dict[str, Any]:
                 "reason": "Whole-market scan has not produced current candidates yet.",
                 "scan_scanned_at": str(scan.get("scanned_at") or ""),
                 "best_trades": [],
+                "decisions": [],
+                "actionable": 0,
                 "thesis": {},
+                "status_source": "persisted_discovery",
             }
 
         scan_at = str(scan.get("scanned_at") or "")
         long_term_at = str(long_term.get("scanned_at") or "")
-        thesis_hash = str(thesis_manifest().get("thesis_hash") or "")
-
+        thesis = dict(thesis_manifest() or {})
+        thesis_hash = str(thesis.get("thesis_hash") or "")
         cached = load_discovery(
             scan_scanned_at=scan_at,
             long_term_scanned_at=long_term_at,
             thesis_hash=thesis_hash,
         )
         if cached is not None:
-            return cached
+            out = dict(cached)
+            out["status_source"] = "persisted_discovery"
+            return out
 
-        # Compatibility/recovery path for older runtimes whose latest scan
-        # predates discovery persistence. Normal startup discovery never pays
-        # this cost in the HTTP path because run_market_scan writes the board.
-        workspace = load_recommendations()
-        if not reco_matches_scan(
-            workspace,
-            scan_scanned_at=scan_at,
-            long_term_scanned_at=long_term_at,
-        ):
-            workspace = build_recommendations_workspace(
-                scan_payload=scan,
-                long_term_payload=long_term,
-                refresh_technicals=False,
-                settle_cases=False,
-                deep_confirm=False,
-                persist_ledger=False,
-            )
-        board = dict(decision_board(workspace=workspace, limit=40) or {})
-        try:
-            save_discovery(
-                board,
-                scan_scanned_at=scan_at,
-                long_term_scanned_at=long_term_at,
-                thesis_hash=thesis_hash,
-            )
-        except Exception:
-            pass
-        return board
+        return {
+            "available": False,
+            "state": "SEARCHING_BEST_TRADES",
+            "reason": (
+                "Current scan exists, but its persisted best-trade discovery projection "
+                "is not ready yet. QuantTerm autonomy will publish it; this status read "
+                "does not rebuild recommendations."
+            ),
+            "scan_scanned_at": scan_at,
+            "best_trades": [],
+            "decisions": [],
+            "actionable": 0,
+            "thesis": thesis,
+            "status_source": "persisted_discovery_missing",
+        }
     except Exception as exc:
         return {
             "available": False,
@@ -162,7 +151,10 @@ def _board() -> dict[str, Any]:
             "reason": str(exc)[:240],
             "scan_scanned_at": "",
             "best_trades": [],
+            "decisions": [],
+            "actionable": 0,
             "thesis": {},
+            "status_source": "persisted_discovery_error",
         }
 
 
