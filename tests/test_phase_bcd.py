@@ -8,7 +8,7 @@ from product.decision_attribution import (
     attribute_outcome,
 )
 from product.decision_calibration import display_confidence
-from product.decision_freeze import freeze, get_freeze
+from product.decision_freeze import DecisionIdentityCollision, freeze, get_freeze
 from product.decision_outcomes import path_metrics
 from product.exit_engine import ATR, HOLD, INITIAL_INVALIDATION, evaluate_exit
 from product.experiment_queue import from_failures
@@ -33,17 +33,23 @@ def test_freeze_is_immutable(tmp_path):
         "reason_code": "ENTRY_TOO_EXTENDED",
         "versions": {"committee_version": "committee_v2_families"},
     }, path=db)
-    second = freeze({
-        "decision_id": "INFY:2026-06-12:1",
-        "symbol": "INFY",
-        "as_of": "2026-06-12",
-        "decision": "BUY",
-        "entry": 1,
-        "stop": 1,
-    }, path=db)
+    # The immutable row cannot be rewritten. Reusing the same explicit
+    # decision_id for materially different decision-time evidence is an identity
+    # collision and must fail closed rather than silently aliasing two decisions.
+    import pytest
+
+    with pytest.raises(DecisionIdentityCollision):
+        freeze({
+            "decision_id": "INFY:2026-06-12:1",
+            "symbol": "INFY",
+            "as_of": "2026-06-12",
+            "decision": "BUY",
+            "entry": 1,
+            "stop": 1,
+        }, path=db)
+
     stored = get_freeze("INFY:2026-06-12:1", path=db)
     assert first["decision"] == "WAIT"
-    assert second["decision"] == "WAIT"
     assert stored["decision"] == "WAIT"
     assert stored["rewritten_after_outcome"] is False
 
