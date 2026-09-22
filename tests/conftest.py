@@ -231,6 +231,8 @@ def isolate_mutable_runtime_state(tmp_path_factory, monkeypatch, request):
     monkeypatch.setenv("QT_LEARNING_POLICIES", str(policies))
     counter = tmp_path_factory.mktemp("counterfactuals") / "cf.jsonl"
     monkeypatch.setenv("QT_COUNTERFACTUALS", str(counter))
+    decision_freeze = tmp_path_factory.mktemp("decision_freeze") / "decision_freeze.db"
+    monkeypatch.setenv("QT_DECISION_FREEZE", str(decision_freeze))
     taken = tmp_path_factory.mktemp("taken_evidence") / "taken.jsonl"
     monkeypatch.setenv("QT_TAKEN_EVIDENCE", str(taken))
     ingested = tmp_path_factory.mktemp("learning_ingested") / "ingested.json"
