@@ -3179,27 +3179,54 @@ class TestLiveEdge:
         assert "VCP" not in calib                     # <30 = no claim
 
     def test_scanner_blend_is_conservative(self, tmp_path, monkeypatch):
-        """Live data may DEMOTE but never inflate past the backtest's view."""
+        """Immutable snapshot preserves: forward may demote, never inflate backtest."""
         import scan.unified_scanner as us
-        # backtest already distrusts SIG (0.75); live is euphoric (would be 1.25)
-        monkeypatch.setattr(us, "_load_calibration", lambda: {"MOMENTUM": 0.75})
-        self._seed(tmp_path, monkeypatch, [("MOMENTUM", 6.0, 1)] * 40)   # live → 1.25
-        sc = us.UnifiedScanner()
-        assert sc._calib["MOMENTUM"] == 0.75                # min(0.75, 1.25) — no inflation
-        # and a live-proven loser pulls a trusted signal DOWN
-        monkeypatch.setattr(us, "_load_calibration", lambda: {"PULLBACK_SUPPORT": 1.0})
-        self._seed(tmp_path, monkeypatch, [("PULLBACK_SUPPORT", -3.0, 0)] * 40)  # live → 0.45
-        sc2 = us.UnifiedScanner()
-        assert sc2._calib["PULLBACK_SUPPORT"] == 0.45              # demoted by live evidence
+        from scan.calibration_snapshot import build_snapshot
+        from scan.live_edge import profile_edge
+
+        self._seed(tmp_path, monkeypatch, [("MOMENTUM", 6.0, 1)] * 40)
+        snap = build_snapshot(
+            backtest_report={
+                "signals": {"MOMENTUM": {"trades": 40, "expectancy_r": 0.0}}
+            },
+            live_profile=profile_edge(),
+            data_identity="test:data",
+            thesis_hash="test:thesis",
+        )
+        sc = us.UnifiedScanner(calibration_snapshot=snap)
+        assert sc._calib["MOMENTUM"] == 0.75
+
+        self._seed(tmp_path, monkeypatch, [("PULLBACK_SUPPORT", -3.0, 0)] * 40)
+        snap2 = build_snapshot(
+            backtest_report={
+                "signals": {
+                    "PULLBACK_SUPPORT": {"trades": 40, "expectancy_r": 0.15}
+                }
+            },
+            live_profile=profile_edge(),
+            data_identity="test:data",
+            thesis_hash="test:thesis",
+        )
+        sc2 = us.UnifiedScanner(calibration_snapshot=snap2)
+        assert sc2._calib["PULLBACK_SUPPORT"] == 0.45
 
     def test_no_data_no_change(self, tmp_path, monkeypatch):
-        """Fresh install (no outcomes) → calibration untouched, nothing breaks."""
+        """No forward outcomes leaves the backtest calibration unchanged."""
         import scan.unified_scanner as us
-        monkeypatch.setattr(us, "_load_calibration", lambda: {"MOMENTUM": 1.1})
+        from scan.calibration_snapshot import build_snapshot
         import core.signal_outcome_tracker as tk
+
         monkeypatch.setattr(tk, "_DB_PATH", str(tmp_path / "empty.db"))
-        sc = us.UnifiedScanner()
-        assert sc._calib.get("MOMENTUM") == 1.1
+        snap = build_snapshot(
+            backtest_report={
+                "signals": {"MOMENTUM": {"trades": 40, "expectancy_r": 0.15}}
+            },
+            live_profile={"signals": {}},
+            data_identity="test:data",
+            thesis_hash="test:thesis",
+        )
+        sc = us.UnifiedScanner(calibration_snapshot=snap)
+        assert sc._calib.get("MOMENTUM") == 1.0
 
     def test_edge_split_by_regime(self, tmp_path, monkeypatch):
         """Same signal can be gold in one tape, poison in another — the
