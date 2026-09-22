@@ -206,6 +206,48 @@ class IncidentStore:
         _atomic(self.path, {"schema_version": SCHEMA_VERSION, "incidents": rows})
         return row
 
+    def recover_for_job(self, job: Any, *, note: str = "") -> list[dict[str, Any]]:
+        """Close open dossiers tied to the exact durable job identity."""
+        job_ctx = _job_context(job)
+        job_id = str(job_ctx.get("job_id") or "")
+        job_type = str(job_ctx.get("job_type") or "")
+        key = str(job_ctx.get("idempotency_key") or "")
+        if not (job_id or (job_type and key)):
+            return []
+
+        store = self.load()
+        rows = dict(store.get("incidents") or {})
+        recovered: list[dict[str, Any]] = []
+        now = ST._now_ist_iso()
+        changed = False
+        for incident_id, raw in list(rows.items()):
+            row = dict(raw or {})
+            if str(row.get("status") or "") != STATUS_OPEN:
+                continue
+            linked = dict(row.get("job") or {})
+            same = bool(
+                (job_id and str(linked.get("job_id") or "") == job_id)
+                or (
+                    job_type
+                    and key
+                    and str(linked.get("job_type") or "") == job_type
+                    and str(linked.get("idempotency_key") or "") == key
+                )
+            )
+            if not same:
+                continue
+            row["status"] = STATUS_RECOVERED
+            row["recovered_at"] = now
+            row["recovery_note"] = str(note or "authoritative job completed successfully")
+            row["materially_changed"] = True
+            rows[incident_id] = row
+            recovered.append(row)
+            changed = True
+
+        if changed:
+            _atomic(self.path, {"schema_version": SCHEMA_VERSION, "incidents": rows})
+        return recovered
+
     def recent(self, limit: int = 20, *, open_only: bool = False) -> list[dict[str, Any]]:
         rows = list(self.load().get("incidents", {}).values())
         if open_only:
