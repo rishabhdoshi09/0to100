@@ -232,6 +232,7 @@ def _decorate(decision: AutopilotDecision, *, policy: Mapping[str, Any] | None, 
     decision.context = dict(context or {})
     decision.policy_effect = str((policy or {}).get("final_effect") or decision.policy_effect or "NEUTRAL")
     decision.breakdown = score_breakdown(decision.card, policy, context)
+    decision.breakdown["confidence"] = dict((policy or {}).get("confidence_breakdown") or {})
     base_rank = float(decision.breakdown.get("selection_rank") or 0.0)
     try:
         from product.challenger_learning import paper_selection_adjustment
