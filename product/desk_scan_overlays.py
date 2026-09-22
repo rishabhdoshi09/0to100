@@ -57,16 +57,19 @@ def persist_desks_from_market_scan(scan_payload: Mapping[str, Any] | None) -> di
         reco_cards = int((slim.get("scan_meta") or {}).get("assigned_count") or 0)
 
         # Startup discovery is computed once in the scan worker, never in the
-        # HTTP status path. It uses the same just-built recommendation workspace
-        # and production selection seam, then persists an immutable projection
-        # keyed to the scan/long-term/thesis identity.
+        # HTTP status path. Build the canonical board first, then fingerprint
+        # the thesis. Decision construction may legitimately settle/persist
+        # learning state used by the thesis manifest; keying the projection to
+        # a pre-build hash can therefore make the just-written projection
+        # unreadable immediately. The persisted identity must describe the
+        # completed board, not the state immediately before it was built.
         try:
             from product.decision_discovery_store import save as save_discovery
             from product.decision_service import decision_board
             from product.trading_thesis import manifest as thesis_manifest
 
-            thesis = dict(thesis_manifest() or {})
             board = decision_board(workspace=reco, limit=40)
+            thesis = dict(thesis_manifest() or {})
             save_discovery(
                 board,
                 scan_scanned_at=str(scan.get("scanned_at") or ""),
