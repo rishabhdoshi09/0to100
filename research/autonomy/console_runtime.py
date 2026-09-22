@@ -31,7 +31,7 @@ _POLL_ERROR_CODES = {
 
 _HEARTBEAT_CONSOLE_LOCK = threading.Lock()
 _HEARTBEAT_CONSOLE_STATE: dict[int, dict[str, object]] = {}
-_DURATION_TOKEN = re.compile(r"(?<![A-Za-z0-9_.])\\d+(?:\\.\\d+)?s\\b")
+_DURATION_TOKEN = re.compile(r"(?<![A-Za-z0-9_.])\d+(?:\.\d+)?s\b")
 
 
 def _normalise_progress_text(value: str) -> str:
