@@ -21,6 +21,12 @@ class _Jobs:
         self.enqueued.append((job_type, kwargs))
         return SimpleNamespace(status=JS.PENDING, job_type=job_type)
 
+    def list(self, limit=2000):
+        # Minimal durable-store contract for resource-governor tests. The
+        # lightweight scheduler tests below only need to express that no
+        # higher-priority persisted job is currently due/running.
+        return []
+
 
 def test_successful_intraday_scan_enqueues_paper_cycle(monkeypatch):
     jobs = _Jobs()
