@@ -389,3 +389,30 @@ def test_active_curriculum_noncontiguous_sessions_are_durable_and_never_repeat(t
     assert second["available"] is True
     assert set(first["sessions"]).isdisjoint(set(second["sessions"]))
     assert second["processed_sessions_before"] == len(first["sessions"])
+
+
+def test_throughput_metrics_measure_useful_examples_not_raw_activity():
+    out = HPL._throughput_metrics(
+        replay_elapsed_s=10.0,
+        paper_elapsed_s=2.0,
+        batch_elapsed_s=20.0,
+        decisions=100,
+        useful_examples=8,
+    )
+
+    assert out["decisions_per_replay_second"] == 10.0
+    assert out["useful_examples_per_batch_second"] == 0.4
+    assert out["useful_training_examples"] == 8
+    assert "not evidence of profitability" in out["metric_note"]
+
+
+def test_throughput_metrics_do_not_divide_by_zero():
+    out = HPL._throughput_metrics(
+        replay_elapsed_s=0.0,
+        paper_elapsed_s=0.0,
+        batch_elapsed_s=0.0,
+        decisions=10,
+        useful_examples=2,
+    )
+    assert out["decisions_per_replay_second"] is None
+    assert out["useful_examples_per_batch_second"] is None
