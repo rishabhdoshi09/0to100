@@ -129,6 +129,10 @@ def test_exact_version_forward_evidence_can_promote_paper_only(tmp_path, monkeyp
     assert current["forward_validation"]["n"] >= 30
     assert current["forward_validation"]["improvement"] > 0
     assert current["forward_validation"]["improvement_lower_95"] > 0
+    assert current["forward_validation"]["expectancy"] > 0
+    assert current["forward_validation"]["drawdown"] >= 0
+    assert current["promotion_dossier"]["decision"] == "ELIGIBLE"
+    assert current["promotion_dossier"]["live_locked"] is True
 
     card = {
         "symbol": "XYZ",
