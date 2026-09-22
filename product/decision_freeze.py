@@ -7,6 +7,7 @@ must never be rewritten or silently reused for materially different evidence.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -29,10 +30,19 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _connect(path: Path | None = None) -> sqlite3.Connection:
+def freeze_path(path: str | Path | None = None) -> Path:
+    if path is not None:
+        return Path(path)
+    override = os.environ.get("QT_DECISION_FREEZE")
+    if override:
+        return Path(override)
+    return DB_PATH
+
+
+def _connect(path: str | Path | None = None) -> sqlite3.Connection:
     from product.sqlite_runtime import connect
 
-    con = connect(path or DB_PATH)
+    con = connect(freeze_path(path))
     con.execute(
         """
         CREATE TABLE IF NOT EXISTS freezes (
