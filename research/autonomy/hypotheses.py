@@ -36,6 +36,9 @@ class EvidenceGap:
     data_mining_risk: float           # 0..1 (higher = worse)
     novelty: float = 0.5              # 0..1
     recommended_action: str = "strategy_mutation"   # or "data_task"
+    evidence_origin: str = "RESEARCH_VALIDATION"
+    current_samples: int = 0
+    target_samples: int = 0
 
     @property
     def priority(self) -> float:
@@ -59,7 +62,10 @@ def plan_gaps(diagnostics) -> list:
             data_available=bool(d.get("data_available", True)),
             data_mining_risk=float(d.get("data_mining_risk", 0.5)),
             novelty=float(d.get("novelty", 0.5)),
-            recommended_action=action))
+            recommended_action=action,
+            evidence_origin=str(d.get("evidence_origin") or "RESEARCH_VALIDATION"),
+            current_samples=int(d.get("n_trades", d.get("current_samples", 0)) or 0),
+            target_samples=int(d.get("target_samples", 30 if kind == "insufficient_sample" else 0) or 0)))
     gaps.sort(key=lambda g: (-g.priority, g.kind, g.strategy_id))
     return gaps
 

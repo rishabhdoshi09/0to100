@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from product import historical_paper_loop as HPL
+from research.autonomy import evidence_acquisition as EA
 
 
 def test_virtual_trade_same_bar_stop_and_target_is_conservative_stop_first():
@@ -244,3 +245,58 @@ def test_historical_sequence_enforces_real_paper_book_overlap_caps(monkeypatch):
     assert all(row["cost_model"] == "india_cash_costs" for row in result["trades"])
     assert all(row["slippage_bps"] == 3.0 for row in result["trades"])
     assert all(row["not_real_pnl"] is True for row in result["trades"])
+
+
+
+def test_historical_batch_carries_only_eligible_evidence_request(tmp_path):
+    state = tmp_path / "state.json"
+    request_path = tmp_path / "request.json"
+    sessions = [f"2026-01-{day:02d}" for day in range(1, 13)]
+
+    historical = EA.build_request(
+        session_date="2026-09-21",
+        strategy_id="MOM",
+        gap_kind="poor_calibration",
+        diagnosis="Need historical validation evidence.",
+        evidence_origin="RESEARCH_VALIDATION",
+        current_samples=20,
+        target_samples=30,
+    )
+    EA.save_request(historical, path=request_path)
+
+    batch = HPL.peek_next_batch(
+        sessions_fn=lambda: sessions,
+        state_path=state,
+        evidence_request_path=request_path,
+        batch_size=2,
+        warmup_sessions=2,
+        horizon_sessions=2,
+        universe_limit=10,
+    )
+    assert batch["evidence_request_id"] == historical.request_id
+    assert batch["evidence_request"]["sample_deficit"] == 10
+    assert batch["selection_policy"] == "DURABLE_CURSOR_WITH_EVIDENCE_REQUEST"
+
+    forward_only = EA.build_request(
+        session_date="2026-09-21",
+        strategy_id="MOM",
+        gap_kind="insufficient_sample",
+        diagnosis="Need forward paper outcomes.",
+        evidence_origin="FORWARD_PAPER",
+        current_samples=5,
+        target_samples=30,
+    )
+    EA.save_request(forward_only, path=request_path)
+
+    batch2 = HPL.peek_next_batch(
+        sessions_fn=lambda: sessions,
+        state_path=state,
+        evidence_request_path=request_path,
+        batch_size=2,
+        warmup_sessions=2,
+        horizon_sessions=2,
+        universe_limit=10,
+    )
+    assert batch2["evidence_request_id"] == ""
+    assert batch2["evidence_request"] == {}
+    assert batch2["selection_policy"] == "DURABLE_CURSOR"
