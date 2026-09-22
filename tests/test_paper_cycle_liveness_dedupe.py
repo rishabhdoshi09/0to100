@@ -198,7 +198,9 @@ def test_autonomous_replay_cache_hit_is_not_recorded_as_new_cycle(tmp_path, monk
             "cache_hit": True,
         },
     )
-    out = AL.maybe_run_closed_market_replay(force=False)
+    from zoneinfo import ZoneInfo
+    closed = datetime(2026, 9, 18, 20, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+    out = AL.maybe_run_closed_market_replay(now=closed, force=False)
     after = AL.load_control()
     assert out["skipped"] is True
     assert out["next_action"] == "WAIT_FOR_NEW_EVIDENCE"
