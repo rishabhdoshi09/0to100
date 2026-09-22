@@ -195,3 +195,53 @@ def test_genuinely_stale_history_preserves_exactly_one_refresh_recovery_intent(t
     assert list(states.values()).count(JS.CANCELLED) == 1
     assert states[old_b.job_id] == JS.PENDING
     sup.shutdown()
+
+
+
+def test_idle_reconcile_clears_latched_researching_to_observing(tmp_path):
+    sup = _sup(tmp_path)
+    assert sup.start() is True
+    sup._transition(ST.RESEARCHING, "fixture", "research already ended", "test")
+
+    sup._reconcile_idle_state()
+
+    assert sup.state.state == ST.OBSERVING
+    assert sup.state.reason_code == "activity_reconcile"
+    assert "no due or running research job remains" in sup.state.explanation
+    sup.shutdown()
+
+
+def test_idle_reconcile_keeps_researching_when_research_job_is_running(tmp_path):
+    sup = _sup(tmp_path)
+    assert sup.start() is True
+    sup._transition(ST.RESEARCHING, "fixture", "research is active", "test")
+    job = sup.jobs.enqueue(
+        SCH.RESEARCH_CYCLE,
+        idempotency_key="hist_research:b1",
+        scheduled_for=sup.clock() - 1.0,
+    )
+    leased = sup.jobs.lease_due(sup.owner)
+    assert leased is not None and leased.job_id == job.job_id
+
+    sup._reconcile_idle_state()
+
+    assert sup.state.state == ST.RESEARCHING
+    sup.shutdown()
+
+
+def test_data_refresh_takes_activity_state_after_research_finishes(tmp_path):
+    sup = _sup(tmp_path)
+    assert sup.start() is True
+    sup._transition(ST.RESEARCHING, "fixture", "research label is stale", "test")
+    sup.jobs.enqueue(
+        SCH.DATA_REFRESH,
+        idempotency_key="data_refresh:due",
+        scheduled_for=sup.clock() - 1.0,
+        critical=True,
+    )
+
+    sup._reconcile_idle_state()
+
+    assert sup.state.state == ST.DATA_REFRESHING
+    assert sup.state.reason_code == "activity_reconcile"
+    sup.shutdown()

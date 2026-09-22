@@ -74,6 +74,8 @@ def read_autonomy_status(root=None) -> dict:
         "heartbeat_ist": raw.get("heartbeat_ist", ""),
         "scheduler_owner_pid": raw.get("scheduler_owner_pid"),
         "active_job": dict(raw.get("active_job", {}) or {}),
+        "activity_truth": dict(raw.get("activity_truth", {}) or {}),
+        "current_activity": str(raw.get("current_activity") or (raw.get("activity_truth") or {}).get("activity") or "UNKNOWN"),
         "snapshot_id": raw.get("snapshot_id", ""),
         "new_paper_entries": caps["new_paper_entries"],
         "existing_exits": caps["existing_exits"],
@@ -86,5 +88,6 @@ def read_autonomy_status(root=None) -> dict:
         "owner_state": raw.get("owner_state", {}),
         "scheduler_of_record": raw.get("scheduler_of_record", ""),
         "last_cycle": raw.get("last_cycle", {}),
+        "resource_governor": dict(raw.get("resource_governor", {}) or {}),
         "broker": _broker_status(),
     }
