@@ -919,6 +919,45 @@ def build_recommendations_workspace(
             pass
     desk = build_desk_context(scan_rows)
     buckets = _bucket_rows(scan_rows, lt_rows, market_ctx=desk)
+
+    # Confidence is a read-only explanation layer over already-built cards.
+    # Point-in-time replay must never read today's policies/calibration because
+    # that would leak later evidence into a historical decision surface.
+    try:
+        from product.confidence_breakdown import (
+            build_confidence_breakdown,
+            load_context as load_confidence_context,
+            unavailable_breakdown,
+        )
+        confidence_context = None if point_in_time else load_confidence_context()
+        for cards in buckets.values():
+            for card in cards:
+                if point_in_time:
+                    card["confidence_breakdown"] = unavailable_breakdown(
+                        "POINT_IN_TIME_CURRENT_CONFIDENCE_SKIPPED"
+                    )
+                else:
+                    card["confidence_breakdown"] = build_confidence_breakdown(
+                        card,
+                        market_ctx=desk,
+                        context=confidence_context,
+                    )
+    except Exception as exc:
+        for cards in buckets.values():
+            for card in cards:
+                card["confidence_breakdown"] = {
+                    "schema_version": 1,
+                    "available": False,
+                    "reason": f"CONFIDENCE_BREAKDOWN_UNAVAILABLE:{type(exc).__name__}",
+                    "final": {
+                        "evidence_strength_score": None,
+                        "stage": "UNAVAILABLE",
+                        "paper_eligible": False,
+                        "is_win_probability": False,
+                    },
+                    "live_locked": True,
+                }
+
     if deep_confirm:
         buckets = _paint_deep_confirm(
             buckets, scan_payload=scan, long_term_payload=lt,
