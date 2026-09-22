@@ -10,6 +10,10 @@ about money. Mixing them is how a system talks itself into being ready.
     WALK_FORWARD        refit forward over history, still history
     HISTORICAL_REPLAY   the live code path re-run over point-in-time data.
                         Proves the PLUMBING works. Never market evidence.
+    OPERATIONAL_DECISION_ONLY
+                        current saved recommendations evaluated by the production
+                        selector outside the entry window. Proves decision plumbing
+                        only; no fill, outcome, P&L or promotion evidence.
     PAPER_FORWARD       decided before the bar existed, settled on real
                         completed sessions. No money at risk.
     REAL_FORWARD        real orders, real fills, real money.
@@ -30,6 +34,7 @@ from __future__ import annotations
 BACKTEST = "BACKTEST"
 WALK_FORWARD = "WALK_FORWARD"
 HISTORICAL_REPLAY = "HISTORICAL_REPLAY"
+OPERATIONAL_DECISION_ONLY = "OPERATIONAL_DECISION_ONLY"
 PAPER_FORWARD = "PAPER_FORWARD"
 REAL_FORWARD = "REAL_FORWARD"
 COUNTERFACTUAL = "COUNTERFACTUAL"
@@ -42,6 +47,7 @@ EVIDENCE_CLASSES = (
     BACKTEST,
     WALK_FORWARD,
     HISTORICAL_REPLAY,
+    OPERATIONAL_DECISION_ONLY,
     PAPER_FORWARD,
     REAL_FORWARD,
     COUNTERFACTUAL,
@@ -54,7 +60,9 @@ MARKET_EVIDENCE = frozenset({PAPER_FORWARD, REAL_FORWARD})
 
 #: Classes produced by running the machinery over data it could have seen.
 #: Useful, necessary, and never promotable.
-PLUMBING_EVIDENCE = frozenset({BACKTEST, WALK_FORWARD, HISTORICAL_REPLAY, TEST_FIXTURE})
+PLUMBING_EVIDENCE = frozenset({
+    BACKTEST, WALK_FORWARD, HISTORICAL_REPLAY, OPERATIONAL_DECISION_ONLY, TEST_FIXTURE
+})
 
 
 def normalise(value: str | None) -> str:
