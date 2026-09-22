@@ -195,13 +195,29 @@ def status(*, path: str | Path | None = None) -> dict[str, Any]:
         }
 
     scan_id = str(board.get("scan_scanned_at") or "")
-    discovery_ready = bool(board.get("available")) and bool(scan_id) and scan_fresh
     approved = bool(
         state.get("approved")
         and startup_id
         and str(state.get("startup_id") or "") == startup_id
     )
+    approved_scan_id = str(state.get("approved_scan_id") or "")
     approved_thesis_hash = str(state.get("approved_thesis_hash") or "")
+
+    # A completed approval is durable evidence that discovery succeeded for that
+    # exact scan earlier in this startup. The cheap read projection may be
+    # temporarily absent while a worker atomically refreshes/rekeys its cache;
+    # that must not make the already-approved current scan regress to
+    # discovery_ready=False. A different/new scan still has to publish its own
+    # discovery projection before it is considered ready.
+    discovery_ready = bool(board.get("available")) and bool(scan_id) and scan_fresh
+    if (
+        not discovery_ready
+        and approved
+        and scan_fresh
+        and scan_id
+        and approved_scan_id == scan_id
+    ):
+        discovery_ready = True
     thesis_changed_since_approval = bool(
         approved and approved_thesis_hash and approved_thesis_hash != thesis_hash
     )
