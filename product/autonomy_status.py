@@ -65,6 +65,14 @@ def read_autonomy_status(root=None) -> dict:
                         dialogue_path=dialogue_path if Path(dialogue_path).exists() else None)
     state = raw.get("state", "UNKNOWN")
     caps = H.capabilities(raw.get("active_failures", []) or [])  # recompute from recorded failures
+    try:
+        from research.autonomy.incident_store import IncidentStore
+        incident_store = IncidentStore(Path(status_path).parent / "incidents.json")
+        open_incidents = incident_store.recent(12, open_only=True)
+        recent_incidents = incident_store.recent(12)
+    except Exception:
+        open_incidents = []
+        recent_incidents = []
     return {
         "running": raw.get("supervisor_running", False),
         "state": state,
@@ -85,6 +93,11 @@ def read_autonomy_status(root=None) -> dict:
         "jobs": raw.get("jobs", {}),
         "recent_transitions": raw.get("recent_transitions", []),
         "recent_dialogue": raw.get("recent_dialogue", []),
+        "operational_incidents": {
+            "open_count": len(open_incidents),
+            "open": open_incidents,
+            "recent": recent_incidents,
+        },
         "owner_state": raw.get("owner_state", {}),
         "scheduler_of_record": raw.get("scheduler_of_record", ""),
         "last_cycle": raw.get("last_cycle", {}),
