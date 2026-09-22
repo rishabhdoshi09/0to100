@@ -334,6 +334,25 @@ export type DashboardPayload = {
     heartbeat_ist: string
     scheduler_owner_pid?: number | string | null
     active_job?: Record<string, unknown>
+    current_activity?: string
+    activity_truth?: Record<string, unknown>
+    resource_governor?: Record<string, unknown>
+    operational_incidents?: {
+      open_count?: number
+      open?: Array<{
+        incident_id?: string
+        status?: string
+        code?: string
+        message?: string
+        first_seen_at?: string
+        last_seen_at?: string
+        occurrence_count?: number
+        recovery_action?: string
+        progress?: Record<string, unknown>
+        job?: Record<string, unknown>
+      }>
+      recent?: Array<Record<string, unknown>>
+    }
     new_entry_capability?: 'allowed' | 'limited' | 'blocked' | 'read_only'
     existing_exit_capability?: 'allowed' | 'limited' | 'blocked' | 'read_only'
     research_capability?: 'allowed' | 'limited' | 'blocked' | 'read_only'

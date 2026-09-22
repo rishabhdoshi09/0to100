@@ -687,6 +687,9 @@ export function SystemHealthView({ dashboard, runControl }: ViewProps) {
   }
   useEffect(() => { loadContract() }, [dashboard.generated_at])
   const a = dashboard.autonomy
+  const incidents = a.operational_incidents || {}
+  const openIncidents = incidents.open || []
+  const governor = a.resource_governor || {}
   return (
     <section className="workspace-view">
       <div className="inline-actions">
@@ -713,6 +716,37 @@ export function SystemHealthView({ dashboard, runControl }: ViewProps) {
         ) : (
           <div className="empty-row">No paper-autopilot cycle recorded yet. Missing stays missing.</div>
         )}
+      </Panel>
+      <Panel title="OPERATIONAL INCIDENTS" subtitle="Deduplicated durable dossiers · repeated identical failures increment occurrence count">
+        <div className="fact-grid">
+          <div><span>Open incidents</span><strong>{incidents.open_count ?? openIncidents.length}</strong></div>
+          <div><span>Current activity</span><strong>{a.current_activity || 'UNKNOWN'}</strong></div>
+          <div><span>Resource governor</span><strong>{String(governor['decision'] || 'NO STATUS')}</strong></div>
+          <div><span>Supervisor state</span><strong>{a.state || 'UNKNOWN'}</strong></div>
+        </div>
+        {openIncidents.length === 0 ? (
+          <div className="empty-row">No open operational incident dossier is persisted.</div>
+        ) : openIncidents.slice(0, 8).map((incident) => {
+          const progress = incident.progress || {}
+          const job = incident.job || {}
+          return (
+            <div className="insight" key={incident.incident_id || `${incident.code}-${incident.last_seen_at}`}>
+              <i className="amber" />
+              <div>
+                <strong>
+                  {incident.code || 'INCIDENT'}
+                  {incident.occurrence_count ? ` · ×${incident.occurrence_count}` : ''}
+                </strong>
+                <span>
+                  {incident.message || 'No incident message persisted.'}
+                  {job['job_type'] ? ` · job ${String(job['job_type'])}` : ''}
+                  {progress['stage'] ? ` · stage ${String(progress['stage'])}` : ''}
+                </span>
+                {incident.recovery_action ? <span>Recovery: {incident.recovery_action}</span> : null}
+              </div>
+            </div>
+          )
+        })}
       </Panel>
       <Panel title="INDEPENDENT HEALTH LANES" subtitle="No collapsed green light. Paper execution is its own lane.">
         {(() => {

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 import threading
 import time
@@ -26,6 +27,16 @@ _POLL_ERROR_CODES = {
     "LONG_TERM_OP_IN_PROGRESS",
     "HISTORICAL_PAPER_IN_PROGRESS",
 }
+
+
+_HEARTBEAT_CONSOLE_LOCK = threading.Lock()
+_HEARTBEAT_CONSOLE_STATE: dict[int, dict[str, object]] = {}
+_DURATION_TOKEN = re.compile(r"(?<![A-Za-z0-9_.])\d+(?:\.\d+)?s\b")
+
+
+def _normalise_progress_text(value: str) -> str:
+    """Ignore elapsed-time churn while preserving material stage/progress changes."""
+    return _DURATION_TOKEN.sub("<elapsed>", str(value or "").strip())
 
 
 def _is_background_poll(job) -> bool:
@@ -114,8 +125,13 @@ def _heartbeat(
     every_s: float,
     active_job: dict | None = None,
 ) -> float:
+    """Emit operator heartbeat only on material change or long proof-of-life.
+
+    runtime.json is written independently at a much faster cadence, so suppressing
+    identical console lines never weakens liveness detection.
+    """
     now = time.monotonic()
-    if not force and now - last_at < every_s:
+    if not force and every_s > 0 and now - last_at < every_s:
         return last_at
     try:
         counts = supervisor._job_counts()
@@ -123,7 +139,9 @@ def _heartbeat(
         counts = {}
     failures = sorted(getattr(supervisor, "failures", set()) or set())
     failure_text = ",".join(failures[:4]) if failures else "none"
+    next_text = _next_job(supervisor)
     active_text = ""
+    active_signature: tuple = ()
     if active_job:
         started = float(active_job.get("started_monotonic", now) or now)
         elapsed = max(0.0, now - started)
@@ -131,16 +149,56 @@ def _heartbeat(
             f" · active={active_job.get('job_type', 'unknown')} "
             f"({elapsed:.0f}s, attempt {active_job.get('attempt', 0)})"
         )
-    _emit(
-        "HEARTBEAT",
-        (
-            f"pid={os.getpid()} · state={getattr(supervisor.state, 'state', 'UNKNOWN')} · "
-            f"phase={_phase(supervisor)} · jobs "
-            f"P:{counts.get(JS.PENDING, 0)} R:{counts.get(JS.RUNNING, 0)} "
-            f"B:{counts.get(JS.BLOCKED, 0)} F:{counts.get(JS.PERMANENT_FAILED, 0)} · "
-            f"next={_next_job(supervisor)}{active_text} · failures={failure_text}"
-        ),
+        active_signature = (
+            str(active_job.get("job_id") or ""),
+            str(active_job.get("job_type") or ""),
+            int(active_job.get("attempt") or 0),
+            bool(active_job.get("background_poll")),
+        )
+    try:
+        activity = str((supervisor._activity_truth() or {}).get("activity") or "UNKNOWN")
+    except Exception:
+        activity = "UNKNOWN"
+
+    state = str(getattr(supervisor.state, "state", "UNKNOWN"))
+    phase = _phase(supervisor)
+    signature = (
+        state,
+        phase,
+        activity,
+        int(counts.get(JS.PENDING, 0)),
+        int(counts.get(JS.RUNNING, 0)),
+        int(counts.get(JS.BLOCKED, 0)),
+        int(counts.get(JS.PERMANENT_FAILED, 0)),
+        _normalise_progress_text(next_text),
+        active_signature,
+        tuple(failures),
     )
+    max_silence_s = max(300.0, float(every_s or 0.0) * 10.0)
+    key = id(supervisor)
+    with _HEARTBEAT_CONSOLE_LOCK:
+        prior = dict(_HEARTBEAT_CONSOLE_STATE.get(key) or {})
+        changed = prior.get("signature") != signature
+        last_emit = float(prior.get("last_emit") or 0.0)
+        should_emit = bool(changed or not last_emit or now - last_emit >= max_silence_s)
+        _HEARTBEAT_CONSOLE_STATE[key] = {
+            "signature": signature,
+            "last_emit": now if should_emit else last_emit,
+        }
+
+    if should_emit:
+        _emit(
+            "HEARTBEAT",
+            (
+                f"pid={os.getpid()} · state={state} · activity={activity} · "
+                f"phase={phase} · jobs "
+                f"P:{counts.get(JS.PENDING, 0)} R:{counts.get(JS.RUNNING, 0)} "
+                f"B:{counts.get(JS.BLOCKED, 0)} F:{counts.get(JS.PERMANENT_FAILED, 0)} · "
+                f"next={next_text}{active_text} · failures={failure_text}"
+            ),
+        )
+    # Returning 'now' throttles callers even when an identical console line was
+    # deliberately suppressed; the independent runtime pulse still advances.
     return now
 
 
@@ -227,6 +285,8 @@ def run_visible_loop(
 
     original_execute = supervisor._execute
     elapsed_by_job: dict[str, float] = {}
+    polled_jobs: set[str] = set()
+    progress_signature_by_job: dict[str, str] = {}
 
     def visible_execute(job):
         started = time.monotonic()
@@ -248,10 +308,12 @@ def run_visible_loop(
         except Exception:
             pass
         if background_poll:
-            _emit(
-                "JOB POLL",
-                f"{job.job_type} · id={job.job_id} · checking existing background worker",
-            )
+            if job.job_id not in polled_jobs:
+                _emit(
+                    "JOB POLL",
+                    f"{job.job_type} · id={job.job_id} · checking existing background worker",
+                )
+                polled_jobs.add(job.job_id)
         else:
             _emit(
                 "JOB START",
@@ -287,11 +349,16 @@ def run_visible_loop(
                     summary = final.result_summary or final.error_message or "no summary"
                     elapsed = elapsed_by_job.pop(job.job_id, 0.0)
                     if final.status == JS.PENDING and _is_background_poll(final):
-                        _emit(
-                            "JOB PROGRESS",
-                            f"{final.job_type} · {summary}",
-                        )
+                        progress_signature = _normalise_progress_text(summary)
+                        if progress_signature_by_job.get(final.job_id) != progress_signature:
+                            _emit(
+                                "JOB PROGRESS",
+                                f"{final.job_type} · {summary}",
+                            )
+                            progress_signature_by_job[final.job_id] = progress_signature
                     else:
+                        progress_signature_by_job.pop(final.job_id, None)
+                        polled_jobs.discard(final.job_id)
                         _emit(
                             "JOB DONE",
                             f"{final.job_type} → {final.status} · {elapsed:.1f}s · "
@@ -368,3 +435,5 @@ def run_visible_loop(
             )
         except Exception:
             pass
+        with _HEARTBEAT_CONSOLE_LOCK:
+            _HEARTBEAT_CONSOLE_STATE.pop(id(supervisor), None)

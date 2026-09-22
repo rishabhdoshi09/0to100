@@ -66,6 +66,34 @@ class _BlockingSupervisor(Supervisor):
         return None
 
 
+class _RepeatedPollingSupervisor(Supervisor):
+    """Poll the same background job repeatedly with elapsed-time-only summary churn."""
+
+    def __init__(self, root, *, deps=None):
+        super().__init__(root, deps=deps or _Deps())
+        self.calls = 0
+
+    def tick(self, now_ist=None):
+        job = self.jobs.lease_due(self.owner)
+        if job is not None:
+            self._execute(job)
+        self.calls += 1
+        if self.calls >= 3:
+            self.stop()
+        self.heartbeat()
+        return job
+
+    def _execute(self, job):
+        elapsed = 45 + (self.calls * 15)
+        self.jobs.reschedule_poll(
+            job.job_id,
+            when=self.jobs.clock(),
+            error_code="DATA_REFRESH_IN_PROGRESS",
+            error_message="snapshot refresh is still running; supervisor remains available",
+            result_summary=f"data refresh running in background · historical_sync · {elapsed}s",
+        )
+
+
 class _PollingJobSupervisor(Supervisor):
     """Lease one background-poll row and keep it pending without inventing a new attempt."""
 
@@ -207,4 +235,38 @@ def test_runtime_heartbeat_advances_while_tick_is_blocked(tmp_path):
     finally:
         sup.release.set()
         runner.join(timeout=3.0)
+        sup.shutdown()
+
+
+def test_repeated_background_poll_suppresses_elapsed_only_console_churn(tmp_path, capsys):
+    sup = _RepeatedPollingSupervisor(tmp_path / "auto", deps=_Deps())
+    assert sup.start()
+    queued = sup.jobs.enqueue("data_refresh", idempotency_key="console-dedupe-test")
+    seeded = sup.jobs.lease_due(sup.owner)
+    assert seeded is not None and seeded.job_id == queued.job_id
+    sup.jobs.reschedule_poll(
+        seeded.job_id,
+        when=sup.jobs.clock(),
+        error_code="DATA_REFRESH_IN_PROGRESS",
+        error_message="snapshot refresh is still running; supervisor remains available",
+        result_summary="data refresh running in background · historical_sync · 30s",
+    )
+    try:
+        run_visible_loop(
+            sup,
+            interval_s=0,
+            max_iterations=3,
+            sleep_fn=lambda _seconds: None,
+            heartbeat_s=0,
+        )
+        output = capsys.readouterr().out
+        assert output.count("JOB POLL") == 1
+        assert output.count("JOB PROGRESS") == 1
+        # The initial heartbeat plus a genuine activity/state transition may both be
+        # visible; elapsed-only polling must not emit one heartbeat per iteration.
+        assert output.count("HEARTBEAT") < 3
+        # Liveness remains a file-level pulse even though console lines collapse.
+        runtime = json.loads((tmp_path / "auto" / "runtime.json").read_text(encoding="utf-8"))
+        assert runtime["process_running"] is False
+    finally:
         sup.shutdown()
