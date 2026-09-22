@@ -275,7 +275,10 @@ def test_historical_batch_carries_only_eligible_evidence_request(tmp_path):
     )
     assert batch["evidence_request_id"] == historical.request_id
     assert batch["evidence_request"]["sample_deficit"] == 10
-    assert batch["selection_policy"] == "DURABLE_CURSOR_WITH_EVIDENCE_REQUEST"
+    # Test environment has no official index cache, so the active curriculum
+    # truthfully falls back instead of inventing historical regime labels.
+    assert batch["selection_policy"] == "DURABLE_CURSOR"
+    assert batch["selection_details"]["outcome_blind_selection"] is True
 
     forward_only = EA.build_request(
         session_date="2026-09-21",
@@ -300,3 +303,89 @@ def test_historical_batch_carries_only_eligible_evidence_request(tmp_path):
     assert batch2["evidence_request_id"] == ""
     assert batch2["evidence_request"] == {}
     assert batch2["selection_policy"] == "DURABLE_CURSOR"
+
+
+
+def test_active_curriculum_noncontiguous_sessions_are_durable_and_never_repeat(tmp_path, monkeypatch):
+    state = tmp_path / "state.json"
+    request_path = tmp_path / "request.json"
+    sessions = [f"2026-01-{day:02d}" for day in range(1, 16)]
+    monkeypatch.setattr(
+        "product.trading_thesis.manifest",
+        lambda: {"thesis_hash": "thesis-active"},
+    )
+
+    req = EA.build_request(
+        session_date="2026-09-21",
+        strategy_id="MOM",
+        gap_kind="poor_calibration",
+        diagnosis="Balance historical regime evidence.",
+        evidence_origin="RESEARCH_VALIDATION",
+        current_samples=10,
+        target_samples=30,
+        thesis_hash="thesis-active",
+    )
+    EA.save_request(req, path=request_path)
+
+    def choose(eligible, *, processed_sessions=(), batch_size=8, classifier=None):
+        remaining = [d for d in eligible if d not in set(processed_sessions)]
+        picks = []
+        if remaining:
+            picks.append(remaining[-1])
+        if len(remaining) > 2:
+            picks.append(remaining[1])
+        return {
+            "sessions": picks[:batch_size],
+            "selection_policy": "ACTIVE_REGIME_COVERAGE",
+            "selection_objective": "test active selection",
+            "outcome_blind_selection": True,
+            "coverage_before": {},
+            "coverage_after": {},
+            "session_states": {},
+        }
+
+    monkeypatch.setattr(
+        "research.autonomy.historical_curriculum.select_regime_balanced_sessions",
+        choose,
+    )
+
+    first = HPL.peek_next_batch(
+        sessions_fn=lambda: sessions,
+        state_path=state,
+        evidence_request_path=request_path,
+        batch_size=2,
+        warmup_sessions=2,
+        horizon_sessions=2,
+        universe_limit=10,
+    )
+    assert first["selection_policy"] == "ACTIVE_REGIME_COVERAGE"
+    assert len(first["sessions"]) == 2
+    assert first["sessions"] == sorted(first["sessions"])
+
+    HPL._save_state(
+        {
+            "phase": HPL.PHASE_AWAITING_RESEARCH,
+            "current_batch_id": first["batch_id"],
+            "current_sessions": first["sessions"],
+            "thesis_hash": "thesis-active",
+            "evidence_request_id": req.request_id,
+            "evidence_request": req.as_dict(),
+            "selection_details": first["selection_details"],
+        },
+        state,
+    )
+    completed = HPL.mark_research_complete(first["batch_id"], state_path=state)
+    assert set(first["sessions"]).issubset(set(completed["processed_sessions"]))
+
+    second = HPL.peek_next_batch(
+        sessions_fn=lambda: sessions,
+        state_path=state,
+        evidence_request_path=request_path,
+        batch_size=2,
+        warmup_sessions=2,
+        horizon_sessions=2,
+        universe_limit=10,
+    )
+    assert second["available"] is True
+    assert set(first["sessions"]).isdisjoint(set(second["sessions"]))
+    assert second["processed_sessions_before"] == len(first["sessions"])

@@ -24,7 +24,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from core.runtime_paths import logs_path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 PHASE_IDLE = "IDLE"
 PHASE_RUNNING = "RUNNING"
 PHASE_AWAITING_LEARNING = "AWAITING_LEARNING"
@@ -76,11 +76,16 @@ def load_state(path: str | Path | None = None) -> dict[str, Any]:
         "current_batch_id": str(payload.get("current_batch_id") or ""),
         "current_sessions": list(payload.get("current_sessions") or []),
         "last_completed_session": str(payload.get("last_completed_session") or ""),
+        "processed_sessions": sorted({
+            str(x)[:10] for x in (payload.get("processed_sessions") or [])
+            if len(str(x)) >= 10
+        }),
         "thesis_hash": str(payload.get("thesis_hash") or ""),
         "last_result": dict(payload.get("last_result") or {}),
         "last_error": str(payload.get("last_error") or ""),
         "evidence_request_id": str(payload.get("evidence_request_id") or ""),
         "evidence_request": dict(payload.get("evidence_request") or {}),
+        "selection_details": dict(payload.get("selection_details") or {}),
         "updated_at": str(payload.get("updated_at") or ""),
     }
 
@@ -162,28 +167,53 @@ def peek_next_batch(
         return {"available": False, "reason": "insufficient_settleable_history", "sessions_total": len(sessions)}
 
     eligible = sessions[warmup: len(sessions) - horizon]
-    # A materially new thesis must earn its own historical evidence. Once the
-    # previous batch is terminal/idle, restart the historical cursor for the new
-    # thesis instead of inheriting old-policy confidence.
-    last = (
-        state["last_completed_session"]
-        if str(state.get("thesis_hash") or "") == thesis_hash
-        else ""
-    )
-    start = 0
-    if last:
+    same_thesis = str(state.get("thesis_hash") or "") == thesis_hash
+    last = state["last_completed_session"] if same_thesis else ""
+    processed = set(state.get("processed_sessions") or []) if same_thesis else set()
+
+    # Schema-v1 migration: the old monotonic cursor implied that every eligible
+    # session through last_completed_session had completed learning + research.
+    if same_thesis and not processed and last:
+        processed.update(day for day in eligible if day <= last)
+
+    remaining = [day for day in eligible if day not in processed]
+    selection_details: dict[str, Any]
+    if evidence_request and remaining:
         try:
-            start = eligible.index(last) + 1
-        except ValueError:
-            # Data retention may have dropped old dates. Continue from the first
-            # eligible session strictly newer than the durable cursor.
-            start = next((i for i, day in enumerate(eligible) if day > last), len(eligible))
-    batch = eligible[start: start + max(1, int(batch_size))]
+            from research.autonomy.historical_curriculum import select_regime_balanced_sessions
+            selection_details = select_regime_balanced_sessions(
+                eligible,
+                processed_sessions=sorted(processed),
+                batch_size=max(1, int(batch_size)),
+            )
+            remaining_set = set(remaining)
+            batch = sorted({
+                str(day)[:10]
+                for day in (selection_details.get("sessions") or [])
+                if str(day)[:10] in remaining_set
+            })
+        except Exception as exc:
+            selection_details = {
+                "selection_policy": "DURABLE_CURSOR",
+                "selection_objective": "chronological fallback",
+                "outcome_blind_selection": True,
+                "fallback_reason": f"{type(exc).__name__}: {exc}"[:200],
+            }
+            batch = remaining[: max(1, int(batch_size))]
+    else:
+        selection_details = {
+            "selection_policy": "DURABLE_CURSOR",
+            "selection_objective": "chronological backlog",
+            "outcome_blind_selection": True,
+        }
+        batch = remaining[: max(1, int(batch_size))]
+
     if not batch:
         return {
             "available": False,
             "reason": "historical_backlog_caught_up",
             "last_completed_session": last,
+            "processed_sessions": len(processed),
             "eligible_sessions": len(eligible),
         }
     return {
@@ -197,11 +227,12 @@ def peek_next_batch(
         "horizon_sessions": horizon,
         "evidence_request_id": str(evidence_request.get("request_id") or ""),
         "evidence_request": evidence_request,
-        "selection_policy": (
-            "DURABLE_CURSOR_WITH_EVIDENCE_REQUEST"
-            if evidence_request
-            else "DURABLE_CURSOR"
+        "selection_policy": str(
+            selection_details.get("selection_policy")
+            or ("DURABLE_CURSOR_WITH_EVIDENCE_REQUEST" if evidence_request else "DURABLE_CURSOR")
         ),
+        "selection_details": selection_details,
+        "processed_sessions_before": len(processed),
     }
 
 
@@ -220,11 +251,13 @@ def reset_for_thesis(
         "current_batch_id": "",
         "current_sessions": [],
         "last_completed_session": "",
+        "processed_sessions": [],
         "thesis_hash": str(thesis_hash or ""),
         "last_result": {},
         "last_error": "",
         "evidence_request_id": "",
         "evidence_request": {},
+        "selection_details": {},
     }, state_path)
 
 
@@ -234,11 +267,13 @@ def pending_stage(*, state_path: str | Path | None = None) -> dict[str, Any]:
         "phase": state["phase"],
         "batch_id": state["current_batch_id"],
         "sessions": state["current_sessions"],
+        "processed_sessions": list(state.get("processed_sessions") or []),
         "thesis_hash": state["thesis_hash"],
         "last_result": state["last_result"],
         "last_error": state["last_error"],
         "evidence_request_id": state.get("evidence_request_id", ""),
         "evidence_request": dict(state.get("evidence_request") or {}),
+        "selection_details": dict(state.get("selection_details") or {}),
     }
 
 
@@ -970,6 +1005,8 @@ def _run_batch(
         "evidence_request_id": str(batch.get("evidence_request_id") or ""),
         "evidence_request": dict(batch.get("evidence_request") or {}),
         "selection_policy": str(batch.get("selection_policy") or "DURABLE_CURSOR"),
+        "selection_details": dict(batch.get("selection_details") or {}),
+        "processed_sessions_before": int(batch.get("processed_sessions_before") or 0),
         "memory": {
             "closed_trades": int(memory.get("closed_trades") or 0) if isinstance(memory, dict) else 0,
             "cooldown": len(memory.get("cooldown") or []) if isinstance(memory, dict) else 0,
@@ -990,6 +1027,7 @@ def _run_batch(
         "last_error": "",
         "evidence_request_id": str(batch.get("evidence_request_id") or ""),
         "evidence_request": dict(batch.get("evidence_request") or {}),
+        "selection_details": dict(batch.get("selection_details") or {}),
     }, state_path)
     return result
 
@@ -1084,11 +1122,12 @@ def ensure_next_batch_started(
                 "horizon_sessions": horizon_sessions,
                 "evidence_request_id": str(state.get("evidence_request_id") or ""),
                 "evidence_request": dict(state.get("evidence_request") or {}),
-                "selection_policy": (
-                    "DURABLE_CURSOR_WITH_EVIDENCE_REQUEST"
-                    if state.get("evidence_request_id")
-                    else "DURABLE_CURSOR"
+                "selection_policy": str(
+                    (state.get("selection_details") or {}).get("selection_policy")
+                    or ("DURABLE_CURSOR_WITH_EVIDENCE_REQUEST" if state.get("evidence_request_id") else "DURABLE_CURSOR")
                 ),
+                "selection_details": dict(state.get("selection_details") or {}),
+                "processed_sessions_before": len(state.get("processed_sessions") or []),
             }
         else:
             return {"status": "IDLE", **batch}
@@ -1129,6 +1168,7 @@ def ensure_next_batch_started(
             "last_error": "",
             "evidence_request_id": str(batch.get("evidence_request_id") or ""),
             "evidence_request": dict(batch.get("evidence_request") or {}),
+            "selection_details": dict(batch.get("selection_details") or {}),
         }, state_path)
         _thread_batch_id = bid
         _thread_result = None
@@ -1169,12 +1209,17 @@ def mark_research_complete(batch_id: str, *, state_path: str | Path | None = Non
     ):
         return state
     sessions = list(state.get("current_sessions") or [])
+    processed = set(state.get("processed_sessions") or [])
+    processed.update(str(day)[:10] for day in sessions if len(str(day)) >= 10)
+    latest = max(processed) if processed else state.get("last_completed_session", "")
     return _save_state({
         "phase": PHASE_IDLE,
-        "last_completed_session": sessions[-1] if sessions else state.get("last_completed_session", ""),
+        "last_completed_session": latest,
+        "processed_sessions": sorted(processed),
         "current_batch_id": "",
         "current_sessions": [],
         "last_error": "",
         "evidence_request_id": "",
         "evidence_request": {},
+        "selection_details": {},
     }, state_path)

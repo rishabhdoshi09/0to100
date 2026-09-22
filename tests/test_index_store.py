@@ -87,3 +87,24 @@ def test_latest_index_print_exposes_exact_session_date(monkeypatch):
     assert got["price"] == 101.0
     assert got["chg_pct"] == 1.0
     assert got["as_of"] == "2026-09-18"
+
+
+
+def test_cached_index_as_of_never_returns_future_rows(monkeypatch):
+    frame = pd.DataFrame(
+        {
+            "Open": [99.0, 100.0, 101.0],
+            "High": [101.0, 102.0, 103.0],
+            "Low": [98.0, 99.0, 100.0],
+            "Close": [100.0, 101.0, 102.0],
+        },
+        index=pd.to_datetime(["2026-09-17", "2026-09-18", "2026-09-21"]),
+    )
+    monkeypatch.setattr(idx, "_store", {"Nifty 50": frame})
+    monkeypatch.setattr(idx, "load_index_store_from_cache", lambda: True)
+
+    got = idx.get_index_ohlcv_as_of_cached("^NSEI", "2026-09-18")
+
+    assert got is not None
+    assert list(got.index.strftime("%Y-%m-%d")) == ["2026-09-17", "2026-09-18"]
+    assert float(got["Close"].iloc[-1]) == 101.0
