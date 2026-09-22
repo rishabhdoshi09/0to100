@@ -248,13 +248,17 @@ def scan_session(
     *,
     ohlcv_fn: Callable[[str], Any] | None = None,
     analyzer: Callable[[str, Any], Any] | None = None,
+    calibration_snapshot: Mapping[str, Any] | None = None,
     progress_cb: Callable[[int, int], None] | None = None,
 ) -> dict[str, Any]:
     """Run the production analyzer on bars that existed at ``as_of``."""
     if analyzer is None:
         from scan.unified_scanner import UnifiedScanner
 
-        scanner = UnifiedScanner(max_workers=1)
+        scanner = UnifiedScanner(
+            max_workers=1,
+            calibration_snapshot=dict(calibration_snapshot or {}) or None,
+        )
         analyzer = scanner._analyze
     from product.scan_store import build_scan_payload
 
@@ -304,6 +308,9 @@ def scan_session(
     payload["pit"] = True
     payload["history_latest_date"] = str(as_of)[:10]
     payload["engine"] = "scan.unified_scanner.UnifiedScanner._analyze"
+    payload["calibration_snapshot_id"] = str(
+        (calibration_snapshot or {}).get("snapshot_id") or ""
+    )
     payload["rejected_candidates"] = rejected
     payload["errors"] = errors
     return payload
@@ -340,6 +347,7 @@ def decide_session(
     persist_ledger: bool = False,
     use_committee: bool | None = None,
     company_evidence: Sequence[Mapping[str, Any]] | None = None,
+    calibration_snapshot_id: str = "",
 ) -> list[dict[str, Any]]:
     """Run the production recommendation + paper gate on a PIT scan payload.
 
@@ -519,6 +527,7 @@ def decide_session(
             "pit_sector": card.get("pit_sector"),
             "pit_downgrade": downgrade,
             "versions": versions,
+            "calibration_snapshot_id": str(calibration_snapshot_id or ""),
             "thesis_hash": str(thesis.get("thesis_hash") or ""),
             "thesis": thesis,
             "selection_score": selection_rank,
@@ -579,6 +588,7 @@ def decide_session(
                     "historical_committee_decision": str(out[-1].get("decision") or ""),
                     "historical_reason_code": str(out[-1].get("reason_code") or ""),
                     "thesis_hash": str(out[-1].get("thesis_hash") or ""),
+                    "calibration_snapshot_id": str(calibration_snapshot_id or ""),
                 },
             )
             frozen_feature = freeze_feature_decision(canonical)
@@ -744,6 +754,7 @@ def replay_identity(
     universe_limit: int = 40,
     symbols: Sequence[str] | None = None,
     dates_fn: Callable[[], Sequence[Any]] | None = None,
+    calibration_snapshot: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Deterministic identity for the exact replay inputs available now."""
     all_sessions = official_sessions(dates_fn=dates_fn)
@@ -751,9 +762,11 @@ def replay_identity(
         return {"available": False, "reason": "insufficient_sessions"}
     usable = all_sessions[:-1] if len(all_sessions) > 1 else all_sessions
     window = usable[-max(1, int(sessions)) :]
+    calibration_id = str((calibration_snapshot or {}).get("snapshot_id") or "")
     run_id = _fingerprint(
         window,
-        [str(s).upper() for s in (symbols or [])] + [str(universe_limit)],
+        [str(s).upper() for s in (symbols or [])]
+        + [str(universe_limit), f"calibration:{calibration_id}"],
     )
     try:
         from product.pit_versions import current_versions
@@ -773,6 +786,7 @@ def replay_identity(
         "sessions": list(window),
         "versions": versions,
         "data_fingerprint": data_fingerprint,
+        "calibration_snapshot_id": calibration_id,
         "engine": ENGINE,
     }
 
@@ -784,10 +798,15 @@ def replay_is_current(
     symbols: Sequence[str] | None = None,
     directory: str | Path | None = None,
     dates_fn: Callable[[], Sequence[Any]] | None = None,
+    calibration_snapshot: Mapping[str, Any] | None = None,
 ) -> bool:
     """True only when persisted replay already covers the exact current inputs."""
     ident = replay_identity(
-        sessions=sessions, universe_limit=universe_limit, symbols=symbols, dates_fn=dates_fn
+        sessions=sessions,
+        universe_limit=universe_limit,
+        symbols=symbols,
+        dates_fn=dates_fn,
+        calibration_snapshot=calibration_snapshot,
     )
     if not ident.get("available"):
         return False
@@ -797,6 +816,7 @@ def replay_is_current(
         and latest.get("run_id") == ident.get("run_id")
         and latest.get("engine") == ident.get("engine")
         and latest.get("data_fingerprint") == ident.get("data_fingerprint")
+        and latest.get("calibration_snapshot_id") == ident.get("calibration_snapshot_id")
         and latest.get("versions") == ident.get("versions")
     )
 
@@ -812,15 +832,24 @@ def run_historical_replay(
     analyzer: Callable[[str, Any], Any] | None = None,
     decide_fn: Callable[..., Any] | None = None,
     persist_live_reco: bool = False,
+    calibration_snapshot: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Replay production decisions on official sessions. Bounded and PIT-safe."""
     target = _root(directory)
     target.mkdir(parents=True, exist_ok=True)
+    frozen_calibration = dict(calibration_snapshot or {})
+    if analyzer is None and not frozen_calibration:
+        try:
+            from scan.calibration_snapshot import get_or_create_snapshot
+            frozen_calibration = dict(get_or_create_snapshot())
+        except Exception:
+            frozen_calibration = {}
     identity = replay_identity(
         sessions=sessions,
         universe_limit=universe_limit,
         symbols=symbols,
         dates_fn=dates_fn,
+        calibration_snapshot=frozen_calibration,
     )
     all_sessions = official_sessions(dates_fn=dates_fn)
     if len(all_sessions) < 2:
@@ -891,6 +920,7 @@ def run_historical_replay(
         and cached.get("status") == _STATUS_SUCCEEDED
         and cached.get("engine") == ENGINE
         and cached.get("data_fingerprint") == data_fp
+        and cached.get("calibration_snapshot_id") == identity.get("calibration_snapshot_id")
         and cached.get("versions") == experiment_versions
     ):
         cached["cache_hit"] = True
@@ -914,6 +944,7 @@ def run_historical_replay(
         "started_at": started,
         "message": f"Historical replay {window[0]} → {window[-1]}",
         "live_locked": True,
+        "calibration_snapshot_id": str(identity.get("calibration_snapshot_id") or ""),
     }
     _write_progress(target, progress)
 
@@ -944,6 +975,7 @@ def run_historical_replay(
                 names,
                 ohlcv_fn=ohlcv_fn,
                 analyzer=analyzer,
+                calibration_snapshot=frozen_calibration,
             )
             stocks_evaluated += int(scan.get("scanned") or 0)
             decisions = decide_session(
@@ -951,10 +983,14 @@ def run_historical_replay(
                 scan,
                 decide_fn=decide_fn,
                 persist_ledger=persist_live_reco,
+                calibration_snapshot_id=str(identity.get("calibration_snapshot_id") or ""),
             )
             decisions = evaluate_outcomes(decisions)
             for row in decisions:
                 row["run_id"] = run_id
+                row["calibration_snapshot_id"] = str(
+                    identity.get("calibration_snapshot_id") or ""
+                )
             all_decisions.extend(decisions)
             session_summaries.append({
                 "as_of": as_of,
@@ -1038,6 +1074,8 @@ def run_historical_replay(
         "live_locked": True,
         "not_promotion_evidence": True,
         "engine": ENGINE,
+        "calibration_snapshot_id": str(identity.get("calibration_snapshot_id") or ""),
+        "calibration_identities": dict(frozen_calibration.get("identities") or {}),
         "started_at": started,
         "finished_at": finished,
         "period_start": window[0],
@@ -1131,6 +1169,7 @@ def run_historical_replay(
         existing.get("run_id") == run_id
         and existing.get("status") == _STATUS_SUCCEEDED
         and existing.get("data_fingerprint") == data_fp
+        and existing.get("calibration_snapshot_id") == str(identity.get("calibration_snapshot_id") or "")
         and existing.get("versions") == experiment_versions
         and not force
     ):
@@ -1179,6 +1218,7 @@ def start_replay_async(**kwargs: Any) -> dict[str, Any]:
         symbols=kwargs.get("symbols"),
         directory=kwargs.get("directory"),
         dates_fn=kwargs.get("dates_fn"),
+        calibration_snapshot=kwargs.get("calibration_snapshot"),
     ):
         cached = dict(latest)
         cached.update({

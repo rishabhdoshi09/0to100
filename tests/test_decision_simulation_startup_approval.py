@@ -138,8 +138,6 @@ def test_gate_board_uses_precomputed_discovery_projection(monkeypatch):
 
     assert G._board() == cached
 
-
-
 def test_stale_gate_never_rebuilds_decision_board(tmp_path, monkeypatch):
     state = tmp_path / "gate.json"
     monkeypatch.setenv("QT_STARTUP_ID", "startup-stale")
@@ -390,3 +388,144 @@ def test_autonomous_approval_refuses_stale_or_unready_discovery(tmp_path, monkey
     assert result["reason"] == "BEST_TRADE_DISCOVERY_NOT_READY"
     assert result["scan_fresh"] is False
     assert G.is_approved(path=state) is False
+
+
+def test_gate_board_cache_miss_is_nonblocking_and_never_builds(monkeypatch):
+    import product.decision_discovery_store as discovery
+    import product.decision_service as decision_service
+    import product.long_term_store as long_term_store
+    import product.recommendations_workspace as workspace_mod
+    import product.scan_store as scan_store
+    import product.trading_thesis as thesis_mod
+
+    monkeypatch.setattr(
+        scan_store,
+        "load_scan",
+        lambda: {
+            "scanned_at": "2026-09-22T10:00:00+00:00",
+            "records": [{"symbol": "INFY"}],
+        },
+    )
+    monkeypatch.setattr(
+        long_term_store,
+        "load_long_term_scan",
+        lambda: {"scanned_at": "2026-09-22T09:00:00+00:00", "records": []},
+    )
+    monkeypatch.setattr(
+        thesis_mod,
+        "manifest",
+        lambda: {"thesis_hash": "thesis-a"},
+    )
+    monkeypatch.setattr(discovery, "load", lambda **_kwargs: None)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("status GET must never perform discovery computation")
+
+    monkeypatch.setattr(workspace_mod, "build_recommendations_workspace", forbidden)
+    monkeypatch.setattr(decision_service, "decision_board", forbidden)
+
+    payload = G._board()
+
+    assert payload["available"] is False
+    assert payload["state"] == "SEARCHING_BEST_TRADES"
+    assert payload["scan_scanned_at"] == "2026-09-22T10:00:00+00:00"
+    assert payload["best_trades"] == []
+    assert payload["decisions"] == []
+    assert payload["status_source"] == "persisted_discovery_missing"
+    assert "does not rebuild recommendations" in payload["reason"]
+
+
+def test_approved_current_scan_stays_discovery_ready_if_projection_cache_temporarily_missing(tmp_path, monkeypatch):
+    state = tmp_path / "gate.json"
+    monkeypatch.setenv("QT_STARTUP_ID", "startup-approved-cache-gap")
+    monkeypatch.setattr(
+        "product.trading_thesis.manifest",
+        lambda: {"thesis_hash": "thesis-a", "objective_id": "test"},
+    )
+    monkeypatch.setattr("product.desk_pipeline.scan_is_fresh", lambda: True)
+
+    board = {
+        "available": True,
+        "scan_scanned_at": "2026-09-22T10:00:00+00:00",
+        "best_trades": [{"symbol": "INFY"}],
+        "decisions": [{"symbol": "INFY"}],
+        "actionable": 1,
+    }
+    monkeypatch.setattr(G, "_board", lambda: dict(board))
+    monkeypatch.setattr(
+        "product.historical_paper_loop.load_state",
+        lambda: {"thesis_hash": "thesis-a"},
+    )
+
+    G.begin_startup("startup-approved-cache-gap", path=state)
+    approved = G.approve(path=state)
+    assert approved["approved"] is True
+    assert approved["discovery_ready"] is True
+
+    # Simulate an atomic projection replacement window after approval. The scan
+    # itself has not changed, so durable approval provenance proves discovery
+    # already completed for this exact scan.
+    monkeypatch.setattr(
+        G,
+        "_board",
+        lambda: {
+            "available": False,
+            "state": "SEARCHING_BEST_TRADES",
+            "reason": "projection refresh in progress",
+            "scan_scanned_at": "2026-09-22T10:00:00+00:00",
+            "best_trades": [],
+            "decisions": [],
+            "actionable": 0,
+        },
+    )
+
+    status = G.status(path=state)
+    assert status["approved"] is True
+    assert status["discovery_ready"] is True
+    assert status["phase"] == "APPROVED"
+
+
+def test_approved_old_scan_does_not_mark_new_scan_discovery_ready(tmp_path, monkeypatch):
+    state = tmp_path / "gate.json"
+    monkeypatch.setenv("QT_STARTUP_ID", "startup-new-scan")
+    monkeypatch.setattr(
+        "product.trading_thesis.manifest",
+        lambda: {"thesis_hash": "thesis-a", "objective_id": "test"},
+    )
+    monkeypatch.setattr("product.desk_pipeline.scan_is_fresh", lambda: True)
+    monkeypatch.setattr(
+        "product.historical_paper_loop.load_state",
+        lambda: {"thesis_hash": "thesis-a"},
+    )
+
+    monkeypatch.setattr(
+        G,
+        "_board",
+        lambda: {
+            "available": True,
+            "scan_scanned_at": "2026-09-22T10:00:00+00:00",
+            "best_trades": [{"symbol": "INFY"}],
+            "decisions": [{"symbol": "INFY"}],
+            "actionable": 1,
+        },
+    )
+    G.begin_startup("startup-new-scan", path=state)
+    assert G.approve(path=state)["approved"] is True
+
+    monkeypatch.setattr(
+        G,
+        "_board",
+        lambda: {
+            "available": False,
+            "state": "SEARCHING_BEST_TRADES",
+            "reason": "new scan projection not published yet",
+            "scan_scanned_at": "2026-09-22T11:00:00+00:00",
+            "best_trades": [],
+            "decisions": [],
+            "actionable": 0,
+        },
+    )
+
+    status = G.status(path=state)
+    assert status["approved"] is True
+    assert status["discovery_ready"] is False

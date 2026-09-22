@@ -51,16 +51,13 @@ def test_persist_desks_saves_recos_and_rebuilds_pulse(monkeypatch, tmp_path):
         return {"reports": []}
 
     monkeypatch.setattr("product.long_term_store.load_long_term_scan", lambda: {"scanned_at": "L", "records": []})
-    monkeypatch.setattr(
-        "product.recommendations_workspace.build_recommendations_workspace",
-        fake_build_reco,
-    )
-    monkeypatch.setattr(
-        "product.recommendations_workspace.build_market_reports_workspace",
-        fake_build_reports,
-    )
+    monkeypatch.setattr("product.recommendations_workspace.build_recommendations_workspace", fake_build_reco)
+    monkeypatch.setattr("product.recommendations_workspace.build_market_reports_workspace", fake_build_reports)
     monkeypatch.setattr("product.recommendations_store.DEFAULT_RECO_PATH", tmp_path / "recos.json")
     monkeypatch.setattr("product.recommendations_store.save_recommendations", lambda payload, path=None: saved.setdefault("reco", dict(payload)))
+    monkeypatch.setattr("product.trading_thesis.manifest", lambda: {"thesis_hash": "thesis-1"})
+    monkeypatch.setattr("product.decision_service.decision_board", lambda **kwargs: {"available": True, "scan_scanned_at": "S", "best_trades": [{"symbol": "AAA"}], "decisions": [{"symbol": "AAA"}], "actionable": 1})
+    monkeypatch.setattr("product.decision_discovery_store.save", lambda board, **kwargs: saved.setdefault("discovery", {"board": dict(board), **kwargs}))
 
     out = persist_desks_from_market_scan({"scanned_at": "S", "records": [{"symbol": "AAA"}]})
     assert out["recommendations"] == "saved"
@@ -68,18 +65,40 @@ def test_persist_desks_saves_recos_and_rebuilds_pulse(monkeypatch, tmp_path):
     assert saved["reco"]["from_saved_market_scan"] is True
     assert saved["pulse"] is True
     assert out["recommendations_error"] is None
+    assert out["decision_discovery"] == "saved"
+    assert out["decision_discovery_actionable"] == 1
+    assert saved["discovery"]["scan_scanned_at"] == "S"
+    assert saved["discovery"]["long_term_scanned_at"] == "L"
+    assert saved["discovery"]["thesis_hash"] == "thesis-1"
+    assert saved["discovery"]["board"]["best_trades"][0]["symbol"] == "AAA"
+
+
+def test_discovery_identity_is_captured_after_board_build(monkeypatch):
+    """A board build may persist learning state; cache key must describe its final thesis."""
+    saved = {}
+    phase = {"built": False}
+    monkeypatch.setattr("product.long_term_store.load_long_term_scan", lambda: {"scanned_at": "L", "records": []})
+    monkeypatch.setattr("product.recommendations_workspace.build_recommendations_workspace", lambda **_k: {"schema_version": 4, "categories": [], "scan_meta": {"assigned_count": 0}, "scan_scanned_at": "S", "long_term_scanned_at": "L", "lifecycle": {"active": [], "closed": []}})
+    monkeypatch.setattr("product.recommendations_workspace.build_market_reports_workspace", lambda **_k: {"reports": []})
+    monkeypatch.setattr("product.recommendations_store.save_recommendations", lambda *_a, **_k: None)
+
+    def build_board(**_kwargs):
+        phase["built"] = True
+        return {"available": True, "scan_scanned_at": "S", "best_trades": [], "decisions": [], "actionable": 0}
+
+    monkeypatch.setattr("product.decision_service.decision_board", build_board)
+    monkeypatch.setattr("product.trading_thesis.manifest", lambda: {"thesis_hash": "post-build" if phase["built"] else "pre-build"})
+    monkeypatch.setattr("product.decision_discovery_store.save", lambda board, **kwargs: saved.setdefault("discovery", {"board": dict(board), **kwargs}))
+
+    out = persist_desks_from_market_scan({"scanned_at": "S", "records": []})
+    assert out["decision_discovery"] == "saved"
+    assert saved["discovery"]["thesis_hash"] == "post-build"
 
 
 def test_persist_desks_failure_is_status_not_raise(monkeypatch):
     monkeypatch.setattr("product.long_term_store.load_long_term_scan", lambda: {})
-    monkeypatch.setattr(
-        "product.recommendations_workspace.build_recommendations_workspace",
-        lambda **_k: (_ for _ in ()).throw(RuntimeError("reco boom")),
-    )
-    monkeypatch.setattr(
-        "product.recommendations_workspace.build_market_reports_workspace",
-        lambda **_k: (_ for _ in ()).throw(RuntimeError("pulse boom")),
-    )
+    monkeypatch.setattr("product.recommendations_workspace.build_recommendations_workspace", lambda **_k: (_ for _ in ()).throw(RuntimeError("reco boom")))
+    monkeypatch.setattr("product.recommendations_workspace.build_market_reports_workspace", lambda **_k: (_ for _ in ()).throw(RuntimeError("pulse boom")))
     out = persist_desks_from_market_scan({"records": []})
     assert out["recommendations"] == "error"
     assert out["market_reports"] == "error"
@@ -90,36 +109,36 @@ def test_persist_desks_failure_is_status_not_raise(monkeypatch):
 
 
 def test_recommendations_get_is_cache_only_when_file_matches(monkeypatch):
-    saved = {
-        "schema_version": 4,
-        "categories": [{"id": "wealth_builders", "count": 0, "cards": []}],
-        "scan_scanned_at": "S",
-        "long_term_scanned_at": "L",
-    }
+    saved = {"schema_version": 4, "categories": [{"id": "wealth_builders", "count": 0, "cards": []}], "scan_scanned_at": "S", "long_term_scanned_at": "L"}
     monkeypatch.setattr("product.observer_api.core._scan_payload", lambda: {"scanned_at": "S", "records": [{"symbol": "AAA"}]})
     monkeypatch.setattr("product.observer_api.core._long_term_payload", lambda: {"scanned_at": "L"})
     monkeypatch.setattr("product.recommendations_store.load_recommendations", lambda: saved)
-    monkeypatch.setattr(
-        "product.recommendations_workspace.build_recommendations_workspace",
-        lambda **_k: (_ for _ in ()).throw(AssertionError("GET must not rebuild")),
-    )
+    monkeypatch.setattr("product.recommendations_workspace.build_recommendations_workspace", lambda **_k: (_ for _ in ()).throw(AssertionError("GET must not rebuild")))
     from product.observer_api import recommendations_workspace
     assert recommendations_workspace(refresh=False) is saved
 
 
 def test_recommendations_get_keeps_saved_file_when_scan_missing(monkeypatch):
-    saved = {
-        "schema_version": 4,
-        "categories": [{"id": "wealth_builders", "count": 1, "cards": [{"symbol": "AAA"}]}],
-        "scan_scanned_at": "yesterday",
-        "long_term_scanned_at": "yesterday",
-    }
+    saved = {"schema_version": 4, "categories": [{"id": "wealth_builders", "count": 1, "cards": [{"symbol": "AAA"}]}], "scan_scanned_at": "yesterday", "long_term_scanned_at": "yesterday"}
     monkeypatch.setattr("product.observer_api.core._scan_payload", lambda: {"scanned_at": "", "records": []})
     monkeypatch.setattr("product.observer_api.core._long_term_payload", lambda: {"scanned_at": ""})
     monkeypatch.setattr("product.recommendations_store.load_recommendations", lambda: saved)
-    monkeypatch.setattr(
-        "product.recommendations_workspace.build_recommendations_workspace",
-        lambda **_k: (_ for _ in ()).throw(AssertionError("do not wipe recos")),
-    )
+    monkeypatch.setattr("product.recommendations_workspace.build_recommendations_workspace", lambda **_k: (_ for _ in ()).throw(AssertionError("do not wipe recos")))
     from product.observer_api import recommendations_workspace
     assert recommendations_workspace(refresh=False) is saved
+
+
+def test_discovery_projection_failure_does_not_erase_saved_recommendations(monkeypatch):
+    saved = {}
+    monkeypatch.setattr("product.long_term_store.load_long_term_scan", lambda: {"scanned_at": "L", "records": []})
+    monkeypatch.setattr("product.recommendations_workspace.build_recommendations_workspace", lambda **_k: {"schema_version": 4, "categories": [], "scan_meta": {"assigned_count": 0}, "scan_scanned_at": "S", "long_term_scanned_at": "L", "lifecycle": {"active": [], "closed": []}})
+    monkeypatch.setattr("product.recommendations_workspace.build_market_reports_workspace", lambda **_k: {"reports": []})
+    monkeypatch.setattr("product.recommendations_store.save_recommendations", lambda payload, path=None: saved.setdefault("reco", dict(payload)))
+    monkeypatch.setattr("product.decision_service.decision_board", lambda **_k: (_ for _ in ()).throw(RuntimeError("discovery boom")))
+
+    out = persist_desks_from_market_scan({"scanned_at": "S", "records": []})
+    assert out["recommendations"] == "saved"
+    assert "reco" in saved
+    assert out["decision_discovery"] == "error"
+    assert out["decision_discovery_error"]["error_type"] == "RuntimeError"
+    assert "discovery boom" in out["decision_discovery_error"]["error_message"]

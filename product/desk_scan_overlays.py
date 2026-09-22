@@ -33,6 +33,9 @@ def persist_desks_from_market_scan(scan_payload: Mapping[str, Any] | None) -> di
     reco_status = SKIPPED
     reco_cards = 0
     reco_error: dict[str, str] | None = None
+    discovery_status = SKIPPED
+    discovery_error: dict[str, str] | None = None
+    discovery_actionable = 0
     try:
         from product.recommendations_store import save_recommendations
         from product.recommendations_workspace import (
@@ -52,6 +55,32 @@ def persist_desks_from_market_scan(scan_payload: Mapping[str, Any] | None) -> di
         save_recommendations(slim)
         reco_status = SAVED
         reco_cards = int((slim.get("scan_meta") or {}).get("assigned_count") or 0)
+
+        # Startup discovery is computed once in the scan worker, never in the
+        # HTTP status path. Build the canonical board first, then fingerprint
+        # the thesis. Decision construction may legitimately settle/persist
+        # learning state used by the thesis manifest; keying the projection to
+        # a pre-build hash can therefore make the just-written projection
+        # unreadable immediately. The persisted identity must describe the
+        # completed board, not the state immediately before it was built.
+        try:
+            from product.decision_discovery_store import save as save_discovery
+            from product.decision_service import decision_board
+            from product.trading_thesis import manifest as thesis_manifest
+
+            board = decision_board(workspace=reco, limit=40)
+            thesis = dict(thesis_manifest() or {})
+            save_discovery(
+                board,
+                scan_scanned_at=str(scan.get("scanned_at") or ""),
+                long_term_scanned_at=str(lt.get("scanned_at") or ""),
+                thesis_hash=str(thesis.get("thesis_hash") or ""),
+            )
+            discovery_status = SAVED
+            discovery_actionable = int(board.get("actionable") or 0)
+        except Exception as exc:
+            discovery_status = ERROR
+            discovery_error = _error_status(exc)
     except Exception as exc:
         reco_error = _error_status(exc)
         reco_status = ERROR
@@ -74,6 +103,9 @@ def persist_desks_from_market_scan(scan_payload: Mapping[str, Any] | None) -> di
         "recommendations": reco_status,
         "recommendation_cards": reco_cards,
         "recommendations_error": reco_error,
+        "decision_discovery": discovery_status,
+        "decision_discovery_actionable": discovery_actionable,
+        "decision_discovery_error": discovery_error,
         "market_reports": reports_status,
         "market_reports_error": reports_error,
     }

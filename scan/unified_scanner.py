@@ -365,85 +365,73 @@ class StockSignal:
 
 
 def _load_calibration() -> dict[str, float]:
-    """
-    Score multipliers from the walk-forward backtest — signals that
-    historically lose get their weight cut automatically; proven ones
-    get a boost. 1.0 for everything until a backtest has been run.
-    """
-    mult: dict[str, float] = {}
+    """Compatibility seam for tests/callers that need backtest-only weights."""
     try:
+        from scan.calibration_snapshot import backtest_multipliers
         from scan.signal_backtest import load_report
-        rep = load_report()
-        if not rep:
-            return mult
-        for sig, s in rep.get("signals", {}).items():
-            if sig not in SIGNAL_META:
-                continue                       # legacy/unknown IDs cannot affect production
-            if s.get("trades", 0) < 20:
-                continue                       # not enough evidence — leave at 1.0
-            exp = s.get("expectancy_r", 0.0)
-            if exp >= 0.30:
-                mult[sig] = 1.25
-            elif exp >= 0.10:
-                mult[sig] = 1.0
-            elif exp >= -0.10:
-                mult[sig] = 0.75
-            else:
-                mult[sig] = 0.45               # proven loser — heavily discounted
+        return backtest_multipliers(load_report() or {})
     except Exception:
-        pass
-    return mult
+        return {}
+
+
+_LOGGED_CALIBRATION_SNAPSHOTS: set[str] = set()
 
 
 class UnifiedScanner:
     """Scans the full universe from the bulk cache. Compute-only, no network."""
 
-    def __init__(self, max_workers: int = 8):
+    def __init__(self, max_workers: int = 8, *, calibration_snapshot: dict | None = None):
         self._max_workers = max_workers
-        self._calib = _load_calibration()
-        # Live edge — blend our OWN forward-tested outcomes into the backtest
-        # calibration. CONSERVATIVE: take the lower multiplier of the two, so
-        # live data can DEMOTE a signal that's leaking money but never inflate
-        # one the backtest already distrusts. Evidence-gated (≥30 outcomes);
-        # no tracked data → no change. This is what actually lifts expectancy:
-        # proven-negative signals stop earning BUY weight.
-        live_mult: dict[str, float] = {}
         try:
-            from scan.live_edge import live_calibration
-            live_mult = {
-                sig: m for sig, m in live_calibration().items()
-                if sig in SIGNAL_META
-            }
-            for sig, m in live_mult.items():
-                self._calib[sig] = min(self._calib.get(sig, 1.0), m)
+            from scan.calibration_snapshot import get_or_create_snapshot
+            self._calibration_snapshot = dict(
+                calibration_snapshot or get_or_create_snapshot()
+            )
         except Exception as exc:
-            log.debug("live_calibration_skip", error=str(exc))
+            log.debug("calibration_snapshot_unavailable", error=str(exc))
+            self._calibration_snapshot = {
+                "snapshot_id": "",
+                "multipliers": _load_calibration(),
+                "signal_registry": {},
+                "cache_hit": False,
+            }
+        self._calib = {
+            str(k): float(v)
+            for k, v in dict(self._calibration_snapshot.get("multipliers") or {}).items()
+            if str(k) in SIGNAL_META
+        }
+        self._calibration_snapshot_id = str(
+            self._calibration_snapshot.get("snapshot_id") or ""
+        )
         self._nifty_ret30 = 0.0        # index benchmark for relative strength
         # Regime-conditional calibration is set per-scan in scan() (NSE tape) —
         # left empty here so US/search paths (which call _analyze directly)
         # never inherit an NSE regime or pay for computing one.
         self._regime = ""
         self._regime_calib: dict[str, float] = {}
-        self._signal_registry: dict = {}
+        self._signal_registry = dict(
+            self._calibration_snapshot.get("signal_registry") or {}
+        )
         try:
-            from scan.signal_registry import build_registry, save_registry
-            self._signal_registry = save_registry(build_registry())
             summary = dict(self._signal_registry.get("summary") or {})
             missing = list(summary.get("scanner_without_forward_calibration") or [])
-            log.info(
-                "scanner_calibrated",
-                signals=len(self._calib),
-                scanner_catalog=int(summary.get("scanner_catalog") or len(SIGNAL_META)),
-                backtest_calibrated=int(summary.get("backtest_calibrated") or 0),
-                live_calibrated=int(summary.get("forward_calibrated") or 0),
-                effective_calibrated=int(summary.get("effective_calibrated") or len(self._calib)),
-                scanner_without_live=[x.get("signal_id") for x in missing],
-                registry_version=self._signal_registry.get("registry_version"),
-            )
+            sid = self._calibration_snapshot_id or "fallback"
+            if sid not in _LOGGED_CALIBRATION_SNAPSHOTS:
+                _LOGGED_CALIBRATION_SNAPSHOTS.add(sid)
+                log.info(
+                    "scanner_calibrated",
+                    signals=len(self._calib),
+                    scanner_catalog=int(summary.get("scanner_catalog") or len(SIGNAL_META)),
+                    backtest_calibrated=int(summary.get("backtest_calibrated") or 0),
+                    live_calibrated=int(summary.get("forward_calibrated") or 0),
+                    effective_calibrated=int(summary.get("effective_calibrated") or len(self._calib)),
+                    scanner_without_live=[x.get("signal_id") for x in missing],
+                    registry_version=self._signal_registry.get("registry_version"),
+                    calibration_snapshot_id=self._calibration_snapshot_id,
+                    calibration_cache_hit=bool(self._calibration_snapshot.get("cache_hit")),
+                )
         except Exception as exc:
             log.debug("signal_registry_skip", error=str(exc))
-            if self._calib:
-                log.info("scanner_calibrated", signals=len(self._calib))
 
     def scan(self, symbols: list[str], progress=None, *, prefetch: bool = True) -> list[StockSignal]:
         from scan.bulk_fetcher import prefetch as do_prefetch, get_cached, cached_symbols
