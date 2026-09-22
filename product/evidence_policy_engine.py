@@ -285,6 +285,30 @@ def evaluate_policies(
         matched.append(gate_row)
         final = BLOCK
 
+    try:
+        from product.evidence_confidence import confidence_breakdown
+
+        decomposed_confidence = confidence_breakdown(
+            ctx,
+            historical,
+            final_effect=final,
+            policy_sample_size=sample,
+            policy_coverage=coverage,
+            matched_policies=matched,
+        )
+    except Exception as exc:
+        decomposed_confidence = {
+            "schema_version": 1,
+            "final": {
+                "evidence_confidence_score": historical.get("evidence_confidence_score"),
+                "confidence_stage": historical.get("confidence_stage"),
+                "paper_eligible": bool(historical.get("paper_eligible")),
+                "is_win_probability": False,
+            },
+            "error": f"{type(exc).__name__}: {exc}"[:200],
+            "live_locked": True,
+        }
+
     return {
         "supportive": supportive,
         "cautionary": cautionary,
@@ -298,6 +322,7 @@ def evaluate_policies(
             else "MEASURED"
         ),
         "historical_forward_confidence": historical,
+        "confidence_breakdown": decomposed_confidence,
         "evidence_confidence_score": historical.get("evidence_confidence_score"),
         "confidence_stage": historical.get("confidence_stage"),
         "historical_base_ready": bool(historical.get("historical_ready")),
