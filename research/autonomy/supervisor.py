@@ -537,10 +537,31 @@ class Supervisor:
             calibration_id = str((load_current() or {}).get("snapshot_id") or "")
         except Exception:
             calibration_id = ""
+
+        policy_hash = "policy-unknown"
+        try:
+            import hashlib
+            from product.learning_policy_store import load_policies
+
+            policy_payload = dict(load_policies() or {})
+            canonical = json.dumps(
+                policy_payload.get("policies") or [],
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            )
+            policy_hash = "policy-" + hashlib.sha256(
+                canonical.encode("utf-8")
+            ).hexdigest()[:16]
+        except Exception:
+            pass
+
         identity = ":".join((
             snap,
+            scan_id or "scan-unknown",
             thesis_hash or "thesis-unknown",
             calibration_id or "calibration-unknown",
+            policy_hash,
         ))
         self.jobs.enqueue(
             SCH.PAPER_CYCLE,
