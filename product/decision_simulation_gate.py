@@ -125,9 +125,10 @@ def _board() -> dict[str, Any]:
             thesis_hash=thesis_hash,
         )
         if cached is not None:
-            out = dict(cached)
-            out["status_source"] = "persisted_discovery"
-            return out
+            # Return the persisted canonical board exactly as written. Status
+            # metadata belongs to cache-miss/error states; mutating a cache hit
+            # changes the projection contract and breaks reproducibility.
+            return dict(cached)
 
         return {
             "available": False,
