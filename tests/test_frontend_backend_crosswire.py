@@ -115,6 +115,7 @@ def test_crosswire_audit_covers_the_primary_product_clients():
         "/api/stock-intelligence/{}",
         "/api/due-diligence/{}",
         "/api/decision-simulator",
+        "/api/research-director",
     }
     missing = sorted(expected - set(frontend))
     assert not missing, f"Cross-wire scanner stopped seeing primary frontend clients: {missing}"

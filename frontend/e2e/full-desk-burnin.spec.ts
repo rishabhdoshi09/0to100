@@ -39,6 +39,7 @@ const CRITICAL_READS = [
   '/api/paper-autopilot',
   '/api/research-status',
   '/api/forward-evidence',
+  '/api/research-director',
   '/api/product-contract',
 ] as const
 

@@ -341,6 +341,14 @@ def research_status() -> dict:
     return build_research_status(autonomy=core._autonomy_payload())
 
 
+@product.app.get("/api/research-director")
+def research_director_status() -> dict:
+    """Single read-only mission-control view of the autonomous research loop."""
+    from product.research_director_status import build_research_director_status
+
+    return build_research_director_status()
+
+
 @product.app.get("/api/paper-autopilot")
 def paper_autopilot() -> dict:
     """Latest selection-authority cycle: taken, rejected, waits, why-no-trade."""
@@ -657,6 +665,7 @@ def product_contract() -> dict:
         "learning": {
             "operator_health_route_registered": "/api/operator-health" in paths,
             "research_status_route_registered": "/api/research-status" in paths,
+            "research_director_route_registered": "/api/research-director" in paths,
             "policies_route_registered": "/api/learning-policies" in paths,
             "dashboard_route_registered": "/api/learning-dashboard" in paths,
             "why_no_trade_route_registered": "/api/why-no-trade" in paths,

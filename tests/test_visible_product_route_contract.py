@@ -52,6 +52,7 @@ def test_every_primary_visible_desk_surface_has_a_real_backend_route():
         ("GET", "/api/data/ratios/{}"),
         ("GET", "/api/strategy-catalog"),
         ("GET", "/api/research-status"),
+        ("GET", "/api/research-director"),
         ("GET", "/api/learning-dashboard"),
         ("GET", "/api/autonomous-learning"),
         ("POST", "/api/autonomous-learning"),

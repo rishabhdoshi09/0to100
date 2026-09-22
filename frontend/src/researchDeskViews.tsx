@@ -5,6 +5,7 @@ import {
   fetchLearningDashboard,
   fetchAutonomousLearning,
   fetchResearchStatus,
+  fetchResearchDirector,
   fetchScanAudit,
   fetchStrategyCatalog,
   fetchSystemHealthContract,
@@ -19,6 +20,7 @@ import {
   type HealthLane,
   type LearningDashboard,
   type ResearchStatus,
+  type ResearchDirectorStatus,
   type ScanAuditPayload,
   type StrategyCatalog,
   type SystemHealthContract,
@@ -238,16 +240,131 @@ function AutonomousLearningPanel({
   )
 }
 
+function ResearchDirectorPanel({ data }: { data: ResearchDirectorStatus | null }) {
+  if (!data) {
+    return (
+      <Panel title="RESEARCH DIRECTOR" subtitle="NO PERSISTED DIRECTOR STATUS">
+        <div className="empty-row">Research Director state is unavailable. QuantTerm does not invent a research question.</div>
+      </Panel>
+    )
+  }
+
+  const req = data.evidence_request || {
+    request_id: '',
+    status: 'NONE',
+    gap_kind: '',
+    evidence_origin: '',
+    allowed_lanes: [],
+    current_samples: 0,
+    target_samples: 0,
+    sample_deficit: 0,
+    missing_metrics: [],
+    acquisition_tasks: [],
+    stop_conditions: [],
+  }
+  const batch = data.next_evidence_batch || {
+    batch_id: '',
+    phase: 'IDLE',
+    sessions: [],
+    selection_policy: '',
+    selection_objective: '',
+  }
+  const delta = data.learning_delta
+  const signals = data.signals || {}
+  const learned = data.challengers?.learned || {}
+  const dossier = learned.promotion_dossier || {}
+  const governor = data.resource_governor || {}
+  const stateTruth = data.state_truth || {}
+  const batchWindow = batch.sessions?.length
+    ? `${batch.sessions[0]} → ${batch.sessions[batch.sessions.length - 1]} · ${batch.sessions.length} sessions`
+    : 'No targeted batch selected'
+  const calibration = data.calibration?.snapshot_id || 'NO SNAPSHOT'
+  const requestStatus = req.request_id ? req.status || 'OPEN' : 'NO OPEN REQUEST'
+  const changeToday = delta?.measurable_change_today ? 'YES — MEASURABLE' : 'NO MEASURABLE CHANGE'
+
+  return (
+    <Panel title="RESEARCH DIRECTOR" subtitle={data.research_phase || 'UNKNOWN'}>
+      <div className="fact-grid">
+        <div><span>Current activity</span><strong>{data.current_activity || 'UNKNOWN'}</strong></div>
+        <div><span>Policy state</span><strong>{data.policy_state || 'UNKNOWN'}</strong></div>
+        <div><span>Evidence request</span><strong>{requestStatus}</strong></div>
+        <div><span>Evidence lane</span><strong>{req.evidence_origin || 'NONE'}</strong></div>
+        <div><span>Samples</span><strong>{req.request_id ? `${delta?.sample_count ?? req.current_samples}/${delta?.target_samples ?? req.target_samples}` : 'NO REQUEST'}</strong></div>
+        <div><span>Deficit</span><strong>{req.request_id ? String(delta?.sample_deficit ?? req.sample_deficit) : '—'}</strong></div>
+        <div><span>Calibration</span><strong>{calibration}</strong></div>
+        <div><span>Signal registry</span><strong>{signals.registry_version || 'NO SNAPSHOT'}</strong></div>
+        <div><span>Scanner / forward calibrated</span><strong>{signals.scanner_catalog ?? '—'} / {signals.forward_calibrated ?? '—'}</strong></div>
+        <div><span>Learned challenger</span><strong>{learned.status || 'NONE'}</strong></div>
+        <div><span>Forward evidence</span><strong>{data.forward_evidence?.status || 'NOT_STARTED'}</strong></div>
+        <div><span>Wiser today?</span><strong>{changeToday}</strong></div>
+      </div>
+
+      <p className="panel-copy"><strong>Current research question:</strong> {data.current_question || 'No unresolved question persisted.'}</p>
+      <p className="panel-copy"><strong>Why this evidence next:</strong> {batch.selection_objective || 'No targeted selection rationale persisted.'}</p>
+      <p className="panel-copy">
+        <strong>Next batch:</strong> {batchWindow}
+        {batch.selection_policy ? ` · ${batch.selection_policy}` : ''}
+        {batch.outcome_blind_selection === true ? ' · outcome-blind selection' : ''}
+      </p>
+      <p className="panel-copy"><strong>Next action:</strong> {data.next_action || 'No explicit next action persisted.'}</p>
+
+      <div className="fact-grid">
+        <div><span>Last-batch evidence added</span><strong>{delta?.last_batch_evidence_added ?? 0}</strong></div>
+        <div><span>Stagnant batches</span><strong>{delta?.stagnant_batches ?? 0}</strong></div>
+        <div><span>Metrics resolved</span><strong>{delta?.resolved_metrics?.length ?? 0}</strong></div>
+        <div><span>Metrics unresolved</span><strong>{delta?.unresolved_metrics?.length ?? 0}</strong></div>
+        <div><span>Knowledge validated (1d)</span><strong>{delta?.knowledge_validated_1d ?? 0}</strong></div>
+        <div><span>Knowledge retired (1d)</span><strong>{delta?.knowledge_retired_1d ?? 0}</strong></div>
+      </div>
+
+      {(req.missing_metrics || []).length ? (
+        <p className="panel-copy"><strong>Missing metrics:</strong> {req.missing_metrics.join(' · ')}</p>
+      ) : null}
+      {(req.acquisition_tasks || []).length ? (
+        <p className="panel-copy"><strong>Evidence acquisition:</strong> {req.acquisition_tasks.join(' · ')}</p>
+      ) : null}
+      {(delta?.unresolved_metrics || []).length ? (
+        <p className="panel-copy"><strong>Still unresolved:</strong> {delta.unresolved_metrics.join(' · ')}</p>
+      ) : null}
+
+      <p className="panel-copy">
+        <strong>Challenger dossier:</strong>{' '}
+        {String(dossier.decision || 'NO DOSSIER')}
+        {learned.model_version ? ` · ${learned.model_version}` : ''}
+        {learned.trained_n != null ? ` · trained n=${learned.trained_n}` : ''}
+        {learned.real_forward_n != null ? ` · forward n=${learned.real_forward_n}` : ''}
+      </p>
+      <p className="panel-copy">
+        <strong>Resource governor:</strong>{' '}
+        {String(governor.decision || 'NO STATUS')}
+        {governor.reason ? ` · ${String(governor.reason)}` : ''}
+      </p>
+      {stateTruth.mismatch ? (
+        <div className="api-warning">
+          Runtime-state mismatch: {stateTruth.reason || 'persisted policy state does not match durable activity truth'}
+        </div>
+      ) : null}
+      {(data.blockers || []).length ? (
+        <div className="api-warning">Research blockers: {data.blockers.join(' · ')}</div>
+      ) : null}
+      <p className="panel-copy">{data.truth_note || delta?.note || ''}</p>
+      <p className="panel-copy"><strong>Live execution:</strong> {liveSafetyLabel(data)}</p>
+    </Panel>
+  )
+}
+
 export function LearningJournalView() {
   const [data, setData] = useState<ResearchStatus | null>(null)
   const [learning, setLearning] = useState<LearningDashboard | null>(null)
   const [soak, setSoak] = useState<ForwardSoakScoreboard | null>(null)
   const [autoLearn, setAutoLearn] = useState<AutonomousLearningDashboard | null>(null)
+  const [director, setDirector] = useState<ResearchDirectorStatus | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const refreshLearning = () => {
     fetchAutonomousLearning().then(setAutoLearn).catch(() => undefined)
     fetchLearningDashboard().then(setLearning).catch(() => undefined)
+    fetchResearchDirector().then(setDirector).catch(() => undefined)
   }
   useEffect(() => {
     let alive = true
@@ -257,13 +374,15 @@ export function LearningJournalView() {
       fetchLearningDashboard(),
       fetchForwardSoak(),
       fetchAutonomousLearning(),
-    ]).then(([status, dash, soakRow, autoRow]) => {
+      fetchResearchDirector(),
+    ]).then(([status, dash, soakRow, autoRow, directorRow]) => {
       if (!alive) return
       if (status.status === 'fulfilled') setData(status.value)
       else setError(status.reason instanceof Error ? status.reason.message : 'Research status unavailable')
       if (dash.status === 'fulfilled') setLearning(dash.value)
       if (soakRow.status === 'fulfilled') setSoak(soakRow.value)
       if (autoRow.status === 'fulfilled') setAutoLearn(autoRow.value)
+      if (directorRow.status === 'fulfilled') setDirector(directorRow.value)
     }).finally(() => { if (alive) setLoading(false) })
     return () => { alive = false }
   }, [])
@@ -279,6 +398,7 @@ export function LearningJournalView() {
       </div>
       {error ? <div className="api-warning">{error}</div> : null}
       {loading ? <p className="panel-copy">Loading learning journal…</p> : null}
+      <ResearchDirectorPanel data={director} />
       <AutonomousLearningPanel data={autoLearn || learning?.autonomous_learning || null} onRefresh={refreshLearning} />
       <Panel title="FORWARD EVIDENCE SCOREBOARD" subtitle={board?.FORWARD_SOAK_STATUS || (loading ? 'Loading' : 'NOT_STARTED')}>
         {loading && !board ? (
