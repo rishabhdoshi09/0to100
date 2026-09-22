@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from datetime import datetime, timezone
@@ -278,6 +279,23 @@ def test_decision_only_job_is_structurally_non_executing():
     assert deps.calls == [("ENTRY_WINDOW_CLOSED_DECISION_ONLY", "off_session")]
 
 
+def test_decision_only_job_does_not_journal_without_trusted_market_data():
+    class NoData(_JobDeps):
+        def active_snapshot_id(self):
+            return ""
+
+    deps = NoData()
+    job = SimpleNamespace(idempotency_key="snapshot_decision:missing")
+    result = JOBS.run_paper_cycle(JOBS._Ctx(deps, job=job))
+
+    assert result.status == JS.BLOCKED
+    assert result.error_code == "NO_DATA_SNAPSHOT"
+    assert result.new_entries_allowed is False
+    assert result.metadata["decision_only_valid"] is False
+    assert result.metadata["judgment_count"] == 0
+    assert deps.calls == []
+
+
 class _CaptureJobs:
     def __init__(self):
         self.calls = []
@@ -323,6 +341,11 @@ def test_scheduler_identity_pins_data_thesis_and_calibration(monkeypatch):
         "scan.calibration_snapshot.load_current",
         lambda: {"snapshot_id": "cal-xyz"},
     )
+    policies = [{"policy_id": "P1", "version": 2, "production_status": "ACTIVE"}]
+    monkeypatch.setattr(
+        "product.learning_policy_store.load_policies",
+        lambda: {"policies": policies},
+    )
     sup = _SchedulerHarness()
 
     Supervisor._ensure_closed_market_decision_cycle(sup)
@@ -330,8 +353,12 @@ def test_scheduler_identity_pins_data_thesis_and_calibration(monkeypatch):
     assert len(sup.jobs.calls) == 1
     job_type, kwargs = sup.jobs.calls[0]
     assert job_type == "paper_cycle"
+    canonical = json.dumps(policies, sort_keys=True, separators=(",", ":"), default=str)
+    policy_hash = "policy-" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
     assert kwargs["idempotency_key"] == (
-        "snapshot_decision:snap-current:thesis-abc:cal-xyz"
+        "snapshot_decision:snap-current:"
+        "2026-09-22T15:30:00+05:30:"
+        "thesis-abc:cal-xyz:" + policy_hash
     )
     assert kwargs["input_snapshot_id"] == "snap-current"
     assert kwargs["critical"] is False
