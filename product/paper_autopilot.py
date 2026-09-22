@@ -49,6 +49,7 @@ NO_TRADE = "NO_TRADE"
 WAIT_FOR_ENTRY = "WAIT_FOR_ENTRY"
 NOT_SURFACED = "NOT_SURFACED"
 BROKER_LOGIN_REQUIRED = "BROKER_LOGIN_REQUIRED"
+DECISION_FINGERPRINT_FAILED = "DECISION_FINGERPRINT_FAILED"
 
 ENTER_NOW = "ENTER_NOW"
 WAIT = "WAIT"
@@ -99,6 +100,8 @@ class AutopilotDecision:
     why: dict[str, Any] = field(default_factory=dict)
     group: str = ""
     portfolio: dict[str, Any] = field(default_factory=dict)
+    freeze_id: str = ""
+    evidence_fingerprint: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -124,6 +127,8 @@ class AutopilotDecision:
             "entry_quality": (self.context or {}).get("entry_quality"),
             "missing_evidence": (self.context or {}).get("missing_evidence") or [],
             "portfolio_authority": self.portfolio or None,
+            "freeze_id": self.freeze_id,
+            "evidence_fingerprint": self.evidence_fingerprint,
         }
 
 
@@ -549,6 +554,86 @@ def _canonical_decision(decision: AutopilotDecision, *, as_of: str, snapshot_id:
         return "", ""
 
 
+def _decision_fingerprint_evidence(
+    decision: AutopilotDecision,
+    *,
+    as_of: str,
+    snapshot_id: str,
+    regime: str,
+    thesis_hash: str = "",
+) -> dict[str, Any]:
+    canonical_id, context_key = _canonical_decision(
+        decision,
+        as_of=as_of,
+        snapshot_id=snapshot_id,
+    )
+    try:
+        from product.pit_versions import current_versions
+        versions = current_versions().as_dict()
+    except Exception:
+        versions = {}
+    try:
+        from product.evidence_class import PAPER_FORWARD
+        evidence_class = PAPER_FORWARD
+    except Exception:
+        evidence_class = "PAPER_FORWARD"
+    ctx = dict(decision.context or {})
+    card = dict(decision.card or {})
+    return {
+        **ctx,
+        "decision_id": canonical_id,
+        "context_key": context_key,
+        "symbol": decision.symbol,
+        "decision": decision.decision,
+        "reason_code": decision.reason_code,
+        "entry": _f(card.get("entry") or card.get("entry_price") or card.get("cmp")),
+        "stop": _f(card.get("stop") or card.get("stop_price")),
+        "target": _f(card.get("target") or card.get("target_price")),
+        "setup_label": card.get("setup_label") or card.get("primary_thesis"),
+        "sector": card.get("sector"),
+        "regime": regime,
+        "selection_score": decision.selection_score,
+        "policy_effect": decision.policy_effect,
+        "portfolio": decision.portfolio or ctx.get("portfolio"),
+        "rules_hash": _identity().get("rules_hash"),
+        "thesis_hash": str(thesis_hash or card.get("thesis_hash") or ""),
+        "calibration_snapshot_id": str(
+            card.get("calibration_snapshot_id")
+            or ctx.get("calibration_snapshot_id")
+            or ""
+        ),
+        "data_snapshot_id": str(snapshot_id or ""),
+        "source_scan_id": str(snapshot_id or ""),
+        "evidence_class": evidence_class,
+        "versions": versions,
+    }
+
+
+
+def _freeze_taken_decision(
+    decision: AutopilotDecision,
+    *,
+    as_of: str,
+    snapshot_id: str,
+    regime: str,
+    thesis_hash: str = "",
+) -> dict[str, Any]:
+    from product.decision_freeze import freeze
+
+    evidence = _decision_fingerprint_evidence(
+        decision,
+        as_of=as_of,
+        snapshot_id=snapshot_id,
+        regime=regime,
+        thesis_hash=thesis_hash,
+    )
+    frozen = freeze(evidence)
+    decision.freeze_id = str(frozen.get("freeze_id") or "")
+    decision.evidence_fingerprint = str(frozen.get("fingerprint") or "")
+    return frozen
+
+
+
 def _intent_for(decision: AutopilotDecision, *, as_of: str, snapshot_id: str):
     from research.intelligence.schemas import TradeIntent
     ident = _identity()
@@ -696,24 +781,19 @@ def run_reco_paper_cycle(
             from product.counterfactual_learning import freeze_decision
             if is_non_judgment(decision.decision, decision.reason_code):
                 return
-            canonical_id, canonical_context = _canonical_decision(
+            evidence = _decision_fingerprint_evidence(
                 decision,
                 as_of=day,
                 snapshot_id=str(payload.get("scan_scanned_at") or day),
+                regime=regime,
+                thesis_hash=str(thesis.get("thesis_hash") or ""),
             )
-            evidence = {
-                **dict(decision.context or {}),
-                "rules_hash": ident.get("rules_hash"),
+            evidence.update({
                 "group": group or decision.group,
                 "detail": decision.detail,
                 "why": decision.why,
-                "setup_label": decision.card.get("setup_label"),
-                "sector": decision.card.get("sector"),
-                "regime": regime,
-                "decision_id": canonical_id,
-                "context_key": canonical_context,
-            }
-            freeze_decision(
+            })
+            frozen = freeze_decision(
                 symbol=decision.symbol,
                 reason_code=decision.reason_code,
                 decision=decision.decision,
@@ -723,6 +803,12 @@ def run_reco_paper_cycle(
                 as_of=day,
                 evidence=evidence,
             )
+            decision.freeze_id = str(
+                frozen.get("canonical_freeze_id")
+                or frozen.get("counterfactual_id")
+                or ""
+            )
+            decision.evidence_fingerprint = str(frozen.get("decision_fingerprint") or "")
         except Exception:
             pass
 
@@ -750,11 +836,11 @@ def run_reco_paper_cycle(
         if decision.decision == ENTER_NOW:
             ranked.append((float(decision.selection_score or 0.0), decision))
         elif decision.decision == WAIT:
-            waits.append(decision.as_dict())
             _freeze(decision, group="RECOMMENDED_BUT_NOT_FILLED")
+            waits.append(decision.as_dict())
         else:
-            rejections.append(decision.as_dict())
             _freeze(decision, group="REJECTED")
+            rejections.append(decision.as_dict())
 
     ranked.sort(key=lambda item: (-item[0], item[1].symbol))
     try:
@@ -763,29 +849,51 @@ def run_reco_paper_cycle(
             ranked, book=book, max_new=max_new, regime=regime,
         )
         for decision in diverted:
-            row = decision.as_dict() if hasattr(decision, "as_dict") else dict(decision)
-            if str(getattr(decision, "decision", row.get("decision"))) == WAIT:
-                waits.append(row)
+            if str(getattr(decision, "decision", "")) == WAIT:
                 _freeze(decision, group="RECOMMENDED_BUT_NOT_FILLED")
+                row = decision.as_dict() if hasattr(decision, "as_dict") else dict(decision)
+                waits.append(row)
             else:
-                rejections.append(row)
                 _freeze(decision, group="REJECTED")
+                row = decision.as_dict() if hasattr(decision, "as_dict") else dict(decision)
+                rejections.append(row)
     except Exception:
         diverted = []
     snapshot_id = str(payload.get("scan_scanned_at") or day)
     entered = 0
     for _score, decision in ranked:
         if entered >= int(max_new):
-            leftover = dict(decision.as_dict())
-            leftover["reason_code"] = NO_TRADE
-            leftover["detail"] = "not top-of-the-top this cycle"
-            leftover["decision"] = NO_TRADE
-            leftover["group"] = "REJECTED"
-            rejections.append(leftover)
             decision.decision = NO_TRADE
             decision.reason_code = NO_TRADE
+            decision.detail = "not top-of-the-top this cycle"
             _freeze(decision, group="REJECTED")
+            leftover = dict(decision.as_dict())
+            leftover["group"] = "REJECTED"
+            rejections.append(leftover)
             continue
+
+        # Every BUY must have a durable immutable fingerprint before the
+        # PaperBook can be mutated. Identity/provenance failure is therefore a
+        # real safety block, not a warning attached after the fill.
+        try:
+            _freeze_taken_decision(
+                decision,
+                as_of=day,
+                snapshot_id=snapshot_id,
+                regime=regime,
+                thesis_hash=str(thesis.get("thesis_hash") or ""),
+            )
+        except Exception as exc:
+            if DECISION_FINGERPRINT_FAILED not in cycle_reasons:
+                cycle_reasons.append(DECISION_FINGERPRINT_FAILED)
+            fail = decision.as_dict()
+            fail["decision"] = BLOCK
+            fail["reason_code"] = DECISION_FINGERPRINT_FAILED
+            fail["detail"] = f"{type(exc).__name__}: {exc}"[:200]
+            fail["group"] = "REJECTED"
+            rejections.append(fail)
+            continue
+
         try:
             pos = _execute(decision, book=book, as_of=day, snapshot_id=snapshot_id)
         except Exception as exc:
