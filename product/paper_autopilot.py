@@ -1076,6 +1076,239 @@ def run_reco_paper_cycle(
     return cycle
 
 
+def run_reco_decision_cycle(
+    *,
+    book,
+    workspace: Mapping[str, Any] | None = None,
+    cards: Sequence[Mapping[str, Any]] | None = None,
+    as_of: str = "",
+    now: datetime | None = None,
+    paper_enabled: bool = True,
+    regime: str = "RISK_ON",
+    persist_journal: bool = True,
+    max_new: int = 3,
+    policy_path=None,
+    policies: Sequence[Mapping[str, Any]] | None = None,
+    enforce_history: bool | None = None,
+) -> dict[str, Any]:
+    """Evaluate the current production selector outside the entry window.
+
+    This is intentionally a separate path from the paper execution cycle:
+    it can never build a TradeIntent, mutate PaperBook, freeze counterfactual
+    outcomes, write forward evidence, or feed learning. It answers only what
+    Selection Authority would judge if clock-based entry authority were open.
+
+    WAIT/BLOCK remain WAIT/BLOCK. ENTER_NOW becomes a WOULD_ENTER judgment, not
+    a paper fill. Missing or stale input remains an invalid decision-only proof.
+    """
+    from product.autopilot_journal import flatten_cards, record_cycle
+    from product.decision_freeze import evidence_fingerprint
+    from product.decision_taxonomy import is_non_judgment
+    from product.evidence_class import OPERATIONAL_DECISION_ONLY
+
+    clock = now or datetime.now(timezone.utc)
+    day = as_of or clock.date().isoformat()
+    payload = dict(workspace or {})
+    if cards is None:
+        if not payload:
+            from product.recommendations_store import load_recommendations
+            payload = load_recommendations() or {}
+        card_list = flatten_cards(payload)
+    else:
+        card_list = [dict(row) for row in cards if isinstance(row, Mapping)]
+
+    try:
+        from product.trading_thesis import manifest as thesis_manifest
+        thesis = dict(thesis_manifest() or {})
+    except Exception:
+        thesis = {}
+    ident = _identity()
+    snapshot_id = str(payload.get("scan_scanned_at") or day)
+    stale = bool(payload and reco_is_stale(payload, now=clock))
+    family_risk, cluster_risk = carried_sector_risk(book)
+    decisions: list[AutopilotDecision] = []
+    ranked: list[tuple[float, AutopilotDecision]] = []
+
+    for card in card_list:
+        # The ONLY bypass is the wall-clock entry authority. Every actual
+        # production thesis, evidence-policy, DD, regime, portfolio, sizing,
+        # liquidity and recommendation-freshness gate still executes.
+        decision = evaluate_selection_candidate(
+            card,
+            book=book,
+            workspace=payload or None,
+            now=clock,
+            entries_allowed=True,
+            entry_block_reason="",
+            paper_enabled=paper_enabled,
+            regime=regime,
+            policy_path=policy_path,
+            policies=policies,
+            enforce_history=enforce_history,
+            family_risk=family_risk,
+            cluster_risk=cluster_risk,
+        )
+        decisions.append(decision)
+        if is_non_judgment(decision.decision, decision.reason_code):
+            continue
+        if decision.decision == ENTER_NOW:
+            ranked.append((float(decision.selection_score or 0.0), decision))
+
+    ranked.sort(key=lambda item: (-item[0], item[1].symbol))
+    if ranked:
+        try:
+            from product.portfolio_selection_authority import apply_portfolio_authority
+            apply_portfolio_authority(
+                ranked,
+                book=book,
+                max_new=max_new,
+                regime=regime,
+            )
+            # Diverted decisions are mutated in the shared decisions list.
+        except Exception as exc:
+            # Portfolio authority is part of the production thesis. If it cannot
+            # be evaluated, do not manufacture a decision-only success.
+            unavailable = {
+                "as_of": day,
+                "session_phase": "off_session",
+                "paper_enabled": bool(paper_enabled),
+                "entries_allowed": False,
+                "entry_block_reason": "ENTRY_WINDOW_CLOSED_DECISION_ONLY",
+                "candidates_seen": len(card_list),
+                "eligible_count": 0,
+                "taken": [],
+                "waits": [],
+                "rejections": [],
+                "decision_only": True,
+                "decision_only_valid": False,
+                "decision_only_judgments": [],
+                "would_enter": [],
+                "positions_opened": [],
+                "final_decision": "DECISION_ONLY_UNAVAILABLE",
+                "cycle_reasons": ["PORTFOLIO_AUTHORITY_UNAVAILABLE"],
+                "summary": f"decision-only unavailable · {type(exc).__name__}: {exc}"[:240],
+                "eligibility": "DECISION_ONLY_UNAVAILABLE",
+                "source": "recommendation_selection_authority",
+                "adapter": "none",
+                "evidence_class": OPERATIONAL_DECISION_ONLY,
+                "not_forward_evidence": True,
+                "not_pnl": True,
+            }
+            if persist_journal:
+                record_cycle(unavailable)
+            return unavailable
+
+    judgments: list[dict[str, Any]] = []
+    for decision in decisions:
+        if is_non_judgment(decision.decision, decision.reason_code):
+            continue
+        row = decision.as_dict()
+        material = {
+            **row,
+            "as_of": day,
+            "regime": str((decision.context or {}).get("regime") or regime),
+            "thesis_hash": str(thesis.get("thesis_hash") or ""),
+            "rules_hash": str(ident.get("rules_hash") or ""),
+            "calibration_snapshot_id": str(
+                (decision.card or {}).get("calibration_snapshot_id")
+                or (decision.context or {}).get("calibration_snapshot_id")
+                or ""
+            ),
+            "data_snapshot_id": snapshot_id,
+            "source_scan_id": snapshot_id,
+            "evidence_class": OPERATIONAL_DECISION_ONLY,
+        }
+        row.update({
+            "status": "WOULD_ENTER" if decision.decision == ENTER_NOW else "JUDGMENT",
+            "evidence_class": OPERATIONAL_DECISION_ONLY,
+            "not_forward_evidence": True,
+            "not_pnl": True,
+            "opens_position": False,
+            "trade_intent_created": False,
+            "thesis_hash": material["thesis_hash"],
+            "rules_hash": material["rules_hash"],
+            "data_snapshot_id": snapshot_id,
+            "source_scan_id": snapshot_id,
+            "calibration_snapshot_id": material["calibration_snapshot_id"],
+            "decision_fingerprint": evidence_fingerprint(material),
+        })
+        judgments.append(row)
+
+    would_enter = [row for row in judgments if row.get("decision") == ENTER_NOW]
+    waits = [row for row in judgments if row.get("decision") == WAIT]
+    rejections = [
+        row for row in judgments
+        if row.get("decision") not in {ENTER_NOW, WAIT}
+    ]
+    invalid_reasons = {PAPER_TRADING_DISABLED, STALE_RECOMMENDATION}
+    invalid_input = any(str(row.get("reason_code") or "") in invalid_reasons for row in judgments)
+    valid = bool(judgments) and bool(paper_enabled) and not stale and not invalid_input
+    if not card_list:
+        reasons = [NOT_SURFACED]
+    elif stale:
+        reasons = [STALE_RECOMMENDATION]
+    elif not paper_enabled:
+        reasons = [PAPER_TRADING_DISABLED]
+    elif not judgments:
+        reasons = ["NO_CANONICAL_JUDGMENT"]
+    else:
+        reasons = ["ENTRY_WINDOW_CLOSED_DECISION_ONLY"]
+
+    final = (
+        "DECISION_ONLY_WOULD_ENTER" if would_enter
+        else "DECISION_ONLY_JUDGED" if judgments
+        else "DECISION_ONLY_NO_JUDGMENT"
+    )
+    cycle = {
+        "as_of": day,
+        "session_phase": "off_session",
+        "paper_enabled": bool(paper_enabled),
+        "entries_allowed": False,
+        "entry_block_reason": "ENTRY_WINDOW_CLOSED_DECISION_ONLY",
+        "candidates_seen": len(card_list),
+        "eligible_count": len(would_enter),
+        "taken": [],
+        "would_enter": would_enter,
+        "waits": waits,
+        "rejections": rejections,
+        "decision_only": True,
+        "decision_only_valid": bool(valid),
+        "decision_only_judgments": judgments,
+        "positions_opened": [],
+        "final_decision": final,
+        "cycle_reasons": reasons,
+        "summary": (
+            f"decision-only judgments={len(judgments)} · would_enter={len(would_enter)} · "
+            f"wait={len(waits)} · reject={len(rejections)} · seen={len(card_list)}"
+        ),
+        "eligibility": (
+            "DECISION_ONLY_WOULD_ENTER" if valid and would_enter
+            else "DECISION_ONLY_JUDGED" if valid
+            else "DECISION_ONLY_INVALID"
+        ),
+        "source": "recommendation_selection_authority",
+        "adapter": "none",
+        "rules_hash": str(ident.get("rules_hash") or ""),
+        "thesis_hash": str(thesis.get("thesis_hash") or ""),
+        "evidence_class": OPERATIONAL_DECISION_ONLY,
+        "not_forward_evidence": True,
+        "not_pnl": True,
+        "cycle_id": f"decision-only:{day}:{ident.get('rules_hash') or ''}:{snapshot_id}",
+    }
+    try:
+        from product.live_safety import live_safety_projection
+        cycle.update(live_safety_projection())
+    except Exception:
+        cycle.update({
+            "live_locked": None,
+            "live_lock_verified": False,
+            "live_execution_authorized": None,
+        })
+    if persist_journal:
+        record_cycle(cycle)
+    return cycle
+
+
 def execution_health(
     *,
     autonomy: Mapping[str, Any] | None = None,
