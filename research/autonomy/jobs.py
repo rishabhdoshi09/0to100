@@ -402,6 +402,34 @@ class Deps:
         self.telegram.notify_paper_cycle(result, book=brain.intel_book)
         return result
 
+    def run_decision_only_cycle(
+        self,
+        entry_block_reason="ENTRY_WINDOW_CLOSED_DECISION_ONLY",
+        session_phase="off_session",
+    ):
+        """Run cached Selection Authority with structurally zero execution authority."""
+        from research.auto_research.scheduler import get_brain
+        from product.paper_autopilot import run_reco_decision_cycle
+
+        brain = get_brain()
+        paper_on = True
+        try:
+            paper_on = bool(brain.is_paper_auto_enabled())
+        except Exception:
+            paper_on = True
+        now_ist = self.now_ist()
+        as_of = SCH.last_completed_session_date(
+            now_ist,
+            self.holidays(),
+        ) or now_ist.date().isoformat()
+        return run_reco_decision_cycle(
+            book=brain.intel_book,
+            as_of=str(as_of),
+            now=now_ist,
+            paper_enabled=paper_on,
+            persist_journal=True,
+        )
+
     def resolve_outcomes(self, session_date: str, capability_failures=()):
         from research.auto_research.scheduler import get_brain
         brain = get_brain()
@@ -887,7 +915,11 @@ def run_paper_cycle(ctx) -> JobResult:
     key = str(getattr(getattr(ctx, "job", None), "idempotency_key", "") or "")
     management_only = key.startswith("snapshot_manage:")
     automatic_entry = key.startswith("snapshot_paper:")
-    if management_only:
+    decision_only = key.startswith("snapshot_decision:")
+    if decision_only:
+        entries_ok = False
+        reason = "ENTRY_WINDOW_CLOSED_DECISION_ONLY"
+    elif management_only:
         entries_ok = False
         reason = "SIMULATION_APPROVAL_REQUIRED"
     elif automatic_entry and entries_ok:
@@ -927,12 +959,23 @@ def run_paper_cycle(ctx) -> JobResult:
         data_failure = "NO_DATA_SNAPSHOT"
         reason = data_failure
     try:
+        if decision_only:
+            if not hasattr(ctx.deps, "run_decision_only_cycle"):
+                return JobResult(
+                    JS.RETRYABLE_FAILED,
+                    "decision-only dependency unavailable",
+                    error_code="DECISION_ONLY_DEPENDENCY_MISSING",
+                    error_message="Deps.run_decision_only_cycle is not installed",
+                    state_hint=ST.DEGRADED,
+                    new_entries_allowed=False,
+                )
+            result = ctx.deps.run_decision_only_cycle(reason, phase)
         # Arity is resolved by inspection, never by calling and catching TypeError.
         # The canonical cycle opens real paper positions before it can raise, so a
         # TypeError from INSIDE the cycle is indistinguishable from a signature
         # mismatch under a try/except probe -- and the retry re-ran the whole
         # cycle, producing a second paper position from one job run.
-        if _accepts_full_paper_cycle_signature(ctx.deps.run_paper_cycle):
+        elif _accepts_full_paper_cycle_signature(ctx.deps.run_paper_cycle):
             result = ctx.deps.run_paper_cycle(entries_ok, reason, phase, ctx.active_failures)
         else:
             result = ctx.deps.run_paper_cycle(entries_ok)
@@ -951,8 +994,12 @@ def run_paper_cycle(ctx) -> JobResult:
     metadata = {"eligibility": eligibility, "entry_block_reason": reason,
                 "session_phase": phase, "market_data_source": data_source,
                 "management_only": management_only,
+                "decision_only": decision_only,
+                "not_forward_evidence": decision_only,
+                "decision_only_valid": bool((result or {}).get("decision_only_valid")) if decision_only else False,
+                "judgment_count": len((result or {}).get("decision_only_judgments") or []) if decision_only else 0,
                 "failure_class": "DATA_OR_PROVIDER" if data_failure else ""}
-    if not os.environ.get("PYTEST_CURRENT_TEST"):
+    if not decision_only and not os.environ.get("PYTEST_CURRENT_TEST"):
         try:
             from product.paper_self_feed import ingest_paper_cycle
 
@@ -969,12 +1016,24 @@ def run_paper_cycle(ctx) -> JobResult:
             }
         except Exception:
             pass
-    summary = f"paper cycle: {eligibility or 'no-op'}"
+    summary = (
+        f"decision-only cycle: {eligibility or 'no-op'}"
+        if decision_only
+        else f"paper cycle: {eligibility or 'no-op'}"
+    )
     if data_failure:
-        summary = f"paper cycle: DATA_UNAVAILABLE ({data_failure})"
-    return JobResult(JS.SUCCEEDED, summary,
-                     state_hint=hint, new_entries_allowed=entries_ok,
-                     metadata=metadata)
+        summary = (
+            f"decision-only cycle: DATA_UNAVAILABLE ({data_failure})"
+            if decision_only
+            else f"paper cycle: DATA_UNAVAILABLE ({data_failure})"
+        )
+    return JobResult(
+        JS.SUCCEEDED,
+        summary,
+        state_hint=ST.OBSERVING if decision_only else hint,
+        new_entries_allowed=False if decision_only else entries_ok,
+        metadata=metadata,
+    )
 
 
 def run_outcome_resolution(ctx) -> JobResult:
