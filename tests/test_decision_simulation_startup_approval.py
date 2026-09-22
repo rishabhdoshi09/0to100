@@ -390,3 +390,49 @@ def test_autonomous_approval_refuses_stale_or_unready_discovery(tmp_path, monkey
     assert result["reason"] == "BEST_TRADE_DISCOVERY_NOT_READY"
     assert result["scan_fresh"] is False
     assert G.is_approved(path=state) is False
+
+
+
+def test_gate_board_cache_miss_is_nonblocking_and_never_builds(monkeypatch):
+    import product.decision_discovery_store as discovery
+    import product.decision_service as decision_service
+    import product.long_term_store as long_term_store
+    import product.recommendations_workspace as workspace_mod
+    import product.scan_store as scan_store
+    import product.trading_thesis as thesis_mod
+
+    monkeypatch.setattr(
+        scan_store,
+        "load_scan",
+        lambda: {
+            "scanned_at": "2026-09-22T10:00:00+00:00",
+            "records": [{"symbol": "INFY"}],
+        },
+    )
+    monkeypatch.setattr(
+        long_term_store,
+        "load_long_term_scan",
+        lambda: {"scanned_at": "2026-09-22T09:00:00+00:00", "records": []},
+    )
+    monkeypatch.setattr(
+        thesis_mod,
+        "manifest",
+        lambda: {"thesis_hash": "thesis-a"},
+    )
+    monkeypatch.setattr(discovery, "load", lambda **_kwargs: None)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("status GET must never perform discovery computation")
+
+    monkeypatch.setattr(workspace_mod, "build_recommendations_workspace", forbidden)
+    monkeypatch.setattr(decision_service, "decision_board", forbidden)
+
+    payload = G._board()
+
+    assert payload["available"] is False
+    assert payload["state"] == "SEARCHING_BEST_TRADES"
+    assert payload["scan_scanned_at"] == "2026-09-22T10:00:00+00:00"
+    assert payload["best_trades"] == []
+    assert payload["decisions"] == []
+    assert payload["status_source"] == "persisted_discovery_missing"
+    assert "does not rebuild recommendations" in payload["reason"]
