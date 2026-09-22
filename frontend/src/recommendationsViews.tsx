@@ -224,6 +224,7 @@ function CardTile({
 
 function EvidencePanel({ card }: { card: RecommendationCard }) {
   const panel = card.evidence_panel
+  const breakdown = card.confidence_breakdown
   if (!panel) {
     return <p className="reco-pick-note">No evidence panel on this row.</p>
   }
@@ -249,6 +250,53 @@ function EvidencePanel({ card }: { card: RecommendationCard }) {
     ['Fundamental confirm', card.fundamental_confirmation || '—'],
     ['Decision coverage', card.research_decision_coverage != null ? `${card.research_decision_coverage}%` : '—'],
   ]
+
+  const confidenceRows: Array<[string, string]> = []
+  if (breakdown?.available) {
+    const comp = breakdown.components || {}
+    const setup = comp.setup_quality
+    const regime = comp.regime_support
+    const sector = comp.sector_support
+    const extension = comp.extension
+    const history = comp.production_history
+    const forward = comp.forward_evidence
+    const calibration = comp.calibration
+    const researchHistory = comp.research_historical_replay
+    const final = breakdown.final
+
+    confidenceRows.push(
+      ['Evidence strength', final?.evidence_strength_score != null
+        ? `${final.evidence_strength_score}/100 · ${final.stage || 'UNMEASURED'}`
+        : final?.stage || 'UNMEASURED'],
+      ['Paper gate', final?.paper_eligible ? 'ELIGIBLE' : 'NOT ELIGIBLE / UNPROVEN'],
+      ['Setup quality', setup?.value != null ? `${setup.value}/100 · not a win probability` : setup?.status || 'UNMEASURED'],
+      ['Regime', regime?.regime || 'UNMEASURED'],
+      ['Market context', [regime?.market_support, regime?.detail].filter(Boolean).join(' · ') || 'UNMEASURED'],
+      ['Sector support', [
+        sector?.leadership_label,
+        sector?.leadership_score != null ? `score ${sector.leadership_score}` : '',
+        sector?.breadth ? `breadth ${sector.breadth}` : '',
+        sector?.momentum ? `momentum ${sector.momentum}` : '',
+      ].filter(Boolean).join(' · ') || 'UNMEASURED'],
+      ['Extension / chase', [
+        extension?.impact,
+        extension?.entry_state,
+        extension?.extension_pct != null ? `${extension.extension_pct}%` : '',
+        extension?.chase_risk ? 'chase risk' : '',
+      ].filter(Boolean).join(' · ') || 'UNMEASURED'],
+      ['Production history', history?.sample_size
+        ? `n=${history.sample_size} · ${history.status || 'UNPROVEN'} · ${history.positive_splits || 0}/${history.splits_tested || 0} positive splits`
+        : history?.status || 'UNPROVEN'],
+      ['Trusted forward', `n=${forward?.trusted_sample_size || 0} trusted / ${forward?.observed_sample_size || 0} observed`],
+      ['Forward version', forward?.version_status || 'NO FORWARD SETUP POLICY'],
+      ['Calibration snapshot', calibration?.snapshot_id || 'NO IMMUTABLE SNAPSHOT'],
+      ['Signal registry', calibration?.signal_registry_version || 'UNAVAILABLE'],
+      ['Research-only history', researchHistory?.available
+        ? `n=${researchHistory.sample_size || 0} · research-only · not promotion evidence`
+        : 'No thesis-scoped research replay policy'],
+    )
+  }
+
   return (
     <div className="reco-evidence-panel">
       <p>{panel.provenance}</p>
@@ -260,6 +308,32 @@ function EvidencePanel({ card }: { card: RecommendationCard }) {
           </div>
         ))}
       </dl>
+      {breakdown?.available ? (
+        <>
+          <p><strong>Confidence breakdown</strong> · evidence strength, not a win probability.</p>
+          <dl>
+            {confidenceRows.map(([k, v]) => (
+              <div key={k}>
+                <dt>{k}</dt>
+                <dd>{v}</dd>
+              </div>
+            ))}
+          </dl>
+          {breakdown.components?.regime_support?.note ? (
+            <p>{breakdown.components.regime_support.note}</p>
+          ) : null}
+          {breakdown.components?.forward_evidence?.note ? (
+            <p>{breakdown.components.forward_evidence.note}</p>
+          ) : null}
+          <p>{breakdown.truth_note}</p>
+        </>
+      ) : (
+        <p>
+          Confidence breakdown unavailable
+          {breakdown?.reason ? ` · ${breakdown.reason}` : ''}.
+          Missing evidence is not synthesized.
+        </p>
+      )}
     </div>
   )
 }
