@@ -51,10 +51,11 @@ def _read_ledger(path: Path) -> list[dict[str, Any]]:
     return out
 
 
-def _counterfactual_freeze_path(path: str | Path | None) -> Path | None:
-    if path is None:
-        return None
-    target = Path(path)
+def _counterfactual_freeze_path(path: str | Path | None) -> Path:
+    # Counterfactual identity must be isolated with the ledger it protects.
+    # This also makes QT_COUNTERFACTUALS test/runtime overrides authoritative
+    # instead of accidentally sharing the process-wide canonical freeze DB.
+    target = ledger_path(path)
     return target.with_suffix(target.suffix + ".freeze.db")
 
 def freeze_decision(
