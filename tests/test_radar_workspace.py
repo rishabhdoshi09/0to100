@@ -386,3 +386,74 @@ def test_radar_home_keeps_real_zero_nifty_change_if_source_reports_it():
     )
     assert payload["nifty_change_1d"] == 0.0
     assert payload["vix"] == 12.5
+
+
+
+def test_radar_home_default_projection_never_refreshes_live_technicals(monkeypatch):
+    import product.live_technicals as live_technicals
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("radar read projection must not refresh live technicals")
+
+    monkeypatch.setattr(live_technicals, "refresh_rows_technicals", forbidden)
+    scan = {
+        "scanned_at": "2026-09-22T10:00:00+00:00",
+        "universe_size": 1,
+        "records": [{
+            "symbol": "AAA",
+            "score": 80,
+            "verdict": "BUY",
+            "status": "Ready to trade",
+            "signals": ["BREAKOUT_52W", "MOMENTUM"],
+            "chase_risk": False,
+            "volume_ratio": 1.5,
+            "rsi": 58,
+            "breakout_grade": "A",
+            "breakout_conviction": 80,
+            "avg_vol20": 1_000_000,
+        }],
+    }
+    payload = build_radar_home(
+        scan_payload=scan,
+        long_term_payload={"records": []},
+        market={"health": "Healthy", "breadth": "60%", "trade_stance": "Open"},
+    )
+
+    assert payload["counts"]["breakouts"] == 1
+    assert payload["lanes"]["breakouts"][0]["symbol"] == "AAA"
+
+
+def test_radar_home_explicit_worker_refresh_can_use_technical_refresher(monkeypatch):
+    import product.live_technicals as live_technicals
+
+    calls = []
+    def fake(rows, *, bulk_overlay=False):
+        calls.append((len(rows), bulk_overlay))
+        return [dict(row, rsi=55, volume_ratio=2.0) for row in rows]
+
+    monkeypatch.setattr(live_technicals, "refresh_rows_technicals", fake)
+    scan = {
+        "scanned_at": "2026-09-22T10:00:00+00:00",
+        "universe_size": 1,
+        "records": [{
+            "symbol": "AAA",
+            "score": 80,
+            "verdict": "BUY",
+            "status": "Ready to trade",
+            "signals": ["BREAKOUT_52W", "MOMENTUM"],
+            "chase_risk": False,
+            "volume_ratio": 1.5,
+            "rsi": 58,
+            "breakout_grade": "A",
+            "breakout_conviction": 80,
+            "avg_vol20": 1_000_000,
+        }],
+    }
+    build_radar_home(
+        scan_payload=scan,
+        long_term_payload={"records": []},
+        market={"health": "Healthy", "breadth": "60%", "trade_stance": "Open"},
+        refresh_technicals=True,
+    )
+
+    assert calls
