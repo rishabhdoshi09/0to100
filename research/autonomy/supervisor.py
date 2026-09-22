@@ -74,6 +74,8 @@ class Supervisor:
         self._state_persist = ST.StatePersistence(self.root / "state.json")
         self.state = self._state_persist.load()
         self.dialogue = DialogueLog(self.root / "dialogue.jsonl")
+        from research.autonomy.incident_store import IncidentStore
+        self.incidents = IncidentStore(self.root / "incidents.json")
         self.lock = SingleInstanceLock(self.root / "supervisor.lock")
         self._status_path = self.root / "status.json"
         self._failures_path = self.root / "failures.json"
@@ -1226,6 +1228,14 @@ class Supervisor:
             self.jobs.complete(job.job_id, result.status, result_summary=result.summary,
                                output_snapshot_id=result.output_snapshot_id,
                                error_code=result.error_code, error_message=result.error_message)
+            if result.status in {JS.SUCCEEDED, JS.SKIPPED_IDEMPOTENT}:
+                try:
+                    self.incidents.recover_for_job(
+                        job,
+                        note=f"{job.job_type} completed with {result.status}",
+                    )
+                except Exception:
+                    pass
             if result.status == JS.SUCCEEDED:
                 for dependency in result.unblocks:
                     self.jobs.unblock_dependency(dependency)
@@ -1341,15 +1351,55 @@ class Supervisor:
                              f"A critical job is overdue: {names}.", "overdue_check")
 
     def _incident(self, code, message, job=None):
-        self.dialogue.append(Record(record_type=OPERATIONAL_INCIDENT, producer="supervisor",
-                                    claim=message, evidence={"error_code": code,
-                                    "job_type": getattr(job, "job_type", ""),
-                                    "job_id": getattr(job, "job_id", "")}, decision=code))
-        if hasattr(self.deps, "notify_incident"):
-            try:
-                self.deps.notify_incident(code, message)
-            except Exception:
-                pass
+        """Persist one deduplicated incident dossier and append audit dialogue only on change."""
+        try:
+            dossier = self.incidents.upsert(
+                code=str(code or ""),
+                message=str(message or ""),
+                job=job,
+                activity_truth=self._activity_truth(),
+                resource_governor=self._resource_budget(),
+                active_failures=sorted(self.failures),
+            )
+        except Exception:
+            dossier = {
+                "incident_id": "",
+                "occurrence_count": 1,
+                "materially_changed": True,
+                "recovery_action": "",
+                "job": {
+                    "job_type": getattr(job, "job_type", ""),
+                    "job_id": getattr(job, "job_id", ""),
+                },
+            }
+
+        if dossier.get("materially_changed"):
+            evidence = {
+                "incident_id": dossier.get("incident_id", ""),
+                "error_code": code,
+                "job_type": (dossier.get("job") or {}).get("job_type", ""),
+                "job_id": (dossier.get("job") or {}).get("job_id", ""),
+                "occurrence_count": dossier.get("occurrence_count", 1),
+                "progress": dossier.get("progress") or {},
+                "recovery_action": dossier.get("recovery_action", ""),
+                "activity": (dossier.get("activity_truth") or {}).get("activity", ""),
+                "resource_decision": (dossier.get("resource_governor") or {}).get("decision", ""),
+            }
+            self.dialogue.append(
+                Record(
+                    record_type=OPERATIONAL_INCIDENT,
+                    producer="supervisor",
+                    claim=message,
+                    evidence=evidence,
+                    decision=code,
+                )
+            )
+            if hasattr(self.deps, "notify_incident"):
+                try:
+                    self.deps.notify_incident(code, message)
+                except Exception:
+                    pass
+        return dossier
 
     def run(self, *, interval_s=15.0, sleep_fn=None, max_iterations=None):
         import time
