@@ -543,6 +543,7 @@ def build_radar_home(
     market: Any,
     sector_lookup: Callable[[str], str] | None = None,
     sepa_cards: Sequence[Mapping[str, Any]] | None = None,
+    refresh_technicals: bool = False,
 ) -> dict[str, Any]:
     scan_rows = [dict(r) for r in (scan_payload or {}).get("records", []) or [] if isinstance(r, Mapping)]
     long_rows = [dict(r) for r in (long_term_payload or {}).get("records", []) or [] if isinstance(r, Mapping)]
@@ -577,43 +578,44 @@ def build_radar_home(
         "confirmed_breakout", "near_breakout", "insufficient_confirmation", "extended_after_breakout",
     }
     breakouts = [r for r in enriched if r.get("breakout_state") in breakout_states]
-    try:
-        from product.live_technicals import refresh_rows_technicals
-        priority = [
-            r for r in breakouts
-            if r.get("breakout_state") in {"confirmed_breakout", "near_breakout"}
-            and not bool(r.get("chase_risk"))
-        ]
-        priority.sort(key=lambda r: (-_f(r.get("score")), r.get("symbol", "")))
-        refresh_cap = 80
-        to_refresh = priority[:refresh_cap]
-        # Always include graded A/B names even if outside the score head.
-        seen = {str(r.get("symbol", "")).upper() for r in to_refresh}
-        for r in breakouts:
-            sym = str(r.get("symbol", "")).upper()
-            if sym in seen:
-                continue
-            if str(r.get("breakout_grade") or "").upper() in {"A", "B"} and not bool(r.get("chase_risk")):
-                to_refresh.append(r)
-                seen.add(sym)
-            if len(to_refresh) >= refresh_cap + 20:
-                break
-        refreshed = {
-            str(r.get("symbol", "")).upper(): r
-            for r in refresh_rows_technicals(to_refresh, bulk_overlay=True)
-        }
-        breakouts = [refreshed.get(str(r.get("symbol", "")).upper(), r) for r in breakouts]
-        by_sym = {str(r.get("symbol", "")).upper(): r for r in enriched}
-        for sym, row in refreshed.items():
-            if sym in by_sym:
-                by_sym[sym].update({
-                    k: row[k] for k in (
-                        "price", "rsi", "volume_ratio", "tech_source", "price_tag",
-                        "eod_as_of", "quote_source",
-                    ) if k in row
-                })
-    except Exception:
-        pass
+    if refresh_technicals:
+        try:
+            from product.live_technicals import refresh_rows_technicals
+            priority = [
+                r for r in breakouts
+                if r.get("breakout_state") in {"confirmed_breakout", "near_breakout"}
+                and not bool(r.get("chase_risk"))
+            ]
+            priority.sort(key=lambda r: (-_f(r.get("score")), r.get("symbol", "")))
+            refresh_cap = 80
+            to_refresh = priority[:refresh_cap]
+            # Worker/explicit refresh path only. Page-open reads must remain cache-only.
+            seen = {str(r.get("symbol", "")).upper() for r in to_refresh}
+            for r in breakouts:
+                sym = str(r.get("symbol", "")).upper()
+                if sym in seen:
+                    continue
+                if str(r.get("breakout_grade") or "").upper() in {"A", "B"} and not bool(r.get("chase_risk")):
+                    to_refresh.append(r)
+                    seen.add(sym)
+                if len(to_refresh) >= refresh_cap + 20:
+                    break
+            refreshed = {
+                str(r.get("symbol", "")).upper(): r
+                for r in refresh_rows_technicals(to_refresh, bulk_overlay=True)
+            }
+            breakouts = [refreshed.get(str(r.get("symbol", "")).upper(), r) for r in breakouts]
+            by_sym = {str(r.get("symbol", "")).upper(): r for r in enriched}
+            for sym, row in refreshed.items():
+                if sym in by_sym:
+                    by_sym[sym].update({
+                        k: row[k] for k in (
+                            "price", "rsi", "volume_ratio", "tech_source", "price_tag",
+                            "eod_as_of", "quote_source",
+                        ) if k in row
+                    })
+        except Exception:
+            pass
 
     for row in breakouts:
         row["breakout_quality"] = breakout_quality_score(row)
@@ -638,12 +640,13 @@ def build_radar_home(
     ))
 
     momentum = [r for r in enriched if "MOMENTUM" in _signals(r)]
-    # Refresh technicals for the momentum lane head (visible cards only).
-    try:
-        from product.live_technicals import refresh_rows_technicals
-        momentum = refresh_rows_technicals(momentum[:24], bulk_overlay=False) + momentum[24:]
-    except Exception:
-        pass
+    # Optional worker-side refresh. API/page-open path uses saved scan technicals.
+    if refresh_technicals:
+        try:
+            from product.live_technicals import refresh_rows_technicals
+            momentum = refresh_rows_technicals(momentum[:24], bulk_overlay=False) + momentum[24:]
+        except Exception:
+            pass
     momentum.sort(key=lambda r: (bool(r.get("chase_risk")), -_f(r.get("score")), r.get("symbol", "")))
 
     long_picks = [
