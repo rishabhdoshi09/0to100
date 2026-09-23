@@ -725,3 +725,57 @@ def test_approved_scan_cache_gap_does_not_mask_changed_thesis_identity(tmp_path,
     assert evolved["thesis_changed_since_approval"] is True
     assert evolved["discovery_ready"] is False
     assert evolved["best_trades"] == []
+
+
+def test_long_term_identity_change_gets_a_new_discovery_refresh_job(tmp_path, monkeypatch):
+    """Discovery idempotency includes every store identity used by the cache key."""
+    from research.autonomy import schedules as SCH
+    from research.autonomy.supervisor import Supervisor
+
+    class DiscoveryDeps:
+        def active_snapshot_id(self):
+            return ""
+
+    gate = {
+        "discovery_ready": False,
+        "approved": True,
+        "scan_fresh": True,
+        "scan_scanned_at": "2026-09-22T19:02:49+00:00",
+        "long_term_scanned_at": "2026-09-22T18:00:00+00:00",
+        "current_thesis_hash": "thesis-b",
+    }
+    monkeypatch.setattr(
+        "product.decision_simulation_gate.status",
+        lambda: dict(gate),
+    )
+
+    sup = Supervisor(tmp_path / "auto", deps=DiscoveryDeps())
+    sup._ensure_startup_trade_discovery()
+    sup._ensure_startup_trade_discovery()
+
+    first = [
+        job for job in sup.jobs.list(limit=20)
+        if job.job_type == SCH.DISCOVERY_REFRESH
+    ]
+    assert len(first) == 1
+
+    gate["long_term_scanned_at"] = "2026-09-22T18:30:00+00:00"
+    sup._ensure_startup_trade_discovery()
+
+    refreshes = [
+        job for job in sup.jobs.list(limit=20)
+        if job.job_type == SCH.DISCOVERY_REFRESH
+    ]
+    assert len(refreshes) == 2
+    assert {job.idempotency_key for job in refreshes} == {
+        SCH.discovery_refresh_key(
+            "2026-09-22T19:02:49+00:00",
+            "2026-09-22T18:00:00+00:00",
+            "thesis-b",
+        ),
+        SCH.discovery_refresh_key(
+            "2026-09-22T19:02:49+00:00",
+            "2026-09-22T18:30:00+00:00",
+            "thesis-b",
+        ),
+    }
