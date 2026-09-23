@@ -37,7 +37,7 @@ def test_successful_intraday_scan_enqueues_paper_cycle(monkeypatch):
         holidays=lambda: set(),
         active_snapshot_id=lambda: "snap-1",
     )
-    monkeypatch.setattr("product.decision_simulation_gate.is_approved", lambda: True)
+    monkeypatch.setattr("product.decision_simulation_gate.status", lambda: {"discovery_ready": True, "approved": True})
     supervisor._enqueue_paper_after_scan(SimpleNamespace(
         job_type=SCH.MARKET_SCAN,
         idempotency_key=SCH.snapshot_scan_key("snap-1"),
@@ -58,7 +58,7 @@ def test_intraday_scan_waits_for_simulation_approval(monkeypatch):
         active_snapshot_id=lambda: "snap-1",
     )
     supervisor._has_open_paper_positions = lambda: False
-    monkeypatch.setattr("product.decision_simulation_gate.is_approved", lambda: False)
+    monkeypatch.setattr("product.decision_simulation_gate.status", lambda: {"discovery_ready": False, "approved": False})
     supervisor._enqueue_paper_after_scan(SimpleNamespace(
         job_type=SCH.MARKET_SCAN,
         idempotency_key=SCH.snapshot_scan_key("snap-1"),
@@ -77,7 +77,7 @@ def test_preapproval_open_positions_get_management_only_pass(monkeypatch):
         active_snapshot_id=lambda: "snap-1",
     )
     supervisor._has_open_paper_positions = lambda: True
-    monkeypatch.setattr("product.decision_simulation_gate.is_approved", lambda: False)
+    monkeypatch.setattr("product.decision_simulation_gate.status", lambda: {"discovery_ready": False, "approved": False})
     supervisor._enqueue_paper_after_scan(SimpleNamespace(
         job_type=SCH.MARKET_SCAN,
         idempotency_key=SCH.snapshot_scan_key("snap-1"),
@@ -155,7 +155,7 @@ def test_off_session_historical_paper_waits_for_approval(monkeypatch):
     )
     supervisor._enqueue_post_market_grind = lambda *_a, **_k: None
     supervisor._ensure_startup_trade_discovery = lambda: None
-    monkeypatch.setattr("product.decision_simulation_gate.is_approved", lambda: False)
+    monkeypatch.setattr("product.decision_simulation_gate.status", lambda: {"discovery_ready": False, "approved": False})
 
     def forbidden(*_a, **_k):
         raise AssertionError("historical simulation must not inspect or enqueue a batch before approval")
@@ -179,7 +179,7 @@ def test_off_session_after_close_enqueues_historical_paper(monkeypatch):
     )
     supervisor._enqueue_post_market_grind = lambda *_a, **_k: None
     supervisor._ensure_startup_trade_discovery = lambda: None
-    monkeypatch.setattr("product.decision_simulation_gate.is_approved", lambda: True)
+    monkeypatch.setattr("product.decision_simulation_gate.status", lambda: {"discovery_ready": True, "approved": True})
     monkeypatch.setattr(
         "product.historical_paper_loop.pending_stage",
         lambda: {"phase": "IDLE", "batch_id": ""},
@@ -262,7 +262,7 @@ def test_overnight_after_midnight_continues_historical_learning(monkeypatch):
     )
     supervisor._enqueue_post_market_grind = lambda *_a, **_k: None
     supervisor._ensure_startup_trade_discovery = lambda: None
-    monkeypatch.setattr("product.decision_simulation_gate.is_approved", lambda: True)
+    monkeypatch.setattr("product.decision_simulation_gate.status", lambda: {"discovery_ready": True, "approved": True})
     monkeypatch.setattr(
         "product.historical_paper_loop.pending_stage",
         lambda: {"phase": "AWAITING_LEARNING", "batch_id": "hist-2"},
@@ -290,7 +290,7 @@ def test_eod_refreshes_official_data_without_starting_live_scan_pipeline(monkeyp
     )
     supervisor._enqueue_post_market_grind = lambda *_a, **_k: None
     supervisor._ensure_startup_trade_discovery = lambda: None
-    monkeypatch.setattr("product.decision_simulation_gate.is_approved", lambda: True)
+    monkeypatch.setattr("product.decision_simulation_gate.status", lambda: {"discovery_ready": True, "approved": True})
     monkeypatch.setattr(
         "product.historical_paper_loop.pending_stage",
         lambda: {"phase": "IDLE", "batch_id": ""},
@@ -372,7 +372,7 @@ def test_restart_reconciles_finished_historical_poll_before_learning(monkeypatch
     )
     supervisor._enqueue_post_market_grind = lambda *_a, **_k: None
     supervisor._ensure_startup_trade_discovery = lambda: None
-    monkeypatch.setattr("product.decision_simulation_gate.is_approved", lambda: True)
+    monkeypatch.setattr("product.decision_simulation_gate.status", lambda: {"discovery_ready": True, "approved": True})
     monkeypatch.setattr(
         "product.historical_paper_loop.pending_stage",
         lambda: {"phase": "AWAITING_LEARNING", "batch_id": "hist-restart"},
@@ -422,6 +422,6 @@ def test_closed_market_does_not_start_historical_simulation_before_approval(monk
     )
     supervisor._enqueue_post_market_grind = lambda *_a, **_k: None
     supervisor._ensure_startup_trade_discovery = lambda: None
-    monkeypatch.setattr("product.decision_simulation_gate.is_approved", lambda: False)
+    monkeypatch.setattr("product.decision_simulation_gate.status", lambda: {"discovery_ready": False, "approved": False})
     supervisor.enqueue_due()
     assert all(job_type != SCH.HISTORICAL_PAPER_CYCLE for job_type, _ in jobs.enqueued)
