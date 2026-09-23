@@ -772,6 +772,7 @@ class Supervisor:
                         idempotency_key=SCH.historical_paper_key(bid),
                         input_snapshot_id=bid,
                     )
+                    return
 
             # No runnable historical batch is still a meaningful scheduler
             # state. Give the Research Director one idempotent chance to close,
