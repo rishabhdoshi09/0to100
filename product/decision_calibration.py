@@ -156,6 +156,7 @@ class DecisionCalibrationEngine:
         decision_as_of: str,
         outcome_as_of: str,
         predicted_p: float | None = None,
+        prediction_source: str = "",
     ) -> dict[str, Any]:
         """PIT-safe: decision_as_of must be <= outcome_as_of. Future data cannot rewrite the prediction."""
         if outcome_as_of and decision_as_of and str(outcome_as_of) < str(decision_as_of):
@@ -174,6 +175,7 @@ class DecisionCalibrationEngine:
             "setup": setup,
             "regime": regime,
             "sector": sector,
+            "prediction_source": str(prediction_source or ""),
             "decision_as_of": decision_as_of,
             "outcome_as_of": outcome_as_of,
             "recorded_at": datetime.now(timezone.utc).isoformat(),
@@ -192,6 +194,7 @@ class DecisionCalibrationEngine:
         setup: str = "",
         regime: str = "",
         sector: str = "",
+        prediction_source: str = "",
     ) -> dict[str, Any]:
         """Summarize hit-rate evidence and probability calibration separately.
 
@@ -208,6 +211,10 @@ class DecisionCalibrationEngine:
             and (not setup or r.get("setup") == setup)
             and (not regime or r.get("regime") == regime)
             and (not sector or r.get("sector") == sector)
+            and (
+                not prediction_source
+                or str(r.get("prediction_source") or "") == str(prediction_source)
+            )
         ]
         n = len(rows)
         probability_rows = [
@@ -224,6 +231,7 @@ class DecisionCalibrationEngine:
             "setup": setup,
             "regime": regime,
             "sector": sector,
+            "prediction_source": prediction_source,
             "probability_sample_size": probability_n,
             "probability_min_sample": MIN_SAMPLE,
             "probability_status": (
@@ -317,6 +325,7 @@ class DecisionCalibrationEngine:
         setup: str = "",
         regime: str = "",
         sector: str = "",
+        prediction_source: str = "",
         recent_n: int = MIN_SAMPLE,
         baseline_n: int = 60,
     ) -> dict[str, Any]:
@@ -335,6 +344,10 @@ class DecisionCalibrationEngine:
             and (not setup or r.get("setup") == setup)
             and (not regime or r.get("regime") == regime)
             and (not sector or r.get("sector") == sector)
+            and (
+                not prediction_source
+                or str(r.get("prediction_source") or "") == str(prediction_source)
+            )
         ]
         rows.sort(key=lambda r: (
             str(r.get("outcome_as_of") or ""),
@@ -346,6 +359,7 @@ class DecisionCalibrationEngine:
             return {
                 "status": "INSUFFICIENT_PROBABILITY_HISTORY",
                 "explicit_probability_observations": len(rows),
+                "prediction_source": prediction_source,
                 "required_observations": recent_need + MIN_SAMPLE,
                 "recent_n": min(len(rows), recent_need),
                 "baseline_n": max(0, len(rows) - recent_need),
@@ -400,6 +414,7 @@ class DecisionCalibrationEngine:
         return {
             "status": status,
             "explicit_probability_observations": len(rows),
+            "prediction_source": prediction_source,
             "recent_n": len(recent),
             "baseline_n": len(baseline),
             "recent_brier": round(recent_mean, 4),
@@ -427,7 +442,18 @@ class DecisionCalibrationEngine:
             r for r in (self.store.get("observations") or [])
             if r.get("realized_win") is not None
         ]
-        explicit = sum(1 for r in rows if _probability(r.get("predicted_p")) is not None)
+        explicit_rows = [
+            r for r in rows if _probability(r.get("predicted_p")) is not None
+        ]
+        explicit = len(explicit_rows)
+        sources = sorted({
+            str(r.get("prediction_source") or "")
+            for r in explicit_rows
+            if str(r.get("prediction_source") or "")
+        })
+        unversioned = sum(
+            1 for r in explicit_rows if not str(r.get("prediction_source") or "")
+        )
         return {
             "schema_version": SCHEMA_VERSION,
             "overall": self.summary(),
@@ -435,12 +461,23 @@ class DecisionCalibrationEngine:
             "settled_observations": len(rows),
             "explicit_probability_observations": explicit,
             "probability_coverage": round(explicit / len(rows), 4) if rows else 0.0,
+            "prediction_sources": sources,
+            "unversioned_probability_observations": unversioned,
+            "source_summaries": {
+                source: self.summary(prediction_source=source)
+                for source in sources
+            },
+            "source_drifts": {
+                source: self.probability_drift(prediction_source=source)
+                for source in sources
+            },
             "probability_drift": self.probability_drift(),
             "affects_production": False,
             "live_locked": True,
             "note": (
                 "Hit-rate measurement and probability calibration are separate. "
-                "Only explicit point-in-time probabilities enter Brier/calibration-gap metrics."
+                "Only explicit point-in-time probabilities enter Brier/calibration-gap metrics; "
+                "production-facing calibration consumers must use the matching prediction_source."
             ),
         }
 
