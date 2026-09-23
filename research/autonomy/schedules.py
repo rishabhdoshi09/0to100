@@ -316,9 +316,16 @@ def historical_replan_key(
     reason: str = "",
     state_token: str = "",
 ) -> str:
-    """One bounded closed-market research replan per meaningful evidence state."""
+    """One bounded research replan per evidence state.
+
+    thesis_hash is accepted for backwards-compatible call sites but is
+    deliberately excluded from the identity. A replan may itself update learned
+    selection policy and therefore the thesis hash. Keying the next replan to
+    that output creates a self-triggering loop with no new evidence. A new
+    replan is warranted only when request/evidence state or the reason changes.
+    """
+    _ = thesis_hash
     raw = "|".join((
-        str(thesis_hash or ""),
         str(request_id or ""),
         str(reason or ""),
         str(state_token or ""),
