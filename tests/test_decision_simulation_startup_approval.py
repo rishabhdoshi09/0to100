@@ -574,8 +574,10 @@ def test_current_scan_with_new_thesis_queues_one_discovery_refresh_not_another_s
     assert scans == []
     assert refreshes[0].critical is True
     assert refreshes[0].input_snapshot_id == "2026-09-22T19:02:49+00:00"
-    assert refreshes[0].idempotency_key == (
-        "discovery_refresh:2026-09-22T19:02:49+00:00:thesis-b"
+    assert refreshes[0].idempotency_key == SCH.discovery_refresh_key(
+        "2026-09-22T19:02:49+00:00",
+        "",
+        "thesis-b",
     )
 
 
