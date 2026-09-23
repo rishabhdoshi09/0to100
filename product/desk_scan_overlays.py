@@ -26,6 +26,8 @@ def _error_status(exc: BaseException) -> dict[str, str]:
 
 def persist_recommendations_and_discovery(
     scan_payload: Mapping[str, Any] | None,
+    *,
+    persist_ledger: bool = True,
 ) -> dict[str, Any]:
     """Project one persisted scan into recommendations + immutable discovery.
 
@@ -63,7 +65,7 @@ def persist_recommendations_and_discovery(
             refresh_technicals=False,
             settle_cases=False,
             deep_confirm=False,
-            persist_ledger=True,
+            persist_ledger=bool(persist_ledger),
         )
         slim = slim_workspace_for_desk(reco)
         slim["from_saved_market_scan"] = True
