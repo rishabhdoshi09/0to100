@@ -650,6 +650,25 @@ class Supervisor:
                     None,
                 )
                 self._ensure_snapshot_pipeline(snap)
+
+            # Discovery repair is independent of broker auth. A fresh persisted
+            # scan may already exist while a long-term refresh or learned-thesis
+            # change invalidates only its immutable decision projection. The
+            # intraday branch used to return before scheduling that repair, so a
+            # broker-auth failure could leave Product Acceptance (and the real
+            # desk) in SEARCHING_BEST_TRADES with an empty queue indefinitely.
+            # Do not start a second intraday scan here: only repair/authorize when
+            # the current persisted market scan is already fresh.
+            try:
+                from product.decision_simulation_gate import status as decision_status
+
+                gate = dict(decision_status() or {})
+            except Exception:
+                gate = {}
+            if gate.get("discovery_ready") or (
+                gate.get("scan_fresh") and gate.get("scan_scanned_at")
+            ):
+                self._ensure_startup_trade_discovery()
             return
 
         # Closed market starts by finding today's best available trades from the
