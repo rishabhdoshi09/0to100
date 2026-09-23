@@ -189,3 +189,74 @@ def test_probability_difference_inside_wilson_uncertainty_is_not_actionable(tmp_
     assert s["calibration_adjustment"] == 0.0
     assert s["overconfidence"] is False
     assert s["underconfidence"] is False
+
+
+def test_probability_drift_detects_recent_forecast_degradation(tmp_path):
+    eng = DecisionCalibrationEngine(tmp_path / "c.json")
+    # Prior window: highly accurate explicit probabilities.
+    for i in range(20):
+        eng.record(
+            predicted_confidence="high_conviction",
+            realized_win=True,
+            predicted_p=0.90,
+            decision_as_of=f"2026-01-{(i % 9) + 1:02d}",
+            outcome_as_of=f"2026-02-{(i % 9) + 1:02d}",
+        )
+    # Recent window: same confidence, systematically wrong.
+    for i in range(20):
+        eng.record(
+            predicted_confidence="high_conviction",
+            realized_win=False,
+            predicted_p=0.90,
+            decision_as_of=f"2026-03-{(i % 9) + 1:02d}",
+            outcome_as_of=f"2026-04-{(i % 9) + 1:02d}",
+        )
+
+    drift = eng.probability_drift(bucket="high_conviction")
+    assert drift["status"] == "DEGRADING"
+    assert drift["recent_n"] == 20
+    assert drift["baseline_n"] == 20
+    assert drift["recent_brier"] == 0.81
+    assert drift["baseline_brier"] == 0.01
+    assert drift["brier_delta"] == 0.8
+    assert drift["delta_confidence_interval"][0] > 0
+    assert drift["degradation_detected"] is True
+    assert drift["improvement_detected"] is False
+    assert drift["affects_production"] is False
+    assert drift["live_locked"] is True
+
+
+def test_probability_drift_refuses_small_history(tmp_path):
+    eng = DecisionCalibrationEngine(tmp_path / "c.json")
+    for i in range(25):
+        eng.record(
+            predicted_confidence="good_setup",
+            realized_win=i % 2 == 0,
+            predicted_p=0.60,
+            decision_as_of="2026-01-01",
+            outcome_as_of=f"2026-02-{(i % 9) + 1:02d}",
+        )
+
+    drift = eng.probability_drift()
+    assert drift["status"] == "INSUFFICIENT_PROBABILITY_HISTORY"
+    assert drift["explicit_probability_observations"] == 25
+    assert drift["degradation_detected"] is False
+    assert drift["affects_production"] is False
+
+
+def test_probability_drift_stable_when_windows_are_indistinguishable(tmp_path):
+    eng = DecisionCalibrationEngine(tmp_path / "c.json")
+    for i in range(40):
+        eng.record(
+            predicted_confidence="good_setup",
+            realized_win=i % 2 == 0,
+            predicted_p=0.50,
+            decision_as_of="2026-01-01",
+            outcome_as_of=f"2026-{2 + (i // 20):02d}-{(i % 9) + 1:02d}",
+        )
+
+    drift = eng.probability_drift()
+    assert drift["status"] == "STABLE_WITHIN_UNCERTAINTY"
+    assert drift["brier_delta"] == 0.0
+    assert drift["degradation_detected"] is False
+    assert drift["improvement_detected"] is False
