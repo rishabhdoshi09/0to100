@@ -276,8 +276,14 @@ def build_research_director_status() -> dict[str, Any]:
                 decision_calibration.get("explicit_probability_observations") or 0
             ),
             "probability_coverage": float(decision_calibration.get("probability_coverage") or 0.0),
+            "prediction_sources": list(decision_calibration.get("prediction_sources") or []),
+            "unversioned_probability_observations": int(
+                decision_calibration.get("unversioned_probability_observations") or 0
+            ),
             "overall": dict(decision_calibration.get("overall") or {}),
             "buckets": dict(decision_calibration.get("buckets") or {}),
+            "source_summaries": dict(decision_calibration.get("source_summaries") or {}),
+            "source_drifts": dict(decision_calibration.get("source_drifts") or {}),
             "probability_drift": dict(decision_calibration.get("probability_drift") or {}),
             "affects_production": False,
             "live_locked": True,
