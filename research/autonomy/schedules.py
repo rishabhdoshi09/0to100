@@ -175,6 +175,18 @@ def paper_cycle_key(snapshot_id: str, session_and_slot: str) -> str:
     return f"paper_cycle:{snapshot_id}:{session_and_slot}"
 
 
+def discovery_refresh_key(
+    scan_scanned_at: str,
+    long_term_scanned_at: str,
+    thesis_hash: str,
+) -> str:
+    """Durable identity for one canonical decision-discovery projection."""
+    return (
+        f"discovery_refresh:{str(scan_scanned_at or '')}:"
+        f"{str(long_term_scanned_at or 'none')}:{str(thesis_hash or '')}"
+    )
+
+
 def snapshot_scan_key(snapshot_id: str) -> str:
     """Automatic scan identity: exactly once for one immutable data snapshot."""
     return f"snapshot_scan:{snapshot_id}"
