@@ -310,6 +310,117 @@ class DecisionCalibrationEngine:
             })
         return result
 
+    def probability_drift(
+        self,
+        *,
+        bucket: str | None = None,
+        setup: str = "",
+        regime: str = "",
+        sector: str = "",
+        recent_n: int = MIN_SAMPLE,
+        baseline_n: int = 60,
+    ) -> dict[str, Any]:
+        """Compare recent vs prior explicit-probability forecast quality.
+
+        Uses per-observation Brier loss and a normal 95% interval for the
+        difference in mean loss between independent recent/prior windows.
+        Positive delta means recent probability forecasts are worse. This is
+        monitoring evidence only; it cannot change production by itself.
+        """
+        rows = [
+            r for r in (self.store.get("observations") or [])
+            if r.get("realized_win") is not None
+            and _probability(r.get("predicted_p")) is not None
+            and (not bucket or r.get("predicted_confidence") == _bucket(bucket))
+            and (not setup or r.get("setup") == setup)
+            and (not regime or r.get("regime") == regime)
+            and (not sector or r.get("sector") == sector)
+        ]
+        rows.sort(key=lambda r: (
+            str(r.get("outcome_as_of") or ""),
+            str(r.get("recorded_at") or ""),
+        ))
+        recent_need = max(MIN_SAMPLE, int(recent_n or MIN_SAMPLE))
+        baseline_cap = max(MIN_SAMPLE, int(baseline_n or MIN_SAMPLE))
+        if len(rows) < recent_need + MIN_SAMPLE:
+            return {
+                "status": "INSUFFICIENT_PROBABILITY_HISTORY",
+                "explicit_probability_observations": len(rows),
+                "required_observations": recent_need + MIN_SAMPLE,
+                "recent_n": min(len(rows), recent_need),
+                "baseline_n": max(0, len(rows) - recent_need),
+                "recent_brier": None,
+                "baseline_brier": None,
+                "brier_delta": None,
+                "delta_confidence_interval": None,
+                "degradation_detected": False,
+                "improvement_detected": False,
+                "affects_production": False,
+                "live_locked": True,
+            }
+
+        recent = rows[-recent_need:]
+        baseline_pool = rows[:-recent_need]
+        baseline = baseline_pool[-baseline_cap:]
+
+        def losses(items):
+            return [
+                (
+                    float(_probability(row.get("predicted_p")))
+                    - (1.0 if row.get("realized_win") else 0.0)
+                ) ** 2
+                for row in items
+            ]
+
+        recent_losses = losses(recent)
+        baseline_losses = losses(baseline)
+        recent_mean = sum(recent_losses) / len(recent_losses)
+        baseline_mean = sum(baseline_losses) / len(baseline_losses)
+        delta = recent_mean - baseline_mean
+
+        def sample_variance(values):
+            if len(values) < 2:
+                return 0.0
+            mean = sum(values) / len(values)
+            return sum((x - mean) ** 2 for x in values) / (len(values) - 1)
+
+        se = math.sqrt(
+            sample_variance(recent_losses) / len(recent_losses)
+            + sample_variance(baseline_losses) / len(baseline_losses)
+        )
+        lower = delta - 1.96 * se
+        upper = delta + 1.96 * se
+        if lower > 0.0:
+            status = "DEGRADING"
+        elif upper < 0.0:
+            status = "IMPROVING"
+        else:
+            status = "STABLE_WITHIN_UNCERTAINTY"
+
+        return {
+            "status": status,
+            "explicit_probability_observations": len(rows),
+            "recent_n": len(recent),
+            "baseline_n": len(baseline),
+            "recent_brier": round(recent_mean, 4),
+            "baseline_brier": round(baseline_mean, 4),
+            "brier_delta": round(delta, 4),
+            "delta_standard_error": round(se, 6),
+            "delta_confidence_interval": [
+                round(lower, 4),
+                round(upper, 4),
+            ],
+            "degradation_detected": lower > 0.0,
+            "improvement_detected": upper < 0.0,
+            "affects_production": False,
+            "live_locked": True,
+            "note": (
+                "Positive Brier delta means recent explicit-probability forecasts "
+                "are worse than the prior window; a drift claim requires the full "
+                "95% delta interval to stay above zero."
+            ),
+        }
+
     def dossier(self) -> dict[str, Any]:
         """Read-only calibration dossier for operator/research inspection."""
         rows = [
@@ -324,6 +435,7 @@ class DecisionCalibrationEngine:
             "settled_observations": len(rows),
             "explicit_probability_observations": explicit,
             "probability_coverage": round(explicit / len(rows), 4) if rows else 0.0,
+            "probability_drift": self.probability_drift(),
             "affects_production": False,
             "live_locked": True,
             "note": (
