@@ -752,6 +752,55 @@ def run_discovery_refresh(ctx) -> JobResult:
             new_entries_allowed=False,
         )
 
+    # A queued projection is authority for one immutable input identity only.
+    # If a newer scan/long-term overlay/thesis exists by lease time, retire this
+    # row without writing and let the supervisor enqueue the new canonical key.
+    job = getattr(ctx, "job", None)
+    requested_scan_id = str(getattr(job, "input_snapshot_id", "") or "")
+    if requested_scan_id and requested_scan_id != scan_id:
+        return JobResult(
+            JS.SKIPPED_IDEMPOTENT,
+            "decision discovery refresh superseded by a newer market scan",
+            state_hint=ST.OBSERVING,
+            new_entries_allowed=False,
+            metadata={
+                "requested_scan_scanned_at": requested_scan_id,
+                "current_scan_scanned_at": scan_id,
+                "live_money_unchanged": True,
+            },
+        )
+
+    requested_key = str(getattr(job, "idempotency_key", "") or "")
+    if requested_key:
+        try:
+            from product.long_term_store import load_long_term_scan
+            from product.trading_thesis import manifest as thesis_manifest
+
+            long_term_id = str((load_long_term_scan() or {}).get("scanned_at") or "")
+            thesis_hash = str((thesis_manifest() or {}).get("thesis_hash") or "")
+            current_key = SCH.discovery_refresh_key(scan_id, long_term_id, thesis_hash)
+        except Exception as exc:
+            return JobResult(
+                JS.RETRYABLE_FAILED,
+                "current discovery identity could not be resolved",
+                error_code="DISCOVERY_IDENTITY_ERROR",
+                error_message=str(exc)[:300],
+                state_hint=ST.OBSERVING,
+                new_entries_allowed=False,
+            )
+        if requested_key != current_key:
+            return JobResult(
+                JS.SKIPPED_IDEMPOTENT,
+                "decision discovery refresh superseded by newer evidence identity",
+                state_hint=ST.OBSERVING,
+                new_entries_allowed=False,
+                metadata={
+                    "requested_identity": requested_key,
+                    "current_identity": current_key,
+                    "live_money_unchanged": True,
+                },
+            )
+
     try:
         from product.desk_scan_overlays import SAVED, persist_recommendations_and_discovery
 
