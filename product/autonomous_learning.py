@@ -374,7 +374,16 @@ def dashboard(*, path: str | Path | None = None) -> dict[str, Any]:
             sim_n = len(list(replay.get("decisions") or replay.get("rows") or []))
     except Exception:
         sim_n = 0
-    last_cycle = control.get("last_cycle_at") or replay.get("finished_at") or auto.get("heartbeat_ist") or ""
+    # This field claims learning completion, so prefer the durable historical
+    # learning transition timestamp. The legacy fallback is retained for
+    # pre-migration state files that do not yet have the explicit field.
+    last_cycle = (
+        historical_paper.get("last_learning_completed_at")
+        or control.get("last_cycle_at")
+        or replay.get("finished_at")
+        or auto.get("heartbeat_ist")
+        or ""
+    )
     missing = []
     if not evidence["forward_evidence_count"] and not evidence["replay_evidence_count"]:
         missing.append("No persisted learning evidence yet.")
@@ -412,6 +421,7 @@ def dashboard(*, path: str | Path | None = None) -> dict[str, Any]:
         "promotion_eligible": policies["promotion_eligible"],
         "promotion_blocked_reason": policies["promotion_blocked_reason"],
         "last_learning_cycle": last_cycle or "No learning cycle has been recorded.",
+        "last_learning_batch_id": str(historical_paper.get("last_learning_batch_id") or ""),
         "next_learning_action": _next_action(control, market_closed=market_closed, activity=activity),
         "historical_virtual_paper": {
             "phase": historical_paper.get("phase") or "IDLE",
