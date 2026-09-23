@@ -549,8 +549,8 @@ class Supervisor:
         The goal is not to manufacture busy work. When historical replay has no
         runnable batch, QuantTerm gets exactly one research pass for that durable
         evidence state. If nothing material changes, the idempotency key prevents
-        an infinite loop; if the thesis/request/evidence state changes, a new pass
-        becomes eligible.
+        an infinite loop. Only a changed request/evidence state or failure reason
+        creates another pass; thesis changes produced by research do not.
         """
         stage = dict(stage or {})
         nxt = dict(next_batch or {})
@@ -608,7 +608,6 @@ class Supervisor:
         return self.jobs.enqueue(
             SCH.RESEARCH_CYCLE,
             idempotency_key=SCH.historical_replan_key(
-                thesis_hash=thesis_hash,
                 request_id=request_id,
                 reason=reason,
                 state_token=state_token,
