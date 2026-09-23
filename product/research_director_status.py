@@ -67,6 +67,11 @@ def _calibration() -> dict[str, Any]:
     return dict(load_current() or {})
 
 
+def _decision_calibration() -> dict[str, Any]:
+    from product.decision_calibration import DecisionCalibrationEngine
+    return dict(DecisionCalibrationEngine().dossier() or {})
+
+
 def _signal_registry() -> dict[str, Any]:
     from scan.signal_registry import load_registry
     return dict(load_registry() or {})
@@ -154,6 +159,7 @@ def build_research_director_status() -> dict[str, Any]:
     historical = _safe(_historical_state, {})
     autonomy = _safe(_autonomy, {})
     calibration = _safe(_calibration, {})
+    decision_calibration = _safe(_decision_calibration, {})
     registry = _safe(_signal_registry, {})
     learned = _safe(_learned_challenger, {})
     rules = _safe(_rule_challengers, {})
@@ -263,6 +269,21 @@ def build_research_director_status() -> dict[str, Any]:
             "snapshot_id": calibration_id,
             "identities": dict(calibration.get("identities") or {}),
             "immutable": calibration.get("immutable") is True,
+        },
+        "decision_calibration": {
+            "settled_observations": int(decision_calibration.get("settled_observations") or 0),
+            "explicit_probability_observations": int(
+                decision_calibration.get("explicit_probability_observations") or 0
+            ),
+            "probability_coverage": float(decision_calibration.get("probability_coverage") or 0.0),
+            "overall": dict(decision_calibration.get("overall") or {}),
+            "buckets": dict(decision_calibration.get("buckets") or {}),
+            "affects_production": False,
+            "live_locked": True,
+            "truth_note": (
+                "Hit-rate labels and explicit probability calibration are separate. "
+                "Brier/miscalibration claims require their own explicit-probability sample floor."
+            ),
         },
         "signals": {
             "registry_version": str(registry.get("registry_version") or ""),
