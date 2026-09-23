@@ -59,6 +59,7 @@ def test_decision_prediction_freeze_and_outcome_immutability(tmp_path, monkeypat
     row = FS.get_observation(f"decision::{d.decision_id}")
     assert row is not None
     assert row["meta"]["predicted_p"] == 0.63
+    assert row["meta"]["prediction_source"] == "evidence_v1"
     assert row["meta"]["challenger_predicted_p"] == 0.59
     assert row["outcome"] is None
 
@@ -117,10 +118,113 @@ def test_historical_evidence_is_strictly_point_in_time_and_sample_aware(tmp_path
     evidence = EI.evidence_read(query)
     assert evidence["raw_n"] == 30
     assert evidence["effective_n"] > 20
-    assert evidence["p_positive_R"] is not None
+    assert evidence["research_positive_R_estimate"] is not None
+    assert evidence["p_positive_R"] is None
+    assert evidence["is_win_probability"] is False
+    assert evidence["probability_evidence_scope"] == "INSUFFICIENT_REAL_FORWARD_PAPER"
+    assert evidence["forward_probability_raw_n"] == 15
     assert evidence["historical_confidence"] > 0
+    assert evidence["calibration_applied"] is False
+    assert evidence["calibration_contract_version"] == "explicit_probability_only_v2"
+    assert evidence["calibrated_p_positive_R"] is None
     assert evidence["evidence_lane_counts"]["PAPER_FORWARD"] == 15
     assert evidence["evidence_lane_counts"]["FORWARD_COUNTERFACTUAL"] == 15
     assert all(a["symbol"] != "T999" for a in evidence["nearest_analogs"])
     assert evidence["affects_selection"] is False
     assert evidence["live_locked"] is True
+
+
+def test_evidence_probability_is_not_adjusted_by_non_probability_hit_rate(tmp_path, monkeypatch):
+    monkeypatch.setattr(FS, "_DB_PATH", tmp_path / "features.db")
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for i in range(30):
+        d = _decision(i, base + timedelta(days=i), rs=88.0 + (i % 5))
+        EI.freeze_decision(d)
+        EI.settle_decision(
+            d.decision_id,
+            1.0 if i % 2 == 0 else -1.0,
+            evidence_class="PAPER_FORWARD",
+        )
+
+    from product import decision_calibration as DC
+
+    def tier_only_summary(self, **_kwargs):
+        return {
+            "status": "MEASURED",
+            "sample_size": 50,
+            "actual_hit_rate": 0.20,
+            "probability_status": "NO_EXPLICIT_PROBABILITIES",
+            "probability_sample_size": 0,
+            "expected_p": None,
+            "calibration_gap": None,
+        }
+
+    monkeypatch.setattr(DC.DecisionCalibrationEngine, "summary", tier_only_summary)
+    evidence = EI.evidence_read(_decision(200, base + timedelta(days=45), rs=91.0))
+
+    assert evidence["research_positive_R_estimate"] is not None
+    assert evidence["p_positive_R"] is not None
+    assert evidence["probability_evidence_scope"] == "REAL_FORWARD_PAPER"
+    assert evidence["forward_probability_effective_n"] >= EI.CLAIM_MIN_EFFECTIVE_N
+    assert evidence["calibration_applied"] is False
+    assert evidence["calibrated_p_positive_R"] == evidence["p_positive_R"]
+
+
+def test_historical_and_counterfactual_evidence_never_masquerade_as_forward_probability(tmp_path, monkeypatch):
+    monkeypatch.setattr(FS, "_DB_PATH", tmp_path / "features.db")
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for i in range(36):
+        d = _decision(i, base + timedelta(days=i), rs=87.0 + (i % 6))
+        EI.freeze_decision(d)
+        EI.settle_decision(
+            d.decision_id,
+            1.0 if i % 3 else -0.8,
+            evidence_class="HISTORICAL_REPLAY" if i < 18 else "FORWARD_COUNTERFACTUAL",
+            not_pnl=True,
+        )
+
+    evidence = EI.evidence_read(_decision(300, base + timedelta(days=50), rs=91.0))
+
+    assert evidence["effective_n"] >= EI.CLAIM_MIN_EFFECTIVE_N
+    assert evidence["research_positive_R_estimate"] is not None
+    assert evidence["forward_probability_raw_n"] == 0
+    assert evidence["forward_probability_effective_n"] == 0.0
+    assert evidence["p_positive_R"] is None
+    assert evidence["calibrated_p_positive_R"] is None
+    assert evidence["is_win_probability"] is False
+    assert evidence["probability_evidence_scope"] == "INSUFFICIENT_REAL_FORWARD_PAPER"
+    assert evidence["probability_contract_version"] == "real_forward_only_v2"
+    assert evidence["historical_confidence"] > 0
+    assert evidence["affects_selection"] is False
+    assert evidence["live_locked"] is True
+
+
+def test_real_forward_sample_can_support_probability_without_counterfactual_substitution(tmp_path, monkeypatch):
+    monkeypatch.setattr(FS, "_DB_PATH", tmp_path / "features.db")
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for i in range(32):
+        d = _decision(i, base + timedelta(days=i), rs=88.0 + (i % 4))
+        EI.freeze_decision(d)
+        if i < 26:
+            lane = "PAPER_FORWARD"
+            not_pnl = False
+        else:
+            lane = "FORWARD_COUNTERFACTUAL"
+            not_pnl = True
+        EI.settle_decision(
+            d.decision_id,
+            1.0 if i % 4 else -1.0,
+            evidence_class=lane,
+            not_pnl=not_pnl,
+        )
+
+    evidence = EI.evidence_read(_decision(400, base + timedelta(days=50), rs=90.0))
+
+    assert evidence["forward_probability_raw_n"] == 26
+    assert evidence["forward_probability_effective_n"] >= EI.CLAIM_MIN_EFFECTIVE_N
+    assert evidence["p_positive_R"] is not None
+    assert evidence["p_positive_R_lower_95"] is not None
+    assert evidence["p_positive_R_upper_95"] is not None
+    assert evidence["is_win_probability"] is True
+    assert evidence["probability_evidence_scope"] == "REAL_FORWARD_PAPER"
+    assert evidence["evidence_lane_counts"]["FORWARD_COUNTERFACTUAL"] == 6
