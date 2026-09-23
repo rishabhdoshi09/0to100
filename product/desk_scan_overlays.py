@@ -1,8 +1,10 @@
-"""Derive Recommendations and Market Reports from one saved market scan.
+"""Derive Recommendations, decision discovery and Market Reports from one saved market scan.
 
 Called after the whole-market scan (and long-term overlay) persist. Must stay
-fast: no pulse crawl, no StockResearchEngine. Failure must never fail the scan.
-GET endpoints read these files cache-only.
+fast: no pulse crawl, no StockResearchEngine. Scan publication remains tolerant
+of optional desk/report failures, while the autonomy discovery-refresh job can
+inspect these explicit statuses and fail closed when the decision projection is
+not durable. GET endpoints read these files cache-only.
 """
 from __future__ import annotations
 
@@ -22,7 +24,16 @@ def _error_status(exc: BaseException) -> dict[str, str]:
     }
 
 
-def persist_desks_from_market_scan(scan_payload: Mapping[str, Any] | None) -> dict[str, Any]:
+def persist_recommendations_and_discovery(
+    scan_payload: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Project one persisted scan into recommendations + immutable discovery.
+
+    The projection is keyed to the thesis *after* decision construction because
+    construction may settle learning state that changes effective selection
+    policy identity. Re-running this function for the same scan is safe: stores
+    are immutable/content-addressed by scan/long-term/thesis identity.
+    """
     scan = dict(scan_payload or {})
     lt: dict[str, Any] = {}
     try:
@@ -30,18 +41,22 @@ def persist_desks_from_market_scan(scan_payload: Mapping[str, Any] | None) -> di
         lt = load_long_term_scan() or {}
     except Exception:
         lt = {}
+
     reco_status = SKIPPED
     reco_cards = 0
     reco_error: dict[str, str] | None = None
     discovery_status = SKIPPED
     discovery_error: dict[str, str] | None = None
     discovery_actionable = 0
+    discovery_thesis_hash = ""
+
     try:
         from product.recommendations_store import save_recommendations
         from product.recommendations_workspace import (
             build_recommendations_workspace,
             slim_workspace_for_desk,
         )
+
         reco = build_recommendations_workspace(
             scan_payload=scan,
             long_term_payload=lt,
@@ -56,13 +71,6 @@ def persist_desks_from_market_scan(scan_payload: Mapping[str, Any] | None) -> di
         reco_status = SAVED
         reco_cards = int((slim.get("scan_meta") or {}).get("assigned_count") or 0)
 
-        # Startup discovery is computed once in the scan worker, never in the
-        # HTTP status path. Build the canonical board first, then fingerprint
-        # the thesis. Decision construction may legitimately settle/persist
-        # learning state used by the thesis manifest; keying the projection to
-        # a pre-build hash can therefore make the just-written projection
-        # unreadable immediately. The persisted identity must describe the
-        # completed board, not the state immediately before it was built.
         try:
             from product.decision_discovery_store import save as save_discovery
             from product.decision_service import decision_board
@@ -70,11 +78,12 @@ def persist_desks_from_market_scan(scan_payload: Mapping[str, Any] | None) -> di
 
             board = decision_board(workspace=reco, limit=40)
             thesis = dict(thesis_manifest() or {})
+            discovery_thesis_hash = str(thesis.get("thesis_hash") or "")
             save_discovery(
                 board,
                 scan_scanned_at=str(scan.get("scanned_at") or ""),
                 long_term_scanned_at=str(lt.get("scanned_at") or ""),
-                thesis_hash=str(thesis.get("thesis_hash") or ""),
+                thesis_hash=discovery_thesis_hash,
             )
             discovery_status = SAVED
             discovery_actionable = int(board.get("actionable") or 0)
@@ -84,10 +93,29 @@ def persist_desks_from_market_scan(scan_payload: Mapping[str, Any] | None) -> di
     except Exception as exc:
         reco_error = _error_status(exc)
         reco_status = ERROR
+
+    return {
+        "recommendations": reco_status,
+        "recommendation_cards": reco_cards,
+        "recommendations_error": reco_error,
+        "decision_discovery": discovery_status,
+        "decision_discovery_actionable": discovery_actionable,
+        "decision_discovery_error": discovery_error,
+        "decision_discovery_thesis_hash": discovery_thesis_hash,
+        "scan_scanned_at": str(scan.get("scanned_at") or ""),
+        "long_term_scanned_at": str(lt.get("scanned_at") or ""),
+    }
+
+
+def persist_desks_from_market_scan(scan_payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    scan = dict(scan_payload or {})
+    projection = persist_recommendations_and_discovery(scan)
+
     reports_status = SKIPPED
     reports_error: dict[str, str] | None = None
     try:
         from product.recommendations_workspace import build_market_reports_workspace
+
         news: dict[str, Any] = {}
         build_market_reports_workspace(
             persist_today=True,
@@ -99,13 +127,9 @@ def persist_desks_from_market_scan(scan_payload: Mapping[str, Any] | None) -> di
     except Exception as exc:
         reports_error = _error_status(exc)
         reports_status = ERROR
+
     return {
-        "recommendations": reco_status,
-        "recommendation_cards": reco_cards,
-        "recommendations_error": reco_error,
-        "decision_discovery": discovery_status,
-        "decision_discovery_actionable": discovery_actionable,
-        "decision_discovery_error": discovery_error,
+        **projection,
         "market_reports": reports_status,
         "market_reports_error": reports_error,
     }
