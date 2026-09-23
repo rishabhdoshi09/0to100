@@ -779,3 +779,52 @@ def test_long_term_identity_change_gets_a_new_discovery_refresh_job(tmp_path, mo
             "thesis-b",
         ),
     }
+
+
+def test_intraday_fresh_scan_repairs_discovery_even_when_broker_auth_is_unavailable(
+    tmp_path, monkeypatch
+):
+    """Intraday auth/data flow must not strand a fresh scan with stale discovery."""
+    from datetime import datetime, timezone
+
+    from research.autonomy import schedules as SCH
+    from research.autonomy.supervisor import Supervisor
+
+    class IntradayDeps:
+        def holidays(self):
+            return set()
+
+        def active_snapshot_id(self):
+            return ""
+
+    monkeypatch.setattr(SCH, "market_is_open", lambda *_a, **_k: True)
+    monkeypatch.setattr(SCH, "in_scan_window", lambda *_a, **_k: True)
+    monkeypatch.setattr(
+        "product.decision_simulation_gate.status",
+        lambda: {
+            "discovery_ready": False,
+            "approved": False,
+            "scan_fresh": True,
+            "scan_scanned_at": "2026-09-23T06:35:49.779226+00:00",
+            "long_term_scanned_at": "2026-09-23T06:36:56.081161+00:00",
+            "current_thesis_hash": "thesis-intraday",
+        },
+    )
+
+    sup = Supervisor(tmp_path / "auto", deps=IntradayDeps())
+    monkeypatch.setattr(sup, "_release_stale_official_blocks", lambda: None)
+
+    sup.enqueue_due(datetime(2026, 9, 23, 6, 45, tzinfo=timezone.utc))
+
+    refreshes = [
+        job for job in sup.jobs.list(limit=50)
+        if job.job_type == SCH.DISCOVERY_REFRESH
+    ]
+    assert len(refreshes) == 1
+    assert refreshes[0].critical is True
+    assert refreshes[0].input_snapshot_id == "2026-09-23T06:35:49.779226+00:00"
+    assert refreshes[0].idempotency_key == SCH.discovery_refresh_key(
+        "2026-09-23T06:35:49.779226+00:00",
+        "2026-09-23T06:36:56.081161+00:00",
+        "thesis-intraday",
+    )
