@@ -119,8 +119,44 @@ def test_historical_evidence_is_strictly_point_in_time_and_sample_aware(tmp_path
     assert evidence["effective_n"] > 20
     assert evidence["p_positive_R"] is not None
     assert evidence["historical_confidence"] > 0
+    assert evidence["calibration_applied"] is False
+    assert evidence["calibration_contract_version"] == "explicit_probability_only_v2"
+    assert evidence["calibrated_p_positive_R"] == evidence["p_positive_R"]
     assert evidence["evidence_lane_counts"]["PAPER_FORWARD"] == 15
     assert evidence["evidence_lane_counts"]["FORWARD_COUNTERFACTUAL"] == 15
     assert all(a["symbol"] != "T999" for a in evidence["nearest_analogs"])
     assert evidence["affects_selection"] is False
     assert evidence["live_locked"] is True
+
+
+def test_evidence_probability_is_not_adjusted_by_non_probability_hit_rate(tmp_path, monkeypatch):
+    monkeypatch.setattr(FS, "_DB_PATH", tmp_path / "features.db")
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for i in range(30):
+        d = _decision(i, base + timedelta(days=i), rs=88.0 + (i % 5))
+        EI.freeze_decision(d)
+        EI.settle_decision(
+            d.decision_id,
+            1.0 if i % 2 == 0 else -1.0,
+            evidence_class="PAPER_FORWARD",
+        )
+
+    from product import decision_calibration as DC
+
+    def tier_only_summary(self, **_kwargs):
+        return {
+            "status": "MEASURED",
+            "sample_size": 50,
+            "actual_hit_rate": 0.20,
+            "probability_status": "NO_EXPLICIT_PROBABILITIES",
+            "probability_sample_size": 0,
+            "expected_p": None,
+            "calibration_gap": None,
+        }
+
+    monkeypatch.setattr(DC.DecisionCalibrationEngine, "summary", tier_only_summary)
+    evidence = EI.evidence_read(_decision(200, base + timedelta(days=45), rs=91.0))
+
+    assert evidence["p_positive_R"] is not None
+    assert evidence["calibration_applied"] is False
+    assert evidence["calibrated_p_positive_R"] == evidence["p_positive_R"]
