@@ -499,11 +499,15 @@ def evidence_read(decision: Decision, *, k: int = DEFAULT_K) -> dict[str, Any]:
         else None
     )
     calibrated = measured_probability
+    calibration_applied = False
     calibration = {
         "status": "INSUFFICIENT_EVIDENCE",
         "sample_size": 0,
         "actual_hit_rate": None,
         "expected_p": None,
+        "probability_status": "NO_EXPLICIT_PROBABILITIES",
+        "probability_sample_size": 0,
+        "calibration_gap": None,
     }
     if measured_probability is not None:
         try:
@@ -513,11 +517,16 @@ def evidence_read(decision: Decision, *, k: int = DEFAULT_K) -> dict[str, Any]:
                 regime=decision.market_state,
                 sector=decision.sector_state,
             )
-            if calibration.get("status") == "MEASURED":
-                gap = float(calibration.get("expected_p") or 0.0) - float(
-                    calibration.get("actual_hit_rate") or 0.0
-                )
+            # A setup-quality hit rate is not a probability-calibration sample.
+            # Adjust a measured probability only when the historical ledger has
+            # enough explicit point-in-time predicted_p observations of its own.
+            if (
+                calibration.get("probability_status") == "MEASURED"
+                and calibration.get("calibration_gap") is not None
+            ):
+                gap = float(calibration.get("calibration_gap"))
                 calibrated = max(0.01, min(0.99, measured_probability - gap))
+                calibration_applied = True
         except Exception:
             pass
 
@@ -554,6 +563,8 @@ def evidence_read(decision: Decision, *, k: int = DEFAULT_K) -> dict[str, Any]:
             stats.get("outcome_p_upper_95") if measured_probability is not None else None
         ),
         "calibrated_p_positive_R": None if calibrated is None else round(calibrated, 4),
+        "calibration_applied": calibration_applied,
+        "calibration_contract_version": "explicit_probability_only_v2",
         "calibration": calibration,
         "historical_prior": prior,
         "nearest_analogs": [
