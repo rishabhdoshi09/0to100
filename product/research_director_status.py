@@ -278,6 +278,7 @@ def build_research_director_status() -> dict[str, Any]:
             "probability_coverage": float(decision_calibration.get("probability_coverage") or 0.0),
             "overall": dict(decision_calibration.get("overall") or {}),
             "buckets": dict(decision_calibration.get("buckets") or {}),
+            "probability_drift": dict(decision_calibration.get("probability_drift") or {}),
             "affects_production": False,
             "live_locked": True,
             "truth_note": (
