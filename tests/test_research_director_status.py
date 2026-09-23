@@ -57,6 +57,12 @@ def _patch_common(monkeypatch):
                 "calibration_actionable": False,
             },
             "buckets": {},
+            "probability_drift": {
+                "status": "STABLE_WITHIN_UNCERTAINTY",
+                "degradation_detected": False,
+                "recent_brier": 0.20,
+                "baseline_brier": 0.21,
+            },
             "affects_production": False,
             "live_locked": True,
         },
@@ -202,6 +208,7 @@ def test_director_reports_exact_evidence_gap_and_batch_rationale(monkeypatch):
     assert out["decision_calibration"]["explicit_probability_observations"] == 24
     assert out["decision_calibration"]["probability_coverage"] == 0.6
     assert out["decision_calibration"]["overall"]["probability_status"] == "MEASURED"
+    assert out["decision_calibration"]["probability_drift"]["status"] == "STABLE_WITHIN_UNCERTAINTY"
     assert out["decision_calibration"]["affects_production"] is False
     assert out["resource_governor"]["decision"] == "ALLOW_HISTORICAL_REPLAY"
     assert out["live_locked"] is True
