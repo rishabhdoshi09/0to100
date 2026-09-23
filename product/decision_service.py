@@ -64,16 +64,20 @@ def decisions_from_workspace(
     # decision state. Fail-open: a research-store issue must not erase the desk's
     # canonical decision or fabricate an alternative one.
     try:
-        from product.evidence_intelligence import enrich
+        from product.evidence_intelligence import enrich, evidence_read_batch
     except Exception:
         return decisions
 
     enriched: list[Decision] = []
-    for decision in decisions:
-        try:
-            enriched.append(enrich(decision))
-        except Exception:
-            enriched.append(decision)
+    # One saved scan is one PIT decision board. Enrich every row against the
+    # same settled-evidence snapshot instead of reopening/parsing the identical
+    # corpus once per symbol. The context is discarded when this board returns.
+    with evidence_read_batch():
+        for decision in decisions:
+            try:
+                enriched.append(enrich(decision))
+            except Exception:
+                enriched.append(decision)
     return enriched
 
 
