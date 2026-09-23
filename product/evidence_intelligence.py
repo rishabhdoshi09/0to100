@@ -508,6 +508,8 @@ def evidence_read(decision: Decision, *, k: int = DEFAULT_K) -> dict[str, Any]:
         "probability_status": "NO_EXPLICIT_PROBABILITIES",
         "probability_sample_size": 0,
         "calibration_gap": None,
+        "calibration_actionable": False,
+        "calibration_adjustment": 0.0,
     }
     if measured_probability is not None:
         try:
@@ -522,11 +524,12 @@ def evidence_read(decision: Decision, *, k: int = DEFAULT_K) -> dict[str, Any]:
             # enough explicit point-in-time predicted_p observations of its own.
             if (
                 calibration.get("probability_status") == "MEASURED"
-                and calibration.get("calibration_gap") is not None
+                and calibration.get("calibration_actionable") is True
+                and calibration.get("calibration_adjustment") is not None
             ):
-                gap = float(calibration.get("calibration_gap"))
-                calibrated = max(0.01, min(0.99, measured_probability - gap))
-                calibration_applied = True
+                adjustment = float(calibration.get("calibration_adjustment") or 0.0)
+                calibrated = max(0.01, min(0.99, measured_probability - adjustment))
+                calibration_applied = bool(adjustment)
         except Exception:
             pass
 
