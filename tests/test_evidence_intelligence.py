@@ -35,6 +35,31 @@ def _decision(i: int, when: datetime, *, rs: float = 90.0, state: str = "WAIT") 
     )
 
 
+def test_evidence_read_batch_reuses_identical_pit_corpus(monkeypatch):
+    when = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    calls = []
+
+    def fake_load_observations(**kwargs):
+        calls.append(dict(kwargs))
+        return []
+
+    monkeypatch.setattr(FS, "load_observations", fake_load_observations)
+
+    with EI.evidence_read_batch():
+        assert EI._analogs(_decision(1, when)) == []
+        assert EI._analogs(_decision(2, when)) == []
+        assert len(calls) == 1
+        assert calls[0]["before_ts"] == when.isoformat()
+
+        later = when + timedelta(days=1)
+        assert EI._analogs(_decision(3, later)) == []
+        assert len(calls) == 2
+
+    # Batch scope ended: the next board/read sees the store afresh.
+    assert EI._analogs(_decision(4, when)) == []
+    assert len(calls) == 3
+
+
 def test_decision_prediction_freeze_and_outcome_immutability(tmp_path, monkeypatch):
     monkeypatch.setattr(FS, "_DB_PATH", tmp_path / "features.db")
     d = _decision(1, datetime(2026, 1, 2, tzinfo=timezone.utc))
