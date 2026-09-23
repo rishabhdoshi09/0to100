@@ -235,7 +235,7 @@ def test_snapshot_pipeline_runs_once_then_stops(tmp_path, monkeypatch):
 
     now = datetime(2026, 7, 31, 10, 0)
     root = tmp_path / "auto"
-    monkeypatch.setattr("product.decision_simulation_gate.is_approved", lambda: True)
+    monkeypatch.setattr("product.decision_simulation_gate.status", lambda: {"discovery_ready": True, "approved": True})
     sup = Supervisor(root, deps=FakeDeps(now=now, data_ok=True))
     assert sup.start() is True
     try:
@@ -272,7 +272,7 @@ def test_completed_snapshot_does_not_restart_pipeline_after_supervisor_restart(t
 
     now = datetime(2026, 7, 31, 10, 0)
     root = tmp_path / "auto"
-    monkeypatch.setattr("product.decision_simulation_gate.is_approved", lambda: True)
+    monkeypatch.setattr("product.decision_simulation_gate.status", lambda: {"discovery_ready": True, "approved": True})
     first = Supervisor(root, deps=FakeDeps(now=now, data_ok=True))
     assert first.start() is True
     for _ in range(12):
