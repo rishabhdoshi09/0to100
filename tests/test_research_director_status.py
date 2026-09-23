@@ -49,6 +49,20 @@ def _patch_common(monkeypatch):
             "settled_observations": 40,
             "explicit_probability_observations": 24,
             "probability_coverage": 0.6,
+            "prediction_sources": ["evidence_v2"],
+            "unversioned_probability_observations": 0,
+            "source_summaries": {
+                "evidence_v2": {
+                    "probability_status": "MEASURED",
+                    "probability_sample_size": 24,
+                }
+            },
+            "source_drifts": {
+                "evidence_v2": {
+                    "status": "STABLE_WITHIN_UNCERTAINTY",
+                    "degradation_detected": False,
+                }
+            },
             "overall": {
                 "status": "MEASURED",
                 "probability_status": "MEASURED",
@@ -207,6 +221,9 @@ def test_director_reports_exact_evidence_gap_and_batch_rationale(monkeypatch):
     assert out["decision_calibration"]["settled_observations"] == 40
     assert out["decision_calibration"]["explicit_probability_observations"] == 24
     assert out["decision_calibration"]["probability_coverage"] == 0.6
+    assert out["decision_calibration"]["prediction_sources"] == ["evidence_v2"]
+    assert out["decision_calibration"]["source_summaries"]["evidence_v2"]["probability_status"] == "MEASURED"
+    assert out["decision_calibration"]["source_drifts"]["evidence_v2"]["status"] == "STABLE_WITHIN_UNCERTAINTY"
     assert out["decision_calibration"]["overall"]["probability_status"] == "MEASURED"
     assert out["decision_calibration"]["probability_drift"]["status"] == "STABLE_WITHIN_UNCERTAINTY"
     assert out["decision_calibration"]["affects_production"] is False
