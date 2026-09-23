@@ -59,6 +59,7 @@ def test_decision_prediction_freeze_and_outcome_immutability(tmp_path, monkeypat
     row = FS.get_observation(f"decision::{d.decision_id}")
     assert row is not None
     assert row["meta"]["predicted_p"] == 0.63
+    assert row["meta"]["prediction_source"] == "evidence_v1"
     assert row["meta"]["challenger_predicted_p"] == 0.59
     assert row["outcome"] is None
 
