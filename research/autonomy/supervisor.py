@@ -979,15 +979,19 @@ class Supervisor:
                 elif ctype == CTRL.RUN_CYCLE_NOW:
                     try:
                         from product.decision_simulation_gate import approve
-                        approval = approve()
-                        if not approval.get("accepted"):
-                            raise ValueError(
-                                "best-trade discovery must complete before paper simulation"
-                            )
-                    except ValueError:
-                        raise
+                        approval = dict(approve() or {})
                     except Exception as exc:
                         raise ValueError(f"decision simulation approval failed: {exc}")
+                    if not approval.get("accepted"):
+                        # Discovery can legitimately be between immutable identities
+                        # after a new scan or an effective thesis-policy change. Keep
+                        # the already-accepted operator control durable and pending;
+                        # queue the prerequisite repair and consume this control only
+                        # after the canonical projection is current. This prevents a
+                        # one-tick race from turning an accepted request into a lost
+                        # paper cycle, while still failing closed on execution.
+                        self._ensure_startup_trade_discovery()
+                        continue
                     self.jobs.enqueue(
                         SCH.PAPER_CYCLE,
                         idempotency_key=f"manual:cycle:{snap}:{control.control_id}",
