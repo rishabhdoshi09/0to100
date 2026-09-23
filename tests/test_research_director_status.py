@@ -44,6 +44,25 @@ def _patch_common(monkeypatch):
     )
     monkeypatch.setattr(
         RD,
+        "_decision_calibration",
+        lambda: {
+            "settled_observations": 40,
+            "explicit_probability_observations": 24,
+            "probability_coverage": 0.6,
+            "overall": {
+                "status": "MEASURED",
+                "probability_status": "MEASURED",
+                "probability_sample_size": 24,
+                "brier": 0.21,
+                "calibration_actionable": False,
+            },
+            "buckets": {},
+            "affects_production": False,
+            "live_locked": True,
+        },
+    )
+    monkeypatch.setattr(
+        RD,
         "_signal_registry",
         lambda: {
             "registry_version": "sig-v1",
@@ -179,6 +198,11 @@ def test_director_reports_exact_evidence_gap_and_batch_rationale(monkeypatch):
     assert out["signals"]["scanner_catalog"] == 17
     assert out["signals"]["forward_calibrated"] == 16
     assert out["calibration"]["snapshot_id"] == "cal-1"
+    assert out["decision_calibration"]["settled_observations"] == 40
+    assert out["decision_calibration"]["explicit_probability_observations"] == 24
+    assert out["decision_calibration"]["probability_coverage"] == 0.6
+    assert out["decision_calibration"]["overall"]["probability_status"] == "MEASURED"
+    assert out["decision_calibration"]["affects_production"] is False
     assert out["resource_governor"]["decision"] == "ALLOW_HISTORICAL_REPLAY"
     assert out["live_locked"] is True
     assert out["live_execution_authorized"] is False
