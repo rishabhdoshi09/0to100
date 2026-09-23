@@ -98,3 +98,26 @@ def test_learning_now_and_replay_are_safe_controls():
     assert "RUN_HISTORICAL_REPLAY" in SAFE_CONTROLS
     assert "UNLOCK_LIVE_MONEY" in FORBIDDEN_CONTROLS
     assert "LIVE_BUY" in FORBIDDEN_CONTROLS
+
+
+def test_dashboard_prefers_durable_historical_learning_completion(tmp_path, monkeypatch):
+    path = tmp_path / "autonomous_learning.json"
+    monkeypatch.setenv("QT_AUTONOMOUS_LEARNING", str(path))
+    save_control({
+        "enabled": True,
+        "mode": MODE_AUTO,
+        "last_cycle_at": "2026-09-18T06:57:54+00:00",
+    })
+    monkeypatch.setattr(
+        "product.historical_paper_loop.load_state",
+        lambda: {
+            "phase": "IDLE",
+            "last_learning_completed_at": "2026-09-23T16:12:23+00:00",
+            "last_learning_batch_id": "hist_97395d4909d00f77",
+        },
+    )
+
+    view = dashboard()
+
+    assert view["last_learning_cycle"] == "2026-09-23T16:12:23+00:00"
+    assert view["last_learning_batch_id"] == "hist_97395d4909d00f77"
