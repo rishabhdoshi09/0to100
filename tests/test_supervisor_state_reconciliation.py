@@ -245,3 +245,146 @@ def test_data_refresh_takes_activity_state_after_research_finishes(tmp_path):
     assert sup.state.state == ST.DATA_REFRESHING
     assert sup.state.reason_code == "activity_reconcile"
     sup.shutdown()
+
+
+def test_historical_replan_identity_ignores_thesis_only_churn():
+    base = SCH.historical_replan_key(
+        thesis_hash="thesis-a",
+        request_id="evreq-1",
+        reason="historical_backlog_caught_up",
+        state_token='{"processed": 10, "eligible": 10}',
+    )
+    evolved = SCH.historical_replan_key(
+        thesis_hash="thesis-b",
+        request_id="evreq-1",
+        reason="historical_backlog_caught_up",
+        state_token='{"processed": 10, "eligible": 10}',
+    )
+    changed_evidence = SCH.historical_replan_key(
+        thesis_hash="thesis-b",
+        request_id="evreq-1",
+        reason="historical_backlog_caught_up",
+        state_token='{"processed": 11, "eligible": 11}',
+    )
+
+    assert evolved == base
+    assert changed_evidence != base
+
+
+def test_closed_market_exhausted_history_queues_one_bounded_research_replan(tmp_path, monkeypatch):
+    sup = _sup(tmp_path)
+    assert sup.start() is True
+    sup._ensure_startup_trade_discovery = lambda: None
+    sup._enqueue_post_market_grind = lambda *_args, **_kwargs: None
+    sup._ensure_decision_simulation_authority = lambda: True
+    sup._resource_budget = lambda: {"historical_replay_allowed": True}
+
+    monkeypatch.setattr(
+        "product.historical_paper_loop.pending_stage",
+        lambda: {
+            "phase": "IDLE",
+            "batch_id": "",
+            "processed_sessions": ["2026-01-05", "2026-01-06"],
+            "thesis_hash": "thesis-a",
+            "last_error": "",
+        },
+    )
+    monkeypatch.setattr(
+        "product.historical_paper_loop.peek_next_batch",
+        lambda: {
+            "available": False,
+            "reason": "historical_backlog_caught_up",
+            "processed_sessions": 2,
+            "eligible_sessions": 2,
+        },
+    )
+
+    request_state = {"open": True}
+    request = {
+        "request_id": "evreq-test",
+        "status": "OPEN",
+        "allowed_lanes": ["HISTORICAL_REPLAY"],
+        "current_samples": 5,
+        "target_samples": 30,
+    }
+    monkeypatch.setattr(
+        "research.autonomy.evidence_acquisition.open_request_for_lane",
+        lambda _lane: dict(request) if request_state["open"] else {},
+    )
+    plateaued = []
+
+    def mark_exhausted(req, **kwargs):
+        plateaued.append((dict(req), dict(kwargs)))
+        request_state["open"] = False
+        return {"status": "PLATEAUED"}
+
+    monkeypatch.setattr(
+        "research.autonomy.evidence_progress.mark_historical_source_exhausted",
+        mark_exhausted,
+    )
+
+    sup.enqueue_due(_NOW)
+    replans = [
+        job for job in sup.jobs.list(limit=100)
+        if job.job_type == SCH.RESEARCH_CYCLE
+        and str(job.idempotency_key or "").startswith("research_replan:")
+    ]
+    assert len(replans) == 1
+    assert replans[0].status == JS.PENDING
+    assert plateaued and plateaued[0][0]["request_id"] == "evreq-test"
+
+    # Upgrade cleanup must preserve the new durable replan identity.
+    sup._retire_legacy_recurring_work()
+    assert sup.jobs.get(replans[0].job_id).status == JS.PENDING
+
+    # Same evidence state is idempotent: no duplicate research loop.
+    sup.enqueue_due(_NOW)
+    replans2 = [
+        job for job in sup.jobs.list(limit=100)
+        if job.job_type == SCH.RESEARCH_CYCLE
+        and str(job.idempotency_key or "").startswith("research_replan:")
+    ]
+    assert len(replans2) == 2
+    # The request transitioned OPEN -> PLATEAUED, so exactly one additional
+    # replan identity without request_id is allowed. Further unchanged ticks
+    # must reuse it rather than grow the queue.
+    sup.enqueue_due(_NOW)
+    replans3 = [
+        job for job in sup.jobs.list(limit=100)
+        if job.job_type == SCH.RESEARCH_CYCLE
+        and str(job.idempotency_key or "").startswith("research_replan:")
+    ]
+    assert len(replans3) == 2
+    sup.shutdown()
+
+
+def test_failed_historical_phase_surfaces_incident_and_queues_replan(tmp_path, monkeypatch):
+    sup = _sup(tmp_path)
+    assert sup.start() is True
+    sup._ensure_startup_trade_discovery = lambda: None
+    sup._enqueue_post_market_grind = lambda *_args, **_kwargs: None
+    sup._ensure_decision_simulation_authority = lambda: True
+    sup._resource_budget = lambda: {"historical_replay_allowed": True}
+    monkeypatch.setattr(
+        "product.historical_paper_loop.pending_stage",
+        lambda: {
+            "phase": "FAILED",
+            "batch_id": "b-failed",
+            "processed_sessions": [],
+            "thesis_hash": "thesis-a",
+            "last_error": "worker crashed",
+        },
+    )
+    incidents = []
+    sup._incident = lambda code, message, job=None: incidents.append((code, message)) or {}
+
+    sup.enqueue_due(_NOW)
+
+    assert any(code == "HISTORICAL_PIPELINE_FAILED" for code, _ in incidents)
+    replans = [
+        job for job in sup.jobs.list(limit=100)
+        if job.job_type == SCH.RESEARCH_CYCLE
+        and str(job.idempotency_key or "").startswith("research_replan:")
+    ]
+    assert len(replans) == 1
+    sup.shutdown()

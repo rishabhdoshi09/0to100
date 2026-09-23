@@ -87,6 +87,36 @@ def _implied_p(bucket: str) -> float | None:
     return None
 
 
+def _probability(value: Any) -> float | None:
+    """Return an explicit probability only when it is finite and in [0, 1]."""
+    try:
+        if value is None or value == "":
+            return None
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(out) or out < 0.0 or out > 1.0:
+        return None
+    return out
+
+
+def _wilson_interval(wins: int, n: int, z: float = 1.96) -> list[float] | None:
+    """95% Wilson interval for a measured binary hit rate."""
+    if n <= 0:
+        return None
+    p = max(0.0, min(1.0, float(wins) / float(n)))
+    z2 = z * z
+    denom = 1.0 + z2 / n
+    centre = (p + z2 / (2.0 * n)) / denom
+    margin = (z / denom) * math.sqrt(
+        (p * (1.0 - p) / n) + (z2 / (4.0 * n * n))
+    )
+    return [
+        round(max(0.0, centre - margin), 4),
+        round(min(1.0, centre + margin), 4),
+    ]
+
+
 def display_confidence(*, tier: str = "", sample_size: int = 0, hit_rate: float | None = None) -> dict[str, Any]:
     """What the operator is allowed to see. No decorative percentages."""
     bucket = _bucket(tier)
@@ -126,12 +156,17 @@ class DecisionCalibrationEngine:
         decision_as_of: str,
         outcome_as_of: str,
         predicted_p: float | None = None,
+        prediction_source: str = "",
     ) -> dict[str, Any]:
         """PIT-safe: decision_as_of must be <= outcome_as_of. Future data cannot rewrite the prediction."""
         if outcome_as_of and decision_as_of and str(outcome_as_of) < str(decision_as_of):
             raise ValueError("outcome cannot precede the point-in-time decision")
         bucket = _bucket(predicted_confidence)
-        implied = predicted_p if predicted_p is not None else _implied_p(bucket)
+        implied = (
+            _probability(predicted_p)
+            if predicted_p is not None
+            else _implied_p(bucket)
+        )
         row = {
             "predicted_confidence": bucket,
             "predicted_p": implied,
@@ -140,6 +175,7 @@ class DecisionCalibrationEngine:
             "setup": setup,
             "regime": regime,
             "sector": sector,
+            "prediction_source": str(prediction_source or ""),
             "decision_as_of": decision_as_of,
             "outcome_as_of": outcome_as_of,
             "recorded_at": datetime.now(timezone.utc).isoformat(),
@@ -158,7 +194,16 @@ class DecisionCalibrationEngine:
         setup: str = "",
         regime: str = "",
         sector: str = "",
+        prediction_source: str = "",
     ) -> dict[str, Any]:
+        """Summarize hit-rate evidence and probability calibration separately.
+
+        Setup-quality tiers are not probabilities. Every settled observation can
+        contribute to a measured hit rate, but Brier / expected-vs-realized
+        calibration is computed only from rows that carried an explicit
+        point-in-time predicted_p. Missing probabilities are never replaced
+        with 0.5 or any other invented value.
+        """
         rows = [
             r for r in (self.store.get("observations") or [])
             if r.get("realized_win") is not None
@@ -166,47 +211,280 @@ class DecisionCalibrationEngine:
             and (not setup or r.get("setup") == setup)
             and (not regime or r.get("regime") == regime)
             and (not sector or r.get("sector") == sector)
+            and (
+                not prediction_source
+                or str(r.get("prediction_source") or "") == str(prediction_source)
+            )
         ]
         n = len(rows)
-        if n < MIN_SAMPLE:
-            return {
-                "sample_size": n,
-                "min_sample": MIN_SAMPLE,
-                "status": "INSUFFICIENT_EVIDENCE",
-                "affects_production": False,
-                "brier": None,
-                "expected_p": None,
-                "actual_hit_rate": None,
-                "confidence_interval": None,
-                "overconfidence": False,
-                "underconfidence": False,
-                "bucket": bucket,
-            }
-        hits = sum(1 for r in rows if r.get("realized_win"))
-        actual = hits / n
-        expected = sum(float(r.get("predicted_p") or 0.5) for r in rows) / n
-        brier = sum(
-            (float(r.get("predicted_p") or 0.5) - (1.0 if r.get("realized_win") else 0.0)) ** 2
-            for r in rows
-        ) / n
-        se = math.sqrt(actual * (1 - actual) / n) if n else 0.0
-        over = actual < expected - 0.08
-        under = actual > expected + 0.08
-        return {
+        probability_rows = [
+            r for r in rows
+            if _probability(r.get("predicted_p")) is not None
+        ]
+        probability_n = len(probability_rows)
+
+        base = {
             "sample_size": n,
             "min_sample": MIN_SAMPLE,
-            "status": "MEASURED",
             "affects_production": False,
-            "brier": round(brier, 4),
-            "expected_p": round(expected, 4),
-            "actual_hit_rate": round(actual, 4),
-            "confidence_interval": [round(actual - 1.96 * se, 4), round(actual + 1.96 * se, 4)],
-            "overconfidence": over,
-            "underconfidence": under,
             "bucket": bucket,
+            "setup": setup,
+            "regime": regime,
+            "sector": sector,
+            "prediction_source": prediction_source,
+            "probability_sample_size": probability_n,
+            "probability_min_sample": MIN_SAMPLE,
+            "probability_status": (
+                "MEASURED" if probability_n >= MIN_SAMPLE
+                else "INSUFFICIENT_PROBABILITY_EVIDENCE" if probability_n > 0
+                else "NO_EXPLICIT_PROBABILITIES"
+            ),
+            "brier": None,
+            "expected_p": None,
+            "probability_actual_hit_rate": None,
+            "probability_confidence_interval": None,
+            "calibration_gap": None,
+            "calibration_actionable": False,
+            "calibration_direction": "NONE",
+            "calibration_adjustment": 0.0,
+            "overconfidence": False,
+            "underconfidence": False,
             "rename_tier": False,
+            "probability_only_scoring": True,
+            "live_locked": True,
+        }
+
+        if n < MIN_SAMPLE:
+            return {
+                **base,
+                "status": "INSUFFICIENT_EVIDENCE",
+                "actual_hit_rate": None,
+                "confidence_interval": None,
+                "wilson_lower_bound": None,
+                "wilson_upper_bound": None,
+            }
+
+        hits = sum(1 for r in rows if r.get("realized_win"))
+        actual = hits / n
+        interval = _wilson_interval(hits, n) or [None, None]
+        result = {
+            **base,
+            "status": "MEASURED",
+            "actual_hit_rate": round(actual, 4),
+            "confidence_interval": interval,
+            "wilson_lower_bound": interval[0],
+            "wilson_upper_bound": interval[1],
+        }
+
+        # Probability calibration is a different estimand. It needs its own
+        # sample floor and uses only predictions that really existed at decision
+        # time. Tier labels without predicted_p do not enter these statistics.
+        if probability_n >= MIN_SAMPLE:
+            probs = [_probability(r.get("predicted_p")) for r in probability_rows]
+            probs = [float(p) for p in probs if p is not None]
+            probability_hits = sum(1 for r in probability_rows if r.get("realized_win"))
+            probability_actual = probability_hits / probability_n
+            expected = sum(probs) / probability_n
+            brier = sum(
+                (p - (1.0 if r.get("realized_win") else 0.0)) ** 2
+                for p, r in zip(probs, probability_rows)
+            ) / probability_n
+            probability_interval = _wilson_interval(probability_hits, probability_n)
+            gap = expected - probability_actual
+            lower = float(probability_interval[0]) if probability_interval else probability_actual
+            upper = float(probability_interval[1]) if probability_interval else probability_actual
+            if expected > upper:
+                direction = "OVERCONFIDENT"
+                adjustment = expected - upper
+            elif expected < lower:
+                direction = "UNDERCONFIDENT"
+                adjustment = expected - lower
+            else:
+                direction = "NONE"
+                adjustment = 0.0
+            result.update({
+                "brier": round(brier, 4),
+                "expected_p": round(expected, 4),
+                "probability_actual_hit_rate": round(probability_actual, 4),
+                "probability_confidence_interval": probability_interval,
+                "calibration_gap": round(gap, 4),
+                "calibration_actionable": direction != "NONE",
+                "calibration_direction": direction,
+                # Positive adjustment means the model over-claimed and should
+                # be shifted down; negative means it under-claimed.
+                "calibration_adjustment": round(adjustment, 4),
+                "overconfidence": direction == "OVERCONFIDENT",
+                "underconfidence": direction == "UNDERCONFIDENT",
+            })
+        return result
+
+    def probability_drift(
+        self,
+        *,
+        bucket: str | None = None,
+        setup: str = "",
+        regime: str = "",
+        sector: str = "",
+        prediction_source: str = "",
+        recent_n: int = MIN_SAMPLE,
+        baseline_n: int = 60,
+    ) -> dict[str, Any]:
+        """Compare recent vs prior explicit-probability forecast quality.
+
+        Uses per-observation Brier loss and a normal 95% interval for the
+        difference in mean loss between independent recent/prior windows.
+        Positive delta means recent probability forecasts are worse. This is
+        monitoring evidence only; it cannot change production by itself.
+        """
+        rows = [
+            r for r in (self.store.get("observations") or [])
+            if r.get("realized_win") is not None
+            and _probability(r.get("predicted_p")) is not None
+            and (not bucket or r.get("predicted_confidence") == _bucket(bucket))
+            and (not setup or r.get("setup") == setup)
+            and (not regime or r.get("regime") == regime)
+            and (not sector or r.get("sector") == sector)
+            and (
+                not prediction_source
+                or str(r.get("prediction_source") or "") == str(prediction_source)
+            )
+        ]
+        rows.sort(key=lambda r: (
+            str(r.get("outcome_as_of") or ""),
+            str(r.get("recorded_at") or ""),
+        ))
+        recent_need = max(MIN_SAMPLE, int(recent_n or MIN_SAMPLE))
+        baseline_cap = max(MIN_SAMPLE, int(baseline_n or MIN_SAMPLE))
+        if len(rows) < recent_need + MIN_SAMPLE:
+            return {
+                "status": "INSUFFICIENT_PROBABILITY_HISTORY",
+                "explicit_probability_observations": len(rows),
+                "prediction_source": prediction_source,
+                "required_observations": recent_need + MIN_SAMPLE,
+                "recent_n": min(len(rows), recent_need),
+                "baseline_n": max(0, len(rows) - recent_need),
+                "recent_brier": None,
+                "baseline_brier": None,
+                "brier_delta": None,
+                "delta_confidence_interval": None,
+                "degradation_detected": False,
+                "improvement_detected": False,
+                "affects_production": False,
+                "live_locked": True,
+            }
+
+        recent = rows[-recent_need:]
+        baseline_pool = rows[:-recent_need]
+        baseline = baseline_pool[-baseline_cap:]
+
+        def losses(items):
+            return [
+                (
+                    float(_probability(row.get("predicted_p")))
+                    - (1.0 if row.get("realized_win") else 0.0)
+                ) ** 2
+                for row in items
+            ]
+
+        recent_losses = losses(recent)
+        baseline_losses = losses(baseline)
+        recent_mean = sum(recent_losses) / len(recent_losses)
+        baseline_mean = sum(baseline_losses) / len(baseline_losses)
+        delta = recent_mean - baseline_mean
+
+        def sample_variance(values):
+            if len(values) < 2:
+                return 0.0
+            mean = sum(values) / len(values)
+            return sum((x - mean) ** 2 for x in values) / (len(values) - 1)
+
+        se = math.sqrt(
+            sample_variance(recent_losses) / len(recent_losses)
+            + sample_variance(baseline_losses) / len(baseline_losses)
+        )
+        lower = delta - 1.96 * se
+        upper = delta + 1.96 * se
+        if lower > 0.0:
+            status = "DEGRADING"
+        elif upper < 0.0:
+            status = "IMPROVING"
+        else:
+            status = "STABLE_WITHIN_UNCERTAINTY"
+
+        return {
+            "status": status,
+            "explicit_probability_observations": len(rows),
+            "prediction_source": prediction_source,
+            "recent_n": len(recent),
+            "baseline_n": len(baseline),
+            "recent_brier": round(recent_mean, 4),
+            "baseline_brier": round(baseline_mean, 4),
+            "brier_delta": round(delta, 4),
+            "delta_standard_error": round(se, 6),
+            "delta_confidence_interval": [
+                round(lower, 4),
+                round(upper, 4),
+            ],
+            "degradation_detected": lower > 0.0,
+            "improvement_detected": upper < 0.0,
+            "affects_production": False,
+            "live_locked": True,
+            "note": (
+                "Positive Brier delta means recent explicit-probability forecasts "
+                "are worse than the prior window; a drift claim requires the full "
+                "95% delta interval to stay above zero."
+            ),
+        }
+
+    def dossier(self) -> dict[str, Any]:
+        """Read-only calibration dossier for operator/research inspection."""
+        rows = [
+            r for r in (self.store.get("observations") or [])
+            if r.get("realized_win") is not None
+        ]
+        explicit_rows = [
+            r for r in rows if _probability(r.get("predicted_p")) is not None
+        ]
+        explicit = len(explicit_rows)
+        sources = sorted({
+            str(r.get("prediction_source") or "")
+            for r in explicit_rows
+            if str(r.get("prediction_source") or "")
+        })
+        unversioned = sum(
+            1 for r in explicit_rows if not str(r.get("prediction_source") or "")
+        )
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "overall": self.summary(),
+            "buckets": self.buckets(),
+            "settled_observations": len(rows),
+            "explicit_probability_observations": explicit,
+            "probability_coverage": round(explicit / len(rows), 4) if rows else 0.0,
+            "prediction_sources": sources,
+            "unversioned_probability_observations": unversioned,
+            "source_summaries": {
+                source: self.summary(prediction_source=source)
+                for source in sources
+            },
+            "source_drifts": {
+                source: self.probability_drift(prediction_source=source)
+                for source in sources
+            },
+            "probability_drift": self.probability_drift(),
+            "affects_production": False,
+            "live_locked": True,
+            "note": (
+                "Hit-rate measurement and probability calibration are separate. "
+                "Only explicit point-in-time probabilities enter Brier/calibration-gap metrics; "
+                "production-facing calibration consumers must use the matching prediction_source."
+            ),
         }
 
     def buckets(self) -> dict[str, Any]:
-        found = sorted({str(r.get("predicted_confidence")) for r in self.store.get("observations") or []})
+        found = sorted({
+            str(r.get("predicted_confidence"))
+            for r in self.store.get("observations") or []
+            if str(r.get("predicted_confidence") or "")
+        })
         return {b: self.summary(bucket=b) for b in found}

@@ -258,7 +258,11 @@ trap on_stop INT TERM
 trap cleanup EXIT
 
 adopt_report() {
-  if url_ok "http://127.0.0.1:8766/health" || port_open 8766; then
+  # A listening socket is not service health. Only adopt :8766 when the
+  # report API answers its explicit health contract. Treating port-open as
+  # healthy made a wedged uvicorn immortal: the watchdog reset its failure
+  # counter forever and Product Acceptance timed out on /health.
+  if url_ok "http://127.0.0.1:8766/health"; then
     if [[ -z "${REPORT_PID:-}" ]] || ! alive "$REPORT_PID"; then
       REPORT_EXTERNAL=1
       REPORT_PID=""
@@ -452,23 +456,34 @@ REPORT_HEALTH_FAILS=0
 while [[ "$STOP" != "1" ]]; do
   if adopt_report; then
     REPORT_HEALTH_FAILS=0
-  elif ! url_ok "http://127.0.0.1:8766/health"; then
+  else
     REPORT_HEALTH_FAILS=$((REPORT_HEALTH_FAILS + 1))
-    if port_open 8766; then
-      echo "[COMPLETE STACK] Report API is listening on :8766; health probe failed. Not killing it."
+    if [[ -n "${REPORT_PID:-}" ]] && alive "$REPORT_PID"; then
+      # This launcher owns the unhealthy report process, so bounded retries may
+      # replace it safely. Do not relabel our own wedged child as "external".
+      if (( REPORT_HEALTH_FAILS >= 3 )); then
+        echo "[COMPLETE STACK] Owned report API is listening/alive but unhealthy; restarting. See $STACK_LOG_DIR/report_api.log." >&2
+        stop_pid "$REPORT_PID" "unhealthy report API"
+        REPORT_EXTERNAL=0
+        REPORT_PID=""
+        start_report || true
+        REPORT_HEALTH_FAILS=0
+      fi
+    elif port_open 8766; then
+      # An unknown external owner has the port but does not satisfy /health.
+      # Never kill a process we do not own; keep the failure visible.
       REPORT_EXTERNAL=1
       REPORT_PID=""
-      REPORT_HEALTH_FAILS=0
+      if (( REPORT_HEALTH_FAILS == 1 || REPORT_HEALTH_FAILS % 10 == 0 )); then
+        echo "[COMPLETE STACK] Port 8766 is owned externally but /health is failing; leaving it untouched and reporting unhealthy." >&2
+      fi
     elif (( REPORT_HEALTH_FAILS >= 3 )); then
-      echo "[COMPLETE STACK] Report API health failed; restarting. See $STACK_LOG_DIR/report_api.log."
-      if [[ -n "${REPORT_PID:-}" ]]; then kill "$REPORT_PID" >/dev/null 2>&1 || true; fi
+      echo "[COMPLETE STACK] Report API is down/unhealthy; restarting. See $STACK_LOG_DIR/report_api.log." >&2
       REPORT_EXTERNAL=0
       REPORT_PID=""
       start_report || true
       REPORT_HEALTH_FAILS=0
     fi
-  else
-    REPORT_HEALTH_FAILS=0
   fi
   if [[ "$REPORT_EXTERNAL" != "1" ]]; then
     if [[ -z "${REPORT_PID:-}" ]] || ! alive "$REPORT_PID"; then

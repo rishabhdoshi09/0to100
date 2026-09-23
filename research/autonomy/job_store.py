@@ -146,6 +146,18 @@ class JobStore:
                                        (idempotency_key,)).fetchone()
                 if row is not None:
                     job = _row_to_job(row)
+                    # A later caller may discover that an existing prerequisite
+                    # is now on the operator's critical path (for example
+                    # RUN_CYCLE_NOW waiting for decision-discovery refresh).
+                    # Promote the durable row in place instead of creating a
+                    # duplicate identity or waiting behind background research.
+                    if critical and not job.critical and job.status in {PENDING, BLOCKED}:
+                        self._db.execute(
+                            "UPDATE jobs SET critical=1 WHERE job_id=?",
+                            (job.job_id,),
+                        )
+                        self._db.commit()
+                        job = self.get(job.job_id, _locked=True)
                     if (
                         job.status == PENDING
                         and (now - float(job.scheduled_for or 0.0)) >= _STALE_PENDING_S

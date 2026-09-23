@@ -7,6 +7,7 @@ recommendations/rankings inside an HTTP request.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from datetime import datetime, timezone
@@ -20,6 +21,27 @@ SCHEMA_VERSION = 1
 
 def _path() -> Path:
     return logs_path("product/startup_trade_discovery.json")
+
+
+def _long_term_fingerprint() -> str:
+    """Fingerprint decision-relevant long-term content, excluding run timestamp.
+
+    A cache-only long-term refresh can rewrite ``scanned_at`` while producing the
+    exact same evidence. That wall-clock change must not invalidate an otherwise
+    identical startup decision projection. Conversely, any material long-term
+    payload change must still fail closed and require a new projection.
+    """
+    try:
+        from product.long_term_store import load_long_term_scan
+
+        payload = dict(load_long_term_scan() or {})
+    except Exception:
+        return ""
+    if not payload:
+        return ""
+    payload.pop("scanned_at", None)
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def save(
@@ -36,6 +58,7 @@ def save(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "scan_scanned_at": str(scan_scanned_at or ""),
         "long_term_scanned_at": str(long_term_scanned_at or ""),
+        "long_term_fingerprint": _long_term_fingerprint(),
         "thesis_hash": str(thesis_hash or ""),
         "board": dict(board),
     }
@@ -62,8 +85,16 @@ def load(
         return None
     if str(payload.get("scan_scanned_at") or "") != str(scan_scanned_at or ""):
         return None
-    if str(payload.get("long_term_scanned_at") or "") != str(long_term_scanned_at or ""):
-        return None
+    stored_lt_at = str(payload.get("long_term_scanned_at") or "")
+    current_lt_at = str(long_term_scanned_at or "")
+    if stored_lt_at != current_lt_at:
+        # Timestamp-only refreshes are harmless only when the complete
+        # decision-relevant long-term payload is byte-deterministically equal.
+        # Legacy rows without a content fingerprint remain strict/fail-closed.
+        stored_fp = str(payload.get("long_term_fingerprint") or "")
+        current_fp = _long_term_fingerprint()
+        if not stored_fp or not current_fp or stored_fp != current_fp:
+            return None
     if str(payload.get("thesis_hash") or "") != str(thesis_hash or ""):
         return None
     board = payload.get("board")

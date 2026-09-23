@@ -136,3 +136,29 @@ def test_forward_only_request_is_blocked_from_historical_progress(tmp_path):
     )
     assert out["status"] == EA.BLOCKED
     assert out["reason"] == "HISTORICAL_REPLAY_NOT_ALLOWED_FOR_REQUEST"
+
+
+def test_exhausted_historical_source_plateaus_request_and_requires_replan(tmp_path):
+    req = _request(current_samples=12, target_samples=30)
+    request_path = tmp_path / "request.json"
+    progress_path = tmp_path / "progress.json"
+    EA.save_request(req, path=request_path)
+
+    out = EP.mark_historical_source_exhausted(
+        req.as_dict(),
+        eligible_sessions=120,
+        processed_sessions=120,
+        path=progress_path,
+        request_path=request_path,
+    )
+
+    assert out["status"] == EA.PLATEAUED
+    assert out["source_exhausted"] is True
+    assert out["sample_count"] == 12
+    assert out["sample_deficit"] == 18
+    assert out["next_action"] == "REPLAN_RESEARCH_QUESTION"
+    assert out["eligible_sessions"] == 120
+    assert out["processed_sessions"] == 120
+    persisted = EA.load_request(request_path)
+    assert persisted["status"] == EA.PLATEAUED
+    assert persisted["progress"]["source_exhausted"] is True

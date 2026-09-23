@@ -529,3 +529,302 @@ def test_approved_old_scan_does_not_mark_new_scan_discovery_ready(tmp_path, monk
     status = G.status(path=state)
     assert status["approved"] is True
     assert status["discovery_ready"] is False
+
+
+def test_current_scan_with_new_thesis_queues_one_discovery_refresh_not_another_scan(
+    tmp_path, monkeypatch
+):
+    """Learning identity changes re-project the saved scan without network/scan churn."""
+    from research.autonomy import schedules as SCH
+    from research.autonomy.supervisor import Supervisor
+
+    class DiscoveryDeps:
+        def active_snapshot_id(self):
+            return ""
+
+    monkeypatch.setattr(
+        "product.decision_simulation_gate.status",
+        lambda: {
+            "discovery_ready": False,
+            "approved": True,
+            "scan_fresh": True,
+            "scan_scanned_at": "2026-09-22T19:02:49+00:00",
+            "current_thesis_hash": "thesis-b",
+        },
+    )
+
+    def forbidden_history():
+        raise AssertionError("fresh saved scan must be re-projected, not re-scanned")
+
+    monkeypatch.setattr("product.readiness.official_history", forbidden_history)
+
+    sup = Supervisor(tmp_path / "auto", deps=DiscoveryDeps())
+    sup._ensure_startup_trade_discovery()
+    sup._ensure_startup_trade_discovery()
+
+    refreshes = [
+        job for job in sup.jobs.list(limit=20)
+        if job.job_type == SCH.DISCOVERY_REFRESH
+    ]
+    scans = [
+        job for job in sup.jobs.list(limit=20)
+        if job.job_type == SCH.MARKET_SCAN
+    ]
+    assert len(refreshes) == 1
+    assert scans == []
+    assert refreshes[0].critical is True
+    assert refreshes[0].input_snapshot_id == "2026-09-22T19:02:49+00:00"
+    assert refreshes[0].idempotency_key == SCH.discovery_refresh_key(
+        "2026-09-22T19:02:49+00:00",
+        "",
+        "thesis-b",
+    )
+
+
+def test_durable_startup_approval_does_not_authorize_stale_current_projection(
+    tmp_path, monkeypatch
+):
+    """Approval survives learning, but new simulation waits for current projection truth."""
+    from research.autonomy.supervisor import Supervisor
+
+    class DiscoveryDeps:
+        def active_snapshot_id(self):
+            return ""
+
+    gate = {
+        "discovery_ready": False,
+        "approved": True,
+        "scan_fresh": True,
+        "scan_scanned_at": "2026-09-22T19:02:49+00:00",
+        "current_thesis_hash": "thesis-b",
+    }
+    monkeypatch.setattr(
+        "product.decision_simulation_gate.status",
+        lambda: dict(gate),
+    )
+
+    def forbidden_approval():
+        raise AssertionError("stale current discovery must not be re-approved")
+
+    monkeypatch.setattr(
+        "product.decision_simulation_gate.ensure_autonomous_approval",
+        forbidden_approval,
+    )
+
+    sup = Supervisor(tmp_path / "auto", deps=DiscoveryDeps())
+    assert sup._ensure_decision_simulation_authority() is False
+
+    gate["discovery_ready"] = True
+    assert sup._ensure_decision_simulation_authority() is True
+
+
+def test_manual_paper_control_waits_durably_for_discovery_refresh(tmp_path, monkeypatch):
+    """An accepted control is not lost when immutable discovery is between identities."""
+    from datetime import datetime, timezone
+
+    from research.autonomy import controls as CTRL
+    from research.autonomy import schedules as SCH
+    from research.autonomy.supervisor import Supervisor
+
+    class DiscoveryDeps:
+        def active_snapshot_id(self):
+            return "snapshot-1"
+
+        def now_ist(self):
+            return datetime(2026, 9, 22, 18, 0, tzinfo=timezone.utc)
+
+    approval = {"accepted": False}
+    monkeypatch.setattr(
+        "product.decision_simulation_gate.approve",
+        lambda: dict(approval),
+    )
+
+    sup = Supervisor(tmp_path / "auto", deps=DiscoveryDeps())
+    refresh_calls = []
+    monkeypatch.setattr(
+        sup,
+        "_ensure_startup_trade_discovery",
+        lambda: refresh_calls.append("refresh"),
+    )
+    control = sup.controls.request(CTRL.RUN_CYCLE_NOW, requested_by="test")
+
+    sup._process_controls()
+
+    assert refresh_calls == ["refresh"]
+    assert [row.control_id for row in sup.controls.pending()] == [control.control_id]
+    assert not [
+        job for job in sup.jobs.list(limit=20)
+        if job.job_type == SCH.PAPER_CYCLE
+    ]
+
+    approval["accepted"] = True
+    sup._process_controls()
+
+    assert sup.controls.pending() == []
+    recent = {row.control_id: row for row in sup.controls.recent(limit=20)}
+    assert recent[control.control_id].status == CTRL.PROCESSED
+    paper = [
+        job for job in sup.jobs.list(limit=20)
+        if job.job_type == SCH.PAPER_CYCLE
+    ]
+    assert len(paper) == 1
+    assert paper[0].critical is True
+    assert paper[0].idempotency_key == (
+        f"manual:cycle:snapshot-1:{control.control_id}"
+    )
+
+
+def test_approved_scan_cache_gap_does_not_mask_changed_thesis_identity(tmp_path, monkeypatch):
+    """An old approval cannot make a missing new-thesis projection look ready."""
+    state = tmp_path / "gate.json"
+    monkeypatch.setenv("QT_STARTUP_ID", "startup-thesis-gap")
+
+    thesis = {"value": "thesis-a"}
+    monkeypatch.setattr(
+        "product.trading_thesis.manifest",
+        lambda: {"thesis_hash": thesis["value"], "objective_id": "test"},
+    )
+    monkeypatch.setattr("product.desk_pipeline.scan_is_fresh", lambda: True)
+    monkeypatch.setattr(
+        "product.historical_paper_loop.load_state",
+        lambda: {"thesis_hash": "thesis-a"},
+    )
+
+    board = {
+        "available": True,
+        "scan_scanned_at": "2026-09-22T10:00:00+00:00",
+        "best_trades": [{"symbol": "INFY"}],
+        "decisions": [{"symbol": "INFY"}],
+        "actionable": 1,
+    }
+    monkeypatch.setattr(G, "_board", lambda: dict(board))
+
+    G.begin_startup("startup-thesis-gap", path=state)
+    approved = G.approve(path=state)
+    assert approved["approved"] is True
+    assert approved["discovery_ready"] is True
+    assert approved["approved_thesis_hash"] == "thesis-a"
+
+    thesis["value"] = "thesis-b"
+    monkeypatch.setattr(
+        G,
+        "_board",
+        lambda: {
+            "available": False,
+            "state": "SEARCHING_BEST_TRADES",
+            "reason": "projection for changed thesis not published yet",
+            "scan_scanned_at": "2026-09-22T10:00:00+00:00",
+            "best_trades": [],
+            "decisions": [],
+            "actionable": 0,
+        },
+    )
+
+    evolved = G.status(path=state)
+    assert evolved["approved"] is True
+    assert evolved["thesis_changed_since_approval"] is True
+    assert evolved["discovery_ready"] is False
+    assert evolved["best_trades"] == []
+
+
+def test_long_term_identity_change_gets_a_new_discovery_refresh_job(tmp_path, monkeypatch):
+    """Discovery idempotency includes every store identity used by the cache key."""
+    from research.autonomy import schedules as SCH
+    from research.autonomy.supervisor import Supervisor
+
+    class DiscoveryDeps:
+        def active_snapshot_id(self):
+            return ""
+
+    gate = {
+        "discovery_ready": False,
+        "approved": True,
+        "scan_fresh": True,
+        "scan_scanned_at": "2026-09-22T19:02:49+00:00",
+        "long_term_scanned_at": "2026-09-22T18:00:00+00:00",
+        "current_thesis_hash": "thesis-b",
+    }
+    monkeypatch.setattr(
+        "product.decision_simulation_gate.status",
+        lambda: dict(gate),
+    )
+
+    sup = Supervisor(tmp_path / "auto", deps=DiscoveryDeps())
+    sup._ensure_startup_trade_discovery()
+    sup._ensure_startup_trade_discovery()
+
+    first = [
+        job for job in sup.jobs.list(limit=20)
+        if job.job_type == SCH.DISCOVERY_REFRESH
+    ]
+    assert len(first) == 1
+
+    gate["long_term_scanned_at"] = "2026-09-22T18:30:00+00:00"
+    sup._ensure_startup_trade_discovery()
+
+    refreshes = [
+        job for job in sup.jobs.list(limit=20)
+        if job.job_type == SCH.DISCOVERY_REFRESH
+    ]
+    assert len(refreshes) == 2
+    assert {job.idempotency_key for job in refreshes} == {
+        SCH.discovery_refresh_key(
+            "2026-09-22T19:02:49+00:00",
+            "2026-09-22T18:00:00+00:00",
+            "thesis-b",
+        ),
+        SCH.discovery_refresh_key(
+            "2026-09-22T19:02:49+00:00",
+            "2026-09-22T18:30:00+00:00",
+            "thesis-b",
+        ),
+    }
+
+
+def test_intraday_fresh_scan_repairs_discovery_even_when_broker_auth_is_unavailable(
+    tmp_path, monkeypatch
+):
+    """Intraday auth/data flow must not strand a fresh scan with stale discovery."""
+    from datetime import datetime, timezone
+
+    from research.autonomy import schedules as SCH
+    from research.autonomy.supervisor import Supervisor
+
+    class IntradayDeps:
+        def holidays(self):
+            return set()
+
+        def active_snapshot_id(self):
+            return ""
+
+    monkeypatch.setattr(SCH, "market_is_open", lambda *_a, **_k: True)
+    monkeypatch.setattr(SCH, "in_scan_window", lambda *_a, **_k: True)
+    monkeypatch.setattr(
+        "product.decision_simulation_gate.status",
+        lambda: {
+            "discovery_ready": False,
+            "approved": False,
+            "scan_fresh": True,
+            "scan_scanned_at": "2026-09-23T06:35:49.779226+00:00",
+            "long_term_scanned_at": "2026-09-23T06:36:56.081161+00:00",
+            "current_thesis_hash": "thesis-intraday",
+        },
+    )
+
+    sup = Supervisor(tmp_path / "auto", deps=IntradayDeps())
+    monkeypatch.setattr(sup, "_release_stale_official_blocks", lambda: None)
+
+    sup.enqueue_due(datetime(2026, 9, 23, 6, 45, tzinfo=timezone.utc))
+
+    refreshes = [
+        job for job in sup.jobs.list(limit=50)
+        if job.job_type == SCH.DISCOVERY_REFRESH
+    ]
+    assert len(refreshes) == 1
+    assert refreshes[0].critical is True
+    assert refreshes[0].input_snapshot_id == "2026-09-23T06:35:49.779226+00:00"
+    assert refreshes[0].idempotency_key == SCH.discovery_refresh_key(
+        "2026-09-23T06:35:49.779226+00:00",
+        "2026-09-23T06:36:56.081161+00:00",
+        "thesis-intraday",
+    )

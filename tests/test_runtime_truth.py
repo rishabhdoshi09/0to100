@@ -83,3 +83,13 @@ def test_researching_with_real_learning_job_is_not_a_mismatch():
     )
     out = RT.transient_state_mismatch("RESEARCHING", truth)
     assert out["mismatch"] is False
+
+
+def test_discovery_refresh_is_reported_as_decision_simulation_not_maintenance():
+    out = RT.derive_activity(
+        [_job(SCH.DISCOVERY_REFRESH, status=JS.RUNNING, key="discovery_refresh:s1:t1")],
+        now_epoch=100.0,
+    )
+    assert out["activity"] == RT.ACTIVITY_DECISION
+    assert out["primary_job"]["job_type"] == SCH.DISCOVERY_REFRESH
+    assert out["research_activity"] is False

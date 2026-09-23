@@ -100,6 +100,16 @@ def test_idempotent_repeated_enqueue(tmp_path):
     assert a.job_id == b.job_id and len(store.list()) == 1
 
 
+def test_idempotent_enqueue_can_promote_existing_operator_prerequisite_to_critical(tmp_path):
+    store = JS.JobStore(tmp_path / "j.db")
+    first = store.enqueue(SCH.DISCOVERY_REFRESH, idempotency_key="disc:1", critical=False)
+    promoted = store.enqueue(SCH.DISCOVERY_REFRESH, idempotency_key="disc:1", critical=True)
+
+    assert promoted.job_id == first.job_id
+    assert promoted.critical is True
+    assert len(store.list()) == 1
+
+
 def test_retryable_then_permanent(tmp_path):
     clk = [0.0]
     sup = _sup(tmp_path, deps=FakeDeps(scan_raises=True), clock=lambda: clk[0])

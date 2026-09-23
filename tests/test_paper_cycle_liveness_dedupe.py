@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from datetime import datetime
+from types import SimpleNamespace
 
 from product import historical_replay as HR
 from research.auto_research.scheduler import AutoResearchBrain
@@ -235,7 +236,7 @@ def test_snapshot_pipeline_runs_once_then_stops(tmp_path, monkeypatch):
 
     now = datetime(2026, 7, 31, 10, 0)
     root = tmp_path / "auto"
-    monkeypatch.setattr("product.decision_simulation_gate.is_approved", lambda: True)
+    monkeypatch.setattr("product.decision_simulation_gate.status", lambda: {"discovery_ready": True, "approved": True})
     sup = Supervisor(root, deps=FakeDeps(now=now, data_ok=True))
     assert sup.start() is True
     try:
@@ -272,7 +273,7 @@ def test_completed_snapshot_does_not_restart_pipeline_after_supervisor_restart(t
 
     now = datetime(2026, 7, 31, 10, 0)
     root = tmp_path / "auto"
-    monkeypatch.setattr("product.decision_simulation_gate.is_approved", lambda: True)
+    monkeypatch.setattr("product.decision_simulation_gate.status", lambda: {"discovery_ready": True, "approved": True})
     first = Supervisor(root, deps=FakeDeps(now=now, data_ok=True))
     assert first.start() is True
     for _ in range(12):
@@ -508,3 +509,43 @@ def test_completing_old_snapshot_does_not_cancel_newer_snapshot_work(tmp_path):
         assert sup.jobs.get(new_scan.job_id).status == JS.PENDING
     finally:
         sup.shutdown()
+
+
+def test_authorized_snapshot_paper_job_does_not_reread_mutable_approval_gate(monkeypatch):
+    calls = []
+
+    class Deps:
+        def now_ist(self):
+            return datetime(2026, 9, 18, 12, 30)
+
+        def holidays(self):
+            return set()
+
+        def active_snapshot_id(self):
+            return "snap-authorized"
+
+        def run_paper_cycle(self, entries_allowed, reason, phase, failures):
+            calls.append((entries_allowed, reason, phase, set(failures)))
+            return {"eligibility": "NO_ELIGIBLE_TRADE"}
+
+    def forbidden_recheck(*_args, **_kwargs):
+        raise AssertionError("durable snapshot paper authority must not reread startup approval")
+
+    monkeypatch.setattr(
+        "product.decision_simulation_gate.is_approved",
+        forbidden_recheck,
+    )
+    ctx = JOBS._Ctx(
+        Deps(),
+        active_failures=(),
+        job=SimpleNamespace(
+            idempotency_key="snapshot_paper:snap-authorized",
+            input_snapshot_id="snap-authorized",
+        ),
+    )
+
+    result = JOBS.run_paper_cycle(ctx)
+
+    assert result.status == JS.SUCCEEDED
+    assert calls and calls[0][0] is True
+    assert result.metadata["market_data_source"] == "snapshot:snap-authorized"

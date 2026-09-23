@@ -5,6 +5,8 @@ and new paper risk is structurally restricted to 09:30–15:15 IST on an NSE ses
 """
 from __future__ import annotations
 
+import hashlib
+
 from datetime import datetime, timedelta
 from datetime import time as _time
 
@@ -16,6 +18,7 @@ CORPORATE_ACTIONS = "corporate_actions"
 UNIVERSE_HISTORY = "universe_history"
 INDEX_WARMUP = "index_warmup"
 MARKET_SCAN = "market_scan"
+DISCOVERY_REFRESH = "discovery_refresh"
 NEWS_REFRESH = "news_refresh"
 PAPER_CYCLE = "paper_cycle"
 OUTCOME_RESOLUTION = "outcome_resolution"
@@ -27,7 +30,7 @@ HISTORICAL_PAPER_CYCLE = "historical_paper_cycle"
 
 ALL_JOB_TYPES = (
     AUTH_HEALTH, INSTRUMENT_REFRESH, DATA_REFRESH, BHAVCOPY_UPDATE, CORPORATE_ACTIONS,
-    UNIVERSE_HISTORY, INDEX_WARMUP, MARKET_SCAN, NEWS_REFRESH, PAPER_CYCLE,
+    UNIVERSE_HISTORY, INDEX_WARMUP, MARKET_SCAN, DISCOVERY_REFRESH, NEWS_REFRESH, PAPER_CYCLE,
     OUTCOME_RESOLUTION, LEARNING_CYCLE, RESEARCH_CYCLE, LONG_TERM_SCAN, LONG_TERM_REFRESH,
     HISTORICAL_PAPER_CYCLE,
 )
@@ -174,6 +177,18 @@ def paper_cycle_key(snapshot_id: str, session_and_slot: str) -> str:
     return f"paper_cycle:{snapshot_id}:{session_and_slot}"
 
 
+def discovery_refresh_key(
+    scan_scanned_at: str,
+    long_term_scanned_at: str,
+    thesis_hash: str,
+) -> str:
+    """Durable identity for one canonical decision-discovery projection."""
+    return (
+        f"discovery_refresh:{str(scan_scanned_at or '')}:"
+        f"{str(long_term_scanned_at or 'none')}:{str(thesis_hash or '')}"
+    )
+
+
 def snapshot_scan_key(snapshot_id: str) -> str:
     """Automatic scan identity: exactly once for one immutable data snapshot."""
     return f"snapshot_scan:{snapshot_id}"
@@ -292,3 +307,28 @@ def long_term_weekly_due(now_ist, holidays=None) -> bool:
 def long_term_key(session_date: str, *, refresh: bool = False) -> str:
     kind = "refresh" if refresh else "scan"
     return f"long_term_{kind}:{session_date}"
+
+
+def historical_replan_key(
+    *,
+    thesis_hash: str = "",
+    request_id: str = "",
+    reason: str = "",
+    state_token: str = "",
+) -> str:
+    """One bounded research replan per evidence state.
+
+    thesis_hash is accepted for backwards-compatible call sites but is
+    deliberately excluded from the identity. A replan may itself update learned
+    selection policy and therefore the thesis hash. Keying the next replan to
+    that output creates a self-triggering loop with no new evidence. A new
+    replan is warranted only when request/evidence state or the reason changes.
+    """
+    _ = thesis_hash
+    raw = "|".join((
+        str(request_id or ""),
+        str(reason or ""),
+        str(state_token or ""),
+    ))
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
+    return f"research_replan:{digest}"

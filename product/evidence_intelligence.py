@@ -13,6 +13,8 @@ recency/regime/setup weighting and uncertainty-aware expectancy.
 from __future__ import annotations
 
 import math
+import threading
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Mapping
@@ -23,12 +25,66 @@ from product.decision import Decision
 from research import feature_schema as FS
 
 SCHEMA_VERSION = 1
+FORMULA_VERSION = "evidence_v2"
 MIN_ANALOGS = 12
 CLAIM_MIN_EFFECTIVE_N = 20.0
 CONFIDENT_MIN_EFFECTIVE_N = 30.0
 DEFAULT_K = 50
 HALF_LIFE_DAYS = 365.0
 SHRINKAGE_K = 8.0
+
+
+_EVIDENCE_BATCH = threading.local()
+
+
+@contextmanager
+def evidence_read_batch():
+    """Freeze prior-evidence reads for one decision-board construction.
+
+    Decisions on the same saved scan share one point-in-time cutoff. Loading and
+    JSON-decoding the identical settled corpus for every symbol is quadratic I/O
+    as the evidence store grows. Within this explicit batch, cache only the raw
+    rows keyed by strict cutoff; no samples are dropped or reweighted. The cache
+    is discarded at exit, so later board builds observe newly settled evidence.
+    """
+    previous_rows = getattr(_EVIDENCE_BATCH, "rows_by_cutoff", None)
+    previous_prepared = getattr(_EVIDENCE_BATCH, "prepared_by_cutoff", None)
+    _EVIDENCE_BATCH.rows_by_cutoff = {}
+    _EVIDENCE_BATCH.prepared_by_cutoff = {}
+    try:
+        yield
+    finally:
+        if previous_rows is None:
+            try:
+                delattr(_EVIDENCE_BATCH, "rows_by_cutoff")
+            except AttributeError:
+                pass
+        else:
+            _EVIDENCE_BATCH.rows_by_cutoff = previous_rows
+        if previous_prepared is None:
+            try:
+                delattr(_EVIDENCE_BATCH, "prepared_by_cutoff")
+            except AttributeError:
+                pass
+        else:
+            _EVIDENCE_BATCH.prepared_by_cutoff = previous_prepared
+
+
+def _prior_observation_rows(before_ts: str) -> list[dict[str, Any]]:
+    from research.feature_store import load_observations
+
+    cache = getattr(_EVIDENCE_BATCH, "rows_by_cutoff", None)
+    key = str(before_ts or "")
+    if cache is not None and key in cache:
+        return cache[key]
+    rows = load_observations(
+        kind="DECISION",
+        require_outcome=True,
+        before_ts=key,
+    )
+    if cache is not None:
+        cache[key] = rows
+    return rows
 
 
 def _f(value: Any) -> float | None:
@@ -235,6 +291,7 @@ def record_resolved_prediction(
         out["calibration"] = DecisionCalibrationEngine().record(
             predicted_confidence=tier,
             predicted_p=predicted_p,
+            prediction_source=str(meta.get("prediction_source") or ""),
             realized_win=float(realized_R) > 0.0,
             setup=str(meta.get("setup") or ""),
             regime=str(meta.get("market_state") or ""),
@@ -301,53 +358,117 @@ def _days_between(older: Any, newer: Any) -> float:
     return max(0.0, (b - a).total_seconds() / 86400.0)
 
 
-def _analogs(decision: Decision, *, k: int = DEFAULT_K) -> list[dict[str, Any]]:
-    from research.feature_store import load_observations
+def _prepared_prior_corpus(before_ts: str) -> dict[str, Any]:
+    """Prepare the immutable numeric analogue corpus once per batch cutoff."""
+    key = str(before_ts or "")
+    cache = getattr(_EVIDENCE_BATCH, "prepared_by_cutoff", None)
+    if cache is not None and key in cache:
+        return cache[key]
 
-    rows = load_observations(
-        kind="DECISION",
-        require_outcome=True,
-        before_ts=decision.generated_at,
+    rows = _prior_observation_rows(key)
+    numeric_names = tuple(
+        name for name in FS.FEATURE_NAMES
+        if FS.FEATURE_REGISTRY[name].dtype != "categorical"
     )
+    matrix = np.full((len(rows), len(numeric_names)), np.nan, dtype=float)
+    setup_counts: dict[str, int] = {}
+    for row_idx, row in enumerate(rows):
+        feats = dict(row.get("features") or {})
+        meta = dict(row.get("meta") or {})
+        setup = str(meta.get("setup") or "")
+        if setup:
+            setup_counts[setup] = setup_counts.get(setup, 0) + 1
+        for col_idx, name in enumerate(numeric_names):
+            value = _f(feats.get(name))
+            if value is not None:
+                matrix[row_idx, col_idx] = value
+
+    # Same robust-scale formula as _robust_scales, computed once for every
+    # numeric feature instead of once per symbol decision.
+    scales = np.ones(len(numeric_names), dtype=float)
+    for col_idx in range(len(numeric_names)):
+        arr = matrix[:, col_idx]
+        arr = arr[np.isfinite(arr)]
+        if arr.size < 3:
+            scales[col_idx] = 1.0
+            continue
+        q25, q75 = np.percentile(arr, [25, 75])
+        iqr = float(q75 - q25)
+        std = float(np.std(arr))
+        scales[col_idx] = max(
+            iqr / 1.349 if iqr > 0 else std,
+            std * 0.25,
+            1e-6,
+        )
+
+    prepared = {
+        "rows": rows,
+        "numeric_names": numeric_names,
+        "name_to_col": {name: idx for idx, name in enumerate(numeric_names)},
+        "matrix": matrix,
+        "scales": scales,
+        "setup_counts": setup_counts,
+    }
+    if cache is not None:
+        cache[key] = prepared
+    return prepared
+
+
+def _analogs(decision: Decision, *, k: int = DEFAULT_K) -> list[dict[str, Any]]:
+    prepared = _prepared_prior_corpus(str(decision.generated_at or ""))
+    rows = list(prepared.get("rows") or [])
     if not rows:
         return []
 
     query = decision_features(decision)
     numeric = [
         name for name in FS.FEATURE_NAMES
-        if FS.FEATURE_REGISTRY[name].dtype != "categorical" and _f(query.get(name)) is not None
+        if FS.FEATURE_REGISTRY[name].dtype != "categorical"
+        and _f(query.get(name)) is not None
     ]
     if len(numeric) < 2:
         return []
 
-    scales = _robust_scales(rows, numeric)
-    setup_matches = sum(
-        1 for r in rows
-        if str((r.get("meta") or {}).get("setup") or "") == str(decision.setup or "")
+    name_to_col = dict(prepared.get("name_to_col") or {})
+    cols = [name_to_col[name] for name in numeric if name in name_to_col]
+    if len(cols) < 2:
+        return []
+
+    matrix = np.asarray(prepared.get("matrix"), dtype=float)[:, cols]
+    scales = np.asarray(prepared.get("scales"), dtype=float)[cols]
+    query_vec = np.asarray([float(_f(query.get(name))) for name in numeric], dtype=float)
+
+    valid = np.isfinite(matrix)
+    shared_counts = valid.sum(axis=1)
+    delta = np.zeros_like(matrix, dtype=float)
+    np.subtract(matrix, query_vec, out=delta, where=valid)
+    delta = delta / scales
+    squared = np.where(valid, delta * delta, 0.0)
+    distances = np.full(len(rows), np.inf, dtype=float)
+    usable = shared_counts >= 2
+    distances[usable] = np.sqrt(
+        squared[usable].sum(axis=1) / shared_counts[usable]
+    )
+    similarities = np.exp(-0.5 * distances)
+
+    setup_matches = int(
+        (prepared.get("setup_counts") or {}).get(str(decision.setup or ""), 0)
     )
     prefer_exact = setup_matches >= MIN_ANALOGS
 
     ranked: list[dict[str, Any]] = []
-    for row in rows:
-        feats = dict(row.get("features") or {})
-        shared = [
-            name for name in numeric
-            if _f(feats.get(name)) is not None and scales.get(name, 0) > 0
-        ]
-        if len(shared) < 2:
+    for row_idx, row in enumerate(rows):
+        shared = int(shared_counts[row_idx])
+        if shared < 2:
             continue
-        z2 = [
-            ((_f(feats.get(name)) - _f(query.get(name))) / scales[name]) ** 2
-            for name in shared
-        ]
-        distance = math.sqrt(sum(z2) / len(z2))
-        similarity = math.exp(-0.5 * distance)
+        similarity = float(similarities[row_idx])
         meta = dict(row.get("meta") or {})
         same_setup = str(meta.get("setup") or "") == str(decision.setup or "")
         if prefer_exact and not same_setup:
             continue
         setup_weight = 1.0 if same_setup else 0.35
 
+        feats = dict(row.get("features") or {})
         old_regime = str(feats.get("regime") or meta.get("market_state") or "")
         now_regime = str(query.get("regime") or decision.market_state or "")
         regime_weight = 1.0 if old_regime and now_regime and old_regime == now_regime else 0.70
@@ -384,7 +505,7 @@ def _analogs(decision: Decision, *, k: int = DEFAULT_K) -> list[dict[str, Any]]:
             "weight": weight,
             "same_setup": same_setup,
             "same_regime": old_regime == now_regime if old_regime and now_regime else False,
-            "shared_features": len(shared),
+            "shared_features": shared,
             "evidence_class": lane,
             "not_pnl": bool(outcome_meta.get("not_pnl")),
         })
@@ -492,18 +613,42 @@ def evidence_read(decision: Decision, *, k: int = DEFAULT_K) -> dict[str, Any]:
 
     historical_confidence = round(max(0.0, min(95.0, historical_confidence)), 1)
     similarity_score = round(float(stats.get("mean_similarity") or 0.0) * 100.0, 1)
-    raw_outcome_p = stats.get("outcome_p_posterior")
+
+    # All PIT analogs may inform research confidence, but a historical replay or
+    # counterfactual is not an executed forward trial. Keep the broad research
+    # estimate separate from the narrower real-forward probability estimand.
+    research_raw_p = stats.get("outcome_p_posterior")
+    research_probability_estimate = (
+        float(research_raw_p)
+        if research_raw_p is not None and eff >= CLAIM_MIN_EFFECTIVE_N
+        else None
+    )
+    forward_analogs = [
+        row for row in analogs
+        if str(row.get("evidence_class") or "").upper()
+        in {"PAPER_FORWARD", "REAL_FORWARD_PAPER"}
+        and not bool(row.get("not_pnl"))
+    ]
+    forward_stats = _weighted_stats(forward_analogs)
+    forward_eff = float(forward_stats.get("effective_n") or 0.0)
+    raw_forward_p = forward_stats.get("outcome_p_posterior")
     measured_probability = (
-        float(raw_outcome_p)
-        if raw_outcome_p is not None and eff >= CLAIM_MIN_EFFECTIVE_N
+        float(raw_forward_p)
+        if raw_forward_p is not None and forward_eff >= CLAIM_MIN_EFFECTIVE_N
         else None
     )
     calibrated = measured_probability
+    calibration_applied = False
     calibration = {
         "status": "INSUFFICIENT_EVIDENCE",
         "sample_size": 0,
         "actual_hit_rate": None,
         "expected_p": None,
+        "probability_status": "NO_EXPLICIT_PROBABILITIES",
+        "probability_sample_size": 0,
+        "calibration_gap": None,
+        "calibration_actionable": False,
+        "calibration_adjustment": 0.0,
     }
     if measured_probability is not None:
         try:
@@ -512,12 +657,19 @@ def evidence_read(decision: Decision, *, k: int = DEFAULT_K) -> dict[str, Any]:
                 setup=decision.setup,
                 regime=decision.market_state,
                 sector=decision.sector_state,
+                prediction_source=FORMULA_VERSION,
             )
-            if calibration.get("status") == "MEASURED":
-                gap = float(calibration.get("expected_p") or 0.0) - float(
-                    calibration.get("actual_hit_rate") or 0.0
-                )
-                calibrated = max(0.01, min(0.99, measured_probability - gap))
+            # A setup-quality hit rate is not a probability-calibration sample.
+            # Adjust a measured probability only when the historical ledger has
+            # enough explicit point-in-time predicted_p observations of its own.
+            if (
+                calibration.get("probability_status") == "MEASURED"
+                and calibration.get("calibration_actionable") is True
+                and calibration.get("calibration_adjustment") is not None
+            ):
+                adjustment = float(calibration.get("calibration_adjustment") or 0.0)
+                calibrated = max(0.01, min(0.99, measured_probability - adjustment))
+                calibration_applied = bool(adjustment)
         except Exception:
             pass
 
@@ -530,7 +682,7 @@ def evidence_read(decision: Decision, *, k: int = DEFAULT_K) -> dict[str, Any]:
 
     return {
         "schema_version": SCHEMA_VERSION,
-        "formula_version": "evidence_v1",
+        "formula_version": FORMULA_VERSION,
         "setup": decision.setup,
         "stage": stage,
         "historical_confidence": historical_confidence,
@@ -546,14 +698,32 @@ def evidence_read(decision: Decision, *, k: int = DEFAULT_K) -> dict[str, Any]:
         "upper_95_R": stats.get("upper_95_R"),
         "positive_rate": stats.get("positive_rate"),
         "p_edge_positive": stats.get("p_edge_positive"),
+        "research_positive_R_estimate": research_probability_estimate,
+        "research_positive_R_lower_95": (
+            stats.get("outcome_p_lower_95")
+            if research_probability_estimate is not None else None
+        ),
+        "research_positive_R_upper_95": (
+            stats.get("outcome_p_upper_95")
+            if research_probability_estimate is not None else None
+        ),
+        "research_probability_scope": "MIXED_PIT_EVIDENCE",
+        "forward_probability_raw_n": int(forward_stats.get("raw_n") or 0),
+        "forward_probability_effective_n": forward_stats.get("effective_n", 0.0),
         "p_positive_R": measured_probability,
         "p_positive_R_lower_95": (
-            stats.get("outcome_p_lower_95") if measured_probability is not None else None
+            forward_stats.get("outcome_p_lower_95") if measured_probability is not None else None
         ),
         "p_positive_R_upper_95": (
-            stats.get("outcome_p_upper_95") if measured_probability is not None else None
+            forward_stats.get("outcome_p_upper_95") if measured_probability is not None else None
+        ),
+        "probability_evidence_scope": (
+            "REAL_FORWARD_PAPER" if measured_probability is not None
+            else "INSUFFICIENT_REAL_FORWARD_PAPER"
         ),
         "calibrated_p_positive_R": None if calibrated is None else round(calibrated, 4),
+        "calibration_applied": calibration_applied,
+        "calibration_contract_version": "explicit_probability_only_v2",
         "calibration": calibration,
         "historical_prior": prior,
         "nearest_analogs": [
@@ -572,12 +742,15 @@ def evidence_read(decision: Decision, *, k: int = DEFAULT_K) -> dict[str, Any]:
             for r in analogs[:10]
         ],
         "is_win_probability": measured_probability is not None,
+        "probability_contract_version": "real_forward_only_v2",
         "affects_selection": False,
         "paper_only_learning": True,
         "live_locked": True,
         "note": (
-            "Evidence projection is shadow-only. It cannot promote a scanner decision; "
-            "promotion requires a separately validated policy challenger."
+            "Mixed historical/counterfactual evidence may strengthen research confidence, "
+            "but only sufficiently sampled executed forward-paper outcomes are labelled as "
+            "a win probability. This projection is shadow-only and cannot promote a scanner "
+            "decision; promotion requires a separately validated policy challenger."
         ),
     }
 
@@ -599,7 +772,7 @@ def enrich(decision: Decision) -> Decision:
     historical["evidence_intelligence"] = evidence
     provenance = dict(decision.provenance or {})
     provenance["learning_observation_id"] = _observation_id(decision.decision_id)
-    provenance["evidence_intelligence_version"] = "evidence_v1"
+    provenance["evidence_intelligence_version"] = FORMULA_VERSION
     return replace(
         decision,
         historical_evidence=historical,

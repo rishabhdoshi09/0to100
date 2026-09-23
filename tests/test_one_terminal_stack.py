@@ -37,6 +37,19 @@ def test_complete_script_starts_every_local_service_in_one_process_tree():
     assert "i < 120" in desk_fn
 
 
+def test_report_watchdog_requires_health_not_just_an_open_port():
+    complete = (ROOT / "scripts" / "run_quantterm_complete.sh").read_text(encoding="utf-8")
+
+    adopt = complete.split("adopt_report() {", 1)[1].split("\n}", 1)[0]
+    assert 'url_ok "http://127.0.0.1:8766/health"' in adopt
+    assert "|| port_open 8766" not in adopt
+
+    watch = complete.split('while [[ "$STOP" != "1" ]]', 1)[1]
+    assert "Owned report API is listening/alive but unhealthy; restarting." in watch
+    assert 'stop_pid "$REPORT_PID" "unhealthy report API"' in watch
+    assert "Port 8766 is owned externally but /health is failing" in watch
+
+
 def test_complete_script_always_stops_old_stack_then_starts_everything():
     complete = (ROOT / "scripts" / "run_quantterm_complete.sh").read_text(encoding="utf-8")
     inner = (ROOT / "scripts" / "run_quantterm.sh").read_text(encoding="utf-8")

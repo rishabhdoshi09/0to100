@@ -246,6 +246,7 @@ class Supervisor:
                     retire = not (
                         key.startswith("forward_research:")
                         or key.startswith("hist_research:")
+                        or key.startswith("research_replan:")
                     )
                 elif job.job_type == SCH.HISTORICAL_PAPER_CYCLE:
                     retire = not key.startswith("hist_paper:")
@@ -435,19 +436,23 @@ class Supervisor:
         )
 
     def _ensure_decision_simulation_authority(self) -> bool:
-        """Automatically authorize paper/history simulation after fresh discovery.
+        """Authorize simulation only for the current scan/thesis discovery identity.
 
-        This grants no live-money authority. It only replaces the old per-startup
-        manual click for PAPER_FORWARD and HISTORICAL_REPLAY after the canonical
-        freshness/discovery gate has succeeded.
+        Startup approval remains durable, but it is not permission to use a stale
+        decision projection after learning changes effective selection behavior or
+        a newer scan replaces the approved scan. The current discovery projection
+        must exist first. Live-money authority is independent and remains locked.
         """
         try:
             from product.decision_simulation_gate import (
                 ensure_autonomous_approval,
-                is_approved,
+                status,
             )
 
-            if is_approved():
+            gate = dict(status() or {})
+            if not gate.get("discovery_ready"):
+                return False
+            if gate.get("approved"):
                 return True
             approval = ensure_autonomous_approval()
             return bool(approval.get("accepted") and approval.get("approved"))
@@ -464,10 +469,36 @@ class Supervisor:
         try:
             from product.decision_simulation_gate import current_startup_id, status
 
-            gate = status()
+            gate = dict(status() or {})
             if gate.get("discovery_ready"):
                 self._ensure_decision_simulation_authority()
                 return
+
+            # A fresh persisted market scan already contains the expensive market
+            # work. If learning changed the effective selection-policy/thesis
+            # identity after that scan, refresh only the deterministic decision
+            # projection. Key the durable job to both identities so repeated ticks
+            # are idempotent and a later thesis change gets its own projection.
+            scan_id = str(gate.get("scan_scanned_at") or "")
+            long_term_id = str(gate.get("long_term_scanned_at") or "")
+            thesis_hash = str(
+                gate.get("current_thesis_hash")
+                or gate.get("thesis_hash")
+                or ""
+            )
+            if gate.get("scan_fresh") and scan_id and thesis_hash:
+                self.jobs.enqueue(
+                    SCH.DISCOVERY_REFRESH,
+                    idempotency_key=SCH.discovery_refresh_key(
+                        scan_id,
+                        long_term_id,
+                        thesis_hash,
+                    ),
+                    input_snapshot_id=scan_id,
+                    critical=True,
+                )
+                return
+
             startup_id = current_startup_id()
             if not startup_id:
                 return
@@ -506,6 +537,84 @@ class Supervisor:
         bucket = minute - minute % size
         return f"{bucket // 60:02d}{bucket % 60:02d}"
 
+    def _enqueue_closed_market_replan(
+        self,
+        *,
+        stage: dict | None,
+        next_batch: dict | None,
+        session_date: str,
+    ):
+        """Schedule one bounded research replan for an exhausted/stalled evidence state.
+
+        The goal is not to manufacture busy work. When historical replay has no
+        runnable batch, QuantTerm gets exactly one research pass for that durable
+        evidence state. If nothing material changes, the idempotency key prevents
+        an infinite loop. Only a changed request/evidence state or failure reason
+        creates another pass; thesis changes produced by research do not.
+        """
+        stage = dict(stage or {})
+        nxt = dict(next_batch or {})
+        reason = str(nxt.get("reason") or "historical_scheduler_stalled")
+        thesis_hash = str(stage.get("thesis_hash") or "")
+        if not thesis_hash:
+            try:
+                from product.trading_thesis import manifest as thesis_manifest
+
+                thesis_hash = str((thesis_manifest() or {}).get("thesis_hash") or "")
+            except Exception:
+                thesis_hash = ""
+        processed = list(stage.get("processed_sessions") or [])
+        request = {}
+        try:
+            from research.autonomy.evidence_acquisition import open_request_for_lane
+
+            request = dict(open_request_for_lane("HISTORICAL_REPLAY") or {})
+        except Exception:
+            request = {}
+        request_id = str(request.get("request_id") or "")
+
+        # A request that asks historical replay for more samples cannot remain
+        # OPEN once every currently settleable historical session is consumed.
+        # Close it as PLATEAUED and hand the question back to research planning.
+        if request and reason == "historical_backlog_caught_up":
+            try:
+                from research.autonomy.evidence_progress import mark_historical_source_exhausted
+
+                mark_historical_source_exhausted(
+                    request,
+                    reason=reason,
+                    eligible_sessions=nxt.get("eligible_sessions"),
+                    processed_sessions=nxt.get("processed_sessions", len(processed)),
+                )
+            except Exception as exc:
+                self._incident(
+                    "EVIDENCE_EXHAUSTION_WRITE_FAILED",
+                    f"Could not persist historical evidence exhaustion: {type(exc).__name__}: {exc}",
+                )
+
+        state_token = json.dumps(
+            {
+                "phase": str(stage.get("phase") or ""),
+                "batch_id": str(stage.get("batch_id") or ""),
+                "processed": len(processed),
+                "last_error": str(stage.get("last_error") or ""),
+                "reason": reason,
+                "eligible": nxt.get("eligible_sessions"),
+                "sessions_total": nxt.get("sessions_total"),
+            },
+            sort_keys=True,
+            default=str,
+        )
+        return self.jobs.enqueue(
+            SCH.RESEARCH_CYCLE,
+            idempotency_key=SCH.historical_replan_key(
+                request_id=request_id,
+                reason=reason,
+                state_token=state_token,
+            ),
+            input_snapshot_id=request_id or thesis_hash or str(session_date or ""),
+        )
+
     def enqueue_due(self, now_ist=None):
         """Keep QuantTerm productive in both live and closed-market regimes.
 
@@ -541,6 +650,25 @@ class Supervisor:
                     None,
                 )
                 self._ensure_snapshot_pipeline(snap)
+
+            # Discovery repair is independent of broker auth. A fresh persisted
+            # scan may already exist while a long-term refresh or learned-thesis
+            # change invalidates only its immutable decision projection. The
+            # intraday branch used to return before scheduling that repair, so a
+            # broker-auth failure could leave Product Acceptance (and the real
+            # desk) in SEARCHING_BEST_TRADES with an empty queue indefinitely.
+            # Do not start a second intraday scan here: only repair/authorize when
+            # the current persisted market scan is already fresh.
+            try:
+                from product.decision_simulation_gate import status as decision_status
+
+                gate = dict(decision_status() or {})
+            except Exception:
+                gate = {}
+            if gate.get("discovery_ready") or (
+                gate.get("scan_fresh") and gate.get("scan_scanned_at")
+            ):
+                self._ensure_startup_trade_discovery()
             return
 
         # Closed market starts by finding today's best available trades from the
@@ -634,8 +762,24 @@ class Supervisor:
                 )
                 return
             if phase == "FAILED":
-                # Do not skip a failed historical batch and create fake progress.
+                # Do not skip the failed batch or advance its cursor. But also do
+                # not leave a healthy supervisor silently IDLE for hours: surface
+                # the failure and allow one bounded research replan on the evidence
+                # that already exists.
+                self._incident(
+                    "HISTORICAL_PIPELINE_FAILED",
+                    f"Historical replay is failed: {stage.get('last_error') or 'unknown error'}",
+                )
+                self._enqueue_closed_market_replan(
+                    stage=stage,
+                    next_batch={
+                        "available": False,
+                        "reason": "historical_phase_failed",
+                    },
+                    session_date=last_session or now_ist.date().isoformat(),
+                )
                 return
+
 
             nxt = peek_next_batch()
             if nxt.get("available"):
@@ -646,6 +790,17 @@ class Supervisor:
                         idempotency_key=SCH.historical_paper_key(bid),
                         input_snapshot_id=bid,
                     )
+                    return
+
+            # No runnable historical batch is still a meaningful scheduler
+            # state. Give the Research Director one idempotent chance to close,
+            # reframe or redirect the evidence request instead of emitting hours
+            # of DATA_READY/IDLE heartbeats with no work due.
+            self._enqueue_closed_market_replan(
+                stage=stage,
+                next_batch=nxt,
+                session_date=last_session or now_ist.date().isoformat(),
+            )
         except Exception as exc:
             self._incident(
                 "HISTORICAL_SCHEDULER_ERROR",
@@ -954,15 +1109,19 @@ class Supervisor:
                 elif ctype == CTRL.RUN_CYCLE_NOW:
                     try:
                         from product.decision_simulation_gate import approve
-                        approval = approve()
-                        if not approval.get("accepted"):
-                            raise ValueError(
-                                "best-trade discovery must complete before paper simulation"
-                            )
-                    except ValueError:
-                        raise
+                        approval = dict(approve() or {})
                     except Exception as exc:
                         raise ValueError(f"decision simulation approval failed: {exc}")
+                    if not approval.get("accepted"):
+                        # Discovery can legitimately be between immutable identities
+                        # after a new scan or an effective thesis-policy change. Keep
+                        # the already-accepted operator control durable and pending;
+                        # queue the prerequisite repair and consume this control only
+                        # after the canonical projection is current. This prevents a
+                        # one-tick race from turning an accepted request into a lost
+                        # paper cycle, while still failing closed on execution.
+                        self._ensure_startup_trade_discovery()
+                        continue
                     self.jobs.enqueue(
                         SCH.PAPER_CYCLE,
                         idempotency_key=f"manual:cycle:{snap}:{control.control_id}",

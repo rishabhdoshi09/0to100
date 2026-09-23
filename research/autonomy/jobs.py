@@ -719,6 +719,129 @@ def _official_ready(ctx=None) -> dict:
         return {"current": False}
 
 
+def run_discovery_refresh(ctx) -> JobResult:
+    """Re-project the current persisted scan under the current thesis identity.
+
+    This job never fetches market data and never opens a paper/live position. It
+    exists because historical/forward learning may legitimately change the
+    effective selection-policy fingerprint after a scan was published. Reusing
+    an old discovery projection under that new identity would be false; rerunning
+    the whole market scan would be wasteful and can create an endless scan loop.
+    """
+    try:
+        from product.scan_store import load_scan
+
+        scan = dict(load_scan() or {})
+    except Exception as exc:
+        return JobResult(
+            JS.RETRYABLE_FAILED,
+            "current market scan could not be loaded for discovery refresh",
+            error_code="DISCOVERY_SCAN_READ_ERROR",
+            error_message=str(exc)[:300],
+            state_hint=ST.OBSERVING,
+            new_entries_allowed=False,
+        )
+
+    scan_id = str(scan.get("scanned_at") or "")
+    if not scan_id or not list(scan.get("records") or []):
+        return JobResult(
+            JS.BLOCKED,
+            "current market scan required before decision discovery refresh",
+            blocked_on=DEP_SCAN,
+            state_hint=ST.OBSERVING,
+            new_entries_allowed=False,
+        )
+
+    # A queued projection is authority for one immutable input identity only.
+    # If a newer scan/long-term overlay/thesis exists by lease time, retire this
+    # row without writing and let the supervisor enqueue the new canonical key.
+    job = getattr(ctx, "job", None)
+    requested_scan_id = str(getattr(job, "input_snapshot_id", "") or "")
+    if requested_scan_id and requested_scan_id != scan_id:
+        return JobResult(
+            JS.SKIPPED_IDEMPOTENT,
+            "decision discovery refresh superseded by a newer market scan",
+            state_hint=ST.OBSERVING,
+            new_entries_allowed=False,
+            metadata={
+                "requested_scan_scanned_at": requested_scan_id,
+                "current_scan_scanned_at": scan_id,
+                "live_money_unchanged": True,
+            },
+        )
+
+    requested_key = str(getattr(job, "idempotency_key", "") or "")
+    if requested_key:
+        try:
+            from product.long_term_store import load_long_term_scan
+            from product.trading_thesis import manifest as thesis_manifest
+
+            long_term_id = str((load_long_term_scan() or {}).get("scanned_at") or "")
+            thesis_hash = str((thesis_manifest() or {}).get("thesis_hash") or "")
+            current_key = SCH.discovery_refresh_key(scan_id, long_term_id, thesis_hash)
+        except Exception as exc:
+            return JobResult(
+                JS.RETRYABLE_FAILED,
+                "current discovery identity could not be resolved",
+                error_code="DISCOVERY_IDENTITY_ERROR",
+                error_message=str(exc)[:300],
+                state_hint=ST.OBSERVING,
+                new_entries_allowed=False,
+            )
+        if requested_key != current_key:
+            return JobResult(
+                JS.SKIPPED_IDEMPOTENT,
+                "decision discovery refresh superseded by newer evidence identity",
+                state_hint=ST.OBSERVING,
+                new_entries_allowed=False,
+                metadata={
+                    "requested_identity": requested_key,
+                    "current_identity": current_key,
+                    "live_money_unchanged": True,
+                },
+            )
+
+    try:
+        from product.desk_scan_overlays import SAVED, persist_recommendations_and_discovery
+
+        projection = dict(persist_recommendations_and_discovery(scan, persist_ledger=False) or {})
+    except Exception as exc:
+        return JobResult(
+            JS.RETRYABLE_FAILED,
+            "decision discovery refresh failed",
+            error_code="DISCOVERY_PROJECTION_ERROR",
+            error_message=str(exc)[:300],
+            state_hint=ST.OBSERVING,
+            new_entries_allowed=False,
+        )
+
+    if str(projection.get("decision_discovery") or "") != SAVED:
+        err = dict(projection.get("decision_discovery_error") or {})
+        return JobResult(
+            JS.RETRYABLE_FAILED,
+            "decision discovery refresh did not persist a canonical projection",
+            error_code=str(err.get("error_code") or "DISCOVERY_PROJECTION_ERROR"),
+            error_message=str(err.get("error_message") or "decision discovery projection unavailable")[:300],
+            state_hint=ST.OBSERVING,
+            new_entries_allowed=False,
+            metadata=projection,
+        )
+
+    thesis_hash = str(projection.get("decision_discovery_thesis_hash") or "")
+    return JobResult(
+        JS.SUCCEEDED,
+        "decision discovery refreshed for current scan/thesis identity",
+        state_hint=ST.OBSERVING,
+        new_entries_allowed=False,
+        metadata={
+            **projection,
+            "scan_scanned_at": scan_id,
+            "thesis_hash": thesis_hash,
+            "live_money_unchanged": True,
+        },
+    )
+
+
 def run_market_scan(ctx) -> JobResult:
     snap = ctx.deps.active_snapshot_id()
     official = _official_ready(ctx)
@@ -890,33 +1013,14 @@ def run_paper_cycle(ctx) -> JobResult:
     if management_only:
         entries_ok = False
         reason = "SIMULATION_APPROVAL_REQUIRED"
-    elif automatic_entry and entries_ok:
-        try:
-            from product.decision_simulation_gate import is_approved
-            if not is_approved():
-                return JobResult(
-                    JS.SKIPPED_IDEMPOTENT,
-                    "paper entries skipped because Decision Simulation approval is no longer valid",
-                    state_hint=ST.OBSERVING,
-                    new_entries_allowed=False,
-                    metadata={
-                        "eligibility": "WAITING_FOR_SIMULATION_APPROVAL",
-                        "entry_block_reason": "SIMULATION_APPROVAL_REQUIRED",
-                        "session_phase": phase,
-                    },
-                )
-        except Exception:
-            return JobResult(
-                JS.SKIPPED_IDEMPOTENT,
-                "paper entries skipped because Decision Simulation approval could not be verified",
-                state_hint=ST.OBSERVING,
-                new_entries_allowed=False,
-                metadata={
-                    "eligibility": "WAITING_FOR_SIMULATION_APPROVAL",
-                    "entry_block_reason": "SIMULATION_APPROVAL_REQUIRED",
-                    "session_phase": phase,
-                },
-            )
+    # snapshot_paper:* is created only by Supervisor._paper_for_snapshot after
+    # the current scan/thesis discovery identity has been approved. That durable
+    # job is the authority record for exactly one paper-only mutation. Re-reading
+    # the mutable startup gate here created a TOCTOU race: the supervisor could
+    # authorize/enqueue the job, then the handler could see a transient cache
+    # replacement or test seam and retire the job as SKIPPED_IDEMPOTENT. Trust
+    # the durable internal job identity; live-money authority remains governed
+    # by the independent execution interlock.
     data_ready, data_source = _paper_market_data_source(ctx)
     data_failure = ""
     if not data_ready:
@@ -1314,6 +1418,7 @@ HANDLERS = {
     SCH.UNIVERSE_HISTORY: run_universe_history,
     SCH.INDEX_WARMUP: run_index_warmup,
     SCH.MARKET_SCAN: run_market_scan,
+    SCH.DISCOVERY_REFRESH: run_discovery_refresh,
     SCH.NEWS_REFRESH: run_news_refresh,
     SCH.PAPER_CYCLE: run_paper_cycle,
     SCH.OUTCOME_RESOLUTION: run_outcome_resolution,

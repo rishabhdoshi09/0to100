@@ -172,6 +172,14 @@ def status(*, path: str | Path | None = None) -> dict[str, Any]:
     except Exception:
         scan_fresh = False
 
+    try:
+        from product.long_term_store import load_long_term_scan
+        long_term_scanned_at = str(
+            (load_long_term_scan() or {}).get("scanned_at") or ""
+        )
+    except Exception:
+        long_term_scanned_at = ""
+
     if scan_fresh:
         board = _board()
     else:
@@ -203,12 +211,11 @@ def status(*, path: str | Path | None = None) -> dict[str, Any]:
     approved_scan_id = str(state.get("approved_scan_id") or "")
     approved_thesis_hash = str(state.get("approved_thesis_hash") or "")
 
-    # A completed approval is durable evidence that discovery succeeded for that
-    # exact scan earlier in this startup. The cheap read projection may be
-    # temporarily absent while a worker atomically refreshes/rekeys its cache;
-    # that must not make the already-approved current scan regress to
-    # discovery_ready=False. A different/new scan still has to publish its own
-    # discovery projection before it is considered ready.
+    # A completed approval proves discovery succeeded for one immutable
+    # scan+thesis identity. A brief atomic cache-replacement gap for that exact
+    # identity must not regress readiness, but neither a newer scan nor a changed
+    # thesis may borrow that proof. Those identities must publish their own
+    # canonical projection before simulation can continue.
     discovery_ready = bool(board.get("available")) and bool(scan_id) and scan_fresh
     if (
         not discovery_ready
@@ -216,6 +223,8 @@ def status(*, path: str | Path | None = None) -> dict[str, Any]:
         and scan_fresh
         and scan_id
         and approved_scan_id == scan_id
+        and approved_thesis_hash
+        and approved_thesis_hash == thesis_hash
     ):
         discovery_ready = True
     thesis_changed_since_approval = bool(
@@ -223,7 +232,12 @@ def status(*, path: str | Path | None = None) -> dict[str, Any]:
     )
     if approved:
         phase = "APPROVED"
-        message = "Decision Simulation approved for this startup and thesis."
+        message = (
+            "Decision Simulation approval is recorded for this startup; current "
+            "scan/thesis discovery must be ready before new simulation work."
+            if not discovery_ready
+            else "Decision Simulation approved for this startup and current discovery identity."
+        )
     elif discovery_ready:
         phase = "AWAITING_APPROVAL"
         message = (
@@ -256,6 +270,7 @@ def status(*, path: str | Path | None = None) -> dict[str, Any]:
         "approval_required": not approved,
         "discovery_ready": discovery_ready,
         "scan_scanned_at": scan_id,
+        "long_term_scanned_at": long_term_scanned_at,
         "scan_fresh": scan_fresh,
         "best_trades": visible_best_trades,
         "decision_count": len(list(board.get("decisions") or [])),
