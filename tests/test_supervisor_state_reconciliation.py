@@ -247,6 +247,30 @@ def test_data_refresh_takes_activity_state_after_research_finishes(tmp_path):
     sup.shutdown()
 
 
+def test_historical_replan_identity_ignores_thesis_only_churn():
+    base = SCH.historical_replan_key(
+        thesis_hash="thesis-a",
+        request_id="evreq-1",
+        reason="historical_backlog_caught_up",
+        state_token='{"processed": 10, "eligible": 10}',
+    )
+    evolved = SCH.historical_replan_key(
+        thesis_hash="thesis-b",
+        request_id="evreq-1",
+        reason="historical_backlog_caught_up",
+        state_token='{"processed": 10, "eligible": 10}',
+    )
+    changed_evidence = SCH.historical_replan_key(
+        thesis_hash="thesis-b",
+        request_id="evreq-1",
+        reason="historical_backlog_caught_up",
+        state_token='{"processed": 11, "eligible": 11}',
+    )
+
+    assert evolved == base
+    assert changed_evidence != base
+
+
 def test_closed_market_exhausted_history_queues_one_bounded_research_replan(tmp_path, monkeypatch):
     sup = _sup(tmp_path)
     assert sup.start() is True
