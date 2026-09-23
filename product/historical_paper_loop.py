@@ -83,6 +83,8 @@ def load_state(path: str | Path | None = None) -> dict[str, Any]:
         }),
         "thesis_hash": str(payload.get("thesis_hash") or ""),
         "last_result": dict(payload.get("last_result") or {}),
+        "last_learning_completed_at": str(payload.get("last_learning_completed_at") or ""),
+        "last_learning_batch_id": str(payload.get("last_learning_batch_id") or ""),
         "last_error": str(payload.get("last_error") or ""),
         "evidence_request_id": str(payload.get("evidence_request_id") or ""),
         "evidence_request": dict(payload.get("evidence_request") or {}),
@@ -255,6 +257,8 @@ def reset_for_thesis(
         "processed_sessions": [],
         "thesis_hash": str(thesis_hash or ""),
         "last_result": {},
+        "last_learning_completed_at": "",
+        "last_learning_batch_id": "",
         "last_error": "",
         "evidence_request_id": "",
         "evidence_request": {},
@@ -271,6 +275,8 @@ def pending_stage(*, state_path: str | Path | None = None) -> dict[str, Any]:
         "processed_sessions": list(state.get("processed_sessions") or []),
         "thesis_hash": state["thesis_hash"],
         "last_result": state["last_result"],
+        "last_learning_completed_at": state.get("last_learning_completed_at", ""),
+        "last_learning_batch_id": state.get("last_learning_batch_id", ""),
         "last_error": state["last_error"],
         "evidence_request_id": state.get("evidence_request_id", ""),
         "evidence_request": dict(state.get("evidence_request") or {}),
@@ -1249,7 +1255,11 @@ def mark_learning_complete(batch_id: str, *, state_path: str | Path | None = Non
         or state["phase"] != PHASE_AWAITING_LEARNING
     ):
         return state
-    return _save_state({"phase": PHASE_AWAITING_RESEARCH}, state_path)
+    return _save_state({
+        "phase": PHASE_AWAITING_RESEARCH,
+        "last_learning_completed_at": _now(),
+        "last_learning_batch_id": str(batch_id),
+    }, state_path)
 
 
 def mark_research_complete(batch_id: str, *, state_path: str | Path | None = None) -> dict[str, Any]:
