@@ -87,6 +87,36 @@ def _implied_p(bucket: str) -> float | None:
     return None
 
 
+def _probability(value: Any) -> float | None:
+    """Return an explicit probability only when it is finite and in [0, 1]."""
+    try:
+        if value is None or value == "":
+            return None
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(out) or out < 0.0 or out > 1.0:
+        return None
+    return out
+
+
+def _wilson_interval(wins: int, n: int, z: float = 1.96) -> list[float] | None:
+    """95% Wilson interval for a measured binary hit rate."""
+    if n <= 0:
+        return None
+    p = max(0.0, min(1.0, float(wins) / float(n)))
+    z2 = z * z
+    denom = 1.0 + z2 / n
+    centre = (p + z2 / (2.0 * n)) / denom
+    margin = (z / denom) * math.sqrt(
+        (p * (1.0 - p) / n) + (z2 / (4.0 * n * n))
+    )
+    return [
+        round(max(0.0, centre - margin), 4),
+        round(min(1.0, centre + margin), 4),
+    ]
+
+
 def display_confidence(*, tier: str = "", sample_size: int = 0, hit_rate: float | None = None) -> dict[str, Any]:
     """What the operator is allowed to see. No decorative percentages."""
     bucket = _bucket(tier)
@@ -159,6 +189,14 @@ class DecisionCalibrationEngine:
         regime: str = "",
         sector: str = "",
     ) -> dict[str, Any]:
+        """Summarize hit-rate evidence and probability calibration separately.
+
+        Setup-quality tiers are not probabilities. Every settled observation can
+        contribute to a measured hit rate, but Brier / expected-vs-realized
+        calibration is computed only from rows that carried an explicit
+        point-in-time predicted_p. Missing probabilities are never replaced
+        with 0.5 or any other invented value.
+        """
         rows = [
             r for r in (self.store.get("observations") or [])
             if r.get("realized_win") is not None
@@ -168,45 +206,113 @@ class DecisionCalibrationEngine:
             and (not sector or r.get("sector") == sector)
         ]
         n = len(rows)
-        if n < MIN_SAMPLE:
-            return {
-                "sample_size": n,
-                "min_sample": MIN_SAMPLE,
-                "status": "INSUFFICIENT_EVIDENCE",
-                "affects_production": False,
-                "brier": None,
-                "expected_p": None,
-                "actual_hit_rate": None,
-                "confidence_interval": None,
-                "overconfidence": False,
-                "underconfidence": False,
-                "bucket": bucket,
-            }
-        hits = sum(1 for r in rows if r.get("realized_win"))
-        actual = hits / n
-        expected = sum(float(r.get("predicted_p") or 0.5) for r in rows) / n
-        brier = sum(
-            (float(r.get("predicted_p") or 0.5) - (1.0 if r.get("realized_win") else 0.0)) ** 2
-            for r in rows
-        ) / n
-        se = math.sqrt(actual * (1 - actual) / n) if n else 0.0
-        over = actual < expected - 0.08
-        under = actual > expected + 0.08
-        return {
+        probability_rows = [
+            r for r in rows
+            if _probability(r.get("predicted_p")) is not None
+        ]
+        probability_n = len(probability_rows)
+
+        base = {
             "sample_size": n,
             "min_sample": MIN_SAMPLE,
-            "status": "MEASURED",
             "affects_production": False,
-            "brier": round(brier, 4),
-            "expected_p": round(expected, 4),
-            "actual_hit_rate": round(actual, 4),
-            "confidence_interval": [round(actual - 1.96 * se, 4), round(actual + 1.96 * se, 4)],
-            "overconfidence": over,
-            "underconfidence": under,
             "bucket": bucket,
+            "setup": setup,
+            "regime": regime,
+            "sector": sector,
+            "probability_sample_size": probability_n,
+            "probability_min_sample": MIN_SAMPLE,
+            "probability_status": (
+                "MEASURED" if probability_n >= MIN_SAMPLE
+                else "INSUFFICIENT_PROBABILITY_EVIDENCE" if probability_n > 0
+                else "NO_EXPLICIT_PROBABILITIES"
+            ),
+            "brier": None,
+            "expected_p": None,
+            "probability_actual_hit_rate": None,
+            "probability_confidence_interval": None,
+            "calibration_gap": None,
+            "overconfidence": False,
+            "underconfidence": False,
             "rename_tier": False,
+            "probability_only_scoring": True,
+            "live_locked": True,
+        }
+
+        if n < MIN_SAMPLE:
+            return {
+                **base,
+                "status": "INSUFFICIENT_EVIDENCE",
+                "actual_hit_rate": None,
+                "confidence_interval": None,
+                "wilson_lower_bound": None,
+                "wilson_upper_bound": None,
+            }
+
+        hits = sum(1 for r in rows if r.get("realized_win"))
+        actual = hits / n
+        interval = _wilson_interval(hits, n) or [None, None]
+        result = {
+            **base,
+            "status": "MEASURED",
+            "actual_hit_rate": round(actual, 4),
+            "confidence_interval": interval,
+            "wilson_lower_bound": interval[0],
+            "wilson_upper_bound": interval[1],
+        }
+
+        # Probability calibration is a different estimand. It needs its own
+        # sample floor and uses only predictions that really existed at decision
+        # time. Tier labels without predicted_p do not enter these statistics.
+        if probability_n >= MIN_SAMPLE:
+            probs = [_probability(r.get("predicted_p")) for r in probability_rows]
+            probs = [float(p) for p in probs if p is not None]
+            probability_hits = sum(1 for r in probability_rows if r.get("realized_win"))
+            probability_actual = probability_hits / probability_n
+            expected = sum(probs) / probability_n
+            brier = sum(
+                (p - (1.0 if r.get("realized_win") else 0.0)) ** 2
+                for p, r in zip(probs, probability_rows)
+            ) / probability_n
+            probability_interval = _wilson_interval(probability_hits, probability_n)
+            gap = expected - probability_actual
+            result.update({
+                "brier": round(brier, 4),
+                "expected_p": round(expected, 4),
+                "probability_actual_hit_rate": round(probability_actual, 4),
+                "probability_confidence_interval": probability_interval,
+                "calibration_gap": round(gap, 4),
+                "overconfidence": gap > 0.08,
+                "underconfidence": gap < -0.08,
+            })
+        return result
+
+    def dossier(self) -> dict[str, Any]:
+        """Read-only calibration dossier for operator/research inspection."""
+        rows = [
+            r for r in (self.store.get("observations") or [])
+            if r.get("realized_win") is not None
+        ]
+        explicit = sum(1 for r in rows if _probability(r.get("predicted_p")) is not None)
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "overall": self.summary(),
+            "buckets": self.buckets(),
+            "settled_observations": len(rows),
+            "explicit_probability_observations": explicit,
+            "probability_coverage": round(explicit / len(rows), 4) if rows else 0.0,
+            "affects_production": False,
+            "live_locked": True,
+            "note": (
+                "Hit-rate measurement and probability calibration are separate. "
+                "Only explicit point-in-time probabilities enter Brier/calibration-gap metrics."
+            ),
         }
 
     def buckets(self) -> dict[str, Any]:
-        found = sorted({str(r.get("predicted_confidence")) for r in self.store.get("observations") or []})
+        found = sorted({
+            str(r.get("predicted_confidence"))
+            for r in self.store.get("observations") or []
+            if str(r.get("predicted_confidence") or "")
+        })
         return {b: self.summary(bucket=b) for b in found}
