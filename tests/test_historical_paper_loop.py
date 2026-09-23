@@ -54,6 +54,8 @@ def test_historical_cursor_advances_only_after_learning_then_research(tmp_path):
     learned = HPL.mark_learning_complete("batch-1", state_path=state)
     assert learned["phase"] == HPL.PHASE_AWAITING_RESEARCH
     assert learned["last_completed_session"] == ""
+    assert learned["last_learning_batch_id"] == "batch-1"
+    assert learned["last_learning_completed_at"]
 
     completed = HPL.mark_research_complete("batch-1", state_path=state)
     assert completed["phase"] == HPL.PHASE_IDLE
