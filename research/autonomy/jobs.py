@@ -719,6 +719,80 @@ def _official_ready(ctx=None) -> dict:
         return {"current": False}
 
 
+def run_discovery_refresh(ctx) -> JobResult:
+    """Re-project the current persisted scan under the current thesis identity.
+
+    This job never fetches market data and never opens a paper/live position. It
+    exists because historical/forward learning may legitimately change the
+    effective selection-policy fingerprint after a scan was published. Reusing
+    an old discovery projection under that new identity would be false; rerunning
+    the whole market scan would be wasteful and can create an endless scan loop.
+    """
+    try:
+        from product.scan_store import load_scan
+
+        scan = dict(load_scan() or {})
+    except Exception as exc:
+        return JobResult(
+            JS.RETRYABLE_FAILED,
+            "current market scan could not be loaded for discovery refresh",
+            error_code="DISCOVERY_SCAN_READ_ERROR",
+            error_message=str(exc)[:300],
+            state_hint=ST.OBSERVING,
+            new_entries_allowed=False,
+        )
+
+    scan_id = str(scan.get("scanned_at") or "")
+    if not scan_id or not list(scan.get("records") or []):
+        return JobResult(
+            JS.BLOCKED,
+            "current market scan required before decision discovery refresh",
+            blocked_on=DEP_SCAN,
+            state_hint=ST.OBSERVING,
+            new_entries_allowed=False,
+        )
+
+    try:
+        from product.desk_scan_overlays import SAVED, persist_recommendations_and_discovery
+
+        projection = dict(persist_recommendations_and_discovery(scan) or {})
+    except Exception as exc:
+        return JobResult(
+            JS.RETRYABLE_FAILED,
+            "decision discovery refresh failed",
+            error_code="DISCOVERY_PROJECTION_ERROR",
+            error_message=str(exc)[:300],
+            state_hint=ST.OBSERVING,
+            new_entries_allowed=False,
+        )
+
+    if str(projection.get("decision_discovery") or "") != SAVED:
+        err = dict(projection.get("decision_discovery_error") or {})
+        return JobResult(
+            JS.RETRYABLE_FAILED,
+            "decision discovery refresh did not persist a canonical projection",
+            error_code=str(err.get("error_code") or "DISCOVERY_PROJECTION_ERROR"),
+            error_message=str(err.get("error_message") or "decision discovery projection unavailable")[:300],
+            state_hint=ST.OBSERVING,
+            new_entries_allowed=False,
+            metadata=projection,
+        )
+
+    thesis_hash = str(projection.get("decision_discovery_thesis_hash") or "")
+    return JobResult(
+        JS.SUCCEEDED,
+        "decision discovery refreshed for current scan/thesis identity",
+        state_hint=ST.OBSERVING,
+        new_entries_allowed=False,
+        metadata={
+            **projection,
+            "scan_scanned_at": scan_id,
+            "thesis_hash": thesis_hash,
+            "live_money_unchanged": True,
+        },
+    )
+
+
 def run_market_scan(ctx) -> JobResult:
     snap = ctx.deps.active_snapshot_id()
     official = _official_ready(ctx)
@@ -1314,6 +1388,7 @@ HANDLERS = {
     SCH.UNIVERSE_HISTORY: run_universe_history,
     SCH.INDEX_WARMUP: run_index_warmup,
     SCH.MARKET_SCAN: run_market_scan,
+    SCH.DISCOVERY_REFRESH: run_discovery_refresh,
     SCH.NEWS_REFRESH: run_news_refresh,
     SCH.PAPER_CYCLE: run_paper_cycle,
     SCH.OUTCOME_RESOLUTION: run_outcome_resolution,
