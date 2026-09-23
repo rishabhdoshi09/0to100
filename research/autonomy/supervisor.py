@@ -479,6 +479,7 @@ class Supervisor:
             # projection. Key the durable job to both identities so repeated ticks
             # are idempotent and a later thesis change gets its own projection.
             scan_id = str(gate.get("scan_scanned_at") or "")
+            long_term_id = str(gate.get("long_term_scanned_at") or "")
             thesis_hash = str(
                 gate.get("current_thesis_hash")
                 or gate.get("thesis_hash")
@@ -487,7 +488,11 @@ class Supervisor:
             if gate.get("scan_fresh") and scan_id and thesis_hash:
                 self.jobs.enqueue(
                     SCH.DISCOVERY_REFRESH,
-                    idempotency_key=f"discovery_refresh:{scan_id}:{thesis_hash}",
+                    idempotency_key=SCH.discovery_refresh_key(
+                        scan_id,
+                        long_term_id,
+                        thesis_hash,
+                    ),
                     input_snapshot_id=scan_id,
                     critical=True,
                 )
