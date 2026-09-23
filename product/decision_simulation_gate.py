@@ -172,6 +172,14 @@ def status(*, path: str | Path | None = None) -> dict[str, Any]:
     except Exception:
         scan_fresh = False
 
+    try:
+        from product.long_term_store import load_long_term_scan
+        long_term_scanned_at = str(
+            (load_long_term_scan() or {}).get("scanned_at") or ""
+        )
+    except Exception:
+        long_term_scanned_at = ""
+
     if scan_fresh:
         board = _board()
     else:
@@ -262,6 +270,7 @@ def status(*, path: str | Path | None = None) -> dict[str, Any]:
         "approval_required": not approved,
         "discovery_ready": discovery_ready,
         "scan_scanned_at": scan_id,
+        "long_term_scanned_at": long_term_scanned_at,
         "scan_fresh": scan_fresh,
         "best_trades": visible_best_trades,
         "decision_count": len(list(board.get("decisions") or [])),
