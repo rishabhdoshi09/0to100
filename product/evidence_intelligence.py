@@ -23,6 +23,7 @@ from product.decision import Decision
 from research import feature_schema as FS
 
 SCHEMA_VERSION = 1
+FORMULA_VERSION = "evidence_v2"
 MIN_ANALOGS = 12
 CLAIM_MIN_EFFECTIVE_N = 20.0
 CONFIDENT_MIN_EFFECTIVE_N = 30.0
@@ -235,6 +236,7 @@ def record_resolved_prediction(
         out["calibration"] = DecisionCalibrationEngine().record(
             predicted_confidence=tier,
             predicted_p=predicted_p,
+            prediction_source=str(meta.get("prediction_source") or ""),
             realized_win=float(realized_R) > 0.0,
             setup=str(meta.get("setup") or ""),
             regime=str(meta.get("market_state") or ""),
@@ -536,6 +538,7 @@ def evidence_read(decision: Decision, *, k: int = DEFAULT_K) -> dict[str, Any]:
                 setup=decision.setup,
                 regime=decision.market_state,
                 sector=decision.sector_state,
+                prediction_source=FORMULA_VERSION,
             )
             # A setup-quality hit rate is not a probability-calibration sample.
             # Adjust a measured probability only when the historical ledger has
@@ -560,7 +563,7 @@ def evidence_read(decision: Decision, *, k: int = DEFAULT_K) -> dict[str, Any]:
 
     return {
         "schema_version": SCHEMA_VERSION,
-        "formula_version": "evidence_v2",
+        "formula_version": FORMULA_VERSION,
         "setup": decision.setup,
         "stage": stage,
         "historical_confidence": historical_confidence,
@@ -650,7 +653,7 @@ def enrich(decision: Decision) -> Decision:
     historical["evidence_intelligence"] = evidence
     provenance = dict(decision.provenance or {})
     provenance["learning_observation_id"] = _observation_id(decision.decision_id)
-    provenance["evidence_intelligence_version"] = "evidence_v2"
+    provenance["evidence_intelligence_version"] = FORMULA_VERSION
     return replace(
         decision,
         historical_evidence=historical,
