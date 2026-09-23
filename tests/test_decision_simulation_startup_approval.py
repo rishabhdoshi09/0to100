@@ -529,3 +529,88 @@ def test_approved_old_scan_does_not_mark_new_scan_discovery_ready(tmp_path, monk
     status = G.status(path=state)
     assert status["approved"] is True
     assert status["discovery_ready"] is False
+
+
+def test_current_scan_with_new_thesis_queues_one_discovery_refresh_not_another_scan(
+    tmp_path, monkeypatch
+):
+    """Learning identity changes re-project the saved scan without network/scan churn."""
+    from research.autonomy import schedules as SCH
+    from research.autonomy.supervisor import Supervisor
+
+    class DiscoveryDeps:
+        def active_snapshot_id(self):
+            return ""
+
+    monkeypatch.setattr(
+        "product.decision_simulation_gate.status",
+        lambda: {
+            "discovery_ready": False,
+            "approved": True,
+            "scan_fresh": True,
+            "scan_scanned_at": "2026-09-22T19:02:49+00:00",
+            "current_thesis_hash": "thesis-b",
+        },
+    )
+
+    def forbidden_history():
+        raise AssertionError("fresh saved scan must be re-projected, not re-scanned")
+
+    monkeypatch.setattr("product.readiness.official_history", forbidden_history)
+
+    sup = Supervisor(tmp_path / "auto", deps=DiscoveryDeps())
+    sup._ensure_startup_trade_discovery()
+    sup._ensure_startup_trade_discovery()
+
+    refreshes = [
+        job for job in sup.jobs.list(limit=20)
+        if job.job_type == SCH.DISCOVERY_REFRESH
+    ]
+    scans = [
+        job for job in sup.jobs.list(limit=20)
+        if job.job_type == SCH.MARKET_SCAN
+    ]
+    assert len(refreshes) == 1
+    assert scans == []
+    assert refreshes[0].critical is True
+    assert refreshes[0].input_snapshot_id == "2026-09-22T19:02:49+00:00"
+    assert refreshes[0].idempotency_key == (
+        "discovery_refresh:2026-09-22T19:02:49+00:00:thesis-b"
+    )
+
+
+def test_durable_startup_approval_does_not_authorize_stale_current_projection(
+    tmp_path, monkeypatch
+):
+    """Approval survives learning, but new simulation waits for current projection truth."""
+    from research.autonomy.supervisor import Supervisor
+
+    class DiscoveryDeps:
+        def active_snapshot_id(self):
+            return ""
+
+    gate = {
+        "discovery_ready": False,
+        "approved": True,
+        "scan_fresh": True,
+        "scan_scanned_at": "2026-09-22T19:02:49+00:00",
+        "current_thesis_hash": "thesis-b",
+    }
+    monkeypatch.setattr(
+        "product.decision_simulation_gate.status",
+        lambda: dict(gate),
+    )
+
+    def forbidden_approval():
+        raise AssertionError("stale current discovery must not be re-approved")
+
+    monkeypatch.setattr(
+        "product.decision_simulation_gate.ensure_autonomous_approval",
+        forbidden_approval,
+    )
+
+    sup = Supervisor(tmp_path / "auto", deps=DiscoveryDeps())
+    assert sup._ensure_decision_simulation_authority() is False
+
+    gate["discovery_ready"] = True
+    assert sup._ensure_decision_simulation_authority() is True
