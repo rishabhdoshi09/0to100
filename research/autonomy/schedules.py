@@ -5,6 +5,7 @@ and new paper risk is structurally restricted to 09:30–15:15 IST on an NSE ses
 """
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timedelta
 from datetime import time as _time
 
@@ -247,6 +248,24 @@ def historical_learning_key(batch_id: str) -> str:
 
 def historical_research_key(batch_id: str) -> str:
     return f"hist_research:{batch_id}"
+
+
+def historical_replan_key(
+    *,
+    thesis_hash: str = "",
+    request_id: str = "",
+    reason: str = "",
+    state_token: str = "",
+) -> str:
+    """One bounded closed-market research replan per meaningful evidence state."""
+    raw = "|".join((
+        str(thesis_hash or ""),
+        str(request_id or ""),
+        str(reason or ""),
+        str(state_token or ""),
+    ))
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
+    return f"research_replan:{digest}"
 
 
 def forward_outcome_key(session_date: str) -> str:
