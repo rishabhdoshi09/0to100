@@ -755,7 +755,7 @@ def run_discovery_refresh(ctx) -> JobResult:
     try:
         from product.desk_scan_overlays import SAVED, persist_recommendations_and_discovery
 
-        projection = dict(persist_recommendations_and_discovery(scan) or {})
+        projection = dict(persist_recommendations_and_discovery(scan, persist_ledger=False) or {})
     except Exception as exc:
         return JobResult(
             JS.RETRYABLE_FAILED,
