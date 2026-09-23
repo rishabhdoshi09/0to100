@@ -260,3 +260,64 @@ def test_probability_drift_stable_when_windows_are_indistinguishable(tmp_path):
     assert drift["brier_delta"] == 0.0
     assert drift["degradation_detected"] is False
     assert drift["improvement_detected"] is False
+
+
+def test_probability_calibration_is_scoped_to_prediction_source(tmp_path):
+    eng = DecisionCalibrationEngine(tmp_path / "c.json")
+    # Old formula: confident and systematically wrong.
+    for i in range(20):
+        eng.record(
+            predicted_confidence="high_conviction",
+            realized_win=False,
+            predicted_p=0.80,
+            prediction_source="evidence_v1",
+            decision_as_of="2026-01-01",
+            outcome_as_of=f"2026-02-{(i % 9) + 1:02d}",
+        )
+    # New formula: confident and correct.
+    for i in range(20):
+        eng.record(
+            predicted_confidence="high_conviction",
+            realized_win=True,
+            predicted_p=0.80,
+            prediction_source="evidence_v2",
+            decision_as_of="2026-03-01",
+            outcome_as_of=f"2026-04-{(i % 9) + 1:02d}",
+        )
+
+    old = eng.summary(prediction_source="evidence_v1")
+    new = eng.summary(prediction_source="evidence_v2")
+    assert old["probability_status"] == "MEASURED"
+    assert old["probability_actual_hit_rate"] == 0.0
+    assert old["calibration_direction"] == "OVERCONFIDENT"
+    assert new["probability_status"] == "MEASURED"
+    assert new["probability_actual_hit_rate"] == 1.0
+    assert new["calibration_direction"] == "UNDERCONFIDENT"
+    assert old["prediction_source"] == "evidence_v1"
+    assert new["prediction_source"] == "evidence_v2"
+
+    dossier = eng.dossier()
+    assert dossier["prediction_sources"] == ["evidence_v1", "evidence_v2"]
+    assert dossier["source_summaries"]["evidence_v1"]["probability_actual_hit_rate"] == 0.0
+    assert dossier["source_summaries"]["evidence_v2"]["probability_actual_hit_rate"] == 1.0
+    assert dossier["unversioned_probability_observations"] == 0
+
+
+def test_unversioned_probability_rows_stay_visible_but_do_not_enter_version_scope(tmp_path):
+    eng = DecisionCalibrationEngine(tmp_path / "c.json")
+    for _ in range(20):
+        eng.record(
+            predicted_confidence="watch",
+            realized_win=True,
+            predicted_p=0.55,
+            decision_as_of="2026-01-01",
+            outcome_as_of="2026-02-01",
+        )
+
+    scoped = eng.summary(prediction_source="evidence_v2")
+    dossier = eng.dossier()
+    assert scoped["sample_size"] == 0
+    assert scoped["probability_status"] == "NO_EXPLICIT_PROBABILITIES"
+    assert dossier["explicit_probability_observations"] == 20
+    assert dossier["unversioned_probability_observations"] == 20
+    assert dossier["prediction_sources"] == []
