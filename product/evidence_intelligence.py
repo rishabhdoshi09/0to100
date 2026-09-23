@@ -13,6 +13,8 @@ recency/regime/setup weighting and uncertainty-aware expectancy.
 from __future__ import annotations
 
 import math
+import threading
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Mapping
@@ -30,6 +32,50 @@ CONFIDENT_MIN_EFFECTIVE_N = 30.0
 DEFAULT_K = 50
 HALF_LIFE_DAYS = 365.0
 SHRINKAGE_K = 8.0
+
+
+_EVIDENCE_BATCH = threading.local()
+
+
+@contextmanager
+def evidence_read_batch():
+    """Freeze prior-evidence reads for one decision-board construction.
+
+    Decisions on the same saved scan share one point-in-time cutoff. Loading and
+    JSON-decoding the identical settled corpus for every symbol is quadratic I/O
+    as the evidence store grows. Within this explicit batch, cache only the raw
+    rows keyed by strict cutoff; no samples are dropped or reweighted. The cache
+    is discarded at exit, so later board builds observe newly settled evidence.
+    """
+    previous = getattr(_EVIDENCE_BATCH, "rows_by_cutoff", None)
+    _EVIDENCE_BATCH.rows_by_cutoff = {}
+    try:
+        yield
+    finally:
+        if previous is None:
+            try:
+                delattr(_EVIDENCE_BATCH, "rows_by_cutoff")
+            except AttributeError:
+                pass
+        else:
+            _EVIDENCE_BATCH.rows_by_cutoff = previous
+
+
+def _prior_observation_rows(before_ts: str) -> list[dict[str, Any]]:
+    from research.feature_store import load_observations
+
+    cache = getattr(_EVIDENCE_BATCH, "rows_by_cutoff", None)
+    key = str(before_ts or "")
+    if cache is not None and key in cache:
+        return cache[key]
+    rows = load_observations(
+        kind="DECISION",
+        require_outcome=True,
+        before_ts=key,
+    )
+    if cache is not None:
+        cache[key] = rows
+    return rows
 
 
 def _f(value: Any) -> float | None:
@@ -304,13 +350,7 @@ def _days_between(older: Any, newer: Any) -> float:
 
 
 def _analogs(decision: Decision, *, k: int = DEFAULT_K) -> list[dict[str, Any]]:
-    from research.feature_store import load_observations
-
-    rows = load_observations(
-        kind="DECISION",
-        require_outcome=True,
-        before_ts=decision.generated_at,
-    )
+    rows = _prior_observation_rows(str(decision.generated_at or ""))
     if not rows:
         return []
 
