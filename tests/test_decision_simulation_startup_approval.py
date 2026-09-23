@@ -670,3 +670,56 @@ def test_manual_paper_control_waits_durably_for_discovery_refresh(tmp_path, monk
     assert paper[0].idempotency_key == (
         f"manual:cycle:snapshot-1:{control.control_id}"
     )
+
+
+def test_approved_scan_cache_gap_does_not_mask_changed_thesis_identity(tmp_path, monkeypatch):
+    """An old approval cannot make a missing new-thesis projection look ready."""
+    state = tmp_path / "gate.json"
+    monkeypatch.setenv("QT_STARTUP_ID", "startup-thesis-gap")
+
+    thesis = {"value": "thesis-a"}
+    monkeypatch.setattr(
+        "product.trading_thesis.manifest",
+        lambda: {"thesis_hash": thesis["value"], "objective_id": "test"},
+    )
+    monkeypatch.setattr("product.desk_pipeline.scan_is_fresh", lambda: True)
+    monkeypatch.setattr(
+        "product.historical_paper_loop.load_state",
+        lambda: {"thesis_hash": "thesis-a"},
+    )
+
+    board = {
+        "available": True,
+        "scan_scanned_at": "2026-09-22T10:00:00+00:00",
+        "best_trades": [{"symbol": "INFY"}],
+        "decisions": [{"symbol": "INFY"}],
+        "actionable": 1,
+    }
+    monkeypatch.setattr(G, "_board", lambda: dict(board))
+
+    G.begin_startup("startup-thesis-gap", path=state)
+    approved = G.approve(path=state)
+    assert approved["approved"] is True
+    assert approved["discovery_ready"] is True
+    assert approved["approved_thesis_hash"] == "thesis-a"
+
+    thesis["value"] = "thesis-b"
+    monkeypatch.setattr(
+        G,
+        "_board",
+        lambda: {
+            "available": False,
+            "state": "SEARCHING_BEST_TRADES",
+            "reason": "projection for changed thesis not published yet",
+            "scan_scanned_at": "2026-09-22T10:00:00+00:00",
+            "best_trades": [],
+            "decisions": [],
+            "actionable": 0,
+        },
+    )
+
+    evolved = G.status(path=state)
+    assert evolved["approved"] is True
+    assert evolved["thesis_changed_since_approval"] is True
+    assert evolved["discovery_ready"] is False
+    assert evolved["best_trades"] == []
