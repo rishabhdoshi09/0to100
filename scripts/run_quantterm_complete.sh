@@ -45,11 +45,34 @@ if ! python -c 'import reportlab, fastapi, uvicorn' >/dev/null 2>&1; then
   python -m pip install 'reportlab>=4.2.0' 'fastapi>=0.115.0' 'uvicorn>=0.30.0'
 fi
 
-RUNTIME_LOGS="$(python - <<'PY'
+# A configured persistent runtime is an existing storage contract, not a path
+# this launcher is allowed to manufacture. In particular, when a macOS external
+# volume is detached, mkdir must never recreate /Volumes/<name>/... and split
+# QuantTerm state onto the wrong disk. Installed services already enforce this;
+# the one-terminal/manual launcher must fail closed the same way.
+if [[ -n "${QT_RUNTIME_ROOT:-}" || -f "$ROOT/.quantterm_runtime_root" ]]; then
+  export QT_RUNTIME_ROOT_REQUIRE_EXISTING=1
+fi
+
+runtime_rc=0
+RUNTIME_LOGS="$(python - <<'PY' || exit $?
+import sys
 from core.runtime_paths import logs_dir
-print(logs_dir())
+
+try:
+    print(logs_dir())
+except Exception as exc:
+    print(f"[COMPLETE STACK] Runtime storage unavailable: {exc}", file=sys.stderr)
+    raise SystemExit(78)
 PY
-)"
+)" || runtime_rc=$?
+if [[ "$runtime_rc" -ne 0 ]]; then
+  if [[ "$runtime_rc" -eq 78 ]]; then
+    echo "[COMPLETE STACK] Persistent runtime is configured but missing or unmounted. Mount/reconnect the configured storage, then re-run this command." >&2
+    echo "[COMPLETE STACK] Refusing to create a replacement runtime under /Volumes or another fallback path." >&2
+  fi
+  exit "$runtime_rc"
+fi
 STACK_LOG_DIR="$RUNTIME_LOGS/stack"
 mkdir -p "$STACK_LOG_DIR"
 
