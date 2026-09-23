@@ -65,6 +65,9 @@ def test_overconfidence_detected(tmp_path):
     assert s["probability_actual_hit_rate"] == 0.0
     assert s["expected_p"] == 0.8
     assert s["brier"] == 0.64
+    assert s["calibration_actionable"] is True
+    assert s["calibration_direction"] == "OVERCONFIDENT"
+    assert s["calibration_adjustment"] > 0
     assert s["rename_tier"] is False
 
 
@@ -161,3 +164,28 @@ def test_invalid_probability_is_not_silently_used(tmp_path):
     assert s["probability_status"] == "NO_EXPLICIT_PROBABILITIES"
     assert s["expected_p"] is None
     assert s["brier"] is None
+    assert all(row["predicted_p"] is None for row in eng.store["observations"])
+
+
+def test_probability_difference_inside_wilson_uncertainty_is_not_actionable(tmp_path):
+    eng = DecisionCalibrationEngine(tmp_path / "c.json")
+    for i in range(20):
+        eng.record(
+            predicted_confidence="good_setup",
+            realized_win=i % 2 == 0,
+            predicted_p=0.55,
+            decision_as_of="2026-01-01",
+            outcome_as_of="2026-02-01",
+        )
+
+    s = eng.summary(bucket="good_setup")
+    assert s["probability_status"] == "MEASURED"
+    assert s["actual_hit_rate"] == 0.5
+    assert s["expected_p"] == 0.55
+    assert s["probability_confidence_interval"][0] < 0.55 < s["probability_confidence_interval"][1]
+    assert s["calibration_gap"] == 0.05
+    assert s["calibration_actionable"] is False
+    assert s["calibration_direction"] == "NONE"
+    assert s["calibration_adjustment"] == 0.0
+    assert s["overconfidence"] is False
+    assert s["underconfidence"] is False
