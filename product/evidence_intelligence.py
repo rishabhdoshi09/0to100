@@ -47,18 +47,27 @@ def evidence_read_batch():
     rows keyed by strict cutoff; no samples are dropped or reweighted. The cache
     is discarded at exit, so later board builds observe newly settled evidence.
     """
-    previous = getattr(_EVIDENCE_BATCH, "rows_by_cutoff", None)
+    previous_rows = getattr(_EVIDENCE_BATCH, "rows_by_cutoff", None)
+    previous_prepared = getattr(_EVIDENCE_BATCH, "prepared_by_cutoff", None)
     _EVIDENCE_BATCH.rows_by_cutoff = {}
+    _EVIDENCE_BATCH.prepared_by_cutoff = {}
     try:
         yield
     finally:
-        if previous is None:
+        if previous_rows is None:
             try:
                 delattr(_EVIDENCE_BATCH, "rows_by_cutoff")
             except AttributeError:
                 pass
         else:
-            _EVIDENCE_BATCH.rows_by_cutoff = previous
+            _EVIDENCE_BATCH.rows_by_cutoff = previous_rows
+        if previous_prepared is None:
+            try:
+                delattr(_EVIDENCE_BATCH, "prepared_by_cutoff")
+            except AttributeError:
+                pass
+        else:
+            _EVIDENCE_BATCH.prepared_by_cutoff = previous_prepared
 
 
 def _prior_observation_rows(before_ts: str) -> list[dict[str, Any]]:
@@ -349,47 +358,117 @@ def _days_between(older: Any, newer: Any) -> float:
     return max(0.0, (b - a).total_seconds() / 86400.0)
 
 
+def _prepared_prior_corpus(before_ts: str) -> dict[str, Any]:
+    """Prepare the immutable numeric analogue corpus once per batch cutoff."""
+    key = str(before_ts or "")
+    cache = getattr(_EVIDENCE_BATCH, "prepared_by_cutoff", None)
+    if cache is not None and key in cache:
+        return cache[key]
+
+    rows = _prior_observation_rows(key)
+    numeric_names = tuple(
+        name for name in FS.FEATURE_NAMES
+        if FS.FEATURE_REGISTRY[name].dtype != "categorical"
+    )
+    matrix = np.full((len(rows), len(numeric_names)), np.nan, dtype=float)
+    setup_counts: dict[str, int] = {}
+    for row_idx, row in enumerate(rows):
+        feats = dict(row.get("features") or {})
+        meta = dict(row.get("meta") or {})
+        setup = str(meta.get("setup") or "")
+        if setup:
+            setup_counts[setup] = setup_counts.get(setup, 0) + 1
+        for col_idx, name in enumerate(numeric_names):
+            value = _f(feats.get(name))
+            if value is not None:
+                matrix[row_idx, col_idx] = value
+
+    # Same robust-scale formula as _robust_scales, computed once for every
+    # numeric feature instead of once per symbol decision.
+    scales = np.ones(len(numeric_names), dtype=float)
+    for col_idx in range(len(numeric_names)):
+        arr = matrix[:, col_idx]
+        arr = arr[np.isfinite(arr)]
+        if arr.size < 3:
+            scales[col_idx] = 1.0
+            continue
+        q25, q75 = np.percentile(arr, [25, 75])
+        iqr = float(q75 - q25)
+        std = float(np.std(arr))
+        scales[col_idx] = max(
+            iqr / 1.349 if iqr > 0 else std,
+            std * 0.25,
+            1e-6,
+        )
+
+    prepared = {
+        "rows": rows,
+        "numeric_names": numeric_names,
+        "name_to_col": {name: idx for idx, name in enumerate(numeric_names)},
+        "matrix": matrix,
+        "scales": scales,
+        "setup_counts": setup_counts,
+    }
+    if cache is not None:
+        cache[key] = prepared
+    return prepared
+
+
 def _analogs(decision: Decision, *, k: int = DEFAULT_K) -> list[dict[str, Any]]:
-    rows = _prior_observation_rows(str(decision.generated_at or ""))
+    prepared = _prepared_prior_corpus(str(decision.generated_at or ""))
+    rows = list(prepared.get("rows") or [])
     if not rows:
         return []
 
     query = decision_features(decision)
     numeric = [
         name for name in FS.FEATURE_NAMES
-        if FS.FEATURE_REGISTRY[name].dtype != "categorical" and _f(query.get(name)) is not None
+        if FS.FEATURE_REGISTRY[name].dtype != "categorical"
+        and _f(query.get(name)) is not None
     ]
     if len(numeric) < 2:
         return []
 
-    scales = _robust_scales(rows, numeric)
-    setup_matches = sum(
-        1 for r in rows
-        if str((r.get("meta") or {}).get("setup") or "") == str(decision.setup or "")
+    name_to_col = dict(prepared.get("name_to_col") or {})
+    cols = [name_to_col[name] for name in numeric if name in name_to_col]
+    if len(cols) < 2:
+        return []
+
+    matrix = np.asarray(prepared.get("matrix"), dtype=float)[:, cols]
+    scales = np.asarray(prepared.get("scales"), dtype=float)[cols]
+    query_vec = np.asarray([float(_f(query.get(name))) for name in numeric], dtype=float)
+
+    valid = np.isfinite(matrix)
+    shared_counts = valid.sum(axis=1)
+    delta = np.zeros_like(matrix, dtype=float)
+    np.subtract(matrix, query_vec, out=delta, where=valid)
+    delta = delta / scales
+    squared = np.where(valid, delta * delta, 0.0)
+    distances = np.full(len(rows), np.inf, dtype=float)
+    usable = shared_counts >= 2
+    distances[usable] = np.sqrt(
+        squared[usable].sum(axis=1) / shared_counts[usable]
+    )
+    similarities = np.exp(-0.5 * distances)
+
+    setup_matches = int(
+        (prepared.get("setup_counts") or {}).get(str(decision.setup or ""), 0)
     )
     prefer_exact = setup_matches >= MIN_ANALOGS
 
     ranked: list[dict[str, Any]] = []
-    for row in rows:
-        feats = dict(row.get("features") or {})
-        shared = [
-            name for name in numeric
-            if _f(feats.get(name)) is not None and scales.get(name, 0) > 0
-        ]
-        if len(shared) < 2:
+    for row_idx, row in enumerate(rows):
+        shared = int(shared_counts[row_idx])
+        if shared < 2:
             continue
-        z2 = [
-            ((_f(feats.get(name)) - _f(query.get(name))) / scales[name]) ** 2
-            for name in shared
-        ]
-        distance = math.sqrt(sum(z2) / len(z2))
-        similarity = math.exp(-0.5 * distance)
+        similarity = float(similarities[row_idx])
         meta = dict(row.get("meta") or {})
         same_setup = str(meta.get("setup") or "") == str(decision.setup or "")
         if prefer_exact and not same_setup:
             continue
         setup_weight = 1.0 if same_setup else 0.35
 
+        feats = dict(row.get("features") or {})
         old_regime = str(feats.get("regime") or meta.get("market_state") or "")
         now_regime = str(query.get("regime") or decision.market_state or "")
         regime_weight = 1.0 if old_regime and now_regime and old_regime == now_regime else 0.70
@@ -426,7 +505,7 @@ def _analogs(decision: Decision, *, k: int = DEFAULT_K) -> list[dict[str, Any]]:
             "weight": weight,
             "same_setup": same_setup,
             "same_regime": old_regime == now_regime if old_regime and now_regime else False,
-            "shared_features": len(shared),
+            "shared_features": shared,
             "evidence_class": lane,
             "not_pnl": bool(outcome_meta.get("not_pnl")),
         })
