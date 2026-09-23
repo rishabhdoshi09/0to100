@@ -14,14 +14,20 @@ def test_discovery_refresh_reprojects_saved_scan_without_execution(monkeypatch):
             "records": [{"symbol": "INFY"}],
         },
     )
-    monkeypatch.setattr(
-        "product.desk_scan_overlays.persist_recommendations_and_discovery",
-        lambda _scan: {
+    calls = []
+
+    def project(_scan, *, persist_ledger=True):
+        calls.append(bool(persist_ledger))
+        return {
             "recommendations": "saved",
             "decision_discovery": "saved",
             "decision_discovery_actionable": 7,
             "decision_discovery_thesis_hash": "thesis-b",
-        },
+        }
+
+    monkeypatch.setattr(
+        "product.desk_scan_overlays.persist_recommendations_and_discovery",
+        project,
     )
 
     result = run_discovery_refresh(SimpleNamespace())
@@ -31,6 +37,7 @@ def test_discovery_refresh_reprojects_saved_scan_without_execution(monkeypatch):
     assert result.metadata["scan_scanned_at"] == "2026-09-22T19:02:49+00:00"
     assert result.metadata["thesis_hash"] == "thesis-b"
     assert result.metadata["live_money_unchanged"] is True
+    assert calls == [False]
 
 
 def test_discovery_refresh_fails_closed_when_projection_is_not_durable(monkeypatch):
@@ -43,7 +50,7 @@ def test_discovery_refresh_fails_closed_when_projection_is_not_durable(monkeypat
     )
     monkeypatch.setattr(
         "product.desk_scan_overlays.persist_recommendations_and_discovery",
-        lambda _scan: {
+        lambda _scan, *, persist_ledger=True: {
             "recommendations": "saved",
             "decision_discovery": "error",
             "decision_discovery_error": {
