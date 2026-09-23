@@ -66,3 +66,38 @@ def test_discovery_refresh_fails_closed_when_projection_is_not_durable(monkeypat
     assert result.new_entries_allowed is False
     assert result.error_code == "DESK_PERSIST_FAILED"
     assert "projection" in result.summary.lower()
+
+
+def test_discovery_refresh_retires_superseded_scan_without_writing(monkeypatch):
+    monkeypatch.setattr(
+        "product.scan_store.load_scan",
+        lambda: {
+            "scanned_at": "2026-09-22T19:05:00+00:00",
+            "records": [{"symbol": "INFY"}],
+        },
+    )
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("superseded discovery job must not publish anything")
+
+    monkeypatch.setattr(
+        "product.desk_scan_overlays.persist_recommendations_and_discovery",
+        forbidden,
+    )
+    ctx = SimpleNamespace(
+        job=SimpleNamespace(
+            input_snapshot_id="2026-09-22T19:02:49+00:00",
+            idempotency_key=(
+                "discovery_refresh:2026-09-22T19:02:49+00:00:"
+                "none:thesis-b"
+            ),
+        )
+    )
+
+    result = run_discovery_refresh(ctx)
+
+    assert result.status == JS.SKIPPED_IDEMPOTENT
+    assert result.new_entries_allowed is False
+    assert result.metadata["requested_scan_scanned_at"] == "2026-09-22T19:02:49+00:00"
+    assert result.metadata["current_scan_scanned_at"] == "2026-09-22T19:05:00+00:00"
+    assert result.metadata["live_money_unchanged"] is True
