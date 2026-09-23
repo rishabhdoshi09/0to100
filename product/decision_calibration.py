@@ -232,6 +232,9 @@ class DecisionCalibrationEngine:
             "probability_actual_hit_rate": None,
             "probability_confidence_interval": None,
             "calibration_gap": None,
+            "calibration_actionable": False,
+            "calibration_direction": "NONE",
+            "calibration_adjustment": 0.0,
             "overconfidence": False,
             "underconfidence": False,
             "rename_tier": False,
@@ -276,14 +279,30 @@ class DecisionCalibrationEngine:
             ) / probability_n
             probability_interval = _wilson_interval(probability_hits, probability_n)
             gap = expected - probability_actual
+            lower = float(probability_interval[0]) if probability_interval else probability_actual
+            upper = float(probability_interval[1]) if probability_interval else probability_actual
+            if expected > upper:
+                direction = "OVERCONFIDENT"
+                adjustment = expected - upper
+            elif expected < lower:
+                direction = "UNDERCONFIDENT"
+                adjustment = expected - lower
+            else:
+                direction = "NONE"
+                adjustment = 0.0
             result.update({
                 "brier": round(brier, 4),
                 "expected_p": round(expected, 4),
                 "probability_actual_hit_rate": round(probability_actual, 4),
                 "probability_confidence_interval": probability_interval,
                 "calibration_gap": round(gap, 4),
-                "overconfidence": gap > 0.08,
-                "underconfidence": gap < -0.08,
+                "calibration_actionable": direction != "NONE",
+                "calibration_direction": direction,
+                # Positive adjustment means the model over-claimed and should
+                # be shifted down; negative means it under-claimed.
+                "calibration_adjustment": round(adjustment, 4),
+                "overconfidence": direction == "OVERCONFIDENT",
+                "underconfidence": direction == "UNDERCONFIDENT",
             })
         return result
 
