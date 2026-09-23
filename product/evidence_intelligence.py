@@ -23,6 +23,7 @@ from product.decision import Decision
 from research import feature_schema as FS
 
 SCHEMA_VERSION = 1
+FORMULA_VERSION = "evidence_v2"
 MIN_ANALOGS = 12
 CLAIM_MIN_EFFECTIVE_N = 20.0
 CONFIDENT_MIN_EFFECTIVE_N = 30.0
@@ -235,6 +236,7 @@ def record_resolved_prediction(
         out["calibration"] = DecisionCalibrationEngine().record(
             predicted_confidence=tier,
             predicted_p=predicted_p,
+            prediction_source=str(meta.get("prediction_source") or ""),
             realized_win=float(realized_R) > 0.0,
             setup=str(meta.get("setup") or ""),
             regime=str(meta.get("market_state") or ""),
@@ -492,18 +494,42 @@ def evidence_read(decision: Decision, *, k: int = DEFAULT_K) -> dict[str, Any]:
 
     historical_confidence = round(max(0.0, min(95.0, historical_confidence)), 1)
     similarity_score = round(float(stats.get("mean_similarity") or 0.0) * 100.0, 1)
-    raw_outcome_p = stats.get("outcome_p_posterior")
+
+    # All PIT analogs may inform research confidence, but a historical replay or
+    # counterfactual is not an executed forward trial. Keep the broad research
+    # estimate separate from the narrower real-forward probability estimand.
+    research_raw_p = stats.get("outcome_p_posterior")
+    research_probability_estimate = (
+        float(research_raw_p)
+        if research_raw_p is not None and eff >= CLAIM_MIN_EFFECTIVE_N
+        else None
+    )
+    forward_analogs = [
+        row for row in analogs
+        if str(row.get("evidence_class") or "").upper()
+        in {"PAPER_FORWARD", "REAL_FORWARD_PAPER"}
+        and not bool(row.get("not_pnl"))
+    ]
+    forward_stats = _weighted_stats(forward_analogs)
+    forward_eff = float(forward_stats.get("effective_n") or 0.0)
+    raw_forward_p = forward_stats.get("outcome_p_posterior")
     measured_probability = (
-        float(raw_outcome_p)
-        if raw_outcome_p is not None and eff >= CLAIM_MIN_EFFECTIVE_N
+        float(raw_forward_p)
+        if raw_forward_p is not None and forward_eff >= CLAIM_MIN_EFFECTIVE_N
         else None
     )
     calibrated = measured_probability
+    calibration_applied = False
     calibration = {
         "status": "INSUFFICIENT_EVIDENCE",
         "sample_size": 0,
         "actual_hit_rate": None,
         "expected_p": None,
+        "probability_status": "NO_EXPLICIT_PROBABILITIES",
+        "probability_sample_size": 0,
+        "calibration_gap": None,
+        "calibration_actionable": False,
+        "calibration_adjustment": 0.0,
     }
     if measured_probability is not None:
         try:
@@ -512,12 +538,19 @@ def evidence_read(decision: Decision, *, k: int = DEFAULT_K) -> dict[str, Any]:
                 setup=decision.setup,
                 regime=decision.market_state,
                 sector=decision.sector_state,
+                prediction_source=FORMULA_VERSION,
             )
-            if calibration.get("status") == "MEASURED":
-                gap = float(calibration.get("expected_p") or 0.0) - float(
-                    calibration.get("actual_hit_rate") or 0.0
-                )
-                calibrated = max(0.01, min(0.99, measured_probability - gap))
+            # A setup-quality hit rate is not a probability-calibration sample.
+            # Adjust a measured probability only when the historical ledger has
+            # enough explicit point-in-time predicted_p observations of its own.
+            if (
+                calibration.get("probability_status") == "MEASURED"
+                and calibration.get("calibration_actionable") is True
+                and calibration.get("calibration_adjustment") is not None
+            ):
+                adjustment = float(calibration.get("calibration_adjustment") or 0.0)
+                calibrated = max(0.01, min(0.99, measured_probability - adjustment))
+                calibration_applied = bool(adjustment)
         except Exception:
             pass
 
@@ -530,7 +563,7 @@ def evidence_read(decision: Decision, *, k: int = DEFAULT_K) -> dict[str, Any]:
 
     return {
         "schema_version": SCHEMA_VERSION,
-        "formula_version": "evidence_v1",
+        "formula_version": FORMULA_VERSION,
         "setup": decision.setup,
         "stage": stage,
         "historical_confidence": historical_confidence,
@@ -546,14 +579,32 @@ def evidence_read(decision: Decision, *, k: int = DEFAULT_K) -> dict[str, Any]:
         "upper_95_R": stats.get("upper_95_R"),
         "positive_rate": stats.get("positive_rate"),
         "p_edge_positive": stats.get("p_edge_positive"),
+        "research_positive_R_estimate": research_probability_estimate,
+        "research_positive_R_lower_95": (
+            stats.get("outcome_p_lower_95")
+            if research_probability_estimate is not None else None
+        ),
+        "research_positive_R_upper_95": (
+            stats.get("outcome_p_upper_95")
+            if research_probability_estimate is not None else None
+        ),
+        "research_probability_scope": "MIXED_PIT_EVIDENCE",
+        "forward_probability_raw_n": int(forward_stats.get("raw_n") or 0),
+        "forward_probability_effective_n": forward_stats.get("effective_n", 0.0),
         "p_positive_R": measured_probability,
         "p_positive_R_lower_95": (
-            stats.get("outcome_p_lower_95") if measured_probability is not None else None
+            forward_stats.get("outcome_p_lower_95") if measured_probability is not None else None
         ),
         "p_positive_R_upper_95": (
-            stats.get("outcome_p_upper_95") if measured_probability is not None else None
+            forward_stats.get("outcome_p_upper_95") if measured_probability is not None else None
+        ),
+        "probability_evidence_scope": (
+            "REAL_FORWARD_PAPER" if measured_probability is not None
+            else "INSUFFICIENT_REAL_FORWARD_PAPER"
         ),
         "calibrated_p_positive_R": None if calibrated is None else round(calibrated, 4),
+        "calibration_applied": calibration_applied,
+        "calibration_contract_version": "explicit_probability_only_v2",
         "calibration": calibration,
         "historical_prior": prior,
         "nearest_analogs": [
@@ -572,12 +623,15 @@ def evidence_read(decision: Decision, *, k: int = DEFAULT_K) -> dict[str, Any]:
             for r in analogs[:10]
         ],
         "is_win_probability": measured_probability is not None,
+        "probability_contract_version": "real_forward_only_v2",
         "affects_selection": False,
         "paper_only_learning": True,
         "live_locked": True,
         "note": (
-            "Evidence projection is shadow-only. It cannot promote a scanner decision; "
-            "promotion requires a separately validated policy challenger."
+            "Mixed historical/counterfactual evidence may strengthen research confidence, "
+            "but only sufficiently sampled executed forward-paper outcomes are labelled as "
+            "a win probability. This projection is shadow-only and cannot promote a scanner "
+            "decision; promotion requires a separately validated policy challenger."
         ),
     }
 
@@ -599,7 +653,7 @@ def enrich(decision: Decision) -> Decision:
     historical["evidence_intelligence"] = evidence
     provenance = dict(decision.provenance or {})
     provenance["learning_observation_id"] = _observation_id(decision.decision_id)
-    provenance["evidence_intelligence_version"] = "evidence_v1"
+    provenance["evidence_intelligence_version"] = FORMULA_VERSION
     return replace(
         decision,
         historical_evidence=historical,
