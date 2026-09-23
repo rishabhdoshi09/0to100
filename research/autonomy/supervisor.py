@@ -246,6 +246,7 @@ class Supervisor:
                     retire = not (
                         key.startswith("forward_research:")
                         or key.startswith("hist_research:")
+                        or key.startswith("research_replan:")
                     )
                 elif job.job_type == SCH.HISTORICAL_PAPER_CYCLE:
                     retire = not key.startswith("hist_paper:")
@@ -506,6 +507,85 @@ class Supervisor:
         bucket = minute - minute % size
         return f"{bucket // 60:02d}{bucket % 60:02d}"
 
+    def _enqueue_closed_market_replan(
+        self,
+        *,
+        stage: dict | None,
+        next_batch: dict | None,
+        session_date: str,
+    ):
+        """Schedule one bounded research replan for an exhausted/stalled evidence state.
+
+        The goal is not to manufacture busy work. When historical replay has no
+        runnable batch, QuantTerm gets exactly one research pass for that durable
+        evidence state. If nothing material changes, the idempotency key prevents
+        an infinite loop; if the thesis/request/evidence state changes, a new pass
+        becomes eligible.
+        """
+        stage = dict(stage or {})
+        nxt = dict(next_batch or {})
+        reason = str(nxt.get("reason") or "historical_scheduler_stalled")
+        thesis_hash = str(stage.get("thesis_hash") or "")
+        if not thesis_hash:
+            try:
+                from product.trading_thesis import manifest as thesis_manifest
+
+                thesis_hash = str((thesis_manifest() or {}).get("thesis_hash") or "")
+            except Exception:
+                thesis_hash = ""
+        processed = list(stage.get("processed_sessions") or [])
+        request = {}
+        try:
+            from research.autonomy.evidence_acquisition import open_request_for_lane
+
+            request = dict(open_request_for_lane("HISTORICAL_REPLAY") or {})
+        except Exception:
+            request = {}
+        request_id = str(request.get("request_id") or "")
+
+        # A request that asks historical replay for more samples cannot remain
+        # OPEN once every currently settleable historical session is consumed.
+        # Close it as PLATEAUED and hand the question back to research planning.
+        if request and reason == "historical_backlog_caught_up":
+            try:
+                from research.autonomy.evidence_progress import mark_historical_source_exhausted
+
+                mark_historical_source_exhausted(
+                    request,
+                    reason=reason,
+                    eligible_sessions=nxt.get("eligible_sessions"),
+                    processed_sessions=nxt.get("processed_sessions", len(processed)),
+                )
+            except Exception as exc:
+                self._incident(
+                    "EVIDENCE_EXHAUSTION_WRITE_FAILED",
+                    f"Could not persist historical evidence exhaustion: {type(exc).__name__}: {exc}",
+                )
+
+        state_token = json.dumps(
+            {
+                "phase": str(stage.get("phase") or ""),
+                "batch_id": str(stage.get("batch_id") or ""),
+                "processed": len(processed),
+                "last_error": str(stage.get("last_error") or ""),
+                "reason": reason,
+                "eligible": nxt.get("eligible_sessions"),
+                "sessions_total": nxt.get("sessions_total"),
+            },
+            sort_keys=True,
+            default=str,
+        )
+        return self.jobs.enqueue(
+            SCH.RESEARCH_CYCLE,
+            idempotency_key=SCH.historical_replan_key(
+                thesis_hash=thesis_hash,
+                request_id=request_id,
+                reason=reason,
+                state_token=state_token,
+            ),
+            input_snapshot_id=request_id or thesis_hash or str(session_date or ""),
+        )
+
     def enqueue_due(self, now_ist=None):
         """Keep QuantTerm productive in both live and closed-market regimes.
 
@@ -634,7 +714,22 @@ class Supervisor:
                 )
                 return
             if phase == "FAILED":
-                # Do not skip a failed historical batch and create fake progress.
+                # Do not skip the failed batch or advance its cursor. But also do
+                # not leave a healthy supervisor silently IDLE for hours: surface
+                # the failure and allow one bounded research replan on the evidence
+                # that already exists.
+                self._incident(
+                    "HISTORICAL_PIPELINE_FAILED",
+                    f"Historical replay is failed: {stage.get('last_error') or 'unknown error'}",
+                )
+                self._enqueue_closed_market_replan(
+                    stage=stage,
+                    next_batch={
+                        "available": False,
+                        "reason": "historical_phase_failed",
+                    },
+                    session_date=last_session or now_ist.date().isoformat(),
+                )
                 return
 
             nxt = peek_next_batch()
@@ -646,6 +741,17 @@ class Supervisor:
                         idempotency_key=SCH.historical_paper_key(bid),
                         input_snapshot_id=bid,
                     )
+                    return
+
+            # No runnable historical batch is still a meaningful scheduler
+            # state. Give the Research Director one idempotent chance to close,
+            # reframe or redirect the evidence request instead of emitting hours
+            # of DATA_READY/IDLE heartbeats with no work due.
+            self._enqueue_closed_market_replan(
+                stage=stage,
+                next_batch=nxt,
+                session_date=last_session or now_ist.date().isoformat(),
+            )
         except Exception as exc:
             self._incident(
                 "HISTORICAL_SCHEDULER_ERROR",
