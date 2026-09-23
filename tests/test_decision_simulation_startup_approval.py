@@ -614,3 +614,59 @@ def test_durable_startup_approval_does_not_authorize_stale_current_projection(
 
     gate["discovery_ready"] = True
     assert sup._ensure_decision_simulation_authority() is True
+
+
+def test_manual_paper_control_waits_durably_for_discovery_refresh(tmp_path, monkeypatch):
+    """An accepted control is not lost when immutable discovery is between identities."""
+    from datetime import datetime, timezone
+
+    from research.autonomy import controls as CTRL
+    from research.autonomy import schedules as SCH
+    from research.autonomy.supervisor import Supervisor
+
+    class DiscoveryDeps:
+        def active_snapshot_id(self):
+            return "snapshot-1"
+
+        def now_ist(self):
+            return datetime(2026, 9, 22, 18, 0, tzinfo=timezone.utc)
+
+    approval = {"accepted": False}
+    monkeypatch.setattr(
+        "product.decision_simulation_gate.approve",
+        lambda: dict(approval),
+    )
+
+    sup = Supervisor(tmp_path / "auto", deps=DiscoveryDeps())
+    refresh_calls = []
+    monkeypatch.setattr(
+        sup,
+        "_ensure_startup_trade_discovery",
+        lambda: refresh_calls.append("refresh"),
+    )
+    control = sup.controls.request(CTRL.RUN_CYCLE_NOW, requested_by="test")
+
+    sup._process_controls()
+
+    assert refresh_calls == ["refresh"]
+    assert [row.control_id for row in sup.controls.pending()] == [control.control_id]
+    assert not [
+        job for job in sup.jobs.list(limit=20)
+        if job.job_type == SCH.PAPER_CYCLE
+    ]
+
+    approval["accepted"] = True
+    sup._process_controls()
+
+    assert sup.controls.pending() == []
+    recent = {row.control_id: row for row in sup.controls.recent(limit=20)}
+    assert recent[control.control_id].status == CTRL.PROCESSED
+    paper = [
+        job for job in sup.jobs.list(limit=20)
+        if job.job_type == SCH.PAPER_CYCLE
+    ]
+    assert len(paper) == 1
+    assert paper[0].critical is True
+    assert paper[0].idempotency_key == (
+        f"manual:cycle:snapshot-1:{control.control_id}"
+    )
