@@ -1013,33 +1013,14 @@ def run_paper_cycle(ctx) -> JobResult:
     if management_only:
         entries_ok = False
         reason = "SIMULATION_APPROVAL_REQUIRED"
-    elif automatic_entry and entries_ok:
-        try:
-            from product.decision_simulation_gate import is_approved
-            if not is_approved():
-                return JobResult(
-                    JS.SKIPPED_IDEMPOTENT,
-                    "paper entries skipped because Decision Simulation approval is no longer valid",
-                    state_hint=ST.OBSERVING,
-                    new_entries_allowed=False,
-                    metadata={
-                        "eligibility": "WAITING_FOR_SIMULATION_APPROVAL",
-                        "entry_block_reason": "SIMULATION_APPROVAL_REQUIRED",
-                        "session_phase": phase,
-                    },
-                )
-        except Exception:
-            return JobResult(
-                JS.SKIPPED_IDEMPOTENT,
-                "paper entries skipped because Decision Simulation approval could not be verified",
-                state_hint=ST.OBSERVING,
-                new_entries_allowed=False,
-                metadata={
-                    "eligibility": "WAITING_FOR_SIMULATION_APPROVAL",
-                    "entry_block_reason": "SIMULATION_APPROVAL_REQUIRED",
-                    "session_phase": phase,
-                },
-            )
+    # snapshot_paper:* is created only by Supervisor._paper_for_snapshot after
+    # the current scan/thesis discovery identity has been approved. That durable
+    # job is the authority record for exactly one paper-only mutation. Re-reading
+    # the mutable startup gate here created a TOCTOU race: the supervisor could
+    # authorize/enqueue the job, then the handler could see a transient cache
+    # replacement or test seam and retire the job as SKIPPED_IDEMPOTENT. Trust
+    # the durable internal job identity; live-money authority remains governed
+    # by the independent execution interlock.
     data_ready, data_source = _paper_market_data_source(ctx)
     data_failure = ""
     if not data_ready:
