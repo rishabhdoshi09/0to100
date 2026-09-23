@@ -435,19 +435,23 @@ class Supervisor:
         )
 
     def _ensure_decision_simulation_authority(self) -> bool:
-        """Automatically authorize paper/history simulation after fresh discovery.
+        """Authorize simulation only for the current scan/thesis discovery identity.
 
-        This grants no live-money authority. It only replaces the old per-startup
-        manual click for PAPER_FORWARD and HISTORICAL_REPLAY after the canonical
-        freshness/discovery gate has succeeded.
+        Startup approval remains durable, but it is not permission to use a stale
+        decision projection after learning changes effective selection behavior or
+        a newer scan replaces the approved scan. The current discovery projection
+        must exist first. Live-money authority is independent and remains locked.
         """
         try:
             from product.decision_simulation_gate import (
                 ensure_autonomous_approval,
-                is_approved,
+                status,
             )
 
-            if is_approved():
+            gate = dict(status() or {})
+            if not gate.get("discovery_ready"):
+                return False
+            if gate.get("approved"):
                 return True
             approval = ensure_autonomous_approval()
             return bool(approval.get("accepted") and approval.get("approved"))
@@ -464,10 +468,31 @@ class Supervisor:
         try:
             from product.decision_simulation_gate import current_startup_id, status
 
-            gate = status()
+            gate = dict(status() or {})
             if gate.get("discovery_ready"):
                 self._ensure_decision_simulation_authority()
                 return
+
+            # A fresh persisted market scan already contains the expensive market
+            # work. If learning changed the effective selection-policy/thesis
+            # identity after that scan, refresh only the deterministic decision
+            # projection. Key the durable job to both identities so repeated ticks
+            # are idempotent and a later thesis change gets its own projection.
+            scan_id = str(gate.get("scan_scanned_at") or "")
+            thesis_hash = str(
+                gate.get("current_thesis_hash")
+                or gate.get("thesis_hash")
+                or ""
+            )
+            if gate.get("scan_fresh") and scan_id and thesis_hash:
+                self.jobs.enqueue(
+                    SCH.DISCOVERY_REFRESH,
+                    idempotency_key=f"discovery_refresh:{scan_id}:{thesis_hash}",
+                    input_snapshot_id=scan_id,
+                    critical=True,
+                )
+                return
+
             startup_id = current_startup_id()
             if not startup_id:
                 return
