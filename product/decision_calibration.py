@@ -161,7 +161,11 @@ class DecisionCalibrationEngine:
         if outcome_as_of and decision_as_of and str(outcome_as_of) < str(decision_as_of):
             raise ValueError("outcome cannot precede the point-in-time decision")
         bucket = _bucket(predicted_confidence)
-        implied = predicted_p if predicted_p is not None else _implied_p(bucket)
+        implied = (
+            _probability(predicted_p)
+            if predicted_p is not None
+            else _implied_p(bucket)
+        )
         row = {
             "predicted_confidence": bucket,
             "predicted_p": implied,
