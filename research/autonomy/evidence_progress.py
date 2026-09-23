@@ -223,6 +223,80 @@ def record_historical_batch(
     return progress
 
 
+def mark_historical_source_exhausted(
+    request: Mapping[str, Any] | None,
+    *,
+    reason: str = "historical_backlog_caught_up",
+    eligible_sessions: int | None = None,
+    processed_sessions: int | None = None,
+    path: str | Path | None = None,
+    request_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Close an OPEN historical request when no settleable source rows remain.
+
+    This is not fake evidence progress. It records that the currently available
+    historical source cannot satisfy the request and hands control back to the
+    research planner to reformulate the question instead of replaying forever or
+    leaving the supervisor silently idle.
+    """
+    req = dict(request or {})
+    request_id = str(req.get("request_id") or "")
+    if not request_id:
+        return {}
+    allowed = {str(x).upper() for x in (req.get("allowed_lanes") or [])}
+    if "HISTORICAL_REPLAY" not in allowed:
+        return {
+            "request_id": request_id,
+            "status": EA.BLOCKED,
+            "reason": "HISTORICAL_REPLAY_NOT_ALLOWED_FOR_REQUEST",
+        }
+
+    target_path = Path(path) if path is not None else DEFAULT_PROGRESS_PATH
+    store = _read(target_path)
+    request_rows = dict(store.get("requests") or {})
+    previous = dict(request_rows.get(request_id) or {})
+    baseline = max(0, int(req.get("current_samples") or 0))
+    acquired = max(0, int(previous.get("samples_acquired") or 0))
+    target = max(baseline, int(req.get("target_samples") or baseline))
+    current = baseline + acquired
+    resolved = sorted({str(x) for x in (previous.get("resolved_metrics") or []) if str(x)})
+    missing = {str(x) for x in (req.get("missing_metrics") or []) if str(x)}
+    unresolved = sorted(missing - set(resolved))
+    message = (
+        "no unprocessed fully-settleable historical sessions remain; "
+        "research question must be replanned"
+    )
+    if reason and reason != "historical_backlog_caught_up":
+        message = f"{reason}: {message}"
+
+    progress = {
+        **previous,
+        "request_id": request_id,
+        "status": EA.PLATEAUED,
+        "reason": message,
+        "evidence_origin": str(req.get("evidence_origin") or ""),
+        "samples_baseline": baseline,
+        "samples_acquired": acquired,
+        "sample_count": current,
+        "target_samples": target,
+        "sample_deficit": max(0, target - current),
+        "resolved_metrics": resolved,
+        "unresolved_metrics": unresolved,
+        "source_exhausted": True,
+        "source_exhaustion_reason": str(reason or "historical_backlog_caught_up"),
+        "eligible_sessions": None if eligible_sessions is None else int(eligible_sessions),
+        "processed_sessions": None if processed_sessions is None else int(processed_sessions),
+        "next_action": "REPLAN_RESEARCH_QUESTION",
+        "updated_at": _now(),
+    }
+    request_rows[request_id] = progress
+    store["requests"] = request_rows
+    store["schema_version"] = SCHEMA_VERSION
+    _write(target_path, store)
+    _update_request_file(request_id, EA.PLATEAUED, progress, request_path=request_path)
+    return progress
+
+
 def load_progress(
     request_id: str,
     *,
