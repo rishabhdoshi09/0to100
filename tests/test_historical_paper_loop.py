@@ -257,7 +257,7 @@ def test_historical_batch_carries_only_eligible_evidence_request(tmp_path, monke
 
     historical = EA.build_request(
         session_date="2026-09-21",
-        strategy_id="MOM",
+        strategy_id="QT_RECO_ENSEMBLE",
         gap_kind="poor_calibration",
         diagnosis="Need historical validation evidence.",
         evidence_origin="RESEARCH_VALIDATION",
@@ -338,7 +338,7 @@ def test_active_curriculum_noncontiguous_sessions_are_durable_and_never_repeat(t
 
     req = EA.build_request(
         session_date="2026-09-21",
-        strategy_id="MOM",
+        strategy_id="QT_RECO_ENSEMBLE",
         gap_kind="poor_calibration",
         diagnosis="Balance historical regime evidence.",
         evidence_origin="RESEARCH_VALIDATION",
