@@ -269,6 +269,7 @@ class TestScheduler:
         # Presence of an open position forces the real management path. The
         # object value is irrelevant because runtime management is stubbed here.
         brain.intel_book.open[("sid", "ABC")] = object()
+        brain._save_intel_book = lambda: None
 
         ctx = SimpleNamespace(
             cycle_type="paper_session",
