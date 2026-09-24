@@ -262,12 +262,17 @@ def mark_historical_source_exhausted(
     resolved = sorted({str(x) for x in (previous.get("resolved_metrics") or []) if str(x)})
     missing = {str(x) for x in (req.get("missing_metrics") or []) if str(x)}
     unresolved = sorted(missing - set(resolved))
-    message = (
-        "no unprocessed fully-settleable historical sessions remain; "
-        "research question must be replanned"
-    )
-    if reason and reason != "historical_backlog_caught_up":
-        message = f"{reason}: {message}"
+    source_exhausted = str(reason or "") == "historical_backlog_caught_up"
+    if source_exhausted:
+        message = (
+            "no unprocessed fully-settleable historical sessions remain; "
+            "research question must be replanned"
+        )
+    else:
+        message = (
+            f"{reason or 'historical_replay_plateau'}: historical replay cannot "
+            "justify another evidence acquisition; research question must be replanned"
+        )
 
     progress = {
         **previous,
@@ -282,8 +287,11 @@ def mark_historical_source_exhausted(
         "sample_deficit": max(0, target - current),
         "resolved_metrics": resolved,
         "unresolved_metrics": unresolved,
-        "source_exhausted": True,
-        "source_exhaustion_reason": str(reason or "historical_backlog_caught_up"),
+        "source_exhausted": source_exhausted,
+        "source_exhaustion_reason": (
+            str(reason or "historical_backlog_caught_up") if source_exhausted else ""
+        ),
+        "stopping_reason": "" if source_exhausted else str(reason or "historical_replay_plateau"),
         "eligible_sessions": None if eligible_sessions is None else int(eligible_sessions),
         "processed_sessions": None if processed_sessions is None else int(processed_sessions),
         "next_action": "REPLAN_RESEARCH_QUESTION",
