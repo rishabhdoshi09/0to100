@@ -1,9 +1,8 @@
-"""Derive and persist realized information gain for historical replay only.
+"""Validate and persist realized evidence yield for historical replay only.
 
-Selection and realization remain separate immutable events.  This module never
-creates forward evidence or execution authority; it merely closes a previously
-journaled HISTORICAL_REPLAY acquisition after the replay executor has produced
-its authoritative result.
+Selection and realization remain separate immutable events. This module never
+creates forward evidence or execution authority; it only closes a previously
+selected HISTORICAL_REPLAY acquisition after authoritative replay completion.
 """
 from __future__ import annotations
 
@@ -27,9 +26,9 @@ def persist_realized_replay_gain(
 ) -> dict[str, Any]:
     """Persist outcome-blind evidence yield from one completed replay.
 
-    The executor must echo the acquisition identity.  Identity disagreement,
-    forward evidence, or incomplete execution fails closed instead of silently
-    attaching a result to the wrong acquisition.
+    The executor must echo every immutable acquisition identity. Any identity
+    disagreement, forward evidence, or non-success result fails closed instead
+    of silently attaching evidence to the wrong acquisition.
     """
     if str(selection.get("evidence_origin") or "").upper() != EVIDENCE_ORIGIN:
         raise ValueError("selection must be HISTORICAL_REPLAY")
@@ -50,25 +49,15 @@ def persist_realized_replay_gain(
         if not expected or not actual or expected != actual:
             raise ValueError(f"replay identity mismatch: {key}")
 
-    requested = _clean_metrics(selection.get("requested_metrics") or replay_result.get("requested_metrics"))
     produced = _clean_metrics(replay_result.get("metrics_produced"))
-    metrics_closed = sorted(requested & produced)
     try:
         eligible_samples = max(0, int(replay_result.get("eligible_sample_count") or 0))
-    except (TypeError, ValueError):
-        raise ValueError("eligible_sample_count must be an integer")
-
-    # Realized gain is evidence acquisition yield, never trade P&L.  One unit
-    # per requested metric closed plus bounded sample yield makes the value
-    # deterministic and safe for plateau/stopping laws.
-    requested_deficit = max(0, int(replay_result.get("requested_sample_deficit") or 0))
-    sample_gain = min(eligible_samples, requested_deficit) if requested_deficit else 0
-    realized_gain = float(len(metrics_closed) + sample_gain)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("eligible_sample_count must be an integer") from exc
 
     return record_realized_gain(
         selection,
-        realized_information_gain=realized_gain,
-        eligible_sample_count=eligible_samples,
-        metrics_produced=sorted(produced),
+        eligible_samples=eligible_samples,
+        metrics_realized=sorted(produced),
         path=journal_path,
     )
