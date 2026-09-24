@@ -232,6 +232,22 @@ def plan_runtime_acquisitions(
     # to the current production thesis; the durable request id is unchanged.
     req["thesis_hash"] = bound_thesis
 
+    from product.strategy_catalog import ENSEMBLE_ID
+
+    if str(req.get("strategy_id") or "") != ENSEMBLE_ID:
+        return {
+            "sessions": [],
+            "acquisitions": [],
+            "selection_policy": "INFORMATION_GAIN",
+            "evidence_origin": EVIDENCE_ORIGIN,
+            "reason": "strategy_replay_parity_unverified",
+            "stop": True,
+            "stopping_reason": (
+                "historical paper replays QT_RECO_ENSEMBLE only; "
+                "research-strategy parity is unverified"
+            ),
+        }
+
     existing = records_for_request(request_id, path=journal_path)
     # A legacy request may predate explicit thesis binding. Never let realized
     # yield from an older production thesis stop a replay investigation under
@@ -323,8 +339,14 @@ def persist_runtime_realized_gain(
         if len(day) == 10:
             by_session[day] = by_session.get(day, 0) + 1
 
+    from product.strategy_catalog import ENSEMBLE_ID
+
     persisted = []
     for acquisition in selected:
+        if str(acquisition.get("strategy_id") or "") != ENSEMBLE_ID:
+            raise ValueError(
+                "historical replay acquisition strategy is not QT_RECO_ENSEMBLE"
+            )
         day = str(acquisition.get("session_date") or "")[:10]
         useful = max(0, int(by_session.get(day, 0)))
         realized = {
