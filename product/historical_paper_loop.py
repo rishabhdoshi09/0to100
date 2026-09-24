@@ -1090,10 +1090,12 @@ def _run_batch(
             state_path=state_path,
         )
 
-    # Close only acquisitions that were durably SELECTED before this replay and
-    # only after the post-simulation thesis identity has been revalidated.
-    # A DEGRADED replay remains useful for diagnostics but is not authoritative
-    # enough to append realized information gain.
+    ledger = Path(ledger_path) if ledger_path is not None else DEFAULT_LEDGER
+    appended = _append_unique(ledger, trades)
+
+    # Close acquisitions only after the settled virtual-paper samples are
+    # durably present in their authoritative ledger. Restart retries are safe:
+    # both the trade ledger and acquisition journal are idempotent.
     acquisition_realization = {
         "records": [],
         "reason": "no_journaled_acquisitions",
@@ -1128,8 +1130,6 @@ def _run_batch(
                 "error": f"{type(exc).__name__}: {exc}"[:200],
             }
 
-    ledger = Path(ledger_path) if ledger_path is not None else DEFAULT_LEDGER
-    appended = _append_unique(ledger, trades)
     all_trades = _load_ledger(ledger)
     thesis_trades = [
         row for row in all_trades
