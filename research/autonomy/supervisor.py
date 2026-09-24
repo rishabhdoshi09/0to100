@@ -1318,6 +1318,18 @@ class Supervisor:
             )
             return
 
+        if (
+            activity == "FORWARD_PAPER"
+            and current in (ST.OBSERVING, ST.DATA_READY, ST.DATA_REFRESHING, ST.STARTING)
+        ):
+            self._transition(
+                ST.PAPER_ACTIVE,
+                "activity_reconcile",
+                "A real forward-paper cycle is the authoritative active work.",
+                "activity_truth",
+            )
+            return
+
         if current not in (ST.DATA_REFRESHING, ST.STARTING):
             return
         if self._refresh_activity_active():
