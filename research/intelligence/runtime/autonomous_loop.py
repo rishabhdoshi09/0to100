@@ -137,6 +137,35 @@ def run_intelligence_cycle(ctx, *, store, book, runtime_state, knowledge=None,
         return res
 
 
+def manage_positions_only(ctx, *, store, book, runtime_state) -> IntelligenceCycleResult:
+    """Manage/exit existing paper positions without rebuilding research evidence.
+
+    This is intentionally narrower than the full intelligence cycle. Forward PAPER
+    execution owns new entries elsewhere; this path only advances already-open
+    positions using the current trusted session bar. It never opens new risk and
+    never computes in-sample strategy evidence.
+    """
+    cid = ctx.cycle_id()
+    res = IntelligenceCycleResult(cycle_id=cid, as_of_date=ctx.as_of_date, mode=ctx.mode)
+    MODES.assert_no_live(ctx.mode)
+    if not ctx.data_ok or not MODES.manages_positions(ctx.mode):
+        res.status = STATUS_NO_ACTION
+        res.data_ok = bool(ctx.data_ok)
+        res.no_action_reasons.append(
+            "data gate failed" if not ctx.data_ok else f"mode {ctx.mode} does not manage positions"
+        )
+        return res
+
+    runtime_state.reconcile(book)
+    _manage_positions(ctx, store, book, runtime_state, res)
+    _persist(store, book, runtime_state)
+    res.events_emitted = len(store)
+    res.status = STATUS_OK if res.positions_closed else STATUS_NO_ACTION
+    if not res.positions_closed:
+        res.no_action_reasons.append("no paper position required an exit")
+    return res
+
+
 # ── steps ────────────────────────────────────────────────────────────────────────
 
 def _manage_positions(ctx, store, book, state, res) -> None:
