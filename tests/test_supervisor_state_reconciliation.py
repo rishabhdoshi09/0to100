@@ -49,6 +49,41 @@ def test_successful_auth_probe_does_not_downgrade_data_ready(tmp_path):
     sup.shutdown()
 
 
+def test_restart_retires_orphaned_snapshot_paper_without_replay(tmp_path):
+    first = _sup(tmp_path)
+    assert first.start() is True
+    job = first.jobs.enqueue(
+        SCH.PAPER_CYCLE,
+        idempotency_key="snapshot_paper:snap-crashed",
+        input_snapshot_id="snap-crashed",
+        critical=True,
+    )
+    leased = first.jobs.lease_due(first.owner)
+    assert leased is not None and leased.job_id == job.job_id
+    assert first.jobs.get(job.job_id).status == JS.RUNNING
+
+    # Simulate abrupt predecessor exit while preserving the durable RUNNING row.
+    first.jobs.close()
+    first.controls.close()
+    first.lock.release()
+
+    second = _sup(tmp_path)
+    assert second.start() is True
+    retired = second.jobs.get(job.job_id)
+    assert retired.status == JS.PERMANENT_FAILED
+    assert retired.error_code == "ORPHANED_PAPER_CYCLE_RESTART"
+
+    same = second.jobs.enqueue(
+        SCH.PAPER_CYCLE,
+        idempotency_key="snapshot_paper:snap-crashed",
+        input_snapshot_id="snap-crashed",
+        critical=True,
+    )
+    assert same.job_id == job.job_id
+    assert same.status == JS.PERMANENT_FAILED
+    second.shutdown()
+
+
 def test_idle_tick_reconciles_latched_refreshing_to_ready(tmp_path):
     sup = _sup(tmp_path)
     assert sup.start() is True
