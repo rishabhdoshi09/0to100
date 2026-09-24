@@ -614,6 +614,7 @@ class Supervisor:
             "historical_backlog_caught_up",
             "realized_information_gain_plateau",
             "no_eligible_information_gain",
+            "strategy_replay_parity_unverified",
         }:
             try:
                 from research.autonomy.evidence_progress import mark_historical_source_exhausted
