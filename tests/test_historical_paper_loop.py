@@ -250,7 +250,7 @@ def test_historical_sequence_enforces_real_paper_book_overlap_caps(monkeypatch):
 
 
 
-def test_historical_batch_carries_only_eligible_evidence_request(tmp_path):
+def test_historical_batch_carries_only_eligible_evidence_request(tmp_path, monkeypatch):
     state = tmp_path / "state.json"
     request_path = tmp_path / "request.json"
     sessions = [f"2026-01-{day:02d}" for day in range(1, 13)]
@@ -266,6 +266,24 @@ def test_historical_batch_carries_only_eligible_evidence_request(tmp_path):
     )
     EA.save_request(historical, path=request_path)
 
+    def plan_information_gain(request, sessions, **_kwargs):
+        picked = list(sessions)[:2]
+        return {
+            "sessions": picked,
+            "acquisitions": [
+                {"session_date": day, "evidence_origin": "HISTORICAL_REPLAY"}
+                for day in picked
+            ],
+            "selection_policy": "INFORMATION_GAIN",
+            "reason": "selected",
+            "stop": False,
+        }
+
+    monkeypatch.setattr(
+        "research.autonomy.replay_acquisition_runtime.plan_runtime_acquisitions",
+        plan_information_gain,
+    )
+
     batch = HPL.peek_next_batch(
         sessions_fn=lambda: sessions,
         state_path=state,
@@ -277,10 +295,11 @@ def test_historical_batch_carries_only_eligible_evidence_request(tmp_path):
     )
     assert batch["evidence_request_id"] == historical.request_id
     assert batch["evidence_request"]["sample_deficit"] == 10
-    # Test environment has no official index cache, so the active curriculum
-    # truthfully falls back instead of inventing historical regime labels.
-    assert batch["selection_policy"] == "DURABLE_CURSOR"
+    # The PIT curriculum is only a prefilter. The final evidence-directed batch
+    # is selected and journaled by the information-gain planner.
+    assert batch["selection_policy"] == "INFORMATION_GAIN"
     assert batch["selection_details"]["outcome_blind_selection"] is True
+    assert batch["selection_details"]["acquisitions"]
 
     forward_only = EA.build_request(
         session_date="2026-09-21",
@@ -351,6 +370,24 @@ def test_active_curriculum_noncontiguous_sessions_are_durable_and_never_repeat(t
         choose,
     )
 
+    def plan_information_gain(request, sessions, **_kwargs):
+        picked = list(sessions)[:2]
+        return {
+            "sessions": picked,
+            "acquisitions": [
+                {"session_date": day, "evidence_origin": "HISTORICAL_REPLAY"}
+                for day in picked
+            ],
+            "selection_policy": "INFORMATION_GAIN",
+            "reason": "selected",
+            "stop": False,
+        }
+
+    monkeypatch.setattr(
+        "research.autonomy.replay_acquisition_runtime.plan_runtime_acquisitions",
+        plan_information_gain,
+    )
+
     first = HPL.peek_next_batch(
         sessions_fn=lambda: sessions,
         state_path=state,
@@ -360,7 +397,8 @@ def test_active_curriculum_noncontiguous_sessions_are_durable_and_never_repeat(t
         horizon_sessions=2,
         universe_limit=10,
     )
-    assert first["selection_policy"] == "ACTIVE_REGIME_COVERAGE"
+    assert first["selection_policy"] == "INFORMATION_GAIN"
+    assert first["selection_details"]["curriculum_selection_policy"] == "ACTIVE_REGIME_COVERAGE"
     assert len(first["sessions"]) == 2
     assert first["sessions"] == sorted(first["sessions"])
 
