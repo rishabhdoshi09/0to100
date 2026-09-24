@@ -229,7 +229,23 @@ def plan_runtime_acquisitions(
     req["thesis_hash"] = bound_thesis
 
     existing = records_for_request(request_id, path=journal_path)
-    stopping = evaluate_realized_gain(existing, request_id=request_id)
+    # A legacy request may predate explicit thesis binding. Never let realized
+    # yield from an older production thesis stop a replay investigation under
+    # the current thesis merely because the durable request id is unchanged.
+    current_fingerprints = {
+        str(row.get("acquisition_fingerprint") or "")
+        for row in existing
+        if str(row.get("event") or "").upper() == "SELECTED"
+        and str(row.get("thesis_hash") or "") == bound_thesis
+        and str(row.get("strategy_id") or "") == str(req.get("strategy_id") or "")
+    }
+    stopping_records = [
+        row
+        for row in existing
+        if str(row.get("event") or "").upper() != "REALIZED"
+        or str(row.get("acquisition_fingerprint") or "") in current_fingerprints
+    ]
+    stopping = evaluate_realized_gain(stopping_records, request_id=request_id)
     if stopping.stop:
         return {
             "sessions": [],
