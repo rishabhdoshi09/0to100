@@ -91,12 +91,17 @@ def _canonical_identity(
     if str(registry.get("registry_version") or "") != signal_registry_version:
         raise ValueError("signal-registry version does not match calibration snapshot")
 
-    universe_context = {
-        "data_version": data_id,
-        "policy_versions": versions,
-        "universe_limit": int(universe_limit),
-        "membership_rule": "official_bar_exactly_on_session",
-    }
+    from product.historical_replay import _universe_cache_identity
+
+    universe_snapshot_id = _universe_cache_identity(
+        data_fingerprint=data_id,
+        versions=versions,
+        symbols=None,
+        universe_limit=int(universe_limit),
+    )
+    if not universe_snapshot_id:
+        raise ValueError("canonical replay universe snapshot identity unavailable")
+
     return {
         "thesis_hash": thesis,
         "data_version": data_id,
@@ -105,7 +110,9 @@ def _canonical_identity(
         "signal_registry_version": signal_registry_version,
         "calibration_snapshot_id": calibration_snapshot_id,
         "policy_versions": versions,
-        "universe_context_fingerprint": _stable_hash(universe_context),
+        # This is the exact cache identity used by product.historical_replay
+        # for universe_snapshot.json under the same data/policy inputs.
+        "universe_snapshot_id": universe_snapshot_id,
     }
 
 
@@ -136,10 +143,7 @@ def _candidate_rows(
         day = str(value or "")[:10]
         if len(day) != 10:
             continue
-        universe_snapshot_id = "unisnap_" + _stable_hash({
-            "session_date": day,
-            "universe_context_fingerprint": identity["universe_context_fingerprint"],
-        })[:20]
+        universe_snapshot_id = str(identity["universe_snapshot_id"])
         decision_fingerprint = "replayctx_" + _stable_hash({
             "request_id": request_id,
             "session_date": day,
