@@ -247,6 +247,27 @@ def test_data_refresh_takes_activity_state_after_research_finishes(tmp_path):
     sup.shutdown()
 
 
+def test_forward_paper_activity_promotes_observing_to_paper_active(tmp_path):
+    sup = _sup(tmp_path)
+    assert sup.start() is True
+    sup._transition(ST.OBSERVING, "fixture", "waiting for paper work", "test")
+    job = sup.jobs.enqueue(
+        SCH.PAPER_CYCLE,
+        idempotency_key="snapshot_paper:snap-current",
+        scheduled_for=sup.clock() - 1.0,
+        critical=True,
+    )
+    leased = sup.jobs.lease_due(sup.owner)
+    assert leased is not None and leased.job_id == job.job_id
+
+    sup._reconcile_idle_state()
+
+    assert sup.state.state == ST.PAPER_ACTIVE
+    assert sup.state.reason_code == "activity_reconcile"
+    assert "forward-paper cycle" in sup.state.explanation
+    sup.shutdown()
+
+
 def test_historical_replan_identity_ignores_thesis_only_churn():
     base = SCH.historical_replan_key(
         thesis_hash="thesis-a",
