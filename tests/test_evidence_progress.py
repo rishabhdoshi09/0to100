@@ -162,3 +162,26 @@ def test_exhausted_historical_source_plateaus_request_and_requires_replan(tmp_pa
     persisted = EA.load_request(request_path)
     assert persisted["status"] == EA.PLATEAUED
     assert persisted["progress"]["source_exhausted"] is True
+
+
+def test_information_gain_plateau_is_not_reported_as_source_exhaustion(tmp_path):
+    req = _request(current_samples=12, target_samples=30)
+    request_path = tmp_path / "request.json"
+    progress_path = tmp_path / "progress.json"
+    EA.save_request(req, path=request_path)
+
+    out = EP.mark_historical_source_exhausted(
+        req.as_dict(),
+        reason="realized_information_gain_plateau",
+        eligible_sessions=120,
+        processed_sessions=40,
+        path=progress_path,
+        request_path=request_path,
+    )
+
+    assert out["status"] == EA.PLATEAUED
+    assert out["source_exhausted"] is False
+    assert out["source_exhaustion_reason"] == ""
+    assert out["stopping_reason"] == "realized_information_gain_plateau"
+    assert out["next_action"] == "REPLAN_RESEARCH_QUESTION"
+    assert "cannot justify another evidence acquisition" in out["reason"]
