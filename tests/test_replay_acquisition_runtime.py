@@ -13,7 +13,7 @@ def _request(**overrides):
         "status": "OPEN",
         "allowed_lanes": ["HISTORICAL_REPLAY"],
         "request_id": "req-runtime-1",
-        "strategy_id": "prod-selection",
+        "strategy_id": "QT_RECO_ENSEMBLE",
         "thesis_hash": "thesis-v1",
         "sample_deficit": 3,
         "missing_metrics": ["walk_forward_ok"],
@@ -152,7 +152,7 @@ def test_realized_plateau_stops_before_another_acquisition(tmp_path):
                 "evidence_origin": "HISTORICAL_REPLAY",
                 "request_id": "req-runtime-1",
                 "acquisition_fingerprint": fingerprint,
-                "strategy_id": "prod-selection",
+                "strategy_id": "QT_RECO_ENSEMBLE",
                 "thesis_hash": "thesis-v1",
                 "record_fingerprint": f"selected-{index}",
             },
@@ -197,7 +197,7 @@ def test_old_thesis_realized_gain_cannot_stop_current_thesis(tmp_path, monkeypat
                 "evidence_origin": "HISTORICAL_REPLAY",
                 "request_id": "req-runtime-1",
                 "acquisition_fingerprint": fingerprint,
-                "strategy_id": "prod-selection",
+                "strategy_id": "QT_RECO_ENSEMBLE",
                 "thesis_hash": "old-thesis",
                 "record_fingerprint": f"old-selected-{index}",
             },
@@ -228,6 +228,19 @@ def test_old_thesis_realized_gain_cannot_stop_current_thesis(tmp_path, monkeypat
     )
     assert planned["stop"] is False
     assert planned["sessions"] == ["2026-01-05"]
+
+
+def test_unverified_research_strategy_parity_stops_without_acquisition(tmp_path):
+    planned = plan_runtime_acquisitions(
+        _request(strategy_id="MOMENTUM_RESEARCH"),
+        ["2026-01-05"],
+        thesis_hash="thesis-v1",
+        universe_limit=40,
+        journal_path=tmp_path / "acquisition.jsonl",
+    )
+    assert planned["stop"] is True
+    assert planned["reason"] == "strategy_replay_parity_unverified"
+    assert planned["acquisitions"] == []
 
 
 def test_runtime_realization_refuses_forward_origin(tmp_path, monkeypatch):
