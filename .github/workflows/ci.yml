@@ -170,7 +170,7 @@ jobs:
       - name: Compile every module (import-safety net)
         run: |
           python -m compileall -q data scan risk execution ui reports ai core alerts news research product reporting operations fundamentals expectancy
-          python -m py_compile api/app.py terminal_api.py terminal_product_api.py terminal_product_api_parallel.py report_api.py
+          python -m py_compile api/app.py api/runtime.py terminal_api.py terminal_product_api.py terminal_product_api_parallel.py report_api.py
           python -m py_compile scripts/run_product_acceptance.py scripts/_product_acceptance_core.py
           python -m py_compile product/paper_learning_loop.py product/_paper_learning_loop_core.py
           python -m py_compile _terminal_product_api_parallel_core.py
