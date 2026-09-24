@@ -145,13 +145,26 @@ def test_realized_plateau_stops_before_another_acquisition(tmp_path):
     journal = tmp_path / "acquisition.jsonl"
     rows = []
     for index in range(8):
-        rows.append({
-            "event": "REALIZED",
-            "evidence_origin": "HISTORICAL_REPLAY",
-            "request_id": "req-runtime-1",
-            "record_fingerprint": f"real-{index}",
-            "eligible_samples": 0,
-        })
+        fingerprint = f"acq-{index}"
+        rows.extend([
+            {
+                "event": "SELECTED",
+                "evidence_origin": "HISTORICAL_REPLAY",
+                "request_id": "req-runtime-1",
+                "acquisition_fingerprint": fingerprint,
+                "strategy_id": "prod-selection",
+                "thesis_hash": "thesis-v1",
+                "record_fingerprint": f"selected-{index}",
+            },
+            {
+                "event": "REALIZED",
+                "evidence_origin": "HISTORICAL_REPLAY",
+                "request_id": "req-runtime-1",
+                "acquisition_fingerprint": fingerprint,
+                "record_fingerprint": f"real-{index}",
+                "eligible_samples": 0,
+            },
+        ])
     journal.write_text(
         "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
         encoding="utf-8",
@@ -167,6 +180,54 @@ def test_realized_plateau_stops_before_another_acquisition(tmp_path):
     assert planned["stop"] is True
     assert planned["reason"] == "realized_information_gain_plateau"
     assert planned["stopping_reason"] == "SUSTAINED_ZERO_INFORMATION_GAIN"
+
+
+def test_old_thesis_realized_gain_cannot_stop_current_thesis(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "scan.signal_registry_versions.persist_canonical_version",
+        lambda: {"registry_version": "sig-1"},
+    )
+    journal = tmp_path / "acquisition.jsonl"
+    rows = []
+    for index in range(8):
+        fingerprint = f"old-acq-{index}"
+        rows.extend([
+            {
+                "event": "SELECTED",
+                "evidence_origin": "HISTORICAL_REPLAY",
+                "request_id": "req-runtime-1",
+                "acquisition_fingerprint": fingerprint,
+                "strategy_id": "prod-selection",
+                "thesis_hash": "old-thesis",
+                "record_fingerprint": f"old-selected-{index}",
+            },
+            {
+                "event": "REALIZED",
+                "evidence_origin": "HISTORICAL_REPLAY",
+                "request_id": "req-runtime-1",
+                "acquisition_fingerprint": fingerprint,
+                "record_fingerprint": f"old-real-{index}",
+                "eligible_samples": 0,
+            },
+        ])
+    journal.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+    planned = plan_runtime_acquisitions(
+        _request(),
+        ["2026-01-05"],
+        thesis_hash="thesis-v1",
+        universe_limit=40,
+        batch_size=1,
+        journal_path=journal,
+        calibration_snapshot=_snapshot(),
+        data_version="data-1",
+        policy_versions={"decision_engine_version": "v1"},
+    )
+    assert planned["stop"] is False
+    assert planned["sessions"] == ["2026-01-05"]
 
 
 def test_runtime_realization_refuses_forward_origin(tmp_path, monkeypatch):
