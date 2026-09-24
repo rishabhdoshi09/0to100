@@ -610,7 +610,11 @@ class Supervisor:
         # A request that asks historical replay for more samples cannot remain
         # OPEN once every currently settleable historical session is consumed.
         # Close it as PLATEAUED and hand the question back to research planning.
-        if request and reason == "historical_backlog_caught_up":
+        if request and reason in {
+            "historical_backlog_caught_up",
+            "realized_information_gain_plateau",
+            "no_eligible_information_gain",
+        }:
             try:
                 from research.autonomy.evidence_progress import mark_historical_source_exhausted
 
