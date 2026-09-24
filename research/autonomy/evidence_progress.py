@@ -63,9 +63,26 @@ def _decision_is_terminal(value: str) -> bool:
 
 
 def _historical_yield(batch_result: Mapping[str, Any]) -> int:
-    # Trade samples are the unit used by the current research gates. Decisions
-    # are not substituted when no virtual trade was formed; doing so would
-    # falsely claim that a rejected/no-geometry decision increased trade N.
+    selection_details = dict(batch_result.get("selection_details") or {})
+    selection_policy = str(
+        batch_result.get("selection_policy")
+        or selection_details.get("selection_policy")
+        or ""
+    ).upper()
+    if selection_policy == "INFORMATION_GAIN":
+        # Once acquisition provenance is active, the realized acquisition journal
+        # is the single authority for evidence yield. Raw virtual-paper trade
+        # count may include unrelated activity and must not independently grow N.
+        realized = batch_result.get("acquisition_realization")
+        if not isinstance(realized, Mapping):
+            return 0
+        try:
+            return max(0, int(realized.get("eligible_samples") or 0))
+        except Exception:
+            return 0
+
+    # Backward compatibility for historical batches created before the
+    # information-gain journal existed.
     try:
         return max(0, int(batch_result.get("historical_paper_trades") or 0))
     except Exception:
