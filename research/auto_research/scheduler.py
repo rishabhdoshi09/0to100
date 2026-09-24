@@ -404,6 +404,69 @@ class AutoResearchBrain:
         finally:
             self._intel_lock.release()
 
+    def manage_intelligence_positions_day(
+        self,
+        date=None,
+        *,
+        entry_block_reason: str = "",
+        session_phase: str | None = None,
+        capability_failures=(),
+        fresh_live_symbols=(),
+    ) -> dict:
+        """Advance exits for existing intelligence-paper positions only.
+
+        New entries are owned by the recommendation paper executor. Keeping this
+        pass management-only prevents expensive in-sample evidence rebuilds from
+        blocking the forward-paper critical path.
+        """
+        if not self.intel_book.open:
+            return {
+                "status": "NO_ACTION",
+                "eligibility": "NO_OPEN_POSITIONS",
+                "positions_opened": [],
+                "positions_closed": [],
+                "new_entries_allowed": False,
+                "entry_block_reason": str(entry_block_reason or "RECO_SELECTION_AUTHORITY"),
+                "session_phase": str(session_phase or ""),
+            }
+        from research.intelligence.runtime.autonomous_loop import manage_positions_only
+        if not self._intel_lock.acquire(blocking=False):
+            return {
+                "status": "SKIPPED_LOCKED",
+                "eligibility": "ALREADY_RUNNING",
+                "positions_opened": [],
+                "positions_closed": [],
+                "new_entries_allowed": False,
+                "entry_block_reason": "INTELLIGENCE_LOCKED",
+                "session_phase": str(session_phase or ""),
+            }
+        try:
+            day = date or _today_str()
+            ctx, _provider = self._build_intel_ctx(day)
+            ctx.cycle_type = "paper_management"
+            ctx.new_entries_allowed = False
+            ctx.entry_block_reason = str(entry_block_reason or "RECO_SELECTION_AUTHORITY")
+            ctx.capability_failures = tuple(sorted(set(capability_failures or ())))
+            ctx.fresh_live_symbols = frozenset(str(s).upper() for s in (fresh_live_symbols or ()))
+            if session_phase:
+                ctx.session_phase = str(session_phase)
+            res = manage_positions_only(
+                ctx,
+                store=self.event_store,
+                book=self.intel_book,
+                runtime_state=self.runtime_state,
+            )
+            self.state.last_intel_cycle = res.as_dict()
+            self._save_intel_book()
+            out = res.as_dict()
+            out["eligibility"] = "MANAGED" if res.positions_closed else "NO_ACTION"
+            out["new_entries_allowed"] = False
+            out["entry_block_reason"] = ctx.entry_block_reason
+            out["session_phase"] = ctx.session_phase
+            return out
+        finally:
+            self._intel_lock.release()
+
     def _build_intel_ctx(self, day):
         """Build a CycleContext for the cycle. Preference order:
           1. an ACTIVE, VERIFIED snapshot (real NSE data) → snapshot-pinned production context;

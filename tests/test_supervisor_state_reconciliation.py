@@ -49,6 +49,41 @@ def test_successful_auth_probe_does_not_downgrade_data_ready(tmp_path):
     sup.shutdown()
 
 
+def test_restart_retires_orphaned_snapshot_paper_without_replay(tmp_path):
+    first = _sup(tmp_path)
+    assert first.start() is True
+    job = first.jobs.enqueue(
+        SCH.PAPER_CYCLE,
+        idempotency_key="snapshot_paper:snap-crashed",
+        input_snapshot_id="snap-crashed",
+        critical=True,
+    )
+    leased = first.jobs.lease_due(first.owner)
+    assert leased is not None and leased.job_id == job.job_id
+    assert first.jobs.get(job.job_id).status == JS.RUNNING
+
+    # Simulate abrupt predecessor exit while preserving the durable RUNNING row.
+    first.jobs.close()
+    first.controls.close()
+    first.lock.release()
+
+    second = _sup(tmp_path)
+    assert second.start() is True
+    retired = second.jobs.get(job.job_id)
+    assert retired.status == JS.PERMANENT_FAILED
+    assert retired.error_code == "ORPHANED_PAPER_CYCLE_RESTART"
+
+    same = second.jobs.enqueue(
+        SCH.PAPER_CYCLE,
+        idempotency_key="snapshot_paper:snap-crashed",
+        input_snapshot_id="snap-crashed",
+        critical=True,
+    )
+    assert same.job_id == job.job_id
+    assert same.status == JS.PERMANENT_FAILED
+    second.shutdown()
+
+
 def test_idle_tick_reconciles_latched_refreshing_to_ready(tmp_path):
     sup = _sup(tmp_path)
     assert sup.start() is True
@@ -244,6 +279,27 @@ def test_data_refresh_takes_activity_state_after_research_finishes(tmp_path):
 
     assert sup.state.state == ST.DATA_REFRESHING
     assert sup.state.reason_code == "activity_reconcile"
+    sup.shutdown()
+
+
+def test_forward_paper_activity_promotes_observing_to_paper_active(tmp_path):
+    sup = _sup(tmp_path)
+    assert sup.start() is True
+    sup._transition(ST.OBSERVING, "fixture", "waiting for paper work", "test")
+    job = sup.jobs.enqueue(
+        SCH.PAPER_CYCLE,
+        idempotency_key="snapshot_paper:snap-current",
+        scheduled_for=sup.clock() - 1.0,
+        critical=True,
+    )
+    leased = sup.jobs.lease_due(sup.owner)
+    assert leased is not None and leased.job_id == job.job_id
+
+    sup._reconcile_idle_state()
+
+    assert sup.state.state == ST.PAPER_ACTIVE
+    assert sup.state.reason_code == "activity_reconcile"
+    assert "forward-paper cycle" in sup.state.explanation
     sup.shutdown()
 
 

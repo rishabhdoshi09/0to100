@@ -1073,7 +1073,14 @@ def run_paper_cycle(ctx) -> JobResult:
             }
         except Exception:
             pass
-    summary = f"paper cycle: {eligibility or 'no-op'}"
+    reco = dict((result or {}).get("reco_autopilot") or {})
+    taken_n = len(reco.get("taken") or [])
+    rejected_n = len(reco.get("rejections") or [])
+    wait_n = len(reco.get("waits") or [])
+    summary = (
+        f"paper cycle: {eligibility or 'no-op'}"
+        f" · taken={taken_n} rejected={rejected_n} wait={wait_n}"
+    )
     if data_failure:
         summary = f"paper cycle: DATA_UNAVAILABLE ({data_failure})"
     return JobResult(JS.SUCCEEDED, summary,

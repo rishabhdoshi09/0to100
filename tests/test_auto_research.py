@@ -260,6 +260,74 @@ class TestScheduler:
                    for e in brain.thread.all())
 
 
+    def test_forward_paper_management_skips_insample_rebuild(self, monkeypatch):
+        from types import SimpleNamespace
+        from research.intelligence.runtime.cycle_result import IntelligenceCycleResult
+
+        brain = AutoResearchBrain(evaluate_fn=_strong_market_evaluator,
+                                  dataset_status_fn=lambda: GREEN)
+        # Presence of an open position forces the real management path. The
+        # object value is irrelevant because runtime management is stubbed here.
+        brain.intel_book.open[("sid", "ABC")] = object()
+        brain._save_intel_book = lambda: None
+
+        ctx = SimpleNamespace(
+            cycle_type="paper_session",
+            new_entries_allowed=True,
+            entry_block_reason="",
+            capability_failures=(),
+            fresh_live_symbols=frozenset(),
+            session_phase="intraday",
+            as_of_date="2026-09-24",
+            mode="PAPER_AUTO",
+            data_ok=True,
+            cycle_id=lambda: "paper-management-test",
+        )
+        brain._build_intel_ctx = lambda _day: (ctx, object())
+
+        def forbidden_insample(*_args, **_kwargs):
+            raise AssertionError("forward paper management must not rebuild in-sample evidence")
+
+        brain._insample_evidence = forbidden_insample
+        seen = {"called": 0}
+
+        def fake_manage(manage_ctx, *, store, book, runtime_state):
+            seen["called"] += 1
+            assert manage_ctx.cycle_type == "paper_management"
+            assert manage_ctx.new_entries_allowed is False
+            return IntelligenceCycleResult(
+                cycle_id=manage_ctx.cycle_id(),
+                as_of_date=manage_ctx.as_of_date,
+                mode=manage_ctx.mode,
+            )
+
+        monkeypatch.setattr(
+            "research.intelligence.runtime.autonomous_loop.manage_positions_only",
+            fake_manage,
+        )
+
+        out = brain.manage_intelligence_positions_day(
+            session_phase="intraday",
+            entry_block_reason="RECO_SELECTION_AUTHORITY",
+        )
+
+        assert seen["called"] == 1
+        assert out["new_entries_allowed"] is False
+        assert out["eligibility"] == "NO_ACTION"
+
+    def test_forward_paper_management_is_constant_time_when_book_empty(self):
+        brain = AutoResearchBrain(evaluate_fn=_strong_market_evaluator,
+                                  dataset_status_fn=lambda: GREEN)
+        brain._build_intel_ctx = lambda _day: (_ for _ in ()).throw(
+            AssertionError("empty book must not build an intelligence context")
+        )
+
+        out = brain.manage_intelligence_positions_day(session_phase="intraday")
+
+        assert out["eligibility"] == "NO_OPEN_POSITIONS"
+        assert out["positions_closed"] == []
+
+
 # ── canonical readiness fails closed ─────────────────────────────────────────────
 
 class TestCanonicalReadiness:

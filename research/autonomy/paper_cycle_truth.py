@@ -107,15 +107,29 @@ def install_paper_cycle_truth() -> None:
         live = self.live_feed
         brain = get_brain()
 
-        management = brain.run_intelligence_cycle_day(
-            new_entries_allowed=False,
-            entry_block_reason=(
-                "RECO_SELECTION_AUTHORITY" if entries_allowed else entry_block_reason
-            ),
-            session_phase=session_phase,
-            capability_failures=capability_failures,
-            fresh_live_symbols=(live.fresh_symbols() if live is not None else ()),
-        )
+        manage_fn = getattr(brain, "manage_intelligence_positions_day", None)
+        if callable(manage_fn):
+            management = manage_fn(
+                entry_block_reason=(
+                    "RECO_SELECTION_AUTHORITY" if entries_allowed else entry_block_reason
+                ),
+                session_phase=session_phase,
+                capability_failures=capability_failures,
+                fresh_live_symbols=(live.fresh_symbols() if live is not None else ()),
+            )
+        else:
+            # Compatibility for injected/older test brains. Production uses the
+            # management-only method above so historical evidence never blocks
+            # the real forward-paper entry path.
+            management = brain.run_intelligence_cycle_day(
+                new_entries_allowed=False,
+                entry_block_reason=(
+                    "RECO_SELECTION_AUTHORITY" if entries_allowed else entry_block_reason
+                ),
+                session_phase=session_phase,
+                capability_failures=capability_failures,
+                fresh_live_symbols=(live.fresh_symbols() if live is not None else ()),
+            )
         result = dict(management or {})
         failure_message = ""
         failure_cause: Exception | None = None

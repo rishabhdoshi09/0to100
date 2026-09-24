@@ -170,6 +170,11 @@ class Supervisor:
             self.jobs.unblock_dependency(JOBS.DEP_UNIVERSE_SOURCE)
         except Exception:
             pass
+        # A previous process may have died while an exactly-once automatic
+        # PAPER_CYCLE was RUNNING. Replaying that unknown partial mutation after
+        # restart is unsafe; retire it fail-closed and wait for a new data identity.
+        self._retire_orphaned_paper_mutations()
+
         # Legacy recurring rows from the old time-bucket scheduler must not fire
         # after an upgrade. Manual controls use "manual:" keys and are preserved.
         self._retire_legacy_recurring_work()
@@ -194,6 +199,35 @@ class Supervisor:
 
     def heartbeat(self):
         self._write_status()
+
+    def _retire_orphaned_paper_mutations(self) -> None:
+        """Fail closed on an automatic paper mutation left RUNNING across restart.
+
+        Once this process owns the single-instance lock, any persisted RUNNING
+        snapshot_paper row belongs to a dead predecessor. Its mutation boundary is
+        unknown, so retrying it could duplicate a paper entry. Preserve the row as
+        terminal failure and require a new snapshot identity (or explicit manual
+        operator action) for any later paper attempt.
+        """
+        for job in self.jobs.list(limit=2000):
+            key = str(job.idempotency_key or "")
+            if (
+                job.job_type == SCH.PAPER_CYCLE
+                and job.status == JS.RUNNING
+                and key.startswith("snapshot_paper:")
+            ):
+                self.jobs.complete(
+                    job.job_id,
+                    JS.PERMANENT_FAILED,
+                    result_summary=(
+                        "orphaned automatic paper cycle retired after restart; "
+                        "unknown partial mutation will not be replayed"
+                    ),
+                    error_code="ORPHANED_PAPER_CYCLE_RESTART",
+                    error_message=(
+                        "previous supervisor exited while snapshot paper mutation was RUNNING"
+                    ),
+                )
 
     def _retire_legacy_recurring_work(self) -> None:
         """Retire only rows owned by the superseded recurring scheduler.
@@ -1314,6 +1348,18 @@ class Supervisor:
                 ST.OBSERVING,
                 "activity_reconcile",
                 "Research work ended; no due or running research job remains.",
+                "activity_truth",
+            )
+            return
+
+        if (
+            activity == "FORWARD_PAPER"
+            and current in (ST.OBSERVING, ST.DATA_READY, ST.DATA_REFRESHING, ST.STARTING)
+        ):
+            self._transition(
+                ST.PAPER_ACTIVE,
+                "activity_reconcile",
+                "A real forward-paper cycle is the authoritative active work.",
                 "activity_truth",
             )
             return

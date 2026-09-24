@@ -44,23 +44,22 @@ const CRITICAL_READS = [
 ] as const
 
 async function loadPersistedSecondaryRoute(page: import('@playwright/test').Page, route: string) {
-  // Write the persisted nav state and trigger reload inside the SAME browser task.
-  // If the test writes sessionStorage and then yields back to React, App's own
-  // navigation persistence effect can truthfully overwrite that test-only write
-  // with the currently active route before a later page.reload() runs. That race
-  // produced false burn-in failures where the app was healthy but still on the
-  // previous Coverage view. Atomic browser-side reload proves the real persisted
-  // navigation contract without weakening any rendered-workspace assertion.
-  await page.evaluate((nextRoute) => {
+  // Seed the persisted route in an init script so it is written after the old
+  // React document is gone but before the new App reads sessionStorage. Writing
+  // from the live app and then reloading has a real race with App's persistence
+  // effect, which can restore the previous route and create a false burn-in
+  // failure even though the requested workspace is healthy.
+  await page.addInitScript(() => {
+    const requested = new URL(window.location.href).searchParams.get('__qt_route')
+    if (!requested) return
     const current = JSON.parse(window.sessionStorage.getItem('quantterm-nav') || '{}')
     window.sessionStorage.setItem('quantterm-nav', JSON.stringify({
-      active: nextRoute,
+      active: requested,
       selected: current.selected || '',
       compare: Array.isArray(current.compare) ? current.compare : [],
     }))
-    window.location.reload()
-  }, route)
-  await page.waitForLoadState('domcontentloaded')
+  })
+  await page.goto(`/?__qt_route=${encodeURIComponent(route)}`, { waitUntil: 'domcontentloaded' })
 }
 
 
