@@ -241,11 +241,12 @@ def peek_next_batch(
                 for day in (information_plan.get("sessions") or [])
                 if str(day)[:10] in remaining_set
             })
+            curriculum_policy = str(selection_details.get("selection_policy") or "")
             selection_details = {
                 **selection_details,
-                "curriculum_selection_policy": str(
-                    selection_details.get("selection_policy") or ""
-                ),
+                "prefilter_sessions": list(prefiltered),
+                "sessions": list(batch),
+                "curriculum_selection_policy": curriculum_policy,
                 "selection_policy": "INFORMATION_GAIN",
                 "selection_objective": (
                     "maximize expected evidence-gap reduction after point-in-time "
