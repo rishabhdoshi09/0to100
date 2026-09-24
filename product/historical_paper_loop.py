@@ -1070,7 +1070,28 @@ def _run_batch(
     paper_elapsed_s = max(0.0, time.perf_counter() - paper_started)
     trades = list(paper_sim.get("trades") or [])
 
-    # Close only acquisitions that were durably SELECTED before this replay.
+    # The paper-book pass can be materially heavier than decision replay. Refuse
+    # to persist its evidence if effective selection behavior changed while it
+    # was running; the next supervisor tick will create a new thesis-versioned
+    # batch instead of mixing versions.
+    try:
+        from product.trading_thesis import manifest as thesis_manifest
+        post_sim_thesis_hash = str(thesis_manifest().get("thesis_hash") or "")
+    except Exception as exc:
+        raise RuntimeError(f"current thesis identity unavailable after paper replay: {type(exc).__name__}") from exc
+    if expected_thesis_hash and not post_sim_thesis_hash:
+        raise RuntimeError("current thesis identity unavailable after paper replay")
+    if expected_thesis_hash and post_sim_thesis_hash != expected_thesis_hash:
+        return _retire_obsolete_batch(
+            batch_id=bid,
+            expected_thesis_hash=expected_thesis_hash,
+            current_thesis_hash=post_sim_thesis_hash,
+            message="production thesis changed during paper-book replay; evidence not persisted",
+            state_path=state_path,
+        )
+
+    # Close only acquisitions that were durably SELECTED before this replay and
+    # only after the post-simulation thesis identity has been revalidated.
     # A DEGRADED replay remains useful for diagnostics but is not authoritative
     # enough to append realized information gain.
     acquisition_realization = {
@@ -1106,26 +1127,6 @@ def _run_batch(
                 "eligible_samples": 0,
                 "error": f"{type(exc).__name__}: {exc}"[:200],
             }
-
-    # The paper-book pass can be materially heavier than decision replay. Refuse
-    # to persist its evidence if effective selection behavior changed while it
-    # was running; the next supervisor tick will create a new thesis-versioned
-    # batch instead of mixing versions.
-    try:
-        from product.trading_thesis import manifest as thesis_manifest
-        post_sim_thesis_hash = str(thesis_manifest().get("thesis_hash") or "")
-    except Exception as exc:
-        raise RuntimeError(f"current thesis identity unavailable after paper replay: {type(exc).__name__}") from exc
-    if expected_thesis_hash and not post_sim_thesis_hash:
-        raise RuntimeError("current thesis identity unavailable after paper replay")
-    if expected_thesis_hash and post_sim_thesis_hash != expected_thesis_hash:
-        return _retire_obsolete_batch(
-            batch_id=bid,
-            expected_thesis_hash=expected_thesis_hash,
-            current_thesis_hash=post_sim_thesis_hash,
-            message="production thesis changed during paper-book replay; evidence not persisted",
-            state_path=state_path,
-        )
 
     ledger = Path(ledger_path) if ledger_path is not None else DEFAULT_LEDGER
     appended = _append_unique(ledger, trades)
