@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import {
-  OPERATOR_ACTIONS,
-  operatorActionDisabled,
-  operatorState,
-} from './operatorControlCenter'
+import { operatorState } from './operatorState'
 import type { DashboardPayload, OperationRecord } from './types'
 
 function dashboard(overrides: Partial<DashboardPayload> = {}): DashboardPayload {
@@ -104,21 +100,7 @@ function activeScan(): OperationRecord {
   }
 }
 
-describe('operator control center', () => {
-  it('exposes only safe data, research and PAPER controls', () => {
-    const controls = OPERATOR_ACTIONS.map((action) => action.control)
-    expect(controls).toEqual(expect.arrayContaining([
-      'RUN_SCAN_NOW',
-      'REFRESH_DATA_NOW',
-      'REFRESH_NEWS_NOW',
-      'REFRESH_LONG_TERM_NOW',
-      'REFRESH_FNO_NOW',
-      'REFRESH_MARKET_REPORT_NOW',
-      'RUN_CYCLE_NOW',
-    ]))
-    expect(controls.some((control) => /LIVE|BUY|SELL|UNLOCK/.test(control))).toBe(false)
-  })
-
+describe('operator runtime state', () => {
   it('reports running, refreshing and attention from runtime truth', () => {
     expect(operatorState(dashboard())).toBe('RUNNING')
 
@@ -137,13 +119,4 @@ describe('operator control center', () => {
     }))).toBe('ATTENTION')
   })
 
-  it('disables a duplicate durable operation while it is active', () => {
-    const base = dashboard()
-    const scan = activeScan()
-    const payload = dashboard({
-      operations: { ...base.operations, active: [scan], latest: { MARKET_SCAN: scan } },
-    })
-    const action = OPERATOR_ACTIONS.find((row) => row.control === 'RUN_SCAN_NOW')!
-    expect(operatorActionDisabled(payload, action)).toBe(true)
-  })
 })

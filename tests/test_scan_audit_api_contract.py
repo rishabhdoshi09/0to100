@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_canonical_product_api_exposes_scan_audit_and_coverage_state():
-    import terminal_product_api_parallel as parallel
+    import api.app as parallel
 
     routes = [
         route
@@ -17,7 +17,7 @@ def test_canonical_product_api_exposes_scan_audit_and_coverage_state():
     ]
     assert len(routes) == 1
 
-    src = (ROOT / "_terminal_product_api_parallel_core.py").read_text(encoding="utf-8")
+    src = (ROOT / "api" / "runtime.py").read_text(encoding="utf-8")
     assert '@product.app.get("/api/scan-audit")' in src
     assert '"audit_route_registered": "/api/scan-audit" in paths' in src
     assert "_scan_payload_with_coverage" in src

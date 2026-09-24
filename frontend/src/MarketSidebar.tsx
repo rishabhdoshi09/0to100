@@ -1,5 +1,5 @@
 import './marketSidebar.css'
-import { operatorState } from './operatorControlCenter'
+import { operatorState } from './operatorState'
 import {
   TOOL_GROUPS,
   WORKSPACE_NAV,
