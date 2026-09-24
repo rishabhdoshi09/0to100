@@ -44,6 +44,29 @@ def test_batch_progress_is_idempotent_and_updates_request_file(tmp_path):
     assert persisted["progress"]["sample_count"] == 14
 
 
+def test_information_gain_progress_uses_authoritative_realized_yield(tmp_path):
+    req = _request(current_samples=10, target_samples=20)
+    out = EP.record_historical_batch(
+        req.as_dict(),
+        {
+            "batch_id": "b-info",
+            "historical_paper_trades": 9,
+            "selection_policy": "INFORMATION_GAIN",
+            "selection_details": {"selection_policy": "INFORMATION_GAIN"},
+            "acquisition_realization": {
+                "eligible_samples": 2,
+                "reason": "persisted",
+            },
+        },
+        {"decision": "EVIDENCE_ACQUISITION"},
+        path=tmp_path / "progress.json",
+        request_path=tmp_path / "request.json",
+    )
+    assert out["samples_acquired"] == 2
+    assert out["sample_count"] == 12
+    assert out["status"] == EA.OPEN
+
+
 def test_request_closes_when_sample_target_is_satisfied(tmp_path):
     req = _request(current_samples=18, target_samples=20)
     request_path = tmp_path / "request.json"
@@ -162,3 +185,26 @@ def test_exhausted_historical_source_plateaus_request_and_requires_replan(tmp_pa
     persisted = EA.load_request(request_path)
     assert persisted["status"] == EA.PLATEAUED
     assert persisted["progress"]["source_exhausted"] is True
+
+
+def test_information_gain_plateau_is_not_reported_as_source_exhaustion(tmp_path):
+    req = _request(current_samples=12, target_samples=30)
+    request_path = tmp_path / "request.json"
+    progress_path = tmp_path / "progress.json"
+    EA.save_request(req, path=request_path)
+
+    out = EP.mark_historical_source_exhausted(
+        req.as_dict(),
+        reason="realized_information_gain_plateau",
+        eligible_sessions=120,
+        processed_sessions=40,
+        path=progress_path,
+        request_path=request_path,
+    )
+
+    assert out["status"] == EA.PLATEAUED
+    assert out["source_exhausted"] is False
+    assert out["source_exhaustion_reason"] == ""
+    assert out["stopping_reason"] == "realized_information_gain_plateau"
+    assert out["next_action"] == "REPLAN_RESEARCH_QUESTION"
+    assert "cannot justify another evidence acquisition" in out["reason"]

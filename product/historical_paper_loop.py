@@ -184,25 +184,111 @@ def peek_next_batch(
     if evidence_request and remaining:
         try:
             from research.autonomy.historical_curriculum import select_regime_balanced_sessions
+
+            # Keep the point-in-time regime curriculum as an outcome-blind
+            # prefilter, but give the information-gain planner a wider bounded
+            # candidate set so it—not chronology—chooses the final batch.
+            prefilter_size = min(
+                len(remaining),
+                max(max(1, int(batch_size)), max(1, int(batch_size)) * 4),
+            )
             selection_details = select_regime_balanced_sessions(
                 eligible,
                 processed_sessions=sorted(processed),
-                batch_size=max(1, int(batch_size)),
+                batch_size=prefilter_size,
             )
             remaining_set = set(remaining)
-            batch = sorted({
+            prefiltered = sorted({
                 str(day)[:10]
                 for day in (selection_details.get("sessions") or [])
                 if str(day)[:10] in remaining_set
             })
-        except Exception as exc:
+            from research.autonomy.replay_acquisition_runtime import plan_runtime_acquisitions
+
+            information_plan = plan_runtime_acquisitions(
+                evidence_request,
+                prefiltered,
+                thesis_hash=thesis_hash,
+                universe_limit=universe_limit,
+                curriculum=selection_details,
+                batch_size=max(1, int(batch_size)),
+            )
+            if information_plan.get("stop"):
+                return {
+                    "available": False,
+                    "reason": str(
+                        information_plan.get("reason")
+                        or "realized_information_gain_plateau"
+                    ),
+                    "last_completed_session": last,
+                    "processed_sessions": len(processed),
+                    "eligible_sessions": len(eligible),
+                    "evidence_request_id": str(evidence_request.get("request_id") or ""),
+                    "evidence_request": evidence_request,
+                    "selection_details": {
+                        **selection_details,
+                        "curriculum_selection_policy": str(
+                            selection_details.get("selection_policy") or ""
+                        ),
+                        "selection_policy": "INFORMATION_GAIN",
+                        "information_gain": information_plan,
+                        "acquisitions": [],
+                    },
+                }
+
+            batch = sorted({
+                str(day)[:10]
+                for day in (information_plan.get("sessions") or [])
+                if str(day)[:10] in remaining_set
+            })
+            curriculum_policy = str(selection_details.get("selection_policy") or "")
             selection_details = {
-                "selection_policy": "DURABLE_CURSOR",
-                "selection_objective": "chronological fallback",
-                "outcome_blind_selection": True,
-                "fallback_reason": f"{type(exc).__name__}: {exc}"[:200],
+                **selection_details,
+                "prefilter_sessions": list(prefiltered),
+                "sessions": list(batch),
+                "curriculum_selection_policy": curriculum_policy,
+                "selection_policy": "INFORMATION_GAIN",
+                "selection_objective": (
+                    "maximize expected evidence-gap reduction after point-in-time "
+                    "regime prefilter"
+                ),
+                "information_gain": information_plan,
+                "acquisitions": list(information_plan.get("acquisitions") or []),
             }
-            batch = remaining[: max(1, int(batch_size))]
+            if not batch:
+                return {
+                    "available": False,
+                    "reason": str(
+                        information_plan.get("reason")
+                        or "no_eligible_information_gain"
+                    ),
+                    "last_completed_session": last,
+                    "processed_sessions": len(processed),
+                    "eligible_sessions": len(eligible),
+                    "evidence_request_id": str(evidence_request.get("request_id") or ""),
+                    "evidence_request": evidence_request,
+                    "selection_details": selection_details,
+                }
+        except Exception as exc:
+            # Evidence-directed replay must not silently degrade to chronological
+            # work when immutable research identity is unavailable. That would
+            # create activity without auditable acquisition provenance.
+            return {
+                "available": False,
+                "reason": "acquisition_identity_unavailable",
+                "error": f"{type(exc).__name__}: {exc}"[:200],
+                "last_completed_session": last,
+                "processed_sessions": len(processed),
+                "eligible_sessions": len(eligible),
+                "evidence_request_id": str(evidence_request.get("request_id") or ""),
+                "evidence_request": evidence_request,
+                "selection_details": {
+                    **selection_details,
+                    "selection_policy": "INFORMATION_GAIN_FAIL_CLOSED",
+                    "outcome_blind_selection": True,
+                    "error": f"{type(exc).__name__}: {exc}"[:200],
+                },
+            }
     else:
         selection_details = {
             "selection_policy": "DURABLE_CURSOR",
@@ -1006,6 +1092,44 @@ def _run_batch(
 
     ledger = Path(ledger_path) if ledger_path is not None else DEFAULT_LEDGER
     appended = _append_unique(ledger, trades)
+
+    # Close acquisitions only after the settled virtual-paper samples are
+    # durably present in their authoritative ledger. Restart retries are safe:
+    # both the trade ledger and acquisition journal are idempotent.
+    acquisition_realization = {
+        "records": [],
+        "reason": "no_journaled_acquisitions",
+        "eligible_samples": 0,
+    }
+    acquisitions = [
+        dict(row)
+        for row in ((batch.get("selection_details") or {}).get("acquisitions") or [])
+        if isinstance(row, Mapping)
+    ]
+    if acquisitions:
+        try:
+            from research.autonomy.replay_acquisition_runtime import (
+                persist_runtime_realized_gain,
+            )
+
+            acquisition_realization = persist_runtime_realized_gain(
+                acquisitions,
+                replay_report=report,
+                trades=trades,
+            )
+        except Exception as exc:
+            if status == "SUCCEEDED":
+                raise RuntimeError(
+                    "historical acquisition realization failed: "
+                    f"{type(exc).__name__}: {exc}"
+                ) from exc
+            acquisition_realization = {
+                "records": [],
+                "reason": "degraded_replay_not_realized",
+                "eligible_samples": 0,
+                "error": f"{type(exc).__name__}: {exc}"[:200],
+            }
+
     all_trades = _load_ledger(ledger)
     thesis_trades = [
         row for row in all_trades
@@ -1062,6 +1186,7 @@ def _run_batch(
         "evidence_request": dict(batch.get("evidence_request") or {}),
         "selection_policy": str(batch.get("selection_policy") or "DURABLE_CURSOR"),
         "selection_details": dict(batch.get("selection_details") or {}),
+        "acquisition_realization": acquisition_realization,
         "processed_sessions_before": int(batch.get("processed_sessions_before") or 0),
         "throughput": throughput,
         "memory": {

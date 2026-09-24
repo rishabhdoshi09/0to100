@@ -63,9 +63,26 @@ def _decision_is_terminal(value: str) -> bool:
 
 
 def _historical_yield(batch_result: Mapping[str, Any]) -> int:
-    # Trade samples are the unit used by the current research gates. Decisions
-    # are not substituted when no virtual trade was formed; doing so would
-    # falsely claim that a rejected/no-geometry decision increased trade N.
+    selection_details = dict(batch_result.get("selection_details") or {})
+    selection_policy = str(
+        batch_result.get("selection_policy")
+        or selection_details.get("selection_policy")
+        or ""
+    ).upper()
+    if selection_policy == "INFORMATION_GAIN":
+        # Once acquisition provenance is active, the realized acquisition journal
+        # is the single authority for evidence yield. Raw virtual-paper trade
+        # count may include unrelated activity and must not independently grow N.
+        realized = batch_result.get("acquisition_realization")
+        if not isinstance(realized, Mapping):
+            return 0
+        try:
+            return max(0, int(realized.get("eligible_samples") or 0))
+        except Exception:
+            return 0
+
+    # Backward compatibility for historical batches created before the
+    # information-gain journal existed.
     try:
         return max(0, int(batch_result.get("historical_paper_trades") or 0))
     except Exception:
@@ -262,12 +279,17 @@ def mark_historical_source_exhausted(
     resolved = sorted({str(x) for x in (previous.get("resolved_metrics") or []) if str(x)})
     missing = {str(x) for x in (req.get("missing_metrics") or []) if str(x)}
     unresolved = sorted(missing - set(resolved))
-    message = (
-        "no unprocessed fully-settleable historical sessions remain; "
-        "research question must be replanned"
-    )
-    if reason and reason != "historical_backlog_caught_up":
-        message = f"{reason}: {message}"
+    source_exhausted = str(reason or "") == "historical_backlog_caught_up"
+    if source_exhausted:
+        message = (
+            "no unprocessed fully-settleable historical sessions remain; "
+            "research question must be replanned"
+        )
+    else:
+        message = (
+            f"{reason or 'historical_replay_plateau'}: historical replay cannot "
+            "justify another evidence acquisition; research question must be replanned"
+        )
 
     progress = {
         **previous,
@@ -282,8 +304,11 @@ def mark_historical_source_exhausted(
         "sample_deficit": max(0, target - current),
         "resolved_metrics": resolved,
         "unresolved_metrics": unresolved,
-        "source_exhausted": True,
-        "source_exhaustion_reason": str(reason or "historical_backlog_caught_up"),
+        "source_exhausted": source_exhausted,
+        "source_exhaustion_reason": (
+            str(reason or "historical_backlog_caught_up") if source_exhausted else ""
+        ),
+        "stopping_reason": "" if source_exhausted else str(reason or "historical_replay_plateau"),
         "eligible_sessions": None if eligible_sessions is None else int(eligible_sessions),
         "processed_sessions": None if processed_sessions is None else int(processed_sessions),
         "next_action": "REPLAN_RESEARCH_QUESTION",
