@@ -188,7 +188,13 @@ class ScanCoverageProbe:
             "qualified": counts[QUALIFIED],
             "no_setup": counts[NO_SETUP],
             "policy_excluded": policy,
+            # Keep the legacy aggregate, but expose the two materially different
+            # conditions separately: NO_OHLCV is a hard data gap; fewer than 60
+            # bars is partial history (often a recent listing) and should not be
+            # narrated as if the symbol had no market data at all.
             "data_unavailable": data_gaps,
+            "hard_data_unavailable": counts[NO_OHLCV],
+            "partial_history": counts[INSUFFICIENT_HISTORY],
             "analysis_errors": counts[ANALYSIS_ERROR],
             "analysis_skipped": counts[ANALYSIS_SKIPPED],
             "not_observed": counts[NOT_OBSERVED],
