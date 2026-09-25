@@ -978,15 +978,39 @@ class Supervisor:
         safe_source = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in source)
         return f"market:{safe_source}:{latest}"
 
-    def _pipeline_complete(self, snapshot_id: str) -> bool:
+    def _pipeline_complete(
+        self,
+        snapshot_id: str,
+        *,
+        slot: str = "",
+        session_date: str = "",
+    ) -> bool:
+        """Whether this exact automatic scan→paper transaction is complete.
+
+        The official completed-session snapshot can stay unchanged throughout the
+        cash session. Intraday opportunity state does not: live quotes, volume and
+        breakout state evolve. Therefore completion is scoped to the deterministic
+        15-minute scan slot when one is supplied, not to the whole daily snapshot.
+        """
         snap = str(snapshot_id or "")
         owner_state = getattr(self, "owner_state", {}) or {}
-        return bool(
-            snap
-            and snap == str(owner_state.get("completed_snapshot_id") or "")
-        )
+        if not snap:
+            return False
+        if slot:
+            return bool(
+                snap == str(owner_state.get("completed_snapshot_id") or "")
+                and str(slot) == str(owner_state.get("completed_scan_slot") or "")
+                and str(session_date or "") == str(owner_state.get("completed_session_date") or "")
+            )
+        return snap == str(owner_state.get("completed_snapshot_id") or "")
 
-    def _mark_snapshot_complete(self, snapshot_id: str) -> None:
+    def _mark_snapshot_complete(
+        self,
+        snapshot_id: str,
+        *,
+        slot: str = "",
+        session_date: str = "",
+    ) -> None:
         snap = str(snapshot_id or "")
         if not snap:
             return
@@ -997,10 +1021,18 @@ class Supervisor:
         self.owner_state["completed_snapshot_at"] = (
             now.isoformat() if hasattr(now, "isoformat") else str(now)
         )
-        self.owner_state["completed_session_date"] = str(now.date().isoformat())
+        self.owner_state["completed_session_date"] = str(
+            session_date or now.date().isoformat()
+        )
+        self.owner_state["completed_scan_slot"] = str(slot or "")
         if hasattr(self, "_save_owner_state"):
             self._save_owner_state()
-        # Retire only automatic rows. Manual controls have manual:* identities.
+
+        # Legacy snapshot-only transactions may safely retire any pending rows
+        # for that immutable snapshot. Slot-scoped intraday transactions must not
+        # cancel a later 15-minute slot that may already have been queued.
+        if slot:
+            return
         try:
             self.jobs.cancel_pending_by_prefix(
                 "news_refresh:",
