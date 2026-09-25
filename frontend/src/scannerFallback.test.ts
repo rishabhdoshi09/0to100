@@ -7,6 +7,7 @@ import {
   scannerDecision,
   scannerEmptyHint,
   scannerFallbackRows,
+  isActionableScanRow,
   scannerMetaFromDashboard,
   scannerWhy,
 } from './scannerFallback'
@@ -34,7 +35,7 @@ describe('scannerFallbackRows', () => {
   it('projects saved scan lanes without inventing symbols', () => {
     expect(scannerFallbackRows('Breakouts', dashboard).map((row) => row.symbol)).toEqual(['AAA', 'CCC'])
     expect(scannerFallbackRows('Momentum', dashboard).map((row) => row.symbol)).toEqual(['BBB', 'CCC'])
-    expect(scannerFallbackRows('Best Setups', dashboard).map((row) => row.symbol)).toEqual(['CCC', 'BBB', 'AAA'])
+    expect(scannerFallbackRows('Best Setups', dashboard).map((row) => row.symbol)).toEqual(['AAA'])
     expect(scannerFallbackRows('Long-Term', dashboard).map((row) => row.symbol)).toEqual(['LT1'])
   })
 })
@@ -46,7 +47,7 @@ describe('bestSetupsFromRadar', () => {
       lanes: { breakouts: [{ symbol: 'AAA' }], momentum: [] },
     } as unknown as RadarHome
     expect(bestSetupsFromRadar(home, dashboard).map((row) => row.symbol)).toEqual(['SEPA1'])
-    expect(bestSetupsFromRadar({ best_setups: [], lanes: { breakouts: [], momentum: [] } } as unknown as RadarHome, dashboard)[0].symbol).toBe('CCC')
+    expect(bestSetupsFromRadar({ best_setups: [], lanes: { breakouts: [], momentum: [] } } as unknown as RadarHome, dashboard)[0].symbol).toBe('AAA')
   })
 })
 
@@ -115,5 +116,21 @@ describe('recoCanonicalDecision', () => {
     expect(recoCanonicalDecision({ committee_decision: 'WAIT' })).toBe('WAIT')
     expect(recoCanonicalDecision({ committee_decision: 'AVOID' })).toBe('AVOID')
     expect(recoCanonicalDecision({ committee_decision: 'NO_JUDGMENT' })).toBe('NO JUDGMENT')
+  })
+})
+
+
+describe('isActionableScanRow', () => {
+  it('rejects watch, extension, RSI blowoff and explicit no-chase language', () => {
+    expect(isActionableScanRow({ verdict: 'BUY', status: 'Ready to trade', chase_risk: false, rsi: 60 })).toBe(true)
+    expect(isActionableScanRow({ verdict: 'WATCH', chase_risk: false, rsi: 60 })).toBe(false)
+    expect(isActionableScanRow({ verdict: 'BUY', chase_risk: true, rsi: 60 })).toBe(false)
+    expect(isActionableScanRow({ verdict: 'BUY', chase_risk: false, rsi: 82 })).toBe(false)
+    expect(isActionableScanRow({
+      verdict: 'BUY',
+      chase_risk: false,
+      rsi: 60,
+      reasons: ['RSI extended — chase nahi'],
+    })).toBe(false)
   })
 })
