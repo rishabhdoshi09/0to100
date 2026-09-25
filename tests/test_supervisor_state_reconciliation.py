@@ -5,6 +5,7 @@ from datetime import datetime
 
 from research.autonomy import health as H
 from research.autonomy import job_store as JS
+from research.autonomy import jobs as JOBS
 from research.autonomy import schedules as SCH
 from research.autonomy import supervisor_state as ST
 from research.autonomy.supervisor import Supervisor
@@ -46,6 +47,40 @@ def test_successful_auth_probe_does_not_downgrade_data_ready(tmp_path):
 
     assert sup.jobs.get(job.job_id).status == JS.SUCCEEDED
     assert sup.state.state == ST.DATA_READY
+    sup.shutdown()
+
+
+
+def test_superseded_discovery_immediately_rechecks_current_identity(tmp_path, monkeypatch):
+    sup = _sup(tmp_path)
+    assert sup.start() is True
+    repair_calls = []
+    sup._ensure_startup_trade_discovery = lambda: repair_calls.append("repair")
+
+    job = sup.jobs.enqueue(
+        SCH.DISCOVERY_REFRESH,
+        idempotency_key="discovery_refresh:old-scan:old-long-term:old-thesis",
+        input_snapshot_id="old-scan",
+        critical=True,
+    )
+    leased = sup.jobs.lease_due(sup.owner)
+    assert leased is not None and leased.job_id == job.job_id
+
+    monkeypatch.setitem(
+        JOBS.HANDLERS,
+        SCH.DISCOVERY_REFRESH,
+        lambda _ctx: JOBS.JobResult(
+            JS.SKIPPED_IDEMPOTENT,
+            "decision discovery refresh superseded by newer evidence identity",
+            state_hint=ST.OBSERVING,
+            new_entries_allowed=False,
+        ),
+    )
+
+    sup._execute(leased)
+
+    assert sup.jobs.get(job.job_id).status == JS.SKIPPED_IDEMPOTENT
+    assert repair_calls == ["repair"]
     sup.shutdown()
 
 
