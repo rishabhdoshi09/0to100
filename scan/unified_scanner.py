@@ -105,6 +105,21 @@ _RSI_ROLLOVER_DROP = float(_os.getenv("QT_RSI_ROLLOVER_DROP", "5") or 5)
 _EXT_ABOVE_SMA50 = float(_os.getenv("QT_EXT_ABOVE_SMA50_PCT", "20") or 20)
 
 
+def _composite_verdict(
+    score: float,
+    signals: list[str],
+    *,
+    breakout_watch_veto: bool = False,
+) -> str:
+    """Final scanner stance; quality vetoes outrank additive signal count."""
+    buy = (score >= 55 and len(signals) >= 2) or any(
+        s in ("BREAKOUT_52W", "HIGH_TIGHT_FLAG") for s in signals
+    )
+    if breakout_watch_veto:
+        return "WATCH"
+    return "BUY" if buy else "WATCH"
+
+
 def close_location_value(close: float, high: float, low: float) -> float:
     """(close-low)/(high-low), [0,1] mein clamp. Flat/no-range din → 0.5
     neutral (koi wick-info nahi, na positive na negative)."""
@@ -754,10 +769,11 @@ class UnifiedScanner:
         trend_bonus = 10 if _above200 else 0
         score = min(100.0, base + trend_bonus + mom_score * 0.2)
 
-        verdict = "BUY" if (score >= 55 and len(signals) >= 2) or any(
-            s in ("BREAKOUT_52W", "HIGH_TIGHT_FLAG") for s in signals) else "WATCH"
-        if breakout_watch_veto and verdict == "BUY":
-            verdict = "WATCH"
+        verdict = _composite_verdict(
+            score,
+            signals,
+            breakout_watch_veto=breakout_watch_veto,
+        )
 
         # ── Extension guard — DON'T CHASE ─────────────────────────────────────
         # A stock already up big in 5 days and stretched far above its 20-EMA,
