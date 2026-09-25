@@ -127,6 +127,8 @@ class AutopilotDecision:
             "dd_status": (self.context or {}).get("dd_status"),
             "entry_quality": (self.context or {}).get("entry_quality"),
             "missing_evidence": (self.context or {}).get("missing_evidence") or [],
+            "paper_evidence_mode": self.card.get("paper_evidence_mode"),
+            "empirical_conflict_methods": self.card.get("empirical_conflict_methods") or [],
             "portfolio_authority": self.portfolio or None,
             "freeze_id": self.freeze_id,
             "evidence_fingerprint": self.evidence_fingerprint,
