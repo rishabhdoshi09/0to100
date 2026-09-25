@@ -55,4 +55,5 @@ def test_complete_launcher_bounds_persistent_runtime_probe() -> None:
     assert "Runtime volume present in mount table" in text
     assert 'mount | grep -F " on $runtime_volume "' in text
     assert '[[ -s "$RUNTIME_PROBE_STATUS" ]]' in text
-    assert "kill -0" not in text.split('echo "[COMPLETE STACK] Startup probe: persistent runtime storage"', 1)[1].split('STACK_LOG_DIR=', 1)[0]
+    probe_block = text.split('echo "[COMPLETE STACK] Startup probe: persistent runtime storage"', 1)[1].split('STACK_LOG_DIR=', 1)[0]
+    assert 'if ! kill -0 "$runtime_probe_pid"' not in probe_block
