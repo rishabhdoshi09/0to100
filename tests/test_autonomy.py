@@ -291,8 +291,8 @@ def test_same_snapshot_can_schedule_the_next_intraday_scan_slot(tmp_path):
     )
     scans = [j for j in sup.jobs.list() if j.job_type == SCH.MARKET_SCAN]
     assert len(scans) == 1
-    assert scans[0].idempotency_key == SCH.scan_key(
-        "snap1", "intraday-1015", "2026-07-31"
+    assert scans[0].idempotency_key == SCH.snapshot_slot_scan_key(
+        "snap1", "2026-07-31", "intraday-1015"
     )
 
     # Repeated supervisor ticks inside the same slot stay idempotent.
@@ -352,8 +352,8 @@ def test_slot_scan_preserves_slot_identity_into_paper_cycle(tmp_path, monkeypatc
     class ScanJob:
         job_type = SCH.MARKET_SCAN
         input_snapshot_id = "market:official_nse:2026-07-30"
-        idempotency_key = SCH.scan_key(
-            input_snapshot_id, "intraday-1015", "2026-07-31"
+        idempotency_key = SCH.snapshot_slot_scan_key(
+            input_snapshot_id, "2026-07-31", "intraday-1015"
         )
 
     sup._enqueue_paper_after_scan(ScanJob())
@@ -368,9 +368,10 @@ def test_slot_scan_preserves_slot_identity_into_paper_cycle(tmp_path, monkeypatc
 def test_slot_paper_cycle_keeps_once_only_mutation_safety(tmp_path):
     sup = _sup(tmp_path)
     sup.start()
-    key = SCH.paper_cycle_key(
+    key = SCH.snapshot_slot_paper_key(
         "market:official_nse:2026-07-30",
-        "2026-07-31:intraday-1015",
+        "2026-07-31",
+        "intraday-1015",
     )
     automatic, session_date, slot = sup._automatic_paper_identity(key)
     assert automatic is True
