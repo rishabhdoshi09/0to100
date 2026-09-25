@@ -27,7 +27,7 @@ import type { DisplayDepth } from './productLanguage'
 import { GLOSSARY, PAGE_GUIDE } from './productLanguage'
 import { fetchTradePlan, type TradePlan } from './productApi'
 import type { ScanRunnerHandle } from './scanRunner'
-import { scannerFallbackRows as fallbackRows } from './scannerFallback'
+import { scannerDecision, scannerFallbackRows as fallbackRows } from './scannerFallback'
 
 export { DisplayDepthToggle } from './displayDepth'
 
@@ -252,7 +252,7 @@ function OpportunityLane({
                 onClick={() => onSelect(row.symbol)}
               >
                 <b>{row.symbol}</b>
-                <span>{row.status || row.verdict || '—'}</span>
+                <span>{scannerDecision(row as unknown as Record<string, unknown>)}</span>
                 <small>{row.sector || '—'}</small>
               </button>
             </li>
@@ -300,8 +300,10 @@ function DecisionLens({
   const reasons = scanRow?.reasons || []
   const confirmItems = [
     ...(scanRow?.signals || []),
-    plan?.tradeable ? 'Trade plan available from saved scan' : null,
-    scanRow?.status === 'Ready to trade' ? 'Setup marked ready in saved scan' : null,
+    plan?.tradeable ? 'Trade-plan geometry available from saved scan — selection authority still applies' : null,
+    scannerDecision((scanRow || {}) as unknown as Record<string, unknown>) === 'SETUP READY'
+      ? 'Technical setup passed scanner — not yet a paper-entry approval'
+      : null,
   ].filter(Boolean) as string[]
 
   const invalidateItems = [
@@ -315,7 +317,7 @@ function DecisionLens({
     || (scanRow?.chase_risk ? 'Extended price — wait for a better entry.' : 'Review invalidation before acting.')
 
   const nextStep = plan?.tradeable
-    ? 'Open Stock Intelligence for the full trade plan and evidence.'
+    ? 'Open Stock Intelligence and Selection Authority; a valid trade plan alone is not paper-entry approval.'
     : scanRow?.chase_risk
       ? 'Wait for pullback — do not chase.'
       : 'Run or refresh scan, then open Stock Intelligence.'
