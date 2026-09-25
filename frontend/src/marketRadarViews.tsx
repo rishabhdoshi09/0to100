@@ -718,6 +718,28 @@ function HomeOsCard({
           </small>
         </div>
       ) : null}
+      {os.us_market ? (
+        <div className="home-os-past">
+          <span>US PAPER MARKET</span>
+          <strong>
+            {os.us_market.market_open ? 'US market open' : 'US market closed'}
+            {os.us_market.paper?.armed ? ' · paper auto ON' : ' · paper auto OFF'}
+          </strong>
+          <small>
+            {os.us_market.scan?.status || 'idle'} · {os.us_market.scan?.scope || 'S&P 500'} ·
+            {' '}{os.us_market.scan?.count ?? 0} setups ·
+            {' '}{os.us_market.paper?.open_trades?.length ?? 0} open paper positions ·
+            {' '}learning {os.us_market.learning?.selection_learning_active ? 'active in ranking' : 'collecting'}
+          </small>
+          {(os.us_market.top_setups || []).length ? (
+            <small>
+              Research leaders: {(os.us_market.top_setups || []).slice(0, 5).map((row) =>
+                `${row.symbol || '—'} ${row.learned_rank_score != null ? Number(row.learned_rank_score).toFixed(1) : ''}`
+              ).join(' · ')}
+            </small>
+          ) : null}
+        </div>
+      ) : null}
       {os.past_decisions?.available ? (
         <div className="home-os-past">
           <span>PAST DECISION TEST</span>
