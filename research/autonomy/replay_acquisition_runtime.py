@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -327,7 +328,7 @@ def persist_runtime_realized_gain(
     if origin != EVIDENCE_ORIGIN:
         raise ValueError("authoritative replay result must be HISTORICAL_REPLAY")
 
-    samples_by_session: dict[str, int] = {}
+    samples_by_session: Counter[str] = Counter()
     for raw in trades:
         row = dict(raw or {})
         day = str(
@@ -337,7 +338,7 @@ def persist_runtime_realized_gain(
             or ""
         )[:10]
         if len(day) == 10:
-            samples_by_session[day] = samples_by_session.get(day, 0) + 1
+            samples_by_session[day] += 1
 
     from product.strategy_catalog import ENSEMBLE_ID
 
@@ -348,7 +349,7 @@ def persist_runtime_realized_gain(
                 "historical replay acquisition strategy is not QT_RECO_ENSEMBLE"
             )
         day = str(acquisition.get("session_date") or "")[:10]
-        useful = max(0, int(samples_by_session.get(day, 0)))
+        useful = max(0, int(samples_by_session[day]))
         realized = {
             **acquisition,
             "status": "SUCCEEDED",
