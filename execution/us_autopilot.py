@@ -519,10 +519,10 @@ def _consider_locked(symbol, entry, stop, score, conviction, source, meta=None) 
             conviction=float(conviction or 0.0),
             meta=meta,
         )
-        _log_activity(f"BUY {qty}×{symbol} @ \$\{entry:,.2f} "
-                      f"(stop \$\{stop:,.2f} / target \$\{target:,.2f}) [PAPER]")
-        _notify(f"BUY <b>{qty} × {symbol}</b> @ \$\{entry:,.2f}\\n"
-                f"stop \$\{stop:,.2f} · target \$\{target:,.2f} (+{s['target_pct']}%)")
+        _log_activity(f"BUY {qty}×{symbol} @ ${entry:,.2f} "
+                      f"(stop ${stop:,.2f} / target ${target:,.2f}) [PAPER]")
+        _notify(f"BUY <b>{qty} × {symbol}</b> @ ${entry:,.2f}\\n"
+                f"stop ${stop:,.2f} · target ${target:,.2f} (+{s['target_pct']}%)")
         return True
     except Exception as exc:
         log.warning("us_autopilot_consider_failed", symbol=symbol, error=str(exc))
