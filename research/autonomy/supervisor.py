@@ -499,6 +499,21 @@ class Supervisor:
             )
             return False
 
+    def _market_scan_in_flight(self) -> bool:
+        """Do not spend minutes projecting discovery from a scan being replaced."""
+        try:
+            from operations.market_ops import MARKET_SCAN
+            from operations.store import OperationStore
+            from core.runtime_paths import logs_dir
+
+            store = OperationStore(logs_dir() / "market_ops" / "jobs.db")
+            return any(
+                str(row.get("kind") or "") == MARKET_SCAN
+                for row in store.active_summary()
+            )
+        except Exception:
+            return False
+
     def _ensure_startup_trade_discovery(self) -> None:
         """Queue one current official-session scan before autonomous simulation.
 
@@ -508,6 +523,12 @@ class Supervisor:
         """
         try:
             from product.decision_simulation_gate import current_startup_id, status
+
+            # If the dedicated market worker is replacing the saved scan right
+            # now, projecting the old one is guaranteed churn. Let the scan
+            # finish and let the next supervisor tick build exactly one board.
+            if self._market_scan_in_flight():
+                return
 
             gate = dict(status() or {})
             if gate.get("discovery_ready"):
