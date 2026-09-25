@@ -102,3 +102,23 @@ def test_bootstrap_does_not_force_kill_fresh_runatload_host(tmp_path, monkeypatc
     assert kickstarts
     assert ["launchctl", "kickstart", lc.target()] in kickstarts
     assert not any("-k" in call for call in kickstarts)
+
+
+def test_start_on_loaded_service_never_uses_force_kill(monkeypatch):
+    calls = []
+    responses = iter([
+        cp(0, out="loaded"),   # initial query_loaded
+        cp(0, out="kick"),     # kickstart
+        cp(0, out="loaded"),   # verification query_loaded
+    ])
+
+    def fake_run(args, **kwargs):
+        calls.append(list(args))
+        return next(responses)
+
+    monkeypatch.setattr(lc, "_run", fake_run)
+    lc.start_verified(label=lc.DEFAULT_LABEL, plist=Path("/tmp/unused.plist"))
+
+    kickstarts = [call for call in calls if call[:2] == ["launchctl", "kickstart"]]
+    assert kickstarts == [["launchctl", "kickstart", lc.target(lc.DEFAULT_LABEL)]]
+    assert not any("-k" in call for call in kickstarts)
