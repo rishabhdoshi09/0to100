@@ -90,6 +90,11 @@ def _record(signal: Any, names: Mapping[str, str], fno_symbols: set[str]) -> dic
         "symbol": symbol,
         "company": str(names.get(symbol, symbol)),
         "status": status,
+        # Scanner status is technical setup state, never final execution authority.
+        # Keep the legacy text for compatibility, but make its scope explicit so
+        # every consumer can distinguish SETUP READY from PAPER ENTER_NOW.
+        "status_scope": "SCANNER_SETUP",
+        "selection_required": True,
         "verdict": verdict,
         # A trade level the scanner never produced is missing, not zero. Coercing
         # to 0.0 rendered "Stop Rs0.00" in the desk, which is a fabricated trade
@@ -294,7 +299,11 @@ def build_scan_payload(
             "momentum": len(momentum),
             "fno_momentum": sum(1 for r in momentum if r["fno_available"]),
             "near_breakout": len(near),
+            # Canonical operator wording. ready_to_trade remains a legacy API
+            # alias only; it does not mean the paper selection authority passed.
+            "setup_ready": len(ready),
             "ready_to_trade": len(ready),
+            "ready_to_trade_scope": "SCANNER_SETUP_ONLY",
             "extended": sum(1 for r in records if r["chase_risk"]),
         },
     }

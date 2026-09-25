@@ -13,6 +13,8 @@ from product.paper_autopilot import (
     DUPLICATE_POSITION,
     ENTER_NOW,
     ENTRY_TOO_EXTENDED,
+    EVIDENCE_POLICY_BLOCK,
+    HISTORICAL_EVIDENCE_PENDING,
     INSUFFICIENT_CAPITAL,
     INVALID_STOP,
     LOW_QUALITY_SETUP,
@@ -20,6 +22,7 @@ from product.paper_autopilot import (
     OUTSIDE_ENTRY_WINDOW,
     PAPER_TRADING_DISABLED,
     STALE_RECOMMENDATION,
+    evaluate_candidate,
     run_reco_paper_cycle,
 )
 from research.auto_research.paper_book import PaperBook
@@ -148,6 +151,7 @@ def test_watch_tier_is_rejected_not_entered():
     out = _cycle(book, [_eligible_card(reco_tier="watch")])
     assert not book.open
     assert out["rejections"][0]["reason_code"] == LOW_QUALITY_SETUP
+    assert out["reason_counts"] == {LOW_QUALITY_SETUP: 1}
 
 
 def test_duplicate_position_is_machine_readable():
@@ -215,6 +219,32 @@ def test_entry_too_extended_waits():
     out = _cycle(book, [_eligible_card(chase_risk=True, entry_state="extended")])
     assert not book.open
     assert out["waits"][0]["reason_code"] == ENTRY_TOO_EXTENDED
+
+
+def test_history_first_block_is_named_separately_from_learned_policy_block():
+    book = PaperBook(capital=100_000)
+    decision = evaluate_candidate(
+        _eligible_card(),
+        book=book,
+        policy={
+            "final_effect": "BLOCK",
+            "historical_forward_confidence": {
+                "required": True,
+                "paper_eligible": False,
+                "confidence_stage": "HISTORICAL_BOOTSTRAP",
+                "paper_ready_setups": 0,
+            },
+        },
+    )
+    assert decision.reason_code == HISTORICAL_EVIDENCE_PENDING
+    assert "HISTORICAL_BOOTSTRAP" in decision.detail
+
+    learned = evaluate_candidate(
+        _eligible_card(),
+        book=book,
+        policy={"final_effect": "BLOCK"},
+    )
+    assert learned.reason_code == EVIDENCE_POLICY_BLOCK
 
 
 def test_insufficient_capital_rejected():

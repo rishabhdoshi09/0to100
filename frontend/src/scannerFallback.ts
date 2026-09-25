@@ -49,10 +49,15 @@ export function projectScanRecord(row: Record<string, unknown>): ScannerWorkspac
   }
 
   const decision = scannerDecision({ ...row, breakout_state, status, verdict, chase_risk: chase })
+  const setupLabel = row.setup_label ?? (
+    status === 'Ready to trade'
+      ? 'Technical setup ready'
+      : (status || row.verdict || null)
+  )
   return {
     ...(row as ScannerWorkspaceRow),
     change_5d_pct: (row.change_5d_pct ?? row.momentum_5d ?? null) as number | null,
-    setup_label: (row.setup_label ?? status ?? row.verdict ?? null) as string | null,
+    setup_label: setupLabel as string | null,
     sector: (typeof row.sector === 'string' && row.sector) ? row.sector : undefined,
     relative_strength: (row.relative_strength ?? row.score ?? null) as number | null,
     breakout_state: breakout_state as string | null,

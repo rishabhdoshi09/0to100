@@ -493,7 +493,7 @@ def test_explicit_policy_path_does_not_bypass_history_gate(monkeypatch, tmp_path
     import product.autonomous_evolution as evolution
     import product.evolution_generation_guard as generation_guard
     from product.evidence_policy_engine import BLOCK, evaluate_policies
-    from product.paper_autopilot import EVIDENCE_POLICY_BLOCK, run_reco_paper_cycle
+    from product.paper_autopilot import HISTORICAL_EVIDENCE_PENDING, run_reco_paper_cycle
     from research.auto_research.paper_book import PaperBook
 
     monkeypatch.setattr(
@@ -545,7 +545,7 @@ def test_explicit_policy_path_does_not_bypass_history_gate(monkeypatch, tmp_path
         policy_path=path,
     )
     assert not out["taken"]
-    assert out["rejections"][0]["reason_code"] == EVIDENCE_POLICY_BLOCK
+    assert out["rejections"][0]["reason_code"] == HISTORICAL_EVIDENCE_PENDING
 
 
 def _vcp_card(**over):
@@ -643,7 +643,7 @@ def test_generation_mismatch_still_blocks_paper_money_path(monkeypatch, tmp_path
     from datetime import datetime, timezone
 
     from product.learning_policy_store import upsert_policy
-    from product.paper_autopilot import EVIDENCE_POLICY_BLOCK, run_reco_paper_cycle
+    from product.paper_autopilot import HISTORICAL_EVIDENCE_PENDING, run_reco_paper_cycle
     from research.auto_research.paper_book import PaperBook
 
     _ready_generation(monkeypatch)
@@ -679,7 +679,7 @@ def test_generation_mismatch_still_blocks_paper_money_path(monkeypatch, tmp_path
         persist_journal=False,
     )
     assert not out["taken"]
-    assert out["rejections"][0]["reason_code"] == EVIDENCE_POLICY_BLOCK
+    assert out["rejections"][0]["reason_code"] == HISTORICAL_EVIDENCE_PENDING
 
 
 def test_history_gate_does_not_hide_invalid_stop_when_setup_is_reproduced(monkeypatch, tmp_path):

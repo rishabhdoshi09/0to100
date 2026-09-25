@@ -75,7 +75,7 @@ describe('projectScanRecord', () => {
     expect(projected.change_5d_pct).toBe(4.2)
     expect(projected.breakout_state).toBe('confirmed_breakout')
     expect(projected.momentum_state).toBeNull()
-    expect(projected.setup_label).toBe('Ready to trade')
+    expect(projected.setup_label).toBe('Technical setup ready')
     expect(dashCell(undefined)).toBe('—')
     expect(dashCell('undefined')).toBe('—')
     expect(dashCell('confirmed_breakout')).toBe('confirmed_breakout')
