@@ -567,6 +567,11 @@ class HostSupervisor:
                 name: {
                     "pid": child.proc.pid if child.proc else None,
                     "alive": child.alive,
+                    "exit_code": (
+                        child.proc.poll()
+                        if child.proc is not None and child.proc.poll() is not None
+                        else None
+                    ),
                     "healthy": child.last_health_ok,
                     "health_failures": child.health_failures,
                     "health_bad_for_s": None if child.health_bad_since is None else max(0.0, now - child.health_bad_since),
