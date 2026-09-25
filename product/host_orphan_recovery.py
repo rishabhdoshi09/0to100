@@ -138,12 +138,32 @@ def _process_row(pid: int) -> dict[str, Any]:
 def _command_matches(name: str, command: str) -> bool:
     text = str(command or "")
     repo = str(REPO_ROOT)
+    if name == "frontend":
+        # npm may rewrite its visible argv from the original
+        #   npm --prefix <repo>/frontend run dev -- --host ... --port 5173
+        # to a shorter
+        #   npm run dev -- --host ... --port 5173
+        # while keeping the same recorded PID/process group. Accept either that
+        # canonical npm dev-server shape or the Vite node executable it launches.
+        exact_launch = all(
+            piece in text
+            for piece in ("npm", "--prefix", f"{repo}/frontend", "run", "dev")
+        )
+        npm_rewritten = all(
+            piece in text
+            for piece in ("npm", "run", "dev", "--host", "127.0.0.1", "--port", "5173")
+        )
+        vite_child_shape = all(
+            piece in text
+            for piece in (f"{repo}/frontend/node_modules/.bin/vite", "--host", "127.0.0.1", "--port", "5173")
+        )
+        return exact_launch or npm_rewritten or vite_child_shape
+
     signatures = {
         "autonomy": ("main.py", "autonomy"),
         "market_ops": ("operations.market_ops",),
         "market_api": ("uvicorn", "terminal_product_api_parallel:app"),
         "report_api": ("uvicorn", "report_api:app"),
-        "frontend": ("npm", "--prefix", f"{repo}/frontend", "run", "dev"),
     }
     required = signatures.get(name)
     return bool(required) and all(piece in text for piece in required)
@@ -400,7 +420,8 @@ def _validate_previous_generation(
             )
         if not _command_matches(str(name), str(row["command"])):
             raise OrphanRecoveryError(
-                f"candidate {name} pid={pid} command does not match the recorded child role"
+                f"candidate {name} pid={pid} command does not match the recorded child role: "
+                f"{str(row.get('command') or '')[:220]}"
             )
         child_started = float(row["started_epoch"])
         if child_started < started_epoch - START_SLOP_BEFORE_S:
