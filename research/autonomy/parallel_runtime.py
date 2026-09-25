@@ -216,10 +216,12 @@ def _delegated_market_scan(ctx):
         or active_snapshot
         or ""
     )
+    operation_identity = job_key if job_key.startswith("snapshot_slot_scan:") else ""
     try:
         operation = ensure_market_scan_started(
             requested_by="autonomy",
             snapshot_id=requested_snapshot,
+            operation_identity=operation_identity,
         )
         operation = _operation_result(operation)
     except Exception as exc:
@@ -240,6 +242,7 @@ def _delegated_market_scan(ctx):
         "execution_plane": "market_ops",
         "requested_snapshot_id": requested_snapshot,
         "operation_snapshot_id": str((operation.get("payload") or {}).get("snapshot_id") or ""),
+        "operation_identity": str((operation.get("payload") or {}).get("operation_identity") or ""),
         "startup_discovery_reuse": startup_discovery,
     }
     if status in {PENDING, RUNNING}:
