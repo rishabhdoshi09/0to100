@@ -1071,7 +1071,9 @@ def run_reco_paper_cycle(
         "entries_allowed": bool(entries_allowed),
         "entry_block_reason": entry_block_reason,
         "candidates_seen": len(card_list),
-        "eligible_count": sum(1 for d in decisions if d.decision == ENTER_NOW) + len(taken),
+        # Decisions keep ENTER_NOW after a successful paper fill, so adding
+        # len(taken) here double-counted every executed candidate in diagnostics.
+        "eligible_count": sum(1 for d in decisions if d.decision == ENTER_NOW),
         "taken": taken,
         "rejections": rejections,
         "waits": waits,
