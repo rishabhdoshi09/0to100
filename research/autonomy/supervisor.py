@@ -259,6 +259,7 @@ class Supervisor:
                         current_startup = ""
                     retire = not (
                         key.startswith("snapshot_scan:")
+                        or key.startswith("snapshot_slot_scan:")
                         or (
                             current_startup
                             and key.startswith(f"startup_discovery_scan:{current_startup}:")
@@ -267,6 +268,7 @@ class Supervisor:
                 elif job.job_type == SCH.PAPER_CYCLE:
                     retire = not (
                         key.startswith("snapshot_paper:")
+                        or key.startswith("snapshot_slot_paper:")
                         or key.startswith("snapshot_manage:")
                     )
                 elif job.job_type == SCH.OUTCOME_RESOLUTION:
@@ -986,8 +988,8 @@ class Supervisor:
         key = str(idempotency_key or "")
         if key.startswith("snapshot_paper:"):
             return True, "", ""
-        if key.startswith("paper_cycle:"):
-            # paper_cycle_key(snapshot, f"{session_date}:{slot}") can be parsed
+        if key.startswith("snapshot_slot_paper:"):
+            # snapshot_slot_paper_key(snapshot, session_date, slot) can be parsed
             # from the right even when the snapshot id contains colons.
             parts = key.rsplit(":", 2)
             if len(parts) == 3:
@@ -1105,7 +1107,7 @@ class Supervisor:
                 )
             return
         paper_key = (
-            SCH.paper_cycle_key(snap, f"{session_date}:{slot}")
+            SCH.snapshot_slot_paper_key(snap, session_date, slot)
             if slot else SCH.snapshot_paper_key(snap)
         )
         paper = self.jobs.enqueue(
@@ -1138,7 +1140,11 @@ class Supervisor:
             return
 
         scan_key = (
-            SCH.scan_key(snap, slot, session_date or now_ist.date().isoformat())
+            SCH.snapshot_slot_scan_key(
+                snap,
+                session_date or now_ist.date().isoformat(),
+                slot,
+            )
             if slot else SCH.snapshot_scan_key(snap)
         )
         scan = self.jobs.enqueue(
@@ -1161,13 +1167,13 @@ class Supervisor:
         session_date = ""
         if key.startswith("snapshot_scan:"):
             pass
-        elif key.startswith("market_scan:"):
-            # scan_key(snapshot, slot, session_date) is safe to parse from the
-            # right even when snapshot ids themselves contain colons.
+        elif key.startswith("snapshot_slot_scan:"):
+            # snapshot_slot_scan_key(snapshot, session_date, slot) is safe to
+            # parse from the right even when snapshot ids contain colons.
             parts = key.rsplit(":", 2)
             if len(parts) != 3:
                 return
-            slot, session_date = parts[-2], parts[-1]
+            session_date, slot = parts[-2], parts[-1]
         else:
             # Manual RUN_SCAN_NOW is scan-only. Only automatic transactions
             # continue into PAPER_CYCLE.
