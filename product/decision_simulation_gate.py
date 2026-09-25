@@ -56,6 +56,32 @@ def current_startup_id() -> str:
     return str(os.environ.get("QT_STARTUP_ID") or "").strip()
 
 
+def _visible_best_trade(row: Mapping[str, Any]) -> bool:
+    """Fail closed only on explicit scanner safety contradictions.
+
+    Old persisted discovery may predate newer scan normalization. Do not invent
+    eligibility here, but never surface a row as a "best trade" when the row
+    itself still says it is extended / overbought / not to chase.
+    """
+    if bool(row.get("chase_risk")):
+        return False
+    try:
+        rsi_raw = row.get("rsi")
+        if rsi_raw not in (None, "") and float(rsi_raw) >= 82.0:
+            return False
+    except (TypeError, ValueError):
+        pass
+    warning_text = " ".join(str(x) for x in (row.get("reasons") or [])).lower()
+    return not any(token in warning_text for token in (
+        "chase nahi",
+        "chase mat karo",
+        "fresh buy nahi",
+        "setup abhi valid nahi",
+        "blow-off-top",
+        "bull-trap/exhaustion",
+    ))
+
+
 def begin_startup(startup_id: str | None = None, *, path: str | Path | None = None) -> dict[str, Any]:
     sid = str(startup_id or current_startup_id() or "").strip()
     if not sid:
@@ -255,7 +281,14 @@ def status(*, path: str | Path | None = None) -> dict[str, Any]:
         else:
             message = str(board.get("reason") or "Searching and ranking current trade candidates first.")
 
-    visible_best_trades = list(board.get("best_trades") or []) if scan_fresh else []
+    visible_best_trades = (
+        [
+            dict(row)
+            for row in (board.get("best_trades") or [])
+            if isinstance(row, Mapping) and _visible_best_trade(row)
+        ]
+        if scan_fresh else []
+    )
 
     return {
         "schema_version": SCHEMA_VERSION,
