@@ -967,11 +967,24 @@ def wait_for_supervisor(
                         if isinstance(child_rows.get(name), Mapping)
                         and child_rows[name].get("healthy") is True
                     )
+                    alive_children = sum(
+                        1 for name in EXPECTED_CHILDREN
+                        if isinstance(child_rows.get(name), Mapping)
+                        and bool(child_rows[name].get("alive"))
+                    )
+                    exit_codes = {
+                        name: child_rows[name].get("exit_code")
+                        for name in EXPECTED_CHILDREN
+                        if isinstance(child_rows.get(name), Mapping)
+                        and child_rows[name].get("exit_code") is not None
+                    }
                     print(
                         "[HOST INSTALL] Supervisor "
                         f"state={state or 'UNKNOWN'} sha={str(payload.get('production_sha') or '')[:12] or 'missing'} "
                         f"heartbeat_age_s={heartbeat_age if heartbeat_age is not None else 'unknown'} "
-                        f"healthy_children={healthy_children}/{len(EXPECTED_CHILDREN)}",
+                        f"alive_children={alive_children}/{len(EXPECTED_CHILDREN)} "
+                        f"healthy_children={healthy_children}/{len(EXPECTED_CHILDREN)} "
+                        f"exit_codes={exit_codes or '{}'}",
                         flush=True,
                     )
                     reported_state = state
