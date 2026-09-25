@@ -492,7 +492,7 @@ def _public_actionable_scan_row(row: Mapping[str, Any]) -> bool:
     if bool(row.get("chase_risk")):
         return False
     rsi = _f(row.get("rsi"))
-    if rsi is not None and rsi > 82.0:
+    if rsi is not None and rsi >= 82.0:
         return False
     return True
 
@@ -500,7 +500,7 @@ def _public_actionable_scan_row(row: Mapping[str, Any]) -> bool:
 def _candidate_rank(row: Mapping[str, Any]) -> tuple:
     chase = 1 if bool(row.get("chase_risk")) else 0
     rsi = _f(row.get("rsi")) or 0.0
-    blowoff = 1 if rsi > 82 else 0
+    blowoff = 1 if rsi >= 82 else 0
     verdict = str(row.get("verdict") or "").upper()
     v = 0 if verdict in {"BUY", "STRONG BUY"} else 1
     score = float(row.get("score") or 0.0)
