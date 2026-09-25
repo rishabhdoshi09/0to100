@@ -99,3 +99,22 @@ def load(
         return None
     board = payload.get("board")
     return dict(board) if isinstance(board, dict) else None
+
+
+def load_current() -> dict[str, Any] | None:
+    """Load the discovery board only when it matches current canonical identity."""
+    try:
+        from product.scan_store import load_scan
+        from product.long_term_store import load_long_term_scan
+        from product.trading_thesis import manifest
+
+        scan = dict(load_scan() or {})
+        long_term = dict(load_long_term_scan() or {})
+        thesis = dict(manifest() or {})
+        return load(
+            scan_scanned_at=str(scan.get("scanned_at") or ""),
+            long_term_scanned_at=str(long_term.get("scanned_at") or ""),
+            thesis_hash=str(thesis.get("thesis_hash") or ""),
+        )
+    except Exception:
+        return None
