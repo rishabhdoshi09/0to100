@@ -136,11 +136,17 @@ def _queue_operation(
                 if finished and 0 <= now - finished <= float(reuse_s):
                     return latest
 
+    payload = None
+    if wanted or source_snapshot:
+        payload = {
+            "snapshot_id": source_snapshot,
+            "operation_identity": wanted or source_snapshot,
+        }
     operation, _created = store.enqueue(
         kind,
         lane=MOPS.LANES[kind],
         requested_by=requested_by,
-        payload={"snapshot_id": wanted} if wanted else None,
+        payload=payload,
         deduplicate=not bool(wanted),
         priority=int(priority),
     )
@@ -152,14 +158,17 @@ def ensure_market_scan_started(
     *,
     requested_by: str = "autonomy",
     snapshot_id: str = "",
+    operation_identity: str = "",
 ) -> dict[str, Any]:
     from operations.market_ops import MARKET_SCAN
+    identity = str(operation_identity or snapshot_id or "")
     return _queue_operation(
         MARKET_SCAN,
         requested_by=requested_by,
         priority=60 if requested_by == "autonomy" else 100,
-        reuse_s=0.0 if snapshot_id else _SCAN_REUSE_S,
-        identity=str(snapshot_id or ""),
+        reuse_s=0.0 if identity else _SCAN_REUSE_S,
+        identity=identity,
+        snapshot_id=str(snapshot_id or ""),
     )
 
 
