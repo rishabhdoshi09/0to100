@@ -934,7 +934,13 @@ def wait_for_supervisor(
     startup_phase_seen = False
     last: dict[str, Any] = {}
     last_state = ""
+    reported_state = ""
+    last_progress = 0.0
 
+    print(
+        f"[HOST INSTALL] Waiting for exact-SHA supervisor {expected_sha[:12]}…",
+        flush=True,
+    )
     while True:
         now_mono = time.monotonic()
         active_deadline = bootstrap_deadline if last_state == "BOOTSTRAPPING" else startup_deadline
@@ -952,6 +958,23 @@ def wait_for_supervisor(
                 correct_sha = str(payload.get("production_sha") or "") == expected_sha
                 heartbeat_age = None if heartbeat_epoch is None else time.time() - heartbeat_epoch
                 fresh_heartbeat = heartbeat_age is not None and heartbeat_age <= HEARTBEAT_STALE_S
+
+                if state != reported_state or time.monotonic() - last_progress >= 15.0:
+                    child_rows = payload.get("children") or {}
+                    healthy_children = sum(
+                        1 for name in EXPECTED_CHILDREN
+                        if isinstance(child_rows.get(name), Mapping)
+                        and child_rows[name].get("healthy") is True
+                    )
+                    print(
+                        "[HOST INSTALL] Supervisor "
+                        f"state={state or 'UNKNOWN'} sha={str(payload.get('production_sha') or '')[:12] or 'missing'} "
+                        f"heartbeat_age_s={heartbeat_age if heartbeat_age is not None else 'unknown'} "
+                        f"healthy_children={healthy_children}/{len(EXPECTED_CHILDREN)}",
+                        flush=True,
+                    )
+                    reported_state = state
+                    last_progress = time.monotonic()
 
                 if fresh_instance and correct_sha and state == "BOOTSTRAPPING":
                     if not fresh_heartbeat:
@@ -993,13 +1016,22 @@ def install_host(
     startup_timeout_s: float = DEFAULT_STARTUP_TIMEOUT_S,
     bootstrap_timeout_s: float = DEFAULT_BOOTSTRAP_TIMEOUT_S,
 ) -> dict[str, Any]:
+    print("[HOST INSTALL] 1/6 verify clean checkout and build identity", flush=True)
     ensure_clean_checkout(REPO_ROOT)
     sha = git_sha(REPO_ROOT)
+    print(f"[HOST INSTALL] build_sha={sha[:12]}", flush=True)
+
+    print("[HOST INSTALL] 2/6 adopt verified persistent runtime", flush=True)
     root = ensure_persistent_runtime_root(runtime_root or default_runtime_root())
     migration = migrate_repo_runtime(root, repo_root=REPO_ROOT, build_sha=sha)
     env_path = _safe_env_file(env_file) if env_file else ""
+
+    print("[HOST INSTALL] 3/6 run host preflight (includes bounded market-access probes)", flush=True)
     preflight = run_required_preflight(root, sha, env_path)
+    print(f"[HOST INSTALL] preflight={preflight.get('verdict')}", flush=True)
+
     selected = manager or service_manager()
+    print(f"[HOST INSTALL] 4/6 write canonical {selected} service definition", flush=True)
     definition = install_service_definition(
         runtime_root=root, build_sha=sha, env_file=env_path, manager=selected,
     )
@@ -1018,7 +1050,9 @@ def install_host(
     started_after = time.time()
     _clear_start_history(root)  # explicit operator install/restart begins a new bounded generation
     try:
+        print(f"[HOST INSTALL] 5/6 install/restart {selected} service", flush=True)
         service_action("install", manager=selected)
+        print("[HOST INSTALL] 6/6 prove fresh supervisor and all required children", flush=True)
         running = wait_for_supervisor(
             root, expected_sha=sha, started_after=started_after,
             timeout_s=startup_timeout_s, bootstrap_timeout_s=bootstrap_timeout_s,
@@ -1053,6 +1087,10 @@ def install_host(
     )
     result["started"] = True
     result["supervisor"] = running
+    print(
+        f"[HOST INSTALL] COMPLETE sha={sha[:12]} state={running.get('state')} live_locked_required=True",
+        flush=True,
+    )
     return result
 
 
