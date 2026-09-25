@@ -545,6 +545,36 @@ function HomeOsCard({
           <small>The production thesis did not qualify a trade. Rejected, extended and WAIT names are kept out of this list.</small>
         </div>
       )}
+      {(os.research_watchlist || []).length ? (
+        <div className="home-os-opps home-os-best-trades" aria-label="Top research watchlist">
+          <span>TOP RESEARCH WATCHLIST</span>
+          <strong>Research only · ranked names that are not currently eligible paper trades</strong>
+          {(os.research_watchlist || []).slice(0, 5).map((row, index) => (
+            <div key={`${row.symbol || 'watch'}-${index}`}>
+              <span>{row.state || 'WATCH'}</span>
+              <strong>{row.symbol || '—'}</strong>
+              <small>
+                rank {row.ranking_score != null ? Number(row.ranking_score).toFixed(2) : 'n/a'}
+                {row.learning_adjustment ? ` · learned ${Number(row.learning_adjustment) > 0 ? '+' : ''}${Number(row.learning_adjustment).toFixed(2)}` : ''}
+                {row.evidence_adjustment ? ` · evidence ${Number(row.evidence_adjustment) > 0 ? '+' : ''}${Number(row.evidence_adjustment).toFixed(2)}` : ''}
+              </small>
+              <small>{row.block_reason || row.why || 'Not currently eligible under the production thesis.'}</small>
+              {row.symbol && onOpenPage ? (
+                <button
+                  type="button"
+                  className="home-os-inspect-link"
+                  onClick={() => {
+                    setSelected?.(String(row.symbol))
+                    onOpenPage('Stock Intelligence')
+                  }}
+                >
+                  Research
+                </button>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
       <div className="home-os-hero">
         <span>WHAT SHOULD I DO?</span>
         {os.runtime?.lifecycle ? (
@@ -652,11 +682,17 @@ function HomeOsCard({
         </div>
         <div>
           <span>LEARNING</span>
-          <strong>{os.learning?.insufficient_evidence ? 'Too early to judge' : (os.learning?.simple || 'Collecting')}</strong>
+          <strong>
+            {os.learning_impact?.status === 'ACTIVE_IN_PAPER_SELECTION'
+              ? 'Active in paper selection'
+              : os.learning_impact?.status === 'LEARNING_BUT_NOT_PROMOTED'
+                ? 'Learning · not promoted yet'
+                : (os.learning?.insufficient_evidence ? 'Too early to judge' : (os.learning?.simple || 'Collecting'))}
+          </strong>
           <small>
             {depth === 'professional'
-              ? `REAL_FORWARD_N ${os.learning?.real_forward_n ?? 0} · coverage ${os.learning?.execution_adjusted_coverage_pct ?? 'n/a'}`
-              : os.learning?.simple}
+              ? `REAL_FORWARD_N ${os.learning?.real_forward_n ?? 0} · influenced ${os.learning_impact?.current_decisions_influenced ?? 0} · policies ${os.learning_impact?.policies?.production_effective ?? 0} · model ${os.learning_impact?.challenger?.status ?? 'OBSERVING'}`
+              : (os.learning_impact?.plain || os.learning?.simple)}
           </small>
         </div>
         <div>
@@ -670,6 +706,18 @@ function HomeOsCard({
           <small>{os.paper_bot?.todays_entries ?? 0} entries · {os.paper_bot?.exits ?? 0} exits</small>
         </div>
       </div>
+      {os.learning_impact ? (
+        <div className="home-os-past">
+          <span>LEARNING IMPACT</span>
+          <strong>{os.learning_impact.plain || 'Learning impact is being measured.'}</strong>
+          <small>
+            Current decisions changed by measured learning: {os.learning_impact.current_decisions_influenced ?? 0}
+            {os.learning_impact.challenger?.model_version ? ` · model ${os.learning_impact.challenger.model_version}` : ''}
+            {os.learning_impact.challenger?.real_forward_n != null ? ` · real-forward n ${os.learning_impact.challenger.real_forward_n}` : ''}
+            {os.learning_impact.policies?.production_effective != null ? ` · effective policies ${os.learning_impact.policies.production_effective}` : ''}
+          </small>
+        </div>
+      ) : null}
       {os.past_decisions?.available ? (
         <div className="home-os-past">
           <span>PAST DECISION TEST</span>
