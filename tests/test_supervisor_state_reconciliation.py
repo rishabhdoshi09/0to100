@@ -51,6 +51,19 @@ def test_successful_auth_probe_does_not_downgrade_data_ready(tmp_path):
 
 
 
+
+def test_discovery_waits_while_new_market_scan_is_in_flight(tmp_path, monkeypatch):
+    sup = _sup(tmp_path)
+    monkeypatch.setattr(sup, "_market_scan_in_flight", lambda: True)
+
+    def should_not_read_gate():
+        raise AssertionError("discovery gate should not be projected from a scan being replaced")
+
+    monkeypatch.setattr("product.decision_simulation_gate.status", should_not_read_gate)
+    sup._ensure_startup_trade_discovery()
+    assert not any(job.job_type == SCH.DISCOVERY_REFRESH for job in sup.jobs.list(limit=20))
+
+
 def test_superseded_discovery_immediately_rechecks_current_identity(tmp_path, monkeypatch):
     sup = _sup(tmp_path)
     assert sup.start() is True
