@@ -167,3 +167,64 @@ def test_missing_owner_blocks_credible_recorded_orphan(tmp_path, monkeypatch):
     )
     with pytest.raises(recovery.OrphanRecoveryError, match="owner evidence is missing"):
         recovery.reconcile_previous_children()
+
+
+def test_quiesce_verified_live_supervisor_then_reconciles_children(tmp_path, monkeypatch):
+    repo, runtime, owner_path, status, _owner = _fixtures(tmp_path)
+    _patch_paths(monkeypatch, repo, runtime, owner_path)
+    status["children"] = {}
+    (runtime / "state" / "host_supervisor.json").write_text(json.dumps(status), encoding="utf-8")
+
+    monkeypatch.setattr(recovery, "_pid_alive", lambda pid: pid == 900)
+    monkeypatch.setattr(
+        recovery,
+        "_process_row",
+        lambda pid: {
+            "pid": 900,
+            "ppid": 1,
+            "pgid": 900,
+            "started": "Wed Sep 16 07:30:00 2026",
+            "started_epoch": float(recovery._iso_epoch(START) or 0) - 30,
+            "command": "/usr/bin/python3 -u -m product.host_launchd_entrypoint",
+        },
+    )
+    signals = []
+    monkeypatch.setattr(recovery.os, "kill", lambda pid, sig: signals.append((pid, sig)))
+    monkeypatch.setattr(recovery, "_wait_pid_gone", lambda pid, timeout_s: True)
+    monkeypatch.setattr(
+        recovery,
+        "reconcile_previous_children",
+        lambda: {"state": "CLEAR", "terminated": []},
+    )
+
+    result = recovery.quiesce_live_previous_supervisor()
+
+    assert result["state"] == "QUIESCED"
+    assert result["previous_supervisor_pid"] == 900
+    assert result["signal"] == "SIGTERM"
+    assert signals == [(900, recovery.signal.SIGTERM)]
+
+
+def test_quiesce_refuses_noncanonical_live_supervisor_before_signal(tmp_path, monkeypatch):
+    repo, runtime, owner_path, _status, _owner = _fixtures(tmp_path)
+    _patch_paths(monkeypatch, repo, runtime, owner_path)
+    monkeypatch.setattr(recovery, "_pid_alive", lambda pid: pid == 900)
+    monkeypatch.setattr(
+        recovery,
+        "_process_row",
+        lambda pid: {
+            "pid": 900,
+            "ppid": 1,
+            "pgid": 900,
+            "started": "Wed Sep 16 07:30:00 2026",
+            "started_epoch": float(recovery._iso_epoch(START) or 0),
+            "command": "/usr/bin/python3 unrelated_service.py",
+        },
+    )
+    signals = []
+    monkeypatch.setattr(recovery.os, "kill", lambda pid, sig: signals.append((pid, sig)))
+
+    with pytest.raises(recovery.OrphanRecoveryError, match="not canonical QuantTerm host"):
+        recovery.quiesce_live_previous_supervisor()
+
+    assert signals == []
