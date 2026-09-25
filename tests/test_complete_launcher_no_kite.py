@@ -40,3 +40,14 @@ def test_complete_launcher_machine_lock_is_portable_to_macos() -> None:
     assert "if try_machine_lock; then" in text
     assert "if flock -n 200; then" not in text
     assert "if flock -n 201; then" not in text
+
+
+def test_complete_launcher_bounds_persistent_runtime_probe() -> None:
+    text = LAUNCHER.read_text(encoding="utf-8")
+
+    assert "Startup probe: persistent runtime storage" in text
+    assert "Runtime storage probe timed out after 10s" in text
+    assert 'kill -TERM "$runtime_probe_pid"' in text
+    assert 'kill -KILL "$runtime_probe_pid"' in text
+    assert "missing, unmounted, or unresponsive" in text
+    assert "Refusing to create a replacement runtime" in text
