@@ -192,6 +192,7 @@ def test_public_best_setups_excludes_non_actionable_scan_rows():
         "HOT": _uptrend(),
         "WATCH": _uptrend(),
         "EDGE82": _uptrend(),
+        "LEGACYWARN": _uptrend(),
     }
     cards, note = public_best_setups(
         {
@@ -202,6 +203,7 @@ def test_public_best_setups_excludes_non_actionable_scan_rows():
                 {"symbol": "HOT", "score": 99, "verdict": "BUY", "chase_risk": False, "rsi": 91},
                 {"symbol": "WATCH", "score": 99, "verdict": "WATCH", "chase_risk": False, "rsi": 60},
                 {"symbol": "EDGE82", "score": 99, "verdict": "BUY", "chase_risk": False, "rsi": 82},
+                {"symbol": "LEGACYWARN", "score": 99, "verdict": "BUY", "chase_risk": False, "rsi": 60, "reasons": ["Extended — chase nahi"]},
             ],
         },
         load_frame=lambda symbol: frames[symbol],
