@@ -22,6 +22,7 @@ OPEN = "OPEN"
 SATISFIED = "SATISFIED"
 PLATEAUED = "PLATEAUED"
 BLOCKED = "BLOCKED"
+_TERMINAL_STATUSES = frozenset({SATISFIED, PLATEAUED, BLOCKED})
 
 DEFAULT_REQUEST_PATH = logs_path("research", "evidence_request.json")
 
@@ -183,6 +184,27 @@ def save_request(request: EvidenceRequest | Mapping[str, Any], *, path: str | Pa
     target = Path(path) if path is not None else DEFAULT_REQUEST_PATH
     payload = request.as_dict() if isinstance(request, EvidenceRequest) else dict(request)
     payload["schema_version"] = SCHEMA_VERSION
+
+    # A deterministic evidence request is one investigation, not a recurring
+    # scheduler trigger. Once that exact request reaches a terminal state, a
+    # later diagnostic pass must not resurrect it merely by rebuilding the same
+    # OPEN request. Reopening would erase the stopping decision while retaining
+    # the same request_id, so the bounded replan idempotency key would already
+    # be spent and the supervisor could sit healthy but permanently idle.
+    #
+    # A materially different question (including a changed thesis, gap, target,
+    # required metrics, strategy, or evidence origin) hashes to a different
+    # request_id and is therefore free to open normally. Explicit terminal-state
+    # updates to the same request are also still allowed.
+    existing = load_request(target)
+    existing_status = str(existing.get("status") or "").upper()
+    incoming_status = str(payload.get("status") or OPEN).upper()
+    same_request = bool(existing.get("request_id")) and (
+        str(existing.get("request_id") or "") == str(payload.get("request_id") or "")
+    )
+    if same_request and existing_status in _TERMINAL_STATUSES and incoming_status == OPEN:
+        return existing
+
     _atomic_json(target, payload)
     return payload
 
