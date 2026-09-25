@@ -51,7 +51,24 @@ if ! diskutil info "$STORAGE_MOUNT" >/dev/null 2>&1; then
     fail "runtime volume is not mounted at $STORAGE_MOUNT"
   fi
   info "mounting APFS sparsebundle: $SPARSEBUNDLE"
-  hdiutil attach -nobrowse "$SPARSEBUNDLE" >/dev/null || fail "could not attach sparsebundle"
+
+  # Preserve the real DiskImages error. Older code redirected hdiutil stdout and
+  # then collapsed every failure into "could not attach sparsebundle", which
+  # made an already-attached image, a busy device, and a genuine image failure
+  # indistinguishable. Also accept the race where hdiutil returns non-zero but
+  # Disk Arbitration finishes mounting the expected volume immediately after.
+  ATTACH_OUTPUT=""
+  ATTACH_RC=0
+  ATTACH_OUTPUT="$(hdiutil attach -nobrowse "$SPARSEBUNDLE" 2>&1)" || ATTACH_RC=$?
+  if [[ "$ATTACH_RC" -ne 0 ]]; then
+    sleep 1
+    if ! diskutil info "$STORAGE_MOUNT" >/dev/null 2>&1; then
+      ATTACH_DETAIL="$(printf '%s\n' "$ATTACH_OUTPUT" | tail -n 1)"
+      [[ -n "$ATTACH_DETAIL" ]] || ATTACH_DETAIL="hdiutil attach exited rc=$ATTACH_RC"
+      fail "could not attach sparsebundle (rc=$ATTACH_RC): $ATTACH_DETAIL"
+    fi
+    info "attach command returned rc=$ATTACH_RC but expected runtime volume is mounted; continuing"
+  fi
 fi
 
 DISK_INFO="$(diskutil info "$STORAGE_MOUNT" 2>/dev/null)" || fail \
