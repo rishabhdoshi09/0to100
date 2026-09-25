@@ -491,6 +491,16 @@ def _public_actionable_scan_row(row: Mapping[str, Any]) -> bool:
         return False
     if bool(row.get("chase_risk")):
         return False
+    warning_text = " ".join(str(x) for x in (row.get("reasons") or [])).lower()
+    if any(token in warning_text for token in (
+        "chase nahi",
+        "chase mat karo",
+        "fresh buy nahi",
+        "setup abhi valid nahi",
+        "blow-off-top",
+        "bull-trap/exhaustion",
+    )):
+        return False
     rsi = _f(row.get("rsi"))
     if rsi is not None and rsi >= 82.0:
         return False
