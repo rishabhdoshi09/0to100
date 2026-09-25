@@ -17,6 +17,7 @@ from product.paper_autopilot import (
     HISTORICAL_EVIDENCE_PENDING,
     INSUFFICIENT_CAPITAL,
     INVALID_STOP,
+    LIQUIDITY_FAILED,
     LOW_QUALITY_SETUP,
     MAX_PORTFOLIO_RISK,
     OUTSIDE_ENTRY_WINDOW,
@@ -219,6 +220,18 @@ def test_entry_too_extended_waits():
     out = _cycle(book, [_eligible_card(chase_risk=True, entry_state="extended")])
     assert not book.open
     assert out["waits"][0]["reason_code"] == ENTRY_TOO_EXTENDED
+
+
+def test_paper_liquidity_floor_matches_recommendation_floor():
+    book = PaperBook(capital=100_000)
+    out = _cycle(book, [_eligible_card(volume_ratio=0.69)])
+    assert not book.open
+    assert out["rejections"][0]["reason_code"] == LIQUIDITY_FAILED
+    assert "floor=0.7" in out["rejections"][0]["detail"]
+
+    at_floor = PaperBook(capital=100_000)
+    ok = _cycle(at_floor, [_eligible_card(volume_ratio=0.70)])
+    assert ok["taken"]
 
 
 def test_history_first_block_is_named_separately_from_learned_policy_block():
