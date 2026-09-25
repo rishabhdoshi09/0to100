@@ -259,6 +259,7 @@ class Supervisor:
                         current_startup = ""
                     retire = not (
                         key.startswith("snapshot_scan:")
+                        or key.startswith("snapshot_slot_scan:")
                         or (
                             current_startup
                             and key.startswith(f"startup_discovery_scan:{current_startup}:")
@@ -267,6 +268,7 @@ class Supervisor:
                 elif job.job_type == SCH.PAPER_CYCLE:
                     retire = not (
                         key.startswith("snapshot_paper:")
+                        or key.startswith("snapshot_slot_paper:")
                         or key.startswith("snapshot_manage:")
                     )
                 elif job.job_type == SCH.OUTCOME_RESOLUTION:
@@ -688,16 +690,18 @@ class Supervisor:
                     getattr(data_job, "output_snapshot_id", None),
                     None,
                 )
-                self._ensure_snapshot_pipeline(snap)
+                slot = str(SCH.scan_slot(now_ist, holidays) or "")
+                self._ensure_snapshot_pipeline(
+                    snap,
+                    slot=slot,
+                    session_date=session_date if slot else "",
+                )
 
             # Discovery repair is independent of broker auth. A fresh persisted
             # scan may already exist while a long-term refresh or learned-thesis
-            # change invalidates only its immutable decision projection. The
-            # intraday branch used to return before scheduling that repair, so a
-            # broker-auth failure could leave Product Acceptance (and the real
-            # desk) in SEARCHING_BEST_TRADES with an empty queue indefinitely.
-            # Do not start a second intraday scan here: only repair/authorize when
-            # the current persisted market scan is already fresh.
+            # change invalidates only its immutable decision projection. Each
+            # 15-minute intraday scan slot is independently idempotent, so this
+            # repair path never suppresses the next live scan→paper transaction.
             try:
                 from product.decision_simulation_gate import status as decision_status
 
@@ -978,15 +982,53 @@ class Supervisor:
         safe_source = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in source)
         return f"market:{safe_source}:{latest}"
 
-    def _pipeline_complete(self, snapshot_id: str) -> bool:
+    @staticmethod
+    def _automatic_paper_identity(idempotency_key: str) -> tuple[bool, str, str]:
+        """Return (automatic, session_date, slot) for automatic paper jobs."""
+        key = str(idempotency_key or "")
+        if key.startswith("snapshot_paper:"):
+            return True, "", ""
+        if key.startswith("snapshot_slot_paper:"):
+            # snapshot_slot_paper_key(snapshot, session_date, slot) can be parsed
+            # from the right even when the snapshot id contains colons.
+            parts = key.rsplit(":", 2)
+            if len(parts) == 3:
+                return True, parts[-2], parts[-1]
+        return False, "", ""
+
+    def _pipeline_complete(
+        self,
+        snapshot_id: str,
+        *,
+        slot: str = "",
+        session_date: str = "",
+    ) -> bool:
+        """Whether this exact automatic scan→paper transaction is complete.
+
+        The official completed-session snapshot can stay unchanged throughout the
+        cash session. Intraday opportunity state does not: live quotes, volume and
+        breakout state evolve. Therefore completion is scoped to the deterministic
+        15-minute scan slot when one is supplied, not to the whole daily snapshot.
+        """
         snap = str(snapshot_id or "")
         owner_state = getattr(self, "owner_state", {}) or {}
-        return bool(
-            snap
-            and snap == str(owner_state.get("completed_snapshot_id") or "")
-        )
+        if not snap:
+            return False
+        if slot:
+            return bool(
+                snap == str(owner_state.get("completed_snapshot_id") or "")
+                and str(slot) == str(owner_state.get("completed_scan_slot") or "")
+                and str(session_date or "") == str(owner_state.get("completed_session_date") or "")
+            )
+        return snap == str(owner_state.get("completed_snapshot_id") or "")
 
-    def _mark_snapshot_complete(self, snapshot_id: str) -> None:
+    def _mark_snapshot_complete(
+        self,
+        snapshot_id: str,
+        *,
+        slot: str = "",
+        session_date: str = "",
+    ) -> None:
         snap = str(snapshot_id or "")
         if not snap:
             return
@@ -997,10 +1039,18 @@ class Supervisor:
         self.owner_state["completed_snapshot_at"] = (
             now.isoformat() if hasattr(now, "isoformat") else str(now)
         )
-        self.owner_state["completed_session_date"] = str(now.date().isoformat())
+        self.owner_state["completed_session_date"] = str(
+            session_date or now.date().isoformat()
+        )
+        self.owner_state["completed_scan_slot"] = str(slot or "")
         if hasattr(self, "_save_owner_state"):
             self._save_owner_state()
-        # Retire only automatic rows. Manual controls have manual:* identities.
+
+        # Legacy snapshot-only transactions may safely retire any pending rows
+        # for that immutable snapshot. Slot-scoped intraday transactions must not
+        # cancel a later 15-minute slot that may already have been queued.
+        if slot:
+            return
         try:
             self.jobs.cancel_pending_by_prefix(
                 "news_refresh:",
@@ -1022,10 +1072,18 @@ class Supervisor:
         except Exception:
             return False
 
-    def _paper_for_snapshot(self, snapshot_id: str) -> None:
-        """Enqueue the terminal paper pass for an already-successful scan."""
+    def _paper_for_snapshot(
+        self,
+        snapshot_id: str,
+        *,
+        slot: str = "",
+        session_date: str = "",
+    ) -> None:
+        """Enqueue the terminal paper pass for one scan transaction."""
         snap = str(snapshot_id or "")
-        if not snap or self._pipeline_complete(snap):
+        if not snap or self._pipeline_complete(
+            snap, slot=slot, session_date=session_date
+        ):
             return
         now_ist = self.deps.now_ist()
         holidays = self.deps.holidays()
@@ -1035,50 +1093,90 @@ class Supervisor:
         if not approved:
             # Existing paper positions must still be managed truthfully. This
             # distinct idempotency key can never become a new-entry pass and
-            # does not mark the snapshot transaction complete.
+            # does not mark the scan transaction complete.
             if self._has_open_paper_positions():
+                manage_key = (
+                    f"snapshot_manage:{snap}:{session_date}:{slot}"
+                    if slot else f"snapshot_manage:{snap}"
+                )
                 self.jobs.enqueue(
                     SCH.PAPER_CYCLE,
-                    idempotency_key=f"snapshot_manage:{snap}",
+                    idempotency_key=manage_key,
                     input_snapshot_id=snap,
                     critical=True,
                 )
             return
+        paper_key = (
+            SCH.snapshot_slot_paper_key(snap, session_date, slot)
+            if slot else SCH.snapshot_paper_key(snap)
+        )
         paper = self.jobs.enqueue(
             SCH.PAPER_CYCLE,
-            idempotency_key=SCH.snapshot_paper_key(snap),
+            idempotency_key=paper_key,
             input_snapshot_id=snap,
             critical=True,
         )
         if getattr(paper, "status", None) == JS.SUCCEEDED:
-            self._mark_snapshot_complete(snap)
+            self._mark_snapshot_complete(
+                snap, slot=slot, session_date=session_date
+            )
 
-    def _ensure_snapshot_pipeline(self, snapshot_id: str) -> None:
-        """Enqueue exactly one MARKET_SCAN for a fresh data identity."""
+    def _ensure_snapshot_pipeline(
+        self,
+        snapshot_id: str,
+        *,
+        slot: str = "",
+        session_date: str = "",
+    ) -> None:
+        """Enqueue one scan→paper transaction per deterministic intraday slot."""
         snap = str(snapshot_id or "")
-        if not snap or self._pipeline_complete(snap):
+        if not snap or self._pipeline_complete(
+            snap, slot=slot, session_date=session_date
+        ):
             return
         now_ist = self.deps.now_ist()
         holidays = self.deps.holidays()
         if not SCH.entries_allowed_by_clock(now_ist, holidays):
             return
 
+        scan_key = (
+            SCH.snapshot_slot_scan_key(
+                snap,
+                session_date or now_ist.date().isoformat(),
+                slot,
+            )
+            if slot else SCH.snapshot_scan_key(snap)
+        )
         scan = self.jobs.enqueue(
             SCH.MARKET_SCAN,
-            idempotency_key=SCH.snapshot_scan_key(snap),
+            idempotency_key=scan_key,
             input_snapshot_id=snap,
         )
         # A recovered/reused scan may already be terminal; continue directly to
         # paper without scheduling another scan.
         if getattr(scan, "status", None) == JS.SUCCEEDED:
-            self._paper_for_snapshot(snap)
+            self._paper_for_snapshot(
+                snap, slot=slot, session_date=session_date
+            )
 
     def _enqueue_paper_after_scan(self, scan_job) -> None:
         if str(getattr(scan_job, "job_type", "") or "") != SCH.MARKET_SCAN:
             return
-        if not str(getattr(scan_job, "idempotency_key", "") or "").startswith("snapshot_scan:"):
-            # Manual RUN_SCAN_NOW is scan-only. Only the automatic snapshot
-            # transaction is authorised to continue into PAPER_CYCLE.
+        key = str(getattr(scan_job, "idempotency_key", "") or "")
+        slot = ""
+        session_date = ""
+        if key.startswith("snapshot_scan:"):
+            pass
+        elif key.startswith("snapshot_slot_scan:"):
+            # snapshot_slot_scan_key(snapshot, session_date, slot) is safe to
+            # parse from the right even when snapshot ids contain colons.
+            parts = key.rsplit(":", 2)
+            if len(parts) != 3:
+                return
+            session_date, slot = parts[-2], parts[-1]
+        else:
+            # Manual RUN_SCAN_NOW is scan-only. Only automatic transactions
+            # continue into PAPER_CYCLE.
             return
         active_fn = getattr(self.deps, "active_snapshot_id", None)
         active = active_fn() if callable(active_fn) else ""
@@ -1087,7 +1185,9 @@ class Supervisor:
             or active
             or ""
         )
-        self._paper_for_snapshot(snap)
+        self._paper_for_snapshot(
+            snap, slot=slot, session_date=session_date
+        )
 
     def _enqueue_scan_after_refresh(
         self,
@@ -1106,7 +1206,13 @@ class Supervisor:
             output_snapshot_id or getattr(refresh_job, "output_snapshot_id", None),
             metadata,
         )
-        self._ensure_snapshot_pipeline(snap)
+        now_ist = self.deps.now_ist()
+        slot = str(SCH.scan_slot(now_ist, self.deps.holidays()) or "")
+        self._ensure_snapshot_pipeline(
+            snap,
+            slot=slot,
+            session_date=now_ist.date().isoformat() if slot else "",
+        )
 
 
     def _process_controls(self):
@@ -1455,16 +1561,21 @@ class Supervisor:
                     result.metadata,
                 )
                 self._enqueue_paper_after_scan(job)
-                if (
-                    job.job_type == SCH.PAPER_CYCLE
-                    and str(job.idempotency_key or "").startswith("snapshot_paper:")
-                ):
+                automatic_paper, paper_session, paper_slot = (
+                    self._automatic_paper_identity(str(job.idempotency_key or ""))
+                    if job.job_type == SCH.PAPER_CYCLE else (False, "", "")
+                )
+                if job.job_type == SCH.PAPER_CYCLE and automatic_paper:
                     snap = str(
                         getattr(job, "input_snapshot_id", None)
                         or self.deps.active_snapshot_id()
                         or ""
                     )
-                    self._mark_snapshot_complete(snap)
+                    self._mark_snapshot_complete(
+                        snap,
+                        slot=paper_slot,
+                        session_date=paper_session,
+                    )
                 key = str(job.idempotency_key or "")
                 if job.job_type == SCH.LEARNING_CYCLE and key.startswith("hist_learning:"):
                     batch_id = str(getattr(job, "input_snapshot_id", None) or key.split(":", 1)[1])
@@ -1478,14 +1589,18 @@ class Supervisor:
                     mark_research_complete(batch_id)
 
         target = self._gated_state(result.state_hint)
+        automatic_paper, _paper_session, _paper_slot = (
+            self._automatic_paper_identity(str(job.idempotency_key or ""))
+            if job.job_type == SCH.PAPER_CYCLE else (False, "", "")
+        )
         if (
             job.job_type == SCH.PAPER_CYCLE
             and result.status == JS.SUCCEEDED
-            and str(job.idempotency_key or "").startswith("snapshot_paper:")
+            and automatic_paper
         ):
-            # The automatic snapshot transaction is terminal after one paper
-            # decision pass. Keep durable positions intact, but the scheduler
-            # returns to OBSERVING and waits for new data.
+            # One slot transaction is terminal after its paper decision pass.
+            # Durable positions stay intact; the next deterministic scan slot
+            # may schedule a fresh scan→paper transaction.
             target = ST.OBSERVING
         # A successful auth probe proves only broker-session health. It must not
         # move an already productive desk into OBSERVING or a fake data-refresh.
@@ -1522,13 +1637,14 @@ class Supervisor:
         return hint
 
     def _retry_or_fail(self, job, *, error_code, error_message, summary=""):
-        if (
-            job.job_type == SCH.PAPER_CYCLE
-            and str(job.idempotency_key or "").startswith("snapshot_paper:")
-        ):
-            # Automatic paper execution is a once-per-data-identity mutation.
-            # Never replay it after an exception; surface the failure and wait
-            # for a new data identity or an explicit manual control.
+        automatic_paper, _paper_session, _paper_slot = (
+            self._automatic_paper_identity(str(job.idempotency_key or ""))
+            if job.job_type == SCH.PAPER_CYCLE else (False, "", "")
+        )
+        if job.job_type == SCH.PAPER_CYCLE and automatic_paper:
+            # Automatic paper execution is a once-per-slot mutation. Never
+            # replay it after an exception: duplicate entry mutations are worse
+            # than missing one slot. The next 15-minute slot can try afresh.
             self.jobs.complete(
                 job.job_id,
                 JS.PERMANENT_FAILED,

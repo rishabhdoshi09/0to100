@@ -98,12 +98,14 @@ def _queue_operation(
     priority: int = 40,
     reuse_s: float = 0.0,
     identity: str = "",
+    snapshot_id: str = "",
 ) -> dict[str, Any]:
     from operations import market_ops as MOPS
     from operations.store import PENDING, RUNNING, SUCCEEDED
 
     store = _ops_store()
     wanted = str(identity or "")
+    source_snapshot = str(snapshot_id or identity or "")
     now = time.time()
 
     # Snapshot-bound autonomy operations may only reuse the exact operation that
@@ -113,7 +115,9 @@ def _queue_operation(
         for row in store.recent_full(limit=250):
             if str(row.get("kind") or "") != str(kind).upper():
                 continue
-            if str((row.get("payload") or {}).get("snapshot_id") or "") != wanted:
+            payload = dict(row.get("payload") or {})
+            row_identity = str(payload.get("operation_identity") or payload.get("snapshot_id") or "")
+            if row_identity != wanted:
                 continue
             status = str(row.get("status") or "")
             if status in {PENDING, RUNNING, SUCCEEDED}:
@@ -132,11 +136,17 @@ def _queue_operation(
                 if finished and 0 <= now - finished <= float(reuse_s):
                     return latest
 
+    payload = None
+    if wanted or source_snapshot:
+        payload = {
+            "snapshot_id": source_snapshot,
+            "operation_identity": wanted or source_snapshot,
+        }
     operation, _created = store.enqueue(
         kind,
         lane=MOPS.LANES[kind],
         requested_by=requested_by,
-        payload={"snapshot_id": wanted} if wanted else None,
+        payload=payload,
         deduplicate=not bool(wanted),
         priority=int(priority),
     )
@@ -148,14 +158,17 @@ def ensure_market_scan_started(
     *,
     requested_by: str = "autonomy",
     snapshot_id: str = "",
+    operation_identity: str = "",
 ) -> dict[str, Any]:
     from operations.market_ops import MARKET_SCAN
+    identity = str(operation_identity or snapshot_id or "")
     return _queue_operation(
         MARKET_SCAN,
         requested_by=requested_by,
         priority=60 if requested_by == "autonomy" else 100,
-        reuse_s=0.0 if snapshot_id else _SCAN_REUSE_S,
-        identity=str(snapshot_id or ""),
+        reuse_s=0.0 if identity else _SCAN_REUSE_S,
+        identity=identity,
+        snapshot_id=str(snapshot_id or ""),
     )
 
 
@@ -203,10 +216,12 @@ def _delegated_market_scan(ctx):
         or active_snapshot
         or ""
     )
+    operation_identity = job_key if job_key.startswith("snapshot_slot_scan:") else ""
     try:
         operation = ensure_market_scan_started(
             requested_by="autonomy",
             snapshot_id=requested_snapshot,
+            operation_identity=operation_identity,
         )
         operation = _operation_result(operation)
     except Exception as exc:
@@ -227,6 +242,7 @@ def _delegated_market_scan(ctx):
         "execution_plane": "market_ops",
         "requested_snapshot_id": requested_snapshot,
         "operation_snapshot_id": str((operation.get("payload") or {}).get("snapshot_id") or ""),
+        "operation_identity": str((operation.get("payload") or {}).get("operation_identity") or ""),
         "startup_discovery_reuse": startup_discovery,
     }
     if status in {PENDING, RUNNING}:
