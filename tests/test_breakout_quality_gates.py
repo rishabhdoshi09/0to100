@@ -139,3 +139,17 @@ def test_scan_store_never_labels_explicit_no_chase_row_ready():
     assert row["status"] == "Wait for pullback"
     assert row["chase_risk"] is True
 
+
+
+def test_session_tag_requires_live_overlay_provenance():
+    import pandas as pd
+    from scan.unified_scanner import _session_tag_for_frame
+
+    frame = pd.DataFrame(
+        {"close": [100.0]},
+        index=[pd.Timestamp("2026-09-25")],
+    )
+    assert _session_tag_for_frame(frame) == " (25 Sep close)"
+
+    frame.attrs["quantterm_live_overlay_date"] = "2026-09-25"
+    assert _session_tag_for_frame(frame) == " (25 Sep intraday/live)"
