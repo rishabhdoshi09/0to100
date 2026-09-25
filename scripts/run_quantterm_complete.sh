@@ -47,6 +47,7 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
+echo "[COMPLETE STACK] Startup probe: Python environment"
 if [[ ! -d venv ]]; then
   echo "[COMPLETE STACK] Creating venv…"
   python3 -m venv venv
@@ -54,6 +55,7 @@ fi
 # shellcheck disable=SC1091
 source venv/bin/activate
 
+echo "[COMPLETE STACK] Startup probe: Python dependencies"
 if ! python -c 'import fastapi, uvicorn, pypdf' >/dev/null 2>&1; then
   echo "[COMPLETE STACK] Installing Python packages (first run takes a few minutes)…"
   python -m pip install --upgrade pip wheel
@@ -74,8 +76,11 @@ if [[ -n "${QT_RUNTIME_ROOT:-}" || -f "$ROOT/.quantterm_runtime_root" ]]; then
   export QT_RUNTIME_ROOT_REQUIRE_EXISTING=1
 fi
 
+echo "[COMPLETE STACK] Startup probe: persistent runtime storage"
 runtime_rc=0
-RUNTIME_LOGS="$(python - <<'PY' || exit $?
+RUNTIME_PROBE_OUT="$(mktemp -t quantterm-runtime-out.XXXXXX)"
+RUNTIME_PROBE_ERR="$(mktemp -t quantterm-runtime-err.XXXXXX)"
+python - <<'PY' >"$RUNTIME_PROBE_OUT" 2>"$RUNTIME_PROBE_ERR" &
 import sys
 from core.runtime_paths import logs_dir
 
@@ -85,10 +90,49 @@ except Exception as exc:
     print(f"[COMPLETE STACK] Runtime storage unavailable: {exc}", file=sys.stderr)
     raise SystemExit(78)
 PY
-)" || runtime_rc=$?
+runtime_probe_pid=$!
+
+# External APFS/sparsebundle trouble can leave a pathname present while a stat/
+# resolve call blocks in the kernel. Never let the whole desk appear frozen with
+# no explanation: bound only this read-only startup probe. No disk repair,
+# detach, mount or mkdir is attempted here.
+runtime_probe_done=0
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  if ! kill -0 "$runtime_probe_pid" 2>/dev/null; then
+    runtime_probe_done=1
+    break
+  fi
+  sleep 0.5
+done
+
+if [[ "$runtime_probe_done" -eq 1 ]]; then
+  if wait "$runtime_probe_pid"; then
+    runtime_rc=0
+  else
+    runtime_rc=$?
+  fi
+else
+  kill -TERM "$runtime_probe_pid" 2>/dev/null || true
+  sleep 0.2
+  kill -KILL "$runtime_probe_pid" 2>/dev/null || true
+  runtime_rc=78
+  echo "[COMPLETE STACK] Runtime storage probe timed out after 10s. The configured external volume may be mounted but unresponsive." >&2
+fi
+
+if [[ -s "$RUNTIME_PROBE_ERR" ]]; then
+  cat "$RUNTIME_PROBE_ERR" >&2
+fi
+RUNTIME_LOGS="$(cat "$RUNTIME_PROBE_OUT" 2>/dev/null || true)"
+rm -f "$RUNTIME_PROBE_OUT" "$RUNTIME_PROBE_ERR" 2>/dev/null || true
+
+if [[ "$runtime_rc" -eq 0 && -z "$RUNTIME_LOGS" ]]; then
+  runtime_rc=78
+fi
 if [[ "$runtime_rc" -ne 0 ]]; then
   if [[ "$runtime_rc" -eq 78 ]]; then
-    echo "[COMPLETE STACK] Persistent runtime is configured but missing or unmounted. Mount/reconnect the configured storage, then re-run this command." >&2
+    echo "[COMPLETE STACK] Persistent runtime is configured but missing, unmounted, or unresponsive." >&2
+    echo "[COMPLETE STACK] Check the configured path with: cat .quantterm_runtime_root" >&2
+    echo "[COMPLETE STACK] Then verify the volume with: diskutil info /Volumes/QuantTermStorage" >&2
     echo "[COMPLETE STACK] Refusing to create a replacement runtime under /Volumes or another fallback path." >&2
   fi
   exit "$runtime_rc"
