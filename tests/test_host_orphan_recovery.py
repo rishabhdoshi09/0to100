@@ -228,3 +228,23 @@ def test_quiesce_refuses_noncanonical_live_supervisor_before_signal(tmp_path, mo
         recovery.quiesce_live_previous_supervisor()
 
     assert signals == []
+
+
+def test_frontend_command_match_accepts_npm_rewritten_process_title(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setattr(recovery, "REPO_ROOT", repo)
+
+    command = "npm run dev -- --host 127.0.0.1 --port 5173"
+    assert recovery._command_matches("frontend", command) is True
+
+
+def test_frontend_command_match_rejects_unrelated_dev_server(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setattr(recovery, "REPO_ROOT", repo)
+
+    assert recovery._command_matches(
+        "frontend",
+        "npm run dev -- --host 127.0.0.1 --port 3000",
+    ) is False
