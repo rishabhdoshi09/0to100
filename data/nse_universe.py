@@ -228,6 +228,32 @@ def _is_valid_symbol(sym: str) -> bool:
     return True
 
 
+def _is_non_stock_fund(symbol: str, name: str = "") -> bool:
+    """True for ETFs/liquid-rate funds that can appear in NSE EQ-like sources.
+
+    QuantTerm's broad scanner is a *stock* selector. Fund units have different
+    return/risk mechanics (and pathological RSI/base patterns for 1-day liquid
+    ETFs), so letting them compete with operating companies corrupts rankings.
+    """
+    sym = str(symbol or "").strip().upper()
+    label = " ".join(str(name or "").strip().upper().split())
+    if not sym:
+        return False
+    if "LIQUID" in sym or sym.endswith("ETF") or sym.endswith("BEES"):
+        return True
+    return any(marker in label for marker in (
+        " EXCHANGE TRADED FUND",
+        " EXCHANGE TRADED ",
+        " ETF",
+        "MUTUAL FUND",
+        "NIFTY 1D RATE LIQUID",
+        "LIQUID RATE",
+        "LIQUID - GROWTH",
+        "GOLD ETF",
+        "SILVER ETF",
+    ))
+
+
 def _dedupe_sorted(symbols: List[str]) -> List[str]:
     return sorted(set(s.strip().upper() for s in symbols if _is_valid_symbol(s.strip().upper())))
 
@@ -447,8 +473,27 @@ def _load_universe() -> tuple:
     except Exception as exc:
         logger.debug("universe instrument cross-check skipped: %s", exc)
 
+    # EQ-like exchange/broker lists can contain ETF and liquid-rate fund units.
+    # They are tradeable instruments, but not operating-company stocks; exclude
+    # them before the stock scanner so their near-monotonic NAV series cannot
+    # manufacture RSI=100 / repeated-base "opportunities".
+    fund_symbols = {
+        str(sym).strip().upper()
+        for sym in symbols
+        if _is_non_stock_fund(sym, names.get(str(sym).strip().upper(), ""))
+    }
+    if fund_symbols:
+        logger.info(
+            "universe: excluded %d ETF/fund units from stock scanner",
+            len(fund_symbols),
+        )
+    symbols = [s for s in symbols if str(s).strip().upper() not in fund_symbols]
+
     _cached_universe = _dedupe_sorted(symbols)
-    _cached_names = {k: v for k, v in names.items() if _is_valid_symbol(k)}
+    _cached_names = {
+        k: v for k, v in names.items()
+        if _is_valid_symbol(k) and k not in fund_symbols
+    }
     _universe_loaded = True
     return _cached_universe, _cached_names
 
