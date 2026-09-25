@@ -502,14 +502,14 @@ class Supervisor:
     def _market_scan_in_flight(self) -> bool:
         """Do not spend minutes projecting discovery from a scan being replaced."""
         try:
-            from operations.market_ops import MARKET_SCAN
-            from operations.store import OperationStore
             from core.runtime_paths import logs_dir
-
-            store = OperationStore(logs_dir() / "market_ops" / "jobs.db")
+            runtime = json.loads(
+                (logs_dir() / "market_ops" / "runtime.json").read_text(encoding="utf-8")
+            )
             return any(
-                str(row.get("kind") or "") == MARKET_SCAN
-                for row in store.active_summary()
+                str(row.get("kind") or "") == "MARKET_SCAN"
+                for row in dict(runtime.get("active") or {}).values()
+                if isinstance(row, dict)
             )
         except Exception:
             return False
