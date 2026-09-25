@@ -149,6 +149,7 @@ def test_persisted_best_setups_skip_rescoring(tmp_path, monkeypatch):
     monkeypatch.setattr(SEPA, "best_setups_path", lambda: path)
     cards = [{"symbol": "UP", "sepa_score": 82}]
     path.write_text(json.dumps({
+        "schema_version": SEPA.BEST_SETUPS_SCHEMA_VERSION,
         "scanned_at": "2026-08-24T10:00:00+00:00",
         "cards": cards,
         "note": "cached SEPA rank",
@@ -182,3 +183,72 @@ def test_public_best_setups_returns_cards_not_pairs():
     assert cards[0]["sepa_score"] >= 80
     assert cards[0]["sepa_verdict"] == "STRONG"
     assert "Stage-2" in note or "SEPA" in note
+
+
+def test_public_best_setups_excludes_non_actionable_scan_rows():
+    frames = {
+        "SAFE": _uptrend(),
+        "CHASE": _uptrend(),
+        "HOT": _uptrend(),
+        "WATCH": _uptrend(),
+    }
+    cards, note = public_best_setups(
+        {
+            "scanned_at": "2026-09-25T08:50:00+00:00",
+            "records": [
+                {"symbol": "SAFE", "score": 80, "verdict": "BUY", "chase_risk": False, "rsi": 60},
+                {"symbol": "CHASE", "score": 99, "verdict": "BUY", "chase_risk": True, "rsi": 60},
+                {"symbol": "HOT", "score": 99, "verdict": "BUY", "chase_risk": False, "rsi": 91},
+                {"symbol": "WATCH", "score": 99, "verdict": "WATCH", "chase_risk": False, "rsi": 60},
+            ],
+        },
+        load_frame=lambda symbol: frames[symbol],
+        max_seconds=None,
+        skip_persist_read=True,
+    )
+    assert [card["symbol"] for card in cards] == ["SAFE"]
+    assert "Best Setups" in note
+
+
+def test_public_best_setups_stays_empty_when_only_unsafe_rows_exist():
+    cards, note = public_best_setups(
+        {
+            "scanned_at": "2026-09-25T08:51:00+00:00",
+            "records": [
+                {"symbol": "CHASE", "score": 99, "verdict": "BUY", "chase_risk": True, "rsi": 60},
+                {"symbol": "HOT", "score": 99, "verdict": "BUY", "chase_risk": False, "rsi": 91},
+                {"symbol": "WATCH", "score": 99, "verdict": "WATCH", "chase_risk": False, "rsi": 60},
+            ],
+        },
+        load_frame=lambda symbol: _uptrend(),
+        max_seconds=None,
+        skip_persist_read=True,
+    )
+    assert cards == []
+    assert "stays empty" in note
+
+
+def test_old_best_setups_cache_schema_is_ignored(tmp_path, monkeypatch):
+    import json
+    from product import sepa_setup as SEPA
+
+    path = tmp_path / "best_setups.json"
+    monkeypatch.setattr(SEPA, "best_setups_path", lambda: path)
+    path.write_text(json.dumps({
+        "schema_version": 1,
+        "scanned_at": "2026-09-25T08:52:00+00:00",
+        "cards": [{"symbol": "UNSAFE", "sepa_score": 100}],
+        "note": "old unsafe cache",
+    }), encoding="utf-8")
+
+    cards, _ = SEPA.public_best_setups(
+        {
+            "scanned_at": "2026-09-25T08:52:00+00:00",
+            "records": [
+                {"symbol": "SAFE", "score": 80, "verdict": "BUY", "chase_risk": False, "rsi": 60},
+            ],
+        },
+        load_frame=lambda _symbol: _uptrend(),
+        max_seconds=None,
+    )
+    assert [card["symbol"] for card in cards] == ["SAFE"]
