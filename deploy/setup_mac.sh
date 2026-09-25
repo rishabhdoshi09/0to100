@@ -57,7 +57,7 @@ echo "[MAC SETUP] Stage 2/5: Python environment"
 [ -d "$APP_DIR/venv" ] || "$SYSTEM_PYTHON" -m venv "$APP_DIR/venv"
 PYTHON_BIN="${QT_PYTHON:-$APP_DIR/venv/bin/python}"
 
-echo "[MAC SETUP] Stage 3/5: dependency sync"
+echo "[MAC SETUP] Stage 3/5: dependency validation"
 run_with_deadline() {
   local seconds="$1"; shift
   "$SYSTEM_PYTHON" - "$seconds" "$@" <<'PY'
@@ -91,9 +91,21 @@ except subprocess.TimeoutExpired:
     raise SystemExit(124)
 PY
 }
-run_with_deadline 300 "$PYTHON_BIN" -m pip install --disable-pip-version-check --upgrade pip wheel
-run_with_deadline 600 "$PYTHON_BIN" -m pip install --disable-pip-version-check --retries 1 --timeout 30 -r "$APP_DIR/requirements.txt"
-echo "[MAC SETUP] Dependency sync complete"
+
+# Updates should not contact package indexes when the existing venv already
+# satisfies the pinned requirements. Validate completely offline first; only a
+# genuinely missing/incompatible dependency is allowed to trigger a bounded
+# network-capable repair.
+if run_with_deadline 120 "$PYTHON_BIN" -m pip install \
+    --disable-pip-version-check --no-index -r "$APP_DIR/requirements.txt"; then
+  echo "[MAC SETUP] Existing Python environment satisfies requirements; network install skipped"
+else
+  echo "[MAC SETUP] Dependency repair required; running bounded package install"
+  run_with_deadline 600 "$PYTHON_BIN" -m pip install \
+    --disable-pip-version-check --retries 1 --timeout 30 -r "$APP_DIR/requirements.txt"
+fi
+"$PYTHON_BIN" -m pip check
+echo "[MAC SETUP] Dependency validation complete"
 
 echo "[MAC SETUP] Stage 4/5: secure host configuration"
 [ -f "$APP_DIR/.env" ] || { cp "$APP_DIR/.env.example" "$APP_DIR/.env" 2>/dev/null || touch "$APP_DIR/.env"; }
