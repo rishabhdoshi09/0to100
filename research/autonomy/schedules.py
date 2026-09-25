@@ -165,6 +165,60 @@ def scan_due(now_ist, last_scan_slot: str | None, holidays=None) -> bool:
     return bool(slot and slot != last_scan_slot)
 
 
+def next_scan_at(now_ist, holidays=None):
+    """Next strictly-future 15-minute intraday scan boundary, or None.
+
+    This is operator/scheduler truth, not a reason to manufacture busy work.
+    Between completed slots the supervisor may be legitimately waiting; exposing
+    the next boundary prevents that wait from looking like a dead scheduler.
+    """
+    if not _is_session_day(now_ist, holidays):
+        return None
+    if now_ist.time() < ENTRY_WINDOW_START:
+        return now_ist.replace(
+            hour=ENTRY_WINDOW_START.hour,
+            minute=ENTRY_WINDOW_START.minute,
+            second=0,
+            microsecond=0,
+        )
+    if now_ist.time() >= ENTRY_WINDOW_END:
+        return None
+    minute = now_ist.hour * 60 + now_ist.minute
+    next_minute = ((minute // SCAN_INTERVAL_MIN) + 1) * SCAN_INTERVAL_MIN
+    hour, minute = divmod(next_minute, 60)
+    candidate = now_ist.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if candidate.time() > ENTRY_WINDOW_END:
+        return None
+    return candidate
+
+
+def intraday_scan_key(snapshot_id: str, session_date: str, slot: str) -> str:
+    """Exactly-once full-market scan identity for one live intraday slot."""
+    return f"intraday_scan:{session_date}:{slot}:{snapshot_id}"
+
+
+def intraday_paper_key(snapshot_id: str, session_date: str, slot: str) -> str:
+    """Exactly-once new-entry paper mutation paired with one intraday scan."""
+    return f"intraday_paper:{session_date}:{slot}:{snapshot_id}"
+
+
+def intraday_manage_key(snapshot_id: str, session_date: str, slot: str) -> str:
+    """Exactly-once management-only paper mutation for one intraday slot."""
+    return f"intraday_manage:{session_date}:{slot}:{snapshot_id}"
+
+
+def intraday_key_parts(key: str, *, prefix: str) -> tuple[str, str, str] | None:
+    """Parse a slot key while allowing ':' inside the underlying snapshot id."""
+    marker = f"{prefix}:"
+    raw = str(key or "")
+    if not raw.startswith(marker):
+        return None
+    parts = raw.split(":", 3)
+    if len(parts) != 4 or not all(parts[1:]):
+        return None
+    return parts[1], parts[2], parts[3]
+
+
 def auth_probe_bucket(now_ist) -> str:
     """Five-minute probes in the login window; 30-minute buckets outside it."""
     minutes = now_ist.hour * 60 + now_ist.minute
