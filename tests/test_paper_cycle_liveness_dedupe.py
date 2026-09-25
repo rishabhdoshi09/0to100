@@ -414,6 +414,82 @@ def test_snapshot_bound_market_operation_reuses_exact_identity(monkeypatch):
     assert op["operation_id"] == "same-op"
 
 
+def test_next_intraday_slot_creates_fresh_market_operation_for_same_snapshot(monkeypatch):
+    from research.autonomy import parallel_runtime as PR
+
+    created = []
+
+    class _Store:
+        def recent_full(self, limit=250):
+            return [{
+                "operation_id": "slot-1000-op",
+                "kind": "MARKET_SCAN",
+                "status": "SUCCEEDED",
+                "payload": {
+                    "snapshot_id": "snap-1",
+                    "operation_identity": "snapshot_slot_scan:snap-1:2026-07-31:intraday-1000",
+                },
+            }]
+
+        def enqueue(self, kind, **kwargs):
+            created.append((kind, kwargs))
+            return {
+                "operation_id": "slot-1015-op",
+                "kind": kind,
+                "status": "PENDING",
+                "payload": kwargs.get("payload") or {},
+            }, True
+
+    monkeypatch.setattr(PR, "_ops_store", lambda: _Store())
+    monkeypatch.setattr(PR, "_ensure_ops_worker", lambda: None)
+
+    identity = "snapshot_slot_scan:snap-1:2026-07-31:intraday-1015"
+    op = PR._queue_operation(
+        "MARKET_SCAN",
+        requested_by="autonomy",
+        identity=identity,
+        snapshot_id="snap-1",
+    )
+
+    assert op["operation_id"] == "slot-1015-op"
+    assert created
+    payload = created[0][1]["payload"]
+    assert payload["snapshot_id"] == "snap-1"
+    assert payload["operation_identity"] == identity
+
+
+def test_same_intraday_slot_reuses_exact_market_operation(monkeypatch):
+    from research.autonomy import parallel_runtime as PR
+
+    identity = "snapshot_slot_scan:snap-1:2026-07-31:intraday-1015"
+
+    class _Store:
+        def recent_full(self, limit=250):
+            return [{
+                "operation_id": "slot-1015-op",
+                "kind": "MARKET_SCAN",
+                "status": "SUCCEEDED",
+                "payload": {
+                    "snapshot_id": "snap-1",
+                    "operation_identity": identity,
+                },
+            }]
+
+        def enqueue(self, *args, **kwargs):
+            raise AssertionError("same intraday slot must reuse its completed operation")
+
+    monkeypatch.setattr(PR, "_ops_store", lambda: _Store())
+    monkeypatch.setattr(PR, "_ensure_ops_worker", lambda: None)
+
+    op = PR._queue_operation(
+        "MARKET_SCAN",
+        requested_by="autonomy",
+        identity=identity,
+        snapshot_id="snap-1",
+    )
+    assert op["operation_id"] == "slot-1015-op"
+
+
 def test_live_ready_data_without_broker_snapshot_gets_stable_identity():
     from research.autonomy.jobs import _kite_live_ready_result
 
