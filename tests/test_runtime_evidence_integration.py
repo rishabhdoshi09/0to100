@@ -15,7 +15,7 @@ import product.startup_check as startup_check
 from product.evidence_policy_engine import BLOCK, evaluate_policies
 from product.execution_adapter import LiveExecutionAdapter, LiveMoneyLocked
 from product.learning_policy_store import upsert_policy
-from product.paper_autopilot import EVIDENCE_POLICY_BLOCK, INVALID_STOP, run_reco_paper_cycle
+from product.paper_autopilot import HISTORICAL_EVIDENCE_PENDING, INVALID_STOP, run_reco_paper_cycle
 from product.runtime_lifecycle import DEGRADED, inspect_runtime
 from product.startup_check import build_startup_check
 from research.auto_research.paper_book import PaperBook
@@ -87,7 +87,7 @@ def test_startup_evidence_ready_does_not_skip_history_first_paper_gate(monkeypat
     payload=build_startup_check(probe_network=False); assert payload["evidence_ready"] is True
     import product.autonomous_evolution as evolution
     monkeypatch.setattr(evolution,"bootstrap_status",lambda:{"status":"NOT_STARTED","analysis_complete":False,"paper_ready_setups":0}); monkeypatch.setattr(evolution,"ensure_started_async",lambda:{"status":"NOT_STARTED"})
-    out=_cycle(_vcp_card()); assert not out["taken"]; assert out["rejections"][0]["reason_code"]==EVIDENCE_POLICY_BLOCK
+    out=_cycle(_vcp_card()); assert not out["taken"]; assert out["rejections"][0]["reason_code"]==HISTORICAL_EVIDENCE_PENDING
 
 
 def test_reproduced_setup_still_paper_eligible_after_runtime_merge(monkeypatch,tmp_path):
@@ -95,7 +95,7 @@ def test_reproduced_setup_still_paper_eligible_after_runtime_merge(monkeypatch,t
 
 
 def test_generation_mismatch_still_blocks_after_runtime_merge(monkeypatch,tmp_path):
-    _ready_bootstrap(monkeypatch,fingerprint="gen-A"); _write_hist_vcp(tmp_path,monkeypatch,fingerprint="gen-OLD"); out=_cycle(_vcp_card()); assert not out["taken"]; assert out["rejections"][0]["reason_code"]==EVIDENCE_POLICY_BLOCK
+    _ready_bootstrap(monkeypatch,fingerprint="gen-A"); _write_hist_vcp(tmp_path,monkeypatch,fingerprint="gen-OLD"); out=_cycle(_vcp_card()); assert not out["taken"]; assert out["rejections"][0]["reason_code"]==HISTORICAL_EVIDENCE_PENDING
 
 
 def test_explicit_path_still_does_not_bypass_history_gate(monkeypatch,tmp_path):
