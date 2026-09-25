@@ -34,6 +34,7 @@ FNO_REFRESH = "FNO_REFRESH"
 DATA_PREPARE = "DATA_PREPARE"
 DUE_DILIGENCE_ACQUIRE = "DUE_DILIGENCE_ACQUIRE"
 MARKET_REPORT = "MARKET_REPORT"
+US_MARKET_SCAN = "US_MARKET_SCAN"
 DUE_DILIGENCE_DEADLINE_S = 12 * 60
 DUE_DILIGENCE_SYMBOL_S = 90.0
 PIPELINE_SNAPSHOT_EVERY_S = 45.0
@@ -47,6 +48,7 @@ LANES = {
     FNO_REFRESH: "data",
     DATA_PREPARE: "data",
     DUE_DILIGENCE_ACQUIRE: "due_diligence",
+    US_MARKET_SCAN: "us_market",
 }
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -82,6 +84,7 @@ _LANE_IDLE_S = {
     "data": 0.25,
     "news": 0.5,
     "due_diligence": 0.5,
+    "us_market": 0.25,
 }
 _DEFAULT_IDLE_S = 0.5
 
@@ -961,6 +964,44 @@ class MarketOperationsWorker:
                 "missing_lanes": ["fno"],
             }
 
+    def _run_us_market_scan(self, operation: dict[str, Any]) -> dict[str, Any]:
+        """Run the supervised US paper-market scan on the dedicated US lane.
+
+        The US lane is paper-only. It persists its scan artifact and feeds the
+        US virtual-paper autopilot; no broker submission path exists here.
+        """
+        operation_id = str(operation["operation_id"])
+        payload = dict(operation.get("payload") or {})
+        scope = str(payload.get("scope") or os.environ.get("QT_US_SCAN_SCOPE") or "S&P 500").strip()
+        index = None if scope.lower() in {"", "all"} else scope
+        self._progress(operation_id, "SCANNING_US", f"Scanning {scope} with the canonical US setup engine")
+        from scan.us_scanner import scan_us, persisted_us_scan
+
+        rows = list(scan_us(index=index) or [])
+        persisted = dict(persisted_us_scan() or {})
+        try:
+            from execution.us_autopilot import get_status, report_card
+            paper = dict(get_status() or {})
+            report = dict(report_card() or {})
+        except Exception as exc:
+            paper = {"error": str(exc)[:200]}
+            report = {}
+        return {
+            "market": "US",
+            "scope": str(persisted.get("scope") or scope),
+            "scanned_at": str(persisted.get("scanned_at") or ""),
+            "setups": len(rows),
+            "paper": {
+                "armed": bool(paper.get("armed")),
+                "allocation": paper.get("allocation"),
+                "open_trades": len(list(paper.get("open_trades") or [])),
+                "trades_today": int(paper.get("trades_today_count") or 0),
+            },
+            "learning_report": report,
+            "paper_only": True,
+            "live_locked": True,
+        }
+
     def _execute(self, operation: dict[str, Any]) -> dict[str, Any]:
         kind = str(operation.get("kind", ""))
         if kind == MARKET_SCAN:
@@ -979,6 +1020,8 @@ class MarketOperationsWorker:
             return self._run_fno(operation)
         if kind == DATA_PREPARE:
             return self._run_data_prepare(operation)
+        if kind == US_MARKET_SCAN:
+            return self._run_us_market_scan(operation)
         raise RuntimeError(f"No market-operations handler for {kind}")
 
     def _lane_loop(self, lane: str) -> None:
