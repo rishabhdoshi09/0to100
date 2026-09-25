@@ -114,6 +114,17 @@ def close_location_value(close: float, high: float, low: float) -> float:
     return max(0.0, min(1.0, (close - low) / rng))
 
 
+def _breakout_note_requires_wait(note: str) -> bool:
+    """True when breakout grading explicitly says the setup must not be chased.
+
+    The scanner used to preserve the warning text but later recompute BUY from
+    aggregate score, creating records that literally said "chase nahi" while
+    exposing Ready-to-trade. Keep the semantic veto machine-readable.
+    """
+    text = str(note or "").lower()
+    return "chase nahi" in text or "bull-trap/exhaustion risk" in text
+
+
 def grade_breakout(price: float, level: float, atr: float, vratio: float,
                    day_change: float, clv: float = 1.0, rsi: float = 0.0
                    ) -> tuple[bool, str, str]:
@@ -556,6 +567,7 @@ class UnifiedScanner:
         # trader waits for the close to confirm instead of chasing a false break.
         breakout_grade = ""
         breakout_conv = 0.0
+        breakout_wait_warning = ""
         if len(high) > 60:
             hi52 = float(np.max(high[:-1]))
             res20 = float(np.max(high[-21:-1]))
@@ -598,7 +610,15 @@ class UnifiedScanner:
                         reasons.append(f"₹{level:,.0f} {tag} toda par conviction "
                                        f"kam ({conv:.0f}/100) — pack ka wait{sess_tag}")
             elif price > level and note:
-                # Cleared the level but not cleanly → watch, not buy
+                # Cleared the level but not cleanly → watch, not buy. Some
+                # grading failures are stronger than "wait for confirmation":
+                # gap/RSI/weak-close exhaustion explicitly says DON'T CHASE.
+                # Preserve that as a hard scanner safety flag so later score
+                # enrichment cannot promote the same row back to BUY.
+                if _breakout_note_requires_wait(note):
+                    breakout_wait_warning = (
+                        f"⚠ Breakout risk ({note}) — fresh BUY nahi"
+                    )
                 if "PRE_BREAKOUT" not in signals:
                     signals.append("PRE_BREAKOUT")
                     reasons.append(f"₹{level:,.0f} {tag} pe hai par {note}{sess_tag}")
@@ -738,15 +758,28 @@ class UnifiedScanner:
         ema20_now = _ema_np(close, 20)
         ext_pct = (price / ema20_now - 1) * 100 if ema20_now else 0.0
         ext50_pct = (price / sma50 - 1) * 100 if sma50 else 0.0
-        chase_risk = False
+        chase_risk = bool(breakout_wait_warning)
+        if chase_risk:
+            # Exactly one leading unpaired warning is the established contract
+            # consumed by conviction.py; signal-specific reasons remain aligned
+            # after that leading safety headline is skipped.
+            reasons.insert(0, breakout_wait_warning)
+            if verdict == "BUY":
+                verdict = "WATCH"
+
         _short_stretched = ext_pct > 10 and mom5 > 10
         _far_from_base = _EXT_ABOVE_SMA50 > 0 and ext50_pct > _EXT_ABOVE_SMA50
         if (_short_stretched or _far_from_base) and not breakout_grade:
             why = (f"{ext_pct:.0f}% above 20-EMA, +{mom5:.0f}% in 5 din"
                    if _short_stretched
                    else f"{ext50_pct:.0f}% above 50-DMA — late-stage, base se door")
-            reasons.insert(
-                0, f"⚠ Extended ({why}) — pullback ka wait, abhi chase mat karo")
+            extension_warning = (
+                f"⚠ Extended ({why}) — pullback ka wait, abhi chase mat karo"
+            )
+            if chase_risk:
+                reasons.append(extension_warning)
+            else:
+                reasons.insert(0, extension_warning)
             # Flag it regardless of the current verdict — a PRE_BREAKOUT that's
             # already WATCH still needs chase_risk set so the sniper skips it
             # (the ADANIENSOL path: extended pre-breakout, never a "BUY" to
