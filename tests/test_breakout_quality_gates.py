@@ -111,3 +111,31 @@ def test_optional_context_marks_unavailable_without_kite(monkeypatch):
     ctx = bq.enrich_optional_context("RELIANCE")
     assert ctx["order_book"]["status"] == "unavailable"
     assert ctx["concall"]["status"] == "unavailable"
+
+def test_composite_score_cannot_override_breakout_quality_veto():
+    from scan.unified_scanner import _composite_verdict
+
+    signals = ["PRE_BREAKOUT", "ASC_TRIANGLE", "FLAT_BASE", "NR7_COIL"]
+    assert _composite_verdict(90.0, signals) == "BUY"
+    assert _composite_verdict(
+        90.0,
+        signals,
+        breakout_watch_veto=True,
+    ) == "WATCH"
+
+
+def test_scan_store_never_labels_explicit_no_chase_row_ready():
+    from product.scan_store import _record
+
+    row = _record({
+        "symbol": "HDFCLIQUID",
+        "verdict": "BUY",
+        "signals": ["PRE_BREAKOUT", "FLAT_BASE"],
+        "reasons": ["RSI 100 — blow-off-top overbought, chase nahi"],
+        "price": 1079.6,
+        "rsi": 100.0,
+    }, {"HDFCLIQUID": "HDFC LIQUID ETF"}, set())
+
+    assert row["status"] == "Wait for pullback"
+    assert row["chase_risk"] is True
+
