@@ -241,6 +241,40 @@ def _canonical_best_trade_rows(*, history_current: bool) -> list[dict[str, Any]]
     return out
 
 
+def _canonical_research_watchlist(*, history_current: bool, exclude: set[str] | None = None) -> list[dict[str, Any]]:
+    """Top ranked current names that are research-only, never relabelled trades."""
+    if not history_current:
+        return []
+    try:
+        from product.decision_discovery_store import load_current
+        board = dict(load_current() or {})
+    except Exception:
+        board = {}
+    if not board.get("available"):
+        return []
+    excluded = {str(x).upper() for x in (exclude or set())}
+    out: list[dict[str, Any]] = []
+    for raw in board.get("decisions") or []:
+        if not isinstance(raw, Mapping):
+            continue
+        row = dict(raw)
+        symbol = str(row.get("symbol") or "").upper().strip()
+        if not symbol or symbol in excluded:
+            continue
+        row["research_only"] = True
+        row["not_a_trade"] = True
+        row["block_reason"] = str(
+            row.get("reason_code")
+            or row.get("why")
+            or row.get("state")
+            or "Not currently eligible under the production thesis."
+        )
+        out.append(row)
+        if len(out) >= 5:
+            break
+    return out
+
+
 def build_home_os(
     *,
     dashboard: Mapping[str, Any] | None = None,
@@ -520,6 +554,20 @@ def build_home_os(
 
     best_rows = _canonical_best_trade_rows(history_current=history_current)
     opportunities = [explain_opportunity(row) for row in best_rows]
+    research_watchlist = _canonical_research_watchlist(
+        history_current=history_current,
+        exclude={str(row.get("symbol") or "").upper() for row in best_rows},
+    )
+    try:
+        from product.learning_impact import build_learning_impact
+        learning_impact = dict(build_learning_impact() or {})
+    except Exception as exc:
+        learning_impact = {
+            "status": "UNAVAILABLE",
+            "plain": f"Learning-impact projection unavailable: {type(exc).__name__}",
+            "selection_is_currently_changed": False,
+            "live_locked": True,
+        }
 
     n_real = int(soak_d.get("real_forward_observations") or 0)
     learning_simple = (
@@ -699,6 +747,8 @@ def build_home_os(
             "next_automatic_action": next_line,
         },
         "opportunities": opportunities[:8],
+        "research_watchlist": research_watchlist[:5],
+        "learning_impact": learning_impact,
         "observe_only": observe_only,
         "observe_only_date": observe_date if observe_only else "",
         "paper_bot": {
