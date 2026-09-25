@@ -82,3 +82,23 @@ def test_strict_plist_makes_python_the_launchd_owned_process(tmp_path):
     assert "<string>product.host_launchd_entrypoint</string>" in rendered
     assert "<string>product.host_entrypoint</string>" not in rendered
     assert "<string>/usr/bin/caffeinate</string><string>-i</string>" not in rendered
+
+
+def test_bootstrap_does_not_force_kill_fresh_runatload_host(tmp_path, monkeypatch):
+    plist = tmp_path / "com.quantterm.desk.plist"
+    plist.write_text("<plist/>", encoding="utf-8")
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(list(args))
+        if args[:2] == ["launchctl", "print"]:
+            return cp(0, out="loaded")
+        return cp(0)
+
+    monkeypatch.setattr(lc, "_run", fake_run)
+    lc._bootstrap_verified(plist=plist, timeout_s=0)
+
+    kickstarts = [call for call in calls if call[:2] == ["launchctl", "kickstart"]]
+    assert kickstarts
+    assert ["launchctl", "kickstart", lc.target()] in kickstarts
+    assert not any("-k" in call for call in kickstarts)
