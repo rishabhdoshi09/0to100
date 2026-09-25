@@ -828,3 +828,44 @@ def test_intraday_fresh_scan_repairs_discovery_even_when_broker_auth_is_unavaila
         "2026-09-23T06:36:56.081161+00:00",
         "thesis-intraday",
     )
+
+
+def test_gate_hides_explicit_no_chase_best_trades(tmp_path, monkeypatch):
+    state = tmp_path / "gate.json"
+    monkeypatch.setenv("QT_STARTUP_ID", "startup-safety")
+    monkeypatch.setattr(
+        "product.trading_thesis.manifest",
+        lambda: {"thesis_hash": "thesis-a", "objective_id": "test"},
+    )
+    monkeypatch.setattr("product.desk_pipeline.scan_is_fresh", lambda: True)
+    monkeypatch.setattr(
+        "product.long_term_store.load_long_term_scan",
+        lambda: {"scanned_at": "2026-09-25T08:00:00+00:00", "records": []},
+    )
+    monkeypatch.setattr(
+        G,
+        "_board",
+        lambda: {
+            "available": True,
+            "scan_scanned_at": "2026-09-25T08:30:00+00:00",
+            "best_trades": [
+                {"symbol": "SAFE", "rsi": 60, "chase_risk": False},
+                {"symbol": "CHASE", "rsi": 60, "chase_risk": True},
+                {"symbol": "HOT", "rsi": 82, "chase_risk": False},
+                {
+                    "symbol": "LEGACY",
+                    "rsi": 60,
+                    "chase_risk": False,
+                    "reasons": ["Extended — chase nahi"],
+                },
+            ],
+            "decisions": [],
+            "actionable": 4,
+        },
+    )
+
+    G.begin_startup("startup-safety", path=state)
+    payload = G.status(path=state)
+
+    assert [row["symbol"] for row in payload["best_trades"]] == ["SAFE"]
+    assert payload["discovery_ready"] is True
