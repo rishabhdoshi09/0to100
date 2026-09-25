@@ -77,53 +77,91 @@ if [[ -n "${QT_RUNTIME_ROOT:-}" || -f "$ROOT/.quantterm_runtime_root" ]]; then
 fi
 
 echo "[COMPLETE STACK] Startup probe: persistent runtime storage"
+
+configured_runtime="${QT_RUNTIME_ROOT:-}"
+if [[ -z "$configured_runtime" && -f "$ROOT/.quantterm_runtime_root" ]]; then
+  configured_runtime="$(head -n 1 "$ROOT/.quantterm_runtime_root" 2>/dev/null || true)"
+fi
+if [[ -n "$configured_runtime" ]]; then
+  echo "[COMPLETE STACK] Runtime target: $configured_runtime"
+  case "$configured_runtime" in
+    /Volumes/*)
+      runtime_volume_name="${configured_runtime#/Volumes/}"
+      runtime_volume_name="${runtime_volume_name%%/*}"
+      runtime_volume="/Volumes/$runtime_volume_name"
+      if ! mount | grep -F " on $runtime_volume " >/dev/null 2>&1; then
+        echo "[COMPLETE STACK] Runtime volume is not mounted: $runtime_volume" >&2
+        echo "[COMPLETE STACK] Reconnect/mount the configured QuantTerm storage, then re-run." >&2
+        exit 78
+      fi
+      echo "[COMPLETE STACK] Runtime volume present in mount table: $runtime_volume"
+      ;;
+  esac
+fi
+
 runtime_rc=0
 RUNTIME_PROBE_OUT="$(mktemp -t quantterm-runtime-out.XXXXXX)"
 RUNTIME_PROBE_ERR="$(mktemp -t quantterm-runtime-err.XXXXXX)"
-python - <<'PY' >"$RUNTIME_PROBE_OUT" 2>"$RUNTIME_PROBE_ERR" &
-import sys
-from core.runtime_paths import logs_dir
+RUNTIME_PROBE_STATUS="$(mktemp -t quantterm-runtime-status.XXXXXX)"
+: >"$RUNTIME_PROBE_OUT"
+: >"$RUNTIME_PROBE_ERR"
+: >"$RUNTIME_PROBE_STATUS"
 
+python - "$RUNTIME_PROBE_OUT" "$RUNTIME_PROBE_ERR" "$RUNTIME_PROBE_STATUS" <<'PY' &
+import sys
+from pathlib import Path
+
+out_path = Path(sys.argv[1])
+err_path = Path(sys.argv[2])
+status_path = Path(sys.argv[3])
+
+rc = 0
 try:
-    print(logs_dir())
+    from core.runtime_paths import logs_dir
+    out_path.write_text(str(logs_dir()) + "\n", encoding="utf-8")
 except Exception as exc:
-    print(f"[COMPLETE STACK] Runtime storage unavailable: {exc}", file=sys.stderr)
-    raise SystemExit(78)
+    err_path.write_text(
+        f"[COMPLETE STACK] Runtime storage unavailable: {exc}\n",
+        encoding="utf-8",
+    )
+    rc = 78
+
+# Completion is signalled by a local status file rather than kill -0. On macOS
+# an exited child can remain a zombie until reaped, for which kill -0 still
+# succeeds and falsely looks "running".
+status_path.write_text(str(rc) + "\n", encoding="utf-8")
+raise SystemExit(rc)
 PY
 runtime_probe_pid=$!
 
-# External APFS/sparsebundle trouble can leave a pathname present while a stat/
-# resolve call blocks in the kernel. Never let the whole desk appear frozen with
-# no explanation: bound only this read-only startup probe. No disk repair,
-# detach, mount or mkdir is attempted here.
 runtime_probe_done=0
-for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-  if ! kill -0 "$runtime_probe_pid" 2>/dev/null; then
+for probe_tick in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  if [[ -s "$RUNTIME_PROBE_STATUS" ]]; then
     runtime_probe_done=1
     break
+  fi
+  if [[ "$probe_tick" -eq 4 || "$probe_tick" -eq 12 ]]; then
+    echo "[COMPLETE STACK] Runtime storage probe still checking…"
   fi
   sleep 0.5
 done
 
 if [[ "$runtime_probe_done" -eq 1 ]]; then
-  if wait "$runtime_probe_pid"; then
-    runtime_rc=0
-  else
-    runtime_rc=$?
-  fi
+  runtime_rc="$(cat "$RUNTIME_PROBE_STATUS" 2>/dev/null || echo 78)"
+  wait "$runtime_probe_pid" 2>/dev/null || true
 else
   kill -TERM "$runtime_probe_pid" 2>/dev/null || true
   sleep 0.2
   kill -KILL "$runtime_probe_pid" 2>/dev/null || true
   runtime_rc=78
-  echo "[COMPLETE STACK] Runtime storage probe timed out after 10s. The configured external volume may be mounted but unresponsive." >&2
+  echo "[COMPLETE STACK] Runtime storage probe timed out after 10s. The configured external volume is mounted but its filesystem is not responding." >&2
 fi
 
 if [[ -s "$RUNTIME_PROBE_ERR" ]]; then
   cat "$RUNTIME_PROBE_ERR" >&2
 fi
 RUNTIME_LOGS="$(cat "$RUNTIME_PROBE_OUT" 2>/dev/null || true)"
-rm -f "$RUNTIME_PROBE_OUT" "$RUNTIME_PROBE_ERR" 2>/dev/null || true
+rm -f "$RUNTIME_PROBE_OUT" "$RUNTIME_PROBE_ERR" "$RUNTIME_PROBE_STATUS" 2>/dev/null || true
 
 if [[ "$runtime_rc" -eq 0 && -z "$RUNTIME_LOGS" ]]; then
   runtime_rc=78
@@ -131,8 +169,9 @@ fi
 if [[ "$runtime_rc" -ne 0 ]]; then
   if [[ "$runtime_rc" -eq 78 ]]; then
     echo "[COMPLETE STACK] Persistent runtime is configured but missing, unmounted, or unresponsive." >&2
-    echo "[COMPLETE STACK] Check the configured path with: cat .quantterm_runtime_root" >&2
-    echo "[COMPLETE STACK] Then verify the volume with: diskutil info /Volumes/QuantTermStorage" >&2
+    echo "[COMPLETE STACK] Read-only diagnosis:" >&2
+    echo "  cat .quantterm_runtime_root" >&2
+    echo "  mount | grep QuantTermStorage" >&2
     echo "[COMPLETE STACK] Refusing to create a replacement runtime under /Volumes or another fallback path." >&2
   fi
   exit "$runtime_rc"
