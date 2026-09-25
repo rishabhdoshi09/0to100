@@ -6,6 +6,26 @@ export type ScannerMeta = {
   universe: number
 }
 
+export function isActionableScanRow(row: Record<string, unknown>): boolean {
+  const verdict = String(row.verdict || '').toUpperCase()
+  const status = String(row.status || '')
+  const chase = Boolean(row.chase_risk)
+  const rsi = Number(row.rsi)
+  const reasons = Array.isArray(row.reasons) ? row.reasons.map(String).join(' ').toLowerCase() : ''
+  const safetyWarning = [
+    'chase nahi',
+    'chase mat karo',
+    'fresh buy nahi',
+    'setup abhi valid nahi',
+    'blow-off-top',
+    'bull-trap/exhaustion',
+  ].some((token) => reasons.includes(token))
+
+  if (chase || safetyWarning) return false
+  if (Number.isFinite(rsi) && rsi >= 82) return false
+  return verdict === 'BUY' || verdict === 'STRONG BUY' || status === 'Ready to trade'
+}
+
 const BREAKOUT_TAGS = ['BREAKOUT_52W', 'BREAKOUT_RES', 'GOLDEN_CROSS', 'VOL_SQUEEZE']
 
 function signalsOf(row: Record<string, unknown>): string[] {
@@ -85,7 +105,7 @@ export function scannerFallbackRows(mode: string, dashboard: DashboardPayload): 
   const scan = dashboard.scan.records
   let rows: Array<Record<string, unknown>>
   if (mode === 'Best Setups') {
-    rows = [...scan].sort((a, b) => {
+    rows = [...scan].filter((row) => isActionableScanRow(row as unknown as Record<string, unknown>)).sort((a, b) => {
       const aSepa = Number(a.sepa_score || 0)
       const bSepa = Number(b.sepa_score || 0)
       if (aSepa !== bSepa) return bSepa - aSepa
@@ -117,6 +137,7 @@ export function bestSetupsFromRadar(home: RadarHome, dashboard: DashboardPayload
   if (lanes.length) {
     const seen = new Set<string>()
     return lanes.filter((row) => {
+      if (!isActionableScanRow(row as unknown as Record<string, unknown>)) return false
       if (seen.has(row.symbol)) return false
       seen.add(row.symbol)
       return true
