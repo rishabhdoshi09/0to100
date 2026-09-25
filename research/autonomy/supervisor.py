@@ -664,6 +664,54 @@ class Supervisor:
             input_snapshot_id=request_id or thesis_hash or str(session_date or ""),
         )
 
+    def _ensure_us_market_pipeline(self, now_ist) -> None:
+        """Schedule one durable US scan/paper pass per 15-minute US slot.
+
+        Scheduling authority stays here; execution runs on the dedicated
+        market-operations US lane. US is PAPER only and has no live broker path.
+        """
+        if os.environ.get("QT_US_MARKET_ENABLED", "1").strip().lower() in {"0", "false", "off", "no"}:
+            return
+        try:
+            from zoneinfo import ZoneInfo
+            from data.us_data import us_market_open
+            from operations.market_ops import LANES, US_MARKET_SCAN
+            from operations.store import OperationStore, PENDING, RUNNING, SUCCEEDED
+            from core.runtime_paths import logs_dir
+
+            if not us_market_open(now_ist):
+                return
+            now_et = now_ist.astimezone(ZoneInfo("America/New_York"))
+            minute = (now_et.minute // 15) * 15
+            slot = f"{now_et.date().isoformat()}T{now_et.hour:02d}:{minute:02d}"
+            store = OperationStore(logs_dir() / "market_ops" / "jobs.db")
+            latest = dict(store.latest(US_MARKET_SCAN) or {})
+            latest_payload = dict(latest.get("payload") or {})
+            if (
+                str(latest_payload.get("slot") or "") == slot
+                and str(latest.get("status") or "") in {PENDING, RUNNING, SUCCEEDED}
+            ):
+                return
+            scope = str(os.environ.get("QT_US_SCAN_SCOPE") or "S&P 500").strip() or "S&P 500"
+            store.enqueue(
+                US_MARKET_SCAN,
+                lane=LANES[US_MARKET_SCAN],
+                requested_by="autonomy",
+                payload={
+                    "slot": slot,
+                    "session_date": now_et.date().isoformat(),
+                    "scope": scope,
+                    "paper_only": True,
+                    "live_locked": True,
+                },
+                deduplicate=True,
+            )
+        except Exception as exc:
+            self._incident(
+                "US_MARKET_SCHEDULER_ERROR",
+                f"US paper-market scheduler: {type(exc).__name__}: {exc}",
+            )
+
     def enqueue_due(self, now_ist=None):
         """Keep QuantTerm productive in both live and closed-market regimes.
 
@@ -681,6 +729,11 @@ class Supervisor:
         now_ist = now_ist or self.deps.now_ist()
         holidays = self.deps.holidays()
         self._release_stale_official_blocks()
+
+        # US paper-market work is independent of NSE session state. The same
+        # supervisor schedules it, while market-ops executes it on an isolated
+        # lane so a US scan cannot block NSE paper/history learning.
+        self._ensure_us_market_pipeline(now_ist)
 
         # Never let historical backfill compete with the live cash session.
         if SCH.market_is_open(now_ist, holidays):
