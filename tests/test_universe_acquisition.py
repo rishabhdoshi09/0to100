@@ -39,6 +39,22 @@ def _payload(symbols, schema_ok=True, detail=""):
             "detail": detail}
 
 
+def test_stock_universe_excludes_etf_and_liquid_fund_units(monkeypatch):
+    monkeypatch.setattr(U, "_fetch_kite_cache", lambda: {
+        "symbols": ["AAA", "HDFCLIQUID", "NIFTYBEES", "CASHIETF"],
+        "names": {
+            "AAA": "ALPHA INDUSTRIES",
+            "HDFCLIQUID": "HDFC NIFTY 1D RATE LIQUID - GROWTH ETF",
+            "NIFTYBEES": "NIPPON INDIA ETF NIFTY 50 BEES",
+            "CASHIETF": "ICICI PRUDENTIAL BSE LIQUID RATE- GROWTH ETF",
+        },
+        "schema_ok": True,
+        "detail": "",
+    })
+    assert U.get_nse_universe() == ["AAA"]
+    assert U.get_nse_universe_with_names() == {"AAA": "ALPHA INDUSTRIES"}
+
+
 def test_the_broker_cache_is_preferred_when_it_is_there(monkeypatch):
     monkeypatch.setattr(U, "_fetch_kite_cache", lambda: _payload(["AAA", "BBB"]))
     symbols = U.get_nse_universe()
