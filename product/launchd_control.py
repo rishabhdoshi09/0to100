@@ -137,7 +137,10 @@ def _bootstrap_verified(
                 )
 
     _run(["launchctl", "enable", target(label)], timeout=10.0)
-    kick = _run(["launchctl", "kickstart", "-k", target(label)], timeout=20.0)
+    # bootstrap + RunAtLoad may already have started the host. Do not use -k
+    # here: killing a just-started exact-SHA supervisor creates a second service
+    # generation and can trip the bounded restart guard during upgrades.
+    kick = _run(["launchctl", "kickstart", target(label)], timeout=20.0)
 
     deadline = time.monotonic() + max(0.0, float(timeout_s))
     while True:
