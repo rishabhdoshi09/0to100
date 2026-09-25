@@ -190,11 +190,14 @@ def apply_live_to_store() -> int:
                 if len(df) and df.index[-1] == today_ts:
                     df.loc[today_ts, ["open", "high", "low", "close", "volume"]] = [
                         bar["open"], bar["high"], bar["low"], bar["close"], bar["volume"]]
+                    df.attrs["quantterm_live_overlay_date"] = today_ts.date().isoformat()
                 else:
                     new_row = {c: bar.get(c) for c in ("open", "high", "low", "close", "volume")
                                if c in df.columns}
-                    bs._store[sym] = pd.concat(
+                    merged = pd.concat(
                         [df, pd.DataFrame([new_row], index=[today_ts])])
+                    merged.attrs["quantterm_live_overlay_date"] = today_ts.date().isoformat()
+                    bs._store[sym] = merged
                 updated += 1
         if updated:
             log.info("live_bar_overlaid", symbols=updated)
