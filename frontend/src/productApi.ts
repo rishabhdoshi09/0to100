@@ -796,6 +796,50 @@ export type HomeOperatingSystem = {
     effective_n?: number | null
     confidence_note?: string
   }>
+  research_watchlist?: Array<{
+    symbol?: string
+    state?: string
+    ranking_score?: number | null
+    base_score?: number | null
+    evidence_adjustment?: number | null
+    learning_adjustment?: number | null
+    block_reason?: string
+    why?: string
+    research_only?: boolean
+    not_a_trade?: boolean
+  }>
+  learning_impact?: {
+    status?: string
+    plain?: string
+    selection_is_currently_changed?: boolean
+    current_decisions_influenced?: number
+    influenced_examples?: Array<{
+      symbol?: string
+      state?: string
+      base_score?: number | null
+      ranking_score?: number | null
+      evidence_adjustment?: number | null
+      learning_adjustment?: number | null
+      why?: string
+    }>
+    challenger?: {
+      status?: string
+      model_version?: string
+      trained_n?: number
+      real_forward_n?: number
+      historical_n?: number
+      counterfactual_n?: number
+      affects_selection?: boolean
+      promotion_reason?: string
+    }
+    policies?: {
+      total?: number
+      production_effective?: number
+      effects?: Record<string, number>
+    }
+    simulation?: Record<string, number>
+    live_locked?: boolean
+  }
   paper_bot?: {
     on?: boolean
     paused?: boolean
