@@ -1086,13 +1086,35 @@ def run_paper_cycle(ctx) -> JobResult:
     reason_counts = dict(sorted(reason_counts.items(), key=lambda item: (-item[1], item[0])))
     metadata["reason_counts"] = reason_counts
 
+    eligible_n = reco.get("eligible_count")
+    seen_n = reco.get("candidates_seen")
     summary = (
         f"paper cycle: {eligibility or 'no-op'}"
         f" · taken={taken_n} rejected={rejected_n} wait={wait_n}"
     )
+    if seen_n is not None:
+        summary += f" seen={int(seen_n or 0)}"
+    if eligible_n is not None:
+        summary += f" eligible={int(eligible_n or 0)}"
     if reason_counts and not taken_n:
         top = list(reason_counts.items())[:3]
         summary += " · reasons " + ", ".join(f"{code}={count}" for code, count in top)
+        samples = []
+        for item in [*(reco.get("rejections") or []), *(reco.get("waits") or [])]:
+            symbol = str((item or {}).get("symbol") or "").strip().upper()
+            code = str((item or {}).get("reason_code") or "").strip()
+            detail = str((item or {}).get("detail") or "").strip()
+            if not symbol or not code:
+                continue
+            sample = f"{symbol}:{code}"
+            if detail and code == "EMPIRICAL_GATE_FAILED":
+                sample += f"({detail[:80]})"
+            if sample not in samples:
+                samples.append(sample)
+            if len(samples) >= 3:
+                break
+        if samples:
+            summary += " · examples " + ", ".join(samples)
     if data_failure:
         summary = f"paper cycle: DATA_UNAVAILABLE ({data_failure})"
     return JobResult(JS.SUCCEEDED, summary,
