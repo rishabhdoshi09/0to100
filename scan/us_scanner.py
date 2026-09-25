@@ -146,9 +146,28 @@ def _rank(raw: list) -> list[dict]:
         tag_conviction(serialized)
     except Exception:
         pass
+    for row in serialized:
+        try:
+            from product.us_learning import adjustment
+            learned = dict(adjustment(row) or {})
+        except Exception:
+            learned = {"adjustment": 0.0, "affects_selection": False, "evidence": []}
+        row["learning_adjustment"] = float(learned.get("adjustment") or 0.0)
+        row["learning_evidence"] = list(learned.get("evidence") or [])
+        row["learning_active"] = bool(learned.get("affects_selection"))
+        row["learned_rank_score"] = round(
+            float(row.get("score") or 0.0) + row["learning_adjustment"],
+            4,
+        )
     _vr = {"STRONG BUY": 2, "BUY": 1}
-    serialized.sort(key=lambda r: (_vr.get(r.get("verdict"), 0),
-                                   float(r.get("score", 0))), reverse=True)
+    serialized.sort(
+        key=lambda r: (
+            _vr.get(r.get("verdict"), 0),
+            float(r.get("learned_rank_score") or r.get("score", 0) or 0),
+            float(r.get("breakout_conviction") or 0),
+        ),
+        reverse=True,
+    )
     return serialized
 
 
