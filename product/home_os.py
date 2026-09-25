@@ -568,6 +568,20 @@ def build_home_os(
             "selection_is_currently_changed": False,
             "live_locked": True,
         }
+    try:
+        from product.us_market_status import status as us_market_status
+        us_market = dict(us_market_status() or {})
+    except Exception:
+        us_market = {
+            "market": "US",
+            "market_open": False,
+            "scan": {"status": "unavailable", "count": 0},
+            "top_setups": [],
+            "paper": {"armed": False, "open_trades": [], "trades_today": 0},
+            "learning": {},
+            "paper_only": True,
+            "live_locked": True,
+        }
 
     n_real = int(soak_d.get("real_forward_observations") or 0)
     learning_simple = (
@@ -749,6 +763,7 @@ def build_home_os(
         "opportunities": opportunities[:8],
         "research_watchlist": research_watchlist[:5],
         "learning_impact": learning_impact,
+        "us_market": us_market,
         "observe_only": observe_only,
         "observe_only_date": observe_date if observe_only else "",
         "paper_bot": {
