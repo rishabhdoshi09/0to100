@@ -185,3 +185,15 @@ def test_setup_mac_dependency_validation_is_offline_first_and_bounded() -> None:
     assert "Dependency repair required; running bounded package install" in script
     assert "run_with_deadline 600" in script
     assert '"$PYTHON_BIN" -m pip check' in script
+
+
+def test_setup_mac_quiesces_verified_old_host_after_launchd_stop() -> None:
+    script = Path("deploy/setup_mac.sh").read_text(encoding="utf-8")
+
+    stop = '"$SYSTEM_PYTHON" -m product.launchd_control stop --label com.quantterm.desk'
+    quiesce = "from product.host_orphan_recovery import quiesce_live_previous_supervisor"
+    assert stop in script
+    assert quiesce in script
+    assert script.index(stop) < script.index(quiesce)
+    assert 'QT_RUNTIME_ROOT="$STORAGE_RUNTIME"' in script
+    assert "Previous host generation:" in script
