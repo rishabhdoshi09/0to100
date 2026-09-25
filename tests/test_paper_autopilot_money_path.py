@@ -13,6 +13,7 @@ from product.paper_autopilot import (
     DUPLICATE_POSITION,
     ENTER_NOW,
     ENTRY_TOO_EXTENDED,
+    EMPIRICAL_GATE_FAILED,
     EVIDENCE_POLICY_BLOCK,
     HISTORICAL_EVIDENCE_PENDING,
     INSUFFICIENT_CAPITAL,
@@ -300,3 +301,53 @@ def test_why_no_trade_is_machine_readable():
     assert why["decision"] in {"NO_TRADE", "WATCH"}
     assert why["rejections"]
     assert why["rejections"][0]["reason_code"] == LOW_QUALITY_SETUP
+
+
+def _with_method_status(card, method_id: str, status: str, detail: str = ""):
+    row = dict(card)
+    methods = []
+    for method in row.get("methods") or []:
+        item = dict(method)
+        if item.get("id") == method_id:
+            item["status"] = status
+            item["detail"] = detail or status
+            item["points"] = 0 if status == "fail" else item.get("points")
+        methods.append(item)
+    row["methods"] = methods
+    return row
+
+
+def test_single_empirical_failure_remains_forward_paper_eligible():
+    book = PaperBook(capital=100_000)
+    card = _with_method_status(
+        _eligible_card(), "ev", "fail", "historical EV negative"
+    )
+    out = _cycle(book, [card])
+    assert out["eligibility"] == "TRADED"
+    assert out["taken"]
+    assert out["taken"][0]["symbol"] == "TCS"
+    assert out["taken"][0]["paper_evidence_mode"] == "EXPLORATORY_EMPIRICAL_CONFLICT"
+    assert out["taken"][0]["empirical_conflict_methods"] == ["ev"]
+
+
+def test_two_empirical_failures_remain_hard_veto():
+    book = PaperBook(capital=100_000)
+    card = _with_method_status(
+        _eligible_card(), "ev", "fail", "historical EV negative"
+    )
+    card = _with_method_status(
+        card, "case", "fail", "similar-case expectancy negative"
+    )
+    out = _cycle(book, [card])
+    assert not book.open
+    assert not out["taken"]
+    assert out["rejections"][0]["reason_code"] == EMPIRICAL_GATE_FAILED
+    assert "consensus failed" in out["rejections"][0]["detail"]
+
+
+def test_explicit_empirical_block_remains_hard_veto():
+    book = PaperBook(capital=100_000)
+    out = _cycle(book, [_eligible_card(empirical_block=True)])
+    assert not book.open
+    assert out["rejections"][0]["reason_code"] == EMPIRICAL_GATE_FAILED
+    assert out["rejections"][0]["detail"] == "explicit empirical policy block"
