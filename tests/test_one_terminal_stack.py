@@ -37,6 +37,23 @@ def test_complete_script_starts_every_local_service_in_one_process_tree():
     assert "i < 120" in desk_fn
 
 
+
+def test_complete_launcher_uses_canonical_launchd_console_on_installed_macos():
+    complete = (ROOT / "scripts" / "run_quantterm_complete.sh").read_text(encoding="utf-8")
+
+    assert "run_installed_launchd_console()" in complete
+    assert 'python" -m product.launchd_control' not in complete  # guard accidental malformed shell quoting
+    assert '-m product.launchd_control "$action"' in complete
+    assert 'action="restart"' in complete
+    assert 'action="start"' in complete
+    assert "Canonical macOS host detected." in complete
+    assert "Streaming fresh host logs" in complete
+    assert "Ctrl-C detaches this console; the launchd full stack keeps running." in complete
+    assert "logs/service/*.log" in complete
+    assert "urllib.request.urlopen" in complete
+    assert "QT_FORCE_MANUAL_STACK" in complete
+    assert "kickstart -k" not in complete
+
 def test_report_watchdog_requires_health_not_just_an_open_port():
     complete = (ROOT / "scripts" / "run_quantterm_complete.sh").read_text(encoding="utf-8")
 
