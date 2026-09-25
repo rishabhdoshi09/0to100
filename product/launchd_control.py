@@ -164,7 +164,10 @@ def start_verified(
     loaded, current = query_loaded(label)
     if not loaded:
         return _bootstrap_verified(label=label, plist=plist, timeout_s=timeout_s)
-    kick = _run(["launchctl", "kickstart", "-k", target(label)], timeout=20.0)
+    # "start" is idempotent. If the job is already loaded, ask launchd to
+    # start it only if needed; never use -k here because that would turn a start
+    # command into an implicit restart and SIGKILL a healthy exact-SHA host.
+    kick = _run(["launchctl", "kickstart", target(label)], timeout=20.0)
     loaded, after = query_loaded(label)
     if not loaded:
         raise LaunchdControlError(
