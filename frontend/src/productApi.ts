@@ -840,6 +840,45 @@ export type HomeOperatingSystem = {
     simulation?: Record<string, number>
     live_locked?: boolean
   }
+  us_market?: {
+    market?: string
+    market_open?: boolean
+    scan?: { status?: string; scope?: string; scanned_at?: string; count?: number }
+    top_setups?: Array<{
+      symbol?: string
+      verdict?: string
+      score?: number | null
+      learned_rank_score?: number | null
+      learning_adjustment?: number | null
+      price?: number | null
+      entry?: number | null
+      stop?: number | null
+      target?: number | null
+    }>
+    paper?: {
+      armed?: boolean
+      allocation?: number | null
+      pool?: number | null
+      available?: number | null
+      open_trades?: Array<Record<string, unknown>>
+      trades_today?: number
+      preset?: string
+      disarmed_reason?: string
+      report?: Record<string, unknown>
+      rejection_funnel?: Record<string, unknown>
+    }
+    learning?: {
+      available?: boolean
+      decisions?: number
+      settled?: number
+      pending?: number
+      selection_learning_active?: boolean
+      model?: Record<string, unknown>
+    }
+    paper_only?: boolean
+    live_locked?: boolean
+    live_execution_available?: boolean
+  }
   paper_bot?: {
     on?: boolean
     paused?: boolean
