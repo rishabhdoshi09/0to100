@@ -58,8 +58,41 @@ echo "[MAC SETUP] Stage 2/5: Python environment"
 PYTHON_BIN="${QT_PYTHON:-$APP_DIR/venv/bin/python}"
 
 echo "[MAC SETUP] Stage 3/5: dependency sync"
-"$PYTHON_BIN" -m pip install --disable-pip-version-check --upgrade pip wheel
-"$PYTHON_BIN" -m pip install --disable-pip-version-check -r "$APP_DIR/requirements.txt"
+run_with_deadline() {
+  local seconds="$1"; shift
+  "$SYSTEM_PYTHON" - "$seconds" "$@" <<'PY'
+import os
+import signal
+import subprocess
+import sys
+
+timeout_s = float(sys.argv[1])
+cmd = sys.argv[2:]
+proc = subprocess.Popen(cmd, start_new_session=True)
+try:
+    raise SystemExit(proc.wait(timeout=timeout_s))
+except subprocess.TimeoutExpired:
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except OSError:
+        pass
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+    print(
+        f"[MAC SETUP] ERROR: command exceeded {timeout_s:.0f}s: {' '.join(cmd)}",
+        file=sys.stderr,
+        flush=True,
+    )
+    raise SystemExit(124)
+PY
+}
+run_with_deadline 300 "$PYTHON_BIN" -m pip install --disable-pip-version-check --upgrade pip wheel
+run_with_deadline 600 "$PYTHON_BIN" -m pip install --disable-pip-version-check --retries 1 --timeout 30 -r "$APP_DIR/requirements.txt"
 echo "[MAC SETUP] Dependency sync complete"
 
 echo "[MAC SETUP] Stage 4/5: secure host configuration"
