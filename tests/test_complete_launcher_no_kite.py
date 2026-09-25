@@ -51,3 +51,8 @@ def test_complete_launcher_bounds_persistent_runtime_probe() -> None:
     assert 'kill -KILL "$runtime_probe_pid"' in text
     assert "missing, unmounted, or unresponsive" in text
     assert "Refusing to create a replacement runtime" in text
+
+    assert "Runtime volume present in mount table" in text
+    assert 'mount | grep -F " on $runtime_volume "' in text
+    assert '[[ -s "$RUNTIME_PROBE_STATUS" ]]' in text
+    assert "kill -0" not in text.split('echo "[COMPLETE STACK] Startup probe: persistent runtime storage"', 1)[1].split('STACK_LOG_DIR=', 1)[0]
