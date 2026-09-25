@@ -385,6 +385,7 @@ class Deps:
                     "final_decision": reco.get("final_decision"),
                     "eligibility": reco.get("eligibility"),
                     "cycle_reasons": reco.get("cycle_reasons") or [],
+                    "reason_counts": reco.get("reason_counts") or {},
                     "summary": reco.get("summary") or "",
                 }
                 if reco.get("positions_opened"):
@@ -1077,10 +1078,21 @@ def run_paper_cycle(ctx) -> JobResult:
     taken_n = len(reco.get("taken") or [])
     rejected_n = len(reco.get("rejections") or [])
     wait_n = len(reco.get("waits") or [])
+    reason_counts = dict(reco.get("reason_counts") or {})
+    if not reason_counts:
+        for item in [*(reco.get("rejections") or []), *(reco.get("waits") or [])]:
+            code = str((item or {}).get("reason_code") or "UNKNOWN")
+            reason_counts[code] = reason_counts.get(code, 0) + 1
+    reason_counts = dict(sorted(reason_counts.items(), key=lambda item: (-item[1], item[0])))
+    metadata["reason_counts"] = reason_counts
+
     summary = (
         f"paper cycle: {eligibility or 'no-op'}"
         f" · taken={taken_n} rejected={rejected_n} wait={wait_n}"
     )
+    if reason_counts and not taken_n:
+        top = list(reason_counts.items())[:3]
+        summary += " · reasons " + ", ".join(f"{code}={count}" for code, count in top)
     if data_failure:
         summary = f"paper cycle: DATA_UNAVAILABLE ({data_failure})"
     return JobResult(JS.SUCCEEDED, summary,
