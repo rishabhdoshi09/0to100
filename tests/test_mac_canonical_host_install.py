@@ -174,3 +174,14 @@ def test_legacy_split_service_templates_are_not_shippable():
         "deploy/quantterm.service",
     )
     assert not [path for path in retired if Path(path).exists()]
+
+
+def test_setup_mac_dependency_validation_is_offline_first_and_bounded() -> None:
+    script = Path("deploy/setup_mac.sh").read_text(encoding="utf-8")
+
+    assert "[MAC SETUP] Stage 3/5: dependency validation" in script
+    assert "--no-index -r" in script
+    assert "Existing Python environment satisfies requirements; network install skipped" in script
+    assert "Dependency repair required; running bounded package install" in script
+    assert "run_with_deadline 600" in script
+    assert '"$PYTHON_BIN" -m pip check' in script
