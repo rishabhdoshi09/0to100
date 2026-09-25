@@ -90,3 +90,33 @@ def test_no_trusted_market_source_still_blocks_new_paper_entries():
     assert deps.seen["allowed"] is False
     assert deps.seen["reason"] == "NO_DATA_SNAPSHOT"
     assert result.metadata["market_data_source"] == "unavailable"
+
+
+class _ReasonDeps(_Deps):
+    def run_paper_cycle(self, entries_allowed, reason="", phase="", failures=()):
+        self.seen = {"allowed": bool(entries_allowed), "reason": str(reason or "")}
+        return {
+            "eligibility": "NO_ELIGIBLE_TRADE",
+            "reco_autopilot": {
+                "taken": [],
+                "rejections": [
+                    {"symbol": "AAA", "reason_code": "LOW_QUALITY_SETUP"},
+                    {"symbol": "BBB", "reason_code": "LOW_QUALITY_SETUP"},
+                    {"symbol": "CCC", "reason_code": "EVIDENCE_POLICY_BLOCK"},
+                ],
+                "waits": [],
+            },
+        }
+
+
+def test_paper_cycle_surfaces_top_no_trade_reasons():
+    deps = _ReasonDeps(snapshot=None, official=True)
+    result = JOBS.run_paper_cycle(JOBS._Ctx(deps))
+
+    assert result.status == JOBS.JS.SUCCEEDED
+    assert result.metadata["reason_counts"] == {
+        "LOW_QUALITY_SETUP": 2,
+        "EVIDENCE_POLICY_BLOCK": 1,
+    }
+    assert "LOW_QUALITY_SETUP=2" in result.summary
+    assert "EVIDENCE_POLICY_BLOCK=1" in result.summary
