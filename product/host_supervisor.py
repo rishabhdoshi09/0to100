@@ -589,13 +589,27 @@ class HostSupervisor:
             self._bootstrap_with_heartbeat()
             self.maybe_reprobe_market_access(force=True)
             self.start_all()
-            self.write_status()
+            # Populate child health before ever publishing RUNNING. The old
+            # sequence wrote RUNNING with healthy=None for every child, which
+            # made the installer treat a valid fresh generation as unproven and
+            # eventually roll it back.
+            for child in self.children.values():
+                self._supervise_child(child)
+            ready = all(
+                child.alive and child.last_health_ok is True
+                for child in self.children.values()
+            )
+            self.write_status(state="RUNNING" if ready else "STARTING")
             while not self.stop_requested:
                 for child in self.children.values():
                     self._supervise_child(child)
                 self._kick_scan_once()
                 self.maybe_reprobe_market_access()
-                self.write_status()
+                ready = all(
+                    child.alive and child.last_health_ok is True
+                    for child in self.children.values()
+                )
+                self.write_status(state="RUNNING" if ready else "STARTING")
                 time.sleep(HEARTBEAT_SECONDS)
             return 0
         except Exception as exc:
