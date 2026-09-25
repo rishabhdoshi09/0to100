@@ -256,6 +256,79 @@ def test_scan_slot_is_deterministic():
     assert not SCH.scan_due(datetime(2026, 7, 31, 10, 14), a)
 
 
+def test_snapshot_completion_is_scoped_to_intraday_slot(tmp_path):
+    sup = _sup(tmp_path)
+    sup.start()
+    sup._mark_snapshot_complete(
+        "snap1", slot="intraday-1000", session_date="2026-07-31"
+    )
+
+    assert sup._pipeline_complete(
+        "snap1", slot="intraday-1000", session_date="2026-07-31"
+    )
+    assert not sup._pipeline_complete(
+        "snap1", slot="intraday-1015", session_date="2026-07-31"
+    )
+    sup.shutdown()
+
+
+def test_same_snapshot_can_schedule_the_next_intraday_scan_slot(tmp_path):
+    sup = _sup(tmp_path)
+    sup.start()
+    sup._mark_snapshot_complete(
+        "snap1", slot="intraday-1000", session_date="2026-07-31"
+    )
+
+    # The completed 10:00 transaction stays terminal.
+    sup._ensure_snapshot_pipeline(
+        "snap1", slot="intraday-1000", session_date="2026-07-31"
+    )
+    assert not [j for j in sup.jobs.list() if j.job_type == SCH.MARKET_SCAN]
+
+    # Same official snapshot, new live slot: one fresh scan is required.
+    sup._ensure_snapshot_pipeline(
+        "snap1", slot="intraday-1015", session_date="2026-07-31"
+    )
+    scans = [j for j in sup.jobs.list() if j.job_type == SCH.MARKET_SCAN]
+    assert len(scans) == 1
+    assert scans[0].idempotency_key == SCH.scan_key(
+        "snap1", "intraday-1015", "2026-07-31"
+    )
+
+    # Repeated supervisor ticks inside the same slot stay idempotent.
+    sup._ensure_snapshot_pipeline(
+        "snap1", slot="intraday-1015", session_date="2026-07-31"
+    )
+    assert len([j for j in sup.jobs.list() if j.job_type == SCH.MARKET_SCAN]) == 1
+    sup.shutdown()
+
+
+def test_slot_scan_preserves_slot_identity_into_paper_cycle(tmp_path, monkeypatch):
+    sup = _sup(tmp_path)
+    sup.start()
+    seen = {}
+
+    def capture(snapshot_id, *, slot="", session_date=""):
+        seen.update(snapshot_id=snapshot_id, slot=slot, session_date=session_date)
+
+    monkeypatch.setattr(sup, "_paper_for_snapshot", capture)
+
+    class ScanJob:
+        job_type = SCH.MARKET_SCAN
+        input_snapshot_id = "market:official_nse:2026-07-30"
+        idempotency_key = SCH.scan_key(
+            input_snapshot_id, "intraday-1015", "2026-07-31"
+        )
+
+    sup._enqueue_paper_after_scan(ScanJob())
+    assert seen == {
+        "snapshot_id": "market:official_nse:2026-07-30",
+        "slot": "intraday-1015",
+        "session_date": "2026-07-31",
+    }
+    sup.shutdown()
+
+
 def test_headless_scan_service_has_no_ui_dependency():
     import ast
     root = Path(__file__).resolve().parents[1]
