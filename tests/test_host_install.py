@@ -382,3 +382,22 @@ def test_partial_resume_capacity_counts_only_bytes_still_to_copy(tmp_path, monke
     assert capacity["source_bytes"] == 2048
     assert capacity["copy_bytes"] == 1024
     assert capacity["required_free_bytes"] == 1536
+
+
+def test_service_definition_build_sha_reads_launchd_and_systemd(tmp_path):
+    plist = tmp_path / "desk.plist"
+    plist.write_text(
+        "<key>QT_BUILD_SHA</key><string>abcdef1234567890</string>",
+        encoding="utf-8",
+    )
+    unit = tmp_path / "quantterm.service"
+    unit.write_text("Environment=QT_BUILD_SHA=1234567deadbeef\n", encoding="utf-8")
+
+    assert HI._service_definition_build_sha(plist) == "abcdef1234567890"
+    assert HI._service_definition_build_sha(unit) == "1234567deadbeef"
+
+
+def test_service_definition_build_sha_returns_empty_for_unknown_backup(tmp_path):
+    path = tmp_path / "bad.previous"
+    path.write_text("no build pin here", encoding="utf-8")
+    assert HI._service_definition_build_sha(path) == ""
