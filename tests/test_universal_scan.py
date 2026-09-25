@@ -328,3 +328,42 @@ def test_desk_ui_uses_one_scan_now_for_every_setup():
     assert "RUN_SCAN_NOW" in views
     assert "Find long-term candidates" not in product
     assert "Refresh funds" in product
+
+
+def test_stale_last_good_fundamentals_never_promote_long_term_candidate(monkeypatch):
+    monkeypatch.setattr(
+        "scan.long_term_service._enrich_with_long_term_score",
+        lambda rows, **_k: rows,
+    )
+
+    stale_pack = {
+        "roe": 28.0,
+        "roce": 31.0,
+        "sales_growth": 24.0,
+        "profit_growth": 30.0,
+        "debt_to_equity": 0.1,
+        "pe": 22.0,
+        "stale": True,
+        "_cache_stale": True,
+        "source_label": "last_good_snapshot",
+        "source_tier": "last_good",
+    }
+
+    report = overlay_long_term_from_market_scan(
+        _scan_payload(),
+        save=False,
+        refresh_fundamentals=True,
+        fundamental_provider=lambda _s, _r: dict(stale_pack),
+        sector_lookup=lambda _s: "Technology",
+    )
+
+    assert report.ok
+    by_symbol = {r["symbol"]: r for r in report.payload["records"]}
+    row = by_symbol["AAA"]
+    assert row["fundamentals_stale"] is True
+    assert row["fundamentals_source"] == "last_good_snapshot"
+    assert row["fundamental_error"] == "STALE_FUNDAMENTALS"
+    assert row["fundamental_score"] == 0.0
+    assert row["fundamental_coverage"] == 0.0
+    assert row["classification"] == "NEEDS_FUNDAMENTALS"
+    assert "Stale fundamentals ignored" in " ".join(row["risk_flags"])
