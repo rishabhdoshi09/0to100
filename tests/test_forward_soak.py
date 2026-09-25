@@ -380,6 +380,71 @@ def test_valid_no_trade_day_is_not_a_failure(monkeypatch):
     assert status["status"] in {HEALTHY, COLLECTING}
 
 
+
+def test_fresh_zero_action_discovery_is_valid_no_trade_without_paper_cycle(monkeypatch):
+    today = datetime.now(timezone.utc).date().isoformat()
+    stamp = f"{today}T10:00:00+00:00"
+    rejected = dict(_eligible_card())
+    rejected["dd_verdict"] = "FAIL"
+    _write_scan_reco([rejected], as_of=today)
+
+    monkeypatch.setattr(
+        "product.decision_simulation_gate.status",
+        lambda: {
+            "discovery_ready": True,
+            "scan_fresh": True,
+            "scan_scanned_at": stamp,
+            "actionable": 0,
+            "decision_count": 1,
+            "approved": True,
+        },
+    )
+    monkeypatch.setattr(
+        "product.autonomy_status.read_autonomy_status",
+        lambda *a, **k: {"running": True},
+    )
+
+    journey = build_runtime_journey()
+    assert journey["valid_no_trade"] is True
+    assert journey["summary"]["SELECTION_AUTHORITY"] == "PASS"
+    assert journey["summary"]["PAPER_EXECUTION"] == "PASS"
+    selection = next(
+        stage for stage in journey["stages"]
+        if stage["name"] == "SELECTION_AUTHORITY"
+    )
+    assert selection["reason_code"] == "NO_ELIGIBLE_TRADE"
+    assert selection["output_artifact"].endswith("startup_trade_discovery.json")
+
+    verified = verify_persisted_soak()
+    assert verified["lanes"]["SELECTION"] == "PASS"
+    assert verified["lanes"]["AUTOPILOT"] == "PASS"
+    assert verified["lanes"]["PAPER EXECUTION"] == "NO_ELIGIBLE_TRADE"
+    assert soak_status()["status"] in {HEALTHY, COLLECTING}
+
+
+def test_actionable_discovery_without_paper_cycle_stays_fail_closed(monkeypatch):
+    today = datetime.now(timezone.utc).date().isoformat()
+    stamp = f"{today}T10:00:00+00:00"
+    _write_scan_reco([_eligible_card()], as_of=today)
+
+    monkeypatch.setattr(
+        "product.decision_simulation_gate.status",
+        lambda: {
+            "discovery_ready": True,
+            "scan_fresh": True,
+            "scan_scanned_at": stamp,
+            "actionable": 1,
+            "decision_count": 1,
+            "approved": True,
+        },
+    )
+
+    journey = build_runtime_journey()
+    assert journey["valid_no_trade"] is False
+    assert journey["summary"]["SELECTION_AUTHORITY"] == "FAIL"
+    assert journey["summary"]["PAPER_EXECUTION"] == "FAIL"
+
+
 def test_daily_report_json_and_markdown_are_written():
     _write_scan_reco()
     book = PaperBook(capital=100_000)
