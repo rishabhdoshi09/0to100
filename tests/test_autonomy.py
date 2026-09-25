@@ -329,6 +329,33 @@ def test_slot_scan_preserves_slot_identity_into_paper_cycle(tmp_path, monkeypatc
     sup.shutdown()
 
 
+def test_slot_paper_cycle_keeps_once_only_mutation_safety(tmp_path):
+    sup = _sup(tmp_path)
+    sup.start()
+    key = SCH.paper_cycle_key(
+        "market:official_nse:2026-07-30",
+        "2026-07-31:intraday-1015",
+    )
+    automatic, session_date, slot = sup._automatic_paper_identity(key)
+    assert automatic is True
+    assert session_date == "2026-07-31"
+    assert slot == "intraday-1015"
+
+    queued = sup.jobs.enqueue(SCH.PAPER_CYCLE, idempotency_key=key, critical=True)
+    leased = sup.jobs.lease_due(sup.owner)
+    assert leased is not None and leased.job_id == queued.job_id
+
+    sup._retry_or_fail(
+        leased,
+        error_code="PAPER_MUTATION_ERROR",
+        error_message="synthetic failure",
+    )
+    final = sup.jobs.get(queued.job_id)
+    assert final.status == JS.PERMANENT_FAILED
+    assert final.attempt == 1
+    sup.shutdown()
+
+
 def test_headless_scan_service_has_no_ui_dependency():
     import ast
     root = Path(__file__).resolve().parents[1]
