@@ -283,6 +283,26 @@ def build_scan_payload(
 ) -> dict[str, Any]:
     fno = {str(s).upper() for s in fno_symbols}
     records = [_record(row, names, fno) for row in results]
+
+    # Defense in depth: the canonical universe already excludes ETFs/fund units,
+    # but stale process caches, alternate universe providers, or legacy callers
+    # can still hand one to the scanner. The published stock-opportunity artifact
+    # must never contain non-stock funds, because their near-monotonic NAV series
+    # can manufacture RSI=100/base/breakout signals and contaminate Top-5 ranking.
+    try:
+        from data.nse_universe import _is_non_stock_fund
+        records = [
+            row for row in records
+            if not _is_non_stock_fund(
+                str(row.get("symbol") or ""),
+                str(row.get("company") or ""),
+            )
+        ]
+    except Exception:
+        # Publishing remains available if the universe helper itself is unavailable;
+        # upstream membership filtering is still the primary gate.
+        pass
+
     # deterministic ranking: score descending, symbol as the stable secondary key for ties
     records.sort(key=lambda row: (-float(row["score"] or 0.0), row["symbol"]))
     momentum = [r for r in records if "MOMENTUM" in r["signals"]]
