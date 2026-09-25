@@ -105,3 +105,7 @@ def test_scan_is_published_only_after_identity_and_overlays(monkeypatch):
     assert saved["scan_status"] == "SUCCEEDED"
     assert saved["long_term_overlay"]["status"] == "SUCCEEDED"
     assert saved["desk_overlays"]["recommendations"] == "saved"
+    assert saved["records"][0]["status_scope"] == "SCANNER_SETUP"
+    assert saved["records"][0]["selection_required"] is True
+    assert saved["summary"]["setup_ready"] == 1
+    assert saved["summary"]["ready_to_trade_scope"] == "SCANNER_SETUP_ONLY"
