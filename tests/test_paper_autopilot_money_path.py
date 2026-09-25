@@ -148,6 +148,7 @@ def test_watch_tier_is_rejected_not_entered():
     out = _cycle(book, [_eligible_card(reco_tier="watch")])
     assert not book.open
     assert out["rejections"][0]["reason_code"] == LOW_QUALITY_SETUP
+    assert out["reason_counts"] == {LOW_QUALITY_SETUP: 1}
 
 
 def test_duplicate_position_is_machine_readable():
