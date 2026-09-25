@@ -65,8 +65,12 @@ def test_launcher_restarts_dead_external_autonomy():
     src = _inner()
     loop = src.split('while [[ "$STOP" != "1" ]]', 1)[1]
     assert "Autonomy is down; restarting." in loop
-    # Reused autonomy is re-probed every cycle, not trusted forever.
-    assert loop.index("read_autonomy_status") < loop.index("Autonomy is down; restarting.")
+    # Reused autonomy is re-probed every cycle through the canonical helper,
+    # and a healthy process from an older startup identity is replaced.
+    assert "autonomy_running" in loop
+    assert loop.index("autonomy_running") < loop.index("Autonomy is down; restarting.")
+    assert "autonomy_startup_matches" in loop
+    assert "replace_stale_autonomy" in loop
     assert "AUTONOMY_EXTERNAL=0" in loop
 
 
