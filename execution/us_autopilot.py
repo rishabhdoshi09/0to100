@@ -401,45 +401,106 @@ def _anchor_live(symbol: str, entry: float, stop: float,
 
 # ── Entry ─────────────────────────────────────────────────────────────────────
 
-def consider(symbol: str, entry: float, stop: float, score: float,
-             conviction: float, source: str = "us_scanner") -> bool:
+def _record_learning_decision(
+    *,
+    symbol: str,
+    action: str,
+    reason: str,
+    entry: float,
+    stop: float,
+    target: float | None,
+    score: float,
+    conviction: float,
+    meta: dict | None,
+) -> None:
+    try:
+        from product.us_learning import record_decision
+        record_decision(
+            symbol=symbol,
+            action=action,
+            reason=reason,
+            entry=entry,
+            stop=stop,
+            target=target,
+            score=score,
+            conviction=conviction,
+            meta=meta or {},
+        )
+    except Exception as exc:
+        log.debug("us_learning_record_skip", symbol=symbol, error=str(exc)[:120])
+
+
+def consider(
+    symbol: str,
+    entry: float,
+    stop: float,
+    score: float,
+    conviction: float,
+    source: str = "us_scanner",
+    meta: dict | None = None,
+) -> bool:
     with _consider_lock:
-        return _consider_locked(symbol, entry, stop, score, conviction, source)
+        return _consider_locked(symbol, entry, stop, score, conviction, source, meta)
 
 
-def _consider_locked(symbol, entry, stop, score, conviction, source) -> bool:
+def _consider_locked(symbol, entry, stop, score, conviction, source, meta=None) -> bool:
+    original_entry = float(entry or 0.0)
+    original_stop = float(stop or 0.0)
+    target_hint = None
+    try:
+        if isinstance(meta, dict) and meta.get("target") not in (None, ""):
+            target_hint = float(meta.get("target"))
+    except Exception:
+        target_hint = None
+
+    def reject(reason: str) -> bool:
+        _record_learning_decision(
+            symbol=symbol,
+            action="REJECT",
+            reason=reason,
+            entry=original_entry,
+            stop=original_stop,
+            target=target_hint,
+            score=float(score or 0.0),
+            conviction=float(conviction or 0.0),
+            meta=meta,
+        )
+        return False
+
     try:
         s = _load()
         entry, stop = float(entry), float(stop)
         _note_considered()
         if entry <= 0 or stop <= 0 or stop >= entry:
             _note_reject("invalid stop")
-            return False
-        reject = _passes_gates(symbol, score, conviction)
-        if reject:
-            log.debug("us_autopilot_reject", symbol=symbol, reason=reject)
-            _note_reject(reject)
-            return False
+            return reject("invalid stop")
+        gate_reject = _passes_gates(symbol, score, conviction)
+        if gate_reject:
+            log.debug("us_autopilot_reject", symbol=symbol, reason=gate_reject)
+            _note_reject(gate_reject)
+            return reject(gate_reject)
         live_entry, why = _anchor_live(symbol, entry, stop, s["max_chase_pct"])
         if live_entry is None:
             _log_activity(f"SKIP {symbol}: {why}")
             _note_reject(why or "live quote")
-            return False
+            return reject(why or "live quote")
         entry = live_entry
         target = round(entry * (1 + s["target_pct"] / 100), 2)
         qty = _size(entry, stop, _conviction_mult(score, conviction))
         if qty < 1:
-            _log_activity(f"SKIP {symbol}: pool/limits mein 1 share nahi aata")
+            reason = "pool/limits mein 1 share nahi aata"
+            _log_activity(f"SKIP {symbol}: {reason}")
             _note_reject("pool/1-share")
-            return False
+            return reject(reason)
 
         from execution.trade_executor import place_trade
         res = place_trade(symbol=symbol, qty=qty, entry_type="MARKET",
                           entry_price=entry, stop=round(stop, 2), target=target,
                           product="CNC", paper=True, note=f"{TAG}:{source}")
         if not res.get("ok"):
+            reason = f"paper order failed: {res.get('message','')[:80]}"
             _log_activity(f"FAIL {symbol}: {res.get('message','')[:80]}")
-            return False
+            return reject(reason)
         today = date.today().isoformat()
         with _lock:
             s = _load()
@@ -447,14 +508,25 @@ def _consider_locked(symbol, entry, stop, score, conviction, source) -> bool:
             s["traded_symbols"] = {
                 today: s.get("traded_symbols", {}).get(today, []) + [symbol]}
         _save()
-        _log_activity(f"BUY {qty}×{symbol} @ ${entry:,.2f} "
-                      f"(stop ${stop:,.2f} / target ${target:,.2f}) [PAPER]")
-        _notify(f"BUY <b>{qty} × {symbol}</b> @ ${entry:,.2f}\n"
-                f"stop ${stop:,.2f} · target ${target:,.2f} (+{s['target_pct']}%)")
+        _record_learning_decision(
+            symbol=symbol,
+            action="TAKE",
+            reason="ELIGIBLE",
+            entry=entry,
+            stop=stop,
+            target=target,
+            score=float(score or 0.0),
+            conviction=float(conviction or 0.0),
+            meta=meta,
+        )
+        _log_activity(f"BUY {qty}×{symbol} @ \$\{entry:,.2f} "
+                      f"(stop \$\{stop:,.2f} / target \$\{target:,.2f}) [PAPER]")
+        _notify(f"BUY <b>{qty} × {symbol}</b> @ \$\{entry:,.2f}\\n"
+                f"stop \$\{stop:,.2f} · target \$\{target:,.2f} (+{s['target_pct']}%)")
         return True
     except Exception as exc:
         log.warning("us_autopilot_consider_failed", symbol=symbol, error=str(exc))
-        return False
+        return reject(f"exception:{type(exc).__name__}")
 
 
 def on_setups(results: list[dict]) -> None:
@@ -463,7 +535,12 @@ def on_setups(results: list[dict]) -> None:
         return
     ranked = sorted(
         [r for r in results if r.get("verdict") in ("STRONG BUY", "BUY")],
-        key=lambda r: float(r.get("conviction_rank") or r.get("score", 0) or 0),
+        key=lambda r: float(
+            r.get("learned_rank_score")
+            or r.get("conviction_rank")
+            or r.get("score", 0)
+            or 0
+        ),
         reverse=True)
     for r in ranked[:15]:
         consider(symbol=r["symbol"],
@@ -471,7 +548,8 @@ def on_setups(results: list[dict]) -> None:
                  stop=float(r.get("stop") or 0),
                  score=float(r.get("score") or 0),
                  conviction=float(r.get("breakout_conviction") or 0),
-                 source="us_scanner")
+                 source="us_scanner",
+                 meta=dict(r))
 
 
 # ── Cost-net P&L (single source of truth) ─────────────────────────────────────
@@ -502,6 +580,11 @@ def review_cycle() -> None:
         _close_positions()
         _account_closed()
         _circuit_breaker()
+        try:
+            from product.us_learning import settle_pending
+            settle_pending()
+        except Exception as exc:
+            log.debug("us_learning_settle_skip", error=str(exc)[:120])
     except Exception as exc:
         log.debug("us_autopilot_review_failed", error=str(exc))
 
