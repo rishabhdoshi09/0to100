@@ -15,6 +15,7 @@ journal so they never collide with the NSE ledger or Report Card.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 from datetime import datetime, date
@@ -34,8 +35,8 @@ _WIN = ("PAPER_WIN",)
 _LOSS = ("PAPER_LOSS",)
 
 _DEFAULTS = {
-    "armed": False,
-    "allocation": 0.0,             # USD the user assigns
+    "armed": True,
+    "allocation": float(os.getenv("QT_US_PAPER_CAPITAL", "100000") or 100000),  # virtual USD paper pool
     "realized_pnl": 0.0,
     "cash_reserve_pct": 0.10,
     "per_trade_cap_pct": 0.20,
@@ -73,12 +74,29 @@ def _load() -> dict:
         if _state:
             return _state
         _state = dict(_DEFAULTS)
+        migrated = False
         try:
             if _STATE_FILE.exists():
                 on_disk = json.loads(_STATE_FILE.read_text())
                 _state.update({k: v for k, v in on_disk.items() if k in _DEFAULTS})
+                # Older builds shipped the US PAPER engine disabled with a zero
+                # allocation. That was a product-default placeholder, not an
+                # operator decision. Migrate only that untouched legacy state;
+                # an explicit disarm carries disarmed_reason and is preserved.
+                if (
+                    float(_state.get("allocation") or 0.0) <= 0.0
+                    and not str(_state.get("disarmed_reason") or "").strip()
+                    and not list(_state.get("activity") or [])
+                    and int(_state.get("max_accounted_id") or 0) == 0
+                ):
+                    _state["allocation"] = float(os.getenv("QT_US_PAPER_CAPITAL", "100000") or 100000)
+                    _state["armed"] = os.getenv("QT_US_PAPER_AUTO", "1").strip().lower() not in {"0", "false", "off", "no"}
+                    migrated = True
         except Exception as exc:
             log.warning("us_autopilot_load_failed", error=str(exc))
+        if migrated:
+            _save()
+            _log_activity("legacy zero-state migrated to autonomous virtual PAPER mode")
         return _state
 
 
