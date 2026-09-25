@@ -199,6 +199,16 @@ def snapshot_paper_key(snapshot_id: str) -> str:
     return f"snapshot_paper:{snapshot_id}"
 
 
+def snapshot_slot_scan_key(snapshot_id: str, session_date: str, slot: str) -> str:
+    """Automatic live scan identity: once per immutable snapshot + intraday slot."""
+    return f"snapshot_slot_scan:{snapshot_id}:{session_date}:{slot}"
+
+
+def snapshot_slot_paper_key(snapshot_id: str, session_date: str, slot: str) -> str:
+    """Automatic paper identity paired to one live scan slot."""
+    return f"snapshot_slot_paper:{snapshot_id}:{session_date}:{slot}"
+
+
 def scan_key(snapshot_id: str, slot: str, session_date: str | None = None) -> str:
     suffix = f":{session_date}" if session_date else ""
     return f"market_scan:{snapshot_id}:{slot}{suffix}"
