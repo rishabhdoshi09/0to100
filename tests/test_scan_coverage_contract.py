@@ -165,3 +165,22 @@ def test_scan_priority_changes_order_not_membership():
     assert ordered[:2] == ["CCC", "DDD"]
     assert set(ordered) == set(symbols)
     assert len(ordered) == len(symbols)
+
+
+def test_coverage_distinguishes_missing_ohlcv_from_partial_history():
+    from scan.scan_coverage import ScanCoverageProbe
+
+    short = _frame(days=20)
+    probe = ScanCoverageProbe(["NEWIPO", "MISS"], instrumented=True)
+    probe.run_analyze(lambda _symbol, _df: None, "NEWIPO", short)
+    audit = probe.finalize([], cached=["NEWIPO"], walked_total=1)
+
+    summary = audit["summary"]
+    assert summary["data_unavailable"] == 2
+    assert summary["hard_data_unavailable"] == 1
+    assert summary["partial_history"] == 1
+    assert summary["state"] == "DEGRADED"
+
+    rows = {row["symbol"]: row for row in audit["ledger"]}
+    assert rows["NEWIPO"]["status"] == "INSUFFICIENT_HISTORY"
+    assert rows["MISS"]["status"] == "NO_OHLCV"
