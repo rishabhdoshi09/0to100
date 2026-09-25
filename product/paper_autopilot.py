@@ -170,24 +170,48 @@ def _dd_status(card: Mapping[str, Any]) -> str:
     return "UNKNOWN"
 
 
-def _empirical_fail(card: Mapping[str, Any]) -> bool:
+def _empirical_failed_methods(card: Mapping[str, Any]) -> tuple[str, ...]:
+    failed: list[str] = []
     for method in card.get("methods") or []:
         mid = str(method.get("id") or "")
-        if mid in {"ev", "case"} and str(method.get("status") or "") == "fail":
-            return True
-    return bool(card.get("empirical_block"))
+        if (
+            mid in {"ev", "case"}
+            and str(method.get("status") or "").lower() == "fail"
+            and mid not in failed
+        ):
+            failed.append(mid)
+    return tuple(sorted(failed))
+
+
+def _empirical_fail(card: Mapping[str, Any]) -> bool:
+    """Hard-block only a real empirical consensus failure.
+
+    Forward paper trading is itself an evidence-acquisition lane. A single
+    negative historical stream (EV *or* case memory) should reduce selection
+    priority, not permanently prevent the system from collecting fresh forward
+    evidence. Explicit policy blocks remain authoritative, and agreement from
+    both empirical streams is still a hard veto.
+    """
+    if bool(card.get("empirical_block")):
+        return True
+    return set(_empirical_failed_methods(card)) == {"ev", "case"}
 
 
 def selection_score(card: Mapping[str, Any], policy: Mapping[str, Any] | None = None) -> float:
     """Rank among already-eligible names. The learner can only reorder them."""
     from product.decision_context import score_breakdown
     base = float(score_breakdown(card, policy).get("selection_rank") or 0.0)
+
+    # One negative empirical stream is an exploration warning, not a paper-entry
+    # veto. Penalise it so clean-evidence setups rank first while still allowing
+    # forward-paper evidence to accumulate when no stronger setup exists.
+    empirical_penalty = 15.0 if len(_empirical_failed_methods(card)) == 1 else 0.0
     try:
         from product.challenger_learning import paper_selection_adjustment
         learned = paper_selection_adjustment(card)
-        return base + float(learned.get("adjustment") or 0.0)
+        return base - empirical_penalty + float(learned.get("adjustment") or 0.0)
     except Exception:
-        return base
+        return base - empirical_penalty
 
 
 def carried_sector_risk(book) -> tuple[dict[str, float], dict[str, float]]:
@@ -320,8 +344,17 @@ def evaluate_candidate(
     if dd in {"FAIL", "FAILED", "BLOCK", "AVOID"}:
         return AutopilotDecision(symbol, BLOCK, DD_GATE_FAILED, f"dd={dd}", row)
 
+    failed_empirical = _empirical_failed_methods(row)
     if _empirical_fail(row):
-        return AutopilotDecision(symbol, BLOCK, EMPIRICAL_GATE_FAILED, "empirical method failed", row)
+        detail = (
+            "explicit empirical policy block"
+            if bool(row.get("empirical_block"))
+            else "empirical consensus failed: " + "+".join(failed_empirical)
+        )
+        return AutopilotDecision(symbol, BLOCK, EMPIRICAL_GATE_FAILED, detail, row)
+    if failed_empirical:
+        row["paper_evidence_mode"] = "EXPLORATORY_EMPIRICAL_CONFLICT"
+        row["empirical_conflict_methods"] = list(failed_empirical)
 
     policy = dict(policy or {})
     if str(policy.get("final_effect") or "") == "BLOCK":
