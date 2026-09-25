@@ -666,3 +666,93 @@ def test_home_activity_reports_scanned_universe_not_qualified_row_count():
     activity = " ".join(row.get("text", "") for row in os.get("recent_activity", []))
     assert "598 names checked" in activity
     assert "3 names checked" not in activity
+
+
+
+def test_home_separates_strict_best_trades_from_research_watchlist_and_learning(monkeypatch):
+    import product.decision_discovery_store as discovery
+    import product.decision_simulation_gate as gate
+    import product.learning_impact as impact
+    import product.us_market_status as us_status
+
+    monkeypatch.setattr(
+        gate,
+        "status",
+        lambda: {
+            "scan_fresh": True,
+            "discovery_ready": True,
+            "best_trades": [],
+        },
+    )
+    monkeypatch.setattr(
+        discovery,
+        "load_current",
+        lambda: {
+            "available": True,
+            "decisions": [
+                {
+                    "symbol": "WATCH1",
+                    "state": "WAIT",
+                    "ranking_score": 82.0,
+                    "base_score": 84.0,
+                    "evidence_adjustment": -2.0,
+                    "learning_adjustment": 0.0,
+                    "why": "entry too extended",
+                    "reason_code": "ENTRY_TOO_EXTENDED",
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        impact,
+        "build_learning_impact",
+        lambda: {
+            "status": "LEARNING_BUT_NOT_PROMOTED",
+            "plain": "Historical evidence exists but is not promoted.",
+            "selection_is_currently_changed": False,
+            "current_decisions_influenced": 0,
+            "live_locked": True,
+        },
+    )
+    monkeypatch.setattr(
+        us_status,
+        "status",
+        lambda: {
+            "market": "US",
+            "market_open": False,
+            "scan": {"status": "ready", "scope": "S&P 500", "count": 12},
+            "top_setups": [],
+            "paper": {"armed": True, "open_trades": [], "trades_today": 0},
+            "learning": {"selection_learning_active": False},
+            "paper_only": True,
+            "live_locked": True,
+        },
+    )
+
+    os = build_home_os(
+        dashboard={
+            "autonomy": {"state": "RUNNING", "running": True, "broker": {"ready": True}},
+            "data": {
+                "ready": True,
+                "bhavcopy": {
+                    "ready": True,
+                    "latest_date": "2026-09-01",
+                    "current": True,
+                    "reason_code": "HISTORY_CURRENT",
+                },
+            },
+        },
+        paper={"enabled": True, "open_positions": [], "closed_trades": []},
+        why={"available": False},
+        soak={"real_forward_observations": 0, "insufficient_evidence": True},
+        scan={"scanned_at": "2026-09-01T05:00:00+00:00", "records": [{"symbol": "WATCH1"}]},
+        reco={"schema_version": 4, "categories": []},
+        now=_open(),
+    )
+
+    assert os["opportunities"] == []
+    assert os["research_watchlist"][0]["symbol"] == "WATCH1"
+    assert os["research_watchlist"][0]["not_a_trade"] is True
+    assert os["learning_impact"]["status"] == "LEARNING_BUT_NOT_PROMOTED"
+    assert os["us_market"]["paper"]["armed"] is True
+    assert os["live_locked"] is True
