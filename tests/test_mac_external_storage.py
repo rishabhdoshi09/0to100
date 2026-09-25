@@ -165,3 +165,31 @@ def test_inner_supervisor_reads_market_ops_truth_from_runtime_root():
     assert 'logs_path("market_ops", "runtime.json")' in inner
     assert 'Path("logs/market_ops/worker.lock")' not in inner
     assert 'Path("logs/market_ops/runtime.json")' not in inner
+
+
+def test_preflight_preserves_hdiutil_attach_failure_detail(tmp_path: Path):
+    env, _, runtime, _ = _env_for_layout(tmp_path)
+    # Force the mount to appear absent so the preflight attempts hdiutil.
+    runtime_root = runtime.parents[1]
+    if runtime_root.exists():
+        import shutil
+        shutil.rmtree(runtime_root)
+
+    hdiutil = Path(env["PATH"].split(":")[0]) / "hdiutil"
+    hdiutil.write_text(
+        "#!/bin/sh\necho 'hdiutil: attach failed - Resource temporarily unavailable' >&2\nexit 16\n",
+        encoding="utf-8",
+    )
+    hdiutil.chmod(0o755)
+
+    proc = subprocess.run(
+        ["bash", str(PREFLIGHT)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 78
+    assert "could not attach sparsebundle (rc=16)" in proc.stderr
+    assert "Resource temporarily unavailable" in proc.stderr
