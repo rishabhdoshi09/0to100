@@ -303,6 +303,42 @@ def test_same_snapshot_can_schedule_the_next_intraday_scan_slot(tmp_path):
     sup.shutdown()
 
 
+def test_live_enqueue_due_uses_the_current_intraday_slot(tmp_path, monkeypatch):
+    now = datetime(2026, 7, 31, 10, 7)
+    sup = _sup(tmp_path, deps=FakeDeps(now=now))
+    sup.start()
+    seen = {}
+
+    class Foundation:
+        status = JS.SUCCEEDED
+        output_snapshot_id = "snap1"
+
+    monkeypatch.setattr(
+        sup,
+        "_enqueue_daily_foundation",
+        lambda _now, _session: Foundation(),
+    )
+    monkeypatch.setattr(
+        sup,
+        "_ensure_snapshot_pipeline",
+        lambda snapshot_id, *, slot="", session_date="": seen.update(
+            snapshot_id=snapshot_id,
+            slot=slot,
+            session_date=session_date,
+        ),
+    )
+    monkeypatch.setattr(sup, "_ensure_startup_trade_discovery", lambda: None)
+
+    sup.enqueue_due(now)
+
+    assert seen == {
+        "snapshot_id": "snap1",
+        "slot": "intraday-1000",
+        "session_date": "2026-07-31",
+    }
+    sup.shutdown()
+
+
 def test_slot_scan_preserves_slot_identity_into_paper_cycle(tmp_path, monkeypatch):
     sup = _sup(tmp_path)
     sup.start()
