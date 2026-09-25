@@ -154,43 +154,54 @@ def _saved_priority_inputs() -> tuple[Mapping[str, Any] | None, Mapping[str, Any
 
 
 def _default_universe() -> Mapping[str, str]:
-    """Return every current NSE EQ instrument we can prove, never just rows with names.
+    """Return the canonical approved NSE cash universe, with best-effort names.
 
-    The previous implementation used ``get_nse_universe_with_names()`` as the
-    universe itself. That meant a valid symbol could disappear simply because its
-    company-name field was absent. The Kite instrument master is now preferred and
-    filtered by exchange + instrument_type only; names are metadata and fall back to
-    the symbol. If Kite is unavailable, the authoritative symbol list is still used
-    and the name map is joined onto it instead of defining it.
+    Universe membership must come from ``data.nse_universe``, because that layer
+    owns the acquisition ladder, symbol policy, provenance, and broker cross-check.
+    Reading every Kite row directly here creates a second, broader universe contract:
+    the scanner can then report thousands of debt/settlement/other EQ-like instrument
+    rows as NO_OHLCV even though the canonical NSE cash universe is healthy.
+
+    Names are metadata only. Missing names never remove a symbol; Kite metadata may
+    fill a missing display name, but it must not expand membership.
     """
+    from data.nse_universe import get_nse_universe, get_nse_universe_with_names
+
+    symbols = [
+        str(s).strip().upper()
+        for s in (get_nse_universe() or [])
+        if str(s).strip()
+    ]
+    if not symbols:
+        return {}
+
+    try:
+        names = {
+            str(k).strip().upper(): str(v or "").strip()
+            for k, v in dict(get_nse_universe_with_names() or {}).items()
+            if str(k).strip()
+        }
+    except Exception:
+        names = {}
+
+    # The canonical universe intentionally decides membership. Broker metadata is
+    # allowed only to improve labels for those already-approved symbols.
     try:
         from data.instruments import InstrumentManager
-        manager = InstrumentManager()
-        rows = getattr(manager, "_meta_map", {}) or {}
-        out: dict[str, str] = {}
-        for raw_symbol, row in rows.items():
-            if not isinstance(row, Mapping):
+
+        rows = getattr(InstrumentManager(), "_meta_map", {}) or {}
+        for symbol in symbols:
+            if names.get(symbol):
                 continue
-            if str(row.get("exchange") or "").strip().upper() != "NSE":
-                continue
-            if str(row.get("instrument_type") or "").strip().upper() != "EQ":
-                continue
-            symbol = str(raw_symbol or row.get("tradingsymbol") or "").strip().upper()
-            if not symbol:
-                continue
-            out[symbol] = str(row.get("name") or symbol).strip() or symbol
-        if len(out) >= 200:
-            return out
+            row = rows.get(symbol)
+            if isinstance(row, Mapping):
+                name = str(row.get("name") or "").strip()
+                if name:
+                    names[symbol] = name
     except Exception:
         pass
 
-    from data.nse_universe import get_nse_universe, get_nse_universe_with_names
-    symbols = [str(s).strip().upper() for s in (get_nse_universe() or []) if str(s).strip()]
-    try:
-        names = dict(get_nse_universe_with_names() or {})
-    except Exception:
-        names = {}
-    return {symbol: str(names.get(symbol) or symbol) for symbol in symbols}
+    return {symbol: names.get(symbol) or symbol for symbol in symbols}
 
 
 def _default_prefetch(symbols, *, progress=None):
