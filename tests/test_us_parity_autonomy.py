@@ -111,3 +111,97 @@ def test_market_ops_exposes_dedicated_us_lane():
     from operations.market_ops import LANES, US_MARKET_SCAN
 
     assert LANES[US_MARKET_SCAN] == "us_market"
+
+
+
+def test_us_learning_requires_forward_sample_before_rank_change(tmp_path, monkeypatch):
+    import product.us_learning as learning
+
+    monkeypatch.setattr(learning, "LEDGER", tmp_path / "ledger.jsonl")
+    monkeypatch.setattr(learning, "MODEL", tmp_path / "model.json")
+    rows = []
+    for i in range(10):
+        rows.append({
+            "decision_id": f"d{i}",
+            "settled": True,
+            "action": "TAKE",
+            "outcome_R": 1.0,
+            "score_bucket": "80+",
+            "conviction_bucket": "70+",
+            "categories": ["Breakout"],
+        })
+    model = learning.rebuild_model(rows=rows)
+    assert model["status"] == "COLLECTING_FORWARD_EVIDENCE"
+    out = learning.adjustment({
+        "score": 85,
+        "breakout_conviction": 75,
+        "categories": ["Breakout"],
+    })
+    assert out["adjustment"] == 0.0
+    assert out["affects_selection"] is False
+
+
+def test_us_forward_learning_can_boundedly_reorder_paper_ranking(tmp_path, monkeypatch):
+    import product.us_learning as learning
+
+    monkeypatch.setattr(learning, "LEDGER", tmp_path / "ledger.jsonl")
+    monkeypatch.setattr(learning, "MODEL", tmp_path / "model.json")
+    rows = []
+    for i in range(35):
+        rows.append({
+            "decision_id": f"good-{i}",
+            "settled": True,
+            "action": "TAKE",
+            "outcome_R": 1.0,
+            "score_bucket": "80+",
+            "conviction_bucket": "70+",
+            "categories": ["Breakout"],
+        })
+    model = learning.rebuild_model(rows=rows)
+    assert model["status"] == "ACTIVE_PAPER_RANKING"
+    out = learning.adjustment({
+        "score": 85,
+        "breakout_conviction": 75,
+        "categories": ["Breakout"],
+    })
+    assert 0.0 < out["adjustment"] <= 3.0
+    assert out["affects_selection"] is True
+    assert out["live_locked"] is True
+
+
+def test_us_negative_forward_evidence_demotes_but_never_unlocks_live(tmp_path, monkeypatch):
+    import product.us_learning as learning
+
+    monkeypatch.setattr(learning, "LEDGER", tmp_path / "ledger.jsonl")
+    monkeypatch.setattr(learning, "MODEL", tmp_path / "model.json")
+    rows = []
+    for i in range(25):
+        rows.append({
+            "decision_id": f"bad-{i}",
+            "settled": True,
+            "action": "TAKE",
+            "outcome_R": -1.0,
+            "score_bucket": "70-79",
+            "conviction_bucket": "55-69",
+            "categories": ["Momentum"],
+        })
+    learning.rebuild_model(rows=rows)
+    out = learning.adjustment({
+        "score": 75,
+        "breakout_conviction": 60,
+        "categories": ["Momentum"],
+    })
+    assert -5.0 <= out["adjustment"] < 0.0
+    assert out["live_locked"] is True
+
+
+def test_us_session_date_uses_new_york_calendar(monkeypatch):
+    import execution.us_autopilot as us
+
+    class FakeNow:
+        def date(self):
+            from datetime import date
+            return date(2026, 9, 25)
+
+    monkeypatch.setattr(us, "_us_now", lambda: FakeNow())
+    assert us._us_session_date() == "2026-09-25"
