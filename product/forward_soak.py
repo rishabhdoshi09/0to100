@@ -382,11 +382,46 @@ def build_runtime_journey(*, cycle: Mapping[str, Any] | None = None) -> dict[str
     )
     reco_ok = bool(reco["payload"])
     cycle_ok = bool(latest)
+
+    # A fresh canonical decision-discovery projection can itself prove a
+    # completed no-action selection for the current scan. This matters when
+    # QuantTerm starts after the cash session: there is correctly no forward
+    # paper-entry job to execute, but "zero actionable candidates" is still a
+    # real Selection Authority result and must not be reported as a system
+    # failure. Missing/stale discovery or any actionable candidate remains
+    # fail-closed and still requires the paper-autopilot cycle.
+    discovery_gate: dict[str, Any] = {}
+    try:
+        from product.decision_simulation_gate import status as decision_gate_status
+
+        discovery_gate = dict(decision_gate_status() or {})
+    except Exception:
+        discovery_gate = {}
+    current_scan_id = str(scan_payload.get("scanned_at") or "")
+    gate_scan_id = str(discovery_gate.get("scan_scanned_at") or "")
+    discovery_no_trade = bool(
+        scan_ok
+        and reco_ok
+        and discovery_gate.get("discovery_ready")
+        and discovery_gate.get("scan_fresh")
+        and current_scan_id
+        and gate_scan_id == current_scan_id
+        and int(discovery_gate.get("actionable") or 0) == 0
+    )
+    selection_ok = bool(cycle_ok or discovery_no_trade)
+
     taken = list(latest.get("taken") or [])
     rejections = list(latest.get("rejections") or [])
     waits = list(latest.get("waits") or [])
     reasons = [str(x) for x in (latest.get("cycle_reasons") or []) if x]
-    valid_no_trade = (not taken) and (bool(rejections) or bool(waits) or bool(reasons))
+    valid_no_trade = bool(
+        (not taken) and (
+            bool(rejections)
+            or bool(waits)
+            or bool(reasons)
+            or discovery_no_trade
+        )
+    )
     opens = list(paper.open_positions or [])
     closed = list(paper.closed_trades or [])
     exec_rows = [r for r in ledger if r.get("entered") and r.get("execution_adjusted_R") is not None]
@@ -406,9 +441,22 @@ def build_runtime_journey(*, cycle: Mapping[str, Any] | None = None) -> dict[str
         _stage("RECOMMENDATIONS", status="PASS" if reco_ok else "FAIL",
                input_artifact=scan["path"], output_artifact=reco["path"],
                reason_code="" if reco_ok else "RECO_MISSING", cycle_id=cycle_id),
-        _stage("SELECTION_AUTHORITY", status="PASS" if cycle_ok else "FAIL",
-               input_artifact=reco["path"], output_artifact="logs/product/paper_autopilot_journal.json",
-               reason_code="" if cycle_ok else "NO_AUTOPILOT_CYCLE", cycle_id=cycle_id),
+        _stage(
+            "SELECTION_AUTHORITY",
+            status="PASS" if selection_ok else "FAIL",
+            input_artifact=reco["path"],
+            output_artifact=(
+                "logs/product/startup_trade_discovery.json"
+                if discovery_no_trade and not cycle_ok
+                else "logs/product/paper_autopilot_journal.json"
+            ),
+            reason_code=(
+                "NO_ELIGIBLE_TRADE"
+                if discovery_no_trade and not cycle_ok
+                else ("" if cycle_ok else "NO_AUTOPILOT_CYCLE")
+            ),
+            cycle_id=cycle_id,
+        ),
         _stage("EVIDENCE_POLICY", status="PASS" if cycle_ok else "PENDING",
                input_artifact="logs/product/learning_policies.json",
                output_artifact="paper_autopilot_journal.latest.policy_effect",
