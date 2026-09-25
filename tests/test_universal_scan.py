@@ -354,7 +354,6 @@ def test_stale_last_good_fundamentals_never_promote_long_term_candidate(monkeypa
         save=False,
         refresh_fundamentals=True,
         fundamental_provider=lambda _s, _r: dict(stale_pack),
-        sector_lookup=lambda _s: "Technology",
     )
 
     assert report.ok
