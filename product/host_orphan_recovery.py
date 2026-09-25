@@ -171,6 +171,119 @@ def _wait_group_gone(pgid: int, timeout_s: float) -> bool:
         time.sleep(0.05)
     return True
 
+def _supervisor_command_matches(command: str) -> bool:
+    text = str(command or "")
+    return any(
+        marker in text
+        for marker in (
+            "product.host_launchd_entrypoint",
+            "product.host_entrypoint",
+            "product.host_supervisor",
+        )
+    )
+
+
+def _wait_pid_gone(pid: int, timeout_s: float) -> bool:
+    deadline = time.monotonic() + max(0.0, timeout_s)
+    while _pid_alive(pid):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+    return True
+
+
+def quiesce_live_previous_supervisor() -> dict[str, Any]:
+    """Stop only a fully-proven old canonical supervisor generation.
+
+    This is intended for the macOS updater after verified launchd bootout.
+    launchd can be unloaded while the Python supervisor is still reparented
+    to PID 1. That survivor keeps the machine-wide flock and blocks the new
+    exact-SHA generation.
+
+    Safety is fail-closed: durable owner/status identity, repo/runtime identity,
+    generation timestamp and the live process command must all agree before a
+    signal is sent. After the parent is gone, existing orphan recovery validates
+    and reaps any proven child process groups.
+    """
+    status_path = runtime_path(STATUS_REL)
+    owner_path = machine_owner_path()
+    status = _read_json(status_path)
+    owner = _read_json(owner_path)
+
+    if not owner or not status:
+        return {
+            "schema_version": 1,
+            "state": "NO_PROVEN_LIVE_SUPERVISOR",
+            "owner_present": bool(owner),
+            "status_present": bool(status),
+            "terminated": False,
+        }
+
+    status_pid = int(status.get("pid") or 0)
+    owner_pid = int(owner.get("pid") or 0)
+    repo = str(REPO_ROOT)
+    runtime = str(runtime_root())
+
+    if status_pid <= 1 or owner_pid != status_pid:
+        raise OrphanRecoveryError("previous supervisor owner/status PID identity is not trustworthy")
+    if str(owner.get("root") or "") != repo:
+        raise OrphanRecoveryError("previous supervisor owner repository does not match current checkout")
+    if str(owner.get("runtime_root") or "") != runtime:
+        raise OrphanRecoveryError("previous supervisor owner runtime does not match configured runtime")
+    if str(status.get("runtime_root") or "") != runtime:
+        raise OrphanRecoveryError("previous supervisor status runtime does not match configured runtime")
+    if str(owner.get("started_at") or "") != str(status.get("started_at") or ""):
+        raise OrphanRecoveryError("previous supervisor owner/status generation timestamps do not match")
+
+    if not _pid_alive(status_pid):
+        recovered = reconcile_previous_children()
+        return {
+            "schema_version": 1,
+            "state": "SUPERVISOR_ALREADY_GONE",
+            "previous_supervisor_pid": status_pid,
+            "terminated": False,
+            "recovery": recovered,
+        }
+
+    row = _process_row(status_pid)
+    if int(row.get("pid") or 0) != status_pid:
+        raise OrphanRecoveryError("previous supervisor PID changed while inspecting it")
+    if int(row.get("ppid") or 0) != 1:
+        raise OrphanRecoveryError(
+            f"previous supervisor pid={status_pid} is not launchd-orphaned (ppid={row.get('ppid')})"
+        )
+    if not _supervisor_command_matches(str(row.get("command") or "")):
+        raise OrphanRecoveryError(
+            f"previous supervisor pid={status_pid} command is not canonical QuantTerm host"
+        )
+
+    try:
+        os.kill(status_pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+    signal_used = "SIGTERM"
+    if not _wait_pid_gone(status_pid, 20.0):
+        try:
+            os.kill(status_pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        signal_used = "SIGKILL"
+        if not _wait_pid_gone(status_pid, KILL_GRACE_S):
+            raise OrphanRecoveryError(
+                f"verified previous supervisor pid={status_pid} remained alive after SIGKILL"
+            )
+
+    recovered = reconcile_previous_children()
+    return {
+        "schema_version": 1,
+        "state": "QUIESCED",
+        "previous_supervisor_pid": status_pid,
+        "signal": signal_used,
+        "terminated": True,
+        "recovery": recovered,
+    }
+
 
 def _terminate_groups(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     terminated: list[dict[str, Any]] = []
