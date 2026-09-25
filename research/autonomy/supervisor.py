@@ -688,16 +688,18 @@ class Supervisor:
                     getattr(data_job, "output_snapshot_id", None),
                     None,
                 )
-                self._ensure_snapshot_pipeline(snap)
+                slot = str(SCH.scan_slot(now_ist, holidays) or "")
+                self._ensure_snapshot_pipeline(
+                    snap,
+                    slot=slot,
+                    session_date=session_date if slot else "",
+                )
 
             # Discovery repair is independent of broker auth. A fresh persisted
             # scan may already exist while a long-term refresh or learned-thesis
-            # change invalidates only its immutable decision projection. The
-            # intraday branch used to return before scheduling that repair, so a
-            # broker-auth failure could leave Product Acceptance (and the real
-            # desk) in SEARCHING_BEST_TRADES with an empty queue indefinitely.
-            # Do not start a second intraday scan here: only repair/authorize when
-            # the current persisted market scan is already fresh.
+            # change invalidates only its immutable decision projection. Each
+            # 15-minute intraday scan slot is independently idempotent, so this
+            # repair path never suppresses the next live scan→paper transaction.
             try:
                 from product.decision_simulation_gate import status as decision_status
 
