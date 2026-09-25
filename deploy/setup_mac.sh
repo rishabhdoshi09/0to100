@@ -26,6 +26,7 @@ QT_STORAGE_MOUNT="$STORAGE_MOUNT" \
 QT_STORAGE_RUNTIME="$STORAGE_RUNTIME" \
 QT_RUNTIME_LINK="$RUNTIME_LINK" \
   bash "$APP_DIR/scripts/quantterm_storage_preflight.sh"
+echo "[MAC SETUP] Stage 1/5: storage preflight complete"
 
 # Stop the canonical host and PROVE launchd no longer owns it before mutating
 # the shared Python environment. A best-effort bootout is not enough: the old
@@ -52,11 +53,16 @@ do
   fi
 done
 
+echo "[MAC SETUP] Stage 2/5: Python environment"
 [ -d "$APP_DIR/venv" ] || "$SYSTEM_PYTHON" -m venv "$APP_DIR/venv"
 PYTHON_BIN="${QT_PYTHON:-$APP_DIR/venv/bin/python}"
-"$PYTHON_BIN" -m pip install --upgrade pip wheel
-"$PYTHON_BIN" -m pip install -r "$APP_DIR/requirements.txt"
 
+echo "[MAC SETUP] Stage 3/5: dependency sync"
+"$PYTHON_BIN" -m pip install --disable-pip-version-check --upgrade pip wheel
+"$PYTHON_BIN" -m pip install --disable-pip-version-check -r "$APP_DIR/requirements.txt"
+echo "[MAC SETUP] Dependency sync complete"
+
+echo "[MAC SETUP] Stage 4/5: secure host configuration"
 [ -f "$APP_DIR/.env" ] || { cp "$APP_DIR/.env.example" "$APP_DIR/.env" 2>/dev/null || touch "$APP_DIR/.env"; }
 chmod 600 "$APP_DIR/.env"
 
@@ -123,6 +129,7 @@ export QT_NPM_BIN="$NPM_BIN"
 # installer adapter must never mkdir this path if the removable volume vanishes
 # during the update window; it fails closed instead.
 export QT_RUNTIME_ROOT_REQUIRE_EXISTING=1
+echo "[MAC SETUP] Stage 5/5: install/re-pin canonical launchd host to current checkout"
 exec "$APP_DIR/scripts/install_quantterm_host.sh" \
   --runtime-root "$STORAGE_RUNTIME" \
   --env-file "$APP_DIR/.env" \
