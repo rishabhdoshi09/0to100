@@ -267,6 +267,58 @@ on_stop() { cleanup; exit 0; }
 trap on_stop INT TERM
 trap cleanup EXIT
 
+autonomy_running() {
+  python - <<'PY' >/dev/null 2>&1
+from product.autonomy_status import read_autonomy_status
+raise SystemExit(0 if read_autonomy_status().get("running") else 1)
+PY
+}
+
+autonomy_owner_pid() {
+  python - <<'PY'
+from product.autonomy_status import read_autonomy_status
+status = read_autonomy_status()
+pid = int(status.get("scheduler_owner_pid") or 0)
+print(pid if pid > 1 else "")
+PY
+}
+
+autonomy_startup_matches() {
+  python - <<'PY' >/dev/null 2>&1
+import json
+import os
+from product.decision_simulation_gate import DEFAULT_PATH
+from product.autonomy_status import read_autonomy_status
+
+if not read_autonomy_status().get("running"):
+    raise SystemExit(1)
+current = str(os.environ.get("QT_STARTUP_ID") or "").strip()
+if not current:
+    raise SystemExit(1)
+try:
+    payload = json.loads(DEFAULT_PATH.read_text(encoding="utf-8"))
+except Exception:
+    payload = {}
+persisted = str(payload.get("startup_id") or "").strip()
+raise SystemExit(0 if persisted and persisted == current else 1)
+PY
+}
+
+replace_stale_autonomy() {
+  if ! autonomy_running; then
+    return 0
+  fi
+  if autonomy_startup_matches; then
+    return 0
+  fi
+  local stale_pid
+  stale_pid="$(autonomy_owner_pid 2>/dev/null || true)"
+  echo "[STACK] Existing autonomy belongs to an older startup; replacing it so Decision Simulation cannot stay stuck awaiting approval."
+  if [[ -n "$stale_pid" ]]; then
+    stop_pid "$stale_pid" "stale autonomy supervisor"
+  fi
+  sleep 0.5 || true
+}
 start_autonomy() {
   echo "[STACK] Starting autonomy supervisor…"
   python -u main.py autonomy &
@@ -463,14 +515,19 @@ if [[ "${QT_MACHINE_OWNER:-}" != "1" ]]; then
   echo "[STACK] Follower boot: adopting the owner's desk. Not starting API, Vite, autonomy, or market_ops."
 else
 
-if python - <<'PY' >/dev/null 2>&1
-from product.autonomy_status import read_autonomy_status
-raise SystemExit(0 if read_autonomy_status().get("running") else 1)
-PY
-then
-  AUTONOMY_EXTERNAL=1
-  echo "[STACK] A healthy autonomy supervisor is already running; reusing it."
+replace_stale_autonomy
+if autonomy_running && autonomy_startup_matches; then
+  existing_autonomy_pid="$(autonomy_owner_pid 2>/dev/null || true)"
+  if [[ -n "$existing_autonomy_pid" ]]; then
+    AUTONOMY_PID="$existing_autonomy_pid"
+    AUTONOMY_EXTERNAL=0
+    echo "[STACK] Adopting same-startup autonomy supervisor · pid=$AUTONOMY_PID"
+  else
+    AUTONOMY_EXTERNAL=1
+    echo "[STACK] Same-startup autonomy supervisor is healthy; reusing it."
+  fi
 else
+  AUTONOMY_EXTERNAL=0
   start_autonomy || true
 fi
 
@@ -614,14 +671,21 @@ while [[ "$STOP" != "1" ]]; do
       fi
     fi
   fi
-  if python - <<'PY' >/dev/null 2>&1
-from product.autonomy_status import read_autonomy_status
-raise SystemExit(0 if read_autonomy_status().get("running") else 1)
-PY
-  then
-    if [[ -z "${AUTONOMY_PID:-}" ]] || ! alive "$AUTONOMY_PID"; then
-      AUTONOMY_EXTERNAL=1
+  if autonomy_running; then
+    if ! autonomy_startup_matches; then
+      replace_stale_autonomy
+      AUTONOMY_EXTERNAL=0
       AUTONOMY_PID=""
+      start_autonomy || true
+    elif [[ -z "${AUTONOMY_PID:-}" ]] || ! alive "$AUTONOMY_PID"; then
+      owner_pid="$(autonomy_owner_pid 2>/dev/null || true)"
+      if [[ -n "$owner_pid" ]]; then
+        AUTONOMY_PID="$owner_pid"
+        AUTONOMY_EXTERNAL=0
+      else
+        AUTONOMY_EXTERNAL=1
+        AUTONOMY_PID=""
+      fi
     fi
   else
     AUTONOMY_EXTERNAL=0
