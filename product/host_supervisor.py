@@ -154,9 +154,27 @@ def _market_ops_health() -> bool:
 
 
 def _autonomy_health() -> bool:
+    """Cheap process-liveness probe for the autonomy child.
+
+    Host supervision must never call the full UI projection here: that path
+    inspects the autonomy job ledger and incident history and can block behind a
+    busy SQLite writer. A blocked child-health probe also blocks this host
+    supervisor's own heartbeat, making a healthy generation look dead during
+    installation. The console runtime heartbeat is intentionally tiny and is
+    the canonical process-liveness surface.
+    """
     try:
-        from product.autonomy_status import read_autonomy_status
-        return bool(read_autonomy_status().get("running"))
+        from research.autonomy import default_root
+        from research.autonomy.health import _fresh
+
+        payload = json.loads((Path(default_root()) / "runtime.json").read_text(encoding="utf-8"))
+        if not bool(payload.get("process_running")) or not _fresh(payload):
+            return False
+        pid = int(payload.get("scheduler_owner_pid") or 0)
+        if pid <= 1:
+            return False
+        os.kill(pid, 0)
+        return True
     except Exception:
         return False
 
