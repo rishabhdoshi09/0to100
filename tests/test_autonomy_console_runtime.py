@@ -8,7 +8,7 @@ import time
 
 from research.autonomy import health as H
 from research.autonomy import job_store as JS
-from research.autonomy.console_runtime import run_visible_loop
+from research.autonomy.console_runtime import _next_job, run_visible_loop
 from research.autonomy.supervisor import Supervisor
 
 
@@ -270,3 +270,12 @@ def test_repeated_background_poll_suppresses_elapsed_only_console_churn(tmp_path
         assert runtime["process_running"] is False
     finally:
         sup.shutdown()
+
+
+def test_idle_intraday_heartbeat_names_next_scan_paper_slot(tmp_path):
+    class IntradayDeps(_Deps):
+        def now_ist(self):
+            return datetime(2026, 9, 25, 14, 38)
+
+    sup = Supervisor(tmp_path / "auto", deps=IntradayDeps())
+    assert _next_job(sup) == "scan→paper slot 14:45 IST"
