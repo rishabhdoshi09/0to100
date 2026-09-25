@@ -31,6 +31,7 @@ WATCH_ONLY = "WATCH_ONLY"
 DD_GATE_FAILED = "DD_GATE_FAILED"
 EMPIRICAL_GATE_FAILED = "EMPIRICAL_GATE_FAILED"
 EVIDENCE_POLICY_BLOCK = "EVIDENCE_POLICY_BLOCK"
+HISTORICAL_EVIDENCE_PENDING = "HISTORICAL_EVIDENCE_PENDING"
 ENTRY_TOO_EXTENDED = "ENTRY_TOO_EXTENDED"
 NO_VALID_ENTRY = "NO_VALID_ENTRY"
 INVALID_STOP = "INVALID_STOP"
@@ -324,6 +325,15 @@ def evaluate_candidate(
 
     policy = dict(policy or {})
     if str(policy.get("final_effect") or "") == "BLOCK":
+        historical = dict(policy.get("historical_forward_confidence") or {})
+        if historical.get("required") and not historical.get("paper_eligible"):
+            stage = str(historical.get("confidence_stage") or "HISTORICAL_EVIDENCE")
+            ready = int(historical.get("paper_ready_setups") or 0)
+            return AutopilotDecision(
+                symbol, BLOCK, HISTORICAL_EVIDENCE_PENDING,
+                f"history-first paper gate pending · {stage} · paper_ready_setups={ready}",
+                row, policy_effect="BLOCK",
+            )
         return AutopilotDecision(
             symbol, BLOCK, EVIDENCE_POLICY_BLOCK,
             "active learning policy blocks this setup", row, policy_effect="BLOCK",
