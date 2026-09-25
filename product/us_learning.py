@@ -175,7 +175,14 @@ def _closed_trade_outcome(row: Mapping[str, Any]) -> tuple[float, str] | None:
     for trade in trades:
         if str(trade.get("symbol") or "").upper() != symbol:
             continue
-        if str(trade.get("placed_at") or "")[:10] != session:
+        note = str(trade.get("note") or "")
+        marker = "session="
+        trade_session = ""
+        if marker in note:
+            trade_session = note.split(marker, 1)[1].split("|", 1)[0].strip()[:10]
+        if not trade_session:
+            trade_session = str(trade.get("placed_at") or "")[:10]
+        if trade_session != session:
             continue
         exit_px = float(trade.get("exit_price") or 0.0)
         if exit_px <= 0:
