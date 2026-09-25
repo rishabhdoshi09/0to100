@@ -15,11 +15,15 @@ Results are shaped exactly like the NSE store so the UI can reuse cards.
 """
 from __future__ import annotations
 
+import json
+import os
 import threading
 import time
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from logger import get_logger
+from core.runtime_paths import logs_path
 
 log = get_logger(__name__)
 
@@ -32,6 +36,44 @@ _total: int = 0              # universe size for this run
 _scan_running: bool = False  # only one scan at a time
 _scope: str = "All"          # "All" | "S&P 500" | "NASDAQ-100" | "Dow 30"
 _pushed: dict[str, set] = {}  # {YYYY-MM-DD: symbols alerted} — one/stock/day
+_STORE = logs_path("product", "us_scan.json")
+
+
+def _persist_results(results: list[dict], *, scope: str, status: str = "ready") -> None:
+    payload = {
+        "schema_version": 1,
+        "market": "US",
+        "status": status,
+        "scope": scope,
+        "scanned_at": datetime.now(timezone.utc).isoformat(),
+        "saved_epoch": time.time(),
+        "records": list(results),
+        "count": len(results),
+        "paper_only": True,
+        "live_locked": True,
+    }
+    _STORE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _STORE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    os.replace(tmp, _STORE)
+
+
+def _load_persisted() -> dict:
+    try:
+        payload = json.loads(_STORE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def persisted_us_scan() -> dict:
+    """Durable US scan truth across UI/API/host restarts."""
+    payload = _load_persisted()
+    payload.setdefault("records", [])
+    payload.setdefault("status", "idle")
+    payload.setdefault("scope", "All")
+    payload.setdefault("market", "US")
+    return payload
 
 
 def _serialize(r) -> dict:
@@ -58,9 +100,8 @@ def _serialize(r) -> dict:
 # Unknown micro-caps $10M/day kabhi nahi chhoote; har naam jo tum jaante ho
 # (AAPL se PLTR tak) isse 100× upar hai. Penny floor alag se ($5 — SEC ki
 # penny-stock line). .env se tunable; 0 = off.
-import os as _os
-_US_MIN_TURNOVER_M = float(_os.getenv("QT_US_MIN_TURNOVER_M", "10") or 10)
-_US_MIN_PRICE = float(_os.getenv("QT_US_MIN_PRICE", "5") or 5)
+_US_MIN_TURNOVER_M = float(os.getenv("QT_US_MIN_TURNOVER_M", "10") or 10)
+_US_MIN_PRICE = float(os.getenv("QT_US_MIN_PRICE", "5") or 5)
 
 
 def _quality_floor(rows: list[dict]) -> list[dict]:
@@ -202,6 +243,7 @@ def scan_us(max_workers: int = 8, index: str | None = None) -> list[dict]:
             _results = serialized
             _last_ts = time.time()
             _status = "ready"
+        _persist_results(serialized, scope=scope, status="ready")
         # 📲 Telegram push — US setups bhi phone pe (NSE push untouched)
         try:
             _push_us_setups(serialized)
@@ -306,7 +348,16 @@ def _push_us_setups(results: list[dict]) -> None:
 
 
 def get_us_results() -> tuple[list[dict], float, str]:
+    global _results, _last_ts, _status, _scope
     with _lock:
+        if not _results:
+            saved = persisted_us_scan()
+            records = [dict(r) for r in (saved.get("records") or []) if isinstance(r, dict)]
+            if records:
+                _results = records
+                _last_ts = float(saved.get("saved_epoch") or 0.0)
+                _status = str(saved.get("status") or "ready")
+                _scope = str(saved.get("scope") or "All")
         return list(_results), _last_ts, _status
 
 
