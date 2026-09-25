@@ -31,42 +31,43 @@ def _frame(price: float = 100.0, volume: float = 500_000.0, days: int = 90) -> p
     )
 
 
-def test_default_universe_uses_all_kite_nse_eq_rows_even_without_names(monkeypatch):
+def test_default_universe_uses_canonical_membership_and_kite_only_for_names(monkeypatch):
+    canonical = [f"EQ{i:03d}" for i in range(205)] + ["VERYLONGEQ01", "NONAMEEQ"]
+    names = {f"EQ{i:03d}": f"Official Company {i}" for i in range(205)}
     meta = {
-        f"EQ{i:03d}": {
+        "VERYLONGEQ01": {
             "exchange": "NSE",
             "instrument_type": "EQ",
-            "name": f"Company {i}",
-        }
-        for i in range(205)
-    }
-    # This symbol would be rejected by the old arbitrary >10-char symbol heuristic.
-    meta["VERYLONGEQ01"] = {
-        "exchange": "NSE",
-        "instrument_type": "EQ",
-        "name": "Long Symbol Ltd",
-    }
-    meta["NONAMEEQ"] = {
-        "exchange": "NSE",
-        "instrument_type": "EQ",
-        "name": "",
-    }
-    meta["NIFTY26SEP"] = {
-        "exchange": "NFO",
-        "instrument_type": "FUT",
-        "name": "NIFTY",
+            "name": "Long Symbol Ltd",
+        },
+        "NONAMEEQ": {
+            "exchange": "NSE",
+            "instrument_type": "EQ",
+            "name": "",
+        },
+        # A broker instrument outside the canonical approved universe must not
+        # silently expand the scan denominator.
+        "EXTRADEBT": {
+            "exchange": "NSE",
+            "instrument_type": "EQ",
+            "name": "Extra Debt-like Instrument",
+        },
     }
 
     class Manager:
         _meta_map = meta
 
+    monkeypatch.setattr("data.nse_universe.get_nse_universe", lambda: canonical)
+    monkeypatch.setattr("data.nse_universe.get_nse_universe_with_names", lambda: names)
     monkeypatch.setattr("data.instruments.InstrumentManager", Manager)
+
     universe = _default_universe()
 
-    assert len(universe) == 207
+    assert len(universe) == len(canonical)
+    assert universe["EQ001"] == "Official Company 1"
     assert universe["VERYLONGEQ01"] == "Long Symbol Ltd"
     assert universe["NONAMEEQ"] == "NONAMEEQ"
-    assert "NIFTY26SEP" not in universe
+    assert "EXTRADEBT" not in universe
 
 
 def test_scan_audit_accounts_for_qualified_no_setup_policy_missing_and_error(monkeypatch):
