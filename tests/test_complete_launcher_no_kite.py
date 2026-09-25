@@ -49,7 +49,7 @@ def test_complete_launcher_bounds_persistent_runtime_probe() -> None:
     assert "Runtime storage probe timed out after 10s" in text
     assert 'kill -TERM "$runtime_probe_pid"' in text
     assert 'kill -KILL "$runtime_probe_pid"' in text
-    assert "missing, unmounted, or unresponsive" in text
+    assert "missing or unmounted, or the mounted filesystem is unresponsive" in text
     assert "Refusing to create a replacement runtime" in text
 
     assert "Runtime volume present in mount table" in text
