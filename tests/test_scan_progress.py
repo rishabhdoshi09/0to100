@@ -11,6 +11,33 @@ def test_eta_needs_a_real_pace():
     assert eta_label(None) == ""
 
 
+def test_eta_ignores_tiny_parallel_sample():
+    assert eta_seconds(1, 2659, 100.0, now=220.0) is None
+    assert eta_seconds(24, 2659, 100.0, now=220.0) is None
+    assert eta_seconds(25, 2659, 100.0, now=220.0) is not None
+
+
+def test_scanning_stage_resets_eta_after_prefetch(tmp_path, monkeypatch):
+    import product.scan_progress as sp
+
+    path = tmp_path / "scan_progress.json"
+    monkeypatch.setattr(sp, "_started_at", None)
+    monkeypatch.setattr(sp, "_last_stage", "")
+    monkeypatch.setattr(sp, "_last_write", 0.0)
+
+    write_progress(current=0, total=0, stage="STARTING", path=path, now=1000.0)
+    write_progress(current=0, total=2660, stage="LOADING_UNIVERSE", path=path, now=1060.0)
+    started = write_progress(current=0, total=2659, stage="SCANNING", path=path, now=1120.0)
+    assert started["started_at"] == 1120.0
+    assert started["eta_label"] == ""
+
+    early = write_progress(current=1, total=2659, stage="SCANNING", path=path, now=1121.0)
+    assert early["started_at"] == 1120.0
+    assert early["eta_label"] == ""
+
+    finish_progress(path=path)
+
+
 def test_stale_active_progress_does_not_keep_a_fake_eta(tmp_path):
     path = tmp_path / "scan_progress.json"
     path.write_text(
