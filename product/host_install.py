@@ -14,6 +14,7 @@ import html
 import json
 import os
 import platform
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -1010,6 +1011,25 @@ def _clear_start_history(runtime_root: Path) -> None:
         pass
 
 
+def _service_definition_build_sha(path: Path | None) -> str:
+    """Read the build SHA embedded in a systemd unit or launchd plist."""
+    if path is None:
+        return ""
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except Exception:
+        return ""
+    patterns = (
+        r"QT_BUILD_SHA=([0-9a-fA-F]{7,64})",
+        r"<key>QT_BUILD_SHA</key>\s*<string>([^<]+)</string>",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return str(match.group(1) or "").strip()
+    return ""
+
+
 def install_host(
     *, runtime_root: Path | None = None, env_file: Path | None = None,
     manager: str | None = None, start: bool = True,
@@ -1060,22 +1080,48 @@ def install_host(
     except Exception:
         backup = Path(definition.get("backup") or "") if definition.get("backup") else None
         service_path = Path(definition["path"])
-        if backup is not None and backup.exists():
+        previous_sha = str(previous_deployment.get("build_sha") or "")
+        backup_sha = _service_definition_build_sha(backup)
+
+        # Repeated failed upgrades can overwrite ".previous" with an intermediate
+        # service definition while the durable deployment manifest still points
+        # at the actual last-known-good SHA. Never launch an intermediate build
+        # while claiming to roll back to the deployed generation.
+        rollback_verified = bool(
+            backup is not None
+            and backup.exists()
+            and previous_sha
+            and backup_sha == previous_sha
+        )
+        if rollback_verified:
             shutil.copy2(backup, service_path)
             try:
                 _clear_start_history(root)
                 rollback_started = time.time()
                 service_action("install", manager=selected)
-                previous_sha = str(previous_deployment.get("build_sha") or "")
-                if previous_sha:
-                    wait_for_supervisor(
-                        root, expected_sha=previous_sha, started_after=rollback_started,
-                        timeout_s=startup_timeout_s, bootstrap_timeout_s=bootstrap_timeout_s,
-                    )
-            except Exception:
-                pass
+                wait_for_supervisor(
+                    root, expected_sha=previous_sha, started_after=rollback_started,
+                    timeout_s=startup_timeout_s, bootstrap_timeout_s=bootstrap_timeout_s,
+                )
+                print(
+                    f"[HOST INSTALL] Rolled back to verified deployed SHA {previous_sha[:12]}",
+                    flush=True,
+                )
+            except Exception as rollback_exc:
+                print(
+                    f"[HOST INSTALL] Verified rollback failed: {type(rollback_exc).__name__}: {rollback_exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
         else:
-            # A failed first install must not leave an unmanifested orphan alive.
+            if backup is not None and backup.exists():
+                print(
+                    "[HOST INSTALL] Rollback skipped: backup SHA "
+                    f"{backup_sha[:12] or 'UNKNOWN'} does not match deployed SHA "
+                    f"{previous_sha[:12] or 'UNKNOWN'}",
+                    file=sys.stderr,
+                    flush=True,
+                )
             try:
                 service_action("stop", manager=selected)
             except Exception:
