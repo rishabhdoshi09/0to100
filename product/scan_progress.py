@@ -21,6 +21,7 @@ DEFAULT_PROGRESS_PATH = default_progress_path()
 
 _started_at: float | None = None
 _last_write = 0.0
+_last_stage = ""
 _WRITE_GAP_S = 0.4
 
 
@@ -29,6 +30,11 @@ def eta_seconds(current: int, total: int, started_at: float | None, *, now: floa
     total = int(total or 0)
     current = int(current or 0)
     if total <= 0 or current <= 0 or not started_at:
+        return None
+    # One or two early completions are statistically useless for a parallel
+    # whole-market scan and produced absurd multi-hour ETAs before the worker
+    # pool drained. Wait for a minimally representative sample.
+    if current < min(25, total):
         return None
     elapsed = float(now if now is not None else time.time()) - float(started_at)
     if elapsed < 0.4:
@@ -69,11 +75,17 @@ def write_progress(
     now: float | None = None,
 ) -> dict[str, Any]:
     """Persist a throttled progress snapshot. Safe to call from a scan thread."""
-    global _started_at, _last_write
+    global _started_at, _last_write, _last_stage
     stamp = float(now if now is not None else time.time())
     stage = str(stage or "SCANNING").upper()
-    if _started_at is None or stage in {"STARTING", "LOADING_UNIVERSE"}:
+    if (
+        _started_at is None
+        or stage in {"STARTING", "LOADING_UNIVERSE"}
+        or (stage == "SCANNING" and _last_stage != "SCANNING")
+    ):
+        # ETA measures the stock-walk itself, not history loading/prefetch.
         _started_at = stamp
+    _last_stage = stage
     current = max(0, int(current or 0))
     total = max(0, int(total or 0))
     remaining = eta_seconds(current, total, _started_at, now=stamp)
@@ -104,7 +116,7 @@ def finish_progress(
     error: str = "",
     path: str | Path | None = None,
 ) -> dict[str, Any]:
-    global _started_at, _last_write
+    global _started_at, _last_write, _last_stage
     payload = {
         "active": False,
         "stage": "FAILED" if error else "DONE",
@@ -124,6 +136,7 @@ def finish_progress(
     _atomic_json(path or DEFAULT_PROGRESS_PATH, payload)
     _started_at = None
     _last_write = 0.0
+    _last_stage = ""
     return payload
 
 
