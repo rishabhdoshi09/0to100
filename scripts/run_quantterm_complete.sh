@@ -4,6 +4,26 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 export PYTHONPATH="$ROOT"
+
+# Make every operator/runtime log self-identifying. This prevents stale-build
+# confusion when the branch advances while a long scan is running.
+if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  QT_GIT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+  QT_GIT_SHA="$(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
+  QT_GIT_DIRTY=""
+  if ! git diff --quiet --ignore-submodules -- 2>/dev/null || \
+     ! git diff --cached --quiet --ignore-submodules -- 2>/dev/null; then
+    QT_GIT_DIRTY="+dirty"
+  fi
+  export QT_GIT_BRANCH QT_GIT_SHA
+  echo "[COMPLETE STACK] Build: branch=$QT_GIT_BRANCH · sha=$QT_GIT_SHA$QT_GIT_DIRTY"
+  if [[ "$QT_GIT_BRANCH" != "HEAD" ]] && git rev-parse --verify "origin/$QT_GIT_BRANCH" >/dev/null 2>&1; then
+    QT_ORIGIN_SHA="$(git rev-parse --short=12 "origin/$QT_GIT_BRANCH" 2>/dev/null || true)"
+    if [[ -n "$QT_ORIGIN_SHA" && "$QT_ORIGIN_SHA" != "$QT_GIT_SHA" ]]; then
+      echo "[COMPLETE STACK] WARNING: local build differs from origin/$QT_GIT_BRANCH ($QT_ORIGIN_SHA). Run git pull before judging runtime behavior."
+    fi
+  fi
+fi
 # One complete-stack launch = one operator approval scope. Child process restarts
 # inherit this id, so autonomous thesis learning never creates another prompt.
 # A new complete-stack launch creates a new id and asks once again.
