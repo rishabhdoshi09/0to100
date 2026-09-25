@@ -65,6 +65,20 @@ def _next_job(supervisor) -> str:
                 detail = str(job.result_summary or job.error_message or "background work in progress")
                 return f"{job.job_type} · {detail}"
             return f"{job.job_type} (attempt {job.attempt})"
+
+        # During the live entry window an empty durable queue usually means the
+        # current 15-minute scan→paper slot is already complete, not that
+        # autonomy has stopped. Tell the operator when the next slot opens.
+        now = supervisor.deps.now_ist()
+        holidays = supervisor.deps.holidays()
+        if SCH.in_scan_window(now, holidays):
+            minutes = now.hour * 60 + now.minute
+            next_bucket = ((minutes // SCH.SCAN_INTERVAL_MIN) + 1) * SCH.SCAN_INTERVAL_MIN
+            end_minutes = SCH.ENTRY_WINDOW_END.hour * 60 + SCH.ENTRY_WINDOW_END.minute
+            if next_bucket <= end_minutes:
+                hh, mm = divmod(next_bucket, 60)
+                return f"scan→paper slot {hh:02d}:{mm:02d} IST"
+            return "entry window ending · no later paper slot"
     except Exception:
         pass
     return "none due"
