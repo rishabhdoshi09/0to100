@@ -73,6 +73,20 @@ def _record(signal: Any, names: Mapping[str, str], fno_symbols: set[str]) -> dic
     reasons = [str(x) for x in (_value(signal, "reasons", []) or [])]
     chase = bool(_value(signal, "chase_risk", False))
     verdict = str(_value(signal, "verdict", "WATCH") or "WATCH")
+    # Defense in depth for legacy/third-party signal rows: explicit safety
+    # language must never render as "Ready to trade" merely because an upstream
+    # producer forgot to set chase_risk. The scanner remains setup-only, but its
+    # label must still be internally truthful.
+    _warning_text = " ".join(reasons).lower()
+    _explicit_safety_veto = any(token in _warning_text for token in (
+        "chase nahi",
+        "chase mat karo",
+        "fresh buy nahi",
+        "setup abhi valid nahi",
+        "blow-off-top",
+        "bull-trap/exhaustion",
+    ))
+    chase = bool(chase or _explicit_safety_veto)
     if chase:
         status = "Wait for pullback"
     elif verdict == "BUY":
