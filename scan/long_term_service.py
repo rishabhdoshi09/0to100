@@ -464,17 +464,35 @@ def run_long_term_scan(
         sector = str(sector_lookup(symbol) or "Unknown")
         raw = None
         error = ""
+        stale_fundamentals = False
+        fundamental_source = ""
         try:
             raw = fundamental_provider(symbol, bool(refresh_fundamentals))
         except Exception as exc:
             error = type(exc).__name__
         fund = {}
         if raw:
-            try:
-                from screener.engine import _extract_fundamentals
-                fund = _extract_fundamentals(dict(raw))
-            except Exception as exc:
-                error = type(exc).__name__
+            raw_map = dict(raw)
+            fundamental_source = str(
+                raw_map.get("source_label") or raw_map.get("source_tier") or ""
+            )
+            stale_fundamentals = bool(
+                raw_map.get("stale")
+                or raw_map.get("_cache_stale")
+                or str(raw_map.get("source_tier") or "").lower() == "last_good"
+                or str(raw_map.get("source_label") or "").lower() == "last_good_snapshot"
+            )
+            if stale_fundamentals:
+                # A last-good snapshot is useful for human context/recovery, but
+                # it is not current evidence. Never let a failed refresh promote
+                # a stock into QUALITY_COMPOUNDER/GARP using stale fundamentals.
+                error = error or "STALE_FUNDAMENTALS"
+            else:
+                try:
+                    from screener.engine import _extract_fundamentals
+                    fund = _extract_fundamentals(raw_map)
+                except Exception as exc:
+                    error = type(exc).__name__
         fq = score_current_fundamentals(fund, sector=sector)
         technical_score = float(row.get("score", 0) or 0)
         combined = round(technical_score * 0.45 + fq["score"] * 0.55, 1)
@@ -496,6 +514,7 @@ def run_long_term_scan(
         extension, timing = _timing_for_technical_row(row)
         factors = list(dict.fromkeys(list(row.get("factors", []) or [])[:4] + fq["factors"]))
         risks = list(dict.fromkeys(fq["risks"] +
+                    (["Stale fundamentals ignored; refresh did not produce current evidence"] if stale_fundamentals else []) +
                     (["Current fundamentals unavailable or incomplete"] if fq["coverage"] < 0.50 else []) +
                     (["Price extended above 200-DMA"] if extension >= 35 else []) +
                     (["Price is extended; wait for a base"] if timing == "WAIT_FOR_BASE" and extension < 35 else [])))
@@ -505,6 +524,8 @@ def run_long_term_scan(
             "fundamental_score": fq["score"], "fundamental_coverage": fq["coverage"],
             "combined_score": combined, "classification": classification,
             "timing": timing, "fundamentals": fund, "fundamental_error": error,
+            "fundamentals_stale": stale_fundamentals,
+            "fundamentals_source": fundamental_source,
             "quality_factors": factors[:8], "risk_flags": risks[:8],
             "fundamentals_point_in_time": False,
         })
