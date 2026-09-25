@@ -73,6 +73,24 @@ def _market_is_live() -> bool:
         return False
 
 
+def _session_tag_for_frame(df: pd.DataFrame) -> str:
+    """Date the bar from provenance, not from wall-clock market state.
+
+    A synthetic/static frame dated today is still an EOD close unless the data
+    loader explicitly marked today's row as a live overlay. This also prevents
+    NSE bars from being called live merely because the US market is open.
+    """
+    try:
+        session_ts = pd.Timestamp(df.index[-1])
+        session = session_ts.strftime("%d %b")
+        live_date = str(df.attrs.get("quantterm_live_overlay_date") or "")
+        if live_date and live_date == session_ts.date().isoformat():
+            return f" ({session} intraday/live)"
+        return f" ({session} close)"
+    except Exception:
+        return ""
+
+
 # Close Location Value (Wyckoff): kis end pe close hua din ki range mein.
 # 1.0 = din ki high pe band (buyers ne close tak control rakha) · 0.0 = din
 # ki low pe band (sellers ne breakout ke din hi vaapas le liya — bada upper
@@ -537,30 +555,9 @@ class UnifiedScanner:
         if is_beaten_down_arr(hi[-_DROP_LOOKBACK:], price):
             return None
 
-        # Honest dating — today's bar is partial while the market is live.
-        # Never call an intraday bar a "close": that makes a provisional signal
-        # look final and can falsely increase operator confidence.
-        try:
-            session_ts = pd.Timestamp(df.index[-1])
-            session = session_ts.strftime("%d %b")
-            try:
-                from datetime import datetime as _dt
-                from zoneinfo import ZoneInfo as _ZoneInfo
-                _today_ist = _dt.now(_ZoneInfo("Asia/Kolkata")).date()
-                _intraday_bar = (
-                    _market_is_live()
-                    and session_ts.date() == _today_ist
-                )
-            except Exception:
-                _intraday_bar = False
-        except Exception:
-            session = ""
-            _intraday_bar = False
-        sess_tag = (
-            f" ({session} intraday/live)"
-            if session and _intraday_bar
-            else (f" ({session} close)" if session else "")
-        )
+        # Honest dating comes from the data artifact itself. Live NSE overlay
+        # marks today's partial bar; ordinary/synthetic frames remain EOD closes.
+        sess_tag = _session_tag_for_frame(df)
 
         chg = (close[-1] / close[-2] - 1) * 100 if len(close) > 1 else 0.0
         mom5 = (close[-1] / close[-6] - 1) * 100 if len(close) > 5 else 0.0
