@@ -522,12 +522,30 @@ class UnifiedScanner:
         if is_beaten_down_arr(hi[-_DROP_LOOKBACK:], price):
             return None
 
-        # Honest dating — signals are computed on the latest EOD session
+        # Honest dating — today's bar is partial while the market is live.
+        # Never call an intraday bar a "close": that makes a provisional signal
+        # look final and can falsely increase operator confidence.
         try:
-            session = pd.Timestamp(df.index[-1]).strftime("%d %b")
+            session_ts = pd.Timestamp(df.index[-1])
+            session = session_ts.strftime("%d %b")
+            try:
+                from datetime import datetime as _dt
+                from zoneinfo import ZoneInfo as _ZoneInfo
+                _today_ist = _dt.now(_ZoneInfo("Asia/Kolkata")).date()
+                _intraday_bar = (
+                    _market_is_live()
+                    and session_ts.date() == _today_ist
+                )
+            except Exception:
+                _intraday_bar = False
         except Exception:
             session = ""
-        sess_tag = f" ({session} close)" if session else ""
+            _intraday_bar = False
+        sess_tag = (
+            f" ({session} intraday/live)"
+            if session and _intraday_bar
+            else (f" ({session} close)" if session else "")
+        )
 
         chg = (close[-1] / close[-2] - 1) * 100 if len(close) > 1 else 0.0
         mom5 = (close[-1] / close[-6] - 1) * 100 if len(close) > 5 else 0.0
@@ -556,6 +574,10 @@ class UnifiedScanner:
         # trader waits for the close to confirm instead of chasing a false break.
         breakout_grade = ""
         breakout_conv = 0.0
+        # A failed breakout-quality gate is authoritative. Later pattern/score
+        # aggregation must never promote that same bar back to BUY.
+        breakout_watch_veto = False
+        breakout_chase_risk = False
         if len(high) > 60:
             hi52 = float(np.max(high[:-1]))
             res20 = float(np.max(high[-21:-1]))
@@ -598,7 +620,19 @@ class UnifiedScanner:
                         reasons.append(f"₹{level:,.0f} {tag} toda par conviction "
                                        f"kam ({conv:.0f}/100) — pack ka wait{sess_tag}")
             elif price > level and note:
-                # Cleared the level but not cleanly → watch, not buy
+                # Cleared the level but not cleanly → watch, not buy.
+                # This veto survives the later composite scorer; otherwise a
+                # high-RSI/gap/weak-quality breakout can be re-promoted simply
+                # because several secondary patterns also fired.
+                breakout_watch_veto = True
+                _note_l = str(note).lower()
+                if (
+                    "chase nahi" in _note_l
+                    or "exhaustion" in _note_l
+                    or "blow-off" in _note_l
+                    or "bull-trap" in _note_l
+                ):
+                    breakout_chase_risk = True
                 if "PRE_BREAKOUT" not in signals:
                     signals.append("PRE_BREAKOUT")
                     reasons.append(f"₹{level:,.0f} {tag} pe hai par {note}{sess_tag}")
@@ -722,6 +756,8 @@ class UnifiedScanner:
 
         verdict = "BUY" if (score >= 55 and len(signals) >= 2) or any(
             s in ("BREAKOUT_52W", "HIGH_TIGHT_FLAG") for s in signals) else "WATCH"
+        if breakout_watch_veto and verdict == "BUY":
+            verdict = "WATCH"
 
         # ── Extension guard — DON'T CHASE ─────────────────────────────────────
         # A stock already up big in 5 days and stretched far above its 20-EMA,
@@ -738,7 +774,7 @@ class UnifiedScanner:
         ema20_now = _ema_np(close, 20)
         ext_pct = (price / ema20_now - 1) * 100 if ema20_now else 0.0
         ext50_pct = (price / sma50 - 1) * 100 if sma50 else 0.0
-        chase_risk = False
+        chase_risk = breakout_chase_risk
         _short_stretched = ext_pct > 10 and mom5 > 10
         _far_from_base = _EXT_ABOVE_SMA50 > 0 and ext50_pct > _EXT_ABOVE_SMA50
         if (_short_stretched or _far_from_base) and not breakout_grade:
