@@ -1054,10 +1054,18 @@ class Supervisor:
         except Exception:
             return False
 
-    def _paper_for_snapshot(self, snapshot_id: str) -> None:
-        """Enqueue the terminal paper pass for an already-successful scan."""
+    def _paper_for_snapshot(
+        self,
+        snapshot_id: str,
+        *,
+        slot: str = "",
+        session_date: str = "",
+    ) -> None:
+        """Enqueue the terminal paper pass for one scan transaction."""
         snap = str(snapshot_id or "")
-        if not snap or self._pipeline_complete(snap):
+        if not snap or self._pipeline_complete(
+            snap, slot=slot, session_date=session_date
+        ):
             return
         now_ist = self.deps.now_ist()
         holidays = self.deps.holidays()
@@ -1067,50 +1075,86 @@ class Supervisor:
         if not approved:
             # Existing paper positions must still be managed truthfully. This
             # distinct idempotency key can never become a new-entry pass and
-            # does not mark the snapshot transaction complete.
+            # does not mark the scan transaction complete.
             if self._has_open_paper_positions():
+                manage_key = (
+                    f"snapshot_manage:{snap}:{session_date}:{slot}"
+                    if slot else f"snapshot_manage:{snap}"
+                )
                 self.jobs.enqueue(
                     SCH.PAPER_CYCLE,
-                    idempotency_key=f"snapshot_manage:{snap}",
+                    idempotency_key=manage_key,
                     input_snapshot_id=snap,
                     critical=True,
                 )
             return
+        paper_key = (
+            SCH.paper_cycle_key(snap, f"{session_date}:{slot}")
+            if slot else SCH.snapshot_paper_key(snap)
+        )
         paper = self.jobs.enqueue(
             SCH.PAPER_CYCLE,
-            idempotency_key=SCH.snapshot_paper_key(snap),
+            idempotency_key=paper_key,
             input_snapshot_id=snap,
             critical=True,
         )
         if getattr(paper, "status", None) == JS.SUCCEEDED:
-            self._mark_snapshot_complete(snap)
+            self._mark_snapshot_complete(
+                snap, slot=slot, session_date=session_date
+            )
 
-    def _ensure_snapshot_pipeline(self, snapshot_id: str) -> None:
-        """Enqueue exactly one MARKET_SCAN for a fresh data identity."""
+    def _ensure_snapshot_pipeline(
+        self,
+        snapshot_id: str,
+        *,
+        slot: str = "",
+        session_date: str = "",
+    ) -> None:
+        """Enqueue one scan→paper transaction per deterministic intraday slot."""
         snap = str(snapshot_id or "")
-        if not snap or self._pipeline_complete(snap):
+        if not snap or self._pipeline_complete(
+            snap, slot=slot, session_date=session_date
+        ):
             return
         now_ist = self.deps.now_ist()
         holidays = self.deps.holidays()
         if not SCH.entries_allowed_by_clock(now_ist, holidays):
             return
 
+        scan_key = (
+            SCH.scan_key(snap, slot, session_date or now_ist.date().isoformat())
+            if slot else SCH.snapshot_scan_key(snap)
+        )
         scan = self.jobs.enqueue(
             SCH.MARKET_SCAN,
-            idempotency_key=SCH.snapshot_scan_key(snap),
+            idempotency_key=scan_key,
             input_snapshot_id=snap,
         )
         # A recovered/reused scan may already be terminal; continue directly to
         # paper without scheduling another scan.
         if getattr(scan, "status", None) == JS.SUCCEEDED:
-            self._paper_for_snapshot(snap)
+            self._paper_for_snapshot(
+                snap, slot=slot, session_date=session_date
+            )
 
     def _enqueue_paper_after_scan(self, scan_job) -> None:
         if str(getattr(scan_job, "job_type", "") or "") != SCH.MARKET_SCAN:
             return
-        if not str(getattr(scan_job, "idempotency_key", "") or "").startswith("snapshot_scan:"):
-            # Manual RUN_SCAN_NOW is scan-only. Only the automatic snapshot
-            # transaction is authorised to continue into PAPER_CYCLE.
+        key = str(getattr(scan_job, "idempotency_key", "") or "")
+        slot = ""
+        session_date = ""
+        if key.startswith("snapshot_scan:"):
+            pass
+        elif key.startswith("market_scan:"):
+            # scan_key(snapshot, slot, session_date) is safe to parse from the
+            # right even when snapshot ids themselves contain colons.
+            parts = key.rsplit(":", 2)
+            if len(parts) != 3:
+                return
+            slot, session_date = parts[-2], parts[-1]
+        else:
+            # Manual RUN_SCAN_NOW is scan-only. Only automatic transactions
+            # continue into PAPER_CYCLE.
             return
         active_fn = getattr(self.deps, "active_snapshot_id", None)
         active = active_fn() if callable(active_fn) else ""
@@ -1119,7 +1163,9 @@ class Supervisor:
             or active
             or ""
         )
-        self._paper_for_snapshot(snap)
+        self._paper_for_snapshot(
+            snap, slot=slot, session_date=session_date
+        )
 
     def _enqueue_scan_after_refresh(
         self,
@@ -1138,7 +1184,13 @@ class Supervisor:
             output_snapshot_id or getattr(refresh_job, "output_snapshot_id", None),
             metadata,
         )
-        self._ensure_snapshot_pipeline(snap)
+        now_ist = self.deps.now_ist()
+        slot = str(SCH.scan_slot(now_ist, self.deps.holidays()) or "")
+        self._ensure_snapshot_pipeline(
+            snap,
+            slot=slot,
+            session_date=now_ist.date().isoformat() if slot else "",
+        )
 
 
     def _process_controls(self):
