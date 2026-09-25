@@ -10,6 +10,8 @@ scorer; do not treat score >= 40 as SEPA eligibility.
 """
 from __future__ import annotations
 
+BEST_SETUPS_SCHEMA_VERSION = 2
+
 from typing import Any, Callable, Mapping, Sequence
 
 SEPA_TOTAL = 7
@@ -477,6 +479,24 @@ def sepa_card_fields(sepa: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _public_actionable_scan_row(row: Mapping[str, Any]) -> bool:
+    """Public Best Setups may contain only scanner rows still actionable now.
+
+    SEPA is a research overlay, not a mechanism for resurrecting a row the
+    scanner already marked WATCH/chase-risk/RSI blow-off. Keeping this boundary
+    explicit prevents "best setup" from contradicting the scanner safety gates.
+    """
+    verdict = str(row.get("verdict") or "").upper()
+    if verdict not in {"BUY", "STRONG BUY"}:
+        return False
+    if bool(row.get("chase_risk")):
+        return False
+    rsi = _f(row.get("rsi"))
+    if rsi is not None and rsi > 82.0:
+        return False
+    return True
+
+
 def _candidate_rank(row: Mapping[str, Any]) -> tuple:
     chase = 1 if bool(row.get("chase_risk")) else 0
     rsi = _f(row.get("rsi")) or 0.0
@@ -627,6 +647,7 @@ def _write_persisted_best_setups(scanned_at: str, cards: list[dict[str, Any]], n
     target = best_setups_path()
     target.parent.mkdir(parents=True, exist_ok=True)
     payload = {
+        "schema_version": BEST_SETUPS_SCHEMA_VERSION,
         "scanned_at": str(scanned_at or ""),
         "cards": cards,
         "note": note,
@@ -656,6 +677,8 @@ def load_persisted_best_setups(scanned_at: str) -> tuple[list[dict[str, Any]], s
     try:
         import json
         raw = json.loads(best_setups_path().read_text(encoding="utf-8"))
+        if int(raw.get("schema_version") or 0) != BEST_SETUPS_SCHEMA_VERSION:
+            return None
         if str(raw.get("scanned_at") or "") != str(scanned_at or ""):
             return None
         cards = list(raw.get("cards") or [])
@@ -676,14 +699,23 @@ def public_best_setups(
     skip_persist_read: bool = False,
 ) -> tuple[list[dict[str, Any]], str]:
     """RecoWealth Today cards from the saved scan. Research overlay only."""
-    records = list((scan_payload or {}).get("records") or [])
-    if not records:
+    all_records = list((scan_payload or {}).get("records") or [])
+    if not all_records:
         return [], "No saved scan yet — SEPA ranking needs the last whole-market scan."
+    records = [dict(row) for row in all_records if _public_actionable_scan_row(row)]
+    if not records:
+        return [], (
+            "No actionable scan setup cleared the scanner safety gates. "
+            "Best Setups stays empty rather than promoting WATCH/chase-risk names."
+        )
     if not skip_persist_read:
         persisted = load_persisted_best_setups(str(scan_payload.get("scanned_at") or ""))
         if persisted is not None:
             return persisted
-    cache_key = f"{scan_payload.get('scanned_at')}:{limit}:{score_cap}:{min_score}"
+    cache_key = (
+        f"v{BEST_SETUPS_SCHEMA_VERSION}:{scan_payload.get('scanned_at')}:"
+        f"{limit}:{score_cap}:{min_score}"
+    )
     ranked, note = rank_best_setups(
         records,
         load_frame=load_frame,
