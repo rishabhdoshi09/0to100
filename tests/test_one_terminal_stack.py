@@ -54,6 +54,19 @@ def test_complete_launcher_uses_canonical_launchd_console_on_installed_macos():
     assert "QT_FORCE_MANUAL_STACK" in complete
     assert "kickstart -k" not in complete
 
+
+def test_inner_stack_replaces_autonomy_from_an_older_startup_identity():
+    inner = (ROOT / "scripts" / "run_quantterm.sh").read_text(encoding="utf-8")
+
+    assert "autonomy_startup_matches()" in inner
+    assert "replace_stale_autonomy()" in inner
+    assert "QT_STARTUP_ID" in inner
+    assert "decision_simulation_gate" in inner
+    assert "Existing autonomy belongs to an older startup" in inner
+    assert 'stop_pid "$stale_pid" "stale autonomy supervisor"' in inner
+    assert "Adopting same-startup autonomy supervisor" in inner
+
+
 def test_report_watchdog_requires_health_not_just_an_open_port():
     complete = (ROOT / "scripts" / "run_quantterm_complete.sh").read_text(encoding="utf-8")
 
