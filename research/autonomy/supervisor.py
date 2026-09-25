@@ -980,6 +980,20 @@ class Supervisor:
         safe_source = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in source)
         return f"market:{safe_source}:{latest}"
 
+    @staticmethod
+    def _automatic_paper_identity(idempotency_key: str) -> tuple[bool, str, str]:
+        """Return (automatic, session_date, slot) for automatic paper jobs."""
+        key = str(idempotency_key or "")
+        if key.startswith("snapshot_paper:"):
+            return True, "", ""
+        if key.startswith("paper_cycle:"):
+            # paper_cycle_key(snapshot, f"{session_date}:{slot}") can be parsed
+            # from the right even when the snapshot id contains colons.
+            parts = key.rsplit(":", 2)
+            if len(parts) == 3:
+                return True, parts[-2], parts[-1]
+        return False, "", ""
+
     def _pipeline_complete(
         self,
         snapshot_id: str,
@@ -1541,16 +1555,21 @@ class Supervisor:
                     result.metadata,
                 )
                 self._enqueue_paper_after_scan(job)
-                if (
-                    job.job_type == SCH.PAPER_CYCLE
-                    and str(job.idempotency_key or "").startswith("snapshot_paper:")
-                ):
+                automatic_paper, paper_session, paper_slot = (
+                    self._automatic_paper_identity(str(job.idempotency_key or ""))
+                    if job.job_type == SCH.PAPER_CYCLE else (False, "", "")
+                )
+                if job.job_type == SCH.PAPER_CYCLE and automatic_paper:
                     snap = str(
                         getattr(job, "input_snapshot_id", None)
                         or self.deps.active_snapshot_id()
                         or ""
                     )
-                    self._mark_snapshot_complete(snap)
+                    self._mark_snapshot_complete(
+                        snap,
+                        slot=paper_slot,
+                        session_date=paper_session,
+                    )
                 key = str(job.idempotency_key or "")
                 if job.job_type == SCH.LEARNING_CYCLE and key.startswith("hist_learning:"):
                     batch_id = str(getattr(job, "input_snapshot_id", None) or key.split(":", 1)[1])
@@ -1564,14 +1583,18 @@ class Supervisor:
                     mark_research_complete(batch_id)
 
         target = self._gated_state(result.state_hint)
+        automatic_paper, _paper_session, _paper_slot = (
+            self._automatic_paper_identity(str(job.idempotency_key or ""))
+            if job.job_type == SCH.PAPER_CYCLE else (False, "", "")
+        )
         if (
             job.job_type == SCH.PAPER_CYCLE
             and result.status == JS.SUCCEEDED
-            and str(job.idempotency_key or "").startswith("snapshot_paper:")
+            and automatic_paper
         ):
-            # The automatic snapshot transaction is terminal after one paper
-            # decision pass. Keep durable positions intact, but the scheduler
-            # returns to OBSERVING and waits for new data.
+            # One slot transaction is terminal after its paper decision pass.
+            # Durable positions stay intact; the next deterministic scan slot
+            # may schedule a fresh scan→paper transaction.
             target = ST.OBSERVING
         # A successful auth probe proves only broker-session health. It must not
         # move an already productive desk into OBSERVING or a fake data-refresh.
@@ -1608,13 +1631,14 @@ class Supervisor:
         return hint
 
     def _retry_or_fail(self, job, *, error_code, error_message, summary=""):
-        if (
-            job.job_type == SCH.PAPER_CYCLE
-            and str(job.idempotency_key or "").startswith("snapshot_paper:")
-        ):
-            # Automatic paper execution is a once-per-data-identity mutation.
-            # Never replay it after an exception; surface the failure and wait
-            # for a new data identity or an explicit manual control.
+        automatic_paper, _paper_session, _paper_slot = (
+            self._automatic_paper_identity(str(job.idempotency_key or ""))
+            if job.job_type == SCH.PAPER_CYCLE else (False, "", "")
+        )
+        if job.job_type == SCH.PAPER_CYCLE and automatic_paper:
+            # Automatic paper execution is a once-per-slot mutation. Never
+            # replay it after an exception: duplicate entry mutations are worse
+            # than missing one slot. The next 15-minute slot can try afresh.
             self.jobs.complete(
                 job.job_id,
                 JS.PERMANENT_FAILED,
