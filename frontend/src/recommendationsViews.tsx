@@ -670,7 +670,7 @@ export function RecommendationsView({
         </p>
         {(simulationGate?.best_trades || []).length > 0 ? (
           <div className="reco-card-stack">
-            {(simulationGate?.best_trades || []).slice(0, 3).map((trade) => {
+            {(simulationGate?.best_trades || []).slice(0, 5).map((trade) => {
               const quality = trade.trade_quality || {}
               const p = quality.win_probability
               const pText = p == null ? 'Unproven' : `${Math.round(p * 100)}%`
