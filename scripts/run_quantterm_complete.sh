@@ -38,6 +38,167 @@ fi
 # shellcheck disable=SC1091
 source "$ROOT/scripts/_setsid_compat.sh"
 
+# macOS production installs are owned by launchd. Keep the familiar
+# run_quantterm_complete.sh command as the operator console, but delegate
+# lifecycle ownership to the canonical host instead of spawning a competing
+# manual supervisor. This preserves the old visible-log experience while
+# keeping one exact-SHA service owner.
+run_installed_launchd_console() {
+  local requested="${1:-}"
+  local action="start"
+  local label="com.quantterm.desk"
+  local plist="$HOME/Library/LaunchAgents/$label.plist"
+  local py="$ROOT/venv/bin/python"
+  local host_log_dir="$HOME/Library/Logs/QuantTerm"
+  local host_out="$host_log_dir/launchd.out.log"
+  local host_err="$host_log_dir/launchd.err.log"
+  local console_tail_pid=""
+
+  if [[ "$requested" == "--restart" ]]; then
+    action="restart"
+  fi
+
+  mkdir -p "$host_log_dir"
+  touch "$host_out" "$host_err"
+
+  echo "[COMPLETE STACK] Canonical macOS host detected."
+  echo "[COMPLETE STACK] Action: $action · service=$label"
+  echo "[COMPLETE STACK] Streaming fresh host logs while the full stack starts…"
+
+  tail -n 0 -F "$host_out" "$host_err" &
+  console_tail_pid=$!
+
+  cleanup_launchd_console_tail() {
+    if [[ -n "${console_tail_pid:-}" ]]; then
+      kill "$console_tail_pid" >/dev/null 2>&1 || true
+      wait "$console_tail_pid" 2>/dev/null || true
+      console_tail_pid=""
+    fi
+  }
+  trap 'cleanup_launchd_console_tail' EXIT
+  trap 'cleanup_launchd_console_tail; exit 130' INT TERM
+
+  if ! "$py" -m product.launchd_control "$action" --label "$label" --plist "$plist"; then
+    cleanup_launchd_console_tail
+    echo "[COMPLETE STACK] Canonical host $action failed." >&2
+    return 1
+  fi
+
+  echo "[COMPLETE STACK] Waiting for terminal API + desk readiness…"
+  local ready=0
+  local summary=""
+  local i
+  for i in {1..120}; do
+    summary="$("$py" - <<'PY' 2>/dev/null || true
+import json
+import urllib.request
+
+try:
+    with urllib.request.urlopen("http://127.0.0.1:8765/api/health", timeout=1.0) as response:
+        payload = json.load(response)
+except Exception:
+    raise SystemExit(1)
+
+components = payload.get("components") or []
+parts = []
+for item in components:
+    if isinstance(item, dict):
+        parts.append(f"{item.get('name')}={item.get('status')}")
+print(
+    f"lifecycle={payload.get('lifecycle')} "
+    f"operational_ready={payload.get('operational_ready')} "
+    f"evidence_ready={payload.get('evidence_ready')} "
+    f"live={payload.get('live_lock_status')} "
+    + " ".join(parts)
+)
+if not payload.get("ok") or not payload.get("operational_ready"):
+    raise SystemExit(2)
+PY
+)"
+    if [[ -n "$summary" ]]; then
+      ready=1
+      break
+    fi
+    if (( i % 5 == 0 )); then
+      "$py" - <<'PY' 2>/dev/null || true
+import json
+import os
+from pathlib import Path
+
+root = os.environ.get("QT_RUNTIME_ROOT", "").strip()
+if not root:
+    marker = Path(".quantterm_runtime_root")
+    if marker.is_file():
+        root = marker.read_text(encoding="utf-8").splitlines()[0].strip()
+if not root:
+    raise SystemExit(0)
+path = Path(root) / "state" / "host_supervisor.json"
+try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(0)
+children = payload.get("children") or {}
+alive = sum(1 for item in children.values() if isinstance(item, dict) and item.get("alive"))
+healthy = sum(1 for item in children.values() if isinstance(item, dict) and item.get("healthy") is True)
+print(
+    "[COMPLETE STACK] "
+    f"{payload.get('state', 'STARTING')} · children_alive={alive}/{len(children)} "
+    f"healthy={healthy}/{len(children)} · heartbeat={payload.get('heartbeat_at', '?')}"
+)
+PY
+    fi
+    sleep 1
+  done
+
+  cleanup_launchd_console_tail
+
+  if [[ "$ready" != "1" ]]; then
+    echo "[COMPLETE STACK] Full stack did not become ready within 120s." >&2
+    "$py" -m product.launchd_control status --label "$label" || true
+    echo "[COMPLETE STACK] Recent host output:" >&2
+    tail -60 "$host_out" >&2 || true
+    echo "[COMPLETE STACK] Recent host errors:" >&2
+    tail -40 "$host_err" >&2 || true
+    return 1
+  fi
+
+  echo
+  echo "[COMPLETE STACK] READY · $summary"
+  echo "[COMPLETE STACK] Desk: http://127.0.0.1:5173"
+  echo "[COMPLETE STACK] API:  http://127.0.0.1:8765"
+  echo "[COMPLETE STACK] Reports: http://127.0.0.1:8766"
+  echo "[COMPLETE STACK] Ctrl-C detaches this console; the launchd full stack keeps running."
+
+  if [[ "${QT_NO_BROWSER:-}" != "1" ]]; then
+    open "http://127.0.0.1:5173" >/dev/null 2>&1 || true
+  fi
+
+  local runtime_root="${QT_RUNTIME_ROOT:-}"
+  if [[ -z "$runtime_root" && -f "$ROOT/.quantterm_runtime_root" ]]; then
+    runtime_root="$(head -n 1 "$ROOT/.quantterm_runtime_root" 2>/dev/null || true)"
+  fi
+
+  set -- "$host_out" "$host_err"
+  if [[ -n "$runtime_root" ]]; then
+    local service_log
+    for service_log in "$runtime_root"/logs/service/*.log; do
+      [[ -f "$service_log" ]] && set -- "$@" "$service_log"
+    done
+  fi
+
+  trap - EXIT INT TERM
+  exec tail -n 20 -F "$@"
+}
+
+if [[ "$(uname -s)" == "Darwin"    && "${QT_FORCE_MANUAL_STACK:-0}" != "1"    && -x "$ROOT/venv/bin/python"    && -f "$HOME/Library/LaunchAgents/com.quantterm.desk.plist" ]]; then
+  case "${1:-}" in
+    ""|--restart|--reuse|--console)
+      run_installed_launchd_console "${1:-}"
+      exit $?
+      ;;
+  esac
+fi
+
 if [[ "${1:-}" == "--restart" || "${1:-}" == "--reuse" ]]; then
   shift || true
 fi
