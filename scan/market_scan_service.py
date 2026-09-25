@@ -392,10 +392,24 @@ def run_whole_market_scan(
     payload["requested_universe"] = requested_n
     payload["coverage"] = coverage
     payload["coverage_state"] = str(coverage.get("state") or "UNKNOWN")
-    payload["coverage_warning"] = (
-        "Some requested NSE equities did not receive a full technical evaluation. Open Scan Coverage for exact symbols and reasons."
-        if coverage.get("state") == "DEGRADED" else ""
-    )
+    if coverage.get("state") == "DEGRADED":
+        hard_gap = int(coverage.get("hard_data_unavailable") or 0)
+        partial = int(coverage.get("partial_history") or 0)
+        errors = int(coverage.get("analysis_errors") or 0)
+        parts = []
+        if hard_gap:
+            parts.append(f"{hard_gap} missing OHLCV")
+        if partial:
+            parts.append(f"{partial} with <60 daily bars")
+        if errors:
+            parts.append(f"{errors} analysis errors")
+        detail = ", ".join(parts) if parts else "some names not fully evaluated"
+        payload["coverage_warning"] = (
+            f"Scan coverage is partial: {detail}. "
+            "Open Scan Coverage for exact symbols and reasons."
+        )
+    else:
+        payload["coverage_warning"] = ""
     sid = snapshot_id if snapshot_id is not None else _active_snapshot_id()
     payload["source_snapshot_id"] = sid
     # Publish the authoritative market-session identity together with the scan
