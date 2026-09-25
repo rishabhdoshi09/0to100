@@ -30,6 +30,28 @@ _lock = threading.RLock()
 _consider_lock = threading.Lock()
 
 TAG = "US_AUTOPILOT"
+
+
+def _us_now():
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("America/New_York"))
+    except Exception:
+        return datetime.now()
+
+
+def _us_session_date() -> str:
+    return _us_now().date().isoformat()
+
+
+def _trade_session_date(trade: dict) -> str:
+    note = str(trade.get("note") or "")
+    marker = "session="
+    if marker in note:
+        value = note.split(marker, 1)[1].split("|", 1)[0].strip()
+        if len(value) >= 10:
+            return value[:10]
+    return str(trade.get("placed_at") or "")[:10]
 _OPEN = ("PAPER_OPEN",)
 _WIN = ("PAPER_WIN",)
 _LOSS = ("PAPER_LOSS",)
@@ -148,7 +170,7 @@ def _reject_category(reason: str) -> str:
 
 
 def _note_reject(reason: str) -> None:
-    today = date.today().isoformat()
+    today = _us_session_date()
     with _lock:
         s = _load()
         rs = dict(s.get("reject_stats", {}).get(today, {}))   # copy, not in-place
@@ -159,7 +181,7 @@ def _note_reject(reason: str) -> None:
 
 
 def _note_considered() -> None:
-    today = date.today().isoformat()
+    today = _us_session_date()
     with _lock:
         s = _load()
         n = int(s.get("considered", {}).get(today, 0)) + 1
@@ -168,7 +190,7 @@ def _note_considered() -> None:
 
 
 def reject_funnel() -> dict:
-    today = date.today().isoformat()
+    today = _us_session_date()
     s = _load()
     return {"considered": int(s.get("considered", {}).get(today, 0)),
             "rejects": dict(s.get("reject_stats", {}).get(today, {}))}
@@ -231,7 +253,7 @@ def get_status() -> dict:
     s["pool"] = round(s["allocation"] + s["realized_pnl"], 2)
     s["available"] = round(
         max(0.0, s["pool"] * (1 - s["cash_reserve_pct"]) - s["deployed"]), 2)
-    today = date.today().isoformat()
+    today = _us_session_date()
     s["trades_today_count"] = int(s.get("trades_today", {}).get(today, 0))
     return s
 
@@ -344,7 +366,7 @@ def _passes_gates(symbol: str, score: float, conviction: float) -> str | None:
         return "not armed"
     if not _in_window():
         return f"US window ({s['start_time']}-{s['end_time']} ET) ke bahar"
-    today = date.today().isoformat()
+    today = _us_session_date()
     if int(s.get("trades_today", {}).get(today, 0)) >= s["max_trades_per_day"]:
         return "daily trade limit reached"
     if len(_open_trades()) >= s["max_open_positions"]:
@@ -496,12 +518,12 @@ def _consider_locked(symbol, entry, stop, score, conviction, source, meta=None) 
         from execution.trade_executor import place_trade
         res = place_trade(symbol=symbol, qty=qty, entry_type="MARKET",
                           entry_price=entry, stop=round(stop, 2), target=target,
-                          product="CNC", paper=True, note=f"{TAG}:{source}")
+                          product="CNC", paper=True, note=f"{TAG}:{source}|session={_us_session_date()}")
         if not res.get("ok"):
             reason = f"paper order failed: {res.get('message','')[:80]}"
             _log_activity(f"FAIL {symbol}: {res.get('message','')[:80]}")
             return reject(reason)
-        today = date.today().isoformat()
+        today = _us_session_date()
         with _lock:
             s = _load()
             s["trades_today"] = {today: int(s.get("trades_today", {}).get(today, 0)) + 1}
@@ -673,9 +695,9 @@ def _circuit_breaker() -> None:
     pool = s["allocation"] + s["realized_pnl"]
     if pool <= 0:
         return
-    today = date.today().isoformat()
+    today = _us_session_date()
     day = sum(_net_pnl(t) for t in _trades(_WIN + _LOSS)
-              if str(t["placed_at"])[:10] == today)
+              if _trade_session_date(t) == today)
     # Include UNREALIZED on open positions — else three open trades could
     # bleed −8% and never trip the breaker until they close (NSE-parity).
     opens = _open_trades()
