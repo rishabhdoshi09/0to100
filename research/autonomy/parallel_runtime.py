@@ -98,12 +98,14 @@ def _queue_operation(
     priority: int = 40,
     reuse_s: float = 0.0,
     identity: str = "",
+    snapshot_id: str = "",
 ) -> dict[str, Any]:
     from operations import market_ops as MOPS
     from operations.store import PENDING, RUNNING, SUCCEEDED
 
     store = _ops_store()
     wanted = str(identity or "")
+    source_snapshot = str(snapshot_id or identity or "")
     now = time.time()
 
     # Snapshot-bound autonomy operations may only reuse the exact operation that
@@ -113,7 +115,9 @@ def _queue_operation(
         for row in store.recent_full(limit=250):
             if str(row.get("kind") or "") != str(kind).upper():
                 continue
-            if str((row.get("payload") or {}).get("snapshot_id") or "") != wanted:
+            payload = dict(row.get("payload") or {})
+            row_identity = str(payload.get("operation_identity") or payload.get("snapshot_id") or "")
+            if row_identity != wanted:
                 continue
             status = str(row.get("status") or "")
             if status in {PENDING, RUNNING, SUCCEEDED}:
