@@ -34,6 +34,30 @@ echo "[MAC SETUP] Stage 1/5: storage preflight complete"
 PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
   "$SYSTEM_PYTHON" -m product.launchd_control stop --label com.quantterm.desk
 
+# launchctl can prove the job is unloaded while its prior Python supervisor is
+# still reparented to PID 1. That survivor owns the machine-wide flock and makes
+# the freshly pinned generation exit safely. Quiesce only when owner/status,
+# repo/runtime identity and canonical host command all prove the old generation.
+echo "[MAC SETUP] Quiescing any verified old host generation"
+QT_RUNTIME_ROOT="$STORAGE_RUNTIME" \
+QT_RUNTIME_ROOT_REQUIRE_EXISTING=1 \
+PYTHONPATH="$APP_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+  "$SYSTEM_PYTHON" - <<'PY'
+from product.host_orphan_recovery import quiesce_live_previous_supervisor
+
+result = quiesce_live_previous_supervisor()
+print(
+    "[MAC SETUP] Previous host generation: "
+    + str(result.get("state") or "UNKNOWN")
+    + (
+        f" pid={result.get('previous_supervisor_pid')}"
+        if result.get("previous_supervisor_pid")
+        else ""
+    ),
+    flush=True,
+)
+PY
+
 # Historical one-off agents are not canonical owners. They remain best-effort
 # cleanup after the canonical service has been proved absent.
 UID_VALUE="$(id -u)"
