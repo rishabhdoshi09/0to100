@@ -492,7 +492,11 @@ class Supervisor:
                 return True
             approval = ensure_autonomous_approval()
             return bool(approval.get("accepted") and approval.get("approved"))
-        except Exception:
+        except Exception as exc:
+            self._incident(
+                "DECISION_SIMULATION_AUTHORITY_ERROR",
+                f"Decision Simulation authority check failed: {type(exc).__name__}: {exc}",
+            )
             return False
 
     def _ensure_startup_trade_discovery(self) -> None:
@@ -563,7 +567,11 @@ class Supervisor:
                 idempotency_key=f"startup_discovery_scan:{startup_id}:{identity}",
                 input_snapshot_id=identity,
             )
-        except Exception:
+        except Exception as exc:
+            self._incident(
+                "DECISION_DISCOVERY_ERROR",
+                f"Decision Simulation discovery repair failed: {type(exc).__name__}: {exc}",
+            )
             return
 
     @staticmethod
