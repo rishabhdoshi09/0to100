@@ -109,3 +109,53 @@ def test_scan_is_published_only_after_identity_and_overlays(monkeypatch):
     assert saved["records"][0]["selection_required"] is True
     assert saved["summary"]["setup_ready"] == 1
     assert saved["summary"]["ready_to_trade_scope"] == "SCANNER_SETUP_ONLY"
+
+
+def test_scan_publication_filters_non_stock_funds(monkeypatch):
+    monkeypatch.setattr(
+        "product.scan_store._history_freshness",
+        lambda: ({
+            "available_session": "2026-09-24",
+            "expected_latest_completed_session": "2026-09-24",
+            "reason_code": "HISTORY_CURRENT",
+            "stale_sessions": 0,
+            "current": True,
+        }, ""),
+    )
+
+    from product.scan_store import build_scan_payload
+
+    rows = [
+        {
+            "symbol": "AAA",
+            "score": 80.0,
+            "verdict": "BUY",
+            "signals": ["MOMENTUM"],
+            "reasons": ["qualified"],
+            "price": 100.0,
+            "entry": 101.0,
+            "stop": 95.0,
+            "target": 113.0,
+        },
+        {
+            "symbol": "HDFCLIQUID",
+            "score": 99.0,
+            "verdict": "BUY",
+            "signals": ["PRE_BREAKOUT"],
+            "reasons": ["synthetic liquid-fund setup"],
+            "price": 1079.6,
+            "entry": 1079.6,
+            "stop": 1079.2,
+            "target": 1080.5,
+        },
+    ]
+    payload = build_scan_payload(
+        {"AAA": "Alpha", "HDFCLIQUID": "HDFC NIFTY 1D RATE LIQUID - GROWTH ETF"},
+        rows,
+        scanned=2,
+        approved_universe=2,
+    )
+
+    assert [r["symbol"] for r in payload["records"]] == ["AAA"]
+    assert payload["qualified_rows"] == 1
+    assert payload["summary"]["setup_ready"] == 1
