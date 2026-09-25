@@ -1560,6 +1560,21 @@ class Supervisor:
                     )
                 except Exception:
                     pass
+            if (
+                job.job_type == SCH.DISCOVERY_REFRESH
+                and result.status in {JS.SUCCEEDED, JS.SKIPPED_IDEMPOTENT}
+            ):
+                # Discovery jobs are keyed to immutable scan/evidence identity.
+                # Long-term/thesis evidence can legitimately advance between
+                # enqueue and lease. A stale job may therefore retire as
+                # SKIPPED_IDEMPOTENT, but that must never leave a healthy
+                # off-session supervisor IDLE waiting for some later tick to
+                # rediscover the replacement identity. Re-evaluate immediately:
+                # this either queues the current canonical discovery key or, if
+                # a matching projection already exists, records autonomous
+                # Decision Simulation authority for the current startup.
+                self._ensure_startup_trade_discovery()
+
             if result.status == JS.SUCCEEDED:
                 for dependency in result.unblocks:
                     self.jobs.unblock_dependency(dependency)
