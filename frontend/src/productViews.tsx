@@ -32,6 +32,7 @@ import {
 import { keepRicher, markInvestigate, recall } from './sessionMemory'
 import { fetchOperation } from './api'
 import { investigateIsAcquiring } from './investigateAcquire'
+import { isActionableScanRow } from './scannerFallback'
 import type { ChartBar, ControlName, DashboardPayload } from './types'
 
 type AcquireJobState = {
@@ -248,7 +249,7 @@ export function ProductCommandCenterView(props: ViewProps) {
   }
 
   const momentum = useMemo(() => [...dashboard.scan.records]
-    .filter((row) => row.signals?.includes('MOMENTUM') || row.verdict === 'BUY')
+    .filter((row) => isActionableScanRow(row as unknown as Record<string, unknown>))
     .sort((a, b) => (b.score || 0) - (a.score || 0)), [dashboard.scan.records])
   const quality = useMemo(() => [...dashboard.long_term.records]
     .filter((row) => ['QUALITY_COMPOUNDER', 'GARP_CANDIDATE', 'QUALITY_BUT_EXPENSIVE'].includes(row.classification || ''))
@@ -280,7 +281,7 @@ export function ProductCommandCenterView(props: ViewProps) {
 
       <div className="product-decision-grid">
         <Panel title="TOP TECHNICAL OPPORTUNITIES" subtitle={dashboard.scan.scanned_at ? `Scan as of ${dashboard.scan.scanned_at}` : 'No scan has completed'} action={<button type="button" onClick={() => setActive('Scanner')}>Open scanner</button>}>
-          <SecurityTable rows={momentum} selected={selected} onSelect={setSelected} limit={8} />
+          <SecurityTable rows={momentum} selected={selected} onSelect={setSelected} limit={5} />
         </Panel>
         <Panel title={`SELECTED STOCK · ${selected || 'NONE'}`} subtitle="Official daily history with the saved research record">
           <ChartWorkspace symbol={selected} bars={bars} row={selectedRow} />
