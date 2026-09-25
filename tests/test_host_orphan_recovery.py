@@ -248,3 +248,31 @@ def test_frontend_command_match_rejects_unrelated_dev_server(tmp_path, monkeypat
         "frontend",
         "npm run dev -- --host 127.0.0.1 --port 3000",
     ) is False
+
+
+def test_validate_previous_generation_accepts_rewritten_npm_frontend(tmp_path, monkeypatch):
+    repo, runtime, owner_path, status, owner = _fixtures(tmp_path)
+    _patch_paths(monkeypatch, repo, runtime, owner_path)
+    status["children"] = {"frontend": {"pid": 222, "alive": True}}
+    (runtime / "state" / "host_supervisor.json").write_text(json.dumps(status), encoding="utf-8")
+
+    start_epoch = recovery._iso_epoch(START)
+    assert start_epoch is not None
+    monkeypatch.setattr(recovery, "_pid_alive", lambda pid: pid == 222)
+    monkeypatch.setattr(
+        recovery,
+        "_process_row",
+        lambda pid: {
+            "pid": 222,
+            "ppid": 1,
+            "pgid": 222,
+            "started": "Wed Sep 16 07:31:00 2026",
+            "started_epoch": float(start_epoch) + 60,
+            "command": "npm run dev -- --host 127.0.0.1 --port 5173",
+        },
+    )
+
+    candidates = recovery._validate_previous_generation(status, owner)
+    assert len(candidates) == 1
+    assert candidates[0]["name"] == "frontend"
+    assert candidates[0]["pid"] == 222
