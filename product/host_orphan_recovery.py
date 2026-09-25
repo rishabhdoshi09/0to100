@@ -169,6 +169,48 @@ def _command_matches(name: str, command: str) -> bool:
     return bool(required) and all(piece in text for piece in required)
 
 
+def _group_commands(pgid: int) -> list[str]:
+    if pgid <= 1:
+        return []
+    proc = subprocess.run(
+        ["/bin/ps", "-ww", "-axo", "pid=", "-o", "ppid=", "-o", "pgid=", "-o", "command="],
+        capture_output=True, text=True, check=False, timeout=5,
+    )
+    commands: list[str] = []
+    for raw in (proc.stdout or "").splitlines():
+        row = raw.strip()
+        if not row:
+            continue
+        parts = row.split(None, 3)
+        if len(parts) < 4:
+            continue
+        try:
+            row_pgid = int(parts[2])
+        except ValueError:
+            continue
+        if row_pgid == pgid:
+            commands.append(parts[3])
+    return commands
+
+
+def _frontend_group_matches(pgid: int) -> bool:
+    repo = str(REPO_ROOT)
+    for command in _group_commands(pgid):
+        text = str(command or "")
+        if all(
+            piece in text
+            for piece in (
+                f"{repo}/frontend/node_modules/.bin/vite",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "5173",
+            )
+        ):
+            return True
+    return False
+
+
 def _group_alive(pgid: int) -> bool:
     if pgid <= 1:
         return False
@@ -418,9 +460,12 @@ def _validate_previous_generation(
                 f"candidate {name} pid={pid} is not its expected process-group leader "
                 f"(pgid={row['pgid']})"
             )
-        if not _command_matches(str(name), str(row["command"])):
+        command_matches = _command_matches(str(name), str(row["command"]))
+        if not command_matches and str(name) == "frontend":
+            command_matches = _frontend_group_matches(int(row["pgid"]))
+        if not command_matches:
             raise OrphanRecoveryError(
-                f"candidate {name} pid={pid} command does not match the recorded child role: "
+                f"candidate {name} pid={pid} command/process-group does not match the recorded child role: "
                 f"{str(row.get('command') or '')[:220]}"
             )
         child_started = float(row["started_epoch"])
