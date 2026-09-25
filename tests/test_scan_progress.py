@@ -53,8 +53,9 @@ def test_stale_active_progress_does_not_keep_a_fake_eta(tmp_path):
 
 def test_progress_file_carries_eta(tmp_path, monkeypatch):
     path = tmp_path / "scan_progress.json"
-    write_progress(current=0, total=2000, stage="STARTING", path=path, now=1000.0)
-    monkeypatch.setattr("product.scan_progress._started_at", 1000.0)
+    write_progress(current=0, total=2000, stage="STARTING", path=path, now=990.0)
+    # ETA starts when the real stock walk starts, not during prefetch/startup.
+    write_progress(current=0, total=2000, stage="SCANNING", path=path, now=1000.0)
     payload = write_progress(current=500, total=2000, stage="SCANNING", path=path, now=1040.0)
     assert payload["active"] is True
     assert payload["pct"] == 25.0
