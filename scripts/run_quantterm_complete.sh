@@ -168,7 +168,7 @@ if [[ "$runtime_rc" -eq 0 && -z "$RUNTIME_LOGS" ]]; then
 fi
 if [[ "$runtime_rc" -ne 0 ]]; then
   if [[ "$runtime_rc" -eq 78 ]]; then
-    echo "[COMPLETE STACK] Persistent runtime is configured but missing, unmounted, or unresponsive." >&2
+    echo "[COMPLETE STACK] Persistent runtime is configured but missing or unmounted, or the mounted filesystem is unresponsive." >&2
     echo "[COMPLETE STACK] Read-only diagnosis:" >&2
     echo "  cat .quantterm_runtime_root" >&2
     echo "  mount | grep QuantTermStorage" >&2
