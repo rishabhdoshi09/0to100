@@ -181,3 +181,97 @@ def test_empty_breakout_set_is_valid_no_trade_and_does_not_request_deep_quotes()
     assert result["decision"] == "NO_ELIGIBLE_TRADE"
     assert result["candidate_count"] == 0
     assert result["quote_scope"]["option_contracts_requested"] == 0
+
+
+def test_default_history_waits_for_current_session_before_prefilter(monkeypatch):
+    bars = _breakout_bars()
+    spot = float(bars["close"].iloc[-1])
+    instruments = _instruments(spot)
+    client = _Client(spot, instruments)
+    events = []
+
+    from data import nse_live
+    from scan import bulk_fetcher
+
+    def _adopt(*, overlay_live=True):
+        events.append(("adopt", overlay_live))
+        return 500
+
+    def _live_ready(*, apply=True):
+        events.append(("live", apply))
+        return {
+            "ready": True,
+            "symbols": 500,
+            "source": "kite_quotes",
+            "session_date": AS_OF.isoformat(),
+            "sessions": 260,
+        }
+
+    def _history(symbol):
+        events.append(("history", symbol))
+        return bars
+
+    monkeypatch.setattr(bulk_fetcher, "adopt_ready_store", _adopt)
+    monkeypatch.setattr(bulk_fetcher, "get_cached", _history)
+    monkeypatch.setattr(nse_live, "live_session_ready", _live_ready)
+    monkeypatch.setattr(
+        fo_runtime,
+        "_index_context",
+        lambda: {"return_20d_pct": 1.0, "return_5d_pct": 0.5, "last_close": 21900.0},
+    )
+    monkeypatch.setattr(fo_runtime, "_sector_strength_map", lambda nifty: {"Tech": 1.2})
+    monkeypatch.setattr(fo_runtime, "_sector_for", lambda symbol: "Tech")
+
+    result = fo_runtime.run_fo_directional_scan(
+        report=_report(spot),
+        instrument_rows=instruments,
+        client=client,
+        as_of=AS_OF,
+    )
+
+    assert events[0] == ("adopt", False)
+    assert events[1] == ("live", True)
+    assert events.index(("live", True)) < events.index(("history", "TEST"))
+    assert result["history_session"]["source"] == "kite_quotes"
+    assert result["candidate_count"] == 1
+
+
+def test_default_history_fails_closed_when_current_session_is_unavailable(monkeypatch):
+    bars = _breakout_bars()
+    spot = float(bars["close"].iloc[-1])
+
+    from data import nse_live
+    from scan import bulk_fetcher
+
+    monkeypatch.setattr(
+        bulk_fetcher, "adopt_ready_store",
+        lambda *, overlay_live=True: 500,
+    )
+    monkeypatch.setattr(
+        nse_live, "live_session_ready",
+        lambda *, apply=True: {
+            "ready": False,
+            "symbols": 0,
+            "source": "",
+            "session_date": "",
+            "sessions": 260,
+        },
+    )
+
+    def _unexpected_history(symbol):
+        raise AssertionError("history must not be read before current-session readiness")
+
+    monkeypatch.setattr(bulk_fetcher, "get_cached", _unexpected_history)
+
+    result = fo_runtime.run_fo_directional_scan(
+        report=_report(spot),
+        instrument_rows=_instruments(spot),
+        client=_NoQuoteClient(),
+        as_of=AS_OF,
+    )
+
+    assert result["available"] is False
+    assert result["status"] == "BLOCKED"
+    assert result["code"] == "FNO_CURRENT_SESSION_UNAVAILABLE"
+    assert result["candidates"] == []
+    assert result["live_execution_allowed"] is False
