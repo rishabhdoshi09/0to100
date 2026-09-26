@@ -217,8 +217,41 @@ def test_best_trades_use_the_same_production_selection_seam(monkeypatch):
     assert [row["symbol"] for row in board["best_trades"]] == ["INFY"]
     assert board["best_trades"][0]["production_selection_score"] == 97.0
     assert board["best_trades"][0]["discovery_decision"] == PA.ENTER_NOW
-    assert board["best_trades_mode"] == "PRODUCTION_THESIS_DISCOVERY"
-    assert all(kwargs["enforce_history"] is False for _symbol, kwargs in calls)
+    assert board["best_trades_mode"] == "PAPER_ELIGIBLE_PRODUCTION_THESIS"
+    assert board["paper_actionable"] == 1
+    assert board["research_actionable"] == 1
+    assert all(kwargs["enforce_history"] is True for _symbol, kwargs in calls)
+
+
+def test_history_pending_buy_stays_research_actionable_but_not_home_best_trade(monkeypatch):
+    import product.paper_autopilot as PA
+
+    class Result:
+        def __init__(self, card, decision):
+            self.symbol = card["symbol"]
+            self.decision = decision
+            self.selection_score = float(card.get("score") or 0.0)
+            self.reason_code = (
+                PA.HISTORICAL_EVIDENCE_PENDING if decision != PA.ENTER_NOW else "ELIGIBLE"
+            )
+            self.policy_effect = "BLOCK" if decision != PA.ENTER_NOW else "NEUTRAL"
+            self.card = dict(card)
+            self.context = {}
+            self.portfolio = {}
+
+    def select(card, **kwargs):
+        # The same technical BUY would be discoverable for research if history
+        # were relaxed, but Home asks the production-paper question.
+        assert kwargs["enforce_history"] is True
+        return Result(card, PA.BLOCK)
+
+    monkeypatch.setattr(PA, "evaluate_selection_candidate", select)
+    board = decision_board(workspace=_workspace(_card("INFY", score=90)))
+
+    assert board["actionable"] == 1
+    assert board["research_actionable"] == 1
+    assert board["paper_actionable"] == 0
+    assert board["best_trades"] == []
 
 
 def test_best_trade_search_is_not_limited_by_board_display_limit(monkeypatch):
