@@ -151,3 +151,22 @@ def test_missing_iv_percentile_adds_no_unearned_score():
     assert known["iv_percentile_available"] is True
     assert known["components"]["iv"] > 0.0
     assert known["score"] > missing["score"]
+
+
+def test_contract_must_outlive_holding_horizon():
+    contract = _contract("RELIANCE27SEP3050CE", 3050.0, 0.62)
+    contract["dte"] = 2
+
+    result = score_option_contract(
+        contract,
+        direction="LONG",
+        spot=3050.0,
+        expected_move_pct=2.0,
+        horizon="2_TO_4D",
+        holding_days=4,
+        underlying_stop_price=2995.0,
+        iv_percentile=45.0,
+    )
+
+    assert result["eligible"] is False
+    assert "DTE_SHORTER_THAN_HOLDING_HORIZON" in result["blockers"]
