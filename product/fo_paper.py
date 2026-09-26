@@ -34,6 +34,7 @@ class FoPaperPosition:
     setup_score: float
     option_score: float
     bars_held: int = 0
+    last_mark_session: str = ""
     max_mark: float = 0.0
     min_mark: float = 0.0
 
@@ -81,6 +82,7 @@ class FoPaperBook:
         risk_per_trade_pct: float = 0.01,
         max_premium_pct: float = 0.10,
         max_positions: int = 5,
+        max_total_risk_pct: float = 0.05,
         slippage_bps: float = 5.0,
         cost_model: CostModel | None = None,
         cost_model_name: str = "",
@@ -89,6 +91,7 @@ class FoPaperBook:
         self.risk_per_trade_pct = float(risk_per_trade_pct)
         self.max_premium_pct = float(max_premium_pct)
         self.max_positions = int(max_positions)
+        self.max_total_risk_pct = float(max_total_risk_pct)
         self.slippage_bps = float(slippage_bps)
         self.cost_model = cost_model
         self.cost_model_name = str(cost_model_name or "")
@@ -139,6 +142,10 @@ class FoPaperBook:
         if symbol in self.open:
             self.refusals.append((symbol, "ALREADY_OPEN"))
             return None
+        clean_underlying = str(underlying or "").upper()
+        if any(pos.underlying == clean_underlying for pos in self.open.values()):
+            self.refusals.append((symbol, "UNDERLYING_ALREADY_OPEN"))
+            return None
         if len(self.open) >= self.max_positions:
             self.refusals.append((symbol, "MAX_POSITIONS"))
             return None
@@ -155,8 +162,13 @@ class FoPaperBook:
         if per_unit_risk <= 0:
             self.refusals.append((symbol, "STOP_NOT_BELOW_EXECUTABLE_ENTRY"))
             return None
-        risk_budget = self.capital * self.risk_per_trade_pct
-        premium_budget = self.capital * self.max_premium_pct
+        equity = max(0.0, self.capital + self.realized_pnl)
+        risk_budget = equity * self.risk_per_trade_pct
+        premium_budget = equity * self.max_premium_pct
+        total_risk_budget = equity * self.max_total_risk_pct
+        open_risk = sum(float(pos.risk_amount) for pos in self.open.values())
+        remaining_total_risk = max(0.0, total_risk_budget - open_risk)
+        risk_budget = min(risk_budget, remaining_total_risk)
         risk_per_lot = per_unit_risk * lot_size
         premium_per_lot = fill * lot_size
         lots_by_risk = floor(risk_budget / risk_per_lot) if risk_per_lot > 0 else 0
@@ -171,7 +183,7 @@ class FoPaperBook:
         qty = lots * lot_size
         pos = FoPaperPosition(
             trade_id=uuid4().hex,
-            underlying=str(underlying or "").upper(),
+            underlying=clean_underlying,
             option_symbol=symbol,
             option_type=kind,
             context_key=str(context_key or ""),
@@ -186,6 +198,7 @@ class FoPaperBook:
             risk_amount=round(per_unit_risk * qty, 2),
             setup_score=float(setup_score),
             option_score=float(option_score),
+            last_mark_session=str(opened_at)[:10],
             max_mark=round(fill, 4),
             min_mark=round(fill, 4),
         )
@@ -211,7 +224,10 @@ class FoPaperBook:
             high = float(raw.get("high") or close)
             low = float(raw.get("low") or close)
             bid = float(raw.get("bid") or 0.0)
-            pos.bars_held += 1
+            clean_session = str(session)[:10]
+            if clean_session and clean_session != pos.last_mark_session:
+                pos.bars_held += 1
+                pos.last_mark_session = clean_session
             pos.max_mark = max(pos.max_mark, high, close)
             pos.min_mark = min(pos.min_mark, low, close)
 
