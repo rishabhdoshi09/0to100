@@ -143,7 +143,11 @@ def implied_volatility(
         return 0.0
 
     lo = max(1e-6, float(lower))
-    hi = max(lo * 2.0, float(upper))
+    # black_scholes accepts either decimal IV (0.24) or percent-style IV (24).
+    # Keep the solver's internal bracket unambiguously decimal. Values above
+    # 3.0 would be reinterpreted by _iv_decimal as percent-style input, so cap
+    # the fail-closed inversion range at 300% annualized volatility.
+    hi = min(3.0, max(lo * 2.0, float(upper)))
     low_price = black_scholes(
         spot=spot, strike=strike, dte=dte, iv=lo,
         option_type=kind, rate=rate,
