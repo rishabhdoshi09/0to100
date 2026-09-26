@@ -294,6 +294,21 @@ def score_fo_setup(
 
     tradable = not blockers
     expected = _expected_move(features, score)
+    atr_abs = price * max(0.0, _f(features.get("atr_pct"))) / 100.0
+    trigger = _f(features.get("breakout_level" if direction == LONG else "breakdown_level"))
+    if direction == LONG:
+        stop_price = trigger - 0.5 * atr_abs if trigger > 0 and atr_abs > 0 else 0.0
+        target_price = price * (1.0 + float(expected["mid_pct"]) / 100.0)
+    else:
+        stop_price = trigger + 0.5 * atr_abs if trigger > 0 and atr_abs > 0 else 0.0
+        target_price = price * (1.0 - float(expected["mid_pct"]) / 100.0)
+    underlying_trade_plan = {
+        "entry": round(price, 2),
+        "stop": round(stop_price, 2) if stop_price > 0 else None,
+        "target": round(target_price, 2) if target_price > 0 else None,
+        "invalidation_model": "BREAK_LEVEL_PLUS_HALF_ATR",
+        "target_model": "EXPECTED_MOVE_MIDPOINT_UNCALIBRATED",
+    }
     return {
         "direction": direction,
         "score": score,
@@ -304,6 +319,7 @@ def score_fo_setup(
         "futures_oi_state": oi_state,
         "breakout_distance_pct": round(breakout_pct, 3),
         "expected_move": expected,
+        "underlying_trade_plan": underlying_trade_plan,
         "tradable": tradable,
         "blockers": blockers,
         "reasons": reasons,
