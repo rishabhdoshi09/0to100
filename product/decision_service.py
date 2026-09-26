@@ -70,14 +70,29 @@ def decisions_from_workspace(
 
     enriched: list[Decision] = []
     # One saved scan is one PIT decision board. Enrich every row against the
-    # same settled-evidence snapshot instead of reopening/parsing the identical
-    # corpus once per symbol. The context is discarded when this board returns.
-    with evidence_read_batch():
-        for decision in decisions:
-            try:
-                enriched.append(enrich(decision))
-            except Exception:
-                enriched.append(decision)
+    # same settled-evidence snapshot and freeze all immutable decision
+    # observations in one SQLite transaction. This preserves write-once
+    # semantics while avoiding one fsync-heavy commit per symbol on external
+    # runtime storage.
+    try:
+        from research.feature_store import feature_write_batch
+    except Exception:
+        feature_write_batch = None
+
+    if feature_write_batch is None:
+        with evidence_read_batch():
+            for decision in decisions:
+                try:
+                    enriched.append(enrich(decision))
+                except Exception:
+                    enriched.append(decision)
+    else:
+        with evidence_read_batch(), feature_write_batch():
+            for decision in decisions:
+                try:
+                    enriched.append(enrich(decision))
+                except Exception:
+                    enriched.append(decision)
     return enriched
 
 
