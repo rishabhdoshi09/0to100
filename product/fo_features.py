@@ -61,7 +61,8 @@ def build_fo_features(
     daily_bars: pd.DataFrame,
     direction: str,
     intraday_vwap: float,
-    benchmark_return_pct: float,
+    benchmark_20d_return_pct: float,
+    nifty_change_pct: float,
     sector_relative_strength_pct: float,
     futures_price_change_pct: float | None,
     futures_oi_change_pct: float | None,
@@ -110,7 +111,7 @@ def build_fo_features(
         if lookback > 0 and close.iloc[-(lookback + 1)] > 0
         else 0.0
     )
-    relative_strength = stock_return - float(benchmark_return_pct)
+    relative_strength = stock_return - float(benchmark_20d_return_pct)
 
     turnover = (close * volume).iloc[-20:]
     avg_turnover_crore = float(turnover.mean() / 1e7) if len(turnover) else 0.0
@@ -144,7 +145,7 @@ def build_fo_features(
         "rvol": round(rvol, 4),
         "relative_strength_pct": round(relative_strength, 4),
         "sector_strength_pct": round(float(sector_relative_strength_pct), 4),
-        "nifty_change_pct": round(float(benchmark_return_pct), 4),
+        "nifty_change_pct": round(float(nifty_change_pct), 4),
         "futures_price_change_pct": (
             round(float(futures_price_change_pct), 4)
             if futures_price_change_pct is not None else None
