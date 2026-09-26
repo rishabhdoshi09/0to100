@@ -104,51 +104,82 @@ class FoPaperStore:
             if (payload := self._decode(row["payload_json"])) is not None
         ]
 
+    def _replace_positions_in_transaction(
+        self,
+        payloads: list[dict[str, Any]],
+    ) -> None:
+        self.conn.execute("DELETE FROM fo_open_positions")
+        for row in payloads:
+            self.conn.execute(
+                """
+                INSERT INTO fo_open_positions(
+                    trade_id, option_symbol, underlying, payload_json, updated_at
+                ) VALUES(?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (
+                    str(row.get("trade_id") or ""),
+                    str(row.get("option_symbol") or ""),
+                    str(row.get("underlying") or ""),
+                    self._json(row),
+                ),
+            )
+
+    def _append_trades_in_transaction(
+        self,
+        payloads: list[dict[str, Any]],
+    ) -> int:
+        inserted = 0
+        for row in payloads:
+            cur = self.conn.execute(
+                """
+                INSERT OR IGNORE INTO fo_closed_trades(
+                    trade_id, option_symbol, underlying, context_key,
+                    evidence_lane, settled_at, production_evidence_eligible,
+                    net_pnl, payload_json
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(row.get("trade_id") or ""),
+                    str(row.get("option_symbol") or ""),
+                    str(row.get("underlying") or ""),
+                    str(row.get("context_key") or ""),
+                    str(row.get("evidence_lane") or "FORWARD_PAPER"),
+                    str(row.get("settled_at") or ""),
+                    1 if bool(row.get("production_evidence_eligible")) else 0,
+                    float(row.get("net_pnl") or 0.0),
+                    self._json(row),
+                ),
+            )
+            inserted += int(cur.rowcount or 0)
+        return inserted
+
     def replace_positions(self, positions: Iterable[Mapping[str, Any]]) -> None:
         payloads = [dict(row) for row in positions]
         with self.conn:
-            self.conn.execute("DELETE FROM fo_open_positions")
-            for row in payloads:
-                self.conn.execute(
-                    """
-                    INSERT INTO fo_open_positions(
-                        trade_id, option_symbol, underlying, payload_json, updated_at
-                    ) VALUES(?, ?, ?, ?, CURRENT_TIMESTAMP)
-                    """,
-                    (
-                        str(row.get("trade_id") or ""),
-                        str(row.get("option_symbol") or ""),
-                        str(row.get("underlying") or ""),
-                        self._json(row),
-                    ),
-                )
+            self._replace_positions_in_transaction(payloads)
 
     def append_trades(self, trades: Iterable[Mapping[str, Any]]) -> int:
-        inserted = 0
+        payloads = [dict(row) for row in trades]
         with self.conn:
-            for raw in trades:
-                row = dict(raw)
-                cur = self.conn.execute(
-                    """
-                    INSERT OR IGNORE INTO fo_closed_trades(
-                        trade_id, option_symbol, underlying, context_key,
-                        evidence_lane, settled_at, production_evidence_eligible,
-                        net_pnl, payload_json
-                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        str(row.get("trade_id") or ""),
-                        str(row.get("option_symbol") or ""),
-                        str(row.get("underlying") or ""),
-                        str(row.get("context_key") or ""),
-                        str(row.get("evidence_lane") or "FORWARD_PAPER"),
-                        str(row.get("settled_at") or ""),
-                        1 if bool(row.get("production_evidence_eligible")) else 0,
-                        float(row.get("net_pnl") or 0.0),
-                        self._json(row),
-                    ),
-                )
-                inserted += int(cur.rowcount or 0)
+            return self._append_trades_in_transaction(payloads)
+
+    def commit_cycle(
+        self,
+        trades: Iterable[Mapping[str, Any]],
+        positions: Iterable[Mapping[str, Any]],
+    ) -> int:
+        """Atomically persist settlements and the resulting open-position book.
+
+        A process death must never leave a trade durable in fo_closed_trades
+        while the same trade remains durable in fo_open_positions. That split
+        state can replay a settlement after restart and distort paper risk/equity.
+        SQLite rolls both sides back together on any failure.
+        """
+        trade_payloads = [dict(row) for row in trades]
+        position_payloads = [dict(row) for row in positions]
+        with self.conn:
+            inserted = self._append_trades_in_transaction(trade_payloads)
+            self._replace_positions_in_transaction(position_payloads)
         return inserted
 
     def load_trades(
