@@ -152,7 +152,8 @@ def run_fo_directional_scan(
 ) -> dict[str, Any]:
     """Run one complete read-only F&O directional scan."""
     if history_getter is None:
-        from scan.bulk_fetcher import get_cached
+        from scan.bulk_fetcher import adopt_ready_store, get_cached
+        adopt_ready_store(overlay_live=True)
         history_getter = get_cached
 
     universe = list(getattr(report, "underlyings", ()) or ())
