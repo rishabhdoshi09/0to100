@@ -731,6 +731,18 @@ function HomeOsCard({
             {' '}avoided losers {os.learning_impact.simulation?.avoided_losers ?? 0} ·
             {' '}missed winners {os.learning_impact.simulation?.missed_winners ?? 0}
           </small>
+          {(os.learning_impact.influenced_examples || []).length ? (
+            <small>
+              Current measured impact:{' '}
+              {(os.learning_impact.influenced_examples || []).slice(0, 4).map((row) => {
+                const delta = Number(row.score_delta ?? ((row.ranking_score ?? 0) - (row.base_score ?? 0)))
+                const rank = row.rank_before_measured && row.rank_after_measured
+                  ? ` · rank ${row.rank_before_measured}→${row.rank_after_measured}`
+                  : ''
+                return `${row.symbol || '—'} ${delta >= 0 ? '+' : ''}${delta.toFixed(1)} score${rank}`
+              }).join(' · ')}
+            </small>
+          ) : null}
         </div>
       ) : null}
       {os.us_market ? (

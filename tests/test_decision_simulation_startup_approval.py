@@ -869,3 +869,39 @@ def test_gate_hides_explicit_no_chase_best_trades(tmp_path, monkeypatch):
 
     assert [row["symbol"] for row in payload["best_trades"]] == ["SAFE"]
     assert payload["discovery_ready"] is True
+
+
+def test_gate_uses_paper_actionable_for_no_trade_truth(tmp_path, monkeypatch):
+    state = tmp_path / "gate.json"
+    monkeypatch.setenv("QT_STARTUP_ID", "startup-paper-truth")
+    monkeypatch.setattr(
+        "product.trading_thesis.manifest",
+        lambda: {"thesis_hash": "thesis-a", "objective_id": "test"},
+    )
+    monkeypatch.setattr("product.desk_pipeline.scan_is_fresh", lambda: True)
+    monkeypatch.setattr(
+        "product.long_term_store.load_long_term_scan",
+        lambda: {"scanned_at": "2026-09-26T03:00:00+00:00", "records": []},
+    )
+    monkeypatch.setattr(
+        G,
+        "_board",
+        lambda: {
+            "available": True,
+            "scan_scanned_at": "2026-09-26T03:10:00+00:00",
+            "best_trades": [],
+            "decisions": [{"symbol": "INFY", "state": "BUY"}],
+            "actionable": 1,
+            "research_actionable": 1,
+            "paper_actionable": 0,
+        },
+    )
+
+    G.begin_startup("startup-paper-truth", path=state)
+    payload = G.status(path=state)
+
+    assert payload["discovery_ready"] is True
+    assert payload["actionable"] == 0
+    assert payload["research_actionable"] == 1
+    assert payload["best_trades"] == []
+    assert payload["live_locked"] is True

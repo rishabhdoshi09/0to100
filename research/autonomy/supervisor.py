@@ -214,7 +214,11 @@ class Supervisor:
             if (
                 job.job_type == SCH.PAPER_CYCLE
                 and job.status == JS.RUNNING
-                and key.startswith("snapshot_paper:")
+                and key.startswith((
+                    "snapshot_paper:",
+                    "snapshot_slot_paper:",
+                    "snapshot_manage:",
+                ))
             ):
                 self.jobs.complete(
                     job.job_id,

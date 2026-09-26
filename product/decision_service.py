@@ -121,11 +121,12 @@ def _best_trades_from_production_thesis(
     market_state: str = "",
     limit: int = 5,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
-    """Return trades actionable under the same thesis + restored paper portfolio.
+    """Return trades that are actually eligible under PAPER_FORWARD gates.
 
-    Discovery is read-only. It disables only the circular historical-bootstrap
-    prerequisite, then applies the same candidate gates, carried sector risk,
-    portfolio authority and max-three-new-positions rule as PAPER_FORWARD.
+    The ranked decision board remains available for historical/research replay,
+    but Home "Best Trades" must not relax the history-first gate. If a candidate
+    still needs historical evidence, it belongs in research/simulation, not in
+    the immediately paper-eligible shortlist.
     """
     from product.paper_autopilot import (
         ENTER_NOW,
@@ -165,7 +166,7 @@ def _best_trades_from_production_thesis(
                 entries_allowed=True,
                 paper_enabled=True,
                 regime=regime,
-                enforce_history=False,
+                enforce_history=True,
                 family_risk=family_risk,
                 cluster_risk=cluster_risk,
             )
@@ -231,7 +232,7 @@ def _best_trades_from_production_thesis(
             "ENTER_NOW" if execution_slot else "RESERVE_CAPACITY"
         )
         payload["discovery_decision"] = ENTER_NOW if execution_slot else "RESERVE_CAPACITY"
-        payload["history_bootstrap_gate_applied"] = False
+        payload["history_bootstrap_gate_applied"] = True
         payload["restored_paper_positions_considered"] = bool(
             book is not None and getattr(book, "open", {})
         )
@@ -313,9 +314,10 @@ def decision_board(
         thesis = {}
 
     # Best trades are not inferred from tier labels alone. They are re-evaluated
-    # through the exact non-executing production selection seam used by replay
-    # and PAPER_FORWARD. Pre-approval discovery relaxes only the circular
-    # history-bootstrap prerequisite; it does not relax strategy/risk gates.
+    # through the exact PAPER_FORWARD candidate gates, including the history-first
+    # prerequisite. Research/simulation still sees the full ranked decision board,
+    # so evidence bootstrap remains possible without mislabelling a blocked name
+    # as immediately executable.
     best_trades, best_trade_errors = _best_trades_from_production_thesis(
         workspace,
         all_rows,
@@ -331,11 +333,18 @@ def decision_board(
         "scan_scanned_at": str(workspace.get("scan_scanned_at") or ""),
         "decisions": rows,
         "best_trades": best_trades,
-        "best_trades_mode": "PRODUCTION_THESIS_DISCOVERY",
+        "best_trades_mode": "PAPER_ELIGIBLE_PRODUCTION_THESIS",
         "best_trades_errors": best_trade_errors,
         "thesis": thesis,
         "counts": counts,
+        # Research-actionable BUY states remain available to historical replay.
         "actionable": sum(1 for r in ranked if r.decision.state == BUY),
+        "research_actionable": sum(1 for r in ranked if r.decision.state == BUY),
+        # Paper-actionable is the truth used by readiness/no-trade semantics.
+        # Capacity reserves passed all entry gates but are not an execution slot.
+        "paper_actionable": sum(
+            1 for row in best_trades if bool(row.get("production_execution_slot"))
+        ),
         "evidence_gaps": dict(sorted(gaps.items(), key=lambda kv: -kv[1])),
     }
 

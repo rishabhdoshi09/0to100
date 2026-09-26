@@ -95,7 +95,7 @@ def _install_truth_with(monkeypatch, brain, reco_callable):
     PCT.install_paper_cycle_truth()
 
 
-def test_executor_crash_is_retryable_failed_job_not_succeeded_or_safety_block(monkeypatch):
+def test_executor_crash_retires_uncertain_mutation_not_succeeded_or_safety_block(monkeypatch):
     original = JOBS.Deps.run_paper_cycle
     brain = _Brain()
     telegram = _Telegram()
@@ -110,8 +110,8 @@ def test_executor_crash_is_retryable_failed_job_not_succeeded_or_safety_block(mo
         JOBS.Deps.run_paper_cycle = original
         PCT._INSTALLED = False
 
-    assert result.status == JS.RETRYABLE_FAILED
-    assert result.error_code == "CYCLE_ERROR"
+    assert result.status == JS.PERMANENT_FAILED
+    assert result.error_code == "PAPER_CYCLE_UNCERTAIN_MUTATION"
     assert PCT.PAPER_EXECUTION_FAILED in result.error_message
     assert telegram.last["eligibility"] == PCT.PAPER_EXECUTION_FAILED
     assert telegram.last["management_eligibility"] == "BLOCKED_SAFETY"
@@ -134,8 +134,8 @@ def test_traded_without_persisted_fill_fails_durable_job(monkeypatch):
         JOBS.Deps.run_paper_cycle = original
         PCT._INSTALLED = False
 
-    assert result.status == JS.RETRYABLE_FAILED
-    assert result.error_code == "CYCLE_ERROR"
+    assert result.status == JS.PERMANENT_FAILED
+    assert result.error_code == "PAPER_CYCLE_UNCERTAIN_MUTATION"
     assert PCT.EXECUTION_INCONSISTENT in result.error_message
     assert telegram.last["eligibility"] == PCT.EXECUTION_INCONSISTENT
     assert brain.state.last_intel_cycle["execution_truth_error"] == "TRADED_WITHOUT_PERSISTED_POSITION"
