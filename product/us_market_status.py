@@ -52,6 +52,13 @@ def status() -> dict[str, Any]:
         reverse=True,
     )[:5]
 
+    pit_snapshots: list[str] = []
+    try:
+        from data.us_universe import available_us_universe_snapshots
+        pit_snapshots = list(available_us_universe_snapshots() or [])
+    except Exception:
+        pit_snapshots = []
+
     return {
         "schema_version": 1,
         "market": "US",
@@ -85,6 +92,10 @@ def status() -> dict[str, Any]:
             "forward_learning": True,
             "learning_can_reorder_paper_only": True,
             "historical_pit_replay": False,
+            "pit_universe_archive_started": bool(pit_snapshots),
+            "pit_universe_archive_snapshots": len(pit_snapshots),
+            "pit_universe_archive_first": pit_snapshots[0] if pit_snapshots else "",
+            "pit_universe_archive_latest": pit_snapshots[-1] if pit_snapshots else "",
             "historical_pit_blocker": (
                 "Current US sources provide present-day listed/index membership and "
                 "daily OHLCV, but not a trustworthy point-in-time historical universe "
