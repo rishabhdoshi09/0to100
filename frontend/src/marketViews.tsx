@@ -186,12 +186,19 @@ export function FnoView({ dashboard, runControl, setSelected, setActive }: Props
               const contract = candidate.selected_contract || {}
               const plan = contract.trade_plan || {}
               const expected = setup.expected_move || {}
+              const evidence = candidate.forward_evidence || {}
+              const evidenceReady = evidence.probability_claim_available === true
               return (
                 <button type="button" key={`${candidate.symbol}-${contract.symbol || index}`} onClick={() => select(candidate.symbol)}>
                   <strong>{candidate.symbol} · {candidate.direction}</strong>
                   <span>{contract.symbol || contract.option_type || 'No contract'} · setup {fmt(setup.score, 1)}/100 · option {fmt(contract.score, 1)}/100</span>
                   <p>OI {words(setup.futures_oi_state || 'unknown')} · Δ {fmt(contract.delta, 2)} · IV {fmt(contract.iv, 1)}% · DTE {contract.dte ?? '—'} · horizon {words(expected.horizon || 'unknown')}</p>
                   <small>Paper entry ₹{fmt(plan.entry)} · stop ₹{fmt(plan.stop)} · target ₹{fmt(plan.target)} · R:R {fmt(plan.risk_reward, 2)}</small>
+                  {evidenceReady ? (
+                    <small>Forward evidence · n={evidence.n ?? 0} fully costed · observed win {fmt(evidence.win_probability_pct, 1)}% · Wilson floor {fmt(evidence.win_probability_wilson_lb_pct, 1)}% · conservative EV {fmt(evidence.conservative_ev_pct, 2)}%</small>
+                  ) : (
+                    <small>Forward evidence · {words(evidence.status || 'uncalibrated')} · observed {evidence.observed_n ?? 0} · fully costed {evidence.n ?? 0}/{evidence.minimum_required_n ?? 30} · probability held</small>
+                  )}
                 </button>
               )
             })}
