@@ -355,6 +355,11 @@ def score_option_contract(
         blockers.append("BID_ASK_TOO_WIDE")
     if dte < 2:
         blockers.append("EXPIRY_TOO_CLOSE")
+    # A contract must outlive the intended holding horizon. DTE is calendar
+    # days while holding_days is session-oriented, so +1 is the minimum safe
+    # buffer; expiry-fit scoring can still prefer a wider cushion.
+    if dte < max(2, int(holding_days) + 1):
+        blockers.append("DTE_SHORTER_THAN_HOLDING_HORIZON")
 
     greeks = black_scholes(
         spot=spot,
