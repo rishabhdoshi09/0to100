@@ -9,12 +9,8 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Iterable, Mapping, Sequence
 
+from data.fno_universe import INDEX_UNDERLYINGS
 from options.directional_selector import implied_volatility
-
-
-INDEX_UNDERLYINGS = frozenset({
-    "NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50",
-})
 
 
 def _f(value: Any, default: float = 0.0) -> float:
