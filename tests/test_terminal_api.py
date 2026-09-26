@@ -502,3 +502,92 @@ def test_fno_payload_exposes_durable_paper_state_without_live_authority(monkeypa
     assert payload["paper"]["production_evidence_enabled"] is False
     assert payload["paper"]["paper_only"] is True
     assert payload["paper"]["live_execution_allowed"] is False
+
+
+def _fo_evidence_rows(*, context_key: str, n: int, production_eligible: bool = True):
+    rows = []
+    for i in range(n):
+        win = i % 3 != 0
+        rows.append({
+            "settled": True,
+            "evidence_lane": "FORWARD_PAPER",
+            "context_key": context_key,
+            "net_option_return_pct": 8.0 if win else -4.0,
+            "production_evidence_eligible": production_eligible,
+            "mfe_pct": 10.0 if win else 2.0,
+            "mae_pct": -2.0 if win else -5.0,
+            "settled_at": f"2026-09-{(i % 28) + 1:02d}T10:00:00",
+        })
+    return rows
+
+
+def test_fno_candidate_evidence_overlay_promotes_only_exact_fully_costed_context():
+    directional = {
+        "available": True,
+        "candidates": [{
+            "symbol": "TEST",
+            "direction": "LONG",
+            "selected_contract": {"symbol": "TESTCE", "context_key": "CTX_A"},
+        }],
+    }
+    outcomes = (
+        _fo_evidence_rows(context_key="CTX_A", n=40)
+        + _fo_evidence_rows(context_key="CTX_B", n=40)
+    )
+
+    payload = terminal_api._fo_forward_evidence_overlay(
+        directional, outcomes, min_n=30,
+    )
+    evidence = payload["candidates"][0]["forward_evidence"]
+
+    assert evidence["status"] == "EVIDENCE_READY"
+    assert evidence["context_key"] == "CTX_A"
+    assert evidence["n"] == 40
+    assert evidence["observed_n"] == 40
+    assert evidence["probability_claim_available"] is True
+    assert evidence["win_probability_pct"] is not None
+    assert evidence["win_probability_wilson_lb_pct"] < evidence["win_probability_pct"]
+    assert evidence["production_influence_allowed"] is True
+    assert payload["candidate_evidence_policy"]["live_execution_allowed"] is False
+
+
+def test_fno_candidate_evidence_overlay_holds_probability_for_uncosted_or_small_samples():
+    directional = {
+        "available": True,
+        "candidates": [
+            {
+                "symbol": "UNCOSTED",
+                "selected_contract": {"context_key": "CTX_GROSS"},
+            },
+            {
+                "symbol": "SMALL",
+                "selected_contract": {"context_key": "CTX_SMALL"},
+            },
+            {
+                "symbol": "NOCTX",
+                "selected_contract": {},
+            },
+        ],
+    }
+    outcomes = (
+        _fo_evidence_rows(context_key="CTX_GROSS", n=40, production_eligible=False)
+        + _fo_evidence_rows(context_key="CTX_SMALL", n=12)
+    )
+
+    payload = terminal_api._fo_forward_evidence_overlay(
+        directional, outcomes, min_n=30,
+    )
+    by_symbol = {row["symbol"]: row["forward_evidence"] for row in payload["candidates"]}
+
+    assert by_symbol["UNCOSTED"]["status"] == "COST_MODEL_REQUIRED"
+    assert by_symbol["UNCOSTED"]["observed_n"] == 40
+    assert by_symbol["UNCOSTED"]["n"] == 0
+    assert by_symbol["UNCOSTED"]["probability_claim_available"] is False
+    assert by_symbol["UNCOSTED"]["production_influence_allowed"] is False
+
+    assert by_symbol["SMALL"]["status"] == "ACCUMULATING"
+    assert by_symbol["SMALL"]["n"] == 12
+    assert by_symbol["SMALL"]["win_probability_pct"] is None
+
+    assert by_symbol["NOCTX"]["status"] == "NO_CONTEXT_KEY"
+    assert by_symbol["NOCTX"]["probability_claim_available"] is False
