@@ -1042,8 +1042,18 @@ def run_paper_cycle(ctx) -> JobResult:
         else:
             result = ctx.deps.run_paper_cycle(entries_ok)
     except Exception as exc:
-        return JobResult(JS.RETRYABLE_FAILED, "paper cycle error", error_code="CYCLE_ERROR",
-                         error_message=str(exc))
+        # PAPER_CYCLE is a mutation boundary. Once execution starts, an exception
+        # cannot prove that zero paper mutations happened. Never replay the same
+        # exactly-once slot after an unknown partial mutation; the next 15-minute
+        # slot is the safe autonomous retry boundary.
+        return JobResult(
+            JS.PERMANENT_FAILED,
+            "paper cycle failed with uncertain mutation state; slot retired fail-closed",
+            error_code="PAPER_CYCLE_UNCERTAIN_MUTATION",
+            error_message=str(exc),
+            state_hint=ST.OBSERVING,
+            new_entries_allowed=False,
+        )
     eligibility = (result or {}).get("eligibility", "")
     if data_failure:
         eligibility = "DATA_UNAVAILABLE"
@@ -1057,6 +1067,22 @@ def run_paper_cycle(ctx) -> JobResult:
                 "session_phase": phase, "market_data_source": data_source,
                 "management_only": management_only,
                 "failure_class": "DATA_OR_PROVIDER" if data_failure else ""}
+    reco = dict((result or {}).get("reco_autopilot") or {})
+    reco_error = str(reco.get("error") or "").strip()
+    if reco_error:
+        # Deps.run_paper_cycle deliberately captures recommendation-autopilot
+        # exceptions so exit-management results are not lost. The job boundary
+        # must still report execution failure, never a false SUCCEEDED/no-trade.
+        metadata["reco_autopilot_error"] = reco_error
+        return JobResult(
+            JS.PERMANENT_FAILED,
+            "paper recommendation autopilot failed; slot retired fail-closed",
+            error_code="PAPER_AUTOPILOT_ERROR",
+            error_message=reco_error,
+            state_hint=ST.OBSERVING,
+            new_entries_allowed=False,
+            metadata=metadata,
+        )
     if not os.environ.get("PYTEST_CURRENT_TEST"):
         try:
             from product.paper_self_feed import ingest_paper_cycle
@@ -1074,7 +1100,6 @@ def run_paper_cycle(ctx) -> JobResult:
             }
         except Exception:
             pass
-    reco = dict((result or {}).get("reco_autopilot") or {})
     taken_n = len(reco.get("taken") or [])
     rejected_n = len(reco.get("rejections") or [])
     wait_n = len(reco.get("waits") or [])
