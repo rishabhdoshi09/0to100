@@ -45,7 +45,7 @@ LANES = {
     LONG_TERM_REFRESH: "long_term",
     NEWS_REFRESH: "news",
     MARKET_REPORT: "news",
-    FNO_REFRESH: "data",
+    FNO_REFRESH: "fno",
     DATA_PREPARE: "data",
     DUE_DILIGENCE_ACQUIRE: "due_diligence",
     US_MARKET_SCAN: "us_market",
@@ -1017,6 +1017,70 @@ class MarketOperationsWorker:
                 }
 
         _persist_fo_directional(directional)
+
+        # Forward F&O paper evidence is advanced only on a real NSE session.
+        # DATA_PREPARE can call _run_fno off-hours/weekends, so never let that
+        # maintenance path consume a fake holding session. New option risk is
+        # even stricter: only the canonical 09:30-15:15 entry window may open it.
+        paper: dict[str, Any]
+        if market_client is None:
+            paper = {
+                "available": False,
+                "status": "BLOCKED",
+                "code": "NFO_PAPER_QUOTES_UNAVAILABLE",
+                "paper_only": True,
+                "live_execution_allowed": False,
+            }
+        else:
+            try:
+                from product.fo_paper_runtime import run_fo_paper_cycle
+                from product.fo_paper_store import FoPaperStore
+                from research.autonomy import schedules as SCH
+                from research.intelligence.data import nse_calendar as CAL
+
+                now_ist = CAL._now_ist()
+                holidays = CAL.load_holidays()
+                minute = now_ist.hour * 60 + now_ist.minute
+                session_day = CAL.is_session(now_ist.date(), holidays)
+                manage_window = session_day and (9 * 60 + 15) <= minute <= (15 * 60 + 40)
+                allow_new_entries = bool(
+                    manage_window and SCH.entries_allowed_by_clock(now_ist, holidays)
+                )
+                if manage_window:
+                    paper = run_fo_paper_cycle(
+                        directional,
+                        client=market_client,
+                        now_ist=now_ist,
+                        allow_new_entries=allow_new_entries,
+                    )
+                    paper["cycle_ran"] = True
+                else:
+                    with FoPaperStore() as paper_store:
+                        store_status = paper_store.status()
+                        open_positions = paper_store.load_positions()
+                    paper = {
+                        "available": True,
+                        "status": "IDLE",
+                        "reason": "NSE_PAPER_MANAGEMENT_WINDOW_CLOSED",
+                        "session": now_ist.date().isoformat(),
+                        "new_entries_allowed": False,
+                        "cycle_ran": False,
+                        "open_count": int(store_status.get("open_positions") or 0),
+                        "open_positions": open_positions,
+                        "store": store_status,
+                        "paper_only": True,
+                        "live_execution_allowed": False,
+                    }
+            except Exception as exc:
+                paper = {
+                    "available": False,
+                    "status": "BLOCKED",
+                    "code": "FNO_PAPER_CYCLE_ERROR",
+                    "reason": f"{type(exc).__name__}: {exc}"[:240],
+                    "paper_only": True,
+                    "live_execution_allowed": False,
+                }
+
         result["directional"] = {
             "available": bool(directional.get("available")),
             "status": directional.get("status"),
@@ -1028,6 +1092,7 @@ class MarketOperationsWorker:
             "paper_only": True,
             "live_execution_allowed": False,
         }
+        result["paper"] = paper
         return result
 
     def _run_data_prepare(self, operation: dict[str, Any]) -> dict[str, Any]:
