@@ -1,3 +1,5 @@
+import json
+import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from product.fo_paper_runtime import run_fo_paper_cycle
@@ -145,3 +147,125 @@ def test_paper_runtime_survives_restart_and_avoids_pre_entry_daily_range(tmp_pat
         assert next_day["settled"][0]["exit_reason"] == "AMBIGUOUS_BAR_STOP_FIRST"
         assert next_day["settled"][0]["production_evidence_eligible"] is False
         assert store.status()["closed_trades"] == 1
+
+
+def test_paper_store_migrates_v1_net_pnl_and_restores_equity(tmp_path):
+    path = tmp_path / "legacy-fo.sqlite3"
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE fo_open_positions (
+                trade_id TEXT PRIMARY KEY,
+                option_symbol TEXT NOT NULL UNIQUE,
+                underlying TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE fo_closed_trades (
+                trade_id TEXT PRIMARY KEY,
+                option_symbol TEXT NOT NULL,
+                underlying TEXT NOT NULL,
+                context_key TEXT NOT NULL DEFAULT '',
+                evidence_lane TEXT NOT NULL DEFAULT 'FORWARD_PAPER',
+                settled_at TEXT NOT NULL DEFAULT '',
+                production_evidence_eligible INTEGER NOT NULL DEFAULT 0,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE fo_paper_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
+        )
+        payload = {
+            "trade_id": "LEGACY1",
+            "option_symbol": "LEGACYCE",
+            "underlying": "LEGACY",
+            "net_pnl": -750.0,
+            "settled": True,
+            "evidence_lane": "FORWARD_PAPER",
+            "production_evidence_eligible": False,
+        }
+        conn.execute(
+            """
+            INSERT INTO fo_closed_trades(
+                trade_id, option_symbol, underlying, context_key,
+                evidence_lane, settled_at, production_evidence_eligible,
+                payload_json
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "LEGACY1", "LEGACYCE", "LEGACY", "CTX", "FORWARD_PAPER",
+                "2026-09-25", 0, json.dumps(payload),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    with FoPaperStore(path) as store:
+        assert store.status()["schema_version"] == 2
+        assert store.realized_pnl() == -750.0
+        result = run_fo_paper_cycle(
+            {"available": True, "candidates": []},
+            client=_QuoteClient(),
+            now_ist=datetime(2026, 9, 26, 10, 0, tzinfo=IST),
+            allow_new_entries=False,
+            store=store,
+            capital=200_000,
+        )
+
+    assert result["realized_pnl"] == -750.0
+    assert result["equity_for_sizing"] == 199_250.0
+
+
+def test_new_closed_trades_persist_realized_pnl_for_next_process(tmp_path):
+    path = tmp_path / "fo.sqlite3"
+    opened_at = datetime(2026, 9, 25, 10, 15, tzinfo=IST)
+
+    with FoPaperStore(path) as store:
+        opened = run_fo_paper_cycle(
+            _directional(),
+            client=_QuoteClient(last=50, high=50, low=50, bid=49),
+            now_ist=opened_at,
+            allow_new_entries=True,
+            store=store,
+            capital=200_000,
+        )
+        assert opened["opened_count"] == 1
+
+    with FoPaperStore(path) as store:
+        settled = run_fo_paper_cycle(
+            {"available": True, "candidates": []},
+            client=_QuoteClient(last=72, high=75, low=49, bid=70),
+            now_ist=opened_at + timedelta(days=1),
+            allow_new_entries=False,
+            store=store,
+            capital=200_000,
+        )
+        assert settled["settled_count"] == 1
+        realized = settled["realized_pnl"]
+        assert realized > 0
+
+    with FoPaperStore(path) as store:
+        restarted = run_fo_paper_cycle(
+            {"available": True, "candidates": []},
+            client=_QuoteClient(),
+            now_ist=opened_at + timedelta(days=2),
+            allow_new_entries=False,
+            store=store,
+            capital=200_000,
+        )
+
+    assert restarted["realized_pnl"] == realized
+    assert restarted["equity_for_sizing"] == 200_000 + realized
