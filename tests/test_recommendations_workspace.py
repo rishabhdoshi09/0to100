@@ -584,6 +584,19 @@ def test_known_thin_volume_is_excluded_from_momentum_breakouts():
     assert assigned is None or assigned[0] != "momentum_breakouts"
 
 
+def test_known_thin_volume_cannot_be_auto_enter_ready():
+    from product.reco_ensemble import ENTRY_NEAR, ENTRY_READY, entry_state
+
+    base = {
+        "verdict": "BUY",
+        "status": "Ready to trade",
+        "chase_risk": False,
+        "rsi": 55,
+    }
+    assert entry_state({**base, "volume_ratio": 0.69}) == ENTRY_NEAR
+    assert entry_state({**base, "volume_ratio": 0.70}) == ENTRY_READY
+
+
 def test_chase_breakout_is_not_listed():
     row = enrich_scan_row({
         "symbol": "CHASEBRK", "signals": ["BREAKOUT_52W"], "verdict": "WATCH",
