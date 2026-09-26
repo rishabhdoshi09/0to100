@@ -171,6 +171,26 @@ def run_fo_directional_scan(
             deep.append((item, frame, pre))
 
     deep.sort(key=lambda row: float(row[2].get("priority") or 0.0), reverse=True)
+    if not deep:
+        return {
+            "available": True,
+            "status": "READY",
+            "as_of": as_of.isoformat(),
+            "universe_size": len(universe),
+            "prefilter_passed": 0,
+            "deep_evaluated": 0,
+            "candidate_count": 0,
+            "decision": "NO_ELIGIBLE_TRADE",
+            "candidates": [],
+            "decisions": [],
+            "deep_failures": [],
+            "considered": considered,
+            "quote_scope": {"deep_underlyings": 0, "option_contracts_requested": 0},
+            "paper_only": True,
+            "live_execution_allowed": False,
+            "probability_claim": None,
+        }
+
     index = _index_context()
     nifty_20 = index.get("return_20d_pct")
     nifty_5 = index.get("return_5d_pct")
