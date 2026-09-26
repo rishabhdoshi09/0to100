@@ -1,11 +1,15 @@
 from datetime import date
 
 from data.nfo_market import (
+    NfoMarketDataClient,
+    candidate_option_instruments,
     equity_fo_universe,
     futures_oi_features,
     nearest_future,
     option_instruments,
+    previous_future_close_oi,
     quote_to_option_contract,
+    read_market_quotes,
     read_nfo_instruments,
     read_nfo_quotes,
 )
@@ -119,6 +123,13 @@ class _Raw:
             for key in keys
         }
 
+    def historical_data(self, token, frm, to, interval, oi=False):
+        assert oi is True
+        return [
+            {"date": "2026-09-24", "close": 100.0, "oi": 1000},
+            {"date": "2026-09-25", "close": 101.0, "oi": 1100},
+        ]
+
 
 class _Client:
     raw = _Raw()
@@ -129,3 +140,45 @@ def test_read_adapter_uses_only_read_only_market_data_surface():
     assert len(instruments) == len(_instruments())
     quotes = read_nfo_quotes(["RELIANCE26OCT3000CE"], _Client())
     assert "RELIANCE26OCT3000CE" in quotes
+
+
+def test_candidate_options_are_bounded_around_spot():
+    rows = _instruments()
+    rows.extend([
+        {
+            "instrument_token": 5, "tradingsymbol": "RELIANCE26OCT3500CE",
+            "name": "RELIANCE", "expiry": "2026-10-29", "strike": 3500,
+            "tick_size": 0.05, "lot_size": 250, "instrument_type": "CE",
+            "segment": "NFO-OPT", "exchange": "NFO",
+        },
+    ])
+    selected = candidate_option_instruments(
+        rows, "RELIANCE", spot=3000.0, as_of=date(2026, 9, 26), max_moneyness_pct=8.0,
+    )
+    assert {row["tradingsymbol"] for row in selected} == {
+        "RELIANCE26OCT3000CE", "RELIANCE26OCT3000PE",
+    }
+
+
+def test_read_only_nfo_facade_exposes_data_but_no_order_surface():
+    facade = NfoMarketDataClient(_Raw())
+    assert facade.is_data_only is True
+    assert facade.instruments("NFO")
+    assert facade.quote(["NFO:RELIANCE26OCT3000CE"])
+    assert facade.historical_with_oi(1, "2026-09-20", "2026-09-25")
+    for forbidden in ("place_order", "modify_order", "cancel_order", "place_gtt", "delete_gtt"):
+        assert not hasattr(facade, forbidden)
+
+
+def test_previous_future_snapshot_is_strictly_historical_and_has_oi():
+    facade = NfoMarketDataClient(_Raw())
+    row = previous_future_close_oi(1, as_of=date(2026, 9, 26), client=facade)
+    assert row["date"] == "2026-09-25"
+    assert row["close"] == 101.0
+    assert row["oi"] == 1100.0
+
+
+def test_generic_quote_reader_preserves_exchange_qualified_keys():
+    facade = NfoMarketDataClient(_Raw())
+    rows = read_market_quotes(["NSE:RELIANCE", "NFO:RELIANCE26OCTFUT"], client=facade)
+    assert set(rows) == {"NSE:RELIANCE", "NFO:RELIANCE26OCTFUT"}
