@@ -875,6 +875,19 @@ export type HomeOperatingSystem = {
       selection_learning_active?: boolean
       model?: Record<string, unknown>
     }
+    parity?: {
+      state?: string
+      autonomous_scan?: boolean
+      paper_auto_execution?: boolean
+      forward_outcome_settlement?: boolean
+      forward_counterfactuals?: boolean
+      forward_learning?: boolean
+      learning_can_reorder_paper_only?: boolean
+      historical_pit_replay?: boolean
+      historical_pit_blocker?: string
+      survivorship_biased_backtest_allowed?: boolean
+      live_money_parity?: boolean
+    }
     paper_only?: boolean
     live_locked?: boolean
     live_execution_available?: boolean
