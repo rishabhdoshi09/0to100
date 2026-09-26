@@ -6,14 +6,17 @@ from options.directional_selector import (
 
 
 def _contract(symbol: str, strike: float, delta=None, *, option_type="CE"):
+    fair = black_scholes(
+        spot=3050.0, strike=strike, dte=9, iv=0.24, option_type=option_type,
+    )["price"]
     row = {
         "symbol": symbol,
         "option_type": option_type,
         "strike": strike,
         "dte": 9,
-        "ltp": 82.0,
-        "bid": 81.5,
-        "ask": 82.5,
+        "ltp": fair,
+        "bid": max(0.05, fair - 0.25),
+        "ask": fair + 0.25,
         "volume": 5500,
         "oi": 32000,
         "iv": 24.0,
@@ -42,12 +45,15 @@ def test_directional_contract_is_scored_and_scenario_repriced():
         expected_move_pct=2.0,
         horizon="1_TO_2D",
         holding_days=2,
+        underlying_stop_price=2995.0,
         iv_percentile=45.0,
     )
     assert result["eligible"] is True
     assert result["score"] >= 60
     assert result["score_is_probability"] is False
     assert result["scenario_model"] == "BLACK_SCHOLES_CONSTANT_IV_ESTIMATE"
+    assert result["trade_plan"]["entry"] > result["trade_plan"]["stop"]
+    assert result["trade_plan"]["target"] > result["trade_plan"]["entry"]
     moves = {row["underlying_move_pct"]: row for row in result["scenarios"]}
     assert moves[2.0]["projected_option_return_pct"] > moves[1.0]["projected_option_return_pct"]
 
@@ -63,6 +69,7 @@ def test_missing_bid_ask_fails_closed_even_with_attractive_delta():
         expected_move_pct=2.0,
         horizon="1_TO_2D",
         holding_days=2,
+        underlying_stop_price=2995.0,
     )
     assert result["eligible"] is False
     assert "BID_ASK_UNAVAILABLE" in result["blockers"]
@@ -76,6 +83,7 @@ def test_wrong_side_and_far_otm_delta_are_rejected():
         expected_move_pct=2.0,
         horizon="1_TO_2D",
         holding_days=2,
+        underlying_stop_price=2995.0,
     )
     assert wrong["eligible"] is False
     assert "WRONG_OPTION_SIDE" in wrong["blockers"]
@@ -87,6 +95,7 @@ def test_wrong_side_and_far_otm_delta_are_rejected():
         expected_move_pct=2.0,
         horizon="1_TO_2D",
         holding_days=2,
+        underlying_stop_price=2995.0,
     )
     assert far["eligible"] is False
     assert "DELTA_OUTSIDE_DIRECTIONAL_BAND" in far["blockers"]
@@ -105,6 +114,7 @@ def test_selector_ranks_eligible_contracts_only():
         expected_move_pct=2.0,
         horizon="1_TO_2D",
         holding_days=2,
+        underlying_stop_price=2995.0,
         iv_percentile=40.0,
     )
     assert result["eligible_count"] >= 1
