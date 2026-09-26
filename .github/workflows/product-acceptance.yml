@@ -309,7 +309,8 @@ jobs:
               'Canonical stack / readiness','UI + report endpoints','Market Scan','Recommendations',
               'Market Report workspace','Stock Intelligence','Investigate / Due Diligence read',
               'Investigate acquire','Simulate Past Decision','Paper execution status',
-              'Paper cycle request','Paper cycle execution','Learning loop dashboard','Forward soak verification',
+              'Paper cycle request','Paper cycle execution','Learning loop dashboard','Learning impact truth',
+              'US forward-paper parity truth','Forward soak verification',
           ]
           missing=[n for n in strict if n not in rows]
           bad={n:(rows[n].get('status'),rows[n].get('blocker_reason')) for n in strict if n in rows and rows[n].get('status')!='PASS'}
