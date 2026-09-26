@@ -117,3 +117,66 @@ def test_learning_impact_does_not_claim_historical_replay_improves_live_ranking(
     assert impact["selection_is_currently_changed"] is False
     assert impact["challenger"]["affects_selection"] is False
     assert impact["contract"]["historical_only_can_promote"] is False
+
+
+def test_learning_impact_reports_before_after_rank_movement(monkeypatch):
+    import product.autonomous_learning as auto
+    import product.challenger_learning as challenger
+    import product.decision_discovery_store as discovery
+    import product.learning_policy_store as policies
+    from product.learning_impact import build_learning_impact
+
+    monkeypatch.setattr(
+        challenger,
+        "dashboard",
+        lambda: {"current": {
+            "status": "PAPER_ACTIVE",
+            "model_version": "clf_rank",
+            "trained_n": 80,
+            "real_forward_n": 40,
+            "affects_selection": True,
+            "forward_validation": {},
+        }},
+    )
+    monkeypatch.setattr(policies, "load_policies", lambda: {"policies": []})
+    monkeypatch.setattr(
+        discovery,
+        "load_current",
+        lambda: {"decisions": [
+            {
+                "decision_id": "a",
+                "symbol": "AAA",
+                "state": "BUY",
+                "base_score": 90,
+                "ranking_score": 85,
+                "evidence_adjustment": -5,
+                "learning_adjustment": 0,
+            },
+            {
+                "decision_id": "b",
+                "symbol": "BBB",
+                "state": "BUY",
+                "base_score": 88,
+                "ranking_score": 91,
+                "evidence_adjustment": 0,
+                "learning_adjustment": 3,
+            },
+        ]},
+    )
+    monkeypatch.setattr(auto, "dashboard", lambda: {"counts": {}})
+
+    impact = build_learning_impact()
+    by_symbol = {row["symbol"]: row for row in impact["influenced_examples"]}
+
+    assert impact["current_decisions_influenced"] == 2
+    assert impact["rank_impact"]["moved_up"] == 1
+    assert impact["rank_impact"]["moved_down"] == 1
+    assert by_symbol["AAA"]["score_delta"] == -5
+    assert by_symbol["AAA"]["rank_before_measured"] == 1
+    assert by_symbol["AAA"]["rank_after_measured"] == 2
+    assert by_symbol["AAA"]["rank_change"] == -1
+    assert by_symbol["BBB"]["score_delta"] == 3
+    assert by_symbol["BBB"]["rank_before_measured"] == 2
+    assert by_symbol["BBB"]["rank_after_measured"] == 1
+    assert by_symbol["BBB"]["rank_change"] == 1
+    assert impact["contract"]["live_money_affected"] is False
