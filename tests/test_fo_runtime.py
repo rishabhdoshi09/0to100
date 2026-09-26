@@ -275,3 +275,44 @@ def test_default_history_fails_closed_when_current_session_is_unavailable(monkey
     assert result["code"] == "FNO_CURRENT_SESSION_UNAVAILABLE"
     assert result["candidates"] == []
     assert result["live_execution_allowed"] is False
+
+
+def test_live_nifty_quote_aligns_relative_strength_horizon(monkeypatch):
+    bars = _breakout_bars()
+    spot = float(bars["close"].iloc[-1])
+    instruments = _instruments(spot)
+    client = _Client(spot, instruments)
+    seen = {}
+
+    monkeypatch.setattr(
+        fo_runtime,
+        "_index_context",
+        lambda: {
+            "return_20d_pct": 1.0,
+            "return_5d_pct": 0.5,
+            "base_20d_close": 21_000.0,
+            "base_5d_close": 21_800.0,
+            "last_close": 21_900.0,
+        },
+    )
+
+    def _sector_map(nifty_5d):
+        seen["nifty_5d"] = nifty_5d
+        return {"Tech": 1.2}
+
+    monkeypatch.setattr(fo_runtime, "_sector_strength_map", _sector_map)
+    monkeypatch.setattr(fo_runtime, "_sector_for", lambda symbol: "Tech")
+
+    result = fo_runtime.run_fo_directional_scan(
+        report=_report(spot),
+        instrument_rows=instruments,
+        client=client,
+        as_of=AS_OF,
+        history_getter=lambda symbol: bars,
+    )
+
+    expected_20d = (22_000.0 / 21_000.0 - 1.0) * 100.0
+    expected_5d = (22_000.0 / 21_800.0 - 1.0) * 100.0
+    assert abs(result["market_context"]["nifty_20d_return_pct"] - expected_20d) < 0.001
+    assert abs(result["market_context"]["nifty_5d_return_pct"] - expected_5d) < 0.001
+    assert abs(seen["nifty_5d"] - expected_5d) < 1e-9
