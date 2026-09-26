@@ -77,4 +77,4 @@ def test_valid_stock_with_bad_option_is_not_forced_into_trade():
         option_contracts=bad,
     )
     assert result["decision"] == "NO_OPTION_TRADE"
-    assert result["selected_contract"] if "selected_contract" in result else True
+    assert "selected_contract" not in result
