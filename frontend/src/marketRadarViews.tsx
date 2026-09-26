@@ -758,6 +758,9 @@ function HomeOsCard({
             {os.us_market.parity?.historical_pit_replay === false
               ? ' · historical PIT replay blocked until a trustworthy US PIT universe/history source is connected'
               : ''}
+            {os.us_market.parity?.pit_universe_archive_snapshots != null
+              ? ` · PIT universe archive ${os.us_market.parity.pit_universe_archive_snapshots} date(s)`
+              : ''}
           </small>
         </div>
       ) : null}
