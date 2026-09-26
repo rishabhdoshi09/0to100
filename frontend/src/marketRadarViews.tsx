@@ -546,7 +546,7 @@ function HomeOsCard({
         </div>
       )}
       {(os.research_watchlist || []).length ? (
-        <div className="home-os-opps home-os-best-trades" aria-label="Top research watchlist">
+        <div className="home-os-opps home-os-research-watchlist" aria-label="Top research watchlist">
           <span>TOP RESEARCH WATCHLIST</span>
           <strong>Research only · ranked names that are not currently eligible paper trades</strong>
           {(os.research_watchlist || []).slice(0, 5).map((row, index) => (
