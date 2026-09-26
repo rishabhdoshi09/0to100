@@ -742,12 +742,33 @@ def _news_payload() -> dict[str, Any]:
         }
 
 
+def _fo_directional_payload() -> dict[str, Any]:
+    path = logs_dir() / "product" / "fo_directional.json"
+    payload = _json_file(path, {})
+    if not payload:
+        return {
+            "available": False,
+            "status": "NOT_RUN",
+            "decision": None,
+            "candidate_count": 0,
+            "candidates": [],
+            "paper_only": True,
+            "live_execution_allowed": False,
+        }
+    payload["cache_mtime"] = path.stat().st_mtime if path.exists() else None
+    payload["paper_only"] = True
+    payload["live_execution_allowed"] = False
+    return payload
+
+
 def _fno_payload() -> dict[str, Any]:
     path = logs_dir() / "product" / "fno_universe.json"
     persisted = _json_file(path, {})
+    directional = _fo_directional_payload()
     if persisted:
         persisted["available"] = int(persisted.get("mapped_underlyings", 0) or 0) > 0
         persisted["cache_mtime"] = path.stat().st_mtime if path.exists() else None
+        persisted["directional"] = directional
         return persisted
     try:
         from data.fno_universe import current_fno_universe
@@ -763,6 +784,7 @@ def _fno_payload() -> dict[str, Any]:
             "mapped_underlyings": report.mapped_underlyings,
             "underlyings": [item.__dict__ for item in report.underlyings],
             "exclusions": [item.__dict__ for item in report.exclusions],
+            "directional": directional,
         }
     except Exception as exc:
         return {
@@ -771,6 +793,7 @@ def _fno_payload() -> dict[str, Any]:
             "mapped_underlyings": 0,
             "underlyings": [],
             "exclusions": [],
+            "directional": directional,
             "error": str(exc),
         }
 
@@ -1049,6 +1072,11 @@ def education_feed(min_impact: int = 40, limit: int = 40) -> dict:
 @app.get("/api/fno")
 def fno_status() -> dict:
     return _fno_payload()
+
+
+@app.get("/api/fno-directional")
+def fno_directional_status() -> dict:
+    return _fo_directional_payload()
 
 
 @app.get("/api/data-readiness")
