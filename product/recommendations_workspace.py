@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from product.breakout_quality import RSI_HARD, passes_volume_floor
+from product.breakout_quality import MIN_VOLUME_RATIO, RSI_HARD, passes_volume_floor
 from product.decision_card import (
     HORIZON_BY_CATEGORY,
     attach_live_ev,
@@ -157,11 +157,11 @@ def _known_volume_ratio(row: Mapping[str, Any]) -> float | None:
 
 
 def _listing_volume_ok(row: Mapping[str, Any]) -> bool:
-    """Known volume below 0.7× rejects. Unknown volume does not hide the name."""
+    """Known volume below the canonical paper floor rejects; unknown stays visible."""
     vol = _known_volume_ratio(row)
     if vol is None:
         return True
-    return vol >= 0.7
+    return vol >= MIN_VOLUME_RATIO
 
 
 def _home_breakout_visible(row: Mapping[str, Any]) -> bool:
