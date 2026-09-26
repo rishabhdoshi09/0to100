@@ -924,7 +924,10 @@ class MarketOperationsWorker:
         operation_id = str(operation["operation_id"])
         self._progress(operation_id, "LOADING_INSTRUMENTS", "Refreshing NSE/NFO instrument master")
         from data.fno_universe import build_fno_universe, current_fno_universe
+        from research.intelligence.data import nse_calendar as CAL
 
+        now_ist = CAL._now_ist()
+        as_of = now_ist.date()
         report = None
         live_error = ""
         rows: list[dict[str, Any]] = []
@@ -942,12 +945,12 @@ class MarketOperationsWorker:
             ]
             if rows:
                 _write_instrument_cache(rows)
-                report = build_fno_universe(rows, as_of=None, source="zerodha_kite")
+                report = build_fno_universe(rows, as_of=as_of, source="zerodha_kite")
         except Exception as exc:
             live_error = str(exc)
 
         if report is None:
-            report = current_fno_universe()
+            report = current_fno_universe(as_of=as_of)
 
         result = {
             "source": report.source,
@@ -996,13 +999,12 @@ class MarketOperationsWorker:
             )
             try:
                 from product.fo_runtime import run_fo_directional_scan
-                from research.intelligence.data import nse_calendar as CAL
 
                 directional = run_fo_directional_scan(
                     report=report,
                     instrument_rows=rows,
                     client=market_client,
-                    as_of=CAL._now_ist().date(),
+                    as_of=as_of,
                 )
             except Exception as exc:
                 directional = {
@@ -1036,9 +1038,7 @@ class MarketOperationsWorker:
                 from product.fo_paper_runtime import run_fo_paper_cycle
                 from product.fo_paper_store import FoPaperStore
                 from research.autonomy import schedules as SCH
-                from research.intelligence.data import nse_calendar as CAL
 
-                now_ist = CAL._now_ist()
                 holidays = CAL.load_holidays()
                 minute = now_ist.hour * 60 + now_ist.minute
                 session_day = CAL.is_session(now_ist.date(), holidays)
