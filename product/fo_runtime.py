@@ -106,6 +106,8 @@ def _index_context() -> dict[str, float | None]:
     return {
         "return_20d_pct": (float(close.iloc[-1]) / float(close.iloc[-21]) - 1.0) * 100.0,
         "return_5d_pct": (float(close.iloc[-1]) / float(close.iloc[-6]) - 1.0) * 100.0,
+        "base_20d_close": float(close.iloc[-21]),
+        "base_5d_close": float(close.iloc[-6]),
         "last_close": float(close.iloc[-1]),
     }
 
@@ -253,7 +255,8 @@ def run_fo_directional_scan(
         quote_keys.append(f"NSE:{getattr(item, 'symbol', '')}")
         quote_keys.append(f"NFO:{getattr(item, 'future_symbol', '')}")
     quotes = read_market_quotes(quote_keys, client=client)
-    nifty_change = _nifty_change_from_quote(quotes.get("NSE:NIFTY 50"))
+    nifty_quote = quotes.get("NSE:NIFTY 50")
+    nifty_change = _nifty_change_from_quote(nifty_quote)
     if nifty_change is None:
         return {
             "available": False,
@@ -265,6 +268,19 @@ def run_fo_directional_scan(
             "paper_only": True,
             "live_execution_allowed": False,
         }
+
+    # Align relative-strength horizons to the same live timestamp as the stock
+    # frames. Historical index bases are fixed; today's NIFTY LTP supplies the
+    # current endpoint. Fall back to completed-session returns only when those
+    # bases are unavailable (e.g. injected unit-test context).
+    nifty_live = _f((nifty_quote or {}).get("last_price"))
+    base_20 = _f(index.get("base_20d_close"))
+    base_5 = _f(index.get("base_5d_close"))
+    if nifty_live > 0 and base_20 > 0:
+        nifty_20 = (nifty_live / base_20 - 1.0) * 100.0
+    if nifty_live > 0 and base_5 > 0:
+        nifty_5 = (nifty_live / base_5 - 1.0) * 100.0
+
     sector_strengths = _sector_strength_map(nifty_5)
 
     option_meta_by_symbol: dict[str, list[dict[str, Any]]] = {}
