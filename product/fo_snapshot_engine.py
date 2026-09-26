@@ -129,7 +129,6 @@ def evaluate_fo_snapshot(
             delta=_f(selected.get("delta")),
             dte=int(_f(selected.get("dte"))),
             iv_percentile=iv_percentile,
-            as_of=as_of,
         )
     return result
 
@@ -166,6 +165,7 @@ def evaluate_fo_snapshot_auto(
             nifty_change_pct=nifty_change_pct,
             sector_relative_strength_pct=sector_relative_strength_pct,
             iv_percentile=iv_percentile,
+            as_of=as_of,
         )
         for direction in ("LONG", "SHORT")
     ]
