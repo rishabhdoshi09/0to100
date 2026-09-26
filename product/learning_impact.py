@@ -87,6 +87,17 @@ def build_learning_impact() -> dict[str, Any]:
     )
     policy_active = bool(production_policies)
     selection_influenced = bool(influenced)
+    forward_validation = dict(current_model.get("forward_validation") or {})
+    improvement_raw = forward_validation.get("improvement")
+    lower_raw = forward_validation.get("improvement_lower_95")
+    try:
+        forward_improvement = None if improvement_raw is None else float(improvement_raw)
+    except (TypeError, ValueError):
+        forward_improvement = None
+    try:
+        forward_lower_95 = None if lower_raw is None else float(lower_raw)
+    except (TypeError, ValueError):
+        forward_lower_95 = None
 
     sim: dict[str, Any] = {}
     try:
@@ -112,10 +123,42 @@ def build_learning_impact() -> dict[str, Any]:
         status = "COLLECTING"
         plain = "No promoted learning effect yet; QuantTerm is still collecting outcome evidence."
 
+    if (
+        model_active
+        and forward_improvement is not None
+        and forward_lower_95 is not None
+        and forward_improvement > 0.0
+        and forward_lower_95 > 0.0
+    ):
+        benefit_status = "PROVEN_BETTER_IN_FORWARD_PAPER"
+        benefit_plain = (
+            "The promoted challenger has beaten the prior paper-ranking champion "
+            "on exact-version forward probability calibration with a positive 95% lower bound."
+        )
+    elif model_active or policy_active or selection_influenced:
+        benefit_status = "CHANGING_SELECTION_NOT_YET_AGGREGATE_PROVEN"
+        benefit_plain = (
+            "Learning is changing PAPER ranking, but the current aggregate forward "
+            "comparison does not yet prove a statistically robust improvement."
+        )
+    elif real_forward_n or historical_n or counterfactual_n or int(counts.get("historical_decisions_simulated") or 0):
+        benefit_status = "LEARNING_NOT_PROMOTED"
+        benefit_plain = (
+            "Useful evidence is being collected, but it is not yet allowed to change "
+            "production PAPER ranking."
+        )
+    else:
+        benefit_status = "COLLECTING"
+        benefit_plain = "There is not enough measured outcome evidence yet to judge benefit."
+
     return {
         "schema_version": 1,
         "status": status,
         "plain": plain,
+        "benefit_status": benefit_status,
+        "benefit_plain": benefit_plain,
+        "forward_improvement_brier": forward_improvement,
+        "forward_improvement_lower_95": forward_lower_95,
         "selection_is_currently_changed": selection_influenced,
         "current_decisions_influenced": len(influenced),
         "influenced_examples": influenced[:8],
@@ -127,7 +170,7 @@ def build_learning_impact() -> dict[str, Any]:
             "historical_n": historical_n,
             "counterfactual_n": counterfactual_n,
             "affects_selection": model_active,
-            "forward_validation": dict(current_model.get("forward_validation") or {}),
+            "forward_validation": forward_validation,
             "promotion_reason": str(current_model.get("promotion_reason") or ""),
         },
         "policies": {
