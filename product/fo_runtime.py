@@ -151,9 +151,49 @@ def run_fo_directional_scan(
     history_getter=None,
 ) -> dict[str, Any]:
     """Run one complete read-only F&O directional scan."""
+    history_session: dict[str, Any] = {}
     if history_getter is None:
         from scan.bulk_fetcher import adopt_ready_store, get_cached
-        adopt_ready_store(overlay_live=True)
+
+        # F&O discovery must see the current session before applying breakout
+        # gates. The generic cash scanner deliberately overlays live bars in a
+        # background thread for latency, but doing that here creates a race:
+        # the prefilter can read yesterday's EOD frame before today's bar lands
+        # and silently miss an intraday breakout. Keep this lane synchronous
+        # and fail closed when current-session data cannot be established.
+        adopted = int(adopt_ready_store(overlay_live=False) or 0)
+        if adopted < 200:
+            return {
+                "available": False,
+                "status": "BLOCKED",
+                "code": "FNO_HISTORY_STORE_UNAVAILABLE",
+                "universe_size": len(list(getattr(report, "underlyings", ()) or ())),
+                "candidates": [],
+                "paper_only": True,
+                "live_execution_allowed": False,
+            }
+        try:
+            from data.nse_live import live_session_ready
+
+            history_session = dict(live_session_ready(apply=True) or {})
+        except Exception as exc:
+            history_session = {
+                "ready": False,
+                "source": "",
+                "session_date": "",
+                "reason": f"{type(exc).__name__}: {exc}"[:200],
+            }
+        if not bool(history_session.get("ready")):
+            return {
+                "available": False,
+                "status": "BLOCKED",
+                "code": "FNO_CURRENT_SESSION_UNAVAILABLE",
+                "universe_size": len(list(getattr(report, "underlyings", ()) or ())),
+                "history_session": history_session,
+                "candidates": [],
+                "paper_only": True,
+                "live_execution_allowed": False,
+            }
         history_getter = get_cached
 
     universe = list(getattr(report, "underlyings", ()) or ())
@@ -187,6 +227,7 @@ def run_fo_directional_scan(
             "deep_failures": [],
             "considered": considered,
             "quote_scope": {"deep_underlyings": 0, "option_contracts_requested": 0},
+            "history_session": history_session,
             "paper_only": True,
             "live_execution_allowed": False,
             "probability_claim": None,
@@ -341,6 +382,7 @@ def run_fo_directional_scan(
             "deep_underlyings": len(deep),
             "option_contracts_requested": len(option_symbols),
         },
+        "history_session": history_session,
         "paper_only": True,
         "live_execution_allowed": False,
         "probability_claim": None,
