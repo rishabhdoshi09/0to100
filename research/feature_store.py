@@ -30,7 +30,9 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -39,6 +41,8 @@ from research import feature_schema as _S
 from core.runtime_paths import logs_path
 
 _DB_PATH = logs_path("feature_store.db")
+
+_WRITE_BATCH = threading.local()
 
 # observation kinds — the whole point is that a REJECTION or NEAR_MISS is as much
 # an observation as a TRADE (non-event learning needs them on equal footing).
@@ -89,6 +93,40 @@ def _conn() -> sqlite3.Connection:
 # Write path — freeze once, settle the label later
 # ══════════════════════════════════════════════════════════════════════════════
 
+@contextmanager
+def feature_write_batch():
+    """Commit a bounded group of immutable observations in one transaction.
+
+    Decision-board construction can freeze dozens of observations at once. On
+    removable/sparsebundle storage, opening and durably committing SQLite once
+    per row creates extreme fsync latency. This context preserves the exact
+    write-once snapshot contract while amortizing that durability cost across
+    one board. Nested callers reuse the existing transaction.
+    """
+    existing = getattr(_WRITE_BATCH, "connection", None)
+    if existing is not None:
+        yield
+        return
+
+    connection = _conn()
+    _WRITE_BATCH.connection = connection
+    try:
+        connection.execute("BEGIN")
+        yield
+        connection.commit()
+    except Exception:
+        try:
+            connection.rollback()
+        finally:
+            raise
+    finally:
+        try:
+            delattr(_WRITE_BATCH, "connection")
+        except AttributeError:
+            pass
+        connection.close()
+
+
 def snapshot(observation_id: str, symbol: str, kind: str, raw_features: dict,
              ts: str | None = None, outcome: float | None = None,
              ages: dict | None = None, reason: str | None = None,
@@ -109,7 +147,9 @@ def snapshot(observation_id: str, symbol: str, kind: str, raw_features: dict,
     try:
         canonical = _S.canonicalize(raw_features or {})
         report = _S.validate_vector(canonical, ages)
-        c = _conn()
+        batched = getattr(_WRITE_BATCH, "connection", None)
+        c = batched or _conn()
+        owns_connection = batched is None
         try:
             exists = c.execute("SELECT 1 FROM observations WHERE observation_id=?",
                                (observation_id,)).fetchone()
@@ -127,9 +167,11 @@ def snapshot(observation_id: str, symbol: str, kind: str, raw_features: dict,
                  json.dumps(report.problems), reason, subtype,
                  json.dumps(meta) if meta is not None else None,
                  time.strftime("%Y-%m-%dT%H:%M:%S")))
-            c.commit()
+            if owns_connection:
+                c.commit()
         finally:
-            c.close()
+            if owns_connection:
+                c.close()
         return {"status": "frozen", "schema_version": _S.SCHEMA_VERSION,
                 "problems": report.problems, "valid": report.ok}
     except Exception as exc:
