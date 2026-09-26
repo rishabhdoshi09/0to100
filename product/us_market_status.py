@@ -76,6 +76,24 @@ def status() -> dict[str, Any]:
             "rejection_funnel": funnel,
         },
         "learning": learning,
+        "parity": {
+            "state": "FORWARD_PAPER_PARITY",
+            "autonomous_scan": True,
+            "paper_auto_execution": True,
+            "forward_outcome_settlement": True,
+            "forward_counterfactuals": True,
+            "forward_learning": True,
+            "learning_can_reorder_paper_only": True,
+            "historical_pit_replay": False,
+            "historical_pit_blocker": (
+                "Current US sources provide present-day listed/index membership and "
+                "daily OHLCV, but not a trustworthy point-in-time historical universe "
+                "including delistings. Historical replay is intentionally not promoted "
+                "until a PIT US universe/history source is connected."
+            ),
+            "survivorship_biased_backtest_allowed": False,
+            "live_money_parity": False,
+        },
         "paper_only": True,
         "live_locked": True,
         "live_execution_available": False,
