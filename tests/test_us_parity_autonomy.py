@@ -205,3 +205,51 @@ def test_us_session_date_uses_new_york_calendar(monkeypatch):
 
     monkeypatch.setattr(us, "_us_now", lambda: FakeNow())
     assert us._us_session_date() == "2026-09-25"
+
+
+def test_us_status_truthfully_reports_forward_parity_without_fake_historical_pit(monkeypatch):
+    import data.us_data as us_data
+    import execution.us_autopilot as us
+    import product.us_learning as learning
+    import scan.us_scanner as scanner
+    from product.us_market_status import status
+
+    monkeypatch.setattr(
+        scanner,
+        "persisted_us_scan",
+        lambda: {
+            "status": "ready",
+            "scope": "S&P 500",
+            "scanned_at": "2026-09-25T20:00:00+00:00",
+            "count": 1,
+            "records": [{"symbol": "AAPL", "score": 80, "learned_rank_score": 81}],
+        },
+    )
+    monkeypatch.setattr(
+        us,
+        "get_status",
+        lambda: {"armed": True, "open_trades": [], "trades_today_count": 0},
+    )
+    monkeypatch.setattr(us, "report_card", lambda: {})
+    monkeypatch.setattr(us, "reject_funnel", lambda: {})
+    monkeypatch.setattr(
+        learning,
+        "dashboard",
+        lambda: {"selection_learning_active": False, "decisions": 0, "settled": 0, "pending": 0},
+    )
+    monkeypatch.setattr(us_data, "us_market_open", lambda: False)
+
+    payload = status()
+    parity = payload["parity"]
+
+    assert parity["state"] == "FORWARD_PAPER_PARITY"
+    assert parity["autonomous_scan"] is True
+    assert parity["paper_auto_execution"] is True
+    assert parity["forward_outcome_settlement"] is True
+    assert parity["forward_counterfactuals"] is True
+    assert parity["forward_learning"] is True
+    assert parity["historical_pit_replay"] is False
+    assert parity["survivorship_biased_backtest_allowed"] is False
+    assert parity["live_money_parity"] is False
+    assert payload["paper_only"] is True
+    assert payload["live_locked"] is True
