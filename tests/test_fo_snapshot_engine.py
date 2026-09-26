@@ -23,7 +23,7 @@ def _bars():
     close[-1] = prior_high + 8.0
     high[-1] = close[-1] + 2.0
     low[-1] = close[-1] - 14.0
-    volume[-1] = 25_000.0
+    volume[-1] = 250_000.0
     return pd.DataFrame({
         "open": close - 2.0,
         "high": high,
