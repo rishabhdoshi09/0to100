@@ -14,6 +14,7 @@ analysis, so feeding the full ~5,000-name universe is safe.
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from datetime import datetime, timezone
@@ -134,14 +135,16 @@ def _archive_official_snapshot(symbols: dict[str, str], *, session_date: str | N
             "count": len(symbols),
             "symbols": dict(sorted(symbols.items())),
         }
-        tmp = target.with_suffix(".json.tmp")
+        tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
         tmp.write_text(json.dumps(payload, indent=1, sort_keys=True))
-        # Fail closed on a same-date writer race: never overwrite PIT history.
+        # Hard-link publication is atomic and cannot replace an existing date.
+        # If another process won the race, keep that first immutable snapshot.
         try:
-            tmp.replace(target)
+            os.link(tmp, target)
+        except FileExistsError:
+            pass
         finally:
-            if tmp.exists():
-                tmp.unlink(missing_ok=True)
+            tmp.unlink(missing_ok=True)
         return target
     except Exception as exc:
         log.warning("us_universe_history_save_failed", date=day, error=str(exc)[:120])
