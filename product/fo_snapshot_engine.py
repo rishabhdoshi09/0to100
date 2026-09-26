@@ -6,6 +6,7 @@ used.
 """
 from __future__ import annotations
 
+from datetime import date
 from typing import Any, Mapping, Sequence
 
 import pandas as pd
@@ -61,12 +62,13 @@ def evaluate_fo_snapshot(
     nifty_change_pct: float,
     sector_relative_strength_pct: float,
     iv_percentile: float | None = None,
+    as_of: date | None = None,
 ) -> dict[str, Any]:
     """Evaluate one direction from pre-captured point-in-time data."""
     symbol = str(symbol or "").upper()
     direction = str(direction or "").upper()
     universe = set(equity_fo_universe(nfo_instruments))
-    future = nearest_future(nfo_instruments, symbol)
+    future = nearest_future(nfo_instruments, symbol, as_of=as_of)
     current_future_price = _f(futures_quote.get("last_price"))
     current_future_oi = _f(futures_quote.get("oi"))
     oi = futures_oi_features(
@@ -93,13 +95,13 @@ def evaluate_fo_snapshot(
 
     spot = _f(underlying_quote.get("last_price"), _f(features.get("price")))
     contracts = []
-    for meta in option_instruments(nfo_instruments, symbol, max_expiries=2):
+    for meta in option_instruments(nfo_instruments, symbol, as_of=as_of, max_expiries=2):
         tradingsymbol = str(meta.get("tradingsymbol") or "")
         quote = option_quotes.get(tradingsymbol)
         if not isinstance(quote, Mapping):
             continue
         contracts.append(
-            quote_to_option_contract(meta, quote, spot=spot)
+            quote_to_option_contract(meta, quote, spot=spot, as_of=as_of)
         )
 
     result = evaluate_fo_opportunity(
@@ -127,6 +129,7 @@ def evaluate_fo_snapshot(
             delta=_f(selected.get("delta")),
             dte=int(_f(selected.get("dte"))),
             iv_percentile=iv_percentile,
+            as_of=as_of,
         )
     return result
 
@@ -145,6 +148,7 @@ def evaluate_fo_snapshot_auto(
     nifty_change_pct: float,
     sector_relative_strength_pct: float,
     iv_percentile: float | None = None,
+    as_of: date | None = None,
 ) -> dict[str, Any]:
     """Evaluate LONG and SHORT without forcing a direction when neither qualifies."""
     rows = [
