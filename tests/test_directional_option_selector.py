@@ -120,3 +120,34 @@ def test_selector_ranks_eligible_contracts_only():
     assert result["eligible_count"] >= 1
     assert all(row["eligible"] for row in result["best_contracts"])
     assert all(row["option_type"] == "CE" for row in result["best_contracts"])
+
+
+def test_missing_iv_percentile_adds_no_unearned_score():
+    contract = _contract("RELIANCE27SEP3050CE", 3050.0, 0.62)
+    missing = score_option_contract(
+        contract,
+        direction="LONG",
+        spot=3050.0,
+        expected_move_pct=2.0,
+        horizon="1_TO_2D",
+        holding_days=2,
+        underlying_stop_price=2995.0,
+        iv_percentile=None,
+    )
+    known = score_option_contract(
+        contract,
+        direction="LONG",
+        spot=3050.0,
+        expected_move_pct=2.0,
+        horizon="1_TO_2D",
+        holding_days=2,
+        underlying_stop_price=2995.0,
+        iv_percentile=45.0,
+    )
+
+    assert missing["iv_percentile"] is None
+    assert missing["iv_percentile_available"] is False
+    assert missing["components"]["iv"] == 0.0
+    assert known["iv_percentile_available"] is True
+    assert known["components"]["iv"] > 0.0
+    assert known["score"] > missing["score"]
