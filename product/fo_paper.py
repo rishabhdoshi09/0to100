@@ -247,7 +247,11 @@ class FoPaperBook:
                 exit_price, reason = close, "MAX_HOLD"
 
             if exit_price is not None:
-                # A closing quote bid is valid for a current/mark-to-market MAX_HOLD exit.\n                # For historical STOP/TARGET/GAP triggers it is from the end-of-bar snapshot,\n                # not the instant the trigger fired; using it would introduce impossible fills.\n                execution_bid = bid if reason == "MAX_HOLD" else None\n                settled.append(self._close(pos, exit_price, reason, str(session), bid=execution_bid))
+                # A closing quote bid is valid for a current/mark-to-market MAX_HOLD exit.
+                # For historical STOP/TARGET/GAP triggers it is from the end-of-bar snapshot,
+                # not the instant the trigger fired; using it would introduce impossible fills.
+                execution_bid = bid if reason == "MAX_HOLD" else None
+                settled.append(self._close(pos, exit_price, reason, str(session), bid=execution_bid))
         return settled
 
     def _close(
