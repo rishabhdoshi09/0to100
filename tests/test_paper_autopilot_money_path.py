@@ -8,6 +8,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import pytest
+
 from product.paper_autopilot import (
     DD_GATE_FAILED,
     DUPLICATE_POSITION,
@@ -221,6 +223,36 @@ def test_entry_too_extended_waits():
     out = _cycle(book, [_eligible_card(chase_risk=True, entry_state="extended")])
     assert not book.open
     assert out["waits"][0]["reason_code"] == ENTRY_TOO_EXTENDED
+
+
+def test_portfolio_authority_failure_never_falls_through_to_execution(monkeypatch):
+    import product.portfolio_selection_authority as authority
+
+    def explode(*_args, **_kwargs):
+        raise RuntimeError("portfolio authority unavailable")
+
+    monkeypatch.setattr(authority, "apply_portfolio_authority", explode)
+    book = PaperBook(capital=100_000)
+
+    with pytest.raises(RuntimeError, match="portfolio selection authority failed"):
+        _cycle(book, [_eligible_card()])
+
+    assert not book.open
+
+
+def test_execution_exception_aborts_uncertain_paper_mutation(monkeypatch):
+    import product.paper_autopilot as autopilot
+
+    def explode(*_args, **_kwargs):
+        raise RuntimeError("adapter failed after unknown mutation point")
+
+    monkeypatch.setattr(autopilot, "_execute", explode)
+    book = PaperBook(capital=100_000)
+
+    with pytest.raises(RuntimeError, match="paper execution mutation failed"):
+        _cycle(book, [_eligible_card()])
+
+    assert not book.open
 
 
 def test_paper_liquidity_floor_matches_recommendation_floor():
