@@ -1,3 +1,4 @@
+from options.directional_selector import black_scholes
 from product.fo_options_pipeline import evaluate_fo_opportunity
 
 
@@ -27,14 +28,17 @@ def _setup():
 
 
 def _options():
+    fair = black_scholes(
+        spot=3050.0, strike=3050.0, dte=9, iv=0.24, option_type="CE",
+    )["price"]
     return [{
         "symbol": "RELIANCE27SEP3050CE",
         "option_type": "CE",
         "strike": 3050.0,
         "dte": 9,
-        "ltp": 82.0,
-        "bid": 81.5,
-        "ask": 82.5,
+        "ltp": fair,
+        "bid": max(0.05, fair - 0.25),
+        "ask": fair + 0.25,
         "volume": 5000,
         "oi": 30000,
         "iv": 24.0,
@@ -51,6 +55,9 @@ def test_pipeline_only_selects_option_after_underlying_gate():
     )
     assert result["decision"] == "PAPER_OPTION_CANDIDATE"
     assert result["selected_contract"]["option_type"] == "CE"
+    plan = result["selected_contract"]["trade_plan"]
+    assert plan["entry"] > plan["stop"]
+    assert plan["target"] > plan["entry"]
     assert result["paper_only"] is True
     assert result["live_execution_allowed"] is False
 
