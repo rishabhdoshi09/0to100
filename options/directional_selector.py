@@ -259,8 +259,11 @@ def _theta_score(theta_per_day: float, premium: float) -> float:
 
 
 def _iv_score(iv_percentile: float | None) -> float:
+    # Missing point-in-time IV percentile is unknown evidence, not a neutral
+    # positive. Keep the contract eligible on its observable market qualities,
+    # but award no IV-regime points until a trustworthy history exists.
     if iv_percentile is None:
-        return 6.0
+        return 0.0
     pct = _clamp(iv_percentile, 0.0, 100.0)
     if pct <= 50:
         return 12.0
@@ -452,6 +455,8 @@ def score_option_contract(
         "volume": int(volume),
         "oi": int(oi),
         "iv": round(iv * 100.0, 2),
+        "iv_percentile": round(float(iv_percentile), 2) if iv_percentile is not None else None,
+        "iv_percentile_available": iv_percentile is not None,
         "delta": round(delta, 4),
         "gamma": round(gamma, 6),
         "theta_per_day": round(theta, 4),
