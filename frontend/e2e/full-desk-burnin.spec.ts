@@ -143,6 +143,8 @@ test('10-hour accelerated full-desk burn-in keeps every visible tab and backend 
 
     const cards = page.locator('.home-os-best-trades > div')
     expect(await cards.count()).toBeLessThanOrEqual(5)
+    await expect(page.getByText('LEARNING IMPACT', { exact: true })).toBeVisible()
+    await expect(page.getByText('US PAPER MARKET', { exact: true })).toBeVisible()
   }
 
   expect(pageErrors, 'uncaught browser exceptions').toEqual([])
