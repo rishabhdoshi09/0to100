@@ -108,8 +108,17 @@ def _status_for(
         return OBSERVING
     if abs_edge < MIN_ABS_EDGE_R:
         return REJECTED if n >= n_eli else OBSERVING
-    # Historical backtest can become EXPERIMENTAL, never ACTIVE on its own.
-    if str(source).startswith("backtest"):
+    # Historical/replay/simulation-only evidence can generate hypotheses,
+    # but it cannot become production-selection authority on its own. Keep the
+    # source classification broad so a renamed historical lane (for example
+    # historical_replay or decision_simulation) cannot accidentally promote
+    # merely by accumulating samples.
+    source_key = str(source or "").strip().lower()
+    historical_only = any(
+        token in source_key
+        for token in ("backtest", "historical", "replay", "simulation")
+    )
+    if historical_only:
         if n >= n_eli:
             return EXPERIMENTAL
         return OBSERVING
