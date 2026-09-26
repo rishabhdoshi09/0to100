@@ -92,7 +92,9 @@ def summarize_fo_outcomes(
     min_n: int = 30,
 ) -> dict[str, Any]:
     """Summarize settled outcomes without inventing a probability claim."""
+    observed_rows = []
     rows = []
+    excluded_unpriced_costs = 0
     for raw in outcomes:
         row = dict(raw)
         if not bool(row.get("settled", False)):
@@ -102,6 +104,13 @@ def summarize_fo_outcomes(
         if context_key is not None and str(row.get("context_key") or "") != context_key:
             continue
         if row.get("net_option_return_pct") is None:
+            continue
+        observed_rows.append(row)
+        if (
+            evidence_lane == FORWARD_PAPER
+            and not bool(row.get("production_evidence_eligible", False))
+        ):
+            excluded_unpriced_costs += 1
             continue
         rows.append(row)
 
@@ -125,7 +134,9 @@ def summarize_fo_outcomes(
     return {
         "context_key": context_key,
         "evidence_lane": evidence_lane,
+        "observed_n": len(observed_rows),
         "n": n,
+        "excluded_unpriced_costs": excluded_unpriced_costs,
         "wins": len(wins),
         "losses": len(losses),
         "probability_claim_available": claim,
