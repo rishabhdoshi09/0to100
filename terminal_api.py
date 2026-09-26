@@ -742,6 +742,75 @@ def _news_payload() -> dict[str, Any]:
         }
 
 
+def _fo_forward_evidence_overlay(
+    directional: dict[str, Any],
+    outcomes: list[dict[str, Any]],
+    *,
+    min_n: int = 30,
+) -> dict[str, Any]:
+    """Attach read-only forward-paper evidence to persisted F&O candidates.
+
+    This projection never changes setup/contract scores, candidate ordering, or
+    execution authority. A win-probability/EV claim is surfaced only when the
+    evidence module says the exact candidate context has enough fully-costed
+    settled FORWARD_PAPER observations.
+    """
+    from product.fo_evidence import summarize_fo_outcomes
+
+    payload = dict(directional or {})
+    candidates: list[dict[str, Any]] = []
+    for raw in payload.get("candidates") or []:
+        if not isinstance(raw, dict):
+            continue
+        row = dict(raw)
+        selected = row.get("selected_contract")
+        selected = selected if isinstance(selected, dict) else {}
+        context_key = str(selected.get("context_key") or "").strip()
+        if not context_key:
+            evidence = {
+                "context_key": "",
+                "evidence_lane": "FORWARD_PAPER",
+                "status": "NO_CONTEXT_KEY",
+                "observed_n": 0,
+                "n": 0,
+                "probability_claim_available": False,
+                "win_probability_pct": None,
+                "win_probability_wilson_lb_pct": None,
+                "expectancy_pct": None,
+                "conservative_ev_pct": None,
+                "insufficient_evidence": True,
+                "minimum_required_n": max(1, int(min_n)),
+                "production_influence_allowed": False,
+            }
+        else:
+            evidence = summarize_fo_outcomes(
+                outcomes,
+                context_key=context_key,
+                min_n=min_n,
+            )
+            if evidence.get("probability_claim_available"):
+                status = "EVIDENCE_READY"
+            elif int(evidence.get("excluded_unpriced_costs") or 0) > 0 and int(evidence.get("n") or 0) == 0:
+                status = "COST_MODEL_REQUIRED"
+            elif int(evidence.get("observed_n") or 0) > 0:
+                status = "ACCUMULATING"
+            else:
+                status = "NO_FORWARD_OUTCOMES"
+            evidence["status"] = status
+        row["forward_evidence"] = evidence
+        candidates.append(row)
+
+    payload["candidates"] = candidates
+    payload["candidate_evidence_policy"] = {
+        "lane": "FORWARD_PAPER",
+        "minimum_fully_costed_n": max(1, int(min_n)),
+        "probability_requires_exact_context": True,
+        "paper_only": True,
+        "live_execution_allowed": False,
+    }
+    return payload
+
+
 def _fo_directional_payload() -> dict[str, Any]:
     path = logs_dir() / "product" / "fo_directional.json"
     payload = _json_file(path, {})
@@ -758,6 +827,19 @@ def _fo_directional_payload() -> dict[str, Any]:
     payload["cache_mtime"] = path.stat().st_mtime if path.exists() else None
     payload["paper_only"] = True
     payload["live_execution_allowed"] = False
+    try:
+        from product.fo_paper_store import FoPaperStore
+
+        with FoPaperStore() as store:
+            # Bounded latest window keeps the dashboard read cheap while still
+            # providing ample context evidence for the minimum-N promotion gate.
+            outcomes = store.load_trades(limit=5000)
+        payload = _fo_forward_evidence_overlay(payload, outcomes, min_n=30)
+        payload["candidate_evidence_status"] = "AVAILABLE"
+    except Exception as exc:
+        # Evidence projection failure must never erase a valid persisted scan.
+        payload["candidate_evidence_status"] = "UNAVAILABLE"
+        payload["candidate_evidence_error"] = str(exc)[:240]
     return payload
 
 
