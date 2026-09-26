@@ -737,6 +737,68 @@ class Supervisor:
                 f"US paper-market scheduler: {type(exc).__name__}: {exc}",
             )
 
+
+    def _ensure_fo_market_pipeline(self, now_ist, holidays) -> None:
+        """Schedule one PAPER-only NSE F&O scan/mark per canonical market slot.
+
+        The autonomy supervisor remains the sole scheduling authority. Intraday
+        slots reuse the canonical 15-minute NSE scan cadence; one closing slot
+        marks existing option positions after entries are already disabled.
+        """
+        if os.environ.get("QT_FO_DIRECTIONAL_ENABLED", "1").strip().lower() in {
+            "0", "false", "off", "no",
+        }:
+            return
+        try:
+            from operations.market_ops import FNO_REFRESH, LANES
+            from operations.store import (
+                OperationStore, PENDING, RUNNING, SUCCEEDED, FAILED, BLOCKED,
+            )
+            from core.runtime_paths import logs_dir
+            from research.intelligence.data import nse_calendar as CAL
+
+            if not CAL.is_session(now_ist.date(), holidays):
+                return
+
+            slot = ""
+            if SCH.in_scan_window(now_ist, holidays):
+                slot = str(SCH.scan_slot(now_ist, holidays) or "")
+            else:
+                minute = now_ist.hour * 60 + now_ist.minute
+                if (15 * 60 + 30) <= minute <= (15 * 60 + 40):
+                    slot = "closing-1530"
+            if not slot:
+                return
+
+            store = OperationStore(logs_dir() / "market_ops" / "jobs.db")
+            latest = dict(store.latest(FNO_REFRESH) or {})
+            latest_payload = dict(latest.get("payload") or {})
+            attempted_states = {PENDING, RUNNING, SUCCEEDED, FAILED, BLOCKED}
+            if (
+                str(latest_payload.get("slot") or "") == slot
+                and str(latest_payload.get("session_date") or "") == now_ist.date().isoformat()
+                and str(latest.get("status") or "") in attempted_states
+            ):
+                return
+
+            store.enqueue(
+                FNO_REFRESH,
+                lane=LANES[FNO_REFRESH],
+                requested_by="autonomy",
+                payload={
+                    "slot": slot,
+                    "session_date": now_ist.date().isoformat(),
+                    "paper_only": True,
+                    "live_locked": True,
+                },
+                deduplicate=True,
+            )
+        except Exception as exc:
+            self._incident(
+                "FNO_MARKET_SCHEDULER_ERROR",
+                f"F&O paper-market scheduler: {type(exc).__name__}: {exc}",
+            )
+
     def enqueue_due(self, now_ist=None):
         """Keep QuantTerm productive in both live and closed-market regimes.
 
@@ -759,6 +821,10 @@ class Supervisor:
         # supervisor schedules it, while market-ops executes it on an isolated
         # lane so a US scan cannot block NSE paper/history learning.
         self._ensure_us_market_pipeline(now_ist)
+
+        # NSE F&O uses the same canonical 15-minute session clock as cash
+        # discovery, but executes on its own PAPER-only market-ops lane.
+        self._ensure_fo_market_pipeline(now_ist, holidays)
 
         # Never let historical backfill compete with the live cash session.
         if SCH.market_is_open(now_ist, holidays):
