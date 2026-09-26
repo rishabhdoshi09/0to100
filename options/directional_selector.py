@@ -114,6 +114,60 @@ def black_scholes(
     }
 
 
+def implied_volatility(
+    *,
+    market_price: float,
+    spot: float,
+    strike: float,
+    dte: float,
+    option_type: str,
+    rate: float = 0.065,
+    lower: float = 0.01,
+    upper: float = 5.0,
+    iterations: int = 80,
+) -> float:
+    """Infer annualized IV with bounded bisection.
+
+    Returns 0 when the quote violates intrinsic bounds or cannot be bracketed.
+    The solver is deterministic and dependency-free, suitable for live quote
+    normalization and historical replay.
+    """
+    market = _f(market_price)
+    spot = _f(spot)
+    strike = _f(strike)
+    kind = str(option_type or "").upper()
+    if market <= 0 or spot <= 0 or strike <= 0 or dte <= 0 or kind not in {CE, PE}:
+        return 0.0
+    intrinsic = max(spot - strike, 0.0) if kind == CE else max(strike - spot, 0.0)
+    if market + 1e-9 < intrinsic:
+        return 0.0
+
+    lo = max(1e-6, float(lower))
+    hi = max(lo * 2.0, float(upper))
+    low_price = black_scholes(
+        spot=spot, strike=strike, dte=dte, iv=lo,
+        option_type=kind, rate=rate,
+    )["price"]
+    high_price = black_scholes(
+        spot=spot, strike=strike, dte=dte, iv=hi,
+        option_type=kind, rate=rate,
+    )["price"]
+    if market < low_price - 1e-6 or market > high_price + 1e-6:
+        return 0.0
+
+    for _ in range(max(1, int(iterations))):
+        mid = (lo + hi) / 2.0
+        value = black_scholes(
+            spot=spot, strike=strike, dte=dte, iv=mid,
+            option_type=kind, rate=rate,
+        )["price"]
+        if value < market:
+            lo = mid
+        else:
+            hi = mid
+    return round((lo + hi) / 2.0, 6)
+
+
 @dataclass(frozen=True)
 class OptionSelectionPolicy:
     min_volume: int = 100
