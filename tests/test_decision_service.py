@@ -219,7 +219,10 @@ def test_best_trades_use_the_same_production_selection_seam(monkeypatch):
     assert board["best_trades"][0]["discovery_decision"] == PA.ENTER_NOW
     assert board["best_trades_mode"] == "PAPER_ELIGIBLE_PRODUCTION_THESIS"
     assert board["paper_actionable"] == 1
-    assert board["research_actionable"] == 1
+    # Research state is independent of the final paper-selection seam: both
+    # technical cards are BUY candidates for learning, but only INFY is
+    # executable after production gates.
+    assert board["research_actionable"] == 2
     assert all(kwargs["enforce_history"] is True for _symbol, kwargs in calls)
 
 
