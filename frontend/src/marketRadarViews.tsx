@@ -738,6 +738,12 @@ function HomeOsCard({
               ).join(' · ')}
             </small>
           ) : null}
+          <small>
+            Parity: {os.us_market.parity?.state || 'UNKNOWN'}
+            {os.us_market.parity?.historical_pit_replay === false
+              ? ' · historical PIT replay blocked until a trustworthy US PIT universe/history source is connected'
+              : ''}
+          </small>
         </div>
       ) : null}
       {os.past_decisions?.available ? (
