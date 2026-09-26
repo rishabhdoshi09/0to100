@@ -565,7 +565,11 @@ start_report() {
     return 0
   fi
   echo "[COMPLETE STACK] Starting research-report API at http://127.0.0.1:8766 …"
-  python -u -m uvicorn report_api:app --host 127.0.0.1 --port 8766 \
+  # Give the report API its own process group, exactly like the inner stack.
+  # CI invokes this launcher from a step shell; an ordinary background child can
+  # receive that shell's teardown signal even while the rest of QuantTerm stays
+  # alive. Closing fd 200 also prevents the child from inheriting the machine lock.
+  setsid python -u -m uvicorn report_api:app --host 127.0.0.1 --port 8766 \
     >>"$STACK_LOG_DIR/report_api.log" 2>&1 200>&- &
   REPORT_PID=$!
   sleep 1 || true
