@@ -709,9 +709,10 @@ function HomeOsCard({
       {os.learning_impact ? (
         <div className="home-os-past">
           <span>LEARNING IMPACT</span>
-          <strong>{os.learning_impact.plain || 'Learning impact is being measured.'}</strong>
+          <strong>{os.learning_impact.benefit_plain || os.learning_impact.plain || 'Learning impact is being measured.'}</strong>
           <small>
-            Current decisions changed by measured learning: {os.learning_impact.current_decisions_influenced ?? 0}
+            benefit={os.learning_impact.benefit_status || os.learning_impact.status || 'COLLECTING'} ·
+            {' '}Current decisions changed by measured learning: {os.learning_impact.current_decisions_influenced ?? 0}
             {os.learning_impact.challenger?.model_version ? ` · model ${os.learning_impact.challenger.model_version}` : ''}
             {os.learning_impact.challenger?.real_forward_n != null ? ` · real-forward n ${os.learning_impact.challenger.real_forward_n}` : ''}
             {os.learning_impact.policies?.production_effective != null ? ` · effective policies ${os.learning_impact.policies.production_effective}` : ''}
