@@ -59,7 +59,7 @@ def test_internal_type_error_does_not_re_run_the_cycle():
 
     assert len(calls) == 1, f"cycle ran {len(calls)} times from one job"
     assert len(positions) == 1, f"{len(positions)} paper positions from one job run"
-    assert result.status == JOBS.JS.RETRYABLE_FAILED
+    assert result.status == JOBS.JS.PERMANENT_FAILED
     assert result.error_code == "CYCLE_ERROR"
 
 
@@ -117,4 +117,4 @@ def test_non_type_errors_still_fail_the_job_once():
 
     result = JOBS.run_paper_cycle(_Ctx(Deps()))
     assert len(calls) == 1
-    assert result.status == JOBS.JS.RETRYABLE_FAILED
+    assert result.status == JOBS.JS.PERMANENT_FAILED
