@@ -28,3 +28,13 @@ def test_complete_stack_fails_closed_for_configured_external_runtime() -> None:
     assert "Refusing to create a replacement runtime under /Volumes" in script
     assert script.index(strict) < script.index(resolve)
     assert script.index(resolve) < script.index(mkdir)
+
+
+def test_complete_stack_detaches_report_api_from_step_shell() -> None:
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "scripts" / "run_quantterm_complete.sh").read_text(encoding="utf-8")
+
+    launch = "setsid python -u -m uvicorn report_api:app --host 127.0.0.1 --port 8766"
+    assert launch in script
+    assert '>>"$STACK_LOG_DIR/report_api.log" 2>&1 200>&- &' in script
+    assert script.index(launch) < script.index('REPORT_PID=$!')
