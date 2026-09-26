@@ -46,6 +46,7 @@ def evaluate_fo_opportunity(
         expected_move_pct=float(expected["mid_pct"]),
         horizon=str(expected["horizon"]),
         holding_days=int(expected["holding_days"]),
+        underlying_stop_price=float((setup.get("underlying_trade_plan") or {}).get("stop") or 0.0),
         iv_percentile=iv_percentile,
         limit=top_n,
     )
