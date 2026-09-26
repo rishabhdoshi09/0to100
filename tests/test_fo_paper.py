@@ -154,3 +154,21 @@ def test_total_open_risk_cap_is_enforced_across_positions():
     )
     assert third is None
     assert book.refusals[-1][1] == "RISK_OR_PREMIUM_BUDGET_TOO_SMALL_FOR_ONE_LOT"
+
+
+def test_executable_ask_cannot_cross_above_target():
+    book = FoPaperBook(capital=200_000, slippage_bps=0)
+    pos = book.open_position(
+        underlying="RELIANCE",
+        option_symbol="RELIANCECE",
+        option_type="CE",
+        entry=50,
+        stop=40,
+        target=55,
+        lot_size=25,
+        opened_at="2026-09-26",
+        max_holding_sessions=2,
+        ask=56,
+    )
+    assert pos is None
+    assert book.refusals[-1][1] == "TARGET_NOT_ABOVE_EXECUTABLE_ENTRY"
