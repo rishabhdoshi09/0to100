@@ -44,3 +44,24 @@ def test_session_status_language_does_not_assume_calendar_today_or_yesterday():
         text = simple_reason(code).lower()
         assert "today" not in text
         assert "yesterday" not in text
+
+
+def test_home_opportunity_preserves_trade_levels_and_risk_context():
+    card = explain_opportunity({
+        "symbol": "ABC",
+        "decision": "BUY",
+        "entry_state": "ENTER_NOW",
+        "cmp": 101.5,
+        "entry": 100.0,
+        "stop": 95.0,
+        "target": 112.0,
+        "upside_to_target_pct": 10.34,
+        "downside_to_stop_pct": -6.40,
+    })
+
+    assert card["cmp"] == 101.5
+    assert card["entry"] == 100.0
+    assert card["stop"] == 95.0
+    assert card["target"] == 112.0
+    assert card["upside_to_target_pct"] == 10.34
+    assert card["downside_to_stop_pct"] == -6.40
