@@ -979,6 +979,63 @@ def run(args: argparse.Namespace) -> int:
         code_sha=sha,
     ))
 
+    radar_home = _request_json(_url(api, "/api/radar-home"), timeout=args.request_timeout)
+    home_os = _as_dict(radar_home.get("home_os"))
+    learning_impact = _as_dict(home_os.get("learning_impact"))
+    benefit_status = str(learning_impact.get("benefit_status") or learning_impact.get("status") or "")
+    allowed_benefit = {
+        "PROVEN_BETTER_IN_FORWARD_PAPER",
+        "CHANGING_SELECTION_NOT_YET_AGGREGATE_PROVEN",
+        "LEARNING_NOT_PROMOTED",
+        "ACTIVE_IN_PAPER_SELECTION",
+        "LEARNING_BUT_NOT_PROMOTED",
+        "COLLECTING",
+    }
+    learning_truth_ok = bool(
+        learning_impact
+        and benefit_status in allowed_benefit
+        and learning_impact.get("live_locked") is True
+        and learning_impact.get("current_decisions_influenced") is not None
+    )
+    rows.append(_row(
+        feature="Learning impact truth",
+        trigger_tested="GET /api/radar-home → home_os.learning_impact",
+        backend_path="product.learning_impact",
+        durable_artifact="current discovery + challenger/policy evidence",
+        status="PASS" if learning_truth_ok else "FAIL",
+        blocker_reason="" if learning_truth_ok else "learning impact truth is missing/incomplete",
+        result_count=int(learning_impact.get("current_decisions_influenced") or 0),
+        start_timestamp=_now(),
+        finish_timestamp=_now(),
+        code_sha=sha,
+    ))
+
+    us_market = _as_dict(home_os.get("us_market"))
+    us_parity = _as_dict(us_market.get("parity"))
+    us_parity_ok = bool(
+        us_market.get("paper_only") is True
+        and us_market.get("live_locked") is True
+        and str(us_parity.get("state") or "") == "FORWARD_PAPER_PARITY"
+        and us_parity.get("autonomous_scan") is True
+        and us_parity.get("paper_auto_execution") is True
+        and us_parity.get("forward_outcome_settlement") is True
+        and us_parity.get("forward_counterfactuals") is True
+        and us_parity.get("forward_learning") is True
+        and us_parity.get("historical_pit_replay") is False
+        and us_parity.get("survivorship_biased_backtest_allowed") is False
+    )
+    rows.append(_row(
+        feature="US forward-paper parity truth",
+        trigger_tested="GET /api/radar-home → home_os.us_market.parity",
+        backend_path="product.us_market_status + canonical US market-ops lane",
+        durable_artifact="US scan/paper/learning stores",
+        status="PASS" if us_parity_ok else "FAIL",
+        blocker_reason="" if us_parity_ok else "US forward-paper parity contract is missing/incomplete",
+        start_timestamp=_now(),
+        finish_timestamp=_now(),
+        code_sha=sha,
+    ))
+
     soak = _request_json(_url(api, "/api/forward-soak"), method="POST", timeout=args.request_timeout)
     soak_grade = grade_forward_soak(soak)
     rows.append(_row(
