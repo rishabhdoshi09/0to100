@@ -196,6 +196,14 @@ def _reference_premium(contract: Mapping[str, Any]) -> float:
     return _f(contract.get("ltp") or contract.get("last_price"))
 
 
+def _entry_premium(contract: Mapping[str, Any]) -> float:
+    """Executable long-premium reference: ask when available, else last price."""
+    ask = _f(contract.get("ask"))
+    if ask > 0:
+        return ask
+    return _f(contract.get("ltp") or contract.get("last_price"))
+
+
 def _delta_score(delta_abs: float) -> float:
     if 0.55 <= delta_abs <= 0.70:
         return 25.0
@@ -267,7 +275,7 @@ def scenario_reprice(
     moves_pct: Sequence[float] = (-2.0, -1.0, 1.0, 2.0, 3.0, 4.0),
     rate: float = 0.065,
 ) -> list[dict[str, float]]:
-    premium = _reference_premium(contract)
+    premium = _entry_premium(contract)
     strike = _f(contract.get("strike"))
     iv = _iv_decimal(contract.get("iv"))
     dte = _dte(contract)
@@ -304,6 +312,7 @@ def score_option_contract(
     expected_move_pct: float,
     horizon: str,
     holding_days: int,
+    underlying_stop_price: float | None = None,
     iv_percentile: float | None = None,
     policy: OptionSelectionPolicy | None = None,
     rate: float = 0.065,
@@ -315,7 +324,7 @@ def score_option_contract(
     if kind != desired:
         blockers.append("WRONG_OPTION_SIDE")
 
-    premium = _reference_premium(contract)
+    premium = _entry_premium(contract)
     strike = _f(contract.get("strike"))
     iv = _iv_decimal(contract.get("iv"))
     volume = _f(contract.get("volume"))
@@ -378,6 +387,38 @@ def score_option_contract(
         else 0.0
     )
 
+    stop_model_price = 0.0
+    stop_underlying = _f(underlying_stop_price)
+    if stop_underlying > 0 and strike > 0 and iv > 0 and dte > 0:
+        stop_model = black_scholes(
+            spot=stop_underlying,
+            strike=strike,
+            dte=max(0.25, float(dte - min(max(0, holding_days), 1))),
+            iv=iv,
+            option_type=kind,
+            rate=rate,
+        )
+        stop_model_price = float(stop_model["price"])
+
+    option_entry = premium
+    option_stop = min(option_entry * 0.98, stop_model_price) if stop_model_price > 0 else 0.0
+    option_target = float(target_model["price"])
+    if option_stop <= 0 or option_stop >= option_entry:
+        blockers.append("OPTION_STOP_MODEL_UNAVAILABLE")
+    if option_target <= option_entry:
+        blockers.append("UNFAVORABLE_OPTION_TARGET")
+    option_risk = option_entry - option_stop if option_stop > 0 else 0.0
+    option_reward = option_target - option_entry
+    risk_reward = option_reward / option_risk if option_risk > 0 and option_reward > 0 else 0.0
+    trade_plan = {
+        "entry": round(option_entry, 2),
+        "stop": round(option_stop, 2) if option_stop > 0 else None,
+        "target": round(option_target, 2) if option_target > 0 else None,
+        "risk_reward": round(risk_reward, 3),
+        "underlying_invalidation": round(stop_underlying, 2) if stop_underlying > 0 else None,
+        "model": "CONSTANT_IV_UNDERLYING_INVALIDATION_AND_EXPECTED_MOVE",
+    }
+
     components = {
         "delta_fit": _delta_score(delta_abs),                     # 25
         "liquidity": _liquidity_score(volume, oi, spread_pct, policy),  # 25
@@ -416,6 +457,7 @@ def score_option_contract(
         "components": {key: round(value, 2) for key, value in components.items()},
         "expected_move_pct": round(abs(expected_move_pct), 2),
         "projected_return_at_expected_move_pct": round(expected_return, 2),
+        "trade_plan": trade_plan,
         "scenarios": scenarios,
         "scenario_model": "BLACK_SCHOLES_CONSTANT_IV_ESTIMATE",
         "eligible": not blockers,
@@ -433,6 +475,7 @@ def select_option_contracts(
     expected_move_pct: float,
     horizon: str,
     holding_days: int,
+    underlying_stop_price: float | None = None,
     iv_percentile: float | None = None,
     limit: int = 5,
     policy: OptionSelectionPolicy | None = None,
@@ -445,6 +488,7 @@ def select_option_contracts(
             expected_move_pct=expected_move_pct,
             horizon=horizon,
             holding_days=holding_days,
+            underlying_stop_price=underlying_stop_price,
             iv_percentile=iv_percentile,
             policy=policy,
         )
