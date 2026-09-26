@@ -1035,6 +1035,7 @@ class MarketOperationsWorker:
             }
         else:
             try:
+                from product.fo_costs import zerodha_nse_option_cost_model_from_env
                 from product.fo_paper_runtime import run_fo_paper_cycle
                 from product.fo_paper_store import FoPaperStore
                 from research.autonomy import schedules as SCH
@@ -1047,11 +1048,14 @@ class MarketOperationsWorker:
                     manage_window and SCH.entries_allowed_by_clock(now_ist, holidays)
                 )
                 if manage_window:
+                    cost_model, cost_model_name = zerodha_nse_option_cost_model_from_env()
                     paper = run_fo_paper_cycle(
                         directional,
                         client=market_client,
                         now_ist=now_ist,
                         allow_new_entries=allow_new_entries,
+                        cost_model=cost_model,
+                        cost_model_name=cost_model_name,
                     )
                     paper["cycle_ran"] = True
                 else:
