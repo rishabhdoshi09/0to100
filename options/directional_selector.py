@@ -392,8 +392,12 @@ def score_option_contract(
 
     return {
         "symbol": str(contract.get("symbol") or contract.get("tradingsymbol") or ""),
+        "instrument_token": contract.get("instrument_token"),
         "option_type": kind,
         "strike": strike,
+        "lot_size": int(_f(contract.get("lot_size"))),
+        "tick_size": _f(contract.get("tick_size")),
+        "source": str(contract.get("source") or ""),
         "expiry": contract.get("expiry"),
         "dte": dte,
         "premium": round(premium, 2),
