@@ -9,7 +9,7 @@ from typing import Any, Iterable, Mapping
 from core.runtime_paths import ensure_logs_path
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class FoPaperStore:
@@ -45,6 +45,7 @@ class FoPaperStore:
                     evidence_lane TEXT NOT NULL DEFAULT 'FORWARD_PAPER',
                     settled_at TEXT NOT NULL DEFAULT '',
                     production_evidence_eligible INTEGER NOT NULL DEFAULT 0,
+                    net_pnl REAL NOT NULL DEFAULT 0,
                     payload_json TEXT NOT NULL,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
@@ -58,6 +59,25 @@ class FoPaperStore:
                 )
                 """
             )
+            columns = {
+                str(row[1])
+                for row in self.conn.execute("PRAGMA table_info(fo_closed_trades)").fetchall()
+            }
+            if "net_pnl" not in columns:
+                self.conn.execute(
+                    "ALTER TABLE fo_closed_trades ADD COLUMN net_pnl REAL NOT NULL DEFAULT 0"
+                )
+                # Backfill from the durable JSON written by schema v1.
+                rows = self.conn.execute(
+                    "SELECT trade_id, payload_json FROM fo_closed_trades"
+                ).fetchall()
+                for row in rows:
+                    payload = self._decode(row["payload_json"])
+                    net_pnl = float((payload or {}).get("net_pnl") or 0.0)
+                    self.conn.execute(
+                        "UPDATE fo_closed_trades SET net_pnl = ? WHERE trade_id = ?",
+                        (net_pnl, str(row["trade_id"])),
+                    )
             self.conn.execute(
                 "INSERT OR REPLACE INTO fo_paper_meta(key, value) VALUES('schema_version', ?)",
                 (str(SCHEMA_VERSION),),
@@ -113,8 +133,8 @@ class FoPaperStore:
                     INSERT OR IGNORE INTO fo_closed_trades(
                         trade_id, option_symbol, underlying, context_key,
                         evidence_lane, settled_at, production_evidence_eligible,
-                        payload_json
-                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                        net_pnl, payload_json
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         str(row.get("trade_id") or ""),
@@ -124,6 +144,7 @@ class FoPaperStore:
                         str(row.get("evidence_lane") or "FORWARD_PAPER"),
                         str(row.get("settled_at") or ""),
                         1 if bool(row.get("production_evidence_eligible")) else 0,
+                        float(row.get("net_pnl") or 0.0),
                         self._json(row),
                     ),
                 )
@@ -148,6 +169,12 @@ class FoPaperStore:
             if (payload := self._decode(row["payload_json"])) is not None
         ]
 
+    def realized_pnl(self) -> float:
+        row = self.conn.execute(
+            "SELECT COALESCE(SUM(net_pnl), 0) FROM fo_closed_trades"
+        ).fetchone()
+        return float(row[0] or 0.0)
+
     def status(self) -> dict[str, Any]:
         open_count = int(self.conn.execute("SELECT COUNT(*) FROM fo_open_positions").fetchone()[0])
         closed_count = int(self.conn.execute("SELECT COUNT(*) FROM fo_closed_trades").fetchone()[0])
@@ -162,6 +189,7 @@ class FoPaperStore:
             "open_positions": open_count,
             "closed_trades": closed_count,
             "production_evidence_trades": eligible_count,
+            "realized_pnl": round(self.realized_pnl(), 2),
         }
 
     def close(self) -> None:
