@@ -307,7 +307,19 @@ def status(*, path: str | Path | None = None) -> dict[str, Any]:
         "scan_fresh": scan_fresh,
         "best_trades": visible_best_trades,
         "decision_count": len(list(board.get("decisions") or [])),
-        "actionable": int(board.get("actionable") or 0),
+        # Readiness/no-trade truth follows actual PAPER_FORWARD eligibility.
+        # Older persisted discovery projections fall back to the legacy field
+        # until the next scan republishes the new paper_actionable field.
+        "actionable": int(
+            board.get("paper_actionable")
+            if board.get("paper_actionable") is not None
+            else (board.get("actionable") or 0)
+        ),
+        "research_actionable": int(
+            board.get("research_actionable")
+            if board.get("research_actionable") is not None
+            else (board.get("actionable") or 0)
+        ),
         "thesis": thesis,
         "thesis_hash": thesis_hash,
         "message": message,
