@@ -59,17 +59,66 @@ def build_learning_impact() -> dict[str, Any]:
         dict(r) for r in (board.get("decisions") or [])
         if isinstance(r, Mapping)
     ]
+    # Quantify the actual ordering effect rather than merely saying that a
+    # learner was consulted. Compare the same current decision set with and
+    # without measured evidence/learning adjustments. This is descriptive
+    # attribution, not a claim that the learned ordering is economically better.
+    indexed = list(enumerate(decisions))
+    base_order = sorted(
+        indexed,
+        key=lambda item: (
+            -_f(item[1].get("base_score")),
+            str(item[1].get("symbol") or ""),
+            item[0],
+        ),
+    )
+    learned_order = sorted(
+        indexed,
+        key=lambda item: (
+            -_f(item[1].get("ranking_score")),
+            str(item[1].get("symbol") or ""),
+            item[0],
+        ),
+    )
+    base_rank = {idx: rank for rank, (idx, _row) in enumerate(base_order, start=1)}
+    learned_rank = {idx: rank for rank, (idx, _row) in enumerate(learned_order, start=1)}
+
     influenced: list[dict[str, Any]] = []
-    for row in decisions:
+    rank_up = 0
+    rank_down = 0
+    score_only = 0
+    max_abs_score_delta = 0.0
+    for idx, row in indexed:
         evidence_adj = _f(row.get("evidence_adjustment"))
         learning_adj = _f(row.get("learning_adjustment"))
         if not evidence_adj and not learning_adj:
             continue
+        base_score = _f(row.get("base_score"))
+        ranking_score = _f(row.get("ranking_score"))
+        score_delta = round(ranking_score - base_score, 6)
+        before = int(base_rank.get(idx) or 0)
+        after = int(learned_rank.get(idx) or 0)
+        rank_change = before - after  # positive = moved up after measured learning
+        if rank_change > 0:
+            rank_up += 1
+            effect = "RANK_UP"
+        elif rank_change < 0:
+            rank_down += 1
+            effect = "RANK_DOWN"
+        else:
+            score_only += 1
+            effect = "SCORE_CHANGED"
+        max_abs_score_delta = max(max_abs_score_delta, abs(score_delta))
         influenced.append({
             "symbol": str(row.get("symbol") or "").upper(),
             "state": str(row.get("state") or ""),
             "base_score": row.get("base_score"),
             "ranking_score": row.get("ranking_score"),
+            "score_delta": score_delta,
+            "rank_before_measured": before,
+            "rank_after_measured": after,
+            "rank_change": rank_change,
+            "measured_effect": effect,
             "evidence_adjustment": evidence_adj,
             "learning_adjustment": learning_adj,
             "why": str(row.get("why") or ""),
@@ -161,6 +210,12 @@ def build_learning_impact() -> dict[str, Any]:
         "forward_improvement_lower_95": forward_lower_95,
         "selection_is_currently_changed": selection_influenced,
         "current_decisions_influenced": len(influenced),
+        "rank_impact": {
+            "moved_up": rank_up,
+            "moved_down": rank_down,
+            "score_changed_without_rank_move": score_only,
+            "max_abs_score_delta": round(max_abs_score_delta, 6),
+        },
         "influenced_examples": influenced[:8],
         "challenger": {
             "status": model_status,
