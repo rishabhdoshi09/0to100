@@ -15,6 +15,7 @@ def _rows(lane=FORWARD_PAPER, n=40):
             "evidence_lane": lane,
             "context_key": "CTX",
             "net_option_return_pct": 8.0 if win else -4.0,
+            "production_evidence_eligible": lane == FORWARD_PAPER,
             "mfe_pct": 12.0 if win else 2.0,
             "mae_pct": -2.0 if win else -6.0,
             "false_breakout": not win,
@@ -64,3 +65,20 @@ def test_small_forward_sample_stays_uncalibrated():
     assert result["n"] == 12
     assert result["probability_claim_available"] is False
     assert result["expectancy_pct"] is None
+
+
+def test_gross_only_forward_rows_never_create_probability_claim():
+    rows = _rows(n=40)
+    for row in rows:
+        row["production_evidence_eligible"] = False
+        row["cost_model_status"] = "UNCONFIGURED_GROSS_ONLY"
+
+    result = summarize_fo_outcomes(rows, context_key="CTX", min_n=30)
+
+    assert result["observed_n"] == 40
+    assert result["n"] == 0
+    assert result["excluded_unpriced_costs"] == 40
+    assert result["probability_claim_available"] is False
+    assert result["win_probability_pct"] is None
+    assert result["expectancy_pct"] is None
+    assert result["production_influence_allowed"] is False
