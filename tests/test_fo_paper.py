@@ -91,3 +91,66 @@ def test_configured_cost_model_flows_into_net_option_return():
     assert closed[0].costs == 100.0
     assert closed[0].net_pnl == closed[0].gross_pnl - 100.0
     assert book.evidence_rows()[0]["production_evidence_eligible"] is True
+
+
+def test_intraday_repeated_marks_do_not_consume_holding_sessions():
+    book = FoPaperBook(capital=200_000, slippage_bps=0)
+    pos = book.open_position(
+        underlying="RELIANCE", option_symbol="RELIANCECE", option_type="CE",
+        entry=50, stop=40, target=80, lot_size=25,
+        opened_at="2026-09-26T10:00:00+05:30", max_holding_sessions=2,
+    )
+    assert pos is not None
+    quote = {"open": 50, "high": 55, "low": 45, "close": 52, "bid": 52}
+    assert book.mark({"RELIANCECE": quote}, session="2026-09-26") == []
+    assert pos.bars_held == 0
+    assert book.mark({"RELIANCECE": quote}, session="2026-09-26") == []
+    assert pos.bars_held == 0
+    assert book.mark({"RELIANCECE": quote}, session="2026-09-27") == []
+    assert pos.bars_held == 1
+
+
+def test_only_one_option_position_per_underlying_is_allowed():
+    book = FoPaperBook(capital=500_000, slippage_bps=0)
+    first = book.open_position(
+        underlying="RELIANCE", option_symbol="RELIANCECE1", option_type="CE",
+        entry=50, stop=40, target=80, lot_size=25,
+        opened_at="2026-09-26", max_holding_sessions=2,
+    )
+    assert first is not None
+    second = book.open_position(
+        underlying="RELIANCE", option_symbol="RELIANCECE2", option_type="CE",
+        entry=45, stop=35, target=70, lot_size=25,
+        opened_at="2026-09-26", max_holding_sessions=2,
+    )
+    assert second is None
+    assert book.refusals[-1][1] == "UNDERLYING_ALREADY_OPEN"
+
+
+def test_total_open_risk_cap_is_enforced_across_positions():
+    book = FoPaperBook(
+        capital=100_000,
+        risk_per_trade_pct=0.03,
+        max_total_risk_pct=0.05,
+        max_premium_pct=1.0,
+        slippage_bps=0,
+    )
+    first = book.open_position(
+        underlying="AAA", option_symbol="AAACE", option_type="CE",
+        entry=50, stop=40, target=80, lot_size=100,
+        opened_at="2026-09-26", max_holding_sessions=2,
+    )
+    assert first is not None
+    second = book.open_position(
+        underlying="BBB", option_symbol="BBBCE", option_type="CE",
+        entry=50, stop=40, target=80, lot_size=100,
+        opened_at="2026-09-26", max_holding_sessions=2,
+    )
+    assert second is not None
+    third = book.open_position(
+        underlying="CCC", option_symbol="CCCCE", option_type="CE",
+        entry=50, stop=40, target=80, lot_size=100,
+        opened_at="2026-09-26", max_holding_sessions=2,
+    )
+    assert third is None
+    assert book.refusals[-1][1] == "RISK_OR_PREMIUM_BUDGET_TOO_SMALL_FOR_ONE_LOT"
