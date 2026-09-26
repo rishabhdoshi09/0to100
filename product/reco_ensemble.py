@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
-from product.breakout_quality import RSI_HARD
+from product.breakout_quality import MIN_VOLUME_RATIO, RSI_HARD
 from product.reco_experts import (
     FAMILY_CATALYST,
     FAMILY_CONTEXT,
@@ -89,6 +89,14 @@ def entry_state(row: Mapping[str, Any]) -> str:
     rsi = _f(row.get("rsi"))
     if rsi is not None and rsi > RSI_HARD:
         return ENTRY_EXTENDED
+
+    # A scanner BUY is only a technical setup. Known participation below the
+    # paper-entry floor cannot be promoted to an auto-enter recommendation.
+    # Unknown volume remains observable rather than being silently invented.
+    volume = _f(row.get("volume_ratio"))
+    if volume is not None and volume > 0 and volume < MIN_VOLUME_RATIO:
+        return ENTRY_NEAR
+
     status = str(row.get("status") or "")
     if status == "Ready to trade":
         return ENTRY_READY

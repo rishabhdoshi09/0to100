@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, Mapping, Sequence
 
+from product.breakout_quality import MIN_VOLUME_RATIO
 from product.reco_ensemble import TIER_GOOD, TIER_HIGH, TIER_WATCH
 from product.strategy_catalog import ENSEMBLE_ID, ensemble_identity
 
@@ -387,8 +388,11 @@ def evaluate_candidate(
         return AutopilotDecision(symbol, WAIT, NO_VALID_ENTRY, "missing/invalid target", row)
 
     vol = _f(row.get("volume_ratio"))
-    if vol is not None and vol < 0.7:
-        return AutopilotDecision(symbol, BLOCK, LIQUIDITY_FAILED, f"volume_ratio={vol}", row)
+    if vol is not None and vol < MIN_VOLUME_RATIO:
+        return AutopilotDecision(
+            symbol, BLOCK, LIQUIDITY_FAILED,
+            f"volume_ratio={vol} < floor={MIN_VOLUME_RATIO}", row,
+        )
 
     if book is not None:
         if any(getattr(p, "symbol", "") == symbol for p in getattr(book, "open", {}).values()):
