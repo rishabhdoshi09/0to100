@@ -158,6 +158,9 @@ class FoPaperBook:
             return None
 
         fill = self._entry_fill(entry, ask)
+        if target <= fill:
+            self.refusals.append((symbol, "TARGET_NOT_ABOVE_EXECUTABLE_ENTRY"))
+            return None
         per_unit_risk = fill - stop
         if per_unit_risk <= 0:
             self.refusals.append((symbol, "STOP_NOT_BELOW_EXECUTABLE_ENTRY"))
