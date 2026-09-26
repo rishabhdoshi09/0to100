@@ -231,6 +231,14 @@ def _persist_fno_report(report) -> Path:
     return path
 
 
+def _persist_fo_directional(payload: dict[str, Any]) -> Path:
+    path = logs_dir() / "product" / "fo_directional.json"
+    body = dict(payload or {})
+    body.setdefault("generated_at", time.time())
+    _atomic_json(path, body)
+    return path
+
+
 class MarketOperationsWorker:
     def __init__(self, store: OperationStore | None = None) -> None:
         self.store = store or OperationStore(OPS_ROOT / "jobs.db")
@@ -916,19 +924,31 @@ class MarketOperationsWorker:
         operation_id = str(operation["operation_id"])
         self._progress(operation_id, "LOADING_INSTRUMENTS", "Refreshing NSE/NFO instrument master")
         from data.fno_universe import build_fno_universe, current_fno_universe
+
         report = None
         live_error = ""
+        rows: list[dict[str, Any]] = []
+        market_client = None
         try:
-            from research.intelligence.data.kite_activation import KiteDataClient
-            client = KiteDataClient.from_config()
-            rows = [dict(row) for row in (list(client.instruments("NSE")) + list(client.instruments("NFO")))]
+            from data.nfo_market import NfoMarketDataClient
+
+            market_client = NfoMarketDataClient.from_config()
+            rows = [
+                dict(row)
+                for row in (
+                    list(market_client.instruments("NSE"))
+                    + list(market_client.instruments("NFO"))
+                )
+            ]
             if rows:
                 _write_instrument_cache(rows)
                 report = build_fno_universe(rows, as_of=None, source="zerodha_kite")
         except Exception as exc:
             live_error = str(exc)
+
         if report is None:
             report = current_fno_universe()
+
         result = {
             "source": report.source,
             "live_refresh_error": live_error,
@@ -940,12 +960,74 @@ class MarketOperationsWorker:
             "exclusions": len(report.exclusions),
         }
         _persist_fno_report(report)
+
         if report.mapped_underlyings <= 0:
+            _persist_fo_directional({
+                "available": False,
+                "status": "BLOCKED",
+                "code": "FNO_UNIVERSE_UNAVAILABLE",
+                "candidates": [],
+                "paper_only": True,
+                "live_execution_allowed": False,
+            })
             raise OperationBlocked(
                 "No current stock F&O underlyings could be mapped; Zerodha login or instrument cache is required",
                 code="FNO_UNIVERSE_UNAVAILABLE",
                 result=result,
             )
+
+        directional: dict[str, Any]
+        if market_client is None or not rows:
+            directional = {
+                "available": False,
+                "status": "BLOCKED",
+                "code": "NFO_LIVE_MARKET_DATA_UNAVAILABLE",
+                "reason": live_error or "Connected read-only Zerodha derivatives data is unavailable",
+                "universe_size": report.mapped_underlyings,
+                "candidates": [],
+                "paper_only": True,
+                "live_execution_allowed": False,
+            }
+        else:
+            self._progress(
+                operation_id,
+                "SCANNING_DIRECTIONAL_OPTIONS",
+                "Evaluating F&O breakouts, futures OI and bounded option chains",
+            )
+            try:
+                from product.fo_runtime import run_fo_directional_scan
+                from research.intelligence.data import nse_calendar as CAL
+
+                directional = run_fo_directional_scan(
+                    report=report,
+                    instrument_rows=rows,
+                    client=market_client,
+                    as_of=CAL._now_ist().date(),
+                )
+            except Exception as exc:
+                directional = {
+                    "available": False,
+                    "status": "BLOCKED",
+                    "code": "FNO_DIRECTIONAL_SCAN_ERROR",
+                    "reason": f"{type(exc).__name__}: {exc}"[:240],
+                    "universe_size": report.mapped_underlyings,
+                    "candidates": [],
+                    "paper_only": True,
+                    "live_execution_allowed": False,
+                }
+
+        _persist_fo_directional(directional)
+        result["directional"] = {
+            "available": bool(directional.get("available")),
+            "status": directional.get("status"),
+            "code": directional.get("code"),
+            "decision": directional.get("decision"),
+            "prefilter_passed": int(directional.get("prefilter_passed") or 0),
+            "deep_evaluated": int(directional.get("deep_evaluated") or 0),
+            "candidate_count": int(directional.get("candidate_count") or 0),
+            "paper_only": True,
+            "live_execution_allowed": False,
+        }
         return result
 
     def _run_data_prepare(self, operation: dict[str, Any]) -> dict[str, Any]:
