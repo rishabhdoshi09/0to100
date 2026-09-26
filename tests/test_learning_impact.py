@@ -20,7 +20,12 @@ def test_learning_impact_distinguishes_active_selection_from_shadow(monkeypatch)
                 "historical_n": 70,
                 "counterfactual_n": 15,
                 "affects_selection": True,
-                "forward_validation": {"n": 35, "improvement": 0.02},
+                "forward_validation": {
+                    "n": 35,
+                    "improvement": 0.02,
+                    "improvement_lower_95": 0.005,
+                    "improvement_upper_95": 0.035,
+                },
             }
         },
     )
@@ -74,6 +79,9 @@ def test_learning_impact_distinguishes_active_selection_from_shadow(monkeypatch)
     impact = build_learning_impact()
 
     assert impact["status"] == "ACTIVE_IN_PAPER_SELECTION"
+    assert impact["benefit_status"] == "PROVEN_BETTER_IN_FORWARD_PAPER"
+    assert impact["forward_improvement_brier"] == 0.02
+    assert impact["forward_improvement_lower_95"] == 0.005
     assert impact["selection_is_currently_changed"] is True
     assert impact["current_decisions_influenced"] == 1
     assert impact["challenger"]["affects_selection"] is True
@@ -105,6 +113,7 @@ def test_learning_impact_does_not_claim_historical_replay_improves_live_ranking(
     impact = build_learning_impact()
 
     assert impact["status"] == "LEARNING_BUT_NOT_PROMOTED"
+    assert impact["benefit_status"] == "LEARNING_NOT_PROMOTED"
     assert impact["selection_is_currently_changed"] is False
     assert impact["challenger"]["affects_selection"] is False
     assert impact["contract"]["historical_only_can_promote"] is False
