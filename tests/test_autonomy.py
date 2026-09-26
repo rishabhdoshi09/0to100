@@ -393,6 +393,48 @@ def test_slot_paper_cycle_keeps_once_only_mutation_safety(tmp_path):
     sup.shutdown()
 
 
+def test_restart_retires_orphaned_intraday_slot_paper_mutation(tmp_path):
+    sup = _sup(tmp_path)
+    key = SCH.snapshot_slot_paper_key(
+        "market:official_nse:2026-07-30",
+        "2026-07-31",
+        "intraday-1015",
+    )
+    queued = sup.jobs.enqueue(SCH.PAPER_CYCLE, idempotency_key=key, critical=True)
+    leased = sup.jobs.lease_due("dead-owner", lease_seconds=300)
+    assert leased is not None and leased.status == JS.RUNNING
+
+    assert sup.start() is True
+    final = sup.jobs.get(queued.job_id)
+    assert final.status == JS.PERMANENT_FAILED
+    assert final.error_code == "ORPHANED_PAPER_CYCLE_RESTART"
+    sup.shutdown()
+
+
+def test_reco_autopilot_error_cannot_be_reported_as_successful_paper_cycle():
+    class BrokenRecoDeps(FakeDeps):
+        def run_paper_cycle(self, entries_allowed, reason="", phase="", failures=()):
+            return {
+                "eligibility": "NO_ELIGIBLE_TRADE",
+                "reco_autopilot": {"error": "selection authority crashed after mutation boundary"},
+            }
+
+    result = JOBS.run_paper_cycle(JOBS._Ctx(BrokenRecoDeps()))
+    assert result.status == JS.PERMANENT_FAILED
+    assert result.error_code == "PAPER_AUTOPILOT_ERROR"
+    assert result.new_entries_allowed is False
+
+
+def test_unhandled_paper_cycle_exception_is_not_retried_as_safe():
+    class ExplodingPaperDeps(FakeDeps):
+        def run_paper_cycle(self, entries_allowed, reason="", phase="", failures=()):
+            raise RuntimeError("unknown partial paper mutation")
+
+    result = JOBS.run_paper_cycle(JOBS._Ctx(ExplodingPaperDeps()))
+    assert result.status == JS.PERMANENT_FAILED
+    assert result.error_code == "PAPER_CYCLE_UNCERTAIN_MUTATION"
+
+
 def test_headless_scan_service_has_no_ui_dependency():
     import ast
     root = Path(__file__).resolve().parents[1]
