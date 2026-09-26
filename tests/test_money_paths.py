@@ -4114,7 +4114,10 @@ class TestUSAutopilot:
 
     def test_paper_only_and_gates(self, tmp_path, monkeypatch):
         ua, te = self._setup(tmp_path, monkeypatch)
-        # not armed → no trade
+        # Production default is autonomous virtual PAPER. Explicitly
+        # disarm when testing the "not armed" safety gate instead of relying on
+        # the historical product default.
+        ua.disarm()
         assert ua.consider("AAPL", 100, 95, 80, 60) is False
         ua.arm()
         # invalid stop → no trade
