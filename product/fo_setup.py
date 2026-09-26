@@ -208,6 +208,30 @@ def score_fo_setup(
         blockers.append("NOT_FO_UNIVERSE")
     if price <= 0:
         blockers.append("INVALID_PRICE")
+
+    # This lane is intentionally stricter than the ordinary equity scanner:
+    # a missing confirmation must never be silently compensated by points from
+    # other features. Zero is a valid market change for strength/OI fields, so
+    # availability is checked separately from magnitude.
+    required_present = (
+        "vwap", "ema20", "ema50", "rsi", "adx", "rvol",
+        "relative_strength_pct", "sector_strength_pct", "nifty_change_pct",
+        "futures_price_change_pct", "futures_oi_change_pct",
+    )
+    for key in required_present:
+        if key not in features or features.get(key) is None:
+            blockers.append(f"MISSING_{key.upper()}")
+    if _f(features.get("vwap")) <= 0:
+        blockers.append("INVALID_VWAP")
+    if _f(features.get("ema20")) <= 0 or _f(features.get("ema50")) <= 0:
+        blockers.append("INVALID_EMA")
+    if not (0 < _f(features.get("rsi")) < 100):
+        blockers.append("INVALID_RSI")
+    if _f(features.get("adx")) <= 0:
+        blockers.append("INVALID_ADX")
+    if _f(features.get("rvol")) <= 0:
+        blockers.append("INVALID_RVOL")
+
     if bool(features.get("false_breakout", False)):
         blockers.append("FALSE_BREAKOUT_FILTER")
     chase_atr = _f(features.get("chase_distance_atr"))
