@@ -164,6 +164,31 @@ export type FnoExclusion = {
 }
 
 
+export type FnoForwardEvidence = {
+  context_key?: string
+  evidence_lane?: string
+  status?: 'EVIDENCE_READY' | 'ACCUMULATING' | 'COST_MODEL_REQUIRED' | 'NO_FORWARD_OUTCOMES' | 'NO_CONTEXT_KEY' | string
+  observed_n?: number
+  n?: number
+  excluded_unpriced_costs?: number
+  wins?: number
+  losses?: number
+  probability_claim_available?: boolean
+  win_probability_pct?: number | null
+  win_probability_wilson_lb_pct?: number | null
+  expectancy_pct?: number | null
+  conservative_ev_pct?: number | null
+  avg_win_pct?: number | null
+  avg_loss_pct?: number | null
+  avg_mfe_pct?: number | null
+  avg_mae_pct?: number | null
+  false_breakout_rate_pct?: number | null
+  max_drawdown_pct?: number | null
+  insufficient_evidence?: boolean
+  minimum_required_n?: number
+  production_influence_allowed?: boolean
+}
+
 export type FnoDirectionalCandidate = {
   symbol: string
   direction: 'LONG' | 'SHORT' | string
@@ -202,6 +227,7 @@ export type FnoDirectionalCandidate = {
     score?: number
     score_is_probability?: boolean
     projected_return_at_expected_move_pct?: number
+    context_key?: string
     trade_plan?: {
       entry?: number
       stop?: number | null
@@ -211,6 +237,7 @@ export type FnoDirectionalCandidate = {
       model?: string
     }
   }
+  forward_evidence?: FnoForwardEvidence
   paper_only?: boolean
   live_execution_allowed?: boolean
 }
@@ -225,6 +252,15 @@ export type FnoDirectionalState = {
   paper_only?: boolean
   live_execution_allowed?: boolean
   cache_mtime?: number | null
+  candidate_evidence_status?: string
+  candidate_evidence_error?: string
+  candidate_evidence_policy?: {
+    lane?: string
+    minimum_fully_costed_n?: number
+    probability_requires_exact_context?: boolean
+    paper_only?: boolean
+    live_execution_allowed?: boolean
+  }
 }
 
 export type FnoPaperPosition = {
