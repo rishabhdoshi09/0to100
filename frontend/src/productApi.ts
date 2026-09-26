@@ -790,6 +790,12 @@ export type HomeOperatingSystem = {
     why?: string
     technical?: string
     candidate_status?: string
+    cmp?: number | null
+    entry?: number | null
+    stop?: number | null
+    target?: number | null
+    upside_to_target_pct?: number | null
+    downside_to_stop_pct?: number | null
     confidence_score?: number | null
     win_probability_pct?: number | null
     confidence_source?: string
