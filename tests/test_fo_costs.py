@@ -76,3 +76,13 @@ def test_configured_cost_model_makes_closed_paper_trade_net_and_evidence_eligibl
 
     evidence = book.evidence_rows()
     assert evidence[0]["production_evidence_eligible"] is True
+
+
+def test_market_ops_wires_the_verified_cost_model_into_forward_paper_cycles():
+    import inspect
+    from operations.market_ops import MarketOperationsWorker
+
+    source = inspect.getsource(MarketOperationsWorker._run_fno)
+    assert "zerodha_nse_option_cost_model_from_env" in source
+    assert "cost_model=cost_model" in source
+    assert "cost_model_name=cost_model_name" in source
