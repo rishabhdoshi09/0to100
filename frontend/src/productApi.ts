@@ -823,11 +823,22 @@ export type HomeOperatingSystem = {
     forward_improvement_lower_95?: number | null
     selection_is_currently_changed?: boolean
     current_decisions_influenced?: number
+    rank_impact?: {
+      moved_up?: number
+      moved_down?: number
+      score_changed_without_rank_move?: number
+      max_abs_score_delta?: number | null
+    }
     influenced_examples?: Array<{
       symbol?: string
       state?: string
       base_score?: number | null
       ranking_score?: number | null
+      score_delta?: number | null
+      rank_before_measured?: number | null
+      rank_after_measured?: number | null
+      rank_change?: number | null
+      measured_effect?: string
       evidence_adjustment?: number | null
       learning_adjustment?: number | null
       why?: string
