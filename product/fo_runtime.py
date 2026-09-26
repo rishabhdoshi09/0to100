@@ -153,7 +153,7 @@ def run_fo_directional_scan(
     history_getter=None,
 ) -> dict[str, Any]:
     """Run one complete read-only F&O directional scan."""
-    history_session: dict[str, Any] = {}
+    history_state: dict[str, Any] = {}
     if history_getter is None:
         from scan.bulk_fetcher import adopt_ready_store, get_cached
 
@@ -177,21 +177,21 @@ def run_fo_directional_scan(
         try:
             from data.nse_live import live_session_ready
 
-            history_session = dict(live_session_ready(apply=True) or {})
+            history_state = dict(live_session_ready(apply=True) or {})
         except Exception as exc:
-            history_session = {
+            history_state = {
                 "ready": False,
                 "source": "",
                 "session_date": "",
                 "reason": f"{type(exc).__name__}: {exc}"[:200],
             }
-        if not bool(history_session.get("ready")):
+        if not bool(history_state.get("ready")):
             return {
                 "available": False,
                 "status": "BLOCKED",
                 "code": "FNO_CURRENT_SESSION_UNAVAILABLE",
                 "universe_size": len(list(getattr(report, "underlyings", ()) or ())),
-                "history_session": history_session,
+                "history_state": history_state,
                 "candidates": [],
                 "paper_only": True,
                 "live_execution_allowed": False,
@@ -229,7 +229,7 @@ def run_fo_directional_scan(
             "deep_failures": [],
             "considered": considered,
             "quote_scope": {"deep_underlyings": 0, "option_contracts_requested": 0},
-            "history_session": history_session,
+            "history_state": history_state,
             "paper_only": True,
             "live_execution_allowed": False,
             "probability_claim": None,
@@ -398,7 +398,7 @@ def run_fo_directional_scan(
             "deep_underlyings": len(deep),
             "option_contracts_requested": len(option_symbols),
         },
-        "history_session": history_session,
+        "history_state": history_state,
         "paper_only": True,
         "live_execution_allowed": False,
         "probability_claim": None,
