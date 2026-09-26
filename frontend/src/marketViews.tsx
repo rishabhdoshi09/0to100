@@ -155,22 +155,63 @@ export function FnoView({ dashboard, runControl, setSelected, setActive }: Props
     setActive?.('Stock Intelligence')
   }
   const generatedAt = dashboard.fno.generated_at ? new Date(Number(dashboard.fno.generated_at) * 1000).toLocaleString('en-IN') : 'unknown'
+  const directional = dashboard.fno.directional || {}
+  const candidates = directional.candidates || []
+  const paper = dashboard.fno.paper || {}
+  const openPaper = paper.open_positions || []
+  const fmt = (value: number | null | undefined, digits = 2) => Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : '—'
   return (
     <section className="workspace-view">
       <div className="feature-purpose">
-        <strong>What F&O Coverage does—and does not do</strong>
-        <p>It answers whether a stock has current derivatives contracts, the nearest future, expiry and lot size. Acquire on Investigate can store a nearest-expiry OI / IV / PCR / max-pain snapshot for a mapped name. This page still does not calculate Greeks or trade direction, so it is not an F&O signal desk.</p>
+        <strong>NSE F&O directional options lab — PAPER ONLY</strong>
+        <p>QuantTerm now combines breakout/breakdown, VWAP, EMA20/50, RSI, ADX, relative/sector strength, NIFTY direction and futures OI, then ranks eligible CE/PE contracts using Greeks, liquidity, spread, IV, DTE and modelled payoff. Setup and option scores are quality scores—not win probabilities. Live execution remains disabled.</p>
       </div>
       <div className="inline-actions">
-        <button type="button" onClick={() => void runControl('REFRESH_FNO_NOW')}>Refresh instrument master</button>
+        <button type="button" onClick={() => void runControl('REFRESH_FNO_NOW')}>Refresh F&O scan</button>
         <input className="inline-search" placeholder="Search underlying…" value={query} onChange={(event: { target: { value: string } }) => setQuery(event.target.value)} />
       </div>
       <div className="view-metrics">
         <MetricCard label="MAPPED STOCKS" value={String(dashboard.fno.mapped_underlyings || 0)} detail={`Source ${dashboard.fno.source || 'unavailable'} · as of ${generatedAt}`} tone={dashboard.fno.available ? 'green' : 'amber'} />
-        <MetricCard label="STOCK UNDERLYINGS" value={String(dashboard.fno.unique_stock_underlyings || 0)} detail="Unique current stock derivative names" />
-        <MetricCard label="FUTURE CONTRACTS" value={String(dashboard.fno.total_future_contracts || 0)} detail={`${dashboard.fno.index_future_contracts || 0} index contracts kept separate`} tone="purple" />
-        <MetricCard label="MAPPING GAPS" value={String(dashboard.fno.exclusions.length)} detail="Names that could not be safely mapped" tone="amber" />
+        <MetricCard label="PAPER CANDIDATES" value={String(directional.candidate_count || 0)} detail={directional.status ? `${directional.status} · quality score ≠ probability` : 'Run F&O refresh for directional evidence'} tone={(directional.candidate_count || 0) > 0 ? 'green' : 'amber'} />
+        <MetricCard label="OPEN OPTION PAPERS" value={String(openPaper.length)} detail={`Realized ₹${fmt(paper.status?.realized_pnl)} · live money locked`} tone="purple" />
+        <MetricCard label="PRODUCTION EVIDENCE" value={paper.production_evidence_enabled ? 'ENABLED' : 'HELD'} detail={paper.production_evidence_enabled ? 'Fully-costed settled evidence exists' : 'Uncosted/gross-only trades cannot promote models'} tone={paper.production_evidence_enabled ? 'green' : 'amber'} />
       </div>
+
+      <div className="fno-layout">
+        <Panel title={`TOP DIRECTIONAL PAPER CANDIDATES · ${candidates.length}`} subtitle="Ranked by setup quality and contract quality; scenarios use constant-IV estimates">
+          <div className="exclusion-list">
+            {candidates.length === 0 && <div className="empty-row">{directional.code ? `${directional.code} · ` : ''}{directional.decision || 'No eligible directional option candidate in the latest scan.'}</div>}
+            {candidates.slice(0, 5).map((candidate, index) => {
+              const setup = candidate.setup || {}
+              const contract = candidate.selected_contract || {}
+              const plan = contract.trade_plan || {}
+              const expected = setup.expected_move || {}
+              return (
+                <button type="button" key={`${candidate.symbol}-${contract.symbol || index}`} onClick={() => select(candidate.symbol)}>
+                  <strong>{candidate.symbol} · {candidate.direction}</strong>
+                  <span>{contract.symbol || contract.option_type || 'No contract'} · setup {fmt(setup.score, 1)}/100 · option {fmt(contract.score, 1)}/100</span>
+                  <p>OI {words(setup.futures_oi_state || 'unknown')} · Δ {fmt(contract.delta, 2)} · IV {fmt(contract.iv, 1)}% · DTE {contract.dte ?? '—'} · horizon {words(expected.horizon || 'unknown')}</p>
+                  <small>Paper entry ₹{fmt(plan.entry)} · stop ₹{fmt(plan.stop)} · target ₹{fmt(plan.target)} · R:R {fmt(plan.risk_reward, 2)}</small>
+                </button>
+              )
+            })}
+          </div>
+        </Panel>
+
+        <Panel title={`F&O PAPER BOOK · ${openPaper.length} OPEN`} subtitle="Durable simulated positions only; broker order mutations are unavailable">
+          <div className="exclusion-list">
+            {openPaper.length === 0 && <div className="empty-row">No open option paper positions.</div>}
+            {openPaper.slice(0, 10).map((position, index) => (
+              <div key={position.trade_id || `${position.option_symbol}-${index}`}>
+                <strong>{position.underlying || '—'} · {position.option_symbol || '—'}</strong>
+                <span>{position.option_type || '—'} · qty {position.quantity ?? '—'} · setup {fmt(position.setup_score, 1)} · option {fmt(position.option_score, 1)}</span>
+                <p>Entry ₹{fmt(position.entry_price)} · stop ₹{fmt(position.stop_price)} · target ₹{fmt(position.target_price)} · max hold {position.max_holding_sessions ?? '—'} session(s)</p>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      </div>
+
       <div className="fno-layout">
         <Panel title={`CURRENT STOCK-DERIVATIVES COVERAGE · ${rows.length}`} subtitle="Click a stock to open its combined cash-market intelligence workspace"><FnoTable rows={rows} onSelect={select} /></Panel>
         <Panel title="MAPPING GAPS" subtitle="Nothing silently disappears"><div className="exclusion-list">{dashboard.fno.exclusions.length === 0 && <div className="empty-row">No mapping exclusions recorded.</div>}{dashboard.fno.exclusions.slice(0, 100).map((item, index) => <div key={`${item.underlying}-${index}`}><strong>{item.underlying}</strong><span>{words(item.stage)}</span><p>{item.reason}</p></div>)}</div></Panel>
