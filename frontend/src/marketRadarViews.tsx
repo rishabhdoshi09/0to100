@@ -717,6 +717,13 @@ function HomeOsCard({
             {os.learning_impact.challenger?.real_forward_n != null ? ` · real-forward n ${os.learning_impact.challenger.real_forward_n}` : ''}
             {os.learning_impact.policies?.production_effective != null ? ` · effective policies ${os.learning_impact.policies.production_effective}` : ''}
           </small>
+          <small>
+            Simulated {os.learning_impact.simulation?.historical_decisions_simulated ?? 0} decisions ·
+            {' '}virtual trades {os.learning_impact.simulation?.historical_virtual_paper_trades ?? 0} ·
+            {' '}correct rejects {os.learning_impact.simulation?.correct_rejects ?? 0} ·
+            {' '}avoided losers {os.learning_impact.simulation?.avoided_losers ?? 0} ·
+            {' '}missed winners {os.learning_impact.simulation?.missed_winners ?? 0}
+          </small>
         </div>
       ) : null}
       {os.us_market ? (
