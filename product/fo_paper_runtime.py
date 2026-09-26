@@ -95,7 +95,6 @@ def run_fo_paper_cycle(
                 row = trade.as_dict()
                 row["production_evidence_eligible"] = book.fully_costed
                 settled_rows.append(row)
-            store.append_trades(settled_rows)
 
         opened: list[dict[str, Any]] = []
         skipped: list[dict[str, str]] = []
@@ -153,7 +152,10 @@ def run_fo_paper_cycle(
                     continue
                 opened.append(pos.as_dict())
 
-        store.replace_positions(pos.as_dict() for pos in book.open.values())
+        store.commit_cycle(
+            settled_rows,
+            (pos.as_dict() for pos in book.open.values()),
+        )
         status = store.status()
         return {
             "available": True,
