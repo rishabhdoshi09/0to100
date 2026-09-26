@@ -13,10 +13,12 @@ AS_OF = date(2026, 9, 26)
 def _bars():
     n = 90
     x = np.arange(n, dtype=float)
-    close = 1000.0 + x * 1.3 + np.sin(x / 2.7) * 12.0
+    # Choppy uptrend: strong enough for a breakout, but deliberately below
+    # the production RSI>=82 blow-off rejection and above the liquidity floor.
+    close = 1000.0 + x * 1.3 + np.sin(x / 2.7) * 20.0
     high = close + 8.0
     low = close - 8.0
-    volume = np.full(n, 10_000.0)
+    volume = np.full(n, 100_000.0)
     prior_high = float(high[-21:-1].max())
     close[-1] = prior_high + 8.0
     high[-1] = close[-1] + 2.0
