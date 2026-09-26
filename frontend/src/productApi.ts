@@ -811,6 +811,10 @@ export type HomeOperatingSystem = {
   learning_impact?: {
     status?: string
     plain?: string
+    benefit_status?: string
+    benefit_plain?: string
+    forward_improvement_brier?: number | null
+    forward_improvement_lower_95?: number | null
     selection_is_currently_changed?: boolean
     current_decisions_influenced?: number
     influenced_examples?: Array<{
