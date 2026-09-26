@@ -360,3 +360,19 @@ def previous_future_close_oi(
         "oi": _f(row.get("oi")),
         "source": "ZERODHA_KITE_NFO_HISTORICAL_OI",
     }
+
+
+def quote_to_option_paper_mark(quote: Mapping[str, Any]) -> dict[str, float]:
+    """Normalize a full option quote into a conservative paper mark."""
+    ohlc = quote.get("ohlc")
+    ohlc = ohlc if isinstance(ohlc, Mapping) else {}
+    last = _f(quote.get("last_price"))
+    bid = _top_depth_price(quote, "buy")
+    return {
+        "open": _f(ohlc.get("open"), last),
+        "high": _f(ohlc.get("high"), last),
+        "low": _f(ohlc.get("low"), last),
+        "close": last,
+        "last_price": last,
+        "bid": bid,
+    }
