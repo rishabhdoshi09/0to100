@@ -515,6 +515,13 @@ function HomeOsCard({
               <span>{row.label || 'BUY'}</span>
               <strong>{row.found}</strong>
               <small>{depth === 'professional' ? (row.technical || row.meaning) : row.meaning}</small>
+              <small className="home-os-trade-levels">
+                CMP {row.cmp != null ? money(row.cmp, 2) : '—'} ·
+                {' '}Entry {row.entry != null ? money(row.entry, 2) : '—'} ·
+                {' '}Stop {row.stop != null ? money(row.stop, 2) : '—'} ·
+                {' '}Target {row.target != null ? money(row.target, 2) : '—'}
+                {row.upside_to_target_pct != null ? ` · target +${Number(row.upside_to_target_pct).toFixed(1)}%` : ''}
+              </small>
               <small className="home-os-confidence">
                 {row.confidence_score != null
                   ? `Evidence confidence ${Number(row.confidence_score).toFixed(1)}/100`
