@@ -894,6 +894,10 @@ export type HomeOperatingSystem = {
       forward_learning?: boolean
       learning_can_reorder_paper_only?: boolean
       historical_pit_replay?: boolean
+      pit_universe_archive_started?: boolean
+      pit_universe_archive_snapshots?: number
+      pit_universe_archive_first?: string
+      pit_universe_archive_latest?: string
       historical_pit_blocker?: string
       survivorship_biased_backtest_allowed?: boolean
       live_money_parity?: boolean
