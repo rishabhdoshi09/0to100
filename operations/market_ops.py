@@ -45,7 +45,7 @@ LANES = {
     LONG_TERM_REFRESH: "long_term",
     NEWS_REFRESH: "news",
     MARKET_REPORT: "news",
-    FNO_REFRESH: "data",
+    FNO_REFRESH: "fno",
     DATA_PREPARE: "data",
     DUE_DILIGENCE_ACQUIRE: "due_diligence",
     US_MARKET_SCAN: "us_market",
@@ -228,6 +228,14 @@ def _persist_fno_report(report) -> Path:
         "exclusions": [item.__dict__ for item in report.exclusions],
     }
     _atomic_json(path, payload)
+    return path
+
+
+def _persist_fo_directional(payload: dict[str, Any]) -> Path:
+    path = logs_dir() / "product" / "fo_directional.json"
+    body = dict(payload or {})
+    body.setdefault("generated_at", time.time())
+    _atomic_json(path, body)
     return path
 
 
@@ -916,19 +924,34 @@ class MarketOperationsWorker:
         operation_id = str(operation["operation_id"])
         self._progress(operation_id, "LOADING_INSTRUMENTS", "Refreshing NSE/NFO instrument master")
         from data.fno_universe import build_fno_universe, current_fno_universe
+        from research.intelligence.data import nse_calendar as CAL
+
+        now_ist = CAL._now_ist()
+        as_of = now_ist.date()
         report = None
         live_error = ""
+        rows: list[dict[str, Any]] = []
+        market_client = None
         try:
-            from research.intelligence.data.kite_activation import KiteDataClient
-            client = KiteDataClient.from_config()
-            rows = [dict(row) for row in (list(client.instruments("NSE")) + list(client.instruments("NFO")))]
+            from data.nfo_market import NfoMarketDataClient
+
+            market_client = NfoMarketDataClient.from_config()
+            rows = [
+                dict(row)
+                for row in (
+                    list(market_client.instruments("NSE"))
+                    + list(market_client.instruments("NFO"))
+                )
+            ]
             if rows:
                 _write_instrument_cache(rows)
-                report = build_fno_universe(rows, as_of=None, source="zerodha_kite")
+                report = build_fno_universe(rows, as_of=as_of, source="zerodha_kite")
         except Exception as exc:
             live_error = str(exc)
+
         if report is None:
-            report = current_fno_universe()
+            report = current_fno_universe(as_of=as_of)
+
         result = {
             "source": report.source,
             "live_refresh_error": live_error,
@@ -940,12 +963,136 @@ class MarketOperationsWorker:
             "exclusions": len(report.exclusions),
         }
         _persist_fno_report(report)
+
         if report.mapped_underlyings <= 0:
+            _persist_fo_directional({
+                "available": False,
+                "status": "BLOCKED",
+                "code": "FNO_UNIVERSE_UNAVAILABLE",
+                "candidates": [],
+                "paper_only": True,
+                "live_execution_allowed": False,
+            })
             raise OperationBlocked(
                 "No current stock F&O underlyings could be mapped; Zerodha login or instrument cache is required",
                 code="FNO_UNIVERSE_UNAVAILABLE",
                 result=result,
             )
+
+        directional: dict[str, Any]
+        if market_client is None or not rows:
+            directional = {
+                "available": False,
+                "status": "BLOCKED",
+                "code": "NFO_LIVE_MARKET_DATA_UNAVAILABLE",
+                "reason": live_error or "Connected read-only Zerodha derivatives data is unavailable",
+                "universe_size": report.mapped_underlyings,
+                "candidates": [],
+                "paper_only": True,
+                "live_execution_allowed": False,
+            }
+        else:
+            self._progress(
+                operation_id,
+                "SCANNING_DIRECTIONAL_OPTIONS",
+                "Evaluating F&O breakouts, futures OI and bounded option chains",
+            )
+            try:
+                from product.fo_runtime import run_fo_directional_scan
+
+                directional = run_fo_directional_scan(
+                    report=report,
+                    instrument_rows=rows,
+                    client=market_client,
+                    as_of=as_of,
+                )
+            except Exception as exc:
+                directional = {
+                    "available": False,
+                    "status": "BLOCKED",
+                    "code": "FNO_DIRECTIONAL_SCAN_ERROR",
+                    "reason": f"{type(exc).__name__}: {exc}"[:240],
+                    "universe_size": report.mapped_underlyings,
+                    "candidates": [],
+                    "paper_only": True,
+                    "live_execution_allowed": False,
+                }
+
+        _persist_fo_directional(directional)
+
+        # Forward F&O paper evidence is advanced only on a real NSE session.
+        # DATA_PREPARE can call _run_fno off-hours/weekends, so never let that
+        # maintenance path consume a fake holding session. New option risk is
+        # even stricter: only the canonical 09:30-15:15 entry window may open it.
+        paper: dict[str, Any]
+        if market_client is None:
+            paper = {
+                "available": False,
+                "status": "BLOCKED",
+                "code": "NFO_PAPER_QUOTES_UNAVAILABLE",
+                "paper_only": True,
+                "live_execution_allowed": False,
+            }
+        else:
+            try:
+                from product.fo_paper_runtime import run_fo_paper_cycle
+                from product.fo_paper_store import FoPaperStore
+                from research.autonomy import schedules as SCH
+
+                holidays = CAL.load_holidays()
+                minute = now_ist.hour * 60 + now_ist.minute
+                session_day = CAL.is_session(now_ist.date(), holidays)
+                manage_window = session_day and (9 * 60 + 15) <= minute <= (15 * 60 + 40)
+                allow_new_entries = bool(
+                    manage_window and SCH.entries_allowed_by_clock(now_ist, holidays)
+                )
+                if manage_window:
+                    paper = run_fo_paper_cycle(
+                        directional,
+                        client=market_client,
+                        now_ist=now_ist,
+                        allow_new_entries=allow_new_entries,
+                    )
+                    paper["cycle_ran"] = True
+                else:
+                    with FoPaperStore() as paper_store:
+                        store_status = paper_store.status()
+                        open_positions = paper_store.load_positions()
+                    paper = {
+                        "available": True,
+                        "status": "IDLE",
+                        "reason": "NSE_PAPER_MANAGEMENT_WINDOW_CLOSED",
+                        "session": now_ist.date().isoformat(),
+                        "new_entries_allowed": False,
+                        "cycle_ran": False,
+                        "open_count": int(store_status.get("open_positions") or 0),
+                        "open_positions": open_positions,
+                        "store": store_status,
+                        "paper_only": True,
+                        "live_execution_allowed": False,
+                    }
+            except Exception as exc:
+                paper = {
+                    "available": False,
+                    "status": "BLOCKED",
+                    "code": "FNO_PAPER_CYCLE_ERROR",
+                    "reason": f"{type(exc).__name__}: {exc}"[:240],
+                    "paper_only": True,
+                    "live_execution_allowed": False,
+                }
+
+        result["directional"] = {
+            "available": bool(directional.get("available")),
+            "status": directional.get("status"),
+            "code": directional.get("code"),
+            "decision": directional.get("decision"),
+            "prefilter_passed": int(directional.get("prefilter_passed") or 0),
+            "deep_evaluated": int(directional.get("deep_evaluated") or 0),
+            "candidate_count": int(directional.get("candidate_count") or 0),
+            "paper_only": True,
+            "live_execution_allowed": False,
+        }
+        result["paper"] = paper
         return result
 
     def _run_data_prepare(self, operation: dict[str, Any]) -> dict[str, Any]:

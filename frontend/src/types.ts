@@ -163,6 +163,104 @@ export type FnoExclusion = {
   reason: string
 }
 
+
+export type FnoDirectionalCandidate = {
+  symbol: string
+  direction: 'LONG' | 'SHORT' | string
+  decision: string
+  setup?: {
+    score?: number
+    score_is_probability?: boolean
+    futures_oi_state?: string
+    expected_move?: {
+      lower_pct?: number
+      upper_pct?: number
+      mid_pct?: number
+      horizon?: string
+      holding_days?: number
+    }
+    blockers?: string[]
+    reasons?: string[]
+  }
+  selected_contract?: {
+    symbol?: string
+    option_type?: 'CE' | 'PE' | string
+    strike?: number
+    expiry?: string
+    dte?: number
+    premium?: number
+    bid?: number
+    ask?: number
+    spread_pct?: number | null
+    volume?: number
+    oi?: number
+    iv?: number
+    delta?: number
+    gamma?: number
+    theta_per_day?: number
+    vega_per_vol_point?: number
+    score?: number
+    score_is_probability?: boolean
+    projected_return_at_expected_move_pct?: number
+    trade_plan?: {
+      entry?: number
+      stop?: number | null
+      target?: number | null
+      risk_reward?: number
+      underlying_invalidation?: number | null
+      model?: string
+    }
+  }
+  paper_only?: boolean
+  live_execution_allowed?: boolean
+}
+
+export type FnoDirectionalState = {
+  available?: boolean
+  status?: string
+  code?: string
+  decision?: string | null
+  candidate_count?: number
+  candidates?: FnoDirectionalCandidate[]
+  paper_only?: boolean
+  live_execution_allowed?: boolean
+  cache_mtime?: number | null
+}
+
+export type FnoPaperPosition = {
+  trade_id?: string
+  underlying?: string
+  option_symbol?: string
+  option_type?: string
+  entry_price?: number
+  stop_price?: number
+  target_price?: number
+  quantity?: number
+  lots?: number
+  setup_score?: number
+  option_score?: number
+  opened_at?: string
+  max_holding_sessions?: number
+  context_key?: string
+}
+
+export type FnoPaperState = {
+  available?: boolean
+  status?: {
+    schema_version?: number
+    open_positions?: number
+    closed_trades?: number
+    production_evidence_trades?: number
+    realized_pnl?: number
+  }
+  open_positions?: FnoPaperPosition[]
+  recent_closed_trades?: Array<Record<string, unknown>>
+  production_evidence_enabled?: boolean
+  paper_only?: boolean
+  live_execution_allowed?: boolean
+  error?: string
+}
+
 export type DataReadiness = {
   ready: boolean
   snapshot: {
@@ -422,6 +520,8 @@ export type DashboardPayload = {
     mapped_underlyings: number
     underlyings: FnoUnderlying[]
     exclusions: FnoExclusion[]
+    directional?: FnoDirectionalState
+    paper?: FnoPaperState
     cache_mtime?: number | null
     error?: string
   }

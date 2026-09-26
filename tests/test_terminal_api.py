@@ -447,3 +447,58 @@ def test_home_and_forward_verifier_share_scan_artifact_override(tmp_path, monkey
     assert verifier_scan["path"] == str(scan_path)
     assert verifier_scan["payload"]["scanned"] == 598
     assert verifier_scan["payload"]["scanned_at"] == home_scan["scanned_at"]
+
+
+def test_fno_payload_exposes_durable_paper_state_without_live_authority(monkeypatch, tmp_path):
+    from product import fo_paper_store
+
+    real_cls = fo_paper_store.FoPaperStore
+    db = tmp_path / "fo-paper.sqlite3"
+
+    class TempStore(real_cls):
+        def __init__(self):
+            super().__init__(db)
+
+    with TempStore() as store:
+        store.replace_positions([{
+            "trade_id": "T1",
+            "option_symbol": "TEST26OCTCE",
+            "underlying": "TEST",
+            "option_type": "CE",
+            "entry_price": 50.0,
+            "stop_price": 40.0,
+            "target_price": 70.0,
+            "lot_size": 50,
+            "lots": 1,
+            "quantity": 50,
+            "opened_at": "2026-09-25T10:00:00+05:30",
+            "max_holding_sessions": 2,
+            "risk_amount": 500.0,
+            "setup_score": 75.0,
+            "option_score": 82.0,
+            "context_key": "CTX",
+            "bars_held": 0,
+            "last_mark_session": "2026-09-25",
+            "max_mark": 50.0,
+            "min_mark": 50.0,
+        }])
+
+    monkeypatch.setattr(fo_paper_store, "FoPaperStore", TempStore)
+    monkeypatch.setattr(terminal_api, "_fo_directional_payload", lambda: {
+        "available": True,
+        "status": "READY",
+        "candidate_count": 1,
+        "candidates": [],
+        "paper_only": True,
+        "live_execution_allowed": False,
+    })
+    monkeypatch.setattr(terminal_api, "_json_file", lambda *_a, **_k: {})
+
+    payload = terminal_api._fno_payload()
+
+    assert payload["paper"]["available"] is True
+    assert payload["paper"]["status"]["open_positions"] == 1
+    assert payload["paper"]["open_positions"][0]["option_symbol"] == "TEST26OCTCE"
+    assert payload["paper"]["production_evidence_enabled"] is False
+    assert payload["paper"]["paper_only"] is True
+    assert payload["paper"]["live_execution_allowed"] is False
