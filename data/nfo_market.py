@@ -6,11 +6,55 @@ selection can fail closed instead of fabricating tradability.
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Iterable, Mapping, Sequence
 
 from data.fno_universe import INDEX_UNDERLYINGS
 from options.directional_selector import implied_volatility
+
+
+class NfoMarketDataClient:
+    """Read-only broker facade for derivatives market data.
+
+    The underlying authenticated SDK remains private. No order/GTT mutation
+    method is exposed on this object, so the F&O paper lane cannot call one.
+    """
+    is_data_only = True
+
+    def __init__(self, session) -> None:
+        self._session = session
+
+    @classmethod
+    def from_config(cls) -> "NfoMarketDataClient":
+        from data.kite_client import KiteClient
+
+        client = KiteClient()
+        if not client.is_connected():
+            raise RuntimeError("no connected Zerodha session for NFO market data")
+        return cls(client.raw)
+
+    def instruments(self, exchange: str) -> list:
+        return list(self._session.instruments(exchange))
+
+    def quote(self, keys: Sequence[str]) -> Mapping[str, Any]:
+        return self._session.quote(list(keys))
+
+    def historical_with_oi(
+        self,
+        instrument_token: int,
+        from_date: str,
+        to_date: str,
+        interval: str = "day",
+    ) -> list:
+        return list(
+            self._session.historical_data(
+                instrument_token,
+                from_date,
+                to_date,
+                interval,
+                oi=True,
+            )
+        )
 
 
 def _f(value: Any, default: float = 0.0) -> float:
@@ -122,6 +166,29 @@ def option_instruments(
     return out
 
 
+def candidate_option_instruments(
+    instruments: Iterable[Mapping[str, Any]],
+    underlying: str,
+    *,
+    spot: float,
+    as_of: date | None = None,
+    max_expiries: int = 2,
+    max_moneyness_pct: float = 8.0,
+) -> list[dict[str, Any]]:
+    """Bound quote traffic to plausible near-money contracts."""
+    spot = _f(spot)
+    if spot <= 0:
+        return []
+    width = max(0.01, float(max_moneyness_pct)) / 100.0
+    lo, hi = spot * (1.0 - width), spot * (1.0 + width)
+    return [
+        row for row in option_instruments(
+            instruments, underlying, as_of=as_of, max_expiries=max_expiries,
+        )
+        if lo <= _f(row.get("strike")) <= hi
+    ]
+
+
 def _top_depth_price(quote: Mapping[str, Any], side: str) -> float:
     depth = quote.get("depth")
     if not isinstance(depth, Mapping):
@@ -211,26 +278,85 @@ def futures_oi_features(
 def read_nfo_instruments(client=None) -> list[dict[str, Any]]:
     """Read the broker instrument master. No trading capability is used."""
     if client is None:
-        from data.kite_client import KiteClient
-        client = KiteClient()
-    rows = client.raw.instruments("NFO")
+        client = NfoMarketDataClient.from_config()
+    if hasattr(client, "instruments"):
+        rows = client.instruments("NFO")
+    else:
+        rows = client.raw.instruments("NFO")
     return [dict(row) for row in rows if isinstance(row, Mapping)]
 
 
 def read_nfo_quotes(tradingsymbols: Sequence[str], client=None) -> dict[str, dict[str, Any]]:
     """Read full NFO quotes in bounded batches, retaining OI and market depth."""
     if client is None:
-        from data.kite_client import KiteClient
-        client = KiteClient()
+        client = NfoMarketDataClient.from_config()
     wanted = [str(symbol).strip() for symbol in tradingsymbols if str(symbol).strip()]
     out: dict[str, dict[str, Any]] = {}
     for start in range(0, len(wanted), 500):
         chunk = wanted[start:start + 500]
         keys = [f"NFO:{symbol}" for symbol in chunk]
-        raw = client.raw.quote(keys)
+        raw = client.quote(keys) if hasattr(client, "quote") else client.raw.quote(keys)
         if not isinstance(raw, Mapping):
             continue
         for key, value in raw.items():
             if isinstance(value, Mapping):
                 out[str(key).split(":", 1)[-1]] = dict(value)
     return out
+
+
+def read_market_quotes(keys: Sequence[str], client=None) -> dict[str, dict[str, Any]]:
+    """Read full quotes for already exchange-qualified market-data keys."""
+    if client is None:
+        client = NfoMarketDataClient.from_config()
+    wanted = [str(key).strip() for key in keys if str(key).strip()]
+    out: dict[str, dict[str, Any]] = {}
+    for start in range(0, len(wanted), 500):
+        chunk = wanted[start:start + 500]
+        raw = client.quote(chunk) if hasattr(client, "quote") else client.raw.quote(chunk)
+        if not isinstance(raw, Mapping):
+            continue
+        for key, value in raw.items():
+            if isinstance(value, Mapping):
+                out[str(key)] = dict(value)
+    return out
+
+
+def previous_future_close_oi(
+    instrument_token: int,
+    *,
+    as_of: date,
+    client=None,
+    lookback_days: int = 12,
+) -> dict[str, Any] | None:
+    """Latest completed daily futures close/OI strictly before the as-of date."""
+    if not instrument_token:
+        return None
+    if client is None:
+        client = NfoMarketDataClient.from_config()
+    end = as_of - timedelta(days=1)
+    start = end - timedelta(days=max(3, int(lookback_days)))
+    if hasattr(client, "historical_with_oi"):
+        rows = client.historical_with_oi(
+            int(instrument_token), start.isoformat(), end.isoformat(), "day",
+        )
+    else:
+        rows = client.raw.historical_data(
+            int(instrument_token), start.isoformat(), end.isoformat(), "day", oi=True,
+        )
+    valid = []
+    for row in rows or []:
+        if not isinstance(row, Mapping):
+            continue
+        close = _f(row.get("close"))
+        oi = _f(row.get("oi"))
+        if close > 0 and oi > 0:
+            valid.append(dict(row))
+    if not valid:
+        return None
+    row = valid[-1]
+    return {
+        "date": str(row.get("date") or "")[:10],
+        "close": _f(row.get("close")),
+        "oi": _f(row.get("oi")),
+        "source": "ZERODHA_KITE_NFO_HISTORICAL_OI",
+    }
