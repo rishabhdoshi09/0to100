@@ -60,6 +60,9 @@ def run_fo_paper_cycle(
             cost_model=cost_model,
             cost_model_name=cost_model_name,
         )
+        # Closed-trade P&L is durable and must survive process restarts; otherwise
+        # every cycle silently sizes from the original capital again.
+        book.realized_pnl = float(store.realized_pnl())
         for raw in store.load_positions():
             pos = _restore_position(raw)
             if pos is not None:
@@ -166,6 +169,8 @@ def run_fo_paper_cycle(
             "skipped": skipped,
             "open_positions": [pos.as_dict() for pos in book.open.values()],
             "store": status,
+            "realized_pnl": round(book.realized_pnl, 2),
+            "equity_for_sizing": round(max(0.0, book.capital + book.realized_pnl), 2),
             "production_evidence_enabled": book.fully_costed,
             "evidence_cost_status": (
                 f"CONFIGURED:{cost_model_name}" if book.fully_costed
