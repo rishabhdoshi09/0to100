@@ -761,14 +761,49 @@ def _fo_directional_payload() -> dict[str, Any]:
     return payload
 
 
+def _fo_paper_payload() -> dict[str, Any]:
+    """Read durable NSE F&O paper state without creating market activity."""
+    try:
+        from product.fo_paper_store import FoPaperStore
+
+        with FoPaperStore() as store:
+            status = store.status()
+            open_positions = store.load_positions()
+            recent_closed = store.load_trades(limit=50)
+        return {
+            "available": True,
+            "status": status,
+            "open_positions": open_positions,
+            "recent_closed_trades": recent_closed,
+            "production_evidence_enabled": int(
+                status.get("production_evidence_trades") or 0
+            ) > 0,
+            "paper_only": True,
+            "live_execution_allowed": False,
+        }
+    except Exception as exc:
+        return {
+            "available": False,
+            "status": {},
+            "open_positions": [],
+            "recent_closed_trades": [],
+            "production_evidence_enabled": False,
+            "paper_only": True,
+            "live_execution_allowed": False,
+            "error": str(exc)[:240],
+        }
+
+
 def _fno_payload() -> dict[str, Any]:
     path = logs_dir() / "product" / "fno_universe.json"
     persisted = _json_file(path, {})
     directional = _fo_directional_payload()
+    paper = _fo_paper_payload()
     if persisted:
         persisted["available"] = int(persisted.get("mapped_underlyings", 0) or 0) > 0
         persisted["cache_mtime"] = path.stat().st_mtime if path.exists() else None
         persisted["directional"] = directional
+        persisted["paper"] = paper
         return persisted
     try:
         from data.fno_universe import current_fno_universe
@@ -785,6 +820,7 @@ def _fno_payload() -> dict[str, Any]:
             "underlyings": [item.__dict__ for item in report.underlyings],
             "exclusions": [item.__dict__ for item in report.exclusions],
             "directional": directional,
+            "paper": paper,
         }
     except Exception as exc:
         return {
@@ -794,6 +830,7 @@ def _fno_payload() -> dict[str, Any]:
             "underlyings": [],
             "exclusions": [],
             "directional": directional,
+            "paper": paper,
             "error": str(exc),
         }
 
