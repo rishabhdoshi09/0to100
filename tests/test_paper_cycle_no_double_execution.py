@@ -60,7 +60,7 @@ def test_internal_type_error_does_not_re_run_the_cycle():
     assert len(calls) == 1, f"cycle ran {len(calls)} times from one job"
     assert len(positions) == 1, f"{len(positions)} paper positions from one job run"
     assert result.status == JOBS.JS.PERMANENT_FAILED
-    assert result.error_code == "CYCLE_ERROR"
+    assert result.error_code == "PAPER_CYCLE_UNCERTAIN_MUTATION"
 
 
 def test_legacy_single_argument_dependency_is_still_supported():
