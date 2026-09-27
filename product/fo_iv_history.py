@@ -47,7 +47,12 @@ def _nearest_pair(
     *,
     spot: float,
 ) -> list[dict[str, Any]]:
-    """Nearest-expiry, nearest-strike CE+PE metadata. Require both sides."""
+    """Nearest-expiry CE+PE at one common strike nearest spot.
+
+    A volatility observation must represent one actual straddle. Independently
+    choosing the nearest CE and PE can silently mix strikes when one leg is
+    missing, biasing the stored IV history.
+    """
     spot = _f(spot)
     if spot <= 0:
         return []
@@ -55,16 +60,29 @@ def _nearest_pair(
     if not expiries:
         return []
     expiry = expiries[0]
+
+    by_side: dict[str, dict[float, list[dict[str, Any]]]] = {"CE": {}, "PE": {}}
+    for raw in option_metas:
+        side = _kind(raw)
+        if _expiry(raw) != expiry or side not in by_side:
+            continue
+        strike = _f(raw.get("strike"))
+        if strike <= 0:
+            continue
+        by_side[side].setdefault(strike, []).append(dict(raw))
+
+    common = sorted(
+        set(by_side["CE"]) & set(by_side["PE"]),
+        key=lambda strike: (abs(strike - spot), strike),
+    )
+    if not common:
+        return []
+    strike = common[0]
+
     chosen: list[dict[str, Any]] = []
     for side in ("CE", "PE"):
-        rows = [
-            dict(row)
-            for row in option_metas
-            if _expiry(row) == expiry and _kind(row) == side and _f(row.get("strike")) > 0
-        ]
-        if not rows:
-            return []
-        rows.sort(key=lambda row: abs(_f(row.get("strike")) - spot))
+        rows = by_side[side][strike]
+        rows.sort(key=lambda row: str(row.get("tradingsymbol") or ""))
         chosen.append(rows[0])
     return chosen
 
