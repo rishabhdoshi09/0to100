@@ -275,12 +275,13 @@ class _CloseClient:
 def test_close_snapshot_persists_one_forward_observation_per_session(tmp_path):
     rows = _option_rows()
     client = _CloseClient(rows)
+    trading_session = date(2026, 9, 25)
     with FoIvHistoryStore(tmp_path / "iv.sqlite3") as store:
         first = collect_close_iv_snapshot(
             symbols=["ABC"],
             instrument_rows=rows,
             client=client,
-            as_of=AS_OF,
+            as_of=trading_session,
             store=store,
         )
         assert first["persisted_symbols"] == 1
@@ -292,11 +293,30 @@ def test_close_snapshot_persists_one_forward_observation_per_session(tmp_path):
             symbols=["ABC"],
             instrument_rows=rows,
             client=client,
-            as_of=AS_OF,
+            as_of=trading_session,
             store=store,
         )
         assert second["store"]["rows"] == 1
         assert second["store"]["symbols"] == 1
+
+
+def test_close_snapshot_rejects_non_trading_session_without_writing(tmp_path):
+    rows = _option_rows()
+    client = _CloseClient(rows)
+    path = tmp_path / "iv.sqlite3"
+    with FoIvHistoryStore(path) as store:
+        result = collect_close_iv_snapshot(
+            symbols=["ABC"],
+            instrument_rows=rows,
+            client=client,
+            as_of=AS_OF,  # Sunday 2026-09-27
+            store=store,
+        )
+        assert result["available"] is False
+        assert result["status"] == "BLOCKED"
+        assert result["reason"] == "NON_TRADING_SESSION"
+        assert result["persisted_symbols"] == 0
+        assert store.status()["rows"] == 0
 
 
 def test_market_ops_collects_iv_history_only_on_closing_slot():
