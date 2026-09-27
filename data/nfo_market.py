@@ -56,6 +56,24 @@ class NfoMarketDataClient:
             )
         )
 
+    def historical(
+        self,
+        instrument_token: int,
+        from_date: str,
+        to_date: str,
+        interval: str = "minute",
+    ) -> list:
+        """Read price bars only; this facade still exposes no order surface."""
+        return list(
+            self._session.historical_data(
+                instrument_token,
+                from_date,
+                to_date,
+                interval,
+                oi=False,
+            )
+        )
+
 
 def _f(value: Any, default: float = 0.0) -> float:
     try:
@@ -359,6 +377,61 @@ def previous_future_close_oi(
         "close": _f(row.get("close")),
         "oi": _f(row.get("oi")),
         "source": "ZERODHA_KITE_NFO_HISTORICAL_OI",
+    }
+
+
+def read_option_intraday_mark(
+    instrument_token: int,
+    *,
+    from_dt: datetime,
+    to_dt: datetime,
+    client=None,
+    interval: str = "minute",
+) -> dict[str, float] | None:
+    """Aggregate read-only option bars strictly from a supplied post-entry window.
+
+    The caller owns the time boundary. This helper never widens the requested
+    window and never substitutes full-day OHLC, so a paper trade cannot inherit
+    extrema that occurred before its entry.
+    """
+    token = int(instrument_token or 0)
+    if token <= 0 or to_dt <= from_dt:
+        return None
+    if client is None:
+        client = NfoMarketDataClient.from_config()
+
+    frm = from_dt.strftime("%Y-%m-%d %H:%M:%S")
+    to = to_dt.strftime("%Y-%m-%d %H:%M:%S")
+    if hasattr(client, "historical"):
+        rows = client.historical(token, frm, to, interval)
+    else:
+        raw = getattr(client, "raw", client)
+        rows = raw.historical_data(token, frm, to, interval, oi=False)
+
+    valid: list[dict[str, float]] = []
+    for raw_row in rows or []:
+        if not isinstance(raw_row, Mapping):
+            continue
+        close = _f(raw_row.get("close"))
+        if close <= 0:
+            continue
+        open_px = _f(raw_row.get("open"), close)
+        high = _f(raw_row.get("high"), close)
+        low = _f(raw_row.get("low"), close)
+        valid.append({
+            "open": open_px if open_px > 0 else close,
+            "high": high if high > 0 else close,
+            "low": low if low > 0 else close,
+            "close": close,
+        })
+    if not valid:
+        return None
+    return {
+        "open": valid[0]["open"],
+        "high": max(row["high"] for row in valid),
+        "low": min(row["low"] for row in valid),
+        "close": valid[-1]["close"],
+        "last_price": valid[-1]["close"],
     }
 
 
