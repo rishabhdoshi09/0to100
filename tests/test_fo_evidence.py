@@ -187,3 +187,45 @@ def test_broader_coverage_never_crosses_context_schema_versions():
     assert coverage["exact_n"] == 5
     assert coverage["direction_n"] == 5
     assert coverage["production_influence_allowed"] is False
+
+
+
+def test_path_uncertain_forward_rows_never_create_probability_claim():
+    rows = _rows(n=40)
+    for row in rows:
+        row["production_evidence_eligible"] = False
+        row["cost_model_status"] = "CONFIGURED:TEST_COSTS"
+        row["entry_minute_status"] = "AMBIGUOUS_BOUNDARY_TOUCH"
+        row["path_observation_complete"] = False
+        row["evidence_exclusion_reason"] = "ENTRY_MINUTE_AMBIGUOUS_BOUNDARY_TOUCH"
+
+    result = summarize_fo_outcomes(rows, context_key=_canonical_context(), min_n=30)
+
+    assert result["observed_n"] == 40
+    assert result["n"] == 0
+    assert result["excluded_unpriced_costs"] == 0
+    assert result["excluded_path_observation"] == 40
+    assert result["excluded_other_ineligible"] == 0
+    assert result["probability_claim_available"] is False
+    assert result["win_probability_pct"] is None
+    assert result["expectancy_pct"] is None
+    assert result["production_influence_allowed"] is False
+
+
+
+def test_cost_and_path_exclusions_are_counted_independently():
+    rows = _rows(n=4)
+    for row in rows:
+        row["production_evidence_eligible"] = False
+        row["cost_model_status"] = "UNCONFIGURED_GROSS_ONLY"
+        row["path_observation_complete"] = False
+        row["entry_minute_status"] = "UNAVAILABLE"
+
+    result = summarize_fo_outcomes(rows, context_key=_canonical_context(), min_n=30)
+
+    assert result["observed_n"] == 4
+    assert result["n"] == 0
+    assert result["excluded_unpriced_costs"] == 4
+    assert result["excluded_path_observation"] == 4
+    assert result["excluded_other_ineligible"] == 0
+    assert result["probability_claim_available"] is False

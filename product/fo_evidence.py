@@ -170,6 +170,8 @@ def summarize_fo_outcomes(
     observed_rows = []
     rows = []
     excluded_unpriced_costs = 0
+    excluded_path_observation = 0
+    excluded_other_ineligible = 0
     for raw in outcomes:
         row = dict(raw)
         if not bool(row.get("settled", False)):
@@ -185,7 +187,29 @@ def summarize_fo_outcomes(
             evidence_lane == FORWARD_PAPER
             and not bool(row.get("production_evidence_eligible", False))
         ):
-            excluded_unpriced_costs += 1
+            cost_status = str(row.get("cost_model_status") or "").upper()
+            exclusion = str(row.get("evidence_exclusion_reason") or "").upper()
+            entry_status = str(row.get("entry_minute_status") or "").upper()
+            cost_excluded = bool(
+                cost_status.startswith("UNCONFIGURED")
+                or exclusion == "COST_MODEL_UNCONFIGURED"
+            )
+            path_excluded = bool(
+                row.get("path_observation_complete") is False
+                or exclusion.startswith("ENTRY_MINUTE_")
+                or exclusion.startswith("EXIT_")
+                or entry_status in {
+                    "PENDING",
+                    "AMBIGUOUS_BOUNDARY_TOUCH",
+                    "UNAVAILABLE",
+                }
+            )
+            if cost_excluded:
+                excluded_unpriced_costs += 1
+            if path_excluded:
+                excluded_path_observation += 1
+            if not cost_excluded and not path_excluded:
+                excluded_other_ineligible += 1
             continue
         rows.append(row)
 
@@ -219,6 +243,8 @@ def summarize_fo_outcomes(
         "observed_n": len(observed_rows),
         "n": n,
         "excluded_unpriced_costs": excluded_unpriced_costs,
+        "excluded_path_observation": excluded_path_observation,
+        "excluded_other_ineligible": excluded_other_ineligible,
         "wins": len(wins),
         "losses": len(losses),
         "probability_claim_available": claim,

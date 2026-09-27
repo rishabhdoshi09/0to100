@@ -10,7 +10,16 @@ from data.nfo_market import (
     read_nfo_quotes,
     read_option_intraday_bars,
 )
-from product.fo_paper import FoPaperBook, FoPaperPosition
+from product.fo_paper import (
+    ENTRY_MINUTE_AMBIGUOUS,
+    ENTRY_MINUTE_CLEAR,
+    ENTRY_MINUTE_EVIDENCE_OK,
+    ENTRY_MINUTE_FULLY_OBSERVED,
+    ENTRY_MINUTE_PENDING,
+    ENTRY_MINUTE_UNAVAILABLE,
+    FoPaperBook,
+    FoPaperPosition,
+)
 from product.fo_paper_store import FoPaperStore
 
 
@@ -23,8 +32,7 @@ def _restore_position(payload: Mapping[str, Any]) -> FoPaperPosition | None:
         return None
 
 
-def _post_entry_intraday_start(opened_at: str, now_ist: datetime) -> datetime | None:
-    """First full minute that cannot contain time before the paper entry."""
+def _opened_at_datetime(opened_at: str, now_ist: datetime) -> datetime | None:
     try:
         opened = datetime.fromisoformat(str(opened_at))
     except (TypeError, ValueError):
@@ -33,10 +41,70 @@ def _post_entry_intraday_start(opened_at: str, now_ist: datetime) -> datetime | 
         opened = opened.replace(tzinfo=now_ist.tzinfo)
     if opened.tzinfo is not None and now_ist.tzinfo is not None:
         opened = opened.astimezone(now_ist.tzinfo)
+    return opened
+
+
+def _post_entry_intraday_start(opened_at: str, now_ist: datetime) -> datetime | None:
+    """First full minute that cannot contain time before the paper entry."""
+    opened = _opened_at_datetime(opened_at, now_ist)
+    if opened is None:
+        return None
     start = opened.replace(second=0, microsecond=0)
     if opened.second or opened.microsecond:
         start += timedelta(minutes=1)
     return start if start < now_ist else None
+
+
+def _audit_entry_minute(pos: FoPaperPosition, *, client, now_ist: datetime) -> str:
+    """Prove whether the excluded partial entry minute could hide an exit.
+
+    We never replay a partial minute because its extrema include time before the
+    paper entry. Instead, its full range is used only as a proof test:
+    - no stop/target touch anywhere => the post-entry slice also could not touch;
+    - any boundary touch => timing is unknowable, so the outcome stays research-only;
+    - an exact minute-boundary entry is fully observable and may be replayed.
+    """
+    current = str(pos.entry_minute_status or ENTRY_MINUTE_PENDING).upper()
+    if current in ENTRY_MINUTE_EVIDENCE_OK or current == ENTRY_MINUTE_AMBIGUOUS:
+        return current
+
+    opened = _opened_at_datetime(pos.opened_at, now_ist)
+    token = int(pos.instrument_token or 0)
+    if opened is None or token <= 0:
+        return ENTRY_MINUTE_UNAVAILABLE
+
+    minute_start = opened.replace(second=0, microsecond=0)
+    minute_end = minute_start + timedelta(minutes=1)
+    if now_ist < minute_end:
+        return ENTRY_MINUTE_PENDING
+
+    try:
+        bars = read_option_intraday_bars(
+            token,
+            from_dt=minute_start,
+            to_dt=minute_end - timedelta(seconds=1),
+            client=client,
+            interval="minute",
+        )
+    except Exception:
+        return ENTRY_MINUTE_UNAVAILABLE
+    if not bars:
+        return ENTRY_MINUTE_UNAVAILABLE
+
+    # If the paper fill occurred exactly on the minute boundary, this entire
+    # minute is post-entry and chronological replay can observe it directly.
+    if opened.second == 0 and opened.microsecond == 0:
+        return ENTRY_MINUTE_FULLY_OBSERVED
+
+    bar = bars[0]
+    close = float(bar.get("close") or 0.0)
+    high = float(bar.get("high") or close)
+    low = float(bar.get("low") or close)
+    if close <= 0 or high <= 0 or low <= 0:
+        return ENTRY_MINUTE_UNAVAILABLE
+    if low <= float(pos.stop_price) or high >= float(pos.target_price):
+        return ENTRY_MINUTE_AMBIGUOUS
+    return ENTRY_MINUTE_CLEAR
 
 
 def _intraday_replay_start(pos: FoPaperPosition, now_ist: datetime) -> datetime | None:
@@ -106,11 +174,30 @@ def run_fo_paper_cycle(
         overnight_intraday_marks_used = 0
         overnight_intraday_marks_fallback = 0
         overnight_intraday_bars_replayed = 0
+        entry_minute_clear = 0
+        entry_minute_ambiguous = 0
+        entry_minute_unavailable = 0
+        entry_minute_pending = 0
+        partial_exit_interval_holdouts = 0
         if book.open:
             raw_quotes = read_nfo_quotes(list(book.open), client=client)
             marks: dict[str, dict[str, float]] = {}
             settled = []
             for symbol, pos in list(book.open.items()):
+                pos.entry_minute_status = _audit_entry_minute(
+                    pos,
+                    client=client,
+                    now_ist=now_ist,
+                )
+                if pos.entry_minute_status in ENTRY_MINUTE_EVIDENCE_OK:
+                    entry_minute_clear += 1
+                elif pos.entry_minute_status == ENTRY_MINUTE_AMBIGUOUS:
+                    entry_minute_ambiguous += 1
+                elif pos.entry_minute_status == ENTRY_MINUTE_UNAVAILABLE:
+                    entry_minute_unavailable += 1
+                else:
+                    entry_minute_pending += 1
+
                 quote = raw_quotes.get(symbol)
                 if not isinstance(quote, Mapping):
                     continue
@@ -183,6 +270,7 @@ def run_fo_paper_cycle(
                                 {symbol: ltp_mark},
                                 session=now_ist.isoformat(),
                                 advance_session=True,
+                                observation_complete=False,
                             )
                         )
                     continue
@@ -203,11 +291,28 @@ def run_fo_paper_cycle(
                 marks[symbol] = mark
 
             if marks:
-                settled.extend(book.mark(marks, session=now_ist.isoformat()))
+                settled.extend(
+                    book.mark(
+                        marks,
+                        session=now_ist.isoformat(),
+                        observation_complete=False,
+                    )
+                )
             for trade in settled:
                 settled_underlyings.add(trade.underlying)
                 row = trade.as_dict()
-                row["production_evidence_eligible"] = book.fully_costed
+                row["production_evidence_eligible"] = bool(
+                    book.fully_costed and trade.path_observation_complete
+                )
+                if not book.fully_costed:
+                    row["evidence_exclusion_reason"] = "COST_MODEL_UNCONFIGURED"
+                elif not trade.path_observation_complete:
+                    row["evidence_exclusion_reason"] = (
+                        trade.path_observation_reason
+                        or f"ENTRY_MINUTE_{trade.entry_minute_status or ENTRY_MINUTE_PENDING}"
+                    )
+                if not trade.exit_observation_complete:
+                    partial_exit_interval_holdouts += 1
                 settled_rows.append(row)
 
         opened: list[dict[str, Any]] = []
@@ -295,6 +400,11 @@ def run_fo_paper_cycle(
             "overnight_intraday_marks_used": overnight_intraday_marks_used,
             "overnight_intraday_marks_fallback": overnight_intraday_marks_fallback,
             "overnight_intraday_bars_replayed": overnight_intraday_bars_replayed,
+            "entry_minute_clear_count": entry_minute_clear,
+            "entry_minute_ambiguous_count": entry_minute_ambiguous,
+            "entry_minute_unavailable_count": entry_minute_unavailable,
+            "entry_minute_pending_count": entry_minute_pending,
+            "partial_exit_interval_holdout_count": partial_exit_interval_holdouts,
             "evidence_cost_status": (
                 f"CONFIGURED:{cost_model_name}" if book.fully_costed
                 else "UNCONFIGURED_GROSS_ONLY"

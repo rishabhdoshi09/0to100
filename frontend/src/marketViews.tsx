@@ -196,9 +196,12 @@ export function FnoView({ dashboard, runControl, setSelected, setActive }: Props
                   <p>OI {words(setup.futures_oi_state || 'unknown')} · Δ {fmt(contract.delta, 2)} · IV {fmt(contract.iv, 1)}% · DTE {contract.dte ?? '—'} · horizon {words(expected.horizon || 'unknown')}</p>
                   <small>Paper entry ₹{fmt(plan.entry)} · stop ₹{fmt(plan.stop)} · target ₹{fmt(plan.target)} · R:R {fmt(plan.risk_reward, 2)}</small>
                   {evidenceReady ? (
-                    <small>Forward evidence · n={evidence.n ?? 0} fully costed · observed win {fmt(evidence.win_probability_pct, 1)}% · Wilson floor {fmt(evidence.win_probability_wilson_lb_pct, 1)}% · conservative EV {fmt(evidence.conservative_ev_pct, 2)}%</small>
+                    <small>Forward evidence · n={evidence.n ?? 0} fully costed + path-valid · observed win {fmt(evidence.win_probability_pct, 1)}% · Wilson floor {fmt(evidence.win_probability_wilson_lb_pct, 1)}% · conservative EV {fmt(evidence.conservative_ev_pct, 2)}%</small>
                   ) : (
-                    <small>Forward evidence · {words(evidence.status || 'uncalibrated')} · observed {evidence.observed_n ?? 0} · fully costed {evidence.n ?? 0}/{evidence.minimum_required_n ?? 30} · probability held</small>
+                    <small>Forward evidence · {words(evidence.status || 'uncalibrated')} · observed {evidence.observed_n ?? 0} · eligible {evidence.n ?? 0}/{evidence.minimum_required_n ?? 30} · probability held</small>
+                  )}
+                  {((evidence.excluded_path_observation ?? 0) > 0 || (evidence.excluded_unpriced_costs ?? 0) > 0) && (
+                    <small>Held out from probability · path uncertainty {evidence.excluded_path_observation ?? 0} · unpriced costs {evidence.excluded_unpriced_costs ?? 0}</small>
                   )}
                   {coverage.valid_context && (
                     <small>Evidence coverage · thesis {coverage.thesis_n ?? 0} · dir+OI {coverage.direction_oi_n ?? 0} · direction {coverage.direction_n ?? 0} · broader counts research only</small>
