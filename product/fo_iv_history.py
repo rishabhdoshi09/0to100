@@ -6,7 +6,7 @@ may compare their current ATM IV only with prior completed-session observations.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 import sqlite3
 from statistics import median
@@ -41,6 +41,24 @@ def _kind(row: Mapping[str, Any]) -> str:
 
 def _expiry(row: Mapping[str, Any]) -> str:
     return str(row.get("expiry") or "")[:10]
+
+
+def _quote_session_date(quote: Mapping[str, Any] | None) -> str:
+    """Exchange quote-packet session date, never last-trade time."""
+    if not isinstance(quote, Mapping):
+        return ""
+    raw = quote.get("timestamp")
+    if raw is None:
+        raw = quote.get("exchange_timestamp")
+    if isinstance(raw, datetime):
+        return raw.date().isoformat()
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        return ""
 
 
 def _nearest_pair(
@@ -297,9 +315,20 @@ def collect_close_iv_snapshot(
         metas_by_symbol: dict[str, list[dict[str, Any]]] = {}
         quote_symbols: list[str] = []
         spots: dict[str, float] = {}
+        preflight_failures: dict[str, str] = {}
         for symbol in clean:
-            spot = _f((spot_quotes.get(f"NSE:{symbol}") or {}).get("last_price"))
+            spot_quote = spot_quotes.get(f"NSE:{symbol}") or {}
+            quote_session = _quote_session_date(spot_quote)
+            if quote_session != as_of_text:
+                preflight_failures[symbol] = (
+                    "SPOT_QUOTE_SESSION_MISMATCH"
+                    if quote_session
+                    else "SPOT_QUOTE_TIMESTAMP_UNAVAILABLE"
+                )
+                continue
+            spot = _f(spot_quote.get("last_price"))
             if spot <= 0:
+                preflight_failures[symbol] = "SPOT_QUOTE_PRICE_UNAVAILABLE"
                 continue
             spots[symbol] = spot
             pair = _nearest_pair(eligible_options.get(symbol, []), spot=spot)
@@ -312,9 +341,32 @@ def collect_close_iv_snapshot(
         persisted = 0
         failures: list[dict[str, str]] = []
         for symbol in clean:
+            if symbol in preflight_failures:
+                failures.append({"symbol": symbol, "reason": preflight_failures[symbol]})
+                continue
             metas = metas_by_symbol.get(symbol) or []
             if len(metas) != 2:
                 failures.append({"symbol": symbol, "reason": "ATM_PAIR_UNAVAILABLE"})
+                continue
+            stale_contract = ""
+            stale_reason = ""
+            for meta in metas:
+                contract_symbol = str(meta.get("tradingsymbol") or "")
+                quote_session = _quote_session_date(option_quotes.get(contract_symbol))
+                if quote_session != as_of_text:
+                    stale_contract = contract_symbol
+                    stale_reason = (
+                        "OPTION_QUOTE_SESSION_MISMATCH"
+                        if quote_session
+                        else "OPTION_QUOTE_TIMESTAMP_UNAVAILABLE"
+                    )
+                    break
+            if stale_reason:
+                failures.append({
+                    "symbol": symbol,
+                    "reason": stale_reason,
+                    "contract": stale_contract,
+                })
                 continue
             observed = representative_atm_iv_pct(
                 metas,

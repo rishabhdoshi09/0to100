@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 import inspect
 
 from options.directional_selector import black_scholes
@@ -256,26 +256,46 @@ def test_representative_atm_iv_rejects_nearest_expiry_without_common_strike():
 
 
 class _CloseClient:
-    def __init__(self, rows):
+    def __init__(
+        self,
+        rows,
+        *,
+        session=date(2026, 9, 25),
+        spot_quote_session=None,
+        option_quote_session=None,
+    ):
         self.rows = rows
         self.quotes = _option_quotes(rows, iv=0.30)
+        self.session = session
+        self.spot_quote_session = spot_quote_session or session
+        self.option_quote_session = option_quote_session or session
+
+    @staticmethod
+    def _stamp(session):
+        return datetime.combine(session, time(15, 29, 0))
 
     def quote(self, keys):
         out = {}
         for key in keys:
             if key == "NSE:ABC":
-                out[key] = {"last_price": 100.0}
+                out[key] = {
+                    "last_price": 100.0,
+                    "timestamp": self._stamp(self.spot_quote_session),
+                }
             elif key.startswith("NFO:"):
                 symbol = key.split(":", 1)[1]
                 if symbol in self.quotes:
-                    out[key] = self.quotes[symbol]
+                    out[key] = {
+                        **self.quotes[symbol],
+                        "timestamp": self._stamp(self.option_quote_session),
+                    }
         return out
 
 
 def test_close_snapshot_persists_one_forward_observation_per_session(tmp_path):
     rows = _option_rows()
-    client = _CloseClient(rows)
     trading_session = date(2026, 9, 25)
+    client = _CloseClient(rows, session=trading_session)
     with FoIvHistoryStore(tmp_path / "iv.sqlite3") as store:
         first = collect_close_iv_snapshot(
             symbols=["ABC"],
@@ -298,6 +318,51 @@ def test_close_snapshot_persists_one_forward_observation_per_session(tmp_path):
         )
         assert second["store"]["rows"] == 1
         assert second["store"]["symbols"] == 1
+
+
+
+def test_close_snapshot_rejects_stale_spot_quote_session(tmp_path):
+    rows = _option_rows()
+    as_of = date(2026, 9, 28)
+    client = _CloseClient(
+        rows,
+        session=as_of,
+        spot_quote_session=date(2026, 9, 25),
+    )
+    with FoIvHistoryStore(tmp_path / "iv.sqlite3") as store:
+        result = collect_close_iv_snapshot(
+            symbols=["ABC"],
+            instrument_rows=rows,
+            client=client,
+            as_of=as_of,
+            store=store,
+        )
+        assert result["persisted_symbols"] == 0
+        assert result["failed_symbols"] == 1
+        assert result["failures"][0]["reason"] == "SPOT_QUOTE_SESSION_MISMATCH"
+        assert store.status()["rows"] == 0
+
+
+def test_close_snapshot_rejects_stale_option_quote_session(tmp_path):
+    rows = _option_rows()
+    as_of = date(2026, 9, 28)
+    client = _CloseClient(
+        rows,
+        session=as_of,
+        option_quote_session=date(2026, 9, 25),
+    )
+    with FoIvHistoryStore(tmp_path / "iv.sqlite3") as store:
+        result = collect_close_iv_snapshot(
+            symbols=["ABC"],
+            instrument_rows=rows,
+            client=client,
+            as_of=as_of,
+            store=store,
+        )
+        assert result["persisted_symbols"] == 0
+        assert result["failed_symbols"] == 1
+        assert result["failures"][0]["reason"] == "OPTION_QUOTE_SESSION_MISMATCH"
+        assert store.status()["rows"] == 0
 
 
 def test_close_snapshot_rejects_non_trading_session_without_writing(tmp_path):
