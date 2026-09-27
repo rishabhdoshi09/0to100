@@ -808,8 +808,19 @@ def _fo_forward_evidence_overlay(
                 status = "CONTEXT_VERSION_REQUIRED"
             elif evidence.get("probability_claim_available"):
                 status = "EVIDENCE_READY"
-            elif int(evidence.get("excluded_unpriced_costs") or 0) > 0 and int(evidence.get("n") or 0) == 0:
-                status = "COST_MODEL_REQUIRED"
+            elif int(evidence.get("n") or 0) == 0:
+                cost_excluded = int(evidence.get("excluded_unpriced_costs") or 0)
+                path_excluded = int(evidence.get("excluded_path_observation") or 0)
+                if cost_excluded > 0 and path_excluded > 0:
+                    status = "EVIDENCE_INPUTS_REQUIRED"
+                elif path_excluded > 0:
+                    status = "PATH_OBSERVATION_REQUIRED"
+                elif cost_excluded > 0:
+                    status = "COST_MODEL_REQUIRED"
+                elif int(evidence.get("observed_n") or 0) > 0:
+                    status = "ACCUMULATING"
+                else:
+                    status = "NO_FORWARD_OUTCOMES"
             elif int(evidence.get("observed_n") or 0) > 0:
                 status = "ACCUMULATING"
             else:
@@ -825,6 +836,7 @@ def _fo_forward_evidence_overlay(
         "context_schema_version": FO_CONTEXT_SCHEMA_VERSION,
         "probability_requires_current_context_version": True,
         "probability_requires_exact_context": True,
+        "probability_requires_complete_entry_path": True,
         "broader_context_counts_research_only": True,
         "paper_only": True,
         "live_execution_allowed": False,
