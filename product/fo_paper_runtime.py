@@ -39,6 +39,14 @@ def _post_entry_intraday_start(opened_at: str, now_ist: datetime) -> datetime | 
     return start if start < now_ist else None
 
 
+def _intraday_replay_start(pos: FoPaperPosition, now_ist: datetime) -> datetime | None:
+    """Start at post-entry time for new positions, session open for overnight ones."""
+    if str(pos.opened_at)[:10] == now_ist.date().isoformat():
+        return _post_entry_intraday_start(pos.opened_at, now_ist)
+    session_open = now_ist.replace(hour=9, minute=15, second=0, microsecond=0)
+    return session_open if session_open < now_ist else None
+
+
 def _candidate_rows(directional: Mapping[str, Any]) -> list[dict[str, Any]]:
     rows = [
         dict(row)
@@ -95,6 +103,9 @@ def run_fo_paper_cycle(
         intraday_marks_used = 0
         intraday_marks_fallback = 0
         intraday_bars_replayed = 0
+        overnight_intraday_marks_used = 0
+        overnight_intraday_marks_fallback = 0
+        overnight_intraday_bars_replayed = 0
         if book.open:
             raw_quotes = read_nfo_quotes(list(book.open), client=client)
             marks: dict[str, dict[str, float]] = {}
@@ -104,77 +115,94 @@ def run_fo_paper_cycle(
                 if not isinstance(quote, Mapping):
                     continue
                 mark = quote_to_option_paper_mark(quote)
-                # Full-day quote OHLC contains time before a same-day entry.
-                # Replay strictly post-entry minute bars in chronological order
-                # so a target hit before a later stop is not collapsed into one
-                # ambiguous range. Inside one minute, STOP-first remains the
-                # conservative rule.
-                if str(pos.opened_at)[:10] == session:
-                    last = float(mark.get("last_price") or mark.get("close") or 0.0)
-                    bars: list[dict[str, Any]] = []
-                    start = _post_entry_intraday_start(pos.opened_at, now_ist)
-                    if int(pos.instrument_token or 0) > 0 and start is not None:
-                        try:
-                            bars = read_option_intraday_bars(
-                                int(pos.instrument_token),
-                                from_dt=start,
-                                to_dt=now_ist,
-                                client=client,
-                                interval="minute",
-                            )
-                        except Exception:
-                            bars = []
-                    if bars:
+                last = float(mark.get("last_price") or mark.get("close") or 0.0)
+                same_day = str(pos.opened_at)[:10] == session
+                bars: list[dict[str, Any]] = []
+                start_at = _intraday_replay_start(pos, now_ist)
+                if int(pos.instrument_token or 0) > 0 and start_at is not None:
+                    try:
+                        bars = read_option_intraday_bars(
+                            int(pos.instrument_token),
+                            from_dt=start_at,
+                            to_dt=now_ist,
+                            client=client,
+                            interval="minute",
+                        )
+                    except Exception:
+                        bars = []
+
+                if bars:
+                    if same_day:
                         intraday_marks_used += 1
-                        first_bar = True
-                        for bar in bars:
-                            if symbol not in book.open:
-                                break
-                            replay = {
-                                "open": float(bar.get("open") or bar.get("close") or 0.0),
-                                "high": float(bar.get("high") or bar.get("close") or 0.0),
-                                "low": float(bar.get("low") or bar.get("close") or 0.0),
-                                "close": float(bar.get("close") or 0.0),
-                                "last_price": float(bar.get("close") or 0.0),
-                                # Never use today's current bid for a historical
-                                # minute exit. STOP/TARGET fills come from the bar.
-                                "bid": 0.0,
-                            }
-                            if first_bar:
-                                # The partial entry minute is intentionally
-                                # excluded; anchor the first complete bar to the
-                                # paper entry rather than inventing a gap.
-                                replay["open"] = float(pos.entry_price)
-                                first_bar = False
-                            bar_session = str(bar.get("timestamp") or now_ist.isoformat())
-                            bar_settled = book.mark({symbol: replay}, session=bar_session)
+                    else:
+                        overnight_intraday_marks_used += 1
+                    first_bar = True
+                    for bar in bars:
+                        if symbol not in book.open:
+                            break
+                        replay = {
+                            "open": float(bar.get("open") or bar.get("close") or 0.0),
+                            "high": float(bar.get("high") or bar.get("close") or 0.0),
+                            "low": float(bar.get("low") or bar.get("close") or 0.0),
+                            "close": float(bar.get("close") or 0.0),
+                            "last_price": float(bar.get("close") or 0.0),
+                            # Never use today's current bid for a historical
+                            # minute exit. STOP/TARGET/GAP fills come from the bar.
+                            "bid": 0.0,
+                        }
+                        if first_bar and same_day:
+                            # The partial entry minute is intentionally excluded;
+                            # anchor the first complete bar to the paper entry
+                            # rather than inventing a same-session gap.
+                            replay["open"] = float(pos.entry_price)
+                        first_bar = False
+                        bar_session = str(bar.get("timestamp") or now_ist.isoformat())
+                        bar_settled = book.mark(
+                            {symbol: replay},
+                            session=bar_session,
+                            advance_session=False,
+                        )
+                        if same_day:
                             intraday_bars_replayed += 1
-                            if bar_settled:
-                                settled.extend(bar_settled)
-                                break
+                        else:
+                            overnight_intraday_bars_replayed += 1
+                        if bar_settled:
+                            settled.extend(bar_settled)
+                            break
 
-                        # Minute history generally ends at the last completed
-                        # minute. Inspect the current LTP as a final partial
-                        # interval without importing the quote's full-day range.
-                        if symbol in book.open and last > 0:
-                            ltp_mark = {
-                                "open": last,
-                                "high": last,
-                                "low": last,
-                                "close": last,
-                                "last_price": last,
-                                "bid": float(mark.get("bid") or 0.0),
-                            }
-                            settled.extend(
-                                book.mark({symbol: ltp_mark}, session=now_ist.isoformat())
+                    # Replay reconstructed historical path first. Only the live
+                    # partial interval advances holding-session age / MAX_HOLD.
+                    if symbol in book.open and last > 0:
+                        ltp_mark = {
+                            "open": last,
+                            "high": last,
+                            "low": last,
+                            "close": last,
+                            "last_price": last,
+                            "bid": float(mark.get("bid") or 0.0),
+                        }
+                        settled.extend(
+                            book.mark(
+                                {symbol: ltp_mark},
+                                session=now_ist.isoformat(),
+                                advance_session=True,
                             )
-                        continue
+                        )
+                    continue
 
+                if same_day:
+                    # Full-day OHLC contains time before entry, so missing minute
+                    # history must fail closed to current LTP only.
                     mark["open"] = last
                     mark["high"] = last
                     mark["low"] = last
                     mark["close"] = last
                     intraday_marks_fallback += 1
+                else:
+                    # The position existed from session open, so today's full-day
+                    # range is valid evidence. Without ordered minute history we
+                    # retain the conservative aggregated STOP-first semantics.
+                    overnight_intraday_marks_fallback += 1
                 marks[symbol] = mark
 
             if marks:
@@ -267,6 +295,9 @@ def run_fo_paper_cycle(
             "same_day_intraday_marks_used": intraday_marks_used,
             "same_day_intraday_marks_fallback": intraday_marks_fallback,
             "same_day_intraday_bars_replayed": intraday_bars_replayed,
+            "overnight_intraday_marks_used": overnight_intraday_marks_used,
+            "overnight_intraday_marks_fallback": overnight_intraday_marks_fallback,
+            "overnight_intraday_bars_replayed": overnight_intraday_bars_replayed,
             "evidence_cost_status": (
                 f"CONFIGURED:{cost_model_name}" if book.fully_costed
                 else "UNCONFIGURED_GROSS_ONLY"
