@@ -504,6 +504,21 @@ def test_fno_payload_exposes_durable_paper_state_without_live_authority(monkeypa
     assert payload["paper"]["live_execution_allowed"] is False
 
 
+def _fo_context(
+    *,
+    direction: str = "LONG",
+    oi: str = "LONG_BUILDUP",
+    rvol: str = "RVOL_2_2.5",
+    adx: str = "ADX_GE30",
+    delta: str = "D_55_65",
+    dte: str = "DTE_8_14",
+    iv: str = "IV_NORMAL",
+) -> str:
+    from product.fo_evidence import FO_CONTEXT_SCHEMA_VERSION
+
+    return "|".join((FO_CONTEXT_SCHEMA_VERSION, direction, oi, rvol, adx, delta, dte, iv))
+
+
 def _fo_evidence_rows(*, context_key: str, n: int, production_eligible: bool = True):
     rows = []
     for i in range(n):
@@ -527,12 +542,12 @@ def test_fno_candidate_evidence_overlay_promotes_only_exact_fully_costed_context
         "candidates": [{
             "symbol": "TEST",
             "direction": "LONG",
-            "selected_contract": {"symbol": "TESTCE", "context_key": "CTX_A"},
+            "selected_contract": {"symbol": "TESTCE", "context_key": _fo_context()},
         }],
     }
     outcomes = (
-        _fo_evidence_rows(context_key="CTX_A", n=40)
-        + _fo_evidence_rows(context_key="CTX_B", n=40)
+        _fo_evidence_rows(context_key=_fo_context(), n=40)
+        + _fo_evidence_rows(context_key=_fo_context(delta="D_65_75"), n=40)
     )
 
     payload = terminal_api._fo_forward_evidence_overlay(
@@ -541,7 +556,7 @@ def test_fno_candidate_evidence_overlay_promotes_only_exact_fully_costed_context
     evidence = payload["candidates"][0]["forward_evidence"]
 
     assert evidence["status"] == "EVIDENCE_READY"
-    assert evidence["context_key"] == "CTX_A"
+    assert evidence["context_key"] == _fo_context()
     assert evidence["n"] == 40
     assert evidence["observed_n"] == 40
     assert evidence["probability_claim_available"] is True
@@ -557,11 +572,11 @@ def test_fno_candidate_evidence_overlay_holds_probability_for_uncosted_or_small_
         "candidates": [
             {
                 "symbol": "UNCOSTED",
-                "selected_contract": {"context_key": "CTX_GROSS"},
+                "selected_contract": {"context_key": _fo_context(iv="IV_HIGH")},
             },
             {
                 "symbol": "SMALL",
-                "selected_contract": {"context_key": "CTX_SMALL"},
+                "selected_contract": {"context_key": _fo_context(dte="DTE_15_30")},
             },
             {
                 "symbol": "NOCTX",
@@ -570,8 +585,12 @@ def test_fno_candidate_evidence_overlay_holds_probability_for_uncosted_or_small_
         ],
     }
     outcomes = (
-        _fo_evidence_rows(context_key="CTX_GROSS", n=40, production_eligible=False)
-        + _fo_evidence_rows(context_key="CTX_SMALL", n=12)
+        _fo_evidence_rows(
+            context_key=_fo_context(iv="IV_HIGH"),
+            n=40,
+            production_eligible=False,
+        )
+        + _fo_evidence_rows(context_key=_fo_context(dte="DTE_15_30"), n=12)
     )
 
     payload = terminal_api._fo_forward_evidence_overlay(
@@ -595,10 +614,10 @@ def test_fno_candidate_evidence_overlay_holds_probability_for_uncosted_or_small_
 
 
 def test_fno_candidate_evidence_overlay_exposes_broader_counts_as_research_only():
-    exact = "LONG|LONG_BUILDUP|RVOL_2_2.5|ADX_GE30|D_55_65|DTE_8_14|IV_NORMAL"
-    same_thesis = "LONG|LONG_BUILDUP|RVOL_2_2.5|ADX_GE30|D_65_75|DTE_15_30|IV_HIGH"
-    same_direction_oi = "LONG|LONG_BUILDUP|RVOL_1.5_2|ADX_20_25|D_55_65|DTE_8_14|IV_NORMAL"
-    same_direction = "LONG|SHORT_COVERING|RVOL_2_2.5|ADX_GE30|D_55_65|DTE_8_14|IV_NORMAL"
+    exact = _fo_context()
+    same_thesis = _fo_context(delta="D_65_75", dte="DTE_15_30", iv="IV_HIGH")
+    same_direction_oi = _fo_context(rvol="RVOL_1.5_2", adx="ADX_20_25")
+    same_direction = _fo_context(oi="SHORT_COVERING")
 
     directional = {
         "available": True,
@@ -635,5 +654,31 @@ def test_fno_candidate_evidence_overlay_exposes_broader_counts_as_research_only(
     assert coverage["counts_only"] is True
     assert coverage["probability_claim_available"] is False
     assert coverage["production_influence_allowed"] is False
+    assert payload["candidate_evidence_policy"]["probability_requires_current_context_version"] is True
     assert payload["candidate_evidence_policy"]["probability_requires_exact_context"] is True
     assert payload["candidate_evidence_policy"]["broader_context_counts_research_only"] is True
+
+
+def test_fno_candidate_evidence_overlay_rejects_legacy_context_version():
+    legacy = "LONG|LONG_BUILDUP|RVOL_2_2.5|ADX_GE30|D_55_65|DTE_8_14|IV_NORMAL"
+    directional = {
+        "available": True,
+        "candidates": [{
+            "symbol": "LEGACY",
+            "direction": "LONG",
+            "selected_contract": {"symbol": "LEGACYCE", "context_key": legacy},
+        }],
+    }
+    outcomes = _fo_evidence_rows(context_key=legacy, n=100)
+
+    payload = terminal_api._fo_forward_evidence_overlay(
+        directional, outcomes, min_n=30,
+    )
+    evidence = payload["candidates"][0]["forward_evidence"]
+
+    assert evidence["status"] == "CONTEXT_VERSION_REQUIRED"
+    assert evidence["valid_context"] is False
+    assert evidence["n"] == 100
+    assert evidence["probability_claim_available"] is False
+    assert evidence["production_influence_allowed"] is False
+    assert evidence["coverage"]["valid_context"] is False

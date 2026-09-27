@@ -755,7 +755,11 @@ def _fo_forward_evidence_overlay(
     evidence module says the exact candidate context has enough fully-costed
     settled FORWARD_PAPER observations.
     """
-    from product.fo_evidence import fo_evidence_coverage, summarize_fo_outcomes
+    from product.fo_evidence import (
+        FO_CONTEXT_SCHEMA_VERSION,
+        fo_evidence_coverage,
+        summarize_fo_outcomes,
+    )
 
     payload = dict(directional or {})
     candidates: list[dict[str, Any]] = []
@@ -769,6 +773,8 @@ def _fo_forward_evidence_overlay(
         if not context_key:
             evidence = {
                 "context_key": "",
+                "context_schema_version": FO_CONTEXT_SCHEMA_VERSION,
+                "valid_context": False,
                 "evidence_lane": "FORWARD_PAPER",
                 "status": "NO_CONTEXT_KEY",
                 "observed_n": 0,
@@ -798,7 +804,9 @@ def _fo_forward_evidence_overlay(
                 context_key=context_key,
                 min_n=min_n,
             )
-            if evidence.get("probability_claim_available"):
+            if not bool(evidence.get("valid_context")):
+                status = "CONTEXT_VERSION_REQUIRED"
+            elif evidence.get("probability_claim_available"):
                 status = "EVIDENCE_READY"
             elif int(evidence.get("excluded_unpriced_costs") or 0) > 0 and int(evidence.get("n") or 0) == 0:
                 status = "COST_MODEL_REQUIRED"
@@ -814,6 +822,8 @@ def _fo_forward_evidence_overlay(
     payload["candidate_evidence_policy"] = {
         "lane": "FORWARD_PAPER",
         "minimum_fully_costed_n": max(1, int(min_n)),
+        "context_schema_version": FO_CONTEXT_SCHEMA_VERSION,
+        "probability_requires_current_context_version": True,
         "probability_requires_exact_context": True,
         "broader_context_counts_research_only": True,
         "paper_only": True,
