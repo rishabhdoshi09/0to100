@@ -187,6 +187,19 @@ export type FnoForwardEvidence = {
   insufficient_evidence?: boolean
   minimum_required_n?: number
   production_influence_allowed?: boolean
+  coverage?: {
+    valid_context?: boolean
+    exact_n?: number
+    thesis_n?: number
+    direction_oi_n?: number
+    direction_n?: number
+    minimum_exact_n?: number
+    remaining_to_exact_min_n?: number
+    research_only?: boolean
+    counts_only?: boolean
+    probability_claim_available?: boolean
+    production_influence_allowed?: boolean
+  }
 }
 
 export type FnoDirectionalCandidate = {
@@ -258,6 +271,7 @@ export type FnoDirectionalState = {
     lane?: string
     minimum_fully_costed_n?: number
     probability_requires_exact_context?: boolean
+    broader_context_counts_research_only?: boolean
     paper_only?: boolean
     live_execution_allowed?: boolean
   }
