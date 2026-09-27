@@ -46,6 +46,12 @@ def _directional():
     }
 
 
+def _directional_with_token(token: int):
+    payload = _directional()
+    payload["candidates"][0]["selected_contract"]["instrument_token"] = token
+    return payload
+
+
 class _QuoteClient:
     def __init__(self, *, last=52.0, high=80.0, low=30.0, bid=51.0):
         self.last = last
@@ -72,6 +78,18 @@ class _QuoteClient:
             }
             for key in keys
         }
+
+
+
+class _IntradayQuoteClient(_QuoteClient):
+    def __init__(self, *, intraday_rows, **kwargs):
+        super().__init__(**kwargs)
+        self.intraday_rows = list(intraday_rows)
+        self.historical_calls = []
+
+    def historical(self, token, frm, to, interval):
+        self.historical_calls.append((token, frm, to, interval))
+        return list(self.intraday_rows)
 
 
 def test_sqlite_store_persists_positions_and_trade_rows(tmp_path):
@@ -269,3 +287,89 @@ def test_new_closed_trades_persist_realized_pnl_for_next_process(tmp_path):
 
     assert restarted["realized_pnl"] == realized
     assert restarted["equity_for_sizing"] == 200_000 + realized
+
+
+def test_same_day_paper_mark_uses_post_entry_intraday_range(tmp_path):
+    path = tmp_path / "fo.sqlite3"
+    opened_at = datetime(2026, 9, 26, 10, 15, 12, tzinfo=IST)
+
+    with FoPaperStore(path) as store:
+        opened = run_fo_paper_cycle(
+            _directional_with_token(777),
+            client=_QuoteClient(last=50, high=80, low=30, bid=49),
+            now_ist=opened_at,
+            allow_new_entries=True,
+            store=store,
+            capital=200_000,
+        )
+        assert opened["opened_count"] == 1
+        assert opened["open_positions"][0]["instrument_token"] == 777
+
+    # Daily high/low are deliberately contaminated by pre-entry prices. The
+    # post-entry minute range contains a real stop touch and must be used.
+    client = _IntradayQuoteClient(
+        last=52,
+        high=80,
+        low=30,
+        bid=51,
+        intraday_rows=[
+            {"open": 51.0, "high": 55.0, "low": 45.0, "close": 53.0},
+            {"open": 53.0, "high": 54.0, "low": 39.0, "close": 52.0},
+        ],
+    )
+    with FoPaperStore(path) as store:
+        marked = run_fo_paper_cycle(
+            {"available": True, "candidates": []},
+            client=client,
+            now_ist=opened_at.replace(hour=14, minute=0, second=0),
+            allow_new_entries=False,
+            store=store,
+            capital=200_000,
+        )
+
+    assert marked["settled_count"] == 1
+    assert marked["settled"][0]["exit_reason"] == "STOP"
+    assert marked["same_day_intraday_marks_used"] == 1
+    assert marked["same_day_intraday_marks_fallback"] == 0
+    assert client.historical_calls == [
+        (777, "2026-09-26 10:16:00", "2026-09-26 14:00:00", "minute")
+    ]
+
+
+def test_same_day_paper_mark_falls_back_to_ltp_when_intraday_bars_missing(tmp_path):
+    path = tmp_path / "fo.sqlite3"
+    opened_at = datetime(2026, 9, 26, 10, 15, 12, tzinfo=IST)
+
+    with FoPaperStore(path) as store:
+        run_fo_paper_cycle(
+            _directional_with_token(778),
+            client=_QuoteClient(last=50, high=80, low=30, bid=49),
+            now_ist=opened_at,
+            allow_new_entries=True,
+            store=store,
+            capital=200_000,
+        )
+
+    client = _IntradayQuoteClient(
+        last=52,
+        high=80,
+        low=30,
+        bid=51,
+        intraday_rows=[],
+    )
+    with FoPaperStore(path) as store:
+        marked = run_fo_paper_cycle(
+            {"available": True, "candidates": []},
+            client=client,
+            now_ist=opened_at.replace(hour=14, minute=0, second=0),
+            allow_new_entries=False,
+            store=store,
+            capital=200_000,
+        )
+
+    # Missing minute history must not make the pre-entry full-day low look like
+    # a stop. The existing LTP-only fail-safe remains truthful.
+    assert marked["settled_count"] == 0
+    assert marked["open_count"] == 1
+    assert marked["same_day_intraday_marks_used"] == 0
+    assert marked["same_day_intraday_marks_fallback"] == 1
