@@ -145,6 +145,116 @@ def test_representative_atm_iv_requires_nearest_expiry_ce_and_pe():
     assert unavailable["available"] is False
 
 
+def test_representative_atm_iv_uses_one_common_strike_not_independent_nearest_legs():
+    rows = [
+        {
+            "instrument_token": 21,
+            "tradingsymbol": "ABC26OCT100CE",
+            "name": "ABC",
+            "expiry": "2026-10-29",
+            "strike": 100.0,
+            "lot_size": 100,
+            "instrument_type": "CE",
+            "segment": "NFO-OPT",
+            "exchange": "NFO",
+        },
+        {
+            "instrument_token": 22,
+            "tradingsymbol": "ABC26OCT101PE",
+            "name": "ABC",
+            "expiry": "2026-10-29",
+            "strike": 101.0,
+            "lot_size": 100,
+            "instrument_type": "PE",
+            "segment": "NFO-OPT",
+            "exchange": "NFO",
+        },
+        {
+            "instrument_token": 23,
+            "tradingsymbol": "ABC26OCT105CE",
+            "name": "ABC",
+            "expiry": "2026-10-29",
+            "strike": 105.0,
+            "lot_size": 100,
+            "instrument_type": "CE",
+            "segment": "NFO-OPT",
+            "exchange": "NFO",
+        },
+        {
+            "instrument_token": 24,
+            "tradingsymbol": "ABC26OCT105PE",
+            "name": "ABC",
+            "expiry": "2026-10-29",
+            "strike": 105.0,
+            "lot_size": 100,
+            "instrument_type": "PE",
+            "segment": "NFO-OPT",
+            "exchange": "NFO",
+        },
+    ]
+    quotes = _option_quotes(rows, spot=100.0, iv=0.25)
+    observed = representative_atm_iv_pct(rows, quotes, spot=100.0, as_of=AS_OF)
+
+    assert observed["available"] is True
+    assert observed["contracts"] == ["ABC26OCT105CE", "ABC26OCT105PE"]
+
+
+def test_representative_atm_iv_rejects_nearest_expiry_without_common_strike():
+    rows = [
+        {
+            "instrument_token": 31,
+            "tradingsymbol": "ABC26OCT100CE",
+            "name": "ABC",
+            "expiry": "2026-10-29",
+            "strike": 100.0,
+            "lot_size": 100,
+            "instrument_type": "CE",
+            "segment": "NFO-OPT",
+            "exchange": "NFO",
+        },
+        {
+            "instrument_token": 32,
+            "tradingsymbol": "ABC26OCT101PE",
+            "name": "ABC",
+            "expiry": "2026-10-29",
+            "strike": 101.0,
+            "lot_size": 100,
+            "instrument_type": "PE",
+            "segment": "NFO-OPT",
+            "exchange": "NFO",
+        },
+        {
+            "instrument_token": 33,
+            "tradingsymbol": "ABC26NOV100CE",
+            "name": "ABC",
+            "expiry": "2026-11-26",
+            "strike": 100.0,
+            "lot_size": 100,
+            "instrument_type": "CE",
+            "segment": "NFO-OPT",
+            "exchange": "NFO",
+        },
+        {
+            "instrument_token": 34,
+            "tradingsymbol": "ABC26NOV100PE",
+            "name": "ABC",
+            "expiry": "2026-11-26",
+            "strike": 100.0,
+            "lot_size": 100,
+            "instrument_type": "PE",
+            "segment": "NFO-OPT",
+            "exchange": "NFO",
+        },
+    ]
+    quotes = _option_quotes(rows, spot=100.0, iv=0.25)
+    observed = representative_atm_iv_pct(rows, quotes, spot=100.0, as_of=AS_OF)
+
+    # The close-IV definition is nearest-expiry. Do not silently substitute a
+    # later expiry just because it has a clean pair.
+    assert observed["available"] is False
+    assert observed["reason"] == "ATM_CE_PE_PAIR_UNAVAILABLE"
+
+
 class _CloseClient:
     def __init__(self, rows):
         self.rows = rows
