@@ -173,6 +173,8 @@ export type FnoForwardEvidence = {
   observed_n?: number
   n?: number
   excluded_unpriced_costs?: number
+  excluded_path_observation?: number
+  excluded_other_ineligible?: number
   wins?: number
   losses?: number
   probability_claim_available?: boolean
@@ -276,6 +278,7 @@ export type FnoDirectionalState = {
     context_schema_version?: string
     probability_requires_current_context_version?: boolean
     probability_requires_exact_context?: boolean
+    probability_requires_complete_entry_path?: boolean
     broader_context_counts_research_only?: boolean
     paper_only?: boolean
     live_execution_allowed?: boolean
