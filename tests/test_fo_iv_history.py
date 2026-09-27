@@ -414,6 +414,31 @@ def test_close_snapshot_rejects_same_day_option_quote_outside_close_window(tmp_p
         assert store.status()["rows"] == 0
 
 
+
+def test_close_snapshot_rejects_wide_spot_option_timestamp_skew(tmp_path):
+    rows = _option_rows()
+    as_of = date(2026, 9, 28)
+    client = _CloseClient(
+        rows,
+        session=as_of,
+        spot_quote_time=time(15, 16),
+        option_quote_time=time(15, 34),
+    )
+    with FoIvHistoryStore(tmp_path / "iv.sqlite3") as store:
+        result = collect_close_iv_snapshot(
+            symbols=["ABC"],
+            instrument_rows=rows,
+            client=client,
+            as_of=as_of,
+            store=store,
+        )
+        assert result["persisted_symbols"] == 0
+        assert result["failed_symbols"] == 1
+        assert result["failures"][0]["reason"] == "QUOTE_TIMESTAMP_SKEW_TOO_WIDE"
+        assert float(result["failures"][0]["skew_seconds"]) > 120.0
+        assert store.status()["rows"] == 0
+
+
 def test_close_snapshot_rejects_non_trading_session_without_writing(tmp_path):
     rows = _option_rows()
     client = _CloseClient(rows)

@@ -26,6 +26,7 @@ LOOKBACK_SESSIONS = 252
 SOURCE = "FORWARD_OBSERVED_ATM_IV_CLOSE"
 _CLOSE_WINDOW_START = time(15, 15)
 _CLOSE_WINDOW_END = time(15, 35)
+_MAX_QUOTE_SKEW_SECONDS = 120
 _IST = ZoneInfo("Asia/Kolkata")
 
 
@@ -338,6 +339,7 @@ def collect_close_iv_snapshot(
         metas_by_symbol: dict[str, list[dict[str, Any]]] = {}
         quote_symbols: list[str] = []
         spots: dict[str, float] = {}
+        spot_stamps: dict[str, datetime] = {}
         preflight_failures: dict[str, str] = {}
         for symbol in clean:
             spot_quote = spot_quotes.get(f"NSE:{symbol}") or {}
@@ -352,11 +354,16 @@ def collect_close_iv_snapshot(
             if not _quote_in_close_window(spot_quote, as_of=as_of):
                 preflight_failures[symbol] = "SPOT_QUOTE_OUTSIDE_CLOSE_WINDOW"
                 continue
+            spot_stamp = _quote_exchange_dt(spot_quote)
+            if spot_stamp is None:
+                preflight_failures[symbol] = "SPOT_QUOTE_TIMESTAMP_UNAVAILABLE"
+                continue
             spot = _f(spot_quote.get("last_price"))
             if spot <= 0:
                 preflight_failures[symbol] = "SPOT_QUOTE_PRICE_UNAVAILABLE"
                 continue
             spots[symbol] = spot
+            spot_stamps[symbol] = spot_stamp
             pair = _nearest_pair(eligible_options.get(symbol, []), spot=spot)
             if len(pair) != 2:
                 continue
@@ -376,6 +383,7 @@ def collect_close_iv_snapshot(
                 continue
             stale_contract = ""
             stale_reason = ""
+            option_stamps: list[datetime] = []
             for meta in metas:
                 contract_symbol = str(meta.get("tradingsymbol") or "")
                 quote_session = _quote_session_date(option_quotes.get(contract_symbol))
@@ -392,11 +400,26 @@ def collect_close_iv_snapshot(
                     stale_contract = contract_symbol
                     stale_reason = "OPTION_QUOTE_OUTSIDE_CLOSE_WINDOW"
                     break
+                stamp = _quote_exchange_dt(quote)
+                if stamp is None:
+                    stale_contract = contract_symbol
+                    stale_reason = "OPTION_QUOTE_TIMESTAMP_UNAVAILABLE"
+                    break
+                option_stamps.append(stamp)
             if stale_reason:
                 failures.append({
                     "symbol": symbol,
                     "reason": stale_reason,
                     "contract": stale_contract,
+                })
+                continue
+            stamps = [spot_stamps[symbol], *option_stamps]
+            skew_seconds = (max(stamps) - min(stamps)).total_seconds()
+            if skew_seconds > _MAX_QUOTE_SKEW_SECONDS:
+                failures.append({
+                    "symbol": symbol,
+                    "reason": "QUOTE_TIMESTAMP_SKEW_TOO_WIDE",
+                    "skew_seconds": str(round(skew_seconds, 3)),
                 })
                 continue
             observed = representative_atm_iv_pct(
