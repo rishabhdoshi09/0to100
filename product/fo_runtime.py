@@ -410,6 +410,8 @@ def run_fo_directional_scan(
         result["prefilter"] = pre
         result["previous_future"] = previous
         result["iv_history"] = iv_history
+        if isinstance(result.get("selected"), dict):
+            result["selected"]["iv_history"] = dict(iv_history)
         decisions.append(result)
 
     if owned_iv_history_store and iv_history_store is not None:
