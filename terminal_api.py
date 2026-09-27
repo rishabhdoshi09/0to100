@@ -836,7 +836,7 @@ def _fo_forward_evidence_overlay(
         "context_schema_version": FO_CONTEXT_SCHEMA_VERSION,
         "probability_requires_current_context_version": True,
         "probability_requires_exact_context": True,
-        "probability_requires_complete_entry_path": True,
+        "probability_requires_complete_observed_path": True,
         "broader_context_counts_research_only": True,
         "paper_only": True,
         "live_execution_allowed": False,
