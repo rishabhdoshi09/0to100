@@ -83,13 +83,25 @@ class _QuoteClient:
 
 
 class _IntradayQuoteClient(_QuoteClient):
-    def __init__(self, *, intraday_rows, **kwargs):
+    def __init__(self, *, intraday_rows, entry_minute_rows=None, **kwargs):
         super().__init__(**kwargs)
         self.intraday_rows = list(intraday_rows)
+        self.entry_minute_rows = (
+            list(entry_minute_rows)
+            if entry_minute_rows is not None
+            else [{"open": 50.0, "high": 55.0, "low": 45.0, "close": 50.0}]
+        )
         self.historical_calls = []
+        self.entry_minute_calls = []
 
     def historical(self, token, frm, to, interval):
-        self.historical_calls.append((token, frm, to, interval))
+        start = datetime.fromisoformat(frm)
+        end = datetime.fromisoformat(to)
+        call = (token, frm, to, interval)
+        if (end - start).total_seconds() <= 60:
+            self.entry_minute_calls.append(call)
+            return list(self.entry_minute_rows)
+        self.historical_calls.append(call)
         return list(self.intraday_rows)
 
 
@@ -628,3 +640,117 @@ def test_same_day_first_complete_minute_preserves_gap_through_target(tmp_path):
     assert marked["settled"][0]["exit_reason"] == "GAP_TARGET"
     assert marked["settled"][0]["exit_price"] == 74.9625
     assert marked["same_day_intraday_bars_replayed"] == 1
+
+
+
+def test_entry_minute_clear_path_allows_fully_costed_forward_evidence(tmp_path):
+    path = tmp_path / "fo.sqlite3"
+    opened_at = datetime(2026, 9, 26, 10, 15, 12, tzinfo=IST)
+
+    with FoPaperStore(path) as store:
+        opened = run_fo_paper_cycle(
+            _directional_with_token(784),
+            client=_QuoteClient(last=50, high=50, low=50, bid=49),
+            now_ist=opened_at,
+            allow_new_entries=True,
+            store=store,
+            capital=200_000,
+        )
+        assert opened["opened_count"] == 1
+
+    client = _IntradayQuoteClient(
+        last=72,
+        high=75,
+        low=49,
+        bid=70,
+        entry_minute_rows=[
+            {
+                "date": "2026-09-26T10:15:00+05:30",
+                "open": 49.0, "high": 55.0, "low": 45.0, "close": 51.0,
+            },
+        ],
+        intraday_rows=[
+            {
+                "date": "2026-09-26T10:16:00+05:30",
+                "open": 52.0, "high": 72.0, "low": 50.0, "close": 71.0,
+            },
+        ],
+    )
+    with FoPaperStore(path) as store:
+        marked = run_fo_paper_cycle(
+            {"available": True, "candidates": []},
+            client=client,
+            now_ist=opened_at.replace(hour=10, minute=20, second=0),
+            allow_new_entries=False,
+            store=store,
+            capital=200_000,
+            cost_model=lambda entry, exit, qty: 25.0,
+            cost_model_name="TEST_COSTS",
+        )
+
+    assert marked["settled_count"] == 1
+    trade = marked["settled"][0]
+    assert trade["entry_minute_status"] == "CLEAR_NO_TRIGGER"
+    assert trade["path_observation_complete"] is True
+    assert trade["production_evidence_eligible"] is True
+    assert marked["entry_minute_clear_count"] == 1
+    assert client.entry_minute_calls == [
+        (784, "2026-09-26 10:15:00", "2026-09-26 10:15:59", "minute")
+    ]
+
+
+def test_entry_minute_boundary_touch_holds_forward_evidence_even_when_costed(tmp_path):
+    path = tmp_path / "fo.sqlite3"
+    opened_at = datetime(2026, 9, 26, 10, 15, 12, tzinfo=IST)
+
+    with FoPaperStore(path) as store:
+        opened = run_fo_paper_cycle(
+            _directional_with_token(785),
+            client=_QuoteClient(last=50, high=50, low=50, bid=49),
+            now_ist=opened_at,
+            allow_new_entries=True,
+            store=store,
+            capital=200_000,
+        )
+        assert opened["opened_count"] == 1
+
+    client = _IntradayQuoteClient(
+        last=72,
+        high=75,
+        low=49,
+        bid=70,
+        # The minute contains time before and after the 10:15:12 paper fill.
+        # A stop touch exists somewhere, so timing is unknowable.
+        entry_minute_rows=[
+            {
+                "date": "2026-09-26T10:15:00+05:30",
+                "open": 50.0, "high": 55.0, "low": 35.0, "close": 51.0,
+            },
+        ],
+        intraday_rows=[
+            {
+                "date": "2026-09-26T10:16:00+05:30",
+                "open": 52.0, "high": 72.0, "low": 50.0, "close": 71.0,
+            },
+        ],
+    )
+    with FoPaperStore(path) as store:
+        marked = run_fo_paper_cycle(
+            {"available": True, "candidates": []},
+            client=client,
+            now_ist=opened_at.replace(hour=10, minute=20, second=0),
+            allow_new_entries=False,
+            store=store,
+            capital=200_000,
+            cost_model=lambda entry, exit, qty: 25.0,
+            cost_model_name="TEST_COSTS",
+        )
+
+    assert marked["settled_count"] == 1
+    trade = marked["settled"][0]
+    assert trade["exit_reason"] == "TARGET"
+    assert trade["entry_minute_status"] == "AMBIGUOUS_BOUNDARY_TOUCH"
+    assert trade["path_observation_complete"] is False
+    assert trade["production_evidence_eligible"] is False
+    assert trade["evidence_exclusion_reason"] == "ENTRY_MINUTE_AMBIGUOUS_BOUNDARY_TOUCH"
+    assert marked["entry_minute_ambiguous_count"] == 1
