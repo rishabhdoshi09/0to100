@@ -216,8 +216,14 @@ class FoPaperBook:
         quotes: Mapping[str, Mapping[str, Any]],
         *,
         session: str,
+        advance_session: bool = True,
     ) -> list[FoPaperTrade]:
-        """Mark one session. When stop and target both hit, STOP wins conservatively."""
+        """Mark prices; optionally advance holding-session age.
+
+        Historical intraday replay uses advance_session=False so chronological
+        STOP/TARGET reconstruction cannot accidentally trigger MAX_HOLD before
+        the current supervision instant. Same-bar ambiguity remains STOP-first.
+        """
         settled: list[FoPaperTrade] = []
         for symbol, pos in list(self.open.items()):
             raw = quotes.get(symbol)
@@ -231,7 +237,7 @@ class FoPaperBook:
             low = float(raw.get("low") or close)
             bid = float(raw.get("bid") or 0.0)
             clean_session = str(session)[:10]
-            if clean_session and clean_session != pos.last_mark_session:
+            if advance_session and clean_session and clean_session != pos.last_mark_session:
                 pos.bars_held += 1
                 pos.last_mark_session = clean_session
             pos.max_mark = max(pos.max_mark, high, close)
