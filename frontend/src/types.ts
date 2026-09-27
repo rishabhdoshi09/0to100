@@ -166,6 +166,8 @@ export type FnoExclusion = {
 
 export type FnoForwardEvidence = {
   context_key?: string
+  context_schema_version?: string
+  valid_context?: boolean
   evidence_lane?: string
   status?: 'EVIDENCE_READY' | 'ACCUMULATING' | 'COST_MODEL_REQUIRED' | 'NO_FORWARD_OUTCOMES' | 'NO_CONTEXT_KEY' | string
   observed_n?: number
@@ -189,6 +191,7 @@ export type FnoForwardEvidence = {
   production_influence_allowed?: boolean
   coverage?: {
     valid_context?: boolean
+    context_schema_version?: string
     exact_n?: number
     thesis_n?: number
     direction_oi_n?: number
@@ -270,6 +273,8 @@ export type FnoDirectionalState = {
   candidate_evidence_policy?: {
     lane?: string
     minimum_fully_costed_n?: number
+    context_schema_version?: string
+    probability_requires_current_context_version?: boolean
     probability_requires_exact_context?: boolean
     broader_context_counts_research_only?: boolean
     paper_only?: boolean
