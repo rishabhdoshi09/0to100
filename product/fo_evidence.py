@@ -14,6 +14,11 @@ FORWARD_PAPER = "FORWARD_PAPER"
 HISTORICAL_REPLAY = "HISTORICAL_REPLAY"
 MODEL_ONLY = "MODEL_ONLY"
 
+# Bump this whenever the meaning of an F&O calibration context changes
+# (bucket boundaries, setup/contract policy semantics, or included dimensions).
+# Legacy keys deliberately do not pool into current production probability.
+FO_CONTEXT_SCHEMA_VERSION = "FOCTX_V1"
+
 
 def _f(value: Any, default: float = 0.0) -> float:
     try:
@@ -42,6 +47,15 @@ def _bucket(value: float, edges: tuple[float, ...], labels: tuple[str, ...]) -> 
     return labels[-1]
 
 
+def _parse_fo_context_key(context_key: str | None) -> tuple[str, ...] | None:
+    parts = tuple(str(context_key or "").split("|"))
+    if len(parts) != 8 or not all(parts):
+        return None
+    if parts[0] != FO_CONTEXT_SCHEMA_VERSION:
+        return None
+    return parts
+
+
 def fo_context_key(
     *,
     direction: str,
@@ -62,6 +76,7 @@ def fo_context_key(
     else:
         iv_bucket = _bucket(_f(iv_percentile), (30.0, 60.0, 80.0), ("IV_LOW", "IV_NORMAL", "IV_HIGH", "IV_EXTREME"))
     return "|".join((
+        FO_CONTEXT_SCHEMA_VERSION,
         str(direction or "").upper(),
         str(futures_oi_state or "NEUTRAL").upper(),
         rvol_bucket,
@@ -85,8 +100,9 @@ def fo_evidence_coverage(
     intentionally counts-only diagnostics so sparse contexts are visible
     without borrowing win-rates across materially different setups/contracts.
     """
-    parts = tuple(str(context_key or "").split("|"))
-    valid_context = len(parts) == 7 and all(parts)
+    parsed = _parse_fo_context_key(context_key)
+    valid_context = parsed is not None
+    parts = parsed or ()
     counts = {
         "exact_n": 0,
         "thesis_n": 0,
@@ -104,14 +120,15 @@ def fo_evidence_coverage(
                 continue
             if row.get("net_option_return_pct") is None:
                 continue
-            row_parts = tuple(str(row.get("context_key") or "").split("|"))
-            if len(row_parts) != 7 or not all(row_parts):
+            row_parts = _parse_fo_context_key(str(row.get("context_key") or ""))
+            if row_parts is None:
                 continue
-            if row_parts[:1] == parts[:1]:
-                counts["direction_n"] += 1
+            # Every broader bucket stays inside the same context schema version.
             if row_parts[:2] == parts[:2]:
+                counts["direction_n"] += 1
+            if row_parts[:3] == parts[:3]:
                 counts["direction_oi_n"] += 1
-            if row_parts[:4] == parts[:4]:
+            if row_parts[:5] == parts[:5]:
                 counts["thesis_n"] += 1
             if row_parts == parts:
                 counts["exact_n"] += 1
@@ -119,6 +136,7 @@ def fo_evidence_coverage(
     minimum = max(1, int(min_n))
     return {
         "valid_context": bool(valid_context),
+        "context_schema_version": FO_CONTEXT_SCHEMA_VERSION,
         **counts,
         "minimum_exact_n": minimum,
         "remaining_to_exact_min_n": max(0, minimum - counts["exact_n"]),
@@ -186,10 +204,17 @@ def summarize_fo_outcomes(
     mfes = [_f(row.get("mfe_pct")) for row in rows if row.get("mfe_pct") is not None]
     maes = [_f(row.get("mae_pct")) for row in rows if row.get("mae_pct") is not None]
     false_breakouts = sum(1 for row in rows if bool(row.get("false_breakout", False)))
-    claim = evidence_lane == FORWARD_PAPER and n >= max(1, int(min_n))
+    valid_context = _parse_fo_context_key(context_key) is not None
+    claim = (
+        evidence_lane == FORWARD_PAPER
+        and valid_context
+        and n >= max(1, int(min_n))
+    )
 
     return {
         "context_key": context_key,
+        "context_schema_version": FO_CONTEXT_SCHEMA_VERSION,
+        "valid_context": valid_context,
         "evidence_lane": evidence_lane,
         "observed_n": len(observed_rows),
         "n": n,
