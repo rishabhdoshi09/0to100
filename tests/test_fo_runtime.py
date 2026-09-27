@@ -505,3 +505,72 @@ def test_stale_option_quotes_are_filtered_before_contract_selection(monkeypatch)
         row["reason"] == "QUOTE_STALE"
         for row in result["deep_failures"][0]["rejected_option_quotes"]
     )
+
+
+def test_fresh_but_incoherent_underlying_future_quotes_fail_closed(monkeypatch):
+    bars = _breakout_bars()
+    spot = float(bars["close"].iloc[-1])
+    instruments = _instruments(spot)
+    client = _Client(
+        spot,
+        instruments,
+        underlying_quote_time=QUOTE_TIME - timedelta(seconds=140),
+        future_quote_time=QUOTE_TIME,
+    )
+
+    monkeypatch.setattr(
+        fo_runtime,
+        "_index_context",
+        lambda: {"return_20d_pct": 1.0, "return_5d_pct": 0.5, "last_close": 21900.0},
+    )
+    monkeypatch.setattr(fo_runtime, "_sector_strength_map", lambda nifty: {"Tech": 1.2})
+    monkeypatch.setattr(fo_runtime, "_sector_for", lambda symbol: "Tech")
+
+    result = fo_runtime.run_fo_directional_scan(
+        report=_report(spot),
+        instrument_rows=instruments,
+        client=client,
+        as_of=AS_OF,
+        history_getter=lambda symbol: bars,
+        quote_now=client.quote_now,
+    )
+
+    assert result["candidate_count"] == 0
+    assert result["deep_failures"][0]["stage"] == "current_quotes"
+    assert result["deep_failures"][0]["reason"] == "UNDERLYING_FUTURE_QUOTE_SKEW_TOO_WIDE"
+
+
+def test_fresh_but_incoherent_option_quotes_are_filtered(monkeypatch):
+    bars = _breakout_bars()
+    spot = float(bars["close"].iloc[-1])
+    instruments = _instruments(spot)
+    client = _Client(
+        spot,
+        instruments,
+        option_quote_time=QUOTE_TIME - timedelta(seconds=140),
+    )
+
+    monkeypatch.setattr(
+        fo_runtime,
+        "_index_context",
+        lambda: {"return_20d_pct": 1.0, "return_5d_pct": 0.5, "last_close": 21900.0},
+    )
+    monkeypatch.setattr(fo_runtime, "_sector_strength_map", lambda nifty: {"Tech": 1.2})
+    monkeypatch.setattr(fo_runtime, "_sector_for", lambda symbol: "Tech")
+
+    result = fo_runtime.run_fo_directional_scan(
+        report=_report(spot),
+        instrument_rows=instruments,
+        client=client,
+        as_of=AS_OF,
+        history_getter=lambda symbol: bars,
+        quote_now=client.quote_now,
+    )
+
+    assert result["candidate_count"] == 0
+    assert result["deep_failures"][0]["stage"] == "option_quotes"
+    assert result["deep_failures"][0]["reason"] == "NO_FRESH_COHERENT_OPTION_QUOTES"
+    assert all(
+        row["reason"] == "OPTION_QUOTE_SKEW_TOO_WIDE"
+        for row in result["deep_failures"][0]["rejected_option_quotes"]
+    )
