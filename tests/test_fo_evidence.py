@@ -73,7 +73,7 @@ def test_historical_replay_never_masquerades_as_forward_probability():
 
 
 def test_small_forward_sample_stays_uncalibrated():
-    result = summarize_fo_outcomes(_rows(n=12), context_key="CTX", min_n=30)
+    result = summarize_fo_outcomes(_rows(n=12), context_key=_canonical_context(), min_n=30)
     assert result["n"] == 12
     assert result["probability_claim_available"] is False
     assert result["expectancy_pct"] is None
@@ -85,7 +85,7 @@ def test_gross_only_forward_rows_never_create_probability_claim():
         row["production_evidence_eligible"] = False
         row["cost_model_status"] = "UNCONFIGURED_GROSS_ONLY"
 
-    result = summarize_fo_outcomes(rows, context_key="CTX", min_n=30)
+    result = summarize_fo_outcomes(rows, context_key=_canonical_context(), min_n=30)
 
     assert result["observed_n"] == 40
     assert result["n"] == 0
