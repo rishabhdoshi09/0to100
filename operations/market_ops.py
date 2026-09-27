@@ -952,6 +952,9 @@ class MarketOperationsWorker:
         if report is None:
             report = current_fno_universe(as_of=as_of)
 
+        operation_payload = dict(operation.get("payload") or {})
+        operation_slot = str(operation_payload.get("slot") or "")
+
         result = {
             "source": report.source,
             "live_refresh_error": live_error,
@@ -1097,6 +1100,39 @@ class MarketOperationsWorker:
             "live_execution_allowed": False,
         }
         result["paper"] = paper
+
+        # Build IV percentile history from one consistent near-close snapshot
+        # across the whole mapped F&O universe. Intraday scans only read prior
+        # completed-session history; they never write candidate-conditioned IV.
+        if operation_slot == "closing-1530" and market_client is not None and rows:
+            try:
+                from product.fo_iv_history import collect_close_iv_snapshot
+
+                result["iv_history"] = collect_close_iv_snapshot(
+                    symbols=[
+                        str(getattr(item, "symbol", "") or "")
+                        for item in list(getattr(report, "underlyings", ()) or ())
+                    ],
+                    instrument_rows=rows,
+                    client=market_client,
+                    as_of=as_of,
+                )
+            except Exception as exc:
+                result["iv_history"] = {
+                    "available": False,
+                    "status": "DEGRADED",
+                    "reason": f"{type(exc).__name__}: {exc}"[:240],
+                    "session": as_of.isoformat(),
+                    "historical_backfill": False,
+                }
+        else:
+            result["iv_history"] = {
+                "available": False,
+                "status": "NOT_DUE",
+                "reason": "CLOSING_1530_SNAPSHOT_ONLY",
+                "session": as_of.isoformat(),
+                "historical_backfill": False,
+            }
         return result
 
     def _run_data_prepare(self, operation: dict[str, Any]) -> dict[str, Any]:

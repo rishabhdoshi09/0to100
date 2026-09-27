@@ -188,12 +188,18 @@ export function FnoView({ dashboard, runControl, setSelected, setActive }: Props
               const expected = setup.expected_move || {}
               const evidence = candidate.forward_evidence || {}
               const coverage = evidence.coverage || {}
+              const ivHistory = candidate.iv_history || {}
               const evidenceReady = evidence.probability_claim_available === true
               return (
                 <button type="button" key={`${candidate.symbol}-${contract.symbol || index}`} onClick={() => select(candidate.symbol)}>
                   <strong>{candidate.symbol} · {candidate.direction}</strong>
                   <span>{contract.symbol || contract.option_type || 'No contract'} · setup {fmt(setup.score, 1)}/100 · option {fmt(contract.score, 1)}/100</span>
                   <p>OI {words(setup.futures_oi_state || 'unknown')} · Δ {fmt(contract.delta, 2)} · IV {fmt(contract.iv, 1)}% · DTE {contract.dte ?? '—'} · horizon {words(expected.horizon || 'unknown')}</p>
+                  {ivHistory.available ? (
+                    <small>Forward IV percentile {fmt(ivHistory.percentile_pct, 1)}% · {ivHistory.prior_sessions ?? 0} prior closing sessions · no backfill</small>
+                  ) : (
+                    <small>Forward IV percentile held · {ivHistory.prior_sessions ?? 0}/{ivHistory.minimum_prior_sessions ?? 60} prior closing sessions · no backfill</small>
+                  )}
                   <small>Paper entry ₹{fmt(plan.entry)} · stop ₹{fmt(plan.stop)} · target ₹{fmt(plan.target)} · R:R {fmt(plan.risk_reward, 2)}</small>
                   {evidenceReady ? (
                     <small>Forward evidence · n={evidence.n ?? 0} fully costed + path-valid · observed win {fmt(evidence.win_probability_pct, 1)}% · Wilson floor {fmt(evidence.win_probability_wilson_lb_pct, 1)}% · conservative EV {fmt(evidence.conservative_ev_pct, 2)}%</small>

@@ -125,6 +125,26 @@ class _Client:
         return [{"date": "2026-09-25", "close": self.spot - 10.0, "oi": 100_000}]
 
 
+class _IvHistory:
+    def __init__(self, percentile=35.0, prior_sessions=80):
+        self.percentile = percentile
+        self.prior_sessions = prior_sessions
+        self.calls = []
+
+    def percentile_before(self, **kwargs):
+        self.calls.append(dict(kwargs))
+        return {
+            "available": True,
+            "percentile_pct": self.percentile,
+            "prior_sessions": self.prior_sessions,
+            "minimum_prior_sessions": 60,
+            "lookback_sessions": 252,
+            "current_iv_pct": kwargs["current_iv_pct"],
+            "source": "FORWARD_OBSERVED_ATM_IV_CLOSE",
+            "historical_backfill": False,
+        }
+
+
 class _NoQuoteClient:
     def quote(self, keys):
         raise AssertionError("no deep quote should be requested for a valid empty prefilter")
@@ -316,3 +336,42 @@ def test_live_nifty_quote_aligns_relative_strength_horizon(monkeypatch):
     assert abs(result["market_context"]["nifty_20d_return_pct"] - expected_20d) < 0.001
     assert abs(result["market_context"]["nifty_5d_return_pct"] - expected_5d) < 0.001
     assert abs(seen["nifty_5d"] - expected_5d) < 1e-9
+
+
+
+def test_runtime_uses_only_prior_forward_iv_history_for_contract_scoring(monkeypatch):
+    bars = _breakout_bars()
+    spot = float(bars["close"].iloc[-1])
+    instruments = _instruments(spot)
+    client = _Client(spot, instruments)
+    iv_history = _IvHistory(percentile=35.0, prior_sessions=80)
+
+    monkeypatch.setattr(
+        fo_runtime,
+        "_index_context",
+        lambda: {"return_20d_pct": 1.0, "return_5d_pct": 0.5, "last_close": 21900.0},
+    )
+    monkeypatch.setattr(fo_runtime, "_sector_strength_map", lambda nifty: {"Tech": 1.2})
+    monkeypatch.setattr(fo_runtime, "_sector_for", lambda symbol: "Tech")
+
+    result = fo_runtime.run_fo_directional_scan(
+        report=_report(spot),
+        instrument_rows=instruments,
+        client=client,
+        as_of=AS_OF,
+        history_getter=lambda symbol: bars,
+        iv_history_store=iv_history,
+    )
+
+    assert result["candidate_count"] == 1
+    selected = result["candidates"][0]
+    assert selected["selected_contract"]["iv_percentile"] == 35.0
+    assert selected["selected_contract"]["iv_percentile_available"] is True
+    assert selected["selected_contract"]["components"]["iv"] > 0
+    assert selected["iv_history"]["prior_sessions"] == 80
+    assert selected["iv_history"]["historical_backfill"] is False
+    assert len(iv_history.calls) == 1
+    call = iv_history.calls[0]
+    assert call["symbol"] == "TEST"
+    assert call["session"] == AS_OF.isoformat()
+    assert 20.0 <= call["current_iv_pct"] <= 30.0

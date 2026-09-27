@@ -238,6 +238,8 @@ export type FnoDirectionalCandidate = {
     volume?: number
     oi?: number
     iv?: number
+    iv_percentile?: number | null
+    iv_percentile_available?: boolean
     delta?: number
     gamma?: number
     theta_per_day?: number
@@ -254,6 +256,17 @@ export type FnoDirectionalCandidate = {
       underlying_invalidation?: number | null
       model?: string
     }
+  }
+  iv_history?: {
+    available?: boolean
+    percentile_pct?: number | null
+    prior_sessions?: number
+    minimum_prior_sessions?: number
+    lookback_sessions?: number
+    current_iv_pct?: number | null
+    source?: string
+    historical_backfill?: boolean
+    reason?: string
   }
   forward_evidence?: FnoForwardEvidence
   paper_only?: boolean
