@@ -6,11 +6,12 @@ may compare their current ATM IV only with prior completed-session observations.
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 from pathlib import Path
 import sqlite3
 from statistics import median
 from typing import Any, Mapping, Sequence
+from zoneinfo import ZoneInfo
 
 from core.runtime_paths import logs_dir
 from data.nfo_market import (
@@ -23,6 +24,9 @@ from research.intelligence.data.nse_calendar import is_session, load_holidays
 MIN_PRIOR_SESSIONS = 60
 LOOKBACK_SESSIONS = 252
 SOURCE = "FORWARD_OBSERVED_ATM_IV_CLOSE"
+_CLOSE_WINDOW_START = time(15, 15)
+_CLOSE_WINDOW_END = time(15, 35)
+_IST = ZoneInfo("Asia/Kolkata")
 
 
 def _f(value: Any, default: float = 0.0) -> float:
@@ -43,22 +47,41 @@ def _expiry(row: Mapping[str, Any]) -> str:
     return str(row.get("expiry") or "")[:10]
 
 
-def _quote_session_date(quote: Mapping[str, Any] | None) -> str:
-    """Exchange quote-packet session date, never last-trade time."""
+def _quote_exchange_dt(quote: Mapping[str, Any] | None) -> datetime | None:
+    """Exchange quote-packet timestamp normalized to IST when timezone-aware."""
     if not isinstance(quote, Mapping):
-        return ""
+        return None
     raw = quote.get("timestamp")
     if raw is None:
         raw = quote.get("exchange_timestamp")
     if isinstance(raw, datetime):
-        return raw.date().isoformat()
-    text = str(raw or "").strip()
-    if not text:
-        return ""
-    try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00")).date().isoformat()
-    except ValueError:
-        return ""
+        stamp = raw
+    else:
+        text = str(raw or "").strip()
+        if not text:
+            return None
+        try:
+            stamp = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if stamp.tzinfo is not None:
+        stamp = stamp.astimezone(_IST).replace(tzinfo=None)
+    return stamp
+
+
+def _quote_session_date(quote: Mapping[str, Any] | None) -> str:
+    """Exchange quote-packet session date, never last-trade time."""
+    stamp = _quote_exchange_dt(quote)
+    return stamp.date().isoformat() if stamp is not None else ""
+
+
+def _quote_in_close_window(quote: Mapping[str, Any] | None, *, as_of: date) -> bool:
+    """True only for a same-session quote packet inside the bounded close window."""
+    stamp = _quote_exchange_dt(quote)
+    if stamp is None or stamp.date() != as_of:
+        return False
+    wall = stamp.time().replace(tzinfo=None)
+    return _CLOSE_WINDOW_START <= wall <= _CLOSE_WINDOW_END
 
 
 def _nearest_pair(
@@ -326,6 +349,9 @@ def collect_close_iv_snapshot(
                     else "SPOT_QUOTE_TIMESTAMP_UNAVAILABLE"
                 )
                 continue
+            if not _quote_in_close_window(spot_quote, as_of=as_of):
+                preflight_failures[symbol] = "SPOT_QUOTE_OUTSIDE_CLOSE_WINDOW"
+                continue
             spot = _f(spot_quote.get("last_price"))
             if spot <= 0:
                 preflight_failures[symbol] = "SPOT_QUOTE_PRICE_UNAVAILABLE"
@@ -353,6 +379,7 @@ def collect_close_iv_snapshot(
             for meta in metas:
                 contract_symbol = str(meta.get("tradingsymbol") or "")
                 quote_session = _quote_session_date(option_quotes.get(contract_symbol))
+                quote = option_quotes.get(contract_symbol)
                 if quote_session != as_of_text:
                     stale_contract = contract_symbol
                     stale_reason = (
@@ -360,6 +387,10 @@ def collect_close_iv_snapshot(
                         if quote_session
                         else "OPTION_QUOTE_TIMESTAMP_UNAVAILABLE"
                     )
+                    break
+                if not _quote_in_close_window(quote, as_of=as_of):
+                    stale_contract = contract_symbol
+                    stale_reason = "OPTION_QUOTE_OUTSIDE_CLOSE_WINDOW"
                     break
             if stale_reason:
                 failures.append({
