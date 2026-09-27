@@ -263,16 +263,20 @@ class _CloseClient:
         session=date(2026, 9, 25),
         spot_quote_session=None,
         option_quote_session=None,
+        spot_quote_time=time(15, 29),
+        option_quote_time=time(15, 29),
     ):
         self.rows = rows
         self.quotes = _option_quotes(rows, iv=0.30)
         self.session = session
         self.spot_quote_session = spot_quote_session or session
         self.option_quote_session = option_quote_session or session
+        self.spot_quote_time = spot_quote_time
+        self.option_quote_time = option_quote_time
 
     @staticmethod
-    def _stamp(session):
-        return datetime.combine(session, time(15, 29, 0))
+    def _stamp(session, at):
+        return datetime.combine(session, at)
 
     def quote(self, keys):
         out = {}
@@ -280,14 +284,14 @@ class _CloseClient:
             if key == "NSE:ABC":
                 out[key] = {
                     "last_price": 100.0,
-                    "timestamp": self._stamp(self.spot_quote_session),
+                    "timestamp": self._stamp(self.spot_quote_session, self.spot_quote_time),
                 }
             elif key.startswith("NFO:"):
                 symbol = key.split(":", 1)[1]
                 if symbol in self.quotes:
                     out[key] = {
                         **self.quotes[symbol],
-                        "timestamp": self._stamp(self.option_quote_session),
+                        "timestamp": self._stamp(self.option_quote_session, self.option_quote_time),
                     }
         return out
 
@@ -362,6 +366,51 @@ def test_close_snapshot_rejects_stale_option_quote_session(tmp_path):
         assert result["persisted_symbols"] == 0
         assert result["failed_symbols"] == 1
         assert result["failures"][0]["reason"] == "OPTION_QUOTE_SESSION_MISMATCH"
+        assert store.status()["rows"] == 0
+
+
+
+def test_close_snapshot_rejects_same_day_spot_quote_outside_close_window(tmp_path):
+    rows = _option_rows()
+    as_of = date(2026, 9, 28)
+    client = _CloseClient(
+        rows,
+        session=as_of,
+        spot_quote_time=time(11, 0),
+    )
+    with FoIvHistoryStore(tmp_path / "iv.sqlite3") as store:
+        result = collect_close_iv_snapshot(
+            symbols=["ABC"],
+            instrument_rows=rows,
+            client=client,
+            as_of=as_of,
+            store=store,
+        )
+        assert result["persisted_symbols"] == 0
+        assert result["failed_symbols"] == 1
+        assert result["failures"][0]["reason"] == "SPOT_QUOTE_OUTSIDE_CLOSE_WINDOW"
+        assert store.status()["rows"] == 0
+
+
+def test_close_snapshot_rejects_same_day_option_quote_outside_close_window(tmp_path):
+    rows = _option_rows()
+    as_of = date(2026, 9, 28)
+    client = _CloseClient(
+        rows,
+        session=as_of,
+        option_quote_time=time(12, 15),
+    )
+    with FoIvHistoryStore(tmp_path / "iv.sqlite3") as store:
+        result = collect_close_iv_snapshot(
+            symbols=["ABC"],
+            instrument_rows=rows,
+            client=client,
+            as_of=as_of,
+            store=store,
+        )
+        assert result["persisted_symbols"] == 0
+        assert result["failed_symbols"] == 1
+        assert result["failures"][0]["reason"] == "OPTION_QUOTE_OUTSIDE_CLOSE_WINDOW"
         assert store.status()["rows"] == 0
 
 
