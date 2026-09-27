@@ -331,6 +331,7 @@ def test_same_day_paper_mark_uses_post_entry_intraday_range(tmp_path):
     assert marked["settled"][0]["exit_reason"] == "STOP"
     assert marked["same_day_intraday_marks_used"] == 1
     assert marked["same_day_intraday_marks_fallback"] == 0
+    assert marked["same_day_intraday_bars_replayed"] == 2
     assert client.historical_calls == [
         (777, "2026-09-26 10:16:00", "2026-09-26 14:00:00", "minute")
     ]
@@ -373,3 +374,56 @@ def test_same_day_paper_mark_falls_back_to_ltp_when_intraday_bars_missing(tmp_pa
     assert marked["open_count"] == 1
     assert marked["same_day_intraday_marks_used"] == 0
     assert marked["same_day_intraday_marks_fallback"] == 1
+
+
+def test_ordered_intraday_replay_respects_target_before_later_stop(tmp_path):
+    path = tmp_path / "fo.sqlite3"
+    opened_at = datetime(2026, 9, 26, 10, 15, 12, tzinfo=IST)
+
+    with FoPaperStore(path) as store:
+        opened = run_fo_paper_cycle(
+            _directional_with_token(779),
+            client=_QuoteClient(last=50, high=80, low=30, bid=49),
+            now_ist=opened_at,
+            allow_new_entries=True,
+            store=store,
+            capital=200_000,
+        )
+        assert opened["opened_count"] == 1
+
+    # Deliberately return provider rows out of order. Chronological replay must
+    # sort them: target is hit at 10:17, while the stop only appears at 10:18.
+    # An aggregated high/low range would incorrectly collapse this to the
+    # conservative ambiguous STOP-first rule.
+    client = _IntradayQuoteClient(
+        last=52,
+        high=90,
+        low=20,
+        bid=51,
+        intraday_rows=[
+            {
+                "date": "2026-09-26T10:18:00+05:30",
+                "open": 69.0, "high": 69.5, "low": 35.0, "close": 38.0,
+            },
+            {
+                "date": "2026-09-26T10:17:00+05:30",
+                "open": 52.0, "high": 72.0, "low": 48.0, "close": 71.0,
+            },
+        ],
+    )
+    with FoPaperStore(path) as store:
+        marked = run_fo_paper_cycle(
+            {"available": True, "candidates": []},
+            client=client,
+            now_ist=opened_at.replace(hour=14, minute=0, second=0),
+            allow_new_entries=False,
+            store=store,
+            capital=200_000,
+        )
+
+    assert marked["settled_count"] == 1
+    assert marked["open_count"] == 0
+    assert marked["settled"][0]["exit_reason"] == "TARGET"
+    assert marked["same_day_intraday_marks_used"] == 1
+    # Replay stops as soon as the first chronological exit occurs.
+    assert marked["same_day_intraday_bars_replayed"] == 1
