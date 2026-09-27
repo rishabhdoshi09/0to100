@@ -1,4 +1,4 @@
-from product.fo_paper import FoPaperBook
+from product.fo_paper import ENTRY_MINUTE_CLEAR, FoPaperBook
 
 
 def test_option_paper_book_enforces_lot_risk_and_premium_caps():
@@ -85,6 +85,7 @@ def test_configured_cost_model_flows_into_net_option_return():
         opened_at="2026-09-26", max_holding_sessions=1,
     )
     assert pos is not None
+    pos.entry_minute_status = ENTRY_MINUTE_CLEAR
     closed = book.mark({
         "RELIANCECE": {"open": 50, "high": 75, "low": 49, "close": 72, "bid": 70}
     }, session="2026-09-27")
@@ -172,3 +173,38 @@ def test_executable_ask_cannot_cross_above_target():
     )
     assert pos is None
     assert book.refusals[-1][1] == "TARGET_NOT_ABOVE_EXECUTABLE_ENTRY"
+
+
+
+def test_configured_costs_still_hold_probability_when_entry_path_is_ambiguous():
+    def costs(entry, exit, qty):
+        return 10.0
+
+    book = FoPaperBook(
+        capital=200_000,
+        slippage_bps=0,
+        cost_model=costs,
+        cost_model_name="TEST_COSTS",
+    )
+    pos = book.open_position(
+        underlying="RELIANCE",
+        option_symbol="RELIANCECE",
+        option_type="CE",
+        entry=50,
+        stop=40,
+        target=70,
+        lot_size=25,
+        opened_at="2026-09-26T10:15:12+05:30",
+        max_holding_sessions=1,
+    )
+    assert pos is not None
+    pos.entry_minute_status = "AMBIGUOUS_BOUNDARY_TOUCH"
+    book.mark({
+        "RELIANCECE": {"open": 50, "high": 55, "low": 45, "close": 52, "bid": 52}
+    }, session="2026-09-27")
+
+    row = book.evidence_rows()[0]
+    assert row["cost_model_status"].startswith("CONFIGURED:")
+    assert row["path_observation_complete"] is False
+    assert row["production_evidence_eligible"] is False
+    assert row["evidence_exclusion_reason"] == "ENTRY_MINUTE_AMBIGUOUS_BOUNDARY_TOUCH"
