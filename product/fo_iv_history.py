@@ -14,7 +14,6 @@ from typing import Any, Mapping, Sequence
 
 from core.runtime_paths import logs_dir
 from data.nfo_market import (
-    candidate_option_instruments,
     quote_to_option_contract,
     read_market_quotes,
     read_nfo_quotes,
@@ -244,6 +243,22 @@ def collect_close_iv_snapshot(
         clean = sorted({str(symbol or "").upper() for symbol in symbols if str(symbol or "").strip()})
         spot_quotes = read_market_quotes([f"NSE:{symbol}" for symbol in clean], client=client)
 
+        # Index the instrument master once. Re-scanning the full NFO master for
+        # every underlying would make the closing collector O(symbols × rows).
+        wanted = set(clean)
+        eligible_options: dict[str, list[dict[str, Any]]] = {symbol: [] for symbol in clean}
+        as_of_text = as_of.isoformat()
+        for raw in instrument_rows:
+            if not isinstance(raw, Mapping):
+                continue
+            symbol = str(raw.get("name") or "").upper()
+            if symbol not in wanted or _kind(raw) not in {"CE", "PE"}:
+                continue
+            expiry = _expiry(raw)
+            if not expiry or expiry < as_of_text:
+                continue
+            eligible_options[symbol].append(dict(raw))
+
         metas_by_symbol: dict[str, list[dict[str, Any]]] = {}
         quote_symbols: list[str] = []
         spots: dict[str, float] = {}
@@ -252,15 +267,7 @@ def collect_close_iv_snapshot(
             if spot <= 0:
                 continue
             spots[symbol] = spot
-            metas = candidate_option_instruments(
-                instrument_rows,
-                symbol,
-                spot=spot,
-                as_of=as_of,
-                max_expiries=1,
-                max_moneyness_pct=8.0,
-            )
-            pair = _nearest_pair(metas, spot=spot)
+            pair = _nearest_pair(eligible_options.get(symbol, []), spot=spot)
             if len(pair) != 2:
                 continue
             metas_by_symbol[symbol] = pair
