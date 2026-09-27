@@ -18,6 +18,7 @@ from data.nfo_market import (
     read_nfo_quotes,
 )
 from product.fo_snapshot_engine import evaluate_fo_snapshot_auto
+from product.fo_iv_history import FoIvHistoryStore, representative_atm_iv_pct
 
 
 def _f(value: Any, default: float = 0.0) -> float:
@@ -151,6 +152,7 @@ def run_fo_directional_scan(
     client,
     as_of: date,
     history_getter=None,
+    iv_history_store=None,
 ) -> dict[str, Any]:
     """Run one complete read-only F&O directional scan."""
     history_state: dict[str, Any] = {}
@@ -301,6 +303,14 @@ def run_fo_directional_scan(
         option_symbols.extend(str(row.get("tradingsymbol") or "") for row in metas)
     option_quotes = read_nfo_quotes(option_symbols, client=client)
 
+    owned_iv_history_store = False
+    if iv_history_store is None:
+        try:
+            iv_history_store = FoIvHistoryStore()
+            owned_iv_history_store = True
+        except Exception:
+            iv_history_store = None
+
     decisions: list[dict[str, Any]] = []
     deep_failures: list[dict[str, Any]] = []
     for item, frame, pre in deep:
@@ -326,6 +336,39 @@ def run_fo_directional_scan(
             )
             for meta in option_meta_by_symbol.get(symbol, [])
         }
+        spot = _f(uq.get("last_price"), _f(pre.get("price")))
+        iv_history = {
+            "available": False,
+            "percentile_pct": None,
+            "prior_sessions": 0,
+            "current_iv_pct": None,
+            "reason": "FORWARD_IV_HISTORY_UNAVAILABLE",
+            "historical_backfill": False,
+        }
+        try:
+            current_iv = representative_atm_iv_pct(
+                option_meta_by_symbol.get(symbol, []),
+                subset,
+                spot=spot,
+                as_of=as_of,
+            )
+            iv_history["current_iv_pct"] = current_iv.get("iv_pct")
+            iv_history["reason"] = str(current_iv.get("reason") or "")
+            if current_iv.get("available") and iv_history_store is not None:
+                prior = iv_history_store.percentile_before(
+                    symbol=symbol,
+                    session=as_of.isoformat(),
+                    current_iv_pct=float(current_iv["iv_pct"]),
+                )
+                iv_history = {**current_iv, **prior}
+                iv_history["reason"] = (
+                    "FORWARD_IV_PERCENTILE_READY"
+                    if prior.get("available")
+                    else "INSUFFICIENT_PRIOR_IV_SESSIONS"
+                )
+        except Exception as exc:
+            iv_history["reason"] = f"IV_HISTORY_ERROR:{type(exc).__name__}"
+
         sector = _sector_for(symbol)
         sector_strength = sector_strengths.get(sector)
         if sector_strength is None:
@@ -349,7 +392,11 @@ def run_fo_directional_scan(
                 benchmark_20d_return_pct=float(nifty_20),
                 nifty_change_pct=float(nifty_change),
                 sector_relative_strength_pct=float(sector_strength),
-                iv_percentile=None,
+                iv_percentile=(
+                    float(iv_history["percentile_pct"])
+                    if iv_history.get("available") and iv_history.get("percentile_pct") is not None
+                    else None
+                ),
                 as_of=as_of,
             )
         except Exception as exc:
@@ -362,7 +409,14 @@ def run_fo_directional_scan(
         result["sector"] = sector
         result["prefilter"] = pre
         result["previous_future"] = previous
+        result["iv_history"] = iv_history
         decisions.append(result)
+
+    if owned_iv_history_store and iv_history_store is not None:
+        try:
+            iv_history_store.close()
+        except Exception:
+            pass
 
     candidates = [
         row["selected"] for row in decisions
