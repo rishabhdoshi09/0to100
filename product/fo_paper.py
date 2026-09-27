@@ -33,6 +33,7 @@ class FoPaperPosition:
     risk_amount: float
     setup_score: float
     option_score: float
+    instrument_token: int = 0
     bars_held: int = 0
     last_mark_session: str = ""
     max_mark: float = 0.0
@@ -131,6 +132,7 @@ class FoPaperBook:
         context_key: str = "",
         setup_score: float = 0.0,
         option_score: float = 0.0,
+        instrument_token: int = 0,
         ask: float | None = None,
         requested_lots: int | None = None,
     ) -> FoPaperPosition | None:
@@ -201,6 +203,7 @@ class FoPaperBook:
             risk_amount=round(per_unit_risk * qty, 2),
             setup_score=float(setup_score),
             option_score=float(option_score),
+            instrument_token=max(0, int(instrument_token or 0)),
             last_mark_session=str(opened_at)[:10],
             max_mark=round(fill, 4),
             min_mark=round(fill, 4),
