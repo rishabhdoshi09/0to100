@@ -2,7 +2,7 @@ from product.fo_costs import (
     NseLongOptionCostSchedule,
     zerodha_nse_option_cost_model_from_env,
 )
-from product.fo_paper import FoPaperBook
+from product.fo_paper import ENTRY_MINUTE_CLEAR, FoPaperBook
 
 
 def test_standard_zerodha_nse_option_round_trip_cost_matches_published_schedule():
@@ -63,6 +63,7 @@ def test_configured_cost_model_makes_closed_paper_trade_net_and_evidence_eligibl
         requested_lots=1,
     )
     assert pos is not None
+    pos.entry_minute_status = ENTRY_MINUTE_CLEAR
 
     settled = book.mark(
         {"TESTCE": {"open": 100.0, "high": 121.0, "low": 100.0, "close": 120.0}},
