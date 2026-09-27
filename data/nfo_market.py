@@ -380,23 +380,18 @@ def previous_future_close_oi(
     }
 
 
-def read_option_intraday_mark(
+def read_option_intraday_bars(
     instrument_token: int,
     *,
     from_dt: datetime,
     to_dt: datetime,
     client=None,
     interval: str = "minute",
-) -> dict[str, float] | None:
-    """Aggregate read-only option bars strictly from a supplied post-entry window.
-
-    The caller owns the time boundary. This helper never widens the requested
-    window and never substitutes full-day OHLC, so a paper trade cannot inherit
-    extrema that occurred before its entry.
-    """
+) -> list[dict[str, Any]]:
+    """Return ordered read-only option bars inside an explicit post-entry window."""
     token = int(instrument_token or 0)
     if token <= 0 or to_dt <= from_dt:
-        return None
+        return []
     if client is None:
         client = NfoMarketDataClient.from_config()
 
@@ -408,8 +403,8 @@ def read_option_intraday_mark(
         raw = getattr(client, "raw", client)
         rows = raw.historical_data(token, frm, to, interval, oi=False)
 
-    valid: list[dict[str, float]] = []
-    for raw_row in rows or []:
+    valid: list[dict[str, Any]] = []
+    for sequence, raw_row in enumerate(rows or []):
         if not isinstance(raw_row, Mapping):
             continue
         close = _f(raw_row.get("close"))
@@ -418,20 +413,52 @@ def read_option_intraday_mark(
         open_px = _f(raw_row.get("open"), close)
         high = _f(raw_row.get("high"), close)
         low = _f(raw_row.get("low"), close)
+        raw_time = raw_row.get("date") or raw_row.get("timestamp") or ""
+        timestamp = raw_time.isoformat() if isinstance(raw_time, datetime) else str(raw_time or "")
         valid.append({
+            "timestamp": timestamp,
+            "sequence": sequence,
             "open": open_px if open_px > 0 else close,
             "high": high if high > 0 else close,
             "low": low if low > 0 else close,
             "close": close,
+            "last_price": close,
         })
+
+    # Kite normally returns chronological bars. Preserve provider order when a
+    # timestamp is absent; otherwise make chronology explicit and deterministic.
+    valid.sort(key=lambda row: (
+        0 if str(row.get("timestamp") or "") else 1,
+        str(row.get("timestamp") or ""),
+        int(row.get("sequence") or 0),
+    ))
+    return valid
+
+
+def read_option_intraday_mark(
+    instrument_token: int,
+    *,
+    from_dt: datetime,
+    to_dt: datetime,
+    client=None,
+    interval: str = "minute",
+) -> dict[str, float] | None:
+    """Aggregate post-entry bars for callers that only need a range summary."""
+    valid = read_option_intraday_bars(
+        instrument_token,
+        from_dt=from_dt,
+        to_dt=to_dt,
+        client=client,
+        interval=interval,
+    )
     if not valid:
         return None
     return {
-        "open": valid[0]["open"],
-        "high": max(row["high"] for row in valid),
-        "low": min(row["low"] for row in valid),
-        "close": valid[-1]["close"],
-        "last_price": valid[-1]["close"],
+        "open": float(valid[0]["open"]),
+        "high": max(float(row["high"]) for row in valid),
+        "low": min(float(row["low"]) for row in valid),
+        "close": float(valid[-1]["close"]),
+        "last_price": float(valid[-1]["close"]),
     }
 
 
