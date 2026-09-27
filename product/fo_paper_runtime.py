@@ -178,6 +178,7 @@ def run_fo_paper_cycle(
         entry_minute_ambiguous = 0
         entry_minute_unavailable = 0
         entry_minute_pending = 0
+        partial_exit_interval_holdouts = 0
         if book.open:
             raw_quotes = read_nfo_quotes(list(book.open), client=client)
             marks: dict[str, dict[str, float]] = {}
@@ -269,6 +270,7 @@ def run_fo_paper_cycle(
                                 {symbol: ltp_mark},
                                 session=now_ist.isoformat(),
                                 advance_session=True,
+                                observation_complete=False,
                             )
                         )
                     continue
@@ -289,7 +291,13 @@ def run_fo_paper_cycle(
                 marks[symbol] = mark
 
             if marks:
-                settled.extend(book.mark(marks, session=now_ist.isoformat()))
+                settled.extend(
+                    book.mark(
+                        marks,
+                        session=now_ist.isoformat(),
+                        observation_complete=False,
+                    )
+                )
             for trade in settled:
                 settled_underlyings.add(trade.underlying)
                 row = trade.as_dict()
@@ -300,8 +308,11 @@ def run_fo_paper_cycle(
                     row["evidence_exclusion_reason"] = "COST_MODEL_UNCONFIGURED"
                 elif not trade.path_observation_complete:
                     row["evidence_exclusion_reason"] = (
-                        f"ENTRY_MINUTE_{trade.entry_minute_status or ENTRY_MINUTE_PENDING}"
+                        trade.path_observation_reason
+                        or f"ENTRY_MINUTE_{trade.entry_minute_status or ENTRY_MINUTE_PENDING}"
                     )
+                if not trade.exit_observation_complete:
+                    partial_exit_interval_holdouts += 1
                 settled_rows.append(row)
 
         opened: list[dict[str, Any]] = []
@@ -393,6 +404,7 @@ def run_fo_paper_cycle(
             "entry_minute_ambiguous_count": entry_minute_ambiguous,
             "entry_minute_unavailable_count": entry_minute_unavailable,
             "entry_minute_pending_count": entry_minute_pending,
+            "partial_exit_interval_holdout_count": partial_exit_interval_holdouts,
             "evidence_cost_status": (
                 f"CONFIGURED:{cost_model_name}" if book.fully_costed
                 else "UNCONFIGURED_GROSS_ONLY"
