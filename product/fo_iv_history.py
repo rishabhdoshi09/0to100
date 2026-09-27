@@ -18,6 +18,7 @@ from data.nfo_market import (
     read_market_quotes,
     read_nfo_quotes,
 )
+from research.intelligence.data.nse_calendar import is_session, load_holidays
 
 MIN_PRIOR_SESSIONS = 60
 LOOKBACK_SESSIONS = 252
@@ -255,10 +256,26 @@ def collect_close_iv_snapshot(
     store: FoIvHistoryStore | None = None,
 ) -> dict[str, Any]:
     """Persist one unbiased near-close ATM-IV observation per mapped underlying."""
+    clean = sorted({str(symbol or "").upper() for symbol in symbols if str(symbol or "").strip()})
+    holidays = load_holidays()
+    if not is_session(as_of, holidays):
+        return {
+            "available": False,
+            "status": "BLOCKED",
+            "reason": "NON_TRADING_SESSION",
+            "session": as_of.isoformat(),
+            "requested_symbols": len(clean),
+            "persisted_symbols": 0,
+            "failed_symbols": len(clean),
+            "failures": [],
+            "holiday_calendar_loaded": len(holidays),
+            "historical_backfill": False,
+            "source": SOURCE,
+        }
+
     owned = store is None
     store = store or FoIvHistoryStore()
     try:
-        clean = sorted({str(symbol or "").upper() for symbol in symbols if str(symbol or "").strip()})
         spot_quotes = read_market_quotes([f"NSE:{symbol}" for symbol in clean], client=client)
 
         # Index the instrument master once. Re-scanning the full NFO master for
