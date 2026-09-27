@@ -591,3 +591,49 @@ def test_fno_candidate_evidence_overlay_holds_probability_for_uncosted_or_small_
 
     assert by_symbol["NOCTX"]["status"] == "NO_CONTEXT_KEY"
     assert by_symbol["NOCTX"]["probability_claim_available"] is False
+
+
+
+def test_fno_candidate_evidence_overlay_exposes_broader_counts_as_research_only():
+    exact = "LONG|LONG_BUILDUP|RVOL_2_2.5|ADX_GE30|D_55_65|DTE_8_14|IV_NORMAL"
+    same_thesis = "LONG|LONG_BUILDUP|RVOL_2_2.5|ADX_GE30|D_65_75|DTE_15_30|IV_HIGH"
+    same_direction_oi = "LONG|LONG_BUILDUP|RVOL_1.5_2|ADX_20_25|D_55_65|DTE_8_14|IV_NORMAL"
+    same_direction = "LONG|SHORT_COVERING|RVOL_2_2.5|ADX_GE30|D_55_65|DTE_8_14|IV_NORMAL"
+
+    directional = {
+        "available": True,
+        "candidates": [{
+            "symbol": "TEST",
+            "direction": "LONG",
+            "selected_contract": {"symbol": "TESTCE", "context_key": exact},
+        }],
+    }
+    outcomes = (
+        _fo_evidence_rows(context_key=exact, n=12)
+        + _fo_evidence_rows(context_key=same_thesis, n=8)
+        + _fo_evidence_rows(context_key=same_direction_oi, n=6)
+        + _fo_evidence_rows(context_key=same_direction, n=4)
+    )
+
+    payload = terminal_api._fo_forward_evidence_overlay(
+        directional, outcomes, min_n=30,
+    )
+    evidence = payload["candidates"][0]["forward_evidence"]
+    coverage = evidence["coverage"]
+
+    assert evidence["status"] == "ACCUMULATING"
+    assert evidence["n"] == 12
+    assert evidence["probability_claim_available"] is False
+    assert evidence["production_influence_allowed"] is False
+
+    assert coverage["valid_context"] is True
+    assert coverage["exact_n"] == 12
+    assert coverage["thesis_n"] == 20
+    assert coverage["direction_oi_n"] == 26
+    assert coverage["direction_n"] == 30
+    assert coverage["remaining_to_exact_min_n"] == 18
+    assert coverage["counts_only"] is True
+    assert coverage["probability_claim_available"] is False
+    assert coverage["production_influence_allowed"] is False
+    assert payload["candidate_evidence_policy"]["probability_requires_exact_context"] is True
+    assert payload["candidate_evidence_policy"]["broader_context_counts_research_only"] is True

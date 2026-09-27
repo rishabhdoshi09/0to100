@@ -187,6 +187,7 @@ export function FnoView({ dashboard, runControl, setSelected, setActive }: Props
               const plan = contract.trade_plan || {}
               const expected = setup.expected_move || {}
               const evidence = candidate.forward_evidence || {}
+              const coverage = evidence.coverage || {}
               const evidenceReady = evidence.probability_claim_available === true
               return (
                 <button type="button" key={`${candidate.symbol}-${contract.symbol || index}`} onClick={() => select(candidate.symbol)}>
@@ -198,6 +199,9 @@ export function FnoView({ dashboard, runControl, setSelected, setActive }: Props
                     <small>Forward evidence · n={evidence.n ?? 0} fully costed · observed win {fmt(evidence.win_probability_pct, 1)}% · Wilson floor {fmt(evidence.win_probability_wilson_lb_pct, 1)}% · conservative EV {fmt(evidence.conservative_ev_pct, 2)}%</small>
                   ) : (
                     <small>Forward evidence · {words(evidence.status || 'uncalibrated')} · observed {evidence.observed_n ?? 0} · fully costed {evidence.n ?? 0}/{evidence.minimum_required_n ?? 30} · probability held</small>
+                  )}
+                  {coverage.valid_context && (
+                    <small>Evidence coverage · thesis {coverage.thesis_n ?? 0} · dir+OI {coverage.direction_oi_n ?? 0} · direction {coverage.direction_n ?? 0} · broader counts research only</small>
                   )}
                 </button>
               )

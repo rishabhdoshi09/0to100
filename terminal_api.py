@@ -755,7 +755,7 @@ def _fo_forward_evidence_overlay(
     evidence module says the exact candidate context has enough fully-costed
     settled FORWARD_PAPER observations.
     """
-    from product.fo_evidence import summarize_fo_outcomes
+    from product.fo_evidence import fo_evidence_coverage, summarize_fo_outcomes
 
     payload = dict(directional or {})
     candidates: list[dict[str, Any]] = []
@@ -781,9 +781,19 @@ def _fo_forward_evidence_overlay(
                 "insufficient_evidence": True,
                 "minimum_required_n": max(1, int(min_n)),
                 "production_influence_allowed": False,
+                "coverage": fo_evidence_coverage(
+                    outcomes,
+                    context_key="",
+                    min_n=min_n,
+                ),
             }
         else:
             evidence = summarize_fo_outcomes(
+                outcomes,
+                context_key=context_key,
+                min_n=min_n,
+            )
+            evidence["coverage"] = fo_evidence_coverage(
                 outcomes,
                 context_key=context_key,
                 min_n=min_n,
@@ -805,6 +815,7 @@ def _fo_forward_evidence_overlay(
         "lane": "FORWARD_PAPER",
         "minimum_fully_costed_n": max(1, int(min_n)),
         "probability_requires_exact_context": True,
+        "broader_context_counts_research_only": True,
         "paper_only": True,
         "live_execution_allowed": False,
     }

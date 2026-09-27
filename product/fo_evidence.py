@@ -72,6 +72,63 @@ def fo_context_key(
     ))
 
 
+def fo_evidence_coverage(
+    outcomes: Iterable[Mapping[str, Any]],
+    *,
+    context_key: str,
+    evidence_lane: str = FORWARD_PAPER,
+    min_n: int = 30,
+) -> dict[str, Any]:
+    """Count nearby evidence without creating a pooled probability claim.
+
+    Production probability remains exact-context only. Broader levels are
+    intentionally counts-only diagnostics so sparse contexts are visible
+    without borrowing win-rates across materially different setups/contracts.
+    """
+    parts = tuple(str(context_key or "").split("|"))
+    valid_context = len(parts) == 7 and all(parts)
+    counts = {
+        "exact_n": 0,
+        "thesis_n": 0,
+        "direction_oi_n": 0,
+        "direction_n": 0,
+    }
+    if valid_context:
+        for raw in outcomes:
+            row = dict(raw)
+            if not bool(row.get("settled", False)):
+                continue
+            if str(row.get("evidence_lane") or "").upper() != str(evidence_lane or "").upper():
+                continue
+            if not bool(row.get("production_evidence_eligible", False)):
+                continue
+            if row.get("net_option_return_pct") is None:
+                continue
+            row_parts = tuple(str(row.get("context_key") or "").split("|"))
+            if len(row_parts) != 7 or not all(row_parts):
+                continue
+            if row_parts[:1] == parts[:1]:
+                counts["direction_n"] += 1
+            if row_parts[:2] == parts[:2]:
+                counts["direction_oi_n"] += 1
+            if row_parts[:4] == parts[:4]:
+                counts["thesis_n"] += 1
+            if row_parts == parts:
+                counts["exact_n"] += 1
+
+    minimum = max(1, int(min_n))
+    return {
+        "valid_context": bool(valid_context),
+        **counts,
+        "minimum_exact_n": minimum,
+        "remaining_to_exact_min_n": max(0, minimum - counts["exact_n"]),
+        "research_only": True,
+        "counts_only": True,
+        "probability_claim_available": False,
+        "production_influence_allowed": False,
+    }
+
+
 def _max_drawdown(returns_pct: list[float]) -> float:
     equity = 1.0
     peak = 1.0
