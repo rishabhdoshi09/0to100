@@ -720,3 +720,36 @@ def test_fno_candidate_evidence_overlay_labels_path_observation_holdout():
     assert evidence["probability_claim_available"] is False
     assert evidence["production_influence_allowed"] is False
     assert payload["candidate_evidence_policy"]["probability_requires_complete_observed_path"] is True
+
+
+
+def test_fno_candidate_evidence_overlay_labels_combined_evidence_inputs():
+    context = _fo_context()
+    directional = {
+        "available": True,
+        "candidates": [{
+            "symbol": "BOTHHELD",
+            "direction": "LONG",
+            "selected_contract": {"symbol": "BOTHCE", "context_key": context},
+        }],
+    }
+    outcomes = _fo_evidence_rows(
+        context_key=context,
+        n=40,
+        production_eligible=False,
+    )
+    for row in outcomes:
+        row["path_observation_complete"] = False
+        row["entry_minute_status"] = "UNAVAILABLE"
+
+    payload = terminal_api._fo_forward_evidence_overlay(
+        directional, outcomes, min_n=30,
+    )
+    evidence = payload["candidates"][0]["forward_evidence"]
+
+    assert evidence["status"] == "EVIDENCE_INPUTS_REQUIRED"
+    assert evidence["n"] == 0
+    assert evidence["excluded_unpriced_costs"] == 40
+    assert evidence["excluded_path_observation"] == 40
+    assert evidence["probability_claim_available"] is False
+    assert evidence["production_influence_allowed"] is False
