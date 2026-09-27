@@ -136,7 +136,6 @@ def run_fo_paper_cycle(
                         intraday_marks_used += 1
                     else:
                         overnight_intraday_marks_used += 1
-                    first_bar = True
                     for bar in bars:
                         if symbol not in book.open:
                             break
@@ -150,12 +149,11 @@ def run_fo_paper_cycle(
                             # minute exit. STOP/TARGET/GAP fills come from the bar.
                             "bid": 0.0,
                         }
-                        if first_bar and same_day:
-                            # The partial entry minute is intentionally excluded;
-                            # anchor the first complete bar to the paper entry
-                            # rather than inventing a same-session gap.
-                            replay["open"] = float(pos.entry_price)
-                        first_bar = False
+                        # For same-day positions the partial entry minute was
+                        # already excluded by _post_entry_intraday_start(). The
+                        # next complete minute open is therefore genuine
+                        # post-entry evidence and must be preserved, especially
+                        # for adverse/favorable gap-through-stop/target fills.
                         bar_session = str(bar.get("timestamp") or now_ist.isoformat())
                         bar_settled = book.mark(
                             {symbol: replay},
