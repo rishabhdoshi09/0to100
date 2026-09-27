@@ -278,7 +278,7 @@ export type FnoDirectionalState = {
     context_schema_version?: string
     probability_requires_current_context_version?: boolean
     probability_requires_exact_context?: boolean
-    probability_requires_complete_entry_path?: boolean
+    probability_requires_complete_observed_path?: boolean
     broader_context_counts_research_only?: boolean
     paper_only?: boolean
     live_execution_allowed?: boolean
