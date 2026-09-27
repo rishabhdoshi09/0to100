@@ -33,18 +33,21 @@ def _f(value: Any, default: float = 0.0) -> float:
     return number
 
 
-def _spread_bps(quote: Mapping[str, Any]) -> float:
+def _spread_bps(quote: Mapping[str, Any]) -> float | None:
+    """Observed top-of-book spread; missing/invalid depth is unknown, never zero."""
     depth = quote.get("depth")
     if not isinstance(depth, Mapping):
-        return 0.0
+        return None
     buys = depth.get("buy")
     sells = depth.get("sell")
     if not isinstance(buys, Sequence) or not buys or not isinstance(sells, Sequence) or not sells:
-        return 0.0
+        return None
     bid = _f(buys[0].get("price")) if isinstance(buys[0], Mapping) else 0.0
     ask = _f(sells[0].get("price")) if isinstance(sells[0], Mapping) else 0.0
     mid = (bid + ask) / 2.0
-    return (ask - bid) / mid * 1e4 if bid > 0 and ask >= bid and mid > 0 else 0.0
+    if bid <= 0 or ask <= 0 or ask < bid or mid <= 0:
+        return None
+    return (ask - bid) / mid * 1e4
 
 
 def evaluate_fo_snapshot(
