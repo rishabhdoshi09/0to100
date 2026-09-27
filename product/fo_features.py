@@ -67,7 +67,7 @@ def build_fo_features(
     futures_price_change_pct: float | None,
     futures_oi_change_pct: float | None,
     is_fo: bool,
-    underlying_spread_bps: float = 0.0,
+    underlying_spread_bps: float | None = None,
     breakout_lookback: int = 20,
 ) -> dict[str, Any]:
     """Build only from data available through the current bar.
@@ -156,7 +156,10 @@ def build_fo_features(
         ),
         "atr_pct": round(atr_pct, 4),
         "avg_turnover_crore": round(avg_turnover_crore, 4),
-        "underlying_spread_bps": round(float(underlying_spread_bps), 4),
+        "underlying_spread_bps": (
+            round(float(underlying_spread_bps), 4)
+            if underlying_spread_bps is not None else None
+        ),
         "chase_distance_atr": round(chase_distance_atr, 4),
         "false_breakout": false_breakout,
         "close_location": round(close_location, 4),

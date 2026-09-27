@@ -237,9 +237,15 @@ def score_fo_setup(
     chase_atr = _f(features.get("chase_distance_atr"))
     if chase_atr > max_chase_atr:
         blockers.append("EXTENDED_CHASE")
-    spread_bps = _f(features.get("underlying_spread_bps"))
-    if spread_bps > 30.0:
-        blockers.append("UNDERLYING_SPREAD_TOO_WIDE")
+    raw_spread_bps = features.get("underlying_spread_bps")
+    if raw_spread_bps is None:
+        blockers.append("UNDERLYING_SPREAD_UNAVAILABLE")
+    else:
+        spread_bps = _f(raw_spread_bps, -1.0)
+        if spread_bps < 0:
+            blockers.append("UNDERLYING_SPREAD_UNAVAILABLE")
+        elif spread_bps > 30.0:
+            blockers.append("UNDERLYING_SPREAD_TOO_WIDE")
     turnover = _f(features.get("avg_turnover_crore"))
     if 0 < turnover < 5.0:
         blockers.append("UNDERLYING_LIQUIDITY_TOO_LOW")
