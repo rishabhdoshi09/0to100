@@ -46,9 +46,10 @@ def _directional():
     }
 
 
-def _directional_with_token(token: int):
+def _directional_with_token(token: int, *, holding_days: int = 2):
     payload = _directional()
     payload["candidates"][0]["selected_contract"]["instrument_token"] = token
+    payload["candidates"][0]["setup"]["expected_move"]["holding_days"] = holding_days
     return payload
 
 
@@ -427,3 +428,110 @@ def test_ordered_intraday_replay_respects_target_before_later_stop(tmp_path):
     assert marked["same_day_intraday_marks_used"] == 1
     # Replay stops as soon as the first chronological exit occurs.
     assert marked["same_day_intraday_bars_replayed"] == 1
+
+
+
+def test_overnight_intraday_replay_respects_target_before_later_stop(tmp_path):
+    path = tmp_path / "fo.sqlite3"
+    opened_at = datetime(2026, 9, 25, 14, 0, tzinfo=IST)
+
+    with FoPaperStore(path) as store:
+        opened = run_fo_paper_cycle(
+            _directional_with_token(780, holding_days=2),
+            client=_QuoteClient(last=50, high=50, low=50, bid=49),
+            now_ist=opened_at,
+            allow_new_entries=True,
+            store=store,
+            capital=200_000,
+        )
+        assert opened["opened_count"] == 1
+
+    # The position existed from the next session's open. Return bars out of
+    # order: chronological replay must see the 09:17 target before the 09:18 stop.
+    client = _IntradayQuoteClient(
+        last=52,
+        high=90,
+        low=20,
+        bid=51,
+        intraday_rows=[
+            {
+                "date": "2026-09-26T09:18:00+05:30",
+                "open": 69.0, "high": 69.5, "low": 35.0, "close": 38.0,
+            },
+            {
+                "date": "2026-09-26T09:17:00+05:30",
+                "open": 52.0, "high": 72.0, "low": 48.0, "close": 71.0,
+            },
+        ],
+    )
+    now = datetime(2026, 9, 26, 10, 0, tzinfo=IST)
+    with FoPaperStore(path) as store:
+        marked = run_fo_paper_cycle(
+            {"available": True, "candidates": []},
+            client=client,
+            now_ist=now,
+            allow_new_entries=False,
+            store=store,
+            capital=200_000,
+        )
+
+    assert marked["settled_count"] == 1
+    assert marked["settled"][0]["exit_reason"] == "TARGET"
+    assert marked["overnight_intraday_marks_used"] == 1
+    assert marked["overnight_intraday_marks_fallback"] == 0
+    assert marked["overnight_intraday_bars_replayed"] == 1
+    assert client.historical_calls == [
+        (780, "2026-09-26 09:15:00", "2026-09-26 10:00:00", "minute")
+    ]
+
+
+def test_overnight_replay_does_not_trigger_max_hold_before_current_mark(tmp_path):
+    path = tmp_path / "fo.sqlite3"
+    opened_at = datetime(2026, 9, 25, 14, 0, tzinfo=IST)
+
+    with FoPaperStore(path) as store:
+        opened = run_fo_paper_cycle(
+            _directional_with_token(781, holding_days=1),
+            client=_QuoteClient(last=50, high=50, low=50, bid=49),
+            now_ist=opened_at,
+            allow_new_entries=True,
+            store=store,
+            capital=200_000,
+        )
+        assert opened["opened_count"] == 1
+
+    client = _IntradayQuoteClient(
+        last=52,
+        high=55,
+        low=45,
+        bid=51,
+        intraday_rows=[
+            {
+                "date": "2026-09-26T09:16:00+05:30",
+                "open": 51.0, "high": 54.0, "low": 49.0, "close": 53.0,
+            },
+            {
+                "date": "2026-09-26T09:17:00+05:30",
+                "open": 53.0, "high": 55.0, "low": 50.0, "close": 54.0,
+            },
+        ],
+    )
+    now = datetime(2026, 9, 26, 10, 0, tzinfo=IST)
+    with FoPaperStore(path) as store:
+        marked = run_fo_paper_cycle(
+            {"available": True, "candidates": []},
+            client=client,
+            now_ist=now,
+            allow_new_entries=False,
+            store=store,
+            capital=200_000,
+        )
+
+    # Historical replay reconstructs path only. Holding-session age advances at
+    # the current supervision mark, where MAX_HOLD exits using the current bid.
+    assert marked["settled_count"] == 1
+    assert marked["settled"][0]["exit_reason"] == "MAX_HOLD"
+    assert marked["settled"][0]["settled_at"] == now.isoformat()
+    assert marked["settled"][0]["exit_price"] == 51.0
+    assert marked["overnight_intraday_marks_used"] == 1
+    assert marked["overnight_intraday_bars_replayed"] == 2
