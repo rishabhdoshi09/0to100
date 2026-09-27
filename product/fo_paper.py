@@ -83,7 +83,9 @@ class FoPaperTrade:
     settled: bool = True
     cost_model_status: str = "UNCONFIGURED"
     entry_minute_status: str = ENTRY_MINUTE_PENDING
+    exit_observation_complete: bool = True
     path_observation_complete: bool = False
+    path_observation_reason: str = ""
     false_breakout: bool = False
 
     def as_dict(self) -> dict[str, Any]:
@@ -235,6 +237,7 @@ class FoPaperBook:
         *,
         session: str,
         advance_session: bool = True,
+        observation_complete: bool = True,
     ) -> list[FoPaperTrade]:
         """Mark prices; optionally advance holding-session age.
 
@@ -281,7 +284,16 @@ class FoPaperBook:
                 # For historical STOP/TARGET/GAP triggers it is from the end-of-bar snapshot,
                 # not the instant the trigger fired; using it would introduce impossible fills.
                 execution_bid = bid if reason == "MAX_HOLD" else None
-                settled.append(self._close(pos, exit_price, reason, str(session), bid=execution_bid))
+                settled.append(
+                    self._close(
+                        pos,
+                        exit_price,
+                        reason,
+                        str(session),
+                        bid=execution_bid,
+                        observation_complete=observation_complete,
+                    )
+                )
         return settled
 
     def _close(
@@ -292,6 +304,7 @@ class FoPaperBook:
         settled_at: str,
         *,
         bid: float | None = None,
+        observation_complete: bool = True,
     ) -> FoPaperTrade:
         fill = self._exit_fill(exit_price, bid)
         gross = (fill - pos.entry_price) * pos.quantity
@@ -303,6 +316,15 @@ class FoPaperBook:
         ret = net / entry_notional * 100.0 if entry_notional > 0 else 0.0
         mfe = (pos.max_mark - pos.entry_price) / pos.entry_price * 100.0
         mae = (pos.min_mark - pos.entry_price) / pos.entry_price * 100.0
+        entry_complete = entry_minute_path_complete(pos.entry_minute_status)
+        path_complete = bool(entry_complete and observation_complete)
+        if not entry_complete:
+            path_reason = f"ENTRY_MINUTE_{pos.entry_minute_status or ENTRY_MINUTE_PENDING}"
+        elif not observation_complete:
+            path_reason = "EXIT_PARTIAL_INTERVAL_UNOBSERVED"
+        else:
+            path_reason = ""
+
         trade = FoPaperTrade(
             trade_id=pos.trade_id,
             underlying=pos.underlying,
@@ -328,7 +350,9 @@ class FoPaperBook:
                 else "UNCONFIGURED_GROSS_ONLY"
             ),
             entry_minute_status=str(pos.entry_minute_status or ENTRY_MINUTE_PENDING),
-            path_observation_complete=entry_minute_path_complete(pos.entry_minute_status),
+            exit_observation_complete=bool(observation_complete),
+            path_observation_complete=path_complete,
+            path_observation_reason=path_reason,
         )
         self.realized_pnl += net
         self.closed.append(trade)
@@ -347,7 +371,8 @@ class FoPaperBook:
                 row["evidence_exclusion_reason"] = "COST_MODEL_UNCONFIGURED"
             elif not trade.path_observation_complete:
                 row["evidence_exclusion_reason"] = (
-                    f"ENTRY_MINUTE_{trade.entry_minute_status or ENTRY_MINUTE_PENDING}"
+                    trade.path_observation_reason
+                    or f"ENTRY_MINUTE_{trade.entry_minute_status or ENTRY_MINUTE_PENDING}"
                 )
             rows.append(row)
         return rows
