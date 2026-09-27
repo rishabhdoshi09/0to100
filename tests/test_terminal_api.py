@@ -659,7 +659,7 @@ def test_fno_candidate_evidence_overlay_exposes_broader_counts_as_research_only(
     assert coverage["production_influence_allowed"] is False
     assert payload["candidate_evidence_policy"]["probability_requires_current_context_version"] is True
     assert payload["candidate_evidence_policy"]["probability_requires_exact_context"] is True
-    assert payload["candidate_evidence_policy"]["probability_requires_complete_entry_path"] is True
+    assert payload["candidate_evidence_policy"]["probability_requires_complete_observed_path"] is True
     assert payload["candidate_evidence_policy"]["broader_context_counts_research_only"] is True
 
 
@@ -719,4 +719,4 @@ def test_fno_candidate_evidence_overlay_labels_path_observation_holdout():
     assert evidence["excluded_path_observation"] == 40
     assert evidence["probability_claim_available"] is False
     assert evidence["production_influence_allowed"] is False
-    assert payload["candidate_evidence_policy"]["probability_requires_complete_entry_path"] is True
+    assert payload["candidate_evidence_policy"]["probability_requires_complete_observed_path"] is True
