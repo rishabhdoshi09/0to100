@@ -535,3 +535,92 @@ def test_overnight_replay_does_not_trigger_max_hold_before_current_mark(tmp_path
     assert marked["settled"][0]["exit_price"] == 51.0
     assert marked["overnight_intraday_marks_used"] == 1
     assert marked["overnight_intraday_bars_replayed"] == 2
+
+
+
+def test_same_day_first_complete_minute_preserves_gap_through_stop(tmp_path):
+    path = tmp_path / "fo.sqlite3"
+    opened_at = datetime(2026, 9, 26, 10, 15, 12, tzinfo=IST)
+
+    with FoPaperStore(path) as store:
+        opened = run_fo_paper_cycle(
+            _directional_with_token(782),
+            client=_QuoteClient(last=50, high=50, low=50, bid=49),
+            now_ist=opened_at,
+            allow_new_entries=True,
+            store=store,
+            capital=200_000,
+        )
+        assert opened["opened_count"] == 1
+
+    # The partial 10:15 minute is excluded. The 10:16 open is fully post-entry
+    # and gaps through the stop, so fill from the real open rather than ₹40 stop.
+    client = _IntradayQuoteClient(
+        last=36,
+        high=38,
+        low=34,
+        bid=35,
+        intraday_rows=[
+            {
+                "date": "2026-09-26T10:16:00+05:30",
+                "open": 35.0, "high": 38.0, "low": 34.0, "close": 36.0,
+            },
+        ],
+    )
+    with FoPaperStore(path) as store:
+        marked = run_fo_paper_cycle(
+            {"available": True, "candidates": []},
+            client=client,
+            now_ist=opened_at.replace(hour=10, minute=20, second=0),
+            allow_new_entries=False,
+            store=store,
+            capital=200_000,
+        )
+
+    assert marked["settled_count"] == 1
+    assert marked["settled"][0]["exit_reason"] == "GAP_STOP"
+    assert marked["settled"][0]["exit_price"] == 34.9825
+    assert marked["same_day_intraday_bars_replayed"] == 1
+
+
+def test_same_day_first_complete_minute_preserves_gap_through_target(tmp_path):
+    path = tmp_path / "fo.sqlite3"
+    opened_at = datetime(2026, 9, 26, 10, 15, 12, tzinfo=IST)
+
+    with FoPaperStore(path) as store:
+        opened = run_fo_paper_cycle(
+            _directional_with_token(783),
+            client=_QuoteClient(last=50, high=50, low=50, bid=49),
+            now_ist=opened_at,
+            allow_new_entries=True,
+            store=store,
+            capital=200_000,
+        )
+        assert opened["opened_count"] == 1
+
+    client = _IntradayQuoteClient(
+        last=76,
+        high=78,
+        low=74,
+        bid=75,
+        intraday_rows=[
+            {
+                "date": "2026-09-26T10:16:00+05:30",
+                "open": 75.0, "high": 78.0, "low": 74.0, "close": 76.0,
+            },
+        ],
+    )
+    with FoPaperStore(path) as store:
+        marked = run_fo_paper_cycle(
+            {"available": True, "candidates": []},
+            client=client,
+            now_ist=opened_at.replace(hour=10, minute=20, second=0),
+            allow_new_entries=False,
+            store=store,
+            capital=200_000,
+        )
+
+    assert marked["settled_count"] == 1
+    assert marked["settled"][0]["exit_reason"] == "GAP_TARGET"
+    assert marked["settled"][0]["exit_price"] == 74.9625
+    assert marked["same_day_intraday_bars_replayed"] == 1
