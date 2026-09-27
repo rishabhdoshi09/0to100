@@ -210,3 +210,22 @@ def test_path_uncertain_forward_rows_never_create_probability_claim():
     assert result["win_probability_pct"] is None
     assert result["expectancy_pct"] is None
     assert result["production_influence_allowed"] is False
+
+
+
+def test_cost_and_path_exclusions_are_counted_independently():
+    rows = _rows(n=4)
+    for row in rows:
+        row["production_evidence_eligible"] = False
+        row["cost_model_status"] = "UNCONFIGURED_GROSS_ONLY"
+        row["path_observation_complete"] = False
+        row["entry_minute_status"] = "UNAVAILABLE"
+
+    result = summarize_fo_outcomes(rows, context_key=_canonical_context(), min_n=30)
+
+    assert result["observed_n"] == 4
+    assert result["n"] == 0
+    assert result["excluded_unpriced_costs"] == 4
+    assert result["excluded_path_observation"] == 4
+    assert result["excluded_other_ineligible"] == 0
+    assert result["probability_claim_available"] is False
