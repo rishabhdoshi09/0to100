@@ -2,6 +2,7 @@ from product.fo_evidence import (
     FORWARD_PAPER,
     HISTORICAL_REPLAY,
     fo_context_key,
+    fo_evidence_coverage,
     summarize_fo_outcomes,
 )
 
@@ -82,3 +83,63 @@ def test_gross_only_forward_rows_never_create_probability_claim():
     assert result["win_probability_pct"] is None
     assert result["expectancy_pct"] is None
     assert result["production_influence_allowed"] is False
+
+
+
+def test_broader_evidence_coverage_is_counts_only_and_fully_costed_forward_only():
+    exact = "LONG|LONG_BUILDUP|RVOL_2_2.5|ADX_GE30|D_55_65|DTE_8_14|IV_NORMAL"
+    same_thesis_other_contract = (
+        "LONG|LONG_BUILDUP|RVOL_2_2.5|ADX_GE30|D_65_75|DTE_15_30|IV_HIGH"
+    )
+    same_direction_oi = (
+        "LONG|LONG_BUILDUP|RVOL_1.5_2|ADX_20_25|D_55_65|DTE_8_14|IV_NORMAL"
+    )
+    same_direction = (
+        "LONG|SHORT_COVERING|RVOL_2_2.5|ADX_GE30|D_55_65|DTE_8_14|IV_NORMAL"
+    )
+    other_direction = (
+        "SHORT|SHORT_BUILDUP|RVOL_2_2.5|ADX_GE30|D_55_65|DTE_8_14|IV_NORMAL"
+    )
+
+    def row(context_key, *, eligible=True, lane=FORWARD_PAPER):
+        return {
+            "settled": True,
+            "evidence_lane": lane,
+            "context_key": context_key,
+            "net_option_return_pct": 3.0,
+            "production_evidence_eligible": eligible,
+        }
+
+    outcomes = (
+        [row(exact) for _ in range(3)]
+        + [row(same_thesis_other_contract) for _ in range(2)]
+        + [row(same_direction_oi) for _ in range(2)]
+        + [row(same_direction)]
+        + [row(other_direction) for _ in range(4)]
+        + [row(exact, eligible=False) for _ in range(5)]
+        + [row(exact, lane=HISTORICAL_REPLAY) for _ in range(6)]
+    )
+
+    coverage = fo_evidence_coverage(outcomes, context_key=exact, min_n=30)
+
+    assert coverage["valid_context"] is True
+    assert coverage["exact_n"] == 3
+    assert coverage["thesis_n"] == 5
+    assert coverage["direction_oi_n"] == 7
+    assert coverage["direction_n"] == 8
+    assert coverage["remaining_to_exact_min_n"] == 27
+    assert coverage["research_only"] is True
+    assert coverage["counts_only"] is True
+    assert coverage["probability_claim_available"] is False
+    assert coverage["production_influence_allowed"] is False
+
+
+def test_evidence_coverage_rejects_noncanonical_context_shape():
+    coverage = fo_evidence_coverage(_rows(), context_key="CTX", min_n=30)
+
+    assert coverage["valid_context"] is False
+    assert coverage["exact_n"] == 0
+    assert coverage["thesis_n"] == 0
+    assert coverage["direction_oi_n"] == 0
+    assert coverage["direction_n"] == 0
+    assert coverage["production_influence_allowed"] is False
