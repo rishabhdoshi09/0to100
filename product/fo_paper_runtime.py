@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 from dataclasses import fields
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Callable, Mapping
 
-from data.nfo_market import quote_to_option_paper_mark, read_nfo_quotes
+from data.nfo_market import (
+    quote_to_option_paper_mark,
+    read_nfo_quotes,
+    read_option_intraday_mark,
+)
 from product.fo_paper import FoPaperBook, FoPaperPosition
 from product.fo_paper_store import FoPaperStore
 
@@ -17,6 +21,22 @@ def _restore_position(payload: Mapping[str, Any]) -> FoPaperPosition | None:
         return FoPaperPosition(**kwargs)
     except (TypeError, ValueError):
         return None
+
+
+def _post_entry_intraday_start(opened_at: str, now_ist: datetime) -> datetime | None:
+    """First full minute that cannot contain time before the paper entry."""
+    try:
+        opened = datetime.fromisoformat(str(opened_at))
+    except (TypeError, ValueError):
+        return None
+    if opened.tzinfo is None and now_ist.tzinfo is not None:
+        opened = opened.replace(tzinfo=now_ist.tzinfo)
+    if opened.tzinfo is not None and now_ist.tzinfo is not None:
+        opened = opened.astimezone(now_ist.tzinfo)
+    start = opened.replace(second=0, microsecond=0)
+    if opened.second or opened.microsecond:
+        start += timedelta(minutes=1)
+    return start if start < now_ist else None
 
 
 def _candidate_rows(directional: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -72,6 +92,8 @@ def run_fo_paper_cycle(
         settled_rows: list[dict[str, Any]] = []
         settled_underlyings: set[str] = set()
 
+        intraday_marks_used = 0
+        intraday_marks_fallback = 0
         if book.open:
             raw_quotes = read_nfo_quotes(list(book.open), client=client)
             marks: dict[str, dict[str, float]] = {}
@@ -80,14 +102,49 @@ def run_fo_paper_cycle(
                 if not isinstance(quote, Mapping):
                     continue
                 mark = quote_to_option_paper_mark(quote)
-                # Daily quote high/low include time before a same-day entry. Using
-                # that range would create impossible post-entry stop/target hits.
+                # Full-day quote OHLC contains time before a same-day entry.
+                # Prefer minute bars beginning strictly at/after the entry; when
+                # those are unavailable, fail closed to the current LTP only.
                 if str(pos.opened_at)[:10] == session:
                     last = float(mark.get("last_price") or mark.get("close") or 0.0)
-                    mark["open"] = last
-                    mark["high"] = last
-                    mark["low"] = last
-                    mark["close"] = last
+                    intraday = None
+                    start = _post_entry_intraday_start(pos.opened_at, now_ist)
+                    if int(pos.instrument_token or 0) > 0 and start is not None:
+                        try:
+                            intraday = read_option_intraday_mark(
+                                int(pos.instrument_token),
+                                from_dt=start,
+                                to_dt=now_ist,
+                                client=client,
+                                interval="minute",
+                            )
+                        except Exception:
+                            intraday = None
+                    if intraday:
+                        close = last if last > 0 else float(intraday.get("close") or 0.0)
+                        mark.update(intraday)
+                        # This is not an overnight gap. Anchor open to the actual
+                        # paper entry so post-entry extrema drive STOP/TARGET.
+                        mark["open"] = float(pos.entry_price)
+                        mark["close"] = close
+                        mark["last_price"] = close
+                        mark["high"] = max(
+                            float(mark.get("high") or close),
+                            close,
+                            float(pos.entry_price),
+                        )
+                        mark["low"] = min(
+                            float(mark.get("low") or close),
+                            close,
+                            float(pos.entry_price),
+                        )
+                        intraday_marks_used += 1
+                    else:
+                        mark["open"] = last
+                        mark["high"] = last
+                        mark["low"] = last
+                        mark["close"] = last
+                        intraday_marks_fallback += 1
                 marks[symbol] = mark
             settled = book.mark(marks, session=session)
             for trade in settled:
@@ -144,6 +201,7 @@ def run_fo_paper_cycle(
                     context_key=str(contract.get("context_key") or ""),
                     setup_score=float(setup.get("score") or 0.0),
                     option_score=float(contract.get("score") or 0.0),
+                    instrument_token=int(contract.get("instrument_token") or 0),
                     ask=float(contract.get("ask") or 0.0),
                 )
                 if pos is None:
@@ -174,6 +232,8 @@ def run_fo_paper_cycle(
             "realized_pnl": round(book.realized_pnl, 2),
             "equity_for_sizing": round(max(0.0, book.capital + book.realized_pnl), 2),
             "production_evidence_enabled": book.fully_costed,
+            "same_day_intraday_marks_used": intraday_marks_used,
+            "same_day_intraday_marks_fallback": intraday_marks_fallback,
             "evidence_cost_status": (
                 f"CONFIGURED:{cost_model_name}" if book.fully_costed
                 else "UNCONFIGURED_GROSS_ONLY"
