@@ -754,3 +754,62 @@ def test_entry_minute_boundary_touch_holds_forward_evidence_even_when_costed(tmp
     assert trade["production_evidence_eligible"] is False
     assert trade["evidence_exclusion_reason"] == "ENTRY_MINUTE_AMBIGUOUS_BOUNDARY_TOUCH"
     assert marked["entry_minute_ambiguous_count"] == 1
+
+
+
+def test_current_partial_exit_interval_is_held_out_of_probability_evidence(tmp_path):
+    path = tmp_path / "fo.sqlite3"
+    opened_at = datetime(2026, 9, 26, 10, 15, 12, tzinfo=IST)
+
+    with FoPaperStore(path) as store:
+        opened = run_fo_paper_cycle(
+            _directional_with_token(786),
+            client=_QuoteClient(last=50, high=50, low=50, bid=49),
+            now_ist=opened_at,
+            allow_new_entries=True,
+            store=store,
+            capital=200_000,
+        )
+        assert opened["opened_count"] == 1
+
+    client = _IntradayQuoteClient(
+        last=75,
+        high=75,
+        low=45,
+        bid=74,
+        entry_minute_rows=[
+            {
+                "date": "2026-09-26T10:15:00+05:30",
+                "open": 49.0, "high": 55.0, "low": 45.0, "close": 51.0,
+            },
+        ],
+        intraday_rows=[
+            {
+                "date": "2026-09-26T10:16:00+05:30",
+                "open": 52.0, "high": 55.0, "low": 48.0, "close": 53.0,
+            },
+        ],
+    )
+    now = opened_at.replace(hour=10, minute=20, second=15)
+    with FoPaperStore(path) as store:
+        marked = run_fo_paper_cycle(
+            {"available": True, "candidates": []},
+            client=client,
+            now_ist=now,
+            allow_new_entries=False,
+            store=store,
+            capital=200_000,
+            cost_model=lambda entry, exit, qty: 25.0,
+            cost_model_name="TEST_COSTS",
+        )
+
+    assert marked["settled_count"] == 1
+    trade = marked["settled"][0]
+    assert trade["exit_reason"] == "GAP_TARGET"
+    assert trade["entry_minute_status"] == "CLEAR_NO_TRIGGER"
+    assert trade["exit_observation_complete"] is False
+    assert trade["path_observation_complete"] is False
+    assert trade["path_observation_reason"] == "EXIT_PARTIAL_INTERVAL_UNOBSERVED"
+    assert trade["production_evidence_eligible"] is False
+    assert trade["evidence_exclusion_reason"] == "EXIT_PARTIAL_INTERVAL_UNOBSERVED"
+    assert marked["partial_exit_interval_holdout_count"] == 1
