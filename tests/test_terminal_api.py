@@ -523,7 +523,7 @@ def _fo_evidence_rows(*, context_key: str, n: int, production_eligible: bool = T
     rows = []
     for i in range(n):
         win = i % 3 != 0
-        rows.append({
+        row = {
             "settled": True,
             "evidence_lane": "FORWARD_PAPER",
             "context_key": context_key,
@@ -532,7 +532,10 @@ def _fo_evidence_rows(*, context_key: str, n: int, production_eligible: bool = T
             "mfe_pct": 10.0 if win else 2.0,
             "mae_pct": -2.0 if win else -5.0,
             "settled_at": f"2026-09-{(i % 28) + 1:02d}T10:00:00",
-        })
+        }
+        if not production_eligible:
+            row["cost_model_status"] = "UNCONFIGURED_GROSS_ONLY"
+        rows.append(row)
     return rows
 
 
@@ -656,6 +659,7 @@ def test_fno_candidate_evidence_overlay_exposes_broader_counts_as_research_only(
     assert coverage["production_influence_allowed"] is False
     assert payload["candidate_evidence_policy"]["probability_requires_current_context_version"] is True
     assert payload["candidate_evidence_policy"]["probability_requires_exact_context"] is True
+    assert payload["candidate_evidence_policy"]["probability_requires_complete_entry_path"] is True
     assert payload["candidate_evidence_policy"]["broader_context_counts_research_only"] is True
 
 
@@ -682,3 +686,37 @@ def test_fno_candidate_evidence_overlay_rejects_legacy_context_version():
     assert evidence["probability_claim_available"] is False
     assert evidence["production_influence_allowed"] is False
     assert evidence["coverage"]["valid_context"] is False
+
+
+
+def test_fno_candidate_evidence_overlay_labels_path_observation_holdout():
+    context = _fo_context()
+    directional = {
+        "available": True,
+        "candidates": [{
+            "symbol": "PATHHELD",
+            "direction": "LONG",
+            "selected_contract": {"symbol": "PATHCE", "context_key": context},
+        }],
+    }
+    outcomes = _fo_evidence_rows(context_key=context, n=40)
+    for row in outcomes:
+        row["production_evidence_eligible"] = False
+        row["cost_model_status"] = "CONFIGURED:TEST_COSTS"
+        row["path_observation_complete"] = False
+        row["entry_minute_status"] = "AMBIGUOUS_BOUNDARY_TOUCH"
+        row["evidence_exclusion_reason"] = "ENTRY_MINUTE_AMBIGUOUS_BOUNDARY_TOUCH"
+
+    payload = terminal_api._fo_forward_evidence_overlay(
+        directional, outcomes, min_n=30,
+    )
+    evidence = payload["candidates"][0]["forward_evidence"]
+
+    assert evidence["status"] == "PATH_OBSERVATION_REQUIRED"
+    assert evidence["observed_n"] == 40
+    assert evidence["n"] == 0
+    assert evidence["excluded_unpriced_costs"] == 0
+    assert evidence["excluded_path_observation"] == 40
+    assert evidence["probability_claim_available"] is False
+    assert evidence["production_influence_allowed"] is False
+    assert payload["candidate_evidence_policy"]["probability_requires_complete_entry_path"] is True
