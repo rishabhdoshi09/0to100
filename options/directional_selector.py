@@ -337,6 +337,11 @@ def score_option_contract(
     volume = _f(contract.get("volume"))
     oi = _f(contract.get("oi"))
     dte = _dte(contract)
+    raw_trading_sessions = contract.get("trading_sessions_to_expiry")
+    trading_sessions_to_expiry = (
+        int(_f(raw_trading_sessions, -1.0))
+        if raw_trading_sessions is not None else -1
+    )
     spread_pct = _spread_pct(contract)
 
     if premium < policy.min_premium:
@@ -355,11 +360,12 @@ def score_option_contract(
         blockers.append("BID_ASK_TOO_WIDE")
     if dte < 2:
         blockers.append("EXPIRY_TOO_CLOSE")
-    # A contract must outlive the intended holding horizon. DTE is calendar
-    # days while holding_days is session-oriented, so +1 is the minimum safe
-    # buffer; expiry-fit scoring can still prefer a wider cushion.
-    if dte < max(2, int(holding_days) + 1):
-        blockers.append("DTE_SHORTER_THAN_HOLDING_HORIZON")
+    # Holding horizons are trading-session oriented; calendar DTE is retained
+    # for Black-Scholes/time decay only and must not stand in for market sessions.
+    if trading_sessions_to_expiry < 0:
+        blockers.append("TRADING_SESSION_EXPIRY_UNAVAILABLE")
+    elif trading_sessions_to_expiry < max(1, int(holding_days) + 1):
+        blockers.append("TRADING_SESSIONS_SHORTER_THAN_HOLDING_HORIZON")
 
     greeks = black_scholes(
         spot=spot,
@@ -453,6 +459,11 @@ def score_option_contract(
         "source": str(contract.get("source") or ""),
         "expiry": contract.get("expiry"),
         "dte": dte,
+        "trading_sessions_to_expiry": (
+            trading_sessions_to_expiry if trading_sessions_to_expiry >= 0 else None
+        ),
+        "holiday_calendar_loaded": int(_f(contract.get("holiday_calendar_loaded"))),
+        "expiry_session_model": str(contract.get("expiry_session_model") or ""),
         "premium": round(premium, 2),
         "bid": _f(contract.get("bid")),
         "ask": _f(contract.get("ask")),
