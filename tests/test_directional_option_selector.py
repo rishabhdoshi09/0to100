@@ -195,3 +195,23 @@ def test_missing_trading_session_expiry_provenance_fails_closed():
 
     assert result["eligible"] is False
     assert "TRADING_SESSION_EXPIRY_UNAVAILABLE" in result["blockers"]
+
+
+def test_missing_holiday_calendar_blocks_trading_session_eligibility():
+    contract = _contract("RELIANCE27SEP3050CE", 3050.0, 0.62)
+    contract["holiday_calendar_loaded"] = 0
+    contract["expiry_session_model"] = "WEEKDAYS_ONLY_NO_HOLIDAY_TABLE"
+
+    result = score_option_contract(
+        contract,
+        direction="LONG",
+        spot=3050.0,
+        expected_move_pct=2.0,
+        horizon="1_TO_2D",
+        holding_days=2,
+        underlying_stop_price=2995.0,
+        iv_percentile=45.0,
+    )
+
+    assert result["eligible"] is False
+    assert "TRADING_CALENDAR_HOLIDAYS_UNAVAILABLE" in result["blockers"]
