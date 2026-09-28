@@ -362,8 +362,11 @@ def score_option_contract(
         blockers.append("EXPIRY_TOO_CLOSE")
     # Holding horizons are trading-session oriented; calendar DTE is retained
     # for Black-Scholes/time decay only and must not stand in for market sessions.
+    holiday_calendar_loaded = int(_f(contract.get("holiday_calendar_loaded")))
     if trading_sessions_to_expiry < 0:
         blockers.append("TRADING_SESSION_EXPIRY_UNAVAILABLE")
+    elif holiday_calendar_loaded <= 0:
+        blockers.append("TRADING_CALENDAR_HOLIDAYS_UNAVAILABLE")
     elif trading_sessions_to_expiry < max(1, int(holding_days) + 1):
         blockers.append("TRADING_SESSIONS_SHORTER_THAN_HOLDING_HORIZON")
 
@@ -462,7 +465,7 @@ def score_option_contract(
         "trading_sessions_to_expiry": (
             trading_sessions_to_expiry if trading_sessions_to_expiry >= 0 else None
         ),
-        "holiday_calendar_loaded": int(_f(contract.get("holiday_calendar_loaded"))),
+        "holiday_calendar_loaded": holiday_calendar_loaded,
         "expiry_session_model": str(contract.get("expiry_session_model") or ""),
         "premium": round(premium, 2),
         "bid": _f(contract.get("bid")),
