@@ -379,7 +379,7 @@ def futures_oi_features(
     )
     oi_change = (
         (current_oi - previous_oi) / previous_oi * 100.0
-        if current_oi >= 0 and previous_oi > 0
+        if current_oi > 0 and previous_oi > 0
         else None
     )
     return {
