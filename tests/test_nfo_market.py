@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 from data.nfo_market import (
     NfoMarketDataClient,
@@ -8,6 +8,9 @@ from data.nfo_market import (
     nearest_future,
     option_instruments,
     previous_future_close_oi,
+    quote_exchange_datetime,
+    quote_provenance,
+    quote_timestamp_skew_seconds,
     quote_to_option_contract,
     read_market_quotes,
     read_nfo_instruments,
@@ -182,3 +185,53 @@ def test_generic_quote_reader_preserves_exchange_qualified_keys():
     facade = NfoMarketDataClient(_Raw())
     rows = read_market_quotes(["NSE:RELIANCE", "NFO:RELIANCE26OCTFUT"], client=facade)
     assert set(rows) == {"NSE:RELIANCE", "NFO:RELIANCE26OCTFUT"}
+
+
+def test_quote_provenance_enforces_session_and_live_freshness():
+    as_of = date(2026, 9, 26)
+    now = datetime(2026, 9, 26, 10, 30, 0)
+
+    fresh = quote_provenance(
+        {"timestamp": datetime(2026, 9, 26, 10, 29, 0)},
+        as_of=as_of,
+        now=now,
+    )
+    assert fresh["ok"] is True
+    assert fresh["freshness_checked"] is True
+    assert fresh["age_seconds"] == 60.0
+
+    stale = quote_provenance(
+        {"timestamp": datetime(2026, 9, 26, 10, 20, 0)},
+        as_of=as_of,
+        now=now,
+    )
+    assert stale["ok"] is False
+    assert stale["reason"] == "QUOTE_STALE"
+
+    wrong_session = quote_provenance(
+        {"timestamp": datetime(2026, 9, 25, 15, 30, 0)},
+        as_of=as_of,
+        now=now,
+    )
+    assert wrong_session["ok"] is False
+    assert wrong_session["reason"] == "QUOTE_SESSION_MISMATCH"
+
+
+def test_quote_timestamp_helpers_normalize_timezone_and_measure_skew():
+    as_of = date(2026, 9, 26)
+    # 05:00 UTC == 10:30 IST.
+    aware = {"timestamp": datetime(2026, 9, 26, 5, 0, tzinfo=timezone.utc)}
+    stamp = quote_exchange_datetime(aware)
+    assert stamp == datetime(2026, 9, 26, 10, 30, 0)
+
+    a = {"timestamp": datetime(2026, 9, 26, 10, 30, 0)}
+    b = {"timestamp": datetime(2026, 9, 26, 10, 31, 30)}
+    assert quote_timestamp_skew_seconds(a, b) == 90.0
+
+    historical = quote_provenance(
+        a,
+        as_of=as_of,
+        now=datetime(2026, 9, 27, 10, 30, 0),
+    )
+    assert historical["ok"] is True
+    assert historical["freshness_checked"] is False

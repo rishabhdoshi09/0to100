@@ -6,14 +6,18 @@ is market-data only and returns paper candidates; it never mutates a broker.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Mapping, Sequence
 
 import pandas as pd
 
 from data.nfo_market import (
+    IST,
+    LIVE_QUOTE_MAX_SKEW_SECONDS,
     candidate_option_instruments,
     previous_future_close_oi,
+    quote_provenance,
+    quote_timestamp_skew_seconds,
     read_market_quotes,
     read_nfo_quotes,
 )
@@ -153,8 +157,10 @@ def run_fo_directional_scan(
     as_of: date,
     history_getter=None,
     iv_history_store=None,
+    quote_now: datetime | None = None,
 ) -> dict[str, Any]:
     """Run one complete read-only F&O directional scan."""
+    quote_now = quote_now or datetime.now(IST)
     history_state: dict[str, Any] = {}
     if history_getter is None:
         from scan.bulk_fetcher import adopt_ready_store, get_cached
@@ -258,6 +264,23 @@ def run_fo_directional_scan(
         quote_keys.append(f"NFO:{getattr(item, 'future_symbol', '')}")
     quotes = read_market_quotes(quote_keys, client=client)
     nifty_quote = quotes.get("NSE:NIFTY 50")
+    nifty_quote_state = quote_provenance(
+        nifty_quote,
+        as_of=as_of,
+        now=quote_now,
+    )
+    if not nifty_quote_state.get("ok"):
+        return {
+            "available": False,
+            "status": "BLOCKED",
+            "code": "CURRENT_NIFTY_QUOTE_UNTRUSTED",
+            "quote_provenance": nifty_quote_state,
+            "universe_size": len(universe),
+            "considered": considered,
+            "candidates": [],
+            "paper_only": True,
+            "live_execution_allowed": False,
+        }
     nifty_change = _nifty_change_from_quote(nifty_quote)
     if nifty_change is None:
         return {
@@ -287,6 +310,7 @@ def run_fo_directional_scan(
 
     option_meta_by_symbol: dict[str, list[dict[str, Any]]] = {}
     option_symbols: list[str] = []
+    quote_state_by_symbol: dict[str, dict[str, Any]] = {}
     nfo_rows = [
         dict(row) for row in instrument_rows
         if str(row.get("exchange") or "").upper() == "NFO"
@@ -294,7 +318,49 @@ def run_fo_directional_scan(
     ]
     for item, _, pre in deep:
         symbol = str(getattr(item, "symbol", "") or "").upper()
+        future_symbol = str(getattr(item, "future_symbol", "") or "")
         uq = quotes.get(f"NSE:{symbol}") or {}
+        fq = quotes.get(f"NFO:{future_symbol}") or {}
+        underlying_state = quote_provenance(uq, as_of=as_of, now=quote_now)
+        future_state = quote_provenance(fq, as_of=as_of, now=quote_now)
+        skew_seconds = quote_timestamp_skew_seconds(uq, fq)
+        if not underlying_state.get("ok"):
+            quote_state_by_symbol[symbol] = {
+                "ok": False,
+                "reason": f"UNDERLYING_{underlying_state.get('reason')}",
+                "underlying": underlying_state,
+                "future": future_state,
+                "skew_seconds": skew_seconds,
+            }
+            option_meta_by_symbol[symbol] = []
+            continue
+        if not future_state.get("ok"):
+            quote_state_by_symbol[symbol] = {
+                "ok": False,
+                "reason": f"FUTURE_{future_state.get('reason')}",
+                "underlying": underlying_state,
+                "future": future_state,
+                "skew_seconds": skew_seconds,
+            }
+            option_meta_by_symbol[symbol] = []
+            continue
+        if skew_seconds is None or skew_seconds > LIVE_QUOTE_MAX_SKEW_SECONDS:
+            quote_state_by_symbol[symbol] = {
+                "ok": False,
+                "reason": "UNDERLYING_FUTURE_QUOTE_SKEW_TOO_WIDE",
+                "underlying": underlying_state,
+                "future": future_state,
+                "skew_seconds": skew_seconds,
+            }
+            option_meta_by_symbol[symbol] = []
+            continue
+        quote_state_by_symbol[symbol] = {
+            "ok": True,
+            "reason": "CURRENT_COHERENT_UNDERLYING_FUTURE_QUOTES",
+            "underlying": underlying_state,
+            "future": future_state,
+            "skew_seconds": round(float(skew_seconds), 3),
+        }
         spot = _f(uq.get("last_price"), _f(pre.get("price")))
         metas = candidate_option_instruments(
             nfo_rows, symbol, spot=spot, as_of=as_of, max_expiries=2,
@@ -319,6 +385,18 @@ def run_fo_directional_scan(
         future_token = int(getattr(item, "instrument_token", 0) or 0)
         uq = quotes.get(f"NSE:{symbol}") or {}
         fq = quotes.get(f"NFO:{future_symbol}") or {}
+        quote_state = quote_state_by_symbol.get(symbol) or {
+            "ok": False,
+            "reason": "CURRENT_QUOTE_PROVENANCE_UNAVAILABLE",
+        }
+        if not quote_state.get("ok"):
+            deep_failures.append({
+                "symbol": symbol,
+                "stage": "current_quotes",
+                "reason": str(quote_state.get("reason") or "CURRENT_QUOTE_UNTRUSTED"),
+                "quote_provenance": quote_state,
+            })
+            continue
         previous = previous_future_close_oi(
             future_token, as_of=as_of, client=client,
         )
@@ -330,12 +408,43 @@ def run_fo_directional_scan(
             })
             continue
 
-        subset = {
+        raw_subset = {
             str(meta.get("tradingsymbol") or ""): option_quotes.get(
                 str(meta.get("tradingsymbol") or ""), {}
             )
             for meta in option_meta_by_symbol.get(symbol, [])
         }
+        subset: dict[str, Mapping[str, Any]] = {}
+        rejected_option_quotes: list[dict[str, Any]] = []
+        for contract_symbol, option_quote in raw_subset.items():
+            option_state = quote_provenance(
+                option_quote,
+                as_of=as_of,
+                now=quote_now,
+            )
+            if not option_state.get("ok"):
+                rejected_option_quotes.append({
+                    "symbol": contract_symbol,
+                    "reason": str(option_state.get("reason") or "OPTION_QUOTE_UNTRUSTED"),
+                })
+                continue
+            option_skew = quote_timestamp_skew_seconds(uq, fq, option_quote)
+            if option_skew is None or option_skew > LIVE_QUOTE_MAX_SKEW_SECONDS:
+                rejected_option_quotes.append({
+                    "symbol": contract_symbol,
+                    "reason": "OPTION_QUOTE_SKEW_TOO_WIDE",
+                    "skew_seconds": option_skew,
+                })
+                continue
+            subset[contract_symbol] = option_quote
+        if not subset:
+            deep_failures.append({
+                "symbol": symbol,
+                "stage": "option_quotes",
+                "reason": "NO_FRESH_COHERENT_OPTION_QUOTES",
+                "rejected_option_quotes": rejected_option_quotes[:20],
+            })
+            continue
         spot = _f(uq.get("last_price"), _f(pre.get("price")))
         iv_history = {
             "available": False,
@@ -410,6 +519,11 @@ def run_fo_directional_scan(
         result["prefilter"] = pre
         result["previous_future"] = previous
         result["iv_history"] = iv_history
+        result["quote_provenance"] = {
+            **quote_state,
+            "fresh_option_quotes": len(subset),
+            "rejected_option_quotes": rejected_option_quotes[:20],
+        }
         if isinstance(result.get("selected"), dict):
             result["selected"]["iv_history"] = dict(iv_history)
         decisions.append(result)

@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 
 import numpy as np
@@ -9,6 +9,7 @@ from product import fo_runtime
 
 
 AS_OF = date(2026, 9, 26)
+QUOTE_TIME = datetime(2026, 9, 26, 10, 30, 0)
 
 
 def _breakout_bars():
@@ -78,17 +79,35 @@ def _instruments(spot):
 
 
 class _Client:
-    def __init__(self, spot, instruments):
+    def __init__(
+        self,
+        spot,
+        instruments,
+        *,
+        nifty_quote_time=QUOTE_TIME,
+        underlying_quote_time=QUOTE_TIME,
+        future_quote_time=QUOTE_TIME,
+        option_quote_time=QUOTE_TIME,
+    ):
         self.spot = spot
         self.instruments_rows = instruments
         self.quote_calls = []
+        self.nifty_quote_time = nifty_quote_time
+        self.underlying_quote_time = underlying_quote_time
+        self.future_quote_time = future_quote_time
+        self.option_quote_time = option_quote_time
+        self.quote_now = QUOTE_TIME + timedelta(seconds=30)
 
     def quote(self, keys):
         self.quote_calls.append(list(keys))
         out = {}
         for key in keys:
             if key == "NSE:NIFTY 50":
-                out[key] = {"last_price": 22000.0, "ohlc": {"close": 21900.0}}
+                out[key] = {
+                    "last_price": 22000.0,
+                    "ohlc": {"close": 21900.0},
+                    "timestamp": self.nifty_quote_time,
+                }
             elif key == "NSE:TEST":
                 out[key] = {
                     "last_price": self.spot,
@@ -97,9 +116,14 @@ class _Client:
                         "buy": [{"price": self.spot - 0.1}],
                         "sell": [{"price": self.spot + 0.1}],
                     },
+                    "timestamp": self.underlying_quote_time,
                 }
             elif key == "NFO:TEST26OCTFUT":
-                out[key] = {"last_price": self.spot + 2.0, "oi": 106_000}
+                out[key] = {
+                    "last_price": self.spot + 2.0,
+                    "oi": 106_000,
+                    "timestamp": self.future_quote_time,
+                }
             elif key.startswith("NFO:TEST26OCT"):
                 kind = "CE" if key.endswith("CE") else "PE"
                 strike = next(
@@ -117,6 +141,7 @@ class _Client:
                         "buy": [{"price": max(0.05, fair - 0.15)}],
                         "sell": [{"price": fair + 0.15}],
                     },
+                    "timestamp": self.option_quote_time,
                 }
         return out
 
@@ -169,6 +194,7 @@ def test_runtime_scans_canonical_universe_and_returns_ranked_paper_candidate(mon
         instrument_rows=instruments,
         client=client,
         as_of=AS_OF,
+        quote_now=client.quote_now,
         history_getter=lambda symbol: bars,
     )
     assert result["available"] is True
@@ -247,6 +273,7 @@ def test_default_history_waits_for_current_session_before_prefilter(monkeypatch)
         instrument_rows=instruments,
         client=client,
         as_of=AS_OF,
+        quote_now=client.quote_now,
     )
 
     assert events[0] == ("adopt", False)
@@ -328,6 +355,7 @@ def test_live_nifty_quote_aligns_relative_strength_horizon(monkeypatch):
         instrument_rows=instruments,
         client=client,
         as_of=AS_OF,
+        quote_now=client.quote_now,
         history_getter=lambda symbol: bars,
     )
 
@@ -359,6 +387,7 @@ def test_runtime_uses_only_prior_forward_iv_history_for_contract_scoring(monkeyp
         instrument_rows=instruments,
         client=client,
         as_of=AS_OF,
+        quote_now=client.quote_now,
         history_getter=lambda symbol: bars,
         iv_history_store=iv_history,
     )
@@ -375,3 +404,173 @@ def test_runtime_uses_only_prior_forward_iv_history_for_contract_scoring(monkeyp
     assert call["symbol"] == "TEST"
     assert call["session"] == AS_OF.isoformat()
     assert 20.0 <= call["current_iv_pct"] <= 30.0
+
+
+def test_stale_nifty_quote_blocks_current_market_context(monkeypatch):
+    bars = _breakout_bars()
+    spot = float(bars["close"].iloc[-1])
+    instruments = _instruments(spot)
+    client = _Client(
+        spot,
+        instruments,
+        nifty_quote_time=QUOTE_TIME - timedelta(minutes=10),
+    )
+
+    monkeypatch.setattr(
+        fo_runtime,
+        "_index_context",
+        lambda: {"return_20d_pct": 1.0, "return_5d_pct": 0.5, "last_close": 21900.0},
+    )
+
+    result = fo_runtime.run_fo_directional_scan(
+        report=_report(spot),
+        instrument_rows=instruments,
+        client=client,
+        as_of=AS_OF,
+        history_getter=lambda symbol: bars,
+        quote_now=client.quote_now,
+    )
+
+    assert result["available"] is False
+    assert result["code"] == "CURRENT_NIFTY_QUOTE_UNTRUSTED"
+    assert result["quote_provenance"]["reason"] == "QUOTE_STALE"
+    assert result["candidates"] == []
+
+
+def test_stale_underlying_quote_cannot_create_fno_candidate(monkeypatch):
+    bars = _breakout_bars()
+    spot = float(bars["close"].iloc[-1])
+    instruments = _instruments(spot)
+    client = _Client(
+        spot,
+        instruments,
+        underlying_quote_time=QUOTE_TIME - timedelta(minutes=10),
+    )
+
+    monkeypatch.setattr(
+        fo_runtime,
+        "_index_context",
+        lambda: {"return_20d_pct": 1.0, "return_5d_pct": 0.5, "last_close": 21900.0},
+    )
+    monkeypatch.setattr(fo_runtime, "_sector_strength_map", lambda nifty: {"Tech": 1.2})
+    monkeypatch.setattr(fo_runtime, "_sector_for", lambda symbol: "Tech")
+
+    result = fo_runtime.run_fo_directional_scan(
+        report=_report(spot),
+        instrument_rows=instruments,
+        client=client,
+        as_of=AS_OF,
+        history_getter=lambda symbol: bars,
+        quote_now=client.quote_now,
+    )
+
+    assert result["candidate_count"] == 0
+    assert result["deep_evaluated"] == 0
+    assert result["deep_failures"][0]["stage"] == "current_quotes"
+    assert result["deep_failures"][0]["reason"] == "UNDERLYING_QUOTE_STALE"
+
+
+def test_stale_option_quotes_are_filtered_before_contract_selection(monkeypatch):
+    bars = _breakout_bars()
+    spot = float(bars["close"].iloc[-1])
+    instruments = _instruments(spot)
+    client = _Client(
+        spot,
+        instruments,
+        option_quote_time=QUOTE_TIME - timedelta(minutes=10),
+    )
+
+    monkeypatch.setattr(
+        fo_runtime,
+        "_index_context",
+        lambda: {"return_20d_pct": 1.0, "return_5d_pct": 0.5, "last_close": 21900.0},
+    )
+    monkeypatch.setattr(fo_runtime, "_sector_strength_map", lambda nifty: {"Tech": 1.2})
+    monkeypatch.setattr(fo_runtime, "_sector_for", lambda symbol: "Tech")
+
+    result = fo_runtime.run_fo_directional_scan(
+        report=_report(spot),
+        instrument_rows=instruments,
+        client=client,
+        as_of=AS_OF,
+        history_getter=lambda symbol: bars,
+        quote_now=client.quote_now,
+    )
+
+    assert result["candidate_count"] == 0
+    assert result["deep_evaluated"] == 0
+    assert result["deep_failures"][0]["stage"] == "option_quotes"
+    assert result["deep_failures"][0]["reason"] == "NO_FRESH_COHERENT_OPTION_QUOTES"
+    assert all(
+        row["reason"] == "QUOTE_STALE"
+        for row in result["deep_failures"][0]["rejected_option_quotes"]
+    )
+
+
+def test_fresh_but_incoherent_underlying_future_quotes_fail_closed(monkeypatch):
+    bars = _breakout_bars()
+    spot = float(bars["close"].iloc[-1])
+    instruments = _instruments(spot)
+    client = _Client(
+        spot,
+        instruments,
+        underlying_quote_time=QUOTE_TIME - timedelta(seconds=140),
+        future_quote_time=QUOTE_TIME,
+    )
+
+    monkeypatch.setattr(
+        fo_runtime,
+        "_index_context",
+        lambda: {"return_20d_pct": 1.0, "return_5d_pct": 0.5, "last_close": 21900.0},
+    )
+    monkeypatch.setattr(fo_runtime, "_sector_strength_map", lambda nifty: {"Tech": 1.2})
+    monkeypatch.setattr(fo_runtime, "_sector_for", lambda symbol: "Tech")
+
+    result = fo_runtime.run_fo_directional_scan(
+        report=_report(spot),
+        instrument_rows=instruments,
+        client=client,
+        as_of=AS_OF,
+        history_getter=lambda symbol: bars,
+        quote_now=client.quote_now,
+    )
+
+    assert result["candidate_count"] == 0
+    assert result["deep_failures"][0]["stage"] == "current_quotes"
+    assert result["deep_failures"][0]["reason"] == "UNDERLYING_FUTURE_QUOTE_SKEW_TOO_WIDE"
+
+
+def test_fresh_but_incoherent_option_quotes_are_filtered(monkeypatch):
+    bars = _breakout_bars()
+    spot = float(bars["close"].iloc[-1])
+    instruments = _instruments(spot)
+    client = _Client(
+        spot,
+        instruments,
+        option_quote_time=QUOTE_TIME - timedelta(seconds=140),
+    )
+
+    monkeypatch.setattr(
+        fo_runtime,
+        "_index_context",
+        lambda: {"return_20d_pct": 1.0, "return_5d_pct": 0.5, "last_close": 21900.0},
+    )
+    monkeypatch.setattr(fo_runtime, "_sector_strength_map", lambda nifty: {"Tech": 1.2})
+    monkeypatch.setattr(fo_runtime, "_sector_for", lambda symbol: "Tech")
+
+    result = fo_runtime.run_fo_directional_scan(
+        report=_report(spot),
+        instrument_rows=instruments,
+        client=client,
+        as_of=AS_OF,
+        history_getter=lambda symbol: bars,
+        quote_now=client.quote_now,
+    )
+
+    assert result["candidate_count"] == 0
+    assert result["deep_failures"][0]["stage"] == "option_quotes"
+    assert result["deep_failures"][0]["reason"] == "NO_FRESH_COHERENT_OPTION_QUOTES"
+    assert all(
+        row["reason"] == "OPTION_QUOTE_SKEW_TOO_WIDE"
+        for row in result["deep_failures"][0]["rejected_option_quotes"]
+    )

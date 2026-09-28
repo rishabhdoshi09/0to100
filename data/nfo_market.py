@@ -8,9 +8,15 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 from typing import Any, Iterable, Mapping, Sequence
+from zoneinfo import ZoneInfo
 
 from data.fno_universe import INDEX_UNDERLYINGS
 from options.directional_selector import implied_volatility
+
+
+IST = ZoneInfo("Asia/Kolkata")
+LIVE_QUOTE_MAX_AGE_SECONDS = 180
+LIVE_QUOTE_MAX_SKEW_SECONDS = 120
 
 
 class NfoMarketDataClient:
@@ -83,6 +89,95 @@ def _f(value: Any, default: float = 0.0) -> float:
     if number != number:
         return default
     return number
+
+
+def quote_exchange_datetime(quote: Mapping[str, Any] | None) -> datetime | None:
+    """Exchange quote-packet timestamp normalized to an IST wall clock."""
+    if not isinstance(quote, Mapping):
+        return None
+    raw = quote.get("timestamp")
+    if raw is None:
+        raw = quote.get("exchange_timestamp")
+    if isinstance(raw, datetime):
+        stamp = raw
+    else:
+        text = str(raw or "").strip()
+        if not text:
+            return None
+        try:
+            stamp = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if stamp.tzinfo is not None:
+        stamp = stamp.astimezone(IST).replace(tzinfo=None)
+    return stamp
+
+
+def quote_provenance(
+    quote: Mapping[str, Any] | None,
+    *,
+    as_of: date,
+    now: datetime | None = None,
+    max_age_seconds: int = LIVE_QUOTE_MAX_AGE_SECONDS,
+) -> dict[str, Any]:
+    """Prove session identity and, for a live-session scan, quote freshness."""
+    stamp = quote_exchange_datetime(quote)
+    if stamp is None:
+        return {
+            "ok": False,
+            "reason": "QUOTE_TIMESTAMP_UNAVAILABLE",
+            "timestamp": None,
+            "age_seconds": None,
+            "freshness_checked": False,
+        }
+    if stamp.date() != as_of:
+        return {
+            "ok": False,
+            "reason": "QUOTE_SESSION_MISMATCH",
+            "timestamp": stamp.isoformat(),
+            "age_seconds": None,
+            "freshness_checked": False,
+        }
+
+    reference = now
+    if reference is not None and reference.tzinfo is not None:
+        reference = reference.astimezone(IST).replace(tzinfo=None)
+    freshness_checked = bool(reference is not None and reference.date() == as_of)
+    age_seconds = None
+    if freshness_checked and reference is not None:
+        age_seconds = (reference - stamp).total_seconds()
+        if age_seconds < -30.0:
+            return {
+                "ok": False,
+                "reason": "QUOTE_TIMESTAMP_IN_FUTURE",
+                "timestamp": stamp.isoformat(),
+                "age_seconds": round(age_seconds, 3),
+                "freshness_checked": True,
+            }
+        if age_seconds > max(1, int(max_age_seconds)):
+            return {
+                "ok": False,
+                "reason": "QUOTE_STALE",
+                "timestamp": stamp.isoformat(),
+                "age_seconds": round(age_seconds, 3),
+                "freshness_checked": True,
+            }
+
+    return {
+        "ok": True,
+        "reason": "CURRENT_SESSION_QUOTE",
+        "timestamp": stamp.isoformat(),
+        "age_seconds": round(age_seconds, 3) if age_seconds is not None else None,
+        "freshness_checked": freshness_checked,
+    }
+
+
+def quote_timestamp_skew_seconds(*quotes: Mapping[str, Any] | None) -> float | None:
+    stamps = [quote_exchange_datetime(quote) for quote in quotes]
+    if not stamps or any(stamp is None for stamp in stamps):
+        return None
+    valid = [stamp for stamp in stamps if stamp is not None]
+    return (max(valid) - min(valid)).total_seconds()
 
 
 def _expiry_date(value: Any) -> date | None:
