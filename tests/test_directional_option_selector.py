@@ -14,6 +14,9 @@ def _contract(symbol: str, strike: float, delta=None, *, option_type="CE"):
         "option_type": option_type,
         "strike": strike,
         "dte": 9,
+        "trading_sessions_to_expiry": 7,
+        "holiday_calendar_loaded": 1,
+        "expiry_session_model": "NSE_SESSIONS_WITH_RUNTIME_HOLIDAYS",
         "ltp": fair,
         "bid": max(0.05, fair - 0.25),
         "ask": fair + 0.25,
@@ -153,9 +156,12 @@ def test_missing_iv_percentile_adds_no_unearned_score():
     assert known["score"] > missing["score"]
 
 
-def test_contract_must_outlive_holding_horizon():
+def test_contract_must_outlive_holding_horizon_in_trading_sessions():
     contract = _contract("RELIANCE27SEP3050CE", 3050.0, 0.62)
-    contract["dte"] = 2
+    # Calendar DTE alone looks sufficient, but only four future NSE sessions
+    # remain. A four-session hold needs an additional buffer session.
+    contract["dte"] = 6
+    contract["trading_sessions_to_expiry"] = 4
 
     result = score_option_contract(
         contract,
@@ -169,4 +175,23 @@ def test_contract_must_outlive_holding_horizon():
     )
 
     assert result["eligible"] is False
-    assert "DTE_SHORTER_THAN_HOLDING_HORIZON" in result["blockers"]
+    assert "TRADING_SESSIONS_SHORTER_THAN_HOLDING_HORIZON" in result["blockers"]
+
+
+def test_missing_trading_session_expiry_provenance_fails_closed():
+    contract = _contract("RELIANCE27SEP3050CE", 3050.0, 0.62)
+    contract.pop("trading_sessions_to_expiry")
+
+    result = score_option_contract(
+        contract,
+        direction="LONG",
+        spot=3050.0,
+        expected_move_pct=2.0,
+        horizon="1_TO_2D",
+        holding_days=2,
+        underlying_stop_price=2995.0,
+        iv_percentile=45.0,
+    )
+
+    assert result["eligible"] is False
+    assert "TRADING_SESSION_EXPIRY_UNAVAILABLE" in result["blockers"]
