@@ -111,6 +111,12 @@ def test_futures_oi_features_preserve_unknown_baseline():
     assert unknown["futures_price_change_pct"] is None
     assert unknown["futures_oi_change_pct"] is None
 
+    missing_current_oi = futures_oi_features(
+        current_price=101, previous_price=100, current_oi=0, previous_oi=1000,
+    )
+    assert missing_current_oi["futures_price_change_pct"] == 1.0
+    assert missing_current_oi["futures_oi_change_pct"] is None
+
 
 class _Raw:
     def instruments(self, exchange):
