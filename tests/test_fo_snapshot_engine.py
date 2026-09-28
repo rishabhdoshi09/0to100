@@ -183,3 +183,36 @@ def test_missing_underlying_depth_blocks_instead_of_assuming_zero_spread():
     long_row = next(row for row in result["directions"] if row["direction"] == "LONG")
     assert long_row["setup"]["tradable"] is False
     assert "UNDERLYING_SPREAD_UNAVAILABLE" in long_row["setup"]["blockers"]
+
+
+def test_missing_current_futures_oi_blocks_instead_of_looking_like_unwinding():
+    bars = _bars()
+    spot = float(bars["close"].iloc[-1])
+    instruments = _nfo(spot)
+    result = evaluate_fo_snapshot_auto(
+        symbol="TEST",
+        daily_bars=bars,
+        nfo_instruments=instruments,
+        underlying_quote={
+            "last_price": spot,
+            "average_price": spot - 3.0,
+            "depth": {
+                "buy": [{"price": spot - 0.1}],
+                "sell": [{"price": spot + 0.1}],
+            },
+        },
+        futures_quote={"last_price": spot + 2.0},
+        previous_futures_price=spot - 10.0,
+        previous_futures_oi=100_000,
+        option_quotes=_option_quotes(spot, instruments),
+        benchmark_20d_return_pct=1.0,
+        nifty_change_pct=0.6,
+        sector_relative_strength_pct=1.2,
+        iv_percentile=45.0,
+        as_of=AS_OF,
+    )
+
+    assert result["decision"] == "NO_TRADE"
+    long_row = next(row for row in result["directions"] if row["direction"] == "LONG")
+    assert long_row["setup"]["tradable"] is False
+    assert "MISSING_FUTURES_OI_CHANGE_PCT" in long_row["setup"]["blockers"]
