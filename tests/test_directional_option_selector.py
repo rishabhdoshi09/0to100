@@ -1,3 +1,6 @@
+from datetime import date
+
+import options.directional_selector as selector
 from options.directional_selector import (
     black_scholes,
     score_option_contract,
@@ -38,6 +41,11 @@ def _contract(symbol: str, strike: float, delta=None, *, option_type="CE"):
     if delta is not None:
         row["delta"] = delta
     return row
+
+
+def test_dte_fallback_uses_exchange_local_today(monkeypatch):
+    monkeypatch.setattr(selector, "_today_ist", lambda: date(2026, 9, 29))
+    assert selector._dte({"expiry": "2026-10-01"}) == 2
 
 
 def test_black_scholes_has_sane_call_and_put_greeks():
