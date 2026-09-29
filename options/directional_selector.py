@@ -384,7 +384,7 @@ def scenario_reprice(
     dte = _dte(contract)
     kind = str(contract.get("option_type") or "").upper()
     resolved_calendar_days = (
-        max(0, int(calendar_holding_days))
+        max(0.0, float(calendar_holding_days))
         if calendar_holding_days is not None
         else _holding_decay_days(contract, holding_days=holding_days, horizon=horizon)
     )
@@ -532,7 +532,7 @@ def score_option_contract(
             strike=strike,
             dte=max(
                 0.25,
-                float(dte - max(0, int(calendar_holding_days))),
+                float(dte - max(0.0, float(calendar_holding_days))),
             ),
             iv=iv,
             option_type=kind,
@@ -559,7 +559,7 @@ def score_option_contract(
             strike=strike,
             dte=max(
                 0.25,
-                float(dte - max(0, int(first_session_calendar_days))),
+                float(dte - max(0.0, float(first_session_calendar_days))),
             ),
             iv=iv,
             option_type=kind,
