@@ -1,5 +1,6 @@
 from datetime import date, datetime, timedelta, timezone
 
+import data.nfo_market as nfo_market
 from data.nfo_market import (
     NfoMarketDataClient,
     candidate_option_instruments,
@@ -59,6 +60,31 @@ def test_nearest_future_and_option_expiry_filtering():
 
     opts = option_instruments(_instruments(), "RELIANCE", as_of=as_of)
     assert {row["instrument_type"] for row in opts} == {"CE", "PE"}
+
+
+def test_nfo_default_dates_use_exchange_local_today(monkeypatch):
+    monkeypatch.setattr(nfo_market, "_today_ist", lambda: date(2026, 10, 30))
+
+    # The October instrument is already expired on the mocked NSE-local date.
+    assert nearest_future(_instruments(), "RELIANCE") is None
+    assert option_instruments(_instruments(), "RELIANCE") == []
+
+    instrument = {**_instruments()[1], "expiry": "2026-11-05"}
+    theoretical = black_scholes(
+        spot=3050.0, strike=3000.0, dte=6, iv=0.24, option_type="CE",
+    )["price"]
+    quote = {
+        "last_price": theoretical,
+        "volume": 5500,
+        "oi": 32000,
+        "depth": {
+            "buy": [{"price": theoretical - 0.25}],
+            "sell": [{"price": theoretical + 0.25}],
+        },
+    }
+    row = quote_to_option_contract(instrument, quote, spot=3050.0)
+    assert row["as_of_date"] == "2026-10-30"
+    assert row["dte"] == 6
 
 
 def test_quote_normalization_uses_depth_oi_and_implied_iv():

@@ -20,6 +20,11 @@ LIVE_QUOTE_MAX_AGE_SECONDS = 180
 LIVE_QUOTE_MAX_SKEW_SECONDS = 120
 
 
+def _today_ist() -> date:
+    """Current exchange-local trading date for NSE defaults."""
+    return datetime.now(IST).date()
+
+
 class NfoMarketDataClient:
     """Read-only broker facade for derivatives market data.
 
@@ -238,7 +243,7 @@ def nearest_future(
     *,
     as_of: date | None = None,
 ) -> dict[str, Any] | None:
-    today = as_of or datetime.now(IST).date()
+    today = as_of or _today_ist()
     wanted = str(underlying or "").upper()
     rows: list[tuple[date, Mapping[str, Any]]] = []
     for row in instruments:
@@ -263,7 +268,7 @@ def option_instruments(
     max_expiries: int = 2,
 ) -> list[dict[str, Any]]:
     """Nearest stock-option expiries only; expired/index contracts excluded."""
-    today = as_of or date.today()
+    today = as_of or _today_ist()
     wanted = str(underlying or "").upper()
     rows: list[tuple[date, Mapping[str, Any]]] = []
     for row in instruments:
@@ -362,7 +367,7 @@ def quote_to_option_contract(
 ) -> dict[str, Any]:
     """Normalize Kite NFO metadata + quote into the selector contract schema."""
     expiry = _expiry_date(instrument.get("expiry"))
-    today = as_of or date.today()
+    today = as_of or _today_ist()
     dte = max(0, (expiry - today).days) if expiry is not None else 0
     trading_sessions_to_expiry, holiday_calendar_loaded, session_dates_to_expiry = (
         _trading_sessions_to_expiry(
