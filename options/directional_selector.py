@@ -450,32 +450,41 @@ def score_option_contract(
         rate=rate,
     )
     aligned_move = abs(expected_move_pct) if desired == CE else -abs(expected_move_pct)
-    target_model = black_scholes(
-        spot=spot * (1.0 + aligned_move / 100.0),
-        strike=strike,
-        dte=max(
-            0.25,
-            float(dte - max(0, int(calendar_holding_days or 0))),
-        ),
-        iv=iv,
-        option_type=kind,
-        rate=rate,
-    )
+    target_model_price = 0.0
+    if calendar_holding_days is not None:
+        target_model = black_scholes(
+            spot=spot * (1.0 + aligned_move / 100.0),
+            strike=strike,
+            dte=max(
+                0.25,
+                float(dte - max(0, int(calendar_holding_days))),
+            ),
+            iv=iv,
+            option_type=kind,
+            rate=rate,
+        )
+        target_model_price = float(target_model["price"])
     expected_return = (
-        (target_model["price"] - premium) / premium * 100.0
-        if premium > 0 and target_model["price"] > 0
+        (target_model_price - premium) / premium * 100.0
+        if premium > 0 and target_model_price > 0
         else 0.0
     )
 
     stop_model_price = 0.0
     stop_underlying = _f(underlying_stop_price)
-    if stop_underlying > 0 and strike > 0 and iv > 0 and dte > 0:
+    if (
+        first_session_calendar_days is not None
+        and stop_underlying > 0
+        and strike > 0
+        and iv > 0
+        and dte > 0
+    ):
         stop_model = black_scholes(
             spot=stop_underlying,
             strike=strike,
             dte=max(
                 0.25,
-                float(dte - max(0, int(first_session_calendar_days or 0))),
+                float(dte - max(0, int(first_session_calendar_days))),
             ),
             iv=iv,
             option_type=kind,
@@ -485,7 +494,7 @@ def score_option_contract(
 
     option_entry = premium
     option_stop = min(option_entry * 0.98, stop_model_price) if stop_model_price > 0 else 0.0
-    option_target = float(target_model["price"])
+    option_target = target_model_price
     if option_stop <= 0 or option_stop >= option_entry:
         blockers.append("OPTION_STOP_MODEL_UNAVAILABLE")
     if option_target <= option_entry:
