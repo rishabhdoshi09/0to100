@@ -289,3 +289,116 @@ def test_seeded_daily_premium_prevents_restart_budget_reset():
     assert pos is None
     assert book.premium_deployed_today == 9_000.0
     assert book.refusals[-1][1] == "DAILY_PREMIUM_BUDGET_EXHAUSTED"
+
+
+def test_trailing_stop_uses_prior_observed_path_not_same_bar_high():
+    book = FoPaperBook(
+        capital=200_000,
+        slippage_bps=0,
+        trail_activation_r=1.0,
+        trail_distance_r=1.0,
+    )
+    pos = book.open_position(
+        underlying="RELIANCE",
+        option_symbol="TRAILCE",
+        option_type="CE",
+        entry=50,
+        stop=40,
+        target=80,
+        lot_size=25,
+        opened_at="2026-09-29T10:00:00+05:30",
+        max_holding_sessions=4,
+    )
+    assert pos is not None
+
+    # This bar first earns the trail. Its own low may not be tested against a
+    # stop tightened by its later/unknown-order high.
+    assert book.mark({
+        "TRAILCE": {"open": 50, "high": 62, "low": 45, "close": 60, "bid": 59}
+    }, session="2026-09-29T10:30:00+05:30", advance_session=False) == []
+    assert pos.trailing_stop_price == 52.0
+
+    closed = book.mark({
+        "TRAILCE": {"open": 60, "high": 61, "low": 51, "close": 52, "bid": 51.5}
+    }, session="2026-09-29T10:31:00+05:30", advance_session=False)
+    assert len(closed) == 1
+    assert closed[0].exit_reason == "TRAIL_STOP"
+    assert closed[0].exit_price == 52.0
+
+
+def test_intraday_eod_policy_exits_at_current_bid_only_when_forced():
+    book = FoPaperBook(capital=200_000, slippage_bps=0)
+    pos = book.open_position(
+        underlying="RELIANCE",
+        option_symbol="EODCE",
+        option_type="CE",
+        entry=50,
+        stop=40,
+        target=80,
+        lot_size=25,
+        opened_at="2026-09-29T11:00:00+05:30",
+        max_holding_sessions=1,
+        horizon="INTRADAY",
+        exit_policy="EOD",
+    )
+    assert pos is not None
+    quote = {"open": 55, "high": 55, "low": 55, "close": 55, "bid": 54.5}
+    assert book.mark(
+        {"EODCE": quote},
+        session="2026-09-29T15:34:00+05:30",
+        advance_session=False,
+        force_eod=False,
+    ) == []
+    closed = book.mark(
+        {"EODCE": quote},
+        session="2026-09-29T15:35:00+05:30",
+        advance_session=False,
+        observation_complete=False,
+        force_eod=True,
+    )
+    assert len(closed) == 1
+    assert closed[0].exit_reason == "EOD"
+    assert closed[0].exit_price == 54.5
+
+
+def test_iv_crush_exit_uses_current_bid_and_does_not_affect_other_positions():
+    book = FoPaperBook(capital=500_000, slippage_bps=0)
+    crushed = book.open_position(
+        underlying="AAA",
+        option_symbol="AAACE",
+        option_type="CE",
+        entry=50,
+        stop=35,
+        target=80,
+        lot_size=25,
+        opened_at="2026-09-29T10:00:00+05:30",
+        max_holding_sessions=2,
+    )
+    clear = book.open_position(
+        underlying="BBB",
+        option_symbol="BBBCE",
+        option_type="CE",
+        entry=50,
+        stop=35,
+        target=80,
+        lot_size=25,
+        opened_at="2026-09-29T10:00:00+05:30",
+        max_holding_sessions=2,
+    )
+    assert crushed is not None and clear is not None
+    quotes = {
+        "AAACE": {"open": 45, "high": 45, "low": 45, "close": 45, "bid": 44.5},
+        "BBBCE": {"open": 52, "high": 52, "low": 52, "close": 52, "bid": 51.5},
+    }
+    closed = book.mark(
+        quotes,
+        session="2026-09-29T12:00:00+05:30",
+        advance_session=False,
+        observation_complete=False,
+        iv_crush_symbols={"AAACE"},
+    )
+    assert len(closed) == 1
+    assert closed[0].option_symbol == "AAACE"
+    assert closed[0].exit_reason == "IV_CRUSH"
+    assert closed[0].exit_price == 44.5
+    assert "BBBCE" in book.open
