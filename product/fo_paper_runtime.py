@@ -122,11 +122,20 @@ def _intraday_replay_start(pos: FoPaperPosition, now_ist: datetime) -> datetime 
 
 FNO_EOD_EXIT_HOUR = 15
 FNO_EOD_EXIT_MINUTE = 35
+FNO_MARKET_CLOSE_HOUR = 15
+FNO_MARKET_CLOSE_MINUTE = 40
 IV_CRUSH_RATIO = 0.75
 
 
 def _eod_exit_due(now_ist: datetime) -> bool:
     return (now_ist.hour, now_ist.minute) >= (FNO_EOD_EXIT_HOUR, FNO_EOD_EXIT_MINUTE)
+
+
+def _market_closed(now_ist: datetime) -> bool:
+    return (now_ist.hour, now_ist.minute) >= (
+        FNO_MARKET_CLOSE_HOUR,
+        FNO_MARKET_CLOSE_MINUTE,
+    )
 
 
 def _iv_crush_state(
@@ -442,6 +451,15 @@ def run_fo_paper_cycle(
                     skipped.append({"symbol": underlying, "reason": "CANDIDATE_NOT_EXECUTABLE"})
                     continue
                 expected = setup.get("expected_move") if isinstance(setup.get("expected_move"), Mapping) else {}
+                if _market_closed(now_ist):
+                    skipped.append({"symbol": underlying, "reason": "FNO_MARKET_CLOSED"})
+                    continue
+                if (
+                    str(expected.get("exit_policy") or "").upper() == "EOD"
+                    and eod_exit_due
+                ):
+                    skipped.append({"symbol": underlying, "reason": "INTRADAY_EOD_CUTOFF_REACHED"})
+                    continue
                 pos = book.open_position(
                     underlying=underlying,
                     option_symbol=option_symbol,
@@ -524,6 +542,7 @@ def run_fo_paper_cycle(
             "iv_crush_unavailable_count": iv_crush_unavailable,
             "eod_exit_due": eod_exit_due,
             "eod_exit_cutoff_ist": f"{FNO_EOD_EXIT_HOUR:02d}:{FNO_EOD_EXIT_MINUTE:02d}",
+            "fno_market_close_ist": f"{FNO_MARKET_CLOSE_HOUR:02d}:{FNO_MARKET_CLOSE_MINUTE:02d}",
             "evidence_cost_status": (
                 f"CONFIGURED:{cost_model_name}" if book.fully_costed
                 else "UNCONFIGURED_GROSS_ONLY"
