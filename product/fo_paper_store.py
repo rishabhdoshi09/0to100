@@ -206,11 +206,15 @@ class FoPaperStore:
         if not wanted:
             return 0.0
         total = 0.0
+        seen_trade_ids: set[str] = set()
         for table in ("fo_open_positions", "fo_closed_trades"):
             rows = self.conn.execute(f"SELECT payload_json FROM {table}").fetchall()
             for row in rows:
                 payload = self._decode(row["payload_json"])
                 if not payload or str(payload.get("opened_at") or "")[:10] != wanted:
+                    continue
+                trade_id = str(payload.get("trade_id") or "").strip()
+                if trade_id and trade_id in seen_trade_ids:
                     continue
                 try:
                     entry = float(payload.get("entry_price") or 0.0)
@@ -219,6 +223,8 @@ class FoPaperStore:
                     continue
                 if entry > 0 and quantity > 0:
                     total += entry * quantity
+                    if trade_id:
+                        seen_trade_ids.add(trade_id)
         return float(total)
 
     def realized_pnl(self) -> float:
