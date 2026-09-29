@@ -431,11 +431,11 @@ def test_atm_reference_is_resolved_independently_per_expiry():
     farther = _contract("W2", 3075.0, 0.58)
     farther["expiry"] = "2026-10-08"
     farther["dte"] = 16
-    farther["trading_sessions_to_expiry"] = 12
+    farther["trading_sessions_to_expiry"] = 11
     farther["session_dates_to_expiry"] = [
         "2026-09-23","2026-09-24","2026-09-25","2026-09-28",
         "2026-09-29","2026-09-30","2026-10-01","2026-10-05",
-        "2026-10-06","2026-10-07","2026-10-08","2026-10-09",
+        "2026-10-06","2026-10-07","2026-10-08",
     ]
     result = select_option_contracts(
         [near, farther],
