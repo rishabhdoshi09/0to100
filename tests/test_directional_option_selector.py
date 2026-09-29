@@ -19,6 +19,7 @@ def _contract(symbol: str, strike: float, delta=None, *, option_type="CE"):
         "expiry": "2026-10-01",
         "dte": 9,
         "as_of_date": "2026-09-22",
+        "quote_timestamp": "2026-09-22T10:00:00",
         "trading_sessions_to_expiry": 7,
         "session_dates_to_expiry": [
             "2026-09-23",
@@ -76,6 +77,9 @@ def test_directional_contract_is_scored_and_scenario_repriced():
     assert result["scenario_model"] == "BLACK_SCHOLES_CONSTANT_IV_ESTIMATE"
     assert result["trade_plan"]["entry"] > result["trade_plan"]["stop"]
     assert result["trade_plan"]["target"] > result["trade_plan"]["entry"]
+    assert result["moneyness"] == "ATM"
+    assert result["gamma_delta_change_for_1pct_move"] > 0
+    assert result["vega_pct_of_premium_per_vol_point"] > 0
     moves = {row["underlying_move_pct"]: row for row in result["scenarios"]}
     assert moves[2.0]["projected_option_return_pct"] > moves[1.0]["projected_option_return_pct"]
 
@@ -333,3 +337,53 @@ def test_missing_session_date_path_fails_closed_for_decay_model():
     assert result["scenarios"] == []
     assert result["trade_plan"]["target"] is None
     assert result["trade_plan"]["stop"] is None
+
+
+def test_known_extreme_iv_percentile_blocks_long_premium_entry():
+    result = score_option_contract(
+        _contract("EXTREME_IV", 3050.0, 0.62),
+        direction="LONG",
+        spot=3050.0,
+        expected_move_pct=2.0,
+        horizon="1_TO_2D",
+        holding_days=2,
+        underlying_stop_price=2995.0,
+        iv_percentile=90.0,
+    )
+    assert result["eligible"] is False
+    assert "IV_CRUSH_RISK_EXTREME_PERCENTILE" in result["blockers"]
+
+
+def test_intraday_horizon_uses_fractional_decay_to_eod():
+    contract = _contract("INTRADAY", 3050.0, 0.62)
+    contract["quote_timestamp"] = "2026-09-22T10:35:00"
+    result = score_option_contract(
+        contract,
+        direction="LONG",
+        spot=3050.0,
+        expected_move_pct=1.0,
+        horizon="INTRADAY",
+        holding_days=0,
+        underlying_stop_price=2995.0,
+        iv_percentile=45.0,
+    )
+    assert result["eligible"] is True
+    assert round(result["calendar_days_to_holding_horizon"], 6) == round(5.0 / 24.0, 6)
+    assert result["scenario_decay_basis"] == "FRACTIONAL_CALENDAR_DAYS_TO_1535_IST_EOD"
+
+
+def test_intraday_candidate_after_eod_cutoff_fails_closed():
+    contract = _contract("LATE_INTRADAY", 3050.0, 0.62)
+    contract["quote_timestamp"] = "2026-09-22T15:36:00"
+    result = score_option_contract(
+        contract,
+        direction="LONG",
+        spot=3050.0,
+        expected_move_pct=1.0,
+        horizon="INTRADAY",
+        holding_days=0,
+        underlying_stop_price=2995.0,
+        iv_percentile=45.0,
+    )
+    assert result["eligible"] is False
+    assert "HOLDING_CALENDAR_DECAY_UNAVAILABLE" in result["blockers"]
