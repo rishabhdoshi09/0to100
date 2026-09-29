@@ -88,6 +88,7 @@ def _option_quotes(spot, instruments):
             option_type=row["instrument_type"],
         )["price"]
         out[row["tradingsymbol"]] = {
+            "timestamp": f"{AS_OF.isoformat()}T10:00:00+05:30",
             "last_price": price,
             "volume": 8000,
             "oi": 40000,
