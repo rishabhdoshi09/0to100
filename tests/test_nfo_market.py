@@ -295,3 +295,31 @@ def test_option_contract_trading_sessions_respect_loaded_holidays(monkeypatch):
     assert row["trading_sessions_to_expiry"] == 3
     assert row["holiday_calendar_loaded"] == 1
     assert row["expiry_session_model"] == "NSE_SESSIONS_WITH_RUNTIME_HOLIDAYS"
+
+
+def test_option_contract_stale_holiday_year_fails_closed(monkeypatch):
+    as_of = date(2027, 1, 4)
+    instrument = {
+        **_instruments()[1],
+        "expiry": "2027-01-28",
+    }
+    theoretical = black_scholes(
+        spot=3050.0, strike=3000.0, dte=24, iv=0.24, option_type="CE",
+    )["price"]
+    quote = {
+        "last_price": theoretical,
+        "volume": 5500,
+        "oi": 32000,
+        "depth": {
+            "buy": [{"price": theoretical - 0.25}],
+            "sell": [{"price": theoretical + 0.25}],
+        },
+    }
+    monkeypatch.setattr(
+        "data.nfo_market.load_holidays",
+        lambda: {"2026-12-25"},
+    )
+    row = quote_to_option_contract(instrument, quote, spot=3050.0, as_of=as_of)
+    assert row["trading_sessions_to_expiry"] > 0
+    assert row["holiday_calendar_loaded"] == 0
+    assert row["expiry_session_model"] == "WEEKDAYS_ONLY_NO_HOLIDAY_TABLE"
