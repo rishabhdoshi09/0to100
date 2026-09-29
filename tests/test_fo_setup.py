@@ -51,7 +51,8 @@ def test_strong_long_setup_passes_without_claiming_probability():
     assert result["score_is_probability"] is False
     assert result["probability"] is None
     assert result["futures_oi_state"] == LONG_BUILDUP
-    assert result["expected_move"]["holding_days"] in {1, 2, 4}
+    assert result["expected_move"]["holding_days"] in {0, 1, 2, 4}
+    assert result["expected_move"]["exit_policy"] in {"EOD", "SESSION_HOLD"}
     assert result["paper_only"] is True
     assert result["live_execution_allowed"] is False
 
@@ -91,3 +92,24 @@ def test_non_fo_symbol_is_rejected_even_if_technical_score_is_high():
     result = score_fo_setup(features, "LONG")
     assert result["tradable"] is False
     assert "NOT_FO_UNIVERSE" in result["blockers"]
+
+
+def test_exceptionally_strong_setup_is_explicit_intraday_eod():
+    features = _features()
+    features.update({
+        "rvol": 3.5,
+        "adx": 38.0,
+        "relative_strength_pct": 3.0,
+        "sector_strength_pct": 2.5,
+        "nifty_change_pct": 1.2,
+        "futures_price_change_pct": 2.0,
+        "futures_oi_change_pct": 10.0,
+        "price": 3075.0,
+        "breakout_level": 3025.0,
+    })
+    result = score_fo_setup(features, "LONG")
+    assert result["tradable"] is True
+    assert result["score"] >= 85
+    assert result["expected_move"]["horizon"] == "INTRADAY"
+    assert result["expected_move"]["holding_days"] == 0
+    assert result["expected_move"]["exit_policy"] == "EOD"

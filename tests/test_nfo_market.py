@@ -8,6 +8,7 @@ from data.nfo_market import (
     futures_oi_features,
     nearest_future,
     option_instruments,
+    option_quote_implied_iv_pct,
     previous_future_close_oi,
     quote_exchange_datetime,
     quote_provenance,
@@ -358,3 +359,50 @@ def test_option_contract_stale_holiday_year_fails_closed(monkeypatch):
     assert row["session_dates_to_expiry"] == []
     assert row["holiday_calendar_loaded"] == 0
     assert row["expiry_session_model"] == "WEEKDAYS_ONLY_NO_HOLIDAY_TABLE"
+
+
+def test_paper_iv_inversion_uses_observed_option_quote():
+    as_of = date(2026, 9, 22)
+    theoretical = black_scholes(
+        spot=3050.0, strike=3050.0, dte=9, iv=0.30, option_type="CE",
+    )["price"]
+    quote = {
+        "last_price": theoretical,
+        "depth": {
+            "buy": [{"price": theoretical - 0.05}],
+            "sell": [{"price": theoretical + 0.05}],
+        },
+    }
+    iv_pct = option_quote_implied_iv_pct(
+        quote,
+        spot=3050.0,
+        strike=3050.0,
+        expiry="2026-10-01",
+        as_of=as_of,
+        option_type="CE",
+    )
+    assert 29.0 <= iv_pct <= 31.0
+
+
+def test_option_contract_persists_exchange_quote_timestamp():
+    as_of = date(2026, 9, 22)
+    instrument = {
+        **_instruments()[1],
+        "expiry": "2026-10-01",
+        "strike": 3050.0,
+    }
+    theoretical = black_scholes(
+        spot=3050.0, strike=3050.0, dte=9, iv=0.24, option_type="CE",
+    )["price"]
+    quote = {
+        "timestamp": "2026-09-22T10:35:00+05:30",
+        "last_price": theoretical,
+        "volume": 5500,
+        "oi": 32000,
+        "depth": {
+            "buy": [{"price": theoretical - 0.25}],
+            "sell": [{"price": theoretical + 0.25}],
+        },
+    }
+    row = quote_to_option_contract(instrument, quote, spot=3050.0, as_of=as_of)
+    assert row["quote_timestamp"] == "2026-09-22T10:35:00"

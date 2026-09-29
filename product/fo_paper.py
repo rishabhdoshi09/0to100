@@ -48,6 +48,13 @@ class FoPaperPosition:
     setup_score: float
     option_score: float
     instrument_token: int = 0
+    horizon: str = ""
+    exit_policy: str = "SESSION_HOLD"
+    strike: float = 0.0
+    expiry: str = ""
+    entry_iv_pct: float = 0.0
+    entry_underlying_spot: float = 0.0
+    trailing_stop_price: float = 0.0
     entry_minute_status: str = ENTRY_MINUTE_PENDING
     bars_held: int = 0
     last_mark_session: str = ""
@@ -106,6 +113,8 @@ class FoPaperBook:
         max_positions: int = 5,
         max_total_risk_pct: float = 0.05,
         slippage_bps: float = 5.0,
+        trail_activation_r: float = 1.0,
+        trail_distance_r: float = 1.0,
         cost_model: CostModel | None = None,
         cost_model_name: str = "",
     ) -> None:
@@ -119,6 +128,8 @@ class FoPaperBook:
         self.max_positions = int(max_positions)
         self.max_total_risk_pct = float(max_total_risk_pct)
         self.slippage_bps = float(slippage_bps)
+        self.trail_activation_r = max(0.0, float(trail_activation_r))
+        self.trail_distance_r = max(0.0, float(trail_distance_r))
         self.cost_model = cost_model
         self.cost_model_name = str(cost_model_name or "")
         self.open: dict[str, FoPaperPosition] = {}
@@ -158,6 +169,12 @@ class FoPaperBook:
         setup_score: float = 0.0,
         option_score: float = 0.0,
         instrument_token: int = 0,
+        horizon: str = "",
+        exit_policy: str = "SESSION_HOLD",
+        strike: float = 0.0,
+        expiry: str = "",
+        entry_iv_pct: float = 0.0,
+        entry_underlying_spot: float = 0.0,
         ask: float | None = None,
         requested_lots: int | None = None,
     ) -> FoPaperPosition | None:
@@ -238,6 +255,13 @@ class FoPaperBook:
             setup_score=float(setup_score),
             option_score=float(option_score),
             instrument_token=max(0, int(instrument_token or 0)),
+            horizon=str(horizon or "").upper(),
+            exit_policy=str(exit_policy or "SESSION_HOLD").upper(),
+            strike=max(0.0, float(strike or 0.0)),
+            expiry=str(expiry or "")[:10],
+            entry_iv_pct=max(0.0, float(entry_iv_pct or 0.0)),
+            entry_underlying_spot=max(0.0, float(entry_underlying_spot or 0.0)),
+            trailing_stop_price=round(stop, 4),
             entry_minute_status=ENTRY_MINUTE_PENDING,
             last_mark_session=str(opened_at)[:10],
             max_mark=round(fill, 4),
@@ -257,6 +281,8 @@ class FoPaperBook:
         session: str,
         advance_session: bool = True,
         observation_complete: bool = True,
+        force_eod: bool = False,
+        iv_crush_symbols: set[str] | frozenset[str] | None = None,
     ) -> list[FoPaperTrade]:
         """Mark prices; optionally advance holding-session age.
 
@@ -280,29 +306,87 @@ class FoPaperBook:
             if advance_session and clean_session and clean_session != pos.last_mark_session:
                 pos.bars_held += 1
                 pos.last_mark_session = clean_session
-            pos.max_mark = max(pos.max_mark, high, close)
-            pos.min_mark = min(pos.min_mark, low, close)
+
+            # Trail from prior observed path only. The current bar's high cannot
+            # tighten a stop that the current bar's low may already have crossed.
+            prior_max = max(float(pos.max_mark or 0.0), pos.entry_price)
+            risk_unit = max(0.0, pos.entry_price - pos.stop_price)
+            effective_stop = max(pos.stop_price, float(pos.trailing_stop_price or 0.0))
+            if (
+                risk_unit > 0
+                and prior_max >= pos.entry_price + self.trail_activation_r * risk_unit
+            ):
+                effective_stop = max(
+                    effective_stop,
+                    pos.entry_price,
+                    prior_max - self.trail_distance_r * risk_unit,
+                )
+            trail_active = effective_stop > pos.stop_price + 1e-9
 
             exit_price: float | None = None
             reason = ""
-            if open_px <= pos.stop_price:
-                exit_price, reason = open_px, "GAP_STOP"
+            if open_px <= effective_stop:
+                exit_price = open_px
+                reason = "GAP_TRAIL_STOP" if trail_active else "GAP_STOP"
             elif open_px >= pos.target_price:
                 exit_price, reason = open_px, "GAP_TARGET"
-            elif low <= pos.stop_price and high >= pos.target_price:
-                exit_price, reason = pos.stop_price, "AMBIGUOUS_BAR_STOP_FIRST"
-            elif low <= pos.stop_price:
-                exit_price, reason = pos.stop_price, "STOP"
+            elif low <= effective_stop and high >= pos.target_price:
+                exit_price = effective_stop
+                reason = (
+                    "AMBIGUOUS_BAR_TRAIL_STOP_FIRST"
+                    if trail_active else "AMBIGUOUS_BAR_STOP_FIRST"
+                )
+            elif low <= effective_stop:
+                exit_price = effective_stop
+                reason = "TRAIL_STOP" if trail_active else "STOP"
             elif high >= pos.target_price:
                 exit_price, reason = pos.target_price, "TARGET"
+            elif symbol in (iv_crush_symbols or ()):
+                exit_price, reason = close, "IV_CRUSH"
+            elif bool(force_eod) and str(pos.exit_policy or "").upper() == "EOD":
+                exit_price, reason = close, "EOD"
             elif pos.bars_held >= pos.max_holding_sessions:
                 exit_price, reason = close, "MAX_HOLD"
 
+            # Excursion evidence must stop at the exit boundary. Do not credit a
+            # later/unknown-order bar high as MFE after a stop, or a later bar
+            # extension above a target after the position has already exited.
+            if exit_price is None:
+                pos.max_mark = max(pos.max_mark, high, close)
+                pos.min_mark = min(pos.min_mark, low, close)
+            elif reason in {
+                "GAP_STOP", "GAP_TRAIL_STOP", "STOP", "TRAIL_STOP",
+                "AMBIGUOUS_BAR_STOP_FIRST", "AMBIGUOUS_BAR_TRAIL_STOP_FIRST",
+            }:
+                pos.max_mark = max(pos.max_mark, open_px)
+                pos.min_mark = min(pos.min_mark, float(exit_price), open_px)
+            elif reason in {"GAP_TARGET", "TARGET"}:
+                pos.max_mark = max(pos.max_mark, float(exit_price), open_px)
+                pos.min_mark = min(pos.min_mark, low, open_px)
+            else:
+                # MAX_HOLD / EOD / IV_CRUSH occur after the observed interval
+                # survived without stop/target, so its range is legitimate.
+                pos.max_mark = max(pos.max_mark, high, close)
+                pos.min_mark = min(pos.min_mark, low, close)
+
+            if exit_price is None:
+                if risk_unit > 0 and pos.max_mark >= pos.entry_price + self.trail_activation_r * risk_unit:
+                    pos.trailing_stop_price = round(max(
+                        pos.stop_price,
+                        pos.entry_price,
+                        pos.max_mark - self.trail_distance_r * risk_unit,
+                    ), 4)
+                else:
+                    pos.trailing_stop_price = round(max(
+                        pos.stop_price,
+                        float(pos.trailing_stop_price or 0.0),
+                    ), 4)
+
             if exit_price is not None:
-                # A closing quote bid is valid for a current/mark-to-market MAX_HOLD exit.
-                # For historical STOP/TARGET/GAP triggers it is from the end-of-bar snapshot,
-                # not the instant the trigger fired; using it would introduce impossible fills.
-                execution_bid = bid if reason == "MAX_HOLD" else None
+                # Current policy exits use observed bid when available. Historical
+                # STOP/TARGET/TRAIL triggers remain bar-priced to avoid using a
+                # later quote for an earlier event.
+                execution_bid = bid if reason in {"MAX_HOLD", "EOD", "IV_CRUSH"} else None
                 settled.append(
                     self._close(
                         pos,

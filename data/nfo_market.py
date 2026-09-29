@@ -397,6 +397,10 @@ def quote_to_option_contract(
         "expiry": expiry.isoformat() if expiry is not None else "",
         "dte": dte,
         "as_of_date": today.isoformat(),
+        "quote_timestamp": (
+            quote_exchange_datetime(quote).isoformat()
+            if quote_exchange_datetime(quote) is not None else ""
+        ),
         "trading_sessions_to_expiry": trading_sessions_to_expiry,
         "session_dates_to_expiry": session_dates_to_expiry,
         "holiday_calendar_loaded": holiday_calendar_loaded,
@@ -416,6 +420,39 @@ def quote_to_option_contract(
         "iv_source": "IMPLIED_FROM_MARKET_QUOTE" if iv > 0 else "UNAVAILABLE",
         "source": "ZERODHA_KITE_NFO_READ_ONLY",
     }
+
+
+
+def option_quote_implied_iv_pct(
+    quote: Mapping[str, Any],
+    *,
+    spot: float,
+    strike: float,
+    expiry: Any,
+    as_of: date,
+    option_type: str,
+    rate: float = 0.065,
+) -> float:
+    """Infer current option IV from an observed quote; provenance is caller-owned."""
+    expiry_date = _expiry_date(expiry)
+    if expiry_date is None:
+        return 0.0
+    dte = (expiry_date - as_of).days
+    if dte <= 0:
+        return 0.0
+    last = _f(quote.get("last_price"))
+    bid = _top_depth_price(quote, "buy")
+    ask = _top_depth_price(quote, "sell")
+    market = (bid + ask) / 2.0 if bid > 0 and ask >= bid else last
+    iv = implied_volatility(
+        market_price=market,
+        spot=_f(spot),
+        strike=_f(strike),
+        dte=float(dte),
+        option_type=str(option_type or "").upper(),
+        rate=rate,
+    )
+    return round(iv * 100.0, 4) if iv > 0 else 0.0
 
 
 def futures_oi_features(

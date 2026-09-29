@@ -212,6 +212,54 @@ def test_runtime_scans_canonical_universe_and_returns_ranked_paper_candidate(mon
     assert selected["live_execution_allowed"] is False
 
 
+def test_live_fno_scan_before_0930_is_valid_no_action_without_market_work():
+    bars = _breakout_bars()
+    spot = float(bars["close"].iloc[-1])
+
+    def history_should_not_run(_symbol):
+        raise AssertionError("pre-09:30 F&O scan must not touch history")
+
+    result = fo_runtime.run_fo_directional_scan(
+        report=_report(spot),
+        instrument_rows=_instruments(spot),
+        client=_NoQuoteClient(),
+        as_of=AS_OF,
+        quote_now=datetime(2026, 9, 26, 9, 29, 0),
+        history_getter=history_should_not_run,
+    )
+
+    assert result["available"] is True
+    assert result["status"] == "READY"
+    assert result["decision"] == "NO_ELIGIBLE_TRADE"
+    assert result["reason"] == "FNO_ENTRY_WINDOW_NOT_OPEN"
+    assert result["candidate_count"] == 0
+    assert result["quote_scope"]["option_contracts_requested"] == 0
+
+
+def test_live_fno_scan_at_1530_is_valid_late_no_action_without_market_work():
+    bars = _breakout_bars()
+    spot = float(bars["close"].iloc[-1])
+
+    def history_should_not_run(_symbol):
+        raise AssertionError("post-15:30 F&O scan must not touch history")
+
+    result = fo_runtime.run_fo_directional_scan(
+        report=_report(spot),
+        instrument_rows=_instruments(spot),
+        client=_NoQuoteClient(),
+        as_of=AS_OF,
+        quote_now=datetime(2026, 9, 26, 15, 30, 0),
+        history_getter=history_should_not_run,
+    )
+
+    assert result["available"] is True
+    assert result["status"] == "READY"
+    assert result["decision"] == "NO_ELIGIBLE_TRADE"
+    assert result["reason"] == "FNO_LATE_ENTRY_CUTOFF_REACHED"
+    assert result["candidate_count"] == 0
+    assert result["quote_scope"]["option_contracts_requested"] == 0
+
+
 def test_empty_breakout_set_is_valid_no_trade_and_does_not_request_deep_quotes():
     bars = _quiet_bars()
     spot = float(bars["close"].iloc[-1])
