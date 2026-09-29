@@ -208,3 +208,84 @@ def test_configured_costs_still_hold_probability_when_entry_path_is_ambiguous():
     assert row["path_observation_complete"] is False
     assert row["production_evidence_eligible"] is False
     assert row["evidence_exclusion_reason"] == "ENTRY_MINUTE_AMBIGUOUS_BOUNDARY_TOUCH"
+
+
+def test_daily_premium_cap_accumulates_across_multiple_positions():
+    book = FoPaperBook(
+        capital=100_000,
+        risk_per_trade_pct=0.10,
+        max_premium_pct=0.10,
+        max_daily_premium_pct=0.10,
+        max_total_risk_pct=0.50,
+        slippage_bps=0,
+    )
+    first = book.open_position(
+        underlying="AAA",
+        option_symbol="AAACE",
+        option_type="CE",
+        entry=50,
+        stop=40,
+        target=80,
+        lot_size=50,
+        opened_at="2026-09-29T10:00:00+05:30",
+        max_holding_sessions=2,
+        requested_lots=2,
+    )
+    second = book.open_position(
+        underlying="BBB",
+        option_symbol="BBBCE",
+        option_type="CE",
+        entry=50,
+        stop=40,
+        target=80,
+        lot_size=50,
+        opened_at="2026-09-29T10:05:00+05:30",
+        max_holding_sessions=2,
+        requested_lots=2,
+    )
+    third = book.open_position(
+        underlying="CCC",
+        option_symbol="CCCCE",
+        option_type="CE",
+        entry=50,
+        stop=40,
+        target=80,
+        lot_size=50,
+        opened_at="2026-09-29T10:10:00+05:30",
+        max_holding_sessions=2,
+        requested_lots=1,
+    )
+
+    assert first is not None
+    assert second is not None
+    assert book.premium_deployed_today == 10_000.0
+    assert third is None
+    assert book.refusals[-1][1] == "DAILY_PREMIUM_BUDGET_EXHAUSTED"
+
+
+def test_seeded_daily_premium_prevents_restart_budget_reset():
+    book = FoPaperBook(
+        capital=100_000,
+        risk_per_trade_pct=0.10,
+        max_premium_pct=0.10,
+        max_daily_premium_pct=0.10,
+        premium_deployed_today=9_000.0,
+        max_total_risk_pct=0.50,
+        slippage_bps=0,
+    )
+    pos = book.open_position(
+        underlying="AAA",
+        option_symbol="AAACE",
+        option_type="CE",
+        entry=50,
+        stop=40,
+        target=80,
+        lot_size=50,
+        opened_at="2026-09-29T11:00:00+05:30",
+        max_holding_sessions=2,
+        requested_lots=1,
+    )
+
+    assert pos is None
+    assert book.premium_deployed_today == 9_000.0
+    assert book.refusals[-1][1] == "DAILY_PREMIUM_BUDGET_EXHAUSTED"
