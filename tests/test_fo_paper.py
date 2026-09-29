@@ -402,3 +402,48 @@ def test_iv_crush_exit_uses_current_bid_and_does_not_affect_other_positions():
     assert closed[0].exit_reason == "IV_CRUSH"
     assert closed[0].exit_price == 44.5
     assert "BBBCE" in book.open
+
+
+def test_exit_bar_does_not_credit_post_exit_mfe():
+    book = FoPaperBook(capital=200_000, slippage_bps=0)
+    pos = book.open_position(
+        underlying="RELIANCE",
+        option_symbol="MFECE",
+        option_type="CE",
+        entry=50,
+        stop=40,
+        target=80,
+        lot_size=25,
+        opened_at="2026-09-29T10:00:00+05:30",
+        max_holding_sessions=2,
+    )
+    assert pos is not None
+    closed = book.mark({
+        # The bar high is irrelevant after the conservative stop exit.
+        "MFECE": {"open": 50, "high": 79, "low": 39, "close": 70, "bid": 69}
+    }, session="2026-09-29T10:30:00+05:30", advance_session=False)
+    assert len(closed) == 1
+    assert closed[0].exit_reason == "STOP"
+    assert closed[0].mfe_pct == 0.0
+
+
+def test_target_exit_caps_mfe_at_target_not_later_bar_extension():
+    book = FoPaperBook(capital=200_000, slippage_bps=0)
+    pos = book.open_position(
+        underlying="RELIANCE",
+        option_symbol="TARGETMFECE",
+        option_type="CE",
+        entry=50,
+        stop=40,
+        target=70,
+        lot_size=25,
+        opened_at="2026-09-29T10:00:00+05:30",
+        max_holding_sessions=2,
+    )
+    assert pos is not None
+    closed = book.mark({
+        "TARGETMFECE": {"open": 50, "high": 90, "low": 45, "close": 85, "bid": 84}
+    }, session="2026-09-29T10:30:00+05:30", advance_session=False)
+    assert len(closed) == 1
+    assert closed[0].exit_reason == "TARGET"
+    assert closed[0].mfe_pct == 40.0
