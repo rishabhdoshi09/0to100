@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -89,3 +90,13 @@ def test_complete_launcher_does_not_silently_restart_old_launchd_build() -> None
     assert stale_guard < control_call
     assert 'if [[ "$requested" != "--restart" ]]' in launchd
     assert 'action="start"' in launchd
+
+
+def test_complete_launcher_shell_syntax_is_valid() -> None:
+    proc = subprocess.run(
+        ["bash", "-n", str(LAUNCHER)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
