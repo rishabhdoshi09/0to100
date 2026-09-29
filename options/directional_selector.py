@@ -687,15 +687,18 @@ def select_option_contracts(
     limit: int = 5,
     policy: OptionSelectionPolicy | None = None,
 ) -> dict[str, Any]:
-    valid_strikes = sorted({
-        _f(contract.get("strike"))
-        for contract in contracts
-        if _f(contract.get("strike")) > 0
-    })
-    atm_strike = (
-        min(valid_strikes, key=lambda strike: (abs(strike - spot), strike))
-        if valid_strikes and spot > 0 else None
-    )
+    strikes_by_expiry: dict[str, set[float]] = {}
+    for contract in contracts:
+        strike = _f(contract.get("strike"))
+        if strike <= 0:
+            continue
+        expiry_key = str(contract.get("expiry") or "")
+        strikes_by_expiry.setdefault(expiry_key, set()).add(strike)
+    atm_by_expiry = {
+        expiry_key: min(strikes, key=lambda strike: (abs(strike - spot), strike))
+        for expiry_key, strikes in strikes_by_expiry.items()
+        if strikes and spot > 0
+    }
     rows = [
         score_option_contract(
             contract,
@@ -706,7 +709,7 @@ def select_option_contracts(
             holding_days=holding_days,
             underlying_stop_price=underlying_stop_price,
             iv_percentile=iv_percentile,
-            atm_strike=atm_strike,
+            atm_strike=atm_by_expiry.get(str(contract.get("expiry") or "")),
             policy=policy,
         )
         for contract in contracts
