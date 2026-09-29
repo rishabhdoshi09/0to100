@@ -314,10 +314,19 @@ def _top_depth_price(quote: Mapping[str, Any], side: str) -> float:
     return _f(first.get("price")) if isinstance(first, Mapping) else 0.0
 
 
-def _trading_sessions_to_expiry(*, as_of: date, expiry: date | None) -> tuple[int | None, int]:
-    """Future NSE sessions in (as_of, expiry], plus holiday-calendar coverage provenance."""
+def _trading_sessions_to_expiry(
+    *,
+    as_of: date,
+    expiry: date | None,
+) -> tuple[int | None, int, list[str]]:
+    """Future NSE sessions in (as_of, expiry], plus calendar provenance.
+
+    Session dates are persisted with the normalized contract so downstream
+    scenario pricing can convert a holding horizon expressed in NSE sessions
+    into the exact elapsed calendar days used by Black-Scholes.
+    """
     if expiry is None or expiry < as_of:
-        return None, 0
+        return None, 0, []
     holidays = load_holidays()
     holiday_years: set[int] = set()
     for raw in holidays:
@@ -329,16 +338,18 @@ def _trading_sessions_to_expiry(*, as_of: date, expiry: date | None) -> tuple[in
     calendar_covers_window = bool(holidays) and required_years.issubset(holiday_years)
 
     cursor = as_of + timedelta(days=1)
-    sessions = 0
+    session_dates: list[str] = []
     while cursor <= expiry:
         if is_session(cursor, holidays):
-            sessions += 1
+            session_dates.append(cursor.isoformat())
         cursor += timedelta(days=1)
 
     # A stale calendar must not masquerade as valid merely because it contains
-    # holidays for an older year. Returning zero provenance makes the selector
-    # fail closed while still exposing the diagnostic session count.
-    return sessions, len(holidays) if calendar_covers_window else 0
+    # holidays for an older year. Keep the diagnostic count, but suppress the
+    # session-date evidence so downstream decay modelling fails closed.
+    if not calendar_covers_window:
+        return len(session_dates), 0, []
+    return len(session_dates), len(holidays), session_dates
 
 
 def quote_to_option_contract(
@@ -353,9 +364,11 @@ def quote_to_option_contract(
     expiry = _expiry_date(instrument.get("expiry"))
     today = as_of or date.today()
     dte = max(0, (expiry - today).days) if expiry is not None else 0
-    trading_sessions_to_expiry, holiday_calendar_loaded = _trading_sessions_to_expiry(
-        as_of=today,
-        expiry=expiry,
+    trading_sessions_to_expiry, holiday_calendar_loaded, session_dates_to_expiry = (
+        _trading_sessions_to_expiry(
+            as_of=today,
+            expiry=expiry,
+        )
     )
     last = _f(quote.get("last_price"))
     bid = _top_depth_price(quote, "buy")
@@ -378,7 +391,9 @@ def quote_to_option_contract(
         "strike": strike,
         "expiry": expiry.isoformat() if expiry is not None else "",
         "dte": dte,
+        "as_of_date": today.isoformat(),
         "trading_sessions_to_expiry": trading_sessions_to_expiry,
+        "session_dates_to_expiry": session_dates_to_expiry,
         "holiday_calendar_loaded": holiday_calendar_loaded,
         "expiry_session_model": (
             "NSE_SESSIONS_WITH_RUNTIME_HOLIDAYS"
