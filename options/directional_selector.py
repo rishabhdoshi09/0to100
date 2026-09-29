@@ -10,10 +10,17 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from math import erf, exp, log, pi, sqrt
 from typing import Any, Mapping, Sequence
+from zoneinfo import ZoneInfo
 
 
 CE = "CE"
 PE = "PE"
+IST = ZoneInfo("Asia/Kolkata")
+
+
+def _today_ist() -> date:
+    """Current exchange-local date for expiry fallbacks."""
+    return datetime.now(IST).date()
 
 
 def _f(value: Any, default: float = 0.0) -> float:
@@ -63,7 +70,7 @@ def _dte(contract: Mapping[str, Any], *, as_of: date | None = None) -> int:
                 expiry = None  # type: ignore[assignment]
         if expiry is None:
             return 0
-    return max(0, (expiry - (as_of or date.today())).days)
+    return max(0, (expiry - (as_of or _today_ist())).days)
 
 
 def black_scholes(
