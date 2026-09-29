@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -57,3 +58,46 @@ def test_complete_launcher_bounds_persistent_runtime_probe() -> None:
     assert '[[ -s "$RUNTIME_PROBE_STATUS" ]]' in text
     probe_block = text.split('echo "[COMPLETE STACK] Startup probe: persistent runtime storage"', 1)[1].split('STACK_LOG_DIR=', 1)[0]
     assert 'if ! kill -0 "$runtime_probe_pid"' not in probe_block
+
+
+def test_complete_launcher_reconciles_stale_launchd_sha_on_restart() -> None:
+    text = LAUNCHER.read_text(encoding="utf-8")
+
+    assert "read_plist_env()" in text
+    assert "QT_BUILD_SHA" in text
+    assert "QT_RUNTIME_ROOT" in text
+    assert "QT_HOST_ENV_FILE" in text
+    assert "PYTHONPATH" in text
+    assert "git rev-parse HEAD" in text
+    assert "Installed host identity differs" in text
+    assert "Refusing to run stale installed code" in text
+    assert "Cannot reconcile launchd from a dirty checkout" in text
+    assert 'local install_args=(install --runtime-root "$reconcile_runtime" --manager launchd)' in text
+    assert 'install_args+=(--env-file "$installed_env_file")' in text
+    assert "QT_RUNTIME_ROOT_REQUIRE_EXISTING=1" in text
+    assert 'PYTHON="$py"' in text
+    assert '"$ROOT/scripts/install_quantterm_host.sh"' in text
+    assert "Exact-SHA host reconciliation failed" in text
+
+
+def test_complete_launcher_does_not_silently_restart_old_launchd_build() -> None:
+    text = LAUNCHER.read_text(encoding="utf-8")
+    launchd = text.split("run_installed_launchd_console() {", 1)[1].split(
+        'if [[ "$(uname -s)" == "Darwin"', 1
+    )[0]
+
+    stale_guard = launchd.index('if [[ -n "$current_sha" && ( "$installed_sha" != "$current_sha" || "$installed_repo" != "$ROOT" ) ]]')
+    control_call = launchd.index('"$py" -m product.launchd_control "$action"')
+    assert stale_guard < control_call
+    assert 'if [[ "$requested" != "--restart" ]]' in launchd
+    assert 'action="start"' in launchd
+
+
+def test_complete_launcher_shell_syntax_is_valid() -> None:
+    proc = subprocess.run(
+        ["bash", "-n", str(LAUNCHER)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr

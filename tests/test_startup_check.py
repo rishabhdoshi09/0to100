@@ -209,7 +209,7 @@ def test_operational_and_evidence_ready_together(monkeypatch):
     assert payload["evidence"]["blockers"] == []
 
 
-def test_startup_surfaces_one_time_decision_approval_instead_of_forward_block(monkeypatch):
+def test_startup_surfaces_autonomous_decision_authorization_instead_of_forward_block(monkeypatch):
     monkeypatch.setenv("QT_STARTUP_ID", "startup-test")
     _patch_operational_healthy(monkeypatch)
     _patch_history(monkeypatch, current=True, available="2026-09-18", expected="2026-09-18", reason="HISTORY_CURRENT")
@@ -220,7 +220,7 @@ def test_startup_surfaces_one_time_decision_approval_instead_of_forward_block(mo
         "product.decision_simulation_gate.status",
         lambda: {
             "phase": "AWAITING_APPROVAL",
-            "message": "Current best-trade search is complete. Review the shortlist, then approve Decision Simulation once.",
+            "message": "Current best-trade search is complete. QuantTerm autonomy will authorize PAPER_FORWARD and HISTORICAL_REPLAY for this startup.",
         },
     )
 
@@ -229,7 +229,7 @@ def test_startup_surfaces_one_time_decision_approval_instead_of_forward_block(mo
 
     assert by["DECISION SIMULATION"]["status"] == "AWAITING_APPROVAL"
     assert by["FORWARD EVIDENCE"]["status"] == "WAITING"
-    assert "one-time Decision Simulation approval" in by["FORWARD EVIDENCE"]["detail"]
+    assert "Autonomy is authorizing Decision Simulation" in by["FORWARD EVIDENCE"]["detail"]
     assert payload["operational_ready"] is True
     assert payload["evidence_ready"] is False
 
