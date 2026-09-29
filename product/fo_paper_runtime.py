@@ -146,10 +146,13 @@ def run_fo_paper_cycle(
     owned_store = store is None
     store = store or FoPaperStore()
     try:
+        session = now_ist.date().isoformat()
         book = FoPaperBook(
             capital=capital,
             risk_per_trade_pct=0.01,
             max_premium_pct=0.10,
+            max_daily_premium_pct=0.10,
+            premium_deployed_today=store.premium_deployed_on_session(session),
             max_positions=5,
             max_total_risk_pct=0.05,
             slippage_bps=5.0,
@@ -164,7 +167,6 @@ def run_fo_paper_cycle(
             if pos is not None:
                 book.open[pos.option_symbol] = pos
 
-        session = now_ist.date().isoformat()
         settled_rows: list[dict[str, Any]] = []
         settled_underlyings: set[str] = set()
 
@@ -393,6 +395,20 @@ def run_fo_paper_cycle(
             "store": status,
             "realized_pnl": round(book.realized_pnl, 2),
             "equity_for_sizing": round(max(0.0, book.capital + book.realized_pnl), 2),
+            "daily_premium_cap_pct": round(book.max_daily_premium_pct * 100.0, 2),
+            "premium_deployed_today": round(book.premium_deployed_today, 2),
+            "daily_premium_budget": round(
+                max(0.0, book.capital + book.realized_pnl) * book.max_daily_premium_pct,
+                2,
+            ),
+            "daily_premium_remaining": round(
+                max(
+                    0.0,
+                    max(0.0, book.capital + book.realized_pnl) * book.max_daily_premium_pct
+                    - book.premium_deployed_today,
+                ),
+                2,
+            ),
             "production_evidence_enabled": book.fully_costed,
             "same_day_intraday_marks_used": intraday_marks_used,
             "same_day_intraday_marks_fallback": intraday_marks_fallback,
