@@ -479,11 +479,13 @@ def run_fo_paper_cycle(
                 if _market_closed(now_ist):
                     skipped.append({"symbol": underlying, "reason": "FNO_MARKET_CLOSED"})
                     continue
-                if (
-                    str(expected.get("exit_policy") or "").upper() == "EOD"
-                    and eod_exit_due
-                ):
-                    skipped.append({"symbol": underlying, "reason": "INTRADAY_EOD_CUTOFF_REACHED"})
+                if eod_exit_due:
+                    reason = (
+                        "INTRADAY_EOD_CUTOFF_REACHED"
+                        if str(expected.get("exit_policy") or "").upper() == "EOD"
+                        else "FNO_LATE_ENTRY_CUTOFF_REACHED"
+                    )
+                    skipped.append({"symbol": underlying, "reason": reason})
                     continue
                 pos = book.open_position(
                     underlying=underlying,
