@@ -963,7 +963,7 @@ def test_runtime_blocks_new_intraday_entry_at_eod_cutoff(tmp_path):
         result = run_fo_paper_cycle(
             payload,
             client=_QuoteClient(),
-            now_ist=datetime(2026, 9, 29, 15, 35, tzinfo=IST),
+            now_ist=datetime(2026, 9, 29, 15, 30, tzinfo=IST),
             allow_new_entries=True,
             store=store,
             capital=200_000,
@@ -971,7 +971,7 @@ def test_runtime_blocks_new_intraday_entry_at_eod_cutoff(tmp_path):
     assert result["opened_count"] == 0
     assert result["skipped"][-1]["reason"] == "INTRADAY_EOD_CUTOFF_REACHED"
     assert result["eod_exit_due"] is True
-    assert result["eod_exit_cutoff_ist"] == "15:35"
+    assert result["eod_exit_cutoff_ist"] == "15:30"
 
 
 def test_runtime_blocks_all_new_option_entries_after_market_close(tmp_path):
