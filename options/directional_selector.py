@@ -325,15 +325,22 @@ def scenario_reprice(
     iv = _iv_decimal(contract.get("iv"))
     dte = _dte(contract)
     kind = str(contract.get("option_type") or "").upper()
-    elapsed_calendar_days = (
+    resolved_calendar_days = (
         max(0, int(calendar_holding_days))
         if calendar_holding_days is not None
-        else max(0, int(holding_days))
+        else _calendar_days_for_session_horizon(contract, holding_days)
     )
-    remaining = max(0.25, float(dte - elapsed_calendar_days))
     rows: list[dict[str, float]] = []
-    if premium <= 0 or strike <= 0 or spot <= 0 or iv <= 0 or kind not in {CE, PE}:
+    if (
+        resolved_calendar_days is None
+        or premium <= 0
+        or strike <= 0
+        or spot <= 0
+        or iv <= 0
+        or kind not in {CE, PE}
+    ):
         return rows
+    remaining = max(0.25, float(dte - resolved_calendar_days))
     for move in moves_pct:
         new_spot = spot * (1.0 + float(move) / 100.0)
         model = black_scholes(
