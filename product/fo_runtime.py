@@ -161,6 +161,32 @@ def run_fo_directional_scan(
 ) -> dict[str, Any]:
     """Run one complete read-only F&O directional scan."""
     quote_now = quote_now or datetime.now(IST)
+    if quote_now.tzinfo is not None:
+        quote_now = quote_now.astimezone(IST)
+    if (
+        quote_now.date() == as_of
+        and (quote_now.hour, quote_now.minute) < (9, 30)
+    ):
+        return {
+            "available": True,
+            "status": "READY",
+            "as_of": as_of.isoformat(),
+            "universe_size": len(list(getattr(report, "underlyings", ()) or ())),
+            "prefilter_passed": 0,
+            "deep_evaluated": 0,
+            "candidate_count": 0,
+            "decision": "NO_ELIGIBLE_TRADE",
+            "reason": "FNO_ENTRY_WINDOW_NOT_OPEN",
+            "candidates": [],
+            "decisions": [],
+            "deep_failures": [],
+            "considered": [],
+            "quote_scope": {"deep_underlyings": 0, "option_contracts_requested": 0},
+            "history_session": {},
+            "paper_only": True,
+            "live_execution_allowed": False,
+            "probability_claim": None,
+        }
     history_state: dict[str, Any] = {}
     if history_getter is None:
         from scan.bulk_fetcher import adopt_ready_store, get_cached
