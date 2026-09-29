@@ -2,7 +2,9 @@ import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from product.fo_paper_runtime import run_fo_paper_cycle
+from product.fo_paper import FoPaperPosition
+from product.fo_paper_runtime import _iv_crush_state, run_fo_paper_cycle
+from options.directional_selector import black_scholes
 from product.fo_paper_store import FoPaperStore
 
 
@@ -884,3 +886,130 @@ def test_current_partial_exit_interval_is_held_out_of_probability_evidence(tmp_p
     assert trade["production_evidence_eligible"] is False
     assert trade["evidence_exclusion_reason"] == "EXIT_PARTIAL_INTERVAL_UNOBSERVED"
     assert marked["partial_exit_interval_holdout_count"] == 1
+
+
+def test_iv_crush_runtime_requires_fresh_coherent_observed_quotes():
+    now_ist = datetime(2026, 9, 22, 12, 0, tzinfo=IST)
+    current_price = black_scholes(
+        spot=3050.0,
+        strike=3050.0,
+        dte=9,
+        iv=0.20,
+        option_type="CE",
+    )["price"]
+    pos = FoPaperPosition(
+        trade_id="IV1",
+        underlying="RELIANCE",
+        option_symbol="RELIANCECE",
+        option_type="CE",
+        context_key="CTX",
+        entry_price=100.0,
+        stop_price=60.0,
+        target_price=140.0,
+        lot_size=25,
+        lots=1,
+        quantity=25,
+        opened_at="2026-09-22T10:00:00+05:30",
+        max_holding_sessions=2,
+        risk_amount=1000.0,
+        setup_score=85.0,
+        option_score=80.0,
+        strike=3050.0,
+        expiry="2026-10-01",
+        entry_iv_pct=40.0,
+        entry_underlying_spot=3050.0,
+    )
+    option_quote = {
+        "timestamp": now_ist.isoformat(),
+        "last_price": current_price,
+        "depth": {
+            "buy": [{"price": current_price - 0.05}],
+            "sell": [{"price": current_price + 0.05}],
+        },
+    }
+    underlying_quote = {
+        "timestamp": now_ist.isoformat(),
+        "last_price": 3050.0,
+    }
+
+    triggered, reason, current_iv = _iv_crush_state(
+        pos=pos,
+        option_quote=option_quote,
+        underlying_quote=underlying_quote,
+        now_ist=now_ist,
+    )
+    assert triggered is True
+    assert reason == "IV_CRUSH_TRIGGERED"
+    assert current_iv is not None and 19.0 <= current_iv <= 21.0
+
+    stale = dict(option_quote)
+    stale["timestamp"] = "2026-09-22T11:00:00+05:30"
+    triggered, reason, current_iv = _iv_crush_state(
+        pos=pos,
+        option_quote=stale,
+        underlying_quote=underlying_quote,
+        now_ist=now_ist,
+    )
+    assert triggered is False
+    assert reason == "IV_CRUSH_QUOTE_UNTRUSTED"
+    assert current_iv is None
+
+
+def test_runtime_blocks_new_intraday_entry_at_eod_cutoff(tmp_path):
+    payload = _directional()
+    expected = payload["candidates"][0]["setup"]["expected_move"]
+    expected.update({"holding_days": 0, "horizon": "INTRADAY", "exit_policy": "EOD"})
+    with FoPaperStore(tmp_path / "fo.sqlite3") as store:
+        result = run_fo_paper_cycle(
+            payload,
+            client=_QuoteClient(),
+            now_ist=datetime(2026, 9, 29, 15, 35, tzinfo=IST),
+            allow_new_entries=True,
+            store=store,
+            capital=200_000,
+        )
+    assert result["opened_count"] == 0
+    assert result["skipped"][-1]["reason"] == "INTRADAY_EOD_CUTOFF_REACHED"
+    assert result["eod_exit_due"] is True
+    assert result["eod_exit_cutoff_ist"] == "15:35"
+
+
+def test_runtime_blocks_all_new_option_entries_after_market_close(tmp_path):
+    with FoPaperStore(tmp_path / "fo.sqlite3") as store:
+        result = run_fo_paper_cycle(
+            _directional(),
+            client=_QuoteClient(),
+            now_ist=datetime(2026, 9, 29, 15, 40, tzinfo=IST),
+            allow_new_entries=True,
+            store=store,
+            capital=200_000,
+        )
+    assert result["opened_count"] == 0
+    assert result["skipped"][-1]["reason"] == "FNO_MARKET_CLOSED"
+    assert result["fno_market_close_ist"] == "15:40"
+
+
+def test_runtime_enforces_no_new_fno_entries_before_0930(tmp_path):
+    with FoPaperStore(tmp_path / "fo.sqlite3") as store:
+        blocked = run_fo_paper_cycle(
+            _directional(),
+            client=_QuoteClient(),
+            now_ist=datetime(2026, 9, 29, 9, 29, tzinfo=IST),
+            allow_new_entries=True,
+            store=store,
+            capital=200_000,
+        )
+    assert blocked["opened_count"] == 0
+    assert blocked["skipped"][-1]["reason"] == "FNO_ENTRY_WINDOW_NOT_OPEN"
+    assert blocked["entry_window_start_ist"] == "09:30"
+
+    with FoPaperStore(tmp_path / "fo2.sqlite3") as store:
+        allowed = run_fo_paper_cycle(
+            _directional(),
+            client=_QuoteClient(last=50, high=50, low=50, bid=49),
+            now_ist=datetime(2026, 9, 29, 9, 30, tzinfo=IST),
+            allow_new_entries=True,
+            store=store,
+            capital=200_000,
+        )
+    assert allowed["opened_count"] == 1

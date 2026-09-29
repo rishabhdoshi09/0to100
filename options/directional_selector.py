@@ -188,6 +188,8 @@ class OptionSelectionPolicy:
     minimum_score: float = 60.0
     min_delta_abs: float = 0.35
     max_delta_abs: float = 0.85
+    max_iv_percentile: float = 85.0
+    min_risk_reward: float = 1.0
 
 
 def _spread_pct(contract: Mapping[str, Any]) -> float | None:
@@ -234,6 +236,59 @@ def _calendar_days_for_session_horizon(
     return elapsed if elapsed > 0 else None
 
 
+def _intraday_calendar_days_to_eod(contract: Mapping[str, Any]) -> float | None:
+    """Fractional calendar days from observed quote time to the 15:35 IST EOD exit."""
+    raw = str(contract.get("quote_timestamp") or "").strip()
+    if not raw:
+        return None
+    try:
+        stamp = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if stamp.tzinfo is not None:
+        stamp = stamp.astimezone(IST).replace(tzinfo=None)
+    eod = stamp.replace(hour=15, minute=35, second=0, microsecond=0)
+    if eod <= stamp:
+        return None
+    return max((eod - stamp).total_seconds() / 86400.0, 1.0 / 1440.0)
+
+
+def _holding_decay_days(
+    contract: Mapping[str, Any],
+    *,
+    holding_days: int,
+    horizon: str,
+) -> float | None:
+    if str(horizon or "").upper() == "INTRADAY":
+        return _intraday_calendar_days_to_eod(contract)
+    sessions = _calendar_days_for_session_horizon(contract, holding_days)
+    return float(sessions) if sessions is not None else None
+
+
+def _moneyness(
+    contract: Mapping[str, Any],
+    *,
+    spot: float,
+    atm_strike: float | None = None,
+) -> tuple[str, float | None]:
+    strike = _f(contract.get("strike"))
+    if strike <= 0 or spot <= 0:
+        return "UNKNOWN", None
+    kind = str(contract.get("option_type") or "").upper()
+    signed = (spot - strike) / spot * 100.0
+    if kind == PE:
+        signed = -signed
+    if atm_strike is not None and abs(strike - float(atm_strike)) < 1e-9:
+        label = "ATM"
+    elif atm_strike is None and abs(signed) < 1e-9:
+        label = "ATM"
+    elif signed > 0:
+        label = "ITM"
+    else:
+        label = "OTM"
+    return label, signed
+
+
 def _reference_premium(contract: Mapping[str, Any]) -> float:
     bid = _f(contract.get("bid"))
     ask = _f(contract.get("ask"))
@@ -267,7 +322,9 @@ def _delta_score(delta_abs: float) -> float:
 def _expiry_score(trading_sessions_to_expiry: int, horizon: str) -> float:
     """Prefer near/next-week expiries using market sessions, never calendar DTE."""
     preferred = {
+        "INTRADAY": (1, 5),
         "INTRADAY_TO_1D": (2, 6),
+        "1D": (2, 6),
         "1_TO_2D": (3, 8),
         "2_TO_4D": (5, 12),
     }.get(horizon, (3, 12))
@@ -323,7 +380,8 @@ def scenario_reprice(
     *,
     spot: float,
     holding_days: int,
-    calendar_holding_days: int | None = None,
+    calendar_holding_days: float | None = None,
+    horizon: str = "",
     moves_pct: Sequence[float] = (-2.0, -1.0, 1.0, 2.0, 3.0, 4.0),
     rate: float = 0.065,
 ) -> list[dict[str, float]]:
@@ -333,9 +391,9 @@ def scenario_reprice(
     dte = _dte(contract)
     kind = str(contract.get("option_type") or "").upper()
     resolved_calendar_days = (
-        max(0, int(calendar_holding_days))
+        max(0.0, float(calendar_holding_days))
         if calendar_holding_days is not None
-        else _calendar_days_for_session_horizon(contract, holding_days)
+        else _holding_decay_days(contract, holding_days=holding_days, horizon=horizon)
     )
     rows: list[dict[str, float]] = []
     if (
@@ -378,6 +436,7 @@ def score_option_contract(
     holding_days: int,
     underlying_stop_price: float | None = None,
     iv_percentile: float | None = None,
+    atm_strike: float | None = None,
     policy: OptionSelectionPolicy | None = None,
     rate: float = 0.065,
 ) -> dict[str, Any]:
@@ -407,6 +466,8 @@ def score_option_contract(
         blockers.append("INVALID_STRIKE_OR_SPOT")
     if iv <= 0:
         blockers.append("IV_UNAVAILABLE")
+    if iv_percentile is not None and float(iv_percentile) > policy.max_iv_percentile:
+        blockers.append("IV_CRUSH_RISK_EXTREME_PERCENTILE")
     if volume < policy.min_volume:
         blockers.append("OPTION_VOLUME_TOO_LOW")
     if oi < policy.min_oi:
@@ -427,8 +488,16 @@ def score_option_contract(
     elif trading_sessions_to_expiry < max(1, int(holding_days) + 1):
         blockers.append("TRADING_SESSIONS_SHORTER_THAN_HOLDING_HORIZON")
 
-    calendar_holding_days = _calendar_days_for_session_horizon(contract, holding_days)
-    first_session_calendar_days = _calendar_days_for_session_horizon(contract, 1)
+    calendar_holding_days = _holding_decay_days(
+        contract,
+        holding_days=holding_days,
+        horizon=horizon,
+    )
+    first_session_calendar_days = (
+        calendar_holding_days
+        if str(horizon or "").upper() == "INTRADAY"
+        else _holding_decay_days(contract, holding_days=1, horizon="1D")
+    )
     if calendar_holding_days is None or first_session_calendar_days is None:
         blockers.append("HOLDING_CALENDAR_DECAY_UNAVAILABLE")
 
@@ -448,12 +517,16 @@ def score_option_contract(
     delta_abs = abs(delta)
     if not (policy.min_delta_abs <= delta_abs <= policy.max_delta_abs):
         blockers.append("DELTA_OUTSIDE_DIRECTIONAL_BAND")
-
+    theta_decay_pct = (
+        abs(theta) / premium * 100.0
+        if premium > 0 else float("inf")
+    )
     scenarios = scenario_reprice(
         contract,
         spot=spot,
         holding_days=holding_days,
         calendar_holding_days=calendar_holding_days,
+        horizon=horizon,
         rate=rate,
     )
     aligned_move = abs(expected_move_pct) if desired == CE else -abs(expected_move_pct)
@@ -464,7 +537,7 @@ def score_option_contract(
             strike=strike,
             dte=max(
                 0.25,
-                float(dte - max(0, int(calendar_holding_days))),
+                float(dte - max(0.0, float(calendar_holding_days))),
             ),
             iv=iv,
             option_type=kind,
@@ -491,7 +564,7 @@ def score_option_contract(
             strike=strike,
             dte=max(
                 0.25,
-                float(dte - max(0, int(first_session_calendar_days))),
+                float(dte - max(0.0, float(first_session_calendar_days))),
             ),
             iv=iv,
             option_type=kind,
@@ -509,6 +582,8 @@ def score_option_contract(
     option_risk = option_entry - option_stop if option_stop > 0 else 0.0
     option_reward = option_target - option_entry
     risk_reward = option_reward / option_risk if option_risk > 0 and option_reward > 0 else 0.0
+    if risk_reward < policy.min_risk_reward:
+        blockers.append("OPTION_RISK_REWARD_TOO_LOW")
     trade_plan = {
         "entry": round(option_entry, 2),
         "stop": round(option_stop, 2) if option_stop > 0 else None,
@@ -530,6 +605,16 @@ def score_option_contract(
     if score < policy.minimum_score:
         blockers.append("OPTION_SCORE_BELOW_THRESHOLD")
 
+    moneyness, moneyness_pct = _moneyness(
+        contract,
+        spot=spot,
+        atm_strike=atm_strike,
+    )
+    gamma_delta_change_for_1pct_move = abs(gamma) * spot * 0.01
+    vega_pct_of_premium_per_vol_point = (
+        abs(vega) / premium * 100.0 if premium > 0 else 0.0
+    )
+
     return {
         "symbol": str(contract.get("symbol") or contract.get("tradingsymbol") or ""),
         "instrument_token": contract.get("instrument_token"),
@@ -549,6 +634,10 @@ def score_option_contract(
         "holding_sessions": max(0, int(holding_days)),
         "calendar_days_to_holding_horizon": calendar_holding_days,
         "calendar_days_to_first_session": first_session_calendar_days,
+        "quote_timestamp": str(contract.get("quote_timestamp") or ""),
+        "moneyness": moneyness,
+        "moneyness_pct": round(moneyness_pct, 4) if moneyness_pct is not None else None,
+        "atm_reference_strike": round(float(atm_strike), 4) if atm_strike is not None else None,
         "premium": round(premium, 2),
         "bid": _f(contract.get("bid")),
         "ask": _f(contract.get("ask")),
@@ -561,7 +650,10 @@ def score_option_contract(
         "delta": round(delta, 4),
         "gamma": round(gamma, 6),
         "theta_per_day": round(theta, 4),
+        "theta_decay_pct_of_premium_per_day": round(theta_decay_pct, 4),
         "vega_per_vol_point": round(vega, 4),
+        "vega_pct_of_premium_per_vol_point": round(vega_pct_of_premium_per_vol_point, 4),
+        "gamma_delta_change_for_1pct_move": round(gamma_delta_change_for_1pct_move, 6),
         "score": score,
         "score_is_probability": False,
         "components": {key: round(value, 2) for key, value in components.items()},
@@ -570,7 +662,11 @@ def score_option_contract(
         "trade_plan": trade_plan,
         "scenarios": scenarios,
         "scenario_model": "BLACK_SCHOLES_CONSTANT_IV_ESTIMATE",
-        "scenario_decay_basis": "CALENDAR_DAYS_TO_NSE_SESSION_HORIZON",
+        "scenario_decay_basis": (
+            "FRACTIONAL_CALENDAR_DAYS_TO_1535_IST_EOD"
+            if str(horizon or "").upper() == "INTRADAY"
+            else "CALENDAR_DAYS_TO_NSE_SESSION_HORIZON"
+        ),
         "eligible": not blockers,
         "blockers": blockers,
         "paper_only": True,
@@ -591,6 +687,15 @@ def select_option_contracts(
     limit: int = 5,
     policy: OptionSelectionPolicy | None = None,
 ) -> dict[str, Any]:
+    valid_strikes = sorted({
+        _f(contract.get("strike"))
+        for contract in contracts
+        if _f(contract.get("strike")) > 0
+    })
+    atm_strike = (
+        min(valid_strikes, key=lambda strike: (abs(strike - spot), strike))
+        if valid_strikes and spot > 0 else None
+    )
     rows = [
         score_option_contract(
             contract,
@@ -601,6 +706,7 @@ def select_option_contracts(
             holding_days=holding_days,
             underlying_stop_price=underlying_stop_price,
             iv_percentile=iv_percentile,
+            atm_strike=atm_strike,
             policy=policy,
         )
         for contract in contracts
@@ -610,6 +716,8 @@ def select_option_contracts(
         key=lambda row: (
             float(row["score"]),
             float(row["projected_return_at_expected_move_pct"]),
+            float(row.get("gamma_delta_change_for_1pct_move") or 0.0),
+            -float(row.get("vega_pct_of_premium_per_vol_point") or 999.0),
             -float(row.get("spread_pct") or 999.0),
         ),
         reverse=True,

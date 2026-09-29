@@ -6,7 +6,12 @@ from datetime import datetime, timedelta
 from typing import Any, Callable, Mapping
 
 from data.nfo_market import (
+    LIVE_QUOTE_MAX_SKEW_SECONDS,
+    option_quote_implied_iv_pct,
+    quote_provenance,
+    quote_timestamp_skew_seconds,
     quote_to_option_paper_mark,
+    read_market_quotes,
     read_nfo_quotes,
     read_option_intraday_bars,
 )
@@ -115,6 +120,73 @@ def _intraday_replay_start(pos: FoPaperPosition, now_ist: datetime) -> datetime 
     return session_open if session_open < now_ist else None
 
 
+FNO_ENTRY_START_HOUR = 9
+FNO_ENTRY_START_MINUTE = 30
+FNO_EOD_EXIT_HOUR = 15
+FNO_EOD_EXIT_MINUTE = 35
+FNO_MARKET_CLOSE_HOUR = 15
+FNO_MARKET_CLOSE_MINUTE = 40
+IV_CRUSH_RATIO = 0.75
+
+
+def _eod_exit_due(now_ist: datetime) -> bool:
+    return (now_ist.hour, now_ist.minute) >= (FNO_EOD_EXIT_HOUR, FNO_EOD_EXIT_MINUTE)
+
+
+def _market_closed(now_ist: datetime) -> bool:
+    return (now_ist.hour, now_ist.minute) >= (
+        FNO_MARKET_CLOSE_HOUR,
+        FNO_MARKET_CLOSE_MINUTE,
+    )
+
+
+def _iv_crush_state(
+    *,
+    pos: FoPaperPosition,
+    option_quote: Mapping[str, Any] | None,
+    underlying_quote: Mapping[str, Any] | None,
+    now_ist: datetime,
+) -> tuple[bool, str, float | None]:
+    """Current-quote IV-crush guard; never infers from stale or incoherent data."""
+    if (
+        pos.entry_iv_pct <= 0
+        or pos.strike <= 0
+        or not pos.expiry
+        or not isinstance(option_quote, Mapping)
+        or not isinstance(underlying_quote, Mapping)
+    ):
+        return False, "IV_CRUSH_PROVENANCE_UNAVAILABLE", None
+    as_of = now_ist.date()
+    option_state = quote_provenance(option_quote, as_of=as_of, now=now_ist)
+    underlying_state = quote_provenance(underlying_quote, as_of=as_of, now=now_ist)
+    if not option_state.get("ok") or not underlying_state.get("ok"):
+        return False, "IV_CRUSH_QUOTE_UNTRUSTED", None
+    skew = quote_timestamp_skew_seconds(option_quote, underlying_quote)
+    if skew is None or skew > LIVE_QUOTE_MAX_SKEW_SECONDS:
+        return False, "IV_CRUSH_QUOTE_SKEW_TOO_WIDE", None
+    spot = float(underlying_quote.get("last_price") or 0.0)
+    if spot <= 0:
+        return False, "IV_CRUSH_SPOT_UNAVAILABLE", None
+    current_iv = option_quote_implied_iv_pct(
+        option_quote,
+        spot=spot,
+        strike=pos.strike,
+        expiry=pos.expiry,
+        as_of=as_of,
+        option_type=pos.option_type,
+    )
+    if current_iv <= 0:
+        return False, "IV_CRUSH_CURRENT_IV_UNAVAILABLE", None
+    mark = quote_to_option_paper_mark(option_quote)
+    last = float(mark.get("last_price") or mark.get("close") or 0.0)
+    triggered = (
+        current_iv <= pos.entry_iv_pct * IV_CRUSH_RATIO
+        and last > 0
+        and last < pos.entry_price
+    )
+    return triggered, "IV_CRUSH_TRIGGERED" if triggered else "IV_CRUSH_CLEAR", current_iv
+
+
 def _candidate_rows(directional: Mapping[str, Any]) -> list[dict[str, Any]]:
     rows = [
         dict(row)
@@ -181,8 +253,31 @@ def run_fo_paper_cycle(
         entry_minute_unavailable = 0
         entry_minute_pending = 0
         partial_exit_interval_holdouts = 0
+        iv_crush_evaluated = 0
+        iv_crush_triggered = 0
+        iv_crush_unavailable = 0
+        eod_exit_due = _eod_exit_due(now_ist)
         if book.open:
             raw_quotes = read_nfo_quotes(list(book.open), client=client)
+            underlying_quotes = read_market_quotes(
+                sorted({f"NSE:{pos.underlying}" for pos in book.open.values()}),
+                client=client,
+            )
+            iv_crush_symbols: set[str] = set()
+            for symbol, pos in list(book.open.items()):
+                triggered, iv_reason, current_iv = _iv_crush_state(
+                    pos=pos,
+                    option_quote=raw_quotes.get(symbol),
+                    underlying_quote=underlying_quotes.get(f"NSE:{pos.underlying}"),
+                    now_ist=now_ist,
+                )
+                if current_iv is None:
+                    iv_crush_unavailable += 1
+                else:
+                    iv_crush_evaluated += 1
+                if triggered:
+                    iv_crush_triggered += 1
+                    iv_crush_symbols.add(symbol)
             marks: dict[str, dict[str, float]] = {}
             settled = []
             for symbol, pos in list(book.open.items()):
@@ -273,6 +368,8 @@ def run_fo_paper_cycle(
                                 session=now_ist.isoformat(),
                                 advance_session=True,
                                 observation_complete=False,
+                                force_eod=eod_exit_due,
+                                iv_crush_symbols=iv_crush_symbols,
                             )
                         )
                     continue
@@ -298,6 +395,8 @@ def run_fo_paper_cycle(
                         marks,
                         session=now_ist.isoformat(),
                         observation_complete=False,
+                        force_eod=eod_exit_due,
+                        iv_crush_symbols=iv_crush_symbols,
                     )
                 )
             for trade in settled:
@@ -352,6 +451,21 @@ def run_fo_paper_cycle(
                     skipped.append({"symbol": underlying, "reason": "CANDIDATE_NOT_EXECUTABLE"})
                     continue
                 expected = setup.get("expected_move") if isinstance(setup.get("expected_move"), Mapping) else {}
+                if (now_ist.hour, now_ist.minute) < (
+                    FNO_ENTRY_START_HOUR,
+                    FNO_ENTRY_START_MINUTE,
+                ):
+                    skipped.append({"symbol": underlying, "reason": "FNO_ENTRY_WINDOW_NOT_OPEN"})
+                    continue
+                if _market_closed(now_ist):
+                    skipped.append({"symbol": underlying, "reason": "FNO_MARKET_CLOSED"})
+                    continue
+                if (
+                    str(expected.get("exit_policy") or "").upper() == "EOD"
+                    and eod_exit_due
+                ):
+                    skipped.append({"symbol": underlying, "reason": "INTRADAY_EOD_CUTOFF_REACHED"})
+                    continue
                 pos = book.open_position(
                     underlying=underlying,
                     option_symbol=option_symbol,
@@ -366,6 +480,14 @@ def run_fo_paper_cycle(
                     setup_score=float(setup.get("score") or 0.0),
                     option_score=float(contract.get("score") or 0.0),
                     instrument_token=int(contract.get("instrument_token") or 0),
+                    horizon=str(expected.get("horizon") or ""),
+                    exit_policy=str(expected.get("exit_policy") or "SESSION_HOLD"),
+                    strike=float(contract.get("strike") or 0.0),
+                    expiry=str(contract.get("expiry") or ""),
+                    entry_iv_pct=float(contract.get("iv") or 0.0),
+                    entry_underlying_spot=float(
+                        (setup.get("underlying_trade_plan") or {}).get("entry") or 0.0
+                    ),
                     ask=float(contract.get("ask") or 0.0),
                 )
                 if pos is None:
@@ -421,6 +543,13 @@ def run_fo_paper_cycle(
             "entry_minute_unavailable_count": entry_minute_unavailable,
             "entry_minute_pending_count": entry_minute_pending,
             "partial_exit_interval_holdout_count": partial_exit_interval_holdouts,
+            "iv_crush_evaluated_count": iv_crush_evaluated,
+            "iv_crush_triggered_count": iv_crush_triggered,
+            "iv_crush_unavailable_count": iv_crush_unavailable,
+            "eod_exit_due": eod_exit_due,
+            "entry_window_start_ist": f"{FNO_ENTRY_START_HOUR:02d}:{FNO_ENTRY_START_MINUTE:02d}",
+            "eod_exit_cutoff_ist": f"{FNO_EOD_EXIT_HOUR:02d}:{FNO_EOD_EXIT_MINUTE:02d}",
+            "fno_market_close_ist": f"{FNO_MARKET_CLOSE_HOUR:02d}:{FNO_MARKET_CLOSE_MINUTE:02d}",
             "evidence_cost_status": (
                 f"CONFIGURED:{cost_model_name}" if book.fully_costed
                 else "UNCONFIGURED_GROSS_ONLY"
