@@ -83,13 +83,17 @@ PY
   local installed_sha=""
   local installed_runtime=""
   local installed_env_file=""
+  local installed_repo=""
   current_sha="$(git rev-parse HEAD 2>/dev/null || true)"
   installed_sha="$(read_plist_env QT_BUILD_SHA)"
   installed_runtime="$(read_plist_env QT_RUNTIME_ROOT)"
   installed_env_file="$(read_plist_env QT_HOST_ENV_FILE)"
+  installed_repo="$(read_plist_env PYTHONPATH)"
 
-  if [[ -n "$current_sha" && "$installed_sha" != "$current_sha" ]]; then
-    echo "[COMPLETE STACK] Installed host SHA ${installed_sha:0:12} does not match checkout ${current_sha:0:12}."
+  if [[ -n "$current_sha" && ( "$installed_sha" != "$current_sha" || "$installed_repo" != "$ROOT" ) ]]; then
+    echo "[COMPLETE STACK] Installed host identity differs from this checkout."
+    echo "[COMPLETE STACK] Installed: root=${installed_repo:-unknown} · sha=${installed_sha:0:12}"
+    echo "[COMPLETE STACK] Checkout:  root=$ROOT · sha=${current_sha:0:12}"
     if [[ "$requested" != "--restart" ]]; then
       echo "[COMPLETE STACK] Refusing to run stale installed code. Re-run with --restart to reconcile the canonical host." >&2
       return 1
