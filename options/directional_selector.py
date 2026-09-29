@@ -192,6 +192,41 @@ def _spread_pct(contract: Mapping[str, Any]) -> float | None:
     return (ask - bid) / mid * 100.0 if mid > 0 else None
 
 
+def _calendar_days_for_session_horizon(
+    contract: Mapping[str, Any],
+    sessions: int,
+) -> int | None:
+    """Exact elapsed calendar days from as-of to the Nth future NSE session."""
+    needed = max(0, int(sessions))
+    if needed == 0:
+        return 0
+    raw_as_of = str(contract.get("as_of_date") or "").strip()
+    raw_sessions = contract.get("session_dates_to_expiry")
+    if not raw_as_of or not isinstance(raw_sessions, Sequence) or isinstance(raw_sessions, (str, bytes)):
+        return None
+    try:
+        as_of = date.fromisoformat(raw_as_of)
+    except ValueError:
+        return None
+
+    parsed: list[date] = []
+    previous = as_of
+    for raw in raw_sessions:
+        try:
+            current = date.fromisoformat(str(raw))
+        except ValueError:
+            return None
+        if current <= previous:
+            return None
+        parsed.append(current)
+        previous = current
+
+    if len(parsed) < needed:
+        return None
+    elapsed = (parsed[needed - 1] - as_of).days
+    return elapsed if elapsed > 0 else None
+
+
 def _reference_premium(contract: Mapping[str, Any]) -> float:
     bid = _f(contract.get("bid"))
     ask = _f(contract.get("ask"))
@@ -281,6 +316,7 @@ def scenario_reprice(
     *,
     spot: float,
     holding_days: int,
+    calendar_holding_days: int | None = None,
     moves_pct: Sequence[float] = (-2.0, -1.0, 1.0, 2.0, 3.0, 4.0),
     rate: float = 0.065,
 ) -> list[dict[str, float]]:
@@ -289,10 +325,22 @@ def scenario_reprice(
     iv = _iv_decimal(contract.get("iv"))
     dte = _dte(contract)
     kind = str(contract.get("option_type") or "").upper()
-    remaining = max(0.25, float(dte - max(0, holding_days)))
+    resolved_calendar_days = (
+        max(0, int(calendar_holding_days))
+        if calendar_holding_days is not None
+        else _calendar_days_for_session_horizon(contract, holding_days)
+    )
     rows: list[dict[str, float]] = []
-    if premium <= 0 or strike <= 0 or spot <= 0 or iv <= 0 or kind not in {CE, PE}:
+    if (
+        resolved_calendar_days is None
+        or premium <= 0
+        or strike <= 0
+        or spot <= 0
+        or iv <= 0
+        or kind not in {CE, PE}
+    ):
         return rows
+    remaining = max(0.25, float(dte - resolved_calendar_days))
     for move in moves_pct:
         new_spot = spot * (1.0 + float(move) / 100.0)
         model = black_scholes(
@@ -372,6 +420,11 @@ def score_option_contract(
     elif trading_sessions_to_expiry < max(1, int(holding_days) + 1):
         blockers.append("TRADING_SESSIONS_SHORTER_THAN_HOLDING_HORIZON")
 
+    calendar_holding_days = _calendar_days_for_session_horizon(contract, holding_days)
+    first_session_calendar_days = _calendar_days_for_session_horizon(contract, 1)
+    if calendar_holding_days is None or first_session_calendar_days is None:
+        blockers.append("HOLDING_CALENDAR_DECAY_UNAVAILABLE")
+
     greeks = black_scholes(
         spot=spot,
         strike=strike,
@@ -393,30 +446,46 @@ def score_option_contract(
         contract,
         spot=spot,
         holding_days=holding_days,
+        calendar_holding_days=calendar_holding_days,
         rate=rate,
     )
     aligned_move = abs(expected_move_pct) if desired == CE else -abs(expected_move_pct)
-    target_model = black_scholes(
-        spot=spot * (1.0 + aligned_move / 100.0),
-        strike=strike,
-        dte=max(0.25, float(dte - max(0, holding_days))),
-        iv=iv,
-        option_type=kind,
-        rate=rate,
-    )
+    target_model_price = 0.0
+    if calendar_holding_days is not None:
+        target_model = black_scholes(
+            spot=spot * (1.0 + aligned_move / 100.0),
+            strike=strike,
+            dte=max(
+                0.25,
+                float(dte - max(0, int(calendar_holding_days))),
+            ),
+            iv=iv,
+            option_type=kind,
+            rate=rate,
+        )
+        target_model_price = float(target_model["price"])
     expected_return = (
-        (target_model["price"] - premium) / premium * 100.0
-        if premium > 0 and target_model["price"] > 0
+        (target_model_price - premium) / premium * 100.0
+        if premium > 0 and target_model_price > 0
         else 0.0
     )
 
     stop_model_price = 0.0
     stop_underlying = _f(underlying_stop_price)
-    if stop_underlying > 0 and strike > 0 and iv > 0 and dte > 0:
+    if (
+        first_session_calendar_days is not None
+        and stop_underlying > 0
+        and strike > 0
+        and iv > 0
+        and dte > 0
+    ):
         stop_model = black_scholes(
             spot=stop_underlying,
             strike=strike,
-            dte=max(0.25, float(dte - min(max(0, holding_days), 1))),
+            dte=max(
+                0.25,
+                float(dte - max(0, int(first_session_calendar_days))),
+            ),
             iv=iv,
             option_type=kind,
             rate=rate,
@@ -425,7 +494,7 @@ def score_option_contract(
 
     option_entry = premium
     option_stop = min(option_entry * 0.98, stop_model_price) if stop_model_price > 0 else 0.0
-    option_target = float(target_model["price"])
+    option_target = target_model_price
     if option_stop <= 0 or option_stop >= option_entry:
         blockers.append("OPTION_STOP_MODEL_UNAVAILABLE")
     if option_target <= option_entry:
@@ -470,6 +539,9 @@ def score_option_contract(
         "holiday_calendar_loaded": holiday_calendar_loaded,
         "expiry_session_model": str(contract.get("expiry_session_model") or ""),
         "expiry_fit_basis": "TRADING_SESSIONS_TO_EXPIRY",
+        "holding_sessions": max(0, int(holding_days)),
+        "calendar_days_to_holding_horizon": calendar_holding_days,
+        "calendar_days_to_first_session": first_session_calendar_days,
         "premium": round(premium, 2),
         "bid": _f(contract.get("bid")),
         "ask": _f(contract.get("ask")),
@@ -491,6 +563,7 @@ def score_option_contract(
         "trade_plan": trade_plan,
         "scenarios": scenarios,
         "scenario_model": "BLACK_SCHOLES_CONSTANT_IV_ESTIMATE",
+        "scenario_decay_basis": "CALENDAR_DAYS_TO_NSE_SESSION_HORIZON",
         "eligible": not blockers,
         "blockers": blockers,
         "paper_only": True,
