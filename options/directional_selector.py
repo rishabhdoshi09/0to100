@@ -189,6 +189,7 @@ class OptionSelectionPolicy:
     min_delta_abs: float = 0.35
     max_delta_abs: float = 0.85
     max_iv_percentile: float = 85.0
+    min_risk_reward: float = 1.0
 
 
 def _spread_pct(contract: Mapping[str, Any]) -> float | None:
@@ -573,6 +574,8 @@ def score_option_contract(
     option_risk = option_entry - option_stop if option_stop > 0 else 0.0
     option_reward = option_target - option_entry
     risk_reward = option_reward / option_risk if option_risk > 0 and option_reward > 0 else 0.0
+    if risk_reward < policy.min_risk_reward:
+        blockers.append("OPTION_RISK_REWARD_TOO_LOW")
     trade_plan = {
         "entry": round(option_entry, 2),
         "stop": round(option_stop, 2) if option_stop > 0 else None,
