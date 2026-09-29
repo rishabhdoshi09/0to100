@@ -131,6 +131,77 @@ def test_sqlite_store_persists_positions_and_trade_rows(tmp_path):
         store.close()
 
 
+def test_store_reconstructs_same_day_premium_across_open_and_closed(tmp_path):
+    session = "2026-09-29"
+    with FoPaperStore(tmp_path / "fo.sqlite3") as store:
+        store.replace_positions([{
+            "trade_id": "OPEN1",
+            "option_symbol": "AAACE",
+            "underlying": "AAA",
+            "entry_price": 50.0,
+            "quantity": 100,
+            "opened_at": f"{session}T10:00:00+05:30",
+        }])
+        store.append_trades([{
+            # Legacy/split-state duplicate of the still-open trade must count once.
+            "trade_id": "OPEN1",
+            "option_symbol": "AAACE",
+            "underlying": "AAA",
+            "entry_price": 50.0,
+            "quantity": 100,
+            "opened_at": f"{session}T10:00:00+05:30",
+            "settled_at": f"{session}T10:30:00+05:30",
+        }, {
+            "trade_id": "CLOSED1",
+            "option_symbol": "BBBCE",
+            "underlying": "BBB",
+            "entry_price": 25.0,
+            "quantity": 100,
+            "opened_at": f"{session}T09:45:00+05:30",
+            "settled_at": f"{session}T11:00:00+05:30",
+        }, {
+            "trade_id": "OLD1",
+            "option_symbol": "OLDCE",
+            "underlying": "OLD",
+            "entry_price": 100.0,
+            "quantity": 100,
+            "opened_at": "2026-09-26T10:00:00+05:30",
+            "settled_at": "2026-09-26T12:00:00+05:30",
+        }])
+
+        assert store.premium_deployed_on_session(session) == 7_500.0
+
+
+def test_runtime_restart_cannot_reset_same_day_premium_budget(tmp_path):
+    now_ist = datetime(2026, 9, 29, 12, 0, tzinfo=IST)
+    with FoPaperStore(tmp_path / "fo.sqlite3") as store:
+        store.append_trades([{
+            "trade_id": "EARLIER",
+            "option_symbol": "EARLIERCE",
+            "underlying": "EARLIER",
+            "entry_price": 50.0,
+            "quantity": 180,
+            "opened_at": "2026-09-29T10:00:00+05:30",
+            "settled_at": "2026-09-29T11:00:00+05:30",
+            "net_pnl": 0.0,
+        }])
+
+        result = run_fo_paper_cycle(
+            _directional(),
+            client=_QuoteClient(),
+            now_ist=now_ist,
+            allow_new_entries=True,
+            store=store,
+            capital=100_000,
+        )
+
+        assert result["premium_deployed_today"] == 9_000.0
+        assert result["daily_premium_budget"] == 10_000.0
+        assert result["daily_premium_remaining"] == 1_000.0
+        assert result["opened_count"] == 0
+        assert result["skipped"][-1]["reason"] == "DAILY_PREMIUM_BUDGET_EXHAUSTED"
+
+
 def test_paper_runtime_survives_restart_and_avoids_pre_entry_daily_range(tmp_path):
     path = tmp_path / "fo.sqlite3"
     opened_at = datetime(2026, 9, 26, 10, 15, tzinfo=IST)
