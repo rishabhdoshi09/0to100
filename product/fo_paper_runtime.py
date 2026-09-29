@@ -120,11 +120,20 @@ def _intraday_replay_start(pos: FoPaperPosition, now_ist: datetime) -> datetime 
     return session_open if session_open < now_ist else None
 
 
+FNO_ENTRY_START_HOUR = 9
+FNO_ENTRY_START_MINUTE = 30
 FNO_EOD_EXIT_HOUR = 15
 FNO_EOD_EXIT_MINUTE = 35
 FNO_MARKET_CLOSE_HOUR = 15
 FNO_MARKET_CLOSE_MINUTE = 40
 IV_CRUSH_RATIO = 0.75
+
+
+def _entry_window_open(now_ist: datetime) -> bool:
+    return (now_ist.hour, now_ist.minute) >= (
+        FNO_ENTRY_START_HOUR,
+        FNO_ENTRY_START_MINUTE,
+    ) and not _market_closed(now_ist)
 
 
 def _eod_exit_due(now_ist: datetime) -> bool:
@@ -451,6 +460,12 @@ def run_fo_paper_cycle(
                     skipped.append({"symbol": underlying, "reason": "CANDIDATE_NOT_EXECUTABLE"})
                     continue
                 expected = setup.get("expected_move") if isinstance(setup.get("expected_move"), Mapping) else {}
+                if (now_ist.hour, now_ist.minute) < (
+                    FNO_ENTRY_START_HOUR,
+                    FNO_ENTRY_START_MINUTE,
+                ):
+                    skipped.append({"symbol": underlying, "reason": "FNO_ENTRY_WINDOW_NOT_OPEN"})
+                    continue
                 if _market_closed(now_ist):
                     skipped.append({"symbol": underlying, "reason": "FNO_MARKET_CLOSED"})
                     continue
@@ -541,6 +556,7 @@ def run_fo_paper_cycle(
             "iv_crush_triggered_count": iv_crush_triggered,
             "iv_crush_unavailable_count": iv_crush_unavailable,
             "eod_exit_due": eod_exit_due,
+            "entry_window_start_ist": f"{FNO_ENTRY_START_HOUR:02d}:{FNO_ENTRY_START_MINUTE:02d}",
             "eod_exit_cutoff_ist": f"{FNO_EOD_EXIT_HOUR:02d}:{FNO_EOD_EXIT_MINUTE:02d}",
             "fno_market_close_ist": f"{FNO_MARKET_CLOSE_HOUR:02d}:{FNO_MARKET_CLOSE_MINUTE:02d}",
             "evidence_cost_status": (
