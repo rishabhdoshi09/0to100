@@ -143,6 +143,15 @@ def test_store_reconstructs_same_day_premium_across_open_and_closed(tmp_path):
             "opened_at": f"{session}T10:00:00+05:30",
         }])
         store.append_trades([{
+            # Legacy/split-state duplicate of the still-open trade must count once.
+            "trade_id": "OPEN1",
+            "option_symbol": "AAACE",
+            "underlying": "AAA",
+            "entry_price": 50.0,
+            "quantity": 100,
+            "opened_at": f"{session}T10:00:00+05:30",
+            "settled_at": f"{session}T10:30:00+05:30",
+        }, {
             "trade_id": "CLOSED1",
             "option_symbol": "BBBCE",
             "underlying": "BBB",
