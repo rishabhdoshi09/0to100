@@ -356,7 +356,7 @@ def test_known_extreme_iv_percentile_blocks_long_premium_entry():
 
 def test_intraday_horizon_uses_fractional_decay_to_eod():
     contract = _contract("INTRADAY", 3050.0, 0.62)
-    contract["quote_timestamp"] = "2026-09-22T10:35:00"
+    contract["quote_timestamp"] = "2026-09-22T10:30:00"
     result = score_option_contract(
         contract,
         direction="LONG",
@@ -369,7 +369,7 @@ def test_intraday_horizon_uses_fractional_decay_to_eod():
     )
     assert result["eligible"] is True
     assert round(result["calendar_days_to_holding_horizon"], 6) == round(5.0 / 24.0, 6)
-    assert result["scenario_decay_basis"] == "FRACTIONAL_CALENDAR_DAYS_TO_1535_IST_EOD"
+    assert result["scenario_decay_basis"] == "FRACTIONAL_CALENDAR_DAYS_TO_1530_IST_EOD"
 
 
 def test_intraday_candidate_after_eod_cutoff_fails_closed():
