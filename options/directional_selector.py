@@ -247,7 +247,7 @@ def _intraday_calendar_days_to_eod(contract: Mapping[str, Any]) -> float | None:
         return None
     if stamp.tzinfo is not None:
         stamp = stamp.astimezone(IST).replace(tzinfo=None)
-    eod = stamp.replace(hour=15, minute=35, second=0, microsecond=0)
+    eod = stamp.replace(hour=15, minute=30, second=0, microsecond=0)
     if eod <= stamp:
         return None
     return max((eod - stamp).total_seconds() / 86400.0, 1.0 / 1440.0)
