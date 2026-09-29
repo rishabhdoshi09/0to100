@@ -170,21 +170,29 @@ def _expected_move(features: Mapping[str, Any], score: float) -> dict[str, Any]:
     lower = _clamp(base * 0.75, 0.35, 4.0)
     upper = _clamp(base * expansion * (1.25 if score >= 80 else 1.10), lower, 6.0)
 
-    if score >= 80 and rvol >= 2.0 and adx >= 25.0:
-        horizon = "INTRADAY_TO_1D"
+    if score >= 85 and rvol >= 2.5 and adx >= 30.0:
+        horizon = "INTRADAY"
+        holding_days = 0
+        exit_policy = "EOD"
+    elif score >= 80 and rvol >= 2.0 and adx >= 25.0:
+        horizon = "1D"
         holding_days = 1
+        exit_policy = "SESSION_HOLD"
     elif score >= 70:
         horizon = "1_TO_2D"
         holding_days = 2
+        exit_policy = "SESSION_HOLD"
     else:
         horizon = "2_TO_4D"
         holding_days = 4
+        exit_policy = "SESSION_HOLD"
     return {
         "lower_pct": round(lower, 2),
         "upper_pct": round(upper, 2),
         "mid_pct": round((lower + upper) / 2.0, 2),
         "horizon": horizon,
         "holding_days": holding_days,
+        "exit_policy": exit_policy,
         "model": "ATR_RVOL_ADX_HEURISTIC_UNCALIBRATED",
     }
 
