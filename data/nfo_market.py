@@ -238,7 +238,7 @@ def nearest_future(
     *,
     as_of: date | None = None,
 ) -> dict[str, Any] | None:
-    today = as_of or date.today()
+    today = as_of or datetime.now(IST).date()
     wanted = str(underlying or "").upper()
     rows: list[tuple[date, Mapping[str, Any]]] = []
     for row in instruments:
@@ -315,17 +315,30 @@ def _top_depth_price(quote: Mapping[str, Any], side: str) -> float:
 
 
 def _trading_sessions_to_expiry(*, as_of: date, expiry: date | None) -> tuple[int | None, int]:
-    """Future NSE sessions in (as_of, expiry], plus loaded-holiday provenance."""
+    """Future NSE sessions in (as_of, expiry], plus holiday-calendar coverage provenance."""
     if expiry is None or expiry < as_of:
         return None, 0
     holidays = load_holidays()
+    holiday_years: set[int] = set()
+    for raw in holidays:
+        try:
+            holiday_years.add(date.fromisoformat(str(raw)).year)
+        except Exception:
+            continue
+    required_years = set(range(as_of.year, expiry.year + 1))
+    calendar_covers_window = bool(holidays) and required_years.issubset(holiday_years)
+
     cursor = as_of + timedelta(days=1)
     sessions = 0
     while cursor <= expiry:
         if is_session(cursor, holidays):
             sessions += 1
         cursor += timedelta(days=1)
-    return sessions, len(holidays)
+
+    # A stale calendar must not masquerade as valid merely because it contains
+    # holidays for an older year. Returning zero provenance makes the selector
+    # fail closed while still exposing the diagnostic session count.
+    return sessions, len(holidays) if calendar_covers_window else 0
 
 
 def quote_to_option_contract(
