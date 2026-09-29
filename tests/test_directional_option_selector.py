@@ -387,3 +387,18 @@ def test_intraday_candidate_after_eod_cutoff_fails_closed():
     )
     assert result["eligible"] is False
     assert "HOLDING_CALENDAR_DECAY_UNAVAILABLE" in result["blockers"]
+
+
+def test_modeled_option_risk_reward_below_one_is_rejected():
+    result = score_option_contract(
+        _contract("POOR_RR", 3050.0, 0.62),
+        direction="LONG",
+        spot=3050.0,
+        expected_move_pct=0.15,
+        horizon="1_TO_2D",
+        holding_days=2,
+        underlying_stop_price=2995.0,
+        iv_percentile=45.0,
+    )
+    assert result["eligible"] is False
+    assert "OPTION_RISK_REWARD_TOO_LOW" in result["blockers"]
