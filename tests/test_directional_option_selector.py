@@ -423,3 +423,32 @@ def test_atm_label_uses_nearest_available_strike_not_exact_spot_equality():
     assert by_symbol["NEAR"]["moneyness"] == "ATM"
     assert by_symbol["NEAR"]["atm_reference_strike"] == 3050.0
     assert by_symbol["FAR"]["moneyness"] == "OTM"
+
+
+def test_atm_reference_is_resolved_independently_per_expiry():
+    near = _contract("W1", 3050.0, 0.60)
+    near["expiry"] = "2026-10-01"
+    farther = _contract("W2", 3075.0, 0.58)
+    farther["expiry"] = "2026-10-08"
+    farther["dte"] = 16
+    farther["trading_sessions_to_expiry"] = 12
+    farther["session_dates_to_expiry"] = [
+        "2026-09-23","2026-09-24","2026-09-25","2026-09-28",
+        "2026-09-29","2026-09-30","2026-10-01","2026-10-05",
+        "2026-10-06","2026-10-07","2026-10-08","2026-10-09",
+    ]
+    result = select_option_contracts(
+        [near, farther],
+        direction="LONG",
+        spot=3060.0,
+        expected_move_pct=2.0,
+        horizon="1_TO_2D",
+        holding_days=2,
+        underlying_stop_price=3000.0,
+        iv_percentile=45.0,
+    )
+    by_symbol = {row["symbol"]: row for row in result["all_candidates"]}
+    assert by_symbol["W1"]["atm_reference_strike"] == 3050.0
+    assert by_symbol["W2"]["atm_reference_strike"] == 3075.0
+    assert by_symbol["W1"]["moneyness"] == "ATM"
+    assert by_symbol["W2"]["moneyness"] == "ATM"
