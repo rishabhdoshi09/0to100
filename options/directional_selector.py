@@ -237,7 +237,7 @@ def _calendar_days_for_session_horizon(
 
 
 def _intraday_calendar_days_to_eod(contract: Mapping[str, Any]) -> float | None:
-    """Fractional calendar days from observed quote time to the 15:35 IST EOD exit."""
+    """Fractional calendar days from observed quote time to the 15:30 IST EOD exit."""
     raw = str(contract.get("quote_timestamp") or "").strip()
     if not raw:
         return None
@@ -663,7 +663,7 @@ def score_option_contract(
         "scenarios": scenarios,
         "scenario_model": "BLACK_SCHOLES_CONSTANT_IV_ESTIMATE",
         "scenario_decay_basis": (
-            "FRACTIONAL_CALENDAR_DAYS_TO_1535_IST_EOD"
+            "FRACTIONAL_CALENDAR_DAYS_TO_1530_IST_EOD"
             if str(horizon or "").upper() == "INTRADAY"
             else "CALENDAR_DAYS_TO_NSE_SESSION_HORIZON"
         ),
