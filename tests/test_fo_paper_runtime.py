@@ -1013,3 +1013,32 @@ def test_runtime_enforces_no_new_fno_entries_before_0930(tmp_path):
             capital=200_000,
         )
     assert allowed["opened_count"] == 1
+
+
+def test_runtime_blocks_multi_session_entry_at_1530_late_cutoff(tmp_path):
+    with FoPaperStore(tmp_path / "fo.sqlite3") as store:
+        result = run_fo_paper_cycle(
+            _directional(),
+            client=_QuoteClient(),
+            now_ist=datetime(2026, 9, 29, 15, 30, tzinfo=IST),
+            allow_new_entries=True,
+            store=store,
+            capital=200_000,
+        )
+    assert result["opened_count"] == 0
+    assert result["skipped"][-1]["reason"] == "FNO_LATE_ENTRY_CUTOFF_REACHED"
+    assert result["entry_window_end_ist"] == "15:30"
+
+
+def test_complete_1530_minute_is_recognized_for_historical_eod_exit():
+    from product.fo_paper_runtime import _historical_bar_reaches_eod
+
+    now_ist = datetime(2026, 9, 29, 15, 31, tzinfo=IST)
+    assert _historical_bar_reaches_eod(
+        "2026-09-29T15:30:00+05:30",
+        now_ist,
+    ) is True
+    assert _historical_bar_reaches_eod(
+        "2026-09-29T15:29:00+05:30",
+        now_ist,
+    ) is False
