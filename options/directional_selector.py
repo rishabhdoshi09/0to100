@@ -189,7 +189,6 @@ class OptionSelectionPolicy:
     min_delta_abs: float = 0.35
     max_delta_abs: float = 0.85
     max_iv_percentile: float = 85.0
-    max_theta_decay_pct_per_day: float = 5.0
 
 
 def _spread_pct(contract: Mapping[str, Any]) -> float | None:
@@ -513,9 +512,6 @@ def score_option_contract(
         abs(theta) / premium * 100.0
         if premium > 0 else float("inf")
     )
-    if theta_decay_pct >= policy.max_theta_decay_pct_per_day:
-        blockers.append("THETA_DECAY_TOO_HIGH")
-
     scenarios = scenario_reprice(
         contract,
         spot=spot,
