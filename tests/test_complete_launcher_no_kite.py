@@ -72,8 +72,11 @@ def test_complete_launcher_reconciles_stale_launchd_sha_on_restart() -> None:
     assert "Installed host identity differs" in text
     assert "Refusing to run stale installed code" in text
     assert "Cannot reconcile launchd from a dirty checkout" in text
+    assert 'local reconcile_runtime="${installed_runtime:-${QT_RUNTIME_ROOT:-}}"' in text
     assert 'local install_args=(install --runtime-root "$reconcile_runtime" --manager launchd)' in text
     assert 'install_args+=(--env-file "$installed_env_file")' in text
+    assert '"$installed_env_file" == "$installed_repo/.env"' in text
+    assert 'installed_env_file="$ROOT/.env"' in text
     assert "QT_RUNTIME_ROOT_REQUIRE_EXISTING=1" in text
     assert 'PYTHON="$py"' in text
     assert '"$ROOT/scripts/install_quantterm_host.sh"' in text
