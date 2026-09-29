@@ -264,7 +264,6 @@ def run_fo_paper_cycle(
                 client=client,
             )
             iv_crush_symbols: set[str] = set()
-            current_iv_by_symbol: dict[str, float] = {}
             for symbol, pos in list(book.open.items()):
                 triggered, iv_reason, current_iv = _iv_crush_state(
                     pos=pos,
@@ -276,7 +275,6 @@ def run_fo_paper_cycle(
                     iv_crush_unavailable += 1
                 else:
                     iv_crush_evaluated += 1
-                    current_iv_by_symbol[symbol] = current_iv
                 if triggered:
                     iv_crush_triggered += 1
                     iv_crush_symbols.add(symbol)
