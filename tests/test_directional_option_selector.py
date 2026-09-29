@@ -323,3 +323,5 @@ def test_missing_session_date_path_fails_closed_for_decay_model():
     assert result["eligible"] is False
     assert "HOLDING_CALENDAR_DECAY_UNAVAILABLE" in result["blockers"]
     assert result["scenarios"] == []
+    assert result["trade_plan"]["target"] is None
+    assert result["trade_plan"]["stop"] is None
