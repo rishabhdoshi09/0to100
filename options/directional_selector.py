@@ -265,7 +265,12 @@ def _holding_decay_days(
     return float(sessions) if sessions is not None else None
 
 
-def _moneyness(contract: Mapping[str, Any], *, spot: float) -> tuple[str, float | None]:
+def _moneyness(
+    contract: Mapping[str, Any],
+    *,
+    spot: float,
+    atm_strike: float | None = None,
+) -> tuple[str, float | None]:
     strike = _f(contract.get("strike"))
     if strike <= 0 or spot <= 0:
         return "UNKNOWN", None
@@ -273,7 +278,9 @@ def _moneyness(contract: Mapping[str, Any], *, spot: float) -> tuple[str, float 
     signed = (spot - strike) / spot * 100.0
     if kind == PE:
         signed = -signed
-    if abs(signed) < 1e-9:
+    if atm_strike is not None and abs(strike - float(atm_strike)) < 1e-9:
+        label = "ATM"
+    elif atm_strike is None and abs(signed) < 1e-9:
         label = "ATM"
     elif signed > 0:
         label = "ITM"
@@ -429,6 +436,7 @@ def score_option_contract(
     holding_days: int,
     underlying_stop_price: float | None = None,
     iv_percentile: float | None = None,
+    atm_strike: float | None = None,
     policy: OptionSelectionPolicy | None = None,
     rate: float = 0.065,
 ) -> dict[str, Any]:
@@ -597,7 +605,11 @@ def score_option_contract(
     if score < policy.minimum_score:
         blockers.append("OPTION_SCORE_BELOW_THRESHOLD")
 
-    moneyness, moneyness_pct = _moneyness(contract, spot=spot)
+    moneyness, moneyness_pct = _moneyness(
+        contract,
+        spot=spot,
+        atm_strike=atm_strike,
+    )
     gamma_delta_change_for_1pct_move = abs(gamma) * spot * 0.01
     vega_pct_of_premium_per_vol_point = (
         abs(vega) / premium * 100.0 if premium > 0 else 0.0
@@ -625,6 +637,7 @@ def score_option_contract(
         "quote_timestamp": str(contract.get("quote_timestamp") or ""),
         "moneyness": moneyness,
         "moneyness_pct": round(moneyness_pct, 4) if moneyness_pct is not None else None,
+        "atm_reference_strike": round(float(atm_strike), 4) if atm_strike is not None else None,
         "premium": round(premium, 2),
         "bid": _f(contract.get("bid")),
         "ask": _f(contract.get("ask")),
@@ -674,6 +687,15 @@ def select_option_contracts(
     limit: int = 5,
     policy: OptionSelectionPolicy | None = None,
 ) -> dict[str, Any]:
+    valid_strikes = sorted({
+        _f(contract.get("strike"))
+        for contract in contracts
+        if _f(contract.get("strike")) > 0
+    })
+    atm_strike = (
+        min(valid_strikes, key=lambda strike: (abs(strike - spot), strike))
+        if valid_strikes and spot > 0 else None
+    )
     rows = [
         score_option_contract(
             contract,
@@ -684,6 +706,7 @@ def select_option_contracts(
             holding_days=holding_days,
             underlying_stop_price=underlying_stop_price,
             iv_percentile=iv_percentile,
+            atm_strike=atm_strike,
             policy=policy,
         )
         for contract in contracts
