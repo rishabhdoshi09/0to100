@@ -264,7 +264,9 @@ def test_option_contract_tracks_future_trading_sessions_not_calendar_days(monkey
     monkeypatch.setattr("data.nfo_market.load_holidays", lambda: set())
     row = quote_to_option_contract(instrument, quote, spot=3050.0, as_of=as_of)
     assert row["dte"] == 6
+    assert row["as_of_date"] == "2026-09-25"
     assert row["trading_sessions_to_expiry"] == 4
+    assert row["session_dates_to_expiry"] == []
     assert row["expiry_session_model"] == "WEEKDAYS_ONLY_NO_HOLIDAY_TABLE"
 
 
@@ -292,7 +294,13 @@ def test_option_contract_trading_sessions_respect_loaded_holidays(monkeypatch):
     )
     row = quote_to_option_contract(instrument, quote, spot=3050.0, as_of=as_of)
     assert row["dte"] == 6
+    assert row["as_of_date"] == "2026-09-25"
     assert row["trading_sessions_to_expiry"] == 3
+    assert row["session_dates_to_expiry"] == [
+        "2026-09-29",
+        "2026-09-30",
+        "2026-10-01",
+    ]
     assert row["holiday_calendar_loaded"] == 1
     assert row["expiry_session_model"] == "NSE_SESSIONS_WITH_RUNTIME_HOLIDAYS"
 
@@ -321,5 +329,6 @@ def test_option_contract_stale_holiday_year_fails_closed(monkeypatch):
     )
     row = quote_to_option_contract(instrument, quote, spot=3050.0, as_of=as_of)
     assert row["trading_sessions_to_expiry"] > 0
+    assert row["session_dates_to_expiry"] == []
     assert row["holiday_calendar_loaded"] == 0
     assert row["expiry_session_model"] == "WEEKDAYS_ONLY_NO_HOLIDAY_TABLE"
