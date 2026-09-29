@@ -215,3 +215,41 @@ def test_missing_holiday_calendar_blocks_trading_session_eligibility():
 
     assert result["eligible"] is False
     assert "TRADING_CALENDAR_HOLIDAYS_UNAVAILABLE" in result["blockers"]
+
+
+def test_expiry_fit_ranks_by_trading_sessions_not_calendar_dte():
+    preferred = _contract("PREFERRED", 3050.0, 0.62)
+    farther = _contract("FARTHER", 3050.0, 0.62)
+    # Hold calendar DTE constant so only exchange-session distance can affect
+    # expiry-fit ranking. Six future sessions is near/next-week fit for 1_TO_2D;
+    # thirteen is outside the preferred band.
+    preferred["dte"] = 30
+    farther["dte"] = 30
+    preferred["trading_sessions_to_expiry"] = 6
+    farther["trading_sessions_to_expiry"] = 13
+
+    preferred_score = score_option_contract(
+        preferred,
+        direction="LONG",
+        spot=3050.0,
+        expected_move_pct=2.0,
+        horizon="1_TO_2D",
+        holding_days=2,
+        underlying_stop_price=2995.0,
+        iv_percentile=45.0,
+    )
+    farther_score = score_option_contract(
+        farther,
+        direction="LONG",
+        spot=3050.0,
+        expected_move_pct=2.0,
+        horizon="1_TO_2D",
+        holding_days=2,
+        underlying_stop_price=2995.0,
+        iv_percentile=45.0,
+    )
+
+    assert preferred_score["expiry_fit_basis"] == "TRADING_SESSIONS_TO_EXPIRY"
+    assert preferred_score["components"]["expiry_fit"] == 10.0
+    assert farther_score["components"]["expiry_fit"] == 6.0
+    assert preferred_score["components"]["expiry_fit"] > farther_score["components"]["expiry_fit"]
