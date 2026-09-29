@@ -402,3 +402,24 @@ def test_modeled_option_risk_reward_below_one_is_rejected():
     )
     assert result["eligible"] is False
     assert "OPTION_RISK_REWARD_TOO_LOW" in result["blockers"]
+
+
+def test_atm_label_uses_nearest_available_strike_not_exact_spot_equality():
+    rows = [
+        _contract("NEAR", 3050.0, 0.60),
+        _contract("FAR", 3100.0, 0.45),
+    ]
+    result = select_option_contracts(
+        rows,
+        direction="LONG",
+        spot=3060.0,
+        expected_move_pct=2.0,
+        horizon="1_TO_2D",
+        holding_days=2,
+        underlying_stop_price=3000.0,
+        iv_percentile=45.0,
+    )
+    by_symbol = {row["symbol"]: row for row in result["all_candidates"]}
+    assert by_symbol["NEAR"]["moneyness"] == "ATM"
+    assert by_symbol["NEAR"]["atm_reference_strike"] == 3050.0
+    assert by_symbol["FAR"]["moneyness"] == "OTM"
