@@ -572,6 +572,7 @@ def run_fo_paper_cycle(
             "trail_distance_r": book.trail_distance_r,
             "eod_exit_due": eod_exit_due,
             "entry_window_start_ist": f"{FNO_ENTRY_START_HOUR:02d}:{FNO_ENTRY_START_MINUTE:02d}",
+            "entry_window_end_ist": f"{FNO_EOD_EXIT_HOUR:02d}:{FNO_EOD_EXIT_MINUTE:02d}",
             "eod_exit_cutoff_ist": f"{FNO_EOD_EXIT_HOUR:02d}:{FNO_EOD_EXIT_MINUTE:02d}",
             "fno_market_close_ist": f"{FNO_MARKET_CLOSE_HOUR:02d}:{FNO_MARKET_CLOSE_MINUTE:02d}",
             "evidence_cost_status": (
