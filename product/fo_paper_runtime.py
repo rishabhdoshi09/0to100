@@ -129,13 +129,6 @@ FNO_MARKET_CLOSE_MINUTE = 40
 IV_CRUSH_RATIO = 0.75
 
 
-def _entry_window_open(now_ist: datetime) -> bool:
-    return (now_ist.hour, now_ist.minute) >= (
-        FNO_ENTRY_START_HOUR,
-        FNO_ENTRY_START_MINUTE,
-    ) and not _market_closed(now_ist)
-
-
 def _eod_exit_due(now_ist: datetime) -> bool:
     return (now_ist.hour, now_ist.minute) >= (FNO_EOD_EXIT_HOUR, FNO_EOD_EXIT_MINUTE)
 
