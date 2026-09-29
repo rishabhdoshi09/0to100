@@ -987,3 +987,29 @@ def test_runtime_blocks_all_new_option_entries_after_market_close(tmp_path):
     assert result["opened_count"] == 0
     assert result["skipped"][-1]["reason"] == "FNO_MARKET_CLOSED"
     assert result["fno_market_close_ist"] == "15:40"
+
+
+def test_runtime_enforces_no_new_fno_entries_before_0930(tmp_path):
+    with FoPaperStore(tmp_path / "fo.sqlite3") as store:
+        blocked = run_fo_paper_cycle(
+            _directional(),
+            client=_QuoteClient(),
+            now_ist=datetime(2026, 9, 29, 9, 29, tzinfo=IST),
+            allow_new_entries=True,
+            store=store,
+            capital=200_000,
+        )
+    assert blocked["opened_count"] == 0
+    assert blocked["skipped"][-1]["reason"] == "FNO_ENTRY_WINDOW_NOT_OPEN"
+    assert blocked["entry_window_start_ist"] == "09:30"
+
+    with FoPaperStore(tmp_path / "fo2.sqlite3") as store:
+        allowed = run_fo_paper_cycle(
+            _directional(),
+            client=_QuoteClient(last=50, high=50, low=50, bid=49),
+            now_ist=datetime(2026, 9, 29, 9, 30, tzinfo=IST),
+            allow_new_entries=True,
+            store=store,
+            capital=200_000,
+        )
+    assert allowed["opened_count"] == 1
