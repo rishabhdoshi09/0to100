@@ -101,6 +101,8 @@ class FoPaperBook:
         *,
         risk_per_trade_pct: float = 0.01,
         max_premium_pct: float = 0.10,
+        max_daily_premium_pct: float | None = None,
+        premium_deployed_today: float = 0.0,
         max_positions: int = 5,
         max_total_risk_pct: float = 0.05,
         slippage_bps: float = 5.0,
@@ -110,6 +112,10 @@ class FoPaperBook:
         self.capital = float(capital)
         self.risk_per_trade_pct = float(risk_per_trade_pct)
         self.max_premium_pct = float(max_premium_pct)
+        self.max_daily_premium_pct = float(
+            max_premium_pct if max_daily_premium_pct is None else max_daily_premium_pct
+        )
+        self.premium_deployed_today = max(0.0, float(premium_deployed_today))
         self.max_positions = int(max_positions)
         self.max_total_risk_pct = float(max_total_risk_pct)
         self.slippage_bps = float(slippage_bps)
@@ -188,7 +194,13 @@ class FoPaperBook:
             return None
         equity = max(0.0, self.capital + self.realized_pnl)
         risk_budget = equity * self.risk_per_trade_pct
-        premium_budget = equity * self.max_premium_pct
+        per_trade_premium_budget = equity * self.max_premium_pct
+        daily_premium_budget = equity * self.max_daily_premium_pct
+        remaining_daily_premium = max(
+            0.0,
+            daily_premium_budget - self.premium_deployed_today,
+        )
+        premium_budget = min(per_trade_premium_budget, remaining_daily_premium)
         total_risk_budget = equity * self.max_total_risk_pct
         open_risk = sum(float(pos.risk_amount) for pos in self.open.values())
         remaining_total_risk = max(0.0, total_risk_budget - open_risk)
@@ -201,7 +213,10 @@ class FoPaperBook:
         if requested_lots is not None:
             lots = min(lots, max(0, int(requested_lots)))
         if lots < 1:
-            self.refusals.append((symbol, "RISK_OR_PREMIUM_BUDGET_TOO_SMALL_FOR_ONE_LOT"))
+            if premium_per_lot > 0 and remaining_daily_premium < premium_per_lot:
+                self.refusals.append((symbol, "DAILY_PREMIUM_BUDGET_EXHAUSTED"))
+            else:
+                self.refusals.append((symbol, "RISK_OR_PREMIUM_BUDGET_TOO_SMALL_FOR_ONE_LOT"))
             return None
 
         qty = lots * lot_size
@@ -229,6 +244,10 @@ class FoPaperBook:
             min_mark=round(fill, 4),
         )
         self.open[symbol] = pos
+        self.premium_deployed_today = round(
+            self.premium_deployed_today + fill * qty,
+            4,
+        )
         return pos
 
     def mark(
