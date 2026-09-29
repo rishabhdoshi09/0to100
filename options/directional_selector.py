@@ -222,18 +222,20 @@ def _delta_score(delta_abs: float) -> float:
     return 0.0
 
 
-def _expiry_score(dte: int, horizon: str) -> float:
+def _expiry_score(trading_sessions_to_expiry: int, horizon: str) -> float:
+    """Prefer near/next-week expiries using market sessions, never calendar DTE."""
     preferred = {
-        "INTRADAY_TO_1D": (3, 10),
-        "1_TO_2D": (5, 14),
-        "2_TO_4D": (7, 21),
-    }.get(horizon, (5, 21))
+        "INTRADAY_TO_1D": (2, 6),
+        "1_TO_2D": (3, 8),
+        "2_TO_4D": (5, 12),
+    }.get(horizon, (3, 12))
     lo, hi = preferred
-    if lo <= dte <= hi:
+    sessions = int(trading_sessions_to_expiry)
+    if lo <= sessions <= hi:
         return 10.0
-    if max(2, lo - 2) <= dte < lo or hi < dte <= hi + 7:
+    if max(1, lo - 1) <= sessions < lo or hi < sessions <= hi + 5:
         return 6.0
-    if dte >= 2:
+    if sessions >= 1:
         return 3.0
     return 0.0
 
@@ -445,7 +447,7 @@ def score_option_contract(
         "liquidity": _liquidity_score(volume, oi, spread_pct, policy),  # 25
         "theta": _theta_score(theta, premium),                    # 12
         "iv": _iv_score(iv_percentile),                           # 12
-        "expiry_fit": _expiry_score(dte, horizon),                # 10
+        "expiry_fit": _expiry_score(trading_sessions_to_expiry, horizon),  # 10
         "expected_payoff": 16.0 * _clamp(expected_return / 25.0, 0.0, 1.0),  # 16
     }
     score = round(sum(components.values()), 1)
@@ -467,6 +469,7 @@ def score_option_contract(
         ),
         "holiday_calendar_loaded": holiday_calendar_loaded,
         "expiry_session_model": str(contract.get("expiry_session_model") or ""),
+        "expiry_fit_basis": "TRADING_SESSIONS_TO_EXPIRY",
         "premium": round(premium, 2),
         "bid": _f(contract.get("bid")),
         "ask": _f(contract.get("ask")),
