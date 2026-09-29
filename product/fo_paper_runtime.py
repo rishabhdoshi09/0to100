@@ -140,6 +140,21 @@ def _market_closed(now_ist: datetime) -> bool:
     )
 
 
+def _historical_bar_reaches_eod(raw_timestamp: str, now_ist: datetime) -> bool:
+    try:
+        stamp = datetime.fromisoformat(str(raw_timestamp or ""))
+    except ValueError:
+        return False
+    if stamp.tzinfo is None and now_ist.tzinfo is not None:
+        stamp = stamp.replace(tzinfo=now_ist.tzinfo)
+    elif stamp.tzinfo is not None and now_ist.tzinfo is not None:
+        stamp = stamp.astimezone(now_ist.tzinfo)
+    return (
+        stamp.date() == now_ist.date()
+        and (stamp.hour, stamp.minute) >= (FNO_EOD_EXIT_HOUR, FNO_EOD_EXIT_MINUTE)
+    )
+
+
 def _iv_crush_state(
     *,
     pos: FoPaperPosition,
@@ -342,6 +357,10 @@ def run_fo_paper_cycle(
                             {symbol: replay},
                             session=bar_session,
                             advance_session=False,
+                            force_eod=(
+                                str(pos.exit_policy or "").upper() == "EOD"
+                                and _historical_bar_reaches_eod(bar_session, now_ist)
+                            ),
                         )
                         if same_day:
                             intraday_bars_replayed += 1
