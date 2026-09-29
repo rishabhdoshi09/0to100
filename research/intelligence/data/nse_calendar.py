@@ -34,14 +34,24 @@ def _now_ist() -> datetime:
 
 
 def load_holidays() -> set:
+    """Load the union of bundled and runtime NSE holiday calendars.
+
+    The bundled file is a safe baseline, while the runtime logs file may carry
+    exchange amendments announced after the build shipped. Unioning the two is
+    deliberately conservative: an added holiday can suppress an entry, but a
+    stale bundled file can no longer shadow a newer runtime amendment.
+    """
+    holidays: set[str] = set()
     for p in (Path("data/nse_holidays.json"),
               logs_dir() / "nse_holidays.json"):
         try:
             if p.exists():
-                return {str(x) for x in json.loads(p.read_text())}
+                payload = json.loads(p.read_text())
+                if isinstance(payload, list):
+                    holidays.update(str(x) for x in payload)
         except Exception:
             continue
-    return set()                     # weekends-only (honest: no holiday table on disk)
+    return holidays                  # weekends-only when neither source is usable
 
 
 def is_session(d: date, holidays: set) -> bool:
