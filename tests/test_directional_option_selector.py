@@ -13,8 +13,19 @@ def _contract(symbol: str, strike: float, delta=None, *, option_type="CE"):
         "symbol": symbol,
         "option_type": option_type,
         "strike": strike,
+        "expiry": "2026-10-01",
         "dte": 9,
+        "as_of_date": "2026-09-22",
         "trading_sessions_to_expiry": 7,
+        "session_dates_to_expiry": [
+            "2026-09-23",
+            "2026-09-24",
+            "2026-09-25",
+            "2026-09-28",
+            "2026-09-29",
+            "2026-09-30",
+            "2026-10-01",
+        ],
         "holiday_calendar_loaded": 1,
         "expiry_session_model": "NSE_SESSIONS_WITH_RUNTIME_HOLIDAYS",
         "ltp": fair,
@@ -253,3 +264,62 @@ def test_expiry_fit_ranks_by_trading_sessions_not_calendar_dte():
     assert preferred_score["components"]["expiry_fit"] == 10.0
     assert farther_score["components"]["expiry_fit"] == 6.0
     assert preferred_score["components"]["expiry_fit"] > farther_score["components"]["expiry_fit"]
+
+
+def test_two_session_hold_across_weekend_uses_four_calendar_days_of_decay():
+    contract = _contract("WEEKEND", 3050.0, 0.62)
+    contract.update({
+        "expiry": "2026-10-01",
+        "dte": 6,
+        "as_of_date": "2026-09-25",
+        "trading_sessions_to_expiry": 4,
+        "session_dates_to_expiry": [
+            "2026-09-28",
+            "2026-09-29",
+            "2026-09-30",
+            "2026-10-01",
+        ],
+    })
+
+    result = score_option_contract(
+        contract,
+        direction="LONG",
+        spot=3050.0,
+        expected_move_pct=2.0,
+        horizon="1_TO_2D",
+        holding_days=2,
+        underlying_stop_price=2995.0,
+        iv_percentile=45.0,
+    )
+
+    expected_target = black_scholes(
+        spot=3050.0 * 1.02,
+        strike=3050.0,
+        dte=2,  # six calendar DTE less Fri->Tue's four elapsed calendar days
+        iv=0.24,
+        option_type="CE",
+    )["price"]
+    assert result["calendar_days_to_first_session"] == 3
+    assert result["calendar_days_to_holding_horizon"] == 4
+    assert result["scenario_decay_basis"] == "CALENDAR_DAYS_TO_NSE_SESSION_HORIZON"
+    assert result["trade_plan"]["target"] == round(expected_target, 2)
+
+
+def test_missing_session_date_path_fails_closed_for_decay_model():
+    contract = _contract("NO_SESSION_PATH", 3050.0, 0.62)
+    contract.pop("session_dates_to_expiry")
+
+    result = score_option_contract(
+        contract,
+        direction="LONG",
+        spot=3050.0,
+        expected_move_pct=2.0,
+        horizon="1_TO_2D",
+        holding_days=2,
+        underlying_stop_price=2995.0,
+        iv_percentile=45.0,
+    )
+
+    assert result["eligible"] is False
+    assert "HOLDING_CALENDAR_DECAY_UNAVAILABLE" in result["blockers"]
+    assert result["scenarios"] == []
