@@ -67,6 +67,7 @@ def test_complete_launcher_reconciles_stale_launchd_sha_on_restart() -> None:
     assert "QT_BUILD_SHA" in text
     assert "QT_RUNTIME_ROOT" in text
     assert "QT_HOST_ENV_FILE" in text
+    assert "PYTHONPATH" in text
     assert "git rev-parse HEAD" in text
     assert "Installed host SHA" in text
     assert "Refusing to run stale installed code" in text
@@ -85,7 +86,7 @@ def test_complete_launcher_does_not_silently_restart_old_launchd_build() -> None
         'if [[ "$(uname -s)" == "Darwin"', 1
     )[0]
 
-    stale_guard = launchd.index('if [[ -n "$current_sha" && "$installed_sha" != "$current_sha" ]]')
+    stale_guard = launchd.index('if [[ -n "$current_sha" && ( "$installed_sha" != "$current_sha" || "$installed_repo" != "$ROOT" ) ]]')
     control_call = launchd.index('"$py" -m product.launchd_control "$action"')
     assert stale_guard < control_call
     assert 'if [[ "$requested" != "--restart" ]]' in launchd
