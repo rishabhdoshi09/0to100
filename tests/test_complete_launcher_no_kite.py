@@ -69,7 +69,7 @@ def test_complete_launcher_reconciles_stale_launchd_sha_on_restart() -> None:
     assert "QT_HOST_ENV_FILE" in text
     assert "PYTHONPATH" in text
     assert "git rev-parse HEAD" in text
-    assert "Installed host SHA" in text
+    assert "Installed host identity differs" in text
     assert "Refusing to run stale installed code" in text
     assert "Cannot reconcile launchd from a dirty checkout" in text
     assert 'local install_args=(install --runtime-root "$reconcile_runtime" --manager launchd)' in text
