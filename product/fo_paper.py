@@ -348,20 +348,39 @@ class FoPaperBook:
             elif pos.bars_held >= pos.max_holding_sessions:
                 exit_price, reason = close, "MAX_HOLD"
 
-            # Persist new favorable excursion only for subsequent observations.
-            pos.max_mark = max(pos.max_mark, high, close)
-            pos.min_mark = min(pos.min_mark, low, close)
-            if risk_unit > 0 and pos.max_mark >= pos.entry_price + self.trail_activation_r * risk_unit:
-                pos.trailing_stop_price = round(max(
-                    pos.stop_price,
-                    pos.entry_price,
-                    pos.max_mark - self.trail_distance_r * risk_unit,
-                ), 4)
+            # Excursion evidence must stop at the exit boundary. Do not credit a
+            # later/unknown-order bar high as MFE after a stop, or a later bar
+            # extension above a target after the position has already exited.
+            if exit_price is None:
+                pos.max_mark = max(pos.max_mark, high, close)
+                pos.min_mark = min(pos.min_mark, low, close)
+            elif reason in {
+                "GAP_STOP", "GAP_TRAIL_STOP", "STOP", "TRAIL_STOP",
+                "AMBIGUOUS_BAR_STOP_FIRST", "AMBIGUOUS_BAR_TRAIL_STOP_FIRST",
+            }:
+                pos.max_mark = max(pos.max_mark, open_px)
+                pos.min_mark = min(pos.min_mark, float(exit_price), open_px)
+            elif reason in {"GAP_TARGET", "TARGET"}:
+                pos.max_mark = max(pos.max_mark, float(exit_price), open_px)
+                pos.min_mark = min(pos.min_mark, low, open_px)
             else:
-                pos.trailing_stop_price = round(max(
-                    pos.stop_price,
-                    float(pos.trailing_stop_price or 0.0),
-                ), 4)
+                # MAX_HOLD / EOD / IV_CRUSH occur after the observed interval
+                # survived without stop/target, so its range is legitimate.
+                pos.max_mark = max(pos.max_mark, high, close)
+                pos.min_mark = min(pos.min_mark, low, close)
+
+            if exit_price is None:
+                if risk_unit > 0 and pos.max_mark >= pos.entry_price + self.trail_activation_r * risk_unit:
+                    pos.trailing_stop_price = round(max(
+                        pos.stop_price,
+                        pos.entry_price,
+                        pos.max_mark - self.trail_distance_r * risk_unit,
+                    ), 4)
+                else:
+                    pos.trailing_stop_price = round(max(
+                        pos.stop_price,
+                        float(pos.trailing_stop_price or 0.0),
+                    ), 4)
 
             if exit_price is not None:
                 # Current policy exits use observed bid when available. Historical
