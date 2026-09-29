@@ -38,6 +38,7 @@ def _options():
         "expiry": "2026-10-01",
         "dte": 9,
         "as_of_date": "2026-09-22",
+        "quote_timestamp": "2026-09-22T10:30:00",
         "trading_sessions_to_expiry": 7,
         "session_dates_to_expiry": [
             "2026-09-23",
@@ -99,3 +100,43 @@ def test_valid_stock_with_bad_option_is_not_forced_into_trade():
     )
     assert result["decision"] == "NO_OPTION_TRADE"
     assert "selected_contract" not in result
+
+
+def test_pipeline_carries_explicit_intraday_eod_horizon_into_option_decay():
+    setup = _setup()
+    setup.update({
+        "rvol": 3.5,
+        "adx": 38.0,
+        "relative_strength_pct": 3.0,
+        "sector_strength_pct": 2.5,
+        "nifty_change_pct": 1.2,
+        "futures_price_change_pct": 2.0,
+        "futures_oi_change_pct": 10.0,
+        "price": 3075.0,
+        "breakout_level": 3025.0,
+    })
+    options = _options()
+    # Reprice the fixture consistently with the stronger current spot.
+    fair = black_scholes(
+        spot=3075.0, strike=3050.0, dte=9, iv=0.24, option_type="CE",
+    )["price"]
+    options[0].update({
+        "ltp": fair,
+        "bid": max(0.05, fair - 0.25),
+        "ask": fair + 0.25,
+        "delta": 0.62,
+    })
+
+    result = evaluate_fo_opportunity(
+        underlying_features=setup,
+        direction="LONG",
+        option_contracts=options,
+        iv_percentile=45.0,
+    )
+    assert result["decision"] == "PAPER_OPTION_CANDIDATE"
+    assert result["setup"]["expected_move"]["horizon"] == "INTRADAY"
+    assert result["setup"]["expected_move"]["holding_days"] == 0
+    assert result["setup"]["expected_move"]["exit_policy"] == "EOD"
+    selected = result["selected_contract"]
+    assert selected["scenario_decay_basis"] == "FRACTIONAL_CALENDAR_DAYS_TO_1530_IST_EOD"
+    assert 0 < selected["calendar_days_to_holding_horizon"] < 1
