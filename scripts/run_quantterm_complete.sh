@@ -58,6 +58,69 @@ run_installed_launchd_console() {
     action="restart"
   fi
 
+  read_plist_env() {
+    local key="$1"
+    "$py" - "$plist" "$key" <<'PY' 2>/dev/null || true
+import plistlib
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+key = sys.argv[2]
+try:
+    with path.open("rb") as fh:
+        payload = plistlib.load(fh)
+except Exception:
+    raise SystemExit(0)
+env = payload.get("EnvironmentVariables") or {}
+value = env.get(key)
+if value is not None:
+    print(str(value))
+PY
+  }
+
+  local current_sha=""
+  local installed_sha=""
+  local installed_runtime=""
+  local installed_env_file=""
+  current_sha="$(git rev-parse HEAD 2>/dev/null || true)"
+  installed_sha="$(read_plist_env QT_BUILD_SHA)"
+  installed_runtime="$(read_plist_env QT_RUNTIME_ROOT)"
+  installed_env_file="$(read_plist_env QT_HOST_ENV_FILE)"
+
+  if [[ -n "$current_sha" && "$installed_sha" != "$current_sha" ]]; then
+    echo "[COMPLETE STACK] Installed host SHA ${installed_sha:0:12} does not match checkout ${current_sha:0:12}."
+    if [[ "$requested" != "--restart" ]]; then
+      echo "[COMPLETE STACK] Refusing to run stale installed code. Re-run with --restart to reconcile the canonical host." >&2
+      return 1
+    fi
+    if [[ -n "$(git status --porcelain 2>/dev/null || true)" ]]; then
+      echo "[COMPLETE STACK] Cannot reconcile launchd from a dirty checkout. Commit/stash local changes first." >&2
+      return 1
+    fi
+
+    local reconcile_runtime="${QT_RUNTIME_ROOT:-$installed_runtime}"
+    if [[ -z "$reconcile_runtime" && -f "$ROOT/.quantterm_runtime_root" ]]; then
+      reconcile_runtime="$(head -n 1 "$ROOT/.quantterm_runtime_root" 2>/dev/null || true)"
+    fi
+    if [[ -z "$reconcile_runtime" ]]; then
+      echo "[COMPLETE STACK] Cannot reconcile launchd: persistent runtime root is unknown." >&2
+      return 1
+    fi
+
+    echo "[COMPLETE STACK] Reconciling canonical launchd host to checkout SHA ${current_sha:0:12}…"
+    local install_args=(install --runtime-root "$reconcile_runtime" --manager launchd)
+    if [[ -n "$installed_env_file" ]]; then
+      install_args+=(--env-file "$installed_env_file")
+    fi
+    if ! QT_RUNTIME_ROOT_REQUIRE_EXISTING=1 PYTHON="$py"       "$ROOT/scripts/install_quantterm_host.sh" "${install_args[@]}"; then
+      echo "[COMPLETE STACK] Exact-SHA host reconciliation failed; stale service was not accepted." >&2
+      return 1
+    fi
+    installed_sha="$current_sha"
+    action="start"
+  fi
+
   mkdir -p "$host_log_dir"
   touch "$host_out" "$host_err"
 
