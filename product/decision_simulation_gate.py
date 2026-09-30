@@ -267,8 +267,8 @@ def status(*, path: str | Path | None = None) -> dict[str, Any]:
     elif discovery_ready:
         phase = "AWAITING_APPROVAL"
         message = (
-            "Current best-trade search is complete. Review the shortlist, then "
-            "approve Decision Simulation once."
+            "Current best-trade search is complete. QuantTerm autonomy will "
+            "authorize PAPER_FORWARD and HISTORICAL_REPLAY for this startup."
         )
     else:
         phase = "SEARCHING_BEST_TRADES"

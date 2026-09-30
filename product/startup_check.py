@@ -277,10 +277,11 @@ def build_startup_check(*, probe_network: bool = True) -> dict[str, Any]:
 
     decision_phase = ""
     decision_detail = ""
-    # A complete-stack launch intentionally requires one operator approval after
-    # best-trade discovery.  That gate is not a forward-evidence failure.  When
-    # it is the reason selection has not run yet, say so explicitly instead of
-    # rendering the honest-but-misleading aggregate soak status as BLOCKED.
+    # A complete-stack launch records one paper/history simulation approval after
+    # best-trade discovery. The autonomy supervisor grants it automatically once
+    # current discovery is ready; it is not an operator action and never touches
+    # live-money authority. While that handoff is pending, surface WAITING rather
+    # than an honest-but-misleading aggregate soak status of BLOCKED.
     if str(os.environ.get("QT_STARTUP_ID") or "").strip():
         try:
             from product.decision_simulation_gate import status as decision_gate_status
@@ -323,7 +324,7 @@ def build_startup_check(*, probe_network: bool = True) -> dict[str, Any]:
             "FORWARD EVIDENCE",
             soak_status,
             (
-                "Waiting for the one-time Decision Simulation approval; no selection/paper cycle has been claimed yet."
+                "Autonomy is authorizing Decision Simulation for paper/history; no selection/paper cycle has been claimed yet."
                 if decision_phase == "AWAITING_APPROVAL"
                 else ""
             ),
