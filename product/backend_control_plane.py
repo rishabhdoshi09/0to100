@@ -585,7 +585,7 @@ def _zerodha_lane(*, auto: Mapping[str, Any], kite_ok: bool) -> dict[str, Any]:
             "",
             label="Login to Zerodha",
             kind="instruction",
-            instruction="Run python main.py login when you want broker-live quotes or broker-dependent paper entry. Autonomous research continues without it.",
+            instruction="Run python main.py login when you want broker-live quotes, F&O broker data or read-only broker reconciliation. Official-data paper operation continues without it.",
         )
     status = "Ready" if kite_ok else "Optional login"
     status_code = "READY" if kite_ok else "CAPABILITY_OFFLINE"
@@ -593,7 +593,7 @@ def _zerodha_lane(*, auto: Mapping[str, Any], kite_ok: bool) -> dict[str, Any]:
     meaning = (
         "Used for live quotes and broker observation."
         if kite_ok
-        else "This does not stop official data, scans, research, shadow tracking, settlement, replay or learning."
+        else "This does not stop official data, scans, paper entry/exits, research, settlement, replay or learning."
     )
     current = (
         f"Last checked: {_fmt_when(heartbeat)}"
