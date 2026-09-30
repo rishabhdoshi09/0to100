@@ -73,6 +73,12 @@ def test_first_run_processes_a_bounded_batch_and_advances_the_cursor(tmp_path, m
     cell = CE.read(sample.context_key, evidence_class=COUNTERFACTUAL, path=evidence_path)
     assert cell["count"] == 10
 
+    # Every one of these engineered breakouts crashes on the very next bar --
+    # a real, honestly graded outcome the forward move went against, not a
+    # fabricated label.
+    assert sum(result["classification_counts"].values()) == 10
+    assert sum(s["classification_counts"].values()) == 10
+
 
 def test_repeated_calls_never_reprocess_the_same_session(tmp_path, monkeypatch):
     monkeypatch.setenv("QT_CONDITIONAL_EVIDENCE", str(tmp_path / "evidence.json"))

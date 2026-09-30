@@ -34,6 +34,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from core.runtime_paths import logs_dir
 from product.fno_historical_walkforward import (
+    classify_walk_forward_outcome,
     evaluate_point_in_time_candidate,
     record_walk_forward_outcome,
 )
@@ -247,6 +248,7 @@ def run_next_batch(
 
     evaluated = 0
     settled = 0
+    classification_counts: dict[str, int] = dict(checkpoint.get("classification_counts") or {})
     errors: list[str] = list(intake_errors)
     try:
         for as_of in batch_dates:
@@ -265,10 +267,11 @@ def run_next_batch(
                 if len(forward_rows) < horizon_sessions:
                     continue
                 forward_row = forward_rows.iloc[horizon_sessions - 1]
+                forward_close = float(forward_row["Close"])
                 try:
                     update = record_walk_forward_outcome(
                         candidate,
-                        forward_close=float(forward_row["Close"]),
+                        forward_close=forward_close,
                         resolved_at=pd.Timestamp(forward_row.name).isoformat(),
                         path=None,
                     )
@@ -277,11 +280,28 @@ def run_next_batch(
                     continue
                 if update is not None:
                     settled += 1
+                # Grading every settled candidate (taken and not-taken alike)
+                # against the same CORRECT_REJECTION/MISSED_WINNER/... taxonomy
+                # the rest of the desk uses for rejected-candidate review is
+                # separate from the R-multiple evidence cell above: it never
+                # feeds ranking, it only makes "was this decision graded, and
+                # was it graded correctly" honestly reportable in the UI.
+                try:
+                    classification = classify_walk_forward_outcome(
+                        candidate, forward_close=forward_close,
+                    )
+                except Exception:
+                    classification = ""
+                if classification:
+                    classification_counts[classification] = (
+                        int(classification_counts.get(classification) or 0) + 1
+                    )
     finally:
         checkpoint["cursor_date"] = batch_dates[-1].isoformat()
         checkpoint["total_sessions_processed"] = int(checkpoint.get("total_sessions_processed") or 0) + len(batch_dates)
         checkpoint["total_candidates_evaluated"] = int(checkpoint.get("total_candidates_evaluated") or 0) + evaluated
         checkpoint["total_settled"] = int(checkpoint.get("total_settled") or 0) + settled
+        checkpoint["classification_counts"] = classification_counts
         checkpoint["last_run_at"] = _now()
         checkpoint["universe_size"] = len(resolved_universe)
         checkpoint["last_available_session"] = last_available.isoformat()
@@ -297,6 +317,7 @@ def run_next_batch(
         "sessions_processed": [d.isoformat() for d in batch_dates],
         "candidates_evaluated": evaluated,
         "settled": settled,
+        "classification_counts": classification_counts,
         "cursor_date": checkpoint["cursor_date"],
         "remaining_sessions": max(0, len(candidate_dates) - len(batch_dates)),
         "errors": errors,
@@ -324,6 +345,7 @@ def status(path: str | Path | None = None) -> dict[str, Any]:
         "total_sessions_processed": int(checkpoint.get("total_sessions_processed") or 0),
         "total_candidates_evaluated": int(checkpoint.get("total_candidates_evaluated") or 0),
         "total_settled": int(checkpoint.get("total_settled") or 0),
+        "classification_counts": dict(checkpoint.get("classification_counts") or {}),
         "universe_size": int(checkpoint.get("universe_size") or 0),
         "last_error": checkpoint.get("last_error") or "",
         "last_error_at": checkpoint.get("last_error_at") or "",

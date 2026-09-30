@@ -175,6 +175,8 @@ export function FnoView({ dashboard, runControl, setSelected, setActive }: Props
   const candidates = directional.candidates || []
   const paper = dashboard.fno.paper || {}
   const openPaper = paper.open_positions || []
+  const learning = dashboard.fno.learning_impact || {}
+  const ranking = learning.ranking_impact || {}
   const fmt = (value: number | null | undefined, digits = 2) => Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : '—'
   return (
     <section className="workspace-view">
@@ -265,6 +267,61 @@ export function FnoView({ dashboard, runControl, setSelected, setActive }: Props
                 <span>{position.option_type || '—'} {fmt(position.strike, 0)} · expiry {position.expiry || 'unavailable'} · qty {position.quantity ?? '—'} · setup {fmt(position.setup_score, 1)} · option {fmt(position.option_score, 1)}</span>
                 <p>Entry ₹{fmt(position.entry_price)} · stop ₹{fmt(position.stop_price)}{position.trailing_stop_price ? ` (trailing ₹${fmt(position.trailing_stop_price)})` : ''} · target ₹{fmt(position.target_price)} · max hold {position.max_holding_sessions ?? '—'} session(s)</p>
                 <small>Supervision · bars held {position.bars_held ?? 0}/{position.max_holding_sessions ?? '—'} · best mark ₹{fmt(position.max_mark)} · worst mark ₹{fmt(position.min_mark)} · entry status {words(position.entry_minute_status || 'unknown')}</small>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      </div>
+
+      <div className="fno-layout">
+        <Panel title="F&O LEARNING LOOP · HISTORICAL (COUNTERFACTUAL)" subtitle="Point-in-time walk-forward replay over real historical OHLC — establishes priors only, can never move ranking">
+          {(() => {
+            const hist = learning.historical || {}
+            if (!hist.available) return <div className="empty-row">{hist.error ? `Unavailable: ${hist.error}` : 'No historical walk-forward run has completed yet.'}</div>
+            return (
+              <div className="exclusion-list">
+                <div>
+                  <strong>{hist.historical_simulations_completed ?? 0} session(s) simulated · {hist.decisions_graded ?? 0} decisions graded · {hist.settled ?? 0} settled</strong>
+                  <span>Cursor {hist.cursor_date || '—'} · {hist.coverage_complete ? 'fully caught up to available history' : 'still catching up on backlog'}</span>
+                  <p>Correct rejects {hist.correct_rejects ?? 0} · missed winners {hist.missed_winners ?? 0} · avoided losers {hist.avoided_losers ?? 0} · ran away without entry {hist.ran_away_without_entry ?? 0}</p>
+                  <small>{hist.evidence_cells ?? 0} evidence cell(s) · can affect ranking: {hist.can_affect_ranking ? 'yes' : 'no'}</small>
+                  <small>{hist.note}</small>
+                </div>
+              </div>
+            )
+          })()}
+        </Panel>
+        <Panel title="F&O LEARNING LOOP · FORWARD (PAPER_FORWARD)" subtitle="Real settled F&O paper trades — the only evidence class that can change ranking">
+          {(() => {
+            const fwd = learning.forward || {}
+            if (!fwd.available) return <div className="empty-row">{fwd.error ? `Unavailable: ${fwd.error}` : 'No forward paper evidence yet.'}</div>
+            return (
+              <div className="exclusion-list">
+                <div>
+                  <strong>{fwd.forward_paper_trades ?? 0} forward paper trade(s) · {fwd.wins ?? 0} win / {fwd.losses ?? 0} loss</strong>
+                  <span>{fwd.open_positions ?? 0} open · {fwd.production_evidence_trades ?? 0} fully-costed production-evidence trade(s)</span>
+                  <p>{fwd.evidence_cells ?? 0} evidence cell(s) · {fwd.matured_cells ?? 0} matured (≥{fwd.minimum_sample_for_ranking ?? 30} samples)</p>
+                  <small>Can affect ranking: {fwd.can_affect_ranking ? 'yes' : 'no'}</small>
+                  <small>{fwd.note}</small>
+                </div>
+              </div>
+            )
+          })()}
+        </Panel>
+      </div>
+      <div className="fno-layout">
+        <Panel title="RANKING IMPACT" subtitle="Only claimed when a real candidate's ranking actually moved this cycle">
+          <div className="exclusion-list">
+            <div>
+              <strong>{ranking.plain || 'Learning impact is being measured.'}</strong>
+              <span>Status: {words(ranking.status || 'COLLECTING')}</span>
+            </div>
+            {(ranking.influenced || []).length === 0 && <div className="empty-row">No candidate's ranking has been changed by validated evidence yet.</div>}
+            {(ranking.influenced || []).map((row, index) => (
+              <div key={`${row.symbol}-${index}`}>
+                <strong>{row.symbol} · {row.direction}</strong>
+                <span>Setup demoted after negative forward expectancy · base {fmt(row.base_score, 1)} → ranked {fmt(row.ranking_score, 1)} ({fmt(row.adjustment, 1)})</span>
+                <p>{words(row.reason || '')} · n={row.count ?? 0} · expectancy {fmt(row.expectancy_R, 2)}R</p>
               </div>
             ))}
           </div>

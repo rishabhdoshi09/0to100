@@ -288,6 +288,79 @@ export type FnoDirectionalCandidate = {
   forward_evidence?: FnoForwardEvidence
   paper_only?: boolean
   live_execution_allowed?: boolean
+  base_score?: number
+  ranking_adjustment?: number
+  ranking_score?: number
+  ranking_evidence?: {
+    usable?: boolean
+    reason?: string
+    adjustment?: number
+    evidence_class?: string
+    context_key?: string
+    count?: number
+    min_sample?: number
+    expectancy_R?: number | null
+    wilson_lower_bound?: number | null
+  }
+}
+
+export type FnoLearningEvidenceBlock = {
+  available?: boolean
+  evidence_class?: string
+  error?: string
+  last_run_at?: string
+  cursor_date?: string
+  coverage_complete?: boolean
+  historical_simulations_completed?: number
+  decisions_graded?: number
+  settled?: number
+  correct_rejects?: number
+  missed_winners?: number
+  avoided_losers?: number
+  ran_away_without_entry?: number
+  good_waits?: number
+  flat?: number
+  open_positions?: number
+  forward_paper_trades?: number
+  wins?: number
+  losses?: number
+  production_evidence_trades?: number
+  evidence_cells?: number
+  matured_cells?: number
+  minimum_sample_for_ranking?: number
+  can_affect_ranking?: boolean
+  note?: string
+}
+
+export type FnoLearningImpact = {
+  schema_version?: number
+  available?: boolean
+  error?: string
+  historical?: FnoLearningEvidenceBlock
+  forward?: FnoLearningEvidenceBlock
+  ranking_impact?: {
+    status?: string
+    plain?: string
+    influenced_count?: number
+    influenced?: Array<{
+      symbol?: string
+      direction?: string
+      base_score?: number
+      ranking_score?: number
+      adjustment?: number
+      reason?: string
+      count?: number
+      expectancy_R?: number | null
+    }>
+  }
+  contract?: {
+    historical_and_forward_kept_separate?: boolean
+    historical_can_promote_ranking?: boolean
+    forward_required_to_change_ranking?: boolean
+    contract_selection_learning_requires_real_option_history?: boolean
+    live_money_affected?: boolean
+  }
+  live_locked?: boolean
 }
 
 export type FnoDirectionalState = {
@@ -621,6 +694,7 @@ export type DashboardPayload = {
     exclusions: FnoExclusion[]
     directional?: FnoDirectionalState
     paper?: FnoPaperState
+    learning_impact?: FnoLearningImpact
     cache_mtime?: number | null
     error?: string
   }
