@@ -308,7 +308,8 @@ def score_fo_setup(
 
     tradable = not blockers
     expected = _expected_move(features, score)
-    atr_abs = price * max(0.0, _f(features.get("atr_pct"))) / 100.0
+    atr_pct = max(0.0, _f(features.get("atr_pct")))
+    atr_abs = price * atr_pct / 100.0
     trigger = _f(features.get("breakout_level" if direction == LONG else "breakdown_level"))
     if direction == LONG:
         stop_price = trigger - 0.5 * atr_abs if trigger > 0 and atr_abs > 0 else 0.0

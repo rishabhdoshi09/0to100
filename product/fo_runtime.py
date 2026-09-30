@@ -568,13 +568,9 @@ def run_fo_directional_scan(
         if row.get("decision") == "PAPER_OPTION_CANDIDATE"
         and isinstance(row.get("selected"), Mapping)
     ]
-    candidates.sort(
-        key=lambda row: (
-            float((row.get("setup") or {}).get("score") or 0.0),
-            float((row.get("selected_contract") or {}).get("score") or 0.0),
-        ),
-        reverse=True,
-    )
+    from product.fno_ranking import rank_fno_candidates
+
+    candidates = rank_fno_candidates(candidates)
     return {
         "available": True,
         "status": "READY",

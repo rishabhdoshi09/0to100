@@ -204,19 +204,14 @@ def _iv_crush_state(
 
 
 def _candidate_rows(directional: Mapping[str, Any]) -> list[dict[str, Any]]:
+    from product.fno_ranking import rank_fno_candidates
+
     rows = [
         dict(row)
         for row in list(directional.get("candidates") or [])
         if isinstance(row, Mapping)
     ]
-    rows.sort(
-        key=lambda row: (
-            float((row.get("setup") or {}).get("score") or 0.0),
-            float((row.get("selected_contract") or {}).get("score") or 0.0),
-        ),
-        reverse=True,
-    )
-    return rows
+    return rank_fno_candidates(rows)
 
 
 def run_fo_paper_cycle(
