@@ -6,9 +6,13 @@
 and the safety properties layered on top of it:
   - a real settled PAPER_FORWARD trade can affect a LATER ranking call once
     genuine evidence threshold is met
-  - historical (COUNTERFACTUAL) evidence, however large the sample, can
-    never override that forward-evidence hierarchy
-  - a tiny sample cannot materially alter ranking
+  - historical (COUNTERFACTUAL) evidence, however large the sample, can only
+    ever act as a small, explicitly bounded prior (product.fno_evidence_fusion
+    .HISTORICAL_CAP) -- and only when forward evidence has nothing to say yet.
+    The moment real forward evidence exists for a context, it dominates
+    completely; historical evidence never comes close to what a genuine,
+    forward-confirmed demotion or promotion can do
+  - a tiny sample (forward OR historical) cannot materially alter ranking
   - rejected historical candidates are graded, not silently dropped
   - ranking_context_key stays populated end to end (candidate -> position ->
     trade row -> evidence cell). This is a SEPARATE field from the legacy
@@ -244,14 +248,17 @@ def test_full_fno_lifecycle_scan_to_future_ranking(tmp_path, monkeypatch):
     demoted = next(r for r in ranked_after if r["symbol"] == "LOSERCO")
     assert demoted["base_score"] == loser_setup["score"], "the raw scorer itself is untouched"
     assert demoted["ranking_adjustment"] < 0
-    assert demoted["ranking_evidence"]["reason"] == "MEASURED_NEGATIVE_EXPECTANCY"
+    assert demoted["ranking_evidence"]["reason"] == "FORWARD_NEGATIVE_EXPECTANCY"
     assert demoted["ranking_evidence"]["context_key"] == loser_key
+    assert demoted["ranking_evidence"]["status"] == "FORWARD_DOMINATES"
 
-    # ---- SAFETY: historical (COUNTERFACTUAL) evidence, however large,
-    # cannot override the forward-evidence hierarchy for this ranking
-    # function. Seed a large COUNTERFACTUAL sample for the CONTROL context
-    # and prove rank_fno_candidates still ignores it entirely. ----
+    # ---- HISTORICAL PRIOR: large, stable COUNTERFACTUAL evidence alone (no
+    # forward evidence at all yet) may now act as a SMALL, BOUNDED prior --
+    # this is the intended relaxation of "historical can never move ranking."
+    # It must still stay an order of magnitude smaller than what LOSERCO's
+    # real, forward-confirmed demotion achieved above. ----
     from product.decision_chain import Outcome
+    from product.fno_evidence_fusion import HISTORICAL_CAP
 
     for i in range(200):
         outcome = Outcome(
@@ -264,16 +271,26 @@ def test_full_fno_lifecycle_scan_to_future_ranking(tmp_path, monkeypatch):
         )
         CE.record_outcome(outcome, context_key=control_key, evidence_class=COUNTERFACTUAL, path=evidence_path)
 
-    ranked_with_historical_noise = rank_fno_candidates(later_scan)
-    assert [r["symbol"] for r in ranked_with_historical_noise] == ["CONTROLCO", "LOSERCO"], (
-        "200 COUNTERFACTUAL (historical replay) outcomes for CONTROLCO must "
-        "never demote it -- only PAPER_FORWARD evidence may move ranking"
+    ranked_with_historical_prior = rank_fno_candidates(later_scan)
+    assert [r["symbol"] for r in ranked_with_historical_prior] == ["CONTROLCO", "LOSERCO"], (
+        "even demoted by its own bounded historical prior, CONTROLCO must "
+        "still rank above LOSERCO's much larger, forward-confirmed demotion"
     )
-    control_row = next(r for r in ranked_with_historical_noise if r["symbol"] == "CONTROLCO")
-    assert control_row["ranking_adjustment"] == 0.0
-    assert control_row["ranking_evidence"]["reason"] == "INSUFFICIENT_EVIDENCE"
+    control_row = next(r for r in ranked_with_historical_prior if r["symbol"] == "CONTROLCO")
+    assert control_row["ranking_evidence"]["status"] == "HISTORICAL_PRIOR_ONLY"
+    assert control_row["ranking_evidence"]["forward_adjustment"] == 0.0, "no forward evidence exists for CONTROLCO"
+    assert control_row["ranking_adjustment"] < 0, "200 stable, negative historical outcomes must produce SOME bounded prior"
+    assert control_row["ranking_adjustment"] == control_row["ranking_evidence"]["historical_prior"]
+    assert abs(control_row["ranking_adjustment"]) <= HISTORICAL_CAP, (
+        "a historical-only prior must never exceed its small, explicit cap"
+    )
+    assert abs(control_row["ranking_adjustment"]) < abs(demoted["ranking_adjustment"]), (
+        "a historical-only prior must stay far smaller than a real, "
+        "forward-confirmed demotion -- historical evidence is a weak vote"
+    )
 
-    # ---- SAFETY: a tiny forward sample cannot materially alter ranking. ----
+    # ---- SAFETY: a tiny forward sample cannot materially alter ranking,
+    # even in a fresh context with zero historical evidence either. ----
     tiny_setup = _setup(sector_strength=-4.0)  # yet another, fresh bucket
     tiny_key = fno_context_key(tiny_setup)
     for i in range(5):
@@ -285,7 +302,8 @@ def test_full_fno_lifecycle_scan_to_future_ranking(tmp_path, monkeypatch):
     tiny_ranked = rank_fno_candidates(tiny_candidates)
     tiny_row = next(r for r in tiny_ranked if r["symbol"] == "TINYCO")
     assert tiny_row["ranking_adjustment"] == 0.0
-    assert tiny_row["ranking_evidence"]["reason"] == "INSUFFICIENT_EVIDENCE"
+    assert tiny_row["ranking_evidence"]["reason"] == "INSUFFICIENT_FORWARD_SAMPLE"
+    assert tiny_row["ranking_evidence"]["status"] == "INSUFFICIENT_EVIDENCE"
 
     # ---- RESTART DURABILITY: a fresh, independent read of the on-disk store
     # (exactly what a new process after a restart would see -- this module
