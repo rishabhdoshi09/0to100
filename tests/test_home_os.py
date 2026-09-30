@@ -446,6 +446,10 @@ def test_home_best_trades_excludes_rejections_waits_and_non_buy_gate_rows(monkey
                     "discovery_decision": "ENTER_NOW",
                     "reason_code": "ENTRY_TOO_EXTENDED",
                 },
+                {
+                    "symbol": "UNKNOWN",
+                    "setup_label": "Missing decision evidence",
+                },
             ],
         },
     )
@@ -498,6 +502,7 @@ def test_home_best_trades_excludes_rejections_waits_and_non_buy_gate_rows(monkey
     assert "AUROPHARMA" not in rendered
     assert "EMIL" not in rendered
     assert "BADWAIT" not in rendered
+    assert "UNKNOWN" not in rendered
 
 
 def test_home_best_list_excludes_capacity_reserves_even_when_five_rows_are_available(monkeypatch):
