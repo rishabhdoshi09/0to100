@@ -332,6 +332,10 @@ def score_fo_setup(
         "components": {key: round(value, 2) for key, value in components.items()},
         "futures_oi_state": oi_state,
         "breakout_distance_pct": round(breakout_pct, 3),
+        # Surfaced so downstream evidence-cell keying (product.fno_evidence
+        # .fno_context_key) can bucket by volatility the same way the equity
+        # ranking engine does, instead of silently losing this dimension.
+        "atr_pct": round(atr_pct, 3),
         "expected_move": expected,
         "underlying_trade_plan": underlying_trade_plan,
         "tradable": tradable,
