@@ -176,17 +176,13 @@ def evaluate_fo_snapshot_auto(
         row for row in rows
         if row.get("decision") == "PAPER_OPTION_CANDIDATE"
     ]
-    candidates.sort(
-        key=lambda row: (
-            float((row.get("setup") or {}).get("score") or 0.0),
-            float((row.get("selected_contract") or {}).get("score") or 0.0),
-        ),
-        reverse=True,
-    )
+    from product.fno_ranking import rank_fno_candidates
+
+    ranked = rank_fno_candidates(candidates)
     return {
         "symbol": str(symbol or "").upper(),
-        "decision": "PAPER_OPTION_CANDIDATE" if candidates else "NO_TRADE",
-        "selected": candidates[0] if candidates else None,
+        "decision": "PAPER_OPTION_CANDIDATE" if ranked else "NO_TRADE",
+        "selected": ranked[0] if ranked else None,
         "directions": rows,
         "paper_only": True,
         "live_execution_allowed": False,

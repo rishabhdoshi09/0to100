@@ -1297,6 +1297,69 @@ def run_historical_paper_cycle(ctx) -> JobResult:
     )
 
 
+def run_fno_historical_walkforward(ctx) -> JobResult:
+    """Poll/advance one bounded, checkpointed F&O historical walk-forward
+    batch. COUNTERFACTUAL evidence only -- never touches live money, never
+    competes with PAPER_FORWARD execution for market-hours resources, and a
+    failure here is isolated to this job type (not in CRITICAL_JOBS)."""
+    now = ctx.deps.now_ist()
+    holidays = ctx.deps.holidays() if hasattr(ctx.deps, "holidays") else None
+    if SCH.market_is_open(now, holidays):
+        return JobResult(
+            JS.SKIPPED_IDEMPOTENT,
+            "fno historical walkforward deferred while cash market is open",
+            state_hint=ST.OBSERVING,
+            metadata={"reason": "market_open"},
+        )
+
+    try:
+        from product.fno_historical_loop import run_next_batch
+
+        result = run_next_batch(now_ist=now)
+    except Exception as exc:
+        return JobResult(
+            JS.RETRYABLE_FAILED,
+            "fno historical walkforward batch failed",
+            error_code="FNO_WALKFORWARD_ERROR",
+            error_message=str(exc),
+            failures={H.LEARNING_FAILED},
+            state_hint=ST.DEGRADED,
+        )
+
+    status = str(result.get("status") or "").upper()
+    if status == "OK":
+        return JobResult(
+            JS.SUCCEEDED,
+            (
+                f"fno walkforward batch complete · "
+                f"{int(result.get('candidates_evaluated') or 0)} candidates · "
+                f"{int(result.get('settled') or 0)} settled"
+            ),
+            clears={H.LEARNING_FAILED},
+            state_hint=ST.RESEARCHING,
+            metadata=result,
+        )
+    if status == "PARTIAL_ERROR":
+        return JobResult(
+            JS.RETRYABLE_FAILED,
+            f"fno walkforward batch had per-symbol failures: {result.get('errors')}",
+            error_code="FNO_WALKFORWARD_PARTIAL_ERROR",
+            error_message="; ".join(str(e) for e in (result.get("errors") or []))[:500],
+            failures={H.LEARNING_FAILED},
+            state_hint=ST.DEGRADED,
+            metadata=result,
+        )
+    # NO_UNIVERSE / NO_HISTORY / AWAITING_FORWARD_BAR / UP_TO_DATE: nothing
+    # new to do right now -- honest no-op, not a failure.
+    return JobResult(
+        JS.SKIPPED_IDEMPOTENT,
+        f"fno walkforward idle: {status or 'no new work'}",
+        clears={H.LEARNING_FAILED},
+        state_hint=ST.OBSERVING,
+        metadata=result,
+    )
+
+
 def run_learning_cycle(ctx) -> JobResult:
     now = ctx.deps.now_ist()
     holidays = ctx.deps.holidays() if hasattr(ctx.deps, "holidays") else None
@@ -1493,4 +1556,5 @@ HANDLERS = {
     SCH.LONG_TERM_SCAN: run_long_term_scan_job,
     SCH.LONG_TERM_REFRESH: run_long_term_refresh_job,
     SCH.HISTORICAL_PAPER_CYCLE: run_historical_paper_cycle,
+    SCH.FNO_HISTORICAL_WALKFORWARD: run_fno_historical_walkforward,
 }

@@ -33,6 +33,7 @@ export const TOOL_GROUPS: readonly NavGroup[] = [
       ['▤', 'Market Reports', 'Reports'],
       ['★', 'Watchlist', 'Watchlist'],
       ['⇔', 'Compare', 'Compare'],
+      ['Ⅎ', 'F&O Desk', 'F&O'],
     ],
   },
   {

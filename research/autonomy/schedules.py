@@ -27,12 +27,13 @@ RESEARCH_CYCLE = "research_cycle"
 LONG_TERM_SCAN = "long_term_scan"
 LONG_TERM_REFRESH = "long_term_refresh"
 HISTORICAL_PAPER_CYCLE = "historical_paper_cycle"
+FNO_HISTORICAL_WALKFORWARD = "fno_historical_walkforward"
 
 ALL_JOB_TYPES = (
     AUTH_HEALTH, INSTRUMENT_REFRESH, DATA_REFRESH, BHAVCOPY_UPDATE, CORPORATE_ACTIONS,
     UNIVERSE_HISTORY, INDEX_WARMUP, MARKET_SCAN, DISCOVERY_REFRESH, NEWS_REFRESH, PAPER_CYCLE,
     OUTCOME_RESOLUTION, LEARNING_CYCLE, RESEARCH_CYCLE, LONG_TERM_SCAN, LONG_TERM_REFRESH,
-    HISTORICAL_PAPER_CYCLE,
+    HISTORICAL_PAPER_CYCLE, FNO_HISTORICAL_WALKFORWARD,
 )
 CRITICAL_JOBS = {AUTH_HEALTH, DATA_REFRESH, PAPER_CYCLE, OUTCOME_RESOLUTION}
 
@@ -272,6 +273,17 @@ def historical_learning_key(batch_id: str) -> str:
 
 def historical_research_key(batch_id: str) -> str:
     return f"hist_research:{batch_id}"
+
+
+def fno_walkforward_key(cursor_token: str) -> str:
+    """One pending job per unprocessed checkpoint cursor -- never per tick.
+
+    ``cursor_token`` should be derived from the walk-forward checkpoint's own
+    state (e.g. its cursor date plus counters) so that repeated scheduler
+    ticks against the same unprocessed window collapse to the same key,
+    while a checkpoint that has genuinely advanced gets a fresh one.
+    """
+    return f"fno_walkforward:{cursor_token}"
 
 
 def forward_outcome_key(session_date: str) -> str:
