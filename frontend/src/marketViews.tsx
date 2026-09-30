@@ -246,7 +246,7 @@ export function FnoView({ dashboard, runControl, setSelected, setActive }: Props
                   {rationale && <small>Option-selection rationale · {rationale}</small>}
                   {setupRationale && <small>Setup rationale · {setupRationale}</small>}
                   {contract.contract_evidence?.usable && (
-                    <small>Contract selection learning · raw {fmt(contract.raw_contract_score, 1)} → learned {fmt(contract.learned_contract_score, 1)} ({contract.contract_evidence.direction === 'PROMOTE' ? '+' : ''}{fmt(contract.contract_evidence.adjustment, 1)}) · n={contract.contract_evidence.count ?? 0} · {words(contract.contract_evidence.reason || '')}</small>
+                    <small>Contract selection learning · raw {fmt(contract.raw_contract_score, 1)} → learned {fmt(contract.learned_contract_score, 1)} ({contract.contract_evidence.direction === 'PROMOTE' ? '+' : ''}{fmt(contract.contract_evidence.adjustment, 1)}) · n={contract.contract_evidence.count ?? 0} · {words(contract.contract_evidence.reason || '')}{contract.contract_evidence.used_modifier ? ` · refined by ${words(contract.contract_evidence.used_modifier)}` : ''}</small>
                   )}
                   {matchedPosition ? (
                     <small className="fno-paper-state">

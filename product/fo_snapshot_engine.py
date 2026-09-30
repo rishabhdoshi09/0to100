@@ -66,6 +66,7 @@ def evaluate_fo_snapshot(
     sector_relative_strength_pct: float,
     iv_percentile: float | None = None,
     as_of: date | None = None,
+    path: str | None = None,
 ) -> dict[str, Any]:
     """Evaluate one direction from pre-captured point-in-time data."""
     symbol = str(symbol or "").upper()
@@ -112,6 +113,7 @@ def evaluate_fo_snapshot(
         direction=direction,
         option_contracts=contracts,
         iv_percentile=iv_percentile,
+        evidence_path=path,
     )
     result["data_provenance"] = {
         "underlying": "POINT_IN_TIME_SUPPLIED_QUOTE",
@@ -151,6 +153,7 @@ def evaluate_fo_snapshot_auto(
     sector_relative_strength_pct: float,
     iv_percentile: float | None = None,
     as_of: date | None = None,
+    path: str | None = None,
 ) -> dict[str, Any]:
     """Evaluate LONG and SHORT without forcing a direction when neither qualifies."""
     rows = [
@@ -169,6 +172,7 @@ def evaluate_fo_snapshot_auto(
             sector_relative_strength_pct=sector_relative_strength_pct,
             iv_percentile=iv_percentile,
             as_of=as_of,
+            path=path,
         )
         for direction in ("LONG", "SHORT")
     ]
@@ -178,7 +182,7 @@ def evaluate_fo_snapshot_auto(
     ]
     from product.fno_ranking import rank_fno_candidates
 
-    ranked = rank_fno_candidates(candidates)
+    ranked = rank_fno_candidates(candidates, path=path)
     return {
         "symbol": str(symbol or "").upper(),
         "decision": "PAPER_OPTION_CANDIDATE" if ranked else "NO_TRADE",

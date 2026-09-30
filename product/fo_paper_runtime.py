@@ -30,6 +30,8 @@ from product.fno_evidence import fno_context_key, record_fno_settlement
 from product.fno_contract_evidence import (
     classify_contract_outcome,
     contract_context_key,
+    contract_context_modifiers,
+    contract_selection_context,
     record_contract_settlement,
 )
 
@@ -463,7 +465,8 @@ def run_fo_paper_cycle(
                 # enforces production_evidence_eligible itself.
                 try:
                     record_contract_settlement(
-                        row, context_key=str(row.get("contract_context_key") or "")
+                        row, context_key=str(row.get("contract_context_key") or ""),
+                        modifier_keys=row.get("contract_modifier_keys"),
                     )
                 except Exception:
                     pass
@@ -589,6 +592,13 @@ def run_fo_paper_cycle(
                     entry_dte=int(contract.get("dte") or 0),
                     entry_oi=int(contract.get("oi") or 0),
                     entry_volume=int(contract.get("volume") or 0),
+                    # The SAME modifier keys product.fo_options_pipeline used
+                    # to rank this exact contract (same setup -> same
+                    # contract_selection_context), so settlement learns into
+                    # exactly the cells that decided the selection.
+                    contract_modifier_keys=contract_context_modifiers(
+                        contract, **contract_selection_context(setup)
+                    ),
                 )
                 if pos is None:
                     reason = book.refusals[-1][1] if book.refusals else "PAPER_BOOK_REJECTED"

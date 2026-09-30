@@ -6,7 +6,7 @@ labels whether statutory/broker costs were configured for evidence use.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from math import floor
 from typing import Any, Callable, Mapping
 from uuid import uuid4
@@ -89,6 +89,12 @@ class FoPaperPosition:
     entry_dte: int = 0
     entry_oi: int = 0
     entry_volume: int = 0
+    # product.fno_contract_evidence.contract_context_modifiers(contract, ...),
+    # computed once at open time from the SAME setup context that ranked
+    # this contract (product.fo_options_pipeline.evaluate_fo_opportunity's
+    # contract_selection_context) -- so what is learned from at settlement is
+    # exactly what decided the selection, never re-derived differently later.
+    contract_modifier_keys: dict[str, str] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -136,6 +142,7 @@ class FoPaperTrade:
     entry_dte: int = 0
     entry_oi: int = 0
     entry_volume: int = 0
+    contract_modifier_keys: dict[str, str] = field(default_factory=dict)
     # The underlying's spot at settlement, captured from the same quote the
     # settlement loop already fetches for IV-crush detection (fo_paper_runtime
     # .py) -- never a second fetch, never fabricated. 0.0 means "not captured
@@ -234,6 +241,7 @@ class FoPaperBook:
         entry_dte: int = 0,
         entry_oi: int = 0,
         entry_volume: int = 0,
+        contract_modifier_keys: dict[str, str] | None = None,
     ) -> FoPaperPosition | None:
         symbol = str(option_symbol or "").strip()
         kind = str(option_type or "").upper()
@@ -336,6 +344,7 @@ class FoPaperBook:
             entry_dte=max(0, int(entry_dte or 0)),
             entry_oi=max(0, int(entry_oi or 0)),
             entry_volume=max(0, int(entry_volume or 0)),
+            contract_modifier_keys=dict(contract_modifier_keys or {}),
         )
         self.open[symbol] = pos
         self.premium_deployed_today = round(
@@ -546,6 +555,7 @@ class FoPaperBook:
             entry_dte=pos.entry_dte,
             entry_oi=pos.entry_oi,
             entry_volume=pos.entry_volume,
+            contract_modifier_keys=dict(pos.contract_modifier_keys or {}),
             exit_underlying_spot=max(0.0, float(exit_underlying_spot or 0.0)),
         )
         self.realized_pnl += net

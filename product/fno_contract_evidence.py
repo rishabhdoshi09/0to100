@@ -27,6 +27,27 @@ Caps are deliberately smaller than the underlying-ranking caps in
 product.fno_evidence_fusion (-20/+10 vs -30/+15): a contract-quality signal
 should nudge which strike/expiry gets picked, never override a strong
 underlying signal.
+
+HIERARCHICAL CONTEXT, NOT ONE GIANT KEY
+-----------------------------------------
+A real contract carries more evidence-worthy dimensions than the base six
+above -- intended holding horizon, market regime, the futures-OI "setup
+character" that picked this direction, and the contract's own OI/volume
+liquidity depth. Folding all of them into one key would fragment evidence
+into cells too sparse to ever mature (exactly the "sparse chaos" this design
+avoids). Instead, each optional dimension gets its own MODIFIER cell -- the
+base key plus exactly one extra dimension -- evaluated independently against
+the same sample/stability/Wilson floors as the base. A modifier only ever
+acts once it has cleared those floors ON ITS OWN; until then it is silently
+absent, and the base lesson (if any) stands. When a modifier IS usable and
+agrees with a usable base's direction, it wins (more specific evidence, once
+independently validated, is preferred over the general lesson it refines).
+When a modifier contradicts a usable base, it is ignored -- the base's
+broader, already-validated sample is not overridden by a narrower slice that
+disagrees with it. OI and volume buckets are derived from the contract
+itself, so they are always available; holding_horizon/regime/setup_type/
+daypart are supplied by the caller only when genuinely known -- an absent
+one simply never forms a modifier, never a fabricated "UNKNOWN" lesson.
 """
 from __future__ import annotations
 
@@ -136,6 +157,28 @@ def _spread_bucket(spread_pct: float | None) -> str:
     return "WIDE"
 
 
+def _oi_bucket(oi: float | None) -> str:
+    if oi is None:
+        return "UNKNOWN"
+    value = float(oi)
+    if value < THIN_LIQUIDITY_OI:
+        return "THIN"
+    if value < THIN_LIQUIDITY_OI * 10:
+        return "MODERATE"
+    return "DEEP"
+
+
+def _volume_bucket(volume: float | None) -> str:
+    if volume is None:
+        return "UNKNOWN"
+    value = float(volume)
+    if value < 100:
+        return "THIN"
+    if value < 5000:
+        return "MODERATE"
+    return "ACTIVE"
+
+
 def contract_context_key(contract: Mapping[str, Any] | None) -> str:
     """Bucket a REAL option contract by its own shape, not by the setup.
 
@@ -166,11 +209,78 @@ def contract_context_key(contract: Mapping[str, Any] | None) -> str:
     return "|".join(parts)
 
 
+def contract_selection_context(setup: Mapping[str, Any] | None) -> dict[str, str]:
+    """The three setup-derived modifier values genuinely available at
+    contract-selection time, from real fields product.fo_setup already
+    computes -- never invented for the sake of having a value. Same
+    dict is used both to rank contracts (product.fo_options_pipeline) and
+    to record which modifier cells a settled trade belongs in
+    (product.fo_paper_runtime), so what is learned from is exactly what was
+    ranked against.
+    """
+    from product.fno_evidence import _market_regime_bucket
+
+    setup = setup or {}
+    components = setup.get("components") if isinstance(setup.get("components"), Mapping) else {}
+    expected = setup.get("expected_move") if isinstance(setup.get("expected_move"), Mapping) else {}
+    out: dict[str, str] = {}
+    horizon = str(expected.get("horizon") or "")
+    if horizon:
+        out["holding_horizon"] = horizon
+    try:
+        nifty_alignment = float(components.get("nifty_alignment"))
+    except (TypeError, ValueError):
+        nifty_alignment = None
+    if nifty_alignment is not None:
+        out["regime"] = _market_regime_bucket(nifty_alignment)
+    setup_type = str(setup.get("futures_oi_state") or "")
+    if setup_type:
+        out["setup_type"] = setup_type
+    return out
+
+
+def contract_context_modifiers(
+    contract: Mapping[str, Any] | None,
+    *,
+    holding_horizon: str | None = None,
+    regime: str | None = None,
+    setup_type: str | None = None,
+    daypart: str | None = None,
+) -> dict[str, str]:
+    """Optional, narrower context keys layered on top of the base contract
+    shape -- see the module docstring's "HIERARCHICAL CONTEXT" section.
+
+    Returns {} when ``contract`` has no base key (nothing to refine). OI and
+    volume modifiers are always included (derived straight from the
+    contract); the other four are included only when the caller actually
+    supplies a real value -- an absent dimension never becomes a fabricated
+    "UNKNOWN" cell competing for evidence.
+    """
+    contract = contract or {}
+    base = contract_context_key(contract)
+    if not base:
+        return {}
+    modifiers = {
+        "oi": f"{base}|oi={_oi_bucket(_f(contract.get('oi')) if contract.get('oi') is not None else None)}",
+        "volume": f"{base}|volume={_volume_bucket(_f(contract.get('volume')) if contract.get('volume') is not None else None)}",
+    }
+    if holding_horizon:
+        modifiers["holding_horizon"] = f"{base}|horizon={str(holding_horizon).upper()}"
+    if regime:
+        modifiers["regime"] = f"{base}|regime={str(regime).upper()}"
+    if setup_type:
+        modifiers["setup_type"] = f"{base}|setup={str(setup_type).upper()}"
+    if daypart:
+        modifiers["daypart"] = f"{base}|daypart={str(daypart).upper()}"
+    return modifiers
+
+
 def record_contract_settlement(
     trade_row: Mapping[str, Any],
     *,
     context_key: str,
     path: str | None = None,
+    modifier_keys: Mapping[str, str] | None = None,
 ) -> Any:
     """Fold one settled F&O paper trade into CONTRACT evidence, or skip it.
 
@@ -178,6 +288,11 @@ def record_contract_settlement(
     exactly (same eligibility gate, same R computation), but keys the cell by
     the contract's own shape instead of the underlying setup, so the two
     statistics never pool.
+
+    ``modifier_keys`` (product.fno_contract_evidence.contract_context_modifiers,
+    computed and stored on the position at entry time) are folded into their
+    own narrower cells too, from the exact same real settlement -- never a
+    second, independently-fabricated observation.
     """
     if not context_key:
         return None
@@ -222,7 +337,7 @@ def record_contract_settlement(
         evidence_class=PAPER_FORWARD,
         resolved_at=str(trade_row.get("settled_at") or ""),
     )
-    return record_outcome(
+    update = record_outcome(
         outcome,
         context_key=context_key,
         evidence_class=PAPER_FORWARD,
@@ -233,6 +348,20 @@ def record_contract_settlement(
         # record_fno_settlement.
         also_update_policy_ladder=False,
     )
+    for modifier_key in (modifier_keys or {}).values():
+        if not modifier_key or modifier_key == context_key:
+            continue
+        try:
+            record_outcome(
+                outcome, context_key=modifier_key, evidence_class=PAPER_FORWARD,
+                path=path, also_update_policy_ladder=False,
+            )
+        except Exception:
+            # A modifier cell is a refinement of the base observation above,
+            # which has already been recorded -- never let a modifier failure
+            # discard the base evidence that just succeeded.
+            pass
+    return update
 
 
 def _stability(r_values: list[float]) -> dict[str, Any]:
@@ -248,28 +377,13 @@ def _stability(r_values: list[float]) -> dict[str, Any]:
     return {"checked": True, "stable": stable}
 
 
-def contract_ranking_adjustment(
-    contract: Mapping[str, Any] | None,
-    *,
-    path: str | None = None,
-) -> dict[str, Any]:
-    """The learned contract-selection adjustment, on top of raw_contract_score.
-
-    Same shape as product.fno_evidence_fusion's forward component: demote is
-    held to a lower sample floor than promote, and promotion additionally
-    requires a Wilson lower bound clearing a coin flip and stability across
-    the sample's two chronological halves. Below every floor this returns
-    adjustment=0.0 -- a tiny sample can never move contract selection.
+def _evaluate_cell(key: str, *, store: Mapping[str, Any]) -> dict[str, Any]:
+    """One cell's usable/direction/adjustment verdict. Shared by the base
+    contract-shape key and every optional modifier key so both are held to
+    the identical sample/stability/Wilson floors -- a modifier is never
+    trusted more easily than the base it refines.
     """
-    key = contract_context_key(contract)
-    if not key:
-        return {
-            "context_key": "", "usable": False, "count": 0,
-            "adjustment": 0.0, "direction": "NONE",
-            "reason": "NO_CONTRACT_CONTEXT_KEY",
-        }
-    store = _load(path)
-    cell = _read(key, evidence_class=PAPER_FORWARD, path=path, store=store)
+    cell = _read(key, evidence_class=PAPER_FORWARD, store=store)
     count = int(cell.get("count") or 0)
     r_values = [float(r) for r in (cell.get("r_values") or [])]
     stability = _stability(r_values)
@@ -301,6 +415,75 @@ def contract_ranking_adjustment(
                 "reason": "CONTRACT_POSITIVE_EXPECTANCY_VALIDATED"}
     return {**base, "usable": True, "adjustment": 0.0, "direction": "NONE",
             "reason": "CONTRACT_FLAT"}
+
+
+def contract_ranking_adjustment(
+    contract: Mapping[str, Any] | None,
+    *,
+    path: str | None = None,
+    holding_horizon: str | None = None,
+    regime: str | None = None,
+    setup_type: str | None = None,
+    daypart: str | None = None,
+) -> dict[str, Any]:
+    """The learned contract-selection adjustment, on top of raw_contract_score.
+
+    Same shape as product.fno_evidence_fusion's forward component: demote is
+    held to a lower sample floor than promote, and promotion additionally
+    requires a Wilson lower bound clearing a coin flip and stability across
+    the sample's two chronological halves. Below every floor this returns
+    adjustment=0.0 -- a tiny sample can never move contract selection.
+
+    When holding_horizon/regime/setup_type/daypart are supplied (and/or the
+    contract itself carries oi/volume), each forms its own narrower modifier
+    cell (see contract_context_modifiers). A modifier only ever overrides the
+    base once it independently clears the same floors AND agrees with the
+    base's own direction (or the base has nothing to say yet); among several
+    qualifying modifiers the one with the largest sample wins, since more
+    settled evidence is more informative, not less. A modifier that
+    contradicts a usable base is ignored -- the broader, already-validated
+    lesson is not overridden by a narrower slice that disagrees with it.
+    """
+    key = contract_context_key(contract)
+    if not key:
+        return {
+            "context_key": "", "usable": False, "count": 0,
+            "adjustment": 0.0, "direction": "NONE",
+            "reason": "NO_CONTRACT_CONTEXT_KEY",
+            "base_context_key": "", "used_modifier": None, "considered": [],
+        }
+    store = _load(path)
+    base_result = _evaluate_cell(key, store=store)
+
+    modifier_keys = contract_context_modifiers(
+        contract, holding_horizon=holding_horizon, regime=regime,
+        setup_type=setup_type, daypart=daypart,
+    )
+    considered = [{"modifier": "base", **base_result}]
+    candidates: list[tuple[str, dict[str, Any]]] = []
+    for name, modifier_key in modifier_keys.items():
+        result = _evaluate_cell(modifier_key, store=store)
+        considered.append({"modifier": name, **result})
+        if not result["usable"]:
+            continue
+        if base_result["usable"] and base_result["direction"] != "NONE" and result["direction"] != base_result["direction"]:
+            # Contradicts an already-validated broader lesson -- ignore.
+            continue
+        candidates.append((name, result))
+
+    if candidates:
+        # Most settled evidence wins among agreeing, independently-validated
+        # modifiers -- it is more specific AND at least as well supported.
+        chosen_name, chosen = max(candidates, key=lambda pair: pair[1]["count"])
+    else:
+        chosen_name, chosen = "base", base_result
+
+    return {
+        **chosen,
+        "base_context_key": key,
+        "used_modifier": chosen_name if chosen_name != "base" else None,
+        "considered": considered,
+    }
 
 
 def classify_contract_outcome(row: Mapping[str, Any]) -> dict[str, Any]:

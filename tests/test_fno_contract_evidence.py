@@ -32,6 +32,7 @@ from product.fno_contract_evidence import (
     POSITIVE_CAP,
     classify_contract_outcome,
     contract_context_key,
+    contract_context_modifiers,
     contract_ranking_adjustment,
     record_contract_settlement,
 )
@@ -381,3 +382,131 @@ def test_classify_theta_damage():
 def test_classify_falls_back_to_contract_poor_when_no_specific_reason_evidenced():
     result = classify_contract_outcome(_row(net_pnl=-1.0))
     assert result["classification"] == CLASSIFICATION_UNDERLYING_RIGHT_CONTRACT_POOR
+
+
+# ── hierarchical context modifiers: base + optional, sample-gated refinement ──
+
+def test_absent_optional_dimensions_never_create_a_fabricated_modifier():
+    contract = _contract()  # no oi/volume set
+    modifiers = contract_context_modifiers(contract)
+    assert set(modifiers.keys()) == {"oi", "volume"}, (
+        "holding_horizon/regime/setup_type/daypart must never appear unless "
+        "the caller actually supplies a real value"
+    )
+    assert modifiers["oi"].endswith("|oi=UNKNOWN")
+    assert modifiers["volume"].endswith("|volume=UNKNOWN")
+
+
+def test_supplied_dimensions_form_their_own_narrower_keys():
+    contract = _contract()
+    modifiers = contract_context_modifiers(
+        contract, holding_horizon="multi_day", regime="risk_on", setup_type="long_buildup",
+    )
+    base = contract_context_key(contract)
+    assert modifiers["holding_horizon"] == f"{base}|horizon=MULTI_DAY"
+    assert modifiers["regime"] == f"{base}|regime=RISK_ON"
+    assert modifiers["setup_type"] == f"{base}|setup=LONG_BUILDUP"
+
+
+def test_no_key_yields_no_modifiers():
+    assert contract_context_modifiers({"delta": 0.5}) == {}
+
+
+def test_tiny_modifier_sample_cannot_override_a_usable_base(tmp_path, monkeypatch):
+    path = tmp_path / "evidence.json"
+    monkeypatch.setenv("QT_CONDITIONAL_EVIDENCE", str(path))
+    contract = _contract()
+    base_key = contract_context_key(contract)
+    _seed(context_key=base_key, evidence_class=PAPER_FORWARD, n=MIN_SAMPLE_DEMOTE,
+          realized_R=-3.0, path=path, prefix="BASE")
+
+    modifier_key = contract_context_modifiers(contract, holding_horizon="multi_day")["holding_horizon"]
+    _seed(context_key=modifier_key, evidence_class=PAPER_FORWARD, n=MIN_SAMPLE_DEMOTE - 1,
+          realized_R=-3.0, path=path, prefix="MOD-TINY")
+
+    result = contract_ranking_adjustment(contract, path=path, holding_horizon="multi_day")
+    assert result["used_modifier"] is None
+    assert result["context_key"] == base_key
+
+
+def test_modifier_overrides_base_once_it_independently_qualifies_and_agrees(tmp_path, monkeypatch):
+    path = tmp_path / "evidence.json"
+    monkeypatch.setenv("QT_CONDITIONAL_EVIDENCE", str(path))
+    contract = _contract()
+    base_key = contract_context_key(contract)
+    # Base: mature, demoted, capped at NEGATIVE_CAP.
+    _seed(context_key=base_key, evidence_class=PAPER_FORWARD, n=MIN_SAMPLE_DEMOTE,
+          realized_R=-3.0, path=path, prefix="BASE")
+    # A narrower, independently-supported modifier: also demoted (agrees),
+    # milder magnitude, MORE sample -- more informative, so it should win.
+    modifier_key = contract_context_modifiers(contract, holding_horizon="multi_day")["holding_horizon"]
+    _seed(context_key=modifier_key, evidence_class=PAPER_FORWARD, n=50,
+          realized_R=-1.0, path=path, prefix="MOD-AGREE")
+
+    result = contract_ranking_adjustment(contract, path=path, holding_horizon="multi_day")
+    assert result["used_modifier"] == "holding_horizon"
+    assert result["context_key"] == modifier_key
+    assert result["direction"] == "DEMOTE"
+    assert result["adjustment"] > NEGATIVE_CAP, "the milder, more specific lesson must be used, not the base's cap"
+
+
+def test_modifier_contradicting_a_usable_base_is_ignored(tmp_path, monkeypatch):
+    path = tmp_path / "evidence.json"
+    monkeypatch.setenv("QT_CONDITIONAL_EVIDENCE", str(path))
+    contract = _contract()
+    base_key = contract_context_key(contract)
+    _seed(context_key=base_key, evidence_class=PAPER_FORWARD, n=MIN_SAMPLE_DEMOTE,
+          realized_R=-3.0, path=path, prefix="BASE")
+    # A mature, stable, Wilson-clearing PROMOTE modifier -- but it disagrees
+    # with the already-validated base, so it must be ignored entirely.
+    modifier_key = contract_context_modifiers(contract, holding_horizon="multi_day")["holding_horizon"]
+    _seed(context_key=modifier_key, evidence_class=PAPER_FORWARD, n=MIN_SAMPLE_PROMOTE,
+          realized_R=2.0, path=path, prefix="MOD-CONTRADICT")
+
+    result = contract_ranking_adjustment(contract, path=path, holding_horizon="multi_day")
+    assert result["used_modifier"] is None
+    assert result["context_key"] == base_key
+    assert result["direction"] == "DEMOTE"
+
+
+def test_modifier_acts_alone_when_base_has_no_usable_evidence(tmp_path, monkeypatch):
+    path = tmp_path / "evidence.json"
+    monkeypatch.setenv("QT_CONDITIONAL_EVIDENCE", str(path))
+    contract = _contract()
+    modifier_key = contract_context_modifiers(contract, regime="risk_on")["regime"]
+    _seed(context_key=modifier_key, evidence_class=PAPER_FORWARD, n=MIN_SAMPLE_PROMOTE,
+          realized_R=1.5, path=path, prefix="MOD-ALONE")
+
+    result = contract_ranking_adjustment(contract, path=path, regime="risk_on")
+    assert result["used_modifier"] == "regime"
+    assert result["direction"] == "PROMOTE"
+    assert result["context_key"] == modifier_key
+
+
+def test_oi_and_volume_modifiers_activate_without_any_extra_caller_context(tmp_path, monkeypatch):
+    """OI/volume are derived straight from the contract, so they must be able
+    to act even when the caller supplies none of the other optional
+    dimensions -- no extra plumbing required for the simplest, always-
+    available refinement.
+    """
+    path = tmp_path / "evidence.json"
+    monkeypatch.setenv("QT_CONDITIONAL_EVIDENCE", str(path))
+    contract = _contract(oi=50_000, volume=20_000)
+    modifier_key = contract_context_modifiers(contract)["oi"]
+    _seed(context_key=modifier_key, evidence_class=PAPER_FORWARD, n=MIN_SAMPLE_PROMOTE,
+          realized_R=1.5, path=path, prefix="OI-ALONE")
+
+    result = contract_ranking_adjustment(contract, path=path)
+    assert result["used_modifier"] == "oi"
+    assert result["direction"] == "PROMOTE"
+
+
+def test_considered_list_reports_every_dimension_examined(tmp_path, monkeypatch):
+    path = tmp_path / "evidence.json"
+    monkeypatch.setenv("QT_CONDITIONAL_EVIDENCE", str(path))
+    contract = _contract()
+    result = contract_ranking_adjustment(
+        contract, path=path, holding_horizon="multi_day", regime="risk_on", setup_type="long_buildup",
+    )
+    considered_names = {row["modifier"] for row in result["considered"]}
+    assert considered_names == {"base", "oi", "volume", "holding_horizon", "regime", "setup_type"}

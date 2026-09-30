@@ -284,6 +284,8 @@ export type FnoDirectionalCandidate = {
       reason?: string
       expectancy_R?: number | null
       wilson_lower_bound?: number | null
+      base_context_key?: string
+      used_modifier?: string | null
     }
   }
   iv_history?: {
