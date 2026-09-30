@@ -218,13 +218,13 @@ def _canonical_best_trade_rows(*, history_current: bool) -> list[dict[str, Any]]
         # Home's primary "best" list is actionable only. Capacity reserves,
         # generic WAIT rows, rejects and extended names belong in separate
         # research/watchlist context, never beside trades labelled as best.
-        if candidate_status and candidate_status != "ENTER_NOW":
+        if candidate_status != "ENTER_NOW":
             continue
         if discovery and discovery != "ENTER_NOW":
             continue
         if committee and committee != "BUY":
             continue
-        if discovery == "ENTER_NOW" and not committee:
+        if not committee:
             row["decision"] = "BUY"
         row["home_candidate_status"] = "ENTER_NOW"
         out.append(row)
