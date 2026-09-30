@@ -170,6 +170,39 @@ body:has(.terminal-root.reco-desk)::before {
   box-shadow: none !important;
 }
 
+/* styles.css's ".top-status button { width: 34px; height: 34px }" is sized
+   for the small square icon-only refresh button, but it also matches the
+   depth-toggle's "Simple"/"Professional" buttons and the "What is this?"
+   trigger, since both are <button> descendants of .top-status. That forced
+   a fixed 34px box onto text buttons that need far more room, clipping
+   their labels to a few letters with no wrap or ellipsis. Let text buttons
+   size to their own content instead. */
+.reco-desk .display-depth-toggle button,
+.reco-desk .experience-help-trigger {
+  width: auto;
+  height: auto;
+}
+/* The search box's flexible width (clarity.css) can otherwise squeeze the
+   whole status cluster below its content width at ordinary desktop widths
+   even with the fix above. Let the search box give way instead: these
+   controls keep their natural size, and the search input (not the whole
+   search box) is free to shrink. */
+.reco-desk .top-status {
+  flex-shrink: 0;
+}
+/* .top-status is itself a flex row (gap: 14px). Without protecting its own
+   children too, they still shrink against EACH OTHER even though the row
+   as a whole no longer loses to the search box. */
+.reco-desk .top-status > * {
+  flex-shrink: 0;
+}
+.reco-desk .search-box {
+  min-width: 0;
+}
+.reco-desk .search-box input {
+  min-width: 0;
+}
+
 .reco-desk .page-title {
   margin: 0;
   padding: 23px 28px 17px;
