@@ -500,7 +500,7 @@ def test_home_best_trades_excludes_rejections_waits_and_non_buy_gate_rows(monkey
     assert "BADWAIT" not in rendered
 
 
-def test_home_can_show_five_with_two_truthful_capacity_reserves_and_confidence(monkeypatch):
+def test_home_best_list_excludes_capacity_reserves_even_when_five_rows_are_available(monkeypatch):
     import product.decision_simulation_gate as gate
 
     rows = []
@@ -554,12 +554,14 @@ def test_home_can_show_five_with_two_truthful_capacity_reserves_and_confidence(m
         now=_open(),
     )
 
-    assert [row["found"].split()[0] for row in os["opportunities"]] == ["A", "B", "C", "D", "E"]
-    assert [row["label"] for row in os["opportunities"][:3]] == ["BUY", "BUY", "BUY"]
-    assert [row["label"] for row in os["opportunities"][3:]] == ["RESERVE", "RESERVE"]
+    assert [row["found"].split()[0] for row in os["opportunities"]] == ["A", "B", "C"]
+    assert [row["label"] for row in os["opportunities"]] == ["BUY", "BUY", "BUY"]
     assert all(row["confidence_score"] is not None for row in os["opportunities"])
     assert os["opportunities"][0]["win_probability_pct"] == 61.0
-    assert "HARDWAIT" not in " ".join(str(row) for row in os["opportunities"])
+    rendered = " ".join(str(row) for row in os["opportunities"])
+    assert "D" not in rendered
+    assert "E" not in rendered
+    assert "HARDWAIT" not in rendered
 
 
 def test_market_closed_never_claims_complete_when_required_verifier_lanes_fail():
