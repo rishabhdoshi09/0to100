@@ -4706,3 +4706,73 @@ class TestQuoteMicroCache:
         lq._qcache["HAL"] = (ts - 60, q)
         lq.get_live_quotes(["HAL"])
         assert calls["n"] == 2
+
+
+class TestFnoRankingSafety:
+    """product.fno_ranking.rank_fno_candidates decides which F&O candidate
+    gets a paper position opened first (product.fo_paper_runtime
+    ._candidate_rows) and which one the desk displays on top
+    (product.fo_runtime.run_fo_directional_scan). A bug here changes what
+    gets traded, so it belongs with the other money-path invariants: demote
+    only, never promote, and live execution stays locked regardless."""
+
+    def _setup(self, *, score=80.0, sector_strength=2.5):
+        return {
+            "score": score,
+            "direction": "LONG",
+            "atr_pct": 2.0,
+            "breakout_distance_pct": 1.5,
+            "components": {"nifty_alignment": 3.0, "sector_strength": sector_strength},
+        }
+
+    def _candidate(self, symbol, *, setup, option_score=80.0):
+        return {
+            "symbol": symbol,
+            "direction": setup["direction"],
+            "setup": setup,
+            "selected_contract": {"symbol": f"{symbol}CE", "score": option_score},
+        }
+
+    def test_ranking_never_inflates_a_score(self, tmp_path, monkeypatch):
+        """A measured, POSITIVE expectancy earns no bonus -- only a proven
+        loser may be demoted. Promoting a survivor is exactly the mistake
+        this desk's evidence architecture is built to refuse."""
+        from product.fno_evidence import fno_context_key, record_fno_settlement
+        from product.fno_ranking import rank_fno_candidates
+
+        path = tmp_path / "evidence.json"
+        monkeypatch.setenv("QT_CONDITIONAL_EVIDENCE", str(path))
+        setup = self._setup()
+        key = fno_context_key(setup)
+        for i in range(30):
+            row = {
+                "trade_id": f"WIN-{i}", "underlying": "WINCO", "option_symbol": "WINCOCE",
+                "entry_price": 50.0, "stop_price": 40.0, "exit_price": 70.0,
+                "quantity": 10, "net_pnl": 200.0, "exit_reason": "TARGET",
+                "opened_at": "2026-09-01T04:00:00+00:00",
+                "settled_at": f"2026-09-{2 + (i % 25):02d}T10:00:00+00:00",
+                "mfe_pct": 1.0, "mae_pct": -0.1, "production_evidence_eligible": True,
+            }
+            assert record_fno_settlement(row, context_key=key, path=path) is not None
+
+        ranked = rank_fno_candidates([self._candidate("WINCO", setup=setup)], path=path)
+        assert ranked[0]["ranking_adjustment"] == 0.0, (
+            "30 real wins must not add points on top of the raw setup score"
+        )
+        assert ranked[0]["ranking_score"] == ranked[0]["base_score"]
+
+    def test_live_execution_stays_locked_regardless_of_ranking_outcome(self, tmp_path, monkeypatch):
+        from product.evidence_class import PAPER_FORWARD
+        from product.fno_ranking import rank_fno_candidates
+        from product.live_execution_interlock import get_live_execution_state
+
+        path = tmp_path / "evidence.json"
+        monkeypatch.setenv("QT_CONDITIONAL_EVIDENCE", str(path))
+        candidates = [self._candidate("A", setup=self._setup()), self._candidate("B", setup=self._setup(sector_strength=0.0))]
+        ranked = rank_fno_candidates(candidates, path=path)
+        assert len(ranked) == 2
+        for row in ranked:
+            assert row["ranking_evidence"]["evidence_class"] == PAPER_FORWARD
+        state = get_live_execution_state()
+        assert state.locked is True
+        assert state.authorized is False
