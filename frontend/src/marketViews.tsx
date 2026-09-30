@@ -211,8 +211,21 @@ export function FnoView({ dashboard, runControl, setSelected, setActive }: Props
               const evidenceReady = evidence.probability_claim_available === true
               const cmp = candidate.options?.spot
               const matchedPosition = openPaper.find((position) => (
+                // An exact tradingsymbol match is unambiguous (it already
+                // encodes strike + expiry + type). The underlying+type
+                // fallback is only safe when strike AND expiry also agree --
+                // otherwise a same-underlying position from a different
+                // contract (a prior cycle's still-open position at a
+                // different strike, say) would show as if it belonged to
+                // this candidate, misreporting its real bars-held/trailing
+                // stop/best-mark figures.
                 (contract.symbol && position.option_symbol === contract.symbol)
-                || (position.underlying === candidate.symbol && position.option_type === contract.option_type)
+                || (
+                  position.underlying === candidate.symbol
+                  && position.option_type === contract.option_type
+                  && contract.strike != null && position.strike === contract.strike
+                  && !!contract.expiry && position.expiry === contract.expiry
+                )
               ))
               const rationale = componentsRationale(contract.components)
               const setupRationale = componentsRationale(setup.components)

@@ -10,8 +10,13 @@ and the safety properties layered on top of it:
     never override that forward-evidence hierarchy
   - a tiny sample cannot materially alter ranking
   - rejected historical candidates are graded, not silently dropped
-  - context_key stays populated end to end (candidate -> position -> trade
-    row -> evidence cell)
+  - ranking_context_key stays populated end to end (candidate -> position ->
+    trade row -> evidence cell). This is a SEPARATE field from the legacy
+    context_key fo_snapshot_engine.py always sets for the unrelated "Forward
+    evidence" UI panel -- test_real_candidate_shape_keeps_the_two_context_keys_separate
+    below proves the two are never conflated, closing a real gap where an
+    earlier version of this fix read the wrong field and silently never
+    matured any evidence cell for a real production candidate.
   - evidence durability survives what a process restart would see (a fresh
     read of the same on-disk store, no in-memory state)
   - live money stays locked throughout
@@ -57,10 +62,16 @@ def _setup(*, direction="LONG", score=82.0, nifty_alignment=3.0, sector_strength
 
 
 def _candidate(symbol: str, *, setup: dict, option_score=86.0, instrument_token=9001) -> dict:
-    """The shape product.fo_snapshot_engine.evaluate_fo_opportunity actually
-    returns and product.fo_runtime.run_fo_directional_scan collects into
-    "candidates" -- no context_key supplied, exactly like real production
-    candidates (fo_setup.py/fo_options_pipeline.py never populate one)."""
+    """The shape product.fo_options_pipeline.evaluate_fo_opportunity returns.
+    Deliberately omits selected_contract["context_key"] the way
+    fo_options_pipeline.py itself never populates one -- but real candidates
+    from product.fo_runtime.run_fo_directional_scan go one layer further
+    through product.fo_snapshot_engine.evaluate_fo_snapshot, which DOES
+    unconditionally set contract["context_key"] to a legacy, unrelated
+    FOCTX_V1-format key (see test_real_candidate_shape_keeps_the_two_context_keys_separate
+    below, which exercises that real layer). This fixture is only valid for
+    proving the ranking_context_key path in isolation; it is not proof that
+    the legacy context_key field is ever actually empty in production."""
     return {
         "symbol": symbol,
         "direction": setup["direction"],
@@ -158,7 +169,12 @@ def test_full_fno_lifecycle_scan_to_future_ranking(tmp_path, monkeypatch):
         positions = store.load_positions()
     assert len(positions) == 1
     position = positions[0]
-    assert position["context_key"] == loser_key, "the durable position must carry the real context key"
+    assert position["ranking_context_key"] == loser_key, (
+        "the durable position must carry the real ranking-evidence context key -- "
+        "context_key (no prefix) is a SEPARATE, legacy FOCTX_V1 key that "
+        "fo_snapshot_engine.evaluate_fo_snapshot always sets for the unrelated "
+        "'Forward evidence' UI panel and product.fno_ranking never reads"
+    )
     # SUPERVISE: an open position is tracked with bars-held / mark bookkeeping.
     assert "bars_held" in position and "max_mark" in position and "min_mark" in position
 
@@ -187,7 +203,9 @@ def test_full_fno_lifecycle_scan_to_future_ranking(tmp_path, monkeypatch):
         )
     assert settled_cycle["settled_count"] == 1
     real_trade = settled_cycle["settled"][0]
-    assert real_trade["context_key"] == loser_key, "settlement must update the SAME cell the candidate was ranked against"
+    assert real_trade["ranking_context_key"] == loser_key, (
+        "settlement must update the SAME cell the candidate was ranked against"
+    )
     assert real_trade["production_evidence_eligible"] is True
     assert float(real_trade["net_pnl"]) < 0.0, "the fixture is engineered to be a real loss"
 
@@ -314,3 +332,121 @@ def test_rejected_historical_candidates_are_graded_not_dropped(tmp_path, monkeyp
     candidates = [_candidate("CONTROLCO", setup=control_setup, instrument_token=2)]
     ranked = rank_fno_candidates(candidates)
     assert ranked[0]["ranking_adjustment"] == 0.0
+
+
+def test_real_candidate_shape_keeps_the_two_context_keys_separate(tmp_path, monkeypatch):
+    """A code-review finding on an earlier version of this fix: every real
+    candidate reaches product.fo_paper_runtime through
+    product.fo_snapshot_engine.evaluate_fo_snapshot, which unconditionally
+    sets selected_contract["context_key"] to product.fo_evidence.fo_context_key
+    -- an older, unrelated, contract-level (option_type/rvol/adx/delta/dte/iv)
+    bucketing that feeds ONLY the pre-existing "Forward evidence" UI panel
+    (_fo_forward_evidence_overlay). The hand-built candidates used elsewhere in
+    this file never set that field, so a version of the fix that read the
+    wrong field back at settlement time still passed every test while being
+    completely disconnected from ranking in real production. This test builds
+    a candidate the same way test_fo_snapshot_engine.py does -- through the
+    real evaluate_fo_snapshot_auto, with real bars/instruments/quotes, never a
+    hand-built dict -- and proves the durable position and settled trade carry
+    BOTH keys, correctly distinct, with evidence recorded under the ranking
+    one only.
+    """
+    from datetime import date as _date
+
+    from options.directional_selector import black_scholes
+    from product.fo_snapshot_engine import evaluate_fo_snapshot_auto
+    from tests.test_fo_snapshot_engine import _bars, _nfo, _option_quotes
+
+    evidence_path = tmp_path / "conditional_evidence.json"
+    monkeypatch.setenv("QT_CONDITIONAL_EVIDENCE", str(evidence_path))
+
+    as_of = _date(2026, 9, 26)
+    bars = _bars()
+    spot = float(bars["close"].iloc[-1])
+    instruments = _nfo(spot)
+    result = evaluate_fo_snapshot_auto(
+        # Must match _nfo()'s hardcoded instrument "name": "TEST", or the
+        # universe/future lookup fails closed with NOT_FO_UNIVERSE.
+        symbol="TEST",
+        daily_bars=bars,
+        nfo_instruments=instruments,
+        underlying_quote={
+            "last_price": spot,
+            "average_price": spot - 3.0,
+            "depth": {"buy": [{"price": spot - 0.1}], "sell": [{"price": spot + 0.1}]},
+        },
+        futures_quote={"last_price": spot + 2.0, "oi": 106_000},
+        previous_futures_price=spot - 10.0,
+        previous_futures_oi=100_000,
+        option_quotes=_option_quotes(spot, instruments),
+        benchmark_20d_return_pct=1.0,
+        nifty_change_pct=0.6,
+        sector_relative_strength_pct=1.2,
+        iv_percentile=45.0,
+        as_of=as_of,
+    )
+    assert result["decision"] == "PAPER_OPTION_CANDIDATE"
+    real_candidate = result["selected"]
+    contract = real_candidate["selected_contract"]
+
+    # The legacy field is genuinely populated -- never empty -- for a real
+    # candidate, and it is NOT the ranking-evidence key format.
+    legacy_key = contract["context_key"]
+    assert legacy_key, "fo_snapshot_engine must always set the legacy context_key"
+    assert legacy_key.startswith("FOCTX_V1|"), "legacy key format must not drift"
+
+    ranked = rank_fno_candidates([real_candidate], path=evidence_path)
+    ranking_key = ranked[0]["ranking_evidence"]["context_key"]
+    assert ranking_key, "ranking must resolve a real context key for a real candidate"
+    assert ranking_key != legacy_key, (
+        "the two evidence systems must never accidentally share one key"
+    )
+
+    fo_db = tmp_path / "fo.sqlite3"
+    opened_at = datetime(2026, 9, 26, 10, 15, 0, tzinfo=IST)
+    with FoPaperStore(fo_db) as store:
+        opened = run_fo_paper_cycle(
+            _directional([real_candidate]),
+            client=_QuoteClient(last=spot, high=spot, low=spot, bid=spot - 1.0),
+            now_ist=opened_at,
+            allow_new_entries=True,
+            store=store,
+            capital=200_000,
+        )
+    assert opened["opened_count"] == 1
+    with FoPaperStore(fo_db) as store:
+        position = store.load_positions()[0]
+    assert position["context_key"] == legacy_key
+    assert position["ranking_context_key"] == ranking_key
+
+    with FoPaperStore(fo_db) as store:
+        settled_cycle = run_fo_paper_cycle(
+            {"available": True, "candidates": []},
+            client=_IntradayQuoteClient(
+                last=spot * 0.5, high=spot * 0.55, low=spot * 0.45, bid=spot * 0.49,
+                entry_minute_rows=[{
+                    "date": "2026-09-26T10:15:00+05:30",
+                    "open": contract["premium"] - 1.0, "high": contract["premium"] + 5.0,
+                    "low": contract["premium"] - 5.0, "close": contract["premium"],
+                }],
+                intraday_rows=[{
+                    "date": "2026-09-26T10:16:00+05:30",
+                    "open": contract["premium"] - 1.0, "high": contract["premium"],
+                    "low": max(0.05, contract["premium"] * 0.3), "close": contract["premium"] * 0.5,
+                }],
+            ),
+            now_ist=opened_at.replace(hour=10, minute=20),
+            allow_new_entries=False,
+            store=store,
+            capital=200_000,
+            cost_model=lambda entry, exit, qty: 5.0,
+            cost_model_name="TEST_COSTS",
+        )
+    assert settled_cycle["settled_count"] == 1
+    trade = settled_cycle["settled"][0]
+    assert trade["context_key"] == legacy_key, "the legacy field/format must survive settlement unchanged"
+    assert trade["ranking_context_key"] == ranking_key
+
+    # Evidence must be recorded under the ranking key -- never the legacy one.
+    assert CE.read(ranking_key, path=evidence_path)["count"] == 1
+    assert CE.read(legacy_key, path=evidence_path)["count"] == 0

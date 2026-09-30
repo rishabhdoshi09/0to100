@@ -115,11 +115,18 @@ def empty_cell(context_key: str, evidence_class: str) -> dict[str, Any]:
 
 
 def read(context_key: str, *, evidence_class: str = PAPER_FORWARD,
-         path: str | Path | None = None) -> dict[str, Any]:
-    """The cell as it stands. Absent reads as an empty cell, never as zero edge."""
-    store = load(path)
+         path: str | Path | None = None,
+         store: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """The cell as it stands. Absent reads as an empty cell, never as zero edge.
+
+    Pass an already-loaded `store` (from :func:`load`) to skip re-reading and
+    re-parsing the file for every lookup in a batch -- e.g. ranking many
+    candidates against the same store in one call. Defaults to loading fresh,
+    exactly as before.
+    """
+    data = store if store is not None else load(path)
     key = cell_key(evidence_class, context_key)
-    cell = store.get("cells", {}).get(key)
+    cell = data.get("cells", {}).get(key)
     return dict(cell) if isinstance(cell, Mapping) else empty_cell(context_key, evidence_class)
 
 
@@ -286,11 +293,16 @@ def ranking_evidence(
     evidence_class: str = PAPER_FORWARD,
     path: str | Path | None = None,
     min_sample: int = MIN_SAMPLE,
+    store: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """What ranking is allowed to use. Demote-only, sample-gated.
 
     Returns a record with an explicit ``adjustment`` in score points and the
     reason for it, so a rank that moved can always say why.
+
+    Pass an already-loaded `store` (from :func:`load`) when ranking several
+    candidates in one call, to avoid re-reading the same file once per
+    candidate. Defaults to loading fresh, exactly as before.
     """
     klass = normalise_evidence_class(evidence_class)
     if not is_market_evidence(klass):
@@ -302,7 +314,7 @@ def ranking_evidence(
             "context_key": context_key,
             "count": 0,
         }
-    cell = read(context_key, evidence_class=klass, path=path)
+    cell = read(context_key, evidence_class=klass, path=path, store=store)
     count = int(cell.get("count") or 0)
     if count < int(min_sample):
         return {

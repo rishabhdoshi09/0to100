@@ -251,9 +251,13 @@ def _candidate_without_context_key(*, symbol="RELIANCE", score=82.0):
             "lot_size": 25,
             "ask": 50.0,
             "score": 86.0,
-            # Deliberately no "context_key" here -- this is the production
-            # shape (nothing upstream ever populates it). The fallback in
-            # fo_paper_runtime.py must derive one from `setup` instead.
+            # Deliberately no "context_key" here to test the fallback that
+            # derives ranking_context_key from `setup`. NOTE: a real
+            # candidate from fo_snapshot_engine.evaluate_fo_snapshot always
+            # DOES set this field, to a different, unrelated legacy FOCTX_V1
+            # key -- see test_fno_full_lifecycle.py's
+            # test_real_candidate_shape_keeps_the_two_context_keys_separate,
+            # which exercises that real shape.
             "trade_plan": {"entry": 50.0, "stop": 40.0, "target": 70.0},
         },
     }
@@ -279,9 +283,22 @@ def _directional_without_context_key(token: int):
 def test_production_settlement_path_records_real_evidence_end_to_end(tmp_path, monkeypatch):
     """Exercises the actual product entrypoint (run_fo_paper_cycle) end to
     end -- open, then settle -- with NO context_key supplied by the
-    candidate, exactly like real production candidates. Proves both halves
-    of the fix together: the fallback derivation at open time, and the
-    record_fno_settlement call at settlement time."""
+    candidate. Proves both halves of the fix together: the fallback
+    derivation at open time, and the record_fno_settlement call at
+    settlement time.
+
+    Checks ranking_context_key, not context_key. The latter is
+    fo_evidence.py's separate, legacy FOCTX_V1 contract-level key that real
+    candidates from fo_snapshot_engine.evaluate_fo_snapshot always populate
+    (never empty in real production, unlike this synthetic fixture) for the
+    unrelated "Forward evidence" UI panel; it happens to equal
+    fno_context_key(setup) here too only because this fixture's fallback
+    branch fires for both fields at once. See
+    tests/test_fno_full_lifecycle.py::test_real_candidate_shape_keeps_the_two_context_keys_separate
+    for the proof that a REAL candidate (built through fo_snapshot_engine,
+    never a hand-built dict) sets context_key to a genuinely different,
+    unrelated string and ranking_context_key is what settlement must key
+    evidence on."""
     evidence_path = tmp_path / "conditional_evidence.json"
     monkeypatch.setenv("QT_CONDITIONAL_EVIDENCE", str(evidence_path))
     monkeypatch.setenv("QT_LEARNING_POLICIES", str(tmp_path / "policies.json"))
@@ -327,10 +344,10 @@ def test_production_settlement_path_records_real_evidence_end_to_end(tmp_path, m
 
     assert marked["settled_count"] == 1
     trade = marked["settled"][0]
-    assert trade["context_key"] == expected_key, (
-        "the position must have been opened with the SAME key fno_context_key "
-        "derives, or its settlement cannot update the cell it was ranked "
-        "against"
+    assert trade["ranking_context_key"] == expected_key, (
+        "the position must have been opened with the SAME ranking key "
+        "fno_context_key derives, or its settlement cannot update the cell "
+        "it was ranked against"
     )
     assert trade["production_evidence_eligible"] is True
 

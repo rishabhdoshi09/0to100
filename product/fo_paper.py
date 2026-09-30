@@ -60,6 +60,18 @@ class FoPaperPosition:
     last_mark_session: str = ""
     max_mark: float = 0.0
     min_mark: float = 0.0
+    # Deliberately separate from context_key. context_key is fo_evidence.py's
+    # legacy FOCTX_V1 contract-level bucketing (option_type/rvol/adx/delta/
+    # dte/iv), unconditionally set by fo_snapshot_engine.evaluate_fo_snapshot
+    # for every real candidate and consumed by _fo_forward_evidence_overlay
+    # for the existing "Forward evidence" UI panel -- it must never change
+    # format. ranking_context_key is product.fno_evidence.fno_context_key's
+    # underlying-setup bucketing, computed fresh from `setup` at open time,
+    # and is the ONLY key product.fno_ranking.rank_fno_candidates /
+    # conditional_evidence.ranking_evidence ever look up. Conflating the two
+    # silently disconnects every real settled trade from ranking evidence
+    # forever, since the two bucketing schemes never produce the same string.
+    ranking_context_key: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -94,6 +106,7 @@ class FoPaperTrade:
     path_observation_complete: bool = False
     path_observation_reason: str = ""
     false_breakout: bool = False
+    ranking_context_key: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -166,6 +179,7 @@ class FoPaperBook:
         opened_at: str,
         max_holding_sessions: int,
         context_key: str = "",
+        ranking_context_key: str = "",
         setup_score: float = 0.0,
         option_score: float = 0.0,
         instrument_token: int = 0,
@@ -243,6 +257,7 @@ class FoPaperBook:
             option_symbol=symbol,
             option_type=kind,
             context_key=str(context_key or ""),
+            ranking_context_key=str(ranking_context_key or ""),
             entry_price=round(fill, 4),
             stop_price=round(stop, 4),
             target_price=round(target, 4),
@@ -434,6 +449,7 @@ class FoPaperBook:
             option_symbol=pos.option_symbol,
             option_type=pos.option_type,
             context_key=pos.context_key,
+            ranking_context_key=pos.ranking_context_key,
             entry_price=pos.entry_price,
             exit_price=round(fill, 4),
             stop_price=pos.stop_price,

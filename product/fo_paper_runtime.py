@@ -440,7 +440,7 @@ def run_fo_paper_cycle(
                 # never interrupt this settlement loop.
                 try:
                     record_fno_settlement(
-                        row, context_key=str(row.get("context_key") or "")
+                        row, context_key=str(row.get("ranking_context_key") or "")
                     )
                 except Exception:
                     pass
@@ -507,16 +507,32 @@ def run_fo_paper_cycle(
                     lot_size=lot_size,
                     opened_at=now_ist.isoformat(),
                     max_holding_sessions=max(1, int(expected.get("holding_days") or 1)),
-                    # An upstream-supplied context_key always wins (tests and
-                    # any future richer candidate source may provide one).
-                    # Nothing upstream has ever populated this in production,
-                    # so without the fallback every F&O position opened with
-                    # context_key="" -- unkeyable, so settlement could never
-                    # feed the evidence store no matter how many trades ran.
+                    # context_key here is fo_evidence.py's legacy FOCTX_V1
+                    # contract-level bucketing -- fo_snapshot_engine
+                    # .evaluate_fo_snapshot sets this on every real candidate
+                    # (never empty in production); the fallback only matters
+                    # for synthetic candidates in tests. It feeds the
+                    # existing "Forward evidence" UI panel
+                    # (_fo_forward_evidence_overlay) and must keep that exact
+                    # format. It is NOT the key product.fno_ranking reads --
+                    # ranking_context_key below is computed fresh from
+                    # `setup` every time specifically because this field
+                    # cannot be repurposed for that without breaking the
+                    # existing panel.
                     context_key=(
                         str(contract.get("context_key") or "")
                         or fno_context_key(setup)
                     ),
+                    # The ONLY key product.fno_ranking.rank_fno_candidates /
+                    # product.conditional_evidence.ranking_evidence ever look
+                    # up (product.fno_evidence.fno_context_key, the same
+                    # underlying-setup bucketing used at ranking time).
+                    # Always computed fresh from `setup`, never read from
+                    # `contract` -- conflating it with context_key above
+                    # silently disconnects every real settled trade from
+                    # ranking evidence, since the two bucketing schemes never
+                    # produce the same string.
+                    ranking_context_key=fno_context_key(setup),
                     setup_score=float(setup.get("score") or 0.0),
                     option_score=float(contract.get("score") or 0.0),
                     instrument_token=int(contract.get("instrument_token") or 0),

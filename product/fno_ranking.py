@@ -38,6 +38,13 @@ def rank_fno_candidates(
     or report can say exactly why a rank did or did not change) alongside
     every original field.
     """
+    from product.conditional_evidence import load as load_evidence_store
+
+    # Load the evidence store once for the whole batch rather than once per
+    # candidate -- this is called for every symbol's LONG/SHORT pick, for the
+    # full scan's candidate list, and again every paper-cycle tick, so a
+    # per-candidate re-read/re-parse of the same file adds up fast.
+    store = load_evidence_store(path)
     rows: list[dict[str, Any]] = []
     for row in candidates:
         row = dict(row)
@@ -47,6 +54,7 @@ def rank_fno_candidates(
         if key:
             evidence = ranking_evidence(
                 key, evidence_class=PAPER_FORWARD, path=path, min_sample=min_sample,
+                store=store,
             )
         else:
             evidence = {
