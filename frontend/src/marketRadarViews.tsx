@@ -1128,10 +1128,10 @@ export function RadarHomeView(props: ExperienceViewProps & {
           <strong>{kiteOk ? 'READY' : kiteLoginOptional ? 'LOGIN OPTIONAL' : 'CHECKING'}</strong>
           <small>
             {kiteOk
-              ? 'broker-dependent quotes and paper capability available'
+              ? 'broker-live quotes, F&O broker data and read-only reconciliation available'
               : kiteLoginOptional
-                ? 'Log in only when you want broker-dependent capability. Core research keeps running.'
-                : 'Broker state comes from backend readiness; core research does not depend on it.'}
+                ? 'Log in only for broker-live/F&O/reconciliation capability. Official-data paper operation keeps running.'
+                : 'Broker state comes from backend readiness; official-data paper operation does not depend on it.'}
           </small>
         </div>
         <div>
