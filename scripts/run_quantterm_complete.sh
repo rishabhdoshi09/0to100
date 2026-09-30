@@ -512,21 +512,11 @@ raise SystemExit(0)
 PY
 
 if [[ "$auth_rc" -eq 2 ]]; then
-  echo "[COMPLETE STACK] Zerodha API credentials are not configured. Broker live-data/execution lanes are disabled; research, official-data scans, replay, settlement and learning continue."
+  echo "[COMPLETE STACK] Zerodha API credentials are not configured. Broker-live/F&O/reconciliation lanes are disabled; official-data scanning, paper execution, replay, settlement and learning continue."
 elif [[ "$auth_rc" -eq 1 ]]; then
-  if [[ "${QT_NONINTERACTIVE:-}" == "1" || ! -t 0 ]]; then
-    echo "[COMPLETE STACK] Zerodha login is needed for broker-dependent work. Non-interactive run skipped it; non-broker autonomy continues. Run: python main.py login"
-  else
-    echo "[COMPLETE STACK] Zerodha login is needed for broker-dependent work. Browser will open; paste the redirect URL here, or Ctrl-C and restart with QT_NONINTERACTIVE=1 to run without broker capability."
-    login_rc=0
-    python main.py login || login_rc=$?
-    if [[ "$login_rc" -eq 130 ]]; then
-      exit 130
-    fi
-    if [[ "$login_rc" -ne 0 ]]; then
-      echo "[COMPLETE STACK] Zerodha login did not complete. Continuing in no-broker mode; research, scanning, replay, settlement and learning remain available." >&2
-    fi
-  fi
+  echo "[COMPLETE STACK] Zerodha daily login is not active. Core QuantTerm startup will not wait for optional broker auth."
+  echo "[COMPLETE STACK] Broker-live/F&O/reconciliation lanes can be enabled later with: python main.py login"
+  echo "[COMPLETE STACK] Official-data scanning, paper execution, replay, settlement and learning continue now."
 fi
 
 port_open() {
