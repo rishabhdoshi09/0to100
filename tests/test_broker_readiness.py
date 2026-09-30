@@ -236,3 +236,72 @@ def test_auth_blocked_data_refresh_does_not_degrade_operator_health(monkeypatch)
     assert not any("data_refresh" in str(item) for item in out["active_failures"])
     assert out["operator_state"] in {"WORKING", "HEALTHY"}
     assert out["operator_state"] != "DEGRADED"
+
+
+def test_readiness_matrix_keeps_paper_entry_broker_neutral(monkeypatch):
+    monkeypatch.setattr(
+        readiness,
+        "official_history",
+        lambda: {
+            "current": True,
+            "usable_for_scan": True,
+            "available_session": "2026-09-29",
+            "expected_latest_completed_session": "2026-09-29",
+            "reason_code": "",
+        },
+    )
+    monkeypatch.setattr(
+        readiness,
+        "broker_status",
+        lambda: {
+            "state": "LOGIN_REQUIRED",
+            "ready": False,
+            "live_data_ready": False,
+            "execution_ready": False,
+            "auth_ready": False,
+            "login_required": True,
+            "auth_status": "TOKEN_MISSING",
+            "reason_code": "KITE_TOKEN_MISSING",
+            "detail": "daily Zerodha login is required",
+            "snapshot_id": "",
+        },
+    )
+    monkeypatch.setattr(readiness, "kite_snapshot_id", lambda: "")
+    matrix = readiness.inspect_readiness()
+
+    assert readiness.missing_for("PAPER_ENTRY", matrix) == []
+    assert "PAPER_ENTRY" in matrix["allowed_without_kite"]
+    assert "PAPER_ENTRY" not in matrix["blocked_without_kite"]
+    assert "BROKER_PORTFOLIO_SYNC" in matrix["blocked_without_kite"]
+
+
+def test_paper_entry_still_blocks_when_official_market_data_is_not_ready(monkeypatch):
+    monkeypatch.setattr(
+        readiness,
+        "official_history",
+        lambda: {
+            "current": False,
+            "usable_for_scan": False,
+            "available_session": "2026-09-28",
+            "expected_latest_completed_session": "2026-09-29",
+            "reason_code": "HISTORY_STALE",
+        },
+    )
+    monkeypatch.setattr(
+        readiness,
+        "broker_status",
+        lambda: {
+            "state": "READY",
+            "ready": True,
+            "live_data_ready": True,
+            "execution_ready": True,
+            "auth_ready": True,
+            "login_required": False,
+            "auth_status": "SESSION_VALID",
+            "reason_code": "",
+            "detail": "",
+            "snapshot_id": "snap-1",
+        },
+    )
+    matrix = readiness.inspect_readiness()
+    assert readiness.missing_for("PAPER_ENTRY", matrix) == [readiness.OFFICIAL_MARKET_DATA_READY]

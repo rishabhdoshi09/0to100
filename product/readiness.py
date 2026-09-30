@@ -15,7 +15,10 @@ REQUIRES = {
     "RESEARCH_ACQUIRE": (RESEARCH_DATA_READY,),
     "HISTORICAL_REPLAY": (OFFICIAL_MARKET_DATA_READY,),
     "OUTCOME_RESOLUTION": (OUTCOME_DATA_READY,),
-    "PAPER_ENTRY": (BROKER_LIVE_DATA_READY, EXECUTION_READY),
+    # Paper execution is deliberately broker-neutral. Fresh official market
+    # data is required, but daily Zerodha auth/snapshot readiness belongs only
+    # to broker-live observation/execution lanes.
+    "PAPER_ENTRY": (OFFICIAL_MARKET_DATA_READY,),
     "BROKER_PORTFOLIO_SYNC": (BROKER_LIVE_DATA_READY,),
     "LEARNING": (OUTCOME_DATA_READY,),
 }
