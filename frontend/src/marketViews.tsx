@@ -52,6 +52,22 @@ export function OperationsRibbon({ dashboard }: { dashboard: DashboardPayload })
   )
 }
 
+const componentLabels: Record<string, string> = {
+  breakout: 'Breakout', trend: 'Trend', rvol: 'RVOL', rsi: 'RSI', adx: 'ADX',
+  relative_strength: 'Rel. strength', sector_strength: 'Sector strength',
+  nifty_alignment: 'NIFTY align', futures_oi: 'Futures OI',
+  delta_fit: 'Delta fit', liquidity: 'Liquidity', theta: 'Theta', iv: 'IV',
+  expiry_fit: 'Expiry fit', expected_payoff: 'Expected payoff',
+}
+
+function componentsRationale(components: Record<string, number> | undefined): string {
+  if (!components || Object.keys(components).length === 0) return ''
+  return Object.entries(components)
+    .sort((a, b) => b[1] - a[1])
+    .map(([key, value]) => `${componentLabels[key] || words(key)} ${value}`)
+    .join(' · ')
+}
+
 const canonicalCategory = (article: NewsArticle) => {
   const text = `${article.category} ${article.event_type} ${(article.tags || []).join(' ')}`.toLowerCase()
   if (/(result|order|contract|promoter|insider|fund rais|company|corporate|dividend|merger|acquisition)/.test(text)) return 'Company'
@@ -185,22 +201,44 @@ export function FnoView({ dashboard, runControl, setSelected, setActive }: Props
               const setup = candidate.setup || {}
               const contract = candidate.selected_contract || {}
               const plan = contract.trade_plan || {}
+              const underlyingPlan = setup.underlying_trade_plan || {}
               const expected = setup.expected_move || {}
               const evidence = candidate.forward_evidence || {}
               const coverage = evidence.coverage || {}
               const ivHistory = candidate.iv_history || {}
               const evidenceReady = evidence.probability_claim_available === true
+              const cmp = candidate.options?.spot
+              const matchedPosition = openPaper.find((position) => (
+                (contract.symbol && position.option_symbol === contract.symbol)
+                || (position.underlying === candidate.symbol && position.option_type === contract.option_type)
+              ))
+              const rationale = componentsRationale(contract.components)
+              const setupRationale = componentsRationale(setup.components)
               return (
                 <button type="button" key={`${candidate.symbol}-${contract.symbol || index}`} onClick={() => select(candidate.symbol)}>
-                  <strong>{candidate.symbol} · {candidate.direction}</strong>
+                  <strong>{candidate.symbol} · {candidate.direction} · CMP ₹{fmt(cmp)}</strong>
                   <span>{contract.symbol || contract.option_type || 'No contract'} · setup {fmt(setup.score, 1)}/100 · option {fmt(contract.score, 1)}/100</span>
-                  <p>OI {words(setup.futures_oi_state || 'unknown')} · Δ {fmt(contract.delta, 2)} · IV {fmt(contract.iv, 1)}% · DTE {contract.dte ?? '—'} · horizon {words(expected.horizon || 'unknown')}</p>
+                  <p>Setup type: {words(candidate.direction || 'unknown')} breakout · futures OI {words(setup.futures_oi_state || 'unknown')} · distance {fmt(setup.breakout_distance_pct, 2)}% · ATR {fmt(setup.atr_pct, 2)}%</p>
+                  <small>Underlying plan · entry ₹{fmt(underlyingPlan.entry)} · stop ₹{fmt(underlyingPlan.stop)} · target ₹{fmt(underlyingPlan.target)}</small>
+                  <p>{contract.option_type || '—'} {fmt(contract.strike, 0)} · expiry {contract.expiry || 'unavailable'} · DTE {contract.dte ?? '—'} · horizon {words(expected.horizon || 'unknown')}</p>
+                  <small>Premium ₹{fmt(contract.premium)} · Δ {fmt(contract.delta, 2)} · IV {fmt(contract.iv, 1)}% · OI {contract.oi ?? '—'} · volume {contract.volume ?? '—'} · spread {contract.spread_pct == null ? 'unavailable' : `${fmt(contract.spread_pct, 2)}%`}</small>
                   {ivHistory.available ? (
                     <small>Forward IV percentile {fmt(ivHistory.percentile_pct, 1)}% · {ivHistory.prior_sessions ?? 0} prior closing sessions · no backfill</small>
                   ) : (
                     <small>Forward IV percentile held · {ivHistory.prior_sessions ?? 0}/{ivHistory.minimum_prior_sessions ?? 60} prior closing sessions · no backfill</small>
                   )}
                   <small>Paper entry ₹{fmt(plan.entry)} · stop ₹{fmt(plan.stop)} · target ₹{fmt(plan.target)} · R:R {fmt(plan.risk_reward, 2)}</small>
+                  {rationale && <small>Option-selection rationale · {rationale}</small>}
+                  {setupRationale && <small>Setup rationale · {setupRationale}</small>}
+                  {matchedPosition ? (
+                    <small className="fno-paper-state">
+                      Paper state: OPEN · bars held {matchedPosition.bars_held ?? 0}/{matchedPosition.max_holding_sessions ?? '—'}
+                      {matchedPosition.trailing_stop_price ? ` · trailing stop ₹${fmt(matchedPosition.trailing_stop_price)}` : ''}
+                      {matchedPosition.max_mark ? ` · best mark ₹${fmt(matchedPosition.max_mark)}` : ''}
+                    </small>
+                  ) : (
+                    <small className="fno-paper-state">Paper state: not yet executed (awaiting next paper cycle, entry window or risk gate)</small>
+                  )}
                   {evidenceReady ? (
                     <small>Forward evidence · n={evidence.n ?? 0} fully costed + path-valid · observed win {fmt(evidence.win_probability_pct, 1)}% · Wilson floor {fmt(evidence.win_probability_wilson_lb_pct, 1)}% · conservative EV {fmt(evidence.conservative_ev_pct, 2)}%</small>
                   ) : (
@@ -224,8 +262,9 @@ export function FnoView({ dashboard, runControl, setSelected, setActive }: Props
             {openPaper.slice(0, 10).map((position, index) => (
               <div key={position.trade_id || `${position.option_symbol}-${index}`}>
                 <strong>{position.underlying || '—'} · {position.option_symbol || '—'}</strong>
-                <span>{position.option_type || '—'} · qty {position.quantity ?? '—'} · setup {fmt(position.setup_score, 1)} · option {fmt(position.option_score, 1)}</span>
-                <p>Entry ₹{fmt(position.entry_price)} · stop ₹{fmt(position.stop_price)} · target ₹{fmt(position.target_price)} · max hold {position.max_holding_sessions ?? '—'} session(s)</p>
+                <span>{position.option_type || '—'} {fmt(position.strike, 0)} · expiry {position.expiry || 'unavailable'} · qty {position.quantity ?? '—'} · setup {fmt(position.setup_score, 1)} · option {fmt(position.option_score, 1)}</span>
+                <p>Entry ₹{fmt(position.entry_price)} · stop ₹{fmt(position.stop_price)}{position.trailing_stop_price ? ` (trailing ₹${fmt(position.trailing_stop_price)})` : ''} · target ₹{fmt(position.target_price)} · max hold {position.max_holding_sessions ?? '—'} session(s)</p>
+                <small>Supervision · bars held {position.bars_held ?? 0}/{position.max_holding_sessions ?? '—'} · best mark ₹{fmt(position.max_mark)} · worst mark ₹{fmt(position.min_mark)} · entry status {words(position.entry_minute_status || 'unknown')}</small>
               </div>
             ))}
           </div>

@@ -212,9 +212,13 @@ export type FnoDirectionalCandidate = {
   direction: 'LONG' | 'SHORT' | string
   decision: string
   setup?: {
+    direction?: string
     score?: number
     score_is_probability?: boolean
     futures_oi_state?: string
+    breakout_distance_pct?: number
+    atr_pct?: number
+    components?: Record<string, number>
     expected_move?: {
       lower_pct?: number
       upper_pct?: number
@@ -222,8 +226,18 @@ export type FnoDirectionalCandidate = {
       horizon?: string
       holding_days?: number
     }
+    underlying_trade_plan?: {
+      entry?: number
+      stop?: number | null
+      target?: number | null
+      invalidation_model?: string
+      target_model?: string
+    }
     blockers?: string[]
     reasons?: string[]
+  }
+  options?: {
+    spot?: number
   }
   selected_contract?: {
     symbol?: string
@@ -246,6 +260,9 @@ export type FnoDirectionalCandidate = {
     vega_per_vol_point?: number
     score?: number
     score_is_probability?: boolean
+    components?: Record<string, number>
+    moneyness?: string
+    moneyness_pct?: number | null
     projected_return_at_expected_move_pct?: number
     context_key?: string
     trade_plan?: {
@@ -303,15 +320,26 @@ export type FnoPaperPosition = {
   underlying?: string
   option_symbol?: string
   option_type?: string
+  strike?: number
+  expiry?: string
   entry_price?: number
   stop_price?: number
   target_price?: number
+  trailing_stop_price?: number
   quantity?: number
   lots?: number
   setup_score?: number
   option_score?: number
   opened_at?: string
   max_holding_sessions?: number
+  bars_held?: number
+  max_mark?: number
+  min_mark?: number
+  entry_minute_status?: string
+  entry_iv_pct?: number
+  entry_underlying_spot?: number
+  horizon?: string
+  exit_policy?: string
   context_key?: string
 }
 
