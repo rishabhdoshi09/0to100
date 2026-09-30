@@ -558,10 +558,10 @@ def test_home_best_list_excludes_capacity_reserves_even_when_five_rows_are_avail
     assert [row["label"] for row in os["opportunities"]] == ["BUY", "BUY", "BUY"]
     assert all(row["confidence_score"] is not None for row in os["opportunities"])
     assert os["opportunities"][0]["win_probability_pct"] == 61.0
-    rendered = " ".join(str(row) for row in os["opportunities"])
-    assert "D" not in rendered
-    assert "E" not in rendered
-    assert "HARDWAIT" not in rendered
+    shown_symbols = [row["found"].split()[0] for row in os["opportunities"]]
+    assert "D" not in shown_symbols
+    assert "E" not in shown_symbols
+    assert "HARDWAIT" not in shown_symbols
 
 
 def test_market_closed_never_claims_complete_when_required_verifier_lanes_fail():
