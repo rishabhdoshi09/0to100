@@ -393,15 +393,17 @@ def build_home_os(
     next_line = "Next automatic paper decision after the scan"
 
     broker_login_required = not kite_ok
-    broker_action_required = bool(
-        broker_login_required and paper_enabled and not observe_only and not market_closed
-    )
+    # Zerodha is an optional broker/live-data capability for the PAPER-only desk.
+    # Official-data paper selection/execution must never be promoted to a global
+    # operator blocker merely because the daily Kite session is absent.
+    broker_action_required = False
     broker_action = _action(
         label="Login to Zerodha",
         kind="instruction",
         instruction=(
-            "Run python main.py login to enable broker-live quotes and broker-dependent paper entry. "
-            "Official data, scanning, research, replay, settlement and learning continue without it."
+            "Run python main.py login to enable broker-live quotes, F&O live-data/instrument lanes "
+            "and read-only broker reconciliation. Official-data scanning, paper entry/exits, "
+            "replay, settlement and learning continue without it."
         ),
     )
 
@@ -628,21 +630,6 @@ def build_home_os(
         learning_simple=learning_simple,
         n_real=n_real,
     )
-    if broker_action_required:
-        zerodha = dict(system.get("zerodha") or {})
-        zerodha.update({
-            "status": "Needs you",
-            "status_code": "LOGIN_REQUIRED",
-            "summary": "Login required for broker-dependent paper entry.",
-            "detail": "Research and official-data autonomy continue without Zerodha.",
-            "meaning": "Log in to enable broker-live quotes and paper entry; this is not a system failure.",
-            "needs_user": True,
-            "optional_capability": False,
-            "blocks_autonomy": False,
-            "blocks_live_money": False,
-            "primary_action": broker_action,
-        })
-        system["zerodha"] = zerodha
     check_system = build_check_system(
         system,
         live_locked=live_locked,
@@ -697,31 +684,15 @@ def build_home_os(
             "reason": subtext,
             "action": primary_action,
         })
-    if broker_action_required and state not in {FAILED_RECOVERABLE, PAUSED, PROBLEM}:
-        state = LOGIN_REQUIRED
-        headline = "Zerodha login is needed for broker-dependent paper entry."
-        subtext = (
-            "This is the only expected human step. Official data, scans, research, replay, "
-            "settlement and learning continue automatically."
-        )
-        now_line = "Non-broker autonomy is running"
-        next_line = "Broker paper entry resumes after login"
-        primary_action = broker_action
-        required_attention = [{
-            "id": "BROKER_LOGIN_REQUIRED",
-            "label": "Login to Zerodha",
-            "reason": subtext,
-            "action": broker_action,
-        }]
-
     optional_attention: list[dict[str, Any]] = []
     if broker_login_required and not broker_action_required:
         optional_attention.append({
             "id": "BROKER_LOGIN_OPTIONAL",
             "label": "Connect Zerodha",
             "reason": (
-                "Optional right now: enables broker-live quotes and broker-dependent paper entry. "
-                "Official data, scan, research, shadow tracking, settlement and learning continue without it."
+                "Optional right now: enables broker-live quotes, F&O live-data/instrument lanes and "
+                "read-only broker reconciliation. Official-data scan, paper entry/exits, research, "
+                "settlement and learning continue without it."
             ),
             "action": broker_action,
         })
@@ -804,9 +775,9 @@ def build_home_os(
             "requires_operator_now": broker_action_required,
             "blocks_autonomy": False,
             "detail": (
-                "Login is required for broker-dependent paper entry; non-broker autonomy continues."
+                "Broker-live capability needs login; official-data paper operation continues."
                 if broker_action_required
-                else "Broker-live quotes and broker-dependent paper entry are unavailable until login; autonomous research work continues."
+                else "Broker-live quotes, F&O broker data and reconciliation are unavailable until login; paper operation continues."
                 if broker_login_required
                 else "Broker session is usable."
             ),
