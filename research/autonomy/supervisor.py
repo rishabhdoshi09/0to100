@@ -898,6 +898,35 @@ class Supervisor:
         if not self._ensure_decision_simulation_authority():
             return
 
+        # F&O historical walk-forward: an independent, self-contained
+        # scheduling path. It shares the equity path's resource-governor gate
+        # (heavy historical replay yields to due/running current-market work)
+        # but nothing else -- no phase state machine, no shared idempotency
+        # keys, no early return. Any failure here is isolated: it can never
+        # prevent the equity historical/learning/research scheduling below
+        # from running, and it produces only COUNTERFACTUAL evidence that
+        # cannot move ranking or touch live money (product.fno_evidence /
+        # product.fno_historical_walkforward). The idempotency key folds in
+        # today's date plus the checkpoint's own cursor so a tick that made
+        # no progress (UP_TO_DATE) never spawns a duplicate job, while a
+        # cursor that genuinely advanced gets a fresh key and keeps draining
+        # the backlog across the same closed-market window.
+        try:
+            budget = self._resource_budget()
+            if budget.get("historical_replay_allowed"):
+                from product.fno_historical_loop import status as fno_walkforward_status
+
+                fno_status = fno_walkforward_status()
+                cursor_token = str(fno_status.get("cursor_date") or "start")
+                self.jobs.enqueue(
+                    SCH.FNO_HISTORICAL_WALKFORWARD,
+                    idempotency_key=SCH.fno_walkforward_key(
+                        f"{now_ist.date().isoformat()}:{cursor_token}"
+                    ),
+                )
+        except Exception:
+            pass
+
         # Then run historical virtual-paper batches whenever the cash market is
         # closed. Each batch has a durable cursor and cannot silently repeat.
         try:

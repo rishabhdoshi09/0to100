@@ -26,6 +26,14 @@ from product.fo_paper import (
     FoPaperPosition,
 )
 from product.fo_paper_store import FoPaperStore
+from product.fno_evidence import fno_context_key, record_fno_settlement
+from product.fno_contract_evidence import (
+    classify_contract_outcome,
+    contract_context_key,
+    contract_context_modifiers,
+    contract_selection_context,
+    record_contract_settlement,
+)
 
 
 def _restore_position(payload: Mapping[str, Any]) -> FoPaperPosition | None:
@@ -203,19 +211,14 @@ def _iv_crush_state(
 
 
 def _candidate_rows(directional: Mapping[str, Any]) -> list[dict[str, Any]]:
+    from product.fno_ranking import rank_fno_candidates
+
     rows = [
         dict(row)
         for row in list(directional.get("candidates") or [])
         if isinstance(row, Mapping)
     ]
-    rows.sort(
-        key=lambda row: (
-            float((row.get("setup") or {}).get("score") or 0.0),
-            float((row.get("selected_contract") or {}).get("score") or 0.0),
-        ),
-        reverse=True,
-    )
-    return rows
+    return rank_fno_candidates(rows)
 
 
 def run_fo_paper_cycle(
@@ -361,6 +364,12 @@ def run_fo_paper_cycle(
                                 str(pos.exit_policy or "").upper() == "EOD"
                                 and _historical_bar_reaches_eod(bar_session, now_ist)
                             ),
+                            # No per-bar historical underlying spot is fetched
+                            # here (same limitation the STOP/TARGET bar fills
+                            # already have); the current underlying quote is
+                            # the best honest evidence available for a bar
+                            # replay settlement, never fabricated further.
+                            underlying_quotes=underlying_quotes,
                         )
                         if same_day:
                             intraday_bars_replayed += 1
@@ -389,6 +398,7 @@ def run_fo_paper_cycle(
                                 observation_complete=False,
                                 force_eod=eod_exit_due,
                                 iv_crush_symbols=iv_crush_symbols,
+                                underlying_quotes=underlying_quotes,
                             )
                         )
                     continue
@@ -416,6 +426,7 @@ def run_fo_paper_cycle(
                         observation_complete=False,
                         force_eod=eod_exit_due,
                         iv_crush_symbols=iv_crush_symbols,
+                        underlying_quotes=underlying_quotes,
                     )
                 )
             for trade in settled:
@@ -434,11 +445,38 @@ def run_fo_paper_cycle(
                 if not trade.exit_observation_complete:
                     partial_exit_interval_holdouts += 1
                 settled_rows.append(row)
+                # Fold a fully-costed, fully-observed settled trade into the
+                # same conditional-evidence store the equity desk's ranking
+                # engine reads (product.decision_ranking.rank). A settlement
+                # this loop does not trust as evidence (see
+                # evidence_exclusion_reason above) is never recorded under a
+                # different label -- record_fno_settlement enforces that by
+                # returning None rather than raising, so one bad row can
+                # never interrupt this settlement loop.
+                try:
+                    record_fno_settlement(
+                        row, context_key=str(row.get("ranking_context_key") or "")
+                    )
+                except Exception:
+                    pass
+                # Same honesty gate, contract-shape cell: a settlement this
+                # loop does not trust as underlying evidence is not trusted
+                # as contract evidence either -- record_contract_settlement
+                # enforces production_evidence_eligible itself.
+                try:
+                    record_contract_settlement(
+                        row, context_key=str(row.get("contract_context_key") or ""),
+                        modifier_keys=row.get("contract_modifier_keys"),
+                    )
+                except Exception:
+                    pass
+                row["contract_outcome"] = classify_contract_outcome(row)
 
         opened: list[dict[str, Any]] = []
         skipped: list[dict[str, str]] = []
+        ranked_candidates = _candidate_rows(directional) if bool(directional.get("available")) else []
         if allow_new_entries and bool(directional.get("available")):
-            for candidate in _candidate_rows(directional):
+            for candidate in ranked_candidates:
                 underlying = str(candidate.get("symbol") or "").upper()
                 if not underlying:
                     skipped.append({"symbol": "", "reason": "MISSING_UNDERLYING"})
@@ -497,7 +535,32 @@ def run_fo_paper_cycle(
                     lot_size=lot_size,
                     opened_at=now_ist.isoformat(),
                     max_holding_sessions=max(1, int(expected.get("holding_days") or 1)),
-                    context_key=str(contract.get("context_key") or ""),
+                    # context_key here is fo_evidence.py's legacy FOCTX_V1
+                    # contract-level bucketing -- fo_snapshot_engine
+                    # .evaluate_fo_snapshot sets this on every real candidate
+                    # (never empty in production); the fallback only matters
+                    # for synthetic candidates in tests. It feeds the
+                    # existing "Forward evidence" UI panel
+                    # (_fo_forward_evidence_overlay) and must keep that exact
+                    # format. It is NOT the key product.fno_ranking reads --
+                    # ranking_context_key below is computed fresh from
+                    # `setup` every time specifically because this field
+                    # cannot be repurposed for that without breaking the
+                    # existing panel.
+                    context_key=(
+                        str(contract.get("context_key") or "")
+                        or fno_context_key(setup)
+                    ),
+                    # The ONLY key product.fno_ranking.rank_fno_candidates /
+                    # product.conditional_evidence.ranking_evidence ever look
+                    # up (product.fno_evidence.fno_context_key, the same
+                    # underlying-setup bucketing used at ranking time).
+                    # Always computed fresh from `setup`, never read from
+                    # `contract` -- conflating it with context_key above
+                    # silently disconnects every real settled trade from
+                    # ranking evidence, since the two bucketing schemes never
+                    # produce the same string.
+                    ranking_context_key=fno_context_key(setup),
                     setup_score=float(setup.get("score") or 0.0),
                     option_score=float(contract.get("score") or 0.0),
                     instrument_token=int(contract.get("instrument_token") or 0),
@@ -510,12 +573,52 @@ def run_fo_paper_cycle(
                         (setup.get("underlying_trade_plan") or {}).get("entry") or 0.0
                     ),
                     ask=float(contract.get("ask") or 0.0),
+                    # Contract-shape evidence fields (product.fno_contract_evidence),
+                    # captured from the REAL selected contract at open time --
+                    # never derived from the setup, never invented at
+                    # settlement. Empty/zero when the field genuinely was not
+                    # available on this contract (e.g. no IV percentile yet).
+                    contract_context_key=contract_context_key(contract),
+                    entry_delta=float(contract.get("delta") or 0.0),
+                    entry_spread_pct=(
+                        float(contract["spread_pct"])
+                        if contract.get("spread_pct") is not None else None
+                    ),
+                    entry_iv_percentile=(
+                        float(contract["iv_percentile"])
+                        if contract.get("iv_percentile") is not None else None
+                    ),
+                    entry_theta_per_day=float(contract.get("theta_per_day") or 0.0),
+                    entry_dte=int(contract.get("dte") or 0),
+                    entry_oi=int(contract.get("oi") or 0),
+                    entry_volume=int(contract.get("volume") or 0),
+                    # The SAME modifier keys product.fo_options_pipeline used
+                    # to rank this exact contract (same setup -> same
+                    # contract_selection_context), so settlement learns into
+                    # exactly the cells that decided the selection.
+                    contract_modifier_keys=contract_context_modifiers(
+                        contract, **contract_selection_context(setup)
+                    ),
                 )
                 if pos is None:
                     reason = book.refusals[-1][1] if book.refusals else "PAPER_BOOK_REJECTED"
                     skipped.append({"symbol": underlying, "reason": reason})
                     continue
                 opened.append(pos.as_dict())
+
+        if ranked_candidates:
+            try:
+                from product.fno_exposure_tracking import record_scan_exposure
+
+                record_scan_exposure(
+                    ranked_candidates,
+                    opened_underlyings={str(pos.get("underlying") or "").upper() for pos in opened},
+                    now_iso=now_ist.isoformat(),
+                )
+            except Exception:
+                # Diagnostic-only instrumentation must never interrupt the
+                # real paper cycle.
+                pass
 
         store.commit_cycle(
             settled_rows,

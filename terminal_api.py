@@ -909,16 +909,33 @@ def _fo_paper_payload() -> dict[str, Any]:
         }
 
 
+def _fno_learning_impact_payload(directional: dict[str, Any]) -> dict[str, Any]:
+    try:
+        from product.fno_learning_impact import build_fno_learning_impact
+        return dict(build_fno_learning_impact(directional) or {})
+    except Exception as exc:
+        return {
+            "available": False,
+            "error": f"{type(exc).__name__}: {exc}"[:240],
+            "historical": {"available": False, "can_affect_ranking": False},
+            "forward": {"available": False, "can_affect_ranking": False},
+            "ranking_impact": {"status": "UNAVAILABLE", "plain": "Learning-impact projection unavailable."},
+            "live_locked": True,
+        }
+
+
 def _fno_payload() -> dict[str, Any]:
     path = logs_dir() / "product" / "fno_universe.json"
     persisted = _json_file(path, {})
     directional = _fo_directional_payload()
     paper = _fo_paper_payload()
+    learning_impact = _fno_learning_impact_payload(directional)
     if persisted:
         persisted["available"] = int(persisted.get("mapped_underlyings", 0) or 0) > 0
         persisted["cache_mtime"] = path.stat().st_mtime if path.exists() else None
         persisted["directional"] = directional
         persisted["paper"] = paper
+        persisted["learning_impact"] = learning_impact
         return persisted
     try:
         from data.fno_universe import current_fno_universe
@@ -936,6 +953,7 @@ def _fno_payload() -> dict[str, Any]:
             "exclusions": [item.__dict__ for item in report.exclusions],
             "directional": directional,
             "paper": paper,
+            "learning_impact": learning_impact,
         }
     except Exception as exc:
         return {
@@ -946,6 +964,7 @@ def _fno_payload() -> dict[str, Any]:
             "exclusions": [],
             "directional": directional,
             "paper": paper,
+            "learning_impact": learning_impact,
             "error": str(exc),
         }
 

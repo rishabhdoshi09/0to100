@@ -29,7 +29,7 @@ def _eod() -> datetime:
     return datetime(2026, 9, 1, 19, 10, tzinfo=IST)
 
 
-def test_journey_b_zerodha_login_required():
+def test_journey_b_zerodha_login_is_optional_for_paper_operation():
     os = build_home_os(
         dashboard={"autonomy": {"state": "AUTH_REQUIRED", "running": True}, "data": {"ready": True}},
         paper={"enabled": True, "open_positions": [], "closed_trades": []},
@@ -38,16 +38,17 @@ def test_journey_b_zerodha_login_required():
         scan={"scanned_at": "2026-09-01T05:00:00+00:00", "records": [{"symbol": "TCS"}]},
         now=_open(),
     )
-    assert os["need_me"] is True
+    assert os["need_me"] is False
     assert os["broker"]["login_required"] is True
-    assert os["primary_action"]["label"] == "Login to Zerodha"
-    assert os["primary_action"]["kind"] == "instruction"
-    assert os["system"]["zerodha"]["status"] == "Needs you"
+    assert os["broker"]["requires_operator_now"] is False
+    assert os["broker"]["status"] == "OPTIONAL_LOGIN"
+    assert os["system"]["zerodha"]["status"] == "Optional login"
+    assert os["system"]["zerodha"]["needs_user"] is False
     assert os["live_locked"] is True
-    assert os["state"] in {LOGIN_REQUIRED, NORMAL, NO_TRADE, MARKET_CLOSED_COMPLETE}
+    assert os["state"] != LOGIN_REQUIRED
 
 
-def test_observing_with_auth_health_still_needs_zerodha_login():
+def test_observing_with_auth_health_keeps_zerodha_optional():
     os = build_home_os(
         dashboard={
             "autonomy": {
@@ -64,9 +65,10 @@ def test_observing_with_auth_health_still_needs_zerodha_login():
         scan={"scanned_at": "2026-09-01T05:00:00+00:00", "records": [{"symbol": "TCS"}]},
         now=_open(),
     )
-    assert os["need_me"] is True
+    assert os["need_me"] is False
     assert os["broker"]["login_required"] is True
-    assert os["system"]["zerodha"]["status"] == "Needs you"
+    assert os["broker"]["requires_operator_now"] is False
+    assert os["system"]["zerodha"]["status"] == "Optional login"
     assert os["live_locked"] is True
 
 
@@ -88,8 +90,10 @@ def test_observing_auth_health_without_explanation_is_not_broker_ready():
         now=_open(),
     )
     assert os["broker"]["login_required"] is True
-    assert os["broker"]["status"] != "READY"
-    assert os["system"]["zerodha"]["status"] == "Needs you"
+    assert os["broker"]["status"] == "OPTIONAL_LOGIN"
+    assert os["broker"]["requires_operator_now"] is False
+    assert os["system"]["zerodha"]["status"] == "Optional login"
+    assert os["need_me"] is False
 
 
 def test_empty_autonomy_snapshot_is_not_broker_ready():
@@ -102,8 +106,10 @@ def test_empty_autonomy_snapshot_is_not_broker_ready():
         now=_open(),
     )
     assert os["broker"]["login_required"] is True
-    assert os["broker"]["status"] != "READY"
-    assert os["system"]["zerodha"]["status"] == "Needs you"
+    assert os["broker"]["status"] == "OPTIONAL_LOGIN"
+    assert os["broker"]["requires_operator_now"] is False
+    assert os["system"]["zerodha"]["status"] == "Optional login"
+    assert os["need_me"] is False
 
 
 def test_observing_auth_missing_failure_without_reason_code_is_not_broker_ready():
@@ -125,8 +131,10 @@ def test_observing_auth_missing_failure_without_reason_code_is_not_broker_ready(
         now=_open(),
     )
     assert os["broker"]["login_required"] is True
-    assert os["broker"]["status"] != "READY"
-    assert os["system"]["zerodha"]["status"] == "Needs you"
+    assert os["broker"]["status"] == "OPTIONAL_LOGIN"
+    assert os["broker"]["requires_operator_now"] is False
+    assert os["system"]["zerodha"]["status"] == "Optional login"
+    assert os["need_me"] is False
 
 
 def test_journey_c_no_trade_is_healthy():
@@ -438,6 +446,10 @@ def test_home_best_trades_excludes_rejections_waits_and_non_buy_gate_rows(monkey
                     "discovery_decision": "ENTER_NOW",
                     "reason_code": "ENTRY_TOO_EXTENDED",
                 },
+                {
+                    "symbol": "UNKNOWN",
+                    "setup_label": "Missing decision evidence",
+                },
             ],
         },
     )
@@ -490,9 +502,10 @@ def test_home_best_trades_excludes_rejections_waits_and_non_buy_gate_rows(monkey
     assert "AUROPHARMA" not in rendered
     assert "EMIL" not in rendered
     assert "BADWAIT" not in rendered
+    assert "UNKNOWN" not in rendered
 
 
-def test_home_can_show_five_with_two_truthful_capacity_reserves_and_confidence(monkeypatch):
+def test_home_best_list_excludes_capacity_reserves_even_when_five_rows_are_available(monkeypatch):
     import product.decision_simulation_gate as gate
 
     rows = []
@@ -546,12 +559,14 @@ def test_home_can_show_five_with_two_truthful_capacity_reserves_and_confidence(m
         now=_open(),
     )
 
-    assert [row["found"].split()[0] for row in os["opportunities"]] == ["A", "B", "C", "D", "E"]
-    assert [row["label"] for row in os["opportunities"][:3]] == ["BUY", "BUY", "BUY"]
-    assert [row["label"] for row in os["opportunities"][3:]] == ["RESERVE", "RESERVE"]
+    assert [row["found"].split()[0] for row in os["opportunities"]] == ["A", "B", "C"]
+    assert [row["label"] for row in os["opportunities"]] == ["BUY", "BUY", "BUY"]
     assert all(row["confidence_score"] is not None for row in os["opportunities"])
     assert os["opportunities"][0]["win_probability_pct"] == 61.0
-    assert "HARDWAIT" not in " ".join(str(row) for row in os["opportunities"])
+    shown_symbols = [row["found"].split()[0] for row in os["opportunities"]]
+    assert "D" not in shown_symbols
+    assert "E" not in shown_symbols
+    assert "HARDWAIT" not in shown_symbols
 
 
 def test_market_closed_never_claims_complete_when_required_verifier_lanes_fail():

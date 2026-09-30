@@ -212,9 +212,13 @@ export type FnoDirectionalCandidate = {
   direction: 'LONG' | 'SHORT' | string
   decision: string
   setup?: {
+    direction?: string
     score?: number
     score_is_probability?: boolean
     futures_oi_state?: string
+    breakout_distance_pct?: number
+    atr_pct?: number
+    components?: Record<string, number>
     expected_move?: {
       lower_pct?: number
       upper_pct?: number
@@ -222,8 +226,18 @@ export type FnoDirectionalCandidate = {
       horizon?: string
       holding_days?: number
     }
+    underlying_trade_plan?: {
+      entry?: number
+      stop?: number | null
+      target?: number | null
+      invalidation_model?: string
+      target_model?: string
+    }
     blockers?: string[]
     reasons?: string[]
+  }
+  options?: {
+    spot?: number
   }
   selected_contract?: {
     symbol?: string
@@ -246,6 +260,9 @@ export type FnoDirectionalCandidate = {
     vega_per_vol_point?: number
     score?: number
     score_is_probability?: boolean
+    components?: Record<string, number>
+    moneyness?: string
+    moneyness_pct?: number | null
     projected_return_at_expected_move_pct?: number
     context_key?: string
     trade_plan?: {
@@ -255,6 +272,20 @@ export type FnoDirectionalCandidate = {
       risk_reward?: number
       underlying_invalidation?: number | null
       model?: string
+    }
+    raw_contract_score?: number
+    learned_contract_score?: number
+    contract_evidence?: {
+      context_key?: string
+      usable?: boolean
+      count?: number
+      direction?: string
+      adjustment?: number
+      reason?: string
+      expectancy_R?: number | null
+      wilson_lower_bound?: number | null
+      base_context_key?: string
+      used_modifier?: string | null
     }
   }
   iv_history?: {
@@ -271,6 +302,132 @@ export type FnoDirectionalCandidate = {
   forward_evidence?: FnoForwardEvidence
   paper_only?: boolean
   live_execution_allowed?: boolean
+  base_score?: number
+  historical_prior?: number
+  forward_adjustment?: number
+  ranking_adjustment?: number
+  ranking_score?: number
+  ranking_evidence?: {
+    usable?: boolean
+    reason?: string
+    status?: string
+    adjustment?: number
+    historical_prior?: number
+    forward_adjustment?: number
+    historical_note?: string
+    evidence_class?: string
+    context_key?: string
+    count?: number
+    min_sample?: number
+    expectancy_R?: number | null
+    wilson_lower_bound?: number | null
+  }
+}
+
+export type FnoLearningEvidenceBlock = {
+  available?: boolean
+  evidence_class?: string
+  error?: string
+  last_run_at?: string
+  cursor_date?: string
+  coverage_complete?: boolean
+  historical_simulations_completed?: number
+  decisions_graded?: number
+  settled?: number
+  correct_rejects?: number
+  missed_winners?: number
+  avoided_losers?: number
+  ran_away_without_entry?: number
+  good_waits?: number
+  flat?: number
+  open_positions?: number
+  forward_paper_trades?: number
+  wins?: number
+  losses?: number
+  production_evidence_trades?: number
+  evidence_cells?: number
+  matured_cells?: number
+  minimum_sample_for_ranking?: number
+  can_affect_ranking?: boolean
+  note?: string
+  cells_large_enough_for_a_prior?: number
+  prior_min_sample?: number
+  prior_cap?: number
+  richest_priors?: Array<{
+    context?: Record<string, string>
+    count?: number
+    win_rate?: number | null
+    wilson_lower_bound?: number | null
+    expectancy_R?: number | null
+    median_R?: number | null
+    mfe_R?: number | null
+    mae_R?: number | null
+    prior_direction?: string
+    prior_adjustment?: number
+  }>
+  contract_selection?: {
+    evidence_cells?: number
+    matured_cells?: number
+    can_affect_contract_selection?: boolean
+    outcome_classification_counts?: Record<string, number>
+    note?: string
+  }
+}
+
+export type FnoLearningImpact = {
+  schema_version?: number
+  available?: boolean
+  error?: string
+  historical?: FnoLearningEvidenceBlock
+  forward?: FnoLearningEvidenceBlock
+  ranking_impact?: {
+    status?: string
+    plain?: string
+    influenced_count?: number
+    forward_influenced_count?: number
+    historical_influenced_count?: number
+    influenced?: Array<{
+      symbol?: string
+      direction?: string
+      base_score?: number
+      historical_prior?: number
+      forward_adjustment?: number
+      ranking_score?: number
+      adjustment?: number
+      status?: string
+      reason?: string
+      count?: number
+      expectancy_R?: number | null
+      why?: string
+    }>
+  }
+  threshold_review?: {
+    min_score_to_take?: number
+    below_threshold_sample?: number
+    above_threshold_sample?: number
+    below_threshold_would_be_winner_rate_pct?: number
+    below_threshold_would_be_loser_rate_pct?: number
+    above_threshold_winner_rate_pct?: number
+    above_threshold_loser_rate_pct?: number
+    min_sample?: number
+    material_gap_pp?: number
+    recommendation?: string
+    reason?: string
+    autonomous_change_applied?: boolean
+    action_required?: string
+  }
+  policy?: {
+    historical_and_forward_kept_in_separate_cells?: boolean
+    historical_alone_can_move_ranking?: boolean
+    historical_prior_is_small_and_bounded?: boolean
+    forward_is_always_the_stronger_vote?: boolean
+    forward_required_to_promote_past_the_historical_cap?: boolean
+    contract_selection_learned_separately_from_underlying_call?: boolean
+    contract_selection_requires_genuine_forward_option_trades?: boolean
+    no_fabricated_historical_option_chain_data?: boolean
+    live_money_affected?: boolean
+  }
+  live_locked?: boolean
 }
 
 export type FnoDirectionalState = {
@@ -303,15 +460,26 @@ export type FnoPaperPosition = {
   underlying?: string
   option_symbol?: string
   option_type?: string
+  strike?: number
+  expiry?: string
   entry_price?: number
   stop_price?: number
   target_price?: number
+  trailing_stop_price?: number
   quantity?: number
   lots?: number
   setup_score?: number
   option_score?: number
   opened_at?: string
   max_holding_sessions?: number
+  bars_held?: number
+  max_mark?: number
+  min_mark?: number
+  entry_minute_status?: string
+  entry_iv_pct?: number
+  entry_underlying_spot?: number
+  horizon?: string
+  exit_policy?: string
   context_key?: string
 }
 
@@ -593,6 +761,7 @@ export type DashboardPayload = {
     exclusions: FnoExclusion[]
     directional?: FnoDirectionalState
     paper?: FnoPaperState
+    learning_impact?: FnoLearningImpact
     cache_mtime?: number | null
     error?: string
   }

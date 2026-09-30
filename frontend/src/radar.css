@@ -141,6 +141,13 @@ button.home-os-check {
   border-radius: 10px;
 }
 .home-os-past span { display: block; font-size: 9px; letter-spacing: .12em; color: var(--muted); }
+/* Without an explicit block display, adjacent inline <strong>/<small> siblings
+   (e.g. "No eligible trade" + its explanation, learning-impact summary lines,
+   the US paper-market line) render their text with no line break or gap
+   between them -- "No eligible tradeThe production thesis..." */
+.home-os-past strong { display: block; margin: 2px 0; }
+.home-os-past small { display: block; margin: 2px 0; color: var(--muted); }
+.home-os-past small:first-of-type { margin-top: 4px; }
 .home-os-inspect-positions { list-style: none; padding: 0; margin: 8px 0; }
 .home-os-inspect-positions li { display: flex; gap: 10px; font-size: 13px; margin: 4px 0; }
 @media (max-width: 720px) {

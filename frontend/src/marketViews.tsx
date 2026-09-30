@@ -52,6 +52,22 @@ export function OperationsRibbon({ dashboard }: { dashboard: DashboardPayload })
   )
 }
 
+const componentLabels: Record<string, string> = {
+  breakout: 'Breakout', trend: 'Trend', rvol: 'RVOL', rsi: 'RSI', adx: 'ADX',
+  relative_strength: 'Rel. strength', sector_strength: 'Sector strength',
+  nifty_alignment: 'NIFTY align', futures_oi: 'Futures OI',
+  delta_fit: 'Delta fit', liquidity: 'Liquidity', theta: 'Theta', iv: 'IV',
+  expiry_fit: 'Expiry fit', expected_payoff: 'Expected payoff',
+}
+
+function componentsRationale(components: Record<string, number> | undefined): string {
+  if (!components || Object.keys(components).length === 0) return ''
+  return Object.entries(components)
+    .sort((a, b) => b[1] - a[1])
+    .map(([key, value]) => `${componentLabels[key] || words(key)} ${value}`)
+    .join(' · ')
+}
+
 const canonicalCategory = (article: NewsArticle) => {
   const text = `${article.category} ${article.event_type} ${(article.tags || []).join(' ')}`.toLowerCase()
   if (/(result|order|contract|promoter|insider|fund rais|company|corporate|dividend|merger|acquisition)/.test(text)) return 'Company'
@@ -159,6 +175,8 @@ export function FnoView({ dashboard, runControl, setSelected, setActive }: Props
   const candidates = directional.candidates || []
   const paper = dashboard.fno.paper || {}
   const openPaper = paper.open_positions || []
+  const learning = dashboard.fno.learning_impact || {}
+  const ranking = learning.ranking_impact || {}
   const fmt = (value: number | null | undefined, digits = 2) => Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : '—'
   return (
     <section className="workspace-view">
@@ -185,22 +203,60 @@ export function FnoView({ dashboard, runControl, setSelected, setActive }: Props
               const setup = candidate.setup || {}
               const contract = candidate.selected_contract || {}
               const plan = contract.trade_plan || {}
+              const underlyingPlan = setup.underlying_trade_plan || {}
               const expected = setup.expected_move || {}
               const evidence = candidate.forward_evidence || {}
               const coverage = evidence.coverage || {}
               const ivHistory = candidate.iv_history || {}
               const evidenceReady = evidence.probability_claim_available === true
+              const cmp = candidate.options?.spot
+              const matchedPosition = openPaper.find((position) => (
+                // An exact tradingsymbol match is unambiguous (it already
+                // encodes strike + expiry + type). The underlying+type
+                // fallback is only safe when strike AND expiry also agree --
+                // otherwise a same-underlying position from a different
+                // contract (a prior cycle's still-open position at a
+                // different strike, say) would show as if it belonged to
+                // this candidate, misreporting its real bars-held/trailing
+                // stop/best-mark figures.
+                (contract.symbol && position.option_symbol === contract.symbol)
+                || (
+                  position.underlying === candidate.symbol
+                  && position.option_type === contract.option_type
+                  && contract.strike != null && position.strike === contract.strike
+                  && !!contract.expiry && position.expiry === contract.expiry
+                )
+              ))
+              const rationale = componentsRationale(contract.components)
+              const setupRationale = componentsRationale(setup.components)
               return (
                 <button type="button" key={`${candidate.symbol}-${contract.symbol || index}`} onClick={() => select(candidate.symbol)}>
-                  <strong>{candidate.symbol} · {candidate.direction}</strong>
+                  <strong>{candidate.symbol} · {candidate.direction} · CMP ₹{fmt(cmp)}</strong>
                   <span>{contract.symbol || contract.option_type || 'No contract'} · setup {fmt(setup.score, 1)}/100 · option {fmt(contract.score, 1)}/100</span>
-                  <p>OI {words(setup.futures_oi_state || 'unknown')} · Δ {fmt(contract.delta, 2)} · IV {fmt(contract.iv, 1)}% · DTE {contract.dte ?? '—'} · horizon {words(expected.horizon || 'unknown')}</p>
+                  <p>Setup type: {words(candidate.direction || 'unknown')} breakout · futures OI {words(setup.futures_oi_state || 'unknown')} · distance {fmt(setup.breakout_distance_pct, 2)}% · ATR {fmt(setup.atr_pct, 2)}%</p>
+                  <small>Underlying plan · entry ₹{fmt(underlyingPlan.entry)} · stop ₹{fmt(underlyingPlan.stop)} · target ₹{fmt(underlyingPlan.target)}</small>
+                  <p>{contract.option_type || '—'} {fmt(contract.strike, 0)} · expiry {contract.expiry || 'unavailable'} · DTE {contract.dte ?? '—'} · horizon {words(expected.horizon || 'unknown')}</p>
+                  <small>Premium ₹{fmt(contract.premium)} · Δ {fmt(contract.delta, 2)} · IV {fmt(contract.iv, 1)}% · OI {contract.oi ?? '—'} · volume {contract.volume ?? '—'} · spread {contract.spread_pct == null ? 'unavailable' : `${fmt(contract.spread_pct, 2)}%`}</small>
                   {ivHistory.available ? (
                     <small>Forward IV percentile {fmt(ivHistory.percentile_pct, 1)}% · {ivHistory.prior_sessions ?? 0} prior closing sessions · no backfill</small>
                   ) : (
                     <small>Forward IV percentile held · {ivHistory.prior_sessions ?? 0}/{ivHistory.minimum_prior_sessions ?? 60} prior closing sessions · no backfill</small>
                   )}
                   <small>Paper entry ₹{fmt(plan.entry)} · stop ₹{fmt(plan.stop)} · target ₹{fmt(plan.target)} · R:R {fmt(plan.risk_reward, 2)}</small>
+                  {rationale && <small>Option-selection rationale · {rationale}</small>}
+                  {setupRationale && <small>Setup rationale · {setupRationale}</small>}
+                  {contract.contract_evidence?.usable && (
+                    <small>Contract selection learning · raw {fmt(contract.raw_contract_score, 1)} → learned {fmt(contract.learned_contract_score, 1)} ({contract.contract_evidence.direction === 'PROMOTE' ? '+' : ''}{fmt(contract.contract_evidence.adjustment, 1)}) · n={contract.contract_evidence.count ?? 0} · {words(contract.contract_evidence.reason || '')}{contract.contract_evidence.used_modifier ? ` · refined by ${words(contract.contract_evidence.used_modifier)}` : ''}</small>
+                  )}
+                  {matchedPosition ? (
+                    <small className="fno-paper-state">
+                      Paper state: OPEN · bars held {matchedPosition.bars_held ?? 0}/{matchedPosition.max_holding_sessions ?? '—'}
+                      {matchedPosition.trailing_stop_price ? ` · trailing stop ₹${fmt(matchedPosition.trailing_stop_price)}` : ''}
+                      {matchedPosition.max_mark ? ` · best mark ₹${fmt(matchedPosition.max_mark)}` : ''}
+                    </small>
+                  ) : (
+                    <small className="fno-paper-state">Paper state: not yet executed (awaiting next paper cycle, entry window or risk gate)</small>
+                  )}
                   {evidenceReady ? (
                     <small>Forward evidence · n={evidence.n ?? 0} fully costed + path-valid · observed win {fmt(evidence.win_probability_pct, 1)}% · Wilson floor {fmt(evidence.win_probability_wilson_lb_pct, 1)}% · conservative EV {fmt(evidence.conservative_ev_pct, 2)}%</small>
                   ) : (
@@ -224,11 +280,91 @@ export function FnoView({ dashboard, runControl, setSelected, setActive }: Props
             {openPaper.slice(0, 10).map((position, index) => (
               <div key={position.trade_id || `${position.option_symbol}-${index}`}>
                 <strong>{position.underlying || '—'} · {position.option_symbol || '—'}</strong>
-                <span>{position.option_type || '—'} · qty {position.quantity ?? '—'} · setup {fmt(position.setup_score, 1)} · option {fmt(position.option_score, 1)}</span>
-                <p>Entry ₹{fmt(position.entry_price)} · stop ₹{fmt(position.stop_price)} · target ₹{fmt(position.target_price)} · max hold {position.max_holding_sessions ?? '—'} session(s)</p>
+                <span>{position.option_type || '—'} {fmt(position.strike, 0)} · expiry {position.expiry || 'unavailable'} · qty {position.quantity ?? '—'} · setup {fmt(position.setup_score, 1)} · option {fmt(position.option_score, 1)}</span>
+                <p>Entry ₹{fmt(position.entry_price)} · stop ₹{fmt(position.stop_price)}{position.trailing_stop_price ? ` (trailing ₹${fmt(position.trailing_stop_price)})` : ''} · target ₹{fmt(position.target_price)} · max hold {position.max_holding_sessions ?? '—'} session(s)</p>
+                <small>Supervision · bars held {position.bars_held ?? 0}/{position.max_holding_sessions ?? '—'} · best mark ₹{fmt(position.max_mark)} · worst mark ₹{fmt(position.min_mark)} · entry status {words(position.entry_minute_status || 'unknown')}</small>
               </div>
             ))}
           </div>
+        </Panel>
+      </div>
+
+      <div className="fno-layout">
+        <Panel title="F&O LEARNING LOOP · HISTORICAL (COUNTERFACTUAL)" subtitle="Point-in-time walk-forward replay over real historical OHLC — only a large, stable sample can act as a small, bounded prior, and only while no forward evidence exists yet">
+          {(() => {
+            const hist = learning.historical || {}
+            if (!hist.available) return <div className="empty-row">{hist.error ? `Unavailable: ${hist.error}` : 'No historical walk-forward run has completed yet.'}</div>
+            return (
+              <div className="exclusion-list">
+                <div>
+                  <strong>{hist.historical_simulations_completed ?? 0} session(s) simulated · {hist.decisions_graded ?? 0} decisions graded · {hist.settled ?? 0} settled</strong>
+                  <span>Cursor {hist.cursor_date || '—'} · {hist.coverage_complete ? 'fully caught up to available history' : 'still catching up on backlog'}</span>
+                  <p>Correct rejects {hist.correct_rejects ?? 0} · missed winners {hist.missed_winners ?? 0} · avoided losers {hist.avoided_losers ?? 0} · ran away without entry {hist.ran_away_without_entry ?? 0}</p>
+                  <small>{hist.evidence_cells ?? 0} evidence cell(s) · {hist.cells_large_enough_for_a_prior ?? 0} large/stable enough for a prior (≥{hist.prior_min_sample ?? 50}, capped ±{hist.prior_cap ?? 5}) · can affect ranking: {hist.can_affect_ranking ? 'yes' : 'no'}</small>
+                  <small>{hist.note}</small>
+                </div>
+                {(hist.richest_priors || []).slice(0, 3).map((row, index) => (
+                  <div key={`prior-${index}`}>
+                    <strong>{row.prior_direction || 'FLAT'} prior · n={row.count ?? 0} · expectancy {fmt(row.expectancy_R, 2)}R</strong>
+                    <span>Win rate {fmt((row.win_rate ?? 0) * 100, 1)}% · Wilson floor {fmt((row.wilson_lower_bound ?? 0) * 100, 1)}% · median {fmt(row.median_R, 2)}R</span>
+                    <small>{Object.entries(row.context || {}).map(([k, v]) => `${k}=${v}`).join(' · ')}</small>
+                  </div>
+                ))}
+              </div>
+            )
+          })()}
+        </Panel>
+        <Panel title="F&O LEARNING LOOP · FORWARD (PAPER_FORWARD)" subtitle="Real settled F&O paper trades — the only evidence class that can change ranking">
+          {(() => {
+            const fwd = learning.forward || {}
+            if (!fwd.available) return <div className="empty-row">{fwd.error ? `Unavailable: ${fwd.error}` : 'No forward paper evidence yet.'}</div>
+            return (
+              <div className="exclusion-list">
+                <div>
+                  <strong>{fwd.forward_paper_trades ?? 0} forward paper trade(s) · {fwd.wins ?? 0} win / {fwd.losses ?? 0} loss</strong>
+                  <span>{fwd.open_positions ?? 0} open · {fwd.production_evidence_trades ?? 0} fully-costed production-evidence trade(s)</span>
+                  <p>{fwd.evidence_cells ?? 0} evidence cell(s) · {fwd.matured_cells ?? 0} matured (≥{fwd.minimum_sample_for_ranking ?? 30} samples)</p>
+                  <small>Can affect ranking: {fwd.can_affect_ranking ? 'yes' : 'no'}</small>
+                  <small>{fwd.note}</small>
+                </div>
+              </div>
+            )
+          })()}
+        </Panel>
+      </div>
+      <div className="fno-layout">
+        <Panel title="RANKING IMPACT" subtitle="Only claimed when a real candidate's ranking actually moved this cycle">
+          <div className="exclusion-list">
+            <div>
+              <strong>{ranking.plain || 'Learning impact is being measured.'}</strong>
+              <span>Status: {words(ranking.status || 'COLLECTING')} · {ranking.forward_influenced_count ?? 0} by forward evidence · {ranking.historical_influenced_count ?? 0} by historical prior only</span>
+            </div>
+            {(ranking.influenced || []).length === 0 && <div className="empty-row">No candidate's ranking has been changed by validated evidence yet.</div>}
+            {(ranking.influenced || []).map((row, index) => (
+              <div key={`${row.symbol}-${index}`}>
+                <strong>{row.symbol} · {row.direction}</strong>
+                <span>base {fmt(row.base_score, 1)} + historical {fmt(row.historical_prior, 1)} + forward {fmt(row.forward_adjustment, 1)} = ranked {fmt(row.ranking_score, 1)}</span>
+                <p>{row.why || words(row.reason || '')}</p>
+              </div>
+            ))}
+          </div>
+        </Panel>
+        <Panel title="THRESHOLD REVIEW · MIN-SCORE ENTRY GATE" subtitle="Recommendation only — never an autonomous gate change">
+          {(() => {
+            const review = learning.threshold_review || {}
+            if (!review.recommendation) return <div className="empty-row">No threshold review available yet.</div>
+            return (
+              <div className="exclusion-list">
+                <div>
+                  <strong>{words(review.recommendation)}</strong>
+                  <span>Gate {fmt(review.min_score_to_take, 0)} · below-threshold sample {review.below_threshold_sample ?? 0} (needs {review.min_sample ?? 30})</span>
+                  <p>{review.reason}</p>
+                  <small>Below: would-be winner {fmt(review.below_threshold_would_be_winner_rate_pct, 1)}% vs would-be loser {fmt(review.below_threshold_would_be_loser_rate_pct, 1)}% · Above: winner {fmt(review.above_threshold_winner_rate_pct, 1)}% vs loser {fmt(review.above_threshold_loser_rate_pct, 1)}%</small>
+                  <small>{review.action_required}</small>
+                </div>
+              </div>
+            )
+          })()}
         </Panel>
       </div>
 

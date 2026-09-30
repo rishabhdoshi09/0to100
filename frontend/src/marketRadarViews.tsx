@@ -718,8 +718,8 @@ function HomeOsCard({
           <span>LEARNING IMPACT</span>
           <strong>{os.learning_impact.benefit_plain || os.learning_impact.plain || 'Learning impact is being measured.'}</strong>
           <small>
-            benefit={os.learning_impact.benefit_status || os.learning_impact.status || 'COLLECTING'} ·
-            {' '}Current decisions changed by measured learning: {os.learning_impact.current_decisions_influenced ?? 0}
+            Status: {(os.learning_impact.benefit_status || os.learning_impact.status || 'COLLECTING').replaceAll('_', ' ').toLowerCase()}
+            {' '}· Current decisions changed by measured learning: {os.learning_impact.current_decisions_influenced ?? 0}
             {os.learning_impact.challenger?.model_version ? ` · model ${os.learning_impact.challenger.model_version}` : ''}
             {os.learning_impact.challenger?.real_forward_n != null ? ` · real-forward n ${os.learning_impact.challenger.real_forward_n}` : ''}
             {os.learning_impact.policies?.production_effective != null ? ` · effective policies ${os.learning_impact.policies.production_effective}` : ''}
@@ -1128,10 +1128,10 @@ export function RadarHomeView(props: ExperienceViewProps & {
           <strong>{kiteOk ? 'READY' : kiteLoginOptional ? 'LOGIN OPTIONAL' : 'CHECKING'}</strong>
           <small>
             {kiteOk
-              ? 'broker-dependent quotes and paper capability available'
+              ? 'broker-live quotes, F&O broker data and read-only reconciliation available'
               : kiteLoginOptional
-                ? 'Log in only when you want broker-dependent capability. Core research keeps running.'
-                : 'Broker state comes from backend readiness; core research does not depend on it.'}
+                ? 'Log in only for broker-live/F&O/reconciliation capability. Official-data paper operation keeps running.'
+                : 'Broker state comes from backend readiness; official-data paper operation does not depend on it.'}
           </small>
         </div>
         <div>

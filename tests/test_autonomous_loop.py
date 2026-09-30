@@ -22,7 +22,9 @@ def test_readiness_separates_official_from_broker():
     assert RDY.BROKER_LIVE_DATA_READY in matrix["capabilities"]
     assert RDY.OUTCOME_DATA_READY in matrix["capabilities"]
     assert "OUTCOME_RESOLUTION" in matrix["allowed_without_kite"]
-    assert "PAPER_ENTRY" in matrix["blocked_without_kite"]
+    assert "PAPER_ENTRY" in matrix["allowed_without_kite"]
+    assert "PAPER_ENTRY" not in matrix["blocked_without_kite"]
+    assert "BROKER_PORTFOLIO_SYNC" in matrix["blocked_without_kite"]
     assert "MARKET_SCAN_COMPLETED_SESSION" in matrix["allowed_without_kite"]
 
 
