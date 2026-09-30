@@ -191,12 +191,18 @@ def test_off_session_after_close_enqueues_historical_paper(monkeypatch):
     supervisor.enqueue_due()
     assert jobs.enqueued == [
         (
+            SCH.FNO_HISTORICAL_WALKFORWARD,
+            {
+                "idempotency_key": SCH.fno_walkforward_key("2026-09-01:start"),
+            },
+        ),
+        (
             SCH.HISTORICAL_PAPER_CYCLE,
             {
                 "idempotency_key": SCH.historical_paper_key("hist-1"),
                 "input_snapshot_id": "hist-1",
             },
-        )
+        ),
     ]
 
 
