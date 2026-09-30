@@ -137,11 +137,27 @@ def test_an_unreadable_interlock_blocks_rather_than_warns(monkeypatch):
     assert "must not start" in check.detail
 
 
-def test_missing_credentials_block(monkeypatch):
+def test_missing_broker_credentials_warn_without_blocking_paper_host(monkeypatch):
     monkeypatch.delenv("KITE_API_KEY", raising=False)
+    monkeypatch.delenv("KITE_API_SECRET", raising=False)
+    monkeypatch.delenv("KITE_ACCESS_TOKEN", raising=False)
     check = check_secrets()
-    assert check.status == FAIL
-    assert "KITE_API_KEY" in check.detail
+    assert check.status == WARN
+    assert check.required is False
+    assert set(check.evidence["broker_optional_missing"]) == {
+        "KITE_API_KEY", "KITE_API_SECRET", "KITE_ACCESS_TOKEN",
+    }
+    assert "paper execution" in check.detail
+
+
+def test_brokerless_credentials_do_not_block_ready_paper_preflight(monkeypatch):
+    monkeypatch.delenv("KITE_API_KEY", raising=False)
+    monkeypatch.delenv("KITE_API_SECRET", raising=False)
+    monkeypatch.delenv("KITE_ACCESS_TOKEN", raising=False)
+    report = run_host_preflight(probe=_all_reachable)
+    assert report["verdict"] == READY
+    assert not any(row["check"] == "secrets_present" for row in report["blockers"])
+    assert any(row["check"] == "secrets_present" for row in report["warnings"])
 
 
 def test_secret_values_are_never_in_the_report(monkeypatch):
