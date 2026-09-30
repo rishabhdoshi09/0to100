@@ -27,6 +27,11 @@ from product.fo_paper import (
 )
 from product.fo_paper_store import FoPaperStore
 from product.fno_evidence import fno_context_key, record_fno_settlement
+from product.fno_contract_evidence import (
+    classify_contract_outcome,
+    contract_context_key,
+    record_contract_settlement,
+)
 
 
 def _restore_position(payload: Mapping[str, Any]) -> FoPaperPosition | None:
@@ -357,6 +362,12 @@ def run_fo_paper_cycle(
                                 str(pos.exit_policy or "").upper() == "EOD"
                                 and _historical_bar_reaches_eod(bar_session, now_ist)
                             ),
+                            # No per-bar historical underlying spot is fetched
+                            # here (same limitation the STOP/TARGET bar fills
+                            # already have); the current underlying quote is
+                            # the best honest evidence available for a bar
+                            # replay settlement, never fabricated further.
+                            underlying_quotes=underlying_quotes,
                         )
                         if same_day:
                             intraday_bars_replayed += 1
@@ -385,6 +396,7 @@ def run_fo_paper_cycle(
                                 observation_complete=False,
                                 force_eod=eod_exit_due,
                                 iv_crush_symbols=iv_crush_symbols,
+                                underlying_quotes=underlying_quotes,
                             )
                         )
                     continue
@@ -412,6 +424,7 @@ def run_fo_paper_cycle(
                         observation_complete=False,
                         force_eod=eod_exit_due,
                         iv_crush_symbols=iv_crush_symbols,
+                        underlying_quotes=underlying_quotes,
                     )
                 )
             for trade in settled:
@@ -444,11 +457,23 @@ def run_fo_paper_cycle(
                     )
                 except Exception:
                     pass
+                # Same honesty gate, contract-shape cell: a settlement this
+                # loop does not trust as underlying evidence is not trusted
+                # as contract evidence either -- record_contract_settlement
+                # enforces production_evidence_eligible itself.
+                try:
+                    record_contract_settlement(
+                        row, context_key=str(row.get("contract_context_key") or "")
+                    )
+                except Exception:
+                    pass
+                row["contract_outcome"] = classify_contract_outcome(row)
 
         opened: list[dict[str, Any]] = []
         skipped: list[dict[str, str]] = []
+        ranked_candidates = _candidate_rows(directional) if bool(directional.get("available")) else []
         if allow_new_entries and bool(directional.get("available")):
-            for candidate in _candidate_rows(directional):
+            for candidate in ranked_candidates:
                 underlying = str(candidate.get("symbol") or "").upper()
                 if not underlying:
                     skipped.append({"symbol": "", "reason": "MISSING_UNDERLYING"})
@@ -545,12 +570,45 @@ def run_fo_paper_cycle(
                         (setup.get("underlying_trade_plan") or {}).get("entry") or 0.0
                     ),
                     ask=float(contract.get("ask") or 0.0),
+                    # Contract-shape evidence fields (product.fno_contract_evidence),
+                    # captured from the REAL selected contract at open time --
+                    # never derived from the setup, never invented at
+                    # settlement. Empty/zero when the field genuinely was not
+                    # available on this contract (e.g. no IV percentile yet).
+                    contract_context_key=contract_context_key(contract),
+                    entry_delta=float(contract.get("delta") or 0.0),
+                    entry_spread_pct=(
+                        float(contract["spread_pct"])
+                        if contract.get("spread_pct") is not None else None
+                    ),
+                    entry_iv_percentile=(
+                        float(contract["iv_percentile"])
+                        if contract.get("iv_percentile") is not None else None
+                    ),
+                    entry_theta_per_day=float(contract.get("theta_per_day") or 0.0),
+                    entry_dte=int(contract.get("dte") or 0),
+                    entry_oi=int(contract.get("oi") or 0),
+                    entry_volume=int(contract.get("volume") or 0),
                 )
                 if pos is None:
                     reason = book.refusals[-1][1] if book.refusals else "PAPER_BOOK_REJECTED"
                     skipped.append({"symbol": underlying, "reason": reason})
                     continue
                 opened.append(pos.as_dict())
+
+        if ranked_candidates:
+            try:
+                from product.fno_exposure_tracking import record_scan_exposure
+
+                record_scan_exposure(
+                    ranked_candidates,
+                    opened_underlyings={str(pos.get("underlying") or "").upper() for pos in opened},
+                    now_iso=now_ist.isoformat(),
+                )
+            except Exception:
+                # Diagnostic-only instrumentation must never interrupt the
+                # real paper cycle.
+                pass
 
         store.commit_cycle(
             settled_rows,

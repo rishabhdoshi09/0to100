@@ -273,6 +273,18 @@ export type FnoDirectionalCandidate = {
       underlying_invalidation?: number | null
       model?: string
     }
+    raw_contract_score?: number
+    learned_contract_score?: number
+    contract_evidence?: {
+      context_key?: string
+      usable?: boolean
+      count?: number
+      direction?: string
+      adjustment?: number
+      reason?: string
+      expectancy_R?: number | null
+      wilson_lower_bound?: number | null
+    }
   }
   iv_history?: {
     available?: boolean
@@ -289,12 +301,18 @@ export type FnoDirectionalCandidate = {
   paper_only?: boolean
   live_execution_allowed?: boolean
   base_score?: number
+  historical_prior?: number
+  forward_adjustment?: number
   ranking_adjustment?: number
   ranking_score?: number
   ranking_evidence?: {
     usable?: boolean
     reason?: string
+    status?: string
     adjustment?: number
+    historical_prior?: number
+    forward_adjustment?: number
+    historical_note?: string
     evidence_class?: string
     context_key?: string
     count?: number
@@ -330,6 +348,28 @@ export type FnoLearningEvidenceBlock = {
   minimum_sample_for_ranking?: number
   can_affect_ranking?: boolean
   note?: string
+  cells_large_enough_for_a_prior?: number
+  prior_min_sample?: number
+  prior_cap?: number
+  richest_priors?: Array<{
+    context?: Record<string, string>
+    count?: number
+    win_rate?: number | null
+    wilson_lower_bound?: number | null
+    expectancy_R?: number | null
+    median_R?: number | null
+    mfe_R?: number | null
+    mae_R?: number | null
+    prior_direction?: string
+    prior_adjustment?: number
+  }>
+  contract_selection?: {
+    evidence_cells?: number
+    matured_cells?: number
+    can_affect_contract_selection?: boolean
+    outcome_classification_counts?: Record<string, number>
+    note?: string
+  }
 }
 
 export type FnoLearningImpact = {
@@ -342,22 +382,47 @@ export type FnoLearningImpact = {
     status?: string
     plain?: string
     influenced_count?: number
+    forward_influenced_count?: number
+    historical_influenced_count?: number
     influenced?: Array<{
       symbol?: string
       direction?: string
       base_score?: number
+      historical_prior?: number
+      forward_adjustment?: number
       ranking_score?: number
       adjustment?: number
+      status?: string
       reason?: string
       count?: number
       expectancy_R?: number | null
+      why?: string
     }>
   }
-  contract?: {
-    historical_and_forward_kept_separate?: boolean
-    historical_can_promote_ranking?: boolean
-    forward_required_to_change_ranking?: boolean
-    contract_selection_learning_requires_real_option_history?: boolean
+  threshold_review?: {
+    min_score_to_take?: number
+    below_threshold_sample?: number
+    above_threshold_sample?: number
+    below_threshold_would_be_winner_rate_pct?: number
+    below_threshold_would_be_loser_rate_pct?: number
+    above_threshold_winner_rate_pct?: number
+    above_threshold_loser_rate_pct?: number
+    min_sample?: number
+    material_gap_pp?: number
+    recommendation?: string
+    reason?: string
+    autonomous_change_applied?: boolean
+    action_required?: string
+  }
+  policy?: {
+    historical_and_forward_kept_in_separate_cells?: boolean
+    historical_alone_can_move_ranking?: boolean
+    historical_prior_is_small_and_bounded?: boolean
+    forward_is_always_the_stronger_vote?: boolean
+    forward_required_to_promote_past_the_historical_cap?: boolean
+    contract_selection_learned_separately_from_underlying_call?: boolean
+    contract_selection_requires_genuine_forward_option_trades?: boolean
+    no_fabricated_historical_option_chain_data?: boolean
     live_money_affected?: boolean
   }
   live_locked?: boolean

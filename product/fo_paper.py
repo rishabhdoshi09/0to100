@@ -72,6 +72,23 @@ class FoPaperPosition:
     # silently disconnects every real settled trade from ranking evidence
     # forever, since the two bucketing schemes never produce the same string.
     ranking_context_key: str = ""
+    # product.fno_contract_evidence.contract_context_key(contract), computed
+    # once from the REAL selected contract at open time. Separate again from
+    # both keys above: this is evidence about the CONTRACT choice (delta/
+    # moneyness/DTE/IV/spread/liquidity/premium), independent of which
+    # underlying/setup/regime chose it, so it generalises across setups.
+    contract_context_key: str = ""
+    # Real fields captured from the contract at entry, kept only because
+    # product.fno_contract_evidence.classify_contract_outcome needs them at
+    # settlement to justify a classification with evidence actually on hand
+    # rather than invented after the fact.
+    entry_delta: float = 0.0
+    entry_spread_pct: float | None = None
+    entry_iv_percentile: float | None = None
+    entry_theta_per_day: float = 0.0
+    entry_dte: int = 0
+    entry_oi: int = 0
+    entry_volume: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -107,6 +124,24 @@ class FoPaperTrade:
     path_observation_reason: str = ""
     false_breakout: bool = False
     ranking_context_key: str = ""
+    # Mirrors FoPaperPosition's contract-shape fields (see the comment there):
+    # product.fno_contract_evidence needs the REAL contract facts captured at
+    # entry to classify why a contract won or lost, never invented after the
+    # fact from the P&L alone.
+    contract_context_key: str = ""
+    entry_delta: float = 0.0
+    entry_spread_pct: float | None = None
+    entry_iv_percentile: float | None = None
+    entry_theta_per_day: float = 0.0
+    entry_dte: int = 0
+    entry_oi: int = 0
+    entry_volume: int = 0
+    # The underlying's spot at settlement, captured from the same quote the
+    # settlement loop already fetches for IV-crush detection (fo_paper_runtime
+    # .py) -- never a second fetch, never fabricated. 0.0 means "not captured
+    # this cycle" (e.g. a historical intraday replay bar), which callers must
+    # treat as unknown, not as "the underlying didn't move".
+    exit_underlying_spot: float = 0.0
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -191,6 +226,14 @@ class FoPaperBook:
         entry_underlying_spot: float = 0.0,
         ask: float | None = None,
         requested_lots: int | None = None,
+        contract_context_key: str = "",
+        entry_delta: float = 0.0,
+        entry_spread_pct: float | None = None,
+        entry_iv_percentile: float | None = None,
+        entry_theta_per_day: float = 0.0,
+        entry_dte: int = 0,
+        entry_oi: int = 0,
+        entry_volume: int = 0,
     ) -> FoPaperPosition | None:
         symbol = str(option_symbol or "").strip()
         kind = str(option_type or "").upper()
@@ -281,6 +324,18 @@ class FoPaperBook:
             last_mark_session=str(opened_at)[:10],
             max_mark=round(fill, 4),
             min_mark=round(fill, 4),
+            contract_context_key=str(contract_context_key or ""),
+            entry_delta=float(entry_delta or 0.0),
+            entry_spread_pct=(
+                float(entry_spread_pct) if entry_spread_pct is not None else None
+            ),
+            entry_iv_percentile=(
+                float(entry_iv_percentile) if entry_iv_percentile is not None else None
+            ),
+            entry_theta_per_day=float(entry_theta_per_day or 0.0),
+            entry_dte=max(0, int(entry_dte or 0)),
+            entry_oi=max(0, int(entry_oi or 0)),
+            entry_volume=max(0, int(entry_volume or 0)),
         )
         self.open[symbol] = pos
         self.premium_deployed_today = round(
@@ -298,6 +353,7 @@ class FoPaperBook:
         observation_complete: bool = True,
         force_eod: bool = False,
         iv_crush_symbols: set[str] | frozenset[str] | None = None,
+        underlying_quotes: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> list[FoPaperTrade]:
         """Mark prices; optionally advance holding-session age.
 
@@ -402,6 +458,14 @@ class FoPaperBook:
                 # STOP/TARGET/TRAIL triggers remain bar-priced to avoid using a
                 # later quote for an earlier event.
                 execution_bid = bid if reason in {"MAX_HOLD", "EOD", "IV_CRUSH"} else None
+                underlying_quote = (
+                    (underlying_quotes or {}).get(f"NSE:{pos.underlying}")
+                    if underlying_quotes else None
+                )
+                exit_spot = (
+                    float(underlying_quote.get("last_price") or 0.0)
+                    if isinstance(underlying_quote, Mapping) else 0.0
+                )
                 settled.append(
                     self._close(
                         pos,
@@ -410,6 +474,7 @@ class FoPaperBook:
                         str(session),
                         bid=execution_bid,
                         observation_complete=observation_complete,
+                        exit_underlying_spot=exit_spot,
                     )
                 )
         return settled
@@ -423,6 +488,7 @@ class FoPaperBook:
         *,
         bid: float | None = None,
         observation_complete: bool = True,
+        exit_underlying_spot: float = 0.0,
     ) -> FoPaperTrade:
         fill = self._exit_fill(exit_price, bid)
         gross = (fill - pos.entry_price) * pos.quantity
@@ -472,6 +538,15 @@ class FoPaperBook:
             exit_observation_complete=bool(observation_complete),
             path_observation_complete=path_complete,
             path_observation_reason=path_reason,
+            contract_context_key=pos.contract_context_key,
+            entry_delta=pos.entry_delta,
+            entry_spread_pct=pos.entry_spread_pct,
+            entry_iv_percentile=pos.entry_iv_percentile,
+            entry_theta_per_day=pos.entry_theta_per_day,
+            entry_dte=pos.entry_dte,
+            entry_oi=pos.entry_oi,
+            entry_volume=pos.entry_volume,
+            exit_underlying_spot=max(0.0, float(exit_underlying_spot or 0.0)),
         )
         self.realized_pnl += net
         self.closed.append(trade)

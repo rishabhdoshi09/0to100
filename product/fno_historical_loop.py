@@ -44,6 +44,22 @@ DEFAULT_MAX_SESSIONS_PER_RUN = 5
 DEFAULT_HORIZON_SESSIONS = 1
 DEFAULT_LOOKBACK_DAYS = 20
 
+#: Score buckets for the threshold-review evidence layer
+#: (product.fno_threshold_review). Bucketed at collection time, not
+#: recomputed later, so a future change to bucket edges cannot silently
+#: reinterpret history that was already graded under the old edges.
+_SCORE_BUCKET_EDGES = (50.0, 60.0, 70.0, 80.0, 90.0)
+
+
+def score_bucket(score: float) -> str:
+    value = float(score)
+    if value < _SCORE_BUCKET_EDGES[0]:
+        return f"BELOW_{int(_SCORE_BUCKET_EDGES[0])}"
+    for lo, hi in zip(_SCORE_BUCKET_EDGES, _SCORE_BUCKET_EDGES[1:]):
+        if lo <= value < hi:
+            return f"{int(lo)}_{int(hi) - 1}"
+    return f"{int(_SCORE_BUCKET_EDGES[-1])}_PLUS"
+
 
 def checkpoint_path(path: str | Path | None = None) -> Path:
     if path is not None:
@@ -249,6 +265,14 @@ def run_next_batch(
     evaluated = 0
     settled = 0
     classification_counts: dict[str, int] = dict(checkpoint.get("classification_counts") or {})
+    # Per-score-bucket, per-taken breakdown -- what product.fno_threshold_review
+    # reads to ask "would a different min_score_to_take have caught more
+    # winners without also letting through more losers", never to change the
+    # gate itself. Nested: {bucket: {taken: bool as str: {classification: n}}}.
+    by_bucket: dict[str, dict[str, dict[str, int]]] = {
+        bucket: {k: dict(v) for k, v in taken_map.items()}
+        for bucket, taken_map in (checkpoint.get("classification_counts_by_score_bucket") or {}).items()
+    }
     errors: list[str] = list(intake_errors)
     try:
         for as_of in batch_dates:
@@ -296,12 +320,18 @@ def run_next_batch(
                     classification_counts[classification] = (
                         int(classification_counts.get(classification) or 0) + 1
                     )
+                    bucket = score_bucket(candidate.score)
+                    taken_key = "taken" if candidate.taken else "not_taken"
+                    bucket_map = by_bucket.setdefault(bucket, {})
+                    taken_map = bucket_map.setdefault(taken_key, {})
+                    taken_map[classification] = int(taken_map.get(classification) or 0) + 1
     finally:
         checkpoint["cursor_date"] = batch_dates[-1].isoformat()
         checkpoint["total_sessions_processed"] = int(checkpoint.get("total_sessions_processed") or 0) + len(batch_dates)
         checkpoint["total_candidates_evaluated"] = int(checkpoint.get("total_candidates_evaluated") or 0) + evaluated
         checkpoint["total_settled"] = int(checkpoint.get("total_settled") or 0) + settled
         checkpoint["classification_counts"] = classification_counts
+        checkpoint["classification_counts_by_score_bucket"] = by_bucket
         checkpoint["last_run_at"] = _now()
         checkpoint["universe_size"] = len(resolved_universe)
         checkpoint["last_available_session"] = last_available.isoformat()
@@ -318,6 +348,7 @@ def run_next_batch(
         "candidates_evaluated": evaluated,
         "settled": settled,
         "classification_counts": classification_counts,
+        "classification_counts_by_score_bucket": by_bucket,
         "cursor_date": checkpoint["cursor_date"],
         "remaining_sessions": max(0, len(candidate_dates) - len(batch_dates)),
         "errors": errors,
@@ -346,6 +377,9 @@ def status(path: str | Path | None = None) -> dict[str, Any]:
         "total_candidates_evaluated": int(checkpoint.get("total_candidates_evaluated") or 0),
         "total_settled": int(checkpoint.get("total_settled") or 0),
         "classification_counts": dict(checkpoint.get("classification_counts") or {}),
+        "classification_counts_by_score_bucket": dict(
+            checkpoint.get("classification_counts_by_score_bucket") or {}
+        ),
         "universe_size": int(checkpoint.get("universe_size") or 0),
         "last_error": checkpoint.get("last_error") or "",
         "last_error_at": checkpoint.get("last_error_at") or "",

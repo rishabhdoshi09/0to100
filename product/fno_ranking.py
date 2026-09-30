@@ -16,11 +16,21 @@ forward-confirmed adjustment further when the two agree. Historical evidence
 alone can never come close to the caps forward evidence can reach -- see
 product.fno_evidence_fusion's module docstring for the exact policy table
 and the reasoning behind every cap.
+
+Separately, when a candidate carries a ``selected_contract``, this step also
+reads product.fno_contract_evidence.contract_ranking_adjustment for that
+exact contract shape (delta/moneyness/DTE/IV/spread bucket) and exposes it as
+``selected_contract["contract_evidence"]`` / ``learned_contract_score``,
+without touching the underlying setup's ranking_score. This is a genuinely
+separate learning signal -- see product.fno_contract_evidence's module
+docstring for why underlying-call correctness and contract-shape quality are
+graded apart.
 """
 from __future__ import annotations
 
 from typing import Any, Mapping
 
+from product.fno_contract_evidence import contract_ranking_adjustment
 from product.fno_evidence_fusion import fuse_fno_ranking_evidence
 
 
@@ -52,11 +62,28 @@ def rank_fno_candidates(
         row["ranking_adjustment"] = adjustment
         row["ranking_score"] = round(base_score + adjustment, 4)
         row["ranking_evidence"] = evidence
+
+        contract = row.get("selected_contract")
+        if isinstance(contract, Mapping):
+            contract = dict(contract)
+            contract_evidence = contract_ranking_adjustment(contract, path=path)
+            raw_contract_score = float(contract.get("score") or 0.0)
+            contract_adjustment = float(contract_evidence.get("adjustment") or 0.0)
+            contract["contract_evidence"] = contract_evidence
+            contract["raw_contract_score"] = raw_contract_score
+            contract["learned_contract_score"] = round(
+                raw_contract_score + contract_adjustment, 4
+            )
+            row["selected_contract"] = contract
         rows.append(row)
     rows.sort(
         key=lambda row: (
             float(row.get("ranking_score") or 0.0),
-            float((row.get("selected_contract") or {}).get("score") or 0.0),
+            float(
+                (row.get("selected_contract") or {}).get("learned_contract_score")
+                if (row.get("selected_contract") or {}).get("learned_contract_score") is not None
+                else (row.get("selected_contract") or {}).get("score") or 0.0
+            ),
         ),
         reverse=True,
     )

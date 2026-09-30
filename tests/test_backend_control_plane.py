@@ -172,20 +172,27 @@ def test_zerodha_login_is_optional_capability_without_secret_leakage():
         scan={"scanned_at": "2026-09-01T05:00:00+00:00", "records": [{"symbol": "TCS"}]},
         now=_open(),
     )
-    assert os["state"] == LOGIN_REQUIRED
-    assert os["need_me"] is True
-    required = os["attention"]["required_now"]
-    assert required and required[0]["id"] == "BROKER_LOGIN_REQUIRED"
-    assert os["attention"]["optional_count"] == 0
+    # Zerodha is an optional broker/live-data capability for the PAPER-only
+    # desk (see product.home_os.build_home_os's broker_action_required
+    # comment): an absent Kite session must never become a global Home
+    # blocker, so it surfaces as OPTIONAL attention, never REQUIRED.
+    assert os["state"] == NORMAL
+    assert os["need_me"] is False
+    assert os["attention"]["required_now"] == []
+    optional = os["attention"]["optional"]
+    assert optional and optional[0]["id"] == "BROKER_LOGIN_OPTIONAL"
+    assert os["attention"]["optional_count"] == 1
     assert os["broker"]["login_required"] is True
-    assert os["broker"]["requires_operator_now"] is True
+    assert os["broker"]["requires_operator_now"] is False
     zed = os["system"]["zerodha"]
-    assert zed["status"] == "Needs you"
-    assert zed["status_code"] == "LOGIN_REQUIRED"
-    assert zed["needs_user"] is True
+    assert zed["status"] == "Optional login"
+    assert zed["status_code"] == "CAPABILITY_OFFLINE"
+    assert zed["needs_user"] is False
     assert zed["login_required"] is True
     assert zed["blocks_autonomy"] is False
-    assert zed.get("primary_action", {}).get("label") == "Login to Zerodha"
+    assert zed.get("primary_action") in (None, {})
+    login_action = zed.get("secondary_actions") or []
+    assert login_action and login_action[0]["label"] == "Login to Zerodha"
     dumped = str(zed) + str(os.get("broker") or {})
     assert "SHOULD_NOT_LEAK" not in dumped
     assert "token=abc" not in dumped

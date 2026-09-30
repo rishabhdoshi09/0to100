@@ -468,3 +468,174 @@ def test_real_candidate_shape_keeps_the_two_context_keys_separate(tmp_path, monk
     # Evidence must be recorded under the ranking key -- never the legacy one.
     assert CE.read(ranking_key, path=evidence_path)["count"] == 1
     assert CE.read(legacy_key, path=evidence_path)["count"] == 0
+
+
+def test_contract_evidence_full_lifecycle_through_real_production_path(tmp_path, monkeypatch):
+    """Requirements 5-7 (contract-selection learning), proved through the same
+    real production path as the test above rather than a hand-built contract
+    dict -- extending scan -> rank -> option select -> paper execute ->
+    durable position -> supervise -> exit -> settle -> UNDERLYING evidence ->
+    CONTRACT evidence -> later option selection.
+
+    A hand-built selected_contract dict would trivially carry whatever
+    delta/dte/iv_percentile/spread fields a test author chose to set. This
+    goes through product.fo_snapshot_engine.evaluate_fo_snapshot_auto (the
+    real scorer) so the contract-shape fields product.fno_contract_evidence
+    keys on are exactly what a real scan would have produced -- the same
+    class of gap the ranking_context_key bug (see the test above) came from.
+    """
+    from datetime import date as _date
+
+    from product.fno_contract_evidence import contract_context_key
+    from product.fno_ranking import rank_fno_candidates
+    from product.fo_snapshot_engine import evaluate_fo_snapshot_auto
+    from tests.test_fo_snapshot_engine import _bars, _nfo, _option_quotes
+
+    evidence_path = tmp_path / "conditional_evidence.json"
+    monkeypatch.setenv("QT_CONDITIONAL_EVIDENCE", str(evidence_path))
+
+    as_of = _date(2026, 9, 26)
+    bars = _bars()
+    spot = float(bars["close"].iloc[-1])
+    instruments = _nfo(spot)
+    quotes = _option_quotes(spot, instruments)
+
+    def _scan():
+        return evaluate_fo_snapshot_auto(
+            symbol="TEST",
+            daily_bars=bars,
+            nfo_instruments=instruments,
+            underlying_quote={
+                "last_price": spot,
+                "average_price": spot - 3.0,
+                "depth": {"buy": [{"price": spot - 0.1}], "sell": [{"price": spot + 0.1}]},
+            },
+            futures_quote={"last_price": spot + 2.0, "oi": 106_000},
+            previous_futures_price=spot - 10.0,
+            previous_futures_oi=100_000,
+            option_quotes=quotes,
+            benchmark_20d_return_pct=1.0,
+            nifty_change_pct=0.6,
+            sector_relative_strength_pct=1.2,
+            iv_percentile=45.0,
+            as_of=as_of,
+        )
+
+    result = _scan()
+    assert result["decision"] == "PAPER_OPTION_CANDIDATE"
+    real_candidate = result["selected"]
+    real_contract = real_candidate["selected_contract"]
+    expected_contract_key = contract_context_key(real_contract)
+    assert expected_contract_key, "a real scored contract must always resolve a contract-shape key"
+    assert expected_contract_key.startswith("CTXCTX_V1|")
+
+    # ---- PAPER EXECUTE -> DURABLE POSITION: entry-time contract fields are
+    # captured from the REAL contract, not invented. ----
+    fo_db = tmp_path / "fo.sqlite3"
+    opened_at = datetime(2026, 9, 26, 10, 15, 0, tzinfo=IST)
+    with FoPaperStore(fo_db) as store:
+        opened = run_fo_paper_cycle(
+            _directional([real_candidate]),
+            client=_QuoteClient(last=spot, high=spot, low=spot, bid=spot - 1.0),
+            now_ist=opened_at,
+            allow_new_entries=True,
+            store=store,
+            capital=200_000,
+        )
+    assert opened["opened_count"] == 1
+    with FoPaperStore(fo_db) as store:
+        position = store.load_positions()[0]
+    assert position["contract_context_key"] == expected_contract_key
+    assert position["entry_delta"] == real_contract["delta"]
+    assert position["entry_dte"] == real_contract["dte"]
+
+    # ---- EXIT -> SETTLE -> UNDERLYING + CONTRACT EVIDENCE, both from the one
+    # real settlement. The underlying-setup cell and the contract-shape cell
+    # must both mature, independently, from the SAME trade. ----
+    with FoPaperStore(fo_db) as store:
+        settled_cycle = run_fo_paper_cycle(
+            {"available": True, "candidates": []},
+            client=_IntradayQuoteClient(
+                last=spot * 0.5, high=spot * 0.55, low=spot * 0.45, bid=spot * 0.49,
+                entry_minute_rows=[{
+                    "date": "2026-09-26T10:15:00+05:30",
+                    "open": real_contract["premium"] - 1.0, "high": real_contract["premium"] + 5.0,
+                    "low": real_contract["premium"] - 5.0, "close": real_contract["premium"],
+                }],
+                intraday_rows=[{
+                    "date": "2026-09-26T10:16:00+05:30",
+                    "open": real_contract["premium"] - 1.0, "high": real_contract["premium"],
+                    "low": max(0.05, real_contract["premium"] * 0.3), "close": real_contract["premium"] * 0.5,
+                }],
+            ),
+            now_ist=opened_at.replace(hour=10, minute=20),
+            allow_new_entries=False,
+            store=store,
+            capital=200_000,
+            cost_model=lambda entry, exit, qty: 5.0,
+            cost_model_name="TEST_COSTS",
+        )
+    assert settled_cycle["settled_count"] == 1
+    real_trade = settled_cycle["settled"][0]
+    assert real_trade["contract_context_key"] == expected_contract_key
+    assert real_trade["net_pnl"] < 0.0, "the fixture is engineered as a real loss (premium halved)"
+    # A real classification was assigned from evidence actually on hand --
+    # never left unclassified for a fully-observed settlement.
+    outcome = real_trade["contract_outcome"]
+    assert outcome["classification"], "a settled, fully-observed trade must always get a classification"
+
+    contract_cell_after_one = CE.read(expected_contract_key, path=evidence_path)
+    assert contract_cell_after_one["count"] == 1, (
+        "the real production settlement loop must record exactly one contract-evidence outcome"
+    )
+    underlying_key = real_trade["ranking_context_key"]
+    assert CE.read(underlying_key, path=evidence_path)["count"] == 1, (
+        "the same settlement must ALSO mature the underlying-setup cell -- "
+        "the two are independent evidence, not one pooled statistic"
+    )
+
+    # ---- Top up the CONTRACT cell only (never the underlying cell) to the
+    # promotion floor, using the same product.fno_contract_evidence
+    # .record_contract_settlement the real settlement loop above already
+    # proved itself equivalent to (see the one-trade assertion above) --
+    # exactly the established pattern this file already uses to reach a
+    # sample floor without dozens of slow simulated cycles. ----
+    from product.fno_contract_evidence import MIN_SAMPLE_PROMOTE, record_contract_settlement
+
+    for i in range(MIN_SAMPLE_PROMOTE - 1):
+        row = {
+            "trade_id": f"CONTRACT-{i}",
+            "option_symbol": real_contract["symbol"],
+            "entry_price": 50.0, "stop_price": 40.0, "exit_price": 65.0,
+            "quantity": 25, "net_pnl": 300.0,
+            "opened_at": "2026-09-01", "settled_at": f"2026-09-{2 + (i % 25):02d}",
+            "mfe_pct": 30.0, "mae_pct": -2.0,
+            "production_evidence_eligible": True,
+        }
+        update = record_contract_settlement(row, context_key=expected_contract_key, path=evidence_path)
+        assert update is not None
+
+    contract_cell = CE.read(expected_contract_key, path=evidence_path)
+    assert contract_cell["count"] == MIN_SAMPLE_PROMOTE
+    assert contract_cell["expectancy_R"] > 0
+
+    # ---- LATER OPTION SELECTION: a fresh real scan (new candidate, same
+    # instruments/quotes -> same contract shape) must now show a learned,
+    # promoted contract score -- through product.fno_ranking, the real "rank"
+    # step both the scan and the paper cycle consult -- while the underlying
+    # setup's own ranking score is untouched (still 0 forward-evidence
+    # adjustment: this trade never fed the underlying cell a second time). ----
+    later_result = _scan()
+    later_candidate = later_result["selected"]
+    later_ranked = rank_fno_candidates([later_candidate], path=evidence_path)
+    later_contract = later_ranked[0]["selected_contract"]
+    assert later_contract["contract_evidence"]["context_key"] == expected_contract_key
+    assert later_contract["contract_evidence"]["direction"] == "PROMOTE"
+    assert later_contract["learned_contract_score"] > later_contract["raw_contract_score"]
+    assert later_ranked[0]["ranking_adjustment"] == 0.0, (
+        "contract-shape evidence must never leak into the underlying-setup "
+        "ranking adjustment -- the two are learned on separate evidence"
+    )
+
+    # ---- Live money stays locked throughout. ----
+    assert get_live_execution_state().locked is True
