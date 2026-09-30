@@ -24,13 +24,15 @@ def test_complete_launcher_does_not_require_kite_credentials() -> None:
     assert "exit 2" not in missing_credentials_block
 
 
-def test_complete_launcher_keeps_daily_login_optional_for_noninteractive_runs() -> None:
+def test_complete_launcher_never_waits_for_optional_daily_broker_login() -> None:
     text = LAUNCHER.read_text(encoding="utf-8")
 
     login_block = text.split('elif [[ "$auth_rc" -eq 1 ]]; then', 1)[1].split("port_open()", 1)[0]
-    assert "QT_NONINTERACTIVE" in login_block
-    assert "non-broker autonomy continues" in login_block
+    assert "Core QuantTerm startup will not wait for optional broker auth" in login_block
     assert "python main.py login" in login_block
+    assert "paper execution" in login_block
+    assert "python main.py login ||" not in login_block
+    assert "Browser will open" not in login_block
 
 
 def test_complete_launcher_machine_lock_is_portable_to_macos() -> None:
