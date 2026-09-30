@@ -68,9 +68,14 @@ KITE_PROBE_SYMBOLS = ("RELIANCE", "INFY", "HDFCBANK")
 #: does. The composite above is required too; the control endpoint only
 #: separates "unplugged" from "selective egress" and gates nothing.
 REQUIRED_CAPABILITIES = frozenset({"nse_archive"})
-REQUIRED_SECRETS = ("KITE_API_KEY", "KITE_API_SECRET")
+# PAPER/SHADOW operation is broker-neutral. Kite credentials improve live-data,
+# F&O and reconciliation capability, but their absence must not make the host
+# itself unready while official NSE data and the paper safety boundary work.
+REQUIRED_SECRETS: tuple[str, ...] = ()
+BROKER_OPTIONAL_SECRETS = ("KITE_API_KEY", "KITE_API_SECRET", "KITE_ACCESS_TOKEN")
 OPTIONAL_SECRETS = (
-    "KITE_ACCESS_TOKEN", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "DEEPSEEK_API_KEY",
+    *BROKER_OPTIONAL_SECRETS,
+    "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "DEEPSEEK_API_KEY",
 )
 
 
@@ -307,13 +312,25 @@ def check_secrets() -> Check:
             "secrets_present", f"missing required credentials: {', '.join(missing)}",
             missing=missing, optional_absent=absent_optional,
         )
+    missing_broker = [
+        name for name in BROKER_OPTIONAL_SECRETS
+        if not os.environ.get(name, "").strip()
+    ]
+    if missing_broker:
+        return _warn(
+            "secrets_present",
+            "broker credentials/session are incomplete; broker-live/F&O lanes may wait for Zerodha, "
+            "but official-data scanning, paper execution, replay, settlement and learning can continue",
+            broker_optional_missing=missing_broker,
+            optional_absent=absent_optional,
+        )
     if absent_optional:
         return _warn(
             "secrets_present",
-            f"present: {', '.join(REQUIRED_SECRETS)} · not set: {', '.join(absent_optional)}",
+            f"optional integrations not configured: {', '.join(absent_optional)}",
             optional_absent=absent_optional,
         )
-    return _ok("secrets_present", "all configured credentials are present")
+    return _ok("secrets_present", "all configured optional integrations are present")
 
 
 def check_live_lock() -> Check:
