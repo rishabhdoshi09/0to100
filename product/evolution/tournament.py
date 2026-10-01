@@ -177,6 +177,7 @@ def evaluate_challengers_from_bundle(
     max_seconds: float | None = DEFAULT_MAX_SECONDS,
     registry_path: str | Path | None = None,
     shadow_path: str | Path | None = None,
+    challenger_policies: Sequence[Mapping[str, Any]] | None = None,
     challenger_batch_evaluator=None,
 ) -> dict[str, Any]:
     """Phase 2 (OUTSIDE the execution-critical path): evaluate every active
@@ -196,7 +197,11 @@ def evaluate_challengers_from_bundle(
     snapshots: dict[str, dict[str, Any]] = dict(bundle.get("snapshots") or {})
     champion_rows: dict[str, dict[str, Any]] = dict(bundle.get("champion_rows") or {})
 
-    challengers = policy_registry.active_challengers(domain, path=registry_path)
+    challengers = (
+        [dict(p) for p in challenger_policies]
+        if challenger_policies is not None
+        else policy_registry.active_challengers(domain, path=registry_path)
+    )
     if max_challengers is not None:
         challengers = challengers[:max_challengers]
 
