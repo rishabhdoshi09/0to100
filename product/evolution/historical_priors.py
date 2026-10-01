@@ -250,3 +250,146 @@ def historical_scorecard(
         "evidence_class": EVIDENCE_CLASS,
         "not_promotion_evidence": True,
     }
+
+
+
+def evaluate_fno_underlying_historical(
+    candidates: Sequence[Mapping[str, Any]],
+    *,
+    max_new_per_session: int = 3,
+    path: str | Path | None = None,
+    registry_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Underlying-only F&O historical policy diagnostics.
+
+    The source walk-forward has real point-in-time underlying OHLC/volume and
+    later underlying closes, but no historical futures OI, sector feed or
+    option chain. Missing dimensions therefore remain neutral (zero) and no
+    FNO_CONTRACT historical evidence is ever produced.
+    """
+    from product.evolution.fno_adapter import underlying_policy_adjustment
+
+    domain = PR.FNO_UNDERLYING
+    population = PR.ensure_seed_population(domain, path=registry_path)
+    champion = population["champion"]
+    policies = [champion, *PR.active_challengers(domain, path=registry_path)]
+
+    valid = [
+        dict(row) for row in candidates
+        if not bool(row.get("future_evidence_used"))
+        and _f(row.get("realized_R")) is not None
+        and isinstance(row.get("setup"), Mapping)
+    ]
+    by_session: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in valid:
+        by_session[str(row.get("as_of") or "")[:10]].append(row)
+
+    generated: list[dict[str, Any]] = []
+    for policy in policies:
+        policy_id = str(policy.get("policy_id") or "")
+        for session, rows in sorted(by_session.items()):
+            session_rows: list[dict[str, Any]] = []
+            selectable: list[tuple[float, str]] = []
+            for source in rows:
+                setup = dict(source.get("setup") or {})
+                eligible = bool(source.get("canonical_eligible"))
+                # The adapter's hard-gate contract remains authoritative.
+                setup["tradable"] = eligible
+                candidate = {
+                    "symbol": str(source.get("symbol") or "").upper(),
+                    "direction": str(source.get("direction") or setup.get("direction") or ""),
+                    "setup": setup,
+                }
+                base_score = float(source.get("base_score") or setup.get("score") or 0.0)
+                adjustment = underlying_policy_adjustment(candidate, policy)
+                final_score = base_score + float(adjustment.get("adjustment") or 0.0)
+                key = str(
+                    source.get("historical_decision_id")
+                    or f"FNO:{candidate['symbol']}:{session}:{candidate['direction']}"
+                )
+                if eligible:
+                    selectable.append((final_score, key))
+                session_rows.append({
+                    "schema_version": SCHEMA_VERSION,
+                    "policy_id": policy_id,
+                    "policy_manifest_fingerprint": PR.policy_manifest_fingerprint(policy),
+                    "domain": domain,
+                    "historical_decision_id": key,
+                    "symbol": candidate["symbol"],
+                    "as_of": session,
+                    "direction": candidate["direction"],
+                    "regime": str(source.get("regime") or "UNKNOWN"),
+                    "canonical_decision": "TAKE" if eligible else "REJECT",
+                    "canonical_eligible": eligible,
+                    "policy_score": round(final_score, 4),
+                    "policy_selected": False,
+                    "realized_R": _f(source.get("realized_R")),
+                    "classification": str(source.get("classification") or ""),
+                    "available_historical_dimensions": [
+                        "underlying_ohlcv",
+                        "breakout_distance",
+                    ],
+                    "unavailable_historical_dimensions": [
+                        "futures_oi",
+                        "live_sector_strength",
+                        "option_chain",
+                        "option_greeks",
+                        "option_iv",
+                        "option_spread",
+                    ],
+                    "evidence_class": EVIDENCE_CLASS,
+                    "option_evidence_status": "UNDERLYING_ONLY_COUNTERFACTUAL",
+                    "not_promotion_evidence": True,
+                    "not_real_pnl": True,
+                    "future_evidence_used": False,
+                })
+
+            selectable.sort(key=lambda pair: (-pair[0], pair[1]))
+            selected_ids = {
+                key for _score, key in selectable[: max(0, int(max_new_per_session))]
+            }
+            for record in session_rows:
+                record["policy_selected"] = (
+                    bool(record["canonical_eligible"])
+                    and record["historical_decision_id"] in selected_ids
+                )
+                generated.append(record)
+
+    existing = _read(path)
+    keyed: dict[tuple[str, str, str], dict[str, Any]] = {
+        (
+            str(row.get("domain") or ""),
+            str(row.get("policy_id") or ""),
+            str(row.get("historical_decision_id") or ""),
+        ): row
+        for row in existing
+    }
+    for row in generated:
+        keyed[(row["domain"], row["policy_id"], row["historical_decision_id"])] = row
+    merged = sorted(
+        keyed.values(),
+        key=lambda row: (
+            str(row.get("as_of") or ""),
+            str(row.get("domain") or ""),
+            str(row.get("policy_id") or ""),
+            str(row.get("historical_decision_id") or ""),
+        ),
+    )
+    _write(merged, path)
+
+    return {
+        "domain": domain,
+        "champion_policy_id": str(champion.get("policy_id") or ""),
+        "policies_evaluated": len(policies),
+        "historical_rows_evaluated": len(valid),
+        "evidence_rows_written": len(generated),
+        "option_evidence_status": "UNDERLYING_ONLY_COUNTERFACTUAL",
+        "not_promotion_evidence": True,
+        "evidence_class": EVIDENCE_CLASS,
+        "policy_summaries": [
+            historical_scorecard(
+                str(policy.get("policy_id") or ""), domain=domain, path=path,
+            )
+            for policy in policies
+        ],
+    }

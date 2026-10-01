@@ -274,6 +274,7 @@ def run_next_batch(
         for bucket, taken_map in (checkpoint.get("classification_counts_by_score_bucket") or {}).items()
     }
     errors: list[str] = list(intake_errors)
+    evolution_historical_rows: list[dict[str, Any]] = []
     try:
         for as_of in batch_dates:
             for symbol, frame in frames.items():
@@ -317,6 +318,40 @@ def run_next_batch(
                 except Exception:
                     classification = ""
                 if classification:
+                    risk = abs(float(candidate.entry) - float(candidate.stop))
+                    if risk > 0:
+                        realized_r = (
+                            (forward_close - float(candidate.entry)) / risk
+                            if str(candidate.direction).upper() == "LONG"
+                            else (float(candidate.entry) - forward_close) / risk
+                        )
+                        evolution_historical_rows.append({
+                            "historical_decision_id": (
+                                f"FNO:{symbol}:{as_of.isoformat()}:{candidate.direction}"
+                            ),
+                            "symbol": symbol,
+                            "as_of": as_of.isoformat(),
+                            "direction": candidate.direction,
+                            "base_score": candidate.score,
+                            "canonical_eligible": bool(candidate.taken),
+                            "setup": {
+                                **dict(candidate.setup or {}),
+                                "direction": candidate.direction,
+                                "score": candidate.score,
+                                "breakout_distance_pct": (
+                                    (candidate.setup or {}).get("breakout_distance_pct")
+                                ),
+                                "components": dict(
+                                    (candidate.setup or {}).get("components") or {}
+                                ),
+                            },
+                            "realized_R": realized_r,
+                            "classification": classification,
+                            "future_evidence_used": False,
+                            "option_evidence_status": (
+                                "UNDERLYING_ONLY_COUNTERFACTUAL"
+                            ),
+                        })
                     classification_counts[classification] = (
                         int(classification_counts.get(classification) or 0) + 1
                     )
@@ -342,6 +377,26 @@ def run_next_batch(
             checkpoint["last_error"] = ""
         _save_checkpoint(checkpoint, path)
 
+    historical_evolution: dict[str, Any] = {}
+    try:
+        from product.evolution.historical_priors import (
+            evaluate_fno_underlying_historical,
+        )
+
+        historical_evolution = evaluate_fno_underlying_historical(
+            evolution_historical_rows,
+            max_new_per_session=3,
+        )
+    except Exception as exc:
+        historical_evolution = {
+            "status": "UNAVAILABLE",
+            "error": f"{type(exc).__name__}: {exc}"[:240],
+            "domain": "FNO_UNDERLYING",
+            "option_evidence_status": "UNDERLYING_ONLY_COUNTERFACTUAL",
+            "not_promotion_evidence": True,
+            "evidence_class": "HISTORICAL_REPLAY",
+        }
+
     return {
         "status": "OK" if not errors else "PARTIAL_ERROR",
         "sessions_processed": [d.isoformat() for d in batch_dates],
@@ -352,6 +407,7 @@ def run_next_batch(
         "cursor_date": checkpoint["cursor_date"],
         "remaining_sessions": max(0, len(candidate_dates) - len(batch_dates)),
         "errors": errors,
+        "historical_evolution": historical_evolution,
         "checked_at": _now(),
     }
 

@@ -175,3 +175,24 @@ def test_checkpoint_survives_a_fresh_reload(tmp_path, monkeypatch):
     after = load_checkpoint(checkpoint_path)
     assert after == before
     assert after["total_candidates_evaluated"] == 4
+
+
+
+def test_fno_historical_loop_exports_underlying_only_evolution_prior(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    monkeypatch.setenv("QT_CONDITIONAL_EVIDENCE", str(tmp_path / "evidence.json"))
+    checkpoint_path = tmp_path / "checkpoint.json"
+
+    from datetime import date
+    frame, _ = _repeated_losing_breakouts(3, start=date(2026, 1, 1))
+    result = run_next_batch(
+        universe=["LOSER"],
+        history_provider=_provider_for({"LOSER": frame}),
+        max_sessions_per_run=999,
+        path=checkpoint_path,
+    )
+    evo = result["historical_evolution"]
+    assert evo["domain"] == "FNO_UNDERLYING"
+    assert evo["option_evidence_status"] == "UNDERLYING_ONLY_COUNTERFACTUAL"
+    assert evo["not_promotion_evidence"] is True
+    assert evo["historical_rows_evaluated"] == result["settled"]

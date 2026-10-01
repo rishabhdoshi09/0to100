@@ -98,3 +98,73 @@ def test_future_tainted_historical_rows_are_refused(tmp_path, monkeypatch):
     result = HP.evaluate_historical_policies([row], path=tmp_path / "hist.jsonl")
     assert result["historical_rows_evaluated"] == 0
     assert HP._read(tmp_path / "hist.jsonl") == []
+
+
+
+def test_fno_historical_evolution_is_underlying_only_and_never_promotion_evidence(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    rows = [
+        {
+            "historical_decision_id": "FNO:AAA:2026-01-05:LONG",
+            "symbol": "AAA",
+            "as_of": "2026-01-05",
+            "direction": "LONG",
+            "base_score": 78.0,
+            "canonical_eligible": True,
+            "setup": {
+                "direction": "LONG",
+                "score": 78.0,
+                "breakout_distance_pct": 1.4,
+                "components": {
+                    "nifty_alignment": 0.0,
+                    "sector_strength": 0.0,
+                },
+            },
+            "realized_R": 1.5,
+            "classification": "WINNER_TAKEN",
+            "future_evidence_used": False,
+        },
+        {
+            "historical_decision_id": "FNO:BBB:2026-01-05:SHORT",
+            "symbol": "BBB",
+            "as_of": "2026-01-05",
+            "direction": "SHORT",
+            "base_score": 70.0,
+            "canonical_eligible": False,
+            "setup": {
+                "direction": "SHORT",
+                "score": 70.0,
+                "breakout_distance_pct": 0.9,
+                "components": {
+                    "nifty_alignment": 0.0,
+                    "sector_strength": 0.0,
+                },
+            },
+            "realized_R": -1.0,
+            "classification": "CORRECT_REJECTION",
+            "future_evidence_used": False,
+        },
+    ]
+    path = tmp_path / "hist.jsonl"
+    result = HP.evaluate_fno_underlying_historical(rows, path=path)
+    assert result["domain"] == PR.FNO_UNDERLYING
+    assert result["option_evidence_status"] == "UNDERLYING_ONLY_COUNTERFACTUAL"
+    assert result["not_promotion_evidence"] is True
+
+    evidence = HP._read(path)
+    fno_rows = [row for row in evidence if row["domain"] == PR.FNO_UNDERLYING]
+    assert fno_rows
+    assert all(row["not_promotion_evidence"] is True for row in fno_rows)
+    assert all(
+        "option_chain" in row["unavailable_historical_dimensions"]
+        for row in fno_rows
+    )
+    rejected = [row for row in fno_rows if row["symbol"] == "BBB"]
+    assert rejected and all(row["policy_selected"] is False for row in rejected)
+
+    batch = PROMO.evaluate_promotion_batch(
+        PR.FNO_UNDERLYING, persist_proofs=False,
+    )
+    assert batch
+    assert all(int(row.get("paired_snapshots") or 0) == 0 for row in batch)
+    assert all(row["status"] == PROMO.NOT_ELIGIBLE for row in batch)
