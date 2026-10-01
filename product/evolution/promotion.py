@@ -342,6 +342,29 @@ def evaluate_retirement_batch(
         return []
     out: list[dict[str, Any]] = []
     for policy in policy_registry.active_challengers(domain, path=registry_path):
+        lifecycle = list(policy.get("lifecycle_history") or [])
+        rollback_protected = (
+            policy.get("status") == policy_registry.PROBATION
+            or any(
+                event.get("status") == policy_registry.CHAMPION
+                for event in lifecycle
+                if isinstance(event, dict)
+            )
+        )
+        if rollback_protected:
+            out.append({
+                "policy_id": policy["policy_id"],
+                "domain": domain,
+                "paired_snapshots": 0,
+                "incremental_expectancy_R": None,
+                "status": NOT_ELIGIBLE,
+                "rollback_protected": True,
+                "reason": (
+                    "former/probation Champion is rollback-protected and cannot "
+                    "be auto-retired"
+                ),
+            })
+            continue
         paired = scorecard.paired_comparison(
             champion["policy_id"], policy["policy_id"], domain=domain, path=ledger_path,
         )
