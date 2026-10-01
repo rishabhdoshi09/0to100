@@ -203,3 +203,69 @@ def test_three_timeouts_fail_closed_instead_of_blocking_forever(tmp_path, monkey
 
     assert DW.ready_work(root=root) == []
     assert DW.get_work(prepared["work_id"], root=root)["attempts"] == 3
+
+
+def test_challenger_can_differ_from_champion_overlay_without_rescuing_hard_gates(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    card = _card()
+    ctx = decision_context.snapshot(card, book=None, regime="RISK_ON")
+    base = decision_context.score_breakdown(
+        card,
+        {"final_effect": "NEUTRAL", "sample_size": 0},
+        ctx,
+    )
+    item = {
+        "bundle": {"domain": "EQUITY"},
+        "individual_decisions_by_symbol": {
+            "TCS": {
+                # Final Champion decision was blocked by its own Evolution
+                # sample-floor policy, but canonical production eligibility
+                # before that overlay was ENTER_NOW.
+                "decision": "BLOCK",
+                "reason_code": "EVOLUTION_MIN_SAMPLE_NOT_MET",
+                "selection_score": 0.0,
+                "breakdown": {
+                    **base,
+                    "pre_evolution_breakdown": {
+                        **base,
+                        "parts": [dict(p) for p in base["parts"]],
+                    },
+                    "pre_evolution_decision": {
+                        "decision": "ENTER_NOW",
+                        "reason_code": "ELIGIBLE",
+                        "detail": "passed canonical hard gates",
+                    },
+                    "learning_challenger": {"adjustment": 0.0},
+                },
+            }
+        },
+        "pre_mutation_book_snapshot": PaperBook(capital=500_000).snapshot(),
+        "held_sector_by_symbol": {},
+        "correlations": {},
+        "max_new": 1,
+        "regime": "RISK_ON",
+    }
+    snapshot = {
+        "symbol": "TCS",
+        "market_snapshot_id": "snap-1",
+        "context": ctx,
+        "card": card,
+    }
+    permissive = {
+        "policy_id": "PERMISSIVE",
+        "version": 1,
+        "status": "CHALLENGER",
+        "weights": {},
+    }
+    verdict = DW._frozen_policy_batch(item, [snapshot], permissive)[0]
+    assert verdict["decision"] == "ENTER_NOW"
+
+    # A genuine canonical hard reject stays rejected regardless of policy.
+    item["individual_decisions_by_symbol"]["TCS"]["breakdown"]["pre_evolution_decision"] = {
+        "decision": "BLOCK",
+        "reason_code": "INVALID_STOP",
+        "detail": "hard gate",
+    }
+    hard = DW._frozen_policy_batch(item, [snapshot], permissive)[0]
+    assert hard["decision"] == "BLOCK"
+    assert hard["reason_code"] == "INVALID_STOP"
