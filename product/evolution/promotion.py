@@ -45,6 +45,7 @@ log = get_logger(__name__)
 AUTO_PROMOTION_ENABLED = False
 
 MIN_PAIRED_SAMPLE = 30
+MIN_INCREMENTAL_EXPECTANCY_R = 0.05
 FDR_ALPHA = 0.05
 MIN_REGIME_BREADTH_OBSERVED = 2  # need at least this many distinct regimes to judge breadth at all
 MIN_REGIME_BREADTH_ACCEPTABLE = 2  # of the observed regimes, at least this many must be non-negative
@@ -91,8 +92,8 @@ def _regime_breadth(
         "regime_means": regime_means,
         "regimes_acceptable": acceptable,
         "breadth_ok": (
-            len(regime_means) < MIN_REGIME_BREADTH_OBSERVED  # too few regimes observed -> can't judge, don't block on this alone
-            or acceptable >= MIN_REGIME_BREADTH_ACCEPTABLE
+            len(regime_means) >= MIN_REGIME_BREADTH_OBSERVED
+            and acceptable >= MIN_REGIME_BREADTH_ACCEPTABLE
         ),
     }
 
@@ -138,6 +139,15 @@ def evaluate_promotion(
 
     if n < MIN_PAIRED_SAMPLE:
         return {**result, "status": NOT_ELIGIBLE, "reason": f"only {n} paired forward observations, need {MIN_PAIRED_SAMPLE}"}
+    if float(paired["incremental_expectancy_R"] or 0.0) < MIN_INCREMENTAL_EXPECTANCY_R:
+        return {
+            **result,
+            "status": NOT_ELIGIBLE,
+            "reason": (
+                f"incremental expectancy {float(paired['incremental_expectancy_R'] or 0.0):+.4f}R "
+                f"is below required margin {MIN_INCREMENTAL_EXPECTANCY_R:+.4f}R"
+            ),
+        }
 
     from research.harness import evaluate as harness_evaluate
 
@@ -170,8 +180,10 @@ def evaluate_promotion(
         return {
             **result, "status": NOT_ELIGIBLE,
             "reason": (
-                f"insufficient regime breadth: only {breadth['regimes_acceptable']}/"
-                f"{breadth['regimes_observed']} observed regimes show non-negative incremental value"
+                f"insufficient regime breadth: observed={breadth['regimes_observed']} "
+                f"acceptable={breadth['regimes_acceptable']} "
+                f"(need >= {MIN_REGIME_BREADTH_OBSERVED} observed and "
+                f">= {MIN_REGIME_BREADTH_ACCEPTABLE} acceptable)"
             ),
         }
 
@@ -240,6 +252,23 @@ def promote_to_champion(
     if policy is None:
         raise KeyError(f"no such policy {new_champion_policy_id!r}")
 
+    # Human approval authorizes the transition; it does NOT bypass science.
+    # Re-evaluate the full simultaneous Challenger family against the exact
+    # current evidence state so an arbitrary internal/API caller cannot
+    # promote an unqualified policy by calling this mutation directly.
+    batch = evaluate_promotion_batch(
+        domain, registry_path=registry_path, ledger_path=None,
+    )
+    eligibility = next(
+        (row for row in batch if row.get("policy_id") == new_champion_policy_id),
+        None,
+    )
+    if not eligibility or eligibility.get("status") != PROMOTION_ELIGIBLE:
+        why = (eligibility or {}).get("reason") or "policy has no current scientific eligibility proof"
+        raise RuntimeError(
+            f"{new_champion_policy_id} is not scientifically PROMOTION_ELIGIBLE: {why}"
+        )
+
     previous_champion_id = current["policy_id"] if current else None
     if current is not None:
         policy_registry.set_status(
@@ -259,6 +288,8 @@ def promote_to_champion(
         "actor": actor,
         "reason": reason,
         "previous_champion_policy_id": previous_champion_id,
+        "eligibility_proof": eligibility,
+        "policy_manifest_fingerprint": policy_registry.policy_manifest_fingerprint(policy),
     }]
     store["policies"][new_champion_policy_id] = record
     policy_registry.save_registry(store, registry_path)

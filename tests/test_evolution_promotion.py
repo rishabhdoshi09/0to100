@@ -39,7 +39,7 @@ def _seed_pair(name, champ_rs, chal_rs, regimes=None):
         policy_id=f"{name}_CHAL", domain=PR.EQUITY, hypothesis="test hypothesis",
         weights={"relative_strength_mult": 2.0}, status=PR.CHALLENGER, parent_policy_id=f"{name}_CHAMP",
     )
-    regs = regimes or ["TRENDING_BULL"] * len(champ_rs)
+    regs = regimes or [("TRENDING_BULL" if i % 2 else "SIDEWAYS") for i in range(len(champ_rs))]
     for i, (cr, hr, reg) in enumerate(zip(champ_rs, chal_rs, regs)):
         _seed(f"{name}_CHAMP", f"{name}_snap_{i}", cr, regime=reg)
         _seed(f"{name}_CHAL", f"{name}_snap_{i}", hr, regime=reg)
@@ -121,8 +121,9 @@ def test_scenario_e_fails_fdr_correction_across_simultaneous_challengers(tmp_pat
     champ_rs = [(-0.3 if i % 2 == 0 else 0.1) for i in range(n)]
     chal_rs = [(0.3 if i % 2 == 0 else 0.25) for i in range(n)]
     for i, (cr, hr) in enumerate(zip(champ_rs, chal_rs)):
-        _seed("E_CHAMP", f"snap_{i}", cr)
-        _seed("E_CHAL", f"snap_{i}", hr)
+        reg = "TRENDING_BULL" if i % 2 else "SIDEWAYS"
+        _seed("E_CHAMP", f"snap_{i}", cr, regime=reg)
+        _seed("E_CHAL", f"snap_{i}", hr, regime=reg)
 
     # Without correction, this looks PROMOTE (same data as scenario D).
     solo = PROMO.evaluate_promotion(PR.EQUITY, "E_CHAL")
@@ -148,10 +149,11 @@ def test_evaluate_promotion_batch_applies_fdr_correction_end_to_end(tmp_path, mo
     n = 35
     for i in range(n):
         champ_r = random.gauss(0, 1)
-        _seed("BATCH_CHAMP", f"snap_{i}", champ_r)
+        reg = "TRENDING_BULL" if i % 2 else "SIDEWAYS"
+        _seed("BATCH_CHAMP", f"snap_{i}", champ_r, regime=reg)
         for c in range(8):
             noise = random.gauss(0.02, 1.0)
-            _seed(f"BATCH_CHAL_{c}", f"snap_{i}", champ_r + noise)
+            _seed(f"BATCH_CHAL_{c}", f"snap_{i}", champ_r + noise, regime=reg)
 
     batch = PROMO.evaluate_promotion_batch(PR.EQUITY)
     assert len(batch) == 8
@@ -208,9 +210,10 @@ def test_auto_promotion_is_disabled_by_default(tmp_path, monkeypatch):
     PR.register_policy(policy_id="AUTO_CHAL", domain=PR.EQUITY, hypothesis="test", weights={}, status=PR.CHALLENGER, parent_policy_id="AUTO_CHAMP")
     with pytest.raises(RuntimeError, match="AUTO_PROMOTION_ENABLED"):
         PROMO.promote_to_champion(PR.EQUITY, "AUTO_CHAL", actor="scheduler", reason="auto", allow_auto=True)
-    # Explicit, deliberate promotion (no allow_auto flag) always works.
-    PROMO.promote_to_champion(PR.EQUITY, "AUTO_CHAL", actor="operator", reason="manual review")
-    assert PR.current_champion(PR.EQUITY)["policy_id"] == "AUTO_CHAL"
+    # Explicit human action cannot bypass scientific qualification either.
+    with pytest.raises(RuntimeError, match="PROMOTION_ELIGIBLE"):
+        PROMO.promote_to_champion(PR.EQUITY, "AUTO_CHAL", actor="operator", reason="manual review")
+    assert PR.current_champion(PR.EQUITY)["policy_id"] == "AUTO_CHAMP"
 
 
 def test_no_single_metric_triggers_promotion_alone(tmp_path, monkeypatch):
@@ -232,3 +235,18 @@ def test_no_single_metric_triggers_promotion_alone(tmp_path, monkeypatch):
     result = PROMO.evaluate_promotion(PR.EQUITY, "NR_CHAL")
     assert result["status"] == PROMO.NOT_ELIGIBLE
     assert result["regime_breadth"]["regimes_acceptable"] < result["regime_breadth"]["regimes_observed"]
+
+
+def test_one_regime_only_evidence_cannot_promote(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    PR.register_policy(policy_id="ONE_CHAMP", domain=PR.EQUITY, hypothesis="baseline", weights={}, status=PR.CHAMPION)
+    PR.register_policy(
+        policy_id="ONE_CHAL", domain=PR.EQUITY, hypothesis="great but one regime only",
+        weights={"relative_strength_mult": 1.5}, status=PR.CHALLENGER, parent_policy_id="ONE_CHAMP",
+    )
+    for i in range(60):
+        _seed("ONE_CHAMP", f"one_{i}", -0.2, regime="TRENDING_BULL")
+        _seed("ONE_CHAL", f"one_{i}", 0.4, regime="TRENDING_BULL")
+    result = PROMO.evaluate_promotion(PR.EQUITY, "ONE_CHAL")
+    assert result["status"] == PROMO.NOT_ELIGIBLE
+    assert "regime breadth" in result["reason"]

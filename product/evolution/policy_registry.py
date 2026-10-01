@@ -16,6 +16,7 @@ is appended to the policy's own history rather than overwriting it.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from datetime import datetime, timezone
@@ -38,7 +39,131 @@ STATUSES = (CHAMPION, CHALLENGER, SHADOW, PROBATION, RETIRED, REJECTED)
 # ── domains: shared tournament engine, domain-specific policy manifests ────
 EQUITY = "EQUITY"
 FNO_UNDERLYING = "FNO_UNDERLYING"
-DOMAINS = (EQUITY, FNO_UNDERLYING)
+FNO_CONTRACT = "FNO_CONTRACT"
+DOMAINS = (EQUITY, FNO_UNDERLYING, FNO_CONTRACT)
+
+_BASELINE_IDS = {
+    EQUITY: "EQUITY_CHAMPION_BASELINE_V1",
+    FNO_UNDERLYING: "FNO_UNDERLYING_CHAMPION_BASELINE_V1",
+    FNO_CONTRACT: "FNO_CONTRACT_CHAMPION_BASELINE_V1",
+}
+
+_SEEDED_CHALLENGERS = {
+    EQUITY: (
+        (
+            "EQUITY_RS_HEAVY_V1",
+            "Test whether giving relative-strength leadership moderately more weight improves paired forward outcomes.",
+            {"relative_strength_mult": 1.25},
+        ),
+        (
+            "EQUITY_SECTOR_STRONG_V1",
+            "Test whether stronger sector confirmation reduces false positives without starving opportunity capture.",
+            {"sector_confirmation_bonus": 2.0},
+        ),
+        (
+            "EQUITY_VOLUME_CONFIRM_V1",
+            "Test whether stronger volume/liquidity confirmation improves forward trade quality.",
+            {"volume_confirmation_bonus": 2.0},
+        ),
+        (
+            "EQUITY_EVIDENCE_CONSERVATIVE_V1",
+            "Test whether requiring a larger empirical sample before selection improves robustness.",
+            {"min_empirical_sample": 30.0},
+        ),
+        (
+            "EQUITY_REGIME_DEFENSIVE_V1",
+            "Test whether stronger risk-off regime penalties reduce avoidable losses.",
+            {"regime_standdown_mult": 1.5},
+        ),
+    ),
+    FNO_UNDERLYING: (
+        (
+            "FNO_UNDERLYING_OI_HEAVY_V1",
+            "Test whether stronger futures-OI confirmation improves directional F&O selection.",
+            {"oi_confirmation_mult": 1.25},
+        ),
+        (
+            "FNO_UNDERLYING_SECTOR_HEAVY_V1",
+            "Test whether stronger sector/NIFTY confirmation improves F&O directional selection.",
+            {"sector_confirmation_mult": 1.25},
+        ),
+        (
+            "FNO_UNDERLYING_EXTENSION_DEFENSIVE_V1",
+            "Test whether stronger extension penalties reduce failed F&O breakouts and breakdowns.",
+            {"extension_penalty_mult": 1.25},
+        ),
+    ),
+    FNO_CONTRACT: (
+        (
+            "FNO_CONTRACT_DELTA_CORE_V1",
+            "Test a mild preference for liquid 0.55-0.70 delta contracts among already-eligible options.",
+            {"delta_preference_mult": 1.15},
+        ),
+        (
+            "FNO_CONTRACT_LIQUIDITY_HEAVY_V1",
+            "Test stronger spread/OI/volume emphasis among already-eligible option contracts.",
+            {"liquidity_mult": 1.25},
+        ),
+        (
+            "FNO_CONTRACT_THETA_DEFENSIVE_V1",
+            "Test stronger theta/DTE protection among already-eligible option contracts.",
+            {"theta_penalty_mult": 1.25},
+        ),
+    ),
+}
+
+
+def policy_manifest_fingerprint(policy: Mapping[str, Any]) -> str:
+    """Stable fingerprint of the immutable policy manifest."""
+    material = json.dumps(
+        _manifest_identity(policy), sort_keys=True, separators=(",", ":"), default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(material).hexdigest()
+
+
+def ensure_seed_population(
+    domain: str, *, path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Idempotently ensure one Champion and a bounded, interpretable seed
+    population. No random search, no duplicate versions on restart.
+
+    Existing promoted Champions are preserved. Seed policies are only
+    registered if their immutable IDs do not already exist.
+    """
+    if domain not in DOMAINS:
+        raise ValueError(f"unknown policy domain {domain!r}, expected one of {DOMAINS}")
+    champion = current_champion(domain, path=path)
+    if champion is None:
+        baseline_id = _BASELINE_IDS[domain]
+        champion = register_policy(
+            policy_id=baseline_id,
+            domain=domain,
+            hypothesis=(
+                "Baseline Champion: current canonical production behavior with "
+                "neutral Evolution weights; reference for paired Challenger evidence."
+            ),
+            weights={},
+            status=CHAMPION,
+            reason_created="bootstrap: no champion existed yet",
+            path=path,
+        )
+
+    seeded: list[dict[str, Any]] = []
+    for policy_id, hypothesis, weights in _SEEDED_CHALLENGERS.get(domain, ()):
+        existing = get_policy(policy_id, path=path)
+        if existing is None:
+            existing = register_policy(
+                policy_id=policy_id,
+                domain=domain,
+                hypothesis=hypothesis,
+                weights=weights,
+                parent_policy_id=champion["policy_id"],
+                status=CHALLENGER,
+                reason_created="deterministic initial Evolution seed",
+                path=path,
+            )
+        seeded.append(existing)
+    return {"champion": champion, "challengers": seeded}
 
 
 class PolicyIdentityCollision(RuntimeError):
