@@ -238,9 +238,15 @@ def _best_trades_from_production_thesis(
         payload["production_selection_score"] = float(score)
         payload["production_reason_code"] = str(decision.reason_code or "")
         payload["production_policy_effect"] = str(decision.policy_effect or "NEUTRAL")
-        payload["champion_policy_id"] = str(decision.evolution_policy_id or "")
-        payload["champion_policy_version"] = int(decision.evolution_policy_version or 0)
-        payload["champion_policy_fingerprint"] = str(decision.evolution_policy_fingerprint or "")
+        payload["champion_policy_id"] = str(
+            getattr(decision, "evolution_policy_id", "") or ""
+        )
+        payload["champion_policy_version"] = int(
+            getattr(decision, "evolution_policy_version", 0) or 0
+        )
+        payload["champion_policy_fingerprint"] = str(
+            getattr(decision, "evolution_policy_fingerprint", "") or ""
+        )
         payload["production_portfolio_authority"] = dict(decision.portfolio or {})
         payload["production_execution_slot"] = bool(execution_slot)
         payload["production_candidate_status"] = (
