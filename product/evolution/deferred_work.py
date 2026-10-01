@@ -29,6 +29,7 @@ from core.runtime_paths import logs_dir
 from product.evolution import policy_eval, tournament
 
 SCHEMA_VERSION = 1
+EVALUATOR_SCHEMA_VERSION = 1
 DEFAULT_CHILD_TIMEOUT_SECONDS = float(
     os.environ.get("QT_EVOLUTION_DEFERRED_TIMEOUT_SECONDS") or 12.0
 )
@@ -82,6 +83,7 @@ def _work_id(
         "as_of": bundle.get("as_of"),
         "champion_policy_id": bundle.get("champion_policy_id"),
         "champion_policy_fingerprint": champion_policy_fingerprint,
+        "evaluator_schema_version": EVALUATOR_SCHEMA_VERSION,
         "snapshot_ids": sorted(
             str((row or {}).get("market_snapshot_id") or "")
             for row in dict(bundle.get("snapshots") or {}).values()
@@ -122,6 +124,7 @@ def prepare_work(
         return existing
     payload = {
         "schema_version": SCHEMA_VERSION,
+        "evaluator_schema_version": EVALUATOR_SCHEMA_VERSION,
         "work_id": work_id,
         "status": "PREPARED",
         "attempts": 0,
@@ -385,6 +388,12 @@ def process_work_item(
     if item.get("status") == "SUCCEEDED":
         existing = _read_json(_result_path(work_id, root))
         return existing or {}
+    if int(item.get("evaluator_schema_version") or 0) != EVALUATOR_SCHEMA_VERSION:
+        raise RuntimeError(
+            f"deferred Evolution evaluator schema mismatch: "
+            f"item={item.get('evaluator_schema_version')} "
+            f"runtime={EVALUATOR_SCHEMA_VERSION}"
+        )
     if item.get("status") not in {"READY", "RETRYABLE", "RUNNING"}:
         raise RuntimeError(
             f"deferred Evolution work {work_id} is not READY: {item.get('status')}"
