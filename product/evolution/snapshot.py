@@ -165,3 +165,85 @@ def get_snapshot_record(snapshot_id: str, *, path: str | Path | None = None) -> 
     ).fetchone()
     con.close()
     return json.loads(row["payload_json"]) if row else None
+
+
+def build_domain_snapshot(
+    *,
+    symbol: str,
+    domain: str,
+    as_of: str,
+    context: Mapping[str, Any],
+    card: Mapping[str, Any],
+    identity_suffix: str = "",
+    path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Freeze a non-equity/domain-adapter snapshot without pretending its
+    schema is an equity decision_context snapshot.
+
+    The explicit decision_id is content-addressed over the FULL supplied
+    point-in-time payload, so multiple F&O directions/contracts for one
+    underlying/session can coexist without decision-freeze collisions.
+    """
+    import hashlib
+
+    actual_symbol = str(symbol or "").upper()
+    material = {
+        "domain": str(domain or ""),
+        "symbol": actual_symbol,
+        "as_of": str(as_of or ""),
+        "identity_suffix": str(identity_suffix or ""),
+        "context": dict(context or {}),
+        "card": dict(card or {}),
+    }
+    digest = hashlib.sha256(
+        json.dumps(material, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()[:24]
+    identity_symbol = (
+        f"{actual_symbol}::{identity_suffix}" if identity_suffix else actual_symbol
+    )
+    ctx = dict(context or {})
+    freeze_input = {
+        "decision_id": f"EVOLUTION_SNAPSHOT:{domain}:{digest}",
+        "symbol": identity_symbol,
+        "as_of": str(as_of or ""),
+        "decision": "SNAPSHOT",
+        "reason_code": f"EVOLUTION_SNAPSHOT:{domain}",
+        "entry": ctx.get("entry"),
+        "stop": ctx.get("stop"),
+        "target": ctx.get("target"),
+        "setup_label": ctx.get("setup_label"),
+        "sector": ctx.get("sector"),
+        "regime": ctx.get("regime"),
+        "selection_score": ctx.get("selection_score"),
+        "data_snapshot_id": ctx.get("data_snapshot_id") or "",
+        "source_scan_id": ctx.get("source_scan_id") or "",
+        "evidence_class": f"EVOLUTION_{domain}_SNAPSHOT",
+    }
+    from product.decision_freeze import freeze as freeze_canonical
+
+    frozen = freeze_canonical(freeze_input, path=snapshot_freeze_path(path))
+    record = {
+        "market_snapshot_id": str(frozen["freeze_id"]),
+        "domain": str(domain or ""),
+        "symbol": actual_symbol,
+        "identity_symbol": identity_symbol,
+        "as_of": str(as_of or ""),
+        "context": ctx,
+        "card": dict(card or {}),
+        "frozen_at": frozen["frozen_at"],
+        "versions": frozen.get("versions") or {},
+        "fingerprint": frozen.get("fingerprint"),
+    }
+    con = _payload_connect(path)
+    existing = con.execute(
+        "SELECT 1 FROM snapshot_payloads WHERE market_snapshot_id=?",
+        (record["market_snapshot_id"],),
+    ).fetchone()
+    if existing is None:
+        con.execute(
+            "INSERT INTO snapshot_payloads (market_snapshot_id, payload_json) VALUES (?,?)",
+            (record["market_snapshot_id"], json.dumps(record, default=str)),
+        )
+        con.commit()
+    con.close()
+    return record

@@ -54,6 +54,11 @@ def grade_shadow_decision(
     never re-settles a resolved outcome."""
     if row.get("outcome") is not None:
         return dict(row)
+    if str(row.get("grading_mode") or "") == "PAPER_FORWARD_CONTRACT_ONLY":
+        # No trustworthy historical NSE option-chain path exists. Contract
+        # shadows are graded only by record_observed_contract_shadow_outcome()
+        # when a genuine PAPER-forward option observation is available.
+        return None
 
     symbol = str(row.get("symbol") or "")
     as_of = str(row.get("as_of") or "")
@@ -107,3 +112,45 @@ def grade_pending_decisions(
         if result is not None and result.get("outcome") is not None:
             graded.append(result)
     return graded
+
+
+def record_observed_contract_shadow_outcome(
+    shadow_id: str,
+    *,
+    realized_R: float,
+    evidence_class: str,
+    observed_source: str,
+    path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Grade one F&O contract shadow from a genuine observed PAPER-forward
+    option outcome. Historical/counterfactual option-chain evidence is
+    deliberately rejected because QuantTerm has no trustworthy source for it.
+    """
+    from product.evidence_class import PAPER_FORWARD
+    from product.evolution.shadow_decisions import get_shadow_decision, save_graded_decision
+    from product import counterfactual_learning as CFL
+
+    if str(evidence_class or "") != PAPER_FORWARD:
+        raise ValueError("F&O contract Evolution outcomes must be PAPER_FORWARD; historical option evidence is forbidden")
+    if not str(observed_source or "").strip():
+        raise ValueError("observed_source is required for F&O contract shadow grading")
+    row = get_shadow_decision(shadow_id, path=path)
+    if row is None:
+        raise KeyError(f"unknown contract shadow {shadow_id}")
+    if str(row.get("grading_mode") or "") != "PAPER_FORWARD_CONTRACT_ONLY":
+        raise ValueError("shadow is not an F&O contract-selection observation")
+    if row.get("outcome") is not None:
+        return row
+
+    value = float(realized_R)
+    updated = dict(row)
+    updated.update({
+        "outcome": "OBSERVED_PAPER_FORWARD_OPTION",
+        "counterfactual_R": value,
+        "classification": CFL.WINNER_TAKEN if value > 0 else CFL.LOSER_TAKEN,
+        "graded_at": datetime.now(timezone.utc).isoformat(),
+        "evidence_class": PAPER_FORWARD,
+        "observed_source": str(observed_source),
+        "not_pnl": True,
+    })
+    return save_graded_decision(updated, path=path)

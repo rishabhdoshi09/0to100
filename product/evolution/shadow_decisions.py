@@ -140,6 +140,14 @@ def freeze_shadow_decision(
         "graded_at": None,
         "not_pnl": True,
         "is_champion_decision": bool(verdict.get("is_champion_decision", False)),
+        "grading_mode": str(
+            verdict.get("grading_mode") or snapshot.get("grading_mode") or "UNDERLYING_FORWARD"
+        ),
+        "direction": verdict.get("direction"),
+        "selected_contract": verdict.get("selected_contract"),
+        "contract_symbol": verdict.get("contract_symbol"),
+        "contract_context_key": verdict.get("contract_context_key"),
+        "evidence_class": verdict.get("evidence_class") or "EVOLUTION_SHADOW",
     }
     existing_rows.append(row)
     _write_ledger(target, existing_rows)
