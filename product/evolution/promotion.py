@@ -334,6 +334,7 @@ def advance_eligible_to_probation(
     registry_path: str | Path | None = None,
     ledger_path: str | Path | None = None,
     proof_path: str | Path | None = None,
+    evaluated_batch: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Move scientifically qualified Challengers into shadow-only PROBATION.
 
@@ -342,13 +343,15 @@ def advance_eligible_to_probation(
     at entry; a later human promotion requires additional unseen forward
     observations beyond this checkpoint.
     """
-    batch = evaluate_promotion_batch(
-        domain,
-        registry_path=registry_path,
-        ledger_path=ledger_path,
-        proof_path=proof_path,
-        persist_proofs=True,
-    )
+    batch = list(evaluated_batch or [])
+    if evaluated_batch is None:
+        batch = evaluate_promotion_batch(
+            domain,
+            registry_path=registry_path,
+            ledger_path=ledger_path,
+            proof_path=proof_path,
+            persist_proofs=True,
+        )
     advanced: list[dict[str, Any]] = []
     for eligibility in batch:
         if eligibility.get("status") != PROMOTION_ELIGIBLE:
@@ -404,13 +407,10 @@ def evaluate_retirement_batch(
     out: list[dict[str, Any]] = []
     for policy in policy_registry.active_challengers(domain, path=registry_path):
         lifecycle = list(policy.get("lifecycle_history") or [])
-        rollback_protected = (
-            policy.get("status") == policy_registry.PROBATION
-            or any(
-                event.get("status") == policy_registry.CHAMPION
-                for event in lifecycle
-                if isinstance(event, dict)
-            )
+        rollback_protected = any(
+            event.get("status") == policy_registry.CHAMPION
+            for event in lifecycle
+            if isinstance(event, dict)
         )
         if rollback_protected:
             out.append({

@@ -1577,7 +1577,9 @@ def run_tournament_cycle(ctx) -> JobResult:
             eligible_total += sum(
                 1 for r in batch if r.get("status") == "PROMOTION_ELIGIBLE"
             )
-            probation_total += len(advance_eligible_to_probation(domain))
+            probation_total += len(
+                advance_eligible_to_probation(domain, evaluated_batch=batch)
+            )
             retired_total += len(retire_qualified_challengers(domain))
         summary_parts.append(f"promotion_eligible={eligible_total}")
         summary_parts.append(f"probation_started={probation_total}")
