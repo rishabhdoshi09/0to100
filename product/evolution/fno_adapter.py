@@ -114,12 +114,19 @@ def run_underlying_tournament(
         plan = dict(setup.get("underlying_trade_plan") or {})
         direction = str(row.get("direction") or setup.get("direction") or "")
         symbol = str(row.get("symbol") or "")
+        try:
+            from product.fno_evidence import _market_regime_bucket
+            regime = _market_regime_bucket(
+                _f((setup.get("components") or {}).get("nifty_alignment"))
+            )
+        except Exception:
+            regime = "UNKNOWN"
         context = {
             "entry": plan.get("entry"),
             "stop": plan.get("stop"),
             "target": plan.get("target"),
             "setup_label": f"FNO_{direction}_{setup.get('futures_oi_state') or 'NEUTRAL'}",
-            "regime": str((row.get("ranking_evidence") or {}).get("market_regime") or ""),
+            "regime": regime,
             "selection_score": row.get("pre_evolution_ranking_score", row.get("ranking_score")),
             "direction": direction,
             "futures_oi_state": setup.get("futures_oi_state"),

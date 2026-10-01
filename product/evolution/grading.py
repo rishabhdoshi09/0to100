@@ -43,6 +43,108 @@ def resolve_forward_outcome(
     }
 
 
+def resolve_directional_underlying_forward_outcome(
+    symbol: str,
+    as_of: str,
+    direction: str,
+    entry: float,
+    stop: float,
+    target: float,
+    *,
+    horizon: int | None = None,
+) -> dict[str, Any] | None:
+    """Direction-aware first-touch resolver for F&O UNDERLYING shadows.
+
+    Uses the same official bhavcopy source as core.outcome_resolver but
+    supports SHORT geometry (stop above entry / target below entry). Return
+    percentage is normalized so positive always means the policy's desired
+    direction won, which lets the shared counterfactual taxonomy compare
+    LONG and SHORT policies on one R sign convention.
+    """
+    from data.bhavcopy_store import get_ohlcv
+    import pandas as pd
+
+    direction = str(direction or "").upper()
+    if direction not in {"LONG", "SHORT"}:
+        return None
+    try:
+        entry_f, stop_f, target_f = float(entry), float(stop), float(target)
+    except (TypeError, ValueError):
+        return None
+    if entry_f <= 0 or stop_f <= 0 or target_f <= 0:
+        return None
+    if direction == "LONG" and not (stop_f < entry_f < target_f):
+        return None
+    if direction == "SHORT" and not (target_f < entry_f < stop_f):
+        return None
+
+    try:
+        df = get_ohlcv(str(symbol or "").upper())
+    except Exception:
+        return None
+    if df is None or getattr(df, "empty", True):
+        return None
+    if not {"high", "low", "close"} <= set(df.columns):
+        return None
+    try:
+        since = df[df.index >= pd.Timestamp(str(as_of or "")[:10])]
+    except Exception:
+        return None
+    if since is None or getattr(since, "empty", True):
+        return None
+    try:
+        highs = since["high"].to_numpy(dtype=float)
+        lows = since["low"].to_numpy(dtype=float)
+        closes = since["close"].to_numpy(dtype=float)
+    except Exception:
+        return None
+
+    limit = int(horizon or PATH_HORIZON_SESSIONS)
+    cap = min(len(highs), limit)
+    filled = False
+    for i in range(cap):
+        if not filled:
+            filled = highs[i] >= entry_f if direction == "LONG" else lows[i] <= entry_f
+            if not filled:
+                continue
+
+        # Conservative ambiguity rule: adverse stop is checked first.
+        if direction == "LONG":
+            if lows[i] <= stop_f:
+                exit_px, worked = stop_f, 0
+                break
+            if highs[i] >= target_f:
+                exit_px, worked = target_f, 1
+                break
+        else:
+            if highs[i] >= stop_f:
+                exit_px, worked = stop_f, 0
+                break
+            if lows[i] <= target_f:
+                exit_px, worked = target_f, 1
+                break
+    else:
+        if not filled:
+            return {"exit_price": 0.0, "forward_return_pct": 0.0, "worked": -1} if len(highs) >= limit else None
+        if len(highs) < limit:
+            return None
+        exit_px = float(closes[cap - 1])
+        worked = 1 if (
+            exit_px >= entry_f if direction == "LONG" else exit_px <= entry_f
+        ) else 0
+
+    normalized_pct = (
+        (float(exit_px) - entry_f) / entry_f * 100.0
+        if direction == "LONG"
+        else (entry_f - float(exit_px)) / entry_f * 100.0
+    )
+    return {
+        "exit_price": float(exit_px),
+        "forward_return_pct": normalized_pct,
+        "worked": worked,
+    }
+
+
 def grade_shadow_decision(
     row: Mapping[str, Any], *, horizon: int | None = None,
     path: str | Path | None = None,
@@ -66,7 +168,20 @@ def grade_shadow_decision(
     if not symbol or not as_of or entry is None or stop is None or target is None:
         return None
 
-    forward = resolve_forward_outcome(symbol, as_of, float(entry), float(stop), float(target), horizon=horizon)
+    if str(row.get("domain") or "") == "FNO_UNDERLYING":
+        forward = resolve_directional_underlying_forward_outcome(
+            symbol,
+            as_of,
+            str(row.get("direction") or ""),
+            float(entry),
+            float(stop),
+            float(target),
+            horizon=horizon,
+        )
+    else:
+        forward = resolve_forward_outcome(
+            symbol, as_of, float(entry), float(stop), float(target), horizon=horizon,
+        )
     if forward is None:
         return None
 
