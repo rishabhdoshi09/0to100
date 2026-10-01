@@ -405,14 +405,22 @@ def resolve_contract_shadow_forward_outcome(
     )
     if not horizon_complete:
         return None
-    exit_price = last_close_by_session.get(horizon_session)
+    exit_price = (
+        last_close_by_session[horizon_session]
+        if horizon_session in last_close_by_session
+        else None
+    )
     if exit_price is None:
         return None
     return {
         "realized_R": round((float(exit_price) - entry) / risk, 6),
         "exit_price": float(exit_price),
         "exit_reason": "SHADOW_EOD" if exit_policy == "EOD" else "SHADOW_HORIZON",
-        "resolved_at": last_timestamp_by_session.get(horizon_session) or now_ist.isoformat(),
+        "resolved_at": (
+            last_timestamp_by_session[horizon_session]
+            if horizon_session in last_timestamp_by_session
+            else now_ist.isoformat()
+        ),
     }
 
 
