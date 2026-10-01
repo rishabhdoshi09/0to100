@@ -1024,6 +1024,10 @@ def run_reco_paper_cycle(
             ) -> list[dict[str, Any]]:
                 shadow_decisions_local: list[AutopilotDecision] = []
                 shadow_ranked: list[tuple[float, AutopilotDecision]] = []
+                snapshot_id_by_symbol = {
+                    str(s.get("symbol") or "").upper(): str(s.get("market_snapshot_id") or "")
+                    for s in snapshots
+                }
                 for frozen_snapshot in snapshots:
                     shadow_decision = evaluate_selection_candidate(
                         frozen_snapshot.get("card") or {},
@@ -1060,7 +1064,16 @@ def run_reco_paper_cycle(
                         decision.reason_code = NO_TRADE
                         decision.detail = "not top-of-the-top under Challenger policy"
                         decision.group = "REJECTED"
-                return [decision.as_dict() for decision in shadow_decisions_local]
+                verdicts: list[dict[str, Any]] = []
+                for decision in shadow_decisions_local:
+                    row = decision.as_dict()
+                    row["policy_id"] = str(challenger_policy.get("policy_id") or "")
+                    row["market_snapshot_id"] = snapshot_id_by_symbol.get(
+                        str(decision.symbol or "").upper(), ""
+                    )
+                    row["domain"] = "EQUITY"
+                    verdicts.append(row)
+                return verdicts
 
             champion_decisions_by_symbol = {
                 decision.symbol: decision.as_dict() for decision in decisions
