@@ -27,8 +27,18 @@ function ScorecardRow({ row, isChampion }: { row: EvolutionPolicyRow; isChampion
           {isChampion ? <span className="evolution-lab__badge">CHAMPION</span> : null}
         </div>
         <div className="evolution-lab__hypothesis">{row.hypothesis}</div>
+        <div className="evolution-lab__paired-note">
+          Controls PAPER decisions: {row.controls_paper_decisions ? 'YES' : 'NO'}
+        </div>
       </td>
-      <td>{row.status}</td>
+      <td>
+        <div>{row.status}</div>
+        {row.promotion_evaluation?.status ? (
+          <div className="evolution-lab__paired-note">
+            {row.promotion_evaluation.status}
+          </div>
+        ) : null}
+      </td>
       <td>{row.scorecard.decision_snapshots}</td>
       <td>{row.scorecard.selected_trades}</td>
       <td>{formatR(row.scorecard.expectancy_R)}</td>
@@ -51,19 +61,24 @@ function ScorecardRow({ row, isChampion }: { row: EvolutionPolicyRow; isChampion
   )
 }
 
+const DOMAINS = ['EQUITY', 'FNO_UNDERLYING', 'FNO_CONTRACT'] as const
+
 export function EvolutionLabView() {
+  const [domain, setDomain] = useState<string>('EQUITY')
   const [board, setBoard] = useState<EvolutionLabBoard | null>(null)
   const [error, setError] = useState('')
 
   useEffect(() => {
     let cancelled = false
-    fetchEvolutionLab()
+    setBoard(null)
+    setError('')
+    fetchEvolutionLab(domain)
       .then((payload) => { if (!cancelled) setBoard(payload) })
       .catch((err: unknown) => {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err))
       })
     return () => { cancelled = true }
-  }, [])
+  }, [domain])
 
   if (error && !board) {
     return <EmptyState title="Evolution Lab" detail={`Could not load the tournament board: ${error}`} />
@@ -75,6 +90,18 @@ export function EvolutionLabView() {
   return (
     <section className="evolution-lab">
       <header className="evolution-lab__header">
+        <div className="evolution-lab__domain-tabs">
+          {DOMAINS.map((item) => (
+            <button
+              key={item}
+              type="button"
+              onClick={() => setDomain(item)}
+              aria-pressed={domain === item}
+            >
+              {item === 'EQUITY' ? 'Equity' : item === 'FNO_UNDERLYING' ? 'F&O Underlying' : 'F&O Contract'}
+            </button>
+          ))}
+        </div>
         <p className="evolution-lab__safety">
           PAPER only — live_locked={String(board.live_locked)}, live_execution_authorized={String(board.live_execution_authorized)}.
           {' '}Automatic promotion is {board.auto_promotion_enabled ? 'enabled' : 'disabled'}; only an explicit, deliberate

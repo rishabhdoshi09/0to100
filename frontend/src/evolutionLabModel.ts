@@ -51,6 +51,18 @@ export type EvolutionPolicyRow = {
   created_at: string
   scorecard: EvolutionScorecard
   paired_vs_champion: PairedComparison | null
+  controls_paper_decisions: boolean
+  manifest_fingerprint?: string
+  promotion_evaluation?: {
+    status?: string
+    reason?: string
+    paired_snapshots?: number
+    incremental_expectancy_R?: number | null
+    fdr_rejected?: boolean
+    harness_stats?: Record<string, number>
+    regime_breadth?: Record<string, unknown>
+  }
+  latest_promotion_proof?: Record<string, unknown> | null
 }
 
 export type EvolutionEvent = {

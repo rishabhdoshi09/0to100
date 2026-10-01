@@ -549,6 +549,12 @@ def build_home_os(
 
     best_rows = _canonical_best_trade_rows(history_current=history_current)
     opportunities = [explain_opportunity(row) for row in best_rows]
+    for opportunity, row in zip(opportunities, best_rows):
+        opportunity["champion_policy_id"] = str(row.get("champion_policy_id") or "")
+        opportunity["champion_policy_version"] = int(row.get("champion_policy_version") or 0)
+        opportunity["champion_policy_fingerprint"] = str(
+            row.get("champion_policy_fingerprint") or ""
+        )
     # Evolution Engine: purely explanatory context (policy consensus,
     # dominant dissent) merged in AFTER eligibility/explanation are already
     # decided above -- it can never add, remove, or reorder a Best Trades

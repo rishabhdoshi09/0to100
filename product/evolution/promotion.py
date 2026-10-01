@@ -33,10 +33,14 @@ same file.
 """
 from __future__ import annotations
 
+import json
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from logger import get_logger
+from core.runtime_paths import logs_dir
 from product.evolution import policy_registry, scorecard
 
 log = get_logger(__name__)
@@ -49,9 +53,73 @@ MIN_INCREMENTAL_EXPECTANCY_R = 0.05
 FDR_ALPHA = 0.05
 MIN_REGIME_BREADTH_OBSERVED = 2  # need at least this many distinct regimes to judge breadth at all
 MIN_REGIME_BREADTH_ACCEPTABLE = 2  # of the observed regimes, at least this many must be non-negative
+MIN_CHAMPION_TENURE_DAYS = 3
+REVERSAL_INCREMENTAL_MARGIN_R = 0.10
+RETIRE_MIN_PAIRED_SAMPLE = 60
+RETIRE_MAX_INCREMENTAL_EXPECTANCY_R = -0.15
 
 PROMOTION_ELIGIBLE = "PROMOTION_ELIGIBLE"
 NOT_ELIGIBLE = "NOT_ELIGIBLE"
+RETIREMENT_ELIGIBLE = "RETIREMENT_ELIGIBLE"
+
+
+def promotion_proof_path(path: str | Path | None = None) -> Path:
+    if path is not None:
+        return Path(path)
+    override = os.environ.get("QT_EVOLUTION_PROMOTION_PROOFS")
+    if override:
+        return Path(override)
+    return logs_dir() / "product" / "evolution_promotion_proofs.jsonl"
+
+
+def _read_proofs(path: str | Path | None = None) -> list[dict[str, Any]]:
+    target = promotion_proof_path(path)
+    if not target.exists():
+        return []
+    out: list[dict[str, Any]] = []
+    try:
+        for line in target.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if isinstance(row, dict):
+                out.append(row)
+    except Exception:
+        return []
+    return out
+
+
+def _persist_proof(row: dict[str, Any], *, path: str | Path | None = None) -> dict[str, Any]:
+    target = promotion_proof_path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        **dict(row),
+        "proof_created_at": datetime.now(timezone.utc).isoformat(),
+        "build_sha": str(os.environ.get("QT_BUILD_SHA") or os.environ.get("GITHUB_SHA") or ""),
+    }
+    rows = _read_proofs(path)
+    rows.append(record)
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as fh:
+        for item in rows[-5000:]:
+            fh.write(json.dumps(item, default=str, sort_keys=True) + "\n")
+    tmp.replace(target)
+    return record
+
+
+def latest_promotion_proof(
+    policy_id: str, *, path: str | Path | None = None,
+) -> dict[str, Any] | None:
+    rows = [row for row in _read_proofs(path) if row.get("policy_id") == policy_id]
+    return rows[-1] if rows else None
+
+
+def _dt(value: Any):
+    try:
+        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
 
 
 def _f(value: Any) -> float | None:
@@ -192,7 +260,10 @@ def evaluate_promotion(
 
 
 def evaluate_promotion_batch(
-    domain: str, *, registry_path: str | Path | None = None, ledger_path: str | Path | None = None,
+    domain: str, *, registry_path: str | Path | None = None,
+    ledger_path: str | Path | None = None,
+    proof_path: str | Path | None = None,
+    persist_proofs: bool = True,
 ) -> list[dict[str, Any]]:
     """Evaluate EVERY active challenger for a domain together, applying
     Benjamini-Hochberg FDR correction across the whole family (section 14) --
@@ -226,13 +297,99 @@ def evaluate_promotion_batch(
                 r["status"] = NOT_ELIGIBLE
                 r["reason"] = "fails Benjamini-Hochberg FDR correction across simultaneously-tested challengers"
 
+    if persist_proofs:
+        for row in raw:
+            _persist_proof(
+                {
+                    **row,
+                    "policy_manifest_fingerprint": (
+                        policy_registry.policy_manifest_fingerprint(
+                            policy_registry.get_policy(
+                                str(row.get("policy_id") or ""), path=registry_path
+                            ) or {}
+                        )
+                        if row.get("policy_id")
+                        else ""
+                    ),
+                    "champion_manifest_fingerprint": (
+                        policy_registry.policy_manifest_fingerprint(champion)
+                        if champion else ""
+                    ),
+                },
+                path=proof_path,
+            )
     return raw
+
+
+def evaluate_retirement_batch(
+    domain: str, *, registry_path: str | Path | None = None,
+    ledger_path: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """Conservative research-only retirement eligibility.
+
+    A policy is eligible for retirement only after a large paired sample and
+    materially negative incremental expectancy. This never affects the current
+    Champion and never touches PAPER/live execution state.
+    """
+    champion = policy_registry.current_champion(domain, path=registry_path)
+    if champion is None:
+        return []
+    out: list[dict[str, Any]] = []
+    for policy in policy_registry.active_challengers(domain, path=registry_path):
+        paired = scorecard.paired_comparison(
+            champion["policy_id"], policy["policy_id"], domain=domain, path=ledger_path,
+        )
+        n = int(paired.get("paired_snapshots") or 0)
+        edge = _f(paired.get("incremental_expectancy_R"))
+        eligible = (
+            n >= RETIRE_MIN_PAIRED_SAMPLE
+            and edge is not None
+            and edge <= RETIRE_MAX_INCREMENTAL_EXPECTANCY_R
+        )
+        out.append({
+            "policy_id": policy["policy_id"],
+            "domain": domain,
+            "paired_snapshots": n,
+            "incremental_expectancy_R": edge,
+            "status": RETIREMENT_ELIGIBLE if eligible else NOT_ELIGIBLE,
+            "reason": (
+                "sufficient paired evidence shows materially negative incremental value"
+                if eligible
+                else "retirement evidence threshold not met"
+            ),
+        })
+    return out
+
+
+def retire_qualified_challengers(
+    domain: str, *, registry_path: str | Path | None = None,
+    ledger_path: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    retired: list[dict[str, Any]] = []
+    for row in evaluate_retirement_batch(
+        domain, registry_path=registry_path, ledger_path=ledger_path,
+    ):
+        if row["status"] != RETIREMENT_ELIGIBLE:
+            continue
+        retired.append(
+            policy_registry.set_status(
+                row["policy_id"], policy_registry.RETIRED,
+                reason=(
+                    f"automatic research retirement: {row['paired_snapshots']} paired, "
+                    f"incremental expectancy {float(row['incremental_expectancy_R']):+.3f}R"
+                ),
+                path=registry_path,
+            )
+        )
+    return retired
 
 
 def promote_to_champion(
     domain: str, new_champion_policy_id: str,
     *, actor: str, reason: str, allow_auto: bool = False,
     registry_path: str | Path | None = None,
+    ledger_path: str | Path | None = None,
+    proof_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Explicitly, deliberately replace the domain's Champion. Never called
     automatically unless AUTO_PROMOTION_ENABLED is True AND allow_auto=True
@@ -257,7 +414,11 @@ def promote_to_champion(
     # current evidence state so an arbitrary internal/API caller cannot
     # promote an unqualified policy by calling this mutation directly.
     batch = evaluate_promotion_batch(
-        domain, registry_path=registry_path, ledger_path=None,
+        domain,
+        registry_path=registry_path,
+        ledger_path=ledger_path,
+        proof_path=proof_path,
+        persist_proofs=True,
     )
     eligibility = next(
         (row for row in batch if row.get("policy_id") == new_champion_policy_id),
@@ -268,6 +429,34 @@ def promote_to_champion(
         raise RuntimeError(
             f"{new_champion_policy_id} is not scientifically PROMOTION_ELIGIBLE: {why}"
         )
+
+    previous_champion_id = current["policy_id"] if current else None
+
+    # Anti-flip-flop hysteresis. The very first baseline replacement is
+    # intentionally exempt; once a Champion was promoted, it earns a minimum
+    # PAPER tenure before another routine replacement may occur. Emergency
+    # rollback remains separately available and immediate.
+    if current is not None and list(current.get("promotion_history") or []):
+        last_promotion = _dt((current.get("promotion_history") or [])[-1].get("at"))
+        now = datetime.now(timezone.utc)
+        if last_promotion is not None:
+            tenure_days = (now - last_promotion).total_seconds() / 86400.0
+            if tenure_days < MIN_CHAMPION_TENURE_DAYS:
+                raise RuntimeError(
+                    f"Champion hysteresis: only {tenure_days:.2f}d tenure; "
+                    f"need {MIN_CHAMPION_TENURE_DAYS}d before routine replacement"
+                )
+
+    # Re-promoting the Champion that was just displaced requires a material
+    # extra margin, not merely the ordinary promotion floor.
+    if current is not None:
+        prior = list(current.get("promotion_history") or [])
+        if prior and str(prior[-1].get("previous_champion_policy_id") or "") == new_champion_policy_id:
+            required = MIN_INCREMENTAL_EXPECTANCY_R + REVERSAL_INCREMENTAL_MARGIN_R
+            if float(eligibility.get("incremental_expectancy_R") or 0.0) < required:
+                raise RuntimeError(
+                    f"reversal hysteresis requires incremental expectancy >= {required:+.3f}R"
+                )
 
     previous_champion_id = current["policy_id"] if current else None
     if current is not None:

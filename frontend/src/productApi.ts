@@ -801,6 +801,10 @@ export type HomeOperatingSystem = {
     confidence_source?: string
     effective_n?: number | null
     confidence_note?: string
+    champion_policy_id?: string
+    champion_policy_version?: number
+    champion_policy_fingerprint?: string
+    evolution_consensus?: Record<string, unknown>
   }>
   research_watchlist?: Array<{
     symbol?: string

@@ -14,11 +14,20 @@ from product.evolution import policy_registry as PR
 from product.evolution import scorecard as SC
 
 
-def _policy_summary(policy: dict[str, Any], *, champion_id: str | None, path: str | Path | None = None) -> dict[str, Any]:
+def _policy_summary(
+    policy: dict[str, Any], *, champion_id: str | None,
+    promotion_by_policy: dict[str, dict[str, Any]] | None = None,
+    path: str | Path | None = None,
+) -> dict[str, Any]:
     card = SC.scorecard(policy["policy_id"], domain=policy["domain"], path=path)
     paired = None
     if champion_id and policy["policy_id"] != champion_id:
         paired = SC.paired_comparison(champion_id, policy["policy_id"], domain=policy["domain"], path=path)
+    try:
+        from product.evolution.promotion import latest_promotion_proof
+        proof = latest_promotion_proof(policy["policy_id"])
+    except Exception:
+        proof = None
     return {
         "policy_id": policy["policy_id"],
         "version": policy.get("version"),
@@ -28,6 +37,12 @@ def _policy_summary(policy: dict[str, Any], *, champion_id: str | None, path: st
         "created_at": policy.get("created_at"),
         "scorecard": card,
         "paired_vs_champion": paired,
+        "controls_paper_decisions": bool(policy.get("status") == PR.CHAMPION),
+        "manifest_fingerprint": PR.policy_manifest_fingerprint(policy),
+        "promotion_evaluation": dict(
+            (promotion_by_policy or {}).get(policy["policy_id"]) or {}
+        ),
+        "latest_promotion_proof": proof,
     }
 
 
@@ -36,12 +51,29 @@ def evolution_lab_board(domain: str = PR.EQUITY, *, path: str | Path | None = No
     promotion/rollback history -- everything the Evolution Lab page shows."""
     champion = PR.current_champion(domain, path=path)
     champion_id = champion["policy_id"] if champion else None
+    try:
+        from product.evolution.promotion import evaluate_promotion_batch
+        promotion_batch = evaluate_promotion_batch(
+            domain, registry_path=path, ledger_path=path, persist_proofs=False,
+        )
+    except Exception:
+        promotion_batch = []
+    promotion_by_policy = {
+        str(row.get("policy_id") or ""): row for row in promotion_batch
+        if row.get("policy_id")
+    }
 
     challengers = [
         p for p in PR.list_policies(domain=domain, path=path)
         if p["status"] in (PR.CHALLENGER, PR.SHADOW, PR.PROBATION)
     ]
-    leaderboard = [_policy_summary(p, champion_id=champion_id, path=path) for p in challengers]
+    leaderboard = [
+        _policy_summary(
+            p, champion_id=champion_id,
+            promotion_by_policy=promotion_by_policy, path=path,
+        )
+        for p in challengers
+    ]
     leaderboard.sort(
         key=lambda row: (row["paired_vs_champion"] or {}).get("incremental_expectancy_R") or float("-inf"),
         reverse=True,
@@ -64,7 +96,10 @@ def evolution_lab_board(domain: str = PR.EQUITY, *, path: str | Path | None = No
         "domain": domain,
         "champion": (
             {
-                **_policy_summary(champion, champion_id=champion_id, path=path),
+                **_policy_summary(
+                    champion, champion_id=champion_id,
+                    promotion_by_policy=promotion_by_policy, path=path,
+                ),
             } if champion else None
         ),
         "challenger_leaderboard": leaderboard,
