@@ -250,3 +250,75 @@ def test_one_regime_only_evidence_cannot_promote(tmp_path, monkeypatch):
     result = PROMO.evaluate_promotion(PR.EQUITY, "ONE_CHAL")
     assert result["status"] == PROMO.NOT_ELIGIBLE
     assert "regime breadth" in result["reason"]
+
+
+def test_promotion_batch_persists_scientific_proof(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    champ_rs = [(-0.25 if i % 2 == 0 else 0.05) for i in range(60)]
+    chal_rs = [(0.30 if i % 2 == 0 else 0.20) for i in range(60)]
+    _seed_pair("PROOF", champ_rs, chal_rs)
+    proof_file = tmp_path / "proofs.jsonl"
+    batch = PROMO.evaluate_promotion_batch(PR.EQUITY, proof_path=proof_file)
+    row = next(r for r in batch if r["policy_id"] == "PROOF_CHAL")
+    assert row["status"] == PROMO.PROMOTION_ELIGIBLE
+    proof = PROMO.latest_promotion_proof("PROOF_CHAL", path=proof_file)
+    assert proof is not None
+    assert proof["paired_snapshots"] >= 30
+    assert proof["policy_manifest_fingerprint"]
+
+
+def test_recent_promoted_champion_has_hysteresis_before_replacement(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    PR.register_policy(
+        policy_id="HYS_CHAMP", domain=PR.EQUITY, hypothesis="incumbent",
+        weights={}, status=PR.CHAMPION,
+    )
+    PR.register_policy(
+        policy_id="HYS_CHAL", domain=PR.EQUITY, hypothesis="challenger",
+        weights={}, status=PR.CHALLENGER, parent_policy_id="HYS_CHAMP",
+    )
+    store = PR.load_registry()
+    current = dict(store["policies"]["HYS_CHAMP"])
+    current["promotion_history"] = [{
+        "at": PROMO.datetime.now(PROMO.timezone.utc).isoformat(),
+        "previous_champion_policy_id": "OLDER",
+    }]
+    store["policies"]["HYS_CHAMP"] = current
+    PR.save_registry(store)
+
+    monkeypatch.setattr(
+        PROMO,
+        "evaluate_promotion_batch",
+        lambda *args, **kwargs: [{
+            "policy_id": "HYS_CHAL",
+            "status": PROMO.PROMOTION_ELIGIBLE,
+            "incremental_expectancy_R": 0.5,
+        }],
+    )
+    with pytest.raises(RuntimeError, match="hysteresis"):
+        PROMO.promote_to_champion(
+            PR.EQUITY, "HYS_CHAL", actor="operator", reason="too soon",
+        )
+    assert PR.current_champion(PR.EQUITY)["policy_id"] == "HYS_CHAMP"
+
+
+def test_materially_negative_challenger_becomes_retirement_eligible(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    PR.register_policy(
+        policy_id="RET_CHAMP", domain=PR.EQUITY, hypothesis="baseline",
+        weights={}, status=PR.CHAMPION,
+    )
+    PR.register_policy(
+        policy_id="RET_CHAL", domain=PR.EQUITY, hypothesis="bad challenger",
+        weights={}, status=PR.CHALLENGER, parent_policy_id="RET_CHAMP",
+    )
+    for i in range(80):
+        reg = "TRENDING_BULL" if i % 2 else "SIDEWAYS"
+        _seed("RET_CHAMP", f"ret_{i}", 0.1, regime=reg)
+        _seed("RET_CHAL", f"ret_{i}", -0.3, regime=reg)
+    rows = PROMO.evaluate_retirement_batch(PR.EQUITY)
+    verdict = next(r for r in rows if r["policy_id"] == "RET_CHAL")
+    assert verdict["status"] == PROMO.RETIREMENT_ELIGIBLE
+    retired = PROMO.retire_qualified_challengers(PR.EQUITY)
+    assert any(r["policy_id"] == "RET_CHAL" for r in retired)
+    assert PR.get_policy("RET_CHAL")["status"] == PR.RETIRED
