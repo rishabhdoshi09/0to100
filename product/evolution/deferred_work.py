@@ -453,6 +453,7 @@ def process_ready_isolated(
         command = list(factory(str(root_path), work_id))
         proc = subprocess.Popen(
             command,
+            cwd=str(Path(__file__).resolve().parents[2]),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
