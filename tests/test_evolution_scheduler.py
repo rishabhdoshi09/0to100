@@ -71,3 +71,53 @@ def test_supervisor_enqueues_tournament_cycle_after_learning_succeeds():
     source = inspect.getsource(SUP)
     assert "SCH.TOURNAMENT_CYCLE" in source
     assert "SCH.tournament_cycle_key(session_date)" in source
+
+
+def test_evolution_deferred_key_is_idempotent_per_work_item():
+    assert SCH.evolution_deferred_key("work-1") == SCH.evolution_deferred_key("work-1")
+    assert SCH.evolution_deferred_key("work-1") != SCH.evolution_deferred_key("work-2")
+
+
+def test_immediate_tournament_job_processes_exact_work_and_skips_eod_science(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    calls = []
+
+    def fake_process(**kwargs):
+        calls.append(kwargs)
+        return [{"work_id": "work-1", "status": "SUCCEEDED", "timed_out": False}]
+
+    monkeypatch.setattr(
+        "product.evolution.deferred_work.process_ready_isolated",
+        fake_process,
+    )
+    with mock.patch(
+        "product.evolution.grading.grade_pending_decisions",
+        side_effect=AssertionError("intraday deferred job must not run outcome grading"),
+    ):
+        ctx = SimpleNamespace(
+            job=SimpleNamespace(
+                idempotency_key=SCH.evolution_deferred_key("work-1"),
+                input_snapshot_id="work-1",
+            )
+        )
+        result = JOBS.run_tournament_cycle(ctx)
+
+    assert result.status == JS.SUCCEEDED
+    assert calls == [{"limit": 1, "work_ids": ["work-1"]}]
+    assert result.metadata["evolution_deferred_work_id"] == "work-1"
+    assert result.metadata["research_only"] is True
+
+
+def test_supervisor_enqueues_ready_deferred_work_only_after_paper_success():
+    import inspect
+    import research.autonomy.supervisor as SUP
+
+    source = inspect.getsource(SUP.Supervisor._execute)
+    assert 'job.job_type == SCH.PAPER_CYCLE' in source
+    assert 'evolution_deferred_work_id' in source
+    assert 'evolution_deferred_work_status' in source
+    assert 'evo_status == "READY"' in source
+    assert 'SCH.evolution_deferred_key(evo_work_id)' in source
+    assert 'critical=False' in source
