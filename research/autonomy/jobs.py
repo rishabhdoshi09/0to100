@@ -1099,6 +1099,13 @@ def run_paper_cycle(ctx) -> JobResult:
                 "management_only": management_only,
                 "failure_class": "DATA_OR_PROVIDER" if data_failure else ""}
     reco = dict((result or {}).get("reco_autopilot") or {})
+    evolution_meta = dict(reco.get("evolution") or {})
+    evolution_work_id = str(evolution_meta.get("deferred_work_id") or "")
+    if evolution_work_id:
+        metadata["evolution_deferred_work_id"] = evolution_work_id
+        metadata["evolution_deferred_work_status"] = str(
+            evolution_meta.get("deferred_work_status") or ""
+        )
     reco_error = str(reco.get("error") or "").strip()
     if reco_error:
         # Deps.run_paper_cycle deliberately captures recommendation-autopilot
@@ -1577,11 +1584,21 @@ def run_tournament_cycle(ctx) -> JobResult:
     never touches the real paper book, never blocks on market data, and a
     failure here can never fail this job's own ledger entry (it is not in
     CRITICAL_JOBS and must never gate PAPER_CYCLE/MARKET_SCAN)."""
+    job = getattr(ctx, "job", None)
+    key = str(getattr(job, "idempotency_key", "") or "")
+    immediate_work_id = (
+        str(getattr(job, "input_snapshot_id", "") or "")
+        if key.startswith("evolution_deferred:")
+        else ""
+    )
     summary_parts: list[str] = []
     try:
         from product.evolution.deferred_work import process_ready_isolated
 
-        deferred = process_ready_isolated(limit=2)
+        deferred = process_ready_isolated(
+            limit=1 if immediate_work_id else 2,
+            work_ids=[immediate_work_id] if immediate_work_id else None,
+        )
         succeeded = sum(1 for row in deferred if row.get("status") == "SUCCEEDED")
         timed_out = sum(1 for row in deferred if row.get("timed_out"))
         failed = sum(
@@ -1595,6 +1612,20 @@ def run_tournament_cycle(ctx) -> JobResult:
         # This is a non-critical research lane.  Even its own isolation
         # wrapper failing must not poison forward PAPER/scan availability.
         summary_parts.append(f"deferred_error={type(exc).__name__}:{exc}")
+
+    # Intraday/near-real-time Challenger evaluation stops here. Grading and
+    # promotion require later outcomes and remain in the once-per-session EOD
+    # tournament job.
+    if immediate_work_id:
+        return JobResult(
+            JS.SUCCEEDED,
+            "tournament cycle: " + ", ".join(summary_parts),
+            metadata={
+                "evolution_deferred_work_id": immediate_work_id,
+                "live_money_unchanged": True,
+                "research_only": True,
+            },
+        )
 
     try:
         from product.evolution.grading import grade_pending_decisions
