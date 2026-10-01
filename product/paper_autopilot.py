@@ -278,6 +278,11 @@ def _decorate(
     decision.context = dict(context or {})
     decision.policy_effect = str((policy or {}).get("final_effect") or decision.policy_effect or "NEUTRAL")
     base_breakdown = score_breakdown(decision.card, policy, context)
+    pre_evolution_decision = {
+        "decision": str(decision.decision or ""),
+        "reason_code": str(decision.reason_code or ""),
+        "detail": str(decision.detail or ""),
+    }
 
     evo = dict(evolution_policy or {})
     if evo:
@@ -319,6 +324,7 @@ def _decorate(
         **dict(base_breakdown),
         "parts": [dict(part) for part in base_breakdown.get("parts") or []],
     }
+    decision.breakdown["pre_evolution_decision"] = pre_evolution_decision
 
     base_rank = float(decision.breakdown.get("selection_rank") or 0.0)
     try:
