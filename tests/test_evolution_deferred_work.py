@@ -197,7 +197,7 @@ def test_three_timeouts_fail_closed_instead_of_blocking_forever(tmp_path, monkey
             root=root,
             limit=1,
             timeout_seconds=0.05,
-            child_target=_hang_child,
+            command_factory=_hang_command,
         )
         assert outcome[0]["status"] == expected
 
