@@ -27,6 +27,7 @@ def _contract(symbol: str, score: float, *, liquidity: float, delta_fit: float =
         "strike": 100.0,
         "expiry": "2026-10-08",
         "dte": 7,
+        "instrument_token": 101 if symbol == "A" else 202,
         "moneyness": "ATM",
         "delta": 0.60,
         "iv_percentile": 40.0,
@@ -70,7 +71,11 @@ def _setup(direction="LONG"):
             if direction == "LONG"
             else {"entry": 100.0, "stop": 105.0, "target": 90.0}
         ),
-        "expected_move": {"horizon": "1_TO_2D"},
+        "expected_move": {
+            "horizon": "1_TO_2D",
+            "holding_days": 1,
+            "exit_policy": "SESSION_HOLD",
+        },
     }
 
 
@@ -180,3 +185,66 @@ def test_short_fno_underlying_shadow_grades_directionally_from_official_bars(tmp
     assert graded is not None
     assert graded["counterfactual_R"] > 0
     assert graded["classification"] == "WINNER_TAKEN"
+
+
+
+def test_contract_challenger_is_graded_from_its_own_forward_option_bars(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    from product.evolution import scorecard
+
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    PR.register_policy(
+        policy_id="OBS_BASE", domain=PR.FNO_CONTRACT, hypothesis="neutral",
+        weights={}, status=PR.CHAMPION,
+    )
+    PR.register_policy(
+        policy_id="OBS_LIQ", domain=PR.FNO_CONTRACT, hypothesis="prefer liquidity",
+        weights={"liquidity_mult": 3.0}, status=PR.CHALLENGER,
+        parent_policy_id="OBS_BASE",
+    )
+    a = dict(_contract("A", 80.0, liquidity=1.0), learned_contract_score=80.0)
+    b = dict(_contract("B", 75.0, liquidity=25.0), learned_contract_score=75.0)
+    result = run_contract_tournament(
+        underlying_symbol="RELIANCE",
+        direction="LONG",
+        setup=_setup(),
+        eligible_contracts=[a, b],
+        selected_contract=a,
+        as_of="2026-09-30",
+    )
+    assert result["results"]["OBS_BASE"]["contract_symbol"] == "A"
+    assert result["results"]["OBS_LIQ"]["contract_symbol"] == "B"
+
+    def observed_bars(token, *, from_dt, to_dt, client=None, interval="minute"):
+        # Contract A loses; independently-observed Contract B hits target.
+        if int(token) == 101:
+            high, low, close = 10.5, 7.5, 8.0
+        else:
+            high, low, close = 14.5, 9.5, 14.0
+        return [{
+            "timestamp": (from_dt + timedelta(minutes=1)).isoformat(),
+            "open": 10.0,
+            "high": high,
+            "low": low,
+            "close": close,
+            "last_price": close,
+        }]
+
+    monkeypatch.setattr("data.nfo_market.read_option_intraday_bars", observed_bars)
+    now_ist = datetime.now(ZoneInfo("Asia/Kolkata")) + timedelta(days=2)
+    graded = grading.grade_pending_contract_decisions(
+        client=object(), now_ist=now_ist,
+    )
+    by_policy = {row["policy_id"]: row for row in graded}
+    assert by_policy["OBS_BASE"]["counterfactual_R"] < 0
+    assert by_policy["OBS_LIQ"]["counterfactual_R"] > 0
+    assert by_policy["OBS_BASE"]["observed_source"] == "NFO_INTRADAY_FORWARD_SHADOW"
+    assert by_policy["OBS_LIQ"]["evidence_class"] == PAPER_FORWARD
+
+    paired = scorecard.paired_comparison(
+        "OBS_BASE", "OBS_LIQ", domain=PR.FNO_CONTRACT,
+    )
+    assert paired["paired_snapshots"] == 1
+    assert paired["incremental_expectancy_R"] > 0

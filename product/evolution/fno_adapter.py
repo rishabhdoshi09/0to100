@@ -243,6 +243,11 @@ def run_contract_tournament(
             item for item in scored if str(item[1].get("symbol") or "") == str(chosen_row.get("symbol") or "")
         )
         plan = dict(chosen_row.get("trade_plan") or {})
+        expected = (
+            setup.get("expected_move")
+            if isinstance(setup.get("expected_move"), Mapping)
+            else {}
+        )
         from product.fno_contract_evidence import contract_context_key
         verdict = {
             "policy_id": policy["policy_id"],
@@ -262,6 +267,8 @@ def run_contract_tournament(
             "selected_contract": chosen_row,
             "contract_symbol": chosen_row.get("symbol"),
             "contract_context_key": contract_context_key(chosen_row),
+            "holding_days": max(1, int(expected.get("holding_days") or 1)),
+            "exit_policy": str(expected.get("exit_policy") or "SESSION_HOLD").upper(),
             "is_champion_decision": is_champion,
         }
         return SD.freeze_shadow_decision(snapshot, verdict)

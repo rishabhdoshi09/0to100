@@ -147,6 +147,8 @@ def freeze_shadow_decision(
         "selected_contract": verdict.get("selected_contract"),
         "contract_symbol": verdict.get("contract_symbol"),
         "contract_context_key": verdict.get("contract_context_key"),
+        "holding_days": verdict.get("holding_days"),
+        "exit_policy": verdict.get("exit_policy"),
         "evidence_class": verdict.get("evidence_class") or "EVOLUTION_SHADOW",
     }
     existing_rows.append(row)
