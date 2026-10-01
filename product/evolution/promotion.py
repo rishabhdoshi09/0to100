@@ -217,6 +217,22 @@ def evaluate_promotion(
             ),
         }
 
+    breadth = _regime_breadth(
+        champion_id, challenger_policy_id, domain=domain, ledger_path=ledger_path,
+    )
+    result["regime_breadth"] = breadth
+    if not breadth["breadth_ok"]:
+        return {
+            **result,
+            "status": NOT_ELIGIBLE,
+            "reason": (
+                f"insufficient regime breadth: observed={breadth['regimes_observed']} "
+                f"acceptable={breadth['regimes_acceptable']} "
+                f"(need >= {MIN_REGIME_BREADTH_OBSERVED} observed and "
+                f">= {MIN_REGIME_BREADTH_ACCEPTABLE} acceptable)"
+            ),
+        }
+
     from research.harness import evaluate as harness_evaluate
 
     verdict = harness_evaluate(diffs, n_trials=max(1, n_simultaneous_challengers))
@@ -241,19 +257,6 @@ def evaluate_promotion(
     result["challenger_max_drawdown_R"] = chal_dd
     if champ_dd is not None and chal_dd is not None and chal_dd < champ_dd:
         return {**result, "status": NOT_ELIGIBLE, "reason": f"worse tail risk: drawdown {chal_dd}R vs champion {champ_dd}R"}
-
-    breadth = _regime_breadth(champion_id, challenger_policy_id, domain=domain, ledger_path=ledger_path)
-    result["regime_breadth"] = breadth
-    if not breadth["breadth_ok"]:
-        return {
-            **result, "status": NOT_ELIGIBLE,
-            "reason": (
-                f"insufficient regime breadth: observed={breadth['regimes_observed']} "
-                f"acceptable={breadth['regimes_acceptable']} "
-                f"(need >= {MIN_REGIME_BREADTH_OBSERVED} observed and "
-                f">= {MIN_REGIME_BREADTH_ACCEPTABLE} acceptable)"
-            ),
-        }
 
     result["primary_improvement"] = chal_card
     return {**result, "status": PROMOTION_ELIGIBLE, "reason": "cleared all promotion gates"}
@@ -284,6 +287,9 @@ def evaluate_promotion_batch(
         )
         raw.append(r)
 
+    for row in raw:
+        row.setdefault("fdr_rejected", False)
+        row.setdefault("fdr_n_tested", 0)
     tested = [r for r in raw if "harness_stats" in r]
     if tested:
         from research.harness import benjamini_hochberg
