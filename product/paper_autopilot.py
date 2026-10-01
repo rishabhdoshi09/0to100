@@ -398,10 +398,20 @@ def evaluate_candidate(
         )
 
     if book is not None:
-        if any(getattr(p, "symbol", "") == symbol for p in getattr(book, "open", {}).values()):
-            return AutopilotDecision(symbol, BLOCK, DUPLICATE_POSITION, "already held", row)
-        if len(getattr(book, "open", {})) >= int(getattr(book, "max_positions", 5)):
-            return AutopilotDecision(symbol, PORTFOLIO_BLOCK, MAX_POSITIONS, "max positions", row)
+        # ONE shared account-level exposure authority (not this book's own
+        # `open` dict alone): execution.autopilot keeps a separate book
+        # (trades.db) this engine has never seen. Checking only `book.open`
+        # here let this engine double up a symbol, blow the combined
+        # position cap, or ignore combined sector concentration whenever the
+        # legacy engine held positions of its own. This is an early probe
+        # (qty not sized yet); the final re-check happens under
+        # account_mutation_lock() right before the position is actually
+        # opened in run_reco_paper_cycle().
+        from risk.portfolio_risk import account_exposure_gate
+        gate = account_exposure_gate(symbol, sector=str(row.get("sector") or ""))
+        if not gate["ok"]:
+            kind = BLOCK if gate["reason_code"] == DUPLICATE_POSITION else PORTFOLIO_BLOCK
+            return AutopilotDecision(symbol, kind, gate["reason_code"], gate["detail"], row)
 
         from research.intelligence.schemas import TradeIntent
         ident = _identity()
@@ -478,13 +488,19 @@ def evaluate_candidate(
                 "QUANTITY_EXCEEDS_APPROVED_LIMIT": PER_NAME_CAP,
             }.get(sizing.reason_code, INSUFFICIENT_CAPITAL)
             return AutopilotDecision(symbol, PORTFOLIO_BLOCK, code, sizing.reason_code, row)
-        open_risk = float(book.open_risk()) if hasattr(book, "open_risk") else 0.0
+        # Combined (not just-this-book) open-risk-cap check, now that the
+        # real sized quantity is known. Same account_exposure_gate() used
+        # above -- the final, race-closing re-check happens again under
+        # account_mutation_lock() in run_reco_paper_cycle() right before the
+        # position is actually opened.
+        gate = account_exposure_gate(
+            symbol, qty=int(sizing.quantity), entry=float(sizing.effective_entry),
+            stop=float(stop), sector=str(row.get("sector") or ""),
+        )
+        if not gate["ok"]:
+            kind = BLOCK if gate["reason_code"] == DUPLICATE_POSITION else PORTFOLIO_BLOCK
+            return AutopilotDecision(symbol, kind, gate["reason_code"], gate["detail"], row)
         cap = float(getattr(book, "capital", 0.0) or 0.0)
-        max_total = cap * float(getattr(book, "max_total_risk_pct", 0.05) or 0.05)
-        if open_risk + sizing.risk_amount > max_total + 1e-6:
-            return AutopilotDecision(
-                symbol, PORTFOLIO_BLOCK, MAX_PORTFOLIO_RISK, "total open risk cap", row,
-            )
         cash = cap + float(getattr(book, "realized_pnl", 0.0) or 0.0)
         notional = sizing.effective_entry * sizing.quantity
         if notional > cash + 1e-6:
@@ -948,15 +964,39 @@ def run_reco_paper_cycle(
             rejections.append(fail)
             continue
 
-        try:
-            pos = _execute(decision, book=book, as_of=day, snapshot_id=snapshot_id)
-        except Exception as exc:
-            # Adapter/book mutation may already have partially happened. Abort
-            # the slot so the outer exactly-once job boundary can retire it
-            # fail-closed instead of continuing or replaying an uncertain state.
-            raise RuntimeError(
-                f"paper execution mutation failed for {decision.symbol}: {exc}"
-            ) from exc
+        # Final cross-process re-check + mutation, under ONE lock shared with
+        # execution.autopilot. evaluate_candidate()'s account_exposure_gate()
+        # probes above ran before this trade's slot in the cycle was decided
+        # and without any mutual exclusion -- the legacy engine could still
+        # have opened this exact symbol (or pushed the account to its
+        # position/risk cap) in the gap since then. Re-validating with the
+        # real approved qty/entry/stop WHILE holding the lock is what
+        # actually closes the race, not the earlier unlocked probes.
+        from risk.portfolio_risk import account_exposure_gate, account_mutation_lock
+        with account_mutation_lock():
+            gate = account_exposure_gate(
+                decision.symbol,
+                qty=int(_f(decision.card.get("approved_quantity")) or 0),
+                entry=float(_f(decision.card.get("entry")) or 0.0),
+                stop=float(_f(decision.card.get("stop")) or 0.0),
+                sector=str(decision.card.get("sector") or ""),
+            )
+            if not gate["ok"]:
+                fail = decision.as_dict()
+                fail["reason_code"] = gate["reason_code"]
+                fail["detail"] = gate["detail"]
+                fail["group"] = "REJECTED"
+                rejections.append(fail)
+                continue
+            try:
+                pos = _execute(decision, book=book, as_of=day, snapshot_id=snapshot_id)
+            except Exception as exc:
+                # Adapter/book mutation may already have partially happened. Abort
+                # the slot so the outer exactly-once job boundary can retire it
+                # fail-closed instead of continuing or replaying an uncertain state.
+                raise RuntimeError(
+                    f"paper execution mutation failed for {decision.symbol}: {exc}"
+                ) from exc
         if pos is None:
             reason = ""
             refusals = list(getattr(book, "refusals", []) or [])

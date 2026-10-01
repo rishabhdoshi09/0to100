@@ -2816,15 +2816,18 @@ class TestSymbolMemory:
         """This legacy autopilot keeps its own book (trades.db), entirely
         separate from product.paper_autopilot's PaperBook (intel_book.json,
         the documented sole new-entry authority). Without a cross-engine
-        check, an operator arming this legacy engine could have it
-        independently buy a symbol the primary engine already holds,
-        doubling real paper exposure with neither book aware of the other."""
+        check (risk.portfolio_risk.account_exposure_gate), an operator
+        arming this legacy engine could have it independently buy a symbol
+        the primary engine already holds, doubling real paper exposure with
+        neither book aware of the other."""
         ta = TestAutopilot()
         ap, te = ta._setup(tmp_path, monkeypatch)
         ap.arm()
         monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
         import product.paper_status as ps
-        monkeypatch.setattr(ps, "modern_engine_open_symbols", lambda: {"HAL"})
+        monkeypatch.setattr(ps, "modern_engine_open_positions", lambda: [
+            {"symbol": "HAL", "qty": 10, "entry_price": 4000.0, "stop_price": 3800.0},
+        ])
         assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is False
         f = ap.reject_funnel()
         assert f["rejects"].get("duplicate with primary paper engine") == 1
