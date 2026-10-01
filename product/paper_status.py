@@ -30,6 +30,45 @@ def _json(path, default):
         return default
 
 
+def modern_engine_open_positions() -> list[dict]:
+    """Open positions the modern automatic paper engine currently holds,
+    normalised to {symbol, qty, entry_price, stop_price} -- the shape
+    risk/portfolio_risk.py already uses for the legacy engine's trades.db
+    rows, so the two can be combined into one real account-level risk
+    picture. Read-only, tolerant of a missing/corrupt file.
+    """
+    book = _json(logs_path("intelligence", "intel_book.json"), {})
+    out: list[dict] = []
+    for pos in book.get("open", []) or []:
+        if not isinstance(pos, dict):
+            continue
+        symbol = str(pos.get("symbol") or "").upper()
+        if not symbol:
+            continue
+        out.append({
+            "symbol": symbol,
+            "qty": int(pos.get("qty") or 0),
+            "entry_price": float(pos.get("entry_price") or 0.0),
+            "stop_price": float(pos.get("stop_price") or 0.0),
+        })
+    return out
+
+
+def modern_engine_open_symbols() -> set[str]:
+    """Symbols the modern automatic paper engine (product.paper_autopilot,
+    persisted to intel_book.json) currently holds open.
+
+    Read-only, tolerant of a missing/corrupt file (returns an empty set
+    rather than raising) -- this exists so OTHER paper-trading entrypoints
+    (notably the legacy execution.autopilot, which keeps its own separate
+    book) can refuse to open a second, uncoordinated position in a symbol
+    the sole new-entry authority already holds. See
+    research.autonomy.paper_cycle_truth for why the modern engine is meant
+    to be the only one opening new equity positions.
+    """
+    return {row["symbol"] for row in modern_engine_open_positions()}
+
+
 def read_paper_status(*, autonomy_root=None) -> PaperStatus:
     # The old repo_root argument is gone: QT_RUNTIME_ROOT redirects the whole
     # tree, so a second way to point this one reader elsewhere was only a way

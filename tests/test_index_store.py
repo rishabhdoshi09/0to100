@@ -1,3 +1,4 @@
+import time
 from datetime import date, timedelta
 
 import pandas as pd
@@ -108,3 +109,53 @@ def test_cached_index_as_of_never_returns_future_rows(monkeypatch):
     assert got is not None
     assert list(got.index.strftime("%Y-%m-%d")) == ["2026-09-17", "2026-09-18"]
     assert float(got["Close"].iloc[-1]) == 101.0
+
+
+def _reset_cold_store(monkeypatch, tmp_path):
+    monkeypatch.setattr(idx, "_DIR", tmp_path)
+    monkeypatch.setattr(idx, "_PKL", tmp_path / "index_store.pkl")
+    monkeypatch.setattr(idx, "_store", {})
+    monkeypatch.setattr(idx, "_last_day", None)
+    monkeypatch.setattr(idx, "_last_build_attempt", 0.0)
+
+
+def test_concurrent_cold_builds_with_a_dead_feed_coalesce_into_one_attempt(tmp_path, monkeypatch):
+    """core/regime_engine.py fans out 8+ index tickers in parallel; every one of them
+    calls build_index_store() and queues on the same _build_lock. On a cold store with
+    an unreachable feed, each queued caller used to re-pay the full network budget in
+    turn (8 x _BUILD_BUDGET_S == minutes). The debounce must coalesce that whole burst
+    into the one attempt the first caller already paid for."""
+    _reset_cold_store(monkeypatch, tmp_path)
+    attempts = []
+    monkeypatch.setattr(idx, "_download_day", lambda d, retries=1: attempts.append(d) or False)
+
+    first = idx.build_index_store(days=30)
+    tried_after_first = len(attempts)
+    assert tried_after_first > 0          # the first (lock-holding) caller did try the network
+
+    second = idx.build_index_store(days=30)   # a sibling ticker queued moments later
+
+    assert len(attempts) == tried_after_first     # no second network attempt was made
+    assert first == 0 and second == 0
+
+
+def test_a_later_retry_past_the_debounce_window_tries_the_network_again(tmp_path, monkeypatch):
+    """The debounce must only coalesce callers queued behind the SAME attempt, not
+    freeze a cold bootstrap indefinitely -- a retry spaced out past the debounce
+    window (e.g. the next scan cycle) must still try again immediately, per the
+    cold-bootstrap intent of _REGIME_BOOTSTRAP_SESSIONS."""
+    _reset_cold_store(monkeypatch, tmp_path)
+    attempts = []
+    monkeypatch.setattr(idx, "_download_day", lambda d, retries=1: attempts.append(d) or False)
+
+    idx.build_index_store(days=30)
+    tried_after_first = len(attempts)
+    assert tried_after_first > 0
+
+    # Simulate enough wall-clock time passing that this is a genuinely separate retry,
+    # not a sibling of the same burst.
+    monkeypatch.setattr(idx, "_last_build_attempt", time.time() - idx._BUILD_DEBOUNCE_S - 1.0)
+
+    idx.build_index_store(days=30)
+
+    assert len(attempts) > tried_after_first      # it tried the network again

@@ -39,9 +39,16 @@ terminal_product_api.py   # FastAPI :8765
 │                         #   regime series + gauntlet benchmark
 │
 ├── scan/                 # Signal layer
-│   ├── auto_scan.py      # BACKGROUND BRAIN: daemon scans whole market every
-│   │                     #   15 min (market hrs), orchestrates everything below,
-│   │                     #   pushes Telegram, serves the shared results store
+│   ├── auto_scan.py      # LEGACY, not started by the canonical stack — only
+│   │                     #   reachable from legacy_app.py / archived ui/
+│   │                     #   Streamlit pages. The real scan entry point is
+│   │                     #   market_scan_service.py (see below).
+│   ├── market_scan_service.py # run_whole_market_scan(): the ONE scan entry
+│   │                     #   point in production, called by both
+│   │                     #   operations/market_ops.py's MARKET_SCAN op and
+│   │                     #   research/autonomy/jobs.py's autonomy job —
+│   │                     #   builds a UnifiedScanner and feeds its report to
+│   │                     #   recommendations_workspace / Market Radar
 │   ├── unified_scanner.py# 16 signals: breakouts, patterns (VCP/cup/triangle/
 │   │                     #   double-bottom/HTF), pre-breakout (accumulation,
 │   │                     #   delivery spike, NR7, pocket pivot), momentum.
@@ -217,11 +224,41 @@ terminal_product_api.py   # FastAPI :8765
 
 ## Background daemons (started by the complete stack, not by `app.py`)
 
-- `auto_scan._worker`: scan → sector heat → conviction → edge → live overlay
-  → Telegram push; plus morning pulse (8:30-10), Kite-login reminder
-  (8:30-9:15), nightly backtest (off-hours), weekly coach (Sun 17+),
-  position/watchlist alerts + breakout sniper (market hours).
+`product/host_supervisor.py::HostSupervisor` (run by
+`scripts/run_quantterm_complete.sh`) owns five child processes: `frontend`,
+`market_api` (`terminal_product_api.py`), `report_api`, `market_ops`
+(`operations/market_ops.py`), and `autonomy` (`main.py autonomy`, which runs
+`research/autonomy/supervisor.py::Supervisor` — "the single durable
+scheduler and mutation owner for QuantTerm PAPER_AUTO"). These are the real
+schedulers in the canonical product path:
+
+- `research/autonomy/supervisor.py` + `jobs.py`: durable, SQLite-ledgered
+  job scheduler (`research/autonomy/job_store.py`) — PAPER_CYCLE / outcome
+  resolution / research jobs, idempotent and restart-safe.
+- `operations/market_ops.py`: isolated-lane worker for scans (via
+  `scan/market_scan_service.py::run_whole_market_scan`, which still builds
+  and runs the real `scan/unified_scanner.py::UnifiedScanner`) and
+  market-data acquisition, independent of PAPER autonomy so a news refresh
+  can't delay a scan. The autonomy job pipeline runs the same
+  `run_whole_market_scan` entry point for its own `MARKET_SCAN` job
+  (`research/autonomy/jobs.py`) — one scan engine, two schedulers that can
+  both trigger it.
 - `telegram_actions._listener`: button-tap long-poll.
+
+`scan/auto_scan.py::_worker` (the old scan → sector heat → conviction →
+edge → Telegram-push loop this section used to describe) is **not started
+by the canonical stack** — `terminal_product_api.py` never imports it.
+It is only reachable from `legacy_app.py` and the archived `ui/` Streamlit
+pages (see the architecture diagram above: not started, not a fallback).
+Equity paper trading itself still has two independent engines sharing one
+account: the legacy `execution/autopilot.py` → `execution/trade_executor.py`
+(`logs/trades.db`) path or `product/paper_autopilot.py` →
+`research/auto_research/paper_book.py::PaperBook`
+(`logs/intelligence/intel_book.json`), the modern engine and the one
+`research/autonomy/jobs.py`'s PAPER_CYCLE actually drives. They cross-check
+each other for duplicate symbols and open risk (`product/paper_status.py`'s
+`modern_engine_open_positions()`), but do not share one position store —
+don't assume "the equity learning loop" means a single pipeline.
 
 ## Data source policy
 

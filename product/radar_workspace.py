@@ -505,7 +505,11 @@ def enrich_scan_row(
     enriched["setup_label"] = str(row.get("status") or row.get("verdict") or "Watch")
     enriched["freshness"] = scanned_at or "unknown"
     enriched["change_5d_pct"] = _f(row.get("momentum_5d"))
-    enriched["relative_strength"] = _f(row.get("score"))
+    # The REAL relative-strength-vs-Nifty figure (scan.unified_scanner's
+    # relative_strength_pct: a 30-session return spread against the index),
+    # not the composite scanner score under a misleading label -- the two
+    # used to be the same number shown twice under two different names.
+    enriched["relative_strength"] = _f(row.get("relative_strength_pct"))
     enriched["risk_label"] = (
         "Chase risk"
         if bool(row.get("chase_risk"))

@@ -146,6 +146,15 @@ def build_conviction(results: list[dict], top_n: int = _ENRICH_TOP_N) -> list[di
             checks.append(f"✓ Volume surge: {r['volume_ratio']:.1f}× normal trading")
             conviction += 4
 
+        # Evidence over vibes: a headline substring match (no sentiment, no
+        # entity-linking -- see _fetch_buzz_map) is not backtested evidence
+        # and must never by itself be what crosses a setup into BUY. It is
+        # still shown and still nudges the DISPLAYED conviction number (so a
+        # buzzing name that already earned BUY on real evidence can sort
+        # above an identical quiet one), but the verdict gate below is
+        # computed on conviction/n_pos BEFORE this bonus, so buzz can never
+        # be the deciding factor for the tier itself.
+        conviction_before_buzz = conviction
         headline = buzz.get(sym)
         if headline:
             checks.append(f"✓ Buzzing: “{headline}”")
@@ -157,27 +166,36 @@ def build_conviction(results: list[dict], top_n: int = _ENRICH_TOP_N) -> list[di
         if g is not None and g >= 15:
             checks.append(f"✓ Good earnings: profit up {g:.0f}% vs last year")
             conviction += 10
+            conviction_before_buzz += 10
         elif g is not None and g < -15:
             checks.append(f"⚠ Weak earnings: profit down {abs(g):.0f}% vs last year")
             conviction -= 10
+            conviction_before_buzz -= 10
 
         d = e.get("days_to_results")
         if d is not None and 0 <= d <= 3:
             checks.append(f"⚠ Results in {d} day{'s' if d != 1 else ''} — event risk, size small")
             conviction -= 5
+            conviction_before_buzz -= 5
         elif d is not None and 4 <= d <= 10:
             checks.append(f"• Results in {d} days — possible catalyst")
 
         conviction = max(0.0, min(100.0, conviction))
+        conviction_before_buzz = max(0.0, min(100.0, conviction_before_buzz))
         n_pos = sum(1 for c in checks if c.startswith("✓"))
+        # Earnings-growth is real evidence (not a vibe), so it counts toward
+        # the pre-buzz check total too -- only the buzz check itself is
+        # excluded from the gate.
+        n_pos_for_gate = n_pos - (1 if headline else 0)
+        conviction_for_gate = conviction_before_buzz if headline else conviction
         if chase_risk:
             # scanner's own don't-chase safety demotion — a WATCH for a
             # SPECIFIC reason (extended, no confirmed trigger), not just a
             # score miss. Buzz/earnings evidence must never override it.
             verdict = "WATCH"
-        elif conviction >= 75 and n_pos >= 4:
+        elif conviction_for_gate >= 75 and n_pos_for_gate >= 4:
             verdict = "STRONG BUY"
-        elif conviction >= 55 and n_pos >= 2:
+        elif conviction_for_gate >= 55 and n_pos_for_gate >= 2:
             verdict = "BUY"
         else:
             verdict = "WATCH"

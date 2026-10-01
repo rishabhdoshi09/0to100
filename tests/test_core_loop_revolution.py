@@ -363,3 +363,29 @@ def test_enrichment_keeps_the_same_decision_id():
         supporting=[EvidenceItem(id="x", direction=SUPPORTING)]
     )
     assert enriched.decision_id == decision.decision_id
+
+
+def test_rank_reads_the_evidence_store_once_per_batch_not_once_per_candidate(evidence_store):
+    """product.conditional_evidence.ranking_evidence's own docstring says a
+    caller ranking many candidates in one call should load the store once and
+    pass it as `store=` -- without that, rank() re-reads and re-parses the
+    entire evidence file from disk once per candidate, growing with both the
+    candidate count AND the evidence store's size as more trades settle."""
+    import product.decision_ranking as dr
+
+    decisions = [_decision(f"SYM{i}", score=float(60 + i), setup="VCP") for i in range(25)]
+    load_calls = {"n": 0}
+    real_load = dr.load_evidence_store
+
+    def _counting_load(path=None):
+        load_calls["n"] += 1
+        return real_load(path)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(dr, "load_evidence_store", _counting_load)
+        ranked = dr.rank(decisions)
+
+    assert len(ranked) == 25
+    assert load_calls["n"] == 1, (
+        f"expected exactly one evidence-store load for the whole batch, got {load_calls['n']}"
+    )

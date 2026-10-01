@@ -122,6 +122,19 @@ _DEFAULTS = {
 
 def _reject_category(reason: str) -> str:
     r = (reason or "").lower()
+    # account_exposure_gate() reason codes (risk.portfolio_risk) -- the ONE
+    # shared check both this legacy engine and product.paper_autopilot run
+    # before mutating, so both engines' rejections land in the same buckets.
+    # Checked FIRST and on the exact "account exposure (...)" prefix: the
+    # gate's own detail text can otherwise collide with the looser
+    # substring checks below (e.g. its MAX_POSITIONS detail literally
+    # contains the words "max open positions").
+    if "account exposure (" in r:
+        if "duplicate_position" in r: return "duplicate with primary paper engine"
+        if "max_positions" in r:      return "position limit full (combined account)"
+        if "sector_cap" in r:         return "sector concentration cap (combined account)"
+        if "max_portfolio_risk" in r: return "account open-risk cap (combined)"
+        return "account exposure cap (combined)"
     if "brain" in r or "stand_aside" in r: return "Brain STAND_ASIDE (survival)"
     if "symbol memory" in r:      return "symbol memory (serial false-breaker)"
     if "time window" in r:        return "time window (market band/settle)"
@@ -620,6 +633,26 @@ def _passes_gates(symbol: str, score: float, edge, sector: str) -> str | None:
         return "max open positions reached"
     if symbol in s.get("traded_symbols", {}).get(today, []):
         return "symbol already traded today"
+    # Cross-engine guard: this legacy autopilot keeps its own book
+    # (trades.db), separate from product.paper_autopilot's PaperBook
+    # (intel_book.json). ONE shared account-level exposure authority
+    # (risk.portfolio_risk.account_exposure_gate) now covers duplicate
+    # symbols, combined position count, and combined sector concentration
+    # across BOTH books -- without it, an operator who arms this legacy
+    # engine could have it independently buy a symbol the modern engine
+    # (the documented "sole new-entry authority", see
+    # research.autonomy.paper_cycle_truth) already holds, or push the
+    # account over its real combined position/sector caps, with neither
+    # book aware of the other. This is an early probe (no sized qty yet);
+    # the final re-check happens under account_mutation_lock() right
+    # before place_trade() below.
+    try:
+        from risk.portfolio_risk import account_exposure_gate
+        gate = account_exposure_gate(symbol, sector=sector)
+        if not gate["ok"]:
+            return f"account exposure ({gate['reason_code']}): {gate['detail'] or gate['reason_code']}"
+    except Exception as exc:
+        log.debug("account_exposure_gate_skip", error=str(exc))
     # 🧠 Symbol memory — is naam ne humein baar-baar kata hai (measured
     # negative expectancy on THIS stock). Serial false-breaker dobara nahi.
     if s.get("symbol_memory_gate", True) and symbol in _serial_losers_cached():
@@ -933,11 +966,29 @@ def _consider_locked(symbol: str, entry: float, stop: float, score: float,
                 _note_reject("pool/1-share")
                 return False
 
-        from execution.trade_executor import place_trade
-        res = place_trade(symbol=symbol, qty=qty, entry_type="MARKET",
-                          entry_price=entry, stop=stop, target=target,
-                          product="CNC", paper=(s["mode"] == "PAPER"),
-                          note=f"{TAG}:{source}")
+        # Final cross-process re-check + mutation, under ONE lock shared
+        # with product.paper_autopilot. The early account_exposure_gate()
+        # probe in _passes_gates() ran before qty was sized and without any
+        # mutual exclusion -- a sibling engine could still have opened this
+        # exact symbol, or pushed the account to its position/risk cap, in
+        # the gap between that probe and this trade actually being placed.
+        # Re-validating with the real qty/entry/stop WHILE holding the lock
+        # is what actually closes the race, not the earlier unlocked probe.
+        from risk.portfolio_risk import account_exposure_gate, account_mutation_lock
+        with account_mutation_lock():
+            gate = account_exposure_gate(symbol, qty=qty, entry=entry, stop=stop, sector=sector)
+            if not gate["ok"]:
+                detail = f"account exposure ({gate['reason_code']}): {gate['detail'] or gate['reason_code']}"
+                _log_activity(f"SKIP {symbol}: {detail}")
+                _note_reject(detail)
+                _jlog("REJECTED", detail)
+                return False
+
+            from execution.trade_executor import place_trade
+            res = place_trade(symbol=symbol, qty=qty, entry_type="MARKET",
+                              entry_price=entry, stop=stop, target=target,
+                              product="CNC", paper=(s["mode"] == "PAPER"),
+                              note=f"{TAG}:{source}")
         if not res.get("ok"):
             _log_activity(f"FAIL {symbol}: {res.get('message', '')[:80]}")
             return False

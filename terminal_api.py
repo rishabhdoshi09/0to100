@@ -503,6 +503,46 @@ def _paper_learning_payload() -> dict:
         }
 
 
+def _project_open_position(raw: dict) -> dict:
+    """research.auto_research.paper_book.PaperPosition.as_dict() uses its own
+    internal field names (qty/stop_price/target_price/strategy_id/bars_held)
+    -- correct for the sizing/mark-to-market math that reads them elsewhere,
+    but not what the Paper Portfolio frontend (frontend/src/types.ts's
+    PaperPosition, rendered by components.tsx's PositionsTable) expects. Add
+    the frontend's names alongside the originals (never remove the
+    originals -- other consumers of this same payload may still read them)
+    so the table stops silently showing QTY 0 / stop-target blank for data
+    that was there all along, just under a different key. There is no live
+    quote fetched in this read-only status path (deliberately -- this
+    endpoint is polled every few seconds and must stay network-free), so
+    current_price/pnl/pnl_pct for an OPEN position stay absent rather than
+    fabricated; the frontend already renders that as '-' honestly.
+    """
+    row = dict(raw)
+    row.setdefault("quantity", row.get("qty"))
+    row.setdefault("stop", row.get("stop_price"))
+    row.setdefault("target", row.get("target_price"))
+    row.setdefault("strategy", row.get("strategy_id"))
+    row.setdefault("days_held", row.get("bars_held"))
+    return row
+
+
+def _project_closed_trade(raw: dict) -> dict:
+    """Mirrors _project_open_position for research.auto_research.paper_book
+    .ClosedTrade.as_dict() -- current_price maps to the real exit_price (a
+    closed trade has no "current" price, its exit price IS what the
+    'EXIT / CURRENT' column header means), result_r maps to the real
+    realized_R. pnl/exit_reason already match the frontend's field names.
+    """
+    row = dict(raw)
+    row.setdefault("quantity", row.get("qty"))
+    row.setdefault("stop", row.get("stop_price"))
+    row.setdefault("current_price", row.get("exit_price"))
+    row.setdefault("strategy", row.get("strategy_id"))
+    row.setdefault("result_r", row.get("realized_R"))
+    return row
+
+
 def _paper_payload() -> dict:
     try:
         from product.paper_status import read_paper_status
@@ -517,8 +557,12 @@ def _paper_payload() -> dict:
             "open_risk": paper.open_risk,
             "risk_per_trade_pct": paper.risk_per_trade_pct,
             "max_positions": paper.max_positions,
-            "open_positions": list(paper.open_positions),
-            "closed_trades": list(paper.closed_trades)[-100:],
+            "open_positions": [
+                _project_open_position(p) for p in paper.open_positions if isinstance(p, dict)
+            ],
+            "closed_trades": [
+                _project_closed_trade(t) for t in list(paper.closed_trades)[-100:] if isinstance(t, dict)
+            ],
             "refusals": list(paper.refusals)[-50:],
             "last_cycle": dict(paper.last_cycle or {}),
             "last_error": paper.last_error,

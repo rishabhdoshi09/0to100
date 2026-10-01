@@ -33,6 +33,14 @@ _BUILD_BUDGET_S = 25.0
 # after a build attempt that could not reach the feed, don't re-pay the network budget for every
 # concurrent regime ticker; reuse the outcome for a short cooldown
 _BUILD_COOLDOWN_S = 120.0
+# regime_engine.compute_regime() fans out 8+ tickers in parallel; they all funnel through the
+# same _build_lock, so a cold/shallow store with a dead feed would otherwise have EVERY queued
+# ticker re-pay the full _BUILD_BUDGET_S in turn (8 x 25s minutes-long stall) because the
+# depth-gated _BUILD_COOLDOWN_S below only protects an already-deep store. This short debounce
+# — just over one build attempt's worth of time — coalesces that whole burst of lock waiters
+# into the ONE attempt already paid for, while still letting a genuinely later retry (next scan
+# cycle, etc.) try immediately per the cold-bootstrap comment below.
+_BUILD_DEBOUNCE_S = _BUILD_BUDGET_S + 2.0
 # Regime classification needs a real SMA200 / long-window market context. A
 # cold bootstrap that stops below this depth is not usable and must be allowed
 # to continue immediately instead of being frozen by the retry cooldown.
@@ -203,12 +211,11 @@ def _build_index_store_locked(days: int = 400) -> int:
     )
     depth_satisfied = have_store and cur_sessions >= requested_depth
     missing = _days_to_download(candidates, last_day=last, have_store=depth_satisfied)
-    if (
-        missing
-        and cur_sessions >= _REGIME_BOOTSTRAP_SESSIONS
-        and (time.time() - _last_build_attempt) < _BUILD_COOLDOWN_S
-    ):
+    _since_last_attempt = time.time() - _last_build_attempt
+    if missing and cur_sessions >= _REGIME_BOOTSTRAP_SESSIONS and _since_last_attempt < _BUILD_COOLDOWN_S:
         missing = []                     # a recent attempt already found the feed unreachable
+    elif missing and _since_last_attempt < _BUILD_DEBOUNCE_S:
+        missing = []                     # a sibling ticker's build is still in flight / just finished
     if missing:
         _last_build_attempt = time.time()
         # Bounded build: when the feed is down, hundreds of per-day timeouts must not block the

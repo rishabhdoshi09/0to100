@@ -104,12 +104,40 @@ def verify_ca_adjustment(sample: int = 200) -> dict:
                      if n_events == 0 or gap_rate > 0.002 else "no data to check")}
 
 
-def integrity_report(sample: int = 120) -> dict:
-    """Store-wide data-health headline over a sample of symbols → the input the
-    Governance Sentinel reads. Fail-open → {'checked': 0}."""
+#: How often the sampled window rotates. store_symbols() returns names in
+#: sorted order, so a fixed [:sample] slice would check the same
+#: alphabetically-first symbols on every single call forever, leaving most
+#: of the universe permanently unchecked by this HALT-worthy gate. Rotating
+#: by wall-clock time (not a persisted cursor -- this stays fail-open and
+#: stateless) means a full ~2000-symbol universe at sample=120 cycles
+#: through entirely in well under two hours, instead of never.
+_SAMPLE_ROTATION_SECONDS = 300
+
+
+def _rotating_sample(symbols: list[str], sample: int, *, now: float | None = None) -> list[str]:
+    """A deterministic, time-rotating slice of `symbols` of size `sample`
+    (or all of them, if there are fewer). Repeated calls with the same
+    `sample` eventually cover the WHOLE list rather than always returning
+    its first `sample` entries.
+    """
+    n = len(symbols)
+    if n <= sample:
+        return list(symbols)
+    import time as _time
+    clock = _time.time() if now is None else now
+    offset = int(clock // _SAMPLE_ROTATION_SECONDS) % n
+    end = offset + sample
+    if end <= n:
+        return symbols[offset:end]
+    return symbols[offset:] + symbols[: end - n]
+
+
+def integrity_report(sample: int = 120, *, now: float | None = None) -> dict:
+    """Store-wide data-health headline over a ROTATING sample of symbols →
+    the input the Governance Sentinel reads. Fail-open → {'checked': 0}."""
     try:
         from data.bhavcopy_store import store_symbols
-        syms = store_symbols()[:sample]
+        syms = _rotating_sample(store_symbols(), sample, now=now)
     except Exception:
         return {"checked": 0, "ca_mismatch": False, "stale": False,
                 "note": "store unavailable"}

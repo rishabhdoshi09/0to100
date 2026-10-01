@@ -42,6 +42,47 @@ def _parse_float(val: Any) -> Optional[float]:
         return None
 
 
+# Sanity bounds for parsed fundamentals -- a scraped number outside its
+# field's definitionally-possible (or grossly-implausible) range is a parser
+# fault or a source unit mismatch (e.g. a lakh/crore mixup), not a real
+# figure. Mirrors the discipline product.due_diligence.extract's
+# _RATE_BOUNDS already applies to bank/NBFC KPIs, extended to the generic
+# fundamentals this module feeds into Stock Intelligence's Financials/
+# Ownership tabs. An out-of-bounds value is dropped to None (unavailable),
+# never clamped or silently passed through as if it were real.
+_FUNDAMENTAL_BOUNDS: dict[str, tuple[float, float]] = {
+    # Percentages of total shares/holding -- cannot exceed 100% or go negative.
+    "promoter_holding": (0.0, 100.0),
+    "promoter_pledge": (0.0, 100.0),
+    "dividend_yield": (0.0, 100.0),
+    # A market cap cannot be zero or negative.
+    "market_cap_cr": (1e-9, float("inf")),
+    # Wide but bounded sanity ranges -- loose enough for legitimate business
+    # variance (loss-making ROE, deep leverage, hyper-growth small caps),
+    # tight enough to catch a gross unit-conversion or parsing disaster.
+    "pe": (-2000.0, 2000.0),
+    "roe": (-500.0, 500.0),
+    "roce": (-500.0, 500.0),
+    "interest_coverage": (-10_000.0, 10_000.0),
+    "debt_to_equity": (-100.0, 200.0),
+    "sales_growth_3y": (-100.0, 2000.0),
+    "profit_growth_3y": (-100.0, 2000.0),
+    "cfo_to_pat": (-100.0, 100.0),
+}
+
+
+def _sane(field: str, value: Optional[float]) -> Optional[float]:
+    """`value` if it falls within `field`'s sanity bounds, else None (never
+    fabricated, never silently passed through as a plausible-looking lie)."""
+    if value is None:
+        return None
+    lo, hi = _FUNDAMENTAL_BOUNDS.get(field, (float("-inf"), float("inf")))
+    if lo <= value <= hi:
+        return value
+    log.debug("fundamental_out_of_bounds", field=field, value=value, lo=lo, hi=hi)
+    return None
+
+
 def _extract_fundamentals(data: Dict) -> Dict:
     """Extract current fundamental quality/valuation fields from a deep snapshot.
 
@@ -149,6 +190,14 @@ def _extract_fundamentals(data: Dict) -> Dict:
             result["promoter_holding"] = latest
         if "pledge" in label:
             result["promoter_pledge"] = latest
+
+    # Drop anything outside its field's sanity bounds (impossible percentage,
+    # negative market cap, an obvious unit-conversion blowout) BEFORE
+    # available_fields is computed, so a rejected value is honestly reported
+    # as unavailable rather than passed through as a confident lie.
+    for field in _FUNDAMENTAL_BOUNDS:
+        if field in result:
+            result[field] = _sane(field, result[field])
 
     result["available_fields"] = sorted(
         key for key, value in result.items()

@@ -56,6 +56,52 @@ def test_paper_payload_exposes_daily_learning_and_keeps_live_locked(tmp_path, mo
     assert "explicit deployment authorization" in learning["disclaimer"].lower()
 
 
+def test_paper_payload_projects_backend_field_names_for_the_frontend(monkeypatch):
+    """research.auto_research.paper_book's PaperPosition/ClosedTrade dataclasses
+    use qty/stop_price/target_price/strategy_id/bars_held/realized_R --
+    frontend/src/types.ts's PaperPosition (rendered by PositionsTable) reads
+    quantity/stop/target/strategy/days_held/result_r. Without a projection,
+    the Paper Portfolio table renders QTY 0 and blank stop/target for data
+    that is present, just under the backend's own field names."""
+    from product.paper_status import PaperStatus
+
+    open_position = {
+        "strategy_id": "swing_breakout", "symbol": "HAL", "entry_price": 4500.0,
+        "stop_price": 4300.0, "target_price": 4900.0, "qty": 10,
+        "entry_date": "2026-08-20", "max_holding_days": 10, "risk_amount": 2000.0,
+        "bars_held": 3,
+    }
+    closed_trade = {
+        "strategy_id": "swing_breakout", "symbol": "TCS", "entry_price": 3500.0,
+        "exit_price": 3400.0, "stop_price": 3400.0, "qty": 5,
+        "entry_date": "2026-08-10", "exit_date": "2026-08-15",
+        "exit_reason": "STOP", "realized_R": -1.0, "pnl": -500.0,
+    }
+    import product.paper_status as paper_status_module
+    monkeypatch.setattr(
+        paper_status_module, "read_paper_status",
+        lambda: PaperStatus(open_positions=(open_position,), closed_trades=(closed_trade,)),
+    )
+    payload = terminal_api._paper_payload()
+
+    projected_open = payload["open_positions"][0]
+    assert projected_open["quantity"] == 10
+    assert projected_open["stop"] == 4300.0
+    assert projected_open["target"] == 4900.0
+    assert projected_open["strategy"] == "swing_breakout"
+    assert projected_open["days_held"] == 3
+    # Originals stay too -- other consumers of this same payload may read them.
+    assert projected_open["qty"] == 10
+
+    projected_closed = payload["closed_trades"][0]
+    assert projected_closed["quantity"] == 5
+    assert projected_closed["stop"] == 3400.0
+    assert projected_closed["current_price"] == 3400.0  # exit_price, honestly
+    assert projected_closed["result_r"] == -1.0
+    assert projected_closed["pnl"] == -500.0
+    assert projected_closed["exit_reason"] == "STOP"
+
+
 def test_market_controls_are_dispatched_outside_paper_autonomy():
     assert terminal_api._OPERATION_CONTROLS == {
         "RUN_SCAN_NOW": "MARKET_SCAN",

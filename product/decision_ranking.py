@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-from product.conditional_evidence import MIN_SAMPLE, ranking_evidence
+from product.conditional_evidence import MIN_SAMPLE, load as load_evidence_store, ranking_evidence
 from product.decision import Decision
 from product.decision_chain import (
     confidence_bucket,
@@ -87,11 +87,18 @@ def rank(
     Ties break on symbol so the order is deterministic: an unstable sort would
     make "the ranking changed" impossible to attribute.
     """
+    # Loaded once and threaded through every ranking_evidence() call below --
+    # the whole-market scan can rank hundreds of candidates in one pass, and
+    # ranking_evidence()'s own docstring anticipates exactly this: without a
+    # shared `store`, it silently re-reads and re-parses the entire evidence
+    # file from disk once per candidate instead of once per batch.
+    store = load_evidence_store(path)
     ranked: list[RankedDecision] = []
     for decision in decisions:
         key = decision_context_key(decision)
         evidence = ranking_evidence(
-            key, evidence_class=evidence_class, path=path, min_sample=min_sample
+            key, evidence_class=evidence_class, path=path, min_sample=min_sample,
+            store=store,
         )
         base = float(decision.score if decision.score is not None else 0.0)
         adjustment = float(evidence.get("adjustment") or 0.0)

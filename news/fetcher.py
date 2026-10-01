@@ -157,7 +157,18 @@ class NewsFetcher:
         articles: List[RawArticle] = []
 
         for entry in feed.entries:
-            published_at = self._parse_entry_time(entry, now)
+            published_at = self._parse_entry_time(entry)
+            if published_at is None:
+                # No genuine published/updated timestamp on this entry --
+                # stamping it "now" would let it always pass the freshness
+                # cutoff and display as if just published (exactly the kind
+                # of ambiguous-age article that could corroborate a macro
+                # theme, or any other staleness-gated consumer, as current
+                # when its real age is unknown). Fail closed: drop it rather
+                # than fabricate a timestamp. News is context, never ground
+                # truth, so losing an occasional unlabelled-but-fresh
+                # article here is the safe side of that tradeoff.
+                continue
             if published_at.timestamp() < cutoff_ts:
                 continue
             headline = entry.get("title", "")
@@ -170,7 +181,12 @@ class NewsFetcher:
         return articles
 
     @staticmethod
-    def _parse_entry_time(entry, fallback: datetime) -> datetime:
+    def _parse_entry_time(entry) -> datetime | None:
+        """The entry's real published/updated time, or None when neither
+        field parses -- never a fabricated "now". A caller that cannot
+        establish a genuine timestamp must treat the entry as unknown-age,
+        not as fresh.
+        """
         try:
             struct = entry.get("published_parsed") or entry.get("updated_parsed")
             if struct:
@@ -178,7 +194,7 @@ class NewsFetcher:
                 return datetime.fromtimestamp(ts, tz=timezone.utc)
         except Exception:
             pass
-        return fallback
+        return None
 
     @staticmethod
     def _strip_tags(text: str) -> str:
