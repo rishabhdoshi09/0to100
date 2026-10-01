@@ -164,9 +164,21 @@ def run_tournament_cycle(
                 ]
                 verdicts = _rank_and_cap(verdicts, max_new=max_new)
             rows: dict[str, dict[str, Any]] = {}
-            for v in verdicts:
-                row = shadow_decisions.freeze_shadow_decision(snapshots[v["symbol"]], v, path=shadow_path)
-                rows[v["symbol"]] = row
+            for raw_verdict in verdicts:
+                v = dict(raw_verdict)
+                symbol = str(v.get("symbol") or "").upper()
+                if symbol not in snapshots:
+                    continue
+                snap = snapshots[symbol]
+                # Canonical batch evaluators return the real decision object
+                # shape; tournament-owned provenance is attached here so every
+                # Challenger freeze is attributable to this exact policy and
+                # immutable Market Twin snapshot.
+                v.setdefault("policy_id", policy_id)
+                v.setdefault("market_snapshot_id", snap["market_snapshot_id"])
+                v.setdefault("domain", domain)
+                row = shadow_decisions.freeze_shadow_decision(snap, v, path=shadow_path)
+                rows[symbol] = row
             challenger_rows[policy_id] = rows
         except Exception as exc:
             # Failure isolation (section 32): one broken Challenger must never
