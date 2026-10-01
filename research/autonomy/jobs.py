@@ -396,20 +396,8 @@ class Deps:
                 brain._save_intel_book()
             except Exception:
                 pass
-            try:
-                # Evolution Engine: freeze the Champion's real decision (just
-                # made above) + bounded Challenger shadows for later grading.
-                # Entirely best-effort -- see product.evolution.autonomy_hook's
-                # own try/except; this outer one is pure defense in depth so a
-                # failure here can never surface as a paper-cycle error.
-                from product.evolution.autonomy_hook import run_tournament_for_reco_cycle
-                run_tournament_for_reco_cycle(
-                    reco, book=brain.intel_book,
-                    regime=str((result or {}).get("regime") or "RISK_ON"),
-                    as_of=str((result or {}).get("as_of_date") or ""),
-                )
-            except Exception:
-                pass
+            # Evolution now runs inside run_reco_paper_cycle() before PAPER
+            # mutation. Do not replay it here against an already-mutated book.
         except Exception as exc:
             if isinstance(result, dict):
                 result.setdefault("reco_autopilot", {})

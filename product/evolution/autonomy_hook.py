@@ -1,9 +1,9 @@
 """Production wiring: run the tournament alongside the REAL paper cycle.
 
-Called from research/autonomy/jobs.py's Deps.run_paper_cycle() right after
-product.paper_autopilot.run_reco_paper_cycle() has ALREADY produced its real
-decisions (and, for ENTER_NOW ones, already mutated the paper book). This
-module never re-scans the market and never influences that real decision --
+Compatibility hook for callers outside the canonical PAPER path. The canonical
+product.paper_autopilot.run_reco_paper_cycle() now runs the tournament itself
+BEFORE any PAPER mutation so Champion and Challengers see the same account
+state. This module never re-scans the market and never influences execution --
 it only re-reads the same already-persisted recommendations payload
 (a cheap JSON read, not a re-scan) to freeze the Champion's real decisions
 and bounded Challenger shadows for later grading.
@@ -26,19 +26,8 @@ CHAMPION_BOOTSTRAP_ID = "EQUITY_CHAMPION_BASELINE_V1"
 def _ensure_champion_exists(domain: str) -> str:
     from product.evolution import policy_registry as PR
 
-    current = PR.current_champion(domain)
-    if current is not None:
-        return current["policy_id"]
-    PR.register_policy(
-        policy_id=CHAMPION_BOOTSTRAP_ID, domain=domain,
-        hypothesis=(
-            "Baseline Champion: the real production score_breakdown() with "
-            "every policy weight at its neutral default -- the reference "
-            "every Challenger is measured against until a proven one is promoted."
-        ),
-        weights={}, status=PR.CHAMPION, reason_created="bootstrap: no champion existed yet",
-    )
-    return CHAMPION_BOOTSTRAP_ID
+    population = PR.ensure_seed_population(domain)
+    return str((population.get("champion") or {}).get("policy_id") or CHAMPION_BOOTSTRAP_ID)
 
 
 def run_tournament_for_reco_cycle(

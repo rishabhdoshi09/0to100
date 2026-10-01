@@ -81,6 +81,13 @@ def build_snapshot(
     """
     ctx = decision_context.snapshot(card, book=book, regime=regime)
     symbol = str(card.get("symbol") or "").upper()
+    pre_decision_book = {
+        "open_symbols": list((ctx.get("portfolio") or {}).get("open_symbols") or []),
+        "open_count": int((ctx.get("portfolio") or {}).get("open_count") or 0),
+        "open_risk": float((ctx.get("portfolio") or {}).get("open_risk") or 0.0),
+        "capital": (ctx.get("portfolio") or {}).get("capital"),
+        "regime": regime,
+    }
     cutoff = str(
         as_of or card.get("as_of") or card.get("scan_scanned_at")
         or card.get("generated_at") or ""
@@ -111,6 +118,7 @@ def build_snapshot(
         "empirical": ctx.get("empirical"),
         "dd_status": ctx.get("dd_status"),
         "portfolio": ctx.get("portfolio"),
+        "pre_decision_book": pre_decision_book,
         "methods": ctx.get("methods"),
         "source_scan_id": card.get("source_scan_id") or card.get("scan_scanned_at") or "",
         "data_snapshot_id": card.get("data_snapshot_id") or "",
@@ -126,6 +134,7 @@ def build_snapshot(
         "as_of": cutoff,
         "context": ctx,
         "card": dict(card),
+        "pre_decision_book": pre_decision_book,
         "frozen_at": frozen["frozen_at"],
         "versions": frozen.get("versions") or {},
         "fingerprint": frozen.get("fingerprint"),

@@ -48,6 +48,7 @@ RECOGNIZED_WEIGHTS = _MULT_KEYS + (
     "sector_confirmation_bonus",
     "regime_standdown_mult",
     "min_empirical_sample",
+    "extension_penalty_mult",
 )
 
 
@@ -100,6 +101,19 @@ def apply_policy_weights(
         extra_parts.append({
             "key": "policy_regime_standdown", "points": round(-4.0 * regime_mult, 4),
             "source": f"regime={context.get('regime')} (policy standdown x{regime_mult:g})",
+        })
+
+    extension_mult = _clamp(_weight(policy, "extension_penalty_mult", 1.0), _MULT_MIN, _MULT_MAX)
+    extension = context.get("extension_pct")
+    try:
+        extension_value = float(extension) if extension is not None else None
+    except (TypeError, ValueError):
+        extension_value = None
+    if extension_mult != 1.0 and extension_value is not None and extension_value > 0:
+        extra_parts.append({
+            "key": "policy_extension_penalty",
+            "points": round(-min(5.0, extension_value / 2.0) * extension_mult, 4),
+            "source": f"extension_pct={extension_value:g} (policy penalty x{extension_mult:g})",
         })
 
     all_parts = parts + extra_parts

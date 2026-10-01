@@ -104,6 +104,10 @@ class AutopilotDecision:
     portfolio: dict[str, Any] = field(default_factory=dict)
     freeze_id: str = ""
     evidence_fingerprint: str = ""
+    evolution_policy_id: str = ""
+    evolution_policy_version: int = 0
+    evolution_policy_status: str = ""
+    evolution_policy_fingerprint: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -133,6 +137,13 @@ class AutopilotDecision:
             "portfolio_authority": self.portfolio or None,
             "freeze_id": self.freeze_id,
             "evidence_fingerprint": self.evidence_fingerprint,
+            "evolution_policy_id": self.evolution_policy_id,
+            "evolution_policy_version": self.evolution_policy_version,
+            "evolution_policy_status": self.evolution_policy_status,
+            "evolution_policy_fingerprint": self.evolution_policy_fingerprint,
+            "champion_policy_id": (
+                self.evolution_policy_id if self.evolution_policy_status == "CHAMPION" else ""
+            ),
         }
 
 
@@ -255,11 +266,38 @@ def _group_for(decision: str) -> str:
     return "REJECTED"
 
 
-def _decorate(decision: AutopilotDecision, *, policy: Mapping[str, Any] | None, context: Mapping[str, Any] | None) -> AutopilotDecision:
+def _decorate(
+    decision: AutopilotDecision,
+    *,
+    policy: Mapping[str, Any] | None,
+    context: Mapping[str, Any] | None,
+    evolution_policy: Mapping[str, Any] | None = None,
+) -> AutopilotDecision:
     from product.decision_context import explain, score_breakdown
+
     decision.context = dict(context or {})
     decision.policy_effect = str((policy or {}).get("final_effect") or decision.policy_effect or "NEUTRAL")
-    decision.breakdown = score_breakdown(decision.card, policy, context)
+    base_breakdown = score_breakdown(decision.card, policy, context)
+
+    evo = dict(evolution_policy or {})
+    if evo:
+        from product.evolution.policy_eval import apply_policy_weights
+        from product.evolution.policy_registry import policy_manifest_fingerprint
+
+        decision.breakdown = apply_policy_weights(base_breakdown, decision.context, evo)
+        decision.evolution_policy_id = str(evo.get("policy_id") or "")
+        decision.evolution_policy_version = int(evo.get("version") or 1)
+        decision.evolution_policy_status = str(evo.get("status") or "")
+        decision.evolution_policy_fingerprint = policy_manifest_fingerprint(evo)
+        decision.breakdown["evolution_policy"] = {
+            "policy_id": decision.evolution_policy_id,
+            "version": decision.evolution_policy_version,
+            "status": decision.evolution_policy_status,
+            "manifest_fingerprint": decision.evolution_policy_fingerprint,
+        }
+    else:
+        decision.breakdown = base_breakdown
+
     base_rank = float(decision.breakdown.get("selection_rank") or 0.0)
     try:
         from product.challenger_learning import paper_selection_adjustment
@@ -298,6 +336,7 @@ def evaluate_candidate(
     policy: Mapping[str, Any] | None = None,
     family_risk: dict | None = None,
     cluster_risk: dict | None = None,
+    evolution_policy: Mapping[str, Any] | None = None,
 ) -> AutopilotDecision:
     """Gate one recommendation card. First hard-block wins. No silent skip."""
     symbol = str(card.get("symbol") or "").strip().upper()
@@ -575,7 +614,7 @@ def evaluate_selection_candidate(
         family_risk=family_risk,
         cluster_risk=cluster_risk,
     )
-    return _decorate(decision, policy=policy, context=ctx)
+    return _decorate(decision, policy=policy, context=ctx, evolution_policy=evolution_policy)
 
 
 def _canonical_decision(decision: AutopilotDecision, *, as_of: str, snapshot_id: str):
@@ -674,6 +713,15 @@ def _decision_fingerprint_evidence(
         "source_scan_id": str(snapshot_id or ""),
         "evidence_class": evidence_class,
         "versions": versions,
+        "evolution_policy_id": decision.evolution_policy_id,
+        "evolution_policy_version": decision.evolution_policy_version,
+        "evolution_policy_status": decision.evolution_policy_status,
+        "evolution_policy_fingerprint": decision.evolution_policy_fingerprint,
+        "champion_policy_id": (
+            decision.evolution_policy_id
+            if decision.evolution_policy_status == "CHAMPION"
+            else ""
+        ),
     }
 
 
@@ -825,6 +873,24 @@ def run_reco_paper_cycle(
     else:
         card_list = [dict(c) for c in cards if isinstance(c, Mapping)]
 
+    evolution_population: dict[str, Any] = {}
+    evolution_champion: dict[str, Any] | None = None
+    evolution_error = ""
+    try:
+        from product.evolution import policy_registry as evolution_registry
+
+        evolution_population = evolution_registry.ensure_seed_population(
+            evolution_registry.EQUITY
+        )
+        evolution_champion = dict(evolution_population.get("champion") or {})
+    except Exception as exc:
+        # Evolution may never become a new failure mode for the existing PAPER
+        # engine. Falling back to neutral production scoring is safe; surface
+        # the failure explicitly in the cycle instead of silently pretending a
+        # promoted policy controlled the decision.
+        evolution_error = f"{type(exc).__name__}: {exc}"[:240]
+        evolution_champion = None
+
     decisions: list[AutopilotDecision] = []
     taken: list[dict[str, Any]] = []
     rejections: list[dict[str, Any]] = []
@@ -896,6 +962,7 @@ def run_reco_paper_cycle(
             enforce_history=enforce_history,
             family_risk=family_risk,
             cluster_risk=cluster_risk,
+            evolution_policy=evolution_champion,
         )
         decisions.append(decision)
         from product.decision_taxonomy import is_non_judgment
@@ -929,6 +996,78 @@ def run_reco_paper_cycle(
         # Portfolio authority is part of the execution gate, not optional
         # enrichment. Never fall through to opening positions if it fails.
         raise RuntimeError(f"portfolio selection authority failed: {exc}") from exc
+    # Market Twin / Evolution tournament MUST run before any PAPER mutation.
+    # Champion and Challengers therefore see the identical pre-decision book.
+    evolution_tournament: dict[str, Any] | None = None
+    if evolution_champion and card_list:
+        try:
+            from product.evolution import tournament as evolution_tournament_engine
+            from product.evolution.consensus_board import save_latest_consensus
+
+            def _challenger_batch_evaluator(
+                snapshots: Sequence[Mapping[str, Any]],
+                challenger_policy: Mapping[str, Any],
+            ) -> list[dict[str, Any]]:
+                shadow_decisions_local: list[AutopilotDecision] = []
+                shadow_ranked: list[tuple[float, AutopilotDecision]] = []
+                for frozen_snapshot in snapshots:
+                    shadow_decision = evaluate_selection_candidate(
+                        frozen_snapshot.get("card") or {},
+                        book=book,
+                        workspace=payload or None,
+                        now=clock,
+                        entries_allowed=entries_allowed,
+                        entry_block_reason=entry_block_reason,
+                        paper_enabled=paper_enabled,
+                        regime=regime,
+                        policy_path=policy_path,
+                        policies=policies,
+                        enforce_history=enforce_history,
+                        family_risk=family_risk,
+                        cluster_risk=cluster_risk,
+                        evolution_policy=challenger_policy,
+                    )
+                    shadow_decisions_local.append(shadow_decision)
+                    if shadow_decision.decision == ENTER_NOW:
+                        shadow_ranked.append(
+                            (float(shadow_decision.selection_score or 0.0), shadow_decision)
+                        )
+
+                shadow_ranked.sort(key=lambda item: (-item[0], item[1].symbol))
+                from product.portfolio_selection_authority import apply_portfolio_authority
+
+                _kept, _diverted = apply_portfolio_authority(
+                    shadow_ranked, book=book, max_new=max_new, regime=regime,
+                )
+                kept_ids = {id(decision) for _, decision in _kept}
+                for decision in shadow_decisions_local:
+                    if decision.decision == ENTER_NOW and id(decision) not in kept_ids:
+                        decision.decision = NO_TRADE
+                        decision.reason_code = NO_TRADE
+                        decision.detail = "not top-of-the-top under Challenger policy"
+                        decision.group = "REJECTED"
+                return [decision.as_dict() for decision in shadow_decisions_local]
+
+            champion_decisions_by_symbol = {
+                decision.symbol: decision.as_dict() for decision in decisions
+            }
+            evolution_tournament = evolution_tournament_engine.run_tournament_cycle(
+                card_list,
+                champion_decisions_by_symbol,
+                champion_policy_id=str(evolution_champion.get("policy_id") or ""),
+                domain="EQUITY",
+                book=book,
+                regime=regime,
+                as_of=day,
+                max_new=max_new,
+                challenger_batch_evaluator=_challenger_batch_evaluator,
+            )
+            save_latest_consensus(evolution_tournament)
+        except Exception as exc:
+            # Research isolation: a Challenger failure may never block the
+            # already-decided Champion PAPER path.
+            evolution_error = f"{type(exc).__name__}: {exc}"[:240]
+
     snapshot_id = str(payload.get("scan_scanned_at") or day)
     entered = 0
     for _score, decision in ranked:
@@ -1153,6 +1292,25 @@ def run_reco_paper_cycle(
         },
         "regime_intelligence_shadow": None,
         "portfolio_authority": "after_selection_authority",
+        "evolution": {
+            "champion_policy_id": str((evolution_champion or {}).get("policy_id") or ""),
+            "champion_policy_version": int((evolution_champion or {}).get("version") or 0),
+            "champion_policy_fingerprint": (
+                decisions[0].evolution_policy_fingerprint if decisions else ""
+            ),
+            "challengers_seeded": len(evolution_population.get("challengers") or []),
+            "challengers_evaluated": list(
+                (evolution_tournament or {}).get("challengers_evaluated") or []
+            ),
+            "market_snapshot_ids": [
+                row.get("market_snapshot_id")
+                for row in (evolution_tournament or {}).get("results") or []
+                if row.get("market_snapshot_id")
+            ],
+            "snapshot_state": "PRE_MUTATION",
+            "error": evolution_error,
+            "controls_paper_decisions": bool(evolution_champion),
+        },
         "cycle_id": f"{day}:{ident.get('rules_hash') or ''}:{clock.isoformat()}",
         **safety,
     }

@@ -107,6 +107,7 @@ def run_tournament_cycle(
     registry_path: str | Path | None = None,
     snapshot_path: str | Path | None = None,
     shadow_path: str | Path | None = None,
+    challenger_batch_evaluator=None,
 ) -> dict[str, Any]:
     """Freeze the Champion's real decisions and every active Challenger's
     shadow decisions against one shared immutable snapshot per candidate,
@@ -139,10 +140,15 @@ def run_tournament_cycle(
     for policy in challengers:
         policy_id = policy["policy_id"]
         try:
-            verdicts = [
-                policy_eval.evaluate_snapshot(snap, policy) for snap in snapshots.values()
-            ]
-            verdicts = _rank_and_cap(verdicts, max_new=max_new)
+            if challenger_batch_evaluator is not None:
+                verdicts = list(
+                    challenger_batch_evaluator(list(snapshots.values()), policy) or []
+                )
+            else:
+                verdicts = [
+                    policy_eval.evaluate_snapshot(snap, policy) for snap in snapshots.values()
+                ]
+                verdicts = _rank_and_cap(verdicts, max_new=max_new)
             rows: dict[str, dict[str, Any]] = {}
             for v in verdicts:
                 row = shadow_decisions.freeze_shadow_decision(snapshots[v["symbol"]], v, path=shadow_path)
