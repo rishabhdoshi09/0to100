@@ -592,6 +592,46 @@ def evolution_lab_board(domain: str = "EQUITY") -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Evolution Lab board failed: {exc}") from exc
 
 
+@app.get("/api/evolution-health")
+def evolution_health(domain: str = "EQUITY") -> dict[str, Any]:
+    """Compact daily evidence-quality/plumbing health check for the
+    Evolution Engine. Read-only against already-persisted stores; a quiet
+    day with zero decisions reads as healthy, not as a failure."""
+    try:
+        from product.evolution.health import daily_health_report
+
+        return daily_health_report(domain, persist=False)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Evolution health report failed: {exc}") from exc
+
+
+@app.get("/api/evolution-auto-promotion-readiness")
+def evolution_auto_promotion_readiness(policy_id: str, domain: str = "EQUITY") -> dict[str, Any]:
+    """Separate, additional-evidence PAPER_AUTO_PROMOTION_READY readiness
+    check for one challenger. Informational only -- never enables automatic
+    promotion; AUTO_PROMOTION_ENABLED is reported but untouched."""
+    try:
+        from product.evolution.auto_promotion_readiness import evaluate_auto_promotion_readiness
+
+        return evaluate_auto_promotion_readiness(domain, policy_id)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Auto-promotion readiness check failed: {exc}") from exc
+
+
+@app.get("/api/evolution-explain")
+def evolution_explain(policy_id: str, domain: str = "EQUITY") -> dict[str, Any]:
+    """One-click scientific explainability for a promotion candidate: exact
+    manifests, paired snapshot IDs, regime/sector distribution, evidence
+    integrity, lifecycle/probation dates -- "why does this policy deserve
+    PAPER authority" without reading source code."""
+    try:
+        from product.evolution.explain import explain_promotion_candidate
+
+        return explain_promotion_candidate(domain, policy_id)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Evolution explain failed: {exc}") from exc
+
+
 @app.get("/api/decisions")
 def decisions_board(limit: int = 40) -> dict[str, Any]:
     """The canonical ranked decision board. Reads the saved scan, never runs one."""

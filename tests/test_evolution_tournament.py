@@ -182,3 +182,53 @@ def test_ranking_cap_lets_a_policy_select_a_different_top_pick_than_champion(tmp
     # RS_HEAVY's own ranking (5x RS weight) should flip the pick to HIGH_RS.
     assert by_symbol["HIGH_RS"]["challengers"]["RS_HEAVY"]["decision"] == "ENTER_NOW"
     assert by_symbol["LOW_RS"]["challengers"]["RS_HEAVY"]["decision"] == "REJECT"
+
+
+# ── wall-clock budget: a slow/hung Challenger can never stall the real
+# Champion path indefinitely (section 30/31 performance constraint) ─────────
+
+def test_slow_challenger_is_skipped_once_budget_exhausted_never_blocks_champion(tmp_path, monkeypatch):
+    import time
+
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    _register("CHAMP", status=policy_registry.CHAMPION)
+    _register("SLOW", parent="CHAMP")
+    _register("FAST", parent="CHAMP")
+
+    cards = [_card("RELIANCE")]
+    champion_decisions = {"RELIANCE": {"decision": "ENTER_NOW", "reason_code": "ELIGIBLE", "selection_score": 90.0}}
+
+    def _evaluator(snapshots, challenger_policy):
+        if challenger_policy["policy_id"] == "SLOW":
+            time.sleep(0.2)
+        return [
+            {"symbol": s["symbol"], "decision": "ENTER_NOW", "reason_code": "ELIGIBLE", "adjusted_score": 10.0}
+            for s in snapshots
+        ]
+
+    result = tournament.run_tournament_cycle(
+        cards, champion_decisions, champion_policy_id="CHAMP", as_of="2026-09-30",
+        max_seconds=0.05, challenger_batch_evaluator=_evaluator,
+    )
+    # The Champion's own row is frozen regardless -- the real decision this
+    # cycle made is never affected by how long Challenger research takes.
+    assert result["results"][0]["champion"]["decision"] == "ENTER_NOW"
+    # SLOW ran (registered first) and ate the whole budget; FAST never got
+    # its turn and is explicitly reported as skipped, not silently dropped.
+    assert "SLOW" in result["challengers_evaluated"]
+    assert "FAST" in result["challengers_skipped"]
+    assert result["tournament_budget_exhausted"] is True
+
+
+def test_default_budget_does_not_affect_normal_fast_cycles(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    _register("CHAMP", status=policy_registry.CHAMPION)
+    _register("C1", parent="CHAMP")
+    _register("C2", parent="CHAMP")
+
+    cards = [_card("RELIANCE")]
+    champion_decisions = {"RELIANCE": {"decision": "ENTER_NOW", "reason_code": "ELIGIBLE", "selection_score": 90.0}}
+    result = tournament.run_tournament_cycle(cards, champion_decisions, champion_policy_id="CHAMP", as_of="2026-09-30")
+    assert result["tournament_budget_exhausted"] is False
+    assert set(result["challengers_evaluated"]) == {"C1", "C2"}
+    assert result["challengers_skipped"] == []

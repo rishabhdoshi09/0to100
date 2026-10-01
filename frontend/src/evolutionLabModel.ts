@@ -71,6 +71,35 @@ export type EvolutionPolicyRow = {
     avoided_losers_or_correct_rejections?: number
     not_promotion_evidence?: boolean
   }
+  probation?: {
+    started_at?: string
+    paired_snapshots_at_start?: number
+    minimum_additional_paired?: number
+  } | null
+  since_probation_checkpoint?: {
+    passed?: boolean
+    since_probation_paired?: number
+    since_probation_incremental_expectancy_R?: number | null
+    reason?: string
+  } | null
+  exposure?: {
+    paired_snapshots?: number
+    champion_total_snapshots?: number
+    challenger_total_snapshots?: number
+    coverage_of_champion_opportunities?: number | null
+    narrow_sample_risk?: boolean
+  } | null
+  retirement_evaluation?: {
+    status?: string
+    reason?: string
+    confidence_ci_upper_R?: number | null
+  } | null
+  tenure?: {
+    promoted_at?: string | null
+    promoted_by_explicit_action?: boolean
+    rollback_target_available?: boolean
+    rollback_target_policy_id?: string | null
+  } | null
 }
 
 export type EvolutionEvent = {
@@ -112,4 +141,15 @@ export function incrementalTone(value: number | null | undefined): 'positive' | 
 export function sampleFloorNote(n: number, floor = 30): string {
   if (n >= floor) return `${n} paired observations`
   return `${n}/${floor} paired observations — below the promotion floor`
+}
+
+export function probationProgressNote(
+  probation: EvolutionPolicyRow['probation'],
+  sinceCheckpoint: EvolutionPolicyRow['since_probation_checkpoint'],
+): string {
+  if (!probation) return ''
+  const need = probation.minimum_additional_paired ?? 10
+  const have = sinceCheckpoint?.since_probation_paired ?? 0
+  const status = sinceCheckpoint?.passed ? 'complete' : 'in progress'
+  return `probation since ${probation.started_at ?? '—'} · ${have}/${need} new paired observations since checkpoint (${status})`
 }

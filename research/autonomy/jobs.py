@@ -1587,6 +1587,16 @@ def run_tournament_cycle(ctx) -> JobResult:
     except Exception as exc:
         summary_parts.append(f"promotion_error={exc}")
 
+    try:
+        from product.evolution import policy_registry as PR
+        from product.evolution.health import daily_health_report
+
+        for domain in PR.DOMAINS:
+            daily_health_report(domain)
+        summary_parts.append("health_reports_written")
+    except Exception as exc:
+        summary_parts.append(f"health_report_error={exc}")
+
     return JobResult(JS.SUCCEEDED, "tournament cycle: " + ", ".join(summary_parts))
 
 

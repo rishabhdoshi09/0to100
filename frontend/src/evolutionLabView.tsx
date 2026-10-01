@@ -4,6 +4,7 @@ import { EmptyState } from './designSystem'
 import {
   formatR,
   incrementalTone,
+  probationProgressNote,
   sampleFloorNote,
 } from './evolutionLabModel'
 import type { EvolutionLabBoard, EvolutionPolicyRow } from './evolutionLabModel'
@@ -30,12 +31,48 @@ function ScorecardRow({ row, isChampion }: { row: EvolutionPolicyRow; isChampion
         <div className="evolution-lab__paired-note">
           Controls PAPER decisions: {row.controls_paper_decisions ? 'YES' : 'NO'}
         </div>
+        {row.manifest_fingerprint ? (
+          <div className="evolution-lab__fingerprint" title={row.manifest_fingerprint}>
+            fp:{row.manifest_fingerprint.slice(0, 10)}…
+          </div>
+        ) : null}
+        {isChampion && row.tenure ? (
+          <div className="evolution-lab__paired-note">
+            promoted {row.tenure.promoted_at ?? '—'}
+            {row.tenure.rollback_target_available
+              ? ` · rollback target: ${row.tenure.rollback_target_policy_id}`
+              : ' · no rollback target available'}
+          </div>
+        ) : null}
+        {row.probation ? (
+          <div className="evolution-lab__paired-note">
+            {probationProgressNote(row.probation, row.since_probation_checkpoint)}
+          </div>
+        ) : null}
       </td>
       <td>
         <div>{row.status}</div>
         {row.promotion_evaluation?.status ? (
+          <div className="evolution-lab__paired-note">{row.promotion_evaluation.status}</div>
+        ) : null}
+        {row.promotion_evaluation?.fdr_rejected !== undefined && row.promotion_evaluation?.fdr_rejected !== null ? (
           <div className="evolution-lab__paired-note">
-            {row.promotion_evaluation.status}
+            FDR: {row.promotion_evaluation.fdr_rejected ? 'survives' : 'rejected'}
+          </div>
+        ) : null}
+        {row.promotion_evaluation?.regime_breadth ? (
+          <div className="evolution-lab__paired-note">
+            regimes observed: {String((row.promotion_evaluation.regime_breadth as Record<string, unknown>).regimes_observed ?? '—')}
+          </div>
+        ) : null}
+        {!isChampion && row.retirement_evaluation?.status === 'RETIREMENT_ELIGIBLE' ? (
+          <div className="evolution-lab__warning-note">
+            retirement eligible (CI upper {formatR(row.retirement_evaluation.confidence_ci_upper_R)})
+          </div>
+        ) : null}
+        {!isChampion && row.exposure?.narrow_sample_risk ? (
+          <div className="evolution-lab__warning-note" title="This Challenger has only been evaluated on a small fraction of the opportunities the Champion saw.">
+            narrow sample ({row.exposure.paired_snapshots}/{row.exposure.champion_total_snapshots} of Champion's opportunities)
           </div>
         ) : null}
       </td>

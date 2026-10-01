@@ -16,6 +16,8 @@ ALREADY-COMPUTED snapshot, never re-fetches data.
 """
 from __future__ import annotations
 
+import os
+import time
 from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -27,6 +29,15 @@ log = get_logger(__name__)
 
 DEFAULT_MAX_NEW = 3
 DEFAULT_MAX_CHALLENGERS = 12
+# Challenger evaluation is bounded by COUNT (max_challengers) above, but a
+# single slow/hung policy evaluator could still stall every challenger behind
+# it -- and this whole tournament runs INLINE, before the Champion's real
+# PAPER mutation (see paper_autopilot.py). A wall-clock budget is the second,
+# independent bound: once exceeded, remaining challengers are skipped (never
+# raised, never blocking) so the real Champion path is never delayed by
+# research work. None disables the budget (existing callers/tests that don't
+# pass max_seconds are unaffected).
+DEFAULT_MAX_SECONDS = float(os.environ.get("QT_EVOLUTION_TOURNAMENT_MAX_SECONDS") or 8.0)
 
 
 def compute_consensus(qualified_rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -104,6 +115,7 @@ def run_tournament_cycle(
     as_of: str = "",
     max_new: int = DEFAULT_MAX_NEW,
     max_challengers: int | None = DEFAULT_MAX_CHALLENGERS,
+    max_seconds: float | None = DEFAULT_MAX_SECONDS,
     registry_path: str | Path | None = None,
     snapshot_path: str | Path | None = None,
     shadow_path: str | Path | None = None,
@@ -137,8 +149,20 @@ def run_tournament_cycle(
         champion_rows[symbol] = shadow_decisions.freeze_shadow_decision(snap, verdict, path=shadow_path)
 
     challenger_rows: dict[str, dict[str, dict[str, Any]]] = {}
+    budget_start = time.monotonic()
+    budget_exhausted = False
     for policy in challengers:
         policy_id = policy["policy_id"]
+        if max_seconds is not None and (time.monotonic() - budget_start) > max_seconds:
+            if not budget_exhausted:
+                log.warning(
+                    "evolution_tournament_budget_exhausted",
+                    max_seconds=max_seconds,
+                    evaluated=len(challenger_rows),
+                    remaining=len(challengers) - len(challenger_rows),
+                )
+                budget_exhausted = True
+            continue
         try:
             if challenger_batch_evaluator is not None:
                 verdicts = list(
@@ -214,5 +238,7 @@ def run_tournament_cycle(
         "challengers_skipped": [
             p["policy_id"] for p in challengers if p["policy_id"] not in challenger_rows
         ],
+        "tournament_elapsed_seconds": round(time.monotonic() - budget_start, 3),
+        "tournament_budget_exhausted": budget_exhausted,
         "results": per_symbol,
     }

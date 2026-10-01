@@ -529,6 +529,14 @@ function HomeOsCard({
                 {row.win_probability_pct != null ? ` · measured +R odds ${Number(row.win_probability_pct).toFixed(1)}%` : ''}
                 {depth === 'professional' && row.effective_n != null ? ` · effective n ${Number(row.effective_n).toFixed(1)}` : ''}
               </small>
+              {depth === 'professional' && row.evolution_consensus && (row.evolution_consensus.qualified_count || 0) > 1 ? (
+                <small className="home-os-evolution-consensus">
+                  Policy consensus {row.evolution_consensus.selecting_count ?? 0}/{row.evolution_consensus.qualified_count}
+                  {row.evolution_consensus.consensus_pct != null ? ` (${Number(row.evolution_consensus.consensus_pct).toFixed(0)}%)` : ''}
+                  {row.evolution_consensus.main_dissent_reason ? ` · dissent: ${row.evolution_consensus.main_dissent_reason}` : ''}
+                  {' '}— context only, not a buy signal
+                </small>
+              ) : null}
               {symbol && onOpenPage ? (
                 <button
                   type="button"
