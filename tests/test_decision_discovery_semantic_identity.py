@@ -56,3 +56,34 @@ def test_discovery_fails_closed_on_material_long_term_change(tmp_path, monkeypat
         long_term_scanned_at=current["scanned_at"],
         thesis_hash="thesis-1",
     ) is None
+
+
+def test_discovery_fails_closed_when_evolution_champion_changes(tmp_path, monkeypatch):
+    target = tmp_path / "startup_trade_discovery.json"
+    monkeypatch.setattr(store, "_path", lambda: target)
+    monkeypatch.setattr(store, "_long_term_fingerprint", lambda: "lt")
+    current_fp = {"value": "champ-a"}
+    monkeypatch.setattr(
+        store, "current_evolution_policy_fingerprint",
+        lambda: current_fp["value"],
+    )
+
+    board = {"available": True, "best_trades": [{"symbol": "AAA"}]}
+    store.save(
+        board,
+        scan_scanned_at="scan-1",
+        long_term_scanned_at="lt-1",
+        thesis_hash="thesis-1",
+    )
+    assert store.load(
+        scan_scanned_at="scan-1",
+        long_term_scanned_at="lt-1",
+        thesis_hash="thesis-1",
+    ) == board
+
+    current_fp["value"] = "champ-b"
+    assert store.load(
+        scan_scanned_at="scan-1",
+        long_term_scanned_at="lt-1",
+        thesis_hash="thesis-1",
+    ) is None

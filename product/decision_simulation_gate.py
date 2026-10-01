@@ -101,6 +101,9 @@ def begin_startup(startup_id: str | None = None, *, path: str | Path | None = No
         "approval_required": not approved,
         "approved_at": state.get("approved_at") if approved else "",
         "approved_thesis_hash": str(state.get("approved_thesis_hash") or "") if approved else "",
+        "approved_evolution_policy_fingerprint": str(
+            state.get("approved_evolution_policy_fingerprint") or ""
+        ) if approved else "",
         "approved_scan_id": state.get("approved_scan_id") if approved else "",
         "approved_symbols": list(state.get("approved_symbols") or []) if approved else [],
         "approval_source": str(state.get("approval_source") or "") if approved else "",
@@ -193,6 +196,11 @@ def status(*, path: str | Path | None = None) -> dict[str, Any]:
     thesis = manifest()
     thesis_hash = str(thesis.get("thesis_hash") or "")
     try:
+        from product.decision_discovery_store import current_evolution_policy_fingerprint
+        evolution_policy_fingerprint = current_evolution_policy_fingerprint()
+    except Exception:
+        evolution_policy_fingerprint = ""
+    try:
         from product.desk_pipeline import scan_is_fresh
         scan_fresh = bool(scan_is_fresh())
     except Exception:
@@ -236,6 +244,9 @@ def status(*, path: str | Path | None = None) -> dict[str, Any]:
     )
     approved_scan_id = str(state.get("approved_scan_id") or "")
     approved_thesis_hash = str(state.get("approved_thesis_hash") or "")
+    approved_evolution_policy_fingerprint = str(
+        state.get("approved_evolution_policy_fingerprint") or ""
+    )
 
     # A completed approval proves discovery succeeded for one immutable
     # scan+thesis identity. A brief atomic cache-replacement gap for that exact
@@ -251,10 +262,15 @@ def status(*, path: str | Path | None = None) -> dict[str, Any]:
         and approved_scan_id == scan_id
         and approved_thesis_hash
         and approved_thesis_hash == thesis_hash
+        and approved_evolution_policy_fingerprint == evolution_policy_fingerprint
     ):
         discovery_ready = True
     thesis_changed_since_approval = bool(
         approved and approved_thesis_hash and approved_thesis_hash != thesis_hash
+    )
+    evolution_policy_changed_since_approval = bool(
+        approved
+        and approved_evolution_policy_fingerprint != evolution_policy_fingerprint
     )
     if approved:
         phase = "APPROVED"
@@ -297,8 +313,13 @@ def status(*, path: str | Path | None = None) -> dict[str, Any]:
         "approved": approved,
         "approved_at": str(state.get("approved_at") or "") if approved else "",
         "approved_thesis_hash": approved_thesis_hash if approved else "",
+        "approved_evolution_policy_fingerprint": (
+            approved_evolution_policy_fingerprint if approved else ""
+        ),
         "approval_source": str(state.get("approval_source") or "") if approved else "",
         "current_thesis_hash": thesis_hash,
+        "current_evolution_policy_fingerprint": evolution_policy_fingerprint,
+        "evolution_policy_changed_since_approval": evolution_policy_changed_since_approval,
         "thesis_changed_since_approval": thesis_changed_since_approval,
         "approval_required": not approved,
         "discovery_ready": discovery_ready,
@@ -361,6 +382,9 @@ def approve(*, path: str | Path | None = None, source: str = "OPERATOR") -> dict
         "approved": True,
         "approved_at": _now(),
         "approved_thesis_hash": str(current.get("thesis_hash") or ""),
+        "approved_evolution_policy_fingerprint": str(
+            current.get("current_evolution_policy_fingerprint") or ""
+        ),
         "approved_scan_id": str(current.get("scan_scanned_at") or ""),
         "approved_symbols": [str(row.get("symbol") or "") for row in best[:5]],
         "approval_source": str(source or "OPERATOR").strip().upper(),

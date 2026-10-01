@@ -16,11 +16,25 @@ from typing import Any, Mapping
 
 from core.runtime_paths import logs_path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _path() -> Path:
     return logs_path("product/startup_trade_discovery.json")
+
+
+def current_evolution_policy_fingerprint() -> str:
+    """Read-only current EQUITY Champion identity for discovery cache keys.
+
+    This helper never seeds/mutates the registry. The producer path
+    (decision_service) ensures a Champion exists before saving a board.
+    """
+    try:
+        from product.evolution import policy_registry as PR
+        champion = PR.current_champion(PR.EQUITY)
+        return PR.policy_manifest_fingerprint(champion) if champion else ""
+    except Exception:
+        return ""
 
 
 def _long_term_fingerprint() -> str:
@@ -50,6 +64,7 @@ def save(
     scan_scanned_at: str,
     long_term_scanned_at: str,
     thesis_hash: str,
+    evolution_policy_fingerprint: str | None = None,
 ) -> Path:
     target = _path()
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -60,6 +75,11 @@ def save(
         "long_term_scanned_at": str(long_term_scanned_at or ""),
         "long_term_fingerprint": _long_term_fingerprint(),
         "thesis_hash": str(thesis_hash or ""),
+        "evolution_policy_fingerprint": str(
+            current_evolution_policy_fingerprint()
+            if evolution_policy_fingerprint is None
+            else evolution_policy_fingerprint
+        ),
         "board": dict(board),
     }
     tmp = target.with_suffix(target.suffix + ".tmp")
@@ -73,6 +93,7 @@ def load(
     scan_scanned_at: str,
     long_term_scanned_at: str,
     thesis_hash: str,
+    evolution_policy_fingerprint: str | None = None,
 ) -> dict[str, Any] | None:
     target = _path()
     try:
@@ -96,6 +117,13 @@ def load(
         if not stored_fp or not current_fp or stored_fp != current_fp:
             return None
     if str(payload.get("thesis_hash") or "") != str(thesis_hash or ""):
+        return None
+    expected_evolution = str(
+        current_evolution_policy_fingerprint()
+        if evolution_policy_fingerprint is None
+        else evolution_policy_fingerprint
+    )
+    if str(payload.get("evolution_policy_fingerprint") or "") != expected_evolution:
         return None
     board = payload.get("board")
     return dict(board) if isinstance(board, dict) else None

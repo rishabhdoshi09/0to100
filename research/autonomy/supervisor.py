@@ -552,12 +552,14 @@ class Supervisor:
                 or ""
             )
             if gate.get("scan_fresh") and scan_id and thesis_hash:
+                evolution_fp = str(gate.get("current_evolution_policy_fingerprint") or "")
                 self.jobs.enqueue(
                     SCH.DISCOVERY_REFRESH,
                     idempotency_key=SCH.discovery_refresh_key(
                         scan_id,
                         long_term_id,
                         thesis_hash,
+                        evolution_fp,
                     ),
                     input_snapshot_id=scan_id,
                     critical=True,

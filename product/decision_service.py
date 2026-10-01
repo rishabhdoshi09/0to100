@@ -152,6 +152,17 @@ def _best_trades_from_production_thesis(
 
     book = _read_only_paper_book()
     family_risk, cluster_risk = carried_sector_risk(book)
+    evolution_champion = None
+    try:
+        from product.evolution import policy_registry as evolution_registry
+        evolution_champion = (
+            evolution_registry.ensure_seed_population(evolution_registry.EQUITY)
+            .get("champion")
+        )
+    except Exception:
+        # Discovery must stay fail-closed to existing production gates if the
+        # optional Evolution registry is unavailable; never invent a policy.
+        evolution_champion = None
     eligible: dict[str, tuple[float, Any]] = {}
     errors: list[dict[str, str]] = []
     for card in _cards(workspace):
@@ -169,6 +180,7 @@ def _best_trades_from_production_thesis(
                 enforce_history=True,
                 family_risk=family_risk,
                 cluster_risk=cluster_risk,
+                evolution_policy=evolution_champion,
             )
         except Exception as exc:
             errors.append({"symbol": symbol, "error": str(exc)[:180]})
@@ -226,6 +238,9 @@ def _best_trades_from_production_thesis(
         payload["production_selection_score"] = float(score)
         payload["production_reason_code"] = str(decision.reason_code or "")
         payload["production_policy_effect"] = str(decision.policy_effect or "NEUTRAL")
+        payload["champion_policy_id"] = str(decision.evolution_policy_id or "")
+        payload["champion_policy_version"] = int(decision.evolution_policy_version or 0)
+        payload["champion_policy_fingerprint"] = str(decision.evolution_policy_fingerprint or "")
         payload["production_portfolio_authority"] = dict(decision.portfolio or {})
         payload["production_execution_slot"] = bool(execution_slot)
         payload["production_candidate_status"] = (

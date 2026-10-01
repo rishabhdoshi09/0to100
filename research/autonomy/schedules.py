@@ -187,12 +187,21 @@ def discovery_refresh_key(
     scan_scanned_at: str,
     long_term_scanned_at: str,
     thesis_hash: str,
+    evolution_policy_fingerprint: str = "",
 ) -> str:
-    """Durable identity for one canonical decision-discovery projection."""
-    return (
+    """Durable identity for one canonical decision-discovery projection.
+
+    A Champion promotion changes selection behavior even when scan/thesis do
+    not change, so the immutable policy manifest belongs in this identity.
+    Empty fingerprint preserves the legacy key shape for callers/tests that
+    genuinely have no Evolution registry yet.
+    """
+    base = (
         f"discovery_refresh:{str(scan_scanned_at or '')}:"
         f"{str(long_term_scanned_at or 'none')}:{str(thesis_hash or '')}"
     )
+    fingerprint = str(evolution_policy_fingerprint or "")
+    return f"{base}:{fingerprint}" if fingerprint else base
 
 
 def snapshot_scan_key(snapshot_id: str) -> str:

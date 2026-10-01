@@ -781,7 +781,11 @@ def run_discovery_refresh(ctx) -> JobResult:
 
             long_term_id = str((load_long_term_scan() or {}).get("scanned_at") or "")
             thesis_hash = str((thesis_manifest() or {}).get("thesis_hash") or "")
-            current_key = SCH.discovery_refresh_key(scan_id, long_term_id, thesis_hash)
+            from product.decision_discovery_store import current_evolution_policy_fingerprint
+            evolution_fp = current_evolution_policy_fingerprint()
+            current_key = SCH.discovery_refresh_key(
+                scan_id, long_term_id, thesis_hash, evolution_fp,
+            )
         except Exception as exc:
             return JobResult(
                 JS.RETRYABLE_FAILED,

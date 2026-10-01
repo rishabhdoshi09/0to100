@@ -51,6 +51,7 @@ def persist_recommendations_and_discovery(
     discovery_error: dict[str, str] | None = None
     discovery_actionable = 0
     discovery_thesis_hash = ""
+    discovery_evolution_policy_fingerprint = ""
 
     try:
         from product.recommendations_store import save_recommendations
@@ -81,6 +82,11 @@ def persist_recommendations_and_discovery(
             board = decision_board(workspace=reco, limit=40)
             thesis = dict(thesis_manifest() or {})
             discovery_thesis_hash = str(thesis.get("thesis_hash") or "")
+            try:
+                from product.decision_discovery_store import current_evolution_policy_fingerprint
+                discovery_evolution_policy_fingerprint = current_evolution_policy_fingerprint()
+            except Exception:
+                discovery_evolution_policy_fingerprint = ""
             save_discovery(
                 board,
                 scan_scanned_at=str(scan.get("scanned_at") or ""),
@@ -104,6 +110,7 @@ def persist_recommendations_and_discovery(
         "decision_discovery_actionable": discovery_actionable,
         "decision_discovery_error": discovery_error,
         "decision_discovery_thesis_hash": discovery_thesis_hash,
+        "decision_discovery_evolution_policy_fingerprint": discovery_evolution_policy_fingerprint,
         "scan_scanned_at": str(scan.get("scanned_at") or ""),
         "long_term_scanned_at": str(lt.get("scanned_at") or ""),
     }
