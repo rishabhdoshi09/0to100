@@ -1,6 +1,7 @@
 """Durability and process-isolation tests for deferred Evolution work."""
 from __future__ import annotations
 
+import sys
 import time
 
 from product import decision_context
@@ -9,9 +10,8 @@ from product.evolution import tournament
 from research.auto_research.paper_book import PaperBook
 
 
-def _hang_child(_root: str, _work_id: str) -> None:
-    while True:
-        time.sleep(1.0)
+def _hang_command(_root: str, _work_id: str) -> list[str]:
+    return [sys.executable, "-c", "import time; time.sleep(60)"]
 
 
 def _card(symbol: str = "TCS") -> dict:
@@ -158,7 +158,7 @@ def test_isolated_worker_kills_nonreturning_child_and_returns_control(tmp_path, 
         root=root,
         limit=1,
         timeout_seconds=0.15,
-        child_target=_hang_child,
+        command_factory=_hang_command,
     )
     elapsed = time.monotonic() - started
 
