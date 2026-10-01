@@ -32,14 +32,15 @@ def test_tournament_cycle_key_is_idempotent_per_session_date():
 def test_run_tournament_cycle_grades_and_evaluates_promotion(tmp_path, monkeypatch):
     monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
     with mock.patch("product.evolution.grading.grade_pending_decisions", return_value=[{"shadow_id": "x"}]) as graded, \
-         mock.patch("product.evolution.promotion.evaluate_promotion_batch", return_value=[{"status": "PROMOTION_ELIGIBLE"}]) as promo:
+         mock.patch("product.evolution.promotion.evaluate_promotion_batch", return_value=[{"status": "PROMOTION_ELIGIBLE"}]) as promo, \
+         mock.patch("product.evolution.promotion.retire_qualified_challengers", return_value=[]):
         result = JOBS.run_tournament_cycle(ctx=None)
 
     assert result.status == JS.SUCCEEDED
     assert "graded=1" in result.summary
     assert "promotion_eligible=" in result.summary
     graded.assert_called_once()
-    assert promo.call_count == 2  # once per domain (EQUITY, FNO_UNDERLYING)
+    assert promo.call_count == 3  # once per domain (EQUITY, FNO_UNDERLYING, FNO_CONTRACT)
 
 
 def test_run_tournament_cycle_never_fails_the_job_even_if_grading_breaks(tmp_path, monkeypatch):
