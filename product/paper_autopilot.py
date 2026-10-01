@@ -865,6 +865,7 @@ def run_reco_paper_cycle(
     policies: Sequence[Mapping[str, Any]] | None = None,
     enforce_history: bool | None = None,
     scan_records: Sequence[Mapping[str, Any]] | None = None,
+    durable_book_save=None,
 ) -> dict[str, Any]:
     """Consume saved recommendations and open paper positions for ENTER_NOW names.
 
@@ -1234,6 +1235,38 @@ def run_reco_paper_cycle(
         except Exception:
             pass
 
+    # Durability boundary: production supplies brain._save_intel_book here so
+    # the real PAPER mutation reaches disk immediately after the mutation loop,
+    # before journaling, counterfactual bookkeeping, or any research work.
+    # Direct/test callers may omit the callback and retain the old in-memory
+    # behavior; their deferred Evolution work remains PREPARED until explicitly
+    # released.
+    durable_book_saved: bool | None = None
+    if durable_book_save is not None:
+        try:
+            saved = durable_book_save()
+            durable_book_saved = saved is not False
+        except Exception:
+            durable_book_saved = False
+
+        if not durable_book_saved:
+            if evolution_deferred_work_id:
+                try:
+                    from product.evolution.deferred_work import mark_abandoned
+                    mark_abandoned(
+                        evolution_deferred_work_id,
+                        "PAPER_BOOK_PERSISTENCE_FAILED_AFTER_MUTATION",
+                    )
+                except Exception:
+                    pass
+            raise RuntimeError(
+                "PAPER book durable save failed after recommendation mutation pass"
+            )
+
+        if evolution_deferred_work_id:
+            from product.evolution.deferred_work import mark_ready
+            mark_ready(evolution_deferred_work_id)
+
     reco_symbols = {str(c.get("symbol") or "").upper() for c in card_list}
     scan_rows = list(scan_records or payload.get("scan_records") or [])
     close_misses = []
@@ -1346,8 +1379,13 @@ def run_reco_paper_cycle(
             "challengers_evaluated": [],
             "deferred_work_id": evolution_deferred_work_id,
             "deferred_work_status": (
-                "PREPARED" if evolution_deferred_work_id else "NOT_PREPARED"
+                "READY"
+                if evolution_deferred_work_id and durable_book_saved is True
+                else "PREPARED"
+                if evolution_deferred_work_id
+                else "NOT_PREPARED"
             ),
+            "paper_book_durable_saved": durable_book_saved,
             "market_snapshot_ids": [
                 str((row or {}).get("market_snapshot_id") or "")
                 for row in dict((evolution_bundle or {}).get("snapshots") or {}).values()
