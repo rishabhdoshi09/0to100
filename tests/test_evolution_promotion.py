@@ -276,6 +276,11 @@ def test_promotion_batch_persists_scientific_proof(tmp_path, monkeypatch):
     assert proof is not None
     assert proof["paired_snapshots"] >= 30
     assert proof["policy_manifest_fingerprint"]
+    assert proof["champion_manifest_fingerprint"]
+    assert proof["evidence_ledger_fingerprint"]
+    assert proof["evidence_paired_rows"] == proof["paired_snapshots"]
+    assert proof["policy_manifest"]["policy_id"] == "PROOF_CHAL"
+    assert proof["champion_manifest"]["policy_id"] == "PROOF_CHAMP"
 
 
 def test_recent_promoted_champion_has_hysteresis_before_replacement(tmp_path, monkeypatch):
