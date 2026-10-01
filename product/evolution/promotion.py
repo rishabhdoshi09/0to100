@@ -232,6 +232,77 @@ def _regime_breadth(
     }
 
 
+def evaluate_probation_evidence(
+    domain: str, challenger_policy_id: str,
+    *, registry_path: str | Path | None = None, ledger_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Non-raising check for whether a PROBATION policy has accumulated
+    genuine, non-regressed evidence SINCE its probation checkpoint. Shared by
+    promote_to_champion() (which raises on failure) and the separate
+    PAPER_AUTO_PROMOTION_READY readiness evaluator (which only reports),
+    so the two never drift onto two different definitions of "probation
+    evidence complete."""
+    policy = policy_registry.get_policy(challenger_policy_id, path=registry_path)
+    if not policy or policy.get("status") != policy_registry.PROBATION:
+        return {
+            "policy_id": challenger_policy_id, "domain": domain, "passed": False,
+            "reason": f"{challenger_policy_id} is not currently in PROBATION",
+        }
+    probation = dict(policy.get("probation") or {})
+    probation_start_n = int(probation.get("paired_snapshots_at_start") or 0)
+    champion_id = str(probation.get("champion_policy_id") or "")
+
+    since = scorecard.paired_comparison(
+        champion_id, challenger_policy_id, domain=domain, path=ledger_path,
+        since=str(probation.get("started_at") or ""),
+    )
+    since_n = int(since.get("paired_snapshots") or 0)
+    since_edge = _f(since.get("incremental_expectancy_R"))
+
+    total_paired = scorecard.paired_comparison(
+        champion_id, challenger_policy_id, domain=domain, path=ledger_path,
+    )
+    paired_now = int(total_paired.get("paired_snapshots") or 0)
+    required_paired = probation_start_n + MIN_PROBATION_ADDITIONAL_PAIRED
+
+    if paired_now < required_paired:
+        return {
+            "policy_id": challenger_policy_id, "domain": domain, "passed": False,
+            "paired_snapshots": paired_now, "required_paired": required_paired,
+            "since_probation_paired": since_n, "since_probation_incremental_expectancy_R": since_edge,
+            "reason": f"PROBATION evidence incomplete: {paired_now} paired observations; need {required_paired}",
+        }
+    if since_n < MIN_PROBATION_ADDITIONAL_PAIRED:
+        return {
+            "policy_id": challenger_policy_id, "domain": domain, "passed": False,
+            "paired_snapshots": paired_now, "required_paired": required_paired,
+            "since_probation_paired": since_n, "since_probation_incremental_expectancy_R": since_edge,
+            "reason": (
+                f"only {since_n} paired observations genuinely frozen after the "
+                f"probation checkpoint ({probation.get('started_at')}); "
+                f"need {MIN_PROBATION_ADDITIONAL_PAIRED}"
+            ),
+        }
+    if since_edge is None or since_edge < 0:
+        return {
+            "policy_id": challenger_policy_id, "domain": domain, "passed": False,
+            "paired_snapshots": paired_now, "required_paired": required_paired,
+            "since_probation_paired": since_n, "since_probation_incremental_expectancy_R": since_edge,
+            "reason": (
+                f"PROBATION evidence since checkpoint has turned negative "
+                f"({since_n} new paired observations, incremental expectancy "
+                f"{('%+.4f' % since_edge) if since_edge is not None else 'n/a'}R)"
+            ),
+        }
+    return {
+        "policy_id": challenger_policy_id, "domain": domain, "passed": True,
+        "paired_snapshots": paired_now, "required_paired": required_paired,
+        "since_probation_paired": since_n, "since_probation_incremental_expectancy_R": since_edge,
+        "probation_started_at": probation.get("started_at"),
+        "reason": "probation evidence complete and not regressed",
+    }
+
+
 def evaluate_promotion(
     domain: str, challenger_policy_id: str,
     *, n_simultaneous_challengers: int = 1, fdr_rejected: bool | None = None,
@@ -481,9 +552,14 @@ def evaluate_retirement_batch(
 ) -> list[dict[str, Any]]:
     """Conservative research-only retirement eligibility.
 
-    A policy is eligible for retirement only after a large paired sample and
-    materially negative incremental expectancy. This never affects the current
-    Champion and never touches PAPER/live execution state.
+    A policy is eligible for retirement only after a large paired sample,
+    materially negative incremental expectancy, AND a correlation-aware
+    block-bootstrap confidence interval (research.harness.block_bootstrap_
+    mean_ci -- the same tool evaluate_promotion's optional require_block_ci
+    gate uses, mirrored for the negative side) whose UPPER bound is still
+    below zero. A point-estimate average alone cannot tell "confidently bad"
+    apart from "noisy, might still be fine" -- the CI can. This never affects
+    the current Champion and never touches PAPER/live execution state.
     """
     champion = policy_registry.current_champion(domain, path=registry_path)
     if champion is None:
@@ -515,21 +591,36 @@ def evaluate_retirement_batch(
         )
         n = int(paired.get("paired_snapshots") or 0)
         edge = _f(paired.get("incremental_expectancy_R"))
-        eligible = (
+        meets_sample_and_magnitude = (
             n >= RETIRE_MIN_PAIRED_SAMPLE
             and edge is not None
             and edge <= RETIRE_MAX_INCREMENTAL_EXPECTANCY_R
         )
+        ci_upper: float | None = None
+        eligible = False
+        if meets_sample_and_magnitude:
+            from research.harness import block_bootstrap_mean_ci
+
+            ci = block_bootstrap_mean_ci(paired["incremental_diffs"])
+            ci_upper = round(float(ci["ci_upper"]), 4)
+            eligible = ci_upper < 0.0
         out.append({
             "policy_id": policy["policy_id"],
             "domain": domain,
             "paired_snapshots": n,
             "incremental_expectancy_R": edge,
+            "confidence_ci_upper_R": ci_upper,
             "status": RETIREMENT_ELIGIBLE if eligible else NOT_ELIGIBLE,
             "reason": (
-                "sufficient paired evidence shows materially negative incremental value"
+                f"confidently negative incremental value: block-bootstrap CI "
+                f"upper bound {ci_upper:+.3f}R stays below zero"
                 if eligible
-                else "retirement evidence threshold not met"
+                else (
+                    f"sample/magnitude threshold met but CI upper bound "
+                    f"{ci_upper:+.3f}R does not confidently exclude zero"
+                    if meets_sample_and_magnitude
+                    else "retirement evidence threshold not met"
+                )
             ),
         })
     return out
@@ -634,7 +725,14 @@ def promote_to_champion(
 
     # PROBATION is a real canary stage, not a label. A qualified policy
     # remains shadow-only until it has accumulated additional unseen paired
-    # forward evidence after entering probation.
+    # forward evidence after entering probation -- and that NEW evidence,
+    # evaluated entirely on its own (never blended with the pre-probation
+    # history that already got it into probation), must not have turned
+    # negative. Without this, the cumulative statistics above (which span
+    # a policy's entire history) would silently let strong pre-probation
+    # evidence carry a policy through even if everything observed since
+    # probation began was actually bad -- the count-only gate this used to
+    # be could never catch that.
     policy = policy_registry.get_policy(
         new_champion_policy_id, path=registry_path,
     ) or policy
@@ -643,15 +741,12 @@ def promote_to_champion(
             f"{new_champion_policy_id} must enter shadow-only PROBATION "
             "before it can become Champion"
         )
-    probation = dict(policy.get("probation") or {})
-    probation_start_n = int(probation.get("paired_snapshots_at_start") or 0)
-    paired_now = int(eligibility.get("paired_snapshots") or 0)
-    required_paired = probation_start_n + MIN_PROBATION_ADDITIONAL_PAIRED
-    if paired_now < required_paired:
-        raise RuntimeError(
-            f"PROBATION evidence incomplete: {paired_now} paired observations; "
-            f"need {required_paired} ({MIN_PROBATION_ADDITIONAL_PAIRED} new after probation)"
-        )
+    probation_check = evaluate_probation_evidence(
+        domain, new_champion_policy_id, registry_path=registry_path, ledger_path=ledger_path,
+    )
+    if not probation_check["passed"]:
+        raise RuntimeError(f"PROBATION evidence incomplete: {probation_check['reason']}")
+    eligibility["since_probation_checkpoint"] = probation_check
 
     previous_champion_id = current["policy_id"] if current else None
     if current is not None:

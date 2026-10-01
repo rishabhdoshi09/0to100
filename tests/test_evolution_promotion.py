@@ -9,6 +9,7 @@ drawdown" etc. without depending on real market data).
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from unittest import mock
 
 import pytest
@@ -18,13 +19,20 @@ from product.evolution import promotion as PROMO
 from product.evolution import shadow_decisions as SD
 
 
-def _seed(policy_id, sid, r, *, regime="TRENDING_BULL", decision="ENTER_NOW"):
+def _seed(policy_id, sid, r, *, regime="TRENDING_BULL", decision="ENTER_NOW", frozen_at=None):
+    if frozen_at is None:
+        # A real wall-clock timestamp (not a placeholder) so tests that
+        # filter paired evidence by a PROBATION checkpoint (promotion.py's
+        # "since" gate) see realistic chronology: rows seeded before a
+        # checkpoint predate it, rows seeded after postdate it, exactly like
+        # production's real decision_freeze-stamped frozen_at.
+        frozen_at = datetime.now(timezone.utc).isoformat()
     row = {
         "schema_version": 1, "shadow_id": f"{policy_id}:{sid}", "policy_id": policy_id,
         "market_snapshot_id": sid, "domain": PR.EQUITY, "symbol": "SYM", "as_of": "2026-09-30",
         "decision": decision, "reason_code": "ELIGIBLE" if decision == "ENTER_NOW" else "REJECT",
         "adjusted_score": 50.0, "breakdown": {}, "entry": 100.0, "stop": 95.0, "target": 110.0,
-        "sector": "IT", "setup_label": "VCP", "regime": regime, "frozen_at": "x", "fingerprint": "x",
+        "sector": "IT", "setup_label": "VCP", "regime": regime, "frozen_at": frozen_at, "fingerprint": "x",
         "outcome": {"forward_return_pct": r * 5, "not_pnl": True},
         "classification": "WINNER_TAKEN" if r > 0 else "LOSER_TAKEN",
         "graded_at": "x", "not_pnl": True, "is_champion_decision": policy_id.endswith("CHAMP"),
@@ -340,6 +348,38 @@ def test_materially_negative_challenger_becomes_retirement_eligible(tmp_path, mo
     assert PR.get_policy("RET_CHAL")["status"] == PR.RETIRED
 
 
+def test_noisy_point_estimate_past_threshold_is_not_confidently_retirement_eligible(tmp_path, monkeypatch):
+    """A point-estimate mean crossing RETIRE_MAX_INCREMENTAL_EXPECTANCY_R is
+    not enough on its own: high-variance/noisy evidence whose block-bootstrap
+    CI does not confidently exclude zero on the upper side must NOT be
+    retired, even though the old magnitude-only gate would have wrongly
+    retired it. This is exactly what evaluate_retirement_batch's CI upgrade
+    exists to prevent -- distinguishing "confidently bad" from "noisy, might
+    still be fine"."""
+    import numpy as np
+
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    PR.register_policy(policy_id="NOISY_CHAMP", domain=PR.EQUITY, hypothesis="baseline", weights={}, status=PR.CHAMPION)
+    PR.register_policy(policy_id="NOISY_CHAL", domain=PR.EQUITY, hypothesis="noisy", weights={}, status=PR.CHALLENGER, parent_policy_id="NOISY_CHAMP")
+
+    rng = np.random.default_rng(3)
+    diffs = list(rng.normal(-0.2, 1.5, 60))
+    assert sum(diffs) / len(diffs) <= PROMO.RETIRE_MAX_INCREMENTAL_EXPECTANCY_R  # crosses the old magnitude bar
+    for i, d in enumerate(diffs):
+        reg = "TRENDING_BULL" if i % 2 else "SIDEWAYS"
+        _seed("NOISY_CHAMP", f"noisy_{i}", 0.0, regime=reg)
+        _seed("NOISY_CHAL", f"noisy_{i}", float(d), regime=reg)
+
+    rows = PROMO.evaluate_retirement_batch(PR.EQUITY)
+    verdict = next(r for r in rows if r["policy_id"] == "NOISY_CHAL")
+    assert verdict["status"] == PROMO.NOT_ELIGIBLE
+    assert verdict["confidence_ci_upper_R"] is not None
+    assert verdict["confidence_ci_upper_R"] > 0  # CI does not exclude zero
+    retired = PROMO.retire_qualified_challengers(PR.EQUITY)
+    assert all(r["policy_id"] != "NOISY_CHAL" for r in retired)
+    assert PR.get_policy("NOISY_CHAL")["status"] == PR.CHALLENGER
+
+
 def test_former_champion_is_never_auto_retired(tmp_path, monkeypatch):
     monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
     PR.register_policy(
@@ -413,3 +453,67 @@ def test_probation_requires_additional_unseen_forward_pairs(tmp_path, monkeypatc
         reason="post-probation evidence complete",
     )
     assert promoted["status"] == PR.CHAMPION
+
+
+def test_probation_cannot_be_carried_by_stale_pre_checkpoint_evidence(tmp_path, monkeypatch):
+    """The exact double-counting bug this gate exists to close: strong
+    PRE-probation evidence qualified this policy for probation in the first
+    place. If the evidence actually observed SINCE the probation checkpoint
+    has turned negative, promotion must fail even though the full cumulative
+    history (pre + post checkpoint) still averages out positive -- the count
+    gate alone (paired_now >= start_n + 10) cannot catch this since it never
+    looks at whether the NEW evidence itself is any good."""
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    n = 60
+    champ_rs = [(-0.3 if i % 2 == 0 else 0.1) for i in range(n)]
+    chal_rs = [(0.3 if i % 2 == 0 else 0.25) for i in range(n)]
+    _seed_pair("STALE", champ_rs, chal_rs)
+    advanced = PROMO.advance_eligible_to_probation(PR.EQUITY)
+    assert any(p["policy_id"] == "STALE_CHAL" for p in advanced)
+
+    # Evidence genuinely observed AFTER the probation checkpoint: the
+    # challenger now clearly underperforms the champion. Enough COUNT to
+    # satisfy the old (broken) gate, but the new evidence itself is bad.
+    for i in range(PROMO.MIN_PROBATION_ADDITIONAL_PAIRED):
+        reg = "TRENDING_BULL" if i % 2 else "SIDEWAYS"
+        _seed("STALE_CHAMP", f"STALE_prob_{i}", 0.3, regime=reg)
+        _seed("STALE_CHAL", f"STALE_prob_{i}", -0.3, regime=reg)
+
+    # The FULL cumulative paired stream (70 pairs) still averages positive --
+    # proving this test would have wrongly passed under a count-only gate.
+    full_history = PROMO.evaluate_promotion(PR.EQUITY, "STALE_CHAL")
+    assert full_history["incremental_expectancy_R"] > 0
+    assert full_history["paired_snapshots"] == n + PROMO.MIN_PROBATION_ADDITIONAL_PAIRED
+
+    with pytest.raises(RuntimeError, match="turned negative"):
+        PROMO.promote_to_champion(
+            PR.EQUITY, "STALE_CHAL", actor="operator",
+            reason="should be blocked by regressed post-probation evidence",
+        )
+    assert PR.current_champion(PR.EQUITY)["policy_id"] == "STALE_CHAMP"
+
+
+def test_probation_since_checkpoint_filter_ignores_pre_checkpoint_snapshots(tmp_path, monkeypatch):
+    """Direct unit check on scorecard.paired_comparison's `since` filter: a
+    snapshot frozen before the cutoff must never appear in the filtered
+    stream, regardless of how positive or negative its diff is."""
+    from product.evolution import scorecard
+
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    PR.register_policy(policy_id="SINCE_CHAMP", domain=PR.EQUITY, hypothesis="baseline", weights={}, status=PR.CHAMPION)
+    PR.register_policy(policy_id="SINCE_CHAL", domain=PR.EQUITY, hypothesis="test", weights={}, status=PR.CHALLENGER, parent_policy_id="SINCE_CHAMP")
+
+    _seed("SINCE_CHAMP", "before_1", -1.0)
+    _seed("SINCE_CHAL", "before_1", 1.0)
+
+    cutoff = datetime.now(timezone.utc).isoformat()
+
+    _seed("SINCE_CHAMP", "after_1", 0.1)
+    _seed("SINCE_CHAL", "after_1", 0.2)
+
+    unfiltered = scorecard.paired_comparison("SINCE_CHAMP", "SINCE_CHAL", domain=PR.EQUITY)
+    assert unfiltered["paired_snapshots"] == 2
+
+    filtered = scorecard.paired_comparison("SINCE_CHAMP", "SINCE_CHAL", domain=PR.EQUITY, since=cutoff)
+    assert filtered["paired_snapshots"] == 1
+    assert filtered["incremental_diffs"] == [0.1]

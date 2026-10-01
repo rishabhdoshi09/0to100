@@ -203,14 +203,163 @@ def test_market_twin_snapshot_is_pre_mutation_and_remains_immutable(tmp_path, mo
     assert frozen_again["pre_decision_book"]["open_count"] == 0
 
 
-def test_normal_paper_cycle_creates_challenger_shadows_automatically(tmp_path, monkeypatch):
+def test_normal_paper_cycle_prepares_restart_safe_challenger_work(tmp_path, monkeypatch):
     monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
     cards = [_card("TCS", score=100, rs=80, confirms=3)]
     cycle = _cycle(PaperBook(capital=500_000), cards, as_of="2026-09-30", now=_now())
-    seeded = {p["policy_id"] for p in PR.active_challengers(PR.EQUITY)}
-    frozen = SD.list_shadow_decisions()
-    frozen_ids = {row["policy_id"] for row in frozen}
 
-    assert len(seeded) >= 5
-    assert seeded & frozen_ids
-    assert cycle["evolution"]["challengers_evaluated"]
+    from product.evolution import deferred_work as DW
+
+    work_id = cycle["evolution"]["deferred_work_id"]
+    assert work_id
+    assert cycle["evolution"]["deferred_work_status"] == "PREPARED"
+    work = DW.get_work(work_id)
+    assert work is not None
+    assert work["status"] == "PREPARED"
+    assert len(work["challenger_policies"]) >= 5
+    # Champion rows are frozen immediately; Challenger rows are intentionally
+    # absent until the non-critical research lane runs.
+    challenger_ids = {p["policy_id"] for p in PR.active_challengers(PR.EQUITY)}
+    frozen_ids = {row["policy_id"] for row in SD.list_shadow_decisions()}
+    assert challenger_ids.isdisjoint(frozen_ids)
+
+
+def test_paper_cycle_never_invokes_challenger_evaluation(tmp_path, monkeypatch):
+    """A non-returning Challenger cannot block PAPER because PAPER never calls
+    the Challenger evaluator at all.  It only persists a PREPARED work item."""
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    PR.register_policy(
+        policy_id="DETACH_CHAMP", domain=PR.EQUITY, hypothesis="neutral",
+        weights={}, status=PR.CHAMPION,
+    )
+    PR.register_policy(
+        policy_id="DETACH_CHAL", domain=PR.EQUITY, hypothesis="shadow",
+        weights={}, status=PR.CHALLENGER, parent_policy_id="DETACH_CHAMP",
+    )
+
+    from product.evolution import tournament as T
+
+    def _must_not_run(*_args, **_kwargs):
+        raise AssertionError("PAPER path must never execute Challenger research")
+
+    monkeypatch.setattr(T, "evaluate_challengers_from_bundle", _must_not_run)
+
+    book = PaperBook(capital=500_000)
+    cycle = _cycle(
+        book,
+        [_card("TCS", score=100, rs=80, confirms=3)],
+        as_of="2026-09-30",
+        now=_now(),
+    )
+    assert len(book.open) == 1
+    assert cycle["taken"][0]["symbol"] == "TCS"
+    assert cycle["evolution"]["deferred_work_id"]
+    assert cycle["evolution"]["challengers_evaluated"] == []
+
+
+def test_deferred_challenger_uses_exact_premutation_snapshot_after_restart(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    PR.register_policy(
+        policy_id="TWIN_CHAMP", domain=PR.EQUITY, hypothesis="neutral baseline",
+        weights={}, status=PR.CHAMPION,
+    )
+    PR.register_policy(
+        policy_id="TWIN_CHAL", domain=PR.EQUITY, hypothesis="test challenger",
+        weights={}, status=PR.CHALLENGER, parent_policy_id="TWIN_CHAMP",
+    )
+
+    book = PaperBook(capital=500_000)
+    cycle = _cycle(
+        book,
+        [_card("TCS", score=100, rs=80, confirms=3)],
+        as_of="2026-09-30",
+        now=_now(),
+    )
+    assert len(book.open) == 1
+
+    from product.evolution import deferred_work as DW
+
+    work_id = cycle["evolution"]["deferred_work_id"]
+    # Simulated process restart: work is re-read from disk; no in-memory
+    # closure/book reference is required.
+    reloaded = DW.get_work(work_id)
+    assert reloaded is not None and reloaded["status"] == "PREPARED"
+    DW.mark_ready(work_id)
+    result = DW.process_work_item(work_id)
+    assert "TWIN_CHAL" in result["challengers_evaluated"]
+
+    champion_row = next(
+        r for r in SD.list_shadow_decisions(policy_id="TWIN_CHAMP") if r["symbol"] == "TCS"
+    )
+    challenger_row = next(
+        r for r in SD.list_shadow_decisions(policy_id="TWIN_CHAL") if r["symbol"] == "TCS"
+    )
+    assert challenger_row["market_snapshot_id"] == champion_row["market_snapshot_id"]
+
+    frozen_snapshot = ES.get_snapshot_record(challenger_row["market_snapshot_id"])
+    assert frozen_snapshot is not None
+    assert frozen_snapshot["pre_decision_book"]["open_count"] == 0
+    assert len(book.open) == 1
+
+
+def test_deferred_research_retry_cannot_duplicate_paper_entry(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    PR.register_policy(
+        policy_id="RETRY_CHAMP", domain=PR.EQUITY, hypothesis="neutral",
+        weights={}, status=PR.CHAMPION,
+    )
+    PR.register_policy(
+        policy_id="RETRY_CHAL", domain=PR.EQUITY, hypothesis="shadow",
+        weights={}, status=PR.CHALLENGER, parent_policy_id="RETRY_CHAMP",
+    )
+    book = PaperBook(capital=500_000)
+    cycle = _cycle(
+        book,
+        [_card("TCS", score=100, rs=80, confirms=3)],
+        as_of="2026-09-30",
+        now=_now(),
+    )
+    assert len(book.open) == 1
+
+    from product.evolution import deferred_work as DW
+
+    work_id = cycle["evolution"]["deferred_work_id"]
+    DW.mark_ready(work_id)
+    first = DW.process_work_item(work_id)
+    second = DW.process_work_item(work_id)
+    assert first == second
+    assert len(book.open) == 1
+
+
+def test_live_money_remains_locked_through_the_deferred_tournament_path(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    PR.register_policy(
+        policy_id="LOCK_CHAMP", domain=PR.EQUITY, hypothesis="neutral baseline",
+        weights={}, status=PR.CHAMPION,
+    )
+    book = PaperBook(capital=500_000)
+    cards = [_card("TCS", score=100, rs=80, confirms=3)]
+    cycle = _cycle(book, cards, as_of="2026-09-30", now=_now())
+
+    assert cycle["execution_reality"]["shadow_mode"] is True
+    assert cycle["execution_reality"]["affects_paper_orders"] is False
+
+    import ast
+    import inspect
+    from product.evolution import deferred_work
+    from product.evolution import tournament as evolution_tournament_engine
+
+    forbidden = {
+        "execution", "zerodha_broker", "telegram_actions",
+        "telegram_commands", "kite_client",
+    }
+    for module in (evolution_tournament_engine, deferred_work):
+        tree = ast.parse(inspect.getsource(module))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = {alias.name.split(".")[0] for alias in node.names}
+            elif isinstance(node, ast.ImportFrom):
+                names = {(node.module or "").split(".")[0]}
+            else:
+                continue
+            assert not (names & forbidden), f"forbidden import found: {names}"

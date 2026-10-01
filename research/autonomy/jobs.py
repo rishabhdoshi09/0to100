@@ -373,6 +373,7 @@ class Deps:
                 entry_block_reason=entry_block_reason,
                 session_phase=session_phase,
                 paper_enabled=paper_on,
+                durable_book_save=brain._save_intel_book,
             )
             if isinstance(result, dict):
                 opened = list(result.get("positions_opened") or [])
@@ -392,12 +393,36 @@ class Deps:
                     result["eligibility"] = "TRADED"
                 elif result.get("eligibility") in {"NO_ELIGIBLE_TRADE", "", None}:
                     result["eligibility"] = reco.get("eligibility") or result.get("eligibility")
-            try:
-                brain._save_intel_book()
-            except Exception:
-                pass
-            # Evolution now runs inside run_reco_paper_cycle() before PAPER
-            # mutation. Do not replay it here against an already-mutated book.
+            evolution_meta = dict(reco.get("evolution") or {})
+            # Compatibility fallback for injected/legacy PAPER functions that
+            # do not accept/use the canonical immediate durability callback.
+            # The real production run_reco_paper_cycle saves before returning.
+            if evolution_meta.get("paper_book_durable_saved") is None:
+                try:
+                    saved = brain._save_intel_book()
+                    save_ok = saved is not False
+                except Exception:
+                    save_ok = False
+                if not save_ok:
+                    work_id = str(evolution_meta.get("deferred_work_id") or "")
+                    if work_id:
+                        from product.evolution import deferred_work as evolution_deferred
+                        evolution_deferred.mark_abandoned(
+                            work_id,
+                            "PAPER_BOOK_PERSISTENCE_FAILED_AFTER_MUTATION",
+                        )
+                    raise RuntimeError(
+                        "paper position mutated in memory but durable intel_book save failed"
+                    )
+                work_id = str(evolution_meta.get("deferred_work_id") or "")
+                if work_id:
+                    from product.evolution import deferred_work as evolution_deferred
+                    evolution_deferred.mark_ready(work_id)
+                    evolution_meta["deferred_work_status"] = "READY"
+                evolution_meta["paper_book_durable_saved"] = True
+
+            if isinstance(result, dict) and evolution_meta:
+                result.setdefault("reco_autopilot", {})["evolution"] = evolution_meta
         except Exception as exc:
             if isinstance(result, dict):
                 result.setdefault("reco_autopilot", {})
@@ -1074,6 +1099,13 @@ def run_paper_cycle(ctx) -> JobResult:
                 "management_only": management_only,
                 "failure_class": "DATA_OR_PROVIDER" if data_failure else ""}
     reco = dict((result or {}).get("reco_autopilot") or {})
+    evolution_meta = dict(reco.get("evolution") or {})
+    evolution_work_id = str(evolution_meta.get("deferred_work_id") or "")
+    if evolution_work_id:
+        metadata["evolution_deferred_work_id"] = evolution_work_id
+        metadata["evolution_deferred_work_status"] = str(
+            evolution_meta.get("deferred_work_status") or ""
+        )
     reco_error = str(reco.get("error") or "").strip()
     if reco_error:
         # Deps.run_paper_cycle deliberately captures recommendation-autopilot
@@ -1552,7 +1584,49 @@ def run_tournament_cycle(ctx) -> JobResult:
     never touches the real paper book, never blocks on market data, and a
     failure here can never fail this job's own ledger entry (it is not in
     CRITICAL_JOBS and must never gate PAPER_CYCLE/MARKET_SCAN)."""
+    job = getattr(ctx, "job", None)
+    key = str(getattr(job, "idempotency_key", "") or "")
+    immediate_work_id = (
+        str(getattr(job, "input_snapshot_id", "") or "")
+        if key.startswith("evolution_deferred:")
+        else ""
+    )
     summary_parts: list[str] = []
+    try:
+        from product.evolution.deferred_work import process_ready_isolated
+
+        deferred = process_ready_isolated(
+            limit=1 if immediate_work_id else 2,
+            work_ids=[immediate_work_id] if immediate_work_id else None,
+        )
+        succeeded = sum(1 for row in deferred if row.get("status") == "SUCCEEDED")
+        timed_out = sum(1 for row in deferred if row.get("timed_out"))
+        failed = sum(
+            1 for row in deferred
+            if row.get("status") in {"FAILED", "RETRYABLE"}
+        )
+        summary_parts.append(
+            f"deferred={len(deferred)} success={succeeded} timeout={timed_out} failed={failed}"
+        )
+    except Exception as exc:
+        # This is a non-critical research lane.  Even its own isolation
+        # wrapper failing must not poison forward PAPER/scan availability.
+        summary_parts.append(f"deferred_error={type(exc).__name__}:{exc}")
+
+    # Intraday/near-real-time Challenger evaluation stops here. Grading and
+    # promotion require later outcomes and remain in the once-per-session EOD
+    # tournament job.
+    if immediate_work_id:
+        return JobResult(
+            JS.SUCCEEDED,
+            "tournament cycle: " + ", ".join(summary_parts),
+            metadata={
+                "evolution_deferred_work_id": immediate_work_id,
+                "live_money_unchanged": True,
+                "research_only": True,
+            },
+        )
+
     try:
         from product.evolution.grading import grade_pending_decisions
 
@@ -1586,6 +1660,16 @@ def run_tournament_cycle(ctx) -> JobResult:
         summary_parts.append(f"retired={retired_total}")
     except Exception as exc:
         summary_parts.append(f"promotion_error={exc}")
+
+    try:
+        from product.evolution import policy_registry as PR
+        from product.evolution.health import daily_health_report
+
+        for domain in PR.DOMAINS:
+            daily_health_report(domain)
+        summary_parts.append("health_reports_written")
+    except Exception as exc:
+        summary_parts.append(f"health_report_error={exc}")
 
     return JobResult(JS.SUCCEEDED, "tournament cycle: " + ", ".join(summary_parts))
 

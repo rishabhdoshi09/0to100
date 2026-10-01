@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import statistics
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,18 @@ def _f(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return None if out != out else out
+
+
+def _dt(value: Any):
+    try:
+        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def _frozen_at_or_never(row: dict[str, Any]):
+    return _dt(row.get("frozen_at"))
 
 
 def graded_rows(
@@ -152,13 +165,30 @@ def _realized_equivalent_r(row: dict[str, Any]) -> float | None:
 def paired_comparison(
     champion_policy_id: str, challenger_policy_id: str,
     *, domain: str | None = None, path: str | Path | None = None,
+    since: str | None = None,
 ) -> dict[str, Any]:
     """Direct comparison restricted to snapshots BOTH policies actually
     evaluated (section 15) -- the only fair way to isolate whether a
-    challenger adds value instead of merely trading in a strong market."""
+    challenger adds value instead of merely trading in a strong market.
+
+    `since`: an ISO timestamp (e.g. a PROBATION checkpoint). When given, a
+    shared snapshot only counts if BOTH policies' shadow decisions were
+    frozen strictly after it -- i.e. this is genuinely unseen evidence, not
+    a decision that already existed (and may already have been counted)
+    before the checkpoint. Without this filter, a policy's pre-checkpoint
+    evidence would silently keep being double-counted into every later
+    promotion statistic computed from the full cumulative ledger.
+    """
     champ = {r["market_snapshot_id"]: r for r in graded_rows(champion_policy_id, domain=domain, path=path)}
     chal = {r["market_snapshot_id"]: r for r in graded_rows(challenger_policy_id, domain=domain, path=path)}
     shared = sorted(set(champ) & set(chal))
+    if since:
+        cutoff = _dt(since)
+        if cutoff is not None:
+            def _after(sid: str) -> bool:
+                c_at, h_at = _frozen_at_or_never(champ[sid]), _frozen_at_or_never(chal[sid])
+                return c_at is not None and h_at is not None and c_at > cutoff and h_at > cutoff
+            shared = [sid for sid in shared if _after(sid)]
 
     diffs: list[float] = []
     agreement = {"both_selected": 0, "both_rejected": 0, "champion_only": 0, "challenger_only": 0}

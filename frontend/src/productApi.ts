@@ -804,7 +804,13 @@ export type HomeOperatingSystem = {
     champion_policy_id?: string
     champion_policy_version?: number
     champion_policy_fingerprint?: string
-    evolution_consensus?: Record<string, unknown>
+    evolution_consensus?: {
+      qualified_count?: number
+      selecting_count?: number
+      consensus_pct?: number
+      main_dissent_reason?: string | null
+      dissent_breakdown?: Record<string, number>
+    }
   }>
   research_watchlist?: Array<{
     symbol?: string

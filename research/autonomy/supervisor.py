@@ -1781,6 +1781,26 @@ class Supervisor:
                         slot=paper_slot,
                         session_date=paper_session,
                     )
+
+                # Challenger research is a distinct non-critical job. It is
+                # enqueued only after the PAPER handler has returned SUCCEEDED,
+                # which means the canonical PAPER path has already crossed its
+                # durable-book-save boundary. Critical work remains higher
+                # priority in JobStore.lease_due().
+                if job.job_type == SCH.PAPER_CYCLE:
+                    evo_work_id = str(
+                        (result.metadata or {}).get("evolution_deferred_work_id") or ""
+                    )
+                    evo_status = str(
+                        (result.metadata or {}).get("evolution_deferred_work_status") or ""
+                    )
+                    if evo_work_id and evo_status == "READY":
+                        self.jobs.enqueue(
+                            SCH.TOURNAMENT_CYCLE,
+                            idempotency_key=SCH.evolution_deferred_key(evo_work_id),
+                            input_snapshot_id=evo_work_id,
+                            critical=False,
+                        )
                 key = str(job.idempotency_key or "")
                 if job.job_type == SCH.LEARNING_CYCLE and key.startswith("hist_learning:"):
                     batch_id = str(getattr(job, "input_snapshot_id", None) or key.split(":", 1)[1])

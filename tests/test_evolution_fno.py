@@ -187,6 +187,81 @@ def test_short_fno_underlying_shadow_grades_directionally_from_official_bars(tmp
     assert graded["classification"] == "WINNER_TAKEN"
 
 
+def test_short_fno_underlying_shadow_grades_directionally_as_loser_when_stop_hit(tmp_path, monkeypatch):
+    """The SHORT-winner case above proves grading handles SHORT geometry when
+    it works out; this proves the symmetric LOSER case is graded correctly
+    too (adverse stop checked first, negative normalized R, LOSER_TAKEN) --
+    not just the favorable direction."""
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    PR.register_policy(
+        policy_id="U_BASE2", domain=PR.FNO_UNDERLYING, hypothesis="neutral",
+        weights={}, status=PR.CHAMPION,
+    )
+    candidate = {
+        "symbol": "RELIANCE",
+        "direction": "SHORT",
+        "setup": _setup("SHORT"),
+        "pre_evolution_ranking_score": 80.0,
+        "ranking_score": 80.0,
+    }
+    result = run_underlying_tournament(
+        [candidate], selected=candidate, as_of="2026-09-30",
+    )
+    row = result["results"]["U_BASE2"]["SHORT"]
+
+    # entry=100, stop=105, target=90 (SHORT geometry from _setup("SHORT")).
+    # Bar 0 fills the entry (low touches 100); bar 1's high reaches the stop
+    # (105) before its low reaches the target (90) -- an adverse exit.
+    idx = pd.to_datetime(["2026-09-30", "2026-10-01"])
+    bars = pd.DataFrame(
+        {
+            "high": [101.0, 110.0],
+            "low": [99.0, 98.0],
+            "close": [100.0, 106.0],
+        },
+        index=idx,
+    )
+    monkeypatch.setattr("data.bhavcopy_store.get_ohlcv", lambda _symbol: bars)
+    graded = grading.grade_shadow_decision(row)
+    assert graded is not None
+    assert graded["resolved_exit_price"] == 105.0
+    assert graded["outcome"]["forward_return_pct"] < 0
+    assert graded["counterfactual_R"] < 0
+    assert graded["classification"] == "LOSER_TAKEN"
+
+
+def test_underlying_policy_weighting_is_direction_agnostic_by_design(tmp_path, monkeypatch):
+    """Documents the real, current state of Evolution's F&O underlying
+    weighting rather than letting it pass unverified: resolve_directional_
+    underlying_forward_outcome (above) correctly grades LONG and SHORT
+    OUTCOMES with mirrored geometry, but the policy-weighting layer
+    (underlying_policy_adjustment) does not yet apply direction-mirrored
+    weight semantics -- it computes identical adjustments from identical
+    component magnitudes regardless of direction. This is not a hidden bug
+    (nothing here produces a WRONG answer), but it means "LONG and SHORT
+    correctness" should be read as "both directions grade correctly", not
+    "both directions get distinct, mirrored policy weighting" -- that would
+    be new architecture, intentionally out of scope for this phase."""
+    from product.evolution.fno_adapter import underlying_policy_adjustment
+
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    policy = {
+        "policy_id": "DIR_TEST", "weights": {
+            "oi_confirmation_mult": 1.5,
+            "sector_confirmation_mult": 1.3,
+            "extension_penalty_mult": 1.2,
+        },
+    }
+    long_candidate = {"setup": _setup("LONG")}
+    short_candidate = {"setup": _setup("SHORT")}
+    # Both setups share the exact same `components` magnitudes in _setup();
+    # only direction/trade_plan differ.
+    long_result = underlying_policy_adjustment(long_candidate, policy)
+    short_result = underlying_policy_adjustment(short_candidate, policy)
+    assert long_result["eligible"] and short_result["eligible"]
+    assert long_result["adjustment"] == short_result["adjustment"]
+    assert long_result["parts"] == short_result["parts"]
+
 
 def test_contract_challenger_is_graded_from_its_own_forward_option_bars(tmp_path, monkeypatch):
     from datetime import datetime, timedelta
