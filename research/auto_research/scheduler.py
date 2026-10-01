@@ -168,10 +168,15 @@ class AutoResearchBrain:
         except Exception:
             pass
 
-    def _save_intel_book(self) -> None:
-        """Persist the paper book (open positions + trade history) so it survives restart."""
+    def _save_intel_book(self) -> bool:
+        """Persist the PAPER book atomically and report durability truth.
+
+        Callers that ignore the return value remain backwards-compatible.
+        The canonical PAPER owner uses it to ensure deferred Evolution work
+        is not released until a real fill has reached durable storage.
+        """
         if not self.intel_book_path:
-            return
+            return True
         try:
             import json as _json, os as _os
             from pathlib import Path as _P
@@ -179,8 +184,9 @@ class AutoResearchBrain:
             tmp = p.with_suffix(".tmp")
             tmp.write_text(_json.dumps(self.intel_book.snapshot(), default=str))
             _os.replace(tmp, p)                       # atomic (crash-safe)
+            return True
         except Exception:
-            pass
+            return False
 
     def _load_insample_cache(self) -> dict[str, tuple[float, int]]:
         if not self.insample_cache_path:
