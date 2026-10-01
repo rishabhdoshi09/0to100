@@ -429,6 +429,7 @@ def process_ready_isolated(
     root: str | Path | None = None,
     limit: int = 2,
     timeout_seconds: float = DEFAULT_CHILD_TIMEOUT_SECONDS,
+    work_ids: Sequence[str] | None = None,
     command_factory=None,
 ) -> list[dict[str, Any]]:
     """Consume READY work in killable subprocesses.
@@ -441,7 +442,11 @@ def process_ready_isolated(
     factory = command_factory or _default_worker_command
     outcomes: list[dict[str, Any]] = []
 
-    for payload in ready_work(root=root_path, limit=limit):
+    candidates = ready_work(root=root_path, limit=max(limit, 100 if work_ids else limit))
+    if work_ids is not None:
+        wanted = {str(value or "") for value in work_ids}
+        candidates = [row for row in candidates if str(row.get("work_id") or "") in wanted]
+    for payload in candidates[: int(limit)]:
         work_id = str(payload.get("work_id") or "")
         path = _item_path(work_id, root_path)
         attempts = int(payload.get("attempts") or 0) + 1
