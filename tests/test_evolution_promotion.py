@@ -322,3 +322,32 @@ def test_materially_negative_challenger_becomes_retirement_eligible(tmp_path, mo
     retired = PROMO.retire_qualified_challengers(PR.EQUITY)
     assert any(r["policy_id"] == "RET_CHAL" for r in retired)
     assert PR.get_policy("RET_CHAL")["status"] == PR.RETIRED
+
+
+def test_former_champion_is_never_auto_retired(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    PR.register_policy(
+        policy_id="SAFE_OLD", domain=PR.EQUITY, hypothesis="former champion",
+        weights={}, status=PR.CHAMPION,
+    )
+    PR.register_policy(
+        policy_id="SAFE_NEW", domain=PR.EQUITY, hypothesis="current champion",
+        weights={}, status=PR.CHALLENGER, parent_policy_id="SAFE_OLD",
+    )
+    PR.set_status("SAFE_OLD", PR.PROBATION, reason="test handoff")
+    PR.set_status("SAFE_NEW", PR.CHAMPION, reason="test handoff")
+
+    for i in range(80):
+        reg = "TRENDING_BULL" if i % 2 else "SIDEWAYS"
+        _seed("SAFE_NEW", f"safe_{i}", 0.3, regime=reg)
+        _seed("SAFE_OLD", f"safe_{i}", -0.4, regime=reg)
+
+    rows = PROMO.evaluate_retirement_batch(PR.EQUITY)
+    protected = next(r for r in rows if r["policy_id"] == "SAFE_OLD")
+    assert protected["status"] == PROMO.NOT_ELIGIBLE
+    assert protected["rollback_protected"] is True
+    assert "rollback-protected" in protected["reason"]
+
+    retired = PROMO.retire_qualified_challengers(PR.EQUITY)
+    assert all(r["policy_id"] != "SAFE_OLD" for r in retired)
+    assert PR.get_policy("SAFE_OLD")["status"] == PR.PROBATION
