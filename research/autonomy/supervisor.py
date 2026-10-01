@@ -1134,6 +1134,13 @@ class Supervisor:
                 SCH.RESEARCH_CYCLE,
                 idempotency_key=SCH.forward_research_key(session_date),
             )
+            # Evolution Engine: grade Challenger shadow decisions + re-check
+            # promotion eligibility, once per session, after real learning
+            # has run. Never gates/blocks the forward learning path above.
+            self.jobs.enqueue(
+                SCH.TOURNAMENT_CYCLE,
+                idempotency_key=SCH.tournament_cycle_key(session_date),
+            )
 
     def _snapshot_token(
         self,

@@ -580,6 +580,18 @@ def forward_evidence_board() -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Forward evidence failed: {exc}") from exc
 
 
+@app.get("/api/evolution-lab")
+def evolution_lab_board(domain: str = "EQUITY") -> dict[str, Any]:
+    """Champion vs Challenger tournament board. Reads already-persisted
+    policy/shadow-decision stores only -- never scans the market."""
+    try:
+        from product.evolution.api import evolution_lab_board as build_board
+
+        return build_board(domain)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Evolution Lab board failed: {exc}") from exc
+
+
 @app.get("/api/decisions")
 def decisions_board(limit: int = 40) -> dict[str, Any]:
     """The canonical ranked decision board. Reads the saved scan, never runs one."""

@@ -549,6 +549,18 @@ def build_home_os(
 
     best_rows = _canonical_best_trade_rows(history_current=history_current)
     opportunities = [explain_opportunity(row) for row in best_rows]
+    # Evolution Engine: purely explanatory context (policy consensus,
+    # dominant dissent) merged in AFTER eligibility/explanation are already
+    # decided above -- it can never add, remove, or reorder a Best Trades
+    # row (section 42); a missing/unavailable board entry changes nothing.
+    try:
+        from product.evolution.consensus_board import get_consensus
+        for opportunity, row in zip(opportunities, best_rows):
+            consensus = get_consensus(str(row.get("symbol") or ""))
+            if consensus:
+                opportunity["evolution_consensus"] = consensus
+    except Exception:
+        pass
     research_watchlist = _canonical_research_watchlist(
         history_current=history_current,
         exclude={str(row.get("symbol") or "").upper() for row in best_rows},

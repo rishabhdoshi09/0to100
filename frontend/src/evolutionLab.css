@@ -1,0 +1,42 @@
+/* Evolution Lab — a research/science board, calm and honest when empty. */
+.evolution-lab { display: flex; flex-direction: column; gap: 18px; }
+.evolution-lab__header {
+  padding: 10px 12px;
+  border: 1px solid rgba(128, 128, 128, 0.25);
+  border-radius: 8px;
+  background: rgba(255,255,255,.02);
+}
+.evolution-lab__safety { margin: 0; font-size: .78rem; opacity: .75; }
+.evolution-lab__table-wrap { overflow-x: auto; }
+.evolution-lab__table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+.evolution-lab__table th, .evolution-lab__table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.18);
+  text-align: left;
+  vertical-align: top;
+}
+.evolution-lab__policy-id { font-weight: 700; }
+.evolution-lab__badge {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: .62rem;
+  letter-spacing: .05em;
+  background: rgba(70, 170, 110, 0.18);
+  color: rgb(70, 170, 110);
+}
+.evolution-lab__hypothesis { font-size: .74rem; opacity: .65; margin-top: 2px; max-width: 320px; }
+.evolution-lab__incremental { font-weight: 700; }
+.evolution-lab__incremental--positive { color: rgb(70, 170, 110); }
+.evolution-lab__incremental--negative { color: rgb(210, 90, 90); }
+.evolution-lab__incremental--neutral { opacity: .7; }
+.evolution-lab__paired-note { font-size: .68rem; opacity: .6; margin-top: 2px; }
+.evolution-lab__row--positive { background: rgba(70, 170, 110, 0.04); }
+.evolution-lab__row--negative { background: rgba(210, 90, 90, 0.04); }
+.evolution-lab__none { opacity: .6; font-size: .85rem; }
+.evolution-lab__events ul { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 6px; }
+.evolution-lab__events li { font-size: .82rem; padding: 6px 8px; border-radius: 6px; background: rgba(255,255,255,.02); }
+.evolution-lab__event-policy { font-weight: 700; }
+.evolution-lab__event-status { opacity: .85; }
+.evolution-lab__event-reason { opacity: .65; }
+.evolution-lab__footer { font-size: .76rem; opacity: .6; }

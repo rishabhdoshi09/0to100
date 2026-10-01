@@ -28,12 +28,17 @@ LONG_TERM_SCAN = "long_term_scan"
 LONG_TERM_REFRESH = "long_term_refresh"
 HISTORICAL_PAPER_CYCLE = "historical_paper_cycle"
 FNO_HISTORICAL_WALKFORWARD = "fno_historical_walkforward"
+# Evolution Engine: off-hours only -- grade pending Challenger shadow
+# decisions whose outcome horizon has elapsed, then re-check scientific
+# promotion eligibility. Never runs during market hours; must not delay
+# MARKET_SCAN/PAPER_CYCLE (section 30/31).
+TOURNAMENT_CYCLE = "tournament_cycle"
 
 ALL_JOB_TYPES = (
     AUTH_HEALTH, INSTRUMENT_REFRESH, DATA_REFRESH, BHAVCOPY_UPDATE, CORPORATE_ACTIONS,
     UNIVERSE_HISTORY, INDEX_WARMUP, MARKET_SCAN, DISCOVERY_REFRESH, NEWS_REFRESH, PAPER_CYCLE,
     OUTCOME_RESOLUTION, LEARNING_CYCLE, RESEARCH_CYCLE, LONG_TERM_SCAN, LONG_TERM_REFRESH,
-    HISTORICAL_PAPER_CYCLE, FNO_HISTORICAL_WALKFORWARD,
+    HISTORICAL_PAPER_CYCLE, FNO_HISTORICAL_WALKFORWARD, TOURNAMENT_CYCLE,
 )
 CRITICAL_JOBS = {AUTH_HEALTH, DATA_REFRESH, PAPER_CYCLE, OUTCOME_RESOLUTION}
 
@@ -265,6 +270,10 @@ def research_key(session_date: str) -> str:
 
 def historical_paper_key(batch_id: str) -> str:
     return f"hist_paper:{batch_id}"
+
+
+def tournament_cycle_key(session_date: str) -> str:
+    return f"tournament_cycle:{session_date}"
 
 
 def historical_learning_key(batch_id: str) -> str:

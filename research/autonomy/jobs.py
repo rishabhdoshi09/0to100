@@ -396,6 +396,20 @@ class Deps:
                 brain._save_intel_book()
             except Exception:
                 pass
+            try:
+                # Evolution Engine: freeze the Champion's real decision (just
+                # made above) + bounded Challenger shadows for later grading.
+                # Entirely best-effort -- see product.evolution.autonomy_hook's
+                # own try/except; this outer one is pure defense in depth so a
+                # failure here can never surface as a paper-cycle error.
+                from product.evolution.autonomy_hook import run_tournament_for_reco_cycle
+                run_tournament_for_reco_cycle(
+                    reco, book=brain.intel_book,
+                    regime=str((result or {}).get("regime") or "RISK_ON"),
+                    as_of=str((result or {}).get("as_of_date") or ""),
+                )
+            except Exception:
+                pass
         except Exception as exc:
             if isinstance(result, dict):
                 result.setdefault("reco_autopilot", {})
@@ -1538,6 +1552,38 @@ def run_news_refresh(ctx) -> JobResult:
 # Compatibility name retained for older tests.
 run_news_health = run_news_refresh
 
+
+def run_tournament_cycle(ctx) -> JobResult:
+    """Evolution Engine off-hours maintenance: grade every Challenger shadow
+    decision whose outcome horizon has elapsed, then re-check scientific
+    promotion eligibility for each domain. Pure research/grading work --
+    never touches the real paper book, never blocks on market data, and a
+    failure here can never fail this job's own ledger entry (it is not in
+    CRITICAL_JOBS and must never gate PAPER_CYCLE/MARKET_SCAN)."""
+    summary_parts: list[str] = []
+    try:
+        from product.evolution.grading import grade_pending_decisions
+
+        graded = grade_pending_decisions()
+        summary_parts.append(f"graded={len(graded)}")
+    except Exception as exc:
+        summary_parts.append(f"grading_error={exc}")
+
+    try:
+        from product.evolution import policy_registry as PR
+        from product.evolution.promotion import evaluate_promotion_batch
+
+        eligible_total = 0
+        for domain in PR.DOMAINS:
+            batch = evaluate_promotion_batch(domain)
+            eligible_total += sum(1 for r in batch if r.get("status") == "PROMOTION_ELIGIBLE")
+        summary_parts.append(f"promotion_eligible={eligible_total}")
+    except Exception as exc:
+        summary_parts.append(f"promotion_error={exc}")
+
+    return JobResult(JS.SUCCEEDED, "tournament cycle: " + ", ".join(summary_parts))
+
+
 HANDLERS = {
     SCH.AUTH_HEALTH: run_auth_health,
     SCH.INSTRUMENT_REFRESH: run_instrument_refresh,
@@ -1557,4 +1603,5 @@ HANDLERS = {
     SCH.LONG_TERM_REFRESH: run_long_term_refresh_job,
     SCH.HISTORICAL_PAPER_CYCLE: run_historical_paper_cycle,
     SCH.FNO_HISTORICAL_WALKFORWARD: run_fno_historical_walkforward,
+    SCH.TOURNAMENT_CYCLE: run_tournament_cycle,
 }

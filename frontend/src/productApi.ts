@@ -2254,3 +2254,10 @@ import type { ForwardEvidenceBoard } from './forwardEvidenceModel'
 
 export const fetchForwardEvidence = (): Promise<ForwardEvidenceBoard> =>
   request('/api/forward-evidence', { headers: { Accept: 'application/json' } })
+
+import type { EvolutionLabBoard } from './evolutionLabModel'
+
+export const fetchEvolutionLab = (domain = 'EQUITY'): Promise<EvolutionLabBoard> =>
+  request(`/api/evolution-lab?domain=${encodeURIComponent(domain)}`, {
+    headers: { Accept: 'application/json' },
+  })
