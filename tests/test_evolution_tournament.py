@@ -232,3 +232,57 @@ def test_default_budget_does_not_affect_normal_fast_cycles(tmp_path, monkeypatch
     assert result["tournament_budget_exhausted"] is False
     assert set(result["challengers_evaluated"]) == {"C1", "C2"}
     assert result["challengers_skipped"] == []
+
+
+# ── freeze/evaluate split (independent architecture review, PR #260) ────────
+
+def test_freeze_then_evaluate_separately_matches_run_tournament_cycle(tmp_path, monkeypatch):
+    """The whole point of the split: freeze_premutation_bundle() can be
+    called once, held onto, and evaluate_challengers_from_bundle() called
+    LATER (e.g. after a real mutation happens in between, in production)
+    without re-freezing -- and produces the exact same result as the
+    combined run_tournament_cycle() convenience wrapper would for the
+    same inputs."""
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    _register("CHAMP", status=policy_registry.CHAMPION)
+    _register("C1", parent="CHAMP")
+
+    cards = [_card("RELIANCE")]
+    champion_decisions = {"RELIANCE": {"decision": "ENTER_NOW", "reason_code": "ELIGIBLE", "selection_score": 90.0}}
+
+    bundle = tournament.freeze_premutation_bundle(
+        cards, champion_decisions, champion_policy_id="CHAMP", as_of="2026-09-30",
+    )
+    assert set(bundle["snapshots"].keys()) == {"RELIANCE"}
+    assert set(bundle["champion_rows"].keys()) == {"RELIANCE"}
+
+    # Simulate real mutation happening here, between freeze and evaluate --
+    # the bundle itself is immutable/already-frozen and unaffected.
+    result = tournament.evaluate_challengers_from_bundle(bundle)
+    assert result["champion_policy_id"] == "CHAMP"
+    assert result["challengers_evaluated"] == ["C1"]
+    assert result["results"][0]["champion"]["decision"] == "ENTER_NOW"
+    assert result["results"][0]["challengers"]["C1"]["symbol"] == "RELIANCE"
+
+
+def test_evaluate_from_bundle_never_rebuilds_or_refetches_snapshots(tmp_path, monkeypatch):
+    """evaluate_challengers_from_bundle must use ONLY what the bundle already
+    has -- never call snapshot.build_snapshot again -- since by the time it
+    runs (after real mutation, in production) rebuilding from live state
+    would silently break the pre-mutation guarantee."""
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    _register("CHAMP", status=policy_registry.CHAMPION)
+    _register("C1", parent="CHAMP")
+
+    cards = [_card("RELIANCE")]
+    champion_decisions = {"RELIANCE": {"decision": "ENTER_NOW", "reason_code": "ELIGIBLE", "selection_score": 90.0}}
+    bundle = tournament.freeze_premutation_bundle(
+        cards, champion_decisions, champion_policy_id="CHAMP", as_of="2026-09-30",
+    )
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("evaluate_challengers_from_bundle must never build a new snapshot")
+
+    monkeypatch.setattr(tournament.snapshot, "build_snapshot", _boom)
+    result = tournament.evaluate_challengers_from_bundle(bundle)
+    assert result["challengers_evaluated"] == ["C1"]

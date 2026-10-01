@@ -3,16 +3,33 @@
 Consumes the Champion's ALREADY-COMPUTED real decisions (from
 product.paper_autopilot.run_reco_paper_cycle's production evaluation) -- this
 module never re-runs the scanner and never calls any execution/broker/book-
-mutation path itself. Its only job is: freeze the Champion's real decision for
-fair comparison, evaluate every active Challenger against the exact same
-immutable snapshot, and compute per-symbol policy consensus.
+mutation path itself. Its job is split into two independent phases, on
+purpose (see product.paper_autopilot.run_reco_paper_cycle for how the real
+caller straddles a PAPER mutation between them):
+
+  1. freeze_premutation_bundle() -- freeze the immutable pre-mutation Market
+     Twin snapshot and the Champion's real verdict against it. Cost is
+     proportional to candidates seen, never to Challenger count, so this
+     phase alone is safe to run on the execution-critical path.
+  2. evaluate_challengers_from_bundle() -- evaluate every active Challenger
+     against that EXACT frozen bundle and compute per-symbol consensus. This
+     is the phase that can take arbitrarily long (N Challengers, each an
+     evaluator call) and MUST run only after the real Champion PAPER
+     mutation has already happened -- never inline before it, or a single
+     slow/hung Challenger can delay real order placement no matter how
+     tight the budget below is (a per-cycle time check between Challengers
+     cannot interrupt one that is already blocking).
+
+run_tournament_cycle() below runs both phases back-to-back for callers that
+have no mutation to straddle (off-hours/batch/historical contexts, most
+tests).
 
 Challenger failures are isolated per policy (section 32): one broken
-Challenger is logged and skipped, never raised up to block the Champion's
-real execution or any other Challenger. A challenger budget (max_challengers)
-bounds the work per cycle so N policies never turn into an
-O(policies x full market scan) cost -- every policy here evaluates the
-ALREADY-COMPUTED snapshot, never re-fetches data.
+Challenger is logged and skipped, never raised up to block any sibling
+Challenger. A challenger budget (max_challengers) bounds the work per cycle
+so N policies never turn into an O(policies x full market scan) cost --
+every policy here evaluates the ALREADY-COMPUTED snapshot, never re-fetches
+data.
 """
 from __future__ import annotations
 
@@ -29,14 +46,14 @@ log = get_logger(__name__)
 
 DEFAULT_MAX_NEW = 3
 DEFAULT_MAX_CHALLENGERS = 12
-# Challenger evaluation is bounded by COUNT (max_challengers) above, but a
-# single slow/hung policy evaluator could still stall every challenger behind
-# it -- and this whole tournament runs INLINE, before the Champion's real
-# PAPER mutation (see paper_autopilot.py). A wall-clock budget is the second,
-# independent bound: once exceeded, remaining challengers are skipped (never
-# raised, never blocking) so the real Champion path is never delayed by
-# research work. None disables the budget (existing callers/tests that don't
-# pass max_seconds are unaffected).
+# A SECOND, independent bound on top of max_challengers: once the cumulative
+# wall-clock time spent evaluating Challengers exceeds this, remaining
+# Challengers are skipped (never raised, never blocking). This bounds total
+# RESEARCH cost per cycle (section 6) -- it does NOT, by itself, protect
+# Champion execution latency, since the check only runs BETWEEN Challengers
+# and cannot interrupt one that is already hung. That protection comes from
+# evaluate_challengers_from_bundle() never running until after the real
+# Champion PAPER mutation has already completed (see module docstring).
 DEFAULT_MAX_SECONDS = float(os.environ.get("QT_EVOLUTION_TOURNAMENT_MAX_SECONDS") or 8.0)
 
 
@@ -104,7 +121,7 @@ def _rank_and_cap(
     return out
 
 
-def run_tournament_cycle(
+def freeze_premutation_bundle(
     card_list: Sequence[Mapping[str, Any]],
     champion_decisions_by_symbol: Mapping[str, Mapping[str, Any]],
     *,
@@ -113,26 +130,21 @@ def run_tournament_cycle(
     book: Any = None,
     regime: str = "",
     as_of: str = "",
-    max_new: int = DEFAULT_MAX_NEW,
-    max_challengers: int | None = DEFAULT_MAX_CHALLENGERS,
-    max_seconds: float | None = DEFAULT_MAX_SECONDS,
-    registry_path: str | Path | None = None,
     snapshot_path: str | Path | None = None,
     shadow_path: str | Path | None = None,
-    challenger_batch_evaluator=None,
 ) -> dict[str, Any]:
-    """Freeze the Champion's real decisions and every active Challenger's
-    shadow decisions against one shared immutable snapshot per candidate,
-    then compute per-symbol consensus. Returns a summary; every frozen row
-    is independently durable (see product.evolution.shadow_decisions).
+    """Phase 1 (execution-critical path): freeze the immutable pre-mutation
+    Market Twin snapshot for every candidate and the Champion's ALREADY-
+    DECIDED real verdict against it. This is the ONLY part of the tournament
+    that may run before real PAPER mutation -- it is proportional to
+    len(card_list), never to the number of Challengers, so it cannot turn
+    into an unbounded delay the way per-Challenger evaluation can.
 
-    registry_path/snapshot_path/shadow_path override three INDEPENDENT
-    stores -- never collapsed into one generic path, so a caller can never
-    accidentally point two different stores at the same file."""
-    challengers = policy_registry.active_challengers(domain, path=registry_path)
-    if max_challengers is not None:
-        challengers = challengers[:max_challengers]
-
+    The caller MUST proceed with the real Champion PAPER mutation immediately
+    after this returns, then evaluate Challengers separately (see
+    evaluate_challengers_from_bundle) from the bundle this returns -- never
+    by re-reading live book/market state, which would no longer be the same
+    pre-mutation information the Champion decided against."""
     snapshots: dict[str, dict[str, Any]] = {}
     for card in card_list:
         symbol = str(card.get("symbol") or "").upper()
@@ -147,6 +159,46 @@ def run_tournament_cycle(
         real = champion_decisions_by_symbol.get(symbol) or {}
         verdict = _champion_verdict(symbol, snap, real, champion_policy_id=champion_policy_id)
         champion_rows[symbol] = shadow_decisions.freeze_shadow_decision(snap, verdict, path=shadow_path)
+
+    return {
+        "domain": domain,
+        "as_of": as_of,
+        "champion_policy_id": champion_policy_id,
+        "snapshots": snapshots,
+        "champion_rows": champion_rows,
+    }
+
+
+def evaluate_challengers_from_bundle(
+    bundle: Mapping[str, Any],
+    *,
+    max_new: int = DEFAULT_MAX_NEW,
+    max_challengers: int | None = DEFAULT_MAX_CHALLENGERS,
+    max_seconds: float | None = DEFAULT_MAX_SECONDS,
+    registry_path: str | Path | None = None,
+    shadow_path: str | Path | None = None,
+    challenger_batch_evaluator=None,
+) -> dict[str, Any]:
+    """Phase 2 (OUTSIDE the execution-critical path): evaluate every active
+    Challenger against the EXACT bundle freeze_premutation_bundle() produced
+    -- the same immutable snapshots the Champion's real decision was already
+    made against. Must be called only AFTER the real Champion PAPER mutation
+    has already happened; nothing here can delay or affect that mutation,
+    because the mutation is already done by the time this runs.
+
+    A hung/slow Challenger can still only block THIS function's return, never
+    the Champion's PAPER entry -- that is the whole point of the split. The
+    wall-clock budget below remains as a bound on total research cost per
+    cycle (section 6), not as the mechanism that protects Champion latency."""
+    domain = str(bundle.get("domain") or policy_registry.EQUITY)
+    champion_policy_id = str(bundle.get("champion_policy_id") or "")
+    as_of = str(bundle.get("as_of") or "")
+    snapshots: dict[str, dict[str, Any]] = dict(bundle.get("snapshots") or {})
+    champion_rows: dict[str, dict[str, Any]] = dict(bundle.get("champion_rows") or {})
+
+    challengers = policy_registry.active_challengers(domain, path=registry_path)
+    if max_challengers is not None:
+        challengers = challengers[:max_challengers]
 
     challenger_rows: dict[str, dict[str, dict[str, Any]]] = {}
     budget_start = time.monotonic()
@@ -242,3 +294,42 @@ def run_tournament_cycle(
         "tournament_budget_exhausted": budget_exhausted,
         "results": per_symbol,
     }
+
+
+def run_tournament_cycle(
+    card_list: Sequence[Mapping[str, Any]],
+    champion_decisions_by_symbol: Mapping[str, Mapping[str, Any]],
+    *,
+    champion_policy_id: str,
+    domain: str = policy_registry.EQUITY,
+    book: Any = None,
+    regime: str = "",
+    as_of: str = "",
+    max_new: int = DEFAULT_MAX_NEW,
+    max_challengers: int | None = DEFAULT_MAX_CHALLENGERS,
+    max_seconds: float | None = DEFAULT_MAX_SECONDS,
+    registry_path: str | Path | None = None,
+    snapshot_path: str | Path | None = None,
+    shadow_path: str | Path | None = None,
+    challenger_batch_evaluator=None,
+) -> dict[str, Any]:
+    """Convenience wrapper combining both phases in sequence -- freeze then
+    evaluate -- for callers where the two do NOT need to straddle a real
+    PAPER mutation (off-hours/batch/historical contexts, and most tests).
+
+    product.paper_autopilot's real cycle does NOT use this wrapper: it calls
+    freeze_premutation_bundle() before mutation and
+    evaluate_challengers_from_bundle() after, specifically so a slow/hung
+    Challenger (bounded only by evaluate_challengers_from_bundle's budget,
+    never by anything here) cannot delay the real Champion PAPER entry that
+    sits between the two phases in that caller."""
+    bundle = freeze_premutation_bundle(
+        card_list, champion_decisions_by_symbol,
+        champion_policy_id=champion_policy_id, domain=domain, book=book,
+        regime=regime, as_of=as_of, snapshot_path=snapshot_path, shadow_path=shadow_path,
+    )
+    return evaluate_challengers_from_bundle(
+        bundle, max_new=max_new, max_challengers=max_challengers, max_seconds=max_seconds,
+        registry_path=registry_path, shadow_path=shadow_path,
+        challenger_batch_evaluator=challenger_batch_evaluator,
+    )

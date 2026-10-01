@@ -214,3 +214,209 @@ def test_normal_paper_cycle_creates_challenger_shadows_automatically(tmp_path, m
     assert len(seeded) >= 5
     assert seeded & frozen_ids
     assert cycle["evolution"]["challengers_evaluated"]
+
+
+# ── Challenger evaluation is OUTSIDE the Champion PAPER execution-critical
+# path (independent architecture review on PR #260) ─────────────────────────
+
+def test_hung_challenger_does_not_delay_real_champion_paper_mutation(tmp_path, monkeypatch):
+    """The literal merge blocker: a Challenger evaluator that blocks far
+    longer than the configured tournament budget must NEVER delay the real
+    Champion PAPER mutation. Proven by chronological ordering of real
+    in-process timestamps -- the real book mutation (_execute) must complete
+    BEFORE the slow Challenger's evaluator even starts running, not merely
+    "the cycle finished eventually". A budget check that only runs BETWEEN
+    Challengers (the pre-fix implementation) cannot guarantee this: the
+    Challenger that is already running blocks regardless of the budget."""
+    import time as time_module
+
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    monkeypatch.setenv("QT_EVOLUTION_TOURNAMENT_MAX_SECONDS", "0.05")
+
+    PR.register_policy(
+        policy_id="HANG_CHAMP", domain=PR.EQUITY, hypothesis="neutral baseline",
+        weights={}, status=PR.CHAMPION,
+    )
+    PR.register_policy(
+        policy_id="HANG_SLOW", domain=PR.EQUITY, hypothesis="deliberately slow evaluator",
+        weights={}, status=PR.CHALLENGER, parent_policy_id="HANG_CHAMP",
+    )
+    PR.register_policy(
+        policy_id="HANG_FAST", domain=PR.EQUITY, hypothesis="normal evaluator",
+        weights={}, status=PR.CHALLENGER, parent_policy_id="HANG_CHAMP",
+    )
+
+    events: list[tuple[str, float]] = []
+
+    import product.paper_autopilot as PA
+    real_execute = PA._execute
+    real_evaluate = PA.evaluate_selection_candidate
+
+    def _tracking_execute(decision, **kwargs):
+        events.append(("champion_mutation", time_module.monotonic()))
+        return real_execute(decision, **kwargs)
+
+    def _tracking_evaluate(card, **kwargs):
+        policy = kwargs.get("evolution_policy") or {}
+        if policy.get("policy_id") == "HANG_SLOW":
+            events.append(("slow_challenger_start", time_module.monotonic()))
+            time_module.sleep(0.35)  # far longer than the 0.05s budget above
+            events.append(("slow_challenger_end", time_module.monotonic()))
+        return real_evaluate(card, **kwargs)
+
+    monkeypatch.setattr(PA, "_execute", _tracking_execute)
+    monkeypatch.setattr(PA, "evaluate_selection_candidate", _tracking_evaluate)
+
+    book = PaperBook(capital=500_000)
+    cards = [_card("TCS", score=100, rs=80, confirms=3)]
+    started = time_module.monotonic()
+    cycle = _cycle(book, cards, as_of="2026-09-30", now=_now())
+    total_elapsed = time_module.monotonic() - started
+
+    # The real mutation genuinely happened.
+    assert len(book.open) == 1
+    assert cycle["taken"]
+    assert cycle["taken"][0]["symbol"] == "TCS"
+    assert cycle["taken"][0]["champion_policy_id"] == "HANG_CHAMP"
+
+    by_label = {label: ts for label, ts in events}
+    assert "champion_mutation" in by_label
+    assert "slow_challenger_start" in by_label
+    # The core proof: mutation completed strictly BEFORE the slow Challenger
+    # even started -- not "finished first" by luck, but structurally ordered.
+    assert by_label["champion_mutation"] < by_label["slow_challenger_start"]
+
+    # The slow Challenger really did run for its full duration (this is a
+    # genuine block, not a mocked-away no-op), and the whole cycle still
+    # completed deterministically afterward.
+    assert by_label["slow_challenger_end"] - by_label["slow_challenger_start"] >= 0.3
+    assert total_elapsed >= 0.3
+
+
+def test_deferred_challenger_evaluates_against_exact_premutation_snapshot(tmp_path, monkeypatch):
+    """Even though Challenger evaluation now runs AFTER the real mutation,
+    it must still see the market/account state EXACTLY as it was before
+    mutation -- the Market Twin guarantee must be preserved by freezing
+    inputs, not by timing. Proven two ways: (1) the Challenger's frozen
+    shadow row cites the identical market_snapshot_id as the Champion's row
+    for the same symbol, and (2) that snapshot's own recorded pre_decision_book
+    shows zero open positions, even though the REAL book has one open
+    position by the time the Challenger actually runs."""
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    PR.register_policy(
+        policy_id="TWIN_CHAMP", domain=PR.EQUITY, hypothesis="neutral baseline",
+        weights={}, status=PR.CHAMPION,
+    )
+    PR.register_policy(
+        policy_id="TWIN_CHAL", domain=PR.EQUITY, hypothesis="test challenger",
+        weights={}, status=PR.CHALLENGER, parent_policy_id="TWIN_CHAMP",
+    )
+
+    book = PaperBook(capital=500_000)
+    cards = [_card("TCS", score=100, rs=80, confirms=3)]
+    cycle = _cycle(book, cards, as_of="2026-09-30", now=_now())
+
+    assert len(book.open) == 1  # the real mutation happened
+
+    champion_row = next(
+        r for r in SD.list_shadow_decisions(policy_id="TWIN_CHAMP") if r["symbol"] == "TCS"
+    )
+    challenger_row = next(
+        r for r in SD.list_shadow_decisions(policy_id="TWIN_CHAL") if r["symbol"] == "TCS"
+    )
+    assert challenger_row["market_snapshot_id"] == champion_row["market_snapshot_id"]
+
+    frozen_snapshot = ES.get_snapshot_record(challenger_row["market_snapshot_id"])
+    assert frozen_snapshot is not None
+    # The frozen Market Twin reflects the PRE-mutation book (zero open),
+    # not the real book's current state (one open) at the time this
+    # Challenger was actually evaluated.
+    assert frozen_snapshot["pre_decision_book"]["open_count"] == 0
+
+
+def test_challenger_failure_is_recorded_and_excluded_from_consensus(tmp_path, monkeypatch):
+    """A Challenger that raises (modeling a timeout/crash) must be recorded
+    explicitly as skipped/unevaluated, never silently dropped, and must never
+    count toward the consensus denominator (section 16's "only policies that
+    actually ran successfully this cycle count")."""
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    PR.register_policy(
+        policy_id="FAIL_CHAMP", domain=PR.EQUITY, hypothesis="neutral baseline",
+        weights={}, status=PR.CHAMPION,
+    )
+    PR.register_policy(
+        policy_id="FAIL_BROKEN", domain=PR.EQUITY, hypothesis="deliberately broken evaluator",
+        weights={}, status=PR.CHALLENGER, parent_policy_id="FAIL_CHAMP",
+    )
+    PR.register_policy(
+        policy_id="FAIL_OK", domain=PR.EQUITY, hypothesis="normal evaluator",
+        weights={}, status=PR.CHALLENGER, parent_policy_id="FAIL_CHAMP",
+    )
+
+    import product.paper_autopilot as PA
+    real_evaluate = PA.evaluate_selection_candidate
+
+    def _flaky_evaluate(card, **kwargs):
+        policy = kwargs.get("evolution_policy") or {}
+        if policy.get("policy_id") == "FAIL_BROKEN":
+            raise RuntimeError("simulated Challenger evaluator crash/timeout")
+        return real_evaluate(card, **kwargs)
+
+    monkeypatch.setattr(PA, "evaluate_selection_candidate", _flaky_evaluate)
+
+    book = PaperBook(capital=500_000)
+    cards = [_card("TCS", score=100, rs=80, confirms=3)]
+    cycle = _cycle(book, cards, as_of="2026-09-30", now=_now())
+
+    # Champion mutation is entirely unaffected by the broken Challenger.
+    assert len(book.open) == 1
+    assert cycle["taken"][0]["champion_policy_id"] == "FAIL_CHAMP"
+
+    evolution = cycle["evolution"]
+    assert "FAIL_BROKEN" not in evolution["challengers_evaluated"]
+    assert "FAIL_OK" in evolution["challengers_evaluated"]
+
+    from product.evolution.consensus_board import get_consensus
+
+    consensus = get_consensus("TCS")
+    assert consensus is not None
+    # Only Champion + the Challengers that actually ran count toward the
+    # denominator -- the broken one is excluded entirely, not counted as a
+    # silent "no" vote. (The environment also auto-seeds its own default
+    # Challenger population alongside FAIL_OK/FAIL_BROKEN, so the exact
+    # count varies; what matters is it equals champion + evaluated, never
+    # champion + evaluated + the one that crashed.)
+    assert consensus["qualified_count"] == 1 + len(evolution["challengers_evaluated"])
+    assert "FAIL_BROKEN" not in str(consensus.get("dissent_breakdown") or {})
+
+
+def test_live_money_remains_locked_through_the_deferred_tournament_path(tmp_path, monkeypatch):
+    """The restructured Phase-1/Phase-2 split must not introduce any new
+    route to execution/broker/Telegram code or flip any live-trading flag."""
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    PR.register_policy(
+        policy_id="LOCK_CHAMP", domain=PR.EQUITY, hypothesis="neutral baseline",
+        weights={}, status=PR.CHAMPION,
+    )
+    book = PaperBook(capital=500_000)
+    cards = [_card("TCS", score=100, rs=80, confirms=3)]
+    cycle = _cycle(book, cards, as_of="2026-09-30", now=_now())
+
+    assert cycle["execution_reality"]["shadow_mode"] is True
+    assert cycle["execution_reality"]["affects_paper_orders"] is False
+
+    import ast
+    import inspect
+    from product.evolution import tournament as evolution_tournament_engine
+
+    source = inspect.getsource(evolution_tournament_engine)
+    tree = ast.parse(source)
+    forbidden = {"execution", "zerodha_broker", "telegram_actions", "telegram_commands", "kite_client"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names = {alias.name.split(".")[0] for alias in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            names = {(node.module or "").split(".")[0]}
+        else:
+            continue
+        assert not (names & forbidden), f"forbidden import found: {names}"
