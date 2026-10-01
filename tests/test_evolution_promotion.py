@@ -189,7 +189,18 @@ def test_scenario_g_rollback_restores_the_previous_champion(tmp_path, monkeypatc
     result = PROMO.evaluate_promotion(PR.EQUITY, "G_CHAL")
     assert result["status"] == PROMO.PROMOTION_ELIGIBLE
 
-    PROMO.promote_to_champion(PR.EQUITY, "G_CHAL", actor="operator", reason="cleared gates per evaluate_promotion")
+    advanced = PROMO.advance_eligible_to_probation(PR.EQUITY)
+    assert any(p["policy_id"] == "G_CHAL" for p in advanced)
+    assert PR.get_policy("G_CHAL")["status"] == PR.PROBATION
+    for i in range(PROMO.MIN_PROBATION_ADDITIONAL_PAIRED):
+        reg = "TRENDING_BULL" if i % 2 else "SIDEWAYS"
+        _seed("G_CHAMP", f"G_prob_{i}", -0.2, regime=reg)
+        _seed("G_CHAL", f"G_prob_{i}", 0.3, regime=reg)
+
+    PROMO.promote_to_champion(
+        PR.EQUITY, "G_CHAL", actor="operator",
+        reason="cleared gates plus probation evidence",
+    )
     assert PR.current_champion(PR.EQUITY)["policy_id"] == "G_CHAL"
     assert PR.get_policy("G_CHAMP")["status"] == PR.PROBATION
 
@@ -351,3 +362,49 @@ def test_former_champion_is_never_auto_retired(tmp_path, monkeypatch):
     retired = PROMO.retire_qualified_challengers(PR.EQUITY)
     assert all(r["policy_id"] != "SAFE_OLD" for r in retired)
     assert PR.get_policy("SAFE_OLD")["status"] == PR.PROBATION
+
+
+
+def test_qualified_challenger_cannot_skip_probation(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    n = 60
+    champ_rs = [(-0.3 if i % 2 == 0 else 0.1) for i in range(n)]
+    chal_rs = [(0.3 if i % 2 == 0 else 0.25) for i in range(n)]
+    _seed_pair("PROB", champ_rs, chal_rs)
+    assert PROMO.evaluate_promotion(
+        PR.EQUITY, "PROB_CHAL"
+    )["status"] == PROMO.PROMOTION_ELIGIBLE
+
+    with pytest.raises(RuntimeError, match="PROBATION"):
+        PROMO.promote_to_champion(
+            PR.EQUITY, "PROB_CHAL", actor="operator",
+            reason="attempted direct promotion",
+        )
+    assert PR.current_champion(PR.EQUITY)["policy_id"] == "PROB_CHAMP"
+
+
+def test_probation_requires_additional_unseen_forward_pairs(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    n = 60
+    champ_rs = [(-0.3 if i % 2 == 0 else 0.1) for i in range(n)]
+    chal_rs = [(0.3 if i % 2 == 0 else 0.25) for i in range(n)]
+    _seed_pair("CANARY", champ_rs, chal_rs)
+    advanced = PROMO.advance_eligible_to_probation(PR.EQUITY)
+    assert any(p["policy_id"] == "CANARY_CHAL" for p in advanced)
+
+    with pytest.raises(RuntimeError, match="PROBATION evidence incomplete"):
+        PROMO.promote_to_champion(
+            PR.EQUITY, "CANARY_CHAL", actor="operator",
+            reason="not enough post-probation evidence",
+        )
+
+    for i in range(PROMO.MIN_PROBATION_ADDITIONAL_PAIRED):
+        reg = "TRENDING_BULL" if i % 2 else "SIDEWAYS"
+        _seed("CANARY_CHAMP", f"CANARY_prob_{i}", -0.2, regime=reg)
+        _seed("CANARY_CHAL", f"CANARY_prob_{i}", 0.3, regime=reg)
+
+    promoted = PROMO.promote_to_champion(
+        PR.EQUITY, "CANARY_CHAL", actor="operator",
+        reason="post-probation evidence complete",
+    )
+    assert promoted["status"] == PR.CHAMPION

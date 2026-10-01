@@ -54,6 +54,7 @@ FDR_ALPHA = 0.05
 MIN_REGIME_BREADTH_OBSERVED = 2  # need at least this many distinct regimes to judge breadth at all
 MIN_REGIME_BREADTH_ACCEPTABLE = 2  # of the observed regimes, at least this many must be non-negative
 MIN_CHAMPION_TENURE_DAYS = 3
+MIN_PROBATION_ADDITIONAL_PAIRED = 10
 REVERSAL_INCREMENTAL_MARGIN_R = 0.10
 RETIRE_MIN_PAIRED_SAMPLE = 60
 RETIRE_MAX_INCREMENTAL_EXPECTANCY_R = -0.15
@@ -327,6 +328,66 @@ def evaluate_promotion_batch(
     return raw
 
 
+def advance_eligible_to_probation(
+    domain: str,
+    *,
+    registry_path: str | Path | None = None,
+    ledger_path: str | Path | None = None,
+    proof_path: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    """Move scientifically qualified Challengers into shadow-only PROBATION.
+
+    PROBATION does not control PAPER decisions: active_challengers() continues
+    to evaluate it as a shadow. The transition freezes the paired sample count
+    at entry; a later human promotion requires additional unseen forward
+    observations beyond this checkpoint.
+    """
+    batch = evaluate_promotion_batch(
+        domain,
+        registry_path=registry_path,
+        ledger_path=ledger_path,
+        proof_path=proof_path,
+        persist_proofs=True,
+    )
+    advanced: list[dict[str, Any]] = []
+    for eligibility in batch:
+        if eligibility.get("status") != PROMOTION_ELIGIBLE:
+            continue
+        policy_id = str(eligibility.get("policy_id") or "")
+        policy = policy_registry.get_policy(policy_id, path=registry_path)
+        if not policy or policy.get("status") == policy_registry.PROBATION:
+            continue
+        if policy.get("status") not in (policy_registry.CHALLENGER, policy_registry.SHADOW):
+            continue
+
+        policy_registry.set_status(
+            policy_id,
+            policy_registry.PROBATION,
+            reason=(
+                "scientifically promotion-eligible; entering shadow-only "
+                "probation for additional unseen forward evidence"
+            ),
+            path=registry_path,
+        )
+        store = policy_registry.load_registry(registry_path)
+        record = dict(store["policies"][policy_id])
+        record["probation"] = {
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "paired_snapshots_at_start": int(
+                eligibility.get("paired_snapshots") or 0
+            ),
+            "champion_policy_id": str(
+                eligibility.get("champion_policy_id") or ""
+            ),
+            "minimum_additional_paired": MIN_PROBATION_ADDITIONAL_PAIRED,
+            "controls_paper_decisions": False,
+        }
+        store["policies"][policy_id] = record
+        policy_registry.save_registry(store, registry_path)
+        advanced.append(record)
+    return advanced
+
+
 def evaluate_retirement_batch(
     domain: str, *, registry_path: str | Path | None = None,
     ledger_path: str | Path | None = None,
@@ -486,6 +547,27 @@ def promote_to_champion(
                 raise RuntimeError(
                     f"reversal hysteresis requires incremental expectancy >= {required:+.3f}R"
                 )
+
+    # PROBATION is a real canary stage, not a label. A qualified policy
+    # remains shadow-only until it has accumulated additional unseen paired
+    # forward evidence after entering probation.
+    policy = policy_registry.get_policy(
+        new_champion_policy_id, path=registry_path,
+    ) or policy
+    if policy.get("status") != policy_registry.PROBATION:
+        raise RuntimeError(
+            f"{new_champion_policy_id} must enter shadow-only PROBATION "
+            "before it can become Champion"
+        )
+    probation = dict(policy.get("probation") or {})
+    probation_start_n = int(probation.get("paired_snapshots_at_start") or 0)
+    paired_now = int(eligibility.get("paired_snapshots") or 0)
+    required_paired = probation_start_n + MIN_PROBATION_ADDITIONAL_PAIRED
+    if paired_now < required_paired:
+        raise RuntimeError(
+            f"PROBATION evidence incomplete: {paired_now} paired observations; "
+            f"need {required_paired} ({MIN_PROBATION_ADDITIONAL_PAIRED} new after probation)"
+        )
 
     previous_champion_id = current["policy_id"] if current else None
     if current is not None:

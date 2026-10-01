@@ -1565,16 +1565,22 @@ def run_tournament_cycle(ctx) -> JobResult:
         from product.evolution import policy_registry as PR
         from product.evolution.promotion import (
             evaluate_promotion_batch,
+            advance_eligible_to_probation,
             retire_qualified_challengers,
         )
 
         eligible_total = 0
+        probation_total = 0
         retired_total = 0
         for domain in PR.DOMAINS:
             batch = evaluate_promotion_batch(domain)
-            eligible_total += sum(1 for r in batch if r.get("status") == "PROMOTION_ELIGIBLE")
+            eligible_total += sum(
+                1 for r in batch if r.get("status") == "PROMOTION_ELIGIBLE"
+            )
+            probation_total += len(advance_eligible_to_probation(domain))
             retired_total += len(retire_qualified_challengers(domain))
         summary_parts.append(f"promotion_eligible={eligible_total}")
+        summary_parts.append(f"probation_started={probation_total}")
         summary_parts.append(f"retired={retired_total}")
     except Exception as exc:
         summary_parts.append(f"promotion_error={exc}")
