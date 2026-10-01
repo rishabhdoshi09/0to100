@@ -1,13 +1,13 @@
 """Pure, read-only policy evaluation over a frozen market snapshot.
 
 PAPER-execution safety boundary: this module contains NO broker call, NO
-book mutation, NO Telegram send, and NO import of execution.trade_executor,
-execution.autopilot, or product.paper_autopilot's book-mutating functions.
-It only ever reads a snapshot dict and a policy manifest dict and returns a
-plain dict describing what that policy WOULD have done. Whether that
-decision is allowed to become a real PAPER order is decided entirely
-outside this module, in product/evolution/tournament.py, which routes only
-the domain's current CHAMPION to the real execution path.
+book mutation, NO Telegram send, and NO import of execution.trade_executor
+or book-mutating functions. It only transforms a canonical score/context
+with one immutable bounded policy manifest. The real PAPER engine resolves
+the domain's current CHAMPION before selection and applies these same bounded
+weights inside its existing hard-gated decision seam; Challengers use this
+module read-only against frozen snapshots. Execution remains owned by the
+existing PAPER engine, never by Evolution itself.
 
 Challengers are bounded, interpretable re-weightings of the SAME real
 scoring function QuantTerm already runs (product.decision_context.
