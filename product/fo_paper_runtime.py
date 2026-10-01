@@ -280,7 +280,7 @@ def run_fo_paper_cycle(
         # non-entry/EOD side of the cycle so research never delays the
         # execution-critical window. Each shadow is resolved from its own
         # post-freeze option bars; failures are isolated and leave it pending.
-        if eod_exit_due or not allow_new_entries:
+        if eod_exit_due:
             try:
                 from product.evolution.grading import grade_pending_contract_decisions
 
