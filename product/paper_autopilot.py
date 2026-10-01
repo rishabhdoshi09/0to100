@@ -350,7 +350,6 @@ def evaluate_candidate(
     policy: Mapping[str, Any] | None = None,
     family_risk: dict | None = None,
     cluster_risk: dict | None = None,
-    evolution_policy: Mapping[str, Any] | None = None,
 ) -> AutopilotDecision:
     """Gate one recommendation card. First hard-block wins. No silent skip."""
     symbol = str(card.get("symbol") or "").strip().upper()
@@ -590,6 +589,7 @@ def evaluate_selection_candidate(
     enforce_history: bool | None = None,
     family_risk: dict | None = None,
     cluster_risk: dict | None = None,
+    evolution_policy: Mapping[str, Any] | None = None,
 ) -> AutopilotDecision:
     """Canonical selection-thesis evaluation without execution.
 
