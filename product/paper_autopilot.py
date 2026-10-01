@@ -312,6 +312,14 @@ def _decorate(
     else:
         decision.breakdown = base_breakdown
 
+    # Durable Evolution replay must never recompute this from future evidence.
+    # Keep the exact decision-time empirical-policy score inputs alongside the
+    # Champion-weighted breakdown.
+    decision.breakdown["pre_evolution_breakdown"] = {
+        **dict(base_breakdown),
+        "parts": [dict(part) for part in base_breakdown.get("parts") or []],
+    }
+
     base_rank = float(decision.breakdown.get("selection_rank") or 0.0)
     try:
         from product.challenger_learning import paper_selection_adjustment
@@ -992,10 +1000,38 @@ def run_reco_paper_cycle(
             rejections.append(decision.as_dict())
 
     ranked.sort(key=lambda item: (-item[0], item[1].symbol))
+    individual_decisions_by_symbol = {
+        decision.symbol: decision.as_dict() for decision in decisions
+    }
+
+    # Compute the point-in-time correlation matrix once and use the SAME
+    # matrix for the Champion portfolio authority and the deferred Challenger
+    # replay. This avoids a later research worker re-reading newer bars.
+    frozen_correlations: dict[str, float] = {}
+    try:
+        from product.pit_correlation import correlations_for_candidates
+
+        held_symbols = [
+            str(getattr(pos, "symbol", "") or "").upper()
+            for pos in (getattr(book, "open", {}) or {}).values()
+            if str(getattr(pos, "symbol", "") or "").strip()
+        ]
+        corr_meta = correlations_for_candidates(
+            [dict(decision.card or {}) for _, decision in ranked],
+            held_symbols=held_symbols,
+        )
+        frozen_correlations = {
+            str(k): float(v)
+            for k, v in dict(corr_meta.get("correlations") or {}).items()
+        }
+    except Exception:
+        frozen_correlations = {}
+
     try:
         from product.portfolio_selection_authority import apply_portfolio_authority
         ranked, diverted = apply_portfolio_authority(
             ranked, book=book, max_new=max_new, regime=regime,
+            correlations=frozen_correlations,
         )
         for decision in diverted:
             if str(getattr(decision, "decision", "")) == WAIT:
@@ -1010,23 +1046,17 @@ def run_reco_paper_cycle(
         # Portfolio authority is part of the execution gate, not optional
         # enrichment. Never fall through to opening positions if it fails.
         raise RuntimeError(f"portfolio selection authority failed: {exc}") from exc
-    # Phase 1 (execution-critical): freeze the immutable pre-mutation Market
-    # Twin snapshot + the Champion's already-decided verdict against it. This
-    # is proportional to len(card_list), never to Challenger count, so it is
-    # the ONLY Evolution work allowed before real PAPER mutation below.
-    # Challenger EVALUATION is deliberately deferred past the mutation loop
-    # (see Phase 2 after `entered = 0`) -- a hung/slow Challenger must never
-    # delay real Champion order placement, which an inline per-cycle time
-    # budget alone cannot guarantee (it only checks BETWEEN Challengers, not
-    # during one that is already blocking).
-    evolution_tournament: dict[str, Any] | None = None
+    # Evolution research is now fully detached from the PAPER transaction.
+    # Before mutation we only freeze/persist immutable inputs. No Challenger
+    # evaluator is invoked here. The work item remains PREPARED until the
+    # outer PAPER owner durably saves the book after this function returns.
     evolution_bundle: dict[str, Any] | None = None
-    frozen_book_for_challengers: Any = None
+    evolution_deferred_work_id = ""
     if evolution_champion and card_list:
         try:
-            import copy
-
+            from product.evolution import policy_registry as evolution_registry
             from product.evolution import tournament as evolution_tournament_engine
+            from product.evolution.deferred_work import prepare_work
 
             champion_decisions_by_symbol = {
                 decision.symbol: decision.as_dict() for decision in decisions
@@ -1035,21 +1065,46 @@ def run_reco_paper_cycle(
                 card_list,
                 champion_decisions_by_symbol,
                 champion_policy_id=str(evolution_champion.get("policy_id") or ""),
-                domain="EQUITY",
+                domain=evolution_registry.EQUITY,
                 book=book,
                 regime=regime,
                 as_of=day,
             )
-            # A genuine frozen COPY, not the live `book` reference -- Challenger
-            # evaluation runs AFTER real mutation below, so reading the live
-            # object at that point would see the Champion's own fresh fill and
-            # silently break the apples-to-apples Market Twin guarantee.
-            frozen_book_for_challengers = copy.deepcopy(book)
+            challenger_manifests = evolution_registry.active_challengers(
+                evolution_registry.EQUITY
+            )
+            pre_book_snapshot = (
+                dict(book.snapshot())
+                if book is not None and hasattr(book, "snapshot")
+                else {}
+            )
+            held_sector_by_symbol = {
+                str(getattr(pos, "symbol", "") or "").upper(): str(
+                    getattr(pos, "sector", "") or ""
+                )
+                for pos in (getattr(book, "open", {}) or {}).values()
+                if str(getattr(pos, "symbol", "") or "").strip()
+            }
+            prepared = prepare_work(
+                bundle=evolution_bundle,
+                champion_policy_fingerprint=evolution_registry.policy_manifest_fingerprint(
+                    evolution_champion
+                ),
+                challenger_policies=challenger_manifests,
+                individual_decisions_by_symbol=individual_decisions_by_symbol,
+                pre_mutation_book_snapshot=pre_book_snapshot,
+                held_sector_by_symbol=held_sector_by_symbol,
+                correlations=frozen_correlations,
+                max_new=max_new,
+                regime=regime,
+            )
+            evolution_deferred_work_id = str(prepared.get("work_id") or "")
         except Exception as exc:
-            # Research isolation: a freeze failure may never block the
+            # Research preparation failure is visible but can never block the
             # already-decided Champion PAPER path.
             evolution_error = f"{type(exc).__name__}: {exc}"[:240]
             evolution_bundle = None
+            evolution_deferred_work_id = ""
 
     snapshot_id = str(payload.get("scan_scanned_at") or day)
     entered = 0
@@ -1173,87 +1228,6 @@ def run_reco_paper_cycle(
         except Exception:
             pass
 
-    # Phase 2 (OUTSIDE the execution-critical path): the real Champion PAPER
-    # mutation loop above has already completed -- nothing below can delay or
-    # affect it. Evaluate every active Challenger against the EXACT bundle
-    # Phase 1 froze before mutation, against a deep-COPIED pre-mutation book
-    # (never the live `book`, which the loop above may have just mutated) so
-    # Challengers still see the identical pre-decision account state the
-    # Champion decided against -- the Market Twin guarantee is preserved by
-    # using frozen inputs, not by timing.
-    if evolution_bundle is not None:
-        try:
-            from product.evolution import tournament as evolution_tournament_engine
-            from product.evolution.consensus_board import save_latest_consensus
-
-            def _challenger_batch_evaluator(
-                snapshots: Sequence[Mapping[str, Any]],
-                challenger_policy: Mapping[str, Any],
-            ) -> list[dict[str, Any]]:
-                shadow_decisions_local: list[AutopilotDecision] = []
-                shadow_ranked: list[tuple[float, AutopilotDecision]] = []
-                snapshot_id_by_symbol = {
-                    str(s.get("symbol") or "").upper(): str(s.get("market_snapshot_id") or "")
-                    for s in snapshots
-                }
-                for frozen_snapshot in snapshots:
-                    shadow_decision = evaluate_selection_candidate(
-                        frozen_snapshot.get("card") or {},
-                        book=frozen_book_for_challengers,
-                        workspace=payload or None,
-                        now=clock,
-                        entries_allowed=entries_allowed,
-                        entry_block_reason=entry_block_reason,
-                        paper_enabled=paper_enabled,
-                        regime=regime,
-                        policy_path=policy_path,
-                        policies=policies,
-                        enforce_history=enforce_history,
-                        family_risk=family_risk,
-                        cluster_risk=cluster_risk,
-                        evolution_policy=challenger_policy,
-                    )
-                    shadow_decisions_local.append(shadow_decision)
-                    if shadow_decision.decision == ENTER_NOW:
-                        shadow_ranked.append(
-                            (float(shadow_decision.selection_score or 0.0), shadow_decision)
-                        )
-
-                shadow_ranked.sort(key=lambda item: (-item[0], item[1].symbol))
-                from product.portfolio_selection_authority import apply_portfolio_authority
-
-                _kept, _diverted = apply_portfolio_authority(
-                    shadow_ranked, book=frozen_book_for_challengers, max_new=max_new, regime=regime,
-                )
-                kept_ids = {id(decision) for _, decision in _kept}
-                for decision in shadow_decisions_local:
-                    if decision.decision == ENTER_NOW and id(decision) not in kept_ids:
-                        decision.decision = NO_TRADE
-                        decision.reason_code = NO_TRADE
-                        decision.detail = "not top-of-the-top under Challenger policy"
-                        decision.group = "REJECTED"
-                verdicts: list[dict[str, Any]] = []
-                for decision in shadow_decisions_local:
-                    row = decision.as_dict()
-                    row["policy_id"] = str(challenger_policy.get("policy_id") or "")
-                    row["market_snapshot_id"] = snapshot_id_by_symbol.get(
-                        str(decision.symbol or "").upper(), ""
-                    )
-                    row["domain"] = "EQUITY"
-                    verdicts.append(row)
-                return verdicts
-
-            evolution_tournament = evolution_tournament_engine.evaluate_challengers_from_bundle(
-                evolution_bundle,
-                max_new=max_new,
-                challenger_batch_evaluator=_challenger_batch_evaluator,
-            )
-            save_latest_consensus(evolution_tournament)
-        except Exception as exc:
-            # Research isolation: a Challenger failure may never retroactively
-            # affect the already-executed Champion PAPER path.
-            evolution_error = f"{type(exc).__name__}: {exc}"[:240]
-
     reco_symbols = {str(c.get("symbol") or "").upper() for c in card_list}
     scan_rows = list(scan_records or payload.get("scan_records") or [])
     close_misses = []
@@ -1363,15 +1337,17 @@ def run_reco_paper_cycle(
                 decisions[0].evolution_policy_fingerprint if decisions else ""
             ),
             "challengers_seeded": len(evolution_population.get("challengers") or []),
-            "challengers_evaluated": list(
-                (evolution_tournament or {}).get("challengers_evaluated") or []
+            "challengers_evaluated": [],
+            "deferred_work_id": evolution_deferred_work_id,
+            "deferred_work_status": (
+                "PREPARED" if evolution_deferred_work_id else "NOT_PREPARED"
             ),
             "market_snapshot_ids": [
-                row.get("market_snapshot_id")
-                for row in (evolution_tournament or {}).get("results") or []
-                if row.get("market_snapshot_id")
+                str((row or {}).get("market_snapshot_id") or "")
+                for row in dict((evolution_bundle or {}).get("snapshots") or {}).values()
+                if (row or {}).get("market_snapshot_id")
             ],
-            "snapshot_state": "PRE_MUTATION",
+            "snapshot_state": "PRE_MUTATION_DURABLE_WORK",
             "error": evolution_error,
             "controls_paper_decisions": bool(evolution_champion),
         },
