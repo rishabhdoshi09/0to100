@@ -44,11 +44,14 @@ def test_bootstraps_a_champion_when_none_exists(tmp_path, monkeypatch):
     assert result["champion_policy_id"] == autonomy_hook.CHAMPION_BOOTSTRAP_ID
     champ = policy_registry.current_champion(policy_registry.EQUITY)
     assert champ is not None and champ["policy_id"] == autonomy_hook.CHAMPION_BOOTSTRAP_ID
+    seeded = policy_registry.active_challengers(policy_registry.EQUITY)
+    assert len(seeded) >= 5
 
-    # A second call reuses the SAME champion -- never re-bootstraps/duplicates.
+    # A second call reuses the SAME champion and seed population -- never duplicates.
     with mock.patch("product.recommendations_store.load_recommendations", return_value=_fake_recommendations_payload(cards)):
         autonomy_hook.run_tournament_for_reco_cycle(reco, as_of="2026-09-30")
     assert len(policy_registry.list_policies(domain=policy_registry.EQUITY, status=policy_registry.CHAMPION)) == 1
+    assert len(policy_registry.active_challengers(policy_registry.EQUITY)) == len(seeded)
 
 
 def test_real_champion_decision_is_frozen_from_the_reco_cycle_output(tmp_path, monkeypatch):

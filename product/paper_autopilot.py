@@ -284,6 +284,20 @@ def _decorate(
         from product.evolution.policy_eval import apply_policy_weights
         from product.evolution.policy_registry import policy_manifest_fingerprint
 
+        # Evolution policies may add conservative gates but can never remove
+        # canonical hard blockers. This sample-floor hypothesis is evaluated
+        # only after the production evaluator has already decided eligibility.
+        min_sample = (evo.get("weights") or {}).get("min_empirical_sample")
+        if min_sample is not None and decision.decision == ENTER_NOW:
+            sample_size = int((decision.context.get("empirical") or {}).get("sample_size") or 0)
+            if sample_size < int(float(min_sample)):
+                decision.decision = BLOCK
+                decision.reason_code = "EVOLUTION_MIN_SAMPLE_NOT_MET"
+                decision.detail = (
+                    f"Evolution policy requires empirical_n>={int(float(min_sample))}; "
+                    f"observed {sample_size}"
+                )
+
         decision.breakdown = apply_policy_weights(base_breakdown, decision.context, evo)
         decision.evolution_policy_id = str(evo.get("policy_id") or "")
         decision.evolution_policy_version = int(evo.get("version") or 1)
