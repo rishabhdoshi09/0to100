@@ -144,6 +144,20 @@ def run_tournament_cycle(
                 verdicts = list(
                     challenger_batch_evaluator(list(snapshots.values()), policy) or []
                 )
+                normalized_verdicts: list[dict[str, Any]] = []
+                for verdict in verdicts:
+                    row = dict(verdict or {})
+                    symbol = str(row.get("symbol") or "").upper()
+                    snap = snapshots.get(symbol)
+                    if snap is None:
+                        raise ValueError(
+                            f"Challenger {policy['policy_id']} returned unknown symbol {symbol!r}"
+                        )
+                    row["policy_id"] = str(policy["policy_id"])
+                    row["market_snapshot_id"] = str(snap["market_snapshot_id"])
+                    row["domain"] = domain
+                    normalized_verdicts.append(row)
+                verdicts = normalized_verdicts
             else:
                 verdicts = [
                     policy_eval.evaluate_snapshot(snap, policy) for snap in snapshots.values()
