@@ -392,12 +392,33 @@ class Deps:
                     result["eligibility"] = "TRADED"
                 elif result.get("eligibility") in {"NO_ELIGIBLE_TRADE", "", None}:
                     result["eligibility"] = reco.get("eligibility") or result.get("eligibility")
+            save_ok = True
             try:
-                brain._save_intel_book()
+                saved = brain._save_intel_book()
+                save_ok = saved is not False
             except Exception:
-                pass
-            # Evolution now runs inside run_reco_paper_cycle() before PAPER
-            # mutation. Do not replay it here against an already-mutated book.
+                save_ok = False
+
+            evolution_work_id = str(
+                ((reco.get("evolution") or {}).get("deferred_work_id") or "")
+            )
+            if evolution_work_id:
+                from product.evolution import deferred_work as evolution_deferred
+
+                if reco.get("positions_opened") and not save_ok:
+                    evolution_deferred.mark_abandoned(
+                        evolution_work_id,
+                        "PAPER_BOOK_PERSISTENCE_FAILED_AFTER_MUTATION",
+                    )
+                    raise RuntimeError(
+                        "paper position mutated in memory but durable intel_book save failed"
+                    )
+                evolution_deferred.mark_ready(evolution_work_id)
+                if isinstance(result, dict):
+                    result.setdefault("reco_autopilot", {})["evolution"] = {
+                        **dict(reco.get("evolution") or {}),
+                        "deferred_work_status": "READY",
+                    }
         except Exception as exc:
             if isinstance(result, dict):
                 result.setdefault("reco_autopilot", {})
@@ -1553,6 +1574,24 @@ def run_tournament_cycle(ctx) -> JobResult:
     failure here can never fail this job's own ledger entry (it is not in
     CRITICAL_JOBS and must never gate PAPER_CYCLE/MARKET_SCAN)."""
     summary_parts: list[str] = []
+    try:
+        from product.evolution.deferred_work import process_ready_isolated
+
+        deferred = process_ready_isolated(limit=2)
+        succeeded = sum(1 for row in deferred if row.get("status") == "SUCCEEDED")
+        timed_out = sum(1 for row in deferred if row.get("timed_out"))
+        failed = sum(
+            1 for row in deferred
+            if row.get("status") in {"FAILED", "RETRYABLE"}
+        )
+        summary_parts.append(
+            f"deferred={len(deferred)} success={succeeded} timeout={timed_out} failed={failed}"
+        )
+    except Exception as exc:
+        # This is a non-critical research lane.  Even its own isolation
+        # wrapper failing must not poison forward PAPER/scan availability.
+        summary_parts.append(f"deferred_error={type(exc).__name__}:{exc}")
+
     try:
         from product.evolution.grading import grade_pending_decisions
 
