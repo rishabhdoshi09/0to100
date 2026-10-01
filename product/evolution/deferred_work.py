@@ -74,6 +74,7 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
 def _work_id(
     bundle: Mapping[str, Any],
     champion_policy_fingerprint: str,
+    challenger_policies: Sequence[Mapping[str, Any]],
 ) -> str:
     material = {
         "domain": bundle.get("domain"),
@@ -83,6 +84,10 @@ def _work_id(
         "snapshot_ids": sorted(
             str((row or {}).get("market_snapshot_id") or "")
             for row in dict(bundle.get("snapshots") or {}).values()
+        ),
+        "challengers": sorted(
+            json.dumps(dict(policy), sort_keys=True, separators=(",", ":"), default=str)
+            for policy in challenger_policies
         ),
     }
     return hashlib.sha256(
@@ -109,7 +114,7 @@ def prepare_work(
     only after the PAPER transaction has returned and its book has been
     durably saved.
     """
-    work_id = _work_id(bundle, champion_policy_fingerprint)
+    work_id = _work_id(bundle, champion_policy_fingerprint, challenger_policies)
     path = _item_path(work_id, root)
     existing = _read_json(path)
     if existing is not None:
@@ -304,6 +309,7 @@ def _frozen_policy_batch(
             selection_score=score,
             portfolio={},
             group="",
+            breakdown=weighted,
         )
         decisions.append(obj)
         if decision == "ENTER_NOW":
@@ -344,7 +350,7 @@ def _frozen_policy_batch(
             "detail": decision.detail,
             "adjusted_score": float(decision.selection_score or 0.0),
             "selection_score": float(decision.selection_score or 0.0),
-            "breakdown": {},
+            "breakdown": dict(getattr(decision, "breakdown", {}) or {}),
             "entry": decision.context.get("entry"),
             "stop": decision.context.get("stop"),
             "target": decision.context.get("target"),
