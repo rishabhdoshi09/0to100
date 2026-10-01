@@ -49,6 +49,21 @@ def portfolio_risk_report(extra_trade: dict | None = None) -> dict:
     rows = [{"symbol": t["symbol"], "qty": int(t["qty"] or 0),
              "entry": float(t["entry_price"] or 0),
              "stop": float(t["stop_price"] or 0)} for t in trades]
+    # The account-level risk meter must see the WHOLE book, not just the
+    # legacy execution.autopilot/trade_executor table. The modern automatic
+    # engine (product.paper_autopilot, the documented sole new-entry
+    # authority) keeps its own separate book -- without this, "5% total
+    # open risk" / sector-concentration warnings would silently ignore the
+    # positions actually being opened by real automatic trading today.
+    try:
+        from product.paper_status import modern_engine_open_positions
+        rows.extend(
+            {"symbol": p["symbol"], "qty": p["qty"],
+             "entry": p["entry_price"], "stop": p["stop_price"]}
+            for p in modern_engine_open_positions()
+        )
+    except Exception as exc:
+        log.debug("modern_engine_positions_read_failed", error=str(exc))
     if extra_trade:
         rows.append(extra_trade)
 

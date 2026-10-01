@@ -110,6 +110,59 @@ class TestDataIntegrity:
         r2 = DI.integrity_report()
         assert r2["checked"] == 0 and r2["ca_mismatch"] is False
 
+    def test_rotating_sample_is_not_always_the_same_alphabetical_prefix(self):
+        """store_symbols() returns names in sorted order, so a fixed [:sample]
+        slice would check the same alphabetically-first symbols on every
+        single call forever -- most of a ~2000-symbol universe would never
+        be covered by this HALT-worthy gate. The sample must rotate."""
+        symbols = [f"SYM{i:04d}" for i in range(500)]
+        first = DI._rotating_sample(symbols, 120, now=0.0)
+        later = DI._rotating_sample(symbols, 120, now=DI._SAMPLE_ROTATION_SECONDS * 50)
+        assert first == symbols[:120], "sanity: at now=0 the window starts at the beginning"
+        assert later != first, "a later rotation window must check different symbols"
+
+    def test_rotating_sample_is_deterministic_for_a_fixed_now(self):
+        symbols = [f"SYM{i:04d}" for i in range(500)]
+        a = DI._rotating_sample(symbols, 120, now=12345.0)
+        b = DI._rotating_sample(symbols, 120, now=12345.0)
+        assert a == b
+
+    def test_rotating_sample_wraps_around_the_end_of_the_universe(self):
+        symbols = [f"SYM{i:04d}" for i in range(10)]
+        # Choose `now` so the window offset lands near the end, forcing wraparound.
+        now = DI._SAMPLE_ROTATION_SECONDS * 8  # offset = 8 % 10 = 8
+        out = DI._rotating_sample(symbols, 5, now=now)
+        assert len(out) == 5
+        assert out == symbols[8:] + symbols[:3]
+
+    def test_rotating_sample_covers_the_whole_universe_eventually(self):
+        symbols = [f"SYM{i:04d}" for i in range(500)]
+        seen: set[str] = set()
+        # Each rotation tick advances the offset by one -- step through enough
+        # ticks (one per symbol) to guarantee every offset residue is hit.
+        for tick in range(len(symbols)):
+            seen.update(DI._rotating_sample(symbols, 120, now=DI._SAMPLE_ROTATION_SECONDS * tick))
+        assert seen == set(symbols)
+
+    def test_rotating_sample_returns_everything_when_universe_fits_in_one_sample(self):
+        symbols = [f"SYM{i:04d}" for i in range(50)]
+        assert DI._rotating_sample(symbols, 120, now=999.0) == symbols
+
+    def test_integrity_report_uses_the_rotating_sample_not_a_fixed_prefix(self, monkeypatch):
+        import data.bhavcopy_store as bs
+        symbols = [f"SYM{i:04d}" for i in range(500)]
+        monkeypatch.setattr(bs, "store_symbols", lambda: symbols)
+        checked_runs: list[list[str]] = []
+        monkeypatch.setattr(
+            DI, "check_symbol",
+            lambda s: (checked_runs[-1].append(s), {"symbol": s, "ok": True, "gaps": [], "stale_days": 0})[1],
+        )
+        checked_runs.append([])
+        DI.integrity_report(sample=120, now=0.0)
+        checked_runs.append([])
+        DI.integrity_report(sample=120, now=DI._SAMPLE_ROTATION_SECONDS * 50)
+        assert checked_runs[0] != checked_runs[1]
+
 
 class TestCorporateActions:
     """Phase-1 data integrity: back-adjustment must turn a phantom split-gap into

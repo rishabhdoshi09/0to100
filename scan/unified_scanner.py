@@ -378,6 +378,8 @@ class StockSignal:
     avg_vol20: float = 0.0                  # 20-day avg volume — sniper vol pacing
     above_sma50: bool = False              # trend flags — breadth ka raw data
     above_sma200: bool = False
+    relative_strength_pct: float = 0.0     # REAL RS vs Nifty (30-session return
+                                            # spread) -- not the composite score
     chase_risk: bool = False               # extension guard fired — WATCH is a
                                             # safety demotion, not a low-score
                                             # miss; downstream enrichment (buzz/
@@ -570,6 +572,15 @@ class UnifiedScanner:
             avg_vol20 = float(np.nanmean(vol[-20:]))    # sniper vol pacing
         atr = _atr(high, low, close)
         sma50 = close[-50:].mean() if len(close) >= 50 else price
+        # Real relative strength vs Nifty (30-session return spread) --
+        # computed unconditionally (not just inside the breakout branch
+        # below, which only ran when a breakout confirmed) so every row can
+        # carry its own genuine RS number. Previously the only "relative
+        # strength" shown anywhere in the UI (product.radar_workspace
+        # .enrich_scan_row) was the composite score itself under a
+        # misleading label -- never this.
+        stk_ret30 = (close[-1] / close[-31] - 1) * 100 if len(close) > 31 else 0.0
+        rel_strength_pct = round(stk_ret30 - self._nifty_ret30, 2)
 
         signals: list[str] = []
         reasons: list[str] = []
@@ -605,9 +616,7 @@ class UnifiedScanner:
                     deliv is not None and len(deliv) >= 5) else None
                 d_base = float(np.nanmean(deliv[-30:-5])) if (
                     deliv is not None and len(deliv) >= 30) else None
-                stk_ret30 = ((close[-1] / close[-31] - 1) * 100
-                             if len(close) > 31 else 0.0)
-                rs_outperf = stk_ret30 - self._nifty_ret30
+                rs_outperf = rel_strength_pct
                 above_200 = len(close) >= 200 and price > close[-200:].mean()
                 base_q, base_note = base_tightness(high, low, price, sma50)
                 conv, conv_factors = breakout_conviction(
@@ -845,6 +854,7 @@ class UnifiedScanner:
             breakout_conviction=breakout_conv,
             avg_vol20=round(avg_vol20, 0),
             above_sma50=bool(_above50), above_sma200=bool(_above200),
+            relative_strength_pct=rel_strength_pct,
         )
 
 

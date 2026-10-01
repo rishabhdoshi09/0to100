@@ -235,6 +235,25 @@ def test_enrich_scan_row_never_fakes_daily_change_label():
     assert "breakout_quality" in row
 
 
+def test_relative_strength_is_the_real_rs_field_not_the_composite_score():
+    """Before this fix, enrich_scan_row aliased the composite scanner score
+    as "relative_strength" -- the UI showed the same number twice under two
+    different labels, one of them dishonest. The real figure
+    (scan.unified_scanner's relative_strength_pct, a 30-session return
+    spread vs Nifty) must be used instead."""
+    row = enrich_scan_row(
+        {"symbol": "X", "score": 82.0, "relative_strength_pct": 6.4, "signals": []},
+        scanned_at="2026-01-01",
+    )
+    assert row["relative_strength"] == 6.4
+    assert row["relative_strength"] != row["score"]
+
+
+def test_relative_strength_defaults_safely_when_absent():
+    row = enrich_scan_row({"symbol": "X", "score": 82.0, "signals": []}, scanned_at="2026-01-01")
+    assert row["relative_strength"] == 0.0
+
+
 def test_enrich_marks_graded_breakout_as_sniper_candidate():
     row = enrich_scan_row(
         {

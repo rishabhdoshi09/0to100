@@ -436,6 +436,22 @@ class TestUnifiedScanner:
         close = np.linspace(200, 100, 260) + rng.normal(0, 2, 260)
         assert UnifiedScanner()._analyze("X", self._df(close)) is None
 
+    def test_relative_strength_is_a_real_rs_number_not_the_composite_score(self):
+        """relative_strength_pct is a genuine 30-session return-vs-Nifty
+        spread, computed for every analyzed row (not only when a breakout
+        fires), and must never equal the composite score -- see
+        product.radar_workspace.enrich_scan_row, which used to alias the
+        score as "relative strength" instead of reading this real field."""
+        from scan.unified_scanner import UnifiedScanner
+        close = np.linspace(100, 140, 260)  # steady uptrend, no breakout spike
+        scanner = UnifiedScanner()
+        scanner._nifty_ret30 = 2.0           # benchmark return over the same window
+        r = scanner._analyze("X", self._df(close))
+        assert r is not None
+        expected_stock_ret30 = (close[-1] / close[-31] - 1) * 100
+        assert r.relative_strength_pct == round(expected_stock_ret30 - 2.0, 2)
+        assert r.relative_strength_pct != r.score
+
     def test_stale_cup_handle_rejected(self):
         # SBCL case: rim 45% below price — pattern long finished
         from scan.unified_scanner import _detect_patterns
@@ -528,6 +544,7 @@ class TestPortfolioRisk:
     def test_verdict_ladder(self, tmp_path, monkeypatch):
         import execution.trade_executor as te
         import risk.portfolio_risk as prm
+        monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
         monkeypatch.setattr(te, "_DB", tmp_path / "trades.db")
         monkeypatch.setattr(te, "kite_ready", lambda: False)
         assert prm.portfolio_risk_report()["verdict"] == "OK"
@@ -540,11 +557,43 @@ class TestPortfolioRisk:
     def test_simulation_never_mutates(self, tmp_path, monkeypatch):
         import execution.trade_executor as te
         import risk.portfolio_risk as prm
+        monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
         monkeypatch.setattr(te, "_DB", tmp_path / "trades.db")
         monkeypatch.setattr(te, "kite_ready", lambda: False)
         te.place_trade("HAL", 10, "LIMIT", 4500, 4300, 4900)
         prm.check_new_trade("INFY", 200, 1500, 1450)
         assert prm.portfolio_risk_report()["n_positions"] == 1
+
+    def test_sees_modern_engine_positions_too(self, tmp_path, monkeypatch):
+        """The account-level risk meter must reflect the WHOLE book, not
+        just the legacy execution.autopilot/trade_executor table -- the
+        modern automatic engine (product.paper_autopilot, the real
+        sole new-entry authority) keeps a separate book (intel_book.json)
+        that was previously invisible to this meter entirely."""
+        import json
+        import execution.trade_executor as te
+        import risk.portfolio_risk as prm
+        from core.runtime_paths import logs_path
+        monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+        monkeypatch.setattr(te, "_DB", tmp_path / "trades.db")
+        monkeypatch.setattr(te, "kite_ready", lambda: False)
+        assert prm.portfolio_risk_report()["n_positions"] == 0
+
+        target = logs_path("intelligence", "intel_book.json")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps({"open": [
+            {"symbol": "HAL", "qty": 10, "entry_price": 4500.0, "stop_price": 4300.0},
+        ]}), encoding="utf-8")
+
+        report = prm.portfolio_risk_report()
+        assert report["n_positions"] == 1
+        assert report["open_risk"] == 10 * (4500.0 - 4300.0)
+
+        # Both books open simultaneously: total risk is the union, not either alone.
+        te.place_trade("INFY", 10, "LIMIT", 1500, 1450, 1600)
+        combined = prm.portfolio_risk_report()
+        assert combined["n_positions"] == 2
+        assert combined["open_risk"] == 10 * (4500.0 - 4300.0) + 10 * (1500.0 - 1450.0)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2761,6 +2810,43 @@ class TestSymbolMemory:
         # toggle off → memory bhoolo (user ka akhri faisla)
         ap.set_config(symbol_memory_gate=False)
         assert ap.consider("TRAP", 500, 480, 90, 0.3, "Defence", "t") is True
+
+    def test_autopilot_refuses_symbol_already_open_in_primary_paper_engine(
+            self, tmp_path, monkeypatch):
+        """This legacy autopilot keeps its own book (trades.db), entirely
+        separate from product.paper_autopilot's PaperBook (intel_book.json,
+        the documented sole new-entry authority). Without a cross-engine
+        check, an operator arming this legacy engine could have it
+        independently buy a symbol the primary engine already holds,
+        doubling real paper exposure with neither book aware of the other."""
+        ta = TestAutopilot()
+        ap, te = ta._setup(tmp_path, monkeypatch)
+        ap.arm()
+        monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
+        import product.paper_status as ps
+        monkeypatch.setattr(ps, "modern_engine_open_symbols", lambda: {"HAL"})
+        assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is False
+        f = ap.reject_funnel()
+        assert f["rejects"].get("duplicate with primary paper engine") == 1
+        # a symbol the primary engine does NOT hold still trades normally
+        assert ap.consider("BEL", 300, 280, 80, 0.2, "Defence", "t") is True
+
+    def test_modern_engine_open_symbols_reads_intel_book(self, tmp_path, monkeypatch):
+        import json
+        monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+        from core.runtime_paths import logs_path
+        from product.paper_status import modern_engine_open_symbols
+        target = logs_path("intelligence", "intel_book.json")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps({
+            "open": [{"symbol": "hal", "qty": 10}, {"symbol": "BEL", "qty": 5}],
+        }), encoding="utf-8")
+        assert modern_engine_open_symbols() == {"HAL", "BEL"}
+
+    def test_modern_engine_open_symbols_empty_on_missing_file(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+        from product.paper_status import modern_engine_open_symbols
+        assert modern_engine_open_symbols() == set()
 
 
 class TestBayesianConfidence:

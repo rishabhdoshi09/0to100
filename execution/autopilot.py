@@ -128,6 +128,7 @@ def _reject_category(reason: str) -> str:
     if "daily trade limit" in r:  return "daily limit hit (max/day)"
     if "max open positions" in r: return "position limit full"
     if "already traded" in r:     return "symbol already traded today"
+    if "primary paper-trading engine" in r: return "duplicate with primary paper engine"
     if "concentration" in r:      return "sector concentration cap"
     if "score" in r or "conviction" in r: return "score/conviction kam"
     if "edge" in r:               return "negative measured edge"
@@ -620,6 +621,20 @@ def _passes_gates(symbol: str, score: float, edge, sector: str) -> str | None:
         return "max open positions reached"
     if symbol in s.get("traded_symbols", {}).get(today, []):
         return "symbol already traded today"
+    # Cross-engine guard: this legacy autopilot keeps its own book
+    # (trades.db), separate from product.paper_autopilot's PaperBook
+    # (intel_book.json) -- the two have never shared a duplicate-symbol
+    # check. Without this, an operator who arms this legacy engine could
+    # have it independently buy a symbol the modern engine (the documented
+    # "sole new-entry authority", see research.autonomy.paper_cycle_truth)
+    # already holds, doubling real paper exposure with neither book aware
+    # of the other.
+    try:
+        from product.paper_status import modern_engine_open_symbols
+        if symbol in modern_engine_open_symbols():
+            return "already open in the primary paper-trading engine"
+    except Exception as exc:
+        log.debug("cross_engine_guard_skip", error=str(exc))
     # 🧠 Symbol memory — is naam ne humein baar-baar kata hai (measured
     # negative expectancy on THIS stock). Serial false-breaker dobara nahi.
     if s.get("symbol_memory_gate", True) and symbol in _serial_losers_cached():
