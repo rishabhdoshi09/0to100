@@ -110,3 +110,33 @@ def test_missing_board_entry_is_silently_absent_not_an_error(monkeypatch, tmp_pa
     )
     assert len(os["opportunities"]) == 1
     assert "evolution_consensus" not in os["opportunities"][0]
+
+
+def test_home_best_trade_exposes_actual_champion_identity(monkeypatch, tmp_path):
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    import product.decision_simulation_gate as gate
+
+    monkeypatch.setattr(gate, "status", lambda: _gate_with([
+        {
+            "symbol": "RELIANCE",
+            "setup_label": "Ready to trade",
+            "decision": "BUY",
+            "discovery_decision": "ENTER_NOW",
+            "production_candidate_status": "ENTER_NOW",
+            "reason_code": "ELIGIBLE",
+            "champion_policy_id": "EQUITY_RS_HEAVY_V1",
+            "champion_policy_version": 1,
+            "champion_policy_fingerprint": "abc123",
+        },
+    ]))
+
+    os = build_home_os(
+        dashboard=_dashboard(),
+        paper={"enabled": True, "open_positions": [], "closed_trades": []},
+        why={"available": True, "taken": [], "rejections": [], "waits": []},
+        reco={"schema_version": 4, "categories": []},
+        now=_open(),
+    )
+    assert os["opportunities"][0]["champion_policy_id"] == "EQUITY_RS_HEAVY_V1"
+    assert os["opportunities"][0]["champion_policy_version"] == 1
+    assert os["opportunities"][0]["champion_policy_fingerprint"] == "abc123"
