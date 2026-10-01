@@ -28,6 +28,20 @@ def _policy_summary(
         proof = latest_promotion_proof(policy["policy_id"])
     except Exception:
         proof = None
+    try:
+        from product.evolution.historical_priors import historical_scorecard
+        historical = historical_scorecard(
+            policy["policy_id"], domain=policy["domain"],
+        )
+    except Exception:
+        historical = {
+            "policy_id": policy["policy_id"],
+            "domain": policy["domain"],
+            "observations": 0,
+            "selected": 0,
+            "selected_expectancy_R": None,
+            "not_promotion_evidence": True,
+        }
     return {
         "policy_id": policy["policy_id"],
         "version": policy.get("version"),
@@ -43,6 +57,7 @@ def _policy_summary(
             (promotion_by_policy or {}).get(policy["policy_id"]) or {}
         ),
         "latest_promotion_proof": proof,
+        "historical_prior": historical,
     }
 
 

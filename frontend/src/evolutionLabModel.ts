@@ -63,6 +63,14 @@ export type EvolutionPolicyRow = {
     regime_breadth?: Record<string, unknown>
   }
   latest_promotion_proof?: Record<string, unknown> | null
+  historical_prior?: {
+    observations?: number
+    selected?: number
+    selected_expectancy_R?: number | null
+    missed_winners?: number
+    avoided_losers_or_correct_rejections?: number
+    not_promotion_evidence?: boolean
+  }
 }
 
 export type EvolutionEvent = {

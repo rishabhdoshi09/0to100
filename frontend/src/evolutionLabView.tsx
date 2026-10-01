@@ -43,6 +43,12 @@ function ScorecardRow({ row, isChampion }: { row: EvolutionPolicyRow; isChampion
       <td>{row.scorecard.selected_trades}</td>
       <td>{formatR(row.scorecard.expectancy_R)}</td>
       <td>{formatR(row.scorecard.max_drawdown_R)}</td>
+      <td>
+        <div>{formatR(row.historical_prior?.selected_expectancy_R)}</div>
+        <div className="evolution-lab__paired-note">
+          {row.historical_prior?.observations ?? 0} historical · prior only
+        </div>
+      </td>
       <td>{row.scorecard.missed_winners}</td>
       <td>{row.scorecard.avoided_losers}</td>
       <td>
@@ -120,7 +126,7 @@ export function EvolutionLabView() {
             <thead>
               <tr>
                 <th>Policy</th><th>Status</th><th>Snapshots</th><th>Selected</th>
-                <th>Expectancy</th><th>Max DD</th><th>Missed winners</th><th>Avoided losers</th>
+                <th>Expectancy</th><th>Max DD</th><th>Historical prior</th><th>Missed winners</th><th>Avoided losers</th>
                 <th>Incremental vs Champion</th>
               </tr>
             </thead>
