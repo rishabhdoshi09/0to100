@@ -285,6 +285,11 @@ def tournament_cycle_key(session_date: str) -> str:
     return f"tournament_cycle:{session_date}"
 
 
+def evolution_deferred_key(work_id: str) -> str:
+    """Immediate, non-critical Challenger evaluation for one frozen PAPER work item."""
+    return f"evolution_deferred:{str(work_id or '')}"
+
+
 def historical_learning_key(batch_id: str) -> str:
     return f"hist_learning:{batch_id}"
 
