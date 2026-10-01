@@ -269,3 +269,22 @@ def test_challenger_can_differ_from_champion_overlay_without_rescuing_hard_gates
     hard = DW._frozen_policy_batch(item, [snapshot], permissive)[0]
     assert hard["decision"] == "BLOCK"
     assert hard["reason_code"] == "INVALID_STOP"
+
+
+def test_default_isolated_worker_processes_real_prepared_work(tmp_path, monkeypatch):
+    """Exercise the exact production subprocess command, module entrypoint and
+    repo-root cwd used by launchd/supervisor integration."""
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    prepared = _prepared_real_item(tmp_path)
+    DW.mark_ready(prepared["work_id"])
+
+    outcome = DW.process_ready_isolated(
+        root=DW._root(),
+        limit=1,
+        timeout_seconds=10.0,
+    )
+    assert len(outcome) == 1
+    assert outcome[0]["work_id"] == prepared["work_id"]
+    assert outcome[0]["status"] == "SUCCEEDED"
+    assert outcome[0]["timed_out"] is False
+    assert DW.get_work(prepared["work_id"])["status"] == "SUCCEEDED"
