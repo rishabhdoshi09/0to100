@@ -54,6 +54,16 @@ def rank_fno_candidates(
     exactly why a rank did or did not change -- alongside every original
     field.
     """
+    evolution_champion = None
+    try:
+        from product.evolution import policy_registry as evolution_registry
+        evolution_champion = (
+            evolution_registry.ensure_seed_population(evolution_registry.FNO_UNDERLYING)
+            .get("champion")
+        )
+    except Exception:
+        evolution_champion = None
+
     rows: list[dict[str, Any]] = []
     for row in candidates:
         row = dict(row)
@@ -65,7 +75,19 @@ def rank_fno_candidates(
         row["historical_prior"] = float(evidence.get("historical_prior") or 0.0)
         row["forward_adjustment"] = float(evidence.get("forward_adjustment") or 0.0)
         row["ranking_adjustment"] = adjustment
-        row["ranking_score"] = round(base_score + adjustment, 4)
+        pre_evolution_score = round(base_score + adjustment, 4)
+        row["pre_evolution_ranking_score"] = pre_evolution_score
+        evolution = {"adjustment": 0.0, "eligible": bool(setup.get("tradable"))}
+        if evolution_champion is not None:
+            try:
+                from product.evolution.fno_adapter import underlying_policy_adjustment
+                evolution = underlying_policy_adjustment(row, evolution_champion)
+            except Exception:
+                evolution = {"adjustment": 0.0, "eligible": bool(setup.get("tradable"))}
+        evolution_adjustment = float(evolution.get("adjustment") or 0.0)
+        row["evolution_underlying"] = evolution
+        row["evolution_adjustment"] = evolution_adjustment
+        row["ranking_score"] = round(pre_evolution_score + evolution_adjustment, 4)
         row["ranking_evidence"] = evidence
 
         contract = row.get("selected_contract")

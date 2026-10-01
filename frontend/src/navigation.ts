@@ -41,6 +41,7 @@ export const TOOL_GROUPS: readonly NavGroup[] = [
     items: [
       ['?', 'Why This Decision', 'Decision'],
       ['∑', 'Forward Evidence', 'Evidence'],
+      ['⚔', 'Evolution Lab', 'Evolution'],
       ['⌬', 'Strategies', 'Strategies'],
       ['🧪', 'Backtest', 'Backtest'],
       ['▤', 'Research Data', 'Data'],
@@ -143,6 +144,10 @@ export const PAGE_META: Readonly<Record<string, PageMeta>> = {
     title: 'Forward Evidence',
     subtitle: 'Real forward-paper evidence stays separate from historical replay and counterfactual outcomes.',
   },
+  'Evolution Lab': {
+    title: 'Evolution Lab',
+    subtitle: 'Champion vs Challenger: which decision process is actually earning PAPER authority.',
+  },
 }
 
 export const ROUTE_ALIAS: Readonly<Record<string, string>> = {
@@ -174,6 +179,7 @@ export const ROUTE_ALIAS: Readonly<Record<string, string>> = {
   Data: 'Research Data',
   Why: 'Why This Decision',
   Evidence: 'Forward Evidence',
+  Evolution: 'Evolution Lab',
 }
 
 export function canonicalNavRoute(route: string): string {

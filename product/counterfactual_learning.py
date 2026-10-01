@@ -24,6 +24,13 @@ AVOIDED_LOSER = "AVOIDED_LOSER"
 RAN_AWAY = "RAN_AWAY_WITHOUT_ENTRY"
 GOOD_WAIT = "GOOD_WAIT"
 FLAT = "FLAT"
+# A policy that actually SELECTED this candidate (the Champion's real paper
+# fill, or a Challenger's shadow ENTER_NOW) gets graded on what the forward
+# move really did, not what it avoided -- product.evolution reuses this same
+# taxonomy for both halves of "grade decisions the policy did and did not
+# take" rather than inventing a second outcome vocabulary.
+WINNER_TAKEN = "WINNER_TAKEN"
+LOSER_TAKEN = "LOSER_TAKEN"
 
 
 def ledger_path(path: str | Path | None = None) -> Path:
@@ -155,7 +162,19 @@ def classify_forward(
     target: float | None,
     forward_return_pct: float | None,
     later_entered: bool = False,
+    selected: bool = False,
 ) -> str:
+    if selected:
+        # This policy chose to take it (real fill or shadow ENTER_NOW) -- grade
+        # the realized move directly rather than the rejected/waited taxonomy
+        # below, which answers a different question ("was avoiding it right?").
+        if entry is None or forward_return_pct is None:
+            return FLAT
+        if forward_return_pct > 0:
+            return WINNER_TAKEN
+        if forward_return_pct < 0:
+            return LOSER_TAKEN
+        return FLAT
     if later_entered:
         return GOOD_WAIT
     if entry is None or forward_return_pct is None:
@@ -182,6 +201,7 @@ def settle(
     *,
     forward_return_pct: float | None,
     later_entered: bool = False,
+    selected: bool = False,
 ) -> dict[str, Any]:
     out = dict(row)
     classification = classify_forward(
@@ -190,6 +210,7 @@ def settle(
         target=_f(row.get("hypothetical_target")),
         forward_return_pct=forward_return_pct,
         later_entered=later_entered,
+        selected=selected,
     )
     resolved_at = datetime.now(timezone.utc).isoformat()
     out["outcome"] = {

@@ -552,12 +552,14 @@ class Supervisor:
                 or ""
             )
             if gate.get("scan_fresh") and scan_id and thesis_hash:
+                evolution_fp = str(gate.get("current_evolution_policy_fingerprint") or "")
                 self.jobs.enqueue(
                     SCH.DISCOVERY_REFRESH,
                     idempotency_key=SCH.discovery_refresh_key(
                         scan_id,
                         long_term_id,
                         thesis_hash,
+                        evolution_fp,
                     ),
                     input_snapshot_id=scan_id,
                     critical=True,
@@ -1133,6 +1135,13 @@ class Supervisor:
             self.jobs.enqueue(
                 SCH.RESEARCH_CYCLE,
                 idempotency_key=SCH.forward_research_key(session_date),
+            )
+            # Evolution Engine: grade Challenger shadow decisions + re-check
+            # promotion eligibility, once per session, after real learning
+            # has run. Never gates/blocks the forward learning path above.
+            self.jobs.enqueue(
+                SCH.TOURNAMENT_CYCLE,
+                idempotency_key=SCH.tournament_cycle_key(session_date),
             )
 
     def _snapshot_token(

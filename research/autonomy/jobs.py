@@ -396,6 +396,8 @@ class Deps:
                 brain._save_intel_book()
             except Exception:
                 pass
+            # Evolution now runs inside run_reco_paper_cycle() before PAPER
+            # mutation. Do not replay it here against an already-mutated book.
         except Exception as exc:
             if isinstance(result, dict):
                 result.setdefault("reco_autopilot", {})
@@ -779,7 +781,11 @@ def run_discovery_refresh(ctx) -> JobResult:
 
             long_term_id = str((load_long_term_scan() or {}).get("scanned_at") or "")
             thesis_hash = str((thesis_manifest() or {}).get("thesis_hash") or "")
-            current_key = SCH.discovery_refresh_key(scan_id, long_term_id, thesis_hash)
+            from product.decision_discovery_store import current_evolution_policy_fingerprint
+            evolution_fp = current_evolution_policy_fingerprint()
+            current_key = SCH.discovery_refresh_key(
+                scan_id, long_term_id, thesis_hash, evolution_fp,
+            )
         except Exception as exc:
             return JobResult(
                 JS.RETRYABLE_FAILED,
@@ -1538,6 +1544,52 @@ def run_news_refresh(ctx) -> JobResult:
 # Compatibility name retained for older tests.
 run_news_health = run_news_refresh
 
+
+def run_tournament_cycle(ctx) -> JobResult:
+    """Evolution Engine off-hours maintenance: grade every Challenger shadow
+    decision whose outcome horizon has elapsed, then re-check scientific
+    promotion eligibility for each domain. Pure research/grading work --
+    never touches the real paper book, never blocks on market data, and a
+    failure here can never fail this job's own ledger entry (it is not in
+    CRITICAL_JOBS and must never gate PAPER_CYCLE/MARKET_SCAN)."""
+    summary_parts: list[str] = []
+    try:
+        from product.evolution.grading import grade_pending_decisions
+
+        graded = grade_pending_decisions()
+        summary_parts.append(f"graded={len(graded)}")
+    except Exception as exc:
+        summary_parts.append(f"grading_error={exc}")
+
+    try:
+        from product.evolution import policy_registry as PR
+        from product.evolution.promotion import (
+            evaluate_promotion_batch,
+            advance_eligible_to_probation,
+            retire_qualified_challengers,
+        )
+
+        eligible_total = 0
+        probation_total = 0
+        retired_total = 0
+        for domain in PR.DOMAINS:
+            batch = evaluate_promotion_batch(domain)
+            eligible_total += sum(
+                1 for r in batch if r.get("status") == "PROMOTION_ELIGIBLE"
+            )
+            probation_total += len(
+                advance_eligible_to_probation(domain, evaluated_batch=batch)
+            )
+            retired_total += len(retire_qualified_challengers(domain))
+        summary_parts.append(f"promotion_eligible={eligible_total}")
+        summary_parts.append(f"probation_started={probation_total}")
+        summary_parts.append(f"retired={retired_total}")
+    except Exception as exc:
+        summary_parts.append(f"promotion_error={exc}")
+
+    return JobResult(JS.SUCCEEDED, "tournament cycle: " + ", ".join(summary_parts))
+
+
 HANDLERS = {
     SCH.AUTH_HEALTH: run_auth_health,
     SCH.INSTRUMENT_REFRESH: run_instrument_refresh,
@@ -1557,4 +1609,5 @@ HANDLERS = {
     SCH.LONG_TERM_REFRESH: run_long_term_refresh_job,
     SCH.HISTORICAL_PAPER_CYCLE: run_historical_paper_cycle,
     SCH.FNO_HISTORICAL_WALKFORWARD: run_fno_historical_walkforward,
+    SCH.TOURNAMENT_CYCLE: run_tournament_cycle,
 }

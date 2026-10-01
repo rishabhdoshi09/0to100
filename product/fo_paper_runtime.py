@@ -259,6 +259,7 @@ def run_fo_paper_cycle(
 
         settled_rows: list[dict[str, Any]] = []
         settled_underlyings: set[str] = set()
+        evolution_contract_shadow_graded: list[dict[str, Any]] = []
 
         intraday_marks_used = 0
         intraday_marks_fallback = 0
@@ -275,6 +276,21 @@ def run_fo_paper_cycle(
         iv_crush_triggered = 0
         iv_crush_unavailable = 0
         eod_exit_due = _eod_exit_due(now_ist)
+        # Contract Challenger grading is deliberately deferred until the
+        # non-entry/EOD side of the cycle so research never delays the
+        # execution-critical window. Each shadow is resolved from its own
+        # post-freeze option bars; failures are isolated and leave it pending.
+        if eod_exit_due:
+            try:
+                from product.evolution.grading import grade_pending_contract_decisions
+
+                evolution_contract_shadow_graded = grade_pending_contract_decisions(
+                    client=client,
+                    now_ist=now_ist,
+                    limit=24,
+                )
+            except Exception:
+                evolution_contract_shadow_graded = []
         if book.open:
             raw_quotes = read_nfo_quotes(list(book.open), client=client)
             underlying_quotes = read_market_quotes(
@@ -671,6 +687,9 @@ def run_fo_paper_cycle(
             "iv_crush_triggered_count": iv_crush_triggered,
             "iv_crush_unavailable_count": iv_crush_unavailable,
             "iv_crush_trigger_ratio": IV_CRUSH_RATIO,
+            "evolution_contract_shadow_graded_count": len(
+                evolution_contract_shadow_graded
+            ),
             "trail_activation_r": book.trail_activation_r,
             "trail_distance_r": book.trail_distance_r,
             "eod_exit_due": eod_exit_due,

@@ -135,6 +135,23 @@ def evaluate_fo_snapshot(
             dte=int(_f(selected.get("dte"))),
             iv_percentile=iv_percentile,
         )
+    if result.get("decision") == "PAPER_OPTION_CANDIDATE" and isinstance(selected, dict):
+        try:
+            from product.evolution.fno_adapter import run_contract_tournament
+            result["evolution_contract_tournament"] = run_contract_tournament(
+                underlying_symbol=symbol,
+                direction=direction,
+                setup=result.get("setup") or {},
+                eligible_contracts=(result.get("options") or {}).get("eligible_learned_contracts") or [],
+                selected_contract=selected,
+                as_of=(as_of or date.today()).isoformat(),
+            )
+        except Exception as exc:
+            result["evolution_contract_tournament"] = {
+                "domain": "FNO_CONTRACT",
+                "error": f"{type(exc).__name__}: {exc}"[:240],
+                "live_execution_allowed": False,
+            }
     return result
 
 
@@ -183,6 +200,21 @@ def evaluate_fo_snapshot_auto(
     from product.fno_ranking import rank_fno_candidates
 
     ranked = rank_fno_candidates(candidates, path=path)
+    underlying_tournament = None
+    if ranked:
+        try:
+            from product.evolution.fno_adapter import run_underlying_tournament
+            underlying_tournament = run_underlying_tournament(
+                ranked,
+                selected=ranked[0],
+                as_of=(as_of or date.today()).isoformat(),
+            )
+        except Exception as exc:
+            underlying_tournament = {
+                "domain": "FNO_UNDERLYING",
+                "error": f"{type(exc).__name__}: {exc}"[:240],
+                "live_execution_allowed": False,
+            }
     return {
         "symbol": str(symbol or "").upper(),
         "decision": "PAPER_OPTION_CANDIDATE" if ranked else "NO_TRADE",
@@ -190,4 +222,5 @@ def evaluate_fo_snapshot_auto(
         "directions": rows,
         "paper_only": True,
         "live_execution_allowed": False,
+        "evolution_underlying_tournament": underlying_tournament,
     }

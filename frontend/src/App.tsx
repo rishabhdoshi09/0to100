@@ -22,6 +22,7 @@ import { NewsView, OperationsRibbon, FnoView } from './marketViews'
 import { ProductStockIntelligenceView, StockInvestigatorView } from './productViews'
 import { DecisionWhyView } from './decisionWhyView'
 import { ForwardEvidenceView } from './forwardEvidenceView'
+import { EvolutionLabView } from './evolutionLabView'
 import { ResearchDataView } from './researchData'
 import {
   MarketInternalsView,
@@ -585,6 +586,7 @@ function App() {
       ))}
       {keep(['Why This Decision', 'Why'], <DecisionWhyView symbol={selected} onSelect={setSelected} suggestions={symbols.slice(0, 6)} />)}
       {keep(['Forward Evidence', 'Evidence'], <ForwardEvidenceView />)}
+      {keep(['Evolution Lab', 'Evolution'], <EvolutionLabView />)}
       {keep(['Research Data', 'Data'], <ResearchDataView symbol={selected} />)}
       {keep(['Strategies'], <StrategiesView />)}
       {keep(['Backtest', 'Backtests'], <ProductionBacktestView {...viewProps} />)}

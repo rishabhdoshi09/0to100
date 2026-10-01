@@ -1070,6 +1070,27 @@ def _run_batch(
     paper_elapsed_s = max(0.0, time.perf_counter() - paper_started)
     trades = list(paper_sim.get("trades") or [])
 
+    # Evolution historical Market Twin: weak point-in-time diagnostics only.
+    # This store is physically separate from forward shadow evidence and is
+    # never read by promotion.py. A failure here must not invalidate an
+    # otherwise honest historical-paper batch.
+    historical_evolution: dict[str, Any] = {}
+    try:
+        from product.evolution.historical_priors import evaluate_historical_policies
+
+        historical_evolution = evaluate_historical_policies(
+            decisions,
+            domain="EQUITY",
+            max_new_per_session=3,
+        )
+    except Exception as exc:
+        historical_evolution = {
+            "status": "UNAVAILABLE",
+            "error": f"{type(exc).__name__}: {exc}"[:240],
+            "not_promotion_evidence": True,
+            "evidence_class": "HISTORICAL_REPLAY",
+        }
+
     # The paper-book pass can be materially heavier than decision replay. Refuse
     # to persist its evidence if effective selection behavior changed while it
     # was running; the next supervisor tick will create a new thesis-versioned
@@ -1198,6 +1219,7 @@ def _run_batch(
         "paper_lane": "HISTORICAL_VIRTUAL_PAPER",
         "not_promotion_evidence": True,
         "not_real_pnl": True,
+        "historical_evolution": historical_evolution,
         "live_locked": True,
     }
     _save_state({

@@ -33,6 +33,15 @@ def _rerank_by_learned_score(
     cleared every one of those gates, never rescue one that did not.
     """
     context = contract_selection_context(setup)
+    evolution_champion = None
+    try:
+        from product.evolution import policy_registry as evolution_registry
+        evolution_champion = (
+            evolution_registry.ensure_seed_population(evolution_registry.FNO_CONTRACT)
+            .get("champion")
+        )
+    except Exception:
+        evolution_champion = None
     rows: list[dict[str, Any]] = []
     for row in eligible:
         row = dict(row)
@@ -47,10 +56,22 @@ def _rerank_by_learned_score(
         row["raw_contract_score"] = raw_score
         row["contract_evidence"] = evidence
         row["learned_contract_score"] = round(raw_score + adjustment, 4)
+        evolution = {"adjustment": 0.0, "eligible": True}
+        if evolution_champion is not None:
+            try:
+                from product.evolution.fno_adapter import contract_policy_adjustment
+                evolution = contract_policy_adjustment(row, evolution_champion)
+            except Exception:
+                evolution = {"adjustment": 0.0, "eligible": True}
+        row["contract_evolution"] = evolution
+        row["evolution_contract_adjustment"] = float(evolution.get("adjustment") or 0.0)
+        row["final_contract_score"] = round(
+            row["learned_contract_score"] + row["evolution_contract_adjustment"], 4
+        )
         rows.append(row)
     rows.sort(
         key=lambda row: (
-            float(row["learned_contract_score"]),
+            float(row.get("final_contract_score", row["learned_contract_score"])),
             float(row.get("projected_return_at_expected_move_pct") or 0.0),
             float(row.get("gamma_delta_change_for_1pct_move") or 0.0),
             -float(row.get("vega_pct_of_premium_per_vol_point") or 999.0),
@@ -116,7 +137,11 @@ def evaluate_fo_opportunity(
         row for row in options.get("all_candidates") or [] if row.get("eligible")
     ]
     learned = _rerank_by_learned_score(eligible_by_raw_score, setup=setup, path=evidence_path)
-    options = {**options, "best_contracts": learned[: max(1, int(top_n))]}
+    options = {
+        **options,
+        "best_contracts": learned[: max(1, int(top_n))],
+        "eligible_learned_contracts": learned,
+    }
     if not options["best_contracts"]:
         return {
             **base,
