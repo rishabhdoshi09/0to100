@@ -33,6 +33,7 @@ same file.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from datetime import datetime, timezone
@@ -131,6 +132,70 @@ def _f(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return None if out != out else out
+
+
+def _immutable_policy_manifest(policy: dict[str, Any] | None) -> dict[str, Any]:
+    """Only the immutable decision-policy fields, suitable for audit proofs."""
+    policy = dict(policy or {})
+    return {
+        "policy_id": str(policy.get("policy_id") or ""),
+        "domain": str(policy.get("domain") or ""),
+        "version": int(policy.get("version") or 1),
+        "parent_policy_id": policy.get("parent_policy_id"),
+        "hypothesis": str(policy.get("hypothesis") or ""),
+        "weights": dict(policy.get("weights") or {}),
+        "code_build_sha": str(policy.get("code_build_sha") or ""),
+    }
+
+
+def _paired_evidence_fingerprint(
+    champion_policy_id: str,
+    challenger_policy_id: str,
+    *,
+    domain: str,
+    ledger_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Content-address the exact graded paired evidence used by promotion.
+
+    The fingerprint changes if either policy's frozen decision or resolved
+    outcome changes. Historical-prior rows are intentionally absent because
+    promotion reads only the forward shadow ledger through scorecard.
+    """
+    champ = {
+        str(row.get("market_snapshot_id") or ""): dict(row)
+        for row in scorecard.graded_rows(
+            champion_policy_id, domain=domain, path=ledger_path,
+        )
+        if row.get("market_snapshot_id")
+    }
+    chal = {
+        str(row.get("market_snapshot_id") or ""): dict(row)
+        for row in scorecard.graded_rows(
+            challenger_policy_id, domain=domain, path=ledger_path,
+        )
+        if row.get("market_snapshot_id")
+    }
+    shared = sorted(set(champ) & set(chal))
+    material = {
+        "domain": domain,
+        "champion_policy_id": champion_policy_id,
+        "challenger_policy_id": challenger_policy_id,
+        "pairs": [
+            {
+                "market_snapshot_id": sid,
+                "champion": champ[sid],
+                "challenger": chal[sid],
+            }
+            for sid in shared
+        ],
+    }
+    encoded = json.dumps(
+        material, sort_keys=True, separators=(",", ":"), default=str,
+    ).encode("utf-8")
+    return {
+        "evidence_ledger_fingerprint": hashlib.sha256(encoded).hexdigest(),
+        "evidence_paired_rows": len(shared),
+    }
 
 
 def _regime_breadth(
@@ -306,16 +371,35 @@ def evaluate_promotion_batch(
 
     if persist_proofs:
         for row in raw:
+            policy = (
+                policy_registry.get_policy(
+                    str(row.get("policy_id") or ""), path=registry_path
+                )
+                if row.get("policy_id")
+                else None
+            )
+            evidence_proof = (
+                _paired_evidence_fingerprint(
+                    str(champion.get("policy_id") or ""),
+                    str(row.get("policy_id") or ""),
+                    domain=domain,
+                    ledger_path=ledger_path,
+                )
+                if champion and row.get("policy_id")
+                else {
+                    "evidence_ledger_fingerprint": "",
+                    "evidence_paired_rows": 0,
+                }
+            )
             _persist_proof(
                 {
                     **row,
+                    **evidence_proof,
+                    "policy_manifest": _immutable_policy_manifest(policy),
+                    "champion_manifest": _immutable_policy_manifest(champion),
                     "policy_manifest_fingerprint": (
-                        policy_registry.policy_manifest_fingerprint(
-                            policy_registry.get_policy(
-                                str(row.get("policy_id") or ""), path=registry_path
-                            ) or {}
-                        )
-                        if row.get("policy_id")
+                        policy_registry.policy_manifest_fingerprint(policy or {})
+                        if policy
                         else ""
                     ),
                     "champion_manifest_fingerprint": (
@@ -589,6 +673,9 @@ def promote_to_champion(
         "reason": reason,
         "previous_champion_policy_id": previous_champion_id,
         "eligibility_proof": eligibility,
+        "scientific_proof": latest_promotion_proof(
+            new_champion_policy_id, path=proof_path,
+        ),
         "policy_manifest_fingerprint": policy_registry.policy_manifest_fingerprint(policy),
     }]
     store["policies"][new_champion_policy_id] = record
