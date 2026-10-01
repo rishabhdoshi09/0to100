@@ -373,6 +373,7 @@ class Deps:
                 entry_block_reason=entry_block_reason,
                 session_phase=session_phase,
                 paper_enabled=paper_on,
+                durable_book_save=brain._save_intel_book,
             )
             if isinstance(result, dict):
                 opened = list(result.get("positions_opened") or [])
@@ -392,33 +393,36 @@ class Deps:
                     result["eligibility"] = "TRADED"
                 elif result.get("eligibility") in {"NO_ELIGIBLE_TRADE", "", None}:
                     result["eligibility"] = reco.get("eligibility") or result.get("eligibility")
-            save_ok = True
-            try:
-                saved = brain._save_intel_book()
-                save_ok = saved is not False
-            except Exception:
-                save_ok = False
-
-            evolution_work_id = str(
-                ((reco.get("evolution") or {}).get("deferred_work_id") or "")
-            )
-            if evolution_work_id:
-                from product.evolution import deferred_work as evolution_deferred
-
-                if reco.get("positions_opened") and not save_ok:
-                    evolution_deferred.mark_abandoned(
-                        evolution_work_id,
-                        "PAPER_BOOK_PERSISTENCE_FAILED_AFTER_MUTATION",
-                    )
+            evolution_meta = dict(reco.get("evolution") or {})
+            # Compatibility fallback for injected/legacy PAPER functions that
+            # do not accept/use the canonical immediate durability callback.
+            # The real production run_reco_paper_cycle saves before returning.
+            if evolution_meta.get("paper_book_durable_saved") is None:
+                try:
+                    saved = brain._save_intel_book()
+                    save_ok = saved is not False
+                except Exception:
+                    save_ok = False
+                if not save_ok:
+                    work_id = str(evolution_meta.get("deferred_work_id") or "")
+                    if work_id:
+                        from product.evolution import deferred_work as evolution_deferred
+                        evolution_deferred.mark_abandoned(
+                            work_id,
+                            "PAPER_BOOK_PERSISTENCE_FAILED_AFTER_MUTATION",
+                        )
                     raise RuntimeError(
                         "paper position mutated in memory but durable intel_book save failed"
                     )
-                evolution_deferred.mark_ready(evolution_work_id)
-                if isinstance(result, dict):
-                    result.setdefault("reco_autopilot", {})["evolution"] = {
-                        **dict(reco.get("evolution") or {}),
-                        "deferred_work_status": "READY",
-                    }
+                work_id = str(evolution_meta.get("deferred_work_id") or "")
+                if work_id:
+                    from product.evolution import deferred_work as evolution_deferred
+                    evolution_deferred.mark_ready(work_id)
+                    evolution_meta["deferred_work_status"] = "READY"
+                evolution_meta["paper_book_durable_saved"] = True
+
+            if isinstance(result, dict) and evolution_meta:
+                result.setdefault("reco_autopilot", {})["evolution"] = evolution_meta
         except Exception as exc:
             if isinstance(result, dict):
                 result.setdefault("reco_autopilot", {})
