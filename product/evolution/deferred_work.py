@@ -252,10 +252,17 @@ def _frozen_policy_batch(
         frozen = dict(individual.get(symbol) or {})
         context = dict(snap.get("context") or {})
         card = dict(snap.get("card") or {})
-        original_decision = str(frozen.get("decision") or "REJECT")
-        reason = str(frozen.get("reason_code") or "NOT_EVALUATED")
-        detail = str(frozen.get("detail") or "")
         breakdown = dict(frozen.get("breakdown") or {})
+        baseline = dict(breakdown.get("pre_evolution_decision") or {})
+        original_decision = str(
+            baseline.get("decision") or frozen.get("decision") or "REJECT"
+        )
+        reason = str(
+            baseline.get("reason_code") or frozen.get("reason_code") or "NOT_EVALUATED"
+        )
+        detail = str(
+            baseline.get("detail") or frozen.get("detail") or ""
+        )
 
         if original_decision == "ENTER_NOW":
             base = dict(
