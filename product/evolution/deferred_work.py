@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-import multiprocessing as mp
+import subprocess
+import sys
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -411,8 +412,16 @@ def process_work_item(
     return result
 
 
-def _child_entry(root_value: str, work_id: str) -> None:
-    process_work_item(work_id, root=root_value)
+def _default_worker_command(root_value: str, work_id: str) -> list[str]:
+    return [
+        sys.executable,
+        "-m",
+        "product.evolution.deferred_worker",
+        "--root",
+        str(root_value),
+        "--work-id",
+        str(work_id),
+    ]
 
 
 def process_ready_isolated(
@@ -420,7 +429,7 @@ def process_ready_isolated(
     root: str | Path | None = None,
     limit: int = 2,
     timeout_seconds: float = DEFAULT_CHILD_TIMEOUT_SECONDS,
-    child_target=None,
+    command_factory=None,
 ) -> list[dict[str, Any]]:
     """Consume READY work in killable subprocesses.
 
@@ -429,9 +438,8 @@ def process_ready_isolated(
     the work becomes RETRYABLE/FAILED, and the tournament job itself returns.
     """
     root_path = _root(root)
-    target = child_target or _child_entry
+    factory = command_factory or _default_worker_command
     outcomes: list[dict[str, Any]] = []
-    ctx = mp.get_context("spawn")
 
     for payload in ready_work(root=root_path, limit=limit):
         work_id = str(payload.get("work_id") or "")
@@ -442,21 +450,25 @@ def process_ready_isolated(
         payload["last_started_at"] = datetime.now(timezone.utc).isoformat()
         _write_json(path, payload)
 
-        proc = ctx.Process(
-            target=target,
-            args=(str(root_path), work_id),
-            daemon=False,
+        command = list(factory(str(root_path), work_id))
+        proc = subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
         )
-        proc.start()
-        proc.join(max(0.01, float(timeout_seconds)))
-
-        timed_out = proc.is_alive()
-        if timed_out:
+        timed_out = False
+        try:
+            proc.wait(timeout=max(0.01, float(timeout_seconds)))
+        except subprocess.TimeoutExpired:
+            timed_out = True
             proc.terminate()
-            proc.join(1.0)
-            if proc.is_alive() and hasattr(proc, "kill"):
+            try:
+                proc.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
                 proc.kill()
-                proc.join(1.0)
+                proc.wait(timeout=1.0)
 
         current = _read_json(path) or payload
         if timed_out:
@@ -476,7 +488,7 @@ def process_ready_isolated(
             })
             continue
 
-        if proc.exitcode == 0 and _result_path(work_id, root_path).exists():
+        if proc.returncode == 0 and _result_path(work_id, root_path).exists():
             current = _read_json(path) or current
             outcomes.append({
                 "work_id": work_id,
@@ -489,7 +501,7 @@ def process_ready_isolated(
         current["status"] = (
             "FAILED" if attempts >= DEFAULT_MAX_ATTEMPTS else "RETRYABLE"
         )
-        current["last_error"] = f"Challenger worker exited with code {proc.exitcode}"
+        current["last_error"] = f"Challenger worker exited with code {proc.returncode}"
         current["finished_at"] = datetime.now(timezone.utc).isoformat()
         _write_json(path, current)
         outcomes.append({
@@ -497,7 +509,7 @@ def process_ready_isolated(
             "status": current["status"],
             "timed_out": False,
             "attempts": attempts,
-            "exitcode": proc.exitcode,
+            "exitcode": proc.returncode,
         })
 
     return outcomes
