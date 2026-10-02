@@ -321,6 +321,7 @@ class HostSupervisor:
         self.market_access: dict[str, Any] = {}
         self._last_market_probe = 0.0
         self._market_probe_thread: threading.Thread | None = None
+        self._scan_kick_thread: threading.Thread | None = None
 
     def verify_safety(self) -> None:
         if not os.environ.get("QT_RUNTIME_ROOT", "").strip():
@@ -497,11 +498,7 @@ class HostSupervisor:
             time.sleep(0.5)
         self.start_child("frontend")
 
-    def _kick_scan_once(self) -> None:
-        if self.scan_kicked:
-            return
-        if not self.children["market_api"].spec.health() or not _market_ops_health():
-            return
+    def _kick_scan_worker(self) -> None:
         try:
             proc = subprocess.run(
                 [sys.executable, "scripts/local_stack.py", "scan"], cwd=REPO_ROOT,
@@ -512,6 +509,27 @@ class HostSupervisor:
                 self.scan_kicked = True
         except Exception:
             pass
+
+    def _kick_scan_once(self) -> None:
+        """Schedule the first scan without ever blocking supervisor heartbeats.
+
+        The scan command is allowed a 20s subprocess budget. Running it inline
+        made the supervisor status heartbeat appear stale to the exact-SHA
+        installer on slower Intel Macs even though every child process was
+        alive. Keep the bounded scan, but execute it off the supervision loop.
+        """
+        if self.scan_kicked:
+            return
+        if self._scan_kick_thread is not None and self._scan_kick_thread.is_alive():
+            return
+        if not self.children["market_api"].spec.health() or not _market_ops_health():
+            return
+        self._scan_kick_thread = threading.Thread(
+            target=self._kick_scan_worker,
+            name="quantterm-startup-scan",
+            daemon=True,
+        )
+        self._scan_kick_thread.start()
 
     def _supervise_child(self, child: Child) -> None:
         if not child.alive:
