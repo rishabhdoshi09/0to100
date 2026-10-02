@@ -52,10 +52,10 @@ ARCHIVE_PROBE_LOOKBACK_DAYS = 6
 
 #: Intraday pricing is a COMPOSITE capability, because production sourcing is a
 #: chain, not a single provider: data.live_quotes tries Kite first and falls
-#: back to the NSE public API. Requiring each leg independently would block an
-#: install on a host whose real intraday path works -- exactly what happened on
-#: the owner's Mac, where authenticated Kite quotes were flowing while NSE's
-#: public route answered 404.
+#: back to the NSE public API. PAPER/SHADOW host readiness is deliberately
+#: broker-neutral, so this composite is observational: it may warn that
+#: broker-live/F&O lanes are unavailable, but it must not block an otherwise
+#: healthy official-data paper host.
 INTRADAY_CAPABILITY = "intraday_market_data"
 INTRADAY_SOURCES = ("kite_intraday", "nse_live")
 
@@ -63,10 +63,11 @@ INTRADAY_SOURCES = ("kite_intraday", "nse_live")
 #: single usable quote is meaningful; the probe reads and never writes.
 KITE_PROBE_SYMBOLS = ("RELIANCE", "INFY", "HDFCBANK")
 
-#: Independently REQUIRED. Bhavcopy is the documented PRIMARY history source and
-#: has no alternative route -- without it there is no scan, whatever intraday
-#: does. The composite above is required too; the control endpoint only
-#: separates "unplugged" from "selective egress" and gates nothing.
+#: REQUIRED for PAPER/SHADOW operation. Bhavcopy is the documented PRIMARY
+#: history source and has no alternative route -- without it there is no scan.
+#: Intraday pricing is intentionally not in this set: broker-live/F&O work may
+#: wait for a fresh Zerodha session while official-data scanning, paper
+#: execution, replay, settlement and learning continue.
 REQUIRED_CAPABILITIES = frozenset({"nse_archive"})
 # PAPER/SHADOW operation is broker-neutral. Kite credentials improve live-data,
 # F&O and reconciliation capability, but their absence must not make the host
@@ -850,9 +851,9 @@ def probe_market_access(
     )
     for name, _url, description in resolved:
         capability = probes[name]
-        # Only bhavcopy gates on its own. Each intraday leg reports its own
-        # truth but the COMPOSITE below is what the install stands or falls on,
-        # so a dead fallback beside a working primary is degraded, not fatal.
+        # Only bhavcopy gates host readiness. Each intraday leg reports its own
+        # truth; the composite below is broker-live/F&O observability only, so a
+        # missing/expired broker session never blocks PAPER/SHADOW installation.
         required = name in REQUIRED_CAPABILITIES
         evidence = {
             "host": capability.result.host,
@@ -885,18 +886,21 @@ def probe_market_access(
         if intraday_source:
             checks.append(Check(
                 INTRADAY_CAPABILITY, PASS,
-                f"intraday pricing available via {intraday_source}", True,
+                f"intraday pricing available via {intraday_source}", False,
                 {"satisfied_by": intraday_source, "sources": states,
                  "capability": CAPABILITY_USABLE,
-                 "note": "production sourcing is Kite first, NSE public API fallback"},
+                 "note": "optional for PAPER/SHADOW host readiness; production sourcing is Kite first, NSE public API fallback"},
             ))
         else:
             checks.append(Check(
-                INTRADAY_CAPABILITY, FAIL,
+                INTRADAY_CAPABILITY, WARN,
                 "no usable intraday price source: "
-                + ", ".join(f"{n}={states[n]}" for n in present), True,
+                + ", ".join(f"{n}={states[n]}" for n in present)
+                + "; PAPER/SHADOW operation remains available, while broker-live/F&O waits for intraday readiness",
+                False,
                 {"satisfied_by": "", "sources": states,
-                 "note": "both the Kite quote path and the NSE public API are unusable"},
+                 "capability": "DEGRADED",
+                 "note": "intraday pricing is optional for PAPER/SHADOW host readiness"},
             ))
     return checks, verdict.as_dict()
 
