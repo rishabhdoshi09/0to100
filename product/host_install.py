@@ -1047,7 +1047,7 @@ def wait_for_supervisor(
     raise HostInstallError(
         f"installed supervisor did not prove RUNNING for SHA {expected_sha}; "
         f"last_state={last.get('state') or 'missing'} last_sha={last.get('production_sha') or 'missing'} "
-        f"unready_children={unready or {}} error={last.get('error') or ''}"
+        f"unready_children={unready} error={last.get('error') or ''}"
     )
 
 
