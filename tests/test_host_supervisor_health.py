@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 from product import host_supervisor as HS
 from research import autonomy
@@ -49,3 +50,26 @@ def test_autonomy_health_fails_closed_for_stale_runtime(tmp_path, monkeypatch):
     )
 
     assert HS._autonomy_health() is False
+
+
+def test_startup_scan_runs_off_supervisor_loop(monkeypatch):
+    supervisor = HS.HostSupervisor()
+    supervisor.children["market_api"].spec = HS.ChildSpec(
+        "market_api", tuple(), lambda: True
+    )
+    monkeypatch.setattr(HS, "_market_ops_health", lambda: True)
+
+    def slow_scan(*args, **kwargs):
+        time.sleep(0.08)
+        return type("Proc", (), {"returncode": 0})()
+
+    monkeypatch.setattr(HS.subprocess, "run", slow_scan)
+
+    started = time.monotonic()
+    supervisor._kick_scan_once()
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.04
+    assert supervisor._scan_kick_thread is not None
+    supervisor._scan_kick_thread.join(timeout=1)
+    assert supervisor.scan_kicked is True
