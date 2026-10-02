@@ -5,6 +5,56 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 export PYTHONPATH="$ROOT"
 
+# One-command operator path: update the canonical checkout, then restart and
+# verify the exact-SHA installed host. This deliberately fails closed on local
+# edits or a non-fast-forward branch instead of discarding operator work.
+if [[ "${1:-}" == "--update" ]]; then
+  update_canonical_and_restart() {
+    local canonical_branch="claude/build-ai-trading-system-miHHd"
+    local current_branch=""
+
+    if ! command -v git >/dev/null 2>&1 || ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      echo "[COMPLETE STACK] Cannot update: $ROOT is not a Git checkout." >&2
+      return 2
+    fi
+    if [[ -n "$(git status --porcelain 2>/dev/null || true)" ]]; then
+      echo "[COMPLETE STACK] Cannot update a dirty checkout. Commit/stash local changes first." >&2
+      return 2
+    fi
+
+    echo "[COMPLETE STACK] Updating canonical QuantTerm source…"
+    if ! git fetch --prune origin "$canonical_branch"; then
+      echo "[COMPLETE STACK] Git fetch failed; existing installation was not restarted." >&2
+      return 2
+    fi
+
+    current_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    if [[ "$current_branch" != "$canonical_branch" ]]; then
+      echo "[COMPLETE STACK] Switching to canonical branch $canonical_branch…"
+      if git show-ref --verify --quiet "refs/heads/$canonical_branch"; then
+        git switch "$canonical_branch"
+      else
+        git switch -c "$canonical_branch" --track "origin/$canonical_branch"
+      fi
+    fi
+
+    if ! git merge --ff-only "origin/$canonical_branch"; then
+      echo "[COMPLETE STACK] Canonical checkout is not fast-forwardable; refusing to overwrite local history." >&2
+      return 2
+    fi
+
+    local updated_sha=""
+    updated_sha="$(git rev-parse HEAD 2>/dev/null || true)"
+    echo "[COMPLETE STACK] Source updated · sha=${updated_sha:0:12}"
+    echo "[COMPLETE STACK] Restarting and verifying the complete stack…"
+
+    # Re-exec the freshly-updated launcher so all remaining startup logic comes
+    # from the exact source tree that was just fetched.
+    exec bash "$ROOT/scripts/run_quantterm_complete.sh" --restart
+  }
+  update_canonical_and_restart
+fi
+
 # Make every operator/runtime log self-identifying. This prevents stale-build
 # confusion when the branch advances while a long scan is running.
 if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
