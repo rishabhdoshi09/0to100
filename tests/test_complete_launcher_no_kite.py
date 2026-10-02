@@ -106,3 +106,22 @@ def test_complete_launcher_shell_syntax_is_valid() -> None:
         check=False,
     )
     assert proc.returncode == 0, proc.stderr
+
+
+def test_complete_launcher_supports_one_command_update_and_restart() -> None:
+    text = LAUNCHER.read_text(encoding="utf-8")
+
+    assert 'if [[ "${1:-}" == "--update" ]]; then' in text
+    assert 'canonical_branch="claude/build-ai-trading-system-miHHd"' in text
+    assert "git status --porcelain" in text
+    assert 'git fetch --prune origin "$canonical_branch"' in text
+    assert 'git switch "$canonical_branch"' in text
+    assert 'git merge --ff-only "origin/$canonical_branch"' in text
+    assert 'exec bash "$ROOT/scripts/run_quantterm_complete.sh" --restart' in text
+
+    update_block = text.split('if [[ "${1:-}" == "--update" ]]; then', 1)[1].split(
+        "# Make every operator/runtime log self-identifying.", 1
+    )[0]
+    assert "reset --hard" not in update_block
+    assert "checkout -f" not in update_block
+    assert "pull --force" not in update_block
