@@ -441,6 +441,7 @@ class NewsCurator:
                 pass
             sources = default_sources(extra)
         self.sources = tuple(source for source in sources if source.enabled)
+        self._owns_store = store is None
         self.store = store or NewsCuratorStore()
         self.resolver = resolver or get_entity_resolver()
         self.timeout = max(3, int(timeout))
@@ -511,9 +512,13 @@ class NewsCurator:
 
     def _fetch_rss(self, source: SourceSpec, max_age_hours: int) -> list[FetchedNews]:
         import feedparser
-        response = requests.get(source.url, headers=_BROWSER_HEADERS, timeout=self.timeout)
-        response.raise_for_status()
-        feed = feedparser.parse(response.content)
+        # Explicitly close every HTTP response. Relying on response GC is unsafe
+        # in the long-lived market-ops process and can exhaust macOS' relatively
+        # small per-process descriptor budget after repeated refreshes.
+        with requests.get(source.url, headers=_BROWSER_HEADERS, timeout=self.timeout) as response:
+            response.raise_for_status()
+            content = response.content
+        feed = feedparser.parse(content)
         cutoff = datetime.now(timezone.utc) - timedelta(hours=max(1, max_age_hours))
         output: list[FetchedNews] = []
         for entry in list(feed.entries)[: source.max_items]:
@@ -539,12 +544,16 @@ class NewsCurator:
         return output
 
     def _fetch_nse_announcements(self, source: SourceSpec, max_age_hours: int) -> list[FetchedNews]:
-        session = requests.Session()
-        session.headers.update(_BROWSER_HEADERS)
-        session.get("https://www.nseindia.com/", timeout=self.timeout)
-        response = session.get(source.url, timeout=self.timeout)
-        response.raise_for_status()
-        payload = response.json()
+        # Session and both responses are explicitly bounded to this fetch. This
+        # source runs inside a repeating background worker, so leaked keep-alive
+        # sockets otherwise accumulate across refresh cycles.
+        with requests.Session() as session:
+            session.headers.update(_BROWSER_HEADERS)
+            with session.get("https://www.nseindia.com/", timeout=self.timeout) as landing:
+                landing.raise_for_status()
+            with session.get(source.url, timeout=self.timeout) as response:
+                response.raise_for_status()
+                payload = response.json()
         rows = payload if isinstance(payload, list) else payload.get("data", [])
         cutoff = datetime.now(timezone.utc) - timedelta(hours=max(1, max_age_hours))
         output: list[FetchedNews] = []
@@ -580,6 +589,17 @@ class NewsCurator:
                 )
             )
         return output
+
+    def close(self) -> None:
+        """Release resources owned by this curator instance."""
+        if self._owns_store:
+            self.store.close()
+
+    def __enter__(self) -> "NewsCurator":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
 
     def latest(self, **filters) -> list[CuratedArticle]:
         return self.store.recent(**filters)

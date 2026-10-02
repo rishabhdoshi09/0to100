@@ -19,6 +19,12 @@ class _FakeResponse:
     status_code = 200
     content = b""
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return None
+
 
 def test_parse_entry_time_returns_none_without_a_genuine_timestamp():
     assert NewsFetcher._parse_entry_time({"title": "no dates here"}) is None

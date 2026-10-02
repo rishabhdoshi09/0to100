@@ -66,9 +66,9 @@ class MarketauxNews:
         if sentiment_filter:
             params["filter_entities_sentiment"] = sentiment_filter
 
-        resp = requests.get(_BASE_URL, params=params, timeout=_REQUEST_TIMEOUT)
-        resp.raise_for_status()
-        data = resp.json()
+        with requests.get(_BASE_URL, params=params, timeout=_REQUEST_TIMEOUT) as resp:
+            resp.raise_for_status()
+            data = resp.json()
 
         articles = []
         for item in data.get("data", []):
