@@ -316,3 +316,60 @@ def test_F_single_worker_lock_still_guards_duplicate_workers():
     import inspect
     src = inspect.getsource(MO.MarketOperationsWorker.run)
     assert "self.lock" in src
+
+
+class _OneShotLaneStore:
+    def __init__(self):
+        self.worker = None
+        self.leases = 0
+        self.finished = []
+
+    def recover_dead_running(self, keep_pid=None):
+        return None
+
+    def recover_stale_running(self):
+        return None
+
+    def lease_next(self, lane, worker_pid=None):
+        self.leases += 1
+        if self.leases == 1:
+            return {
+                "operation_id": "news-op",
+                "kind": MO.NEWS_REFRESH,
+                "attempt": 1,
+            }
+        assert self.worker is not None
+        self.worker.stop_event.set()
+        return None
+
+    def finish(self, operation_id, **kwargs):
+        self.finished.append((operation_id, kwargs))
+
+
+def test_lane_survives_runtime_snapshot_emfile_after_success(tmp_path, monkeypatch):
+    store = _OneShotLaneStore()
+    worker = _worker(tmp_path, store)
+    store.worker = worker
+    worker._execute = lambda operation: {"ok": True}
+    emitted = []
+
+    monkeypatch.setattr(
+        MO,
+        "_atomic_json",
+        lambda *a, **k: (_ for _ in ()).throw(
+            OSError(24, "Too many open files")
+        ),
+    )
+    monkeypatch.setattr(MO, "_emit", lambda kind, message: emitted.append((kind, message)))
+
+    thread = threading.Thread(target=worker._lane_loop, args=("news",), daemon=True)
+    thread.start()
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert store.finished and store.finished[0][0] == "news-op"
+    assert store.finished[0][1]["status"] == MO.SUCCEEDED
+    assert any(
+        kind == "WARN" and "runtime snapshot deferred" in message
+        for kind, message in emitted
+    )
