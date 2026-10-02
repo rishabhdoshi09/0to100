@@ -11,6 +11,7 @@ TTL = 86 400 seconds (1 trading day).
 
 from __future__ import annotations
 
+from contextlib import closing
 import json
 import sqlite3
 import time
@@ -51,7 +52,7 @@ class FundamentalsCache:
         ``allow_stale=True``, in which case the snapshot is labelled stale.
         """
         symbol = symbol.upper()
-        with _connect() as conn:
+        with closing(_connect()) as conn:
             row = conn.execute(
                 "SELECT data_json, fetched_at FROM fundamentals_cache WHERE symbol = ?",
                 (symbol,),
@@ -86,7 +87,7 @@ class FundamentalsCache:
         """Store data with current timestamp."""
         symbol = symbol.upper()
         payload = json.dumps(data, ensure_ascii=False)
-        with _connect() as conn:
+        with closing(_connect()) as conn:
             conn.execute(
                 """
                 INSERT INTO fundamentals_cache (symbol, data_json, fetched_at)
@@ -107,7 +108,7 @@ class FundamentalsCache:
         so a failed official/secondary fetch can still serve a labelled snapshot.
         """
         cutoff = time.time() - 90 * 86_400
-        with _connect() as conn:
+        with closing(_connect()) as conn:
             cursor = conn.execute(
                 "DELETE FROM fundamentals_cache WHERE fetched_at < ?", (cutoff,)
             )
@@ -120,7 +121,7 @@ class FundamentalsCache:
     def invalidate(self, symbol: str) -> None:
         """Force-expire a single symbol."""
         symbol = symbol.upper()
-        with _connect() as conn:
+        with closing(_connect()) as conn:
             conn.execute(
                 "DELETE FROM fundamentals_cache WHERE symbol = ?", (symbol,)
             )
