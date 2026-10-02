@@ -285,10 +285,11 @@ class MarketOperationsWorker:
             fd_count = count_open_fds(os.getpid())
         except Exception:
             fd_count = None
+        lane_thread_map = getattr(self, "_lane_threads", {})
         lane_threads = {
             lane: bool(thread and thread.is_alive())
             for lane in EXPECTED_LANES
-            for thread in [self._lane_threads.get(lane)]
+            for thread in [lane_thread_map.get(lane)]
         }
         return {
             "process_running": bool(running),
@@ -296,7 +297,7 @@ class MarketOperationsWorker:
             "heartbeat_epoch": time.time(),
             "heartbeat": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "lanes": list(EXPECTED_LANES),
-            "lane_threads_started": bool(self._lane_threads_started),
+            "lane_threads_started": bool(getattr(self, "_lane_threads_started", False)),
             "lane_threads": lane_threads,
             "active": active,
             "rss_mb": rss_mb,
