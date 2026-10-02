@@ -1,9 +1,13 @@
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 import time
 
-from news.curator import EntityResolver, curate_articles
-from news.curator_models import FetchedNews
+import feedparser
+
+import news.curator as NC
+from news.curator import EntityResolver, NewsCurator, curate_articles
+from news.curator_models import FetchedNews, SourceSpec
 from news.curator_store import NewsCuratorStore
 from news.source_catalog import default_sources
 
@@ -111,3 +115,115 @@ def test_source_catalog_contains_official_and_discovery_feeds():
     assert {"nse_announcements", "sebi", "rbi_press", "pib_releases"}.issubset(keys)
     assert any(source.key.startswith("google_") for source in sources)
     assert len({source.url for source in sources}) == len(sources)
+
+
+class _ClosableStore:
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+def test_curator_context_closes_only_store_it_owns(monkeypatch):
+    owned = _ClosableStore()
+    monkeypatch.setattr(NC, "NewsCuratorStore", lambda: owned)
+
+    with NewsCurator(sources=[], resolver=EntityResolver({}, set())):
+        pass
+    assert owned.closed is True
+
+    external = _ClosableStore()
+    curator = NewsCurator(
+        sources=[],
+        store=external,
+        resolver=EntityResolver({}, set()),
+    )
+    curator.close()
+    assert external.closed is False
+
+
+class _FakeResponse:
+    def __init__(self, *, content=b"", payload=None):
+        self.content = content
+        self._payload = [] if payload is None else payload
+        self.entered = False
+        self.exited = False
+
+    def __enter__(self):
+        self.entered = True
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.exited = True
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._payload
+
+
+def test_rss_fetch_closes_http_response(monkeypatch):
+    response = _FakeResponse(content=b"<rss/>")
+    monkeypatch.setattr(NC.requests, "get", lambda *a, **k: response)
+    monkeypatch.setattr(
+        feedparser,
+        "parse",
+        lambda content: SimpleNamespace(entries=[], feed={}),
+    )
+    source = SourceSpec(
+        key="rss",
+        name="RSS",
+        url="https://example.test/rss",
+        category="market",
+    )
+    curator = NewsCurator(
+        sources=[source],
+        store=_ClosableStore(),
+        resolver=EntityResolver({}, set()),
+    )
+
+    assert curator._fetch_rss(source, 24) == []
+    assert response.entered is True
+    assert response.exited is True
+
+
+def test_nse_fetch_closes_session_and_both_responses(monkeypatch):
+    landing = _FakeResponse()
+    api = _FakeResponse(payload=[])
+    seen = {"session_entered": False, "session_exited": False, "gets": 0}
+
+    class _Session:
+        headers = {}
+
+        def __enter__(self):
+            seen["session_entered"] = True
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            seen["session_exited"] = True
+
+        def get(self, *args, **kwargs):
+            seen["gets"] += 1
+            return landing if seen["gets"] == 1 else api
+
+    monkeypatch.setattr(NC.requests, "Session", _Session)
+    source = SourceSpec(
+        key="nse",
+        name="NSE",
+        url="https://example.test/api",
+        category="company",
+        official=True,
+        kind="nse_announcements",
+    )
+    curator = NewsCurator(
+        sources=[source],
+        store=_ClosableStore(),
+        resolver=EntityResolver({}, set()),
+    )
+
+    assert curator._fetch_nse_announcements(source, 24) == []
+    assert seen == {"session_entered": True, "session_exited": True, "gets": 2}
+    assert landing.exited is True
+    assert api.exited is True
