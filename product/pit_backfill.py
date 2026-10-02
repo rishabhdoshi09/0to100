@@ -86,6 +86,18 @@ def _already_have(symbol: str, name: str) -> bool:
         return False
 
 
+
+
+def _close_http(obj) -> None:
+    """Best-effort close for sessions/responses owned by this module."""
+    close = getattr(obj, "close", None)
+    if not callable(close):
+        return
+    try:
+        close()
+    except Exception:
+        pass
+
 def _fetch_lane(symbol: str, lane: str, session) -> dict[str, Any]:
     from product.due_diligence.acquire import _download
 
@@ -150,31 +162,36 @@ def backfill_symbol(
         "reasons": {},
         "lanes": [],
     }
+    owns_session = session is None
     sess = session or _nse_session()
-    for lane in LANES:
-        report["attempted"] += 1
-        item = _fetch_lane(name, lane, sess)
-        report["lanes"].append(item)
-        if item.get("skipped"):
-            report["skipped"] += 1
-        elif item.get("ok"):
-            report["acquired"] += 1
-        else:
-            report["failed"] += 1
-            reason = str(item.get("reason") or REASON_HTTP_FAILURE)
-            report["reasons"][reason] = report["reasons"].get(reason, 0) + 1
-        if sleep_s:
-            time.sleep(float(sleep_s))
-    harvest = harvest_symbol(name, warehouse_path=warehouse_path)
-    report["parsed"] = int(harvest.get("parsed") or 0)
-    report["unverified"] = int(harvest.get("unverified") or 0)
-    report["harvest"] = {k: harvest.get(k) for k in (
-        "attempted", "acquired", "parsed", "unverified", "deduped", "unavailable",
-    )}
-    if harvest.get("unavailable"):
-        report["unavailable"] += 1
-        report["reasons"][REASON_NOT_FOUND] = report["reasons"].get(REASON_NOT_FOUND, 0) + 1
-    return report
+    try:
+        for lane in LANES:
+            report["attempted"] += 1
+            item = _fetch_lane(name, lane, sess)
+            report["lanes"].append(item)
+            if item.get("skipped"):
+                report["skipped"] += 1
+            elif item.get("ok"):
+                report["acquired"] += 1
+            else:
+                report["failed"] += 1
+                reason = str(item.get("reason") or REASON_HTTP_FAILURE)
+                report["reasons"][reason] = report["reasons"].get(reason, 0) + 1
+            if sleep_s:
+                time.sleep(float(sleep_s))
+        harvest = harvest_symbol(name, warehouse_path=warehouse_path)
+        report["parsed"] = int(harvest.get("parsed") or 0)
+        report["unverified"] = int(harvest.get("unverified") or 0)
+        report["harvest"] = {k: harvest.get(k) for k in (
+            "attempted", "acquired", "parsed", "unverified", "deduped", "unavailable",
+        )}
+        if harvest.get("unavailable"):
+            report["unavailable"] += 1
+            report["reasons"][REASON_NOT_FOUND] = report["reasons"].get(REASON_NOT_FOUND, 0) + 1
+        return report
+    finally:
+        if owns_session:
+            _close_http(sess)
 
 
 def backfill(
@@ -196,33 +213,36 @@ def backfill(
     session = None
     details = []
     started = _now()
-    for name in names:
-        if name in done:
-            details.append({"symbol": name, "skipped": True, "reason": "resume"})
-            continue
-        try:
-            if session is None:
-                from product.due_diligence.acquire import _nse_session
-                session = _nse_session()
-            row = backfill_symbol(name, session=session, warehouse_path=warehouse_path, sleep_s=sleep_s)
-        except Exception as exc:
-            row = {
-                "symbol": name, "ok": False, "failed": 1,
-                "reasons": {REASON_HTTP_FAILURE: 1}, "error": str(exc)[:240],
+    try:
+        for name in names:
+            if name in done:
+                details.append({"symbol": name, "skipped": True, "reason": "resume"})
+                continue
+            try:
+                if session is None:
+                    from product.due_diligence.acquire import _nse_session
+                    session = _nse_session()
+                row = backfill_symbol(name, session=session, warehouse_path=warehouse_path, sleep_s=sleep_s)
+            except Exception as exc:
+                row = {
+                    "symbol": name, "ok": False, "failed": 1,
+                    "reasons": {REASON_HTTP_FAILURE: 1}, "error": str(exc)[:240],
+                }
+            details.append(row)
+            if row.get("acquired") or row.get("parsed") or row.get("skipped"):
+                done.add(name)
+            state = {
+                "stage": stage,
+                "completed": sorted(done),
+                "updated_at": _now(),
+                "last_symbol": name,
             }
-        details.append(row)
-        if row.get("acquired") or row.get("parsed") or row.get("skipped"):
-            done.add(name)
-        state = {
-            "stage": stage,
-            "completed": sorted(done),
-            "updated_at": _now(),
-            "last_symbol": name,
-        }
-        _write_json(state_file, state)
-        reasons = row.get("reasons") or {}
-        if reasons.get(REASON_RATE_LIMITED) or reasons.get(REASON_ACCESS_BLOCKED):
-            time.sleep(max(sleep_s, 2.0))
+            _write_json(state_file, state)
+            reasons = row.get("reasons") or {}
+            if reasons.get(REASON_RATE_LIMITED) or reasons.get(REASON_ACCESS_BLOCKED):
+                time.sleep(max(sleep_s, 2.0))
+    finally:
+        _close_http(session)
     return {
         "stage": stage,
         "started_at": started,
@@ -310,131 +330,145 @@ def backfill_structured_financials(
     from product.pit_warehouse import persist_artifact
 
     name = str(symbol).upper()
+    owns_session = session is None
     sess = session or _nse_session()
     report = {
         "symbol": name, "attempted": 0, "acquired": 0, "parsed": 0,
         "failed": 0, "skipped": 0, "reasons": {},
     }
-    rows: list[dict[str, Any]] = []
-    integrated = sess.get(
-        "https://www.nseindia.com/api/integrated-filing-results",
-        params={
-            "index": "equities",
-            "symbol": name,
-            "period_ended": "all",
-            "type": "Integrated Filing- Financials",
-            "page": 1,
-            "size": 50,
-        },
-        timeout=25,
-    )
-    if integrated.status_code == 200:
-        payload = integrated.json() if integrated.content else {}
-        for row in list((payload or {}).get("data") or []):
-            if not isinstance(row, dict):
+    try:
+        rows: list[dict[str, Any]] = []
+
+        integrated = None
+        try:
+            integrated = sess.get(
+                "https://www.nseindia.com/api/integrated-filing-results",
+                params={
+                    "index": "equities",
+                    "symbol": name,
+                    "period_ended": "all",
+                    "type": "Integrated Filing- Financials",
+                    "page": 1,
+                    "size": 50,
+                },
+                timeout=25,
+            )
+            if integrated.status_code == 200:
+                payload = integrated.json() if integrated.content else {}
+                for row in list((payload or {}).get("data") or []):
+                    if not isinstance(row, dict):
+                        continue
+                    rows.append({
+                        "xbrl": row.get("xbrl"),
+                        "publication": _parse_nse_stamp(row.get("broadcast_Date") or row.get("creation_Date")),
+                        "period_end": _parse_nse_stamp(row.get("qe_Date")),
+                        "consolidated": row.get("consolidated"),
+                        "audited": row.get("audited"),
+                        "seq": row.get("seq_Id"),
+                        "revised": bool(row.get("revised_Date")),
+                        "kind": "integrated",
+                    })
+            else:
+                report["reasons"][_reason_from_error(f"HTTP {integrated.status_code}")] = 1
+        finally:
+            _close_http(integrated)
+
+        quarterly = None
+        try:
+            quarterly = sess.get(
+                f"https://www.nseindia.com/api/corporates-financial-results?index=equities&symbol={name}&period=Quarterly",
+                timeout=25,
+            )
+            if quarterly.status_code == 200:
+                qrows = quarterly.json() if quarterly.content else []
+                if isinstance(qrows, dict):
+                    qrows = qrows.get("data") or qrows.get("financialResults") or []
+                for row in list(qrows or []):
+                    if not isinstance(row, dict):
+                        continue
+                    xbrl = str(row.get("xbrl") or "")
+                    if not xbrl or xbrl.endswith("xbrl/-"):
+                        continue
+                    rows.append({
+                        "xbrl": xbrl,
+                        "publication": _parse_nse_stamp(row.get("filingDate") or row.get("broadCastDate")),
+                        "period_end": _parse_nse_stamp(row.get("toDate")),
+                        "period_start": _parse_nse_stamp(row.get("fromDate")),
+                        "consolidated": row.get("consolidated"),
+                        "audited": row.get("audited"),
+                        "seq": row.get("seqNumber"),
+                        "revised": False,
+                        "kind": "quarterly",
+                    })
+        finally:
+            _close_http(quarterly)
+
+        # Newest publication first; integrated + consolidated win ties.
+        def _rank(item: dict[str, Any]) -> tuple:
+            consol = str(item.get("consolidated") or "").lower()
+            pub = str(item.get("publication") or "")
+            return (
+                pub,
+                1 if item.get("kind") == "integrated" else 0,
+                1 if consol.startswith("consol") else 0,
+            )
+
+        seen_url = set()
+        picked = []
+        for item in sorted(rows, key=_rank, reverse=True):
+            url = str(item.get("xbrl") or "")
+            if not url or url in seen_url:
                 continue
-            rows.append({
-                "xbrl": row.get("xbrl"),
-                "publication": _parse_nse_stamp(row.get("broadcast_Date") or row.get("creation_Date")),
-                "period_end": _parse_nse_stamp(row.get("qe_Date")),
-                "consolidated": row.get("consolidated"),
-                "audited": row.get("audited"),
-                "seq": row.get("seq_Id"),
-                "revised": bool(row.get("revised_Date")),
-                "kind": "integrated",
-            })
-    else:
-        report["reasons"][_reason_from_error(f"HTTP {integrated.status_code}")] = 1
+            seen_url.add(url)
+            picked.append(item)
+            if len(picked) >= int(max_xbrl):
+                break
 
-    quarterly = sess.get(
-        f"https://www.nseindia.com/api/corporates-financial-results?index=equities&symbol={name}&period=Quarterly",
-        timeout=25,
-    )
-    if quarterly.status_code == 200:
-        qrows = quarterly.json() if quarterly.content else []
-        if isinstance(qrows, dict):
-            qrows = qrows.get("data") or qrows.get("financialResults") or []
-        for row in list(qrows or []):
-            if not isinstance(row, dict):
-                continue
-            xbrl = str(row.get("xbrl") or "")
-            if not xbrl or xbrl.endswith("xbrl/-"):
-                continue
-            rows.append({
-                "xbrl": xbrl,
-                "publication": _parse_nse_stamp(row.get("filingDate") or row.get("broadCastDate")),
-                "period_end": _parse_nse_stamp(row.get("toDate")),
-                "period_start": _parse_nse_stamp(row.get("fromDate")),
-                "consolidated": row.get("consolidated"),
-                "audited": row.get("audited"),
-                "seq": row.get("seqNumber"),
-                "revised": False,
-                "kind": "quarterly",
-            })
+        from product.due_diligence.acquire import _download
 
-    # Newest publication first; integrated + consolidated win ties.
-    def _rank(item: dict[str, Any]) -> tuple:
-        consol = str(item.get("consolidated") or "").lower()
-        pub = str(item.get("publication") or "")
-        return (
-            pub,
-            1 if item.get("kind") == "integrated" else 0,
-            1 if consol.startswith("consol") else 0,
-        )
-
-    seen_url = set()
-    picked = []
-    for item in sorted(rows, key=_rank, reverse=True):
-        url = str(item.get("xbrl") or "")
-        if not url or url in seen_url:
-            continue
-        seen_url.add(url)
-        picked.append(item)
-        if len(picked) >= int(max_xbrl):
-            break
-
-    from product.due_diligence.acquire import _download
-
-    for item in picked:
-        report["attempted"] += 1
-        url = str(item["xbrl"])
-        seq = str(item.get("seq") or url.rsplit("/", 1)[-1])
-        fname = f"nse_xbrl_{item.get('kind')}_{seq}.xml"
-        if _already_have(name, fname):
-            xml_text = (EVIDENCE_ROOT / name / "autonomy" / fname).read_text(encoding="utf-8", errors="ignore")
-            report["skipped"] += 1
-        else:
-            downloaded = _download(sess, url, symbol=name, name=fname)
-            if not downloaded.get("ok"):
-                report["failed"] += 1
-                reason = _reason_from_error(str(downloaded.get("error") or ""))
-                report["reasons"][reason] = report["reasons"].get(reason, 0) + 1
-                continue
-            report["acquired"] += 1
-            persist_artifact({
-                "symbol": name,
-                "source_url": url,
-                "local_path": downloaded.get("path"),
-                "bytes": downloaded.get("bytes"),
-                "document_type": "XBRL",
-                "parser_version": "pit_xbrl.v1",
-            })
-            xml_text = Path(ROOT / str(downloaded["path"])).read_text(encoding="utf-8", errors="ignore")
-        stored = _persist_parsed_xbrl(
-            name,
-            xml_text=xml_text,
-            publication=str(item.get("publication") or ""),
-            period_end=str(item.get("period_end") or ""),
-            source_url=url,
-            source_identity=f"nse_xbrl:{item.get('kind')}:{seq}",
-            warehouse_path=warehouse_path,
-            extra=item,
-        )
-        if (stored.get("extracted") or stored).get("numbers_parsed") or stored.get("pit_status") == "INDEXED":
-            report["parsed"] += 1
-        if sleep_s:
-            time.sleep(float(sleep_s))
-    return report
+        for item in picked:
+            report["attempted"] += 1
+            url = str(item["xbrl"])
+            seq = str(item.get("seq") or url.rsplit("/", 1)[-1])
+            fname = f"nse_xbrl_{item.get('kind')}_{seq}.xml"
+            if _already_have(name, fname):
+                xml_text = (EVIDENCE_ROOT / name / "autonomy" / fname).read_text(encoding="utf-8", errors="ignore")
+                report["skipped"] += 1
+            else:
+                downloaded = _download(sess, url, symbol=name, name=fname)
+                if not downloaded.get("ok"):
+                    report["failed"] += 1
+                    reason = _reason_from_error(str(downloaded.get("error") or ""))
+                    report["reasons"][reason] = report["reasons"].get(reason, 0) + 1
+                    continue
+                report["acquired"] += 1
+                persist_artifact({
+                    "symbol": name,
+                    "source_url": url,
+                    "local_path": downloaded.get("path"),
+                    "bytes": downloaded.get("bytes"),
+                    "document_type": "XBRL",
+                    "parser_version": "pit_xbrl.v1",
+                })
+                xml_text = Path(ROOT / str(downloaded["path"])).read_text(encoding="utf-8", errors="ignore")
+            stored = _persist_parsed_xbrl(
+                name,
+                xml_text=xml_text,
+                publication=str(item.get("publication") or ""),
+                period_end=str(item.get("period_end") or ""),
+                source_url=url,
+                source_identity=f"nse_xbrl:{item.get('kind')}:{seq}",
+                warehouse_path=warehouse_path,
+                extra=item,
+            )
+            if (stored.get("extracted") or stored).get("numbers_parsed") or stored.get("pit_status") == "INDEXED":
+                report["parsed"] += 1
+            if sleep_s:
+                time.sleep(float(sleep_s))
+        return report
+    finally:
+        if owns_session:
+            _close_http(sess)
 
 
 def consume_data_debt(
