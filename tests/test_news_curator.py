@@ -6,7 +6,11 @@ import time
 import feedparser
 
 import news.curator as NC
+import news.fetcher as NF
+import news.marketaux_news as MX
 from news.curator import EntityResolver, NewsCurator, curate_articles
+from news.fetcher import NewsFetcher
+from news.marketaux_news import MarketauxNews
 from news.curator_models import FetchedNews, SourceSpec
 from news.curator_store import NewsCuratorStore
 from news.source_catalog import default_sources
@@ -144,9 +148,10 @@ def test_curator_context_closes_only_store_it_owns(monkeypatch):
 
 
 class _FakeResponse:
-    def __init__(self, *, content=b"", payload=None):
+    def __init__(self, *, content=b"", payload=None, status_code=200):
         self.content = content
         self._payload = [] if payload is None else payload
+        self.status_code = status_code
         self.entered = False
         self.exited = False
 
@@ -227,3 +232,26 @@ def test_nse_fetch_closes_session_and_both_responses(monkeypatch):
     assert seen == {"session_entered": True, "session_exited": True, "gets": 2}
     assert landing.exited is True
     assert api.exited is True
+
+
+def test_legacy_news_fetcher_closes_rss_response(monkeypatch):
+    response = _FakeResponse(content=b"<rss/>")
+    monkeypatch.setattr(NC.requests, "get", lambda *a, **k: response)
+    monkeypatch.setattr(
+        NF.feedparser,
+        "parse",
+        lambda content: SimpleNamespace(entries=[], feed={}),
+    )
+
+    assert NewsFetcher()._fetch_rss("https://example.test/rss", 24) == []
+    assert response.entered is True
+    assert response.exited is True
+
+
+def test_marketaux_fetch_closes_http_response(monkeypatch):
+    response = _FakeResponse(payload={"data": []})
+    monkeypatch.setattr(MX.requests, "get", lambda *a, **k: response)
+
+    assert MarketauxNews("test-key").fetch_news("RELIANCE") == []
+    assert response.entered is True
+    assert response.exited is True
