@@ -47,9 +47,6 @@ def test_warm_session_closes_homepage_response(monkeypatch):
     fetcher = _fetcher(session, warmed=False)
 
     monkeypatch.setattr(SD.time, "sleep", lambda *_: None)
-    monkeypatch.setattr(SD.settings, "screener_email", "")
-    monkeypatch.setattr(SD.settings, "screener_password", "")
-
     fetcher._warm_session()
 
     assert response.closed is True
