@@ -93,6 +93,17 @@ def _build_session() -> requests.Session:
     return sess
 
 
+def _close_response(obj) -> None:
+    """Best-effort close for one HTTP response while keeping the session reusable."""
+    close = getattr(obj, "close", None)
+    if not callable(close):
+        return
+    try:
+        close()
+    except Exception:
+        pass
+
+
 class ScreenerDeepFetcher:
     """
     Parse a screener.in company page into structured Python dicts.
@@ -147,22 +158,27 @@ class ScreenerDeepFetcher:
         """GET the screener.in homepage to pick up session cookies."""
         if self._warmed:
             return
+        resp = None
         try:
             time.sleep(_REQUEST_DELAY)
             resp = self._session.get(_HOME_URL, timeout=_TIMEOUT)
-            log.debug("session_warmed", status=resp.status_code)
+            status_code = resp.status_code
+            homepage_html = resp.text
+            log.debug("session_warmed", status=status_code)
             # Attempt login if credentials are configured in .env
             email = getattr(settings, "screener_email", "")
             password = getattr(settings, "screener_password", "")
             if email and password:
-                self._login(email, password, resp.text)
+                self._login(email, password, homepage_html)
         except Exception as exc:
             log.warning("session_warm_failed", error=str(exc))
         finally:
+            _close_response(resp)
             self._warmed = True
 
     def _login(self, email: str, password: str, homepage_html: str) -> None:
         """POST login credentials to screener.in (enables full 10-year data)."""
+        resp = None
         try:
             soup = BeautifulSoup(homepage_html, "lxml")
             csrf_input = soup.find("input", {"name": "csrfmiddlewaretoken"})
@@ -185,6 +201,8 @@ class ScreenerDeepFetcher:
                 log.warning("screener_login_failed", hint="Check SCREENER_EMAIL / SCREENER_PASSWORD in .env")
         except Exception as exc:
             log.warning("screener_login_error", error=str(exc))
+        finally:
+            _close_response(resp)
 
     def _fetch_page(self, symbol: str) -> Tuple[str, BeautifulSoup]:
         """Warm session, then GET the company page. Falls back to standalone URL on 404."""
@@ -194,21 +212,29 @@ class ScreenerDeepFetcher:
         log.info("screener_fetching", symbol=symbol, url=url)
         time.sleep(_REQUEST_DELAY)
 
-        resp = self._session.get(url, timeout=_TIMEOUT)
-
-        if resp.status_code == 404:
-            url = _FALLBACK_URL.format(symbol=symbol)
-            log.info("screener_fallback_url", symbol=symbol, url=url)
-            time.sleep(_REQUEST_DELAY)
+        resp = None
+        try:
             resp = self._session.get(url, timeout=_TIMEOUT)
+            if resp.status_code == 404:
+                _close_response(resp)
+                resp = None
+                url = _FALLBACK_URL.format(symbol=symbol)
+                log.info("screener_fallback_url", symbol=symbol, url=url)
+                time.sleep(_REQUEST_DELAY)
+                resp = self._session.get(url, timeout=_TIMEOUT)
 
-        if resp.status_code == 404:
+            status_code = resp.status_code
+            html = resp.text
+        finally:
+            _close_response(resp)
+
+        if status_code == 404:
             raise ValueError(
                 f"Symbol '{symbol}' not found on screener.in (HTTP 404). "
                 "Verify the NSE symbol spelling."
             )
 
-        if resp.status_code == 403:
+        if status_code == 403:
             raise RuntimeError(
                 f"Screener.in blocked the request for '{symbol}' (HTTP 403). "
                 "Install `cloudscraper` (pip install cloudscraper) to bypass "
@@ -216,12 +242,12 @@ class ScreenerDeepFetcher:
                 "to .env to use an authenticated session."
             )
 
-        if resp.status_code != 200:
+        if status_code != 200:
             raise RuntimeError(
-                f"Screener.in returned HTTP {resp.status_code} for '{symbol}'."
+                f"Screener.in returned HTTP {status_code} for '{symbol}'."
             )
 
-        return url, BeautifulSoup(resp.text, "lxml")
+        return url, BeautifulSoup(html, "lxml")
 
     # ── Section Parsers ───────────────────────────────────────────────────
 
