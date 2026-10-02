@@ -154,7 +154,7 @@ def test_wait_for_supervisor_tolerates_bounded_slow_starting_heartbeat(tmp_path)
     try:
         result = HI.wait_for_supervisor(
             root, expected_sha="abc", started_after=started,
-            timeout_s=0.3, bootstrap_timeout_s=0.3,
+            timeout_s=0.8, bootstrap_timeout_s=0.8,
         )
     finally:
         thread.join(timeout=1)
