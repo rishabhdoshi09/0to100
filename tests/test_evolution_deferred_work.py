@@ -288,3 +288,36 @@ def test_default_isolated_worker_processes_real_prepared_work(tmp_path, monkeypa
     assert outcome[0]["status"] == "SUCCEEDED"
     assert outcome[0]["timed_out"] is False
     assert DW.get_work(prepared["work_id"])["status"] == "SUCCEEDED"
+
+
+def test_correlation_freeze_uses_canonical_pre_evolution_eligibility():
+    """A Champion-only conservative block must not remove correlation context
+    needed by a more permissive Challenger replay."""
+    from types import SimpleNamespace
+    from product.paper_autopilot import _correlation_cards_from_canonical_eligibility
+
+    champion_blocked_but_canonically_eligible = SimpleNamespace(
+        decision="BLOCK",
+        card={"symbol": "TCS", "sector": "Technology"},
+        breakdown={
+            "pre_evolution_decision": {
+                "decision": "ENTER_NOW",
+                "reason_code": "ELIGIBLE",
+            }
+        },
+    )
+    canonically_rejected = SimpleNamespace(
+        decision="BLOCK",
+        card={"symbol": "BAD", "sector": "Technology"},
+        breakdown={
+            "pre_evolution_decision": {
+                "decision": "BLOCK",
+                "reason_code": "INVALID_STOP",
+            }
+        },
+    )
+
+    rows = _correlation_cards_from_canonical_eligibility(
+        [champion_blocked_but_canonically_eligible, canonically_rejected]
+    )
+    assert [row["symbol"] for row in rows] == ["TCS"]
