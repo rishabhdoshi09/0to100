@@ -254,6 +254,28 @@ def carried_sector_risk(book) -> tuple[dict[str, float], dict[str, float]]:
     return family, cluster
 
 
+def _correlation_cards_from_canonical_eligibility(
+    decisions: Sequence[AutopilotDecision],
+) -> list[dict[str, Any]]:
+    """Freeze PIT correlation coverage from canonical pre-Evolution eligibility.
+
+    A Champion-specific overlay may conservatively BLOCK a candidate that another
+    Challenger is allowed to keep.  Correlation inputs therefore cannot be built
+    only from the Champion-surviving ranked list: that would give the Challenger
+    incomplete portfolio context.  Use the decision-time pre-Evolution verdict
+    captured in each breakdown so every canonically eligible candidate has the
+    same frozen correlation opportunity set.
+    """
+    rows: list[dict[str, Any]] = []
+    for decision in decisions:
+        breakdown = dict(getattr(decision, "breakdown", None) or {})
+        baseline = dict(breakdown.get("pre_evolution_decision") or {})
+        if str(baseline.get("decision") or "") != ENTER_NOW:
+            continue
+        rows.append(dict(getattr(decision, "card", None) or {}))
+    return rows
+
+
 def _group_for(decision: str) -> str:
     if decision == ENTER_NOW:
         return "TAKEN"
@@ -1024,7 +1046,7 @@ def run_reco_paper_cycle(
             if str(getattr(pos, "symbol", "") or "").strip()
         ]
         corr_meta = correlations_for_candidates(
-            [dict(decision.card or {}) for _, decision in ranked],
+            _correlation_cards_from_canonical_eligibility(decisions),
             held_symbols=held_symbols,
         )
         frozen_correlations = {
