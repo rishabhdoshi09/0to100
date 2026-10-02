@@ -373,3 +373,31 @@ def test_lane_survives_runtime_snapshot_emfile_after_success(tmp_path, monkeypat
         kind == "WARN" and "runtime snapshot deferred" in message
         for kind, message in emitted
     )
+
+
+def test_G_dead_required_lane_thread_fails_market_ops_liveness(tmp_path, monkeypatch):
+    path = _runtime(tmp_path, monkeypatch)
+    lanes = sorted(set(MO.LANES.values()))
+    lane_threads = {lane: True for lane in lanes}
+    lane_threads["news"] = False
+    _publish(
+        path,
+        lane_threads_started=True,
+        lanes=lanes,
+        lane_threads=lane_threads,
+    )
+
+    assert HS._market_ops_liveness() is False
+    assert HS._market_ops_health() is False
+
+
+def test_G_lane_thread_contract_is_backward_compatible_before_threads_start(tmp_path, monkeypatch):
+    path = _runtime(tmp_path, monkeypatch)
+    _publish(
+        path,
+        lane_threads_started=False,
+        lanes=sorted(set(MO.LANES.values())),
+        lane_threads={},
+    )
+
+    assert HS._market_ops_liveness() is True
