@@ -120,6 +120,11 @@ def _market_ops_alive(payload: dict[str, Any]) -> bool:
         return False
     if time.time() - heartbeat > MARKET_OPS_HEARTBEAT_MAX_AGE_S:
         return False
+    if payload.get("lane_threads_started") is True:
+        required_lanes = [str(x) for x in (payload.get("lanes") or []) if str(x)]
+        lane_threads = payload.get("lane_threads") or {}
+        if required_lanes and not all(lane_threads.get(lane) is True for lane in required_lanes):
+            return False
     os.kill(pid, 0)
     return True
 
