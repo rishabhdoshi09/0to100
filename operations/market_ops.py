@@ -50,6 +50,7 @@ LANES = {
     DUE_DILIGENCE_ACQUIRE: "due_diligence",
     US_MARKET_SCAN: "us_market",
 }
+EXPECTED_LANES = tuple(sorted(set(LANES.values())))
 
 ROOT = Path(__file__).resolve().parents[1]
 OPS_ROOT = logs_dir() / "market_ops"
@@ -247,6 +248,8 @@ class MarketOperationsWorker:
         self._active_lock = threading.Lock()
         self._active: dict[str, dict[str, Any]] = {}
         self._threads: list[threading.Thread] = []
+        self._lane_threads: dict[str, threading.Thread] = {}
+        self._lane_threads_started = False
         self._history_lock = threading.Lock()
         self._last_rss_sample = 0.0
         self._last_pipeline_snapshot = 0.0
@@ -282,12 +285,19 @@ class MarketOperationsWorker:
             fd_count = count_open_fds(os.getpid())
         except Exception:
             fd_count = None
+        lane_threads = {
+            lane: bool(thread and thread.is_alive())
+            for lane in EXPECTED_LANES
+            for thread in [self._lane_threads.get(lane)]
+        }
         return {
             "process_running": bool(running),
             "worker_pid": os.getpid(),
             "heartbeat_epoch": time.time(),
             "heartbeat": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-            "lanes": sorted(set(LANES.values())),
+            "lanes": list(EXPECTED_LANES),
+            "lane_threads_started": bool(self._lane_threads_started),
+            "lane_threads": lane_threads,
             "active": active,
             "rss_mb": rss_mb,
             "fd_count": fd_count,
@@ -1365,7 +1375,7 @@ class MarketOperationsWorker:
             f"pid={os.getpid()} · lanes={','.join(sorted(set(LANES.values())))} · "
             f"recovered={recovered} · bootstrap={','.join(bootstrap) or 'nothing_due'}",
         )
-        for lane in sorted(set(LANES.values())):
+        for lane in EXPECTED_LANES:
             thread = threading.Thread(
                 target=self._lane_loop,
                 args=(lane,),
@@ -1373,7 +1383,9 @@ class MarketOperationsWorker:
                 daemon=True,
             )
             thread.start()
+            self._lane_threads[lane] = thread
             self._threads.append(thread)
+        self._lane_threads_started = True
         try:
             while not self.stop_event.wait(1.0):
                 pass
