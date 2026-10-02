@@ -60,7 +60,7 @@ def test_startup_scan_runs_off_supervisor_loop(monkeypatch):
     monkeypatch.setattr(HS, "_market_ops_health", lambda: True)
 
     def slow_scan(*args, **kwargs):
-        time.sleep(0.08)
+        time.sleep(0.15)
         return type("Proc", (), {"returncode": 0})()
 
     monkeypatch.setattr(HS.subprocess, "run", slow_scan)
@@ -69,7 +69,7 @@ def test_startup_scan_runs_off_supervisor_loop(monkeypatch):
     supervisor._kick_scan_once()
     elapsed = time.monotonic() - started
 
-    assert elapsed < 0.04
+    assert elapsed < 0.08
     assert supervisor._scan_kick_thread is not None
     supervisor._scan_kick_thread.join(timeout=1)
     assert supervisor.scan_kicked is True
