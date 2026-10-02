@@ -15,6 +15,10 @@ import pytest
 from data.egress import ENVIRONMENT_EGRESS_BLOCKED, MARKET_EGRESS_BLOCKED, ProbeResult
 from product.host_preflight import (
     BLOCKED,
+    CAPABILITY_ENDPOINT_INVALID,
+    CAPABILITY_REJECTED,
+    CAPABILITY_USABLE,
+    CapabilityProbe,
     FAIL,
     PASS,
     READY,
@@ -107,7 +111,7 @@ def test_individual_providers_are_listed_when_the_failure_is_not_uniform():
     assert "market_access" not in by_name
     # Kite is named and its state is truthful, but it is one leg of the
     # intraday chain: the NSE fallback is serving, so this is degraded, not
-    # fatal, and the composite is what the install stands on.
+    # fatal. The composite is useful observability but is optional for PAPER.
     assert by_name["kite_intraday"].status == WARN
     assert by_name["kite_intraday"].required is False
     assert by_name[INTRADAY_CAPABILITY].status == PASS
@@ -120,6 +124,40 @@ def test_skipping_the_network_can_never_be_ready():
     market = next(c for c in report["checks"] if c["name"] == "market_access")
     assert market["status"] == UNKNOWN
     assert "unproven" in market["detail"]
+
+
+def test_broker_intraday_unavailable_does_not_block_official_data_paper_host():
+    """Regression for the owner's Mac: stale Kite + NSE live 404 must not block PAPER."""
+    from urllib.parse import urlsplit
+
+    def brokerless_intraday(url: str):
+        host = urlsplit(url).hostname or url
+        result = ProbeResult(host, host, True, "", "provider answered")
+        if host == "api.kite.trade":
+            return CapabilityProbe(
+                result, CAPABILITY_REJECTED,
+                {"transport": "OK", "reason": "invalid or expired access token"},
+            )
+        if host == "www.nseindia.com":
+            return CapabilityProbe(
+                result, CAPABILITY_ENDPOINT_INVALID,
+                {"transport": "OK", "http_status": 404},
+            )
+        return CapabilityProbe(result, CAPABILITY_USABLE, {"transport": "OK"})
+
+    checks, _ = probe_market_access(probe=brokerless_intraday)
+    by_name = {c.name: c for c in checks}
+
+    assert by_name["nse_archive"].status == PASS
+    assert by_name["nse_archive"].required is True
+    assert by_name[INTRADAY_CAPABILITY].status == WARN
+    assert by_name[INTRADAY_CAPABILITY].required is False
+    assert "PAPER/SHADOW operation remains available" in by_name[INTRADAY_CAPABILITY].detail
+
+    report = run_host_preflight(probe=brokerless_intraday)
+    assert report["verdict"] == READY
+    assert not any(row["check"] == INTRADAY_CAPABILITY for row in report["blockers"])
+    assert any(row["check"] == INTRADAY_CAPABILITY for row in report["warnings"])
 
 
 # ── individual checks ──────────────────────────────────────────────────────

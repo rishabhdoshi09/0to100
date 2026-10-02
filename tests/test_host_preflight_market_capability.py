@@ -8,8 +8,8 @@ working Zerodha and working NSE data access was blocked at install.
 
 These tests pin the fix: probes exercise the routes QuantTerm actually reads,
 requested the way production requests them, and report transport separately
-from capability. Fail-closed is unchanged -- a genuinely unusable data route
-still blocks.
+from capability. Fail-closed remains on required official history; broker-live
+intraday capability may warn without blocking PAPER/SHADOW host readiness.
 """
 from __future__ import annotations
 
@@ -165,9 +165,8 @@ def test_responding_roots_do_not_rescue_a_dead_data_route(monkeypatch):
 
     report = run_host_preflight()
     assert report["verdict"] == BLOCKED
-    assert {b["check"] for b in report["blockers"]} >= {
-        "nse_archive", HP.INTRADAY_CAPABILITY,
-    }
+    assert {b["check"] for b in report["blockers"]} == {"nse_archive"}
+    assert HP.INTRADAY_CAPABILITY in {w["check"] for w in report["warnings"]}
 
 
 # ── the four states are distinguished ──────────────────────────────────────

@@ -7,7 +7,8 @@ composite, the read-only nature of the Kite probe, and the evidence that says
 which source actually satisfied intraday.
 
 Bhavcopy stays independently required: it is the primary history source and has
-no alternate route.
+no alternate route. Intraday availability is optional for PAPER/SHADOW host
+readiness and gates only broker-live/F&O capability.
 """
 from __future__ import annotations
 
@@ -84,7 +85,7 @@ def test_A_kite_usable_and_nse_live_404_passes(monkeypatch):
     by_name = {c.name: c for c in checks}
 
     assert by_name[INTRADAY_CAPABILITY].status == PASS
-    assert by_name[INTRADAY_CAPABILITY].required is True
+    assert by_name[INTRADAY_CAPABILITY].required is False
     assert by_name["kite_intraday"].status == PASS
     # The dead fallback is reported, and is degraded rather than fatal.
     assert by_name["nse_live"].status == WARN
@@ -111,14 +112,15 @@ def test_B_kite_rejected_and_nse_live_usable_passes(monkeypatch):
     assert run_host_preflight()["verdict"] == READY
 
 
-# ── C: both intraday paths gone -- fail closed ─────────────────────────────
-def test_C_both_intraday_paths_unusable_blocks(monkeypatch):
+# ── C: both intraday paths gone -- PAPER remains available ─────────────────
+def test_C_both_intraday_paths_unusable_warns_without_blocking_paper(monkeypatch):
     _wire(monkeypatch, kite=CAPABILITY_UNREACHABLE, nse_live=CAPABILITY_ENDPOINT_INVALID)
 
     checks, _env = probe_market_access()
     by_name = {c.name: c for c in checks}
 
-    assert by_name[INTRADAY_CAPABILITY].status == FAIL
+    assert by_name[INTRADAY_CAPABILITY].status == WARN
+    assert by_name[INTRADAY_CAPABILITY].required is False
     assert by_name[INTRADAY_CAPABILITY].evidence["satisfied_by"] == ""
     assert by_name[INTRADAY_CAPABILITY].evidence["sources"] == {
         "kite_intraday": CAPABILITY_UNREACHABLE,
@@ -126,8 +128,9 @@ def test_C_both_intraday_paths_unusable_blocks(monkeypatch):
     }
 
     report = run_host_preflight()
-    assert report["verdict"] == BLOCKED
-    assert INTRADAY_CAPABILITY in {b["check"] for b in report["blockers"]}
+    assert report["verdict"] == READY
+    assert INTRADAY_CAPABILITY not in {b["check"] for b in report["blockers"]}
+    assert INTRADAY_CAPABILITY in {w["check"] for w in report["warnings"]}
 
 
 # ── D: history has no alternate route, so it gates on its own ──────────────
