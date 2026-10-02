@@ -803,7 +803,8 @@ class MarketOperationsWorker:
         operation_id = str(operation["operation_id"])
         self._progress(operation_id, "FETCHING_SOURCES", "Fetching official and editorial market-news sources")
         from news.curator import NewsCurator
-        report = NewsCurator().refresh()
+        with NewsCurator() as curator:
+            report = curator.refresh()
         result = report.as_dict()
         self._progress(
             operation_id,
@@ -1286,7 +1287,18 @@ class MarketOperationsWorker:
                 traceback.print_exc()
             finally:
                 self._set_active(lane, None)
-                _atomic_json(RUNTIME_PATH, self._runtime_payload(running=True))
+                try:
+                    _atomic_json(RUNTIME_PATH, self._runtime_payload(running=True))
+                except OSError as exc:
+                    # A transient filesystem/descriptor-pressure failure must
+                    # not silently kill an entire operation lane after the job
+                    # itself has already completed. The dedicated heartbeat
+                    # thread will continue publishing liveness and the next loop
+                    # iteration can recover.
+                    _emit(
+                        "WARN",
+                        f"lane {lane} runtime snapshot deferred · {type(exc).__name__}: {exc}",
+                    )
                 # Execution worker only: finishing any operation must never invent
                 # the next one. Supervisor/manual controls are the sole scheduling
                 # authorities. This is especially important after PAPER_CYCLE has
