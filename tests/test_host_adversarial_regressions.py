@@ -132,6 +132,51 @@ def test_wait_for_supervisor_allows_fresh_bootstrap_then_running(tmp_path):
     assert result["state"] == "RUNNING"
 
 
+def test_wait_for_supervisor_tolerates_bounded_slow_starting_heartbeat(tmp_path):
+    root = tmp_path / "runtime"
+    path = root / HI.SUPERVISOR_REL
+    path.parent.mkdir(parents=True)
+    started = time.time() - 0.05
+    slow = (datetime.now(timezone.utc) - timedelta(seconds=20)).isoformat()
+    payload = _supervisor_payload("STARTING", "abc", started, heartbeat=slow)
+    payload["children"]["frontend"]["healthy"] = False
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    def finish():
+        time.sleep(0.06)
+        path.write_text(
+            json.dumps(_supervisor_payload("RUNNING", "abc", started)),
+            encoding="utf-8",
+        )
+
+    thread = threading.Thread(target=finish)
+    thread.start()
+    try:
+        result = HI.wait_for_supervisor(
+            root, expected_sha="abc", started_after=started,
+            timeout_s=0.8, bootstrap_timeout_s=0.8,
+        )
+    finally:
+        thread.join(timeout=1)
+    assert result["state"] == "RUNNING"
+
+
+def test_wait_for_supervisor_failure_names_unready_children(tmp_path):
+    root = tmp_path / "runtime"
+    path = root / HI.SUPERVISOR_REL
+    path.parent.mkdir(parents=True)
+    started = time.time() - 0.05
+    payload = _supervisor_payload("STARTING", "abc", started)
+    payload["children"]["report_api"]["healthy"] = False
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(HI.HostInstallError, match="report_api"):
+        HI.wait_for_supervisor(
+            root, expected_sha="abc", started_after=started,
+            timeout_s=0.03, bootstrap_timeout_s=0.03,
+        )
+
+
 def test_wait_for_supervisor_rejects_stale_bootstrap_heartbeat(tmp_path):
     root = tmp_path / "runtime"
     path = root / HI.SUPERVISOR_REL
@@ -146,6 +191,47 @@ def test_wait_for_supervisor_rejects_stale_bootstrap_heartbeat(tmp_path):
             root, expected_sha="abc", started_after=started,
             timeout_s=0.1, bootstrap_timeout_s=1.0,
         )
+
+
+def test_failed_upgrade_never_rolls_back_service_to_sha_not_in_checkout(tmp_path, monkeypatch):
+    root = tmp_path / "runtime"
+    root.mkdir()
+    service = tmp_path / "agent.plist"
+    backup = tmp_path / "agent.plist.previous"
+    backup.write_text(
+        "<key>QT_BUILD_SHA</key><string>oldsha</string>",
+        encoding="utf-8",
+    )
+    calls: list[str] = []
+
+    monkeypatch.setattr(HI, "ensure_clean_checkout", lambda *a, **k: None)
+    monkeypatch.setattr(HI, "git_sha", lambda *a, **k: "newsha")
+    monkeypatch.setattr(HI, "ensure_persistent_runtime_root", lambda *a, **k: root)
+    monkeypatch.setattr(HI, "migrate_repo_runtime", lambda *a, **k: {"state": "ADOPTED"})
+    monkeypatch.setattr(HI, "run_required_preflight", lambda *a, **k: {"verdict": "READY_FOR_PAPER_OPERATION"})
+    monkeypatch.setattr(HI, "service_manager", lambda: "launchd")
+    monkeypatch.setattr(HI, "deployment_manifest", lambda *a, **k: {"build_sha": "oldsha"})
+    monkeypatch.setattr(HI, "install_service_definition", lambda **k: {
+        "manager": "launchd",
+        "path": str(service),
+        "backup": str(backup),
+    })
+    monkeypatch.setattr(
+        HI,
+        "service_action",
+        lambda name, **kwargs: calls.append(name) or subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        HI,
+        "wait_for_supervisor",
+        lambda *a, **k: (_ for _ in ()).throw(HI.HostInstallError("new generation unhealthy")),
+    )
+
+    with pytest.raises(HI.HostInstallError, match="new generation unhealthy"):
+        HI.install_host(runtime_root=root, manager="launchd")
+
+    assert calls == ["install", "stop"]
+    assert backup.read_text(encoding="utf-8").find("oldsha") >= 0
 
 
 def test_failed_first_install_stops_unmanifested_service(tmp_path, monkeypatch):

@@ -46,6 +46,10 @@ REPORT_SCHEDULER_REL = Path("state") / "daily_report_scheduler.json"
 REPORT_JOB_REL = Path("state") / "daily_report_job.json"
 EXPECTED_CHILDREN = ("autonomy", "market_ops", "market_api", "report_api", "frontend")
 HEARTBEAT_STALE_S = 10.0
+# STARTING performs bounded local health probes while a slow Intel Mac may be
+# under bootstrap pressure. Those probes must not be confused with a dead
+# supervisor. RUNNING and BOOTSTRAPPING retain the tighter heartbeat contract.
+STARTING_HEARTBEAT_STALE_S = 60.0
 DEFAULT_STARTUP_TIMEOUT_S = 300.0
 DEFAULT_BOOTSTRAP_TIMEOUT_S = 1800.0
 MIGRATION_MIN_HEADROOM_BYTES = 512 * 1024 * 1024
@@ -958,7 +962,10 @@ def wait_for_supervisor(
                 fresh_instance = started_epoch is not None and started_epoch >= started_after - 0.25
                 correct_sha = str(payload.get("production_sha") or "") == expected_sha
                 heartbeat_age = None if heartbeat_epoch is None else time.time() - heartbeat_epoch
-                fresh_heartbeat = heartbeat_age is not None and heartbeat_age <= HEARTBEAT_STALE_S
+                heartbeat_limit = (
+                    STARTING_HEARTBEAT_STALE_S if state == "STARTING" else HEARTBEAT_STALE_S
+                )
+                fresh_heartbeat = heartbeat_age is not None and heartbeat_age <= heartbeat_limit
 
                 if state != reported_state or time.monotonic() - last_progress >= 15.0:
                     child_rows = payload.get("children") or {}
@@ -972,6 +979,16 @@ def wait_for_supervisor(
                         if isinstance(child_rows.get(name), Mapping)
                         and bool(child_rows[name].get("alive"))
                     )
+                    unhealthy_children = [
+                        name for name in EXPECTED_CHILDREN
+                        if isinstance(child_rows.get(name), Mapping)
+                        and child_rows[name].get("healthy") is False
+                    ]
+                    pending_health = [
+                        name for name in EXPECTED_CHILDREN
+                        if not isinstance(child_rows.get(name), Mapping)
+                        or child_rows[name].get("healthy") is None
+                    ]
                     exit_codes = {
                         name: child_rows[name].get("exit_code")
                         for name in EXPECTED_CHILDREN
@@ -982,8 +999,11 @@ def wait_for_supervisor(
                         "[HOST INSTALL] Supervisor "
                         f"state={state or 'UNKNOWN'} sha={str(payload.get('production_sha') or '')[:12] or 'missing'} "
                         f"heartbeat_age_s={heartbeat_age if heartbeat_age is not None else 'unknown'} "
+                        f"heartbeat_limit_s={heartbeat_limit} "
                         f"alive_children={alive_children}/{len(EXPECTED_CHILDREN)} "
                         f"healthy_children={healthy_children}/{len(EXPECTED_CHILDREN)} "
+                        f"unhealthy={unhealthy_children or '[]'} "
+                        f"pending_health={pending_health or '[]'} "
                         f"exit_codes={exit_codes or '{}'}",
                         flush=True,
                     )
@@ -1010,10 +1030,24 @@ def wait_for_supervisor(
             pass
         time.sleep(0.5)
 
+    child_rows = last.get("children") or {}
+    unready = {
+        name: {
+            "alive": bool(child_rows.get(name, {}).get("alive")) if isinstance(child_rows.get(name), Mapping) else False,
+            "healthy": child_rows.get(name, {}).get("healthy") if isinstance(child_rows.get(name), Mapping) else None,
+            "exit_code": child_rows.get(name, {}).get("exit_code") if isinstance(child_rows.get(name), Mapping) else None,
+        }
+        for name in EXPECTED_CHILDREN
+        if not (
+            isinstance(child_rows.get(name), Mapping)
+            and bool(child_rows[name].get("alive"))
+            and child_rows[name].get("healthy") is True
+        )
+    }
     raise HostInstallError(
         f"installed supervisor did not prove RUNNING for SHA {expected_sha}; "
         f"last_state={last.get('state') or 'missing'} last_sha={last.get('production_sha') or 'missing'} "
-        f"error={last.get('error') or ''}"
+        f"unready_children={unready} error={last.get('error') or ''}"
     )
 
 
@@ -1105,6 +1139,11 @@ def install_host(
             and backup.exists()
             and previous_sha
             and backup_sha == previous_sha
+            # This repository is an in-place checkout. A service pinned to an
+            # older SHA cannot pass verify_safety() while the working tree is
+            # already on the new SHA. Never pretend that restoring only the
+            # plist can roll source code back.
+            and previous_sha == sha
         )
         if rollback_verified:
             shutil.copy2(backup, service_path)
@@ -1128,10 +1167,19 @@ def install_host(
                 )
         else:
             if backup is not None and backup.exists():
+                if backup_sha == previous_sha and previous_sha and previous_sha != sha:
+                    reason = (
+                        "verified previous service definition belongs to stale source SHA "
+                        f"{previous_sha[:12]}; current checkout is {sha[:12]}"
+                    )
+                else:
+                    reason = (
+                        "backup SHA "
+                        f"{backup_sha[:12] or 'UNKNOWN'} does not match deployed SHA "
+                        f"{previous_sha[:12] or 'UNKNOWN'}"
+                    )
                 print(
-                    "[HOST INSTALL] Rollback skipped: backup SHA "
-                    f"{backup_sha[:12] or 'UNKNOWN'} does not match deployed SHA "
-                    f"{previous_sha[:12] or 'UNKNOWN'}",
+                    f"[HOST INSTALL] Rollback skipped: {reason}; stopping failed generation instead.",
                     file=sys.stderr,
                     flush=True,
                 )
