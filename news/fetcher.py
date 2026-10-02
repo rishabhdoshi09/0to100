@@ -131,13 +131,15 @@ class NewsFetcher:
         }
         try:
             import requests
-            resp = requests.get(feed_url, headers=_browser_headers, timeout=10)
-            feed = feedparser.parse(resp.content)
+            with requests.get(feed_url, headers=_browser_headers, timeout=10) as resp:
+                content = resp.content
+                status_code = resp.status_code
+            feed = feedparser.parse(content)
             if not feed.entries:
                 log.warning(
                     "rss_feed_empty",
                     url=feed_url,
-                    http_status=resp.status_code,
+                    http_status=status_code,
                     bozo=bool(getattr(feed, "bozo", False)),
                 )
         except Exception:
