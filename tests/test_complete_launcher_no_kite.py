@@ -75,7 +75,11 @@ def test_complete_launcher_reconciles_stale_launchd_sha_on_restart() -> None:
     assert "Refusing to run stale installed code" in text
     assert "Cannot reconcile launchd from a dirty checkout" in text
     assert 'local reconcile_runtime="${installed_runtime:-${QT_RUNTIME_ROOT:-}}"' in text
-    assert 'local install_args=(install --runtime-root "$reconcile_runtime" --manager launchd)' in text
+    assert 'local install_args=(--runtime-root "$reconcile_runtime" --manager launchd)' in text
+    reconcile_block = text.split('echo "[COMPLETE STACK] Reconciling canonical launchd host', 1)[1].split(
+        'installed_sha="$current_sha"', 1
+    )[0]
+    assert 'install_args=(install ' not in reconcile_block
     assert 'install_args+=(--env-file "$installed_env_file")' in text
     assert '"$installed_env_file" == "$installed_repo/.env"' in text
     assert 'installed_env_file="$ROOT/.env"' in text
