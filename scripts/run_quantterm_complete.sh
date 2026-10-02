@@ -175,7 +175,7 @@ PY
     fi
 
     echo "[COMPLETE STACK] Reconciling canonical launchd host to checkout SHA ${current_sha:0:12}…"
-    local install_args=(install --runtime-root "$reconcile_runtime" --manager launchd)
+    local install_args=(--runtime-root "$reconcile_runtime" --manager launchd)
     if [[ -n "$installed_env_file" ]]; then
       install_args+=(--env-file "$installed_env_file")
     fi
