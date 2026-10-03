@@ -133,11 +133,23 @@ def _kite_snapshot(symbols: list[str]) -> dict[str, dict]:
                 if ltp <= 0:
                     continue
                 snap[sym] = {
-                    "open":   float(q.get("open") or ltp),
-                    "high":   float(q.get("high") or ltp),
-                    "low":    float(q.get("low") or ltp),
-                    "close":  ltp,
+                    "open": float(q.get("open") or ltp),
+                    "high": float(q.get("high") or ltp),
+                    "low": float(q.get("low") or ltp),
+                    "close": ltp,
                     "volume": float(q.get("volume") or 0),
+                    "pchange": float(q.get("change") or 0.0),
+                    "average_price": float(q.get("average_price") or 0.0),
+                    "last_quantity": int(q.get("last_quantity") or 0),
+                    "buy_quantity": int(q.get("buy_quantity") or 0),
+                    "sell_quantity": int(q.get("sell_quantity") or 0),
+                    "oi": int(q.get("oi") or 0),
+                    "oi_day_high": int(q.get("oi_day_high") or 0),
+                    "oi_day_low": int(q.get("oi_day_low") or 0),
+                    "depth": q.get("depth") or {},
+                    "timestamp": q.get("timestamp"),
+                    "last_trade_time": q.get("last_trade_time"),
+                    "source": "kite",
                 }
         if snap:
             _last_kite_snap = snap
@@ -301,7 +313,7 @@ def live_quotes(symbols: list[str]) -> dict[str, dict]:
                 close = float(bar["close"])
                 out[sym] = {
                     "price": close,
-                    "chg_pct": 0.0,
+                    "chg_pct": round(float(bar.get("pchange") or 0.0), 2),
                     "source": "kite",
                 }
         return out
