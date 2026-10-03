@@ -1,6 +1,7 @@
 """Canonical current long-term shortlist service.
 
-The technical pre-screen uses official bhavcopy history. Fundamentals are a
+The technical pre-screen uses the canonical source-authoritative OHLCV cache
+(Kite when connected; explicit offline fallback otherwise). Fundamentals are a
 current Screener.in/cache snapshot and are explicitly *not* point-in-time
 historical evidence. Missing data lowers coverage and can never be converted to
 an optimistic pass.
@@ -162,14 +163,20 @@ def _default_fundamental_provider(symbol: str, refresh: bool) -> Mapping[str, An
 
 
 def _prepare_official_history() -> dict:
-    """Load or build the single canonical official-history store.
+    """Prepare the active historical market-data authority.
 
-    API and supervisor are separate processes, so an in-memory readiness check is
-    insufficient. First load the persisted cache, then rebuild from existing local
-    CSVs, and only then invoke the canonical downloader/builder.
+    The function name is retained for compatibility. With Kite configured the
+    whole-market scanner owns loading/repair from the immutable Kite snapshot;
+    NSE bhavcopy preparation is used only in no-Kite mode.
     """
-    from data.bhavcopy_runtime import ensure_loaded
+    try:
+        from data.kite_client import kite_credentials_available
+        if kite_credentials_available():
+            return {"ready": True, "source": "kite_authoritative"}
+    except Exception:
+        pass
 
+    from data.bhavcopy_runtime import ensure_loaded
     state = ensure_loaded(rebuild_from_local=True)
     if state.get("ready"):
         return state
@@ -237,7 +244,7 @@ def _enrich_with_long_term_score(
     include_watch: bool,
 ) -> list[dict]:
     try:
-        from data.bhavcopy_store import get_ohlcv
+        from scan.bulk_fetcher import get_cached
         from scan.long_term import long_term_score, thesis_line
     except Exception:
         return rows
@@ -246,7 +253,7 @@ def _enrich_with_long_term_score(
     scored_any = False
     for row in rows:
         try:
-            df = get_ohlcv(row["symbol"])
+            df = get_cached(row["symbol"])
         except Exception:
             df = None
         if df is None:
