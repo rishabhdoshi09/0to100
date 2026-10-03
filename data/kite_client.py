@@ -218,18 +218,25 @@ class KiteClient:
 
     # -- Market Data --------------------------------------------------------
 
-    def get_quote(self, symbols: List[str]) -> Dict[str, Any]:
-        instruments = [f"{settings.exchange}:{s}" for s in symbols]
-        return self._kite.quote(instruments)
+    @staticmethod
+    def _qualified(symbols: List[str], exchange: str | None = None) -> List[str]:
+        default_exchange = exchange or settings.exchange
+        return [s if ":" in s else f"{default_exchange}:{s}" for s in symbols]
 
-    def get_ltp(self, symbols: List[str]) -> Dict[str, float]:
-        instruments = [f"{settings.exchange}:{s}" for s in symbols]
-        raw = self._kite.ltp(instruments)
-        return {k.split(":")[1]: v["last_price"] for k, v in raw.items()}
+    def get_instruments(self, exchange: str | None = None) -> List[Dict[str, Any]]:
+        """Kite instrument master. Exchange-qualified metadata stays broker-sourced."""
+        return list(self._kite.instruments(exchange)) if exchange else list(self._kite.instruments())
 
-    def get_ohlcv(self, symbols: List[str]) -> Dict[str, Any]:
-        instruments = [f"{settings.exchange}:{s}" for s in symbols]
-        return self._kite.ohlc(instruments)
+    def get_quote(self, symbols: List[str], *, exchange: str | None = None) -> Dict[str, Any]:
+        """Full Kite quote payload, including volume/OI/depth where the exchange publishes it."""
+        return self._kite.quote(self._qualified(symbols, exchange))
+
+    def get_ltp(self, symbols: List[str], *, exchange: str | None = None) -> Dict[str, float]:
+        raw = self._kite.ltp(self._qualified(symbols, exchange))
+        return {k.split(":", 1)[-1]: v["last_price"] for k, v in raw.items()}
+
+    def get_ohlcv(self, symbols: List[str], *, exchange: str | None = None) -> Dict[str, Any]:
+        return self._kite.ohlc(self._qualified(symbols, exchange))
 
     def get_historical(
         self,
@@ -238,6 +245,7 @@ class KiteClient:
         to_date: str,
         interval: str = "day",
         continuous: bool = False,
+        oi: bool = False,
     ) -> pd.DataFrame:
         raw = self._kite.historical_data(
             instrument_token=instrument_token,
@@ -245,6 +253,7 @@ class KiteClient:
             to_date=to_date,
             interval=interval,
             continuous=continuous,
+            oi=oi,
         )
         if not raw:
             return pd.DataFrame()
@@ -321,6 +330,36 @@ class KiteClient:
     def get_margins(self) -> Dict[str, Any]:
         return self._kite.margins()
 
+    def get_profile(self) -> Dict[str, Any]:
+        return self._kite.profile()
+
+    def get_trades(self) -> List[Dict[str, Any]]:
+        return self._kite.trades()
+
+    def get_gtts(self) -> List[Dict[str, Any]]:
+        return self._kite.get_gtts()
+
+    def get_auction_instruments(self) -> List[Dict[str, Any]]:
+        return self._kite.get_auction_instruments()
+
+    def get_order_margins(self, orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return self._kite.order_margins(orders)
+
+    def get_basket_order_margins(
+        self,
+        orders: List[Dict[str, Any]],
+        *,
+        consider_positions: bool = True,
+        mode: str | None = None,
+    ) -> Dict[str, Any]:
+        kwargs: Dict[str, Any] = {"consider_positions": consider_positions}
+        if mode is not None:
+            kwargs["mode"] = mode
+        return self._kite.basket_order_margins(orders, **kwargs)
+
+    def get_virtual_contract_note(self, orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return self._kite.get_virtual_contract_note(orders)
+
     # -- WebSocket ----------------------------------------------------------
 
     def get_ticker(self, on_ticks, on_connect, on_close, on_error=None) -> KiteTicker:
@@ -337,16 +376,17 @@ class KiteClient:
     def is_connected(self) -> bool:
         return bool(self._access_token)
 
-    def batch_quotes(self, symbols: list[str]) -> dict[str, dict]:
+    def batch_quotes(self, symbols: list[str], *, exchange: str | None = None) -> dict[str, dict]:
+        """Normalized full Kite quotes without discarding broker-published fields."""
         if not symbols:
             return {}
         try:
-            instruments = [f"{settings.exchange}:{s}" if ":" not in s else s for s in symbols]
+            instruments = self._qualified(symbols, exchange)
             raw = self._kite.quote(instruments)
             result: dict[str, dict] = {}
             for key, val in raw.items():
-                sym = key.split(":")[-1]
-                ohlc = val.get("ohlc", {})
+                sym = key.split(":", 1)[-1]
+                ohlc = val.get("ohlc", {}) or {}
                 result[sym] = {
                     "ltp": val.get("last_price", 0.0),
                     "open": ohlc.get("open", 0.0),
@@ -354,7 +394,20 @@ class KiteClient:
                     "low": ohlc.get("low", 0.0),
                     "close": ohlc.get("close", 0.0),
                     "volume": val.get("volume", 0),
-                    "change": val.get("change", 0.0),
+                    "average_price": val.get("average_price", 0.0),
+                    "last_quantity": val.get("last_quantity", 0),
+                    "buy_quantity": val.get("buy_quantity", 0),
+                    "sell_quantity": val.get("sell_quantity", 0),
+                    "oi": val.get("oi", 0),
+                    "oi_day_high": val.get("oi_day_high", 0),
+                    "oi_day_low": val.get("oi_day_low", 0),
+                    "change": val.get("change", val.get("net_change", 0.0)),
+                    "depth": val.get("depth") or {},
+                    "timestamp": val.get("timestamp"),
+                    "last_trade_time": val.get("last_trade_time"),
+                    "instrument_token": val.get("instrument_token"),
+                    "source": "kite",
+                    "raw": dict(val),
                 }
             return result
         except Exception as exc:
