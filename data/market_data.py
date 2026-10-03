@@ -1,12 +1,16 @@
 """
-MarketDataProvider — Kite-first, yfinance fallback.
+MarketDataProvider — Kite-authoritative for every Kite-covered market field.
 
-All UI modules that need live prices, % change, volume, or OHLC should
-import from here instead of calling yfinance directly.
+All UI/modules that need prices, OHLCV, volume, market depth, OI, or historical
+candles should route through this module instead of calling alternate market
+providers directly.
 
-Priority:
-  1. Zerodha Kite — real NSE tick data, no delay, accurate
-  2. yfinance     — fallback when KITE_ACCESS_TOKEN is not set
+Policy:
+  1. When a valid Kite credential set is present, Kite is authoritative for
+     every dataset Kite exposes. A Kite failure is surfaced honestly; the same
+     field is NOT silently substituted from Yahoo/NSE.
+  2. Non-Kite providers are fallback only when Kite is unavailable, or for
+     datasets Kite does not expose.
 
 Usage:
     from data.market_data import get_provider, get_historical_data
@@ -19,7 +23,7 @@ Usage:
     # Batch quotes (one API call for Kite)
     quotes = mdp.quotes(["RELIANCE", "TCS", "INFY"])
 
-    # Historical OHLCV (Kite-first with yfinance fallback)
+    # Historical OHLCV (Kite authoritative while Kite is available)
     df = get_historical_data("RELIANCE", interval="day", from_date="2025-01-01", to_date="2025-03-01")
 """
 from __future__ import annotations
@@ -44,7 +48,11 @@ except Exception:
 
 
 def _kite_available() -> bool:
-    return bool(os.getenv("KITE_API_KEY", "") and os.getenv("KITE_ACCESS_TOKEN", ""))
+    try:
+        from data.kite_client import kite_credentials_available
+        return bool(kite_credentials_available())
+    except Exception:
+        return bool(os.getenv("KITE_API_KEY", "") and os.getenv("KITE_ACCESS_TOKEN", ""))
 
 
 # ── Kite historical data ──────────────────────────────────────────────────────
@@ -145,9 +153,10 @@ def get_historical_data(
 ) -> pd.DataFrame:
     """
     Unified OHLCV entry point.
-    source = "auto"    → try Kite first, fall back to yfinance
-    source = "kite"    → Kite only (raises on failure)
-    source = "yfinance" → yfinance only
+    source = "auto"     → Kite when available; no same-field fallback on Kite failure.
+                          yfinance is used only when Kite credentials are unavailable.
+    source = "kite"     → Kite only (raises on failure)
+    source = "yfinance" → explicit yfinance override
     """
     if source == "yfinance":
         return get_historical_data_yfinance(symbol, interval, from_date, to_date)
@@ -162,20 +171,20 @@ def get_historical_data(
         mark_dead = lambda s, r="": None    # noqa: E731
     if is_dead(symbol):
         raise ValueError(f"{symbol}: dead-symbol registry (delisted?) — skip")
-    kite_says_missing = False
     if _kite_available():
         try:
             return get_historical_data_kite(symbol, interval, from_date, to_date)
-        except Exception as e:
-            kite_says_missing = "not found in NSE instrument" in str(e)
-            log.debug("kite_hist_fallback_yf", symbol=symbol, error=str(e)[:80])
-    try:
-        return get_historical_data_yfinance(symbol, interval, from_date, to_date)
-    except Exception:
-        if kite_says_missing:
-            # Both authorities agree the symbol doesn't exist → register
-            mark_dead(symbol, "kite instrument missing + yfinance no data")
-        raise
+        except Exception as exc:
+            if "not found in NSE instrument" in str(exc):
+                mark_dead(symbol, "kite instrument missing")
+            log.warning(
+                "kite_hist_authoritative_failure",
+                symbol=symbol,
+                interval=interval,
+                error=str(exc)[:160],
+            )
+            raise
+    return get_historical_data_yfinance(symbol, interval, from_date, to_date)
 
 
 # ── Live quote providers ──────────────────────────────────────────────────────
@@ -213,76 +222,107 @@ class _KiteProvider:
         self._kite_client = KiteClient()
         self._exchange = os.getenv("KITE_EXCHANGE", "NSE")
 
+    def _key(self, symbol: str) -> str:
+        return _KITE_INDEX_SYMBOLS.get(symbol.upper(), (
+            symbol if ":" in symbol else f"{self._exchange}:{symbol}"
+        ))
+
+    @staticmethod
+    def _normalize_quote(payload: dict) -> dict:
+        price = float(payload.get("last_price") or 0.0)
+        ohlc = payload.get("ohlc") or {}
+        prev = float(ohlc.get("close") or price or 0.0)
+        volume = float(payload.get("volume") or 0.0)
+        chg = float(
+            payload.get("change")
+            or payload.get("net_change")
+            or ((price - prev) / prev * 100 if prev else 0.0)
+        )
+        return {
+            "price": price,
+            "prev_close": prev,
+            "chg_pct": chg,
+            "volume": volume,
+            "avg_volume": volume or 1.0,
+            "open": float(ohlc.get("open") or price or 0.0),
+            "high": float(ohlc.get("high") or price or 0.0),
+            "low": float(ohlc.get("low") or price or 0.0),
+            "average_price": float(payload.get("average_price") or 0.0),
+            "last_quantity": int(payload.get("last_quantity") or 0),
+            "buy_quantity": int(payload.get("buy_quantity") or 0),
+            "sell_quantity": int(payload.get("sell_quantity") or 0),
+            "oi": int(payload.get("oi") or 0),
+            "oi_day_high": int(payload.get("oi_day_high") or 0),
+            "oi_day_low": int(payload.get("oi_day_low") or 0),
+            "depth": payload.get("depth") or {},
+            "timestamp": payload.get("timestamp"),
+            "last_trade_time": payload.get("last_trade_time"),
+            "instrument_token": payload.get("instrument_token"),
+            "source": "kite",
+        }
+
     def quote(self, symbol: str) -> dict:
         return self.quotes([symbol]).get(symbol, _empty_quote())
 
     def quotes(self, symbols: list[str]) -> dict[str, dict]:
+        if not symbols:
+            return {}
         try:
-            # Separate indices from equities
-            index_syms = [s for s in symbols if s.upper() in _KITE_INDEX_SYMBOLS or s.startswith("^")]
-            equity_syms = [s for s in symbols if s not in index_syms]
-
+            key_by_symbol = {symbol: self._key(symbol) for symbol in symbols}
             out: dict[str, dict] = {}
-
-            # Fetch equities via get_ohlcv
-            if equity_syms:
-                raw = self._kite_client.get_ohlcv(equity_syms)
-                for sym in equity_syms:
-                    key = f"{self._exchange}:{sym}"
-                    if key not in raw:
-                        out[sym] = _empty_quote()
-                        continue
-                    d = raw[key]
-                    price = float(d.get("last_price", 0))
-                    ohlc  = d.get("ohlc", {})
-                    prev  = float(ohlc.get("close", price))
-                    vol   = float(d.get("volume_traded", 0))
-                    chg   = (price - prev) / prev * 100 if prev else 0.0
-                    out[sym] = {
-                        "price": price, "prev_close": prev, "chg_pct": chg,
-                        "volume": vol, "avg_volume": vol or 1,
-                        "open": float(ohlc.get("open", price)),
-                        "high": float(ohlc.get("high", price)),
-                        "low":  float(ohlc.get("low", price)),
-                    }
-
-            # Fetch indices via ltp
-            if index_syms:
-                kite_index_keys = [_KITE_INDEX_SYMBOLS.get(s.upper(), f"NSE:{s}") for s in index_syms]
-                raw_ltp = self._kite_client._kite.ltp(kite_index_keys)
-                for sym, kite_key in zip(index_syms, kite_index_keys):
-                    d = raw_ltp.get(kite_key, {})
-                    price = float(d.get("last_price", 0))
-                    ohlc  = d.get("ohlc", {})
-                    prev  = float(ohlc.get("close", price))
-                    chg   = (price - prev) / prev * 100 if prev else 0.0
-                    out[sym] = {
-                        "price": price, "prev_close": prev, "chg_pct": chg,
-                        "volume": 0, "avg_volume": 1,
-                        "open": float(ohlc.get("open", price)),
-                        "high": float(ohlc.get("high", price)),
-                        "low":  float(ohlc.get("low", price)),
-                    }
-
+            keys = list(key_by_symbol.values())
+            raw: dict = {}
+            for start in range(0, len(keys), 500):
+                raw.update(self._kite_client.get_quote(keys[start:start + 500]))
+            for symbol, key in key_by_symbol.items():
+                payload = raw.get(key)
+                if not isinstance(payload, dict):
+                    out[symbol] = {**_empty_quote(), "source": "kite", "unavailable": True}
+                    continue
+                out[symbol] = self._normalize_quote(payload)
             return out
-        except Exception as e:
-            log.debug("kite_provider_quotes_failed", error=str(e)[:80])
-            return {s: _empty_quote() for s in symbols}
+        except Exception as exc:
+            log.warning("kite_provider_quotes_failed", error=str(exc)[:160])
+            return {
+                symbol: {**_empty_quote(), "source": "kite", "unavailable": True}
+                for symbol in symbols
+            }
 
     def live_ltp(self, symbols: list[str]) -> dict[str, float]:
-        """Fast LTP fetch — one call, returns {symbol: price}."""
+        """Fast Kite LTP fetch. No alternate-source substitution."""
+        if not symbols:
+            return {}
         try:
-            instruments = [f"{self._exchange}:{s}" for s in symbols]
-            raw = self._kite_client._kite.ltp(instruments)
+            key_by_symbol = {symbol: self._key(symbol) for symbol in symbols}
+            raw = self._kite_client.raw.ltp(list(key_by_symbol.values()))
             return {
-                k.split(":")[1]: float(v.get("last_price", 0))
-                for k, v in raw.items()
+                symbol: float((raw.get(key) or {}).get("last_price") or 0.0)
+                for symbol, key in key_by_symbol.items()
+                if float((raw.get(key) or {}).get("last_price") or 0.0) > 0
             }
-        except Exception:
+        except Exception as exc:
+            log.warning("kite_ltp_failed", error=str(exc)[:160])
             return {}
 
     def history_closes(self, symbol: str, days: int = 20) -> list[float]:
-        return _yf_history_closes(symbol, days)
+        """Close history from Kite only while this provider is active."""
+        if days <= 0:
+            return []
+        end = datetime.today()
+        start = end - timedelta(days=max(45, int(days) * 3))
+        try:
+            df = get_historical_data_kite(
+                symbol,
+                interval="day",
+                from_date=start.strftime("%Y-%m-%d"),
+                to_date=end.strftime("%Y-%m-%d"),
+            )
+        except Exception as exc:
+            log.warning("kite_history_closes_failed", symbol=symbol, error=str(exc)[:160])
+            return []
+        if "close" not in df.columns:
+            return []
+        return [float(value) for value in df["close"].dropna().tolist()[-int(days):]]
 
     @property
     def source(self) -> str:
