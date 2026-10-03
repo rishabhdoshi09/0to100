@@ -429,8 +429,8 @@ _provider: Optional[_KiteProvider | _GoogleFinanceProvider | _YFinanceProvider] 
 
 
 def get_provider() -> _KiteProvider | _GoogleFinanceProvider | _YFinanceProvider:
-    """Return a cached provider. Kite if token is set, else Google Finance
-    (live quotes, with yfinance as per-symbol backup).
+    """Return a cached provider under the Kite-authoritative source policy.
+    Public providers are available only when Kite credentials are absent.
 
     Auto-upgrade: app Kite-login se pehle khuli ho toh Google cache ho
     jata tha aur login ke BAAD bhi din bhar scrape se quotes aate the.
@@ -439,11 +439,9 @@ def get_provider() -> _KiteProvider | _GoogleFinanceProvider | _YFinanceProvider
     if _provider is None or (
             not isinstance(_provider, _KiteProvider) and _kite_available()):
         if _kite_available():
-            try:
-                _provider = _KiteProvider()
-            except Exception:
-                if _provider is None:
-                    _provider = _GoogleFinanceProvider()
+            # Kite authority is explicit: construction/auth problems must be
+            # visible, never converted into a same-field public-source switch.
+            _provider = _KiteProvider()
         else:
             _provider = _GoogleFinanceProvider()
     return _provider
