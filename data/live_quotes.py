@@ -211,36 +211,47 @@ _KITE_INDEX_KEYS = {
 
 
 def get_index_quotes(names: list[str]) -> dict[str, dict]:
-    """
-    {name: {price, chg_pct, source}} for NIFTY/BANKNIFTY/VIX/SENSEX.
-    Kite first (real-time indices), Google Finance fallback.
-    """
+    """Index quotes with Kite authoritative whenever broker credentials exist."""
     out: dict[str, dict] = {}
     wanted = [n.upper() for n in names]
-    # 1. Kite — one ltp-style quote call for all indices
     try:
-        from config import settings
-        if settings.kite_access_token:
-            from data.kite_client import KiteClient
+        from data.kite_client import KiteClient, kite_credentials_available
+        kite_authoritative = bool(kite_credentials_available())
+    except Exception:
+        kite_authoritative = False
+
+    if kite_authoritative:
+        try:
             kite = KiteClient()
             keys = [_KITE_INDEX_KEYS[n] for n in wanted if n in _KITE_INDEX_KEYS]
-            raw = kite.raw.quote(keys)
+            raw = kite.get_quote(keys)
             for name in wanted:
                 key = _KITE_INDEX_KEYS.get(name)
                 d = raw.get(key) if key else None
-                if not d:
+                if not isinstance(d, dict):
                     continue
                 price = float(d.get("last_price") or 0)
                 prev = float((d.get("ohlc") or {}).get("close") or 0)
-                if price > 0:
-                    chg = (price - prev) / prev * 100 if prev else 0.0
-                    out[name] = {"price": price, "chg_pct": round(chg, 2),
-                                 "source": "kite"}
-    except Exception as exc:
-        log.debug("kite_index_quotes_failed", error=str(exc))
-    # 2. Google Finance for what Kite missed
-    missing = [n for n in wanted if n not in out]
-    for name in missing:
+                if price <= 0:
+                    continue
+                chg = (price - prev) / prev * 100 if prev else 0.0
+                out[name] = {
+                    "price": price,
+                    "chg_pct": round(chg, 2),
+                    "source": "kite",
+                    "open": float((d.get("ohlc") or {}).get("open") or 0.0),
+                    "high": float((d.get("ohlc") or {}).get("high") or 0.0),
+                    "low": float((d.get("ohlc") or {}).get("low") or 0.0),
+                    "close": prev,
+                    "timestamp": d.get("timestamp"),
+                    "instrument_token": d.get("instrument_token"),
+                }
+        except Exception as exc:
+            log.debug("kite_index_quotes_failed", error=str(exc))
+        return out
+
+    # Broker unavailable: public quote source is continuity-only.
+    for name in wanted:
         try:
             from data.google_finance import get_quote
             q = get_quote(name)
@@ -249,7 +260,6 @@ def get_index_quotes(names: list[str]) -> dict[str, dict]:
         except Exception:
             pass
     return out
-
 
 def source_health(sample: str = "RELIANCE") -> tuple[bool, str]:
     """(ok, 'kite ₹1,390') — which source answers for a probe symbol."""
