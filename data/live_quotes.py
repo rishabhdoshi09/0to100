@@ -1,16 +1,15 @@
 """
 Unified live-quote source — ONE reliable path for "today's price".
 
-Priority (most reliable first):
-  1. Kite (Zerodha)   — real-time LTP, up to 500 symbols/call. Used
-                         whenever the user is logged in. This is the
-                         source to trust during and after market hours.
-  2. NSE snapshot     — one bulk call, live pChange for ~750 stocks.
-  3. Google Finance   — per-stock scrape, fragile (often blocked). Last
-                         resort only.
+Policy:
+  1. When Kite credentials are available, Kite is authoritative for quote fields.
+     Missing/failed Kite data stays unavailable; NSE/Google never overwrite or
+     silently substitute the same market field.
+  2. Only when Kite is unavailable do NSE snapshot and Google Finance act as
+     continuity fallbacks.
 
-Returns {symbol: {price, chg_pct, source}}. A symbol missing from all
-three simply isn't included — the caller shows an honest EOD tag.
+Returns {symbol: {price, chg_pct, source, ...}}. Kite rows retain the full useful
+market payload (OHLC, volume, OI, quantities, depth, timestamps) exposed by Kite.
 """
 from __future__ import annotations
 
@@ -34,13 +33,12 @@ _qcache_lock = threading.Lock()
 
 def _kite_quotes(symbols: list[str]) -> dict[str, dict]:
     try:
-        from config import settings
-        if not settings.kite_access_token:
+        from data.kite_client import KiteClient, kite_credentials_available
+        if not kite_credentials_available():
             return {}
-        from data.kite_client import KiteClient
         kite = KiteClient()
         out: dict[str, dict] = {}
-        # Kite allows up to 500 instruments per quote() call
+        # Kite full quote endpoint is bounded; batch conservatively at 500.
         for i in range(0, len(symbols), 500):
             chunk = symbols[i:i + 500]
             raw = kite.batch_quotes(chunk)
@@ -50,7 +48,27 @@ def _kite_quotes(symbols: list[str]) -> dict[str, dict]:
                 if ltp <= 0:
                     continue
                 chg = float(q.get("change") or ((ltp - prev) / prev * 100 if prev else 0))
-                out[sym] = {"price": ltp, "chg_pct": round(chg, 2), "source": "kite"}
+                out[sym] = {
+                    "price": ltp,
+                    "chg_pct": round(chg, 2),
+                    "source": "kite",
+                    "open": float(q.get("open") or 0.0),
+                    "high": float(q.get("high") or 0.0),
+                    "low": float(q.get("low") or 0.0),
+                    "close": prev,
+                    "volume": int(q.get("volume") or 0),
+                    "average_price": float(q.get("average_price") or 0.0),
+                    "last_quantity": int(q.get("last_quantity") or 0),
+                    "buy_quantity": int(q.get("buy_quantity") or 0),
+                    "sell_quantity": int(q.get("sell_quantity") or 0),
+                    "oi": int(q.get("oi") or 0),
+                    "oi_day_high": int(q.get("oi_day_high") or 0),
+                    "oi_day_low": int(q.get("oi_day_low") or 0),
+                    "depth": q.get("depth") or {},
+                    "timestamp": q.get("timestamp"),
+                    "last_trade_time": q.get("last_trade_time"),
+                    "instrument_token": q.get("instrument_token"),
+                }
         return out
     except Exception as exc:
         log.debug("kite_quotes_failed", error=str(exc))
@@ -112,11 +130,32 @@ def get_live_quotes(symbols: list[str], ttl: float = _QUOTE_TTL_S) -> dict[str, 
         if len(quotes) == len(symbols):
             return quotes
 
-    # 2. Network chain for the rest
+    # 2. Network chain for the rest. If Kite is configured it is authoritative:
+    # do not silently replace a missing Kite field with another provider.
     t0 = time.perf_counter()
     fetched: dict[str, dict] = {}
-    for name, fn in (("kite", _kite_quotes), ("nse", _nse_quotes),
-                     ("google", _google_quotes)):
+    try:
+        from data.kite_client import kite_credentials_available
+        kite_authoritative = bool(kite_credentials_available())
+    except Exception:
+        kite_authoritative = False
+
+    if kite_authoritative:
+        missing = [s for s in symbols if s not in quotes]
+        fetched.update(_kite_quotes(missing))
+        if fetched:
+            log.info(
+                "live_quotes_source",
+                source="kite",
+                filled=len(fetched),
+                still_missing=len(symbols) - len(quotes) - len(fetched),
+            )
+        # Continue to the common cache/telemetry block below; no NSE/Google
+        # substitution is allowed while Kite is the active authority.
+        provider_chain = ()
+    else:
+        provider_chain = (("nse", _nse_quotes), ("google", _google_quotes))
+    for name, fn in provider_chain:
         missing = [s for s in symbols if s not in quotes and s not in fetched]
         if not missing:
             break
