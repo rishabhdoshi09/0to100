@@ -5,9 +5,9 @@ A separate lens from the short-term breakout scanner. Where that one hunts for a
 break happening THIS week, this screens the whole market for stocks worth HOLDING
 for months: a proven long-term uptrend, rising 200-day trend, real momentum,
 leadership (near their highs, not laggards), steadiness (not lottery tickets), and
-enough liquidity to actually own. All computed from official bhavcopy history —
-network-free, no fundamentals API needed for the scan (fundamentals enrich only
-the shortlist elsewhere).
+enough liquidity to actually own. OHLCV comes from the canonical scanner cache:
+Kite snapshot/history when Kite is connected, explicit offline fallback otherwise.
+Fundamentals enrich only the shortlist elsewhere.
 
 `long_term_score(df)` is a pure function (unit-tested on synthetic history);
 `scan_long_term()` runs it over the universe and returns ranked picks with a
@@ -140,18 +140,27 @@ def scan_long_term(symbols=None, min_score: float | None = None,
     The default remains backward compatible and returns only ``LONG_TERM_BUY``
     technical candidates.  ``include_watch=True`` also returns structurally
     valid WATCH rows so the current-fundamental layer can make the final retail
-    classification.  Reads official bhavcopy only — fail-open → [].
+    classification. Reads the same source-authoritative OHLCV cache as the
+    whole-market scanner.
     """
     try:
-        from data.bhavcopy_store import get_ohlcv, store_symbols
-        syms = symbols if symbols is not None else store_symbols()
+        from scan.bulk_fetcher import cached_symbols, get_cached, prefetch
+        if symbols is None:
+            syms = cached_symbols()
+            if not syms:
+                from data.nse_universe import get_nifty500_universe
+                syms = list(get_nifty500_universe())
+        else:
+            syms = list(symbols)
+        if syms:
+            prefetch(syms)
     except Exception:
         return []
     bar = _BUY_SCORE if min_score is None else min_score
     picks: list[dict] = []
     for sym in syms:
         try:
-            df = get_ohlcv(sym)
+            df = get_cached(sym)
             if df is None or len(df) < _MIN_SESSIONS:
                 continue
             s = long_term_score(df)
