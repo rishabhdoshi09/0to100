@@ -196,7 +196,7 @@ def render_real_holdings() -> None:
     try:
         from data.kite_client import KiteClient
         kc = KiteClient()
-        holdings = kc.kite.holdings()
+        holdings = kc.get_holdings()
         kite_connected = True
     except Exception as exc:
         kite_error = str(exc)
@@ -371,7 +371,7 @@ def render_real_holdings() -> None:
         try:
             from data.kite_client import KiteClient
             kc2 = KiteClient()
-            net_pos = kc2.kite.positions().get("net", [])
+            net_pos = kc2.get_positions().get("net", [])
             positions = [p for p in net_pos if p.get("quantity", 0) != 0]
         except Exception:
             pass
