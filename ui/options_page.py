@@ -19,36 +19,14 @@ from options.analytics import (
 # ─────────────────────────────────────────────────────────────────────────────
 _SYMBOLS = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]
 
-# Approximate spot proxies via yfinance for ATM calculation when live feed is
-# unavailable — used only to position the ATM strike, not for trading.
-_SPOT_YF = {
-    "NIFTY":      "^NSEI",
-    "BANKNIFTY":  "^NSEBANK",
-    "FINNIFTY":   "NIFTY_FIN_SERVICE.NS",
-    "MIDCPNIFTY": "NIFTY_MIDCAP_SELECT.NS",
-}
-
-
 @st.cache_data(ttl=120, show_spinner=False)
 def _get_spot(symbol: str) -> float:
-    """Spot for ATM positioning — Kite REAL-TIME index quote first
-    (data policy: Kite primary, scrapes fallback), yfinance backup."""
+    """Spot for ATM positioning under the Kite-authoritative quote policy."""
     try:
         from data.live_quotes import get_index_quotes
         q = get_index_quotes([symbol]).get(symbol.upper())
         if q and q.get("price"):
             return float(q["price"])
-    except Exception:
-        pass
-    try:
-        import yfinance as yf
-
-        ticker = _SPOT_YF.get(symbol, "^NSEI")
-        hist = yf.Ticker(ticker).history(period="2d")
-        if hist is not None and not hist.empty:
-            if hasattr(hist.columns, "levels"):
-                hist.columns = [c[0] for c in hist.columns]
-            return float(hist["Close"].iloc[-1])
     except Exception:
         pass
     return 0.0
@@ -229,8 +207,8 @@ def render_options_page() -> None:
 
     if df is None or df.empty:
         st.error(
-            "Could not fetch option chain data. NSE API may be rate-limiting or "
-            "the market is closed. Try again during market hours (9:15 AM – 3:30 PM IST)."
+            "Could not fetch option chain data from the active market-data source. "
+            "If Kite is connected, QuantTerm will not silently replace it with NSE/Yahoo."
         )
         return
 
@@ -365,8 +343,8 @@ def render_options_page() -> None:
         )
     else:
         st.info(
-            "Change-in-OI data unavailable from this source "
-            "(yfinance fallback doesn't provide intraday COI).",
+            "Change-in-OI is not a direct Kite full-quote field, so QuantTerm leaves it "
+            "unavailable rather than borrowing it from another market-data source.",
             icon="ℹ️",
         )
 
