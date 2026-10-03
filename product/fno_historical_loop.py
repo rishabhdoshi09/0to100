@@ -138,13 +138,14 @@ def _default_universe() -> list[str]:
 
 
 def _default_history_provider(symbol: str):
-    """Real historical equity OHLC, column names normalised to what
-    evaluate_point_in_time_candidate expects. Never fabricates a bar: a
-    symbol with no store history returns None, exactly like
-    data.bhavcopy_store.get_ohlcv itself."""
-    from data.bhavcopy_store import get_ohlcv
+    """Historical equity OHLC from the canonical source-authoritative cache.
 
-    frame = get_ohlcv(symbol)
+    With Kite connected this reads the immutable Kite snapshot/history cache;
+    no-Kite mode may use the explicit public/official continuity fallback.
+    """
+    from scan.bulk_fetcher import get_cached
+
+    frame = get_cached(symbol)
     if frame is None or frame.empty:
         return None
     rename = {"open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"}
