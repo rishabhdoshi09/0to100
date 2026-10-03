@@ -61,11 +61,17 @@ def _scan_one(symbol: str) -> Optional[FlowSignal]:
             get_option_chain, compute_pcr, compute_max_pain,
             get_atm_iv, get_oi_buildup, get_iv_percentile,
         )
-        df, spot_str = get_option_chain(symbol)
+        df, _expiry = get_option_chain(symbol)
         if df is None or df.empty:
             return None
 
-        spot = float(spot_str) if spot_str else 0.0
+        spot = float(df.attrs.get("spot") or 0.0)
+        if spot <= 0:
+            try:
+                from data.live_quotes import get_live_quotes
+                spot = float((get_live_quotes([symbol]).get(symbol) or {}).get("price") or 0.0)
+            except Exception:
+                spot = 0.0
         pcr         = compute_pcr(df)
         max_pain    = compute_max_pain(df)
         atm_iv      = get_atm_iv(df, spot)
