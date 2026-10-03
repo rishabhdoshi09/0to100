@@ -151,8 +151,9 @@ def _kite_snapshot(symbols: list[str]) -> dict[str, dict]:
 
 def apply_live_to_store() -> int:
     """
-    Overlay today's live bar onto the bhavcopy store during market hours.
-    Source order: Kite (reliable) → NSE public API (fallback).
+    Overlay today's live bar onto the historical store during market hours.
+    Kite is authoritative whenever configured. NSE public data is used only
+    when Kite is unavailable, never to replace a failed/missing Kite quote.
     Returns number of symbols updated. No-op when the store already has
     today's session (evening bhavcopy landed) or market is closed.
     """
@@ -172,12 +173,24 @@ def apply_live_to_store() -> int:
             _uni = get_nse_universe()
         except Exception:
             _uni = []
-        snap = _kite_snapshot(_uni) if _uni else {}
-        if not snap:
+        try:
+            from data.kite_client import kite_credentials_available
+            kite_authoritative = bool(kite_credentials_available())
+        except Exception:
+            kite_authoritative = False
+
+        snap = _kite_snapshot(_uni) if (_uni and kite_authoritative) else {}
+        if not kite_authoritative:
             snap = fetch_live_snapshot()
         if not snap:
-            log.info("live_bar_unavailable",
-                     hint="Kite login + NSE API dono se intraday nahi mila")
+            log.info(
+                "live_bar_unavailable",
+                hint=(
+                    "Kite is authoritative but returned no usable intraday quotes"
+                    if kite_authoritative
+                    else "Kite unavailable and NSE public snapshot returned no data"
+                ),
+            )
             return 0
 
         today_ts = pd.Timestamp(date.today())
@@ -272,15 +285,35 @@ def live_session_ready(*, apply: bool = True) -> dict:
 
 
 def live_quotes(symbols: list[str]) -> dict[str, dict]:
-    """
-    {symbol: {price, chg_pct}} from today's NSE snapshot — one bulk call
-    covers the whole list. Empty for symbols not in the snapshot (caller
-    falls back to Google Finance / EOD). Uses NSE's own pChange field.
-    """
+    """Read live cash quotes under the Kite-authoritative source policy."""
+    try:
+        from data.kite_client import kite_credentials_available
+        kite_authoritative = bool(kite_credentials_available())
+    except Exception:
+        kite_authoritative = False
+
+    if kite_authoritative:
+        snap = _kite_snapshot(symbols)
+        out: dict[str, dict] = {}
+        for sym in symbols:
+            bar = snap.get(sym.upper()) or snap.get(sym)
+            if bar and bar.get("close"):
+                close = float(bar["close"])
+                out[sym] = {
+                    "price": close,
+                    "chg_pct": 0.0,
+                    "source": "kite",
+                }
+        return out
+
     snap = fetch_live_snapshot()
     out: dict[str, dict] = {}
     for sym in symbols:
         bar = snap.get(sym.upper())
         if bar and bar.get("close"):
-            out[sym] = {"price": bar["close"], "chg_pct": round(bar.get("pchange", 0), 2)}
+            out[sym] = {
+                "price": bar["close"],
+                "chg_pct": round(bar.get("pchange", 0), 2),
+                "source": "nse",
+            }
     return out
