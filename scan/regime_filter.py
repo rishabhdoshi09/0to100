@@ -73,8 +73,8 @@ class RegimeFilter:
             except Exception:
                 pass
             if h is None or len(h) < 50:
-                import yfinance as yf
-                h = yf.Ticker(f"{symbol}.NS").history(period="250d", interval="1d")
+                from data.market_data import get_historical_data
+                h = get_historical_data(symbol, interval="day")
             if h is None or len(h) < 50:
                 return None
             # Normalise column names — bulk cache uses lowercase, yfinance uses Title case
@@ -101,10 +101,13 @@ class RegimeFilter:
 
             # RS vs Nifty
             try:
-                import yfinance as yf
-                nifty = yf.Ticker("^NSEI").history(period="7d")
-                nifty_close = nifty["Close"] if "Close" in nifty.columns else nifty["close"]
-                nifty_ret = (float(nifty_close.iloc[-1]) / float(nifty_close.iloc[-6]) - 1) if len(nifty) >= 6 else 0.0
+                from data.index_store import get_index_ohlcv
+                nifty = get_index_ohlcv("^NSEI")
+                nifty_close = nifty["Close"] if nifty is not None and "Close" in nifty.columns else None
+                nifty_ret = (
+                    float(nifty_close.iloc[-1]) / float(nifty_close.iloc[-6]) - 1
+                    if nifty_close is not None and len(nifty_close) >= 6 else 0.0
+                )
             except Exception:
                 nifty_ret = 0.0
             stock_ret = (price / float(close[-6]) - 1) if len(close) >= 6 else 0.0
