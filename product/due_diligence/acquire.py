@@ -17,7 +17,7 @@ from product.due_diligence.extract import (
     html_to_text,
     merge_kpi_maps,
 )
-from product.due_diligence.option_chain import summarize_option_chain
+from product.due_diligence.option_chain import summarize_kite_option_chain, summarize_option_chain
 from core.runtime_paths import logs_dir, logs_path, RuntimeLogsPath
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -564,7 +564,7 @@ def _fetch_annual_reports(symbol: str, session) -> dict[str, Any]:
     }
 
 
-def _fetch_option_chain(symbol: str, session) -> dict[str, Any]:
+def _fetch_option_chain_nse(symbol: str, session) -> dict[str, Any]:
     url = f"https://www.nseindia.com/api/option-chain-equities?symbol={symbol}"
     snapshot: dict[str, Any] = {
         "available": False,
@@ -620,6 +620,135 @@ def _fetch_option_chain(symbol: str, session) -> dict[str, Any]:
         "download": downloaded,
         "snapshot": snapshot,
     }
+
+
+def _fetch_option_chain_kite(symbol: str) -> dict[str, Any]:
+    """Build the chain from Kite instrument metadata + full contract quotes.
+
+    This path is data-only. If Kite is configured but unavailable, the failure
+    is surfaced and NSE is not used to replace Kite-covered market fields.
+    """
+    from data.nfo_market import (
+        NfoMarketDataClient,
+        option_instruments,
+        quote_to_option_contract,
+        read_market_quotes,
+        read_nfo_instruments,
+        read_nfo_quotes,
+    )
+
+    client = NfoMarketDataClient.from_config()
+    instrument_rows = read_nfo_instruments(client)
+    metas = option_instruments(
+        instrument_rows,
+        symbol,
+        max_expiries=1,
+    )
+    if not metas:
+        snapshot = {
+            "available": False,
+            "source": "ZERODHA_KITE_NFO_READ_ONLY",
+            "reason": "Kite instrument master returned no live option contracts for this symbol.",
+            "not_a_signal": True,
+            "places_orders": False,
+            "acquired": True,
+        }
+        return {
+            "step": {
+                "id": "option_chain",
+                "ok": False,
+                "error": snapshot["reason"],
+                "source": snapshot["source"],
+            },
+            "download": {},
+            "snapshot": snapshot,
+        }
+
+    spot_rows = read_market_quotes([f"NSE:{symbol}"], client=client)
+    spot = float(((spot_rows.get(f"NSE:{symbol}") or {}).get("last_price")) or 0.0)
+    if spot <= 0:
+        snapshot = {
+            "available": False,
+            "source": "ZERODHA_KITE_NFO_READ_ONLY",
+            "reason": "Kite underlying quote unavailable for option-chain normalization.",
+            "not_a_signal": True,
+            "places_orders": False,
+            "acquired": True,
+        }
+        return {
+            "step": {
+                "id": "option_chain",
+                "ok": False,
+                "error": snapshot["reason"],
+                "source": snapshot["source"],
+            },
+            "download": {},
+            "snapshot": snapshot,
+        }
+
+    symbols = [str(row.get("tradingsymbol") or "") for row in metas if row.get("tradingsymbol")]
+    quotes = read_nfo_quotes(symbols, client=client)
+    contracts = []
+    for meta in metas:
+        contract_symbol = str(meta.get("tradingsymbol") or "")
+        quote = quotes.get(contract_symbol)
+        if not isinstance(quote, Mapping):
+            continue
+        contracts.append(
+            quote_to_option_contract(
+                meta,
+                quote,
+                spot=spot,
+            )
+        )
+
+    snapshot = summarize_kite_option_chain(contracts, spot=spot)
+    snapshot["acquired"] = True
+    return {
+        "step": {
+            "id": "option_chain",
+            "ok": bool(snapshot.get("available")),
+            "expiry": snapshot.get("expiry"),
+            "error": None if snapshot.get("available") else snapshot.get("reason"),
+            "source": snapshot.get("source"),
+        },
+        "download": {},
+        "snapshot": snapshot,
+    }
+
+
+def _fetch_option_chain(symbol: str, session) -> dict[str, Any]:
+    """Kite-authoritative option chain; NSE only when Kite is unavailable."""
+    try:
+        from data.kite_client import kite_credentials_available
+        kite_available = bool(kite_credentials_available())
+    except Exception:
+        kite_available = False
+
+    if kite_available:
+        try:
+            return _fetch_option_chain_kite(symbol)
+        except Exception as exc:
+            snapshot = {
+                "available": False,
+                "source": "ZERODHA_KITE_NFO_READ_ONLY",
+                "reason": f"Kite option-chain acquisition failed: {str(exc)[:200]}",
+                "not_a_signal": True,
+                "places_orders": False,
+                "acquired": True,
+            }
+            return {
+                "step": {
+                    "id": "option_chain",
+                    "ok": False,
+                    "error": snapshot["reason"],
+                    "source": snapshot["source"],
+                },
+                "download": {},
+                "snapshot": snapshot,
+            }
+
+    return _fetch_option_chain_nse(symbol, session)
 
 
 def _news_snippets(symbol: str) -> list[tuple[str, str, str]]:
