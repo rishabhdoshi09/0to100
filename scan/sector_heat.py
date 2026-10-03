@@ -63,7 +63,9 @@ def sector_of(symbol: str) -> str:
 def sector_performance(min_members: int = 3) -> list[dict]:
     """
     [{sector, chg_1d, chg_5d, members}] — average price move per sector
-    from the bhav store, best 1-day performers first. Sectors with too
+    from the canonical scanner OHLCV cache. With Kite authority active this is
+    the active Kite snapshot/history; offline mode retains its explicit fallback.
+    Sectors with too
     few members with data are skipped (one stock ≠ a sector).
     """
     import numpy as np
@@ -71,13 +73,13 @@ def sector_performance(min_members: int = 3) -> list[dict]:
     if not smap:
         return []
     try:
-        from data.bhavcopy_store import get_ohlcv
+        from scan.bulk_fetcher import get_cached
     except Exception:
         return []
 
     agg: dict[str, list[tuple[float, float]]] = {}
     for sym, sec in smap.items():
-        df = get_ohlcv(sym)
+        df = get_cached(sym)
         if df is None or len(df) < 6:
             continue
         close = df["close"].values
