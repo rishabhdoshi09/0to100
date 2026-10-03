@@ -1,13 +1,10 @@
 """
-NSE Index Store — official daily OHLC for NIFTY indices, no Yahoo.
+Index OHLC store under QuantTerm's Kite-authoritative market-data policy.
 
-Mirrors bhavcopy_store: NSE publishes ind_close_all_DDMMYYYY.csv daily
-with every index's OHLC. We keep ~400 sessions on disk (logs/indices/),
-consolidate to a pickle, and serve DataFrames in yfinance-compatible
-shape (Title-case columns) so the regime engine plugs in unchanged.
-
-Kite historical needs a paid subscription and Yahoo's crumb auth keeps
-breaking — this is the boring, official, free source.
+When Kite is connected, index history is fetched from Zerodha Kite historical
+data and persisted in a dedicated cache for the regime engine. The legacy
+official NSE index CSV store remains an explicit continuity fallback only when
+Kite credentials are unavailable.
 """
 from __future__ import annotations
 
@@ -27,6 +24,7 @@ log = get_logger(__name__)
 
 _DIR = logs_path("indices")
 _PKL = _DIR / "index_store.pkl"
+_KITE_PKL = _DIR / "index_store_kite.pkl"
 # whole-batch budget for building the index store from the network; a dead feed gives up here
 # instead of blocking the caller through hundreds of per-day request timeouts
 _BUILD_BUDGET_S = 25.0
@@ -68,9 +66,187 @@ TICKER_MAP = {
     "^CNXSC":     "Nifty Smallcap 100",
 }
 
+_KITE_INDEX_SYMBOLS = {
+    "^NSEI": "NIFTY 50",
+    "^NSEBANK": "NIFTY BANK",
+    "^INDIAVIX": "INDIA VIX",
+    "^CNXIT": "NIFTY IT",
+    "^CNXPHARMA": "NIFTY PHARMA",
+    "^CNXFMCG": "NIFTY FMCG",
+    "^CNXAUTO": "NIFTY AUTO",
+    "^CNXMETAL": "NIFTY METAL",
+    "^CNXENERGY": "NIFTY ENERGY",
+    "^CNXREALTY": "NIFTY REALTY",
+    "^CNXSC": "NIFTY SMLCAP 100",
+}
+
 _lock = threading.Lock()
-_store: dict[str, pd.DataFrame] = {}      # official name -> OHLC df
+_store: dict[str, pd.DataFrame] = {}      # official NSE fallback store
 _last_day: Optional[date] = None
+_kite_lock = threading.Lock()
+_kite_build_lock = threading.Lock()
+_kite_store: dict[str, pd.DataFrame] = {}
+_kite_last_day: Optional[date] = None
+
+
+def _kite_authoritative() -> bool:
+    try:
+        from data.kite_client import kite_credentials_available
+        return bool(kite_credentials_available())
+    except Exception:
+        return False
+
+
+def _load_kite_cache() -> bool:
+    global _kite_store, _kite_last_day
+    with _kite_lock:
+        if _kite_store:
+            return True
+    if not _KITE_PKL.exists():
+        return False
+    try:
+        import pickle
+        with open(_KITE_PKL, "rb") as fh:
+            payload = pickle.load(fh)
+        store = payload.get("store") or {}
+        if not isinstance(store, dict):
+            return False
+        sample = next(iter(store.values()), None)
+        if sample is not None and "Close" not in getattr(sample, "columns", []):
+            return False
+        with _kite_lock:
+            _kite_store = store
+            raw_day = payload.get("last_day")
+            _kite_last_day = raw_day if isinstance(raw_day, date) else (
+                date.fromisoformat(str(raw_day)[:10]) if raw_day else None
+            )
+        return bool(store)
+    except Exception:
+        return False
+
+
+def _build_kite_index_store(days: int = 400) -> int:
+    """Build all regime indices from Kite historical data in one bounded pass."""
+    global _kite_store, _kite_last_day
+    target = max(_REGIME_BOOTSTRAP_SESSIONS, int(days or 0))
+    with _kite_build_lock:
+        _load_kite_cache()
+        with _kite_lock:
+            depth = max((len(df) for df in _kite_store.values()), default=0)
+            cached_last = _kite_last_day
+        try:
+            from research.intelligence.data import nse_calendar as CAL
+            required = CAL.latest_required_session(CAL._now_ist(), CAL.load_holidays())
+        except Exception:
+            required = date.today()
+        if depth >= target and cached_last is not None and cached_last >= required:
+            return len(_kite_store)
+
+        try:
+            from data.kite_client import KiteClient
+            from research.intelligence.data.kite_source import RateLimiter
+
+            client = KiteClient()
+            rows = client.get_instruments("NSE")
+            token_by_symbol: dict[str, int] = {}
+            wanted_symbols = set(_KITE_INDEX_SYMBOLS.values())
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                symbol = str(row.get("tradingsymbol") or "").strip().upper()
+                token = row.get("instrument_token")
+                if symbol in wanted_symbols and token is not None:
+                    token_by_symbol[symbol] = int(token)
+
+            if not token_by_symbol:
+                raise RuntimeError("Kite NSE instrument master returned no configured indices")
+
+            end = required
+            start = end - timedelta(days=max(500, int(target * 1.8)))
+            limiter = RateLimiter(max_per_sec=3.0)
+            built: dict[str, pd.DataFrame] = {}
+            latest: Optional[date] = None
+            for ticker, official_name in TICKER_MAP.items():
+                kite_symbol = _KITE_INDEX_SYMBOLS.get(ticker)
+                token = token_by_symbol.get(str(kite_symbol or "").upper())
+                if token is None:
+                    continue
+                limiter.acquire()
+                frame = client.get_historical(
+                    token,
+                    start.isoformat(),
+                    end.isoformat(),
+                    "day",
+                )
+                if frame is None or frame.empty:
+                    continue
+                rename = {
+                    "open": "Open",
+                    "high": "High",
+                    "low": "Low",
+                    "close": "Close",
+                    "volume": "Volume",
+                }
+                frame = frame.rename(columns=rename)
+                keep = [col for col in ("Open", "High", "Low", "Close", "Volume") if col in frame.columns]
+                frame = frame[keep].copy()
+                if "Volume" not in frame.columns:
+                    frame["Volume"] = 0.0
+                frame = frame.dropna(subset=["Close"])
+                if frame.empty:
+                    continue
+                frame.attrs["quantterm_source"] = "kite_index_history"
+                frame.attrs["kite_tradingsymbol"] = kite_symbol
+                built[official_name] = frame
+                try:
+                    d = pd.Timestamp(frame.index[-1]).date()
+                    latest = d if latest is None or d > latest else latest
+                except Exception:
+                    pass
+
+            if not built:
+                raise RuntimeError("Kite historical returned no configured index history")
+
+            with _kite_lock:
+                _kite_store = built
+                _kite_last_day = latest
+            try:
+                import pickle
+                _DIR.mkdir(parents=True, exist_ok=True)
+                tmp = _KITE_PKL.with_suffix(".pkl.tmp")
+                with open(tmp, "wb") as fh:
+                    pickle.dump({
+                        "store": built,
+                        "last_day": latest,
+                        "source": "zerodha_kite_historical",
+                    }, fh)
+                tmp.replace(_KITE_PKL)
+            except Exception:
+                pass
+            log.info(
+                "kite_index_store_built",
+                indices=len(built),
+                latest=str(latest or ""),
+            )
+            return len(built)
+        except Exception as exc:
+            log.warning("kite_index_store_failed", error=str(exc)[:180])
+            return 0
+
+
+def _kite_index_frame(ticker: str, *, build: bool = True) -> Optional[pd.DataFrame]:
+    name = TICKER_MAP.get((ticker or "").upper())
+    if not name:
+        return None
+    _load_kite_cache()
+    with _kite_lock:
+        frame = _kite_store.get(name)
+        depth = len(frame) if frame is not None else 0
+    if build and depth < _REGIME_BOOTSTRAP_SESSIONS:
+        _build_kite_index_store(_REGIME_BOOTSTRAP_SESSIONS)
+        with _kite_lock:
+            frame = _kite_store.get(name)
+    return frame.copy() if frame is not None else None
 
 
 def _day_path(d: date) -> Path:
@@ -162,8 +338,9 @@ _build_lock = threading.Lock()   # 8 parallel regime fetches must build ONCE
 
 
 def build_index_store(days: int = 400) -> int:
-    """Download-missing → consolidate → pickle. Returns #indices covered.
-    Serialised: concurrent callers wait, then reuse the finished build."""
+    """Build index history from Kite when authoritative, NSE only when offline."""
+    if _kite_authoritative():
+        return _build_kite_index_store(days)
     with _build_lock:
         return _build_index_store_locked(days)
 
@@ -330,7 +507,14 @@ def load_index_store_from_cache() -> bool:
 
 
 def recent_index_closes(ticker: str, n: int = 4) -> list[float]:
-    """Oldest-to-newest closes from the cached official store. No network."""
+    """Oldest-to-newest closes under the active index-data authority."""
+    if _kite_authoritative():
+        df = _kite_index_frame(ticker)
+        if df is None or "Close" not in df.columns:
+            return []
+        values = [float(x) for x in df["Close"].dropna().tolist() if float(x) > 0]
+        return values[-max(1, int(n or 1)):]
+
     name = TICKER_MAP.get((ticker or "").upper())
     if not name:
         return []
@@ -347,12 +531,28 @@ def recent_index_closes(ticker: str, n: int = 4) -> list[float]:
                 continue
             if price > 0:
                 values.append(price)
-    keep = max(1, int(n or 1))
-    return values[-keep:]
+    return values[-max(1, int(n or 1)):]
 
 
 def latest_index_print(ticker: str) -> Optional[dict]:
-    """Last close + 1-day % from the cached official index store. No network."""
+    """Last close + one-day change under the active index-data authority."""
+    if _kite_authoritative():
+        df = _kite_index_frame(ticker)
+        if df is None or len(df) < 2 or "Close" not in df.columns:
+            return None
+        close = float(df["Close"].iloc[-1])
+        prev = float(df["Close"].iloc[-2])
+        try:
+            as_of = str(pd.Timestamp(df.index[-1]).date())
+        except Exception:
+            as_of = ""
+        return {
+            "price": close,
+            "chg_pct": round((close / prev - 1.0) * 100.0, 2) if prev else 0.0,
+            "source": "kite_index_history",
+            "as_of": as_of,
+        }
+
     name = TICKER_MAP.get(ticker.upper())
     if not name:
         return None
@@ -369,37 +569,34 @@ def latest_index_print(ticker: str) -> Optional[dict]:
             as_of = ""
     if close <= 0:
         return None
-    chg = (close / prev - 1.0) * 100.0 if prev else 0.0
     return {
         "price": close,
-        "chg_pct": round(chg, 2),
+        "chg_pct": round((close / prev - 1.0) * 100.0, 2) if prev else 0.0,
         "source": "nse_index_store",
         "as_of": as_of,
     }
 
 
 def get_index_ohlcv_as_of_cached(ticker: str, as_of: str) -> Optional[pd.DataFrame]:
-    """Return official index OHLC known on or before as_of without network I/O.
-
-    Historical replay/research must not ask today's regime engine for a past
-    market state. This reader loads only the already-persisted official NSE
-    index cache (or local CSVs when available), then slices away every future
-    row before returning a private copy.
-    """
-    name = TICKER_MAP.get((ticker or "").upper())
-    if not name:
-        return None
-    if not load_index_store_from_cache():
-        # Local rebuild parses files already on disk; it performs no download.
-        try:
-            build_from_local()
-        except Exception:
+    """Return cached index OHLC on/before as_of without network I/O."""
+    if _kite_authoritative():
+        frame = _kite_index_frame(ticker, build=False)
+        if frame is None or frame.empty:
             return None
-    with _lock:
-        df = _store.get(name)
-        frame = df.copy() if df is not None else None
-    if frame is None or getattr(frame, "empty", True):
-        return None
+    else:
+        name = TICKER_MAP.get((ticker or "").upper())
+        if not name:
+            return None
+        if not load_index_store_from_cache():
+            try:
+                build_from_local()
+            except Exception:
+                return None
+        with _lock:
+            df = _store.get(name)
+            frame = df.copy() if df is not None else None
+        if frame is None or getattr(frame, "empty", True):
+            return None
     try:
         cutoff = pd.Timestamp(str(as_of)[:10]).normalize()
         frame = frame.loc[frame.index.normalize() <= cutoff]
@@ -408,16 +605,13 @@ def get_index_ohlcv_as_of_cached(ticker: str, as_of: str) -> Optional[pd.DataFra
     return frame.copy() if frame is not None and not frame.empty else None
 
 def get_index_ohlcv(ticker: str) -> Optional[pd.DataFrame]:
-    """yfinance-shaped OHLC for a ^TICKER with regime-safe bootstrap depth.
+    """Index OHLC under the active market-data authority."""
+    if _kite_authoritative():
+        return _kite_index_frame(ticker)
 
-    A timed-out cold build can leave a truthful but shallow current pickle.
-    Regime classification needs at least about 210 sessions, so a shallow cache
-    must continue backfilling immediately; merely having the index key is not enough.
-    """
     name = TICKER_MAP.get(ticker.upper())
     if not name:
         return None
-
     for _ in range(2):
         with _lock:
             df = _store.get(name)
@@ -425,7 +619,6 @@ def get_index_ohlcv(ticker: str) -> Optional[pd.DataFrame]:
         if depth >= _REGIME_BOOTSTRAP_SESSIONS:
             return df.copy()
         build_index_store(days=_REGIME_BOOTSTRAP_SESSIONS)
-
     with _lock:
         df = _store.get(name)
     return df.copy() if df is not None else None
