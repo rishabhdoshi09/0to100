@@ -167,6 +167,14 @@ def _fresh_env(name: str, default: str = "") -> str:
     return file_value or default
 
 
+def kite_credentials_available() -> bool:
+    """Fresh credential presence check used by source-routing code."""
+    return bool(
+        _fresh_env("KITE_API_KEY", settings.kite_api_key)
+        and _fresh_env("KITE_ACCESS_TOKEN", settings.kite_access_token)
+    )
+
+
 class KiteClient:
     """Thin, opinionated wrapper around KiteConnect SDK."""
 
