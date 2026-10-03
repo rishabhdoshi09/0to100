@@ -6,8 +6,116 @@ import numpy as np
 from typing import Optional
 
 
+_KITE_UNDERLYING_KEYS = {
+    "NIFTY": "NSE:NIFTY 50",
+    "BANKNIFTY": "NSE:NIFTY BANK",
+    "FINNIFTY": "NSE:NIFTY FIN SERVICE",
+    "MIDCPNIFTY": "NSE:NIFTY MID SELECT",
+    "NIFTYNXT50": "NSE:NIFTY NEXT 50",
+}
+
+
+def _kite_option_chain(symbol: str) -> tuple[Optional[pd.DataFrame], Optional[str]]:
+    """Nearest-expiry chain built only from Zerodha Kite market-data reads."""
+    from data.nfo_market import (
+        NfoMarketDataClient,
+        option_instruments,
+        quote_to_option_contract,
+        read_market_quotes,
+        read_nfo_instruments,
+        read_nfo_quotes,
+    )
+
+    wanted = str(symbol or "").strip().upper()
+    client = NfoMarketDataClient.from_config()
+    instruments = read_nfo_instruments(client)
+    contracts = option_instruments(instruments, wanted, max_expiries=1)
+    if not contracts:
+        return None, None
+
+    underlying_key = _KITE_UNDERLYING_KEYS.get(wanted, f"NSE:{wanted}")
+    spot_rows = read_market_quotes([underlying_key], client=client)
+    spot = float((spot_rows.get(underlying_key) or {}).get("last_price") or 0.0)
+    if spot <= 0:
+        return None, None
+
+    symbols = [
+        str(row.get("tradingsymbol") or "")
+        for row in contracts
+        if row.get("tradingsymbol")
+    ]
+    quotes = read_nfo_quotes(symbols, client=client)
+    normalized = []
+    for meta in contracts:
+        tradingsymbol = str(meta.get("tradingsymbol") or "")
+        quote = quotes.get(tradingsymbol)
+        if not isinstance(quote, dict):
+            continue
+        normalized.append(
+            quote_to_option_contract(meta, quote, spot=spot)
+        )
+    if not normalized:
+        return None, None
+
+    expiry = str(normalized[0].get("expiry") or "")
+    by_strike: dict[float, dict] = {}
+    for row in normalized:
+        strike = float(row.get("strike") or 0.0)
+        if strike <= 0:
+            continue
+        bucket = by_strike.setdefault(
+            strike,
+            {
+                "strike": strike,
+                "ce_oi": 0,
+                "ce_coi": 0,
+                "ce_iv": 0.0,
+                "ce_ltp": 0.0,
+                "ce_volume": 0,
+                "pe_oi": 0,
+                "pe_coi": 0,
+                "pe_iv": 0.0,
+                "pe_ltp": 0.0,
+                "pe_volume": 0,
+                "source": "ZERODHA_KITE_NFO_READ_ONLY",
+            },
+        )
+        side = str(row.get("option_type") or "").upper()
+        prefix = "ce" if side == "CE" else "pe" if side == "PE" else ""
+        if not prefix:
+            continue
+        bucket[f"{prefix}_oi"] = int(row.get("oi") or 0)
+        bucket[f"{prefix}_iv"] = float(row.get("iv") or 0.0)
+        bucket[f"{prefix}_ltp"] = float(row.get("ltp") or 0.0)
+        bucket[f"{prefix}_volume"] = int(row.get("volume") or 0)
+
+    if not by_strike:
+        return None, None
+    df = pd.DataFrame([by_strike[strike] for strike in sorted(by_strike)])
+    df.attrs["source"] = "ZERODHA_KITE_NFO_READ_ONLY"
+    df.attrs["spot"] = spot
+    df.attrs["iv_source"] = "IMPLIED_FROM_KITE_MARKET_QUOTES"
+    df.attrs["coi_source"] = "UNAVAILABLE_FROM_KITE_FULL_QUOTE"
+    return df, expiry
+
+
 def get_option_chain(symbol: str = "NIFTY") -> tuple[Optional[pd.DataFrame], Optional[str]]:
-    """Fetch option chain. Tries NSE API first, yfinance fallback."""
+    """Fetch the nearest option chain under the Kite-authoritative policy.
+
+    When Kite is configured, this function uses only Zerodha Kite instrument
+    metadata + full NFO quotes. NSE/yfinance are continuity fallbacks only when
+    Kite credentials are unavailable.
+    """
+    try:
+        from data.kite_client import kite_credentials_available
+        kite_authoritative = bool(kite_credentials_available())
+    except Exception:
+        kite_authoritative = False
+    if kite_authoritative:
+        try:
+            return _kite_option_chain(symbol)
+        except Exception:
+            return None, None
     # ── Attempt 1: NSE public API ─────────────────────────────────────────────
     try:
         import requests
