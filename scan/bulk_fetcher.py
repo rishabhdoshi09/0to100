@@ -1,19 +1,18 @@
 """
-Bulk OHLCV prefetcher — NSE official bhavcopy first, Kite targeted repair second,
-Yahoo only as a last-resort whole-store backup.
+Bulk OHLCV prefetcher under QuantTerm's Kite-authoritative data policy.
 
-Primary : data/bhavcopy_store.py — one NSE file per day covers the whole market.
-Repair  : the EXISTING data-only Zerodha session fetches only requested NSE EQ
-          symbols that are still absent from the official store. This closes the
-          old hole where a generally-ready store caused missing symbols to vanish
-          from the scanner without a repair attempt.
-Backup  : chunked yf.download() — used only when the bhavcopy store itself cannot
-          be built.
+When Kite credentials are available:
+  Primary : the immutable active Kite snapshot already produced by DATA_REFRESH.
+  Repair  : bounded Kite historical/day calls for only snapshot gaps.
+  Rule    : NSE bhavcopy/Yahoo never silently replace Kite-covered OHLCV.
+
+When Kite is unavailable:
+  Fallback: official NSE bhavcopy, then Yahoo only as last-resort continuity.
 
 Usage:
-    prefetch(symbols)            # warm the whole-market store
-    backfill_missing(symbols)    # repair current-master names absent from it
-    df = get_cached("RELIANCE")  # bhavcopy -> Kite repair -> Yahoo backup
+    prefetch(symbols)
+    backfill_missing(symbols)
+    df = get_cached("RELIANCE")
 """
 from __future__ import annotations
 
@@ -31,6 +30,70 @@ _lock = threading.Lock()
 _TTL = 300           # seconds (yfinance backup cache)
 _CHUNK = 200         # symbols per yf.download() call
 _bhav_ok: bool = False
+
+_kite_snapshot_id: str = ""
+
+
+def _kite_authoritative() -> bool:
+    try:
+        from data.kite_client import kite_credentials_available
+        return bool(kite_credentials_available())
+    except Exception:
+        return False
+
+
+def _adopt_active_kite_snapshot(symbols: list[str]) -> int:
+    """Load requested OHLCV frames from the active immutable Kite snapshot."""
+    global _kite_snapshot_id
+    try:
+        from research.intelligence.data.snapshot_store import SnapshotStore
+
+        store = SnapshotStore()
+        sid = str(store.get_active_snapshot() or "")
+        if not sid:
+            return 0
+        snap = store.open_snapshot(sid)
+        if str(snap.manifest.get("source") or "").lower() != "kite":
+            return 0
+
+        wanted = {str(symbol or "").strip().upper() for symbol in symbols if str(symbol or "").strip()}
+        if not wanted:
+            return 0
+
+        path = snap.dir / "bars_equity.csv"
+        if not path.exists():
+            return 0
+        raw = pd.read_csv(path)
+        if raw.empty or "symbol" not in raw.columns:
+            return 0
+        raw["symbol"] = raw["symbol"].astype(str).str.upper()
+        raw = raw[raw["symbol"].isin(wanted)]
+        if raw.empty:
+            return 0
+
+        loaded: dict[str, pd.DataFrame] = {}
+        for symbol, frame in raw.groupby("symbol", sort=False):
+            frame = frame.copy()
+            frame["date"] = pd.to_datetime(frame["date"])
+            frame = frame.sort_values("date").drop_duplicates(subset=["date"], keep="last").set_index("date")
+            keep = [col for col in ("open", "high", "low", "close", "volume") if col in frame.columns]
+            frame = frame[keep]
+            for col in keep:
+                frame[col] = pd.to_numeric(frame[col], errors="coerce")
+            frame = frame.dropna(subset=[col for col in ("open", "high", "low", "close") if col in frame.columns])
+            if len(frame) >= 30:
+                frame.attrs["quantterm_source"] = "kite_snapshot"
+                frame.attrs["quantterm_snapshot_id"] = sid
+                loaded[str(symbol)] = frame
+
+        with _lock:
+            if sid != _kite_snapshot_id:
+                _kite_cache.clear()
+                _kite_snapshot_id = sid
+            _kite_cache.update(loaded)
+        return len(loaded)
+    except Exception:
+        return 0
 
 
 def _overlay_live_quiet() -> None:
@@ -81,19 +144,52 @@ def prefetch(
     period: str = "260d",
     progress: Optional[Callable[[int, int], None]] = None,
 ) -> int:
-    """Make OHLCV available for ``symbols`` with official whole-market data first."""
+    """Make OHLCV available under the Kite-authoritative source policy."""
     global _bhav_ok
+    requested = list(dict.fromkeys(
+        str(symbol or "").strip().upper()
+        for symbol in (symbols or [])
+        if str(symbol or "").strip()
+    ))
+    if not requested:
+        return 0
+
+    if _kite_authoritative():
+        _adopt_active_kite_snapshot(requested)
+        with _lock:
+            missing = [symbol for symbol in requested if symbol not in _kite_cache]
+        if missing:
+            try:
+                loaded, _stats = _repair_via_kite(missing)
+            except Exception as exc:
+                __import__("logger").get_logger(__name__).warning(
+                    "kite_prefetch_failed",
+                    missing=len(missing),
+                    error=str(exc)[:160],
+                )
+                loaded = {}
+            if loaded:
+                with _lock:
+                    _kite_cache.update(loaded)
+        with _lock:
+            covered = sum(1 for symbol in requested if symbol in _kite_cache)
+        if progress:
+            try:
+                progress(covered, len(requested))
+            except Exception:
+                pass
+        return covered
 
     ready = adopt_ready_store(overlay_live=True)
     if ready >= 200:
         have = _bhav_symbols()
-        return sum(1 for s in symbols if str(s).upper() in have) or ready
+        return sum(1 for s in requested if s in have) or ready
 
-    # ── Primary: NSE bhavcopy (no Yahoo) ──────────────────────────────────────
+    # Kite unavailable: official NSE history is the first continuity fallback.
     try:
         from data.bhavcopy_store import build_store
         n = build_store(days=260, progress=progress)
-        if n >= 200:                      # sane whole-market build
+        if n >= 200:
             try:
                 from data.nse_live import apply_live_to_store
                 apply_live_to_store()
@@ -102,15 +198,15 @@ def prefetch(
             with _lock:
                 _bhav_ok = True
             covered = _bhav_symbols()
-            return sum(1 for s in symbols if str(s).upper() in covered)
+            return sum(1 for s in requested if s in covered)
     except Exception as exc:
         __import__("logger").get_logger(__name__).warning(
-            "bhav_prefetch_failed", error=str(exc))
+            "bhav_prefetch_failed", error=str(exc)
+        )
     with _lock:
         _bhav_ok = False
 
-    # ── Backup: yfinance chunked download ─────────────────────────────────────
-    return _prefetch_yf(symbols, period=period, progress=progress)
+    return _prefetch_yf(requested, period=period, progress=progress)
 
 
 def _frame_from_kite(candles: list[dict]) -> Optional[pd.DataFrame]:
@@ -202,88 +298,136 @@ def _repair_frames_validator(payload):
 
 
 def backfill_missing(symbols: list[str], *, client=None, now: datetime | None = None) -> dict:
-    """Repair the history the scan needs, from whichever source can supply it.
-
-    A missing symbol is a gap to close, not a verdict. The broker is preferred
-    because it is authenticated and current, but a missing Zerodha session is a
-    fact about our login rather than about the market, and it used to leave
-    every gap open — so the official store and finally a public source are
-    tried in turn for whatever the rung above could not supply.
-
-    DATA ONLY: no order or GTT surface is reachable from here. Symbols that no
-    source can supply stay missing, so the coverage ledger reports them
-    honestly rather than the scan pretending to have walked them.
-    """
+    """Repair scan history without crossing the active source authority."""
     from data.acquisition import Source, SourceTier, acquire
 
     requested = list(dict.fromkeys(
         str(s).strip().upper() for s in (symbols or []) if str(s).strip()
     ))
+    if _kite_authoritative():
+        _adopt_active_kite_snapshot(requested)
+        with _lock:
+            missing = [s for s in requested if s not in _kite_cache]
+        if not missing:
+            return {
+                "requested": len(requested), "missing": 0, "attempted": 0,
+                "attempted_total": 0, "loaded": 0, "unresolved": 0,
+                "failed": 0, "state": "KITE_SNAPSHOT", "sources": ["kite_snapshot"],
+                "source": "kite_snapshot", "attempts": [],
+            }
+
+        stats: dict[str, Any] = {"attempted": 0, "failed": 0}
+
+        def kite_rung() -> dict:
+            frames, outcome = _repair_via_kite(missing, client=client, now=now)
+            stats.update(outcome)
+            return frames
+
+        result = acquire(
+            "scan_history_repair",
+            [
+                Source(
+                    "zerodha_kite_data_only",
+                    SourceTier.BROKER,
+                    kite_rung,
+                    _repair_frames_validator,
+                    identifier="kite historical/day",
+                ),
+            ],
+            accumulate=lambda acc, new: {**acc, **new},
+            complete=lambda acc: set(missing) <= set(acc),
+            parser_version="2-kite-authoritative",
+        )
+        loaded = dict(result.value or {}) if result.ok else {}
+        if loaded:
+            with _lock:
+                _kite_cache.update(loaded)
+        report = {
+            "requested": len(requested),
+            "missing": len(missing),
+            "attempted": int(stats.get("attempted") or 0),
+            "attempted_total": len(missing),
+            "loaded": len(loaded),
+            "unresolved": len(set(missing) - set(loaded)),
+            "failed": int(stats.get("failed") or 0),
+            "state": result.state,
+            "sources": list(result.contributing_sources),
+            "source": result.source or "",
+            "attempts": [
+                {
+                    "source": a.source,
+                    "outcome": a.outcome,
+                    "detail": a.detail[:160],
+                    "loaded": a.record_count,
+                }
+                for a in result.attempts
+            ],
+        }
+        if stats.get("error_code"):
+            report["error_code"] = stats["error_code"]
+            report["error"] = stats.get("error", "")
+        return report
+
+    # No Kite session: retain the continuity ladder for offline/public operation.
     with _lock:
-        fallback_have = set(_kite_cache) | set(_yf_cache)
+        fallback_have = set(_yf_cache)
     have = _bhav_symbols() | fallback_have
     missing = [s for s in requested if s not in have]
     if not missing:
-        return {"requested": len(requested), "missing": 0, "attempted": 0, "loaded": 0, "unresolved": 0, "failed": 0}
+        return {
+            "requested": len(requested), "missing": 0, "attempted": 0,
+            "attempted_total": 0, "loaded": 0, "unresolved": 0,
+            "failed": 0,
+        }
 
     wanted = set(missing)
-    outcome: dict[str, Any] = {"unresolved": 0, "failed": 0, "attempted": 0}
-
-    def kite_rung() -> dict:
-        frames, stats = _repair_via_kite(missing, client=client, now=now)
-        outcome.update(stats)
-        return frames
-
     result = acquire(
         "scan_history_repair",
         [
-            Source("zerodha_kite_data_only", SourceTier.BROKER, kite_rung,
-                   _repair_frames_validator, identifier="kite historical/day"),
-            Source("nse_bhavcopy", SourceTier.OFFICIAL_FILE,
-                   lambda: _repair_via_bhavcopy(missing), _repair_frames_validator,
-                   identifier="NSE bhavcopy store"),
-            Source("yfinance_daily", SourceTier.REPUTABLE_PUBLIC,
-                   lambda: _repair_via_yfinance(missing), _repair_frames_validator,
-                   identifier="yfinance 1d"),
+            Source(
+                "nse_bhavcopy",
+                SourceTier.OFFICIAL_FILE,
+                lambda: _repair_via_bhavcopy(missing),
+                _repair_frames_validator,
+                identifier="NSE bhavcopy store",
+            ),
+            Source(
+                "yfinance_daily",
+                SourceTier.REPUTABLE_PUBLIC,
+                lambda: _repair_via_yfinance(missing),
+                _repair_frames_validator,
+                identifier="yfinance 1d",
+            ),
         ],
         accumulate=lambda acc, new: {**acc, **new},
         complete=lambda acc: wanted <= set(acc),
-        parser_version="1",
+        parser_version="2-offline-fallback",
     )
-
     loaded = dict(result.value or {}) if result.ok else {}
     if loaded:
         with _lock:
-            _kite_cache.update(loaded)
-            overflow = len(_kite_cache) - 256
-            if overflow > 0:
-                for key in list(_kite_cache)[:overflow]:
-                    _kite_cache.pop(key, None)
-
-    report = {
+            _yf_cache.update(loaded)
+    return {
         "requested": len(requested),
         "missing": len(missing),
-        # "attempted" keeps its original meaning — symbols the BROKER resolved
-        # and tried — because callers and the coverage ledger already read it
-        # that way. The ladder's own reach is attempted_total.
-        "attempted": int(outcome.get("attempted") or 0),
+        "attempted": 0,
         "attempted_total": len(missing),
         "loaded": len(loaded),
         "unresolved": len(wanted - set(loaded)),
-        "failed": int(outcome.get("failed") or 0),
+        "failed": 0,
         "state": result.state,
         "sources": list(result.contributing_sources),
         "source": result.source or "",
         "attempts": [
-            {"source": a.source, "outcome": a.outcome, "detail": a.detail[:160],
-             "loaded": a.record_count}
+            {
+                "source": a.source,
+                "outcome": a.outcome,
+                "detail": a.detail[:160],
+                "loaded": a.record_count,
+            }
             for a in result.attempts
         ],
     }
-    if outcome.get("error_code"):
-        report["error_code"] = outcome["error_code"]
-        report["error"] = outcome.get("error", "")
-    return report
 
 
 def _repair_via_kite(missing: list[str], *, client=None, now: datetime | None = None):
@@ -354,8 +498,17 @@ def _repair_via_kite(missing: list[str], *, client=None, now: datetime | None = 
 
 
 def get_cached(symbol: str) -> Optional[pd.DataFrame]:
-    """Cached OHLCV for one symbol — bhavcopy, Kite repair, then Yahoo backup."""
+    """Cached OHLCV respecting the active source authority."""
     clean = str(symbol or "").strip().upper()
+    if _kite_authoritative():
+        with _lock:
+            df = _kite_cache.get(clean)
+        if df is None:
+            _adopt_active_kite_snapshot([clean])
+            with _lock:
+                df = _kite_cache.get(clean)
+        return df.copy() if df is not None else None
+
     with _lock:
         use_bhav = _bhav_ok
     if use_bhav:
@@ -367,17 +520,18 @@ def get_cached(symbol: str) -> Optional[pd.DataFrame]:
         except Exception:
             pass
     with _lock:
-        df = _kite_cache.get(clean)
-        if df is None:
-            df = _yf_cache.get(clean)
+        df = _yf_cache.get(clean)
     return df.copy() if df is not None else None
 
 
 def cached_symbols() -> list[str]:
+    if _kite_authoritative():
+        with _lock:
+            return sorted(_kite_cache)
+
     symbols: set[str] = set()
     with _lock:
         use_bhav = _bhav_ok
-        symbols.update(_kite_cache)
         symbols.update(_yf_cache)
     if use_bhav:
         symbols.update(_bhav_symbols())
@@ -385,10 +539,13 @@ def cached_symbols() -> list[str]:
 
 
 def is_warm() -> bool:
+    if _kite_authoritative():
+        with _lock:
+            return bool(_kite_cache)
     with _lock:
         if _bhav_ok:
             return True
-        return bool(_kite_cache) or (bool(_yf_cache) and (time.time() - _yf_cache_ts < _TTL))
+        return bool(_yf_cache) and (time.time() - _yf_cache_ts < _TTL)
 
 
 # ── yfinance backup path ──────────────────────────────────────────────────────
