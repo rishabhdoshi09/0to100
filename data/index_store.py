@@ -87,6 +87,10 @@ _kite_lock = threading.Lock()
 _kite_build_lock = threading.Lock()
 _kite_store: dict[str, pd.DataFrame] = {}
 _kite_last_day: Optional[date] = None
+# A rejected session must not be retried by every dashboard/regime reader.
+# Keep failures separate from cached data, and allow token rotation immediately.
+_kite_failed_session: Optional[str] = None
+_kite_retry_after = 0.0
 
 
 def _kite_authoritative() -> bool:
@@ -127,7 +131,7 @@ def _load_kite_cache() -> bool:
 
 def _build_kite_index_store(days: int = 400) -> int:
     """Build all regime indices from Kite historical data in one bounded pass."""
-    global _kite_store, _kite_last_day
+    global _kite_store, _kite_last_day, _kite_failed_session, _kite_retry_after
     target = max(_REGIME_BOOTSTRAP_SESSIONS, int(days or 0))
     with _kite_build_lock:
         _load_kite_cache()
@@ -142,9 +146,14 @@ def _build_kite_index_store(days: int = 400) -> int:
         if depth >= target and cached_last is not None and cached_last >= required:
             return len(_kite_store)
 
+        session = None
         try:
-            from data.kite_client import KiteClient
+            from data.kite_client import KiteClient, kite_session_identity
             from research.intelligence.data.kite_source import RateLimiter
+
+            session = kite_session_identity()
+            if session == _kite_failed_session and time.monotonic() < _kite_retry_after:
+                return 0
 
             client = KiteClient()
             rows = client.get_instruments("NSE")
@@ -228,8 +237,12 @@ def _build_kite_index_store(days: int = 400) -> int:
                 indices=len(built),
                 latest=str(latest or ""),
             )
+            _kite_failed_session = None
+            _kite_retry_after = 0.0
             return len(built)
         except Exception as exc:
+            _kite_failed_session = session
+            _kite_retry_after = time.monotonic() + _BUILD_COOLDOWN_S
             log.warning("kite_index_store_failed", error=str(exc)[:180])
             return 0
 

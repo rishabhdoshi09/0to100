@@ -109,6 +109,48 @@ def test_startup_prepare_honours_skip_flag(monkeypatch):
     assert called == []
 
 
+def test_api_startup_does_not_wait_for_slow_history_cache(monkeypatch):
+    import threading
+
+    entered = threading.Event()
+    release = threading.Event()
+    calls = []
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("QUANTTERM_SKIP_STARTUP_BOOTSTRAP", raising=False)
+    monkeypatch.setattr(tpa, "_startup_bootstrap_thread", None)
+
+    def slow_bootstrap(**kwargs):
+        calls.append(kwargs)
+        entered.set()
+        assert release.wait(timeout=5), "test did not release slow bootstrap"
+        return {"accepted": True}
+
+    monkeypatch.setattr(tpa, "queue_product_bootstrap", slow_bootstrap)
+    worker = None
+    try:
+        tpa._product_startup()
+        worker = tpa._startup_bootstrap_thread
+        assert entered.wait(timeout=2)
+        assert worker.is_alive()
+        # Repeated lifespan entry must not start another cache loader/queue pass.
+        tpa._product_startup()
+        assert calls == [{"requested_by": "api_startup"}]
+        assert tpa._startup_bootstrap_thread is worker
+    finally:
+        release.set()
+        if worker is not None:
+            worker.join(timeout=2)
+    assert not worker.is_alive()
+
+
+def test_api_startup_skip_does_not_launch_background_work(monkeypatch):
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setenv("QUANTTERM_SKIP_STARTUP_BOOTSTRAP", "1")
+    monkeypatch.setattr(tpa, "_startup_bootstrap_thread", None)
+    tpa._product_startup()
+    assert tpa._startup_bootstrap_thread is None
+
+
 def test_scan_artifact_is_fresh_uses_scanned_at(tmp_path: Path):
     from datetime import datetime, timedelta, timezone
 

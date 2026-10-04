@@ -207,6 +207,10 @@ PY
   trap 'cleanup_launchd_console_tail' EXIT
   trap 'cleanup_launchd_console_tail; exit 130' INT TERM
 
+  local restart_after=0
+  if [[ "$action" == "restart" ]]; then
+    restart_after="$("$py" -c 'import time; print(time.time())')"
+  fi
   if ! "$py" -m product.launchd_control "$action" --label "$label" --plist "$plist"; then
     cleanup_launchd_console_tail
     echo "[COMPLETE STACK] Canonical host $action failed." >&2
@@ -216,11 +220,34 @@ PY
   echo "[COMPLETE STACK] Waiting for terminal API + desk readiness…"
   local ready=0
   local summary=""
-  local i
-  for i in {1..120}; do
-    summary="$("$py" - <<'PY' 2>/dev/null || true
+  # Persistent history can take over two minutes to warm on an Intel Mac.
+  # Bound actual elapsed time rather than counting probes as one-second ticks.
+  local readiness_deadline=$((SECONDS + 300))
+  local i=0
+  while (( SECONDS < readiness_deadline )); do
+    i=$((i + 1))
+    if summary="$("$py" - "$restart_after" "$installed_runtime" <<'PY' 2>/dev/null
+from datetime import datetime
 import json
+import os
+from pathlib import Path
+import sys
 import urllib.request
+
+restart_after = float(sys.argv[1])
+if restart_after:
+    root = sys.argv[2].strip() or os.environ.get("QT_RUNTIME_ROOT", "").strip()
+    if not root:
+        marker = Path(".quantterm_runtime_root")
+        if marker.is_file():
+            root = marker.read_text(encoding="utf-8").splitlines()[0].strip()
+    try:
+        status = json.loads((Path(root) / "state" / "host_supervisor.json").read_text())
+        started = datetime.fromisoformat(status["started_at"]).timestamp()
+    except Exception:
+        raise SystemExit(1)
+    if started < restart_after:
+        raise SystemExit(1)
 
 try:
     with urllib.request.urlopen("http://127.0.0.1:8765/api/health", timeout=1.0) as response:
@@ -243,18 +270,19 @@ print(
 if not payload.get("ok") or not payload.get("operational_ready"):
     raise SystemExit(2)
 PY
-)"
-    if [[ -n "$summary" ]]; then
+)"; then
       ready=1
       break
     fi
     if (( i % 5 == 0 )); then
-      "$py" - <<'PY' 2>/dev/null || true
+      "$py" - "$restart_after" "$installed_runtime" <<'PY' 2>/dev/null || true
+from datetime import datetime
 import json
 import os
 from pathlib import Path
+import sys
 
-root = os.environ.get("QT_RUNTIME_ROOT", "").strip()
+root = sys.argv[2].strip() or os.environ.get("QT_RUNTIME_ROOT", "").strip()
 if not root:
     marker = Path(".quantterm_runtime_root")
     if marker.is_file():
@@ -266,13 +294,23 @@ try:
     payload = json.loads(path.read_text(encoding="utf-8"))
 except Exception:
     raise SystemExit(0)
+restart_after = float(sys.argv[1])
+if restart_after:
+    try:
+        started = datetime.fromisoformat(payload["started_at"]).timestamp()
+    except Exception:
+        started = 0.0
+    if started < restart_after:
+        print("[COMPLETE STACK] Waiting for current host generation…")
+        raise SystemExit(0)
 children = payload.get("children") or {}
 alive = sum(1 for item in children.values() if isinstance(item, dict) and item.get("alive"))
 healthy = sum(1 for item in children.values() if isinstance(item, dict) and item.get("healthy") is True)
+pending = sum(1 for item in children.values() if isinstance(item, dict) and item.get("healthy") is None)
 print(
     "[COMPLETE STACK] "
     f"{payload.get('state', 'STARTING')} · children_alive={alive}/{len(children)} "
-    f"healthy={healthy}/{len(children)} · heartbeat={payload.get('heartbeat_at', '?')}"
+    f"healthy={healthy}/{len(children)} pending_health={pending} · heartbeat={payload.get('heartbeat_at', '?')}"
 )
 PY
     fi
@@ -282,7 +320,7 @@ PY
   cleanup_launchd_console_tail
 
   if [[ "$ready" != "1" ]]; then
-    echo "[COMPLETE STACK] Full stack did not become ready within 120s." >&2
+    echo "[COMPLETE STACK] Full stack did not become ready within 300s." >&2
     "$py" -m product.launchd_control status --label "$label" || true
     echo "[COMPLETE STACK] Recent host output:" >&2
     tail -60 "$host_out" >&2 || true

@@ -175,6 +175,18 @@ def kite_credentials_available() -> bool:
     )
 
 
+def kite_session_identity() -> str:
+    """Opaque identity for retry state; changes immediately after a fresh login."""
+    import hashlib
+    import json
+
+    credentials = (
+        _fresh_env("KITE_API_KEY", settings.kite_api_key),
+        _fresh_env("KITE_ACCESS_TOKEN", settings.kite_access_token),
+    )
+    return hashlib.sha256(json.dumps(credentials).encode("utf-8")).hexdigest()
+
+
 class KiteClient:
     """Thin, opinionated wrapper around KiteConnect SDK."""
 

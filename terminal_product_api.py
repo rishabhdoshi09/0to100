@@ -8,6 +8,7 @@ Run Uvicorn with ``terminal_product_api:app`` so the original endpoints remain u
 from __future__ import annotations
 
 import os
+import threading
 from typing import Any
 
 from fastapi import HTTPException
@@ -507,9 +508,31 @@ def _startup_prepare_product() -> None:
         return
 
 
+_startup_bootstrap_lock = threading.Lock()
+_startup_bootstrap_thread: threading.Thread | None = None
+
+
 @app.on_event("startup")
 def _product_startup() -> None:
-    _startup_prepare_product()
+    """Serve the desk before slow cache/freshness work queues its first data lane."""
+    global _startup_bootstrap_thread
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return
+    if os.environ.get("QUANTTERM_SKIP_STARTUP_BOOTSTRAP") == "1":
+        return
+    with _startup_bootstrap_lock:
+        if _startup_bootstrap_thread is not None:
+            return
+        worker = threading.Thread(
+            target=_startup_prepare_product,
+            name="product-startup-bootstrap",
+            daemon=True,
+        )
+        _startup_bootstrap_thread = worker
+        try:
+            worker.start()
+        except Exception:
+            _startup_bootstrap_thread = None
 
 
 @app.get("/api/autonomy-desk")
