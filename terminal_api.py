@@ -907,7 +907,7 @@ def _fo_directional_payload() -> dict[str, Any]:
     try:
         from product.fo_paper_store import FoPaperStore
 
-        with FoPaperStore() as store:
+        with FoPaperStore(read_only=True) as store:
             # Bounded latest window keeps the dashboard read cheap while still
             # providing ample context evidence for the minimum-N promotion gate.
             outcomes = store.load_trades(limit=5000)
@@ -925,7 +925,7 @@ def _fo_paper_payload() -> dict[str, Any]:
     try:
         from product.fo_paper_store import FoPaperStore
 
-        with FoPaperStore() as store:
+        with FoPaperStore(read_only=True) as store:
             status = store.status()
             open_positions = store.load_positions()
             recent_closed = store.load_trades(limit=50)

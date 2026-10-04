@@ -189,7 +189,7 @@ def _forward_summary() -> dict[str, Any]:
         from product.conditional_evidence import MIN_SAMPLE
         from product.fo_paper_store import FoPaperStore
 
-        with FoPaperStore() as store:
+        with FoPaperStore(read_only=True) as store:
             paper_status = dict(store.status() or {})
             trades = [t for t in store.load_trades(limit=5000) if isinstance(t, Mapping)]
     except Exception as exc:

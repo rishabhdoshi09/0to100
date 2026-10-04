@@ -6,15 +6,27 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from core.runtime_paths import ensure_logs_path
+from core.runtime_paths import ensure_logs_path, logs_path
 
 
 SCHEMA_VERSION = 2
 
 
 class FoPaperStore:
-    def __init__(self, path: Path | str | None = None) -> None:
-        self.path = Path(path) if path is not None else ensure_logs_path("product", "fo_paper.sqlite3")
+    def __init__(self, path: Path | str | None = None, *, read_only: bool = False) -> None:
+        self.path = Path(path) if path is not None else (
+            logs_path("product", "fo_paper.sqlite3") if read_only
+            else ensure_logs_path("product", "fo_paper.sqlite3")
+        )
+        if read_only:
+            # Dashboard projections must not migrate tables or replace metadata:
+            # those writes wait behind the paper worker's active transaction.
+            # mode=ro also fails without creating an empty ledger when absent.
+            self.conn = sqlite3.connect(
+                self.path.absolute().as_uri() + "?mode=ro", uri=True, timeout=0.5,
+            )
+            self.conn.row_factory = sqlite3.Row
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(self.path), timeout=10.0)
         self.conn.row_factory = sqlite3.Row

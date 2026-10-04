@@ -502,8 +502,8 @@ def test_fno_payload_exposes_durable_paper_state_without_live_authority(monkeypa
     db = tmp_path / "fo-paper.sqlite3"
 
     class TempStore(real_cls):
-        def __init__(self):
-            super().__init__(db)
+        def __init__(self, **kwargs):
+            super().__init__(db, **kwargs)
 
     with TempStore() as store:
         store.replace_positions([{
