@@ -259,3 +259,16 @@ describe('reconcileDashboard', () => {
     expect(result.data.scan_records).toBe(0)
   })
 })
+
+it('retains mapped F&O names while replacing candidate and paper authority with the current response', () => {
+  const previous = dashboard()
+  previous.fno.directional = { available: true, status: 'READY', candidates: [{ symbol: 'OLD', direction: 'LONG', decision: 'PAPER_OPTION_CANDIDATE' }] }
+  const current = dashboard({ fno: { available: false, source: 'unavailable', mapped_underlyings: 0, underlyings: [], exclusions: [],
+    directional: { available: false, status: 'BLOCKED', code: 'NFO_LIVE_MARKET_DATA_UNAVAILABLE', candidates: [] },
+    desk: { status: 'BLOCKED', reason: 'NFO_LIVE_MARKET_DATA_UNAVAILABLE', as_of: '', candidates: [], candidate_count: 0,
+      blockers: [], paper_available: false, open_positions: [], recent_closed_trades: [] } } })
+  const result = reconcileDashboard(previous, current)
+  expect(result.fno.underlyings).toEqual(previous.fno.underlyings)
+  expect(result.fno.directional?.candidates).toEqual([])
+  expect(result.fno.desk?.status).toBe('BLOCKED')
+})

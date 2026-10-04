@@ -7,6 +7,7 @@ read-only observations plus PAPER ledger notifications; they never submit an ord
 from __future__ import annotations
 
 import hashlib
+import fcntl
 import html
 import json
 import os
@@ -783,6 +784,117 @@ class TelegramNotifier:
             pass
         return {"sent": False, "reason": "send_failed"}
 
+    def notify_fno(self, directional=None, paper=None) -> dict[str, Any]:
+        # Worker and desk retry can run in different processes. Reload durable
+        # sent keys under a dedicated nonblocking lock before sending events.
+        with (self.root / "fno_delivery.lock").open("a+") as lock:
+            try:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return {"reason": "in_progress"}
+            try:
+                self.state = self._load()
+                return self._notify_fno(directional, paper)
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+    def _notify_fno(self, directional=None, paper=None) -> dict[str, Any]:
+        """Deliver current saved F&O candidates and durable PAPER events only."""
+        from product.fo_desk import build_fo_desk
+
+        if not self.configured():
+            return {"reason": "not_configured", "candidates": 0, "opened": 0, "closed": 0}
+        desk = build_fo_desk(directional, paper, now=self._now_fn())
+        day = self._day()
+        sent = {"candidates": 0, "opened": 0, "closed": 0, "status": 0}
+        failed = False
+
+        def deliver(key, message, kind):
+            nonlocal failed
+            result = self._send_status(key, message)
+            if result == "sent":
+                sent[kind] += 1
+            elif result == "failed":
+                failed = True
+
+        def amount(value):
+            try:
+                number = float(value)
+                import math
+                return f"₹{number:,.2f}" if math.isfinite(number) else "unavailable"
+            except (TypeError, ValueError):
+                return "unavailable"
+
+        for row in desk["candidates"]:
+            contract = row["selected_contract"]
+            plan = contract["trade_plan"]
+            symbol = self._esc(row["symbol"])
+            deliver(
+                f"fno_candidate:{day}:{contract['symbol']}",
+                f"<b>F&amp;O PAPER CANDIDATE · {symbol} · {self._esc(row.get('direction'))}</b>\n"
+                f"{self._esc(contract['symbol'])} · {self._esc(contract['option_type'])} "
+                f"{self._esc(contract.get('strike'))} · expiry {self._esc(contract['expiry'])}\n"
+                f"Premium {amount(contract['premium'])} · entry {amount(plan['entry'])} · "
+                f"stop {amount(plan['stop'])} · target {amount(plan['target'])}\n"
+                f"Setup {self._esc((row.get('setup') or {}).get('score'))}/100 · "
+                f"option {self._esc(contract.get('score'))}/100 (quality scores, not win probabilities).\n"
+                "<i>Candidate only; execution requires paper entry-window and risk gates. No live order.</i>",
+                "candidates",
+            )
+        for rows, kind, date_field, prefix in (
+            (desk["open_positions"], "opened", "opened_at", "OPEN"),
+            ((paper or {}).get("recent_closed_trades") or (paper or {}).get("settled") or [], "closed", "settled_at", "CLOSED"),
+        ):
+            for row in rows:
+                if not isinstance(row, Mapping) or not row.get("trade_id"):
+                    continue
+                if str(row.get(date_field) or "")[:10] != day:
+                    continue
+                details = (
+                    f"Entry {amount(row.get('entry_price'))} · stop {amount(row.get('stop_price'))} · "
+                    f"target {amount(row.get('target_price'))}"
+                    if kind == "opened" else
+                    f"Exit {amount(row.get('exit_price'))} · net P&amp;L {amount(row.get('net_pnl'))} · "
+                    f"{self._esc(row.get('exit_reason'))} · costs {self._esc(row.get('cost_model_status'))}"
+                )
+                deliver(
+                    f"fno_paper_{kind}:{row['trade_id']}",
+                    f"<b>F&amp;O PAPER {prefix} · {self._esc(row.get('underlying'))}</b>\n"
+                    f"{self._esc(row.get('option_symbol'))} · quantity {self._esc(row.get('quantity'))}\n"
+                    f"{details}\n<i>Simulated paper ledger event. No live order.</i>", kind,
+                )
+        if not desk["candidates"] and (directional or {}).get("status"):
+            deliver(
+                f"fno_status:{day}:{desk['status']}:{desk['reason']}",
+                f"<b>F&amp;O PAPER · {self._esc(desk['status'])}</b>\n"
+                f"No current eligible candidate · {self._esc(desk['reason'])}\n"
+                f"Scan session {self._esc(desk['as_of'] or 'unavailable')} · "
+                f"{len(desk['open_positions'])} open paper positions.\n<i>No live order.</i>", "status",
+            )
+        sent["reason"] = "send_failed" if failed else "sent" if any(sent.values()) else "already_sent"
+        self._record_delivery("fno", sent)
+        return sent
+
+    def drain_fno_alerts(self) -> dict[str, Any]:
+        """Retry committed F&O artifacts without scanning or creating a ledger."""
+        from core.runtime_paths import logs_dir
+        path = logs_dir() / "product" / "fo_directional.json"
+        try:
+            directional = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            directional = {}
+        paper = {"available": False}
+        try:
+            from product.fo_paper_store import FoPaperStore
+            with FoPaperStore(read_only=True) as store:
+                paper = {
+                    "available": True, "open_positions": store.load_positions(),
+                    "recent_closed_trades": store.load_trades(limit=50),
+                }
+        except Exception:
+            pass
+        return self.notify_fno(directional, paper)
+
     def drain_desk_alerts(self) -> dict[str, Any]:
         """Retry saved recommendations and the after-close market report."""
         recos: dict[str, Any] = {"sent": False, "reason": "skipped"}
@@ -796,7 +908,11 @@ class TelegramNotifier:
             report = self.notify_market_report_if_due()
         except Exception as exc:
             report = {"sent": False, "reason": "error", "error": str(exc)[:200]}
-        return {"recommendations": recos, "market_report": report}
+        try:
+            fno = self.drain_fno_alerts()
+        except Exception as exc:
+            fno = {"reason": "error", "error": str(exc)[:200]}
+        return {"recommendations": recos, "market_report": report, "fno": fno}
 
     @staticmethod
     def _reco_tiers(workspace: Mapping[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:

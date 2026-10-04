@@ -158,6 +158,7 @@ def run_fo_directional_scan(
     history_getter=None,
     iv_history_store=None,
     quote_now: datetime | None = None,
+    progress_callback=None,
 ) -> dict[str, Any]:
     """Run one complete read-only F&O directional scan."""
     quote_now = quote_now or datetime.now(IST)
@@ -200,6 +201,8 @@ def run_fo_directional_scan(
         # the prefilter can read yesterday's EOD frame before today's bar lands
         # and silently miss an intraday breakout. Keep this lane synchronous
         # and fail closed when current-session data cannot be established.
+        if progress_callback:
+            progress_callback("PREPARING_KITE_HISTORY", "Loading the verified Kite history snapshot", 0, 0)
         adopted = int(adopt_ready_store(overlay_live=False) or 0)
         if adopted < 200:
             return {
@@ -238,7 +241,9 @@ def run_fo_directional_scan(
     universe = list(getattr(report, "underlyings", ()) or ())
     considered: list[dict[str, Any]] = []
     deep: list[tuple[Any, pd.DataFrame, dict[str, Any]]] = []
-    for item in universe:
+    for offset, item in enumerate(universe):
+        if progress_callback and offset % 25 == 0:
+            progress_callback("FNO_PREFILTER", "Checking F&O history and breakout gates", offset, len(universe))
         symbol = str(getattr(item, "symbol", "") or "").upper()
         try:
             frame = history_getter(symbol)
@@ -251,6 +256,8 @@ def run_fo_directional_scan(
             deep.append((item, frame, pre))
 
     deep.sort(key=lambda row: float(row[2].get("priority") or 0.0), reverse=True)
+    if progress_callback:
+        progress_callback("FNO_PREFILTER", f"History checked; {len(deep)} passed prefilter", len(universe), len(universe))
     if not deep:
         return {
             "available": True,
@@ -408,7 +415,9 @@ def run_fo_directional_scan(
 
     decisions: list[dict[str, Any]] = []
     deep_failures: list[dict[str, Any]] = []
-    for item, frame, pre in deep:
+    for offset, (item, frame, pre) in enumerate(deep):
+        if progress_callback:
+            progress_callback("FNO_OPTION_GATES", f"Evaluating {getattr(item, 'symbol', '')} option contracts", offset, len(deep))
         symbol = str(getattr(item, "symbol", "") or "").upper()
         future_symbol = str(getattr(item, "future_symbol", "") or "")
         future_token = int(getattr(item, "instrument_token", 0) or 0)

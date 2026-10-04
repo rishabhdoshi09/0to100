@@ -995,7 +995,14 @@ class MarketOperationsWorker:
             )
 
         directional: dict[str, Any]
-        if market_client is None or not rows:
+        if not CAL.is_session(as_of, CAL.load_holidays()):
+            directional = {
+                "available": True, "status": "READY", "as_of": as_of.isoformat(),
+                "decision": "NO_ELIGIBLE_TRADE", "reason": "NSE_SESSION_CLOSED",
+                "universe_size": report.mapped_underlyings, "candidate_count": 0,
+                "candidates": [], "paper_only": True, "live_execution_allowed": False,
+            }
+        elif market_client is None or not rows:
             directional = {
                 "available": False,
                 "status": "BLOCKED",
@@ -1020,6 +1027,9 @@ class MarketOperationsWorker:
                     instrument_rows=rows,
                     client=market_client,
                     as_of=as_of,
+                    progress_callback=lambda stage, message, current, total: self._progress(
+                        operation_id, stage, message, current, total,
+                    ),
                 )
             except Exception as exc:
                 directional = {
@@ -1033,6 +1043,7 @@ class MarketOperationsWorker:
                     "live_execution_allowed": False,
                 }
 
+        directional["generated_at"] = time.time()
         _persist_fo_directional(directional)
 
         # Forward F&O paper evidence is advanced only on a real NSE session.
@@ -1112,6 +1123,12 @@ class MarketOperationsWorker:
             "live_execution_allowed": False,
         }
         result["paper"] = paper
+        try:
+            from research.autonomy import default_root
+            from research.autonomy.telegram_notifications import TelegramNotifier
+            result["telegram"] = TelegramNotifier(default_root()).notify_fno(directional, paper)
+        except Exception as exc:
+            result["telegram"] = {"reason": "send_failed", "error": str(exc)[:200]}
 
         # Build IV percentile history from one consistent near-close snapshot
         # across the whole mapped F&O universe. Intraday scans only read prior

@@ -172,7 +172,7 @@ export function FnoView({ dashboard, runControl, setSelected, setActive }: Props
   }
   const generatedAt = dashboard.fno.generated_at ? new Date(Number(dashboard.fno.generated_at) * 1000).toLocaleString('en-IN') : 'unknown'
   const directional = dashboard.fno.directional || {}
-  const candidates = directional.candidates || []
+  const candidates = dashboard.fno.desk?.candidates ?? directional.candidates ?? []
   const paper = dashboard.fno.paper || {}
   const openPaper = paper.open_positions || []
   const learning = dashboard.fno.learning_impact || {}
@@ -190,7 +190,7 @@ export function FnoView({ dashboard, runControl, setSelected, setActive }: Props
       </div>
       <div className="view-metrics">
         <MetricCard label="MAPPED STOCKS" value={String(dashboard.fno.mapped_underlyings || 0)} detail={`Source ${dashboard.fno.source || 'unavailable'} · as of ${generatedAt}`} tone={dashboard.fno.available ? 'green' : 'amber'} />
-        <MetricCard label="PAPER CANDIDATES" value={String(directional.candidate_count || 0)} detail={directional.status ? `${directional.status} · quality score ≠ probability` : 'Run F&O refresh for directional evidence'} tone={(directional.candidate_count || 0) > 0 ? 'green' : 'amber'} />
+        <MetricCard label="PAPER CANDIDATES" value={String(candidates.length)} detail={directional.status ? `${dashboard.fno.desk?.status || directional.status} · quality score ≠ probability` : 'Run F&O refresh for directional evidence'} tone={candidates.length > 0 ? 'green' : 'amber'} />
         <MetricCard label="OPEN OPTION PAPERS" value={String(openPaper.length)} detail={`Realized ₹${fmt(paper.status?.realized_pnl)} · live money locked`} tone="purple" />
         <MetricCard label="PRODUCTION EVIDENCE" value={paper.production_evidence_enabled ? 'ENABLED' : 'HELD'} detail={paper.production_evidence_enabled ? 'Fully-costed settled evidence exists' : 'Uncosted/gross-only trades cannot promote models'} tone={paper.production_evidence_enabled ? 'green' : 'amber'} />
       </div>
@@ -198,7 +198,7 @@ export function FnoView({ dashboard, runControl, setSelected, setActive }: Props
       <div className="fno-layout">
         <Panel title={`TOP DIRECTIONAL PAPER CANDIDATES · ${candidates.length}`} subtitle="Ranked by setup quality and contract quality; scenarios use constant-IV estimates">
           <div className="exclusion-list">
-            {candidates.length === 0 && <div className="empty-row">{directional.code ? `${directional.code} · ` : ''}{directional.decision || 'No eligible directional option candidate in the latest scan.'}</div>}
+            {candidates.length === 0 && <div className="empty-row">No current eligible directional option candidate · {words(dashboard.fno.desk?.reason || directional.reason || directional.code || directional.decision || 'Waiting for scan completion')}</div>}
             {candidates.slice(0, 5).map((candidate, index) => {
               const setup = candidate.setup || {}
               const contract = candidate.selected_contract || {}

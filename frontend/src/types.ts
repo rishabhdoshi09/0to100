@@ -431,6 +431,9 @@ export type FnoLearningImpact = {
 }
 
 export type FnoDirectionalState = {
+  as_of?: string
+  generated_at?: number
+  reason?: string
   available?: boolean
   status?: string
   code?: string
@@ -760,6 +763,19 @@ export type DashboardPayload = {
     underlyings: FnoUnderlying[]
     exclusions: FnoExclusion[]
     directional?: FnoDirectionalState
+    desk?: {
+      status: string
+      reason: string
+      as_of: string
+      generated_at?: number | null
+      candidates: FnoDirectionalCandidate[]
+      candidate_count: number
+      blockers: Array<{ reason: string; count: number }>
+      paper_available: boolean
+      paper_error?: string
+      open_positions: FnoPaperPosition[]
+      recent_closed_trades: Array<Record<string, unknown>>
+    }
     paper?: FnoPaperState
     learning_impact?: FnoLearningImpact
     cache_mtime?: number | null

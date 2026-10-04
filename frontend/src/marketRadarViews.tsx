@@ -32,6 +32,7 @@ import { keepRicher, markInvestigate, recall, remember } from './sessionMemory'
 import { SystemLaneInspector, SystemLaneStrip } from './homeSystemInspector'
 import type { CheckSystemSnapshot, SystemLane } from './backendControlPlane'
 import { DailyWrapList, magazineWrapLines } from './dailyWrap'
+import { FnoHomePanel } from './fnoHome'
 import {
   bestSetupsFromRadar,
   dashCell,
@@ -1154,6 +1155,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
         </div>
       </div>
       {deskNote ? <p className="radar-desk-note">{deskNote}</p> : null}
+      <FnoHomePanel dashboard={dashboard} setActive={setActive} setSelected={setSelected} runControl={runControl} />
 
       <div className="radar-market-strip">
         <div>

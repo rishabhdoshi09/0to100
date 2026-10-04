@@ -121,6 +121,10 @@ export function reconcileDashboard(
     && previous.fno.underlyings.length > 0
     ? {
         ...previous.fno,
+        directional: incoming.fno.directional,
+        paper: incoming.fno.paper,
+        desk: incoming.fno.desk,
+        learning_impact: incoming.fno.learning_impact,
         available: false,
         error: incoming.fno.error || previous.fno.error,
       }

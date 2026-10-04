@@ -997,12 +997,15 @@ def _fno_payload() -> dict[str, Any]:
     directional = _fo_directional_payload()
     paper = _fo_paper_payload()
     learning_impact = _fno_learning_impact_payload(directional)
+    from product.fo_desk import build_fo_desk
+    desk = build_fo_desk(directional, paper)
     if persisted:
         persisted["available"] = int(persisted.get("mapped_underlyings", 0) or 0) > 0
         persisted["cache_mtime"] = path.stat().st_mtime if path.exists() else None
         persisted["directional"] = directional
         persisted["paper"] = paper
         persisted["learning_impact"] = learning_impact
+        persisted["desk"] = desk
         return persisted
     try:
         from data.fno_universe import current_fno_universe
@@ -1021,6 +1024,7 @@ def _fno_payload() -> dict[str, Any]:
             "directional": directional,
             "paper": paper,
             "learning_impact": learning_impact,
+            "desk": desk,
         }
     except Exception as exc:
         return {
@@ -1032,6 +1036,7 @@ def _fno_payload() -> dict[str, Any]:
             "directional": directional,
             "paper": paper,
             "learning_impact": learning_impact,
+            "desk": desk,
             "error": str(exc),
         }
 

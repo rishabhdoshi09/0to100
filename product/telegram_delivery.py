@@ -37,9 +37,11 @@ def delivery_status(root: Path | None = None) -> dict[str, Any]:
     delivery = dict(notifier.state.get("delivery") or {})
     scan = dict(delivery.get("scan") or {})
     sniper = dict(delivery.get("sniper") or {})
+    fno = dict(delivery.get("fno") or {})
     day = notifier._day()
     sent_today = list(notifier.state.get("sent", {}).get(day, []) or [])
     scan_pushed = any(str(k).startswith(("setup:", "pre:")) for k in sent_today)
+    fno_pushed = any(str(k).startswith(("fno_candidate:", "fno_paper_", "fno_status:")) for k in sent_today)
     watch = 0
     try:
         from product.scan_store import load_scan
@@ -72,6 +74,10 @@ def delivery_status(root: Path | None = None) -> dict[str, Any]:
                 "(login + autonomy) during market hours"
             )
             state = "scan_sent"
+    elif fno_pushed:
+        headline = "F&O paper alerts sent"
+        detail = "Candidates and paper ledger entries/exits; no live orders"
+        state = "scan_sent"
     elif scan_reason == "send_failed":
         headline = "Telegram connected · last scan failed to send"
         detail = last_error or "Retrying last-scan setups and breakout watches"
@@ -102,6 +108,10 @@ def delivery_status(root: Path | None = None) -> dict[str, Any]:
         "headline": headline,
         "detail": detail,
         "scan_reason": scan_reason,
+        "fno_reason": str(fno.get("reason") or ""),
+        "fno_candidates": int(fno.get("candidates") or 0),
+        "fno_opened": int(fno.get("opened") or 0),
+        "fno_closed": int(fno.get("closed") or 0),
         "sniper_reason": sniper_reason,
         "scan_setups": int(scan.get("setup") or 0),
         "scan_prebreakout": int(scan.get("prebreakout") or 0),
