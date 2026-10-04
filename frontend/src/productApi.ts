@@ -874,7 +874,7 @@ export type HomeOperatingSystem = {
   us_market?: {
     market?: string
     market_open?: boolean
-    scan?: { status?: string; scope?: string; scanned_at?: string; count?: number }
+    scan?: { status?: string; scope?: string; scanned_at?: string; count?: number; reason?: string; coverage?: { requested?: number; evaluated?: number; missing_history?: number; analysis_failed?: number; batch_failed?: number } }
     top_setups?: Array<{
       symbol?: string
       verdict?: string

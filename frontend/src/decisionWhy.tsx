@@ -87,7 +87,14 @@ export function DecisionWhyPanel({ why }: { why: DecisionWhy | null }): ReactNod
     <section className="decision-why">
       <header className="decision-why__header">
         <h2>Why this decision</h2>
-        <p className="decision-why__headline">{why.headline}</p>
+        {why.committee ? (
+          <p className="decision-why__headline">
+            Current committee: {why.committee.decision || 'NO_JUDGMENT'}
+            {' · '}{why.committee.reason || why.committee.status}
+            {why.committee.execution_state ? ` · execution ${why.committee.execution_state}` : ''}
+          </p>
+        ) : null}
+        <p className="decision-why__headline">Research assessment: {why.headline}</p>
         {why.ranking_explanation ? (
           <p className="decision-why__ranking">{why.ranking_explanation}</p>
         ) : null}

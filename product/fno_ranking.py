@@ -65,11 +65,15 @@ def rank_fno_candidates(
         evolution_champion = None
 
     rows: list[dict[str, Any]] = []
+    from product.conditional_evidence import load
+    # One coherent evidence generation for the entire batch, including on
+    # slower mounted storage. A concurrent settlement affects the next batch.
+    evidence_store = load(path)
     for row in candidates:
         row = dict(row)
         setup = row.get("setup") if isinstance(row.get("setup"), Mapping) else {}
         base_score = float(setup.get("score") or 0.0)
-        evidence = fuse_fno_ranking_evidence(setup, path=path)
+        evidence = fuse_fno_ranking_evidence(setup, path=path, store=evidence_store)
         adjustment = float(evidence.get("adjustment") or 0.0)
         row["base_score"] = base_score
         row["historical_prior"] = float(evidence.get("historical_prior") or 0.0)

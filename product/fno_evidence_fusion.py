@@ -170,6 +170,7 @@ def fuse_fno_ranking_evidence(
     setup: Mapping[str, Any] | None,
     *,
     path: str | None = None,
+    store: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The single place F&O ranking reads to decide historical_prior,
     forward_adjustment and their sum. Never called for equity; never reads
@@ -217,7 +218,7 @@ def fuse_fno_ranking_evidence(
 
     from product.conditional_evidence import load as _load, read as _read
 
-    store = _load(path)
+    store = _load(path) if store is None else store
     forward_cell = _read(key, evidence_class=PAPER_FORWARD, path=path, store=store)
     historical_cell = _read(key, evidence_class=COUNTERFACTUAL, path=path, store=store)
     forward = _forward_component(forward_cell)

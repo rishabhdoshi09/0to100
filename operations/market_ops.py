@@ -1193,8 +1193,12 @@ class MarketOperationsWorker:
         self._progress(operation_id, "SCANNING_US", f"Scanning {scope} with the canonical US setup engine")
         from scan.us_scanner import scan_us, persisted_us_scan
 
+        previous = persisted_us_scan().get("scanned_at")
         rows = list(scan_us(index=index) or [])
         persisted = dict(persisted_us_scan() or {})
+        if persisted.get("scanned_at") == previous or persisted.get("status") not in {"ready", "partial"}:
+            raise OperationBlocked("US scan did not produce a usable new data evaluation",
+                                   code="US_SCAN_DATA_UNAVAILABLE", result={"scan": persisted})
         try:
             from execution.us_autopilot import get_status, report_card
             paper = dict(get_status() or {})
@@ -1207,6 +1211,9 @@ class MarketOperationsWorker:
             "scope": str(persisted.get("scope") or scope),
             "scanned_at": str(persisted.get("scanned_at") or ""),
             "setups": len(rows),
+            "scan_status": persisted.get("status"),
+            "coverage": persisted.get("coverage") or {},
+            "reason": persisted.get("reason") or "",
             "paper": {
                 "armed": bool(paper.get("armed")),
                 "allocation": paper.get("allocation"),

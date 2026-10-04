@@ -506,4 +506,19 @@ def decision_why(
         ),
         "unfilled_sections": missing_sections(payload),
     })
+    # Preserve the immutable research assessment/rank; show the current frozen
+    # committee judgment separately so a setup BUY is not a trade instruction.
+    from product.recommendation_truth import project_workspace_truth
+    projected = project_workspace_truth(workspace or {})
+    truth_cards = [card for cat in projected.get("categories") or [] for card in cat.get("cards") or []]
+    truth_cards += list((projected.get("lifecycle") or {}).get("active") or [])
+    truth = next((card for card in truth_cards if str(card.get("symbol") or "").upper() == wanted), {})
+    payload["committee"] = {
+        "decision": truth.get("canonical_decision", "NO_JUDGMENT"),
+        "status": truth.get("decision_truth_status", "SCAN_LINEAGE_UNAVAILABLE"),
+        "reason": truth.get("decision_reason_code") or "",
+        "decision_id": truth.get("decision_id"),
+        "scan_run_id": truth.get("decision_scan_run_id"),
+        "execution_state": truth.get("canonical_execution_state") or "",
+    }
     return payload

@@ -151,9 +151,22 @@ class TelegramNotifier:
     def _save(self) -> None:
         try:
             self.root.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(self.state, indent=2, sort_keys=True), encoding="utf-8")
-            os.replace(tmp, self.path)
+            # F&O worker and autonomy notifier can hold different snapshots.
+            # Serialize persistence and union today's sent keys so a later cash
+            # save cannot erase already-delivered F&O events (or vice versa).
+            with (self.root / "telegram_state.lock").open("a+") as lock:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+                try:
+                    disk = self._load()
+                    day = self._day()
+                    sent = set((disk.get("sent") or {}).get(day) or [])
+                    sent.update((self.state.get("sent") or {}).get(day) or [])
+                    self.state.setdefault("sent", {})[day] = sorted(sent)
+                    tmp = self.path.with_suffix(".tmp")
+                    tmp.write_text(json.dumps(self.state, indent=2, sort_keys=True), encoding="utf-8")
+                    os.replace(tmp, self.path)
+                finally:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
         except Exception:
             pass
 
@@ -695,6 +708,8 @@ class TelegramNotifier:
         payload = dict(workspace or {})
         if not payload:
             return {"sent": False, "reason": "no_workspace"}
+        from product.recommendation_truth import project_workspace_truth
+        payload = project_workspace_truth(payload)
         now = self._now_fn()
         scan_at = str(payload.get("scan_scanned_at") or payload.get("scan_at") or "")[:19]
         kind = f"reco_desk:{scan_at}" if scan_at else "reco_desk"
@@ -720,7 +735,7 @@ class TelegramNotifier:
             return {"sent": False, "reason": "send_failed"}
         lines = [
             f"<b>Recommendations — {now.strftime('%d %b %Y %H:%M')} IST</b>",
-            "<i>Same market scan as the desk. Not a broker order.</i>",
+            "<i>Research setup scores, not win probabilities. Action follows the current committee verdict. Not a broker order.</i>",
             "",
             "<b>High conviction</b>",
         ]
@@ -954,6 +969,9 @@ class TelegramNotifier:
         head += f" — {score_txt}"
         if action:
             head += f" · {action}"
+        committee_reason = cls._esc(card.get("decision_reason_code") or card.get("decision_truth_status") or "")
+        if committee_reason:
+            head += f" · {committee_reason}"
         if why:
             return f"{head}\n  {why[:220]}"
         return head

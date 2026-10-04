@@ -39,7 +39,7 @@ _pushed: dict[str, set] = {}  # {YYYY-MM-DD: symbols alerted} — one/stock/day
 _STORE = logs_path("product", "us_scan.json")
 
 
-def _persist_results(results: list[dict], *, scope: str, status: str = "ready") -> None:
+def _persist_results(results: list[dict], *, scope: str, status: str = "ready", coverage: dict | None = None, reason: str = "") -> None:
     payload = {
         "schema_version": 1,
         "market": "US",
@@ -49,6 +49,8 @@ def _persist_results(results: list[dict], *, scope: str, status: str = "ready") 
         "saved_epoch": time.time(),
         "records": list(results),
         "count": len(results),
+        "coverage": dict(coverage or {}),
+        "reason": reason,
         "paper_only": True,
         "live_locked": True,
     }
@@ -204,9 +206,14 @@ def scan_us(max_workers: int = 8, index: str | None = None) -> list[dict]:
         _scan_running = True
         _status = "scanning"
         _progress = 0
+    scope = str(index or "All")
+    coverage = {"requested": 0, "history_available": 0, "evaluated": 0,
+                "missing_history": 0, "analysis_failed": 0, "batch_failed": 0,
+                "no_signal": 0, "symbols": []}
     try:
         _syms, scope = _index_universe(index)
         symbols = _liquid_first(_syms)
+        coverage["requested"] = len(symbols)
         with _lock:
             _total = len(symbols)
             _scope = scope
@@ -220,19 +227,28 @@ def scan_us(max_workers: int = 8, index: str | None = None) -> list[dict]:
 
         from data.us_data import get_us_daily_batch
 
-        def _run_batch(chunk: list[str]) -> list:
+        def _run_batch(chunk: list[str]) -> tuple[list, list[dict]]:
             out = []
+            ledger = []
             try:
-                for sym, df in get_us_daily_batch(chunk).items():
+                downloaded = get_us_daily_batch(chunk)
+                for sym in chunk:
+                    df = downloaded.get(sym)
+                    if df is None or len(df) < 60:
+                        ledger.append({"symbol": sym, "status": "MISSING_HISTORY"})
+                        continue
                     try:
                         r = sc._analyze(sym, df)
                         if r and r.signals:
                             out.append(r)
-                    except Exception:
-                        pass
+                        ledger.append({"symbol": sym, "status": "EVALUATED", "has_signal": bool(r and r.signals)})
+                    except Exception as exc:
+                        ledger.append({"symbol": sym, "status": "ANALYSIS_FAILED", "error_type": type(exc).__name__})
             except Exception as exc:
                 log.debug("us_batch_chunk_failed", error=str(exc)[:80])
-            return out
+                ledger = [{"symbol": sym, "status": "BATCH_FAILED", "error_type": type(exc).__name__} for sym in chunk]
+                out = []
+            return out, ledger
 
         # PARALLEL batches (not one-by-one), liquid names first, and results
         # STREAM into the store as each batch lands — good setups show in
@@ -249,7 +265,17 @@ def scan_us(max_workers: int = 8, index: str | None = None) -> list[dict]:
         with ThreadPoolExecutor(max_workers=_n_pool) as pool:
             futs = {pool.submit(_run_batch, c): c for c in chunks}
             for fut in as_completed(futs):
-                raw.extend(fut.result() or [])
+                batch, ledger = fut.result()
+                raw.extend(batch)
+                coverage["symbols"].extend(ledger)
+                for row in ledger:
+                    state = row["status"]
+                    if state in {"EVALUATED", "ANALYSIS_FAILED"}:
+                        coverage["history_available"] += 1
+                    coverage[{"EVALUATED": "evaluated", "MISSING_HISTORY": "missing_history",
+                              "ANALYSIS_FAILED": "analysis_failed", "BATCH_FAILED": "batch_failed"}[state]] += 1
+                    if state == "EVALUATED" and not row["has_signal"]:
+                        coverage["no_signal"] += 1
                 done += len(futs[fut])
                 serialized = _rank(raw)          # progressive: publish as we go
                 with _lock:
@@ -258,11 +284,18 @@ def scan_us(max_workers: int = 8, index: str | None = None) -> list[dict]:
                     _last_ts = time.time()
 
         serialized = _rank(raw)
+        status = ("error" if not coverage["evaluated"] else
+                  "ready" if coverage["evaluated"] == coverage["requested"] else "partial")
+        reason = ("US_SCAN_DATA_UNAVAILABLE" if status == "error" else
+                  "US_SCAN_INCOMPLETE_COVERAGE" if status == "partial" else
+                  "NO_ELIGIBLE_SETUP" if not serialized else "SCAN_COMPLETE")
         with _lock:
             _results = serialized
             _last_ts = time.time()
-            _status = "ready"
-        _persist_results(serialized, scope=scope, status="ready")
+            _status = status
+        _persist_results(serialized, scope=scope, status=status, coverage=coverage, reason=reason)
+        if status == "error":
+            return []
         # 📲 Telegram push — US setups bhi phone pe (NSE push untouched)
         try:
             _push_us_setups(serialized)
@@ -275,13 +308,16 @@ def scan_us(max_workers: int = 8, index: str | None = None) -> list[dict]:
             on_setups(serialized)
         except Exception as exc:
             log.debug("us_autopilot_feed_skip", error=str(exc))
-        log.info("us_scan_done", scanned=len(symbols),
+        log.info("us_scan_done", requested=len(symbols), evaluated=coverage["evaluated"], status=status,
                  with_signals=len(serialized))
         return serialized
     except Exception as exc:
         log.warning("us_scan_failed", error=str(exc))
         with _lock:
             _status = "error"
+            _results = []
+            _last_ts = time.time()
+        _persist_results([], scope=scope, status="error", coverage=coverage, reason="US_SCAN_FAILED")
         return []
     finally:
         with _lock:

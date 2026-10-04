@@ -15,6 +15,7 @@ never leak into the new scan's UI.
 from __future__ import annotations
 
 import json
+import sqlite3
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
@@ -50,13 +51,29 @@ def current_scan_run_id() -> str:
     return _scan_run_for_file(str(path), _mtime_ns(path))
 
 
+def _db_revision(path: Path) -> tuple:
+    # WAL commits need not touch the main database until a checkpoint. Include
+    # both files, and the resolved path, so readers see each committed verdict.
+    def revision(file: Path) -> tuple:
+        try:
+            stat = file.stat()
+            return (stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
+        except OSError:
+            return (-1, -1, -1)
+    return (revision(path), revision(Path(str(path) + "-wal")))
+
+
 @lru_cache(maxsize=16)
-def _candidate_map_for_scan(scan_run_id: str, db_mtime_ns: int) -> dict[str, dict[str, Any]]:
+def _candidate_map_for_scan(scan_run_id: str, path_text: str, revision: tuple) -> dict[str, dict[str, Any]]:
     """Load exact-scan candidates once per DB revision, not once per card."""
-    del db_mtime_ns  # cache invalidator only
-    if not scan_run_id or not CL.DB_PATH.exists():
+    del revision  # cache invalidator only
+    path = Path(path_text)
+    if not scan_run_id or not path.exists():
         return {}
-    con = CL._connect()  # product-internal store; also applies schema migrations
+    # A presentation read must never create/migrate schema or wait behind a
+    # writer's migration. Schema ownership belongs to the lifecycle writer.
+    con = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=0.5)
+    con.row_factory = sqlite3.Row
     try:
         rows = con.execute(
             "SELECT * FROM candidates WHERE scan_run_id=? ORDER BY updated_at DESC",
@@ -74,7 +91,8 @@ def _candidate_map_for_scan(scan_run_id: str, db_mtime_ns: int) -> dict[str, dic
 
 
 def candidates_for_current_scan(scan_run_id: str) -> dict[str, dict[str, Any]]:
-    return _candidate_map_for_scan(scan_run_id, _mtime_ns(CL.DB_PATH))
+    path = CL.DB_PATH.resolve()
+    return _candidate_map_for_scan(scan_run_id, str(path), _db_revision(path))
 
 
 def _wait_trigger(candidate: Mapping[str, Any]) -> dict[str, Any]:
@@ -188,3 +206,33 @@ def decorate_current_recommendation(card: Mapping[str, Any]) -> dict[str, Any]:
     symbol = str(card.get("symbol") or "").upper()
     candidate = candidates_for_current_scan(scan_run_id).get(symbol) if scan_run_id and symbol else None
     return project_candidate_truth(card, scan_run_id=scan_run_id, candidate=candidate)
+
+
+def project_workspace_truth(workspace: Mapping[str, Any]) -> dict[str, Any]:
+    """One read-only committee snapshot for all cards on a delivery surface."""
+    scan = str(workspace.get("scan_scanned_at") or workspace.get("scan_at") or "")
+    current = current_scan_run_id()
+    unavailable = False
+    try:
+        candidates = candidates_for_current_scan(scan) if scan and scan == current else {}
+    except (sqlite3.Error, OSError):
+        candidates, unavailable = {}, True
+
+    def decorate(card: Mapping[str, Any]) -> dict[str, Any]:
+        truth = project_candidate_truth(
+            card, scan_run_id=scan if scan == current else "",
+            candidate=candidates.get(str(card.get("symbol") or "").upper()),
+        )
+        if unavailable:
+            truth["decision_truth_status"] = "TRUTH_UNAVAILABLE"
+        return {**card, **truth}
+
+    payload = dict(workspace)
+    payload["categories"] = [
+        {**category, "cards": [decorate(card) for card in category.get("cards") or [] if isinstance(card, Mapping)]}
+        for category in workspace.get("categories") or [] if isinstance(category, Mapping)
+    ]
+    lifecycle = dict(workspace.get("lifecycle") or {})
+    lifecycle["active"] = [decorate(card) for card in lifecycle.get("active") or [] if isinstance(card, Mapping)]
+    payload["lifecycle"] = lifecycle
+    return payload

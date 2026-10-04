@@ -68,6 +68,8 @@ def status() -> dict[str, Any]:
             "scope": str(scan.get("scope") or "All"),
             "scanned_at": str(scan.get("scanned_at") or ""),
             "count": int(scan.get("count") or len(records)),
+            "coverage": dict(scan.get("coverage") or {}),
+            "reason": str(scan.get("reason") or ""),
         },
         "top_setups": top,
         "paper": {

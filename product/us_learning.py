@@ -18,7 +18,8 @@ from typing import Any, Mapping
 
 from core.runtime_paths import logs_path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+OUTCOME_BASIS = "US_PAPER_NET_COST_MODEL_V1"
 LEDGER = logs_path("product", "us_decision_ledger.jsonl")
 MODEL = logs_path("product", "us_learning.json")
 MIN_SAMPLE = 20
@@ -32,7 +33,8 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _read_jsonl(path: Path = LEDGER) -> list[dict[str, Any]]:
+def _read_jsonl(path: Path | None = None) -> list[dict[str, Any]]:
+    path = path or LEDGER
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except Exception:
@@ -48,7 +50,8 @@ def _read_jsonl(path: Path = LEDGER) -> list[dict[str, Any]]:
     return out
 
 
-def _write_jsonl(rows: list[Mapping[str, Any]], path: Path = LEDGER) -> None:
+def _write_jsonl(rows: list[Mapping[str, Any]], path: Path | None = None) -> None:
+    path = path or LEDGER
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(
@@ -167,11 +170,6 @@ def _closed_trade_outcome(row: Mapping[str, Any]) -> tuple[float, str] | None:
         return None
     symbol = str(row.get("symbol") or "").upper()
     session = str(row.get("session_date") or "")[:10]
-    entry = float(row.get("entry") or 0.0)
-    stop = float(row.get("stop") or 0.0)
-    risk = entry - stop
-    if risk <= 0:
-        return None
     for trade in trades:
         if str(trade.get("symbol") or "").upper() != symbol:
             continue
@@ -184,10 +182,23 @@ def _closed_trade_outcome(row: Mapping[str, Any]) -> tuple[float, str] | None:
             trade_session = str(trade.get("placed_at") or "")[:10]
         if trade_session != session:
             continue
-        exit_px = float(trade.get("exit_price") or 0.0)
-        if exit_px <= 0:
+        try:
+            from execution.cost_model import net_result
+            entry = float(trade.get("entry_price") or 0.0)
+            # The journal stop can trail above entry. R uses the frozen initial
+            # decision risk, never the mutable protection level at settlement.
+            stop = float(row.get("stop") or 0.0)
+            exit_px = float(trade.get("exit_price") or 0.0)
+            qty = int(trade.get("qty") or 0)
+            risk = (entry - stop) * qty
+            if qty <= 0 or stop <= 0 or risk <= 0 or exit_px <= 0 or not all(math.isfinite(v) for v in (entry, stop, exit_px, risk)):
+                continue
+            net = float(net_result(entry, exit_px, qty, exit_is_stop=trade.get("status") in _LOSS, paper=True, market="US")["net"])
+            if not math.isfinite(net):
+                continue
+            return net / risk, str(trade.get("status") or "CLOSED")
+        except Exception:
             continue
-        return (exit_px - entry) / risk, str(trade.get("status") or "CLOSED")
     return None
 
 
@@ -250,6 +261,8 @@ def settle_pending() -> dict[str, Any]:
             row["settled"] = True
             row["outcome_R"] = round(float(outcome_r), 6)
             row["outcome_kind"] = kind
+            row["outcome_basis"] = OUTCOME_BASIS if row.get("action") == "TAKE" else "DAILY_OHLC_COUNTERFACTUAL_UNCOSTED"
+            row["not_pnl"] = row.get("action") != "TAKE"
             row["outcome_at"] = _now()
             updated += 1
         if updated:
@@ -275,12 +288,38 @@ def _wilson_lower(wins: float, n: float) -> float:
     return max(0.0, (centre - margin) / denom)
 
 
+def _ranking_rows(rows: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """Counterfactual/legacy gross outcomes cannot grant ranking authority.
+
+    Conflicting duplicate identities are quarantined, not arbitrarily picked.
+    """
+    identities: dict[str, list[Mapping[str, Any]]] = {}
+    for row in rows:
+        did = str(row.get("decision_id") or "")
+        if did:
+            identities.setdefault(did, []).append(row)
+    valid = []
+    for copies in identities.values():
+        row = copies[0]
+        if any(dict(other) != dict(row) for other in copies[1:]):
+            continue
+        if (not row.get("settled") or row.get("action") != "TAKE"
+                or row.get("evidence_class") != "US_PAPER_FORWARD"
+                or row.get("outcome_basis") != OUTCOME_BASIS or row.get("not_pnl") is not False):
+            continue
+        try:
+            if not math.isfinite(float(row["outcome_R"])):
+                continue
+        except (KeyError, TypeError, ValueError):
+            continue
+        valid.append(row)
+    return valid
+
+
 def _cells(rows: list[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
     groups: dict[str, list[tuple[float, float]]] = {}
-    for row in rows:
-        if not row.get("settled") or row.get("outcome_R") is None:
-            continue
-        weight = 1.0 if str(row.get("action")) == "TAKE" else 0.5
+    for row in _ranking_rows(rows):
+        weight = 1.0
         r = float(row.get("outcome_R") or 0.0)
         keys = [
             f"score:{row.get('score_bucket') or ''}",
@@ -335,6 +374,10 @@ def rebuild_model(*, rows: list[Mapping[str, Any]] | None = None) -> dict[str, A
         "paper_only": True,
         "live_locked": True,
         "historical_only_can_promote": False,
+        "ranking_outcome_basis": OUTCOME_BASIS,
+        "ranking_eligible_decisions": len(_ranking_rows(rows)),
+        "counterfactual_can_promote": False,
+        "uncertified_outcomes_can_promote": False,
     }
     MODEL.parent.mkdir(parents=True, exist_ok=True)
     tmp = MODEL.with_suffix(".json.tmp")
@@ -348,7 +391,8 @@ def load_model() -> dict[str, Any]:
         payload = json.loads(MODEL.read_text(encoding="utf-8"))
     except Exception:
         return rebuild_model()
-    return payload if isinstance(payload, dict) else rebuild_model()
+    return payload if (isinstance(payload, dict) and payload.get("schema_version") == SCHEMA_VERSION
+                       and payload.get("ranking_outcome_basis") == OUTCOME_BASIS) else rebuild_model()
 
 
 def adjustment(card: Mapping[str, Any]) -> dict[str, Any]:

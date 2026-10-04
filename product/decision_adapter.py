@@ -91,6 +91,11 @@ def _direction(status: Any) -> str:
 
 
 def _state(card: Mapping[str, Any]) -> str:
+    committee = str(card.get("canonical_decision") or "").upper()
+    if committee in {BUY, WAIT, AVOID}:
+        return committee
+    if committee == "NO_JUDGMENT":
+        return WAIT
     tier = str(card.get("reco_tier") or "").strip().lower()
     if tier in _TIER_TO_STATE:
         state = _TIER_TO_STATE[tier]
@@ -255,7 +260,10 @@ def decision_from_card(
         feature_schema_version=feature_schema_version,
         strategy_version=strategy_version,
         evidence_class=evidence_class,
-        provenance={"built_from": "recommendation_card", "scan_scanned_at": as_of},
+        provenance={"built_from": "recommendation_card", "scan_scanned_at": as_of,
+                    "committee_decision": card.get("canonical_decision"),
+                    "committee_decision_id": card.get("decision_id"),
+                    "decision_truth_status": card.get("decision_truth_status")},
         generated_at=generated_at or as_of or "",
     )
 

@@ -33,6 +33,7 @@ export type DecisionWhy = {
   reason?: string
   state?: string
   headline?: string
+  committee?: { decision?: string; status?: string; reason?: string; decision_id?: string | null; scan_run_id?: string | null; execution_state?: string }
   authority?: string
   note?: string
   sections?: DecisionSection[]

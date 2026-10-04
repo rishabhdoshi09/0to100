@@ -767,6 +767,10 @@ function HomeOsCard({
             {' '}{os.us_market.paper?.open_trades?.length ?? 0} open paper positions ·
             {' '}learning {os.us_market.learning?.selection_learning_active ? 'active in ranking' : 'collecting'}
           </small>
+          <small>
+            Coverage: {os.us_market.scan?.coverage?.evaluated ?? 'unknown'}/{os.us_market.scan?.coverage?.requested ?? 'unknown'} evaluated
+            {' · '}{os.us_market.scan?.reason || 'Coverage not recorded by this scan'}
+          </small>
           {(os.us_market.top_setups || []).length ? (
             <small>
               Research leaders: {(os.us_market.top_setups || []).slice(0, 5).map((row) =>
