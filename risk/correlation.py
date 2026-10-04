@@ -84,21 +84,34 @@ def clusters_from_corr(symbols: list[str], corr: dict,
                   key=lambda g: (-len(g), g))
 
 
+def report_for_symbols(symbols: list[str], corr: dict | None = None) -> dict:
+    """Cluster an explicit symbol list. ``measured`` is False when no pair
+    had enough overlapping history — n_bets then equals n_positions and is
+    not a claim that the names are independent."""
+    names = sorted({str(s).strip().upper() for s in (symbols or []) if str(s).strip()})
+    if len(names) < 2:
+        return {"n_positions": len(names), "n_bets": len(names),
+                "clusters": [[s] for s in names], "biggest": None,
+                "measured": False}
+    if corr is None:
+        corr = pairwise_corr(names)
+    corr = dict(corr or {})
+    clusters = clusters_from_corr(names, corr)
+    biggest = clusters[0] if clusters and len(clusters[0]) > 1 else None
+    return {"n_positions": len(names), "n_bets": len(clusters),
+            "clusters": clusters, "biggest": biggest,
+            "measured": bool(corr)}
+
+
 def book_correlation_report() -> dict:
-    """The live book through the correlation lens:
-    {n_positions, n_bets, clusters: [[syms...]], biggest: [syms]|None}.
-    Safe on empty book / missing history (falls back to positions=bets)."""
+    """The legacy live book through the correlation lens.
+    {n_positions, n_bets, clusters: [[syms...]], biggest: [syms]|None, measured}.
+    Safe on empty book / missing history (falls back to positions=bets,
+    measured=False — that fallback is not an independence claim)."""
     try:
         from risk.position_manager import review_positions
         symbols = sorted({p.get("symbol") for p in (review_positions() or [])
                           if p.get("symbol")})
     except Exception:
         symbols = []
-    if len(symbols) < 2:
-        return {"n_positions": len(symbols), "n_bets": len(symbols),
-                "clusters": [[s] for s in symbols], "biggest": None}
-    corr = pairwise_corr(symbols)
-    clusters = clusters_from_corr(symbols, corr)
-    biggest = clusters[0] if clusters and len(clusters[0]) > 1 else None
-    return {"n_positions": len(symbols), "n_bets": len(clusters),
-            "clusters": clusters, "biggest": biggest}
+    return report_for_symbols(symbols)

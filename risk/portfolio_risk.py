@@ -38,40 +38,70 @@ def _max_positions() -> int:
         return 5
 
 
-def portfolio_risk_report(extra_trade: dict | None = None) -> dict:
-    """
-    {deployed, deployed_pct, open_risk, open_risk_pct, n_positions,
-     sector_packs: {sector: [syms]}, warnings: [...], verdict}
-    extra_trade: {symbol, qty, entry, stop} — simulate adding a trade.
-    """
+def legacy_open_rows() -> list[dict]:
+    """Open rows from the legacy trades journal. Empty when that book is quiet."""
     from risk.position_manager import _open_trades
     trades = _open_trades()
-    rows = [{"symbol": t["symbol"], "qty": int(t["qty"] or 0),
+    return [{"symbol": t["symbol"], "qty": int(t["qty"] or 0),
              "entry": float(t["entry_price"] or 0),
              "stop": float(t["stop_price"] or 0)} for t in trades]
-    if extra_trade:
-        rows.append(extra_trade)
 
-    cap = _capital()
-    deployed = sum(r["qty"] * r["entry"] for r in rows)
-    open_risk = sum(r["qty"] * max(0.0, r["entry"] - r["stop"]) for r in rows)
 
-    # Sector packs
+def assess_open_rows(rows: list[dict] | None, *,
+                     capital: float | None = None,
+                     max_positions: int | None = None) -> dict:
+    """Same OK / CAUTION / DANGER rails as the legacy report, on any row list.
+
+    Thresholds are unchanged: sector pack of 2 → CAUTION, open risk >3% →
+    CAUTION, open risk >5% or 3 names in one sector or more than max positions
+    → DANGER. A supplied ``sector`` is trusted; otherwise the sector map is
+    consulted. Missing sectors stay ungrouped — they are not invented.
+    """
+    clean: list[dict] = []
+    for raw in rows or []:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            qty = int(raw.get("qty") or 0)
+            entry = float(raw.get("entry") or 0)
+            stop = float(raw.get("stop") or 0)
+        except (TypeError, ValueError):
+            continue
+        symbol = str(raw.get("symbol") or "").strip().upper()
+        if not symbol or qty <= 0 or entry <= 0:
+            continue
+        clean.append({
+            "symbol": symbol,
+            "qty": qty,
+            "entry": entry,
+            "stop": stop,
+            "sector": str(raw.get("sector") or "").strip(),
+        })
+
+    cap = float(capital) if capital is not None else _capital()
+    max_n = int(max_positions) if max_positions is not None else _max_positions()
+    deployed = sum(r["qty"] * r["entry"] for r in clean)
+    open_risk = sum(r["qty"] * max(0.0, r["entry"] - r["stop"]) for r in clean)
+
     sector_packs: dict[str, list[str]] = {}
     try:
         from scan.sector_heat import sector_of
-        for r in rows:
-            sec = sector_of(r["symbol"])
-            if sec:
-                sector_packs.setdefault(sec, []).append(r["symbol"])
     except Exception:
-        pass
+        sector_of = None  # type: ignore[assignment]
+    for r in clean:
+        sec = r["sector"]
+        if not sec and sector_of is not None:
+            try:
+                sec = str(sector_of(r["symbol"]) or "")
+            except Exception:
+                sec = ""
+        if sec:
+            sector_packs.setdefault(sec, []).append(r["symbol"])
     packs = {s: syms for s, syms in sector_packs.items() if len(syms) >= 2}
 
     risk_pct = open_risk / cap * 100 if cap else 0
     dep_pct = deployed / cap * 100 if cap else 0
-    n = len(rows)
-    max_n = _max_positions()
+    n = len(clean)
 
     warnings: list[str] = []
     verdict = "OK"
@@ -100,6 +130,18 @@ def portfolio_risk_report(extra_trade: dict | None = None) -> dict:
             "open_risk": round(open_risk, 0), "open_risk_pct": round(risk_pct, 2),
             "n_positions": n, "max_positions": max_n,
             "sector_packs": packs, "warnings": warnings, "verdict": verdict}
+
+
+def portfolio_risk_report(extra_trade: dict | None = None) -> dict:
+    """
+    {deployed, deployed_pct, open_risk, open_risk_pct, n_positions,
+     sector_packs: {sector: [syms]}, warnings: [...], verdict}
+    extra_trade: {symbol, qty, entry, stop} — simulate adding a trade.
+    """
+    rows = legacy_open_rows()
+    if extra_trade:
+        rows.append(extra_trade)
+    return assess_open_rows(rows)
 
 
 def check_new_trade(symbol: str, qty: int, entry: float, stop: float) -> dict:

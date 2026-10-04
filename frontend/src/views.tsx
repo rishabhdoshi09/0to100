@@ -10,6 +10,7 @@ import {
   SecurityTable,
 } from './components'
 import { boolLabel, money, pct, score, words } from './format'
+import { paperCycleNote } from './paperCycleNote'
 import type {
   ChartBar,
   ControlName,
@@ -90,6 +91,7 @@ export function CommandCenterView(props: ViewProps) {
   const lt = dashboard.long_term.summary
   const latestScan = dashboard.operations.latest.MARKET_SCAN
   const latestLongTerm = dashboard.operations.latest.LONG_TERM_SCAN
+  const cycleNote = paperCycleNote(dashboard.paper.last_cycle)
   const insights = [
     dashboard.market.trade_stance,
     dashboard.operations.running
@@ -104,6 +106,7 @@ export function CommandCenterView(props: ViewProps) {
       {!dashboard.data.ready && <div className="api-warning">Market-data pipeline is incomplete. QuantTerm is showing only persisted facts; missing values are not simulated.</div>}
       <section className="metric-grid">
         <MetricCard label="MARKET HEALTH" value={dashboard.market.health.toUpperCase()} detail={dashboard.market.breadth} tone={dashboard.market.health.toLowerCase() === 'healthy' ? 'green' : 'amber'} />
+        <MetricCard label="DESK POSTURE" value={(dashboard.market.brain?.posture || 'UNMEASURED').replace(/_/g, ' ')} detail={dashboard.market.brain?.action || dashboard.market.brain?.posture_reason || 'Posture is not on this payload yet.'} tone={dashboard.market.brain?.posture === 'AGGRESSIVE' ? 'green' : dashboard.market.brain?.posture === 'STAND_ASIDE' || dashboard.market.brain?.posture === 'DEFENSIVE' ? 'amber' : 'cyan'} />
         <MetricCard label="MARKET OPS" value={dashboard.operations.running ? 'ONLINE' : 'OFFLINE'} detail={`${dashboard.operations.active.length} active · PID ${dashboard.operations.worker_pid || '—'}`} tone={dashboard.operations.running ? 'green' : 'amber'} />
         <MetricCard label="ENTRY READY" value={String(summary.ready_to_trade ?? 0)} detail={`${summary.near_breakout ?? 0} near breakout`} />
         <MetricCard label="LONG-HORIZON" value={String((lt.quality_compounder ?? 0) + (lt.garp_candidate ?? 0))} detail={`${lt.coverage_pct ?? 0}% fundamental coverage`} tone="purple" />
@@ -153,6 +156,7 @@ export function CommandCenterView(props: ViewProps) {
 
         <Panel title="PAPER PORTFOLIO · SECONDARY EXECUTION LAYER" subtitle={`${dashboard.paper.open_positions.length} open · equity ${money(dashboard.paper.equity)}`} className="positions-panel" action={<button type="button" onClick={() => setActive('Portfolio')}>Open portfolio</button>}>
           <PositionsTable rows={dashboard.paper.open_positions.slice(0, 8)} />
+          {cycleNote?.headline ? <p className="panel-copy">{cycleNote.headline}</p> : null}
         </Panel>
         <BotLearningPanel dashboard={dashboard} />
       </section>
@@ -267,6 +271,7 @@ export function BotLearningPanel({ dashboard }: { dashboard: DashboardPayload })
 
 export function PortfolioView({ dashboard, runControl }: ViewProps) {
   const paperReturn = dashboard.paper.capital > 0 ? ((dashboard.paper.equity / dashboard.paper.capital) - 1) * 100 : null
+  const cycleNote = paperCycleNote(dashboard.paper.last_cycle)
   if (dashboard.paper.available === false) {
     return (
       <section className="workspace-view">
@@ -283,6 +288,13 @@ export function PortfolioView({ dashboard, runControl }: ViewProps) {
     <section className="workspace-view">
       <div className="inline-actions"><button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Request paper cycle</button><button type="button" onClick={() => void runControl(dashboard.autonomy.new_paper_entries ? 'PAUSE_NEW_PAPER_ENTRIES' : 'RESUME_NEW_PAPER_ENTRIES')}>{dashboard.autonomy.new_paper_entries ? 'Pause new entries' : 'Resume new entries'}</button></div>
       <div className="view-metrics"><MetricCard label="PAPER CAPITAL" value={money(dashboard.paper.capital)} /><MetricCard label="PAPER EQUITY" value={money(dashboard.paper.equity)} detail={pct(paperReturn)} tone="green" /><MetricCard label="OPEN RISK" value={money(dashboard.paper.open_risk)} detail={`${(dashboard.paper.risk_per_trade_pct * 100).toFixed(1)}% risk/trade`} tone="amber" /><MetricCard label="POSITIONS" value={String(dashboard.paper.open_positions.length)} detail={`Max ${dashboard.paper.max_positions}`} tone="purple" /></div>
+      {cycleNote ? (
+        <Panel title="LATEST PAPER CYCLE" subtitle={cycleNote.eligibility || 'Recorded cycle'}>
+          {cycleNote.headline ? <p className="panel-copy">{cycleNote.headline}</p> : null}
+          {cycleNote.posture ? <p className="panel-copy">Desk posture {cycleNote.posture.replace(/_/g, ' ')}.</p> : null}
+          {cycleNote.reasons.length ? <p className="panel-copy">Reasons: {cycleNote.reasons.join(' · ')}</p> : null}
+        </Panel>
+      ) : null}
       <BotLearningPanel dashboard={dashboard} />
       <div className="portfolio-workspace">
         <Panel title="RECORDED EQUITY CURVE" subtitle="No synthetic history"><EquityCurve values={dashboard.paper.equity_curve} /></Panel>
@@ -300,7 +312,7 @@ export function MarketInternalsView({ dashboard }: ViewProps) {
       {!dashboard.data.ready && <DataReadinessPanel dashboard={dashboard} />}
       <div className="view-metrics"><MetricCard label="REGIME" value={dashboard.market.health} detail={String(details.market_regime || dashboard.market.breadth)} tone={dashboard.market.health.toLowerCase() === 'healthy' ? 'green' : 'amber'} /><MetricCard label="NIFTY 1D" value={pct(dashboard.market.nifty_change_1d)} detail={`5D ${pct(dashboard.market.nifty_change_5d)}`} /><MetricCard label="INDIA VIX" value={Number.isFinite(dashboard.market.vix) ? Number(dashboard.market.vix).toFixed(2) : '—'} tone="purple" /><MetricCard label="SCAN COVERAGE" value={dashboard.scan.universe_size.toLocaleString('en-IN')} detail={`${dashboard.scan.summary.with_any_setup ?? 0} with setups`} /></div>
       <div className="market-grid">
-        <Panel title="MARKET NARRATIVE"><p className="lead-copy">{dashboard.market.summary}</p><p className="panel-copy">{dashboard.market.trade_stance}</p></Panel>
+        <Panel title="MARKET NARRATIVE"><p className="lead-copy">{dashboard.market.summary}</p><p className="panel-copy">{dashboard.market.trade_stance}</p>{dashboard.market.brain?.posture ? <p className="panel-copy">Desk posture {dashboard.market.brain.posture.replace(/_/g, ' ')}. {dashboard.market.brain.posture_reason || dashboard.market.brain.action}</p> : null}{(dashboard.market.brain?.directives || []).slice(0, 3).map((item) => <p className="panel-copy" key={item.text}>{item.text}</p>)}</Panel>
         <Panel title="SECTOR LEADERS"><div className="tag-cloud">{dashboard.market.leaders.length ? dashboard.market.leaders.map((item) => <span className="positive-tag" key={item}>{item}</span>) : <span>No clear leaders recorded.</span>}</div></Panel>
         <Panel title="SECTOR LAGGARDS"><div className="tag-cloud">{dashboard.market.laggards.length ? dashboard.market.laggards.map((item) => <span className="negative-tag" key={item}>{item}</span>) : <span>No clear laggards recorded.</span>}</div></Panel>
         <Panel title="REGIME ENGINE DETAILS"><div className="key-value-list">{Object.entries(details).map(([key, value]) => <div key={key}><span>{words(key)}</span><strong>{String(value ?? '—')}</strong></div>)}</div></Panel>

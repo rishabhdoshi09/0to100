@@ -660,6 +660,16 @@ class MarketOperationsWorker:
             except Exception:
                 pass
         finish_progress(records=result["records"], setups=int(summary.get("with_any_setup") or 0))
+        try:
+            from product.desk_brain import load_for_execution
+            brain = load_for_execution(book=None) or {}
+            result["desk_brain"] = {
+                "posture": brain.get("posture"),
+                "book_verdict": brain.get("book_verdict"),
+                "breadth_verdict": brain.get("breadth_verdict"),
+            }
+        except Exception:
+            result["desk_brain"] = {}
         result["telegram"] = self._notify_scan_telegram(payload)
         result["long_term_overlay"] = dict(payload.get("long_term_overlay") or {})
         elapsed = time.monotonic() - started

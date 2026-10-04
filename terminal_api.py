@@ -927,6 +927,15 @@ def dashboard() -> dict:
             )
         except Exception:
             daily_wrap = []
+        try:
+            from product.desk_brain import overlay_market
+            market = overlay_market(
+                market,
+                paper=paper,
+                articles=list((news or {}).get("articles") or []),
+            )
+        except Exception:
+            pass
         return _json_safe({
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "market": market,
