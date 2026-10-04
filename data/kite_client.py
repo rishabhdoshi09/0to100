@@ -395,6 +395,8 @@ class KiteClient:
             for key, val in raw.items():
                 sym = key.split(":", 1)[-1]
                 ohlc = val.get("ohlc", {}) or {}
+                price = float(val.get("last_price") or 0.0)
+                prev = float(ohlc.get("close") or 0.0)
                 result[sym] = {
                     "ltp": val.get("last_price", 0.0),
                     "open": ohlc.get("open", 0.0),
@@ -409,7 +411,9 @@ class KiteClient:
                     "oi": val.get("oi", 0),
                     "oi_day_high": val.get("oi_day_high", 0),
                     "oi_day_low": val.get("oi_day_low", 0),
-                    "change": val.get("change", val.get("net_change", 0.0)),
+                    # Consumers use this normalized field as percentage change.
+                    # Kite's net_change is an absolute price change, not a percent.
+                    "change": (price - prev) / prev * 100 if prev > 0 else 0.0,
                     "depth": val.get("depth") or {},
                     "timestamp": val.get("timestamp"),
                     "last_trade_time": val.get("last_trade_time"),

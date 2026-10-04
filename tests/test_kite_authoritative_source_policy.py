@@ -84,7 +84,7 @@ def test_kite_provider_quotes_preserve_full_kite_market_fields():
                     "oi": 321,
                     "oi_day_high": 400,
                     "oi_day_low": 250,
-                    "change": 1.25,
+                    "net_change": 18.5,
                     "instrument_token": 408065,
                     "timestamp": "2026-10-03T10:00:00+05:30",
                     "last_trade_time": "2026-10-03T09:59:59+05:30",
@@ -109,6 +109,7 @@ def test_kite_provider_quotes_preserve_full_kite_market_fields():
 
     assert row["source"] == "kite"
     assert row["price"] == 1500.0
+    assert row["chg_pct"] == pytest.approx(18.5 / 1481.5 * 100)
     assert row["volume"] == 123456
     assert row["average_price"] == 1492.5
     assert row["last_quantity"] == 7
@@ -117,6 +118,32 @@ def test_kite_provider_quotes_preserve_full_kite_market_fields():
     assert row["oi"] == 321
     assert row["depth"]["buy"][0]["price"] == 1499.9
     assert row["instrument_token"] == 408065
+
+
+@pytest.mark.parametrize("price,net_change,expected_pct", [
+    (1021.0, 21.0, 2.1), (979.0, -21.0, -2.1), (1000.0, 0.0, 0.0),
+])
+def test_kite_absolute_change_is_normalized_to_percent_in_every_quote_path(
+        monkeypatch, price, net_change, expected_pct):
+    import data.kite_client as KC
+
+    payload = {"last_price": price, "net_change": net_change,
+               "ohlc": {"close": 1000.0}}
+
+    class FakeKite:
+        def quote(self, keys):
+            return {key: payload for key in keys}
+
+    monkeypatch.setattr(KC, "KiteConnect", lambda **kwargs: FakeKite())
+    client = KC.KiteClient(api_key="test", access_token="", api_secret="")
+    monkeypatch.setattr(KC, "KiteClient", lambda: client)
+    monkeypatch.setattr(KC, "kite_credentials_available", lambda: True)
+
+    batch = client.batch_quotes(["INFY"])["INFY"]
+    assert batch["change"] == pytest.approx(expected_pct)
+    assert batch["raw"]["net_change"] == net_change
+    assert MD._KiteProvider._normalize_quote(payload)["chg_pct"] == pytest.approx(expected_pct)
+    assert LQ.get_live_quotes(["INFY"], ttl=0)["INFY"]["chg_pct"] == pytest.approx(expected_pct)
 
 
 def test_kite_provider_history_closes_never_calls_yahoo(monkeypatch):

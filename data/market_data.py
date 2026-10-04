@@ -233,11 +233,9 @@ class _KiteProvider:
         ohlc = payload.get("ohlc") or {}
         prev = float(ohlc.get("close") or price or 0.0)
         volume = float(payload.get("volume") or 0.0)
-        chg = float(
-            payload.get("change")
-            or payload.get("net_change")
-            or ((price - prev) / prev * 100 if prev else 0.0)
-        )
+        # Full Kite quotes report net_change in price units. Derive percentage
+        # change from the same quote's last price and previous-session close.
+        chg = (price - prev) / prev * 100 if prev > 0 else 0.0
         return {
             "price": price,
             "prev_close": prev,
