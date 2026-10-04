@@ -104,6 +104,31 @@ def test_stale_cash_notifier_cannot_erase_fno_delivery_keys(tmp_path):
     assert restarted._was_sent("reco_desk:scan1")
 
 
+def test_home_rechecks_committee_wal_verdict_after_cached_discovery(tmp_path, monkeypatch):
+    from product import recommendation_truth as truth
+    import product.decision_simulation_gate as gate
+    from product.home_os import _canonical_best_trade_rows
+    path = tmp_path / "candidates.db"
+    monkeypatch.setattr(truth.CL, "DB_PATH", path)
+    monkeypatch.setattr(gate, "status", lambda: {
+        "scan_fresh": True, "discovery_ready": True, "scan_scanned_at": SCAN,
+        "best_trades": [{"symbol": "AAA", "discovery_decision": "ENTER_NOW"},
+                        {"symbol": "PENDING", "discovery_decision": "ENTER_NOW"}],
+    })
+    writer = _candidate_db(path)
+    try:
+        assert [r["symbol"] for r in _canonical_best_trade_rows(history_current=True)] == ["AAA"]
+        writer.execute("ALTER TABLE candidates ADD COLUMN entry_state TEXT")
+        writer.execute("UPDATE candidates SET entry_state='WAIT_EVIDENCE'")
+        writer.commit()
+        assert _canonical_best_trade_rows(history_current=True) == []
+        writer.execute("UPDATE candidates SET decision='WAIT'")
+        writer.commit()
+        assert _canonical_best_trade_rows(history_current=True) == []
+    finally:
+        writer.close()
+
+
 @pytest.fixture
 def us_scan(tmp_path, monkeypatch):
     import scan.us_scanner as scanner

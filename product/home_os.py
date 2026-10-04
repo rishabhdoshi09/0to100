@@ -203,6 +203,15 @@ def _canonical_best_trade_rows(*, history_current: bool) -> list[dict[str, Any]]
     if not gate.get("scan_fresh") or not gate.get("discovery_ready"):
         return []
 
+    scan_run_id = str(gate.get("scan_scanned_at") or "")
+    candidates: dict[str, dict[str, Any]] = {}
+    if scan_run_id:
+        try:
+            from product.recommendation_truth import candidates_for_current_scan
+            candidates = candidates_for_current_scan(scan_run_id)
+        except Exception:
+            return []
+
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
     for raw in gate.get("best_trades") or []:
@@ -212,6 +221,19 @@ def _canonical_best_trade_rows(*, history_current: bool) -> list[dict[str, Any]]
         symbol = str(row.get("symbol") or "").upper().strip()
         if not symbol or symbol in seen:
             continue
+        if scan_run_id:
+            from product.recommendation_truth import project_candidate_truth
+            truth = project_candidate_truth(row, scan_run_id=scan_run_id, candidate=candidates.get(symbol))
+            # Discovery is cached independently of committee WAL commits. A
+            # pending/WAIT/AVOID verdict cannot inherit its earlier eligibility.
+            if truth["canonical_decision"] != "BUY":
+                continue
+            if truth["canonical_entry_state"] and truth["canonical_entry_state"] not in {"ENTER_NOW", "READY", "ELIGIBLE"}:
+                continue
+            row.update(truth)
+            row["decision"] = truth["canonical_decision"]
+            row["entry_state"] = truth["canonical_entry_state"]
+            row["execution_state"] = truth["canonical_execution_state"]
         discovery = str(row.get("discovery_decision") or "").upper().strip()
         candidate_status = str(row.get("production_candidate_status") or discovery).upper().strip()
         committee = str(row.get("decision") or row.get("committee_decision") or "").upper().strip()

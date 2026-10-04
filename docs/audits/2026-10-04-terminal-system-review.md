@@ -26,6 +26,7 @@ The release remains paper-only with live execution locked.
 | P1 | US taken-trade learning used gross returns and nominated entry instead of the journal entry/quantity and modeled net costs. Rejected-name counterfactuals could provide promotion sample/expectancy in the same cells. Duplicate/nonfinite/legacy outcomes were not excluded. | Ranking authority uses unique, finite, settled US PAPER_FORWARD TAKE outcomes with explicit net-cost basis. Counterfactual and uncertified gross history remain stored and counted, but grant no ranking authority. Legacy model generation invalidated. | A baseline positive outcome becomes negative after modeled costs and actual journal basis. Counterfactual-only, wrong-class, gross, NaN, infinity, duplicate and conflicting-identity regressions cannot promote. Positive/negative certified forward evidence still adjusts paper rank within existing caps. |
 | P2 | F&O underlying ranking reloaded conditional evidence for each candidate. Concurrent settlement could change the evidence generation within a batch; mounted storage incurred repeated reads. | Load one conditional-evidence snapshot per ranking batch. Existing evidence hierarchy, promotion floors, caps and live lock preserved. | Batch regression checks one load and the same generation across candidates. Existing underlying/contract evidence tests remain in the gate. |
 | P2 | Why page presented a research BUY headline without the current committee judgment or execution state beside it. | Explicit current committee verdict/reason/execution state beside a labeled research assessment. Immutable research ranking and decision identity are preserved. | Backend lineage tests and rendered frontend WAIT-versus-research-BUY regression. |
+| P1 | Home's production discovery cache was independent of committee verdict updates; a previous eligible candidate could remain after the committee changed to WAIT or its entry became unready. | Recheck the exact-scan committee snapshot at presentation. Only frozen BUY with no explicit entry wait remains in the primary list; pending and unavailable truth cannot inherit cached eligibility. Expose the current execution state. | Cached discovery plus real WAL updates regression; Home exclusions/strict-list tests. |
 
 ## System review matrix
 
@@ -45,7 +46,7 @@ The release remains paper-only with live execution locked.
 
 ## Validation and release boundary
 
-Local validation: 157 changed-path Python checks; 178 additional risk, execution,
+Local validation: 182 changed-path Python checks; 178 additional risk, execution,
 OMS, promotion, readiness, recovery and F&O-delivery checks; 126 frontend checks;
 production TypeScript/Vite build; whitespace check. Regression cases were also
 executed against the baseline to confirm causal failures, rather than only
