@@ -71,3 +71,37 @@ def test_dashboard_and_learning_projections_use_read_only_ledger(monkeypatch, tm
         assert terminal_api._fo_paper_payload()["available"] is True
         assert _forward_summary()["available"] is True
         writer.conn.rollback()
+
+
+def test_missing_ledger_holds_saved_probability_claims_without_erasing_setup(monkeypatch, tmp_path):
+    import terminal_api
+    from product import fo_paper_store
+
+    product_dir = tmp_path / "product"
+    product_dir.mkdir()
+    path = product_dir / "fo_paper.sqlite3"
+    saved = {
+        "symbol": "TEST", "setup": {"score": 82},
+        "selected_contract": {"symbol": "TEST26OCTCE"},
+        "forward_evidence": {
+            "probability_claim_available": True, "win_probability_pct": 80,
+            "conservative_ev_pct": 4, "n": 100,
+        },
+    }
+    (product_dir / "fo_directional.json").write_text(json.dumps({
+        "available": True, "candidates": [saved], "candidate_count": 1,
+    }))
+    monkeypatch.setattr(terminal_api, "logs_dir", lambda: tmp_path)
+    monkeypatch.setattr(fo_paper_store, "logs_path", lambda *parts: path)
+    result = terminal_api._fo_directional_payload()
+    assert result["available"] is True
+    assert result["candidate_evidence_status"] == "UNAVAILABLE"
+    candidate = result["candidates"][0]
+    assert candidate["setup"] == saved["setup"]
+    assert candidate["selected_contract"] == saved["selected_contract"]
+    evidence = candidate["forward_evidence"]
+    assert evidence["probability_claim_available"] is False
+    assert evidence["win_probability_pct"] is None
+    assert evidence["conservative_ev_pct"] is None
+    assert evidence["n"] is None
+    assert not path.exists()

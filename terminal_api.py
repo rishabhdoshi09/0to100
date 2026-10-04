@@ -915,6 +915,29 @@ def _fo_directional_payload() -> dict[str, Any]:
         payload["candidate_evidence_status"] = "AVAILABLE"
     except Exception as exc:
         # Evidence projection failure must never erase a valid persisted scan.
+        # It also must not carry saved probability claims forward when the
+        # durable observations cannot be read (including an absent ledger).
+        payload["candidates"] = [
+            {
+                **row,
+                "forward_evidence": {
+                    "status": "UNAVAILABLE",
+                    "evidence_lane": "FORWARD_PAPER",
+                    "observed_n": None,
+                    "n": None,
+                    "minimum_required_n": 30,
+                    "probability_claim_available": False,
+                    "win_probability_pct": None,
+                    "win_probability_wilson_lb_pct": None,
+                    "expectancy_pct": None,
+                    "conservative_ev_pct": None,
+                    "insufficient_evidence": True,
+                    "production_influence_allowed": False,
+                    "coverage": {},
+                },
+            }
+            for row in (payload.get("candidates") or []) if isinstance(row, dict)
+        ]
         payload["candidate_evidence_status"] = "UNAVAILABLE"
         payload["candidate_evidence_error"] = str(exc)[:240]
     return payload
