@@ -99,10 +99,10 @@ def _google_quotes(symbols: list[str]) -> dict[str, dict]:
 
 def get_live_quotes(symbols: list[str], ttl: float = _QUOTE_TTL_S) -> dict[str, dict]:
     """
-    {symbol: {price, chg_pct, source}} — Kite → NSE → Google, each only
-    filling what the previous missed. Logs which source covered how many.
-    Offline short-circuit: when Kite AND NSE both return nothing (DNS
-    down / no internet), skip the per-symbol Google pass entirely —
+    {symbol: {price, chg_pct, source}} — Kite alone when configured;
+    NSE → Google continuity otherwise. Logs source coverage.
+    Offline short-circuit: when NSE returns nothing (DNS
+    down / no internet), skip a large per-symbol Google pass entirely —
     60 doomed requests add minutes of latency and pure log spam.
 
     A symbol fetched within `ttl` seconds is served from the micro-cache
@@ -112,6 +112,14 @@ def get_live_quotes(symbols: list[str], ttl: float = _QUOTE_TTL_S) -> dict[str, 
     if not symbols:
         return {}
     quotes: dict[str, dict] = {}
+    # Resolve authority before consulting the cache. A desk opened before Kite
+    # login may hold fresh public quotes; those must not bypass the new authority,
+    # including when the first Kite fetch fails or covers only part of the batch.
+    try:
+        from data.kite_client import kite_credentials_available
+        kite_authoritative = bool(kite_credentials_available())
+    except Exception:
+        kite_authoritative = False
 
     # 1. Micro-cache pass
     if ttl > 0:
@@ -119,7 +127,8 @@ def get_live_quotes(symbols: list[str], ttl: float = _QUOTE_TTL_S) -> dict[str, 
         with _qcache_lock:
             for s in symbols:
                 hit = _qcache.get(s)
-                if hit and now - hit[0] < ttl:
+                if (hit and now - hit[0] < ttl
+                        and (not kite_authoritative or hit[1].get("source") == "kite")):
                     quotes[s] = dict(hit[1])
         if quotes:
             try:
@@ -134,12 +143,6 @@ def get_live_quotes(symbols: list[str], ttl: float = _QUOTE_TTL_S) -> dict[str, 
     # do not silently replace a missing Kite field with another provider.
     t0 = time.perf_counter()
     fetched: dict[str, dict] = {}
-    try:
-        from data.kite_client import kite_credentials_available
-        kite_authoritative = bool(kite_credentials_available())
-    except Exception:
-        kite_authoritative = False
-
     if kite_authoritative:
         missing = [s for s in symbols if s not in quotes]
         fetched.update(_kite_quotes(missing))

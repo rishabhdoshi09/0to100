@@ -12,6 +12,41 @@ from product.due_diligence.option_chain import summarize_kite_option_chain
 import scan.bulk_fetcher as BF
 
 
+@pytest.fixture(autouse=True)
+def _isolate_provider_caches(monkeypatch):
+    monkeypatch.setattr(LQ, "_qcache", {})
+    monkeypatch.setattr(BF, "_kite_cache", {})
+    monkeypatch.setattr(BF, "_kite_snapshot_id", "")
+
+
+@pytest.mark.parametrize("kite_answer", [True, False])
+def test_login_rejects_warm_public_quotes_even_when_kite_has_a_gap(monkeypatch, kite_answer):
+    import data.kite_client as KC
+
+    connected = [False]
+    monkeypatch.setattr(KC, "kite_credentials_available", lambda: connected[0])
+    monkeypatch.setattr(LQ, "_nse_quotes", lambda symbols: {
+        s: {"price": 99.0, "source": "nse"} for s in symbols
+    })
+    monkeypatch.setattr(LQ, "_google_quotes", lambda symbols: {})
+    calls = []
+
+    def kite_quotes(symbols):
+        calls.append(symbols)
+        return {s: {"price": 101.0, "source": "kite"} for s in symbols} if kite_answer else {}
+
+    monkeypatch.setattr(LQ, "_kite_quotes", kite_quotes)
+    assert LQ.get_live_quotes(["INFY"])["INFY"]["source"] == "nse"
+    connected[0] = True
+
+    result = LQ.get_live_quotes(["INFY"])
+    assert calls == [["INFY"]]
+    if kite_answer:
+        assert result["INFY"] == {"price": 101.0, "source": "kite"}
+    else:
+        assert result == {}
+
+
 def test_auto_historical_does_not_fallback_when_kite_is_authoritative(monkeypatch):
     called = {"yf": 0}
 
@@ -245,3 +280,31 @@ def test_scan_prefetch_uses_active_kite_snapshot_not_bhavcopy_or_yahoo(monkeypat
     assert len(frame) == 45
     assert frame.attrs["quantterm_source"] == "kite_snapshot"
     assert frame.attrs["quantterm_snapshot_id"] == sid
+
+
+@pytest.mark.parametrize("replacement", ["new_snapshot", "removed_pointer"])
+def test_history_cache_tracks_active_snapshot_changes(monkeypatch, tmp_path, replacement):
+    from research.intelligence.data import snapshot_store as SS
+
+    store = SS.SnapshotStore(tmp_path / "snapshots")
+    start = date(2026, 7, 1)
+    rows = [("INFY", (start + timedelta(days=i)).isoformat(), 100, 102, 99, 101, 1000, "EQ")
+            for i in range(45)]
+    sid = store.commit_snapshot(rows, extra_manifest={"source": "kite"})
+    store.activate_snapshot(sid)
+    monkeypatch.setattr(BF, "_kite_authoritative", lambda: True)
+    monkeypatch.setattr(SS, "SnapshotStore", lambda *a, **k: store)
+    assert BF._adopt_active_kite_snapshot(["INFY"]) == 1
+    assert BF.get_cached("INFY") is not None
+
+    if replacement == "new_snapshot":
+        # A new active snapshot covers a different universe. INFY is a real gap.
+        newer = store.commit_snapshot([("TCS", *row[1:]) for row in rows],
+                                      extra_manifest={"source": "kite"})
+        store.activate_snapshot(newer)
+    else:
+        (store.root / "ACTIVE").unlink()
+
+    assert BF.get_cached("INFY") is None
+    assert "INFY" not in BF.cached_symbols()
+    assert BF.is_warm() is False

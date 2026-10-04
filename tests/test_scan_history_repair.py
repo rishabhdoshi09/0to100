@@ -8,14 +8,12 @@ import scan.bulk_fetcher as bulk
 
 
 @pytest.fixture(autouse=True)
-def _clear_repair_caches():
-    with bulk._lock:
-        bulk._kite_cache.clear()
-        bulk._yf_cache.clear()
-    yield
-    with bulk._lock:
-        bulk._kite_cache.clear()
-        bulk._yf_cache.clear()
+def _clear_repair_caches(monkeypatch):
+    monkeypatch.setattr(bulk, "_kite_cache", {})
+    monkeypatch.setattr(bulk, "_yf_cache", {})
+    monkeypatch.setattr(bulk, "_kite_snapshot_id", "")
+    monkeypatch.setattr(bulk, "_kite_authoritative", lambda: True)
+    monkeypatch.setattr(bulk, "_adopt_active_kite_snapshot", lambda symbols: 0)
 
 
 def _candles(days: int = 90):
@@ -54,7 +52,8 @@ class _FakeDataClient:
 
 
 def test_missing_current_nse_equity_is_repaired_via_data_only_kite(monkeypatch):
-    monkeypatch.setattr(bulk, "_bhav_symbols", lambda: {"EXISTING"})
+    # Existing coverage must come from Kite, rather than the offline bhav store.
+    bulk._kite_cache["EXISTING"] = bulk._frame_from_kite(_candles())
 
     result = bulk.backfill_missing(
         ["EXISTING", "NEWSTOCK"],

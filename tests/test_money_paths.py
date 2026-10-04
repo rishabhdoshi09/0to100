@@ -4702,14 +4702,14 @@ class TestDeadSymbolRegistry:
         monkeypatch.setattr(md, "_kite_available", lambda: True)
         monkeypatch.setattr(md, "get_historical_data_kite", _kite_fail)
         monkeypatch.setattr(md, "get_historical_data_yfinance", _yf_fail)
-        # first attempt: both fail → registered
+        # Kite is authoritative: an instrument miss is registered without Yahoo.
         with pytest.raises(ValueError):
             md.get_historical_data("ACLGATI")
-        assert calls["yf"] == 1 and ds.is_dead("ACLGATI")
+        assert calls["yf"] == 0 and ds.is_dead("ACLGATI")
         # every later attempt: instant skip, ZERO network calls
         with pytest.raises(ValueError, match="dead-symbol registry"):
             md.get_historical_data("ACLGATI")
-        assert calls["yf"] == 1
+        assert calls["yf"] == 0
 
     def test_live_symbol_never_registered(self, tmp_path, monkeypatch):
         """Kite down for a NORMAL reason (token expired) must not mark
@@ -4754,6 +4754,8 @@ class TestProviderPolicy:
 class TestQuoteMicroCache:
     def _fresh(self, monkeypatch):
         import data.live_quotes as lq
+        import data.kite_client as kc
+        monkeypatch.setattr(kc, "kite_credentials_available", lambda: True)
         monkeypatch.setattr(lq, "_qcache", {}, raising=False)
         calls = {"n": 0}
 

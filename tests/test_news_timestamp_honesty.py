@@ -12,6 +12,8 @@ import time
 import types
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from news.fetcher import NewsFetcher
 
 
@@ -40,6 +42,26 @@ def test_parse_entry_time_falls_back_to_updated_parsed():
     struct = time.gmtime(1_700_000_000)
     out = NewsFetcher._parse_entry_time({"updated_parsed": struct})
     assert out == datetime.fromtimestamp(1_700_000_000, tz=timezone.utc)
+
+
+@pytest.mark.parametrize("host_timezone", ["UTC", "Asia/Kolkata", "America/New_York"])
+@pytest.mark.parametrize("field", ["published_parsed", "updated_parsed"])
+def test_rss_time_is_utc_in_every_host_timezone(monkeypatch, host_timezone, field):
+    import os
+
+    previous = os.environ.get("TZ")
+    try:
+        monkeypatch.setenv("TZ", host_timezone)
+        time.tzset()
+        stamp = 1_700_000_000
+        out = NewsFetcher._parse_entry_time({field: time.gmtime(stamp)})
+        assert out == datetime.fromtimestamp(stamp, tz=timezone.utc)
+    finally:
+        if previous is None:
+            monkeypatch.delenv("TZ", raising=False)
+        else:
+            monkeypatch.setenv("TZ", previous)
+        time.tzset()
 
 
 def test_fetch_rss_drops_entries_with_no_genuine_timestamp(monkeypatch):

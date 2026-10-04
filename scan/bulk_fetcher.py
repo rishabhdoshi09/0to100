@@ -42,14 +42,32 @@ def _kite_authoritative() -> bool:
         return False
 
 
-def _adopt_active_kite_snapshot(symbols: list[str]) -> int:
-    """Load requested OHLCV frames from the active immutable Kite snapshot."""
+def _current_kite_snapshot():
+    """Invalidate old frames when DATA_REFRESH replaces or removes authority.
+
+    Checking the atomic pointer is cheap; full snapshot verification and CSV
+    loading remain on cache misses. Broker repairs without a snapshot retain
+    the empty identity until a snapshot is activated.
+    """
     global _kite_snapshot_id
     try:
         from research.intelligence.data.snapshot_store import SnapshotStore
 
         store = SnapshotStore()
         sid = str(store.get_active_snapshot() or "")
+    except Exception:
+        store, sid = None, ""
+    with _lock:
+        if sid != _kite_snapshot_id:
+            _kite_cache.clear()
+            _kite_snapshot_id = sid
+    return store, sid
+
+
+def _adopt_active_kite_snapshot(symbols: list[str]) -> int:
+    """Load requested OHLCV frames from the active immutable Kite snapshot."""
+    try:
+        store, sid = _current_kite_snapshot()
         if not sid:
             return 0
         snap = store.open_snapshot(sid)
@@ -87,9 +105,10 @@ def _adopt_active_kite_snapshot(symbols: list[str]) -> int:
                 loaded[str(symbol)] = frame
 
         with _lock:
+            # A concurrent reader may already have observed a newer pointer.
+            # Never publish frames from the superseded snapshot into its cache.
             if sid != _kite_snapshot_id:
-                _kite_cache.clear()
-                _kite_snapshot_id = sid
+                return 0
             _kite_cache.update(loaded)
         return len(loaded)
     except Exception:
@@ -501,6 +520,7 @@ def get_cached(symbol: str) -> Optional[pd.DataFrame]:
     """Cached OHLCV respecting the active source authority."""
     clean = str(symbol or "").strip().upper()
     if _kite_authoritative():
+        _current_kite_snapshot()
         with _lock:
             df = _kite_cache.get(clean)
         if df is None:
@@ -526,6 +546,7 @@ def get_cached(symbol: str) -> Optional[pd.DataFrame]:
 
 def cached_symbols() -> list[str]:
     if _kite_authoritative():
+        _current_kite_snapshot()
         with _lock:
             return sorted(_kite_cache)
 
@@ -540,6 +561,7 @@ def cached_symbols() -> list[str]:
 
 def is_warm() -> bool:
     if _kite_authoritative():
+        _current_kite_snapshot()
         with _lock:
             return bool(_kite_cache)
     with _lock:

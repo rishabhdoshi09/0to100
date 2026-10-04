@@ -6,8 +6,8 @@ and the durable retail news-curator cache.
 """
 from __future__ import annotations
 
+import calendar
 import hashlib
-import time
 from datetime import datetime, timezone
 from typing import List
 
@@ -192,7 +192,9 @@ class NewsFetcher:
         try:
             struct = entry.get("published_parsed") or entry.get("updated_parsed")
             if struct:
-                ts = time.mktime(struct)
+                # feedparser supplies UTC tuples. mktime treats them as local
+                # time, shifting publication age on non-UTC operator hosts.
+                ts = calendar.timegm(struct)
                 return datetime.fromtimestamp(ts, tz=timezone.utc)
         except Exception:
             pass

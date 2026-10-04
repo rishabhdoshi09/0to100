@@ -47,10 +47,11 @@ class TestScreener:
         mid = _series(np.linspace(100, 150, 300))
         dn = _series(np.linspace(200, 120, 300))
         data = {"WINNER": up, "OKAY": mid, "LOSER": dn}
-        monkeypatch.setattr("data.bhavcopy_store.get_ohlcv",
+        monkeypatch.setattr("scan.bulk_fetcher.get_cached",
                             lambda s: data.get(s))
-        monkeypatch.setattr("data.bhavcopy_store.store_symbols",
+        monkeypatch.setattr("scan.bulk_fetcher.cached_symbols",
                             lambda: list(data))
+        monkeypatch.setattr("scan.bulk_fetcher.prefetch", lambda symbols: len(symbols))
         picks = LT.scan_long_term()
         syms = [p["symbol"] for p in picks]
         assert "WINNER" in syms and "LOSER" not in syms
