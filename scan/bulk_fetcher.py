@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import threading
 import time
+import json
 from datetime import datetime, timedelta
 from typing import Any, Callable, Optional
 
@@ -32,6 +33,9 @@ _CHUNK = 200         # symbols per yf.download() call
 _bhav_ok: bool = False
 
 _kite_snapshot_id: str = ""
+_kite_loaded_snapshot_id: str = ""
+_kite_load_lock = threading.Lock()
+_KITE_LOAD_CHUNK_ROWS = 100_000
 
 
 def _kite_authoritative() -> bool:
@@ -49,7 +53,7 @@ def _current_kite_snapshot():
     loading remain on cache misses. Broker repairs without a snapshot retain
     the empty identity until a snapshot is activated.
     """
-    global _kite_snapshot_id
+    global _kite_snapshot_id, _kite_loaded_snapshot_id
     try:
         from research.intelligence.data.snapshot_store import SnapshotStore
 
@@ -61,56 +65,86 @@ def _current_kite_snapshot():
         if sid != _kite_snapshot_id:
             _kite_cache.clear()
             _kite_snapshot_id = sid
+            _kite_loaded_snapshot_id = ""
     return store, sid
 
 
-def _adopt_active_kite_snapshot(symbols: list[str]) -> int:
-    """Load requested OHLCV frames from the active immutable Kite snapshot."""
+def _read_kite_snapshot_frames(path, sid: str) -> dict[str, pd.DataFrame]:
+    """Read once in chunks, without also materializing Snapshot's row objects."""
+    parts: dict[str, list[pd.DataFrame]] = {}
+    with pd.read_csv(path, chunksize=_KITE_LOAD_CHUNK_ROWS) as chunks:
+        for raw in chunks:
+            if raw.empty:
+                continue
+            raw["symbol"] = raw["symbol"].astype(str).str.upper()
+            keep = [col for col in ("open", "high", "low", "close", "volume") if col in raw.columns]
+            for symbol, frame in raw.groupby("symbol", sort=False):
+                parts.setdefault(str(symbol), []).append(frame[["date", *keep]].copy())
+
+    loaded: dict[str, pd.DataFrame] = {}
+    while parts:
+        symbol, frames = parts.popitem()
+        frame = pd.concat(frames, ignore_index=True)
+        frame["date"] = pd.to_datetime(frame["date"])
+        frame = frame.sort_values("date").drop_duplicates(subset=["date"], keep="last").set_index("date")
+        for col in frame.columns:
+            frame[col] = pd.to_numeric(frame[col], errors="coerce")
+        frame = frame.dropna(subset=[col for col in ("open", "high", "low", "close") if col in frame.columns])
+        if len(frame) >= 30:
+            frame.attrs["quantterm_source"] = "kite_snapshot"
+            frame.attrs["quantterm_snapshot_id"] = sid
+            loaded[symbol] = frame
+    return loaded
+
+
+def _adopt_active_kite_snapshot(symbols: list[str] | None = None) -> int:
+    """Prepare one verified snapshot for all readers, including known gaps.
+
+    Loading only a requested symbol reread the entire CSV on every cold name
+    and every genuine gap. F&O and the cash scan share one load; pointer changes
+    invalidate both frames and the completed-load marker. None means all names.
+    """
+    global _kite_loaded_snapshot_id
+    wanted = None if symbols is None else {
+        str(symbol or "").strip().upper() for symbol in symbols if str(symbol or "").strip()
+    }
+    if wanted == set():
+        return 0
+
     try:
-        store, sid = _current_kite_snapshot()
-        if not sid:
-            return 0
-        snap = store.open_snapshot(sid)
-        if str(snap.manifest.get("source") or "").lower() != "kite":
-            return 0
-
-        wanted = {str(symbol or "").strip().upper() for symbol in symbols if str(symbol or "").strip()}
-        if not wanted:
-            return 0
-
-        path = snap.dir / "bars_equity.csv"
-        if not path.exists():
-            return 0
-        raw = pd.read_csv(path)
-        if raw.empty or "symbol" not in raw.columns:
-            return 0
-        raw["symbol"] = raw["symbol"].astype(str).str.upper()
-        raw = raw[raw["symbol"].isin(wanted)]
-        if raw.empty:
-            return 0
-
-        loaded: dict[str, pd.DataFrame] = {}
-        for symbol, frame in raw.groupby("symbol", sort=False):
-            frame = frame.copy()
-            frame["date"] = pd.to_datetime(frame["date"])
-            frame = frame.sort_values("date").drop_duplicates(subset=["date"], keep="last").set_index("date")
-            keep = [col for col in ("open", "high", "low", "close", "volume") if col in frame.columns]
-            frame = frame[keep]
-            for col in keep:
-                frame[col] = pd.to_numeric(frame[col], errors="coerce")
-            frame = frame.dropna(subset=[col for col in ("open", "high", "low", "close") if col in frame.columns])
-            if len(frame) >= 30:
-                frame.attrs["quantterm_source"] = "kite_snapshot"
-                frame.attrs["quantterm_snapshot_id"] = sid
-                loaded[str(symbol)] = frame
-
-        with _lock:
-            # A concurrent reader may already have observed a newer pointer.
-            # Never publish frames from the superseded snapshot into its cache.
-            if sid != _kite_snapshot_id:
+        with _kite_load_lock:
+            store, sid = _current_kite_snapshot()
+            if not sid:
                 return 0
-            _kite_cache.update(loaded)
-        return len(loaded)
+            with _lock:
+                complete = _kite_loaded_snapshot_id == sid
+            if not complete:
+                started = time.monotonic()
+                directory = store.root / sid
+                manifest = json.loads((directory / "manifest.json").read_text())
+                if str(manifest.get("source") or "").lower() != "kite":
+                    return 0
+                verified, failures = store.verify_snapshot(sid)
+                if not verified:
+                    raise ValueError(f"Kite snapshot verification failed: {failures}")
+                log = __import__("logger").get_logger(__name__)
+                log.info("kite_snapshot_cache_loading", snapshot_id=sid,
+                         instruments=manifest.get("instrument_count"))
+                loaded = _read_kite_snapshot_frames(directory / "bars_equity.csv", sid)
+                # Recheck the actual pointer after IO, not only what another
+                # thread last observed. A successor must never receive old bars.
+                _, active = _current_kite_snapshot()
+                if active != sid:
+                    return 0
+                with _lock:
+                    if sid != _kite_snapshot_id:
+                        return 0
+                    _kite_cache.update(loaded)
+                    _kite_loaded_snapshot_id = sid
+                log.info("kite_snapshot_cache_loaded", snapshot_id=sid,
+                         symbols=len(loaded), elapsed_s=round(time.monotonic() - started, 2))
+            with _lock:
+                return len(_kite_cache) if wanted is None else sum(s in _kite_cache for s in wanted)
     except Exception:
         return 0
 
@@ -132,12 +166,15 @@ def _bhav_symbols() -> set[str]:
 
 
 def adopt_ready_store(*, overlay_live: bool = True) -> int:
-    """Use the official bhavcopy already in this process. Do not block a scan on a rebuild.
+    """Adopt cached history from the active authority without fetching a feed.
 
-    Live Kite/NSE overlay runs in the background so the parallel stock walk can start
-    immediately on the bars already loaded.
+    With Kite configured, the bhavcopy count is not scanner readiness: only the
+    active Kite snapshot can prepare that cache. Offline operation retains the
+    official bhavcopy path and optional background live overlay.
     """
     global _bhav_ok
+    if _kite_authoritative():
+        return _adopt_active_kite_snapshot()
     try:
         from data.bhavcopy_runtime import status as history_status
 

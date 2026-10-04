@@ -381,4 +381,8 @@ def test_history_cache_tracks_active_snapshot_changes(monkeypatch, tmp_path, rep
 
     assert BF.get_cached("INFY") is None
     assert "INFY" not in BF.cached_symbols()
-    assert BF.is_warm() is False
+    if replacement == "new_snapshot":
+        assert BF.get_cached("TCS") is not None
+        assert BF.is_warm() is True
+    else:
+        assert BF.is_warm() is False
