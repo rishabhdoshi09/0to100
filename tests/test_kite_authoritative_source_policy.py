@@ -14,9 +14,56 @@ import scan.bulk_fetcher as BF
 
 @pytest.fixture(autouse=True)
 def _isolate_provider_caches(monkeypatch):
+    monkeypatch.setattr(MD, "_provider", None)
+    monkeypatch.setattr(MD, "_provider_session", None)
     monkeypatch.setattr(LQ, "_qcache", {})
     monkeypatch.setattr(BF, "_kite_cache", {})
     monkeypatch.setattr(BF, "_kite_snapshot_id", "")
+
+
+def test_cached_kite_quote_provider_adopts_token_rotation(monkeypatch):
+    import data.kite_client as KC
+
+    credentials = {"KITE_API_KEY": "test-key", "KITE_ACCESS_TOKEN": "old-token"}
+    monkeypatch.setattr(KC, "_fresh_env", lambda name, default="": credentials.get(name, default))
+    clients = []
+
+    class FakeClient:
+        def __init__(self):
+            self.token = credentials["KITE_ACCESS_TOKEN"]
+            clients.append(self)
+
+    monkeypatch.setattr(KC, "KiteClient", FakeClient)
+    first = MD.get_provider()
+    assert first._kite_client.token == "old-token"
+    assert MD.get_provider() is first
+    credentials["KITE_ACCESS_TOKEN"] = "fresh-token"
+    refreshed = MD.get_provider()
+    assert refreshed is not first
+    assert refreshed._kite_client.token == "fresh-token"
+    assert len(clients) == 2
+    credentials["KITE_ACCESS_TOKEN"] = ""
+    assert isinstance(MD.get_provider(), MD._GoogleFinanceProvider)
+
+
+def test_rotated_kite_provider_construction_failure_does_not_return_old_quotes(monkeypatch):
+    import data.kite_client as KC
+
+    monkeypatch.setattr(MD, "_kite_available", lambda: True)
+    identity = ["old-session"]
+    monkeypatch.setattr(KC, "kite_session_identity", lambda: identity[0])
+    monkeypatch.setattr(KC, "KiteClient", lambda: object())
+    first = MD.get_provider()
+    identity[0] = "fresh-session"
+
+    def rejected_client():
+        raise RuntimeError("Kite construction failed")
+
+    monkeypatch.setattr(KC, "KiteClient", rejected_client)
+    with pytest.raises(RuntimeError, match="Kite construction failed"):
+        MD.get_provider()
+    assert MD._provider is first
+    assert MD._provider_session == "old-session"
 
 
 @pytest.mark.parametrize("kite_answer", [True, False])

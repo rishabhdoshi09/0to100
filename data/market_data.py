@@ -424,6 +424,7 @@ class _YFinanceProvider:
 
 
 _provider: Optional[_KiteProvider | _GoogleFinanceProvider | _YFinanceProvider] = None
+_provider_session: str | None = None
 
 
 def get_provider() -> _KiteProvider | _GoogleFinanceProvider | _YFinanceProvider:
@@ -433,20 +434,26 @@ def get_provider() -> _KiteProvider | _GoogleFinanceProvider | _YFinanceProvider
     Auto-upgrade: app Kite-login se pehle khuli ho toh Google cache ho
     jata tha aur login ke BAAD bhi din bhar scrape se quotes aate the.
     Ab har call pe check: Kite available ho gaya → Kite pe switch."""
-    global _provider
-    if _provider is None or (
-            not isinstance(_provider, _KiteProvider) and _kite_available()):
-        if _kite_available():
-            # Kite authority is explicit: construction/auth problems must be
-            # visible, never converted into a same-field public-source switch.
+    global _provider, _provider_session
+    if _kite_available():
+        from data.kite_client import kite_session_identity
+
+        session = kite_session_identity()
+        if not isinstance(_provider, _KiteProvider) or session != _provider_session:
+            # Refresh an existing Kite provider after token rotation too. A login
+            # in another process cannot reset this process's cached SDK client.
+            # Construction/auth errors remain visible under Kite authority.
             _provider = _KiteProvider()
-        else:
-            _provider = _GoogleFinanceProvider()
+            _provider_session = session
+    elif _provider is None or isinstance(_provider, _KiteProvider):
+        _provider = _GoogleFinanceProvider()
+        _provider_session = None
     return _provider
 
 
 def reset_provider():
     """Call this after updating .env at runtime to pick up new credentials."""
-    global _provider, _kite_instruments_cache
+    global _provider, _provider_session, _kite_instruments_cache
     _provider = None
+    _provider_session = None
     _kite_instruments_cache = None
