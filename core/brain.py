@@ -283,14 +283,15 @@ def _probe_setups(market: str) -> tuple[list[dict], float]:
 
 
 def _probe_book() -> dict:
-    """Account risk across both books. They do not share a store, so open
-    rupee risk is added. Same 3% / 5% rails, never a looser cap."""
+    """Account risk across both books. They do not share a store.
+
+    A symbol in both is one position: keep the larger rupee risk, do not
+    add the two books. Different symbols still sum. Same 3% / 5% rails.
+    """
     try:
-        from product.desk_brain import product_open_rows
-        from risk.portfolio_risk import assess_open_rows, legacy_open_rows
-        rows = list(legacy_open_rows())
-        rows.extend(product_open_rows())
-        return assess_open_rows(rows)
+        from product.desk_brain import combined_open_rows
+        from risk.portfolio_risk import assess_open_rows
+        return assess_open_rows(combined_open_rows())
     except Exception:
         try:
             from risk.portfolio_risk import portfolio_risk_report

@@ -10,6 +10,7 @@ import {
   SecurityTable,
 } from './components'
 import { boolLabel, money, pct, score, words } from './format'
+import { paperCycleNote } from './paperCycleNote'
 import type {
   ChartBar,
   ControlName,
@@ -90,6 +91,7 @@ export function CommandCenterView(props: ViewProps) {
   const lt = dashboard.long_term.summary
   const latestScan = dashboard.operations.latest.MARKET_SCAN
   const latestLongTerm = dashboard.operations.latest.LONG_TERM_SCAN
+  const cycleNote = paperCycleNote(dashboard.paper.last_cycle)
   const insights = [
     dashboard.market.trade_stance,
     dashboard.operations.running
@@ -154,6 +156,7 @@ export function CommandCenterView(props: ViewProps) {
 
         <Panel title="PAPER PORTFOLIO · SECONDARY EXECUTION LAYER" subtitle={`${dashboard.paper.open_positions.length} open · equity ${money(dashboard.paper.equity)}`} className="positions-panel" action={<button type="button" onClick={() => setActive('Portfolio')}>Open portfolio</button>}>
           <PositionsTable rows={dashboard.paper.open_positions.slice(0, 8)} />
+          {cycleNote?.headline ? <p className="panel-copy">{cycleNote.headline}</p> : null}
         </Panel>
         <BotLearningPanel dashboard={dashboard} />
       </section>
@@ -268,6 +271,7 @@ export function BotLearningPanel({ dashboard }: { dashboard: DashboardPayload })
 
 export function PortfolioView({ dashboard, runControl }: ViewProps) {
   const paperReturn = dashboard.paper.capital > 0 ? ((dashboard.paper.equity / dashboard.paper.capital) - 1) * 100 : null
+  const cycleNote = paperCycleNote(dashboard.paper.last_cycle)
   if (dashboard.paper.available === false) {
     return (
       <section className="workspace-view">
@@ -284,6 +288,13 @@ export function PortfolioView({ dashboard, runControl }: ViewProps) {
     <section className="workspace-view">
       <div className="inline-actions"><button type="button" onClick={() => void runControl('RUN_CYCLE_NOW')}>Request paper cycle</button><button type="button" onClick={() => void runControl(dashboard.autonomy.new_paper_entries ? 'PAUSE_NEW_PAPER_ENTRIES' : 'RESUME_NEW_PAPER_ENTRIES')}>{dashboard.autonomy.new_paper_entries ? 'Pause new entries' : 'Resume new entries'}</button></div>
       <div className="view-metrics"><MetricCard label="PAPER CAPITAL" value={money(dashboard.paper.capital)} /><MetricCard label="PAPER EQUITY" value={money(dashboard.paper.equity)} detail={pct(paperReturn)} tone="green" /><MetricCard label="OPEN RISK" value={money(dashboard.paper.open_risk)} detail={`${(dashboard.paper.risk_per_trade_pct * 100).toFixed(1)}% risk/trade`} tone="amber" /><MetricCard label="POSITIONS" value={String(dashboard.paper.open_positions.length)} detail={`Max ${dashboard.paper.max_positions}`} tone="purple" /></div>
+      {cycleNote ? (
+        <Panel title="LATEST PAPER CYCLE" subtitle={cycleNote.eligibility || 'Recorded cycle'}>
+          {cycleNote.headline ? <p className="panel-copy">{cycleNote.headline}</p> : null}
+          {cycleNote.posture ? <p className="panel-copy">Desk posture {cycleNote.posture.replace(/_/g, ' ')}.</p> : null}
+          {cycleNote.reasons.length ? <p className="panel-copy">Reasons: {cycleNote.reasons.join(' · ')}</p> : null}
+        </Panel>
+      ) : null}
       <BotLearningPanel dashboard={dashboard} />
       <div className="portfolio-workspace">
         <Panel title="RECORDED EQUITY CURVE" subtitle="No synthetic history"><EquityCurve values={dashboard.paper.equity_curve} /></Panel>

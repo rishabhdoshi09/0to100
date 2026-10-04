@@ -254,6 +254,59 @@ def test_outcome_resolution_blocks_old_snapshot():
     assert result.blocked_on == JOBS.DEP_OUTCOME_DATA
 
 
+def test_outcome_resolution_resolves_decision_journal(monkeypatch):
+    """Canonical outcome job settles the decision journal. auto_scan does not run."""
+    from datetime import datetime
+    from research.autonomy import jobs as JOBS
+    from research.autonomy import job_store as JS
+
+    calls = {"n": 0}
+
+    def fake_update():
+        calls["n"] += 1
+        return 2
+
+    monkeypatch.setattr("core.decision_journal.update_outcomes", fake_update)
+
+    class Deps:
+        def now_ist(self): return datetime(2026, 7, 31, 18, 10)
+        def holidays(self): return set()
+        def active_snapshot_id(self): return None
+        def official_history(self):
+            return {"current": True, "available_session": "2026-07-31", "latest_date": "2026-07-31"}
+        def resolve_outcomes(self, session_date, failures=()):
+            return {"positions_closed": [], "outcomes_recorded": [], "as_of": session_date}
+
+    result = JOBS.run_outcome_resolution(JOBS._Ctx(Deps()))
+    assert result.status == JS.SUCCEEDED
+    assert calls["n"] == 1
+    assert result.metadata["decision_journal_resolved"] == 2
+
+
+def test_outcome_resolution_skips_decision_journal_until_official_bars(monkeypatch):
+    from datetime import datetime
+    from research.autonomy import jobs as JOBS
+    from research.autonomy import job_store as JS
+
+    calls = {"n": 0}
+    monkeypatch.setattr(
+        "core.decision_journal.update_outcomes",
+        lambda: calls.__setitem__("n", calls["n"] + 1),
+    )
+
+    class Deps:
+        def now_ist(self): return datetime(2026, 7, 31, 18, 10)
+        def holidays(self): return set()
+        def active_snapshot_id(self): return None
+        def active_snapshot_info(self): return {}
+        def official_history(self):
+            return {"current": False, "available_session": "2026-07-30", "latest_date": "2026-07-30"}
+
+    result = JOBS.run_outcome_resolution(JOBS._Ctx(Deps()))
+    assert result.status == JS.BLOCKED
+    assert calls["n"] == 0
+
+
 def test_outcome_resolution_uses_official_bars_without_kite():
     from datetime import datetime
     from research.autonomy import jobs as JOBS

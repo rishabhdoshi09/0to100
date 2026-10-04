@@ -4729,6 +4729,102 @@ class TestDeskBrainWiring:
         assert report["n_positions"] == 2
         assert report["verdict"] == "DANGER"
 
+    def test_same_symbol_keeps_max_risk_not_the_sum(self, monkeypatch, tmp_path):
+        import core.brain as brain
+        from datetime import datetime, timezone
+        from product.desk_brain import load_for_execution, merge_book_rows, overlay_market, write_snapshot
+        from risk.portfolio_risk import assess_open_rows
+        self._limits(monkeypatch)
+        # Two real lots in one journal still sum. The other book's copy does not.
+        kept = merge_book_rows(
+            [
+                {"symbol": "AAA", "qty": 50, "entry": 100, "stop": 40},
+                {"symbol": "AAA", "qty": 50, "entry": 100, "stop": 40},
+            ],
+            [{"symbol": "aaa", "qty": 100, "entry": 100, "stop": 80, "sector": "IT"}],
+        )
+        assert [row["symbol"] for row in kept] == ["AAA", "AAA"]
+        assert kept[0]["sector"] == "IT"
+        report = assess_open_rows(kept, capital=100_000, max_positions=5)
+        assert report["open_risk"] == 6000
+        assert report["n_positions"] == 2
+        assert report["verdict"] == "DANGER"
+
+        monkeypatch.setattr(
+            "product.desk_brain.product_open_rows",
+            lambda: [{"symbol": "AAA", "qty": 100, "entry": 100, "stop": 60}],
+        )
+        monkeypatch.setattr(
+            "risk.portfolio_risk.legacy_open_rows",
+            lambda: [{"symbol": "AAA", "qty": 100, "entry": 100, "stop": 60}],
+        )
+        same = brain._probe_book()
+        assert same["n_positions"] == 1
+        assert same["open_risk"] == 4000
+        assert same["verdict"] == "CAUTION"
+
+        monkeypatch.setattr(
+            "risk.portfolio_risk.legacy_open_rows",
+            lambda: [{"symbol": "AAA", "qty": 100, "entry": 100, "stop": 40}],
+        )
+        larger = brain._probe_book()
+        assert larger["n_positions"] == 1
+        assert larger["open_risk"] == 6000
+        assert larger["verdict"] == "DANGER"
+
+        class _Book:
+            max_positions = 5
+            open = {
+                "AAA": {"symbol": "AAA", "qty": 100, "entry_price": 100, "stop_price": 80},
+            }
+
+        cycle = load_for_execution(
+            _Book(),
+            breadth_fn=lambda: {"verdict": "HEALTHY"},
+            edge_fn=lambda _capital: {
+                "expectancy_r": 0.4, "edge_trend": "improving", "closed": 80,
+            },
+            macro_fn=lambda: {},
+            corr_fn=lambda _symbols: {"measured": False, "n_positions": 1, "n_bets": 1},
+            regime_fn=lambda: ("TRENDING_BULL", "RISK_ON"),
+            persist=False,
+        )
+        assert cycle["n_positions"] == 1
+        assert cycle["open_risk"] == 6000
+        assert cycle["posture"] == "STAND_ASIDE"
+
+        market = {
+            "available": True,
+            "summary": "tape",
+            "trade_stance": "New paper trades are allowed when evidence passes.",
+            "technical_details": {"market_regime": "TRENDING_BULL", "risk_mode": "RISK_ON"},
+        }
+        fresh = tmp_path / "fresh.json"
+        write_snapshot({
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "breadth": {"verdict": "HEALTHY", "n": 800, "pct_above_50": 70},
+            "edge": {"measured": True, "expectancy_r": 0.4, "edge_trend": "improving", "closed": 80},
+            "correlation": {"measured": False, "n_positions": 1, "n_bets": 1},
+        }, fresh)
+        monkeypatch.setattr(
+            "risk.portfolio_risk.legacy_open_rows",
+            lambda: [{"symbol": "AAA", "qty": 100, "entry": 100, "stop": 60}],
+        )
+        doubled = overlay_market(
+            market,
+            paper={
+                "max_positions": 5,
+                "open_positions": [{
+                    "symbol": "AAA", "qty": 100, "entry_price": 100, "stop_price": 60,
+                }],
+            },
+            articles=[],
+            path=fresh,
+        )
+        assert doubled["brain"]["book_verdict"] == "CAUTION"
+        assert doubled["brain"]["open_risk_pct"] == 4.0
+        assert doubled["brain"]["posture"] == "DEFENSIVE"
+
     def test_setups_come_from_product_scan(self, monkeypatch):
         import core.brain as brain
         monkeypatch.setattr("product.scan_store.load_scan", lambda *a, **k: {

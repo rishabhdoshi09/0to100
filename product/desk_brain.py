@@ -144,6 +144,93 @@ def rows_from_book(book) -> list[dict]:
     return product_open_rows()
 
 
+def _row_risk(row: Mapping[str, Any]) -> float:
+    """Rupee risk of one lot. Same formula as the portfolio rails."""
+    try:
+        qty = float(row.get("qty") or 0)
+        entry = float(row.get("entry") or 0)
+        stop = float(row.get("stop") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if qty <= 0 or entry <= 0:
+        return 0.0
+    return qty * max(0.0, entry - stop)
+
+
+def merge_book_rows(left: list[dict] | None, right: list[dict] | None) -> list[dict]:
+    """One symbol across two books is one position.
+
+    Lots inside a single book still sum — those fills are real. A name that
+    sits in both the legacy journal and the modern paper book contributes
+    the larger of the two rupee-risk totals, never the sum. A tie keeps the
+    left book. The discarded side can fill a missing sector; it does not
+    add a second position.
+    """
+    def grouped(rows: list[dict] | None) -> tuple[dict[str, list[dict]], list[str]]:
+        groups: dict[str, list[dict]] = {}
+        order: list[str] = []
+        for raw in rows or []:
+            if not isinstance(raw, dict):
+                continue
+            symbol = str(raw.get("symbol") or "").strip().upper()
+            if not symbol:
+                continue
+            if symbol not in groups:
+                order.append(symbol)
+                groups[symbol] = []
+            groups[symbol].append(dict(raw))
+        return groups, order
+
+    def total(rows: list[dict]) -> float:
+        return sum(_row_risk(row) for row in rows)
+
+    def borrow_sector(winner: list[dict], loser: list[dict]) -> list[dict]:
+        sector = ""
+        for row in loser:
+            sector = str(row.get("sector") or "").strip()
+            if sector:
+                break
+        if not sector:
+            return winner
+        kept: list[dict] = []
+        for row in winner:
+            item = dict(row)
+            if not str(item.get("sector") or "").strip():
+                item["sector"] = sector
+            kept.append(item)
+        return kept
+
+    left_groups, left_order = grouped(left)
+    right_groups, right_order = grouped(right)
+    merged: list[dict] = []
+    seen: set[str] = set()
+    for symbol in left_order + [name for name in right_order if name not in left_groups]:
+        if symbol in seen:
+            continue
+        seen.add(symbol)
+        legacy = left_groups.get(symbol) or []
+        paper = right_groups.get(symbol) or []
+        if legacy and paper:
+            if total(paper) > total(legacy):
+                merged.extend(borrow_sector(paper, legacy))
+            else:
+                merged.extend(borrow_sector(legacy, paper))
+        else:
+            merged.extend(legacy or paper)
+    return merged
+
+
+def combined_open_rows(book=None, paper_rows: list[dict] | None = None) -> list[dict]:
+    """Legacy journal plus the modern book, deduped by symbol before the sum."""
+    rows = list(paper_rows) if paper_rows is not None else rows_from_book(book)
+    try:
+        from risk.portfolio_risk import legacy_open_rows
+        legacy = list(legacy_open_rows() or [])
+    except Exception:
+        legacy = []
+    return merge_book_rows(legacy, rows)
+
+
 def _account_limits(book=None) -> tuple[float, int]:
     from risk.portfolio_risk import _capital, _max_positions
     capital = float(_capital())
@@ -384,8 +471,12 @@ def load_for_execution(
     persist: bool = True,
     path: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Job-path read. Safe to call from scan and paper cycle; not from Home."""
-    rows = rows_from_book(book)
+    """Job-path read. Safe to call from scan and paper cycle; not from Home.
+
+    Open risk is the deduped union of the legacy journal and this book, so
+    the cycle and the desk stand aside on the same number.
+    """
+    rows = combined_open_rows(book)
     capital, max_n = _account_limits(book)
     regime, risk_mode = (regime_fn or _peek_regime)()
     edge = dict((edge_fn or _safe_edge)(capital) or {})
@@ -433,12 +524,9 @@ def overlay_market(
         snap = read_snapshot(path)
         stale = _is_stale(snap, now) if snap else True
         paper_map = dict(paper or {})
-        rows = rows_from_positions(paper_map.get("open_positions") or [])
-        try:
-            from risk.portfolio_risk import legacy_open_rows
-            rows = list(legacy_open_rows()) + rows
-        except Exception:
-            pass
+        rows = combined_open_rows(
+            paper_rows=rows_from_positions(paper_map.get("open_positions") or []),
+        )
         capital = float(_capital())
         max_n = int(_max_positions())
         try:

@@ -862,6 +862,17 @@ def run_outcome_resolution(ctx) -> JobResult:
             official_settle = {"error": str(exc)[:240]}
     if isinstance(result, dict):
         result["official_settlement"] = official_settle
+    # auto_scan is not on this stack. Decision-journal rows (taken and
+    # rejected) resolve here, on official bars only. A journal miss does
+    # not fail the paper-book settlement.
+    journal_resolved = 0
+    try:
+        from core.decision_journal import update_outcomes
+        journal_resolved = int(update_outcomes() or 0)
+    except Exception:
+        journal_resolved = 0
+    if isinstance(result, dict):
+        result["decision_journal_resolved"] = journal_resolved
     closed = len((result or {}).get("positions_closed", []))
     recorded = len((result or {}).get("outcomes_recorded", []))
     matured = int((official_settle or {}).get("n_settled") or 0)
