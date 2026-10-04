@@ -209,6 +209,12 @@ class Deps:
                 records=len(payload.get("records") or []),
                 setups=int(summary.get("with_any_setup") or 0),
             )
+            if getattr(report, "ok", False):
+                try:
+                    from product.desk_brain import load_for_execution
+                    load_for_execution(book=None)
+                except Exception:
+                    pass
             return report
         except Exception:
             finish_progress(error="scan_failed")
@@ -345,6 +351,15 @@ class Deps:
             fresh_live_symbols=(live.fresh_symbols() if live is not None else ()),
         )
         reco = {}
+        controls = {"regime": "RISK_ON", "posture": "", "posture_reason": ""}
+        snap: dict = {}
+        try:
+            from product.desk_brain import execution_controls, load_for_execution
+            snap = load_for_execution(book=brain.intel_book) or {}
+            controls = execution_controls(snap)
+        except Exception:
+            snap = {}
+            controls = {"regime": "RISK_ON", "posture": "", "posture_reason": ""}
         try:
             from product.paper_autopilot import run_reco_paper_cycle
             paper_on = True
@@ -359,7 +374,15 @@ class Deps:
                 entry_block_reason=entry_block_reason,
                 session_phase=session_phase,
                 paper_enabled=paper_on,
+                regime=controls.get("regime") or "RISK_ON",
+                posture=controls.get("posture") or "",
+                posture_reason=controls.get("posture_reason") or "",
             )
+            try:
+                from product.desk_brain import journal_cycle
+                journal_cycle(reco)
+            except Exception:
+                pass
             if isinstance(result, dict):
                 opened = list(result.get("positions_opened") or [])
                 opened.extend(list(reco.get("positions_opened") or []))
@@ -372,6 +395,14 @@ class Deps:
                     "eligibility": reco.get("eligibility"),
                     "cycle_reasons": reco.get("cycle_reasons") or [],
                     "summary": reco.get("summary") or "",
+                    "brain": {
+                        "posture": controls.get("posture") or "",
+                        "posture_reason": controls.get("posture_reason") or "",
+                        "book_verdict": snap.get("book_verdict"),
+                        "breadth_verdict": snap.get("breadth_verdict"),
+                        "macro_mood": snap.get("macro_mood"),
+                        "market_risk_mode": snap.get("market_risk_mode"),
+                    },
                 }
                 if reco.get("positions_opened"):
                     result["eligibility"] = "TRADED"

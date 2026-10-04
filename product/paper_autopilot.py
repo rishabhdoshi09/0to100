@@ -49,6 +49,8 @@ NO_TRADE = "NO_TRADE"
 WAIT_FOR_ENTRY = "WAIT_FOR_ENTRY"
 NOT_SURFACED = "NOT_SURFACED"
 BROKER_LOGIN_REQUIRED = "BROKER_LOGIN_REQUIRED"
+BRAIN_STAND_ASIDE = "BRAIN_STAND_ASIDE"
+BRAIN_DEFENSIVE = "BRAIN_DEFENSIVE"
 
 ENTER_NOW = "ENTER_NOW"
 WAIT = "WAIT"
@@ -221,6 +223,8 @@ def evaluate_candidate(
     policy: Mapping[str, Any] | None = None,
     family_risk: dict | None = None,
     cluster_risk: dict | None = None,
+    posture: str = "",
+    posture_reason: str = "",
 ) -> AutopilotDecision:
     """Gate one recommendation card. First hard-block wins. No silent skip."""
     symbol = str(card.get("symbol") or "").strip().upper()
@@ -251,12 +255,25 @@ def evaluate_candidate(
         return AutopilotDecision(symbol, BLOCK, code or OUTSIDE_ENTRY_WINDOW, entry_block_reason, row)
     if regime == "RISK_OFF":
         return AutopilotDecision(symbol, BLOCK, REGIME_STANDDOWN, "regime is RISK_OFF", row)
+    posture_name = str(posture or "").upper()
+    if posture_name == "STAND_ASIDE":
+        return AutopilotDecision(
+            symbol, BLOCK, BRAIN_STAND_ASIDE,
+            posture_reason or "desk posture STAND_ASIDE",
+            row,
+        )
     if workspace is not None and reco_is_stale(workspace, now=now):
         return AutopilotDecision(symbol, BLOCK, STALE_RECOMMENDATION, "recommendation file is stale", row)
 
     tier = str(row.get("reco_tier") or TIER_WATCH)
     if tier not in ELIGIBLE_TIERS:
         return AutopilotDecision(symbol, WATCH, LOW_QUALITY_SETUP, f"tier={tier} is not auto-enter", row)
+    if posture_name == "DEFENSIVE" and tier != TIER_HIGH:
+        return AutopilotDecision(
+            symbol, WAIT, BRAIN_DEFENSIVE,
+            posture_reason or "defensive posture — only high-conviction setups",
+            row,
+        )
 
     entry_state = str(row.get("entry_state") or "")
     if bool(row.get("chase_risk")) or entry_state == "extended":
@@ -477,6 +494,8 @@ def run_reco_paper_cycle(
     session_phase: str = "",
     paper_enabled: bool = True,
     regime: str = "RISK_ON",
+    posture: str = "",
+    posture_reason: str = "",
     persist_journal: bool = True,
     max_new: int = 3,
     policy_path=None,
@@ -519,6 +538,9 @@ def run_reco_paper_cycle(
         cycle_reasons.append(PAPER_TRADING_DISABLED)
     if not entries_allowed:
         cycle_reasons.append(str(entry_block_reason or OUTSIDE_ENTRY_WINDOW))
+    posture_name = str(posture or "").upper()
+    if posture_name == "STAND_ASIDE":
+        cycle_reasons.append(BRAIN_STAND_ASIDE)
     if payload and reco_is_stale(payload, now=clock):
         cycle_reasons.append(STALE_RECOMMENDATION)
     if not card_list and not cycle_reasons:
@@ -574,6 +596,8 @@ def run_reco_paper_cycle(
             policy=policy,
             family_risk=family_risk,
             cluster_risk=cluster_risk,
+            posture=posture_name,
+            posture_reason=posture_reason,
         )
         _decorate(decision, policy=policy, context=ctx)
         decisions.append(decision)
@@ -748,8 +772,16 @@ def run_reco_paper_cycle(
         "cycle_reasons": cycle_reasons,
         "summary": summary,
         "eligibility": "TRADED" if taken else (
-            "BLOCKED_SAFETY" if not entries_allowed or not paper_enabled else "NO_ELIGIBLE_TRADE"
+            "BLOCKED_SAFETY" if (
+                not entries_allowed or not paper_enabled
+                or posture_name == "STAND_ASIDE"
+                or str(regime or "").upper() == "RISK_OFF"
+            ) else "NO_ELIGIBLE_TRADE"
         ),
+        "brain": {
+            "posture": posture_name,
+            "posture_reason": posture_reason,
+        },
         "source": "recommendation_selection_authority",
         "live_locked": True,
         "adapter": "paper",

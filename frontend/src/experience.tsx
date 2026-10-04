@@ -122,7 +122,7 @@ function TodayStrip({ dashboard }: { dashboard: DashboardPayload }) {
   const scanOperation = operationFor(dashboard, 'MARKET_SCAN')
   return (
     <div className="today-strip">
-      <div><span>MARKET</span><strong>{dashboard.market.health.toUpperCase()}</strong><small>{dashboard.market.trade_stance}</small></div>
+      <div><span>MARKET</span><strong>{dashboard.market.health.toUpperCase()}</strong><small>{dashboard.market.brain?.posture === 'STAND_ASIDE' || dashboard.market.brain?.posture === 'DEFENSIVE' ? (dashboard.market.brain.action || dashboard.market.trade_stance) : dashboard.market.trade_stance}</small></div>
       <div><span>NIFTY 1D</span><strong className={(dashboard.market.nifty_change_1d || 0) >= 0 ? 'positive' : 'negative'}>{pct(dashboard.market.nifty_change_1d)}</strong><small>{dashboard.market.breadth}</small></div>
       <div><span>VOLATILITY</span><strong>{dashboard.market.vix == null ? '—' : Number(dashboard.market.vix).toFixed(2)}</strong><small>VIX / regime input</small></div>
       <div><span>PRICE DATA</span><strong>{dashboard.data.bhavcopy.latest_date || 'MISSING'}</strong><small>{dashboard.data.bhavcopy.sessions} sessions</small></div>

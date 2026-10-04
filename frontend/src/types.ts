@@ -216,6 +216,22 @@ export type DashboardPayload = {
     vix: number | null
     nifty_price?: number | null
     technical_details?: Record<string, unknown>
+    brain?: {
+      posture?: string
+      posture_reason?: string
+      action?: string
+      book_verdict?: string
+      open_risk_pct?: number | null
+      breadth_verdict?: string
+      macro_mood?: string
+      correlation_measured?: boolean
+      correlation_positions?: number | null
+      correlation_bets?: number | null
+      directives?: Array<{ severity?: string; text?: string }>
+      snapshot_stale?: boolean
+      regime_measured?: boolean
+      live_locked?: boolean
+    }
   }
   daily_wrap?: Array<{
     id?: string

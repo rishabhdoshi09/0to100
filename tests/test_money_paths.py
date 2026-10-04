@@ -4676,3 +4676,222 @@ class TestQuoteMicroCache:
         lq._qcache["HAL"] = (ts - 60, q)
         lq.get_live_quotes(["HAL"])
         assert calls["n"] == 2
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Desk brain — live paper book, scan context and news joined to posture
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestDeskBrainWiring:
+    """The conductor's posture has to bind the paper cycle and the desk.
+
+    Network-free: no bhav walk, no news fetch. Rails stay 1% / 10% / 5%.
+    """
+
+    def _limits(self, monkeypatch):
+        import risk.portfolio_risk as prm
+        monkeypatch.setattr(prm, "_capital", lambda: 100_000.0)
+        monkeypatch.setattr(prm, "_max_positions", lambda: 5)
+        monkeypatch.setattr(prm, "legacy_open_rows", lambda: [])
+
+    def test_same_rails_on_any_book(self):
+        from risk.portfolio_risk import assess_open_rows
+        quiet = assess_open_rows([], capital=100_000, max_positions=5)
+        assert quiet["verdict"] == "OK"
+        caution = assess_open_rows(
+            [{"symbol": "AAA", "qty": 100, "entry": 100, "stop": 60}],
+            capital=100_000, max_positions=5,
+        )
+        assert caution["open_risk_pct"] == 4.0
+        assert caution["verdict"] == "CAUTION"
+        danger = assess_open_rows(
+            [
+                {"symbol": "AAA", "qty": 100, "entry": 100, "stop": 70},
+                {"symbol": "BBB", "qty": 100, "entry": 100, "stop": 70},
+            ],
+            capital=100_000, max_positions=5,
+        )
+        assert danger["open_risk"] == 6000
+        assert danger["verdict"] == "DANGER"
+
+    def test_brain_book_adds_legacy_and_paper(self, monkeypatch):
+        import core.brain as brain
+        self._limits(monkeypatch)
+        monkeypatch.setattr(
+            "product.desk_brain.product_open_rows",
+            lambda: [{"symbol": "BBB", "qty": 100, "entry": 100, "stop": 70}],
+        )
+        monkeypatch.setattr(
+            "risk.portfolio_risk.legacy_open_rows",
+            lambda: [{"symbol": "AAA", "qty": 100, "entry": 100, "stop": 70}],
+        )
+        report = brain._probe_book()
+        assert report["n_positions"] == 2
+        assert report["verdict"] == "DANGER"
+
+    def test_setups_come_from_product_scan(self, monkeypatch):
+        import core.brain as brain
+        monkeypatch.setattr("product.scan_store.load_scan", lambda *a, **k: {
+            "scanned_at": "2026-10-04T04:00:00+00:00",
+            "records": [{
+                "symbol": "TCS", "verdict": "BUY", "status": "Ready to trade", "score": 88,
+            }],
+        })
+        rows, ts = brain._probe_setups("IN")
+        assert rows[0]["symbol"] == "TCS"
+        assert rows[0]["verdict"] == "BUY"
+        assert ts > 0
+
+    def test_correlation_lens_does_not_invent_independence(self):
+        from risk.correlation import report_for_symbols
+        measured = report_for_symbols(
+            ["HAL", "BEL", "INFY"],
+            {("BEL", "HAL"): 0.91, ("HAL", "INFY"): 0.10},
+        )
+        assert measured["measured"] is True
+        assert measured["n_positions"] == 3
+        assert measured["n_bets"] == 2
+        unknown = report_for_symbols(["HAL", "BEL"], {})
+        assert unknown["measured"] is False
+        assert unknown["n_bets"] == 2
+
+    def test_book_danger_stands_aside_and_risk_off_matches_the_gate(self):
+        from product.desk_brain import compose_desk_read, execution_controls
+        danger = compose_desk_read(
+            book_rows=[{"symbol": "AAA", "qty": 100, "entry": 100, "stop": 40}],
+            capital=100_000, max_positions=5,
+            regime="TRENDING_BULL",
+            edge={"expectancy_r": 0.4, "edge_trend": "improving", "closed": 80},
+            breadth={"verdict": "HEALTHY"},
+        )
+        assert danger["book_verdict"] == "DANGER"
+        assert danger["posture"] == "STAND_ASIDE"
+        assert "1%" in danger["size_rails"]
+        assert "5%" in danger["size_rails"]
+        aligned = compose_desk_read(
+            book_rows=[], capital=100_000, max_positions=5,
+            regime="TRENDING_BULL", market_risk_mode="RISK_ON",
+            edge={"expectancy_r": 0.4, "edge_trend": "improving", "closed": 80},
+            breadth={"verdict": "HEALTHY"},
+        )
+        assert aligned["posture"] == "AGGRESSIVE"
+        demoted = compose_desk_read(
+            book_rows=[], capital=100_000, max_positions=5,
+            regime="TRENDING_BULL",
+            edge={"expectancy_r": 0.4, "edge_trend": "improving", "closed": 80},
+            breadth={"verdict": "NARROW"},
+            macro={"mood": "RISK_OFF", "risk_off": True, "note": "tariffs"},
+        )
+        assert demoted["posture"] == "NORMAL"
+        blocked = compose_desk_read(
+            book_rows=[], capital=100_000, max_positions=5,
+            regime="TRENDING_BULL", market_risk_mode="RISK_OFF",
+            edge={"expectancy_r": 0.4, "edge_trend": "improving", "closed": 80},
+            breadth={"verdict": "HEALTHY"},
+        )
+        assert blocked["posture"] == "STAND_ASIDE"
+        controls = execution_controls(blocked)
+        assert controls["regime"] == "RISK_OFF"
+        assert controls["posture"] == "STAND_ASIDE"
+        assert execution_controls({})["posture"] == ""
+        assert execution_controls({})["regime"] == "RISK_ON"
+
+    def test_overlay_uses_fresh_context_and_ignores_stale_edge(self, monkeypatch, tmp_path):
+        from datetime import datetime, timedelta, timezone
+        from product.desk_brain import overlay_market, write_snapshot
+        self._limits(monkeypatch)
+
+        def boom(*_a, **_k):
+            raise AssertionError("request path walked the bhav cache")
+
+        monkeypatch.setattr("scan.breadth.breadth_from_cache", boom)
+        stale = tmp_path / "stale.json"
+        write_snapshot({
+            "generated_at": (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat(),
+            "breadth": {"verdict": "HEALTHY", "n": 800, "pct_above_50": 70},
+            "edge": {"measured": True, "expectancy_r": 0.5, "edge_trend": "improving", "closed": 90},
+            "correlation": {"measured": True, "n_positions": 2, "n_bets": 1, "biggest": ["AAA", "BBB"]},
+        }, stale)
+        market = {
+            "available": True,
+            "summary": "Market regime is still assembling from index history.",
+            "trade_stance": "New paper trades are allowed when evidence passes.",
+            "technical_details": {"market_regime": "TRENDING_BULL", "risk_mode": "RISK_ON"},
+        }
+        paper = {"capital": 100_000, "max_positions": 5, "open_positions": []}
+        stale_read = overlay_market(market, paper=paper, articles=[], path=stale)
+        assert stale_read["brain"]["snapshot_stale"] is True
+        assert stale_read["brain"]["posture"] != "AGGRESSIVE"
+        assert "assembl" in stale_read["summary"]
+
+        fresh = tmp_path / "fresh.json"
+        write_snapshot({
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "breadth": {"verdict": "HEALTHY", "line": "broad", "n": 800, "pct_above_50": 70},
+            "edge": {"measured": True, "expectancy_r": 0.4, "edge_trend": "improving", "closed": 80},
+            "correlation": {"measured": False, "n_positions": 0},
+            "macro": {},
+        }, fresh)
+        fresh_read = overlay_market(market, paper=paper, articles=[], path=fresh)
+        assert fresh_read["brain"]["posture"] == "AGGRESSIVE"
+        assert fresh_read["brain"]["live_locked"] is True
+
+        danger = overlay_market(
+            market,
+            paper={
+                "max_positions": 5,
+                "open_positions": [{
+                    "symbol": "AAA", "qty": 100, "entry_price": 100, "stop_price": 40,
+                }],
+            },
+            articles=[],
+            path=fresh,
+        )
+        assert danger["brain"]["posture"] == "STAND_ASIDE"
+        assert danger["brain"]["book_verdict"] == "DANGER"
+        assert danger["trade_stance"].startswith("No new paper entries")
+
+    def test_journal_records_paper_cycle_decisions(self, tmp_path, monkeypatch):
+        import core.decision_journal as dj
+        from product.desk_brain import journal_cycle
+        monkeypatch.setattr(dj, "_DB_PATH", str(tmp_path / "decisions.db"))
+        journal_cycle({
+            "taken": [{
+                "symbol": "TCS", "entry": 100.0, "stop": 94.0,
+                "reason_code": "ELIGIBLE", "selection_score": 82,
+            }],
+            "rejections": [{
+                "symbol": "INFY", "entry": 50.0, "stop": 45.0,
+                "reason_code": "BRAIN_STAND_ASIDE",
+            }],
+            "waits": [{
+                "symbol": "WIPRO", "entry": 20.0, "stop": 18.0,
+                "reason_code": "BRAIN_DEFENSIVE",
+            }],
+        })
+        conn = dj._conn()
+        try:
+            rows = conn.execute(
+                "SELECT symbol, decision, reason, source FROM decisions ORDER BY symbol"
+            ).fetchall()
+        finally:
+            conn.close()
+        got = {(row["symbol"], row["decision"], row["reason"], row["source"]) for row in rows}
+        assert ("TCS", "TAKEN", "ELIGIBLE", "reco_paper_cycle") in got
+        assert ("INFY", "REJECTED", "BRAIN_STAND_ASIDE", "reco_paper_cycle") in got
+        assert ("WIPRO", "WAIT", "BRAIN_DEFENSIVE", "reco_paper_cycle") in got
+
+    def test_production_jobs_consult_desk_brain(self):
+        import inspect
+        from operations.market_ops import MarketOperationsWorker
+        from research.autonomy.jobs import Deps
+        import terminal_api
+        paper = inspect.getsource(Deps.run_paper_cycle)
+        scan = inspect.getsource(Deps.run_scan)
+        market = inspect.getsource(MarketOperationsWorker._run_market_scan)
+        dash = inspect.getsource(terminal_api.dashboard)
+        assert "load_for_execution" in paper and "execution_controls" in paper
+        assert "journal_cycle" in paper
+        assert "load_for_execution" in scan
+        assert "load_for_execution" in market
+        assert "overlay_market" in dash

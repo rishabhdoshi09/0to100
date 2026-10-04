@@ -248,6 +248,41 @@ def test_paper_trading_disabled():
     assert out["rejections"][0]["reason_code"] == PAPER_TRADING_DISABLED
 
 
+def test_stand_aside_blocks_as_safety_not_as_no_setup():
+    book = PaperBook(capital=100_000)
+    out = _cycle(
+        book, [_eligible_card()],
+        posture="STAND_ASIDE", posture_reason="open risk DANGER",
+    )
+    assert not book.open
+    assert out["eligibility"] == "BLOCKED_SAFETY"
+    assert out["rejections"][0]["reason_code"] == "BRAIN_STAND_ASIDE"
+    assert "BRAIN_STAND_ASIDE" in out["cycle_reasons"]
+    assert out["brain"]["posture"] == "STAND_ASIDE"
+
+
+def test_defensive_posture_keeps_high_conviction_and_waits_good_setup():
+    book = PaperBook(capital=100_000)
+    out = _cycle(
+        book,
+        [_eligible_card("INFY", reco_tier="good_setup"), _eligible_card("TCS")],
+        posture="DEFENSIVE",
+        posture_reason="edge decaying",
+    )
+    assert [row["symbol"] for row in out["taken"]] == ["TCS"]
+    assert out["waits"][0]["symbol"] == "INFY"
+    assert out["waits"][0]["reason_code"] == "BRAIN_DEFENSIVE"
+    assert out["eligibility"] == "TRADED"
+    assert next(iter(book.open.values())).symbol == "TCS"
+
+
+def test_aggressive_posture_does_not_bypass_invalid_stop():
+    book = PaperBook(capital=100_000)
+    out = _cycle(book, [_eligible_card(stop=101)], posture="AGGRESSIVE")
+    assert not book.open
+    assert out["rejections"][0]["reason_code"] == INVALID_STOP
+
+
 def test_valid_candidate_after_restart_uses_persisted_book():
     book = PaperBook(capital=100_000)
     _cycle(book, [_eligible_card("RELIANCE")])

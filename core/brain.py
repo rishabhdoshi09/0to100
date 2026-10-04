@@ -239,12 +239,42 @@ def _probe_edge(capital: float) -> dict:
         return {}
 
 
+def _scan_epoch(stamp: str) -> float:
+    from datetime import datetime
+    text = str(stamp or "").strip()
+    if not text:
+        return 0.0
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return parsed.timestamp()
+    except Exception:
+        return 0.0
+
+
 def _probe_setups(market: str) -> tuple[list[dict], float]:
     try:
         if market == "US":
             from scan.us_scanner import get_us_results
             res, ts, _st = get_us_results()
             return res, ts
+        # Canonical desk writes product/scan_store. auto_scan is not started
+        # by the product stack, so a saved scan wins when one exists.
+        try:
+            from product.scan_store import load_scan
+            payload = load_scan()
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            rows: list[dict] = []
+            for row in payload.get("records") or []:
+                if not isinstance(row, dict) or not row.get("symbol"):
+                    continue
+                item = dict(row)
+                verdict = str(item.get("verdict") or "")
+                if verdict not in {"BUY", "STRONG BUY", "WATCH", "AVOID"} and item.get("status") == "Ready to trade":
+                    item["verdict"] = "BUY"
+                rows.append(item)
+            return rows, _scan_epoch(str(payload.get("scanned_at") or ""))
         from scan.auto_scan import get_results
         res, _n, ts, _st = get_results()
         return res, ts
@@ -253,14 +283,24 @@ def _probe_setups(market: str) -> tuple[list[dict], float]:
 
 
 def _probe_book() -> dict:
+    """Account risk across both books. They do not share a store, so open
+    rupee risk is added. Same 3% / 5% rails, never a looser cap."""
     try:
-        from risk.portfolio_risk import portfolio_risk_report
-        return portfolio_risk_report()
+        from product.desk_brain import product_open_rows
+        from risk.portfolio_risk import assess_open_rows, legacy_open_rows
+        rows = list(legacy_open_rows())
+        rows.extend(product_open_rows())
+        return assess_open_rows(rows)
     except Exception:
-        return {}
+        try:
+            from risk.portfolio_risk import portfolio_risk_report
+            return portfolio_risk_report()
+        except Exception:
+            return {}
 
 
 def _probe_autopilot(market: str) -> dict:
+    legacy: dict = {}
     try:
         if market == "US":
             import execution.us_autopilot as ap
@@ -272,11 +312,24 @@ def _probe_autopilot(market: str) -> dict:
             day = ap.pnl_snapshot().get("day_pnl")
         except Exception:
             day = None
-        return {"armed": bool(s.get("armed")),
-                "trades_today": int(s.get("trades_today_count", 0)),
-                "day_pnl": day}
+        legacy = {"armed": bool(s.get("armed")),
+                  "trades_today": int(s.get("trades_today_count", 0)),
+                  "day_pnl": day}
     except Exception:
-        return {}
+        legacy = {}
+    if market == "US":
+        return legacy
+    try:
+        from product.paper_status import read_paper_status
+        status = read_paper_status()
+        return {
+            "armed": bool(status.enabled) or bool(legacy.get("armed")),
+            "trades_today": int(legacy.get("trades_today") or 0),
+            "day_pnl": legacy.get("day_pnl"),
+            "paper_open_positions": len(status.open_positions),
+        }
+    except Exception:
+        return legacy
 
 
 def _probe_rotation(market: str) -> dict:
@@ -291,15 +344,26 @@ def _probe_rotation(market: str) -> dict:
 
 
 def _probe_breadth(market: str) -> dict:
-    """Full-market internals (advance/decline, % above DMAs) — index ke
-    peechhe ki sachchai, apne hi scan cache se muft."""
+    """Full-market internals. The legacy auto-scan memory is used when it
+    has a verdict; otherwise the fresh desk snapshot written by scan / paper
+    cycle. This probe does not walk the bhav cache itself."""
     if market == "US":
         return {}
     try:
         from scan.auto_scan import get_breadth
-        return get_breadth() or {}
+        data = get_breadth() or {}
+        if data.get("verdict"):
+            return data
     except Exception:
-        return {}
+        data = {}
+    try:
+        from product.desk_brain import fresh_section
+        saved = fresh_section("breadth")
+        if saved.get("verdict"):
+            return saved
+    except Exception:
+        pass
+    return data or {}
 
 
 _macro_cache = {"ts": 0.0, "data": {}}
@@ -489,14 +553,28 @@ def _probe_flows(market: str) -> dict:
 
 
 def _probe_correlation(market: str) -> dict:
-    """Book through the correlation lens — positions vs real bets."""
+    """Book through the correlation lens — positions vs real bets.
+
+    A fresh desk snapshot (paper-book symbols, measured on the job) wins
+    when it actually measured pairs. Otherwise the legacy book lens.
+    Unmeasured snapshots are not treated as independent bets.
+    """
     if market == "US":
         return {}
+    legacy: dict = {}
     try:
         from risk.correlation import book_correlation_report
-        return book_correlation_report() or {}
+        legacy = book_correlation_report() or {}
     except Exception:
-        return {}
+        legacy = {}
+    try:
+        from product.desk_brain import fresh_section
+        saved = fresh_section("correlation")
+        if saved.get("measured") and int(saved.get("n_positions") or 0) >= int(legacy.get("n_positions") or 0):
+            return saved
+    except Exception:
+        pass
+    return legacy
 
 
 def _probe_dead_daemons() -> list[str]:
