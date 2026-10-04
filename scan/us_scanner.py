@@ -30,7 +30,7 @@ log = get_logger(__name__)
 _lock = threading.Lock()
 _results: list[dict] = []
 _last_ts: float = 0.0
-_status: str = "idle"        # idle | scanning | ready | error
+_status: str = "idle"        # idle | scanning | ready | partial | error
 _progress: int = 0           # symbols processed so far (live)
 _total: int = 0              # universe size for this run
 _scan_running: bool = False  # only one scan at a time
@@ -405,10 +405,10 @@ def _push_us_setups(results: list[dict]) -> None:
 def get_us_results() -> tuple[list[dict], float, str]:
     global _results, _last_ts, _status, _scope
     with _lock:
-        if not _results:
+        if not _scan_running and _last_ts <= 0:
             saved = persisted_us_scan()
             records = [dict(r) for r in (saved.get("records") or []) if isinstance(r, dict)]
-            if records:
+            if saved.get("scanned_at"):
                 _results = records
                 _last_ts = float(saved.get("saved_epoch") or 0.0)
                 _status = str(saved.get("status") or "ready")

@@ -46,7 +46,7 @@ The release remains paper-only with live execution locked.
 
 ## Validation and release boundary
 
-Local validation: 182 changed-path Python checks; 178 additional risk, execution,
+Local validation: 184 changed-path Python checks; 178 additional risk, execution,
 OMS, promotion, readiness, recovery and F&O-delivery checks; 126 frontend checks;
 production TypeScript/Vite build; whitespace check. Regression cases were also
 executed against the baseline to confirm causal failures, rather than only

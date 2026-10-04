@@ -189,6 +189,17 @@ def test_us_analysis_errors_are_visible_not_counted_as_evaluated(us_scan, monkey
     assert coverage["analysis_failed"] == 2
 
 
+@pytest.mark.parametrize("status", ["ready", "error"])
+def test_empty_us_scan_retains_its_complete_or_failed_truth_after_restart(us_scan, monkeypatch, status):
+    scanner, _, _ = us_scan
+    scanner._persist_results([], scope="S&P 500", status=status)
+    monkeypatch.setattr(scanner, "_results", [])
+    monkeypatch.setattr(scanner, "_last_ts", 0.)
+    monkeypatch.setattr(scanner, "_status", "idle")
+    rows, stamp, loaded_status = scanner.get_us_results()
+    assert rows == [] and stamp > 0 and loaded_status == status
+
+
 def _net_row(i, **overrides):
     from product.us_learning import OUTCOME_BASIS
     return {"decision_id": f"d{i}", "settled": True, "action": "TAKE",
