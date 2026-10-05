@@ -340,6 +340,11 @@ PY
     open "http://127.0.0.1:5173" >/dev/null 2>&1 || true
   fi
 
+  # Browser/input belongs to this operator console, never to launchd workers.
+  # Run after readiness so optional daily login cannot hold up the core stack.
+  QT_HOST_ENV_FILE="$installed_env_file" QT_RUNTIME_ROOT="${installed_runtime:-${QT_RUNTIME_ROOT:-}}" \
+    "$py" -m product.startup_login || true
+
   local runtime_root="${QT_RUNTIME_ROOT:-}"
   if [[ -z "$runtime_root" && -f "$ROOT/.quantterm_runtime_root" ]]; then
     runtime_root="$(head -n 1 "$ROOT/.quantterm_runtime_root" 2>/dev/null || true)"
@@ -895,6 +900,7 @@ maybe_open_home_browser()
 PY
     HOME_OPENED=1
   fi
+  python -m product.startup_login || true
 else
   echo "[COMPLETE STACK] Home is still starting. Open http://127.0.0.1:5173 when the desk is up."
 fi
