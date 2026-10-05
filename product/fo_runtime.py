@@ -161,6 +161,7 @@ def run_fo_directional_scan(
     progress_callback=None,
 ) -> dict[str, Any]:
     """Run one complete read-only F&O directional scan."""
+    live_clock = quote_now is None
     quote_now = quote_now or datetime.now(IST)
     if quote_now.tzinfo is not None:
         quote_now = quote_now.astimezone(IST)
@@ -195,12 +196,9 @@ def run_fo_directional_scan(
     if history_getter is None:
         from scan.bulk_fetcher import adopt_ready_store, get_cached
 
-        # F&O discovery must see the current session before applying breakout
-        # gates. The generic cash scanner deliberately overlays live bars in a
-        # background thread for latency, but doing that here creates a race:
-        # the prefilter can read yesterday's EOD frame before today's bar lands
-        # and silently miss an intraday breakout. Keep this lane synchronous
-        # and fail closed when current-session data cannot be established.
+        # Readiness and the prefilter must consume the SAME Kite history plus
+        # current-session bars. A bhavcopy overlay cannot establish freshness
+        # for the separate authoritative Kite cache used by get_cached().
         if progress_callback:
             progress_callback("PREPARING_KITE_HISTORY", "Loading the verified Kite history snapshot", 0, 0)
         adopted = int(adopt_ready_store(overlay_live=False) or 0)
@@ -214,17 +212,17 @@ def run_fo_directional_scan(
                 "paper_only": True,
                 "live_execution_allowed": False,
             }
-        try:
-            from data.nse_live import live_session_ready
-
-            history_state = dict(live_session_ready(apply=True) or {})
-        except Exception as exc:
-            history_state = {
-                "ready": False,
-                "source": "",
-                "session_date": "",
-                "reason": f"{type(exc).__name__}: {exc}"[:200],
-            }
+        from product.fo_live_history import prepare_history
+        if live_clock:
+            # Snapshot preparation may take minutes on the external drive.
+            # Timestamp current quotes against the time after that preparation.
+            quote_now = datetime.now(IST)
+        if progress_callback:
+            progress_callback("LOADING_CURRENT_FNO_QUOTES", "Validating current Kite OHLCV for F&O history", 0, 0)
+        current_frames, history_state = prepare_history(
+            [getattr(item, "symbol", "") for item in report.underlyings],
+            history_getter=get_cached, client=client, as_of=as_of, now=quote_now,
+        )
         if not bool(history_state.get("ready")):
             return {
                 "available": False,
@@ -236,7 +234,7 @@ def run_fo_directional_scan(
                 "paper_only": True,
                 "live_execution_allowed": False,
             }
-        history_getter = get_cached
+        history_getter = current_frames.get
 
     universe = list(getattr(report, "underlyings", ()) or ())
     considered: list[dict[str, Any]] = []
@@ -249,6 +247,10 @@ def run_fo_directional_scan(
             frame = history_getter(symbol)
         except Exception as exc:
             considered.append({"symbol": symbol, "stage": "history", "reason": f"HISTORY_ERROR:{type(exc).__name__}"})
+            continue
+        history_rejection = (history_state.get("rejected") or {}).get(symbol)
+        if history_rejection:
+            considered.append({"symbol": symbol, "stage": "history", "reason": history_rejection})
             continue
         pre = _daily_prefilter(frame)
         considered.append({"symbol": symbol, "stage": "prefilter", **pre})

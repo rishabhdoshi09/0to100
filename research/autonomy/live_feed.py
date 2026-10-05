@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import os
 import time
@@ -19,6 +20,7 @@ class LiveFeedController:
         self.subscribed: set[str] = set()
         self._quote_at = 0.0
         self._quote_log_at = 0.0
+        self._session_identity = ""
 
     def _tokens(self, symbols) -> dict[int, str]:
         cache = logs_dir() / "instruments_cache.csv"
@@ -49,8 +51,10 @@ class LiveFeedController:
         """REST LTP into the overlay when the websocket has no ticks. Data only."""
         if self.overlay is None or not callable(getattr(self.overlay, "on_tick", None)):
             return 0
-        if self._ticking() > 0:
-            return self._ticking()
+        # symbols_ticking is a lifetime count, not a freshness measurement.
+        # A single old REST quote must not suppress fallback forever.
+        if symbols and all(self.overlay.entry_allowed(str(s).upper()) for s in symbols):
+            return len(symbols)
         now = time.time()
         if now - float(self._quote_at or 0.0) < 8.0:
             return self._ticking()
@@ -94,13 +98,20 @@ class LiveFeedController:
         if not ordered:
             return self.health()
         try:
-            token_to_symbol = self._tokens(ordered)
-            if self.overlay is None:
+            if self.overlay is None or self.ticker is not None:
                 from data.kite_client import _fresh_env
                 api_key = _fresh_env("KITE_API_KEY")
                 token = _fresh_env("KITE_ACCESS_TOKEN")
+                identity = hashlib.sha256(json.dumps([api_key, token]).encode()).hexdigest()
+                if self.ticker is not None and identity != self._session_identity:
+                    # Preserve subscriptions but discard old-session prices. Late
+                    # callbacks from the retired socket must not touch the new overlay.
+                    ordered.extend(sorted(self.subscribed - set(ordered)))
+                    self._retire_session()
                 if not api_key or not token:
                     raise RuntimeError("valid Kite credentials are required for live ticks")
+            token_to_symbol = self._tokens(ordered)
+            if self.overlay is None:
                 if not token_to_symbol:
                     raise RuntimeError("no approved subscription tokens resolved")
                 from kiteconnect import KiteTicker
@@ -111,6 +122,7 @@ class LiveFeedController:
                 self.feed = KiteTickerFeed(self.ticker, token_to_symbol=token_to_symbol,
                                            overlay=self.overlay)
                 self.overlay.feed = self.feed
+                self._session_identity = identity
             elif self.feed is not None and token_to_symbol:
                 self.feed.add_mappings(token_to_symbol)
             if not getattr(self.overlay, "connected", False):
@@ -127,6 +139,25 @@ class LiveFeedController:
             pass
         self._persist()
         return self.health()
+
+    def _retire_session(self) -> None:
+        if self.feed is not None:
+            self.feed.overlay = None
+        if self.ticker is not None:
+            # Never stop the process-wide Twisted reactor: other feeds use it.
+            for method in ("stop_retry", "close"):
+                try:
+                    action = getattr(self.ticker, method, None)
+                    if callable(action):
+                        action()
+                except Exception:
+                    pass
+        self.feed = None
+        self.ticker = None
+        self.overlay = None
+        self.subscribed.clear()
+        self._session_identity = ""
+        self._quote_at = 0.0
 
     def stop(self) -> None:
         try:
