@@ -292,18 +292,25 @@ def test_default_history_waits_for_current_session_before_prefilter(monkeypatch)
         return 500
 
     def _live_ready(*, apply=True):
-        events.append(("live", apply))
-        return {
-            "ready": True,
-            "symbols": 500,
-            "source": "kite_quotes",
-            "session_date": AS_OF.isoformat(),
-            "sessions": 260,
-        }
+        raise AssertionError("F&O must not depend on the separate bhavcopy overlay")
+
+    original_quote = client.quote
+    def _quotes(keys):
+        events.append(("quotes", True))
+        out = original_quote(keys)
+        if "NSE:TEST" in out:
+            out["NSE:TEST"].update(
+                ohlc={k: float(bars[k].iloc[-1]) for k in ("open", "high", "low")},
+                volume=float(bars["volume"].iloc[-1]),
+            )
+        return out
+    client.quote = _quotes
+    history = bars.iloc[:-1].copy()
+    history.index = pd.date_range(end=AS_OF - timedelta(days=1), periods=len(history))
 
     def _history(symbol):
         events.append(("history", symbol))
-        return bars
+        return history
 
     monkeypatch.setattr(bulk_fetcher, "adopt_ready_store", _adopt)
     monkeypatch.setattr(bulk_fetcher, "get_cached", _history)
@@ -325,8 +332,8 @@ def test_default_history_waits_for_current_session_before_prefilter(monkeypatch)
     )
 
     assert events[0] == ("adopt", False)
-    assert events[1] == ("live", True)
-    assert events.index(("live", True)) < events.index(("history", "TEST"))
+    assert events[1] == ("quotes", True)
+    assert events.index(("quotes", True)) < events.index(("history", "TEST"))
     assert result["history_session"]["source"] == "kite_quotes"
     assert result["candidate_count"] == 1
 
