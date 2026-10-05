@@ -1014,6 +1014,18 @@ class MarketOperationsWorker:
                 "live_execution_allowed": False,
             }
         else:
+            # This lane's history/prefilter pass (above) can run for several
+            # minutes, and an interactive Kite login mid-run writes a fresh
+            # access_token to .env. market_client was built from whatever
+            # token existed when this job started, so every quote call below
+            # would otherwise keep using the stale one for the rest of the
+            # job. Rebuilding here is a pure local credential re-read (no
+            # network cost) and guarantees the actual quote-dependent scan
+            # always uses the current session.
+            try:
+                market_client = NfoMarketDataClient.from_config()
+            except Exception:
+                pass
             self._progress(
                 operation_id,
                 "SCANNING_DIRECTIONAL_OPTIONS",

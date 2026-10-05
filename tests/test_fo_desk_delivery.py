@@ -182,6 +182,69 @@ def test_weekend_worker_completes_without_running_live_scan_or_paper_cycle(tmp_p
     assert result['telegram']['reason'] == 'sent'
 
 
+def test_fno_refresh_rebuilds_market_client_if_kite_session_rotates_mid_run(tmp_path, monkeypatch):
+    """A long FNO_REFRESH job must not scan with the pre-login Kite token.
+
+    NfoMarketDataClient.from_config() is built once at the top of _run_fno to
+    fetch the instrument master. That pass (history adoption, bulk prefetch)
+    can take minutes, during which an interactive Kite login can complete and
+    write a fresh access_token. The actual quote-dependent directional scan
+    must see that fresh token, not the one captured minutes earlier.
+    """
+    from operations import market_ops as mo
+    from operations.store import OperationStore
+    from research.intelligence.data import nse_calendar as cal
+    from product import fo_runtime, fo_paper_runtime
+    from data import nfo_market, fno_universe
+    from research.autonomy.telegram_notifications import TelegramNotifier
+
+    monkeypatch.setenv('QT_RUNTIME_ROOT', str(tmp_path))
+    session_day = datetime(2026, 10, 5, 10, 0, tzinfo=ZoneInfo('Asia/Kolkata'))
+    monkeypatch.setattr(cal, '_now_ist', lambda: session_day)
+    monkeypatch.setattr(cal, 'is_session', lambda *a, **k: True)
+
+    report = SimpleNamespace(source='zerodha_kite', total_instrument_rows=2,
+        total_future_contracts=1, index_future_contracts=0, unique_stock_underlyings=1,
+        mapped_underlyings=1, underlyings=[SimpleNamespace(symbol='TEST')], exclusions=[])
+
+    token = {'value': 'pre-login-token'}
+    build_calls = []
+
+    def fake_from_config():
+        client = SimpleNamespace(instruments=lambda exchange: [{'exchange': exchange}],
+                                  token=token['value'])
+        build_calls.append(client.token)
+        return client
+    monkeypatch.setattr(nfo_market.NfoMarketDataClient, 'from_config', fake_from_config)
+
+    def fake_build_fno_universe(*args, **kw):
+        # Stands in for the minutes-long history/prefilter pass: an
+        # interactive login completes and rotates the token during it.
+        token['value'] = 'post-login-token'
+        return report
+    monkeypatch.setattr(fno_universe, 'build_fno_universe', fake_build_fno_universe)
+
+    seen_scan_client = {}
+
+    def fake_scan(*, report, instrument_rows, client, as_of, progress_callback=None):
+        seen_scan_client['token'] = client.token
+        return {'available': True, 'status': 'READY', 'as_of': as_of.isoformat(),
+                'decision': 'NO_ELIGIBLE_TRADE', 'candidate_count': 0,
+                'prefilter_passed': 0, 'deep_evaluated': 0, 'candidates': []}
+    monkeypatch.setattr(fo_runtime, 'run_fo_directional_scan', fake_scan)
+    monkeypatch.setattr(fo_paper_runtime, 'run_fo_paper_cycle',
+                         lambda *a, **kw: {'available': True, 'status': 'READY'})
+    monkeypatch.setattr(TelegramNotifier, 'notify_fno', lambda self, d, p: {'reason': 'sent'})
+
+    store = OperationStore(tmp_path / 'jobs.db')
+    queued, _ = store.enqueue('FNO_REFRESH', lane='fno')
+    result = mo.MarketOperationsWorker(store)._run_fno(queued)
+
+    assert build_calls == ['pre-login-token', 'post-login-token']
+    assert seen_scan_client['token'] == 'post-login-token'
+    assert result['directional']['status'] == 'READY'
+
+
 def test_api_projects_same_desk_without_starting_scan(tmp_path, monkeypatch):
     import terminal_api as api
     from product import fo_desk

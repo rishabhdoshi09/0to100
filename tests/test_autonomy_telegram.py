@@ -226,6 +226,93 @@ def test_live_feed_controller_exposes_read_only_price():
     assert controller.price("AAA") == 123.45
 
 
+def test_live_feed_controller_rebuilds_ticker_when_kite_session_rotates(monkeypatch):
+    """A fresh interactive login must not leave the websocket stuck on the old token.
+
+    KiteTicker bakes its access token in at construction and never re-reads it, so
+    reusing the same ticker object across a login forever retries the exchange
+    websocket with the stale token (surfaces as a permanent 403 even after login).
+    """
+    created: list = []
+    closed: list = []
+
+    class FakeTicker:
+        def __init__(self, api_key, access_token):
+            self.api_key = api_key
+            self.access_token = access_token
+            created.append(self)
+
+        def close(self):
+            closed.append(self)
+
+    class FakeOverlay:
+        def __init__(self):
+            self.feed = None
+            self.connected = False
+            self.subscribed: set[str] = set()
+
+        def connect(self):
+            self.connected = True
+
+        def subscribe(self, symbols):
+            self.subscribed |= set(symbols)
+
+        def health(self):
+            return {"connected": self.connected, "subscriptions": len(self.subscribed),
+                     "reconnects": 0, "symbols_ticking": 0, "rejected": {}, "last_connect_ts": 0.0}
+
+        def is_stale(self, symbol):
+            return False
+
+        def entry_allowed(self, symbol):
+            return True
+
+        def price(self, symbol):
+            return None
+
+    class FakeFeed:
+        def __init__(self, ticker, *, token_to_symbol, overlay):
+            self.ticker = ticker
+            self.token_to_symbol = dict(token_to_symbol)
+            self.overlay = overlay
+
+        def add_mappings(self, mapping):
+            self.token_to_symbol.update(mapping)
+
+    monkeypatch.setattr("kiteconnect.KiteTicker", FakeTicker)
+    monkeypatch.setattr("research.intelligence.data.kite_activation.KiteTickerFeed", FakeFeed)
+    monkeypatch.setattr("research.intelligence.data.kite_live.KiteLiveOverlay", FakeOverlay)
+
+    session = {"KITE_API_KEY": "key-1", "KITE_ACCESS_TOKEN": "token-1"}
+    monkeypatch.setattr("data.kite_client._fresh_env", lambda name, default="": session.get(name, default))
+    monkeypatch.setattr("data.kite_client.kite_session_identity",
+                         lambda: f"{session['KITE_API_KEY']}:{session['KITE_ACCESS_TOKEN']}")
+
+    controller = LiveFeedController()
+    monkeypatch.setattr(controller, "_tokens", lambda symbols: {1: "AAA"})
+
+    controller.start({"AAA"})
+    assert len(created) == 1
+    first_ticker = created[0]
+    assert first_ticker.access_token == "token-1"
+    assert controller.overlay.connected
+
+    # Same session on the next call: the ticker must be reused, not rebuilt.
+    controller.start({"AAA"})
+    assert len(created) == 1
+    assert closed == []
+
+    # A fresh interactive login rotates the access token mid-run.
+    session["KITE_ACCESS_TOKEN"] = "token-2"
+    health = controller.start({"AAA"})
+
+    assert len(created) == 2
+    assert created[1].access_token == "token-2"
+    assert closed == [first_ticker]
+    assert controller.overlay.connected
+    assert health.get("connected") is True
+
+
 def test_quote_overlay_feeds_sniper_when_websocket_has_no_ticks(tmp_path, monkeypatch):
     from research.intelligence.data.kite_live import KiteLiveOverlay
     overlay = KiteLiveOverlay()

@@ -19,6 +19,7 @@ class LiveFeedController:
         self.subscribed: set[str] = set()
         self._quote_at = 0.0
         self._quote_log_at = 0.0
+        self._session_identity = ""
 
     def _tokens(self, symbols) -> dict[int, str]:
         cache = logs_dir() / "instruments_cache.csv"
@@ -83,6 +84,23 @@ class LiveFeedController:
                 print(f"[KITE] quote overlay · {filled} symbols · sniper uses LTP until websocket ticks", flush=True)
         return filled
 
+    def _teardown_ticker(self) -> None:
+        """Drop the ticker/overlay built from a now-superseded Kite session.
+
+        A ``KiteTicker`` bakes its access token in at construction and never
+        re-reads it, so a stale ticker just keeps retrying the exchange
+        websocket with the pre-login token forever (visible as a permanent
+        403 even once a fresh login has written a valid token to disk).
+        """
+        try:
+            if self.ticker is not None and hasattr(self.ticker, "close"):
+                self.ticker.close()
+        except Exception:
+            pass
+        self.ticker = None
+        self.feed = None
+        self.overlay = None
+
     def start(self, symbols) -> dict:
         ordered: list[str] = []
         seen: set[str] = set()
@@ -95,8 +113,13 @@ class LiveFeedController:
             return self.health()
         try:
             token_to_symbol = self._tokens(ordered)
+            from data.kite_client import _fresh_env, kite_session_identity
+            current_identity = kite_session_identity()
+            if (self.overlay is not None and self._session_identity
+                    and current_identity != self._session_identity):
+                self._teardown_ticker()
+                print("[KITE] session rotated · rebuilding websocket ticker with fresh token", flush=True)
             if self.overlay is None:
-                from data.kite_client import _fresh_env
                 api_key = _fresh_env("KITE_API_KEY")
                 token = _fresh_env("KITE_ACCESS_TOKEN")
                 if not api_key or not token:
@@ -111,6 +134,7 @@ class LiveFeedController:
                 self.feed = KiteTickerFeed(self.ticker, token_to_symbol=token_to_symbol,
                                            overlay=self.overlay)
                 self.overlay.feed = self.feed
+                self._session_identity = current_identity
             elif self.feed is not None and token_to_symbol:
                 self.feed.add_mappings(token_to_symbol)
             if not getattr(self.overlay, "connected", False):
