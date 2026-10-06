@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import asyncio
+import json
+
+from fastapi import Request
+from fastapi.responses import JSONResponse
 
 import report_api
 
@@ -89,3 +94,44 @@ def test_acquire_result_succeeds_when_attempt_has_no_failures():
     assert summary["status"] == "SUCCEEDED"
     assert summary["items_succeeded"] == 1
     assert summary["automation_failed"] == 0
+
+
+
+def test_report_api_public_mode_blocks_evidence_mutation_before_route(monkeypatch):
+    monkeypatch.setenv("QT_PUBLIC_READ_ONLY", "1")
+    monkeypatch.delenv("QT_OPERATOR_TOKEN", raising=False)
+    downstream_called = False
+
+    async def downstream(_request):
+        nonlocal downstream_called
+        downstream_called = True
+        return JSONResponse({"ok": True})
+
+    request = Request({
+        "type": "http",
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "https",
+        "path": "/evidence/TCS/actions/auto-acquire",
+        "raw_path": b"/evidence/TCS/actions/auto-acquire",
+        "query_string": b"",
+        "headers": [],
+        "client": ("127.0.0.1", 44000),
+        "server": ("127.0.0.1", 8766),
+    })
+    response = asyncio.run(report_api._public_mutation_boundary(request, downstream))
+
+    assert response.status_code == 403
+    assert downstream_called is False
+    assert json.loads(response.body)["code"] == "PUBLIC_READ_ONLY"
+
+
+def test_report_health_exposes_public_access_without_token_value(monkeypatch):
+    monkeypatch.setenv("QT_PUBLIC_READ_ONLY", "1")
+    monkeypatch.setenv("QT_OPERATOR_TOKEN", "secret-report-operator-token")
+
+    payload = report_api.health()
+    assert payload["access"]["public_read_only"] is True
+    assert payload["access"]["mutation_policy"] == "OPERATOR_TOKEN_REQUIRED"
+    assert payload["access"]["operator_token_configured"] is True
+    assert "secret-report-operator-token" not in json.dumps(payload)

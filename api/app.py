@@ -135,13 +135,17 @@ def market_reports_workspace() -> dict:
     resolved by the builder itself; no compatibility filler is invented here.
     """
     from product.recommendations_workspace import build_market_reports_workspace
+    from product.public_access import public_read_only_enabled
 
+    public_read_only = public_read_only_enabled()
     payload = build_market_reports_workspace(
-        persist_today=True,
+        persist_today=not public_read_only,
         news_payload=_core.core._news_payload(),
         scan_payload=_core.core._scan_payload(),
         rebuild=False,
     )
+    if public_read_only:
+        payload["load_note"] = "Public read-only view: saved report evidence is never persisted by this request."
     if payload.get("needs_refresh") and not payload.get("empty_detail"):
         payload["empty_detail"] = (
             "Today's sourced market report is incomplete. Missing scan/news evidence "

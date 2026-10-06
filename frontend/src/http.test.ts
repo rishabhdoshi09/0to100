@@ -13,6 +13,16 @@ describe('readJson', () => {
   it('returns JSON on 200', async () => {
     await expect(readJson<{ ok: boolean }>(new Response('{"ok":true}', { status: 200 }))).resolves.toEqual({ ok: true })
   })
+
+  it('turns public read-only 403 into a human message', async () => {
+    const body = JSON.stringify({
+      code: 'PUBLIC_READ_ONLY',
+      detail: 'This public QuantTerm instance is read-only. Operator mutations are disabled.',
+    })
+    await expect(readJson(new Response(body, { status: 403 }))).rejects.toThrow(
+      'This public QuantTerm instance is read-only. Operator mutations are disabled.',
+    )
+  })
 })
 
 describe('withTimeout', () => {

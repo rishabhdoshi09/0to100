@@ -13,6 +13,17 @@ export const fetchDashboard = async (): Promise<DashboardPayload> => {
   return previous ? reconcileDashboard(previous, incoming) : incoming
 }
 
+export type AccessMode = {
+  public_read_only: boolean
+  mutation_policy: 'PRIVATE_OPERATOR' | 'READ_ONLY' | 'OPERATOR_TOKEN_REQUIRED' | string
+  operator_token_configured: boolean
+  unsafe_methods: string[]
+  live_money_unlocked: boolean
+}
+
+export const fetchAccessMode = (): Promise<AccessMode> =>
+  request<AccessMode>('/api/access', { timeoutMs: 4_000 })
+
 export const fetchHealth = (): Promise<{
   ok: boolean
   service?: string

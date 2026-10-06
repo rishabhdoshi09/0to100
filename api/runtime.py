@@ -442,8 +442,17 @@ def autonomous_learning_replay() -> dict:
 def forward_soak_api() -> dict:
     """Forward paper-trading soak scoreboard from persisted artifacts."""
     from product.forward_soak import load_latest_verification, persist_soak_verification, scoreboard
+    from product.public_access import public_read_only_enabled
+
     payload = scoreboard()
-    payload["verification"] = load_latest_verification() or persist_soak_verification()
+    verification = load_latest_verification()
+    if not verification and not public_read_only_enabled():
+        verification = persist_soak_verification()
+    payload["verification"] = verification or {}
+    if public_read_only_enabled() and not verification:
+        payload["verification_note"] = (
+            "No persisted verification is available. Public read-only requests never create one."
+        )
     return payload
 
 
@@ -565,14 +574,18 @@ def market_reports_workspace() -> dict:
     """Canonical read projection for Market Reports."""
     from product.recommendations_workspace import build_market_reports_workspace
 
+    from product.public_access import public_read_only_enabled
+    public_read_only = public_read_only_enabled()
     payload = build_market_reports_workspace(
-        persist_today=True,
+        persist_today=not public_read_only,
         news_payload=core._news_payload(),
         scan_payload=core._scan_payload(),
         long_term_payload=core._long_term_payload(),
         market_payload=core._market_payload(),
         rebuild=False,
     )
+    if public_read_only:
+        payload["load_note"] = "Public read-only view: saved report evidence is never persisted by this request."
     if payload.get("needs_refresh") and not payload.get("empty_detail"):
         payload["empty_detail"] = (
             "Today's sourced market report is incomplete. Missing scan/news evidence "

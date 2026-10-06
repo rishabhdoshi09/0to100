@@ -18,6 +18,17 @@ export async function readJson<T>(response: Response): Promise<T> {
     if (!body && PROXY_STATUSES.has(response.status)) {
       throw new Error(API_DOWN_MESSAGE)
     }
+    if (response.status === 403 && body) {
+      let payload: { code?: string; detail?: string } | null = null
+      try {
+        payload = JSON.parse(body) as { code?: string; detail?: string }
+      } catch {
+        payload = null
+      }
+      if (payload?.code === 'PUBLIC_READ_ONLY' || payload?.code === 'OPERATOR_AUTH_REQUIRED') {
+        throw new Error(payload.detail || 'This public QuantTerm view is read-only.')
+      }
+    }
     throw new Error(body || `Request failed with ${response.status}`)
   }
   return response.json() as Promise<T>

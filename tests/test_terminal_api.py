@@ -153,6 +153,19 @@ def test_health_is_a_cheap_liveness_probe():
     assert payload["service"] == "quantterm-terminal-api"
 
 
+def test_health_exposes_non_secret_public_access_posture(monkeypatch):
+    monkeypatch.setenv("QT_PUBLIC_READ_ONLY", "1")
+    monkeypatch.setenv("QT_OPERATOR_TOKEN", "do-not-leak-this-token")
+
+    payload = terminal_api.health()
+    access = payload["access"]
+    assert access["public_read_only"] is True
+    assert access["mutation_policy"] == "OPERATOR_TOKEN_REQUIRED"
+    assert access["operator_token_configured"] is True
+    assert access["live_money_unlocked"] is False
+    assert "do-not-leak-this-token" not in json.dumps(payload)
+
+
 def test_health_surfaces_inspect_runtime_ready_flags_without_inventing_them(monkeypatch):
     monkeypatch.setattr(
         "product.runtime_lifecycle.inspect_runtime",

@@ -50,6 +50,38 @@ async def _log_unhandled(request: Request, exc: Exception):
         status_code=500,
     )
 
+@app.middleware("http")
+async def _public_mutation_boundary(request: Request, call_next):
+    """Require explicit operator authorization for mutations in public mode.
+
+    The guard covers every POST/PUT/PATCH/DELETE route registered on this
+    FastAPI application, including product-extension routes. It deliberately
+    does not trust client IPs or forwarding headers.
+    """
+    from product.public_access import authorize_mutation
+
+    access = authorize_mutation(request.method, request.headers)
+    if not access.allowed:
+        return JSONResponse(
+            {
+                "detail": access.detail,
+                "code": access.code,
+                "public_read_only": True,
+            },
+            status_code=403,
+            headers={"Cache-Control": "no-store"},
+        )
+    return await call_next(request)
+
+
+@app.get("/api/access")
+def access_mode() -> dict[str, Any]:
+    """Expose the non-secret access policy for the public desk."""
+    from product.public_access import access_projection
+
+    return access_projection()
+
+
 _ops_process: subprocess.Popen | None = None
 
 
@@ -1171,6 +1203,16 @@ def health() -> dict:
         "reasons": [],
         "components": [],
     }
+    try:
+        from product.public_access import access_projection
+        payload["access"] = access_projection()
+    except Exception:
+        payload["access"] = {
+            "public_read_only": None,
+            "mutation_policy": "UNVERIFIED",
+            "operator_token_configured": False,
+            "live_money_unlocked": False,
+        }
     try:
         from product.runtime_lifecycle import inspect_runtime
 

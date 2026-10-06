@@ -877,7 +877,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
   onCompare: (symbol: string) => void
   onWatchlist: (symbol: string) => void
 }) {
-  const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, runControl, onCompare, onWatchlist } = props
+  const { dashboard, selected, setSelected, bars, setActive, depth, marketScan, longTermScan, runControl, onCompare, onWatchlist, publicReadOnly = false } = props
   const [radar, setRadar] = useState<RadarHome | null>(() => recall<RadarHome>('radar-home') ?? null)
   const [plan, setPlan] = useState<TradePlan | null>(null)
   const [readiness, setReadiness] = useState<ProductReadiness | null>(() => recall<ProductReadiness>('product-readiness') ?? null)
@@ -970,6 +970,11 @@ export function RadarHomeView(props: ExperienceViewProps & {
   const needsBootstrap = emptyDesk || readinessScore < 70 || !dashboard.data.ready
 
   const runBootstrap = async () => {
+    if (publicReadOnly) {
+      setDeskNote('Public view is read-only. Operator refresh actions are disabled.')
+      window.setTimeout(() => setDeskNote(''), 5000)
+      return
+    }
     setBootstrapBusy(true)
     setDeskNote('Starting the next desk download…')
     try {
@@ -988,6 +993,10 @@ export function RadarHomeView(props: ExperienceViewProps & {
 
   useEffect(() => {
     if (autoBootRef.current) return
+    if (publicReadOnly) {
+      autoBootRef.current = true
+      return
+    }
     const cached = recall<RadarHome>('radar-home')
     const cachedCount = (cached?.counts.breakouts || 0) + (cached?.counts.momentum || 0) + (cached?.counts.long_term_picks || 0)
     if (cachedCount > 0 || dashboard.scan.scanned_at) {
@@ -998,7 +1007,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
     if (!deskNeedsWork) return
     autoBootRef.current = true
     void runBootstrap()
-  }, [emptyDesk, dashboard.data.ready, dashboard.scan.scanned_at])
+  }, [emptyDesk, dashboard.data.ready, dashboard.scan.scanned_at, publicReadOnly])
 
   const laneCard = (title: string, rows: RadarRow[], count: number, qualityHint?: number) => (
     <section className="radar-lane-card">
@@ -1057,6 +1066,11 @@ export function RadarHomeView(props: ExperienceViewProps & {
       void fetchRadarHome().then((payload) => setRadar(payload)).catch(() => undefined)
       return
     }
+    if (publicReadOnly) {
+      setDeskNote('Public view is read-only. Operator actions are disabled.')
+      window.setTimeout(() => setDeskNote(''), 5000)
+      return
+    }
     if (control === 'RUN_SCAN_NOW') {
       void marketScan.start()
       return
@@ -1110,16 +1124,22 @@ export function RadarHomeView(props: ExperienceViewProps & {
           <p>{dashboard.market.summary}</p>
         </div>
         <div className="radar-hero-actions">
-          {needsBootstrap && (
-            <button type="button" disabled={bootstrapBusy} onClick={() => void runBootstrap()}>
-              {bootstrapBusy ? 'Preparing…' : 'Refresh desk'}
-            </button>
+          {publicReadOnly ? (
+            <span className="public-readonly-note">Operator refresh actions are disabled in the public view.</span>
+          ) : (
+            <>
+              {needsBootstrap && (
+                <button type="button" disabled={bootstrapBusy} onClick={() => void runBootstrap()}>
+                  {bootstrapBusy ? 'Preparing…' : 'Refresh desk'}
+                </button>
+              )}
+              <button type="button" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
+                {marketScan.isBusy
+                  ? `Scanning… ${marketScan.percent != null ? `${marketScan.percent}%` : ''}${marketScan.etaLine ? ` · ETA ${marketScan.etaLine}` : ''}`
+                  : 'Scan now'}
+              </button>
+            </>
           )}
-          <button type="button" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
-            {marketScan.isBusy
-              ? `Scanning… ${marketScan.percent != null ? `${marketScan.percent}%` : ''}${marketScan.etaLine ? ` · ETA ${marketScan.etaLine}` : ''}`
-              : 'Scan now'}
-          </button>
         </div>
       </header>
 

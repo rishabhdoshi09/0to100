@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 from typing import Any, Mapping
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
@@ -22,9 +23,41 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def _public_mutation_boundary(request: Request, call_next):
+    """Apply the same public read-only policy to research/evidence mutations."""
+    from product.public_access import authorize_mutation
+
+    access = authorize_mutation(request.method, request.headers)
+    if not access.allowed:
+        return Response(
+            content=json.dumps({
+                "detail": access.detail,
+                "code": access.code,
+                "public_read_only": True,
+            }),
+            status_code=403,
+            media_type="application/json",
+            headers={"Cache-Control": "no-store"},
+        )
+    return await call_next(request)
+
+
+@app.get("/access")
+def access_mode() -> dict:
+    from product.public_access import access_projection
+    return access_projection()
+
+
 @app.get("/health")
 def health() -> dict:
-    return {"ok": True, "service": "quantterm-research-report-api", "version": app.version}
+    from product.public_access import access_projection
+    return {
+        "ok": True,
+        "service": "quantterm-research-report-api",
+        "version": app.version,
+        "access": access_projection(),
+    }
 
 
 def _pdf_response(path: Path) -> FileResponse:

@@ -42,6 +42,7 @@ export type ExperienceViewProps = {
   marketScan: ScanRunnerHandle
   longTermScan: ScanRunnerHandle
   marketReport?: ScanRunnerHandle
+  publicReadOnly?: boolean
 }
 
 const scoreOf = (row: ScannerWorkspaceRow) => Number(
