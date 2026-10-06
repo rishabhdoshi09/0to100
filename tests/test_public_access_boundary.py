@@ -113,3 +113,81 @@ def test_public_boundary_does_not_trust_local_proxy_identity(monkeypatch):
 
     response = asyncio.run(terminal_api._public_mutation_boundary(request, downstream))
     assert response.status_code == 403
+
+
+
+def test_public_forward_soak_get_never_creates_verification(monkeypatch):
+    import api.runtime as runtime
+    import product.forward_soak as forward_soak
+
+    monkeypatch.setenv("QT_PUBLIC_READ_ONLY", "1")
+    monkeypatch.setattr(forward_soak, "scoreboard", lambda: {"available": True})
+    monkeypatch.setattr(forward_soak, "load_latest_verification", lambda: None)
+
+    def must_not_persist(*_args, **_kwargs):
+        raise AssertionError("public GET must not persist forward-soak verification")
+
+    monkeypatch.setattr(forward_soak, "persist_soak_verification", must_not_persist)
+    payload = runtime.forward_soak_api()
+
+    assert payload["verification"] == {}
+    assert "never create" in payload["verification_note"].lower()
+
+
+def test_private_forward_soak_get_preserves_existing_lazy_verification(monkeypatch):
+    import api.runtime as runtime
+    import product.forward_soak as forward_soak
+
+    monkeypatch.delenv("QT_PUBLIC_READ_ONLY", raising=False)
+    monkeypatch.setattr(forward_soak, "scoreboard", lambda: {"available": True})
+    monkeypatch.setattr(forward_soak, "load_latest_verification", lambda: None)
+    monkeypatch.setattr(
+        forward_soak,
+        "persist_soak_verification",
+        lambda: {"status": "VERIFIED", "source": "test"},
+    )
+
+    payload = runtime.forward_soak_api()
+    assert payload["verification"]["status"] == "VERIFIED"
+
+
+def test_public_market_reports_get_disables_persistence(monkeypatch):
+    import api.app as public_api
+    import product.recommendations_workspace as workspace
+
+    monkeypatch.setenv("QT_PUBLIC_READ_ONLY", "1")
+    seen = {}
+
+    def fake_builder(**kwargs):
+        seen.update(kwargs)
+        return {"needs_refresh": False, "load_note": "private default"}
+
+    monkeypatch.setattr(workspace, "build_market_reports_workspace", fake_builder)
+    monkeypatch.setattr(public_api._core.core, "_news_payload", lambda: {})
+    monkeypatch.setattr(public_api._core.core, "_scan_payload", lambda: {})
+
+    payload = public_api.market_reports_workspace()
+
+    assert seen["persist_today"] is False
+    assert "public read-only" in payload["load_note"].lower()
+
+
+def test_private_market_reports_get_keeps_persistence(monkeypatch):
+    import api.app as public_api
+    import product.recommendations_workspace as workspace
+
+    monkeypatch.delenv("QT_PUBLIC_READ_ONLY", raising=False)
+    seen = {}
+
+    def fake_builder(**kwargs):
+        seen.update(kwargs)
+        return {"needs_refresh": False, "load_note": "private default"}
+
+    monkeypatch.setattr(workspace, "build_market_reports_workspace", fake_builder)
+    monkeypatch.setattr(public_api._core.core, "_news_payload", lambda: {})
+    monkeypatch.setattr(public_api._core.core, "_scan_payload", lambda: {})
+
+    payload = public_api.market_reports_workspace()
+
+    assert seen["persist_today"] is True
+    assert payload["load_note"] == "private default"
