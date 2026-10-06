@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { fetchChart, fetchDashboard, fetchHealth, sendControl } from './api'
+import { fetchAccessMode, fetchChart, fetchDashboard, fetchHealth, sendControl, type AccessMode } from './api'
 import { deskStartupLabel, deskStartupRecovery, deskStartupState, type DeskStartupState } from './deskStartupState'
 import { createPollGate } from './pollGate'
 import { deskRefreshBanner } from './deskBanner'
@@ -240,6 +240,7 @@ function App() {
   const healthGate = useRef(createPollGate())
   const [startupState, setStartupState] = useState<DeskStartupState>('PREPARING_DATA')
   const [healthReason, setHealthReason] = useState('')
+  const [accessMode, setAccessMode] = useState<AccessMode | null>(null)
   const istClock = useIstClock()
   const [depth, setDepth] = useState<DisplayDepth>(() => {
     const saved = window.localStorage.getItem('quantterm-display-depth')
@@ -282,6 +283,25 @@ function App() {
     } finally {
       setLoading(false)
     }
+  }, [])
+
+  useEffect(() => {
+    let alive = true
+    fetchAccessMode()
+      .then((payload) => { if (alive) setAccessMode(payload) })
+      .catch(() => {
+        if (!alive) return
+        // UI fails closed if it cannot prove mutation access. The backend
+        // remains the actual security boundary.
+        setAccessMode({
+          public_read_only: true,
+          mutation_policy: 'UNKNOWN',
+          operator_token_configured: false,
+          unsafe_methods: ['POST', 'PUT', 'PATCH', 'DELETE'],
+          live_money_unlocked: false,
+        })
+      })
+    return () => { alive = false }
   }, [])
 
   const marketScan = useScanRunner('MARKET_SCAN', {
@@ -358,7 +378,11 @@ function App() {
   }, [dashboard, error])
 
   useEffect(() => {
-    if (autoPrepareRef.current || loading || error) return
+    if (autoPrepareRef.current || loading || error || accessMode === null) return
+    if (accessMode.public_read_only) {
+      autoPrepareRef.current = true
+      return
+    }
     if (readSessionJson('quantterm-auto-prepare-done')) {
       autoPrepareRef.current = true
       return
@@ -377,7 +401,7 @@ function App() {
         void refresh()
       })
       .catch(() => { autoPrepareRef.current = false })
-  }, [loading, error, dashboard.data.ready, dashboard.scan.available, dashboard.scan.records.length, dashboard.scan.scanned_at, refresh])
+  }, [loading, error, accessMode, dashboard.data.ready, dashboard.scan.available, dashboard.scan.records.length, dashboard.scan.scanned_at, refresh])
 
   useEffect(() => {
     window.localStorage.setItem('quantterm-display-depth', depth)
@@ -438,6 +462,11 @@ function App() {
   }
 
   const runControl = async (control: ControlName) => {
+    if (accessMode?.public_read_only) {
+      setControlState('Public view is read-only. Operator controls are disabled.')
+      window.setTimeout(() => setControlState(''), 4000)
+      return
+    }
     setControlState('Starting…')
     try {
       const result = await sendControl(control)
@@ -473,6 +502,11 @@ function App() {
   }
 
   const addToWatchlist = async (symbol: string) => {
+    if (accessMode?.public_read_only) {
+      setControlState('Public view is read-only. Watchlist changes are disabled.')
+      window.setTimeout(() => setControlState(''), 3000)
+      return
+    }
     try {
       await addWatchlistItem({ symbol, notes: 'From radar' })
       setControlState(`${symbol} added to watchlist`)
@@ -620,6 +654,14 @@ function App() {
             <span className="reco-clock" title="Asia/Kolkata">{istClock || '—:—:—'} IST</span>
             <DisplayDepthToggle depth={depth} onChange={setDepth} />
             <button type="button" className="experience-help-trigger" onClick={() => setHelpOpen(true)}>What is this?</button>
+            {accessMode?.public_read_only && (
+              <span
+                className="read-only-pill"
+                title="Public visitor mode: market/research reads are available, state-changing operator actions are disabled."
+              >
+                <i /> PUBLIC READ ONLY
+              </span>
+            )}
             <span
               className={startupState === 'READY' ? 'live-pill' : (startupState === 'PREPARING_DATA' || startupState === 'WAITING_FOR_PROVIDER' ? 'work-pill' : 'offline-pill')}
               title={healthReason || deskStartupRecovery(startupState)}
