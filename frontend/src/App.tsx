@@ -527,6 +527,7 @@ function App() {
     marketScan,
     longTermScan,
     marketReport,
+    publicReadOnly: accessMode?.public_read_only ?? true,
   }
 
   const primaryPages = [
