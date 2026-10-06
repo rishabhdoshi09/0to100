@@ -33,6 +33,16 @@ GET /api/health
 
 A public visitor deployment should report `public_read_only: true`.
 
+Before opening the reverse proxy to users, run the zero-side-effect safety probe:
+
+```bash
+python scripts/verify_public_launch.py
+```
+
+Do not proceed unless it ends with `PUBLIC LAUNCH PASS`. The probe verifies
+both mutation guards and the canonical live-money lock without queueing a scan,
+paper cycle, replay, evidence acquisition, or any other real operation.
+
 ## Optional operator mutations
 
 If the same API instance must accept authenticated operator mutations, provide a
