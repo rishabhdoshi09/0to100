@@ -19,13 +19,14 @@ export async function readJson<T>(response: Response): Promise<T> {
       throw new Error(API_DOWN_MESSAGE)
     }
     if (response.status === 403 && body) {
+      let payload: { code?: string; detail?: string } | null = null
       try {
-        const payload = JSON.parse(body) as { code?: string; detail?: string }
-        if (payload.code === 'PUBLIC_READ_ONLY' || payload.code === 'OPERATOR_AUTH_REQUIRED') {
-          throw new Error(payload.detail || 'This public QuantTerm view is read-only.')
-        }
-      } catch (reason) {
-        if (reason instanceof Error && !reason.message.startsWith('Unexpected')) throw reason
+        payload = JSON.parse(body) as { code?: string; detail?: string }
+      } catch {
+        payload = null
+      }
+      if (payload?.code === 'PUBLIC_READ_ONLY' || payload?.code === 'OPERATOR_AUTH_REQUIRED') {
+        throw new Error(payload.detail || 'This public QuantTerm view is read-only.')
       }
     }
     throw new Error(body || `Request failed with ${response.status}`)
