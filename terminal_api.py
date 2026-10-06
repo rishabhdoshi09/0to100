@@ -1204,6 +1204,16 @@ def health() -> dict:
         "components": [],
     }
     try:
+        from product.public_access import access_projection
+        payload["access"] = access_projection()
+    except Exception:
+        payload["access"] = {
+            "public_read_only": None,
+            "mutation_policy": "UNVERIFIED",
+            "operator_token_configured": False,
+            "live_money_unlocked": False,
+        }
+    try:
         from product.runtime_lifecycle import inspect_runtime
 
         runtime = inspect_runtime(api_serving=True)
