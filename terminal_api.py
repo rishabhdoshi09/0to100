@@ -52,15 +52,14 @@ async def _log_unhandled(request: Request, exc: Exception):
 
 @app.middleware("http")
 async def _public_mutation_boundary(request: Request, call_next):
-    """Require explicit operator authorization for mutations in public mode.
+    """Enforce public mutation and owner-only read boundaries.
 
-    The guard covers every POST/PUT/PATCH/DELETE route registered on this
-    FastAPI application, including product-extension routes. It deliberately
-    does not trust client IPs or forwarding headers.
+    The guard covers routes registered later on the same FastAPI app and does
+    not infer trust from client IPs or forwarding headers.
     """
-    from product.public_access import authorize_mutation
+    from product.public_access import authorize_request
 
-    access = authorize_mutation(request.method, request.headers)
+    access = authorize_request(request.method, request.url.path, request.headers)
     if not access.allowed:
         return JSONResponse(
             {
