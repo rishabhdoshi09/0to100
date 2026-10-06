@@ -484,7 +484,9 @@ function App() {
     }
   }
 
-  const reportBase = `${window.location.protocol}//${window.location.hostname}:8766`
+  const reportBase = accessMode?.public_read_only
+    ? window.location.origin
+    : `${window.location.protocol}//${window.location.hostname}:8766`
   const openEquityReport = () => {
     if (!selected) {
       setControlState('Select a stock before generating an equity evidence PDF')
