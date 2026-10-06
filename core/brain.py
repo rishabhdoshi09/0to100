@@ -239,12 +239,44 @@ def _probe_edge(capital: float) -> dict:
         return {}
 
 
+def _scan_epoch(stamp: str) -> float:
+    """Parse an ISO scan timestamp into epoch seconds for existing staleness math."""
+    from datetime import datetime
+
+    text = str(stamp or "").strip()
+    if not text:
+        return 0.0
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return 0.0
+
+
 def _probe_setups(market: str) -> tuple[list[dict], float]:
     try:
         if market == "US":
             from scan.us_scanner import get_us_results
             res, ts, _st = get_us_results()
             return res, ts
+
+        # Canonical production scans are persisted through product.scan_store.
+        # scan.auto_scan is a legacy/compatibility path and is not the source
+        # the current desk API reads. Prefer the same artifact as Home so the
+        # Brain cannot disagree with the operator surface about opportunities.
+        try:
+            from product.scan_store import load_scan, resolved_scan_path
+            payload = load_scan(resolved_scan_path())
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            rows = [
+                dict(row)
+                for row in (payload.get("records") or [])
+                if isinstance(row, dict) and str(row.get("symbol") or "").strip()
+            ]
+            return rows, _scan_epoch(str(payload.get("scanned_at") or ""))
+
+        # Compatibility fallback only when no canonical artifact is readable.
         from scan.auto_scan import get_results
         res, _n, ts, _st = get_results()
         return res, ts
@@ -261,6 +293,27 @@ def _probe_book() -> dict:
 
 
 def _probe_autopilot(market: str) -> dict:
+    if market != "US":
+        try:
+            from product.paper_status import read_paper_status
+            paper = read_paper_status()
+            last_cycle = dict(getattr(paper, "last_cycle", {}) or {})
+            opened = list(last_cycle.get("positions_opened") or [])
+            return {
+                "armed": bool(getattr(paper, "enabled", False)),
+                # This is deliberately cycle-local rather than a fabricated
+                # daily aggregate. The current PaperStatus does not expose a
+                # trustworthy all-day counter.
+                "trades_today": len(opened),
+                "day_pnl": None,
+                "paper_open_positions": len(getattr(paper, "open_positions", ()) or ()),
+                "source": "product.paper_status",
+            }
+        except Exception:
+            pass
+
+    # US still owns its dedicated autopilot. For IN this is compatibility
+    # fallback only if the canonical modern paper status cannot be read.
     try:
         if market == "US":
             import execution.us_autopilot as ap
