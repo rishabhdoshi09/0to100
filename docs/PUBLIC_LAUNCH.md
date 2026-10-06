@@ -62,12 +62,19 @@ strictly read-only. That is the recommended public launch posture.
 The deployment edge should:
 
 1. terminate HTTPS;
-2. proxy the public frontend and read-only API routes to the loopback services;
-3. preserve the API's 403 responses;
-4. rate-limit expensive public reads where appropriate;
-5. never expose filesystem paths, runtime databases, environment files, logs,
+2. serve the built frontend (do not expose Vite's development server directly);
+3. proxy `/api/*` to `127.0.0.1:8765`;
+4. proxy public report reads such as `/reports/*` to `127.0.0.1:8766`;
+5. preserve both services' 403 responses;
+6. rate-limit expensive public reads, especially report generation, where appropriate;
+7. never expose filesystem paths, runtime databases, environment files, logs,
    or the operator bearer token;
-6. never rewrite blocked POST/PUT/PATCH/DELETE requests into GET requests.
+8. never rewrite blocked POST/PUT/PATCH/DELETE requests into GET requests.
+
+The report/evidence service uses the same public mutation guard as the main API.
+Its public GET report routes can be proxied, while evidence uploads/acquisition
+and other state-changing report-service routes remain blocked unless explicitly
+operator-authenticated.
 
 For the safest first launch, expose only the public read experience and keep all
 operator mutations on the private/local QuantTerm desk.
