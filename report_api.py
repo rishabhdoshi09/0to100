@@ -25,10 +25,15 @@ app.add_middleware(
 
 @app.middleware("http")
 async def _public_mutation_boundary(request: Request, call_next):
-    """Apply the same public read-only policy to research/evidence mutations."""
-    from product.public_access import authorize_mutation
+    """Apply public mutation and private evidence-read boundaries."""
+    from product.public_access import authorize_request
 
-    access = authorize_mutation(request.method, request.headers)
+    access = authorize_request(
+        request.method,
+        request.url.path,
+        request.headers,
+        service="report",
+    )
     if not access.allowed:
         return Response(
             content=json.dumps({
