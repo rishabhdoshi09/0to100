@@ -155,25 +155,8 @@ def _operator_autonomy_payload() -> dict:
 
 core._autonomy_payload = _operator_autonomy_payload
 
-# Preserve stock-by-stock coverage accounting through the compact dashboard API.
-_base_scan_payload = core._scan_payload
-
-
-def _scan_payload_with_coverage() -> dict:
-    projected = dict(_base_scan_payload() or {})
-    try:
-        from product.scan_store import load_scan
-        raw = load_scan() or {}
-    except Exception:
-        raw = {}
-    projected["requested_universe"] = int(raw.get("requested_universe", projected.get("universe_size", 0)) or 0)
-    projected["coverage_state"] = str(raw.get("coverage_state") or "UNKNOWN")
-    projected["coverage_warning"] = str(raw.get("coverage_warning") or "")
-    projected["coverage"] = dict(raw.get("coverage") or {})
-    return projected
-
-
-core._scan_payload = _scan_payload_with_coverage
+# Stock-by-stock coverage is projected by terminal_api._scan_payload from the
+# same atomic scan artifact as the ranked records, without a second JSON read.
 
 
 def _component_line(scorecard: dict) -> str:
@@ -194,7 +177,7 @@ def _component_line(scorecard: dict) -> str:
     return " · ".join(bits)
 
 
-def _attach_authority(payload: dict) -> dict:
+def _attach_authority(payload: dict, *, scan_payload: dict | None = None) -> dict:
     """Decorate recommendations with explanatory evidence; never change ranking/gates.
 
     Existing React cards already render ``evidence`` and ``evidence_coverage``.
@@ -245,7 +228,9 @@ def _attach_authority(payload: dict) -> dict:
             card["evidence_panel"] = panel
             card.update(decorate_card(card))
 
-    authority = build_authority_contract(core._scan_payload())
+    # Reuse the exact scan snapshot already read for Recommendations.
+    # Reading it a second time here previously reparsed hundreds of rows.
+    authority = build_authority_contract(scan_payload if scan_payload is not None else core._scan_payload())
     journal = build_decision_journal(limit=12)
     payload["authority"] = authority
     payload["decision_journal"] = journal
@@ -298,15 +283,16 @@ def recommendations_workspace() -> dict:
         slim_workspace_for_desk,
     )
 
+    scan = core._scan_payload()
     payload = build_recommendations_workspace(
-        scan_payload=core._scan_payload(),
+        scan_payload=scan,
         long_term_payload=core._long_term_payload(),
         refresh_technicals=False,
         settle_cases=False,
         deep_confirm=False,
         persist_ledger=False,
     )
-    return slim_workspace_for_desk(_attach_authority(payload))
+    return slim_workspace_for_desk(_attach_authority(payload, scan_payload=scan))
 
 
 @product.app.get("/api/evidence-authority")

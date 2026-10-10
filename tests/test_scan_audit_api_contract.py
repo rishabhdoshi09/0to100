@@ -20,9 +20,12 @@ def test_canonical_product_api_exposes_scan_audit_and_coverage_state():
     src = (ROOT / "api" / "runtime.py").read_text(encoding="utf-8")
     assert '@product.app.get("/api/scan-audit")' in src
     assert '"audit_route_registered": "/api/scan-audit" in paths' in src
-    assert "_scan_payload_with_coverage" in src
-    assert 'projected["requested_universe"]' in src
-    assert 'projected["coverage"]' in src
+    # Coverage now comes from the *same* atomic saved-scan read as ranked rows.
+    # A second full JSON parse in api.runtime is a performance regression.
+    terminal_src = (ROOT / "terminal_api.py").read_text(encoding="utf-8")
+    assert "_scan_payload_with_coverage" not in src
+    assert '"requested_universe": int(payload.get("requested_universe"' in terminal_src
+    assert '"coverage": dict(payload.get("coverage") or {})' in terminal_src
     assert '"coverage_state": str(scan.get("coverage_state") or "UNKNOWN")' in src
     assert '"checked_universe": int(scan.get("universe_size") or 0)' in src
 

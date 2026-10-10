@@ -435,6 +435,13 @@ def _scan_payload() -> dict:
             # WHEN THE SCAN RAN vs WHICH SESSION IT READ are different facts.
             # The desk must be able to render them separately.
             "provenance": dict(provenance) if isinstance(provenance, dict) else {},
+            # Preserve canonical coverage from this same atomic saved scan.
+            # Previously api.runtime reparsed the entire scan file just to
+            # recover these four metadata fields on every dashboard request.
+            "requested_universe": int(payload.get("requested_universe", payload.get("universe_size", 0)) or 0),
+            "coverage_state": str(payload.get("coverage_state") or "UNKNOWN"),
+            "coverage_warning": str(payload.get("coverage_warning") or ""),
+            "coverage": dict(payload.get("coverage") or {}),
         }
     except Exception as exc:
         return {
@@ -444,6 +451,10 @@ def _scan_payload() -> dict:
             "summary": {},
             "records": [],
             "provenance": {},
+            "requested_universe": 0,
+            "coverage_state": "UNKNOWN",
+            "coverage_warning": "",
+            "coverage": {},
             "error": str(exc),
         }
 
@@ -1267,67 +1278,85 @@ def health() -> dict:
 @app.get("/api/dashboard")
 def dashboard() -> dict:
     """RecoWealth desk bootstrap. Last readable scan survives a subsystem failure."""
+    started = time.monotonic()
+    timings: dict[str, float] = {}
+
+    def _timed(label: str, fn):
+        step_started = time.monotonic()
+        try:
+            return fn()
+        finally:
+            timings[label] = round(time.monotonic() - step_started, 3)
+
     try:
-        scan = _scan_payload()
-    except Exception as exc:
-        scan = {
-            "available": False,
-            "scanned_at": "",
-            "universe_size": 0,
-            "summary": {},
-            "records": [],
-            "provenance": {},
-            "error": str(exc),
-        }
-    try:
-        market = _market_payload()
-        long_term = _long_term_payload()
-        paper = _paper_payload()
-        autonomy = _autonomy_payload()
-        operations = _operations_payload()
-        news = _news_payload()
-        fno = _fno_payload()
-        data = _data_payload(scan, long_term, operations, fno, news)
-        conviction = _conviction(scan, market)
-        daily_wrap: list = []
         try:
-            from product.desk_note import daily_wrap as build_daily_wrap
-            daily_wrap = build_daily_wrap(
-                articles=list(news.get("articles") or []),
-                scan_payload=scan,
-            )
-        except Exception:
-            daily_wrap = []
-        return _json_safe({
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-            "market": market,
-            "scan": _slim_ranked_records(scan),
-            "long_term": _slim_ranked_records(long_term),
-            "paper": paper,
-            "autonomy": autonomy,
-            "operations": operations,
-            "news": news,
-            "fno": fno,
-            "data": data,
-            "conviction": conviction,
-            "scan_progress": _scan_progress_payload(),
-            "daily_wrap": daily_wrap,
-        })
-    except Exception as exc:
-        degraded = _empty_dashboard(f"Dashboard degraded: {exc}", scan)
+            scan = _timed("scan", _scan_payload)
+        except Exception as exc:
+            scan = {
+                "available": False,
+                "scanned_at": "",
+                "universe_size": 0,
+                "summary": {},
+                "records": [],
+                "provenance": {},
+                "error": str(exc),
+            }
         try:
-            degraded["market"] = _market_payload()
-        except Exception:
-            pass
-        try:
-            degraded["long_term"] = _long_term_payload()
-        except Exception:
-            pass
-        try:
-            degraded["operations"] = _operations_payload()
-        except Exception:
-            pass
-        return _json_safe(degraded)
+            market = _timed("market", _market_payload)
+            long_term = _timed("long_term", _long_term_payload)
+            paper = _timed("paper", _paper_payload)
+            autonomy = _timed("autonomy", _autonomy_payload)
+            operations = _timed("operations", _operations_payload)
+            news = _timed("news", _news_payload)
+            fno = _timed("fno", _fno_payload)
+            data = _timed("data", lambda: _data_payload(scan, long_term, operations, fno, news))
+            conviction = _timed("conviction", lambda: _conviction(scan, market))
+            daily_wrap: list = []
+            try:
+                from product.desk_note import daily_wrap as build_daily_wrap
+                daily_wrap = build_daily_wrap(
+                    articles=list(news.get("articles") or []),
+                    scan_payload=scan,
+                )
+            except Exception:
+                daily_wrap = []
+            return _json_safe({
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "market": market,
+                "scan": _slim_ranked_records(scan),
+                "long_term": _slim_ranked_records(long_term),
+                "paper": paper,
+                "autonomy": autonomy,
+                "operations": operations,
+                "news": news,
+                "fno": fno,
+                "data": data,
+                "conviction": conviction,
+                "scan_progress": _scan_progress_payload(),
+                "daily_wrap": daily_wrap,
+            })
+        except Exception as exc:
+            degraded = _empty_dashboard(f"Dashboard degraded: {exc}", scan)
+            try:
+                degraded["market"] = _market_payload()
+            except Exception:
+                pass
+            try:
+                degraded["long_term"] = _long_term_payload()
+            except Exception:
+                pass
+            try:
+                degraded["operations"] = _operations_payload()
+            except Exception:
+                pass
+            return _json_safe(degraded)
+    finally:
+        total = time.monotonic() - started
+        if total >= 2.0:
+            # No symbols, positions, credentials or other sensitive payloads.
+            # Only slow requests are logged; external response JSON is unchanged.
+            lanes = " ".join(f"{name}={seconds:.3f}s" for name, seconds in timings.items())
+            print(f"[API SLOW] GET /api/dashboard total={total:.3f}s {lanes}", flush=True)
 
 
 @app.get("/api/operations")
