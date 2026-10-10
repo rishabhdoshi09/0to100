@@ -30,22 +30,86 @@ def paper_autopilot() -> dict:
     return _with_live_safety(_core.paper_autopilot())
 
 
-def decision_simulation_gate() -> dict:
-    """Startup discovery/approval truth plus the current canonical best trades."""
-    import time
-    from product.decision_simulation_gate import status
+def _gate_http_cold() -> dict:
+    """Fail-closed initial status: never invent approval or paper authority."""
+    return {
+        "schema_version": 1,
+        "phase": "SEARCHING_BEST_TRADES",
+        "approved": False,
+        "approval_required": True,
+        "discovery_ready": False,
+        "scan_fresh": False,
+        "scan_scanned_at": "",
+        "best_trades": [],
+        "decision_count": 0,
+        "actionable": 0,
+        "research_actionable": 0,
+        "thesis": {},
+        "thesis_hash": "",
+        "message": "Read-only decision status is preparing; approval is unverified.",
+        "live_locked": True,
+        "live_lock_verified": False,
+        "live_execution_authorized": False,
+        "simulation_scope": [],
+    }
 
-    # Release the read budget only when the synchronous handler finishes,
-    # not when a browser disconnects. A slow approval/status read can otherwise
-    # pile up in FastAPI's shared thread pool.
-    with _core.core._bounded_status_read("/api/decision-simulation-gate"):
-        started = time.monotonic()
-        try:
-            return _with_live_safety(status())
-        finally:
-            elapsed = time.monotonic() - started
-            if elapsed >= 2.0:
-                print(f"[API SLOW] GET /api/decision-simulation-gate total={elapsed:.3f}s", flush=True)
+
+def _gate_http_stale(payload: dict) -> None:
+    """Old GET projections are never proof of a current approval identity."""
+    payload.update(
+        phase="SEARCHING_BEST_TRADES",
+        approved=False, approval_required=True,
+        discovery_ready=False, scan_fresh=False,
+        approved_at="", approved_scan_id="", approved_symbols=[],
+        approved_thesis_hash="", approved_evolution_policy_fingerprint="",
+        current_thesis_hash="", current_evolution_policy_fingerprint="",
+        best_trades=[], decision_count=0,
+        actionable=0, research_actionable=0,
+        live_locked=True, live_lock_verified=False,
+        live_execution_authorized=False,
+        simulation_scope=[],
+        message="Decision status is not current; no approval or eligibility is implied.",
+    )
+
+
+def _compute_gate_http_status() -> dict:
+    """A read-only slow projection, never an execution or approval action."""
+    from datetime import datetime, timezone
+    from product.decision_simulation_gate import status
+    result = _with_live_safety(status())
+    result["generated_at"] = datetime.now(timezone.utc).isoformat()
+    return result
+
+
+from fastapi import Request
+from product.dashboard_snapshot_cache import DashboardSnapshotCache
+
+_gate_http_cache = DashboardSnapshotCache(
+    loader=_compute_gate_http_status,
+    cold_payload=_gate_http_cold,
+    ttl_seconds=15.0,
+    stale_transform=_gate_http_stale,
+    metadata_key="status_cache",
+)
+
+
+def decision_simulation_gate(request: Request = None) -> dict:
+    """Nonblocking browser GET; direct callers retain authoritative live read.
+
+    The write-side approve() in product.decision_simulation_gate always calls
+    status() synchronously and verifies current immutable identities. This HTTP
+    optimization cannot grant/revoke that authority.
+    """
+    if request is not None:
+        return _gate_http_cache.read()
+    import time
+    started = time.monotonic()
+    try:
+        return _compute_gate_http_status()
+    finally:
+        elapsed = time.monotonic() - started
+        if elapsed >= 2.0:
+            print(f"[API SLOW] GET /api/decision-simulation-gate total={elapsed:.3f}s", flush=True)
 
 
 def decision_simulator_get(
