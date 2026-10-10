@@ -611,6 +611,9 @@ export type DashboardPayload = {
     dashboard_record_limit?: number
     dashboard_records_shown?: number
     provenance?: ScanProvenance
+    desk_overlays?: Record<string, unknown>
+    long_term_overlay?: Record<string, unknown>
+    overlay_timings_s?: Record<string, number>
   }
   long_term: {
     available: boolean
