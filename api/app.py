@@ -35,13 +35,17 @@ def decision_simulation_gate() -> dict:
     import time
     from product.decision_simulation_gate import status
 
-    started = time.monotonic()
-    try:
-        return _with_live_safety(status())
-    finally:
-        elapsed = time.monotonic() - started
-        if elapsed >= 2.0:
-            print(f"[API SLOW] GET /api/decision-simulation-gate total={elapsed:.3f}s", flush=True)
+    # Release the read budget only when the synchronous handler finishes,
+    # not when a browser disconnects. A slow approval/status read can otherwise
+    # pile up in FastAPI's shared thread pool.
+    with _core.core._bounded_status_read("/api/decision-simulation-gate"):
+        started = time.monotonic()
+        try:
+            return _with_live_safety(status())
+        finally:
+            elapsed = time.monotonic() - started
+            if elapsed >= 2.0:
+                print(f"[API SLOW] GET /api/decision-simulation-gate total={elapsed:.3f}s", flush=True)
 
 
 def decision_simulator_get(
