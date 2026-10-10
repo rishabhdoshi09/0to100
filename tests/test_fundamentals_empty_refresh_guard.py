@@ -108,3 +108,30 @@ def test_valid_partial_financial_evidence_is_not_rejected(monkeypatch):
 
     assert result["key_ratios"][0]["value"] == "0%"
     assert len(cache.writes) == 1
+
+
+def test_long_term_cache_only_path_rejects_legacy_empty_placeholder(monkeypatch):
+    from fundamentals.cache import FundamentalsCache
+    from scan.long_term_service import _default_fundamental_provider
+
+    monkeypatch.setattr(
+        FundamentalsCache, "get",
+        lambda self, symbol, **kwargs: {"about": "HTML challenge",
+                                        "profit_loss": [],
+                                        "metadata": {"total_rows_scraped": 0}},
+    )
+    assert _default_fundamental_provider("INFY", refresh=False) is None
+
+
+def test_long_term_cache_only_path_accepts_valid_financial_rows(monkeypatch):
+    from fundamentals.cache import FundamentalsCache
+    from scan.long_term_service import _default_fundamental_provider
+
+    monkeypatch.setattr(
+        FundamentalsCache, "get",
+        lambda self, symbol, **kwargs: {
+            "key_ratios": [{"name": "Stock P/E", "value": "25"}]
+        },
+    )
+    result = _default_fundamental_provider("INFY", refresh=False)
+    assert result["key_ratios"][0]["value"] == "25"
