@@ -277,7 +277,13 @@ def operator_health() -> dict:
 
 @product.app.get("/api/recommendations-workspace")
 def recommendations_workspace() -> dict:
-    """Canonical Recommendations projection plus read-only evidence explanations."""
+    """Canonical Recommendations projection, protected from runaway UI polling."""
+    with core._bounded_status_read("/api/recommendations-workspace"):
+        return _build_recommendations_workspace_response()
+
+
+def _build_recommendations_workspace_response() -> dict:
+    """Read-only evidence projection; does not execute market scans."""
     from product.recommendations_workspace import (
         build_recommendations_workspace,
         slim_workspace_for_desk,

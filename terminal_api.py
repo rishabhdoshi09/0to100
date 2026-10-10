@@ -7,6 +7,7 @@ separate execution/learning lane and is never allowed to block scans.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -53,6 +54,62 @@ async def _log_unhandled(request: Request, exc: Exception):
 _API_TRACE_PATHS = frozenset({"/api/dashboard", "/api/decision-simulation-gate"})
 _API_TRACE_LOCK = threading.Lock()
 _API_TRACE_ACTIVE: dict[str, int] = {}
+
+# Read-only desk projections are expensive on older Mac hosts with an external
+# persistent volume. When the client times out, the Python worker can continue
+# running for minutes. Without admission control, later polls launch more slow
+# handlers and eventually starve even /api/access and /api/health.
+# This limit applies ONLY to read-only UI projections; it cannot gate broker
+# interlocks, paper exits, internal worker operations or write requests.
+_API_STATUS_READ_PATHS = frozenset({
+    "/api/dashboard",
+    "/api/decision-simulation-gate",
+    "/api/recommendations-workspace",
+})
+# Normal overlapping status reads are expected during initial browser mount.
+# Shed ONLY when at least one request has become demonstrably slow. The Mac
+# incident had reads blocked for 180-240s and eight accumulated in flight.
+_API_STATUS_READ_SLOW_S = 12.0
+_API_STATUS_READ_MAX_SLOW_PARALLEL = 2
+_API_STATUS_READ_LOCK = threading.Lock()
+_API_STATUS_READ_ACTIVE: dict[str, dict[object, float]] = {}
+
+
+@contextmanager
+def _bounded_status_read(path: str):
+    """Admit normal concurrent reads; reject *additional* severely slow polls.
+
+    Bound concurrency only once a handler has been running for >=12s. Healthy
+    overlapping browser reads keep their existing HTTP 200 contract. The
+    admission record stays held by the synchronous handler even when an HTTP
+    client disconnects; no broker/execution/worker path is constrained.
+    """
+    if path not in _API_STATUS_READ_PATHS:
+        raise ValueError("unsupported bounded status route")
+    identity = object()
+    with _API_STATUS_READ_LOCK:
+        started = time.monotonic()
+        active = [stamp for rows in _API_STATUS_READ_ACTIVE.values() for stamp in rows.values()]
+        oldest_slow = any(started - stamp >= _API_STATUS_READ_SLOW_S for stamp in active)
+        same_path_busy = bool(_API_STATUS_READ_ACTIVE.get(path))
+        if oldest_slow and (
+            same_path_busy or len(active) >= _API_STATUS_READ_MAX_SLOW_PARALLEL
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "API_STATUS_BUSY", "message": "Read-only desk status is overloaded; retry shortly. Last cached data may be stale."},
+                headers={"Retry-After": "10", "Cache-Control": "no-store"},
+            )
+        _API_STATUS_READ_ACTIVE.setdefault(path, {})[identity] = started
+    try:
+        yield
+    finally:
+        with _API_STATUS_READ_LOCK:
+            entries = _API_STATUS_READ_ACTIVE.get(path)
+            if entries is not None:
+                entries.pop(identity, None)
+                if not entries:
+                    _API_STATUS_READ_ACTIVE.pop(path, None)
 
 
 @app.middleware("http")
@@ -1125,8 +1182,10 @@ def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news
         # Do not unpickle store_cache.pkl on the Home request. A cold API
         # process can spend longer than the page timeout loading it.
         bhavcopy = bhavcopy_status(load_cache=False)
-        if bhavcopy.get("cache_exists") and not bhavcopy.get("ready"):
-            _schedule_warm("bhavcopy-cache", _warm_bhavcopy_cache)
+        # Do not start a multi-year OHLCV pickle unmarshal in the API process
+        # merely because Home was polled. The dedicated market-data/scan worker
+        # owns historical-store loading. The desk reports "store_loaded=False"
+        # honestly while still checking official disk-session freshness.
     except Exception as exc:
         bhavcopy = {
             "ready": False,
@@ -1304,6 +1363,12 @@ def health() -> dict:
 
 @app.get("/api/dashboard")
 def dashboard() -> dict:
+    """Read-only desk snapshot with bounded work admission."""
+    with _bounded_status_read("/api/dashboard"):
+        return _compose_dashboard()
+
+
+def _compose_dashboard() -> dict:
     """RecoWealth desk bootstrap. Last readable scan survives a subsystem failure."""
     started = time.monotonic()
     timings: dict[str, float] = {}
