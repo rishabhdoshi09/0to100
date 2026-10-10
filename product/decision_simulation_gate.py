@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -188,41 +189,52 @@ def _board() -> dict[str, Any]:
         }
 
 
+def _status_stage(name: str, fn):
+    """Show the *individual* slow status read without logging market data."""
+    started = time.monotonic()
+    try:
+        return fn()
+    finally:
+        elapsed = time.monotonic() - started
+        if elapsed >= 2.0:
+            print(f"[API SLOW STAGE] decision-simulation-gate {name}={elapsed:.3f}s", flush=True)
+
+
 def status(*, path: str | Path | None = None) -> dict[str, Any]:
     from product.trading_thesis import manifest
 
-    state = _read(path)
+    state = _status_stage("approval_state", lambda: _read(path))
     startup_id = current_startup_id() or str(state.get("startup_id") or "")
-    thesis = manifest()
+    thesis = _status_stage("thesis", manifest)
     thesis_hash = str(thesis.get("thesis_hash") or "")
     try:
         from product.decision_discovery_store import current_evolution_policy_fingerprint
-        evolution_policy_fingerprint = current_evolution_policy_fingerprint()
+        evolution_policy_fingerprint = _status_stage("evolution_policy", current_evolution_policy_fingerprint)
     except Exception:
         evolution_policy_fingerprint = ""
     try:
         from product.desk_pipeline import scan_is_fresh
-        scan_fresh = bool(scan_is_fresh())
+        scan_fresh = bool(_status_stage("scan_freshness", scan_is_fresh))
     except Exception:
         scan_fresh = False
 
     try:
         from product.long_term_store import load_long_term_scan
         long_term_scanned_at = str(
-            (load_long_term_scan() or {}).get("scanned_at") or ""
+            (_status_stage("long_term_snapshot", load_long_term_scan) or {}).get("scanned_at") or ""
         )
     except Exception:
         long_term_scanned_at = ""
 
     if scan_fresh:
-        board = _board()
+        board = _status_stage("cached_discovery", _board)
     else:
         # Freshness is a prerequisite, so do not spend seconds rebuilding and
         # ranking a scan that is forbidden from being shown/approved anyway.
         # This keeps the gate responsive during stale-data recovery.
         try:
             from product.scan_store import load_scan
-            scan = dict(load_scan() or {})
+            scan = dict(_status_stage("stale_scan_snapshot", load_scan) or {})
         except Exception:
             scan = {}
         board = {

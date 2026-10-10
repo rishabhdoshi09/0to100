@@ -124,7 +124,11 @@ def scan_is_fresh() -> bool:
     try:
         from data.bhavcopy_runtime import official_history_freshness
 
-        freshness = official_history_freshness(load_cache=True)
+        # A *persisted scan artifact* freshness probe only needs the official
+        # session date already on disk. Do not unpickle the multi-year OHLCV
+        # cache inside an HTTP Decision Simulation status request. Scanner and
+        # data-preparation workers still require a loaded store separately.
+        freshness = official_history_freshness(load_cache=False, require_store=False)
         # New freshness payloads expose usable_for_scan explicitly. Older/test
         # payloads may only expose current; keep that compatibility without
         # weakening the production publication-grace contract.
