@@ -155,25 +155,8 @@ def _operator_autonomy_payload() -> dict:
 
 core._autonomy_payload = _operator_autonomy_payload
 
-# Preserve stock-by-stock coverage accounting through the compact dashboard API.
-_base_scan_payload = core._scan_payload
-
-
-def _scan_payload_with_coverage() -> dict:
-    projected = dict(_base_scan_payload() or {})
-    try:
-        from product.scan_store import load_scan
-        raw = load_scan() or {}
-    except Exception:
-        raw = {}
-    projected["requested_universe"] = int(raw.get("requested_universe", projected.get("universe_size", 0)) or 0)
-    projected["coverage_state"] = str(raw.get("coverage_state") or "UNKNOWN")
-    projected["coverage_warning"] = str(raw.get("coverage_warning") or "")
-    projected["coverage"] = dict(raw.get("coverage") or {})
-    return projected
-
-
-core._scan_payload = _scan_payload_with_coverage
+# Stock-by-stock coverage is projected by terminal_api._scan_payload from the
+# same atomic scan artifact as the ranked records, without a second JSON read.
 
 
 def _component_line(scorecard: dict) -> str:
