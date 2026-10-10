@@ -25,6 +25,10 @@ def valid_responses():
                 "requested_universe": 2000,
                 "universe_size": 1980,
                 "coverage": {"checked": 1980, "analysis_errors": 0},
+                "desk_overlays": {
+                    "recommendations": "saved",
+                    "decision_discovery": "saved",
+                },
                 "provenance": {
                     "data_current": True, "price_data_as_of": "2026-10-09",
                 },
@@ -92,3 +96,11 @@ def test_slow_or_missing_api_endpoint_fails():
     partial = valid_responses()
     del partial["dashboard"]
     assert evaluate(partial, timings_s=timings())["verdict"] == "HOLD"
+
+
+def test_completed_scan_without_decision_publication_is_hold():
+    responses = valid_responses()
+    responses["dashboard"]["scan"]["desk_overlays"]["decision_discovery"] = "error"
+    report = evaluate(responses, timings_s=timings())
+    assert report["verdict"] == "HOLD"
+    assert any("Decision discovery" in x for x in report["blockers"])
