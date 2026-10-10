@@ -7,7 +7,6 @@ operational capabilities are set to unavailable rather than treated as live.
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timezone
 import threading
 import time
 from typing import Any, Callable
