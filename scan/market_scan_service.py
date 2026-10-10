@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, Mapping, Any
+import time
 
 
 SUCCEEDED = "SUCCEEDED"
@@ -447,21 +448,37 @@ def run_whole_market_scan(
         )
 
     payload["scan_status"] = SUCCEEDED
+    # The worker used to report one opaque 10+ minute "ranking" block.
+    # Track each persisted overlay independently; durations are diagnostics
+    # only, never synthetic evidence or a reason to promote/execute a trade.
+    overlay_timings: dict[str, float] = {}
+    def _overlay_stage(name: str, fn):
+        stage_started = time.monotonic()
+        try:
+            return fn()
+        finally:
+            elapsed = round(max(0.0, time.monotonic() - stage_started), 3)
+            overlay_timings[name] = elapsed
+            print(f"[SCAN STAGE] {name}={elapsed:.3f}s", flush=True)
+
     if save:
         try:
             from scan.scan_coverage import save_audit
-            save_audit(audit)
+            _overlay_stage("coverage_audit", lambda: save_audit(audit))
         except Exception:
             pass
         try:
             from product.sepa_setup import persist_public_best_setups
-            persist_public_best_setups(payload)
+            _overlay_stage("sepa_best_setups", lambda: persist_public_best_setups(payload))
         except Exception:
             pass
         try:
             from scan.long_term_service import overlay_long_term_from_market_scan
-            overlay = overlay_long_term_from_market_scan(
-                payload, refresh_fundamentals=False, save=True,
+            overlay = _overlay_stage(
+                "long_term_overlay",
+                lambda: overlay_long_term_from_market_scan(
+                    payload, refresh_fundamentals=False, save=True,
+                ),
             )
             payload["long_term_overlay"] = {
                 "status": overlay.status,
@@ -476,9 +493,13 @@ def run_whole_market_scan(
             }
         try:
             from product.desk_scan_overlays import persist_desks_from_market_scan
-            payload["desk_overlays"] = persist_desks_from_market_scan(payload)
+            payload["desk_overlays"] = _overlay_stage(
+                "recommendations_discovery_reports",
+                lambda: persist_desks_from_market_scan(payload),
+            )
         except Exception as exc:
             payload["desk_overlays"] = {"error": type(exc).__name__}
+    payload["overlay_timings_s"] = overlay_timings
     summary = dict(payload.get("summary", {}))
     n_setups = int(summary.get("with_any_setup", 0) or 0)
     status = SUCCEEDED if n_setups else NO_SETUPS
@@ -488,7 +509,7 @@ def run_whole_market_scan(
     # and keeps scan identity + recommendation projection atomic at the product
     # boundary. save_scan itself uses an atomic file replace.
     if save:
-        save_scan(payload)
+        _overlay_stage("publish_scan", lambda: save_scan(payload))
         # Shadow learning must observe only the same fully-published canonical
         # scan readers can see. It never participates in publication success.
         if _feature002_hook is not None:
