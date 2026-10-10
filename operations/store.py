@@ -75,6 +75,12 @@ _SCHEMA_INITIALIZED: dict[str, tuple[int, int]] = {}
 _SCHEMA_INIT_LOCK = threading.Lock()
 
 
+# Reuse a connection only within the SAME worker thread, across short-lived
+# OperationStore wrappers. Otherwise each GET recreated its own SQLite handle
+# and repeated WAL/busy_timeout setup despite the per-thread cache comment.
+_SHARED_STORE_CONNECTIONS = threading.local()
+
+
 def _database_identity(path: Path) -> tuple[int, int] | None:
     try:
         stat = path.stat()
@@ -222,7 +228,7 @@ class OperationStore:
     def __init__(self, path: str | Path = "logs/market_ops/jobs.db") -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._local = threading.local()
+        self._local = _SHARED_STORE_CONNECTIONS
         # Database is backed by a removable external APFS volume on the Mac.
         # Identity checking must invalidate schema proof if the file/volume
         # disappears or a replacement DB is mounted at the same path.
@@ -240,16 +246,21 @@ class OperationStore:
     def _connect(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         cached = getattr(self._local, "con", None)
-        if cached is not None and getattr(self._local, "path", None) == str(self.path):
+        # Never reuse a connection to a replaced/unmounted SQLite inode.
+        current_identity = _database_identity(self.path)
+        if cached is not None and (
+            getattr(self._local, "path", None) != str(self.path)
+            or getattr(self._local, "identity", None) != current_identity
+            or current_identity is None
+        ):
+            self._drop_cached()
+            cached = None
+        if cached is not None:
             try:
                 cached.execute("SELECT 1")
                 return _BorrowedConnection(cached)
             except Exception:
-                try:
-                    cached.close()
-                except Exception:
-                    pass
-                self._local.con = None
+                self._drop_cached()
         last_exc: Exception | None = None
         for _ in range(3):
             try:
@@ -260,6 +271,7 @@ class OperationStore:
                 con.execute("PRAGMA busy_timeout=30000")
                 self._local.con = con
                 self._local.path = str(self.path)
+                self._local.identity = _database_identity(self.path)
                 return _BorrowedConnection(con)
             except sqlite3.OperationalError as exc:
                 last_exc = exc
@@ -271,6 +283,8 @@ class OperationStore:
     def _drop_cached(self) -> None:
         cached = getattr(self._local, "con", None)
         self._local.con = None
+        self._local.identity = None
+        self._local.path = None
         if cached is None:
             return
         try:
