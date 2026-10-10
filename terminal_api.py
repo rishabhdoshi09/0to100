@@ -1474,6 +1474,16 @@ def operations_status() -> dict:
     return _operations_payload()
 
 
+@app.get("/api/operations/{operation_id}/status")
+def operation_poll_status(operation_id: str) -> dict:
+    """Read-only high-frequency operation status; never decode result_json."""
+    from operations.store import OperationStore
+    item = OperationStore(OPS_DB).get_summary(operation_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Operation not found")
+    return item
+
+
 @app.get("/api/operations/{operation_id}")
 def operation_status(operation_id: str) -> dict:
     from operations.store import OperationStore
