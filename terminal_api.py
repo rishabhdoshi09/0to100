@@ -66,36 +66,50 @@ _API_STATUS_READ_PATHS = frozenset({
     "/api/decision-simulation-gate",
     "/api/recommendations-workspace",
 })
-_API_STATUS_READ_MAX_PARALLEL = 2
-_API_STATUS_READ_TOKENS = threading.BoundedSemaphore(_API_STATUS_READ_MAX_PARALLEL)
+# Normal overlapping status reads are expected during initial browser mount.
+# Shed ONLY when at least one request has become demonstrably slow. The Mac
+# incident had reads blocked for 180-240s and eight accumulated in flight.
+_API_STATUS_READ_SLOW_S = 12.0
+_API_STATUS_READ_MAX_SLOW_PARALLEL = 2
 _API_STATUS_READ_LOCK = threading.Lock()
-_API_STATUS_READ_ACTIVE: set[str] = set()
+_API_STATUS_READ_ACTIVE: dict[str, dict[object, float]] = {}
 
 
 @contextmanager
 def _bounded_status_read(path: str):
-    """Fail fast on duplicate heavy polls rather than exhaust FastAPI threads.
+    """Admit normal concurrent reads; reject *additional* severely slow polls.
 
-    The lock is held by the *synchronous handler* until all database reads and
-    JSON encoding finish, even if a browser times out and abandons its HTTP
-    connection. A busy response never claims a fresh trading snapshot.
+    Bound concurrency only once a handler has been running for >=12s. Healthy
+    overlapping browser reads keep their existing HTTP 200 contract. The
+    admission record stays held by the synchronous handler even when an HTTP
+    client disconnects; no broker/execution/worker path is constrained.
     """
     if path not in _API_STATUS_READ_PATHS:
         raise ValueError("unsupported bounded status route")
+    identity = object()
     with _API_STATUS_READ_LOCK:
-        if path in _API_STATUS_READ_ACTIVE or not _API_STATUS_READ_TOKENS.acquire(blocking=False):
+        started = time.monotonic()
+        active = [stamp for rows in _API_STATUS_READ_ACTIVE.values() for stamp in rows.values()]
+        oldest_slow = any(started - stamp >= _API_STATUS_READ_SLOW_S for stamp in active)
+        same_path_busy = bool(_API_STATUS_READ_ACTIVE.get(path))
+        if oldest_slow and (
+            same_path_busy or len(active) >= _API_STATUS_READ_MAX_SLOW_PARALLEL
+        ):
             raise HTTPException(
                 status_code=503,
-                detail={"code": "API_STATUS_BUSY", "message": "Read-only desk status is busy; retry shortly. Last cached data may be stale."},
+                detail={"code": "API_STATUS_BUSY", "message": "Read-only desk status is overloaded; retry shortly. Last cached data may be stale."},
                 headers={"Retry-After": "10", "Cache-Control": "no-store"},
             )
-        _API_STATUS_READ_ACTIVE.add(path)
+        _API_STATUS_READ_ACTIVE.setdefault(path, {})[identity] = started
     try:
         yield
     finally:
         with _API_STATUS_READ_LOCK:
-            _API_STATUS_READ_ACTIVE.discard(path)
-            _API_STATUS_READ_TOKENS.release()
+            entries = _API_STATUS_READ_ACTIVE.get(path)
+            if entries is not None:
+                entries.pop(identity, None)
+                if not entries:
+                    _API_STATUS_READ_ACTIVE.pop(path, None)
 
 
 @app.middleware("http")
