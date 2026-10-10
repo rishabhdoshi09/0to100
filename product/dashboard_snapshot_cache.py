@@ -20,11 +20,15 @@ class DashboardSnapshotCache:
         *,
         ttl_seconds: float = 45.0,
         failure_retry_seconds: float = 10.0,
+        stale_transform: Callable[[dict[str, Any]], None] | None = None,
+        metadata_key: str = "dashboard_cache",
     ) -> None:
         self._loader = loader
         self._cold_payload = cold_payload
         self.ttl_seconds = ttl_seconds
         self.failure_retry_seconds = failure_retry_seconds
+        self._stale_transform = stale_transform or self._fail_closed_stale
+        self._metadata_key = metadata_key
         self._lock = threading.Lock()
         self._snapshot: dict[str, Any] | None = None
         self._completed_at: float | None = None
@@ -160,14 +164,14 @@ class DashboardSnapshotCache:
             result = self._cold_payload()
             status = "DEGRADED" if last_error else "BOOTSTRAPPING"
             # The cold fallback must not imply the data is fresh.
-            self._fail_closed_stale(result)
+            self._stale_transform(result)
         else:
             result = deepcopy(snapshot)
             status = "STALE" if expired else "FRESH"
             if expired:
-                self._fail_closed_stale(result)
+                self._stale_transform(result)
 
-        result["dashboard_cache"] = {
+        result[self._metadata_key] = {
             "status": status,
             "snapshot_generated_at": (
                 snapshot.get("generated_at", "") if snapshot is not None else ""
