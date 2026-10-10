@@ -499,8 +499,11 @@ export function RecommendationsView({
 
   useEffect(() => {
     let cancelled = false
+    let inFlight = false
     const loadGate = () => {
-      fetchDecisionSimulationGate()
+      if (inFlight) return
+      inFlight = true
+      void fetchDecisionSimulationGate()
         .then((payload) => {
           if (!cancelled) {
             setSimulationGate(payload)
@@ -510,9 +513,12 @@ export function RecommendationsView({
         .catch((reason: unknown) => {
           if (!cancelled) setSimulationError(reason instanceof Error ? reason.message : 'Decision Simulation status unavailable')
         })
+        .finally(() => { inFlight = false })
     }
     loadGate()
-    const timer = window.setInterval(loadGate, 5000)
+    // Approval/discovery status is not an intraday quote. Slow requests must
+    // never pile up concurrently on the local Python/SQLite API thread pool.
+    const timer = window.setInterval(loadGate, 15_000)
     return () => {
       cancelled = true
       window.clearInterval(timer)
@@ -521,9 +527,12 @@ export function RecommendationsView({
 
   useEffect(() => {
     let cancelled = false
+    let inFlight = false
     const load = () => {
+      if (inFlight) return
+      inFlight = true
       if (!recallMemory('reco-workspace')) setLoading(true)
-      fetchRecommendationsWorkspace()
+      void fetchRecommendationsWorkspace()
         .then((payload) => {
           if (!cancelled) {
             const kept = keepRicherMemory('reco-workspace', payload, (row) => !(row.categories || []).some((c) => (c.count || 0) > 0 || (c.cards || []).length > 0))
@@ -537,6 +546,7 @@ export function RecommendationsView({
           if (!cancelled) setError(err.message || 'Failed to load recommendations')
         })
         .finally(() => {
+          inFlight = false
           if (!cancelled) setLoading(false)
         })
     }
