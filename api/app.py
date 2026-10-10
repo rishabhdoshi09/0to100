@@ -103,13 +103,14 @@ def decision_simulation_gate(request: Request = None) -> dict:
     if request is not None:
         return _gate_http_cache.read()
     import time
-    started = time.monotonic()
-    try:
-        return _compute_gate_http_status()
-    finally:
-        elapsed = time.monotonic() - started
-        if elapsed >= 2.0:
-            print(f"[API SLOW] GET /api/decision-simulation-gate total={elapsed:.3f}s", flush=True)
+    with _core.core._bounded_status_read("/api/decision-simulation-gate"):
+        started = time.monotonic()
+        try:
+            return _compute_gate_http_status()
+        finally:
+            elapsed = time.monotonic() - started
+            if elapsed >= 2.0:
+                print(f"[API SLOW] GET /api/decision-simulation-gate total={elapsed:.3f}s", flush=True)
 
 
 def decision_simulator_get(
