@@ -217,7 +217,7 @@ def test_scan_fresh_when_session_identity_current(monkeypatch, tmp_path):
     monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
     monkeypatch.setattr(
         "data.bhavcopy_runtime.official_history_freshness",
-        lambda load_cache=True: {
+        lambda load_cache=False, require_store=False: {
             "current": True,
             "expected_latest_completed_session": "2026-09-02",
         },
@@ -225,7 +225,7 @@ def test_scan_fresh_when_session_identity_current(monkeypatch, tmp_path):
     assert DP.scan_is_fresh() is True
     monkeypatch.setattr(
         "data.bhavcopy_runtime.official_history_freshness",
-        lambda load_cache=True: {
+        lambda load_cache=False, require_store=False: {
             "current": True,
             "expected_latest_completed_session": "2026-09-03",
         },
