@@ -796,16 +796,27 @@ class MarketOperationsWorker:
         if as_of_session:
             result["as_of_session"] = as_of_session
             result["history_latest_date"] = as_of_session
-            try:
-                from product.scan_store import default_scan_path, load_scan, save_scan
+            # The scanner now commits immutable provenance + as_of_session in
+            # its ONE atomic saved-scan write. Re-reading and rewriting that
+            # large JSON here doubles I/O and briefly invalidates cache readers.
+            # Keep compatibility repair only for old injected scan producers.
+            if not (
+                str(payload.get("as_of_session") or "")[:10] == as_of_session
+                and str(payload.get("history_latest_date") or "")[:10] == as_of_session
+            ):
+                try:
+                    from product.scan_store import default_scan_path, load_scan, save_scan
 
-                saved = load_scan(default_scan_path())
-                if saved:
-                    saved["as_of_session"] = as_of_session
-                    saved["history_latest_date"] = as_of_session
-                    save_scan(saved)
-            except Exception:
-                pass
+                    saved = load_scan(default_scan_path())
+                    if saved and (
+                        str(saved.get("as_of_session") or "")[:10] != as_of_session
+                        or str(saved.get("history_latest_date") or "")[:10] != as_of_session
+                    ):
+                        saved["as_of_session"] = as_of_session
+                        saved["history_latest_date"] = as_of_session
+                        save_scan(saved)
+                except Exception:
+                    pass
         finish_progress(records=result["records"], setups=int(summary.get("with_any_setup") or 0))
         result["telegram"] = self._notify_scan_telegram(payload)
         result["long_term_overlay"] = dict(payload.get("long_term_overlay") or {})
