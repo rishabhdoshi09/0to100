@@ -68,6 +68,21 @@ _SUMMARY_SELECT = ",".join(_SUMMARY_COLUMNS)
 _MARKET_SCAN_ARTIFACT = "logs/product/latest_momentum_scan.json"
 
 
+# API status handlers instantiate OperationStore on every GET. Replaying CREATE
+# TABLE/INDEX and a failing ALTER TABLE each time increases SQLite writer lock
+# contention. Cache only the schema initialization proof, never query results.
+_SCHEMA_INITIALIZED: dict[str, tuple[int, int]] = {}
+_SCHEMA_INIT_LOCK = threading.Lock()
+
+
+def _database_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        stat = path.stat()
+        return (int(stat.st_dev), int(stat.st_ino))
+    except OSError:
+        return None
+
+
 def _result_for_storage(kind: str, status: str, result: dict[str, Any] | None) -> dict[str, Any]:
     """Keep operation history compact while preserving the canonical result artifact.
 
@@ -208,7 +223,19 @@ class OperationStore:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
-        self._init_schema()
+        # Database is backed by a removable external APFS volume on the Mac.
+        # Identity checking must invalidate schema proof if the file/volume
+        # disappears or a replacement DB is mounted at the same path.
+        key = str(self.path.resolve())
+        with _SCHEMA_INIT_LOCK:
+            identity = _database_identity(self.path)
+            if identity is None or _SCHEMA_INITIALIZED.get(key) != identity:
+                self._init_schema()
+                verified = _database_identity(self.path)
+                if verified is not None:
+                    _SCHEMA_INITIALIZED[key] = verified
+                else:
+                    _SCHEMA_INITIALIZED.pop(key, None)
 
     def _connect(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
