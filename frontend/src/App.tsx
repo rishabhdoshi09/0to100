@@ -383,6 +383,9 @@ function App() {
       autoPrepareRef.current = true
       return
     }
+    // An initial/stale HTTP snapshot does not prove missing market data.
+    // Do not launch another heavy data preparation while the read worker warms.
+    if (dashboard.dashboard_cache && dashboard.dashboard_cache.status !== 'FRESH') return
     if (readSessionJson('quantterm-auto-prepare-done')) {
       autoPrepareRef.current = true
       return
@@ -401,7 +404,7 @@ function App() {
         void refresh()
       })
       .catch(() => { autoPrepareRef.current = false })
-  }, [loading, error, accessMode, dashboard.data.ready, dashboard.scan.available, dashboard.scan.records.length, dashboard.scan.scanned_at, refresh])
+  }, [loading, error, accessMode, dashboard.dashboard_cache?.status, dashboard.data.ready, dashboard.scan.available, dashboard.scan.records.length, dashboard.scan.scanned_at, refresh])
 
   useEffect(() => {
     window.localStorage.setItem('quantterm-display-depth', depth)
@@ -690,6 +693,19 @@ function App() {
             <span>{controlState || (loading ? 'Loading real state…' : `Updated ${dashboard.generated_at ? new Date(dashboard.generated_at).toLocaleTimeString('en-IN') : '—'}`)}</span>
           </div>
         </section>
+
+        {dashboard.dashboard_cache && dashboard.dashboard_cache.status !== 'FRESH' && (
+          <div className="api-degraded-banner" role="status">
+            <strong>{dashboard.dashboard_cache.status === 'BOOTSTRAPPING'
+              ? 'Loading the read-only dashboard snapshot'
+              : 'Dashboard snapshot is not current'}</strong>
+            <p>
+              {dashboard.dashboard_cache.status === 'BOOTSTRAPPING'
+                ? 'The first snapshot is being built without blocking the interface. Trade execution and live safety are not represented by this placeholder.'
+                : 'Last known observations may still be visible. Operational permissions and F&O candidates are unavailable until a fresh snapshot completes.'}
+            </p>
+          </div>
+        )}
 
         {connectionBanner && (
           <div className="api-degraded-banner" role="alert">
