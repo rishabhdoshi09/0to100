@@ -752,15 +752,20 @@ def _scan_progress_payload() -> dict[str, Any]:
 
 
 def _operations_payload() -> dict[str, Any]:
+    """Only query lightweight operation metadata for polling dashboard clients.
+
+    Detailed results remain available from /api/operations/{operation_id}.
+    Never decode large completed result_json blobs on the 8-12s UI poll.
+    """
     try:
         from operations.market_ops import LANES
         from operations.store import OperationStore
         store = OperationStore(OPS_DB)
         runtime = _ops_runtime_payload()
-        recent = store.recent(100)
+        recent = store.recent_summary(100)
         latest = {}
         for kind in LANES:
-            item = store.latest(kind)
+            item = store.latest_summary(kind)
             if item:
                 latest[kind] = item
         return {
@@ -770,7 +775,7 @@ def _operations_payload() -> dict[str, Any]:
             "heartbeat": runtime.get("heartbeat", ""),
             "active_lanes": dict(runtime.get("active", {}) or {}),
             "counts": store.counts(),
-            "active": store.active(),
+            "active": store.active_summary(),
             "recent": recent,
             "latest": latest,
         }
@@ -799,7 +804,10 @@ def _news_payload() -> dict[str, Any]:
             stats = store.stats(hours=24)
         finally:
             store.close()
-        latest_refresh = _operations_payload().get("latest", {}).get("NEWS_REFRESH", {})
+        # News needs one operation's status, not an entire second operations
+        # dashboard (which would repeatedly load historical result blobs).
+        from operations.store import OperationStore
+        latest_refresh = OperationStore(OPS_DB).latest_summary("NEWS_REFRESH") or {}
         return {
             "available": bool(articles or health),
             "stats": stats,
