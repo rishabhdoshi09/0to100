@@ -82,6 +82,12 @@ def evaluate(
     if int(coverage.get("analysis_errors") or 0) > 0:
         blockers.append("Scanner recorded analysis errors; check exact coverage ledger")
 
+    desk_overlays = scan.get("desk_overlays") or {}
+    if desk_overlays.get("recommendations") != "saved":
+        blockers.append("Recommendation cards were not durably published for the scan")
+    if desk_overlays.get("decision_discovery") != "saved":
+        blockers.append("Decision discovery was not durably published for the scan")
+
     status_cache = gate.get("status_cache") or {}
     if status_cache.get("status") != "FRESH":
         blockers.append("Decision Simulation status read snapshot is not FRESH")
