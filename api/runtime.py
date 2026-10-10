@@ -177,7 +177,7 @@ def _component_line(scorecard: dict) -> str:
     return " · ".join(bits)
 
 
-def _attach_authority(payload: dict) -> dict:
+def _attach_authority(payload: dict, *, scan_payload: dict | None = None) -> dict:
     """Decorate recommendations with explanatory evidence; never change ranking/gates.
 
     Existing React cards already render ``evidence`` and ``evidence_coverage``.
@@ -228,7 +228,9 @@ def _attach_authority(payload: dict) -> dict:
             card["evidence_panel"] = panel
             card.update(decorate_card(card))
 
-    authority = build_authority_contract(core._scan_payload())
+    # Reuse the exact scan snapshot already read for Recommendations.
+    # Reading it a second time here previously reparsed hundreds of rows.
+    authority = build_authority_contract(scan_payload if scan_payload is not None else core._scan_payload())
     journal = build_decision_journal(limit=12)
     payload["authority"] = authority
     payload["decision_journal"] = journal
@@ -281,15 +283,16 @@ def recommendations_workspace() -> dict:
         slim_workspace_for_desk,
     )
 
+    scan = core._scan_payload()
     payload = build_recommendations_workspace(
-        scan_payload=core._scan_payload(),
+        scan_payload=scan,
         long_term_payload=core._long_term_payload(),
         refresh_technicals=False,
         settle_cases=False,
         deep_confirm=False,
         persist_ledger=False,
     )
-    return slim_workspace_for_desk(_attach_authority(payload))
+    return slim_workspace_for_desk(_attach_authority(payload, scan_payload=scan))
 
 
 @product.app.get("/api/evidence-authority")
