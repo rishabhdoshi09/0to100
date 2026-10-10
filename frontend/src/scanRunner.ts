@@ -25,6 +25,12 @@ export function isActiveStatus(status: string): boolean {
   return status === 'PENDING' || status === 'RUNNING'
 }
 
+// A cached dashboard may still show RUNNING after an explicit operation-status
+// read confirmed completion. Never resurrect polling for that same operation.
+export function isAlreadyCompletedSeed(operationId: string, completedId: string | null): boolean {
+  return Boolean(completedId && operationId === completedId)
+}
+
 export function seedKindMatches(seedKind: string, runnerKind: ScanKind): boolean {
   if (seedKind === runnerKind) return true
   if (runnerKind === 'LONG_TERM_SCAN' && (seedKind === 'LONG_TERM_REFRESH' || seedKind === 'MARKET_SCAN')) return true
@@ -196,10 +202,12 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
     setIsBusy(false)
     startedAtRef.current = null
     scanPaceIdRef.current = null
-    if (completedIdRef.current === op.operation_id) return
-    completedIdRef.current = op.operation_id
+    // Always stop polling, including when stale dashboard seeds have briefly
+    // reattached a previously completed operation. Completion notices run once.
     clearPoll()
     trackedIdRef.current = null
+    if (completedIdRef.current === op.operation_id) return
+    completedIdRef.current = op.operation_id
     if (op.status === 'SUCCEEDED') {
       setNotice('Done — refreshing results…')
       onComplete?.()
@@ -247,6 +255,7 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
   }, [clearPoll, pollOnce])
 
   const attachOperation = useCallback((op: OperationRecord) => {
+    if (isAlreadyCompletedSeed(op.operation_id, completedIdRef.current)) return
     setOperation(op)
     if (isActiveStatus(op.status)) {
       setIsBusy(operationBlocksUserAction(op))
@@ -267,6 +276,7 @@ export function useScanRunner(kind: ScanKind, options: ScanRunnerOptions = {}): 
   useEffect(() => {
     const seed = seedOperation
     if (!seed || !seedKindMatches(seed.kind, kind)) return
+    if (isAlreadyCompletedSeed(seed.operation_id, completedIdRef.current)) return
     if (trackedIdRef.current === seed.operation_id) {
       setOperation(seed)
       if (isActiveStatus(seed.status)) setIsBusy(operationBlocksUserAction(seed))
