@@ -571,6 +571,15 @@ export type ScanProvenance = {
 
 export type DashboardPayload = {
   generated_at: string
+  dashboard_cache?: {
+    status: 'FRESH' | 'STALE' | 'BOOTSTRAPPING' | 'DEGRADED'
+    snapshot_generated_at?: string
+    age_seconds?: number | null
+    refreshing: boolean
+    retry_after_seconds?: number
+    error?: string
+    read_only?: boolean
+  }
   market: {
     available: boolean
     health: string
