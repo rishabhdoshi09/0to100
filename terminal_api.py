@@ -526,6 +526,11 @@ def _scan_payload() -> dict:
             "coverage_state": str(payload.get("coverage_state") or "UNKNOWN"),
             "coverage_warning": str(payload.get("coverage_warning") or ""),
             "coverage": dict(payload.get("coverage") or {}),
+            # A technical scan can SUCCEED while a dependent discovery/reco
+            # overlay fails. Do not flatten those truths into one green badge.
+            "desk_overlays": dict(payload.get("desk_overlays") or {}),
+            "long_term_overlay": dict(payload.get("long_term_overlay") or {}),
+            "overlay_timings_s": dict(payload.get("overlay_timings_s") or {}),
         }
     except Exception as exc:
         return {
@@ -539,6 +544,9 @@ def _scan_payload() -> dict:
             "coverage_state": "UNKNOWN",
             "coverage_warning": "",
             "coverage": {},
+            "desk_overlays": {},
+            "long_term_overlay": {},
+            "overlay_timings_s": {},
             "error": str(exc),
         }
 
