@@ -32,8 +32,16 @@ def paper_autopilot() -> dict:
 
 def decision_simulation_gate() -> dict:
     """Startup discovery/approval truth plus the current canonical best trades."""
+    import time
     from product.decision_simulation_gate import status
-    return _with_live_safety(status())
+
+    started = time.monotonic()
+    try:
+        return _with_live_safety(status())
+    finally:
+        elapsed = time.monotonic() - started
+        if elapsed >= 2.0:
+            print(f"[API SLOW] GET /api/decision-simulation-gate total={elapsed:.3f}s", flush=True)
 
 
 def decision_simulator_get(
