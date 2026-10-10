@@ -189,11 +189,11 @@ def get_deep_fundamentals(
     secondary scrape. Official tables always win after a secondary enrichment.
     """
     symbol = symbol.upper().strip()
-    last_good = _cache.get(symbol, allow_stale=True)
-    # Historical runs may already have stored zero-row HTTP 200 pages.
-    # Never treat such a cache entry as valid last-good financial evidence.
-    if not _has_financial_evidence(last_good):
-        last_good = None
+    cached_enrichment = _cache.get(symbol, allow_stale=True)
+    # Metadata-only cache can supply an "about" description when official
+    # financial tables exist. It must NEVER qualify as last-good financial
+    # evidence by itself after a failed secondary refresh.
+    last_good = cached_enrichment if _has_financial_evidence(cached_enrichment) else None
     official = _official_warehouse_snapshot(symbol)
     cached = None if force_refresh else _cache.get(symbol, allow_stale=False)
 
@@ -214,7 +214,7 @@ def get_deep_fundamentals(
         official = _try_official_backfill(symbol)
 
     if official and not force_refresh:
-        merged = _merge_official(last_good, official)
+        merged = _merge_official(cached_enrichment, official)
         _cache.set(symbol, merged)
         log.info("fundamentals_served_from_official_warehouse", symbol=symbol)
         return merged
@@ -229,7 +229,7 @@ def get_deep_fundamentals(
             raise RuntimeError("Secondary fundamentals returned no financial evidence")
     except Exception as exc:
         if official:
-            merged = _merge_official(last_good, official)
+            merged = _merge_official(cached_enrichment, official)
             merged["secondary_refresh_error"] = str(exc)[:240]
             _cache.set(symbol, merged)
             log.info("fundamentals_served_official_after_secondary_failure", symbol=symbol)
