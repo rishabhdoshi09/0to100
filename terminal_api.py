@@ -50,6 +50,11 @@ async def _log_unhandled(request: Request, exc: Exception):
         status_code=500,
     )
 
+_API_TRACE_PATHS = frozenset({"/api/dashboard", "/api/decision-simulation-gate"})
+_API_TRACE_LOCK = threading.Lock()
+_API_TRACE_ACTIVE: dict[str, int] = {}
+
+
 @app.middleware("http")
 async def _public_mutation_boundary(request: Request, call_next):
     """Require explicit operator authorization for mutations in public mode.
@@ -71,7 +76,29 @@ async def _public_mutation_boundary(request: Request, call_next):
             status_code=403,
             headers={"Cache-Control": "no-store"},
         )
-    return await call_next(request)
+
+    path = request.url.path
+    if request.method != "GET" or path not in _API_TRACE_PATHS:
+        return await call_next(request)
+
+    started = time.monotonic()
+    with _API_TRACE_LOCK:
+        active = _API_TRACE_ACTIVE.get(path, 0) + 1
+        _API_TRACE_ACTIVE[path] = active
+    # Log BEFORE scheduling the synchronous handler into the thread pool:
+    # previous step-only logs did not appear when calls waited for a worker.
+    print(f"[API TRACE] begin {path} inflight={active}", flush=True)
+    try:
+        return await call_next(request)
+    finally:
+        elapsed = time.monotonic() - started
+        with _API_TRACE_LOCK:
+            left = max(0, _API_TRACE_ACTIVE.get(path, 1) - 1)
+            if left:
+                _API_TRACE_ACTIVE[path] = left
+            else:
+                _API_TRACE_ACTIVE.pop(path, None)
+        print(f"[API TRACE] end {path} total={elapsed:.3f}s remaining={left}", flush=True)
 
 
 @app.get("/api/access")
