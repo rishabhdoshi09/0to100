@@ -1361,9 +1361,27 @@ def health() -> dict:
     return payload
 
 
+from product.dashboard_snapshot_cache import DashboardSnapshotCache
+
+
+# HTTP polling is deliberately nonblocking. Direct module callers retain the
+# synchronous projection contract for diagnostics/tests; market execution and
+# safety checks never read this cache.
+_dashboard_http_cache = DashboardSnapshotCache(
+    loader=lambda: _compose_dashboard(),
+    cold_payload=lambda: _empty_dashboard(
+        "Dashboard read snapshot is warming; current execution state is unavailable.",
+        {"available": False, "scanned_at": "", "universe_size": 0,
+         "summary": {}, "records": [], "provenance": {}},
+    ),
+)
+
+
 @app.get("/api/dashboard")
-def dashboard() -> dict:
-    """Read-only desk snapshot with bounded work admission."""
+def dashboard(request: Request = None) -> dict:
+    """HTTP status is cached; internal callers can still request a fresh read."""
+    if request is not None:
+        return _dashboard_http_cache.read()
     with _bounded_status_read("/api/dashboard"):
         return _compose_dashboard()
 
