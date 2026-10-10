@@ -684,6 +684,15 @@ class OperationStore:
             ).fetchone()
         return self._decode(row)
 
+    def get_summary(self, operation_id: str) -> dict[str, Any] | None:
+        """One inexpensive polling read without full scan result/payload blobs."""
+        with self._connect() as con:
+            row = con.execute(
+                f"SELECT {_SUMMARY_SELECT} FROM operations WHERE operation_id=?",
+                (operation_id,),
+            ).fetchone()
+        return self._decode_summary(row)
+
     def latest(self, kind: str) -> dict[str, Any] | None:
         """Return the full latest operation for callers that explicitly need details."""
         with self._connect() as con:
