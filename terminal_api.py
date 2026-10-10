@@ -451,6 +451,10 @@ def _scan_payload() -> dict:
             "summary": {},
             "records": [],
             "provenance": {},
+            "requested_universe": 0,
+            "coverage_state": "UNKNOWN",
+            "coverage_warning": "",
+            "coverage": {},
             "error": str(exc),
         }
 
