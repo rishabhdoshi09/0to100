@@ -435,6 +435,13 @@ def _scan_payload() -> dict:
             # WHEN THE SCAN RAN vs WHICH SESSION IT READ are different facts.
             # The desk must be able to render them separately.
             "provenance": dict(provenance) if isinstance(provenance, dict) else {},
+            # Preserve canonical coverage from this same atomic saved scan.
+            # Previously api.runtime reparsed the entire scan file just to
+            # recover these four metadata fields on every dashboard request.
+            "requested_universe": int(payload.get("requested_universe", payload.get("universe_size", 0)) or 0),
+            "coverage_state": str(payload.get("coverage_state") or "UNKNOWN"),
+            "coverage_warning": str(payload.get("coverage_warning") or ""),
+            "coverage": dict(payload.get("coverage") or {}),
         }
     except Exception as exc:
         return {
