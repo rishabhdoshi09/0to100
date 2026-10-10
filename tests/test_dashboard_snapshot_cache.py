@@ -143,3 +143,82 @@ def test_http_dashboard_uses_cache_without_changing_internal_diagnostic_contract
     result = client.get("/api/dashboard")
     assert result.status_code == 200
     assert result.json() == {"marker": "cached_http"}
+
+
+def test_gate_stale_snapshot_never_grants_approval_or_active_trades():
+    from api.app import _gate_http_stale, _gate_http_cold
+
+    fake = _gate_http_cold()
+    fake.update(
+        approved=True, approval_required=False, discovery_ready=True,
+        scan_fresh=True, actionable=9, research_actionable=10,
+        best_trades=[{"symbol": "INFY"}], live_execution_authorized=True,
+        current_thesis_hash="old", current_evolution_policy_fingerprint="old",
+    )
+    _gate_http_stale(fake)
+    assert fake["approved"] is False
+    assert fake["approval_required"] is True
+    assert fake["discovery_ready"] is False
+    assert fake["scan_fresh"] is False
+    assert fake["best_trades"] == []
+    assert fake["actionable"] == 0
+    assert fake["live_execution_authorized"] is False
+    assert fake["current_thesis_hash"] == ""
+
+
+def test_gate_http_get_nonblocking_even_when_original_compute_is_slow(monkeypatch):
+    import api.app as canonical
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow_build():
+        entered.set()
+        assert release.wait(3)
+        return {
+            **canonical._gate_http_cold(),
+            "approved": True,
+            "discovery_ready": True,
+            "scan_fresh": True,
+            "best_trades": [{"symbol": "INFY"}],
+        }
+
+    cache = DashboardSnapshotCache(
+        slow_build, canonical._gate_http_cold,
+        ttl_seconds=15, stale_transform=canonical._gate_http_stale,
+        metadata_key="status_cache",
+    )
+    monkeypatch.setattr(canonical, "_gate_http_cache", cache)
+    try:
+        client = TestClient(canonical.app)
+        started = time.monotonic()
+        response = client.get("/api/decision-simulation-gate")
+        assert time.monotonic() - started < 1.0
+        assert response.status_code == 200
+        body = response.json()
+        assert body["approved"] is False
+        assert body["discovery_ready"] is False
+        assert body["status_cache"]["status"] == "BOOTSTRAPPING"
+        assert entered.wait(1)
+        client.get("/api/decision-simulation-gate")
+    finally:
+        release.set()
+    _wait_for_completion(cache)
+    ready = client.get("/api/decision-simulation-gate").json()
+    assert ready["approved"] is True
+    assert ready["status_cache"]["status"] == "FRESH"
+
+
+def test_direct_gate_status_remains_uncached_and_authoritative(monkeypatch):
+    import api.app as canonical
+
+    monkeypatch.setattr(
+        canonical, "_compute_gate_http_status",
+        lambda: {"approved": True, "discovery_ready": True},
+    )
+    monkeypatch.setattr(
+        canonical, "_gate_http_cache",
+        type("OnlyHTTP", (), {"read": lambda self: (_ for _ in ()).throw(
+            AssertionError("direct status unexpectedly used HTTP cache"))})(),
+    )
+    assert canonical.decision_simulation_gate()["approved"] is True
