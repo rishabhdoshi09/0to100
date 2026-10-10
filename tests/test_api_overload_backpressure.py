@@ -9,30 +9,38 @@ import pytest
 from fastapi import HTTPException
 
 
-def test_duplicate_dashboard_read_is_rejected_before_heavy_work():
+def test_duplicate_dashboard_read_is_shed_only_when_sustained_slow(monkeypatch):
     import terminal_api as core
 
+    clock = [1000.0]
+    monkeypatch.setattr(core.time, "monotonic", lambda: clock[0])
     with core._bounded_status_read("/api/dashboard"):
+        # Normal browser overlap must continue returning its usual HTTP 200.
+        with core._bounded_status_read("/api/dashboard"):
+            pass
+        clock[0] += core._API_STATUS_READ_SLOW_S + 0.1
         with pytest.raises(HTTPException) as err:
             with core._bounded_status_read("/api/dashboard"):
-                raise AssertionError("duplicate status read was admitted")
+                raise AssertionError("slow duplicate status read was admitted")
         assert err.value.status_code == 503
         assert err.value.detail["code"] == "API_STATUS_BUSY"
         assert err.value.headers["Retry-After"] == "10"
 
-    # A completed handler always returns its capacity.
     with core._bounded_status_read("/api/dashboard"):
         pass
 
 
-def test_two_heavy_reads_cannot_admit_a_third_concurrent_request():
+def test_existing_very_slow_reads_limit_total_pressure(monkeypatch):
     import terminal_api as core
 
+    clock = [1000.0]
+    monkeypatch.setattr(core.time, "monotonic", lambda: clock[0])
     with core._bounded_status_read("/api/dashboard"):
         with core._bounded_status_read("/api/decision-simulation-gate"):
+            clock[0] += core._API_STATUS_READ_SLOW_S + 0.1
             with pytest.raises(HTTPException) as err:
                 with core._bounded_status_read("/api/recommendations-workspace"):
-                    raise AssertionError("third expensive read was admitted")
+                    raise AssertionError("third read admitted during sustained overload")
             assert err.value.status_code == 503
 
     with core._bounded_status_read("/api/recommendations-workspace"):
