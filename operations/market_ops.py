@@ -183,6 +183,33 @@ def _emit(kind: str, message: str) -> None:
     print(f"[{console_stamp()}] MARKET OPS {kind:<9} {message}", flush=True)
 
 
+def _operation_log_summary(result: dict[str, Any]) -> str:
+    """Log bounded completion facts, never full saved scan/price/evidence blobs.
+
+    The canonical operation store and market scan artifacts retain detailed
+    results. A full report can be hundreds of KB; formatting and flushing it
+    to the shared external drive after every operation adds avoidable IO and
+    generates noisy logs that are difficult to inspect.
+    """
+    if not isinstance(result, dict):
+        return "result=unavailable"
+
+    payload = result.get("payload")
+    payload = payload if isinstance(payload, dict) else {}
+    parts = []
+    for name, value in (
+        ("status", result.get("status")),
+        ("records", result.get("records")),
+        ("scanned", payload.get("scanned")),
+        ("qualified", payload.get("qualified_rows")),
+        ("as_of_session", result.get("as_of_session")),
+        ("source_snapshot_id", result.get("source_snapshot_id")),
+    ):
+        if isinstance(value, (int, float, bool)) or (isinstance(value, str) and value):
+            parts.append(f"{name}={str(value)[:80]}")
+    return " ".join(parts) if parts else "result=persisted"
+
+
 def _operation_result(report: Any) -> dict[str, Any]:
     if hasattr(report, "as_dict"):
         return dict(report.as_dict())
@@ -1277,7 +1304,7 @@ class MarketOperationsWorker:
                 elapsed = time.monotonic() - started
                 message = f"{kind} completed in {elapsed:.1f}s"
                 self.store.finish(operation_id, status=SUCCEEDED, message=message, result=result)
-                _emit("DONE", f"{kind} · id={operation_id} · {elapsed:.1f}s · {result}")
+                _emit("DONE", f"{kind} · id={operation_id} · {elapsed:.1f}s · {_operation_log_summary(result)}")
             except OperationBlocked as exc:
                 elapsed = time.monotonic() - started
                 self.store.finish(
