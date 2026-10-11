@@ -93,6 +93,23 @@ def test_report_watchdog_requires_health_not_just_an_open_port():
     assert "Port 8766 is owned externally but /health is failing" in watch
 
 
+
+def test_api_watchdog_does_not_confuse_an_open_port_with_health():
+    """Only an owned, persistently unhealthy API may be terminated."""
+    inner = (ROOT / "scripts" / "run_quantterm.sh").read_text(encoding="utf-8")
+    adopt = inner.split("adopt_api() {", 1)[1].split("\n}", 1)[0]
+    start = inner.split("start_api() {", 1)[1].split("\n}", 1)[0]
+    watch = inner.split('while [[ "$STOP" != "1" ]]', 1)[1]
+    assert 'url_ok "http://127.0.0.1:8765/api/health"' in adopt
+    assert "|| api_listening" not in adopt
+    assert 'if api_listening; then' in start
+    assert "refusing a competing uvicorn" in start
+    assert 'API_UNHEALTHY_GRACE_S="${QT_API_UNHEALTHY_GRACE_S:-120}"' in inner
+    assert 'stop_pid "$API_PID" "unresponsive market API"' in watch
+    assert 'API_EXTERNAL" != "1"' in watch
+    assert "no tracked owned API exists; refusing to kill it" in watch
+
+
 def test_complete_script_always_stops_old_stack_then_starts_everything():
     complete = (ROOT / "scripts" / "run_quantterm_complete.sh").read_text(encoding="utf-8")
     inner = (ROOT / "scripts" / "run_quantterm.sh").read_text(encoding="utf-8")
