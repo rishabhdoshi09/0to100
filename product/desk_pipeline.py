@@ -157,9 +157,17 @@ def scan_is_fresh() -> bool:
     except Exception:
         expected = ""
     try:
-        from product.scan_store import load_scan, scan_artifact_is_fresh
+        from product.scan_store import (
+            load_scan, load_scan_metadata, scan_age_hours,
+            scan_artifact_is_fresh,
+        )
 
-        payload = load_scan(path)
+        # The status/approval probe needs only immutable price-session identity.
+        # Avoid deserializing the whole multi-megabyte recommendation scan on
+        # every UI poll. Old/mismatched sidecars fall back to the source JSON;
+        # current official history freshness was checked independently above.
+        metadata = load_scan_metadata(path)
+        payload = metadata if metadata is not None else load_scan(path)
         if not payload:
             return False
         provenance = payload.get("provenance") if isinstance(payload.get("provenance"), dict) else {}
@@ -180,6 +188,9 @@ def scan_is_fresh() -> bool:
             # rescan solely because wall-clock age crossed SCAN_FRESH_S.
             return True
         if payload.get("scanned_at"):
+            if metadata is not None:
+                age_h = scan_age_hours(metadata)
+                return bool(age_h is not None and age_h * 3600.0 <= SCAN_FRESH_S)
             return bool(scan_artifact_is_fresh(path, max_age_s=SCAN_FRESH_S))
     except Exception:
         return False
