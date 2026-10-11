@@ -13,8 +13,8 @@ def test_disk_inventory_reports_date_without_claiming_ohlcv_ready(tmp_path):
     path = tmp_path / "bhav"
     path.mkdir()
     (path / "09102026.csv").write_text(
-        "SYMBOL,SERIES,OPEN_PRICE,HIGH_PRICE,LOW_PRICE,CLOSE_PRICE\n"
-        + ("TCS,EQ,100,101,99,100\n" * 100),
+        "SYMBOL,SERIES,DATE1,OPEN_PRICE,HIGH_PRICE,LOW_PRICE,CLOSE_PRICE,TTL_TRD_QNTY\n"
+        + ("TCS,EQ,09-Oct-2026,100,101,99,100,500\n" * 100),
         encoding="utf-8",
     )
     (path / "11132026.csv").write_text("bad", encoding="utf-8")
@@ -104,8 +104,8 @@ def test_bogus_newer_csv_filename_never_makes_history_current(tmp_path):
     path = tmp_path / "bhav"
     path.mkdir()
     (path / "09102026.csv").write_text(
-        "SYMBOL,SERIES,OPEN_PRICE,CLOSE_PRICE\n"
-        + ("TCS,EQ,100,101\n" * 100),
+        "SYMBOL,SERIES,DATE1,OPEN_PRICE,HIGH_PRICE,LOW_PRICE,CLOSE_PRICE,TTL_TRD_QNTY\n"
+        + ("TCS,EQ,09-Oct-2026,100,101,99,100,500\n" * 100),
         encoding="utf-8",
     )
     assert disk.unloaded_status(path)["csv_latest_date"] == "2026-10-09"
@@ -155,3 +155,39 @@ def test_imported_but_unloaded_price_engine_still_checks_disk_integrity(monkeypa
         ),
     )
     assert runtime.status(load_cache=False) is marker
+
+
+def test_renaming_previous_session_archive_cannot_fake_a_current_trading_day(tmp_path):
+    path = tmp_path / "bhav"
+    path.mkdir()
+    header = "SYMBOL,SERIES,DATE1,OPEN_PRICE,HIGH_PRICE,LOW_PRICE,CLOSE_PRICE,TTL_TRD_QNTY\n"
+    rows = "TCS,EQ,09-Oct-2026,100,101,99,100,500\n" * 100
+    (path / "12102026.csv").write_text(header + rows, encoding="utf-8")
+    state = disk.unloaded_status(path)
+    assert state["csv_latest_named_date"] == "2026-10-12"
+    assert state["csv_latest_validated"] is False
+    assert state["csv_latest_date"] == ""
+
+
+def test_missing_required_parser_column_or_bad_bars_do_not_verify_latest_session(tmp_path):
+    path = tmp_path / "bhav"
+    path.mkdir()
+    dest = path / "09102026.csv"
+    header = "SYMBOL,SERIES,DATE1,OPEN_PRICE,HIGH_PRICE,LOW_PRICE,CLOSE_PRICE,TTL_TRD_QNTY\n"
+    # A plausible-size file without volume cannot be read by the actual
+    # pandas price parser. A malformed 1000-byte body must not pass by size.
+    dest.write_text(
+        "SYMBOL,SERIES,DATE1,OPEN_PRICE,HIGH_PRICE,LOW_PRICE,CLOSE_PRICE\n"
+        + ("TCS,EQ,09-Oct-2026,100,101,99,100\n" * 100), encoding="utf-8",
+    )
+    assert disk.unloaded_status(path)["csv_latest_validated"] is False
+    dest.write_text(
+        header + ("TCS,EQ,09-Oct-2026,100,-1,150,100,500\n" * 100),
+        encoding="utf-8",
+    )
+    assert disk.unloaded_status(path)["csv_latest_validated"] is False
+    dest.write_text(
+        header + ("TCS,EQ,09-Oct-2026,100,101,99,100,500\n" * 100),
+        encoding="utf-8",
+    )
+    assert disk.unloaded_status(path)["csv_latest_date"] == "2026-10-09"
