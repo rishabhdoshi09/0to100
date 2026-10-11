@@ -505,6 +505,8 @@ export type FnoPaperState = {
 
 export type DataReadiness = {
   ready: boolean
+  history_current?: boolean
+  store_loaded?: boolean
   snapshot: {
     ready: boolean
     snapshot_id: string
