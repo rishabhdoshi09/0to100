@@ -82,11 +82,21 @@ def test_unverified_coverage_or_missing_provenance_is_hold():
     assert any("coverage" in x.lower() for x in result["blockers"])
 
 
-def test_public_mode_never_passes_without_mutation_authorization():
+def test_public_mode_accepts_fully_read_only_or_token_protected_access():
     responses = valid_responses()
+    assert evaluate(responses, timings_s=timings(), public=True)["verdict"] == "LOCAL_READ_GATE_PASS"
+
     responses["access"]["operator_token_configured"] = False
+    responses["access"]["mutation_policy"] = "READ_ONLY"
+    assert evaluate(responses, timings_s=timings(), public=True)["verdict"] == "LOCAL_READ_GATE_PASS"
+
+    responses["access"]["mutation_policy"] = "OPERATOR_TOKEN_REQUIRED"
     assert evaluate(responses, timings_s=timings(), public=True)["verdict"] == "HOLD"
-    assert evaluate(responses, timings_s=timings(), public=False)["verdict"] == "LOCAL_READ_GATE_PASS"
+    responses["access"]["operator_token_configured"] = True
+    responses["access"]["mutation_policy"] = "READ_ONLY"
+    assert evaluate(responses, timings_s=timings(), public=True)["verdict"] == "HOLD"
+    responses["access"]["mutation_policy"] = "PRIVATE_OPERATOR"
+    assert evaluate(responses, timings_s=timings(), public=True)["verdict"] == "HOLD"
 
 
 def test_slow_or_missing_api_endpoint_fails():
