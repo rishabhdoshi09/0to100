@@ -42,3 +42,55 @@ def test_private_local_error_context_is_preserved_for_existing_operator_workflow
     assert result.status_code == 500
     assert payload["error"] == "local scanner diagnostic"
     assert payload["path"] == "/api/health"
+
+
+def test_public_health_never_exposes_runtime_paths_or_exception_text(monkeypatch):
+    import product.runtime_lifecycle as lifecycle
+
+    secret = "/Users/operator/.env QT_OPERATOR_TOKEN=EXAMPLE_PRIVATE_SECRET"
+    monkeypatch.setenv("QT_PUBLIC_READ_ONLY", "1")
+
+    def broken_runtime(*, api_serving):
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(lifecycle, "inspect_runtime", broken_runtime)
+    result = terminal_api.health()
+    assert result["lifecycle"] == "DEGRADED"
+    assert result["live_lock_verified"] is False
+    assert result["live_execution_authorized"] is None
+    assert secret not in json.dumps(result)
+    assert result["reasons"] == []
+    assert result["history"] == {}
+    assert result["resources"] == {}
+
+
+def test_public_health_redacts_even_successful_probes_with_private_details(monkeypatch):
+    import product.runtime_lifecycle as lifecycle
+
+    secret = "/Volumes/QuantTermStorage/operator-only.db"
+    monkeypatch.setenv("QT_PUBLIC_READ_ONLY", "1")
+
+    def successful_runtime(*, api_serving):
+        return {
+            "lifecycle": "READY", "reason": f"Loaded {secret}",
+            "reasons": [secret], "components": [{"name": secret, "status": "READY"}],
+            "history": {"path": secret}, "resources": {"path": secret},
+            "operational_ready": True, "evidence_ready": True,
+            "live_locked": True, "live_lock_verified": True,
+            "live_execution_authorized": False,
+            "live_lock_reason": secret,
+        }
+
+    monkeypatch.setattr(lifecycle, "inspect_runtime", successful_runtime)
+    result = terminal_api.health()
+    assert result["lifecycle"] == "READY"
+    assert result["operational_ready"] is True
+    assert result["live_locked"] is True
+    assert result["live_execution_authorized"] is False
+    assert secret not in json.dumps(result)
+
+    # Local/private operator retains the useful diagnostic payload.
+    monkeypatch.delenv("QT_PUBLIC_READ_ONLY", raising=False)
+    private_result = terminal_api.health()
+    assert private_result["reason"] == f"Loaded {secret}"
+    assert secret in json.dumps(private_result)
