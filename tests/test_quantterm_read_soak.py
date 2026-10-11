@@ -66,6 +66,17 @@ def test_missing_sample_or_timeout_is_hold():
     assert assess_samples(cycles)["verdict"] == "HOLD"
 
 
+
+def test_soak_rejects_single_sample_and_invalid_release_thresholds():
+    import math
+    # The required 20 cycles cannot be weakened by setting min_samples=1.
+    assert assess_samples([_cycle()], min_samples=1)["verdict"] == "HOLD"
+    assert assess_samples([_cycle() for _ in range(20)], max_p95_s=math.nan)["verdict"] == "HOLD"
+    assert assess_samples([_cycle() for _ in range(20)], max_p95_s=math.inf)["verdict"] == "HOLD"
+    assert assess_samples([_cycle() for _ in range(20)], max_p95_s=10.0)["verdict"] == "HOLD"
+    assert assess_samples([_cycle() for _ in range(20)], max_p95_s=3.0)["verdict"] == "READ_SOAK_PASS"
+
+
 def test_percentile_nearest_rank_semantics():
     assert percentile_nearest_rank([], 95) is None
     assert percentile_nearest_rank([1.0] * 19 + [10.0], 95) == 1.0
