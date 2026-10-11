@@ -142,8 +142,10 @@ def test_local_soak_ignores_proxy_environment(monkeypatch):
     proxies = [
         h for h in soak._LOCAL_OPENER.handlers if isinstance(h, ProxyHandler)
     ]
-    assert len(proxies) == 1
-    assert proxies[0].proxies == {}
+    # urllib excludes an empty ProxyHandler from its active handler list
+    # (there are no proxy_open methods). Zero installed handlers is the
+    # normal safe result; any installed handler must have no proxies.
+    assert all(handler.proxies == {} for handler in proxies)
 
     class LocalResponse:
         status = 200
