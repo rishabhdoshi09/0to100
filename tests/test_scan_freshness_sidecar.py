@@ -135,3 +135,45 @@ def test_future_dated_scan_session_never_overrides_exchange_history(tmp_path, mo
         },
     )
     assert desk_pipeline.scan_is_fresh() is False
+
+
+def test_concurrent_scan_writer_cannot_bind_own_sidecar_to_other_writer_file(tmp_path, monkeypatch):
+    path = tmp_path / "latest_momentum_scan.json"
+    replaced = []
+    original_replace = scan_store.os.replace
+
+    def competing_publish(src, dst):
+        original_replace(src, dst)
+        if str(dst) == str(path) and not replaced:
+            # Another writer atomically publishes newer canonical content
+            # before this writer checks the published inode identity.
+            rival = tmp_path / ".rival.json"
+            rival.write_text(json.dumps(_scan(session="2026-10-08")), encoding="utf-8")
+            original_replace(rival, path)
+            replaced.append(True)
+
+    monkeypatch.setattr(scan_store.os, "replace", competing_publish)
+    scan_store.save_scan(_scan(session="2026-10-09"), path)
+
+    assert replaced == [True]
+    assert scan_store.load_scan_metadata(path) is None
+    assert scan_store.load_scan(path)["provenance"]["price_data_as_of"] == "2026-10-08"
+
+
+def test_scan_publications_use_distinct_temp_names_and_no_stray_files(tmp_path, monkeypatch):
+    path = tmp_path / "latest_momentum_scan.json"
+    original_replace = scan_store.os.replace
+    source_files = []
+
+    def note_publish(src, dst):
+        if str(dst) == str(path):
+            source_files.append(str(src))
+        return original_replace(src, dst)
+
+    monkeypatch.setattr(scan_store.os, "replace", note_publish)
+    scan_store.save_scan(_scan(session="2026-10-08"), path)
+    scan_store.save_scan(_scan(session="2026-10-09"), path)
+
+    assert len(source_files) == 2 and source_files[0] != source_files[1]
+    assert scan_store.load_scan_metadata(path)["provenance"]["price_data_as_of"] == "2026-10-09"
+    assert not any(item.name.endswith(".tmp") for item in tmp_path.iterdir())
