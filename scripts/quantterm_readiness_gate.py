@@ -24,6 +24,7 @@ def evaluate(
     public: bool = False,
     max_read_s: float = 3.0,
     min_coverage_pct: float = 95.0,
+    expected_sha: str = "",
 ) -> dict[str, Any]:
     blockers: list[str] = []
     warnings: list[str] = []
@@ -34,6 +35,13 @@ def evaluate(
 
     if health.get("ok") is not True:
         blockers.append("Canonical API liveness not verified")
+    if expected_sha:
+        # A healthy old process is NOT evidence that the proposed release is
+        # running. Require the full exact 40-digit SHA, not a short prefix.
+        actual_sha = str(health.get("build_sha") or "").strip().lower()
+        if (health.get("service") != "quantterm-terminal-api"
+                or actual_sha != expected_sha.lower()):
+            blockers.append("Running QuantTerm API build SHA does not match expected release")
     if health.get("live_locked") is not True or health.get("live_lock_verified") is not True:
         blockers.append("Live-money interlock is not positively verified LOCKED")
     if health.get("live_execution_authorized") is not False:
@@ -121,6 +129,8 @@ def evaluate(
         "warnings": warnings,
         "metrics": {
             "scan_coverage_pct": round(coverage_pct, 2),
+            "build_sha": str(health.get("build_sha") or ""),
+            "expected_sha": expected_sha,
             "endpoint_seconds": {
                 name: round(seconds, 3) for name, seconds in timings_s.items()
             },
@@ -174,6 +184,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--origin", default="http://127.0.0.1:8765")
     parser.add_argument("--public", action="store_true", help="Require public read-only operator security")
+    parser.add_argument("--expected-sha", default="", help="Require the exact full 40-character Git SHA served by the running API")
     parser.add_argument("--max-read-seconds", type=float, default=3.0)
     parser.add_argument("--min-coverage-pct", type=float, default=95.0)
     args = parser.parse_args(argv)
@@ -181,6 +192,11 @@ def main(argv: list[str] | None = None) -> int:
         origin = _safe_origin(args.origin)
     except ValueError as exc:
         parser.error(str(exc))
+    if args.expected_sha and (
+        len(args.expected_sha) != 40
+        or any(ch not in "0123456789abcdefABCDEF" for ch in args.expected_sha)
+    ):
+        parser.error("--expected-sha must be a full 40-character hexadecimal commit SHA")
     responses: dict[str, dict] = {}
     timings: dict[str, float] = {}
     failed: list[str] = []
@@ -194,6 +210,7 @@ def main(argv: list[str] | None = None) -> int:
     report = evaluate(
         responses, timings_s=timings, public=args.public,
         max_read_s=args.max_read_seconds, min_coverage_pct=args.min_coverage_pct,
+        expected_sha=args.expected_sha,
     )
     if failed:
         report["blockers"].extend(failed)
