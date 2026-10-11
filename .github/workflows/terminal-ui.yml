@@ -38,6 +38,9 @@ jobs:
       - name: Build frontend
         working-directory: frontend
         run: npm run build
+      - name: Supply-chain audit — block critical npm advisories
+        working-directory: frontend
+        run: npm audit --audit-level=critical
       - name: Compile terminal, product and research APIs
         run: |
           python -m py_compile api/app.py api/runtime.py terminal_api.py terminal_product_api.py terminal_product_api_parallel.py report_api.py
