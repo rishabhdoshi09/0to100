@@ -223,13 +223,15 @@ def _load_pkl() -> bool:
 
 def _full_build(available: list[date]) -> int:
     global _store, _store_last_day, _store_sessions
-    frames = []
+    accepted_days = []
     for d in sorted(available):
         f = _read_day(d)
         if f is not None:
-            frames.append(f)
-    if not frames:
+            accepted_days.append((d, f))
+    if not accepted_days:
         return 0
+    frames = [frame for _day, frame in accepted_days]
+    latest_valid = accepted_days[-1][0]
     allday = pd.concat(frames, ignore_index=True)
     keep_cols = ["open", "high", "low", "close", "volume"]
     if "deliv_per" in allday.columns:
@@ -241,10 +243,10 @@ def _full_build(available: list[date]) -> int:
             new_store[sym] = g[[c for c in keep_cols if c in g.columns]]
     with _lock:
         _store = new_store
-        _store_last_day = max(available)
+        _store_last_day = latest_valid
         _store_sessions = len(frames)
     log.info("bhav_store_built", symbols=len(new_store), sessions=len(frames),
-             latest=str(max(available)))
+             latest=str(latest_valid))
     _save_pkl()
     return len(new_store)
 
@@ -252,10 +254,12 @@ def _full_build(available: list[date]) -> int:
 def _incremental_append(new_days: list[date]) -> None:
     """Append only the fresh sessions onto the loaded store."""
     global _store_last_day, _store_sessions
-    frames = [f for d in sorted(new_days)
-              if (f := _read_day(d)) is not None]
-    if not frames:
+    accepted_days = [(d, f) for d in sorted(new_days)
+                     if (f := _read_day(d)) is not None]
+    if not accepted_days:
         return
+    frames = [frame for _day, frame in accepted_days]
+    latest_valid = accepted_days[-1][0]
     allday = pd.concat(frames, ignore_index=True)
     with _lock:
         for sym, g in allday.groupby("symbol"):
@@ -269,9 +273,9 @@ def _incremental_append(new_days: list[date]) -> None:
                 _store[sym] = merged[~merged.index.duplicated(keep="last")]
             elif len(g) >= 1:
                 _store[sym] = g[cols]
-        _store_last_day = max(new_days)
+        _store_last_day = latest_valid
         _store_sessions += len(frames)
-    log.info("bhav_store_appended", days=len(frames), latest=str(max(new_days)))
+    log.info("bhav_store_appended", days=len(frames), latest=str(latest_valid))
     _save_pkl()
 
 
