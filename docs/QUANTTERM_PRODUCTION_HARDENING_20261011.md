@@ -51,6 +51,30 @@ grep -E '\[SCAN STAGE\]|\[SCAN OVERLAY\]|\[API SLOW\]' /Volumes/QuantTermStorage
 
 Readiness gate verdicts are `HOLD` or `LOCAL_READ_GATE_PASS`; the latter is strictly a *local read-path* proof. It does not certify public internet safety, live order execution, research expectancy, or a completed paper trade.
 
+## Read-only API soak after deploying a verified SHA
+
+The local read acceptance probe above checks functional gate truth once. A
+separate **20-cycle read soak** checks request latency and freshness stability
+without making mutations, placing paper orders, or restarting services:
+
+```bash
+cd ~/0to100
+python3 scripts/quantterm_read_soak.py --samples 20 --p95-budget-seconds 3
+```
+
+It samples four local GET endpoints sequentially (health, access, dashboard,
+decision-simulation-gate) and returns a nonzero exit if any read is unsafe,
+stale or the endpoint's nearest-rank p95 exceeds three seconds. A successful
+soak demonstrates **only local read-path stability** at the sampled cadence,
+not external concurrency capacity, actual scan throughput, correct broker
+fills, current F&O option-chain data, or public deployment security.
+
+CSV session filenames alone are never proof of a completed NSE archive: when
+the API price store is unloaded, the lightweight inventory validates the
+newest file's size and stock-price CSV header. A corrupt newest file fails
+closed instead of promoting its date; scans still rely on the authoritative
+full OHLCV store, not the metadata-only read.
+
 ## Rollout
 
 - Keep the canonical branch + running Mac unchanged while the consolidated PR is draft or has pending/failed checks.
