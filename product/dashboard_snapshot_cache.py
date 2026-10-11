@@ -72,6 +72,11 @@ class DashboardSnapshotCache:
         paper = payload.get("paper")
         if isinstance(paper, dict):
             paper.update(available=False, enabled=False, supervisor_running=False)
+            learning = paper.get("learning")
+            if isinstance(learning, dict):
+                learning["live_locked"] = None
+                learning["live_lock_verified"] = False
+                learning["live_lock_status"] = "UNVERIFIED"
 
         autonomy = payload.get("autonomy")
         if isinstance(autonomy, dict):
@@ -79,6 +84,7 @@ class DashboardSnapshotCache:
                 available=False,
                 running=False,
                 process_running=False,
+                active_job={},
                 new_paper_entries=False,
                 existing_exits=False,
                 research_enabled=False,
@@ -108,6 +114,7 @@ class DashboardSnapshotCache:
             if isinstance(directional, dict):
                 directional.update(
                     available=False, status="STALE", candidates=[],
+                    candidate_count=0, live_execution_allowed=False,
                     code="DASHBOARD_STATUS_STALE",
                 )
             desk = fno.get("desk")
@@ -116,10 +123,26 @@ class DashboardSnapshotCache:
                     status="BLOCKED", reason="DASHBOARD_STATUS_STALE",
                     candidates=[], candidate_count=0, paper_available=False,
                 )
+            fno_paper = fno.get("paper")
+            if isinstance(fno_paper, dict):
+                fno_paper.update(available=False, live_execution_allowed=False)
 
         data = payload.get("data")
         if isinstance(data, dict):
             data["ready"] = False
+            data["history_current"] = False
+            data["store_loaded"] = False
+            data["lane_status"] = "Unverified"
+            data["lane_status_code"] = "UNKNOWN"
+            snapshot = data.get("snapshot")
+            if isinstance(snapshot, dict):
+                snapshot["ready"] = False
+            bhavcopy = data.get("bhavcopy")
+            if isinstance(bhavcopy, dict):
+                bhavcopy.update(
+                    ready=False, current=False,
+                    reason_code="DASHBOARD_STATUS_STALE",
+                )
             blockers = list(data.get("blockers") or [])
             blockers.append("Dashboard snapshot is stale; live operational readiness is unverified.")
             data["blockers"] = blockers
