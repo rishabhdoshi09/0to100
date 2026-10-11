@@ -19,7 +19,7 @@ import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -116,6 +116,27 @@ def _read_day(d: date) -> Optional[pd.DataFrame]:
             df = pd.read_csv(path, dtype=str, encoding="latin-1")
         df.columns = [c.strip().upper() for c in df.columns]
         df = df[df["SERIES"].str.strip() == "EQ"]
+        if df.empty:
+            # An HTML error, non-equity archive, or incomplete CSV has no
+            # valid market session to publish. Do not advance _store_last_day.
+            return None
+        if "DATE1" in df.columns:
+            # NSE's legacy sec_bhavdata_full embeds the trading session.
+            # A real prior-day file renamed to today's date is not today's
+            # price evidence, even when OHLCV columns are otherwise valid.
+            values = {str(x).strip() for x in df["DATE1"].dropna().unique()}
+            if not values:
+                return None
+            for value in values:
+                try:
+                    internal_date = datetime.strptime(value, "%d-%b-%Y").date()
+                except ValueError:
+                    try:
+                        internal_date = date.fromisoformat(value)
+                    except ValueError:
+                        return None
+                if internal_date != d:
+                    return None
         out = pd.DataFrame({
             "symbol": df["SYMBOL"].str.strip().str.upper(),
             "open":   pd.to_numeric(df["OPEN_PRICE"], errors="coerce"),
@@ -129,7 +150,10 @@ def _read_day(d: date) -> Optional[pd.DataFrame]:
             out["deliv_per"] = pd.to_numeric(
                 df["DELIV_PER"].str.strip().replace("-", None), errors="coerce")
         out["date"] = pd.Timestamp(d)
-        return out.dropna(subset=["close"])
+        good = out.dropna(subset=["close"])
+        if good.empty:
+            return None
+        return good
     except Exception as exc:
         log.debug("bhav_parse_failed", day=str(d), error=str(exc))
         return None
