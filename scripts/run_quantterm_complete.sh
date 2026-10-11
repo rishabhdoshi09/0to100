@@ -66,7 +66,7 @@ if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/n
      ! git diff --cached --quiet --ignore-submodules -- 2>/dev/null; then
     QT_GIT_DIRTY="+dirty"
   fi
-  export QT_GIT_BRANCH QT_GIT_SHA
+  export QT_GIT_BRANCH QT_GIT_SHA QT_BUILD_SHA
   echo "[COMPLETE STACK] Build: branch=$QT_GIT_BRANCH · sha=$QT_GIT_SHA$QT_GIT_DIRTY"
   if [[ "$QT_GIT_BRANCH" != "HEAD" ]] && git rev-parse --verify "origin/$QT_GIT_BRANCH" >/dev/null 2>&1; then
     QT_ORIGIN_SHA="$(git rev-parse --short=12 "origin/$QT_GIT_BRANCH" 2>/dev/null || true)"
