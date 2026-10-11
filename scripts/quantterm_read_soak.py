@@ -37,8 +37,13 @@ def assess_samples(
     """No payloads/secrets in reports; observations are request metadata."""
     blockers: list[str] = []
     endpoints: dict[str, Any] = {}
-    if len(samples) < min_samples:
-        blockers.append(f"Only {len(samples)} cycles; require {min_samples}")
+    # Production evidence needs at least 20 cycles. A caller must not lower
+    # the bar to one request or use NaN to bypass p95 comparisons.
+    required_samples = max(20, min_samples)
+    if len(samples) < required_samples:
+        blockers.append(f"Only {len(samples)} cycles; require {required_samples}")
+    if not math.isfinite(max_p95_s) or not 0 < max_p95_s <= 3.0:
+        blockers.append("Read soak p95 release budget must be finite, positive, and <=3s")
     if expected_sha:
         # All samples, not just the final one, must belong to the reviewed
         # build. A mid-soak host replacement invalidates latency evidence.
@@ -108,7 +113,7 @@ def assess_samples(
     return {
         "verdict": "HOLD" if blockers else "READ_SOAK_PASS",
         "sample_cycles": len(samples),
-        "minimum_cycles": min_samples,
+        "minimum_cycles": required_samples,
         "p95_budget_seconds": max_p95_s,
         "endpoints": endpoints,
         "blockers": blockers,
@@ -243,12 +248,14 @@ def main(argv: list[str] | None = None) -> int:
         or any(ch not in "0123456789abcdefABCDEF" for ch in args.expected_sha)
     ):
         parser.error("--expected-sha must be a full 40-character hexadecimal commit SHA")
-    if not 1 <= args.samples <= 500:
-        parser.error("--samples must be between 1 and 500")
-    if not 0 <= args.interval_seconds <= 60:
-        parser.error("--interval-seconds must be between 0 and 60")
-    if not 0.5 <= args.timeout_seconds <= 120:
-        parser.error("--timeout-seconds must be between 0.5 and 120")
+    if not 20 <= args.samples <= 500:
+        parser.error("--samples must be between 20 and 500")
+    if not math.isfinite(args.interval_seconds) or not 0 <= args.interval_seconds <= 60:
+        parser.error("--interval-seconds must be finite and between 0 and 60")
+    if not math.isfinite(args.timeout_seconds) or not 0.5 <= args.timeout_seconds <= 120:
+        parser.error("--timeout-seconds must be finite and between 0.5 and 120")
+    if not math.isfinite(args.p95_budget_seconds) or not 0 < args.p95_budget_seconds <= 3.0:
+        parser.error("--p95-budget-seconds must be finite, positive and at most 3")
     results: list[dict[str, Any]] = []
     for index in range(args.samples):
         results.append({
