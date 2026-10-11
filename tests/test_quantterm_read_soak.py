@@ -24,6 +24,23 @@ def test_latencies_within_budget_all_20_cycles_can_pass():
     assert result["endpoints"]["dashboard"]["p95_seconds"] == 0.1
 
 
+
+def test_soak_must_use_exact_same_reviewed_build_for_every_sample():
+    expected = "234e3e30e228e515a38bee994436c0af3dad1b85"
+    cycles = [_cycle() for _ in range(20)]
+    # Missing attestation must not pass, even with excellent p95.
+    result = assess_samples(cycles, expected_sha=expected)
+    assert result["verdict"] == "HOLD"
+    assert any("build SHA" in item for item in result["blockers"])
+
+    for cycle in cycles:
+        cycle["health"]["build_sha"] = expected
+    assert assess_samples(cycles, expected_sha=expected)["verdict"] == "READ_SOAK_PASS"
+
+    cycles[11]["health"]["build_sha"] = "f" * 40
+    assert assess_samples(cycles, expected_sha=expected)["verdict"] == "HOLD"
+
+
 def test_p95_exceeding_budget_fails_even_if_last_probe_was_fast():
     cycles = [_cycle(latency=0.2) for _ in range(18)]
     cycles += [_cycle(latency=3.5) for _ in range(2)]
@@ -172,6 +189,32 @@ def test_local_soak_ignores_proxy_environment(monkeypatch):
     monkeypatch.setattr(soak._LOCAL_OPENER, "open", local_only)
     result = sample_one("http://127.0.0.1:8765", "health", 2)
     assert result["ok"] is True
+
+
+
+def test_health_sample_contains_sanitized_build_attestation(monkeypatch):
+    import json
+    import scripts.quantterm_read_soak as soak
+
+    expected = "234e3e30e228e515a38bee994436c0af3dad1b85"
+
+    class Response:
+        status = 200
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+        def read(self, _size):
+            return json.dumps({
+                "ok": True, "build_sha": expected,
+                "live_locked": True, "live_lock_verified": True,
+                "live_execution_authorized": False,
+            }).encode()
+
+    monkeypatch.setattr(soak._LOCAL_OPENER, "open", lambda *_a, **_k: Response())
+    row = sample_one("http://127.0.0.1:8765", "health", 2)
+    assert row["ok"] is True
+    assert row["build_sha"] == expected
 
 
 def test_normal_single_flight_cache_ttl_transition_is_accepted():
