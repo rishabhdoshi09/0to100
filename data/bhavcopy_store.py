@@ -52,6 +52,22 @@ def _day_path(d: date) -> Path:
     return _BHAV_DIR / f"{d.strftime('%d%m%Y')}.csv"
 
 
+def _prepare_bhav_write_directory(directory: Path) -> None:
+    """Never recreate a vanished installed-host external runtime mount.
+
+    Module-level paths survive after a volume unmount. In strict installed
+    mode, re-resolve runtime_root for EVERY write and reject a cached path
+    that no longer matches the configured persistent root.
+    """
+    from core.runtime_paths import _require_existing_runtime, logs_dir
+
+    if _require_existing_runtime():
+        expected = logs_dir() / "bhav"  # fresh strict runtime existence check
+        if directory != expected:
+            raise RuntimeError("bhavcopy write path no longer matches installed runtime root")
+    directory.mkdir(parents=True, exist_ok=True)
+
+
 def _download_day(d: date, retries: int = 2) -> bool:
     """
     Fetch one bhavcopy to disk. 404 = holiday (no retry). Network errors
@@ -71,7 +87,7 @@ def _download_day(d: date, retries: int = 2) -> bool:
             if resp.status_code == 404:
                 return False          # holiday/weekend — retrying won't help
             if resp.status_code == 200 and len(resp.content) >= 1000:
-                _BHAV_DIR.mkdir(parents=True, exist_ok=True)
+                _prepare_bhav_write_directory(_BHAV_DIR)
                 fd, name = tempfile.mkstemp(
                     prefix=f".{d.strftime('%d%m%Y')}-",
                     suffix=".csv", dir=_BHAV_DIR,
@@ -186,11 +202,22 @@ def _save_pkl() -> None:
         with _lock:
             data = {"store": _store, "last_day": _store_last_day,
                     "sessions": _store_sessions}
-        _PKL.parent.mkdir(parents=True, exist_ok=True)
-        tmp = _PKL.with_suffix(".pkl.tmp")
-        with open(tmp, "wb") as f:
-            pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
-        tmp.replace(_PKL)                     # atomic — no half-written cache
+        _prepare_bhav_write_directory(_PKL.parent)
+        tmp: Path | None = None
+        try:
+            fd, name = tempfile.mkstemp(
+                prefix=".store_cache-", suffix=".pkl.tmp", dir=_PKL.parent,
+            )
+            tmp = Path(name)
+            with os.fdopen(fd, "wb") as handle:
+                pickle.dump(data, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            os.replace(tmp, _PKL)  # unique temp prevents concurrent-writer collision
+        finally:
+            if tmp is not None:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
     except Exception as exc:
         log.debug("bhav_pkl_save_failed", error=str(exc))
 
