@@ -151,3 +151,19 @@ def test_pickle_cache_publishes_with_unique_atomic_temp_file(monkeypatch, tmp_pa
     assert destination.is_file()
     assert len(set(observed)) == 2
     assert sorted(p.name for p in destination.parent.iterdir()) == ["store_cache.pkl"]
+
+
+def test_installed_runtime_bhavcopy_writer_rejects_symlink_to_internal_disk(monkeypatch, tmp_path):
+    import pytest
+
+    root = tmp_path / "QuantTerm" / "runtime"
+    root.mkdir(parents=True)
+    external = tmp_path / "local-internal-dir"
+    external.mkdir()
+    (root / "logs").symlink_to(external, target_is_directory=True)
+    directory = root / "logs" / "bhav"
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(root))
+    monkeypatch.setenv("QT_RUNTIME_ROOT_REQUIRE_EXISTING", "1")
+    with pytest.raises(RuntimeError, match="no longer matches"):
+        store._prepare_bhav_write_directory(directory)
+    assert not (external / "bhav").exists()
