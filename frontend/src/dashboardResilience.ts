@@ -208,14 +208,14 @@ export function historicalDashboard(payload: DashboardPayload): DashboardPayload
       research_enabled: false,
       state: 'UNKNOWN',
       plain_state: 'Historical dashboard; current execution capabilities unverified.',
-      broker: {
+      broker: payload.autonomy.broker ? {
         ...payload.autonomy.broker,
         ready: false,
         auth_ready: false,
         live_data_ready: false,
         execution_ready: false,
         state: 'UNKNOWN',
-      },
+      } : undefined,
       live_feed: {},
     },
     operations: {
