@@ -45,9 +45,26 @@ app.add_middleware(
 async def _log_unhandled(request: Request, exc: Exception):
     if isinstance(exc, HTTPException):
         raise exc
-    print(f"[API] unhandled {request.method} {request.url.path}: {exc}", flush=True)
+    from product.public_access import public_read_only_enabled
+
+    public = public_read_only_enabled()
+    # Public error bodies/logs may be read by untrusted clients/operators:
+    # never disclose exception text, file paths, tokens or SQL detail.
+    path = request.url.path
+    if public:
+        print(
+            f"[API] unhandled {request.method} {path} type={type(exc).__name__}",
+            flush=True,
+        )
+        return JSONResponse(
+            {"ok": False, "error": "Internal server error",
+             "code": "API_INTERNAL_ERROR"},
+            status_code=500,
+            headers={"Cache-Control": "no-store"},
+        )
+    print(f"[API] unhandled {request.method} {path}: {exc}", flush=True)
     return JSONResponse(
-        {"ok": False, "error": str(exc)[:300], "path": request.url.path},
+        {"ok": False, "error": str(exc)[:300], "path": path},
         status_code=500,
     )
 
