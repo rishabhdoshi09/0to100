@@ -107,3 +107,17 @@ def test_changed_json_makes_gate_use_authoritative_fallback(tmp_path, monkeypatc
         },
     )
     assert desk_pipeline.scan_is_fresh() is False
+
+
+def test_official_history_lookup_error_cannot_be_replaced_by_scan_wallclock(tmp_path, monkeypatch):
+    path = tmp_path / "product" / "latest_momentum_scan.json"
+    scan_store.save_scan(_scan(), path)
+    monkeypatch.setattr(desk_pipeline, "logs_dir", lambda: tmp_path)
+
+    def unavailable(*_args, **_kwargs):
+        raise OSError("external data volume unavailable")
+
+    monkeypatch.setattr(
+        "data.bhavcopy_runtime.official_history_freshness", unavailable,
+    )
+    assert desk_pipeline.scan_is_fresh() is False
