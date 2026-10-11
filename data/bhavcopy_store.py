@@ -15,6 +15,7 @@ Data is end-of-day official NSE. Live prices come from Google Finance
 from __future__ import annotations
 
 import os
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -56,23 +57,45 @@ def _download_day(d: date, retries: int = 2) -> bool:
     Fetch one bhavcopy to disk. 404 = holiday (no retry). Network errors
     retry with backoff so a flaky connection can't punch holes in history.
     """
+    from data.bhavcopy_disk_status import _latest_csv_has_basic_integrity
+
     path = _day_path(d)
-    if path.exists():
+    if path.is_file() and _latest_csv_has_basic_integrity(path, expected_date=d):
         return True
     import requests
     url = _URL.format(d=d.strftime("%d%m%Y"))
     for attempt in range(retries + 1):
+        tmp: Path | None = None
         try:
             resp = requests.get(url, headers=_HEADERS, timeout=12)
             if resp.status_code == 404:
                 return False          # holiday/weekend — retrying won't help
             if resp.status_code == 200 and len(resp.content) >= 1000:
                 _BHAV_DIR.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(resp.content)
+                fd, name = tempfile.mkstemp(
+                    prefix=f".{d.strftime('%d%m%Y')}-",
+                    suffix=".csv", dir=_BHAV_DIR,
+                )
+                tmp = Path(name)
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(resp.content)
+                if not _latest_csv_has_basic_integrity(tmp, expected_date=d):
+                    log.warning("bhav_download_invalid_content", day=str(d))
+                    continue
+                # Readers see either the previous complete file or the new
+                # complete file. Interrupted downloads never create partial
+                # official-session filenames and can safely be retried.
+                os.replace(tmp, path)
                 return True
         except Exception as exc:
             if attempt == retries:
                 log.debug("bhav_download_failed", day=str(d), error=str(exc))
+        finally:
+            if tmp is not None:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
         if attempt < retries:
             time.sleep(1.5 * (attempt + 1))
     return False
@@ -248,8 +271,21 @@ def build_store(days: int = DEFAULT_DAYS, progress=None, should_stop=None) -> in
     """
     candidates = _trading_days_back(days)
 
-    # Download whatever is missing on disk, bounded concurrency
-    missing = [d for d in candidates if not _day_path(d).exists()]
+    # Recheck only the most recent candidate sessions for corrupt or
+    # interrupted archives. Scanning every historical CSV on each scheduler
+    # tick would thrash the external HDD, while ignoring corrupt recent files
+    # permanently makes the price feed appear current when it is not.
+    from data.bhavcopy_disk_status import _latest_csv_has_basic_integrity
+    recent = set(candidates[:10])
+    def _usable_day(d: date) -> bool:
+        path = _day_path(d)
+        return path.is_file() and (
+            d not in recent
+            or _latest_csv_has_basic_integrity(path, expected_date=d)
+        )
+
+    # Download missing/corrupt recent archives with bounded concurrency.
+    missing = [d for d in candidates if not _usable_day(d)]
     if missing:
         log.info("bhav_download_start", missing=len(missing))
         done = 0
@@ -283,7 +319,7 @@ def build_store(days: int = DEFAULT_DAYS, progress=None, should_stop=None) -> in
                 f"History acquisition cancelled after {done}/{len(missing)} sessions"
             )
 
-    available = [d for d in candidates if _day_path(d).exists()]
+    available = [d for d in candidates if _usable_day(d)]
     if len(available) < _MIN_DAYS:
         log.warning("bhav_insufficient_history", have=len(available))
         return 0
