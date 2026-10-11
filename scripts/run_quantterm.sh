@@ -441,12 +441,14 @@ wait_for_frontend() {
 start_frontend() {
   echo "[STACK] Starting dedicated terminal at http://127.0.0.1:5173 …"
   mkdir -p "$STACK_LOG_DIR"
-  # Own process group. `npm run dev` is a wrapper chain (npm -> sh -> node ->
-  # esbuild); signalling only the npm PID left the node server still serving
-  # :5173 after the API was gone — a healthy-looking desk with no backend.
-  # setsid makes the PID a group leader so the whole tree can be stopped.
-  # On macOS the canonical _setsid_compat.sh shim supplies setsid via Python.
-  setsid npm --prefix "$ROOT/frontend" run dev -- --host 127.0.0.1 --port 5173 \
+  # Launch Vite as the directly owned Node process, not via npm -> sh ->
+  # Node. An npm wrapper can exit while its child still owns :5173; the
+  # supervisor then misclassifies the orphan as an external healthy UI and
+  # leaves it behind on Ctrl-C. Own Node as a session/group leader instead.
+  # The explicit frontend root preserves Vite config and module resolution.
+  # --strictPort prevents a hidden :5174 instance when :5173 is occupied.
+  setsid node "$ROOT/frontend/node_modules/vite/bin/vite.js" "$ROOT/frontend" \
+    --host 127.0.0.1 --port 5173 --strictPort \
     >>"$STACK_LOG_DIR/vite.log" 2>&1 &
   FRONTEND_PID=$!
   if wait_for_frontend 80; then
