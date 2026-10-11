@@ -427,9 +427,12 @@ def _prepare_scan_write_path(target: Path) -> None:
     from core.runtime_paths import _require_existing_runtime, logs_dir
 
     if _require_existing_runtime():
-        expected_root = logs_dir()  # strict runtime_root() checks existence
+        expected_root = logs_dir().resolve(strict=False)  # root must exist
+        # Resolve symlinked log/output parents as well as ".." path segments.
+        # A lexical under-root name could otherwise write outside the mount.
+        destination = target.resolve(strict=False)
         try:
-            target.relative_to(expected_root)
+            destination.relative_to(expected_root)
         except ValueError as exc:
             raise RuntimeError(
                 "scan write destination is outside the installed persistent runtime"
