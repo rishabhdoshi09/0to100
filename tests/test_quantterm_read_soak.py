@@ -1,6 +1,6 @@
 """Read-only soak probe must fail closed on latency, stale reads and live unlock."""
 from scripts.quantterm_read_soak import (
-    ENDPOINTS, _safe_origin, access_policy_safe, assess_samples, percentile_nearest_rank,
+    ENDPOINTS, _safe_origin, access_policy_safe, assess_samples, percentile_nearest_rank, sample_one,
 )
 import pytest
 
@@ -100,3 +100,65 @@ def test_ambiguous_or_broken_public_access_configuration_fails_soak():
         {"mutation_policy": "UNKNOWN", "public_read_only": False},
     ):
         assert access_policy_safe(config) is False
+
+
+def test_local_only_soak_never_follows_a_redirect_to_remote_url():
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+
+    class Redirect(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(302)
+            self.send_header("Location", "https://outside.example/health")
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Redirect)
+    worker = Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        result = sample_one(f"http://127.0.0.1:{server.server_port}", "health", 2)
+        assert result["ok"] is False
+        assert result["error_type"] == "HTTPError"
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=2)
+
+
+def test_local_soak_ignores_proxy_environment(monkeypatch):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+    import json
+
+    class Local(BaseHTTPRequestHandler):
+        def do_GET(self):
+            payload = json.dumps({
+                "ok": True, "live_locked": True,
+                "live_lock_verified": True, "live_execution_authorized": False,
+            }).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args):
+            pass
+
+    # A diagnostic must use a direct loopback socket, not HTTP_PROXY.
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")
+    monkeypatch.setenv("http_proxy", "http://127.0.0.1:1")
+    monkeypatch.setenv("NO_PROXY", "")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Local)
+    worker = Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        result = sample_one(f"http://127.0.0.1:{server.server_port}", "health", 2)
+        assert result["ok"] is True
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=2)
