@@ -424,13 +424,13 @@ def _prepare_scan_write_path(target: Path) -> None:
     persistent runtime root is freshly resolved before every publication so a
     vanished /Volumes mount is not quietly recreated on the system drive.
     """
-    from core.runtime_paths import _require_existing_runtime, runtime_root
+    from core.runtime_paths import _require_existing_runtime, logs_dir
 
     if _require_existing_runtime():
-        # runtime_root() verifies and resolves the actual configured volume.
-        # Do NOT resolve the "logs" child: if it itself is a symlink, doing
-        # so would incorrectly make an escaped destination look authorized.
-        expected_root = runtime_root() / "logs"
+        # logs_dir() verifies and resolves the configured runtime volume.
+        # Do NOT resolve the "logs" child: a symlinked escape must remain
+        # visible to the destination path check below.
+        expected_root = logs_dir()
         destination = target.resolve(strict=False)
         try:
             destination.relative_to(expected_root)
