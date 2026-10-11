@@ -121,3 +121,17 @@ def test_official_history_lookup_error_cannot_be_replaced_by_scan_wallclock(tmp_
         "data.bhavcopy_runtime.official_history_freshness", unavailable,
     )
     assert desk_pipeline.scan_is_fresh() is False
+
+
+def test_future_dated_scan_session_never_overrides_exchange_history(tmp_path, monkeypatch):
+    path = tmp_path / "product" / "latest_momentum_scan.json"
+    scan_store.save_scan(_scan(session="2026-10-12"), path)
+    monkeypatch.setattr(desk_pipeline, "logs_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        "data.bhavcopy_runtime.official_history_freshness",
+        lambda *args, **kwargs: {
+            "current": True, "usable_for_scan": True,
+            "available_session": "2026-10-09",
+        },
+    )
+    assert desk_pipeline.scan_is_fresh() is False
