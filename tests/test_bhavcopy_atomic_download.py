@@ -85,3 +85,17 @@ def test_already_valid_csv_is_not_redownloaded(monkeypatch, tmp_path):
         ),
     )
     assert store._download_day(DAY, retries=0) is True
+
+
+def test_invalid_exchange_response_uses_retry_backoff_before_recovery(monkeypatch, tmp_path):
+    monkeypatch.setattr(store, "_BHAV_DIR", tmp_path)
+    replies = iter([
+        SimpleNamespace(status_code=200, content=b"INVALID" * 200),
+        SimpleNamespace(status_code=200, content=GOOD),
+    ])
+    delays = []
+    monkeypatch.setattr("requests.get", lambda *a, **k: next(replies))
+    monkeypatch.setattr(store.time, "sleep", lambda seconds: delays.append(seconds))
+    assert store._download_day(DAY, retries=1) is True
+    assert store._day_path(DAY).read_bytes() == GOOD
+    assert delays == [1.5]
