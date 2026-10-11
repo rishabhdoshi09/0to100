@@ -167,3 +167,31 @@ def test_installed_runtime_bhavcopy_writer_rejects_symlink_to_internal_disk(monk
     with pytest.raises(RuntimeError, match="no longer matches"):
         store._prepare_bhav_write_directory(directory)
     assert not (external / "bhav").exists()
+
+
+def test_disconnected_runtime_stops_nse_download_before_http(monkeypatch, tmp_path):
+    root = tmp_path / "external-disconnected" / "QuantTerm" / "runtime"
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(root))
+    monkeypatch.setenv("QT_RUNTIME_ROOT_REQUIRE_EXISTING", "1")
+    monkeypatch.setattr(store, "_BHAV_DIR", root / "logs" / "bhav")
+    calls = []
+    monkeypatch.setattr("requests.get", lambda *a, **k: calls.append(True))
+    assert store._download_day(DAY, retries=0) is False
+    assert calls == []
+    assert not root.exists()
+
+
+def test_disconnected_runtime_aborts_history_batch_before_scheduling(monkeypatch, tmp_path):
+    import pytest
+
+    root = tmp_path / "external-disconnected" / "QuantTerm" / "runtime"
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(root))
+    monkeypatch.setenv("QT_RUNTIME_ROOT_REQUIRE_EXISTING", "1")
+    calls = []
+    monkeypatch.setattr(
+        store, "_trading_days_back", lambda *_a: calls.append(True) or [DAY],
+    )
+    with pytest.raises(RuntimeError, match="runtime root"):
+        store.build_store(days=500)
+    assert calls == []
+    assert not root.exists()
