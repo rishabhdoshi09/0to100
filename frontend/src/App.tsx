@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchAccessMode, fetchChart, fetchDashboard, fetchHealth, sendControl, type AccessMode } from './api'
 import { deskStartupLabel, deskStartupRecovery, deskStartupState, type DeskStartupState } from './deskStartupState'
 import { createPollGate } from './pollGate'
+import { historicalDashboard, reconcileHttpDashboard } from './dashboardResilience'
 import { deskRefreshBanner } from './deskBanner'
 import {
   CompareView,
@@ -168,15 +169,6 @@ const emptyDashboard: DashboardPayload = {
   conviction: [],
 }
 
-function dashboardHasWork(payload: DashboardPayload): boolean {
-  return Boolean(
-    payload.scan.scanned_at
-    || payload.scan.records.length > 0
-    || payload.long_term.records.length > 0
-    || payload.data.ready,
-  )
-}
-
 function slimDashboard(payload: DashboardPayload): DashboardPayload {
   return {
     ...payload,
@@ -222,9 +214,10 @@ function useIstClock() {
 
 function App() {
   const nav = readDeskNav()
-  const [dashboard, setDashboard] = useState<DashboardPayload>(() => (
-    readSessionJson<DashboardPayload>('quantterm-dashboard') || emptyDashboard
-  ))
+  const [dashboard, setDashboard] = useState<DashboardPayload>(() => {
+    const remembered = readSessionJson<DashboardPayload>('quantterm-dashboard')
+    return remembered ? historicalDashboard(remembered) : emptyDashboard
+  })
   const [loading, setLoading] = useState(() => !readSessionJson('quantterm-dashboard'))
   const [error, setError] = useState('')
   const [active, setActive] = useState(nav.active || 'Home')
@@ -252,19 +245,7 @@ function App() {
     try {
       const payload = await fetchDashboard()
       setDashboard((prev) => {
-        const next = dashboardHasWork(prev) && !dashboardHasWork(payload)
-          ? {
-              ...payload,
-              scan: prev.scan.records.length ? prev.scan : payload.scan,
-              long_term: prev.long_term.records.length ? prev.long_term : payload.long_term,
-              conviction: prev.conviction.length ? prev.conviction : payload.conviction,
-              data: {
-                ...payload.data,
-                scan_saved: payload.data.scan_saved || prev.data.scan_saved,
-                scan_records: Math.max(payload.data.scan_records || 0, prev.data.scan_records || 0),
-              },
-            }
-          : payload
+        const next = reconcileHttpDashboard(prev, payload)
         writeSessionJson('quantterm-dashboard', slimDashboard(next))
         return next
       })
