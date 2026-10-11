@@ -64,10 +64,34 @@ def disk_dates(root: Path | None = None) -> tuple[date, ...]:
         return _LAST_DATES
 
 
+def _latest_csv_has_basic_integrity(path: Path) -> bool:
+    """Cheap superficial validity check, NOT full OHLCV or source certification.
+
+    A file named for today's market session is not proof that its download
+    finished. Reject empty files, directories, symlinks and a non-CSV header.
+    Actual row/content verification stays in the authoritative scanner.
+    """
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size < 1000:
+            return False
+        with path.open("rb") as handle:
+            header = handle.readline(2048).decode("latin-1").upper().lstrip("\ufeff")
+        return "," in header and "SYMBOL" in header and "CLOSE" in header
+    except (OSError, UnicodeError):
+        return False
+
+
 def unloaded_status(root: Path | None = None) -> dict[str, Any]:
     """File-inventory truth only; zero loaded symbols, no session approval."""
     path = Path(root) if root is not None else logs_path("bhav")
     dates = disk_dates(path)
+    latest = dates[-1] if dates else None
+    validated = bool(
+        latest is not None
+        and _latest_csv_has_basic_integrity(
+            path / f"{latest.strftime('%d%m%Y')}.csv"
+        )
+    )
     cache = path / "store_cache.pkl"
     return {
         "ready": False,
@@ -75,7 +99,12 @@ def unloaded_status(root: Path | None = None) -> dict[str, Any]:
         "sessions": 0,
         "latest_date": "",
         "csv_files": len(dates),
-        "csv_latest_date": dates[-1].isoformat() if dates else "",
+        # Do not promote a filename into official session freshness if its
+        # content is clearly corrupt or incomplete.
+        "csv_latest_date": latest.isoformat() if validated and latest else "",
+        "csv_latest_named_date": latest.isoformat() if latest else "",
+        "csv_latest_validated": validated,
+        "csv_inventory_error": "LATEST_CSV_INVALID" if latest and not validated else "",
         "cache_exists": cache.is_file(),
         "cache_path": str(cache),
         "bhavcopy_dir": str(path),
