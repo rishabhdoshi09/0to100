@@ -177,3 +177,39 @@ def test_scan_publications_use_distinct_temp_names_and_no_stray_files(tmp_path, 
     assert len(source_files) == 2 and source_files[0] != source_files[1]
     assert scan_store.load_scan_metadata(path)["provenance"]["price_data_as_of"] == "2026-10-09"
     assert not any(item.name.endswith(".tmp") for item in tmp_path.iterdir())
+
+
+def test_installed_host_scan_writer_never_recreates_missing_external_mount(tmp_path, monkeypatch):
+    import pytest
+
+    missing_root = tmp_path / "disconnected-volume" / "QuantTerm" / "runtime"
+    destination = missing_root / "logs" / "product" / "latest_momentum_scan.json"
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(missing_root))
+    monkeypatch.setenv("QT_RUNTIME_ROOT_REQUIRE_EXISTING", "1")
+    with pytest.raises(RuntimeError, match="runtime root"):
+        scan_store.save_scan(_scan(), destination)
+    assert not missing_root.exists()
+    assert not destination.parent.exists()
+
+
+def test_installed_host_scan_writer_blocks_unredirected_checkout_path(tmp_path, monkeypatch):
+    import pytest
+
+    mounted = tmp_path / "QuantTerm" / "runtime"
+    mounted.mkdir(parents=True)
+    other = tmp_path / "checkout" / "logs" / "product" / "latest_momentum_scan.json"
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(mounted))
+    monkeypatch.setenv("QT_RUNTIME_ROOT_REQUIRE_EXISTING", "1")
+    with pytest.raises(RuntimeError, match="outside the installed persistent runtime"):
+        scan_store.save_scan(_scan(), other)
+    assert not other.parent.exists()
+
+
+def test_installed_host_scan_writer_allows_existing_persistent_runtime(tmp_path, monkeypatch):
+    mounted = tmp_path / "QuantTerm" / "runtime"
+    mounted.mkdir(parents=True)
+    destination = mounted / "logs" / "product" / "latest_momentum_scan.json"
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(mounted))
+    monkeypatch.setenv("QT_RUNTIME_ROOT_REQUIRE_EXISTING", "1")
+    assert scan_store.save_scan(_scan(), destination) == destination
+    assert scan_store.load_scan_metadata(destination) is not None
