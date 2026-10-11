@@ -206,6 +206,10 @@ export function historicalDashboard(payload: DashboardPayload): DashboardPayload
       new_paper_entries: false,
       existing_exits: false,
       research_enabled: false,
+      new_entry_capability: 'blocked',
+      existing_exit_capability: 'blocked',
+      research_capability: 'blocked',
+      active_job: {},
       state: 'UNKNOWN',
       plain_state: 'Historical dashboard; current execution capabilities unverified.',
       broker: payload.autonomy.broker ? {
@@ -234,6 +238,8 @@ export function historicalDashboard(payload: DashboardPayload): DashboardPayload
         status: 'STALE',
         code: 'DASHBOARD_STATUS_STALE',
         candidates: [],
+        candidate_count: 0,
+        live_execution_allowed: false,
       } : undefined,
       desk: payload.fno.desk ? {
         ...payload.fno.desk,
@@ -246,13 +252,21 @@ export function historicalDashboard(payload: DashboardPayload): DashboardPayload
       paper: payload.fno.paper ? {
         ...payload.fno.paper,
         available: false,
+        live_execution_allowed: false,
       } : undefined,
     },
     data: {
       ...payload.data,
       ready: false,
       history_current: false,
+      store_loaded: false,
       snapshot: { ...payload.data.snapshot, ready: false },
+      bhavcopy: {
+        ...payload.data.bhavcopy,
+        ready: false,
+        current: false,
+        reason_code: 'DASHBOARD_STATUS_STALE',
+      },
       scan_saved: false,
       long_term_saved: false,
       blockers: [
@@ -276,5 +290,14 @@ export function reconcileHttpDashboard(
   // reconcileDashboard preserves durable rows where the HTTP read has no
   // rows. Apply the fail-closed transform AFTER the merge so the old live
   // flags can never be reintroduced into a warming/stale result.
-  return historicalDashboard(reconcileDashboard(previous, incoming))
+  const historical = historicalDashboard(reconcileDashboard(previous, incoming))
+  return {
+    ...historical,
+    dashboard_cache: {
+      ...historical.dashboard_cache!,
+      status: incoming.dashboard_cache.status,
+      refreshing: incoming.dashboard_cache.refreshing,
+      error: incoming.dashboard_cache.error,
+    },
+  }
 }
