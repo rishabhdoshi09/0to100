@@ -343,12 +343,102 @@ def build_scan_payload(
     }
 
 
+def _scan_metadata_path(target: Path) -> Path:
+    """Sidecar metadata belonging to the exact canonical scan JSON file."""
+    return target.with_suffix(".meta.json")
+
+
+def _scan_file_identity(target: Path) -> dict[str, int] | None:
+    try:
+        stat = target.stat()
+        return {
+            "device": int(stat.st_dev),
+            "inode": int(stat.st_ino),
+            "size": int(stat.st_size),
+            "mtime_ns": int(stat.st_mtime_ns),
+        }
+    except OSError:
+        return None
+
+
+def _scan_metadata(payload: Mapping[str, Any], identity: dict[str, int]) -> dict[str, Any] | None:
+    """Bounded read projection of a published scan; never new price evidence."""
+    if int(payload.get("schema_version") or 0) not in SUPPORTED_SCHEMA_VERSIONS:
+        return None
+    records = payload.get("records")
+    if not isinstance(records, list):
+        return None
+    provenance = payload.get("provenance")
+    if not isinstance(provenance, Mapping):
+        # Legacy scans must use the original full-artifact read and uncertainty.
+        return None
+    return {
+        "schema_version": int(payload["schema_version"]),
+        "scanned_at": str(payload.get("scanned_at") or ""),
+        "as_of_session": str(payload.get("as_of_session") or ""),
+        "history_latest_date": str(payload.get("history_latest_date") or ""),
+        "provenance": dict(provenance),
+        "records_count": len(records),
+        "file_identity": identity,
+    }
+
+
+def load_scan_metadata(path: str | Path = DEFAULT_SCAN_PATH) -> dict[str, Any] | None:
+    """Inspect only verified metadata; absent/mismatched sidecar is UNKNOWN.
+
+    File identity proves the metadata was produced for the *same* atomic scan
+    publication. The disk-session authority is checked independently by the
+    caller. Never accept a sidecar after the JSON file was replaced or edited.
+    """
+    target = Path(path)
+    before = _scan_file_identity(target)
+    if before is None:
+        return None
+    sidecar = _scan_metadata_path(target)
+    try:
+        if not sidecar.is_file() or sidecar.stat().st_size > 16_384:
+            return None
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return None
+        if payload.get("file_identity") != before:
+            return None
+        if int(payload.get("schema_version") or 0) not in SUPPORTED_SCHEMA_VERSIONS:
+            return None
+        if not isinstance(payload.get("provenance"), dict):
+            return None
+        if not isinstance(payload.get("records_count"), int) or payload["records_count"] < 0:
+            return None
+        if _scan_file_identity(target) != before:
+            return None
+        return payload
+    except (OSError, ValueError, TypeError, UnicodeError):
+        return None
+
+
 def save_scan(payload: Mapping[str, Any], path: str | Path = DEFAULT_SCAN_PATH) -> Path:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_suffix(target.suffix + ".tmp")
     tmp.write_text(json.dumps(dict(payload), indent=2, default=str), encoding="utf-8")
     os.replace(tmp, target)
+
+    # The authoritative JSON is already safely committed. Sidecar publication
+    # is best-effort: metadata failure cannot invalidate the real scan. Readers
+    # reject outdated sidecars by matching stat identity and use full JSON as
+    # the compatibility fallback.
+    try:
+        identity = _scan_file_identity(target)
+        metadata = _scan_metadata(payload, identity) if identity is not None else None
+        if metadata is not None and _scan_file_identity(target) == identity:
+            sidecar = _scan_metadata_path(target)
+            sidecar_tmp = sidecar.with_suffix(sidecar.suffix + ".tmp")
+            sidecar_tmp.write_text(
+                json.dumps(metadata, sort_keys=True, default=str), encoding="utf-8"
+            )
+            os.replace(sidecar_tmp, sidecar)
+    except (OSError, ValueError, TypeError):
+        pass
     return target
 
 
