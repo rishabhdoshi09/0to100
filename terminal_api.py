@@ -1351,9 +1351,16 @@ def health() -> dict:
     File, PID and port checks only. Autonomy SQLite and live scans stay off
     this path so the launcher can start the desk.
     """
+    # Immutable build identity is set by the installed-host manifest or the
+    # canonical manual launcher. Never invoke git on this health/polling path.
+    # No path, secret, or arbitrary environment value should reach HTTP.
+    build_sha = os.environ.get("QT_BUILD_SHA", "").strip().lower()
+    if len(build_sha) != 40 or any(ch not in "0123456789abcdef" for ch in build_sha):
+        build_sha = ""
     payload = {
         "ok": True,
         "service": "quantterm-terminal-api",
+        "build_sha": build_sha,
         "version": app.version,
         "lifecycle": None,
         "reason": "Terminal API is serving",
