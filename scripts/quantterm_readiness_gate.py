@@ -40,10 +40,18 @@ def evaluate(
     if public:
         if access.get("public_read_only") is not True:
             blockers.append("Public read-only access is not enabled")
-        if access.get("operator_token_configured") is not True:
-            blockers.append("Public operator mutation token is not configured")
-        if str(access.get("mutation_policy") or "") != "OPERATOR_TOKEN_REQUIRED":
-            blockers.append("Public mutation authorization policy is not enforced")
+        policy = str(access.get("mutation_policy") or "")
+        token_present = access.get("operator_token_configured") is True
+        # Two safe spectator deployments:
+        # 1) No token => every public mutation returns 403 (READ_ONLY).
+        # 2) Token present => operator-only mutation (OPERATOR_TOKEN_REQUIRED).
+        # Never require an operator credential for a zero-mutation kiosk.
+        valid_policy = (
+            (policy == "READ_ONLY" and not token_present)
+            or (policy == "OPERATOR_TOKEN_REQUIRED" and token_present)
+        )
+        if not valid_policy:
+            blockers.append("Public mutation policy/token configuration is inconsistent or unsafe")
     for endpoint in ("health", "access", "dashboard", "decision-simulation-gate"):
         if endpoint not in responses:
             blockers.append(f"Missing GET /api/{endpoint}")
