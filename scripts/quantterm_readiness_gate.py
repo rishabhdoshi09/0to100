@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 from typing import Any, Mapping
@@ -28,6 +29,12 @@ def evaluate(
 ) -> dict[str, Any]:
     blockers: list[str] = []
     warnings: list[str] = []
+    # This command is a release gate, not a benchmark knob: NaN, infinity,
+    # relaxed read budgets, or relaxed coverage may not produce a PASS.
+    if not math.isfinite(max_read_s) or not 0 < max_read_s <= 3.0:
+        blockers.append("Release read budget must be finite, positive and <=3s")
+    if not math.isfinite(min_coverage_pct) or not 95.0 <= min_coverage_pct <= 100.0:
+        blockers.append("Release coverage target must be finite and >=95%")
     health = responses.get("health") or {}
     access = responses.get("access") or {}
     dashboard = responses.get("dashboard") or {}
@@ -66,8 +73,10 @@ def evaluate(
             blockers.append(f"Missing GET /api/{endpoint}")
             continue
         seconds = timings_s.get(endpoint)
-        if seconds is None or seconds > max_read_s:
-            blockers.append(f"/api/{endpoint} exceeded the {max_read_s:g}s read budget")
+        if (seconds is None or not isinstance(seconds, (int, float))
+                or not math.isfinite(float(seconds)) or seconds < 0
+                or seconds > max_read_s):
+            blockers.append(f"/api/{endpoint} exceeded or lacked a valid {max_read_s:g}s read budget")
 
     cache = dashboard.get("dashboard_cache") or {}
     if cache.get("status") != "FRESH":
@@ -197,6 +206,11 @@ def main(argv: list[str] | None = None) -> int:
         or any(ch not in "0123456789abcdefABCDEF" for ch in args.expected_sha)
     ):
         parser.error("--expected-sha must be a full 40-character hexadecimal commit SHA")
+    if not math.isfinite(args.max_read_seconds) or not 0 < args.max_read_seconds <= 3.0:
+        parser.error("--max-read-seconds must be finite, positive and at most 3")
+    if (not math.isfinite(args.min_coverage_pct)
+            or not 95.0 <= args.min_coverage_pct <= 100.0):
+        parser.error("--min-coverage-pct must be finite and at least 95")
     responses: dict[str, dict] = {}
     timings: dict[str, float] = {}
     failed: list[str] = []
