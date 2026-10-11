@@ -850,9 +850,19 @@ def _snapshot_payload() -> dict:
         manifest = _json_file(directory / "manifest.json", {})
         if str(manifest.get("snapshot_id") or "") != snapshot_id:
             return missing
-        # The active pointer is immutable and activation validates the full
-        # equity CSV hash. This cheap read only proves pointer/manifest
-        # consistency; it must not hash gigabytes of bars on HTTP status.
+        # Verify the small manifest itself; activation originally checked the
+        # full equity CSV hash. HTTP GETs must not re-hash gigabytes of bars.
+        import hashlib
+        import json
+        if not (directory / "bars_equity.csv").is_file():
+            return missing
+        checksum = str(manifest.get("manifest_checksum") or "")
+        payload = {key: value for key, value in manifest.items() if key != "manifest_checksum"}
+        actual = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+        if checksum != actual:
+            return missing
         return {
             "ready": True,
             "snapshot_id": snapshot_id,
