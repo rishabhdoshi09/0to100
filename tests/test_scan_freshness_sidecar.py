@@ -213,3 +213,19 @@ def test_installed_host_scan_writer_allows_existing_persistent_runtime(tmp_path,
     monkeypatch.setenv("QT_RUNTIME_ROOT_REQUIRE_EXISTING", "1")
     assert scan_store.save_scan(_scan(), destination) == destination
     assert scan_store.load_scan_metadata(destination) is not None
+
+
+def test_strict_scan_writer_blocks_symlink_escape_from_mounted_volume(tmp_path, monkeypatch):
+    import pytest
+
+    mounted = tmp_path / "QuantTerm" / "runtime"
+    mounted.mkdir(parents=True)
+    outside = tmp_path / "internal-disk"
+    outside.mkdir()
+    (mounted / "logs").symlink_to(outside, target_is_directory=True)
+    destination = mounted / "logs" / "product" / "latest_momentum_scan.json"
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(mounted))
+    monkeypatch.setenv("QT_RUNTIME_ROOT_REQUIRE_EXISTING", "1")
+    with pytest.raises(RuntimeError, match="outside the installed persistent runtime"):
+        scan_store.save_scan(_scan(), destination)
+    assert not (outside / "product").exists()
