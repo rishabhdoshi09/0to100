@@ -76,10 +76,19 @@ def _download_day(d: date, retries: int = 2) -> bool:
     retry with backoff so a flaky connection can't punch holes in history.
     """
     from data.bhavcopy_disk_status import _latest_csv_has_basic_integrity
+    from core.runtime_paths import _require_existing_runtime
 
     path = _day_path(d)
     if path.is_file() and _latest_csv_has_basic_integrity(path, expected_date=d):
         return True
+    # An absent external runtime is NOT a network/transient NSE failure.
+    # Check the installed mount before contacting NSE so a lost drive does
+    # not generate hundreds of requests that cannot be persisted.
+    if _require_existing_runtime():
+        try:
+            _prepare_bhav_write_directory(_BHAV_DIR)
+        except RuntimeError:
+            return False
     import requests
     url = _URL.format(d=d.strftime("%d%m%Y"))
     for attempt in range(retries + 1):
@@ -327,6 +336,13 @@ def build_store(days: int = DEFAULT_DAYS, progress=None, should_stop=None) -> in
     dropped and HistoryAcquisitionCancelled is raised; whatever reached disk
     stays there, because a partial history is still a real history.
     """
+    from core.runtime_paths import _require_existing_runtime, runtime_root
+
+    # A missing installed runtime is a hard-stop, not a reason to schedule
+    # one HTTP fetch per absent historical day.
+    if _require_existing_runtime():
+        runtime_root()
+
     candidates = _trading_days_back(days)
 
     # Recheck only the most recent candidate sessions for corrupt or
