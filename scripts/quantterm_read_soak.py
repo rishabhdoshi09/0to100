@@ -67,10 +67,34 @@ def assess_samples(
             blockers.append(f"/api/{name} had {len(samples) - len(valid)} failed/unsafe reads")
         if p95 is None or p95 > max_p95_s:
             blockers.append(f"/api/{name} p95 exceeds {max_p95_s:g}s")
-        if name in ("dashboard", "decision-simulation-gate") and (
-            states.get("FRESH", 0) != len(samples)
-        ):
-            blockers.append(f"/api/{name} did not serve FRESH status for every sample")
+        if name in ("dashboard", "decision-simulation-gate"):
+            # Both single-flight caches explicitly return a safe STALE response
+            # while refreshing their TTLs (15s gate, 45s dashboard). A healthy
+            # 20-cycle soak will *necessarily* see a gate expiry. Require
+            # mostly FRESH evidence, zero DEGRADED/unknown status and no long
+            # streak of stale reads instead of demanding impossible 100% FRESH.
+            fresh = states.get("FRESH", 0)
+            minimum_fresh = math.ceil(len(samples) * 0.90)
+            if fresh < minimum_fresh:
+                blockers.append(
+                    f"/api/{name} had only {fresh}/{len(samples)} FRESH reads"
+                )
+            if any(
+                status not in ("FRESH", "STALE", "BOOTSTRAPPING")
+                for status in states
+            ):
+                blockers.append(f"/api/{name} served a degraded or unknown cache status")
+            streak = longest = 0
+            for entry in rows:
+                if isinstance(entry, dict) and entry.get("cache_status") == "FRESH":
+                    streak = 0
+                else:
+                    streak += 1
+                    longest = max(longest, streak)
+            if longest > 2:
+                blockers.append(
+                    f"/api/{name} served {longest} consecutive non-FRESH reads"
+                )
     return {
         "verdict": "HOLD" if blockers else "READ_SOAK_PASS",
         "sample_cycles": len(samples),
@@ -147,9 +171,31 @@ def sample_one(origin: str, path: str, timeout_s: float) -> dict[str, Any]:
         elif path == "access":
             safe = access_policy_safe(payload)
         elif path == "dashboard":
-            safe = (payload.get("dashboard_cache") or {}).get("status") == "FRESH"
+            cache_status = (payload.get("dashboard_cache") or {}).get("status")
+            safe = cache_status in ("FRESH", "STALE", "BOOTSTRAPPING")
+            if cache_status != "FRESH":
+                # The cache must render a genuine fail-closed historical UI
+                # while background refresh runs. Transport success is not
+                # evidence of live entry authority.
+                safe = safe and all((
+                    (payload.get("scan") or {}).get("available") is False,
+                    (payload.get("data") or {}).get("ready") is False,
+                    (payload.get("paper") or {}).get("enabled") is False,
+                    (payload.get("autonomy") or {}).get("new_paper_entries") is False,
+                    (payload.get("fno") or {}).get("available") is False,
+                ))
         else:
-            safe = (payload.get("status_cache") or {}).get("status") == "FRESH"
+            cache_status = (payload.get("status_cache") or {}).get("status")
+            safe = cache_status in ("FRESH", "STALE", "BOOTSTRAPPING")
+            if cache_status != "FRESH":
+                safe = safe and all((
+                    payload.get("approved") is False,
+                    payload.get("discovery_ready") is False,
+                    payload.get("scan_fresh") is False,
+                    payload.get("live_lock_verified") is False,
+                    payload.get("live_execution_authorized") is False,
+                    not payload.get("best_trades"),
+                ))
         cache_key = "dashboard_cache" if path == "dashboard" else "status_cache"
         return {
             "ok": safe,
