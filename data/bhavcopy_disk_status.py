@@ -7,7 +7,9 @@ The authoritative scan process still uses data.bhavcopy_store.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
+import csv
+import math
 import os
 from pathlib import Path
 import threading
@@ -65,19 +67,67 @@ def disk_dates(root: Path | None = None) -> tuple[date, ...]:
 
 
 def _latest_csv_has_basic_integrity(path: Path) -> bool:
-    """Cheap superficial validity check, NOT full OHLCV or source certification.
+    """Bounded structural check, never full OHLCV/source certification.
 
-    A file named for today's market session is not proof that its download
-    finished. Reject empty files, directories, symlinks and a non-CSV header.
-    Actual row/content verification stays in the authoritative scanner.
+    NSE sec_bhavdata_full must have the fields the canonical pandas parser
+    actually consumes. Validate a few realistic EQ bars and, when DATE1 is
+    present, make sure a renamed prior-session file cannot masquerade as
+    the latest archive. Scan execution still requires the full loaded store.
     """
+    required = (
+        "SYMBOL", "SERIES", "OPEN_PRICE", "HIGH_PRICE",
+        "LOW_PRICE", "CLOSE_PRICE", "TTL_TRD_QNTY",
+    )
     try:
         if path.is_symlink() or not path.is_file() or path.stat().st_size < 1000:
             return False
-        with path.open("rb") as handle:
-            header = handle.readline(2048).decode("latin-1").upper().lstrip("\ufeff")
-        return "," in header and "SYMBOL" in header and "CLOSE" in header
-    except (OSError, UnicodeError):
+        expected_date = date(
+            int(path.stem[4:8]), int(path.stem[2:4]), int(path.stem[:2])
+        )
+        with path.open("r", encoding="latin-1", newline="") as handle:
+            reader = csv.DictReader(handle)
+            columns = {
+                str(name).strip().lstrip("\ufeff").upper(): name
+                for name in (reader.fieldnames or []) if name
+            }
+            if not all(field in columns for field in required):
+                return False
+            valid_eq = 0
+            for index, row in enumerate(reader):
+                if index >= 256:
+                    break
+                if str(row.get(columns["SERIES"]) or "").strip().upper() != "EQ":
+                    continue
+                if not str(row.get(columns["SYMBOL"]) or "").strip():
+                    continue
+                if "DATE1" in columns:
+                    raw_day = str(row.get(columns["DATE1"]) or "").strip()
+                    try:
+                        data_day = datetime.strptime(raw_day, "%d-%b-%Y").date()
+                    except ValueError:
+                        try:
+                            data_day = date.fromisoformat(raw_day)
+                        except ValueError:
+                            return False
+                    if data_day != expected_date:
+                        return False
+                try:
+                    prices = [
+                        float(str(row.get(columns[key]) or "").strip())
+                        for key in ("OPEN_PRICE", "HIGH_PRICE", "LOW_PRICE", "CLOSE_PRICE")
+                    ]
+                    volume = float(str(row.get(columns["TTL_TRD_QNTY"]) or "").strip())
+                except (ValueError, TypeError):
+                    continue
+                op, hi, lo, cl = prices
+                if (all(math.isfinite(v) for v in (*prices, volume))
+                        and lo > 0 and lo <= min(op, cl) <= max(op, cl) <= hi
+                        and volume >= 0):
+                    valid_eq += 1
+                    if valid_eq >= 3:
+                        return True
+        return False
+    except (OSError, UnicodeError, ValueError, csv.Error):
         return False
 
 
