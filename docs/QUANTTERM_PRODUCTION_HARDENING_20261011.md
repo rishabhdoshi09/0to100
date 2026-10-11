@@ -41,7 +41,13 @@ The following are read-only and do not restart services or place orders:
 
 ```bash
 cd ~/0to100
-python3 scripts/quantterm_readiness_gate.py --public
+# Set this from the GitHub-reviewed release candidate, NOT from the Mac's
+# current HEAD; otherwise an outdated checkout can attest to itself.
+export EXPECTED_QT_SHA='<paste-exact-40-character-green-PR-head-SHA>'
+# For a private local operator desk (the ordinary Mac deployment):
+python3 scripts/quantterm_readiness_gate.py --expected-sha "$EXPECTED_QT_SHA"
+# A public spectator deployment additionally needs --public:
+# python3 scripts/quantterm_readiness_gate.py --public --expected-sha "$EXPECTED_QT_SHA"
 curl -sS -m 5 -w '\nHTTP %{http_code} %{time_total}s\n' http://127.0.0.1:8765/api/health
 sysctl vm.swapusage
 memory_pressure -Q
@@ -59,8 +65,14 @@ without making mutations, placing paper orders, or restarting services:
 
 ```bash
 cd ~/0to100
-python3 scripts/quantterm_read_soak.py --samples 20 --p95-budget-seconds 3
+python3 scripts/quantterm_read_soak.py --samples 20 --p95-budget-seconds 3 --expected-sha "$EXPECTED_QT_SHA"
 ```
+
+With `--expected-sha`, all read samples must identify the full 40-character
+reviewed build advertised by `/api/health`. Missing identity, truncated SHA,
+or a mid-soak build change is HOLD even if latency looks good. The installed
+launchd service and canonical manual launcher set `QT_BUILD_SHA`; the API
+health handler does not run git or expose environment secrets.
 
 It samples four local GET endpoints sequentially (health, access, dashboard,
 decision-simulation-gate). It fails on any unsafe operational read or when
