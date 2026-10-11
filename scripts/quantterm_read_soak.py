@@ -32,12 +32,22 @@ def percentile_nearest_rank(values: list[float], pct: float) -> float | None:
 def assess_samples(
     samples: list[Mapping[str, Any]], *, min_samples: int = 20,
     max_p95_s: float = 3.0,
+    expected_sha: str = "",
 ) -> dict[str, Any]:
     """No payloads/secrets in reports; observations are request metadata."""
     blockers: list[str] = []
     endpoints: dict[str, Any] = {}
     if len(samples) < min_samples:
         blockers.append(f"Only {len(samples)} cycles; require {min_samples}")
+    if expected_sha:
+        # All samples, not just the final one, must belong to the reviewed
+        # build. A mid-soak host replacement invalidates latency evidence.
+        if any(
+            str((cycle.get("health") or {}).get("build_sha") or "").lower()
+            != expected_sha.lower()
+            for cycle in samples
+        ):
+            blockers.append("Read soak sampled an unverified or different API build SHA")
     for name in ENDPOINTS:
         rows = [row.get(name) if isinstance(row, dict) else None for row in samples]
         latency = [
@@ -203,6 +213,7 @@ def sample_one(origin: str, path: str, timeout_s: float) -> dict[str, Any]:
         return {
             "ok": safe,
             "seconds": round(time.monotonic() - started, 4),
+            "build_sha": str(payload.get("build_sha") or "") if path == "health" else "",
             "cache_status": str((payload.get(cache_key) or {}).get("status") or "")
                 if path in ("dashboard", "decision-simulation-gate") else "",
         }
@@ -221,11 +232,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--interval-seconds", type=float, default=1.0)
     parser.add_argument("--timeout-seconds", type=float, default=3.0)
     parser.add_argument("--p95-budget-seconds", type=float, default=3.0)
+    parser.add_argument("--expected-sha", default="", help="Require every sample to come from the reviewed full Git commit SHA")
     args = parser.parse_args(argv)
     try:
         origin = _safe_origin(args.origin)
     except ValueError as exc:
         parser.error(str(exc))
+    if args.expected_sha and (
+        len(args.expected_sha) != 40
+        or any(ch not in "0123456789abcdefABCDEF" for ch in args.expected_sha)
+    ):
+        parser.error("--expected-sha must be a full 40-character hexadecimal commit SHA")
     if not 1 <= args.samples <= 500:
         parser.error("--samples must be between 1 and 500")
     if not 0 <= args.interval_seconds <= 60:
@@ -244,6 +261,7 @@ def main(argv: list[str] | None = None) -> int:
         results,
         min_samples=args.samples,
         max_p95_s=args.p95_budget_seconds,
+        expected_sha=args.expected_sha,
     )
     print(json.dumps(result, indent=2))
     return 0 if result["verdict"] == "READ_SOAK_PASS" else 2
