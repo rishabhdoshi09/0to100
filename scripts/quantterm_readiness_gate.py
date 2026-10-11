@@ -141,7 +141,10 @@ def evaluate(
             "build_sha": str(health.get("build_sha") or ""),
             "expected_sha": expected_sha,
             "endpoint_seconds": {
-                name: round(seconds, 3) for name, seconds in timings_s.items()
+                name: (round(float(seconds), 3)
+                       if isinstance(seconds, (int, float)) and math.isfinite(float(seconds))
+                       else None)
+                for name, seconds in timings_s.items()
             },
         },
         "scope": (
