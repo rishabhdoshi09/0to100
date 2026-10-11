@@ -1417,6 +1417,21 @@ def health() -> dict:
             "live_lock_reason": f"Runtime probe failed before live-execution safety could be verified: {exc}"[:240],
             "live_lock_source": "product.live_execution_interlock",
         })
+    # The public GET endpoint is not an operator diagnostics channel.
+    # Runtime probes may include exception strings, paths, SQLite locations or
+    # configuration fragments even on a nominal HTTP 200. Never surface those
+    # strings publicly; keep safety booleans and readiness truth unchanged.
+    if os.environ.get("QT_PUBLIC_READ_ONLY", "").strip().lower() in ("1", "true", "yes", "on"):
+        lifecycle = str(payload.get("lifecycle") or "").upper()
+        if lifecycle not in ("STARTING", "READY", "DEGRADED", "FAILED", "RECOVERING"):
+            lifecycle = "UNKNOWN"
+        payload["lifecycle"] = lifecycle
+        payload["reason"] = "QuantTerm lifecycle: " + lifecycle
+        payload["reasons"] = []
+        payload["components"] = []
+        payload["history"] = {}
+        payload["resources"] = {}
+        payload["live_lock_reason"] = "Detailed interlock diagnostics available to the private operator only."
     return payload
 
 
