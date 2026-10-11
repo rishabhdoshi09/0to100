@@ -140,6 +140,23 @@ def test_slow_or_missing_api_endpoint_fails():
     assert evaluate(partial, timings_s=timings())["verdict"] == "HOLD"
 
 
+
+def test_readiness_rejects_nan_infinite_or_weakened_release_thresholds():
+    import math
+    valid = valid_responses()
+    for budget in (math.nan, math.inf, 10.0, -1.0):
+        report = evaluate(valid, timings_s=timings(), max_read_s=budget)
+        assert report["verdict"] == "HOLD", budget
+    for coverage_target in (math.nan, math.inf, 50.0, 101.0):
+        report = evaluate(valid, timings_s=timings(), min_coverage_pct=coverage_target)
+        assert report["verdict"] == "HOLD", coverage_target
+    read_times = {**timings(), "dashboard": math.nan}
+    report = evaluate(valid, timings_s=read_times)
+    assert report["verdict"] == "HOLD"
+    assert report["metrics"]["endpoint_seconds"]["dashboard"] is None
+    assert evaluate(valid, timings_s=timings())["verdict"] == "LOCAL_READ_GATE_PASS"
+
+
 def test_completed_scan_without_decision_publication_is_hold():
     responses = valid_responses()
     responses["dashboard"]["scan"]["desk_overlays"]["decision_discovery"] = "error"
