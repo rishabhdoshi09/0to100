@@ -13,7 +13,8 @@ import sys
 import time
 from typing import Any, Mapping
 from urllib.error import URLError
-from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 
 def evaluate(
@@ -132,11 +133,32 @@ def evaluate(
     }
 
 
+class _RejectRedirects(HTTPRedirectHandler):
+    """A localhost safety check must never follow external redirects."""
+
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        return None
+
+
+_LOCAL_OPENER = build_opener(ProxyHandler({}), _RejectRedirects())
+
+
+def _safe_origin(raw: str) -> str:
+    """Only direct local API origins; never proxy, credentials or URL suffix."""
+    parsed = urlsplit(raw)
+    if parsed.scheme != "http" or parsed.hostname not in ("127.0.0.1", "localhost", "::1"):
+        raise ValueError("Only local loopback HTTP origins are supported")
+    if (parsed.username or parsed.password or parsed.path not in ("", "/")
+            or parsed.query or parsed.fragment or parsed.port is None):
+        raise ValueError("Only a plain local HTTP origin with an explicit port is supported")
+    return raw.rstrip("/")
+
+
 def fetch_json(origin: str, endpoint: str, timeout_s: float) -> tuple[dict, float]:
-    url = f"{origin.rstrip('/')}/api/{endpoint}"
+    url = f"{_safe_origin(origin)}/api/{endpoint}"
     started = time.monotonic()
     request = Request(url, headers={"Accept": "application/json"}, method="GET")
-    with urlopen(request, timeout=timeout_s) as response:
+    with _LOCAL_OPENER.open(request, timeout=timeout_s) as response:
         if response.status != 200:
             raise ValueError(f"/api/{endpoint} returned HTTP {response.status}")
         raw = response.read(6 * 1024 * 1024 + 1)
@@ -155,9 +177,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-read-seconds", type=float, default=3.0)
     parser.add_argument("--min-coverage-pct", type=float, default=95.0)
     args = parser.parse_args(argv)
-    origin = args.origin.rstrip("/")
-    if not origin.startswith(("http://127.0.0.1:", "http://localhost:")):
-        parser.error("Only local loopback URLs are supported by this safety probe")
+    try:
+        origin = _safe_origin(args.origin)
+    except ValueError as exc:
+        parser.error(str(exc))
     responses: dict[str, dict] = {}
     timings: dict[str, float] = {}
     failed: list[str] = []
