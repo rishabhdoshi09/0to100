@@ -81,12 +81,13 @@ def _download_day(d: date, retries: int = 2) -> bool:
                     handle.write(resp.content)
                 if not _latest_csv_has_basic_integrity(tmp, expected_date=d):
                     log.warning("bhav_download_invalid_content", day=str(d))
-                    continue
-                # Readers see either the previous complete file or the new
-                # complete file. Interrupted downloads never create partial
-                # official-session filenames and can safely be retried.
-                os.replace(tmp, path)
-                return True
+                else:
+                    # Readers see either the previous complete file or the
+                    # new complete file. Interrupted downloads never create
+                    # partial official-session filenames and are retried with
+                    # the normal source cooldown.
+                    os.replace(tmp, path)
+                    return True
         except Exception as exc:
             if attempt == retries:
                 log.debug("bhav_download_failed", day=str(d), error=str(exc))
