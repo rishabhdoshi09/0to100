@@ -1,6 +1,6 @@
 """Read-only soak probe must fail closed on latency, stale reads and live unlock."""
 from scripts.quantterm_read_soak import (
-    ENDPOINTS, _safe_origin, assess_samples, percentile_nearest_rank,
+    ENDPOINTS, _safe_origin, access_policy_safe, assess_samples, percentile_nearest_rank,
 )
 import pytest
 
@@ -71,3 +71,32 @@ def test_loopback_only_no_credentials_or_remote_paths(url):
 def test_accepted_loopback_origin():
     assert _safe_origin("http://127.0.0.1:8765") == "http://127.0.0.1:8765"
     assert _safe_origin("http://localhost:8765/") == "http://localhost:8765"
+
+
+def test_loopback_private_operator_is_safe_for_local_soak_but_not_public_approval():
+    assert access_policy_safe({
+        "mutation_policy": "PRIVATE_OPERATOR",
+        "public_read_only": False,
+        "operator_token_configured": False,
+    })
+    assert access_policy_safe({
+        "mutation_policy": "READ_ONLY",
+        "public_read_only": True,
+        "operator_token_configured": False,
+    })
+    assert access_policy_safe({
+        "mutation_policy": "OPERATOR_TOKEN_REQUIRED",
+        "public_read_only": True,
+        "operator_token_configured": True,
+    })
+
+
+def test_ambiguous_or_broken_public_access_configuration_fails_soak():
+    for config in (
+        {"mutation_policy": "PRIVATE_OPERATOR", "public_read_only": True},
+        {"mutation_policy": "READ_ONLY", "public_read_only": False},
+        {"mutation_policy": "OPERATOR_TOKEN_REQUIRED",
+         "public_read_only": True, "operator_token_configured": False},
+        {"mutation_policy": "UNKNOWN", "public_read_only": False},
+    ):
+        assert access_policy_safe(config) is False
