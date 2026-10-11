@@ -1,0 +1,109 @@
+"""Decision-gate scan freshness cannot reparse giant scan JSON every poll."""
+from __future__ import annotations
+
+import json
+import os
+
+from product import scan_store
+from product import desk_pipeline
+
+
+def _scan(*, session="2026-10-09"):
+    return {
+        "schema_version": 2,
+        "scanned_at": "2026-10-11T09:15:00+00:00",
+        "as_of_session": session,
+        "history_latest_date": session,
+        "provenance": {
+            "market_session_date": session,
+            "price_data_as_of": session,
+            "data_current": True,
+            "scan_id": "1234567890abcdef",
+        },
+        "records": [{"symbol": "TCS", "status_scope": "SCANNER_SETUP"}],
+        "universe_size": 1,
+        "summary": {"with_any_setup": 1},
+    }
+
+
+def test_scan_sidecar_matches_exact_atomic_publication(tmp_path):
+    path = tmp_path / "latest_momentum_scan.json"
+    scan_store.save_scan(_scan(), path)
+    metadata = scan_store.load_scan_metadata(path)
+    assert metadata is not None
+    assert metadata["provenance"]["price_data_as_of"] == "2026-10-09"
+    assert metadata["records_count"] == 1
+    assert not metadata.get("records")
+
+    # A second atomic publication at the same filename invalidates the
+    # earlier sidecar. Do not borrow session provenance from older content.
+    replacement = path.with_suffix(".replacement")
+    replacement.write_text(json.dumps(_scan(session="2026-10-08")), encoding="utf-8")
+    os.replace(replacement, path)
+    assert scan_store.load_scan_metadata(path) is None
+    assert scan_store.load_scan(path)["provenance"]["price_data_as_of"] == "2026-10-08"
+
+
+def test_metadata_does_not_pretend_missing_json_is_current(tmp_path):
+    path = tmp_path / "latest_momentum_scan.json"
+    scan_store.save_scan(_scan(), path)
+    path.unlink()
+    assert scan_store.load_scan_metadata(path) is None
+
+
+def test_corrupt_or_old_sidecar_fails_closed(tmp_path):
+    path = tmp_path / "latest_momentum_scan.json"
+    scan_store.save_scan(_scan(), path)
+    sidecar = scan_store._scan_metadata_path(path)
+    sidecar.write_text('{"schema_version": 2, "file_identity": {}}', encoding="utf-8")
+    assert scan_store.load_scan_metadata(path) is None
+
+
+def test_decision_freshness_avoids_full_scan_json_when_sidecar_verified(tmp_path, monkeypatch):
+    path = tmp_path / "product" / "latest_momentum_scan.json"
+    scan_store.save_scan(_scan(), path)
+    monkeypatch.setattr(desk_pipeline, "logs_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        "data.bhavcopy_runtime.official_history_freshness",
+        lambda *args, **kwargs: {
+            "current": True, "usable_for_scan": True,
+            "available_session": "2026-10-09",
+        },
+    )
+    monkeypatch.setattr(
+        scan_store, "load_scan", lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("Full saved scan JSON reloaded during metadata-only freshness")
+        ),
+    )
+    assert desk_pipeline.scan_is_fresh() is True
+
+
+def test_sidecar_never_bypasses_stale_authoritative_exchange_session(tmp_path, monkeypatch):
+    path = tmp_path / "product" / "latest_momentum_scan.json"
+    scan_store.save_scan(_scan(), path)
+    monkeypatch.setattr(desk_pipeline, "logs_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        "data.bhavcopy_runtime.official_history_freshness",
+        lambda *args, **kwargs: {
+            "current": False, "usable_for_scan": False,
+            "available_session": "2026-10-10",
+        },
+    )
+    assert desk_pipeline.scan_is_fresh() is False
+
+
+def test_changed_json_makes_gate_use_authoritative_fallback(tmp_path, monkeypatch):
+    path = tmp_path / "product" / "latest_momentum_scan.json"
+    scan_store.save_scan(_scan(), path)
+    replacement = path.with_suffix(".new.json")
+    replacement.write_text(json.dumps(_scan(session="2026-10-08")), encoding="utf-8")
+    os.replace(replacement, path)
+    monkeypatch.setattr(desk_pipeline, "logs_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        "data.bhavcopy_runtime.official_history_freshness",
+        lambda *args, **kwargs: {
+            "current": True, "usable_for_scan": True,
+            "available_session": "2026-10-09",
+        },
+    )
+    assert desk_pipeline.scan_is_fresh() is False
