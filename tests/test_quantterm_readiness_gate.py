@@ -53,6 +53,38 @@ def test_local_readiness_requires_current_sources_but_not_paper_approval():
     assert result["blockers"] == []
 
 
+
+def test_release_readiness_requires_exact_running_build_sha():
+    expected = "234e3e30e228e515a38bee994436c0af3dad1b85"
+    responses = valid_responses()
+    # Healthy, fully populated API evidence without build identity cannot
+    # approve deployment of a newer source tree.
+    assert evaluate(
+        responses, timings_s=timings(), expected_sha=expected,
+    )["verdict"] == "HOLD"
+
+    responses["health"]["service"] = "quantterm-terminal-api"
+    responses["health"]["build_sha"] = expected[:12]
+    assert evaluate(
+        responses, timings_s=timings(), expected_sha=expected,
+    )["verdict"] == "HOLD"
+
+    responses["health"]["build_sha"] = "f" * 40
+    report = evaluate(responses, timings_s=timings(), expected_sha=expected)
+    assert report["verdict"] == "HOLD"
+    assert any("build SHA" in reason for reason in report["blockers"])
+
+    responses["health"]["build_sha"] = expected
+    assert evaluate(
+        responses, timings_s=timings(), expected_sha=expected,
+    )["verdict"] == "LOCAL_READ_GATE_PASS"
+
+    responses["health"]["service"] = "another-local-process"
+    assert evaluate(
+        responses, timings_s=timings(), expected_sha=expected,
+    )["verdict"] == "HOLD"
+
+
 def test_stale_dashboard_or_gate_never_produces_pass():
     responses = valid_responses()
     responses["dashboard"]["dashboard_cache"]["status"] = "STALE"
