@@ -98,11 +98,21 @@ def _snapshot(store) -> dict[str, Any]:
 def status(*, load_cache: bool = False) -> dict[str, Any]:
     """Return canonical history readiness without network access.
 
-    ``load_cache=True`` keeps this process coherent with the persisted canonical
-    cache. It loads ``store_cache.pkl`` when memory is empty and reloads when a
-    newer raw session exists, but never reloads the same unchanged pickle in a
-    tight loop while another process is still publishing that session.
+    A metadata-only API read must not import pandas, numpy, or deserialize
+    store_cache.pkl. When the full store is not yet imported in this process,
+    disk file names can prove which official session is present, but NEVER
+    claim the OHLCV store has been loaded or its bars validated.
+
+    ``load_cache=True`` preserves the scan/worker contract and loads the
+    full persisted cache on demand, including cross-process cache coherence.
     """
+    if not load_cache:
+        import sys
+
+        if "data.bhavcopy_store" not in sys.modules:
+            from data.bhavcopy_disk_status import unloaded_status
+            return unloaded_status()
+
     store = _store_module()
     if load_cache:
         _sync_persisted_cache(store)
