@@ -16,7 +16,7 @@ from collections import Counter
 from typing import Any, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 ENDPOINTS = ("health", "access", "dashboard", "decision-simulation-gate")
 MAX_RESPONSE_BYTES = 6 * 1024 * 1024
@@ -110,6 +110,18 @@ def access_policy_safe(access: Mapping[str, Any]) -> bool:
     return False
 
 
+class _RejectRedirects(HTTPRedirectHandler):
+    """Never let a local test be redirected to an external endpoint."""
+
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        return None
+
+
+# Ignore HTTP_PROXY/HTTPS_PROXY even if the host machine has them set.
+# A local-only test must never send API reads or readiness state to a proxy.
+_LOCAL_OPENER = build_opener(ProxyHandler({}), _RejectRedirects())
+
+
 def sample_one(origin: str, path: str, timeout_s: float) -> dict[str, Any]:
     started = time.monotonic()
     try:
@@ -118,7 +130,7 @@ def sample_one(origin: str, path: str, timeout_s: float) -> dict[str, Any]:
             headers={"Accept": "application/json"},
             method="GET",
         )
-        with urlopen(request, timeout=timeout_s) as response:
+        with _LOCAL_OPENER.open(request, timeout=timeout_s) as response:
             if response.status != 200:
                 raise ValueError("Unexpected HTTP response")
             raw = response.read(MAX_RESPONSE_BYTES + 1)
