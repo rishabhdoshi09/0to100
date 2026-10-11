@@ -16,7 +16,9 @@ def snapshot():
         "long_term": {"available": True, "records": [{"symbol": "INFY"}]},
         "news": {"available": True, "articles": [{"title": "Article"}]},
         "paper": {"available": True, "enabled": True, "supervisor_running": True,
-                  "open_positions": [{"symbol": "INFY"}]},
+                  "open_positions": [{"symbol": "INFY"}],
+                  "learning": {"live_locked": True, "live_lock_verified": True,
+                               "live_lock_status": "LOCKED"}},
         "autonomy": {"available": True, "running": True, "process_running": True,
                      "new_paper_entries": True, "existing_exits": True,
                      "research_enabled": True, "new_entry_capability": "allowed",
@@ -27,10 +29,16 @@ def snapshot():
                        "active_lanes": {"scan": "busy"}},
         "fno": {"available": True,
                 "directional": {"available": True, "status": "READY",
+                                "live_execution_allowed": True, "candidate_count": 1,
                                 "candidates": [{"symbol": "INFY"}]},
                 "desk": {"status": "READY", "candidates": [{"symbol": "INFY"}],
-                         "candidate_count": 1, "paper_available": True}},
-        "data": {"ready": True, "blockers": []},
+                         "candidate_count": 1, "paper_available": True},
+                "paper": {"available": True, "live_execution_allowed": True}},
+        "data": {"ready": True, "history_current": True,
+                 "store_loaded": True,
+                 "snapshot": {"ready": True},
+                 "bhavcopy": {"ready": True, "current": True},
+                 "blockers": []},
         "conviction": [{"symbol": "INFY"}],
         "daily_wrap": [{"text": "Today's note"}],
     }
@@ -97,13 +105,20 @@ def test_expired_snapshot_returns_historical_rows_but_blocks_authority():
         assert result["paper"]["open_positions"][0]["symbol"] == "INFY"
         assert result["paper"]["enabled"] is False
         assert result["paper"]["supervisor_running"] is False
+        assert result["paper"]["learning"]["live_lock_verified"] is False
+        assert result["paper"]["learning"]["live_locked"] is None
         assert result["autonomy"]["new_paper_entries"] is False
         assert result["autonomy"]["existing_exits"] is False
         assert result["autonomy"]["broker"]["ready"] is False
         assert result["operations"]["running"] is False
         assert result["data"]["ready"] is False
         assert result["fno"]["directional"]["candidates"] == []
+        assert result["fno"]["directional"]["live_execution_allowed"] is False
         assert result["fno"]["desk"]["candidates"] == []
+        assert result["fno"]["paper"]["live_execution_allowed"] is False
+        assert result["data"]["history_current"] is False
+        assert result["data"]["snapshot"]["ready"] is False
+        assert result["data"]["bhavcopy"]["current"] is False
         assert result["conviction"] == []
         assert result["dashboard_cache"]["age_seconds"] >= 45
     finally:
