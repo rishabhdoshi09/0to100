@@ -313,18 +313,61 @@ def build_store(days: int = DEFAULT_DAYS, progress=None, should_stop=None) -> in
     return _full_build(available)
 
 
+# An off-session read storm must not enumerate ~1800 CSV names hundreds of
+# times. File creation/removal changes the directory metadata and invalidates
+# this date-only index; no OHLCV content or trade decisions are cached here.
+_DATES_DISK_LOCK = threading.Lock()
+_DATES_DISK_SIGNATURE: tuple | None = None
+_DATES_DISK_VALUES: tuple[date, ...] = ()
+
+
 def _dates_on_disk() -> list[date]:
-    """Trading dates for every bhavcopy CSV already present in the store dir."""
-    from datetime import datetime as _dt
-    out: list[date] = []
-    if not _BHAV_DIR.exists():
-        return out
-    for p in _BHAV_DIR.glob("*.csv"):
+    """Actual CSV dates, memoized by directory identity and modification time.
+
+    Do not cache failures or pretend missing files exist. Return a copy so callers
+    cannot mutate the stored index. Existing CSV contents do not affect which
+    session dates exist; adding/removing/renaming files changes directory mtime.
+    """
+    global _DATES_DISK_SIGNATURE, _DATES_DISK_VALUES
+    try:
+        identity = _BHAV_DIR.stat()
+        signature = (str(_BHAV_DIR), int(identity.st_dev), int(identity.st_ino),
+                     int(identity.st_mtime_ns), int(identity.st_ctime_ns))
+    except OSError:
+        return []
+
+    with _DATES_DISK_LOCK:
+        if signature == _DATES_DISK_SIGNATURE:
+            return list(_DATES_DISK_VALUES)
+        found: list[date] = []
         try:
-            out.append(_dt.strptime(p.stem, "%d%m%Y").date())
-        except Exception:
-            continue
-    return sorted(out)
+            for path in _BHAV_DIR.glob("*.csv"):
+                stem = path.stem
+                if len(stem) != 8 or not stem.isascii() or not stem.isdecimal():
+                    continue
+                try:
+                    found.append(date(int(stem[4:8]), int(stem[2:4]), int(stem[:2])))
+                except ValueError:
+                    continue
+        except OSError:
+            # Transient/missing external volume: fail closed; retry next poll.
+            return []
+        ordered = tuple(sorted(found))
+        # If a writer published another CSV while enumerating, discard the
+        # possibly torn result instead of caching it under the old signature.
+        try:
+            final = _BHAV_DIR.stat()
+            final_signature = (
+                str(_BHAV_DIR), int(final.st_dev), int(final.st_ino),
+                int(final.st_mtime_ns), int(final.st_ctime_ns),
+            )
+        except OSError:
+            return []
+        if final_signature != signature:
+            return []
+        _DATES_DISK_SIGNATURE = signature
+        _DATES_DISK_VALUES = ordered
+        return list(ordered)
 
 
 def build_from_local() -> int:

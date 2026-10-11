@@ -45,7 +45,7 @@ export const fetchChart = (symbol: string): Promise<{ symbol: string; bars: Char
   request<{ symbol: string; bars: ChartBar[] }>(`/api/chart/${encodeURIComponent(symbol)}`)
 
 export const fetchOperation = (operationId: string): Promise<OperationRecord> =>
-  request<OperationRecord>(`/api/operations/${encodeURIComponent(operationId)}`)
+  request<OperationRecord>(`/api/operations/${encodeURIComponent(operationId)}/status`)
 
 export const fetchOperationsPayload = (): Promise<DashboardPayload['operations']> =>
   request<DashboardPayload['operations']>('/api/operations')

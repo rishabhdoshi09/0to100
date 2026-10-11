@@ -526,6 +526,11 @@ def _scan_payload() -> dict:
             "coverage_state": str(payload.get("coverage_state") or "UNKNOWN"),
             "coverage_warning": str(payload.get("coverage_warning") or ""),
             "coverage": dict(payload.get("coverage") or {}),
+            # A technical scan can SUCCEED while a dependent discovery/reco
+            # overlay fails. Do not flatten those truths into one green badge.
+            "desk_overlays": dict(payload.get("desk_overlays") or {}),
+            "long_term_overlay": dict(payload.get("long_term_overlay") or {}),
+            "overlay_timings_s": dict(payload.get("overlay_timings_s") or {}),
         }
     except Exception as exc:
         return {
@@ -539,6 +544,9 @@ def _scan_payload() -> dict:
             "coverage_state": "UNKNOWN",
             "coverage_warning": "",
             "coverage": {},
+            "desk_overlays": {},
+            "long_term_overlay": {},
+            "overlay_timings_s": {},
             "error": str(exc),
         }
 
@@ -814,28 +822,55 @@ def _autonomy_payload() -> dict:
 
 
 def _snapshot_payload() -> dict:
+    """Inspect the activated immutable snapshot WITHOUT constructing directories.
+
+    An API read must never create a replacement root if the external runtime
+    volume becomes unavailable. Only the snapshot writer/activation authority
+    can create or repair storage; a missing/bad pointer fails closed here.
+    """
+    missing = {
+        "ready": False, "snapshot_id": "", "latest_date": "",
+        "source": "", "error": "No active verified snapshot",
+    }
     try:
-        from research.intelligence.data.snapshot_store import SnapshotStore
+        import re
+
         root = logs_dir() / "snapshots"
-        store = SnapshotStore(root)
-        snapshot_id = store.get_active_snapshot()
-        if not snapshot_id:
-            return {
-                "ready": False,
-                "snapshot_id": "",
-                "latest_date": "",
-                "source": "",
-                "error": "No active verified snapshot",
-            }
-        manifest = _json_file(root / str(snapshot_id) / "manifest.json", {})
+        if not root.is_dir():
+            return missing
+        pointer = _json_file(root / "ACTIVE", {})
+        snapshot_id = str(pointer.get("snapshot_id") or "")
+        # SnapshotStore commits use sha256(...).hexdigest()[:16]. Never allow
+        # path traversal or unrelated paths from a corrupt ACTIVE pointer.
+        if re.fullmatch(r"[0-9a-f]{16}", snapshot_id) is None:
+            return missing
+        directory = root / snapshot_id
+        if not directory.is_dir():
+            return missing
+        manifest = _json_file(directory / "manifest.json", {})
+        if str(manifest.get("snapshot_id") or "") != snapshot_id:
+            return missing
+        # Verify the small manifest itself; activation originally checked the
+        # full equity CSV hash. HTTP GETs must not re-hash gigabytes of bars.
+        import hashlib
+        import json
+        if not (directory / "bars_equity.csv").is_file():
+            return missing
+        checksum = str(manifest.get("manifest_checksum") or "")
+        payload = {key: value for key, value in manifest.items() if key != "manifest_checksum"}
+        actual = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+        if checksum != actual:
+            return missing
         return {
             "ready": True,
-            "snapshot_id": str(snapshot_id),
+            "snapshot_id": snapshot_id,
             "latest_date": str(manifest.get("last_trading_date") or ""),
             "source": str(manifest.get("source") or ""),
         }
     except Exception as exc:
-        return {"ready": False, "snapshot_id": "", "latest_date": "", "source": "", "error": str(exc)}
+        return {**missing, "error": f"Snapshot read unavailable: {type(exc).__name__}"}
 
 
 def _scan_progress_payload() -> dict[str, Any]:
@@ -1361,9 +1396,27 @@ def health() -> dict:
     return payload
 
 
+from product.dashboard_snapshot_cache import DashboardSnapshotCache
+
+
+# HTTP polling is deliberately nonblocking. Direct module callers retain the
+# synchronous projection contract for diagnostics/tests; market execution and
+# safety checks never read this cache.
+_dashboard_http_cache = DashboardSnapshotCache(
+    loader=lambda: _compose_dashboard(),
+    cold_payload=lambda: _empty_dashboard(
+        "Dashboard read snapshot is warming; current execution state is unavailable.",
+        {"available": False, "scanned_at": "", "universe_size": 0,
+         "summary": {}, "records": [], "provenance": {}},
+    ),
+)
+
+
 @app.get("/api/dashboard")
-def dashboard() -> dict:
-    """Read-only desk snapshot with bounded work admission."""
+def dashboard(request: Request = None) -> dict:
+    """HTTP status is cached; internal callers can still request a fresh read."""
+    if request is not None:
+        return _dashboard_http_cache.read()
     with _bounded_status_read("/api/dashboard"):
         return _compose_dashboard()
 
@@ -1454,6 +1507,16 @@ def _compose_dashboard() -> dict:
 @app.get("/api/operations")
 def operations_status() -> dict:
     return _operations_payload()
+
+
+@app.get("/api/operations/{operation_id}/status")
+def operation_poll_status(operation_id: str) -> dict:
+    """Read-only high-frequency operation status; never decode result_json."""
+    from operations.store import OperationStore
+    item = OperationStore(OPS_DB).get_summary(operation_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Operation not found")
+    return item
 
 
 @app.get("/api/operations/{operation_id}")
