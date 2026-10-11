@@ -108,9 +108,20 @@ def status(*, load_cache: bool = False) -> dict[str, Any]:
     """
     if not load_cache:
         import sys
+        from data.bhavcopy_disk_status import unloaded_status
 
         if "data.bhavcopy_store" not in sys.modules:
-            from data.bhavcopy_disk_status import unloaded_status
+            return unloaded_status()
+        # Some API routes import the pandas engine for research without
+        # actually loading any canonical OHLCV rows. In that case, importing
+        # the module must not silently bypass disk CSV integrity checks.
+        imported = sys.modules["data.bhavcopy_store"]
+        try:
+            with imported._lock:
+                store_loaded = bool(imported._store)
+            if not store_loaded:
+                return unloaded_status()
+        except (AttributeError, TypeError):
             return unloaded_status()
 
     store = _store_module()
