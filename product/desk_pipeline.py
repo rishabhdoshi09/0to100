@@ -155,7 +155,12 @@ def scan_is_fresh() -> bool:
             or ""
         )
     except Exception:
-        expected = ""
+        # A recently written scanner file is not proof that its underlying
+        # NSE session is current. Missing/unreadable official history cannot
+        # be bypassed by the scan file's wall-clock timestamp.
+        return False
+    if not expected:
+        return False
     try:
         from product.scan_store import (
             load_scan, load_scan_metadata, scan_age_hours,
