@@ -114,3 +114,75 @@ def test_completed_scan_without_decision_publication_is_hold():
     report = evaluate(responses, timings_s=timings())
     assert report["verdict"] == "HOLD"
     assert any("Decision discovery" in x for x in report["blockers"])
+
+
+def test_readiness_probe_rejects_deceptive_localhost_or_external_origins():
+    import pytest
+    from scripts.quantterm_readiness_gate import _safe_origin
+    for url in (
+        "http://127.0.0.1:8765@attacker.example",
+        "https://127.0.0.1:8765",
+        "http://attacker.example:8765",
+        "http://127.0.0.1:8765/something",
+        "http://localhost:8765/?token=secret",
+        "http://admin:secret@localhost:8765",
+        "http://127.0.0.1",
+    ):
+        with pytest.raises(ValueError):
+            _safe_origin(url)
+    assert _safe_origin("http://127.0.0.1:8765") == "http://127.0.0.1:8765"
+
+
+def test_readiness_probe_bypasses_proxy_and_refuses_offhost_redirect_without_socket(monkeypatch):
+    from urllib.request import ProxyHandler, Request
+    from urllib.error import HTTPError
+    import scripts.quantterm_readiness_gate as gate
+    import pytest
+
+    handler = next(
+        x for x in gate._LOCAL_OPENER.handlers
+        if isinstance(x, gate._RejectRedirects)
+    )
+    assert handler.redirect_request(
+        Request("http://127.0.0.1:8765/api/health"),
+        None, 302, "Found", {},
+        "https://untrusted.example/status",
+    ) is None
+    assert all(
+        not proxy.proxies
+        for proxy in gate._LOCAL_OPENER.handlers if isinstance(proxy, ProxyHandler)
+    )
+
+    def reject_redirect(request, timeout):
+        assert request.full_url == "http://127.0.0.1:8765/api/health"
+        raise HTTPError(request.full_url, 302, "Found",
+                        {"Location": "https://untrusted.example/"}, None)
+    monkeypatch.setattr(gate._LOCAL_OPENER, "open", reject_redirect)
+    with pytest.raises(HTTPError):
+        gate.fetch_json("http://127.0.0.1:8765", "health", 1.0)
+
+
+def test_readiness_probe_get_uses_only_loopback_and_handles_json(monkeypatch):
+    import json
+    import scripts.quantterm_readiness_gate as gate
+
+    class Reply:
+        status = 200
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+        def read(self, count):
+            assert count > 0
+            return json.dumps({"ok": True, "live_locked": True}).encode()
+
+    def intercept(request, timeout):
+        assert request.get_method() == "GET"
+        assert request.full_url == "http://127.0.0.1:8765/api/health"
+        assert timeout == 2
+        return Reply()
+
+    monkeypatch.setattr(gate._LOCAL_OPENER, "open", intercept)
+    payload, elapsed = gate.fetch_json("http://127.0.0.1:8765", "health", 2)
+    assert payload["ok"] is True
+    assert elapsed >= 0
