@@ -60,6 +60,7 @@ fi
 if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   QT_GIT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
   QT_GIT_SHA="$(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
+  QT_BUILD_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
   QT_GIT_DIRTY=""
   if ! git diff --quiet --ignore-submodules -- 2>/dev/null || \
      ! git diff --cached --quiet --ignore-submodules -- 2>/dev/null; then
