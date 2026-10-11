@@ -66,7 +66,7 @@ def disk_dates(root: Path | None = None) -> tuple[date, ...]:
         return _LAST_DATES
 
 
-def _latest_csv_has_basic_integrity(path: Path) -> bool:
+def _latest_csv_has_basic_integrity(path: Path, *, expected_date: date | None = None) -> bool:
     """Bounded structural check, never full OHLCV/source certification.
 
     NSE sec_bhavdata_full must have the fields the canonical pandas parser
@@ -81,9 +81,10 @@ def _latest_csv_has_basic_integrity(path: Path) -> bool:
     try:
         if path.is_symlink() or not path.is_file() or path.stat().st_size < 1000:
             return False
-        expected_date = date(
-            int(path.stem[4:8]), int(path.stem[2:4]), int(path.stem[:2])
-        )
+        if expected_date is None:
+            expected_date = date(
+                int(path.stem[4:8]), int(path.stem[2:4]), int(path.stem[:2])
+            )
         with path.open("r", encoding="latin-1", newline="") as handle:
             reader = csv.DictReader(handle)
             columns = {
