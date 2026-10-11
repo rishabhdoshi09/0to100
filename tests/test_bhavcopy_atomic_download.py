@@ -99,3 +99,55 @@ def test_invalid_exchange_response_uses_retry_backoff_before_recovery(monkeypatc
     assert store._download_day(DAY, retries=1) is True
     assert store._day_path(DAY).read_bytes() == GOOD
     assert delays == [1.5]
+
+
+def test_missing_installed_external_runtime_is_never_recreated_by_download(monkeypatch, tmp_path):
+    root = tmp_path / "vanished-volume" / "QuantTerm" / "runtime"
+    target_dir = root / "logs" / "bhav"
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(root))
+    monkeypatch.setenv("QT_RUNTIME_ROOT_REQUIRE_EXISTING", "1")
+    monkeypatch.setattr(store, "_BHAV_DIR", target_dir)
+    monkeypatch.setattr(
+        "requests.get",
+        lambda *a, **k: SimpleNamespace(status_code=200, content=GOOD),
+    )
+    assert store._download_day(DAY, retries=0) is False
+    assert not root.exists()
+    assert not target_dir.exists()
+
+
+def test_missing_installed_external_runtime_is_never_recreated_by_pickle_writer(monkeypatch, tmp_path):
+    root = tmp_path / "vanished-volume" / "QuantTerm" / "runtime"
+    folder = root / "logs" / "bhav"
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(root))
+    monkeypatch.setenv("QT_RUNTIME_ROOT_REQUIRE_EXISTING", "1")
+    monkeypatch.setattr(store, "_PKL", folder / "store_cache.pkl")
+    monkeypatch.setattr(store, "_store", {"TCS": "cached"})
+    store._save_pkl()  # the writer logs failure but must not create any path
+    assert not root.exists()
+
+
+def test_pickle_cache_publishes_with_unique_atomic_temp_file(monkeypatch, tmp_path):
+    monkeypatch.delenv("QT_RUNTIME_ROOT_REQUIRE_EXISTING", raising=False)
+    destination = tmp_path / "bhav" / "store_cache.pkl"
+    monkeypatch.setattr(store, "_PKL", destination)
+    monkeypatch.setattr(store, "_store", {"TCS": "cached"})
+    monkeypatch.setattr(store, "_store_last_day", DAY)
+    monkeypatch.setattr(store, "_store_sessions", 1)
+    observed = []
+    actual_replace = store.os.replace
+
+    def record_replace(src, dst):
+        assert Path(src).parent == destination.parent
+        assert Path(src).name.startswith(".store_cache-")
+        assert Path(dst) == destination
+        assert Path(src).is_file()
+        observed.append(Path(src).name)
+        return actual_replace(src, dst)
+
+    monkeypatch.setattr(store.os, "replace", record_replace)
+    store._save_pkl()
+    store._save_pkl()
+    assert destination.is_file()
+    assert len(set(observed)) == 2
+    assert sorted(p.name for p in destination.parent.iterdir()) == ["store_cache.pkl"]
