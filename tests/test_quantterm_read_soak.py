@@ -255,3 +255,14 @@ def test_stale_decision_gate_must_drop_approval_and_best_trades(monkeypatch):
     assert sample_one("http://127.0.0.1:8765", "decision-simulation-gate", 2)["ok"] is True
     gate["approved"] = True
     assert sample_one("http://127.0.0.1:8765", "decision-simulation-gate", 2)["ok"] is False
+
+
+def test_direct_read_soak_call_cannot_bypass_cli_localhost_guard(monkeypatch):
+    import scripts.quantterm_read_soak as soak
+
+    def network_forbidden(*args, **kwargs):
+        raise AssertionError("A remote origin must never reach the transport")
+    monkeypatch.setattr(soak._LOCAL_OPENER, "open", network_forbidden)
+    result = sample_one("http://127.0.0.1:8765@attacker.example", "health", 2)
+    assert result["ok"] is False
+    assert result["error_type"] == "ValueError"
