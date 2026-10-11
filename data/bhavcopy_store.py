@@ -59,12 +59,12 @@ def _prepare_bhav_write_directory(directory: Path) -> None:
     mode, re-resolve runtime_root for EVERY write and reject a cached path
     that no longer matches the configured persistent root.
     """
-    from core.runtime_paths import _require_existing_runtime, runtime_root
+    from core.runtime_paths import _require_existing_runtime, logs_path
 
     if _require_existing_runtime():
         # Resolve the volume root, never a symlinked logs/bhav subfolder:
         # a stale or retargeted link to the internal disk must fail closed.
-        expected = runtime_root() / "logs" / "bhav"
+        expected = logs_path("bhav")
         if directory.resolve(strict=False) != expected:
             raise RuntimeError("bhavcopy write path no longer matches installed runtime root")
     directory.mkdir(parents=True, exist_ok=True)
