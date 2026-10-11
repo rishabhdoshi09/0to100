@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -419,24 +420,52 @@ def load_scan_metadata(path: str | Path = DEFAULT_SCAN_PATH) -> dict[str, Any] |
 def save_scan(payload: Mapping[str, Any], path: str | Path = DEFAULT_SCAN_PATH) -> Path:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(json.dumps(dict(payload), indent=2, default=str), encoding="utf-8")
-    os.replace(tmp, target)
 
-    # The authoritative JSON is already safely committed. Sidecar publication
-    # is best-effort: metadata failure cannot invalidate the real scan. Readers
-    # reject outdated sidecars by matching stat identity and use full JSON as
-    # the compatibility fallback.
+    # Each writer owns a unique temporary file on the same filesystem. The
+    # pre-rename inode identity is the ONLY identity authorized to carry this
+    # writer's provenance: another process can win the publication race before
+    # metadata is emitted and must not inherit our market-session claim.
+    fd, name = tempfile.mkstemp(
+        prefix=f".{target.name}.", suffix=".tmp", dir=target.parent,
+    )
+    tmp = Path(name)
+    own_identity = None
     try:
-        identity = _scan_file_identity(target)
-        metadata = _scan_metadata(payload, identity) if identity is not None else None
-        if metadata is not None and _scan_file_identity(target) == identity:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(dict(payload), handle, indent=2, default=str)
+        own_identity = _scan_file_identity(tmp)
+        os.replace(tmp, target)
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    # The source JSON was atomically published. Companion metadata is optional:
+    # if the canonical path no longer identifies OUR inode, another writer won
+    # the race and the status reader must fall back to the full authoritative
+    # file, never pair our provenance with another writer's result.
+    if own_identity is None or _scan_file_identity(target) != own_identity:
+        return target
+    try:
+        metadata = _scan_metadata(payload, own_identity)
+        if metadata is not None:
             sidecar = _scan_metadata_path(target)
-            sidecar_tmp = sidecar.with_suffix(sidecar.suffix + ".tmp")
-            sidecar_tmp.write_text(
-                json.dumps(metadata, sort_keys=True, default=str), encoding="utf-8"
+            fd, name = tempfile.mkstemp(
+                prefix=f".{sidecar.name}.", suffix=".tmp", dir=sidecar.parent,
             )
-            os.replace(sidecar_tmp, sidecar)
+            sidecar_tmp = Path(name)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    json.dump(metadata, handle, sort_keys=True, default=str)
+                # Still the exact source file? Otherwise discard this sidecar.
+                if _scan_file_identity(target) == own_identity:
+                    os.replace(sidecar_tmp, sidecar)
+            finally:
+                try:
+                    sidecar_tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
     except (OSError, ValueError, TypeError):
         pass
     return target
