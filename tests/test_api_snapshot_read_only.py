@@ -64,3 +64,17 @@ def test_missing_equity_file_fails_closed(tmp_path, monkeypatch):
     child = _write_valid_snapshot(tmp_path / "snapshots")
     (child / "bars_equity.csv").unlink()
     assert terminal_api._snapshot_payload()["ready"] is False
+
+
+def test_health_build_sha_is_exact_and_never_exposes_arbitrary_env(monkeypatch):
+    verified = "234e3e30e228e515a38bee994436c0af3dad1b85"
+    monkeypatch.setenv("QT_BUILD_SHA", verified.upper())
+    assert terminal_api.health()["build_sha"] == verified
+
+    # A malformed installation marker must not leak strings/paths/secrets.
+    monkeypatch.setenv("QT_BUILD_SHA", "/private/Users/person/.env?token=secret")
+    assert terminal_api.health()["build_sha"] == ""
+
+    # A truncated commit prefix is not proof of the reviewed exact head.
+    monkeypatch.setenv("QT_BUILD_SHA", verified[:12])
+    assert terminal_api.health()["build_sha"] == ""
