@@ -63,17 +63,23 @@ python3 scripts/quantterm_read_soak.py --samples 20 --p95-budget-seconds 3
 ```
 
 It samples four local GET endpoints sequentially (health, access, dashboard,
-decision-simulation-gate) and returns a nonzero exit if any read is unsafe,
-stale or the endpoint's nearest-rank p95 exceeds three seconds. A successful
+decision-simulation-gate). It fails on any unsafe operational read or when
+the endpoint's nearest-rank p95 exceeds three seconds. Single-flight cache
+TTL rollover may legitimately return a short **labelled, fail-closed STALE**
+snapshot while the asynchronous refresh runs: the soak allows at most two
+non-FRESH samples per 20-cycle window and no more than two consecutive
+non-FRESH samples. It rejects DEGRADED or unknown status outright, and
+requires at least 90% FRESH responses per cached endpoint. A successful
 soak demonstrates **only local read-path stability** at the sampled cadence,
 not external concurrency capacity, actual scan throughput, correct broker
 fills, current F&O option-chain data, or public deployment security.
 
 CSV session filenames alone are never proof of a completed NSE archive: when
 the API price store is unloaded, the lightweight inventory validates the
-newest file's size and stock-price CSV header. A corrupt newest file fails
-closed instead of promoting its date; scans still rely on the authoritative
-full OHLCV store, not the metadata-only read.
+newest file's required parser columns, equity price/volume samples and
+embedded trading date where available. A corrupt or renamed prior-session
+file fails closed instead of promoting its filename; scans still rely on the
+authoritative full OHLCV store, not the metadata-only read.
 
 ## Rollout
 
