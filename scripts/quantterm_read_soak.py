@@ -149,8 +149,11 @@ _LOCAL_OPENER = build_opener(ProxyHandler({}), _RejectRedirects())
 def sample_one(origin: str, path: str, timeout_s: float) -> dict[str, Any]:
     started = time.monotonic()
     try:
+        # Validate at the transport boundary too: callers importing this
+        # helper must not bypass the CLI's localhost-only origin guard.
+        safe_origin = _safe_origin(origin)
         request = Request(
-            origin + "/api/" + path,
+            safe_origin + "/api/" + path,
             headers={"Accept": "application/json"},
             method="GET",
         )
