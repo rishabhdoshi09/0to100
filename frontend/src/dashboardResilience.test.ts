@@ -303,7 +303,9 @@ describe('HTTP snapshot and browser-session freshness safety', () => {
     expect(restored.autonomy.existing_exits).toBe(false)
     expect(restored.operations.running).toBe(false)
     expect(restored.data.ready).toBe(false)
+    expect(restored.data.bhavcopy.ready).toBe(false)
     expect(restored.data.scan_saved).toBe(false)
+    expect(restored.autonomy.new_entry_capability).toBe('blocked')
     expect(restored.fno.available).toBe(false)
     expect(restored.fno.directional?.candidates).toEqual([])
     expect(restored.fno.desk?.candidate_count).toBe(0)
@@ -335,7 +337,9 @@ describe('HTTP snapshot and browser-session freshness safety', () => {
     expect(result.data.scan_saved).toBe(false)
     expect(result.fno.available).toBe(false)
     expect(result.conviction).toEqual([])
-    expect(result.dashboard_cache?.status).toBe('STALE')
+    expect(result.dashboard_cache?.status).toBe('BOOTSTRAPPING')
+    expect(result.data.bhavcopy.ready).toBe(false)
+    expect(result.data.bhavcopy.current).toBe(false)
   })
 
   it('honors a FRESH empty scan instead of resurrecting older BUY candidates', () => {
