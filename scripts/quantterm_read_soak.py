@@ -93,6 +93,23 @@ def _safe_origin(raw: str) -> str:
     return raw.rstrip("/")
 
 
+def access_policy_safe(access: Mapping[str, Any]) -> bool:
+    """Recognize the three explicit deployment modes, never unknown access."""
+    policy = str(access.get("mutation_policy") or "")
+    public = access.get("public_read_only")
+    token = access.get("operator_token_configured") is True
+    if policy == "READ_ONLY":
+        return public is True and not token
+    if policy == "OPERATOR_TOKEN_REQUIRED":
+        return public is True and token
+    # This GET-only soak runs against loopback and must not make a private
+    # owner-operated Mac report insecure merely because public mode is off.
+    # This DOES NOT establish internet-facing security or permit proxying it.
+    if policy == "PRIVATE_OPERATOR":
+        return public is False
+    return False
+
+
 def sample_one(origin: str, path: str, timeout_s: float) -> dict[str, Any]:
     started = time.monotonic()
     try:
@@ -116,11 +133,7 @@ def sample_one(origin: str, path: str, timeout_s: float) -> dict[str, Any]:
             safe = safe and payload.get("live_lock_verified") is True
             safe = safe and payload.get("live_execution_authorized") is False
         elif path == "access":
-            safe = str(payload.get("mutation_policy") or "") in (
-                "READ_ONLY", "OPERATOR_TOKEN_REQUIRED",
-            )
-            if payload.get("mutation_policy") == "OPERATOR_TOKEN_REQUIRED":
-                safe = safe and payload.get("operator_token_configured") is True
+            safe = access_policy_safe(payload)
         elif path == "dashboard":
             safe = (payload.get("dashboard_cache") or {}).get("status") == "FRESH"
         else:
