@@ -186,9 +186,12 @@ def scan_is_fresh() -> bool:
             or payload.get("history_latest_date")
             or ""
         )[:10]
-        if expected and (not as_of or as_of < expected):
+        # A future-dated scan provenance is not stronger than the exchange
+        # session actually available. Do not approve a fabricated/future bar
+        # date merely because lexicographic comparison says it is newer.
+        if expected and (not as_of or as_of != expected):
             return False
-        if expected and as_of >= expected:
+        if expected and as_of == expected:
             # Session identity is authoritative. Worker restarts must not force a
             # rescan solely because wall-clock age crossed SCAN_FRESH_S.
             return True
