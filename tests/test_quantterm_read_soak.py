@@ -172,3 +172,86 @@ def test_local_soak_ignores_proxy_environment(monkeypatch):
     monkeypatch.setattr(soak._LOCAL_OPENER, "open", local_only)
     result = sample_one("http://127.0.0.1:8765", "health", 2)
     assert result["ok"] is True
+
+
+def test_normal_single_flight_cache_ttl_transition_is_accepted():
+    cycles = [_cycle() for _ in range(20)]
+    # Decision gate TTL is 15s and the 20-cycle read-soak overlaps expiry.
+    # A short, fail-closed refresh window is expected, not an outage.
+    cycles[15]["decision-simulation-gate"] = {
+        "ok": True, "seconds": 0.1, "cache_status": "STALE",
+    }
+    cycles[16]["decision-simulation-gate"] = {
+        "ok": True, "seconds": 0.1, "cache_status": "STALE",
+    }
+    assert assess_samples(cycles)["verdict"] == "READ_SOAK_PASS"
+
+
+def test_prolonged_staleness_or_unknown_cache_state_is_a_release_hold():
+    cycles = [_cycle() for _ in range(20)]
+    for i in (6, 7, 8):
+        cycles[i]["decision-simulation-gate"] = {
+            "ok": True, "seconds": 0.1, "cache_status": "STALE",
+        }
+    assert assess_samples(cycles)["verdict"] == "HOLD"
+    cycles[8]["decision-simulation-gate"]["cache_status"] = "DEGRADED"
+    assert assess_samples(cycles)["verdict"] == "HOLD"
+
+
+def test_stale_http_dashboard_requires_authority_to_be_fail_closed(monkeypatch):
+    import json
+    import scripts.quantterm_read_soak as soak
+
+    class Response:
+        status = 200
+        def __init__(self, payload):
+            self.payload = payload
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+        def read(self, _size):
+            return json.dumps(self.payload).encode()
+
+    historical = {
+        "dashboard_cache": {"status": "STALE"},
+        "scan": {"available": False},
+        "data": {"ready": False},
+        "paper": {"enabled": False},
+        "autonomy": {"new_paper_entries": False},
+        "fno": {"available": False},
+    }
+    monkeypatch.setattr(soak._LOCAL_OPENER, "open",
+                        lambda *_a, **_k: Response(historical))
+    assert sample_one("http://127.0.0.1:8765", "dashboard", 2)["ok"] is True
+
+    historical["paper"]["enabled"] = True
+    assert sample_one("http://127.0.0.1:8765", "dashboard", 2)["ok"] is False
+
+
+def test_stale_decision_gate_must_drop_approval_and_best_trades(monkeypatch):
+    import json
+    import scripts.quantterm_read_soak as soak
+
+    class Response:
+        status = 200
+        def __init__(self, payload):
+            self.payload = payload
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+        def read(self, _size):
+            return json.dumps(self.payload).encode()
+
+    gate = {
+        "status_cache": {"status": "STALE"},
+        "approved": False, "discovery_ready": False, "scan_fresh": False,
+        "live_lock_verified": False, "live_execution_authorized": False,
+        "best_trades": [],
+    }
+    monkeypatch.setattr(soak._LOCAL_OPENER, "open",
+                        lambda *_a, **_k: Response(gate))
+    assert sample_one("http://127.0.0.1:8765", "decision-simulation-gate", 2)["ok"] is True
+    gate["approved"] = True
+    assert sample_one("http://127.0.0.1:8765", "decision-simulation-gate", 2)["ok"] is False
