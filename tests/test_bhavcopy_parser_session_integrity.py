@@ -45,3 +45,48 @@ def test_legacy_equity_file_without_date1_keeps_previous_parser_compatibility(mo
     frame = store._read_day(DAY)
     assert frame is not None
     assert frame["symbol"].tolist() == ["TCS"]
+
+
+def test_full_rebuild_never_claims_a_newest_file_that_failed_to_parse(monkeypatch):
+    import pandas as pd
+    older = date(2026, 10, 8)
+    latest_bad = DAY
+    bars = pd.DataFrame({
+        "symbol": ["TCS"] * 30,
+        "date": [pd.Timestamp(older)] * 30,
+        "open": [100.0] * 30, "high": [101.0] * 30,
+        "low": [99.0] * 30, "close": [100.0] * 30,
+        "volume": [500.0] * 30,
+    })
+    monkeypatch.setattr(store, "_read_day",
+                        lambda d: bars.copy() if d == older else None)
+    monkeypatch.setattr(store, "_save_pkl", lambda: None)
+    assert store._full_build([older, latest_bad]) == 1
+    assert store._store_last_day == older
+    assert store._store_sessions == 1
+
+
+def test_incremental_append_never_claims_newer_corrupt_archive(monkeypatch):
+    import pandas as pd
+    baseline = date(2026, 10, 7)
+    valid = date(2026, 10, 8)
+    latest_bad = DAY
+    preexisting = pd.DataFrame({
+        "open": [100.0], "high": [101.0], "low": [99.0],
+        "close": [100.0], "volume": [500.0],
+    }, index=[pd.Timestamp(baseline)])
+    next_bar = pd.DataFrame({
+        "symbol": ["TCS"], "date": [pd.Timestamp(valid)],
+        "open": [101.0], "high": [102.0], "low": [100.0],
+        "close": [101.0], "volume": [600.0],
+    })
+    monkeypatch.setattr(store, "_store", {"TCS": preexisting})
+    monkeypatch.setattr(store, "_store_last_day", baseline)
+    monkeypatch.setattr(store, "_store_sessions", 1)
+    monkeypatch.setattr(store, "_read_day",
+                        lambda d: next_bar.copy() if d == valid else None)
+    monkeypatch.setattr(store, "_save_pkl", lambda: None)
+    store._incremental_append([valid, latest_bad])
+    assert store._store_last_day == valid
+    assert store._store_sessions == 2
+    assert len(store._store["TCS"]) == 2
