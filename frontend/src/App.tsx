@@ -169,6 +169,16 @@ const emptyDashboard: DashboardPayload = {
   conviction: [],
 }
 
+function dashboardHasWork(payload: DashboardPayload): boolean {
+  // Historical rows may help the loading UI, but never imply live readiness.
+  return Boolean(
+    payload.scan.scanned_at
+    || payload.scan.records.length > 0
+    || payload.long_term.records.length > 0
+    || payload.data.ready,
+  )
+}
+
 function slimDashboard(payload: DashboardPayload): DashboardPayload {
   return {
     ...payload,
