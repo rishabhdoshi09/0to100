@@ -417,9 +417,29 @@ def load_scan_metadata(path: str | Path = DEFAULT_SCAN_PATH) -> dict[str, Any] |
         return None
 
 
+def _prepare_scan_write_path(target: Path) -> None:
+    """Fail closed when installed-host external storage is missing/retargeted.
+
+    The module-level default Path is frozen at import time. The configured
+    persistent runtime root is freshly resolved before every publication so a
+    vanished /Volumes mount is not quietly recreated on the system drive.
+    """
+    from core.runtime_paths import _require_existing_runtime, logs_dir
+
+    if _require_existing_runtime():
+        expected_root = logs_dir()  # strict runtime_root() checks existence
+        try:
+            target.relative_to(expected_root)
+        except ValueError as exc:
+            raise RuntimeError(
+                "scan write destination is outside the installed persistent runtime"
+            ) from exc
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+
 def save_scan(payload: Mapping[str, Any], path: str | Path = DEFAULT_SCAN_PATH) -> Path:
     target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
+    _prepare_scan_write_path(target)
 
     # Each writer owns a unique temporary file on the same filesystem. The
     # pre-rename inode identity is the ONLY identity authorized to carry this
