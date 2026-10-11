@@ -102,63 +102,71 @@ def test_ambiguous_or_broken_public_access_configuration_fails_soak():
         assert access_policy_safe(config) is False
 
 
-def test_local_only_soak_never_follows_a_redirect_to_remote_url():
-    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-    from threading import Thread
+def test_local_only_soak_never_follows_a_redirect_to_remote_url(monkeypatch):
+    """Hermetic CI prohibits sockets: exercise the actual opener/redirect hook."""
+    from urllib.error import HTTPError
+    from urllib.request import Request
+    import scripts.quantterm_read_soak as soak
 
-    class Redirect(BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(302)
-            self.send_header("Location", "https://outside.example/health")
-            self.end_headers()
+    redirects = [
+        h for h in soak._LOCAL_OPENER.handlers
+        if isinstance(h, soak._RejectRedirects)
+    ]
+    assert len(redirects) == 1
+    req = Request("http://127.0.0.1:8765/api/health", method="GET")
+    assert redirects[0].redirect_request(
+        req, None, 302, "Found", {"Location": "https://outside.example/health"},
+        "https://outside.example/health",
+    ) is None
 
-        def log_message(self, *_args):
-            pass
+    def redirect_error(request, timeout):
+        assert request.full_url == "http://127.0.0.1:8765/api/health"
+        raise HTTPError(request.full_url, 302, "Found",
+                        {"Location": "https://outside.example/health"}, None)
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Redirect)
-    worker = Thread(target=server.serve_forever, daemon=True)
-    worker.start()
-    try:
-        result = sample_one(f"http://127.0.0.1:{server.server_port}", "health", 2)
-        assert result["ok"] is False
-        assert result["error_type"] == "HTTPError"
-    finally:
-        server.shutdown()
-        server.server_close()
-        worker.join(timeout=2)
+    monkeypatch.setattr(soak._LOCAL_OPENER, "open", redirect_error)
+    result = sample_one("http://127.0.0.1:8765", "health", 2)
+    assert result["ok"] is False
+    assert result["error_type"] == "HTTPError"
 
 
 def test_local_soak_ignores_proxy_environment(monkeypatch):
-    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-    from threading import Thread
+    """Prove proxy handler and GET validation without opening a CI socket."""
     import json
+    from urllib.request import ProxyHandler
+    import scripts.quantterm_read_soak as soak
 
-    class Local(BaseHTTPRequestHandler):
-        def do_GET(self):
-            payload = json.dumps({
-                "ok": True, "live_locked": True,
-                "live_lock_verified": True, "live_execution_authorized": False,
-            }).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
-
-        def log_message(self, *_args):
-            pass
-
-    # A diagnostic must use a direct loopback socket, not HTTP_PROXY.
     monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")
     monkeypatch.setenv("http_proxy", "http://127.0.0.1:1")
     monkeypatch.setenv("NO_PROXY", "")
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Local)
-    worker = Thread(target=server.serve_forever, daemon=True)
-    worker.start()
-    try:
-        result = sample_one(f"http://127.0.0.1:{server.server_port}", "health", 2)
-        assert result["ok"] is True
-    finally:
-        server.shutdown()
-        server.server_close()
-        worker.join(timeout=2)
+    proxies = [
+        h for h in soak._LOCAL_OPENER.handlers if isinstance(h, ProxyHandler)
+    ]
+    assert len(proxies) == 1
+    assert proxies[0].proxies == {}
+
+    class LocalResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, size):
+            assert size > 100
+            return json.dumps({
+                "ok": True, "live_locked": True,
+                "live_lock_verified": True, "live_execution_authorized": False,
+            }).encode()
+
+    def local_only(request, timeout):
+        assert request.get_method() == "GET"
+        assert request.full_url == "http://127.0.0.1:8765/api/health"
+        assert timeout == 2
+        return LocalResponse()
+
+    monkeypatch.setattr(soak._LOCAL_OPENER, "open", local_only)
+    result = sample_one("http://127.0.0.1:8765", "health", 2)
+    assert result["ok"] is True
