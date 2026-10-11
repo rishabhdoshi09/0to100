@@ -133,3 +133,25 @@ def test_zero_byte_or_non_csv_latest_file_is_not_verified(tmp_path):
     assert disk.unloaded_status(path)["csv_latest_date"] == ""
     filename.write_text("HTTP 200 OK " * 150, encoding="utf-8")
     assert disk.unloaded_status(path)["csv_latest_date"] == ""
+
+
+def test_imported_but_unloaded_price_engine_still_checks_disk_integrity(monkeypatch):
+    from types import SimpleNamespace
+    import threading
+
+    fake = SimpleNamespace(_lock=threading.Lock(), _store={})
+    monkeypatch.setitem(sys.modules, "data.bhavcopy_store", fake)
+    marker = {
+        "metadata_only": True,
+        "ready": False,
+        "csv_latest_date": "",
+        "csv_latest_validated": False,
+    }
+    monkeypatch.setattr(disk, "unloaded_status", lambda: marker)
+    monkeypatch.setattr(
+        runtime, "_store_module",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("Empty imported store should not bypass CSV validation")
+        ),
+    )
+    assert runtime.status(load_cache=False) is marker
