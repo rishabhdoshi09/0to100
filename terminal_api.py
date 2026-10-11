@@ -822,28 +822,45 @@ def _autonomy_payload() -> dict:
 
 
 def _snapshot_payload() -> dict:
+    """Inspect the activated immutable snapshot WITHOUT constructing directories.
+
+    An API read must never create a replacement root if the external runtime
+    volume becomes unavailable. Only the snapshot writer/activation authority
+    can create or repair storage; a missing/bad pointer fails closed here.
+    """
+    missing = {
+        "ready": False, "snapshot_id": "", "latest_date": "",
+        "source": "", "error": "No active verified snapshot",
+    }
     try:
-        from research.intelligence.data.snapshot_store import SnapshotStore
+        import re
+
         root = logs_dir() / "snapshots"
-        store = SnapshotStore(root)
-        snapshot_id = store.get_active_snapshot()
-        if not snapshot_id:
-            return {
-                "ready": False,
-                "snapshot_id": "",
-                "latest_date": "",
-                "source": "",
-                "error": "No active verified snapshot",
-            }
-        manifest = _json_file(root / str(snapshot_id) / "manifest.json", {})
+        if not root.is_dir():
+            return missing
+        pointer = _json_file(root / "ACTIVE", {})
+        snapshot_id = str(pointer.get("snapshot_id") or "")
+        # SnapshotStore commits use sha256(...).hexdigest()[:16]. Never allow
+        # path traversal or unrelated paths from a corrupt ACTIVE pointer.
+        if re.fullmatch(r"[0-9a-f]{16}", snapshot_id) is None:
+            return missing
+        directory = root / snapshot_id
+        if not directory.is_dir():
+            return missing
+        manifest = _json_file(directory / "manifest.json", {})
+        if str(manifest.get("snapshot_id") or "") != snapshot_id:
+            return missing
+        # The active pointer is immutable and activation validates the full
+        # equity CSV hash. This cheap read only proves pointer/manifest
+        # consistency; it must not hash gigabytes of bars on HTTP status.
         return {
             "ready": True,
-            "snapshot_id": str(snapshot_id),
+            "snapshot_id": snapshot_id,
             "latest_date": str(manifest.get("last_trading_date") or ""),
             "source": str(manifest.get("source") or ""),
         }
     except Exception as exc:
-        return {"ready": False, "snapshot_id": "", "latest_date": "", "source": "", "error": str(exc)}
+        return {**missing, "error": f"Snapshot read unavailable: {type(exc).__name__}"}
 
 
 def _scan_progress_payload() -> dict[str, Any]:
