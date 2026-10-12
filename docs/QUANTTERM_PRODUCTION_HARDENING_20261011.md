@@ -80,7 +80,9 @@ the canonical QuantTerm API, report lifecycle READY, operational_ready=true,
 evidence_ready=true, and positively verify that live money remains locked.
 A DEGRADED/RECOVERING API or stale evidence fails the release soak even if
 every response is fast. It fails on any unsafe operational read or when
-the endpoint's nearest-rank p95 exceeds three seconds. Single-flight cache
+the endpoint's nearest-rank p95 exceeds three seconds. The default one-second interval and mandatory 20 cycles cross the 15-second
+Decision Simulation TTL; reducing the interval below one second is rejected
+so a warm-cache burst cannot masquerade as a durability soak. Single-flight cache
 TTL rollover may legitimately return a short **labelled, fail-closed STALE**
 snapshot while the asynchronous refresh runs: the soak allows at most two
 non-FRESH samples per 20-cycle window and no more than two consecutive
