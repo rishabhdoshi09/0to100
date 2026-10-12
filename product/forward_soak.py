@@ -302,7 +302,7 @@ def attach_closed_trades(book, *, path=None) -> dict[str, Any]:
     ]
     by_decision: dict[str, list[dict[str, Any]]] = {}
     by_intent: dict[str, list[dict[str, Any]]] = {}
-    legacy_by_session: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    legacy_entries_by_day: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for item in pending:
         did = str(item.get("decision_id") or "")
         iid = str(item.get("paper_intent_id") or "")
@@ -316,7 +316,7 @@ def attach_closed_trades(book, *, path=None) -> dict[str, Any]:
         # use a session/symbol fallback. Never match arbitrary canonical
         # decisions based solely on a symbol.
         if day and symbol and not iid and did.startswith(f"{day}|{symbol}|TAKEN|"):
-            legacy_by_session.setdefault((day, symbol), []).append(item)
+            legacy_entries_by_day.setdefault((day, symbol), []).append(item)
 
     attached = 0
     unattributed = 0
@@ -340,7 +340,7 @@ def attach_closed_trades(book, *, path=None) -> dict[str, Any]:
         elif iid:
             choices = by_intent.get(iid, [])
         elif day:
-            choices = legacy_by_session.get((day, symbol), [])
+            choices = legacy_entries_by_day.get((day, symbol), [])
         # Every candidate must match the closed symbol, known entry day and
         # every identity supplied by the paper book, not just one of them.
         # A different intent behind the same decision_id is not equivalent.
