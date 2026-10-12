@@ -945,3 +945,75 @@ def test_forward_ledger_missing_volume_refuses_write_and_recovers(tmp_path, monk
         cycle_id="new", as_of="2026-10-09", group="TAKEN", path=ledger,
     )
     assert len(evidence.load_ledger(ledger)) == 2
+
+
+def test_large_forward_cycle_deduplicates_with_one_historical_ledger_pass(monkeypatch, tmp_path):
+    """An 8 GB Mac must not walk every historical decision for every card."""
+    import product.forward_evidence as evidence
+
+    initial = [
+        {"decision_id": f"legacy-{i}", "symbol": f"OLD{i}", "entry": i}
+        for i in range(1000)
+    ]
+
+    class CountingRows(list):
+        iter_calls = 0
+
+        def __iter__(self):
+            self.iter_calls += 1
+            return super().__iter__()
+
+    rows = CountingRows(initial)
+    published = []
+    monkeypatch.setattr(evidence, "_read_jsonl", lambda *_a, **_kw: rows)
+    monkeypatch.setattr(evidence, "_write_jsonl", lambda path, output: published.append(len(output)))
+
+    cycle = {
+        "cycle_id": "large-cycle", "as_of": "2026-10-09",
+        "taken": [
+            {"symbol": f"NEW{i}", "decision": "ENTER_NOW",
+             "reason_code": "ELIGIBLE", "entry": 100 + i, "stop": 90}
+            for i in range(300)
+        ],
+    }
+    cycle["taken"].append(dict(cycle["taken"][0], entry=99999))
+
+    result = evidence.freeze_cycle(cycle, path=tmp_path / "forward_evidence.jsonl")
+    assert result["written"] == 300
+    assert result["skipped_duplicates"] == 1
+    assert published == [1300]
+    assert rows.iter_calls == 1  # One historical index; no quadratic rescanning.
+    new = [r for r in rows if r.get("symbol") == "NEW0"]
+    assert len(new) == 1
+    assert new[0]["entry"] == 100  # First immutable point-in-time record wins.
+
+
+def test_forward_index_keeps_first_existing_duplicate_row(tmp_path):
+    """Preserve legacy first-record-wins semantics when old JSONL has duplicates."""
+    import product.forward_evidence as evidence
+
+    target = tmp_path / "forward_evidence.jsonl"
+    candidate = {"symbol": "INFY", "decision": "ENTER_NOW",
+                 "reason_code": "ELIGIBLE", "entry": 999, "stop": 900}
+    did = evidence.decision_id(
+        as_of="2026-10-09", symbol="INFY", group="TAKEN",
+        reason_code="ELIGIBLE", cycle_id="repeat",
+    )
+    target.write_text(
+        json.dumps({"decision_id": did, "symbol": "INFY", "entry": 100}) + "\n" +
+        json.dumps({"decision_id": did, "symbol": "INFY", "entry": 200}) + "\n",
+        encoding="utf-8",
+    )
+    result = evidence.freeze_cycle(
+        {"cycle_id": "repeat", "as_of": "2026-10-09",
+         "taken": [candidate]},
+        path=target,
+    )
+    assert result["written"] == 0
+    assert result["skipped_duplicates"] == 1
+    assert len(evidence.load_ledger(target)) == 2
+    record = evidence.freeze_observation(
+        candidate, cycle_id="repeat", as_of="2026-10-09",
+        group="TAKEN", path=target,
+    )
+    assert record["entry"] == 100
