@@ -203,6 +203,7 @@ def _freeze_observation_in_rows(
     surfaced: bool = True,
     provenance: str | None = None,
     existing: list[dict[str, Any]],
+    existing_by_id: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any] | None, bool]:
     """Freeze a PIT decision. Existing decision_id is left untouched."""
     symbol = str(row.get("symbol") or "").strip().upper()
@@ -219,9 +220,16 @@ def _freeze_observation_in_rows(
     did = str(row.get("decision_id") or "") or decision_id(
         as_of=as_of, symbol=symbol, group=group, reason_code=reason, cycle_id=cycle_id,
     )
-    for prev in existing:
-        if str(prev.get("decision_id")) == did:
-            return dict(prev), False
+    # A cycle must not linearly scan its entire historical evidence ledger
+    # once for every new candidate. Keep the FIRST record for duplicate ids,
+    # preserving existing immutable PIT decision semantics.
+    if existing_by_id is None:
+        existing_by_id = {}
+        for previous in existing:
+            existing_by_id.setdefault(str(previous.get("decision_id")), previous)
+    prev = existing_by_id.get(did)
+    if prev is not None:
+        return dict(prev), False
     portfolio = row.get("portfolio_authority") if isinstance(row.get("portfolio_authority"), Mapping) else {}
     policy = str(row.get("policy_effect") or (row.get("policy") or {}).get("final_effect") or "NEUTRAL")
     payload = {
@@ -277,6 +285,7 @@ def _freeze_observation_in_rows(
         "not_pnl": not entered,
     }
     existing.append(payload)
+    existing_by_id[did] = payload
     return payload, True
 
 def attach_settlement(
@@ -351,6 +360,11 @@ def freeze_cycle(cycle: Mapping[str, Any], *, path: str | Path | None = None) ->
     target = ledger_path(path)
     with _ledger_write_lock(target):
         rows = _read_jsonl(target, strict=True)
+        # One O(historical decisions) index; duplicate checks for each card
+        # are now O(1) rather than walking a growing JSONL row list.
+        by_id: dict[str, dict[str, Any]] = {}
+        for existing in rows:
+            by_id.setdefault(str(existing.get("decision_id")), existing)
         for group, entered, surfaced in (
             ("taken", True, True),
             ("rejections", False, True),
@@ -364,6 +378,7 @@ def freeze_cycle(cycle: Mapping[str, Any], *, path: str | Path | None = None) ->
                     row, cycle_id=cycle_id, as_of=as_of, rules_hash=rules_hash,
                     group=group.upper() if group != "rejections" else "REJECTED",
                     entered=entered, surfaced=surfaced, existing=rows,
+                    existing_by_id=by_id,
                 )
                 if created:
                     written += 1
