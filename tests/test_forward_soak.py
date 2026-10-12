@@ -1017,3 +1017,33 @@ def test_forward_index_keeps_first_existing_duplicate_row(tmp_path):
         group="TAKEN", path=target,
     )
     assert record["entry"] == 100
+
+
+def test_forward_ledger_parses_streaming_without_loading_entire_text(tmp_path, monkeypatch):
+    """Large on-disk forward ledgers must not materialize read_text().splitlines()."""
+    import product.forward_evidence as evidence
+
+    ledger = tmp_path / "forward_evidence.jsonl"
+    with ledger.open("w", encoding="utf-8") as output:
+        for i in range(1200):
+            output.write(json.dumps({"decision_id": f"d{i}", "symbol": f"S{i}"}) + "\n")
+
+    original_read_text = Path.read_text
+
+    def disallow_full_read(self, *args, **kwargs):
+        if self == ledger:
+            raise AssertionError("Full ledger read_text() would cause avoidable peak memory")
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", disallow_full_read)
+    rows = evidence.load_ledger(ledger)
+    assert len(rows) == 1200
+    assert rows[0]["decision_id"] == "d0"
+    assert rows[-1]["decision_id"] == "d1199"
+
+    with ledger.open("a", encoding="utf-8") as output:
+        output.write("{corrupt-record\n")
+    import pytest
+    with pytest.raises(RuntimeError, match="invalid JSON at line 1201"):
+        evidence._read_jsonl(ledger, strict=True)
+    assert len(evidence.load_ledger(ledger)) == 1200
