@@ -256,6 +256,11 @@ def _freeze_observation_in_rows(
         "schema_version": SCHEMA_VERSION,
         "decision_id": did,
         "cycle_id": str(cycle_id or ""),
+        # Bind later paper exits by their original execution intent rather
+        # than approximating an identity from the symbol or current quote.
+        "paper_intent_id": str(row.get("paper_intent_id") or ""),
+        "context_key": str(row.get("context_key") or ""),
+        "entry_date": str(row.get("entry_date") or as_of or "")[:10],
         "provenance": current_provenance(provenance),
         "symbol": symbol,
         "decision_timestamp": _now(),
