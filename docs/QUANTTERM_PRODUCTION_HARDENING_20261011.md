@@ -101,6 +101,13 @@ authoritative full OHLCV store, not the metadata-only read.
 
 ## Rollout
 
+- **Durable runtime identity:** the installed storage guard requires both the
+  original resolved directory's `st_dev/st_ino` and the exact adopted runtime
+  manifest SHA-256. Byte-for-byte copying `host_runtime_manifest.json` into
+  a new directory or onto another mount must NEVER authorize that replacement.
+  When no manifest existed at adoption, creating one later is a loss of the
+  adopted identity, not implicit reauthorization. Recovery accepts only the
+  restored original runtime and preserves paper-book continuity.
 - Keep the canonical branch + running Mac unchanged while the consolidated PR is draft or has pending/failed checks.
 - Merge only after the full exact-head CI pass; never force auto-merge of partial tests.
 - Use the existing canonical update/restart script after a known-green release, with a runtime backup and host-mounted volume verified first.
