@@ -44,7 +44,10 @@ def ledger_path(path: str | Path | None = None) -> Path:
     override = os.environ.get("QT_FORWARD_LEDGER")
     if override:
         return Path(override)
-    return DEFAULT_PATH
+    # Runtime storage may be redirected after this module is imported.
+    # Resolve via the canonical root on every call instead of freezing an
+    # import-time Path against an old checkout/mount.
+    return logs_dir() / "product" / "forward_evidence.jsonl"
 
 
 def current_provenance(explicit: str | None = None) -> str:
@@ -313,6 +316,7 @@ def attach_settlement(
     with _ledger_write_lock(target):
         rows = _read_jsonl(target, strict=True)
         found = None
+        changed = False
         out: list[dict[str, Any]] = []
         for row in rows:
             if str(row.get("decision_id")) != str(decision_id_value):
@@ -320,6 +324,7 @@ def attach_settlement(
                 continue
             updated = dict(row)
             if updated.get("later_outcome") is None:
+                changed = True
                 updated["later_outcome"] = {
                     "forward_return_pct": forward_return_pct,
                     "settled_at": _now(),
@@ -346,7 +351,10 @@ def attach_settlement(
             out.append(updated)
         if found is None:
             return None
-        _write_jsonl(target, out)
+        # Repeated settlement checks occur every paper cycle. Avoid a full
+        # fsync+rename of the historical ledger for an unchanged outcome.
+        if changed:
+            _write_jsonl(target, out)
         return found
 
 
