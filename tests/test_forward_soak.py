@@ -1107,3 +1107,35 @@ def test_forward_paths_follow_runtime_root_after_import(tmp_path, monkeypatch):
     # No writer should have created a default checkout-relative logs folder.
     assert not (tmp_path / "first-runtime").exists()
     assert not (tmp_path / "second-runtime").exists()
+
+
+def test_corrupted_forward_ledger_cannot_produce_measured_or_healthy_report(tmp_path, monkeypatch):
+    import pytest
+    import product.forward_evidence as evidence
+    import product.forward_soak as forward
+
+    ledger = tmp_path / "forward_evidence.jsonl"
+    valid = [
+        {"decision_id": f"real-{i}", "provenance": REAL_FORWARD_MARKET,
+         "symbol": f"STOCK{i}", "entered": True, "gross_R": 0.8}
+        for i in range(25)
+    ]
+    with ledger.open("w", encoding="utf-8") as out:
+        for record in valid:
+            out.write(json.dumps(record) + "\n")
+        out.write("{broken point-in-time evidence\n")
+
+    monkeypatch.setenv("QT_FORWARD_LEDGER", str(ledger))
+    # Only explicit diagnostic reads may omit the broken row.
+    assert len(evidence.load_ledger(strict=False)) == 25
+    with pytest.raises(RuntimeError, match="invalid JSON at line 26"):
+        evidence.load_ledger(strict=True)
+
+    # An incomplete ledger must never earn MEASURED, HEALTHY or
+    # a verification PASS by silently ignoring the damaged row.
+    with pytest.raises(RuntimeError, match="invalid JSON at line 26"):
+        forward.scoreboard()
+    with pytest.raises(RuntimeError, match="invalid JSON at line 26"):
+        forward.soak_status()
+    with pytest.raises(RuntimeError, match="invalid JSON at line 26"):
+        forward.settle_pending_from_market(return_fn=lambda _symbol, _day: None)
