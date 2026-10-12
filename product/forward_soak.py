@@ -243,7 +243,7 @@ def settle_pending_from_market(
 
     getter = return_fn or (lambda symbol, as_of: _forward_return(symbol, as_of, horizon))
     entered = {str(k).upper(): bool(v) for k, v in dict(later_entered or {}).items()}
-    pending = [r for r in load_fwd() if not r.get("entered") and r.get("later_outcome") is None]
+    pending = [r for r in load_fwd(strict=True) if not r.get("entered") and r.get("later_outcome") is None]
     updated = 0
     pending_n = 0
     classifications: dict[str, int] = {}
@@ -297,7 +297,7 @@ def attach_closed_trades(book, *, path=None) -> dict[str, Any]:
         if not symbol:
             continue
         matches = [
-            r for r in load_ledger(path)
+            r for r in load_ledger(path, strict=True)
             if r.get("entered") and str(r.get("symbol")) == symbol and r.get("later_outcome") is None
         ]
         if not matches:
@@ -392,7 +392,7 @@ def build_runtime_journey(*, cycle: Mapping[str, Any] | None = None) -> dict[str
     latest = dict(cycle or journal.get("latest") or {})
     paper = read_paper_status()
     policies = load_policies()
-    ledger = load_ledger()
+    ledger = load_ledger(strict=True)
     ingested = _read_json(Path(os.environ.get("QT_LEARNING_INGESTED") or logs_dir() / "product" / "learning_ingested.json"))
     cycle_id = str(latest.get("cycle_id") or "")
     scan_payload = dict(scan.get("payload") or {})
@@ -561,7 +561,7 @@ def soak_status() -> dict[str, Any]:
         stale = bool(reco) and reco_is_stale(reco)
     except Exception:
         stale = False
-    ledger = load_ledger()
+    ledger = load_ledger(strict=True)
     real = real_forward_only(ledger)
     summary = journey.get("summary") or {}
     blockers: list[str] = []
@@ -726,7 +726,7 @@ def scoreboard() -> dict[str, Any]:
     from product.champion_challenger import load_store
     from product.live_readiness import evaluate_live_readiness
 
-    ledger = load_ledger()
+    ledger = load_ledger(strict=True)
     real = real_forward_only(ledger)
     use = real if real else []
     taken = [r for r in use if r.get("entered")]
@@ -836,7 +836,7 @@ def write_daily_report(as_of: str, *, book=None) -> dict[str, Any]:
     scan = _scan_payload()["payload"]
     reco = _reco_payload()["payload"]
     reco_n = sum(len(list(c.get("cards") or [])) for c in (reco.get("categories") or []))
-    ledger = load_ledger()
+    ledger = load_ledger(strict=True)
     day_rows = [r for r in ledger if str(r.get("market_timestamp") or "")[:10] == day]
     ident = ensemble_identity()
     closed_today = 0
