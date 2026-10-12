@@ -19,6 +19,7 @@ from product.observer_api import install as install_observer_api, observer_paylo
 from product.product_readiness import build_product_readiness
 from product.stock_workspace import build_stock_workspace, clean_symbol
 from core.runtime_paths import logs_dir
+from product.public_access import public_exception_text, public_http_error_detail
 
 app = core.app
 app.version = "0.11.0"
@@ -119,7 +120,7 @@ def _target_portfolio_payload() -> dict[str, Any]:
             "portfolio": {},
             "positions": [],
             "message": "Target portfolio projection is unavailable.",
-            "error": str(exc),
+            "error": public_exception_text(exc),
         }
 
 
@@ -153,7 +154,7 @@ def _oms_payload() -> dict[str, Any]:
             "summary": {"orders": 0, "by_status": {}, "recovery_required": []},
             "orders": [],
             "message": "OMS projection is unavailable.",
-            "error": str(exc),
+            "error": public_exception_text(exc),
         }
 
 
@@ -189,7 +190,7 @@ def _risk_governor_payload() -> dict[str, Any]:
             "mode": "SHADOW",
             "authoritative_state_connected": False,
             "message": "Risk Governor projection is unavailable.",
-            "error": str(exc),
+            "error": public_exception_text(exc),
         }
 
 
@@ -247,7 +248,7 @@ def _reconciliation_payload() -> dict[str, Any]:
             "certified_for_live": False,
             "broker_snapshot_connected": False,
             "message": "Reconciliation projection is unavailable.",
-            "error": str(exc),
+            "error": public_exception_text(exc),
         }
 
 
@@ -298,7 +299,7 @@ def _protection_payload() -> dict[str, Any]:
             "exchange_adapter_connected": False,
             "certified_for_live": False,
             "message": "Protection projection is unavailable.",
-            "error": str(exc),
+            "error": public_exception_text(exc),
         }
 
 
@@ -344,7 +345,7 @@ def _tca_payload() -> dict[str, Any]:
             "assessments": [],
             "live_fill_feed_connected": False,
             "message": "Transaction-cost projection is unavailable.",
-            "error": str(exc),
+            "error": public_exception_text(exc),
         }
 
 
@@ -559,7 +560,7 @@ def product_bootstrap() -> dict[str, Any]:
         payload["readiness"] = product_readiness()
         return payload
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Product bootstrap failed: {exc}") from exc
+        raise HTTPException(status_code=500, detail=public_http_error_detail("Product bootstrap failed", exc)) from exc
 
 
 @app.get("/api/stock-intelligence/{symbol}")
@@ -569,7 +570,7 @@ def stock_intelligence(symbol: str) -> dict[str, Any]:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Stock intelligence failed: {exc}") from exc
+        raise HTTPException(status_code=500, detail=public_http_error_detail("Stock intelligence failed", exc)) from exc
 
 
 def _market_regime() -> str:
@@ -600,7 +601,7 @@ def forward_evidence_board() -> dict[str, Any]:
         book = core._json_file(logs_dir() / "intelligence" / "intel_book.json", {})
         return build_forward_evidence_board(book=book)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Forward evidence failed: {exc}") from exc
+        raise HTTPException(status_code=500, detail=public_http_error_detail("Forward evidence failed", exc)) from exc
 
 
 @app.get("/api/evolution-lab")
@@ -612,7 +613,7 @@ def evolution_lab_board(domain: str = "EQUITY") -> dict[str, Any]:
 
         return build_board(domain)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Evolution Lab board failed: {exc}") from exc
+        raise HTTPException(status_code=500, detail=public_http_error_detail("Evolution Lab board failed", exc)) from exc
 
 
 @app.get("/api/evolution-health")
@@ -625,7 +626,7 @@ def evolution_health(domain: str = "EQUITY") -> dict[str, Any]:
 
         return daily_health_report(domain, persist=False)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Evolution health report failed: {exc}") from exc
+        raise HTTPException(status_code=500, detail=public_http_error_detail("Evolution health report failed", exc)) from exc
 
 
 @app.get("/api/evolution-auto-promotion-readiness")
@@ -638,7 +639,7 @@ def evolution_auto_promotion_readiness(policy_id: str, domain: str = "EQUITY") -
 
         return evaluate_auto_promotion_readiness(domain, policy_id)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Auto-promotion readiness check failed: {exc}") from exc
+        raise HTTPException(status_code=500, detail=public_http_error_detail("Auto-promotion readiness check failed", exc)) from exc
 
 
 @app.get("/api/evolution-explain")
@@ -652,7 +653,7 @@ def evolution_explain(policy_id: str, domain: str = "EQUITY") -> dict[str, Any]:
 
         return explain_promotion_candidate(domain, policy_id)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Evolution explain failed: {exc}") from exc
+        raise HTTPException(status_code=500, detail=public_http_error_detail("Evolution explain failed", exc)) from exc
 
 
 @app.get("/api/decisions")
@@ -663,7 +664,7 @@ def decisions_board(limit: int = 40) -> dict[str, Any]:
 
         return decision_board(market_state=_market_regime(), limit=limit)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Decision board failed: {exc}") from exc
+        raise HTTPException(status_code=500, detail=public_http_error_detail("Decision board failed", exc)) from exc
 
 
 @app.get("/api/decisions/{symbol}/why")
@@ -676,7 +677,7 @@ def decision_why_endpoint(symbol: str) -> dict[str, Any]:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Decision explanation failed: {exc}") from exc
+        raise HTTPException(status_code=500, detail=public_http_error_detail("Decision explanation failed", exc)) from exc
 
 
 @app.get("/api/due-diligence/framework-audit")
@@ -690,7 +691,7 @@ def due_diligence_framework_audit(framework: str = "") -> dict[str, Any]:
             return audit_framework(fid)
         return audit_all_frameworks()
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Framework audit failed: {exc}") from exc
+        raise HTTPException(status_code=500, detail=public_http_error_detail("Framework audit failed", exc)) from exc
 
 
 @app.get("/api/due-diligence/{symbol}")
@@ -703,7 +704,7 @@ def due_diligence(symbol: str) -> dict[str, Any]:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Due diligence failed: {exc}") from exc
+        raise HTTPException(status_code=500, detail=public_http_error_detail("Due diligence failed", exc)) from exc
 
 
 @app.get("/api/stock-research/{symbol}")
@@ -727,7 +728,7 @@ def stock_investigator_suggest(q: str = "", limit: int = 8) -> dict[str, Any]:
             "places_orders": False,
         }
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Investigator suggest failed: {exc}") from exc
+        raise HTTPException(status_code=500, detail=public_http_error_detail("Investigator suggest failed", exc)) from exc
 
 
 @app.post("/api/due-diligence/{symbol}/acquire")
@@ -800,7 +801,7 @@ def acquire_due_diligence(symbol: str, mode: str = "missing_or_stale", async_job
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Investigate acquire failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail=public_http_error_detail("Investigate acquire failed", exc)) from exc
 
 
 @app.post("/api/stock-intelligence/{symbol}/refresh-fundamentals")
@@ -827,4 +828,4 @@ def refresh_stock_fundamentals(symbol: str) -> dict[str, Any]:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Fundamental refresh failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail=public_http_error_detail("Fundamental refresh failed", exc)) from exc

@@ -60,12 +60,13 @@ fi
 if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   QT_GIT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
   QT_GIT_SHA="$(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
+  QT_BUILD_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
   QT_GIT_DIRTY=""
   if ! git diff --quiet --ignore-submodules -- 2>/dev/null || \
      ! git diff --cached --quiet --ignore-submodules -- 2>/dev/null; then
     QT_GIT_DIRTY="+dirty"
   fi
-  export QT_GIT_BRANCH QT_GIT_SHA
+  export QT_GIT_BRANCH QT_GIT_SHA QT_BUILD_SHA
   echo "[COMPLETE STACK] Build: branch=$QT_GIT_BRANCH · sha=$QT_GIT_SHA$QT_GIT_DIRTY"
   if [[ "$QT_GIT_BRANCH" != "HEAD" ]] && git rev-parse --verify "origin/$QT_GIT_BRANCH" >/dev/null 2>&1; then
     QT_ORIGIN_SHA="$(git rev-parse --short=12 "origin/$QT_GIT_BRANCH" 2>/dev/null || true)"
@@ -856,7 +857,10 @@ start_vite_safety_net() {
     return 0
   fi
   echo "[COMPLETE STACK] Desk UI is not on :5173 yet; starting Vite from the complete launcher."
-  setsid npm --prefix "$ROOT/frontend" run dev -- --host 127.0.0.1 --port 5173 \
+  # Use the same directly-owned Vite process as the inner supervisor. The
+  # old npm -> sh -> Node chain could outlive the launcher on SIGINT.
+  setsid node "$ROOT/frontend/node_modules/vite/bin/vite.js" "$ROOT/frontend" \
+    --host 127.0.0.1 --port 5173 --strictPort \
     >>"$STACK_LOG_DIR/vite.log" 2>&1 200>&- &
   VITE_PID=$!
   return 0

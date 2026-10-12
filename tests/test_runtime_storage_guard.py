@@ -60,6 +60,51 @@ def test_manifest_identity_is_verified_and_tampering_fails_closed(tmp_path: Path
     assert "manifest changed unexpectedly" in reason
 
 
+
+def test_copied_manifest_never_authorizes_replaced_runtime_directory(tmp_path: Path):
+    # A replacement local directory, or another mounted volume with the same
+    # relative files, can carry byte-identical manifest.json. Manifest hash
+    # equality alone MUST NOT accept a different durable state identity.
+    root = _runtime(tmp_path / "runtime")
+    identity = establish_runtime_storage_identity(root)
+    copied_manifest = (root / MANIFEST_REL).read_bytes()
+
+    previous = tmp_path / "disconnected-original"
+    root.rename(previous)
+    root.mkdir()
+    (root / MANIFEST_REL).parent.mkdir(parents=True)
+    (root / MANIFEST_REL).write_bytes(copied_manifest)
+
+    assert (root / MANIFEST_REL).read_bytes() == copied_manifest
+    assert root.stat().st_ino != identity.st_ino
+    ok, reason = verify_runtime_storage(identity)
+    assert ok is False
+    assert "device/inode changed unexpectedly" in reason
+    assert not list(root.glob(".quantterm-runtime-probe.*"))
+
+    # Restoring the same original directory must still permit recovery.
+    replacement = tmp_path / "unauthorized-replacement"
+    root.rename(replacement)
+    previous.rename(root)
+    ok, reason = verify_runtime_storage(identity)
+    assert ok is True, reason
+
+
+def test_unexpected_manifest_creation_is_not_silent_identity_adoption(tmp_path: Path):
+    root = tmp_path / "runtime"
+    root.mkdir()
+    identity = establish_runtime_storage_identity(root)
+    assert identity.manifest_sha256 == ""
+
+    manifest = root / MANIFEST_REL
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text('{"schema_version": 1}', encoding="utf-8")
+
+    ok, reason = verify_runtime_storage(identity)
+    assert ok is False
+    assert "manifest appeared unexpectedly" in reason
+
+
 def test_broken_runtime_symlink_detects_loss_and_same_runtime_can_recover(tmp_path: Path):
     external = tmp_path / "external"
     runtime = _runtime(external / "QuantTerm" / "runtime")

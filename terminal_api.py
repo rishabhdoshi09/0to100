@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse
 
 from logger import quiet_uvicorn_health_access
 from core.runtime_paths import logs_dir, logs_path
+from product.public_access import public_exception_text, public_http_error_detail
 
 ROOT = Path(__file__).resolve().parent
 OPS_ROOT = logs_dir() / "market_ops"
@@ -45,9 +46,26 @@ app.add_middleware(
 async def _log_unhandled(request: Request, exc: Exception):
     if isinstance(exc, HTTPException):
         raise exc
-    print(f"[API] unhandled {request.method} {request.url.path}: {exc}", flush=True)
+    from product.public_access import public_read_only_enabled
+
+    public = public_read_only_enabled()
+    # Public error bodies/logs may be read by untrusted clients/operators:
+    # never disclose exception text, file paths, tokens or SQL detail.
+    path = request.url.path
+    if public:
+        print(
+            f"[API] unhandled {request.method} {path} type={type(exc).__name__}",
+            flush=True,
+        )
+        return JSONResponse(
+            {"ok": False, "error": "Internal server error",
+             "code": "API_INTERNAL_ERROR"},
+            status_code=500,
+            headers={"Cache-Control": "no-store"},
+        )
+    print(f"[API] unhandled {request.method} {path}: {exc}", flush=True)
     return JSONResponse(
-        {"ok": False, "error": str(exc)[:300], "path": request.url.path},
+        {"ok": False, "error": str(exc)[:300], "path": path},
         status_code=500,
     )
 
@@ -500,7 +518,7 @@ def _market_payload() -> dict:
             "vix": None,
             "nifty_price": None,
             "technical_details": {},
-            "error": str(exc),
+            "error": public_exception_text(exc),
         }
 
 
@@ -526,6 +544,11 @@ def _scan_payload() -> dict:
             "coverage_state": str(payload.get("coverage_state") or "UNKNOWN"),
             "coverage_warning": str(payload.get("coverage_warning") or ""),
             "coverage": dict(payload.get("coverage") or {}),
+            # A technical scan can SUCCEED while a dependent discovery/reco
+            # overlay fails. Do not flatten those truths into one green badge.
+            "desk_overlays": dict(payload.get("desk_overlays") or {}),
+            "long_term_overlay": dict(payload.get("long_term_overlay") or {}),
+            "overlay_timings_s": dict(payload.get("overlay_timings_s") or {}),
         }
     except Exception as exc:
         return {
@@ -539,7 +562,10 @@ def _scan_payload() -> dict:
             "coverage_state": "UNKNOWN",
             "coverage_warning": "",
             "coverage": {},
-            "error": str(exc),
+            "desk_overlays": {},
+            "long_term_overlay": {},
+            "overlay_timings_s": {},
+            "error": public_exception_text(exc),
         }
 
 
@@ -592,7 +618,7 @@ def _long_term_payload() -> dict:
             "summary": {},
             "records": [],
             "job": {},
-            "error": str(exc),
+            "error": public_exception_text(exc),
         }
 
 
@@ -710,8 +736,8 @@ def _paper_payload() -> dict:
             "closed_trades": [],
             "refusals": [],
             "last_cycle": {},
-            "last_error": str(exc),
-            "error": str(exc),
+            "last_error": public_exception_text(exc),
+            "error": public_exception_text(exc),
             "learning": _paper_learning_payload(),
         }
 
@@ -738,7 +764,7 @@ def _autonomy_payload() -> dict:
             from product.telegram_delivery import delivery_status
             telegram = delivery_status()
         except Exception as exc:
-            telegram = {"configured": False, "state": "unavailable", "detail": str(exc)}
+            telegram = {"configured": False, "state": "unavailable", "detail": public_exception_text(exc)}
         explanation = str(raw.get("explanation") or "") or str(status.get("explanation") or "")
         reason_code = str(raw.get("reason_code") or status.get("reason_code") or "")
         return {
@@ -809,33 +835,60 @@ def _autonomy_payload() -> dict:
             "live_feed": {},
             "telegram": {"configured": False, "state": "unavailable"},
             "last_cycle": {},
-            "error": str(exc),
+            "error": public_exception_text(exc),
         }
 
 
 def _snapshot_payload() -> dict:
+    """Inspect the activated immutable snapshot WITHOUT constructing directories.
+
+    An API read must never create a replacement root if the external runtime
+    volume becomes unavailable. Only the snapshot writer/activation authority
+    can create or repair storage; a missing/bad pointer fails closed here.
+    """
+    missing = {
+        "ready": False, "snapshot_id": "", "latest_date": "",
+        "source": "", "error": "No active verified snapshot",
+    }
     try:
-        from research.intelligence.data.snapshot_store import SnapshotStore
+        import re
+
         root = logs_dir() / "snapshots"
-        store = SnapshotStore(root)
-        snapshot_id = store.get_active_snapshot()
-        if not snapshot_id:
-            return {
-                "ready": False,
-                "snapshot_id": "",
-                "latest_date": "",
-                "source": "",
-                "error": "No active verified snapshot",
-            }
-        manifest = _json_file(root / str(snapshot_id) / "manifest.json", {})
+        if not root.is_dir():
+            return missing
+        pointer = _json_file(root / "ACTIVE", {})
+        snapshot_id = str(pointer.get("snapshot_id") or "")
+        # SnapshotStore commits use sha256(...).hexdigest()[:16]. Never allow
+        # path traversal or unrelated paths from a corrupt ACTIVE pointer.
+        if re.fullmatch(r"[0-9a-f]{16}", snapshot_id) is None:
+            return missing
+        directory = root / snapshot_id
+        if not directory.is_dir():
+            return missing
+        manifest = _json_file(directory / "manifest.json", {})
+        if str(manifest.get("snapshot_id") or "") != snapshot_id:
+            return missing
+        # Verify the small manifest itself; activation originally checked the
+        # full equity CSV hash. HTTP GETs must not re-hash gigabytes of bars.
+        import hashlib
+        import json
+        if not (directory / "bars_equity.csv").is_file():
+            return missing
+        checksum = str(manifest.get("manifest_checksum") or "")
+        payload = {key: value for key, value in manifest.items() if key != "manifest_checksum"}
+        actual = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+        if checksum != actual:
+            return missing
         return {
             "ready": True,
-            "snapshot_id": str(snapshot_id),
+            "snapshot_id": snapshot_id,
             "latest_date": str(manifest.get("last_trading_date") or ""),
             "source": str(manifest.get("source") or ""),
         }
     except Exception as exc:
-        return {"ready": False, "snapshot_id": "", "latest_date": "", "source": "", "error": str(exc)}
+        return {**missing, "error": f"Snapshot read unavailable: {type(exc).__name__}"}
 
 
 def _scan_progress_payload() -> dict[str, Any]:
@@ -885,7 +938,7 @@ def _operations_payload() -> dict[str, Any]:
             "active": [],
             "recent": [],
             "latest": {},
-            "error": str(exc),
+            "error": public_exception_text(exc),
         }
 
 
@@ -917,7 +970,7 @@ def _news_payload() -> dict[str, Any]:
             "articles": [],
             "source_health": [],
             "latest_refresh": {},
-            "error": str(exc),
+            "error": public_exception_text(exc),
         }
 
 
@@ -1107,7 +1160,7 @@ def _fo_paper_payload() -> dict[str, Any]:
             "production_evidence_enabled": False,
             "paper_only": True,
             "live_execution_allowed": False,
-            "error": str(exc)[:240],
+            "error": public_exception_text(exc)[:240],
         }
 
 
@@ -1118,7 +1171,7 @@ def _fno_learning_impact_payload(directional: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         return {
             "available": False,
-            "error": f"{type(exc).__name__}: {exc}"[:240],
+            "error": (public_exception_text(exc) if os.environ.get("QT_PUBLIC_READ_ONLY", "").strip().lower() in ("1", "true", "yes", "on") else f"{type(exc).__name__}: {exc}")[:240],
             "historical": {"available": False, "can_affect_ranking": False},
             "forward": {"available": False, "can_affect_ranking": False},
             "ranking_impact": {"status": "UNAVAILABLE", "plain": "Learning-impact projection unavailable."},
@@ -1172,7 +1225,7 @@ def _fno_payload() -> dict[str, Any]:
             "paper": paper,
             "learning_impact": learning_impact,
             "desk": desk,
-            "error": str(exc),
+            "error": public_exception_text(exc),
         }
 
 
@@ -1194,7 +1247,7 @@ def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news
             "latest_date": "",
             "csv_files": 0,
             "cache_exists": False,
-            "error": str(exc),
+            "error": public_exception_text(exc),
         }
     snapshot = _snapshot_payload()
     blockers: list[str] = []
@@ -1299,9 +1352,16 @@ def health() -> dict:
     File, PID and port checks only. Autonomy SQLite and live scans stay off
     this path so the launcher can start the desk.
     """
+    # Immutable build identity is set by the installed-host manifest or the
+    # canonical manual launcher. Never invoke git on this health/polling path.
+    # No path, secret, or arbitrary environment value should reach HTTP.
+    build_sha = os.environ.get("QT_BUILD_SHA", "").strip().lower()
+    if len(build_sha) != 40 or any(ch not in "0123456789abcdef" for ch in build_sha):
+        build_sha = ""
     payload = {
         "ok": True,
         "service": "quantterm-terminal-api",
+        "build_sha": build_sha,
         "version": app.version,
         "lifecycle": None,
         "reason": "Terminal API is serving",
@@ -1358,12 +1418,45 @@ def health() -> dict:
             "live_lock_reason": f"Runtime probe failed before live-execution safety could be verified: {exc}"[:240],
             "live_lock_source": "product.live_execution_interlock",
         })
+    # The public GET endpoint is not an operator diagnostics channel.
+    # Runtime probes may include exception strings, paths, SQLite locations or
+    # configuration fragments even on a nominal HTTP 200. Never surface those
+    # strings publicly; keep safety booleans and readiness truth unchanged.
+    if os.environ.get("QT_PUBLIC_READ_ONLY", "").strip().lower() in ("1", "true", "yes", "on"):
+        lifecycle = str(payload.get("lifecycle") or "").upper()
+        if lifecycle not in ("STARTING", "READY", "DEGRADED", "FAILED", "RECOVERING"):
+            lifecycle = "UNKNOWN"
+        payload["lifecycle"] = lifecycle
+        payload["reason"] = "QuantTerm lifecycle: " + lifecycle
+        payload["reasons"] = []
+        payload["components"] = []
+        payload["history"] = {}
+        payload["resources"] = {}
+        payload["live_lock_reason"] = "Detailed interlock diagnostics available to the private operator only."
     return payload
 
 
+from product.dashboard_snapshot_cache import DashboardSnapshotCache
+
+
+# HTTP polling is deliberately nonblocking. Direct module callers retain the
+# synchronous projection contract for diagnostics/tests; market execution and
+# safety checks never read this cache.
+_dashboard_http_cache = DashboardSnapshotCache(
+    loader=lambda: _compose_dashboard(),
+    cold_payload=lambda: _empty_dashboard(
+        "Dashboard read snapshot is warming; current execution state is unavailable.",
+        {"available": False, "scanned_at": "", "universe_size": 0,
+         "summary": {}, "records": [], "provenance": {}},
+    ),
+)
+
+
 @app.get("/api/dashboard")
-def dashboard() -> dict:
-    """Read-only desk snapshot with bounded work admission."""
+def dashboard(request: Request = None) -> dict:
+    """HTTP status is cached; internal callers can still request a fresh read."""
+    if request is not None:
+        return _dashboard_http_cache.read()
     with _bounded_status_read("/api/dashboard"):
         return _compose_dashboard()
 
@@ -1391,7 +1484,7 @@ def _compose_dashboard() -> dict:
                 "summary": {},
                 "records": [],
                 "provenance": {},
-                "error": str(exc),
+                "error": public_exception_text(exc),
             }
         try:
             market = _timed("market", _market_payload)
@@ -1428,7 +1521,7 @@ def _compose_dashboard() -> dict:
                 "daily_wrap": daily_wrap,
             })
         except Exception as exc:
-            degraded = _empty_dashboard(f"Dashboard degraded: {exc}", scan)
+            degraded = _empty_dashboard(public_http_error_detail("Dashboard degraded", exc), scan)
             try:
                 degraded["market"] = _market_payload()
             except Exception:
@@ -1454,6 +1547,16 @@ def _compose_dashboard() -> dict:
 @app.get("/api/operations")
 def operations_status() -> dict:
     return _operations_payload()
+
+
+@app.get("/api/operations/{operation_id}/status")
+def operation_poll_status(operation_id: str) -> dict:
+    """Read-only high-frequency operation status; never decode result_json."""
+    from operations.store import OperationStore
+    item = OperationStore(OPS_DB).get_summary(operation_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Operation not found")
+    return item
 
 
 @app.get("/api/operations/{operation_id}")
@@ -1513,7 +1616,7 @@ def chart(symbol: str, limit: int = 220) -> dict:
         frame = get_ohlcv(clean_symbol)
         readiness = bhavcopy_status(load_cache=False)
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Price history unavailable: {exc}") from exc
+        raise HTTPException(status_code=503, detail=public_http_error_detail("Price history unavailable", exc)) from exc
     if frame is None or len(frame) == 0:
         return {"symbol": clean_symbol, "bars": [], "history": readiness}
     frame = frame.tail(max(20, min(int(limit), 500))).copy()

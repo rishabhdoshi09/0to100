@@ -676,3 +676,624 @@ def test_rejection_gate_scorecard_keeps_counterfactuals_out_of_pnl():
     assert card["r_coverage"] == 1.0
     assert card["evidence"] == "MEASURED"
     assert card["not_pnl"] is True
+
+
+def test_forward_soak_concurrent_publication_uses_distinct_atomic_temps(tmp_path, monkeypatch):
+    """Two writers must never share the old forward_soak_verify.json.tmp."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    import product.forward_soak as forward
+
+    target = tmp_path / "forward_soak_verify.json"
+    barrier = threading.Barrier(2)
+    originals = forward.os.replace
+    seen = []
+    guard = threading.Lock()
+
+    def colliding_replace(source, destination):
+        with guard:
+            seen.append(str(source))
+        barrier.wait(timeout=8)
+        return originals(source, destination)
+
+    monkeypatch.setattr(forward.os, "replace", colliding_replace)
+    def writer(index):
+        return forward._write_json(target, {"schema_version": 1, "writer": index})
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(writer, (1, 2)))
+
+    assert results == [target, target]
+    assert len(seen) == 2 and len(set(seen)) == 2
+    assert json.loads(target.read_text(encoding="utf-8")) in (
+        {"schema_version": 1, "writer": 1},
+        {"schema_version": 1, "writer": 2},
+    )
+    assert not list(tmp_path.glob(".*.tmp"))
+
+
+def test_forward_soak_failed_rename_preserves_previous_artifact(tmp_path, monkeypatch):
+    import product.forward_soak as forward
+
+    target = tmp_path / "forward_journey.json"
+    forward._write_json(target, {"version": "previous"})
+
+    def fail_replace(_a, _b):
+        raise OSError("simulated atomic-rename error")
+
+    monkeypatch.setattr(forward.os, "replace", fail_replace)
+    import pytest
+    with pytest.raises(OSError, match="simulated"):
+        forward._write_json(target, {"version": "new"})
+    assert json.loads(target.read_text(encoding="utf-8")) == {"version": "previous"}
+    assert not list(tmp_path.glob(".*.tmp"))
+
+
+def test_forward_soak_unmounted_volume_fails_before_any_directory_created(tmp_path, monkeypatch):
+    import pytest
+    import product.forward_soak as forward
+
+    root = tmp_path / "external" / "QuantTerm" / "runtime"
+    root.mkdir(parents=True)
+    target = root / "logs" / "product" / "forward_soak_verify.json"
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(root))
+    monkeypatch.setenv("QT_RUNTIME_ROOT_REQUIRE_EXISTING", "1")
+
+    forward._write_json(target, {"status": "OLD"})
+    disconnected = root.with_name("runtime.offline")
+    root.rename(disconnected)
+
+    with pytest.raises(RuntimeError, match="runtime root is missing"):
+        forward._write_json(target, {"status": "NEW"})
+    assert not root.exists()
+    assert json.loads(
+        (disconnected / "logs" / "product" / "forward_soak_verify.json").read_text()
+    ) == {"status": "OLD"}
+    disconnected.rename(root)
+    forward._write_json(target, {"status": "RESTORED"})
+    assert json.loads(target.read_text()) == {"status": "RESTORED"}
+
+
+def test_forward_soak_strict_runtime_blocks_symlink_escape(tmp_path, monkeypatch):
+    import pytest
+    import product.forward_soak as forward
+
+    root = tmp_path / "external" / "QuantTerm" / "runtime"
+    root.mkdir(parents=True)
+    outside = tmp_path / "untrusted"
+    outside.mkdir()
+    (root / "logs").symlink_to(outside, target_is_directory=True)
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(root))
+    monkeypatch.setenv("QT_RUNTIME_ROOT_REQUIRE_EXISTING", "1")
+
+    target = root / "logs" / "product" / "forward_journey.json"
+    with pytest.raises(RuntimeError, match="outside the persistent runtime"):
+        forward._write_json(target, {"sensitive": "never outside"})
+    assert not (outside / "product").exists()
+
+
+def test_concurrent_forward_ledger_freezes_preserve_all_unique_decisions(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    import product.forward_evidence as evidence
+
+    ledger = tmp_path / "forward_evidence.jsonl"
+    workers = 8
+    start = Barrier(workers)
+
+    def freeze(n):
+        start.wait(timeout=8)
+        return evidence.freeze_observation(
+            {"symbol": f"TEST{n}", "decision": "ENTER_NOW",
+             "reason_code": "ELIGIBLE", "entry": 100, "stop": 94},
+            cycle_id=f"cycle-{n}", as_of="2026-10-09",
+            group="TAKEN", entered=True, path=ledger,
+        )
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        out = list(pool.map(freeze, range(workers)))
+
+    assert len(out) == workers
+    rows = evidence.load_ledger(ledger)
+    assert len(rows) == workers
+    assert {r["symbol"] for r in rows} == {f"TEST{i}" for i in range(workers)}
+    assert len({r["decision_id"] for r in rows}) == workers
+
+    # Races for the same identity must deduplicate, never overwrite PIT data.
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        duplicates = list(pool.map(freeze, range(workers)))
+    assert len(duplicates) == workers
+    assert len(evidence.load_ledger(ledger)) == workers
+
+
+def test_freeze_cycle_batches_candidate_publication_into_one_atomic_write(tmp_path, monkeypatch):
+    import product.forward_evidence as evidence
+
+    ledger = tmp_path / "forward_evidence.jsonl"
+    original = evidence._write_jsonl
+    count = []
+
+    def counted_write(path, rows):
+        count.append(len(rows))
+        return original(path, rows)
+
+    monkeypatch.setattr(evidence, "_write_jsonl", counted_write)
+    cycle = {
+        "as_of": "2026-10-09", "cycle_id": "whole-market-1",
+        "taken": [
+            {"symbol": f"SYM{i}", "decision": "ENTER_NOW",
+             "reason_code": "ELIGIBLE", "entry": 100, "stop": 94}
+            for i in range(30)
+        ],
+        "rejections": [{"symbol": "WAITME", "decision": "REJECTED",
+                        "reason_code": "CHASE_RISK"}],
+    }
+    first = evidence.freeze_cycle(cycle, path=ledger)
+    assert first["written"] == 31
+    assert first["skipped_duplicates"] == 0
+    assert count == [31]
+    assert len(evidence.load_ledger(ledger)) == 31
+
+    second = evidence.freeze_cycle(cycle, path=ledger)
+    assert second["written"] == 0
+    assert second["skipped_duplicates"] == 31
+    assert count == [31]  # No redundant write on a duplicate replay.
+
+
+def test_settlement_and_concurrent_new_freeze_cannot_lose_one_another(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    import product.forward_evidence as evidence
+
+    ledger = tmp_path / "forward_evidence.jsonl"
+    orig = evidence.freeze_observation(
+        {"symbol": "INFY", "decision": "ENTER_NOW", "reason_code": "ELIGIBLE",
+         "entry": 100, "stop": 94},
+        cycle_id="orig", as_of="2026-10-09", group="TAKEN",
+        entered=True, path=ledger,
+    )
+    start = Barrier(2)
+
+    def settle():
+        start.wait(timeout=8)
+        return evidence.attach_settlement(
+            orig["decision_id"], classification="TARGET", gross_R=1.4,
+            outcome_provenance=REAL_FORWARD_MARKET, path=ledger,
+        )
+
+    def add():
+        start.wait(timeout=8)
+        return evidence.freeze_observation(
+            {"symbol": "TCS", "decision": "ENTER_NOW", "reason_code": "ELIGIBLE",
+             "entry": 200, "stop": 190},
+            cycle_id="new", as_of="2026-10-09", group="TAKEN",
+            entered=True, path=ledger,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(settle), pool.submit(add)]
+        for f in futures:
+            assert f.result(timeout=12) is not None
+
+    rows = evidence.load_ledger(ledger)
+    assert {row["symbol"] for row in rows} == {"INFY", "TCS"}
+    settled = next(row for row in rows if row["symbol"] == "INFY")
+    assert settled["entry"] == 100
+    assert settled["later_outcome"] is not None
+    assert settled["gross_R"] == 1.4
+    assert len(rows) == 2
+
+
+def test_corrupt_forward_ledger_cannot_be_silently_rewritten(tmp_path):
+    import product.forward_evidence as evidence
+    import pytest
+
+    ledger = tmp_path / "forward_evidence.jsonl"
+    first = evidence.freeze_observation(
+        {"symbol": "INFY", "decision": "ENTER_NOW",
+         "reason_code": "ELIGIBLE", "entry": 100, "stop": 94},
+        cycle_id="orig", as_of="2026-10-09", group="TAKEN", path=ledger,
+    )
+    with ledger.open("a", encoding="utf-8") as file:
+        file.write("{partially-written-old-decision\n")
+    before = ledger.read_bytes()
+
+    with pytest.raises(RuntimeError, match="invalid JSON at line 2"):
+        evidence.freeze_observation(
+            {"symbol": "TCS", "decision": "ENTER_NOW",
+             "reason_code": "ELIGIBLE", "entry": 200, "stop": 180},
+            cycle_id="another", as_of="2026-10-09", group="TAKEN", path=ledger,
+        )
+    with pytest.raises(RuntimeError, match="invalid JSON at line 2"):
+        evidence.attach_settlement(first["decision_id"], gross_R=1.5, path=ledger)
+    with pytest.raises(RuntimeError, match="invalid JSON at line 2"):
+        evidence.freeze_cycle({"as_of": "2026-10-09", "cycle_id": "batch",
+                               "taken": [{"symbol": "RELIANCE"}]}, path=ledger)
+
+    assert ledger.read_bytes() == before  # No silent permanent deletion.
+
+
+def test_forward_ledger_missing_volume_refuses_write_and_recovers(tmp_path, monkeypatch):
+    import product.forward_evidence as evidence
+    import pytest
+
+    root = tmp_path / "external" / "QuantTerm" / "runtime"
+    root.mkdir(parents=True)
+    ledger = root / "logs" / "product" / "forward_evidence.jsonl"
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(root))
+    monkeypatch.setenv("QT_RUNTIME_ROOT_REQUIRE_EXISTING", "1")
+    first = evidence.freeze_observation(
+        {"symbol": "INFY", "decision": "ENTER_NOW",
+         "reason_code": "ELIGIBLE", "entry": 100, "stop": 94},
+        cycle_id="orig", as_of="2026-10-09", group="TAKEN", path=ledger,
+    )
+    assert first is not None
+    offline = root.with_name("runtime.offline")
+    root.rename(offline)
+
+    with pytest.raises(RuntimeError, match="runtime root is missing"):
+        evidence.freeze_observation(
+            {"symbol": "TCS", "decision": "ENTER_NOW", "reason_code": "ELIGIBLE"},
+            cycle_id="new", as_of="2026-10-09", group="TAKEN", path=ledger,
+        )
+    assert not root.exists()
+    assert len(evidence.load_ledger(offline / "logs" / "product" / "forward_evidence.jsonl")) == 1
+
+    offline.rename(root)
+    evidence.freeze_observation(
+        {"symbol": "TCS", "decision": "ENTER_NOW", "reason_code": "ELIGIBLE"},
+        cycle_id="new", as_of="2026-10-09", group="TAKEN", path=ledger,
+    )
+    assert len(evidence.load_ledger(ledger)) == 2
+
+
+def test_large_forward_cycle_deduplicates_with_one_historical_ledger_pass(monkeypatch, tmp_path):
+    """An 8 GB Mac must not walk every historical decision for every card."""
+    import product.forward_evidence as evidence
+
+    initial = [
+        {"decision_id": f"legacy-{i}", "symbol": f"OLD{i}", "entry": i}
+        for i in range(1000)
+    ]
+
+    class CountingRows(list):
+        iter_calls = 0
+
+        def __iter__(self):
+            self.iter_calls += 1
+            return super().__iter__()
+
+    rows = CountingRows(initial)
+    published = []
+    monkeypatch.setattr(evidence, "_read_jsonl", lambda *_a, **_kw: rows)
+    monkeypatch.setattr(evidence, "_write_jsonl", lambda path, output: published.append(len(output)))
+
+    cycle = {
+        "cycle_id": "large-cycle", "as_of": "2026-10-09",
+        "taken": [
+            {"symbol": f"NEW{i}", "decision": "ENTER_NOW",
+             "reason_code": "ELIGIBLE", "entry": 100 + i, "stop": 90}
+            for i in range(300)
+        ],
+    }
+    cycle["taken"].append(dict(cycle["taken"][0], entry=99999))
+
+    result = evidence.freeze_cycle(cycle, path=tmp_path / "forward_evidence.jsonl")
+    assert result["written"] == 300
+    assert result["skipped_duplicates"] == 1
+    assert published == [1300]
+    assert rows.iter_calls == 1  # One historical index; no quadratic rescanning.
+    new = [r for r in rows if r.get("symbol") == "NEW0"]
+    assert len(new) == 1
+    assert new[0]["entry"] == 100  # First immutable point-in-time record wins.
+
+
+def test_forward_index_keeps_first_existing_duplicate_row(tmp_path):
+    """Preserve legacy first-record-wins semantics when old JSONL has duplicates."""
+    import product.forward_evidence as evidence
+
+    target = tmp_path / "forward_evidence.jsonl"
+    candidate = {"symbol": "INFY", "decision": "ENTER_NOW",
+                 "reason_code": "ELIGIBLE", "entry": 999, "stop": 900}
+    did = evidence.decision_id(
+        as_of="2026-10-09", symbol="INFY", group="TAKEN",
+        reason_code="ELIGIBLE", cycle_id="repeat",
+    )
+    target.write_text(
+        json.dumps({"decision_id": did, "symbol": "INFY", "entry": 100}) + "\n" +
+        json.dumps({"decision_id": did, "symbol": "INFY", "entry": 200}) + "\n",
+        encoding="utf-8",
+    )
+    result = evidence.freeze_cycle(
+        {"cycle_id": "repeat", "as_of": "2026-10-09",
+         "taken": [candidate]},
+        path=target,
+    )
+    assert result["written"] == 0
+    assert result["skipped_duplicates"] == 1
+    assert len(evidence.load_ledger(target)) == 2
+    record = evidence.freeze_observation(
+        candidate, cycle_id="repeat", as_of="2026-10-09",
+        group="TAKEN", path=target,
+    )
+    assert record["entry"] == 100
+
+
+def test_forward_ledger_parses_streaming_without_loading_entire_text(tmp_path, monkeypatch):
+    """Large on-disk forward ledgers must not materialize read_text().splitlines()."""
+    import product.forward_evidence as evidence
+
+    ledger = tmp_path / "forward_evidence.jsonl"
+    with ledger.open("w", encoding="utf-8") as output:
+        for i in range(1200):
+            output.write(json.dumps({"decision_id": f"d{i}", "symbol": f"S{i}"}) + "\n")
+
+    original_read_text = Path.read_text
+
+    def disallow_full_read(self, *args, **kwargs):
+        if self == ledger:
+            raise AssertionError("Full ledger read_text() would cause avoidable peak memory")
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", disallow_full_read)
+    rows = evidence.load_ledger(ledger)
+    assert len(rows) == 1200
+    assert rows[0]["decision_id"] == "d0"
+    assert rows[-1]["decision_id"] == "d1199"
+
+    with ledger.open("a", encoding="utf-8") as output:
+        output.write("{corrupt-record\n")
+    import pytest
+    with pytest.raises(RuntimeError, match="invalid JSON at line 1201"):
+        evidence._read_jsonl(ledger, strict=True)
+    assert len(evidence.load_ledger(ledger)) == 1200
+
+
+def test_duplicate_forward_settlement_does_not_rewrite_entire_historical_ledger(
+    tmp_path, monkeypatch,
+):
+    """A repeated paper settle check is a true no-op, including on disk."""
+    import product.forward_evidence as evidence
+
+    target = tmp_path / "forward_evidence.jsonl"
+    decision = evidence.freeze_observation(
+        {"symbol": "INFY", "decision": "ENTER_NOW", "reason_code": "ELIGIBLE",
+         "entry": 100, "stop": 94},
+        cycle_id="repeat-settle", as_of="2026-10-09",
+        group="TAKEN", entered=True, path=target,
+    )
+    assert decision is not None
+
+    original_write = evidence._write_jsonl
+    publications = []
+
+    def counted_write(path, rows):
+        publications.append(len(rows))
+        return original_write(path, rows)
+
+    monkeypatch.setattr(evidence, "_write_jsonl", counted_write)
+    first = evidence.attach_settlement(
+        decision["decision_id"], classification="TARGET", gross_R=1.5,
+        outcome_provenance=REAL_FORWARD_MARKET, path=target,
+    )
+    first_bytes = target.read_bytes()
+    second = evidence.attach_settlement(
+        decision["decision_id"], classification="STOP", gross_R=-1.0,
+        outcome_provenance=REAL_FORWARD_MARKET, path=target,
+    )
+    assert first["gross_R"] == second["gross_R"] == 1.5
+    assert publications == [1]
+    assert target.read_bytes() == first_bytes
+    assert len(evidence.load_ledger(target)) == 1
+
+
+def test_forward_paths_follow_runtime_root_after_import(tmp_path, monkeypatch):
+    """Store functions must not keep module-import-time runtime locations."""
+    import product.forward_evidence as evidence
+    import product.forward_soak as soak
+
+    for name in ("QT_FORWARD_LEDGER", "QT_FORWARD_JOURNEY",
+                 "QT_FORWARD_DAILY", "QT_FORWARD_SOAK_VERIFY"):
+        monkeypatch.delenv(name, raising=False)
+
+    for name in ("first-runtime", "second-runtime"):
+        root = tmp_path / name
+        monkeypatch.setenv("QT_RUNTIME_ROOT", str(root))
+        assert evidence.ledger_path() == root / "logs" / "product" / "forward_evidence.jsonl"
+        assert soak.journey_path() == root / "logs" / "product" / "forward_journey.json"
+        assert soak.daily_dir() == root / "logs" / "product" / "forward_daily"
+        assert soak.verify_state_path() == root / "logs" / "product" / "forward_soak_verify.json"
+
+    # No writer should have created a default checkout-relative logs folder.
+    assert not (tmp_path / "first-runtime").exists()
+    assert not (tmp_path / "second-runtime").exists()
+
+
+def test_corrupted_forward_ledger_cannot_produce_measured_or_healthy_report(tmp_path, monkeypatch):
+    import pytest
+    import product.forward_evidence as evidence
+    import product.forward_soak as forward
+
+    ledger = tmp_path / "forward_evidence.jsonl"
+    valid = [
+        {"decision_id": f"real-{i}", "provenance": REAL_FORWARD_MARKET,
+         "symbol": f"STOCK{i}", "entered": True, "gross_R": 0.8}
+        for i in range(25)
+    ]
+    with ledger.open("w", encoding="utf-8") as out:
+        for record in valid:
+            out.write(json.dumps(record) + "\n")
+        out.write("{broken point-in-time evidence\n")
+
+    monkeypatch.setenv("QT_FORWARD_LEDGER", str(ledger))
+    # Only explicit diagnostic reads may omit the broken row.
+    assert len(evidence.load_ledger(strict=False)) == 25
+    with pytest.raises(RuntimeError, match="invalid JSON at line 26"):
+        evidence.load_ledger(strict=True)
+
+    # An incomplete ledger must never earn MEASURED, HEALTHY or
+    # a verification PASS by silently ignoring the damaged row.
+    with pytest.raises(RuntimeError, match="invalid JSON at line 26"):
+        forward.scoreboard()
+    with pytest.raises(RuntimeError, match="invalid JSON at line 26"):
+        forward.soak_status()
+    with pytest.raises(RuntimeError, match="invalid JSON at line 26"):
+        forward.settle_pending_from_market(return_fn=lambda _symbol, _day: None)
+
+
+def test_strict_forward_evidence_read_rejects_disconnected_runtime(tmp_path, monkeypatch):
+    import pytest
+    import product.forward_evidence as evidence
+
+    root = tmp_path / "external" / "QuantTerm" / "runtime"
+    root.mkdir(parents=True)
+    ledger = root / "logs" / "product" / "forward_evidence.jsonl"
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(root))
+    monkeypatch.setenv("QT_RUNTIME_ROOT_REQUIRE_EXISTING", "1")
+    monkeypatch.setenv("QT_FORWARD_LEDGER", str(ledger))
+
+    evidence.freeze_observation(
+        {"symbol": "INFY", "decision": "ENTER_NOW", "reason_code": "ELIGIBLE"},
+        cycle_id="host", as_of="2026-10-12", group="TAKEN",
+    )
+    assert len(evidence.load_ledger(strict=True)) == 1
+
+    offline = root.with_name("runtime.disconnected")
+    root.rename(offline)
+    with pytest.raises(RuntimeError, match="runtime root is missing"):
+        evidence.load_ledger(strict=True)
+    assert not root.exists()
+    assert evidence.load_ledger(strict=False) == []
+
+    offline.rename(root)
+    assert len(evidence.load_ledger(strict=True)) == 1
+
+
+def test_closed_trade_settles_only_its_original_decision_with_repeated_symbol(tmp_path):
+    from types import SimpleNamespace
+    from product.forward_evidence import freeze_observation, load_ledger
+    from product.forward_soak import attach_closed_trades
+
+    path = tmp_path / "forward_evidence.jsonl"
+    for day, did, intent in [
+        ("2026-10-09", "canonical-older", "intent-older"),
+        ("2026-10-12", "canonical-newer", "intent-newer"),
+    ]:
+        item = freeze_observation(
+            {"symbol": "TCS", "decision": "ENTER_NOW",
+             "reason_code": "ELIGIBLE", "entry": 100, "stop": 94,
+             "decision_id": did, "paper_intent_id": intent, "entry_date": day},
+            cycle_id=f"paper-{day}", as_of=day, group="TAKEN",
+            entered=True, path=path,
+        )
+        assert item["decision_id"] == did
+        assert item["paper_intent_id"] == intent
+
+    book = SimpleNamespace(closed=[{
+        "symbol": "TCS", "decision_id": "canonical-older",
+        "paper_intent_id": "intent-older",
+        "entry_date": "2026-10-09", "exit_date": "2026-10-13",
+        "realized_R": 1.4, "entry_price": 100, "stop_price": 94,
+        "exit_price": 109, "qty": 10, "exit_reason": "TARGET",
+    }])
+    result = attach_closed_trades(book, path=path)
+    assert result["attached"] == 1
+    rows = {r["decision_id"]: r for r in load_ledger(path, strict=True)}
+    assert rows["canonical-older"]["gross_R"] == 1.4
+    assert rows["canonical-older"]["later_outcome"] is not None
+    assert rows["canonical-newer"]["gross_R"] is None
+    assert rows["canonical-newer"]["later_outcome"] is None
+    assert attach_closed_trades(book, path=path)["attached"] == 0
+
+
+def test_closed_trade_wrong_canonical_identity_cannot_fallback_to_same_symbol_day(tmp_path):
+    from types import SimpleNamespace
+    from product.forward_evidence import freeze_observation, load_ledger
+    from product.forward_soak import attach_closed_trades
+
+    path = tmp_path / "forward_evidence.jsonl"
+    legacy = freeze_observation(
+        {"symbol": "INFY", "decision": "ENTER_NOW",
+         "reason_code": "ELIGIBLE", "entry": 100, "stop": 94},
+        cycle_id="legacy-1", as_of="2026-10-09",
+        group="TAKEN", entered=True, path=path,
+    )
+    assert legacy["decision_id"].startswith("2026-10-09|INFY|TAKEN|")
+
+    wrong = SimpleNamespace(closed=[{
+        "symbol": "INFY", "decision_id": "some-other-canonical-order",
+        "paper_intent_id": "different-intent",
+        "entry_date": "2026-10-09", "exit_date": "2026-10-12",
+        "realized_R": 1.9, "exit_reason": "TARGET",
+    }])
+    result = attach_closed_trades(wrong, path=path)
+    assert result["attached"] == 0
+    assert result["unattributed"] == 1
+    assert load_ledger(path, strict=True)[0]["later_outcome"] is None
+
+
+def test_conflicting_intent_does_not_settle_matching_decision(tmp_path):
+    from types import SimpleNamespace
+    from product.forward_evidence import freeze_observation, load_ledger
+    from product.forward_soak import attach_closed_trades
+
+    path = tmp_path / "forward_evidence.jsonl"
+    freeze_observation(
+        {"symbol": "RELIANCE", "decision": "ENTER_NOW",
+         "reason_code": "ELIGIBLE", "entry": 100, "stop": 94,
+         "decision_id": "decision-exact", "paper_intent_id": "intent-true"},
+        cycle_id="c1", as_of="2026-10-09", group="TAKEN",
+        entered=True, path=path,
+    )
+    conflicting = SimpleNamespace(closed=[{
+        "symbol": "RELIANCE", "decision_id": "decision-exact",
+        "paper_intent_id": "intent-false", "entry_date": "2026-10-09",
+        "realized_R": 2.1,
+    }])
+    result = attach_closed_trades(conflicting, path=path)
+    assert result["attached"] == 0
+    assert result["unattributed"] == 1
+    assert load_ledger(path, strict=True)[0]["later_outcome"] is None
+
+
+def test_legacy_paper_exit_requires_unique_matching_entry_session(tmp_path):
+    from types import SimpleNamespace
+    from product.forward_evidence import freeze_observation, load_ledger
+    from product.forward_soak import attach_closed_trades
+
+    path = tmp_path / "forward_evidence.jsonl"
+    older = freeze_observation(
+        {"symbol": "TCS", "decision": "ENTER_NOW",
+         "reason_code": "ELIGIBLE", "entry": 90, "stop": 84},
+        cycle_id="legacy-1", as_of="2026-10-09",
+        group="TAKEN", entered=True, path=path,
+    )
+    newer = freeze_observation(
+        {"symbol": "TCS", "decision": "ENTER_NOW",
+         "reason_code": "ELIGIBLE", "entry": 100, "stop": 94},
+        cycle_id="legacy-2", as_of="2026-10-12",
+        group="TAKEN", entered=True, path=path,
+    )
+    older_close = SimpleNamespace(closed=[{
+        "symbol": "TCS", "entry_date": "2026-10-09",
+        "exit_date": "2026-10-13", "realized_R": 1.0, "exit_reason": "TARGET",
+    }])
+    assert attach_closed_trades(older_close, path=path)["attached"] == 1
+    rows = {r["decision_id"]: r for r in load_ledger(path, strict=True)}
+    assert rows[older["decision_id"]]["later_outcome"] is not None
+    assert rows[newer["decision_id"]]["later_outcome"] is None
+
+    freeze_observation(
+        {"symbol": "TCS", "decision": "ENTER_NOW",
+         "reason_code": "ELIGIBLE", "entry": 101, "stop": 95},
+        cycle_id="legacy-3", as_of="2026-10-12",
+        group="TAKEN", entered=True, path=path,
+    )
+    ambiguous_close = SimpleNamespace(closed=[{
+        "symbol": "TCS", "entry_date": "2026-10-12",
+        "exit_date": "2026-10-13", "realized_R": 1.2,
+    }])
+    status = attach_closed_trades(ambiguous_close, path=path)
+    assert status["attached"] == 0
+    assert status["ambiguous"] == 1
+    assert sum(r["later_outcome"] is not None for r in load_ledger(path, strict=True)) == 1

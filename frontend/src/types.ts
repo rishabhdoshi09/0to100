@@ -505,6 +505,8 @@ export type FnoPaperState = {
 
 export type DataReadiness = {
   ready: boolean
+  history_current?: boolean
+  store_loaded?: boolean
   snapshot: {
     ready: boolean
     snapshot_id: string
@@ -571,6 +573,15 @@ export type ScanProvenance = {
 
 export type DashboardPayload = {
   generated_at: string
+  dashboard_cache?: {
+    status: 'FRESH' | 'STALE' | 'BOOTSTRAPPING' | 'DEGRADED'
+    snapshot_generated_at?: string
+    age_seconds?: number | null
+    refreshing: boolean
+    retry_after_seconds?: number
+    error?: string
+    read_only?: boolean
+  }
   market: {
     available: boolean
     health: string
@@ -602,6 +613,9 @@ export type DashboardPayload = {
     dashboard_record_limit?: number
     dashboard_records_shown?: number
     provenance?: ScanProvenance
+    desk_overlays?: Record<string, unknown>
+    long_term_overlay?: Record<string, unknown>
+    overlay_timings_s?: Record<string, number>
   }
   long_term: {
     available: boolean

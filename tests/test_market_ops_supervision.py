@@ -82,7 +82,8 @@ def test_launcher_never_starts_api_while_port_is_listening():
     assert "adopt_api" in start
     assert start.index("adopt_api") < start.index("Starting local API")
     loop = src.split('while [[ "$STOP" != "1" ]]', 1)[1]
-    assert "Not killing it" in loop
+    assert "no tracked owned API exists; refusing to kill it" in loop
+    assert 'stop_pid "$API_PID" "unresponsive market API"' in loop
     assert "adopt_api" in loop
     assert "scan_is_fresh" in src
     assert "not queueing another" in src
@@ -101,15 +102,15 @@ def test_complete_script_reuses_healthy_stack_without_second_inner():
 
 
 def test_frontend_is_stopped_as_a_process_group():
-    """`npm run dev` is a wrapper chain: npm -> sh -> node -> esbuild.
+    """The frontend must be a directly managed Node process group.
 
-    Signalling only the npm PID left the node server still serving :5173 after
-    the API was gone — a healthy-looking desk with no backend behind it. The
-    frontend is started with setsid so it leads its own process group, and
-    stop_pid signals the group.
+    Launching through npm -> sh -> node could orphan Vite and retain :5173
+    after the backend had stopped. The supervisor now owns Vite itself.
     """
     for src in (_inner(), _complete()):
-        assert "setsid npm --prefix" in src
+        assert 'setsid node "$ROOT/frontend/node_modules/vite/bin/vite.js" "$ROOT/frontend"' in src
+        assert "setsid npm --prefix" not in src
+        assert "--strictPort" in src
         assert "signal_tree" in src
         group_signal = src.split("signal_tree() {", 1)[1].split("}", 1)[0]
         assert 'kill "-$sig" "-$pid"' in group_signal

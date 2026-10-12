@@ -15,10 +15,11 @@ Data is end-of-day official NSE. Live prices come from Google Finance
 from __future__ import annotations
 
 import os
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -51,28 +52,78 @@ def _day_path(d: date) -> Path:
     return _BHAV_DIR / f"{d.strftime('%d%m%Y')}.csv"
 
 
+def _prepare_bhav_write_directory(directory: Path) -> None:
+    """Never recreate a vanished installed-host external runtime mount.
+
+    Module-level paths survive after a volume unmount. In strict installed
+    mode, re-resolve runtime_root for EVERY write and reject a cached path
+    that no longer matches the configured persistent root.
+    """
+    from core.runtime_paths import _require_existing_runtime, logs_path
+
+    if _require_existing_runtime():
+        # Resolve the volume root, never a symlinked logs/bhav subfolder:
+        # a stale or retargeted link to the internal disk must fail closed.
+        expected = logs_path("bhav")
+        if directory.resolve(strict=False) != expected:
+            raise RuntimeError("bhavcopy write path no longer matches installed runtime root")
+    directory.mkdir(parents=True, exist_ok=True)
+
+
 def _download_day(d: date, retries: int = 2) -> bool:
     """
     Fetch one bhavcopy to disk. 404 = holiday (no retry). Network errors
     retry with backoff so a flaky connection can't punch holes in history.
     """
+    from data.bhavcopy_disk_status import _latest_csv_has_basic_integrity
+    from core.runtime_paths import _require_existing_runtime
+
     path = _day_path(d)
-    if path.exists():
+    if path.is_file() and _latest_csv_has_basic_integrity(path, expected_date=d):
         return True
+    # An absent external runtime is NOT a network/transient NSE failure.
+    # Check the installed mount before contacting NSE so a lost drive does
+    # not generate hundreds of requests that cannot be persisted.
+    if _require_existing_runtime():
+        try:
+            _prepare_bhav_write_directory(_BHAV_DIR)
+        except RuntimeError:
+            return False
     import requests
     url = _URL.format(d=d.strftime("%d%m%Y"))
     for attempt in range(retries + 1):
+        tmp: Path | None = None
         try:
             resp = requests.get(url, headers=_HEADERS, timeout=12)
             if resp.status_code == 404:
                 return False          # holiday/weekend — retrying won't help
             if resp.status_code == 200 and len(resp.content) >= 1000:
-                _BHAV_DIR.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(resp.content)
-                return True
+                _prepare_bhav_write_directory(_BHAV_DIR)
+                fd, name = tempfile.mkstemp(
+                    prefix=f".{d.strftime('%d%m%Y')}-",
+                    suffix=".csv", dir=_BHAV_DIR,
+                )
+                tmp = Path(name)
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(resp.content)
+                if not _latest_csv_has_basic_integrity(tmp, expected_date=d):
+                    log.warning("bhav_download_invalid_content", day=str(d))
+                else:
+                    # Readers see either the previous complete file or the
+                    # new complete file. Interrupted downloads never create
+                    # partial official-session filenames and are retried with
+                    # the normal source cooldown.
+                    os.replace(tmp, path)
+                    return True
         except Exception as exc:
             if attempt == retries:
                 log.debug("bhav_download_failed", day=str(d), error=str(exc))
+        finally:
+            if tmp is not None:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
         if attempt < retries:
             time.sleep(1.5 * (attempt + 1))
     return False
@@ -93,6 +144,27 @@ def _read_day(d: date) -> Optional[pd.DataFrame]:
             df = pd.read_csv(path, dtype=str, encoding="latin-1")
         df.columns = [c.strip().upper() for c in df.columns]
         df = df[df["SERIES"].str.strip() == "EQ"]
+        if df.empty:
+            # An HTML error, non-equity archive, or incomplete CSV has no
+            # valid market session to publish. Do not advance _store_last_day.
+            return None
+        if "DATE1" in df.columns:
+            # NSE's legacy sec_bhavdata_full embeds the trading session.
+            # A real prior-day file renamed to today's date is not today's
+            # price evidence, even when OHLCV columns are otherwise valid.
+            values = {str(x).strip() for x in df["DATE1"].dropna().unique()}
+            if not values:
+                return None
+            for value in values:
+                try:
+                    internal_date = datetime.strptime(value, "%d-%b-%Y").date()
+                except ValueError:
+                    try:
+                        internal_date = date.fromisoformat(value)
+                    except ValueError:
+                        return None
+                if internal_date != d:
+                    return None
         out = pd.DataFrame({
             "symbol": df["SYMBOL"].str.strip().str.upper(),
             "open":   pd.to_numeric(df["OPEN_PRICE"], errors="coerce"),
@@ -106,7 +178,10 @@ def _read_day(d: date) -> Optional[pd.DataFrame]:
             out["deliv_per"] = pd.to_numeric(
                 df["DELIV_PER"].str.strip().replace("-", None), errors="coerce")
         out["date"] = pd.Timestamp(d)
-        return out.dropna(subset=["close"])
+        good = out.dropna(subset=["close"])
+        if good.empty:
+            return None
+        return good
     except Exception as exc:
         log.debug("bhav_parse_failed", day=str(d), error=str(exc))
         return None
@@ -138,11 +213,22 @@ def _save_pkl() -> None:
         with _lock:
             data = {"store": _store, "last_day": _store_last_day,
                     "sessions": _store_sessions}
-        _PKL.parent.mkdir(parents=True, exist_ok=True)
-        tmp = _PKL.with_suffix(".pkl.tmp")
-        with open(tmp, "wb") as f:
-            pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
-        tmp.replace(_PKL)                     # atomic — no half-written cache
+        _prepare_bhav_write_directory(_PKL.parent)
+        tmp: Path | None = None
+        try:
+            fd, name = tempfile.mkstemp(
+                prefix=".store_cache-", suffix=".pkl.tmp", dir=_PKL.parent,
+            )
+            tmp = Path(name)
+            with os.fdopen(fd, "wb") as handle:
+                pickle.dump(data, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            os.replace(tmp, _PKL)  # unique temp prevents concurrent-writer collision
+        finally:
+            if tmp is not None:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
     except Exception as exc:
         log.debug("bhav_pkl_save_failed", error=str(exc))
 
@@ -176,13 +262,15 @@ def _load_pkl() -> bool:
 
 def _full_build(available: list[date]) -> int:
     global _store, _store_last_day, _store_sessions
-    frames = []
+    accepted_days = []
     for d in sorted(available):
         f = _read_day(d)
         if f is not None:
-            frames.append(f)
-    if not frames:
+            accepted_days.append((d, f))
+    if not accepted_days:
         return 0
+    frames = [frame for _day, frame in accepted_days]
+    latest_valid = accepted_days[-1][0]
     allday = pd.concat(frames, ignore_index=True)
     keep_cols = ["open", "high", "low", "close", "volume"]
     if "deliv_per" in allday.columns:
@@ -194,10 +282,10 @@ def _full_build(available: list[date]) -> int:
             new_store[sym] = g[[c for c in keep_cols if c in g.columns]]
     with _lock:
         _store = new_store
-        _store_last_day = max(available)
+        _store_last_day = latest_valid
         _store_sessions = len(frames)
     log.info("bhav_store_built", symbols=len(new_store), sessions=len(frames),
-             latest=str(max(available)))
+             latest=str(latest_valid))
     _save_pkl()
     return len(new_store)
 
@@ -205,10 +293,12 @@ def _full_build(available: list[date]) -> int:
 def _incremental_append(new_days: list[date]) -> None:
     """Append only the fresh sessions onto the loaded store."""
     global _store_last_day, _store_sessions
-    frames = [f for d in sorted(new_days)
-              if (f := _read_day(d)) is not None]
-    if not frames:
+    accepted_days = [(d, f) for d in sorted(new_days)
+                     if (f := _read_day(d)) is not None]
+    if not accepted_days:
         return
+    frames = [frame for _day, frame in accepted_days]
+    latest_valid = accepted_days[-1][0]
     allday = pd.concat(frames, ignore_index=True)
     with _lock:
         for sym, g in allday.groupby("symbol"):
@@ -222,9 +312,9 @@ def _incremental_append(new_days: list[date]) -> None:
                 _store[sym] = merged[~merged.index.duplicated(keep="last")]
             elif len(g) >= 1:
                 _store[sym] = g[cols]
-        _store_last_day = max(new_days)
+        _store_last_day = latest_valid
         _store_sessions += len(frames)
-    log.info("bhav_store_appended", days=len(frames), latest=str(max(new_days)))
+    log.info("bhav_store_appended", days=len(frames), latest=str(latest_valid))
     _save_pkl()
 
 
@@ -246,10 +336,30 @@ def build_store(days: int = DEFAULT_DAYS, progress=None, should_stop=None) -> in
     dropped and HistoryAcquisitionCancelled is raised; whatever reached disk
     stays there, because a partial history is still a real history.
     """
+    from core.runtime_paths import _require_existing_runtime, runtime_root
+
+    # A missing installed runtime is a hard-stop, not a reason to schedule
+    # one HTTP fetch per absent historical day.
+    if _require_existing_runtime():
+        runtime_root()
+
     candidates = _trading_days_back(days)
 
-    # Download whatever is missing on disk, bounded concurrency
-    missing = [d for d in candidates if not _day_path(d).exists()]
+    # Recheck only the most recent candidate sessions for corrupt or
+    # interrupted archives. Scanning every historical CSV on each scheduler
+    # tick would thrash the external HDD, while ignoring corrupt recent files
+    # permanently makes the price feed appear current when it is not.
+    from data.bhavcopy_disk_status import _latest_csv_has_basic_integrity
+    recent = set(candidates[:10])
+    def _usable_day(d: date) -> bool:
+        path = _day_path(d)
+        return path.is_file() and (
+            d not in recent
+            or _latest_csv_has_basic_integrity(path, expected_date=d)
+        )
+
+    # Download missing/corrupt recent archives with bounded concurrency.
+    missing = [d for d in candidates if not _usable_day(d)]
     if missing:
         log.info("bhav_download_start", missing=len(missing))
         done = 0
@@ -283,7 +393,7 @@ def build_store(days: int = DEFAULT_DAYS, progress=None, should_stop=None) -> in
                 f"History acquisition cancelled after {done}/{len(missing)} sessions"
             )
 
-    available = [d for d in candidates if _day_path(d).exists()]
+    available = [d for d in candidates if _usable_day(d)]
     if len(available) < _MIN_DAYS:
         log.warning("bhav_insufficient_history", have=len(available))
         return 0
@@ -313,18 +423,61 @@ def build_store(days: int = DEFAULT_DAYS, progress=None, should_stop=None) -> in
     return _full_build(available)
 
 
+# An off-session read storm must not enumerate ~1800 CSV names hundreds of
+# times. File creation/removal changes the directory metadata and invalidates
+# this date-only index; no OHLCV content or trade decisions are cached here.
+_DATES_DISK_LOCK = threading.Lock()
+_DATES_DISK_SIGNATURE: tuple | None = None
+_DATES_DISK_VALUES: tuple[date, ...] = ()
+
+
 def _dates_on_disk() -> list[date]:
-    """Trading dates for every bhavcopy CSV already present in the store dir."""
-    from datetime import datetime as _dt
-    out: list[date] = []
-    if not _BHAV_DIR.exists():
-        return out
-    for p in _BHAV_DIR.glob("*.csv"):
+    """Actual CSV dates, memoized by directory identity and modification time.
+
+    Do not cache failures or pretend missing files exist. Return a copy so callers
+    cannot mutate the stored index. Existing CSV contents do not affect which
+    session dates exist; adding/removing/renaming files changes directory mtime.
+    """
+    global _DATES_DISK_SIGNATURE, _DATES_DISK_VALUES
+    try:
+        identity = _BHAV_DIR.stat()
+        signature = (str(_BHAV_DIR), int(identity.st_dev), int(identity.st_ino),
+                     int(identity.st_mtime_ns), int(identity.st_ctime_ns))
+    except OSError:
+        return []
+
+    with _DATES_DISK_LOCK:
+        if signature == _DATES_DISK_SIGNATURE:
+            return list(_DATES_DISK_VALUES)
+        found: list[date] = []
         try:
-            out.append(_dt.strptime(p.stem, "%d%m%Y").date())
-        except Exception:
-            continue
-    return sorted(out)
+            for path in _BHAV_DIR.glob("*.csv"):
+                stem = path.stem
+                if len(stem) != 8 or not stem.isascii() or not stem.isdecimal():
+                    continue
+                try:
+                    found.append(date(int(stem[4:8]), int(stem[2:4]), int(stem[:2])))
+                except ValueError:
+                    continue
+        except OSError:
+            # Transient/missing external volume: fail closed; retry next poll.
+            return []
+        ordered = tuple(sorted(found))
+        # If a writer published another CSV while enumerating, discard the
+        # possibly torn result instead of caching it under the old signature.
+        try:
+            final = _BHAV_DIR.stat()
+            final_signature = (
+                str(_BHAV_DIR), int(final.st_dev), int(final.st_ino),
+                int(final.st_mtime_ns), int(final.st_ctime_ns),
+            )
+        except OSError:
+            return []
+        if final_signature != signature:
+            return []
+        _DATES_DISK_SIGNATURE = signature
+        _DATES_DISK_VALUES = ordered
+        return list(ordered)
 
 
 def build_from_local() -> int:

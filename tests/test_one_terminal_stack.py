@@ -16,7 +16,9 @@ def test_complete_script_starts_every_local_service_in_one_process_tree():
     assert "python main.py login" in complete
     assert "report_api:app" in complete
     assert "api.app:app" in inner
-    assert "npm --prefix" in inner and "run dev" in inner
+    assert 'setsid node "$ROOT/frontend/node_modules/vite/bin/vite.js" "$ROOT/frontend"' in inner
+    assert "--host 127.0.0.1 --port 5173 --strictPort" in inner
+    assert "setsid npm --prefix" not in inner
     assert "python -u main.py autonomy" in inner
     assert "scripts/local_stack.py scan" in inner
     assert "curl" not in complete
@@ -36,6 +38,17 @@ def test_complete_script_starts_every_local_service_in_one_process_tree():
     assert "i < 90" in desk_fn
     assert "i < 120" in desk_fn
 
+
+
+
+def test_both_vite_launchers_own_a_direct_node_process_group():
+    """A detached npm wrapper must not strand a serving UI after Ctrl-C."""
+    for script in ("run_quantterm.sh", "run_quantterm_complete.sh"):
+        body = (ROOT / "scripts" / script).read_text(encoding="utf-8")
+        assert 'setsid node "$ROOT/frontend/node_modules/vite/bin/vite.js" "$ROOT/frontend"' in body
+        assert "--host 127.0.0.1 --port 5173 --strictPort" in body
+        assert "setsid npm --prefix" not in body
+        assert 'stop_pid "$FRONTEND_PID"' in body if script == "run_quantterm.sh" else 'stop_pid "$VITE_PID"' in body
 
 
 def test_complete_launcher_uses_canonical_launchd_console_on_installed_macos():
@@ -80,6 +93,23 @@ def test_report_watchdog_requires_health_not_just_an_open_port():
     assert "Port 8766 is owned externally but /health is failing" in watch
 
 
+
+def test_api_watchdog_does_not_confuse_an_open_port_with_health():
+    """Only an owned, persistently unhealthy API may be terminated."""
+    inner = (ROOT / "scripts" / "run_quantterm.sh").read_text(encoding="utf-8")
+    adopt = inner.split("adopt_api() {", 1)[1].split("\n}", 1)[0]
+    start = inner.split("start_api() {", 1)[1].split("\n}", 1)[0]
+    watch = inner.split('while [[ "$STOP" != "1" ]]', 1)[1]
+    assert 'url_ok "http://127.0.0.1:8765/api/health"' in adopt
+    assert "|| api_listening" not in adopt
+    assert 'if api_listening; then' in start
+    assert "refusing a competing uvicorn" in start
+    assert 'API_UNHEALTHY_GRACE_S="${QT_API_UNHEALTHY_GRACE_S:-120}"' in inner
+    assert 'stop_pid "$API_PID" "unresponsive market API"' in watch
+    assert 'API_EXTERNAL" != "1"' in watch
+    assert "no tracked owned API exists; refusing to kill it" in watch
+
+
 def test_complete_script_always_stops_old_stack_then_starts_everything():
     complete = (ROOT / "scripts" / "run_quantterm_complete.sh").read_text(encoding="utf-8")
     inner = (ROOT / "scripts" / "run_quantterm.sh").read_text(encoding="utf-8")
@@ -114,7 +144,9 @@ def test_complete_script_always_stops_old_stack_then_starts_everything():
     boot = inner.split("start_api || true", 1)[1].split('while [[ "$STOP" != "1" ]]', 1)[0]
     assert boot.index("wait_for_api") < boot.index("start_frontend")
     assert boot.index("start_frontend") < boot.index("kick_scan")
-    assert "npm --prefix" in inner and "run dev" in inner
+    assert 'setsid node "$ROOT/frontend/node_modules/vite/bin/vite.js" "$ROOT/frontend"' in inner
+    assert "--host 127.0.0.1 --port 5173 --strictPort" in inner
+    assert "setsid npm --prefix" not in inner
     assert "vite.log" in inner
     assert "vite.log" in complete
     assert "Use --restart" not in inner

@@ -1,0 +1,288 @@
+#!/usr/bin/env python3
+"""Read-only latency/freshness soak for QuantTerm's local desk API.
+
+Run ONLY after deploying a reviewed exact SHA to the Mac. No broker calls,
+orders, POSTs, database mutations, or service restarts; HTTP GET only.
+This is one narrow latency gate, not approval for public/live-money trading.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import sys
+import time
+from collections import Counter
+from typing import Any, Mapping
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+
+ENDPOINTS = ("health", "access", "dashboard", "decision-simulation-gate")
+MAX_RESPONSE_BYTES = 6 * 1024 * 1024
+
+
+def percentile_nearest_rank(values: list[float], pct: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    return round(ordered[max(0, math.ceil(len(ordered) * pct / 100) - 1)], 4)
+
+
+def assess_samples(
+    samples: list[Mapping[str, Any]], *, min_samples: int = 20,
+    max_p95_s: float = 3.0,
+    expected_sha: str = "",
+) -> dict[str, Any]:
+    """No payloads/secrets in reports; observations are request metadata."""
+    blockers: list[str] = []
+    endpoints: dict[str, Any] = {}
+    # Production evidence needs at least 20 cycles. A caller must not lower
+    # the bar to one request or use NaN to bypass p95 comparisons.
+    required_samples = max(20, min_samples)
+    if len(samples) < required_samples:
+        blockers.append(f"Only {len(samples)} cycles; require {required_samples}")
+    if not math.isfinite(max_p95_s) or not 0 < max_p95_s <= 3.0:
+        blockers.append("Read soak p95 release budget must be finite, positive, and <=3s")
+    if expected_sha:
+        # All samples, not just the final one, must belong to the reviewed
+        # build. A mid-soak host replacement invalidates latency evidence.
+        if any(
+            str((cycle.get("health") or {}).get("build_sha") or "").lower()
+            != expected_sha.lower()
+            for cycle in samples
+        ):
+            blockers.append("Read soak sampled an unverified or different API build SHA")
+    for name in ENDPOINTS:
+        rows = [row.get(name) if isinstance(row, dict) else None for row in samples]
+        latency = [
+            float(x["seconds"]) for x in rows
+            if isinstance(x, dict) and isinstance(x.get("seconds"), (int, float))
+            and math.isfinite(float(x["seconds"]))
+        ]
+        valid = [
+            x for x in rows if isinstance(x, dict)
+            and x.get("ok") is True
+        ]
+        p95 = percentile_nearest_rank(latency, 95)
+        states = dict(Counter(
+            str(x.get("cache_status") or "N/A")
+            for x in rows if isinstance(x, dict)
+        ))
+        endpoints[name] = {
+            "samples": len(rows),
+            "successes": len(valid),
+            "p95_seconds": p95,
+            "max_seconds": round(max(latency), 4) if latency else None,
+            "cache_status_counts": states if name in (
+                "dashboard", "decision-simulation-gate",
+            ) else {},
+        }
+        if len(valid) != len(samples):
+            blockers.append(f"/api/{name} had {len(samples) - len(valid)} failed/unsafe reads")
+        if p95 is None or p95 > max_p95_s:
+            blockers.append(f"/api/{name} p95 exceeds {max_p95_s:g}s")
+        if name in ("dashboard", "decision-simulation-gate"):
+            # Both single-flight caches explicitly return a safe STALE response
+            # while refreshing their TTLs (15s gate, 45s dashboard). A healthy
+            # 20-cycle soak will *necessarily* see a gate expiry. Require
+            # mostly FRESH evidence, zero DEGRADED/unknown status and no long
+            # streak of stale reads instead of demanding impossible 100% FRESH.
+            fresh = states.get("FRESH", 0)
+            minimum_fresh = math.ceil(len(samples) * 0.90)
+            if fresh < minimum_fresh:
+                blockers.append(
+                    f"/api/{name} had only {fresh}/{len(samples)} FRESH reads"
+                )
+            if any(
+                status not in ("FRESH", "STALE", "BOOTSTRAPPING")
+                for status in states
+            ):
+                blockers.append(f"/api/{name} served a degraded or unknown cache status")
+            streak = longest = 0
+            for entry in rows:
+                if isinstance(entry, dict) and entry.get("cache_status") == "FRESH":
+                    streak = 0
+                else:
+                    streak += 1
+                    longest = max(longest, streak)
+            if longest > 2:
+                blockers.append(
+                    f"/api/{name} served {longest} consecutive non-FRESH reads"
+                )
+    return {
+        "verdict": "HOLD" if blockers else "READ_SOAK_PASS",
+        "sample_cycles": len(samples),
+        "minimum_cycles": required_samples,
+        "p95_budget_seconds": max_p95_s,
+        "endpoints": endpoints,
+        "blockers": blockers,
+        "scope": "GET-only local latency. No external security/market data/paper execution approval.",
+    }
+
+
+def _safe_origin(raw: str) -> str:
+    parsed = urlsplit(raw)
+    if parsed.scheme != "http" or parsed.hostname not in ("127.0.0.1", "localhost", "::1"):
+        raise ValueError("Only local loopback HTTP origins are supported")
+    if parsed.username or parsed.password or parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+        raise ValueError("Only a simple local loopback origin is supported")
+    if parsed.port is None:
+        raise ValueError("Specify the local API port explicitly")
+    return raw.rstrip("/")
+
+
+def access_policy_safe(access: Mapping[str, Any]) -> bool:
+    """Recognize the three explicit deployment modes, never unknown access."""
+    policy = str(access.get("mutation_policy") or "")
+    public = access.get("public_read_only")
+    token = access.get("operator_token_configured") is True
+    if policy == "READ_ONLY":
+        return public is True and not token
+    if policy == "OPERATOR_TOKEN_REQUIRED":
+        return public is True and token
+    # This GET-only soak runs against loopback and must not make a private
+    # owner-operated Mac report insecure merely because public mode is off.
+    # This DOES NOT establish internet-facing security or permit proxying it.
+    if policy == "PRIVATE_OPERATOR":
+        return public is False
+    return False
+
+
+class _RejectRedirects(HTTPRedirectHandler):
+    """Never let a local test be redirected to an external endpoint."""
+
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        return None
+
+
+# Ignore HTTP_PROXY/HTTPS_PROXY even if the host machine has them set.
+# A local-only test must never send API reads or readiness state to a proxy.
+_LOCAL_OPENER = build_opener(ProxyHandler({}), _RejectRedirects())
+
+
+def sample_one(origin: str, path: str, timeout_s: float) -> dict[str, Any]:
+    started = time.monotonic()
+    try:
+        # Validate at the transport boundary too: callers importing this
+        # helper must not bypass the CLI's localhost-only origin guard.
+        safe_origin = _safe_origin(origin)
+        request = Request(
+            safe_origin + "/api/" + path,
+            headers={"Accept": "application/json"},
+            method="GET",
+        )
+        with _LOCAL_OPENER.open(request, timeout=timeout_s) as response:
+            if response.status != 200:
+                raise ValueError("Unexpected HTTP response")
+            raw = response.read(MAX_RESPONSE_BYTES + 1)
+            if len(raw) > MAX_RESPONSE_BYTES:
+                raise ValueError("API JSON response exceeded size bound")
+        payload = json.loads(raw)
+        if not isinstance(payload, dict):
+            raise ValueError("API returned a non-object JSON payload")
+        safe = bool(payload.get("ok") is True) if path == "health" else True
+        if path == "health":
+            # /health can return HTTP 200 while autonomy/market operations
+            # are RECOVERING or evidence is DEGRADED. A green latency report
+            # must never mistake liveness for production readiness.
+            safe = safe and payload.get("service") == "quantterm-terminal-api"
+            safe = safe and payload.get("lifecycle") == "READY"
+            safe = safe and payload.get("operational_ready") is True
+            safe = safe and payload.get("evidence_ready") is True
+            safe = safe and payload.get("live_locked") is True
+            safe = safe and payload.get("live_lock_verified") is True
+            safe = safe and payload.get("live_execution_authorized") is False
+        elif path == "access":
+            safe = access_policy_safe(payload)
+        elif path == "dashboard":
+            cache_status = (payload.get("dashboard_cache") or {}).get("status")
+            safe = cache_status in ("FRESH", "STALE", "BOOTSTRAPPING")
+            if cache_status != "FRESH":
+                # The cache must render a genuine fail-closed historical UI
+                # while background refresh runs. Transport success is not
+                # evidence of live entry authority.
+                safe = safe and all((
+                    (payload.get("scan") or {}).get("available") is False,
+                    (payload.get("data") or {}).get("ready") is False,
+                    (payload.get("paper") or {}).get("enabled") is False,
+                    (payload.get("autonomy") or {}).get("new_paper_entries") is False,
+                    (payload.get("fno") or {}).get("available") is False,
+                ))
+        else:
+            cache_status = (payload.get("status_cache") or {}).get("status")
+            safe = cache_status in ("FRESH", "STALE", "BOOTSTRAPPING")
+            if cache_status != "FRESH":
+                safe = safe and all((
+                    payload.get("approved") is False,
+                    payload.get("discovery_ready") is False,
+                    payload.get("scan_fresh") is False,
+                    payload.get("live_lock_verified") is False,
+                    payload.get("live_execution_authorized") is False,
+                    not payload.get("best_trades"),
+                ))
+        cache_key = "dashboard_cache" if path == "dashboard" else "status_cache"
+        return {
+            "ok": safe,
+            "seconds": round(time.monotonic() - started, 4),
+            "build_sha": str(payload.get("build_sha") or "") if path == "health" else "",
+            "cache_status": str((payload.get(cache_key) or {}).get("status") or "")
+                if path in ("dashboard", "decision-simulation-gate") else "",
+        }
+    except (HTTPError, URLError, OSError, ValueError, json.JSONDecodeError) as exc:
+        return {
+            "ok": False,
+            "seconds": round(time.monotonic() - started, 4),
+            "error_type": type(exc).__name__,
+        }
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--origin", default="http://127.0.0.1:8765")
+    parser.add_argument("--samples", type=int, default=20)
+    parser.add_argument("--interval-seconds", type=float, default=1.0)
+    parser.add_argument("--timeout-seconds", type=float, default=3.0)
+    parser.add_argument("--p95-budget-seconds", type=float, default=3.0)
+    parser.add_argument("--expected-sha", default="", help="Require every sample to come from the reviewed full Git commit SHA")
+    args = parser.parse_args(argv)
+    try:
+        origin = _safe_origin(args.origin)
+    except ValueError as exc:
+        parser.error(str(exc))
+    if args.expected_sha and (
+        len(args.expected_sha) != 40
+        or any(ch not in "0123456789abcdefABCDEF" for ch in args.expected_sha)
+    ):
+        parser.error("--expected-sha must be a full 40-character hexadecimal commit SHA")
+    if not 20 <= args.samples <= 500:
+        parser.error("--samples must be between 20 and 500")
+    # At least one second between cycles forces a 20-sample run to cross
+    # the 15s decision-cache TTL. Bursting all reads at once measures only
+    # the happy warm cache and can hide a permanently wedged refresher.
+    if not math.isfinite(args.interval_seconds) or not 1 <= args.interval_seconds <= 60:
+        parser.error("--interval-seconds must be finite and between 1 and 60")
+    if not math.isfinite(args.timeout_seconds) or not 0.5 <= args.timeout_seconds <= 120:
+        parser.error("--timeout-seconds must be finite and between 0.5 and 120")
+    if not math.isfinite(args.p95_budget_seconds) or not 0 < args.p95_budget_seconds <= 3.0:
+        parser.error("--p95-budget-seconds must be finite, positive and at most 3")
+    results: list[dict[str, Any]] = []
+    for index in range(args.samples):
+        results.append({
+            endpoint: sample_one(origin, endpoint, args.timeout_seconds)
+            for endpoint in ENDPOINTS
+        })
+        if index + 1 < args.samples:
+            time.sleep(args.interval_seconds)
+    result = assess_samples(
+        results,
+        min_samples=args.samples,
+        max_p95_s=args.p95_budget_seconds,
+        expected_sha=args.expected_sha,
+    )
+    print(json.dumps(result, indent=2))
+    return 0 if result["verdict"] == "READ_SOAK_PASS" else 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

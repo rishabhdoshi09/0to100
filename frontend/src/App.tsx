@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchAccessMode, fetchChart, fetchDashboard, fetchHealth, sendControl, type AccessMode } from './api'
 import { deskStartupLabel, deskStartupRecovery, deskStartupState, type DeskStartupState } from './deskStartupState'
 import { createPollGate } from './pollGate'
+import { historicalDashboard, reconcileHttpDashboard } from './dashboardResilience'
 import { deskRefreshBanner } from './deskBanner'
 import {
   CompareView,
@@ -169,6 +170,7 @@ const emptyDashboard: DashboardPayload = {
 }
 
 function dashboardHasWork(payload: DashboardPayload): boolean {
+  // Historical rows may help the loading UI, but never imply live readiness.
   return Boolean(
     payload.scan.scanned_at
     || payload.scan.records.length > 0
@@ -222,9 +224,10 @@ function useIstClock() {
 
 function App() {
   const nav = readDeskNav()
-  const [dashboard, setDashboard] = useState<DashboardPayload>(() => (
-    readSessionJson<DashboardPayload>('quantterm-dashboard') || emptyDashboard
-  ))
+  const [dashboard, setDashboard] = useState<DashboardPayload>(() => {
+    const remembered = readSessionJson<DashboardPayload>('quantterm-dashboard')
+    return remembered ? historicalDashboard(remembered) : emptyDashboard
+  })
   const [loading, setLoading] = useState(() => !readSessionJson('quantterm-dashboard'))
   const [error, setError] = useState('')
   const [active, setActive] = useState(nav.active || 'Home')
@@ -252,19 +255,7 @@ function App() {
     try {
       const payload = await fetchDashboard()
       setDashboard((prev) => {
-        const next = dashboardHasWork(prev) && !dashboardHasWork(payload)
-          ? {
-              ...payload,
-              scan: prev.scan.records.length ? prev.scan : payload.scan,
-              long_term: prev.long_term.records.length ? prev.long_term : payload.long_term,
-              conviction: prev.conviction.length ? prev.conviction : payload.conviction,
-              data: {
-                ...payload.data,
-                scan_saved: payload.data.scan_saved || prev.data.scan_saved,
-                scan_records: Math.max(payload.data.scan_records || 0, prev.data.scan_records || 0),
-              },
-            }
-          : payload
+        const next = reconcileHttpDashboard(prev, payload)
         writeSessionJson('quantterm-dashboard', slimDashboard(next))
         return next
       })
@@ -383,6 +374,9 @@ function App() {
       autoPrepareRef.current = true
       return
     }
+    // An initial/stale HTTP snapshot does not prove missing market data.
+    // Do not launch another heavy data preparation while the read worker warms.
+    if (dashboard.dashboard_cache && dashboard.dashboard_cache.status !== 'FRESH') return
     if (readSessionJson('quantterm-auto-prepare-done')) {
       autoPrepareRef.current = true
       return
@@ -401,7 +395,7 @@ function App() {
         void refresh()
       })
       .catch(() => { autoPrepareRef.current = false })
-  }, [loading, error, accessMode, dashboard.data.ready, dashboard.scan.available, dashboard.scan.records.length, dashboard.scan.scanned_at, refresh])
+  }, [loading, error, accessMode, dashboard.dashboard_cache?.status, dashboard.data.ready, dashboard.scan.available, dashboard.scan.records.length, dashboard.scan.scanned_at, refresh])
 
   useEffect(() => {
     window.localStorage.setItem('quantterm-display-depth', depth)
@@ -690,6 +684,19 @@ function App() {
             <span>{controlState || (loading ? 'Loading real state…' : `Updated ${dashboard.generated_at ? new Date(dashboard.generated_at).toLocaleTimeString('en-IN') : '—'}`)}</span>
           </div>
         </section>
+
+        {dashboard.dashboard_cache && dashboard.dashboard_cache.status !== 'FRESH' && (
+          <div className="api-degraded-banner" role="status">
+            <strong>{dashboard.dashboard_cache.status === 'BOOTSTRAPPING'
+              ? 'Loading the read-only dashboard snapshot'
+              : 'Dashboard snapshot is not current'}</strong>
+            <p>
+              {dashboard.dashboard_cache.status === 'BOOTSTRAPPING'
+                ? 'The first snapshot is being built without blocking the interface. Trade execution and live safety are not represented by this placeholder.'
+                : 'Last known observations may still be visible. Operational permissions and F&O candidates are unavailable until a fresh snapshot completes.'}
+            </p>
+          </div>
+        )}
 
         {connectionBanner && (
           <div className="api-degraded-banner" role="alert">

@@ -159,7 +159,13 @@ def _default_fundamental_provider(symbol: str, refresh: bool) -> Mapping[str, An
         from fundamentals.fetcher import get_deep_fundamentals
         return get_deep_fundamentals(symbol, force_refresh=True)
     from fundamentals.cache import FundamentalsCache
-    return FundamentalsCache().get(symbol)
+    from fundamentals.fetcher import _has_financial_evidence
+
+    cached = FundamentalsCache().get(symbol)
+    # The long-term overlay reads the SQLite cache directly, bypassing the
+    # unified fetcher's refresh guard. Do not treat legacy zero-row scrape
+    # placeholders as fresh coverage during a whole-market scan.
+    return cached if _has_financial_evidence(cached) else None
 
 
 def _prepare_official_history() -> dict:

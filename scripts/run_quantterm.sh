@@ -387,8 +387,9 @@ api_listening() {
 }
 
 adopt_api() {
-  # A listening :8765 is a live API. Never start a second uvicorn on it.
-  if url_ok "http://127.0.0.1:8765/api/health" || api_listening; then
+  # Port binding is not health. A wedged API must not reset its watchdog just
+  # because its socket still accepts connections.
+  if url_ok "http://127.0.0.1:8765/api/health"; then
     if [[ -z "${API_PID:-}" ]] || ! alive "$API_PID"; then
       API_EXTERNAL=1
       API_PID=""
@@ -402,6 +403,10 @@ start_api() {
   if adopt_api; then
     echo "[STACK] Reusing market API at http://127.0.0.1:8765"
     return 0
+  fi
+  if api_listening; then
+    echo "[STACK] :8765 is occupied but /api/health is unresponsive; refusing a competing uvicorn." >&2
+    return 1
   fi
   echo "[STACK] Starting local API at http://127.0.0.1:8765 …"
   mkdir -p "$STACK_LOG_DIR"
@@ -441,12 +446,14 @@ wait_for_frontend() {
 start_frontend() {
   echo "[STACK] Starting dedicated terminal at http://127.0.0.1:5173 …"
   mkdir -p "$STACK_LOG_DIR"
-  # Own process group. `npm run dev` is a wrapper chain (npm -> sh -> node ->
-  # esbuild); signalling only the npm PID left the node server still serving
-  # :5173 after the API was gone — a healthy-looking desk with no backend.
-  # setsid makes the PID a group leader so the whole tree can be stopped.
-  # On macOS the canonical _setsid_compat.sh shim supplies setsid via Python.
-  setsid npm --prefix "$ROOT/frontend" run dev -- --host 127.0.0.1 --port 5173 \
+  # Launch Vite as the directly owned Node process, not via npm -> sh ->
+  # Node. An npm wrapper can exit while its child still owns :5173; the
+  # supervisor then misclassifies the orphan as an external healthy UI and
+  # leaves it behind on Ctrl-C. Own Node as a session/group leader instead.
+  # The explicit frontend root preserves Vite config and module resolution.
+  # --strictPort prevents a hidden :5174 instance when :5173 is occupied.
+  setsid node "$ROOT/frontend/node_modules/vite/bin/vite.js" "$ROOT/frontend" \
+    --host 127.0.0.1 --port 5173 --strictPort \
     >>"$STACK_LOG_DIR/vite.log" 2>&1 &
   FRONTEND_PID=$!
   if wait_for_frontend 80; then
@@ -588,6 +595,10 @@ beat
 # trap and kill the API the next time a probe returns non-zero.
 set +e
 API_HEALTH_FAILS=0
+API_UNHEALTHY_SINCE=0
+# Slow 8GB hosts can legitimately spend time warming imports and history.
+# Restart ONLY a tracked owned API after persistent unhealthy responses.
+API_UNHEALTHY_GRACE_S="${QT_API_UNHEALTHY_GRACE_S:-120}"
 
 while [[ "$STOP" != "1" ]]; do
   if [[ "${QT_MACHINE_OWNER:-}" != "1" ]]; then
@@ -641,24 +652,37 @@ while [[ "$STOP" != "1" ]]; do
 
   if adopt_api; then
     API_HEALTH_FAILS=0
-  elif ! url_ok "http://127.0.0.1:8765/api/health"; then
+    API_UNHEALTHY_SINCE=0
+  else
     API_HEALTH_FAILS=$((API_HEALTH_FAILS + 1))
-    if api_listening; then
-      echo "[STACK] Market API is listening on :8765; health probe failed ${API_HEALTH_FAILS} time(s). Not killing it."
-      API_EXTERNAL=1
-      API_PID=""
-      API_HEALTH_FAILS=0
+    if (( API_UNHEALTHY_SINCE == 0 )); then
+      API_UNHEALTHY_SINCE=$SECONDS
+    fi
+    if [[ "$API_EXTERNAL" != "1" && -n "${API_PID:-}" ]] && alive "$API_PID"; then
+      if (( SECONDS - API_UNHEALTHY_SINCE >= API_UNHEALTHY_GRACE_S )); then
+        echo "[STACK] Owned API has been unresponsive for ${API_UNHEALTHY_GRACE_S}s; restarting its process group." >&2
+        stop_pid "$API_PID" "unresponsive market API"
+        API_PID=""
+        API_EXTERNAL=0
+        API_UNHEALTHY_SINCE=0
+        API_HEALTH_FAILS=0
+        start_api || true
+      elif (( API_HEALTH_FAILS == 1 || API_HEALTH_FAILS % 20 == 0 )); then
+        echo "[STACK] Waiting on owned API health: failed=${API_HEALTH_FAILS} port_listening=$(api_listening && echo yes || echo no)." >&2
+      fi
+    elif api_listening; then
+      # Unknown listener, possibly from another checkout: never kill by port.
+      if (( API_HEALTH_FAILS == 1 || API_HEALTH_FAILS % 20 == 0 )); then
+        echo "[STACK] :8765 is listening but unhealthy, and no tracked owned API exists; refusing to kill it." >&2
+      fi
     elif (( API_HEALTH_FAILS >= 3 )); then
-      echo "[STACK] Market API health failed ${API_HEALTH_FAILS} times; restarting. See $STACK_LOG_DIR/api.log."
-      if [[ -n "${API_PID:-}" ]]; then kill "$API_PID" >/dev/null 2>&1 || true; fi
+      echo "[STACK] Market API is absent; starting a new owned instance." >&2
       API_EXTERNAL=0
       API_PID=""
       start_api || true
-      wait_for_api || echo "[STACK] Market API restart is not healthy yet; will retry." >&2
+      API_UNHEALTHY_SINCE=0
       API_HEALTH_FAILS=0
     fi
-  else
-    API_HEALTH_FAILS=0
   fi
   if [[ "$API_EXTERNAL" != "1" ]]; then
     if [[ -z "${API_PID:-}" ]] || ! alive "$API_PID"; then

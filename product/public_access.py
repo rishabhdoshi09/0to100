@@ -32,6 +32,25 @@ def operator_token() -> str:
     return str(os.environ.get("QT_OPERATOR_TOKEN") or "").strip()
 
 
+def public_exception_text(exc: Exception) -> str:
+    """Preserve private operator diagnostics, never expose them to spectators.
+
+    FastAPI's global unhandled-error handler does not intercept exceptions
+    deliberately caught and re-emitted as HTTPException(500/502), nor failures
+    represented by an HTTP 200 JSON "error" field. Both paths use this helper.
+    """
+    if public_read_only_enabled():
+        return "Internal diagnostic unavailable in public read-only mode."
+    return str(exc)
+
+
+def public_http_error_detail(context: str, exc: Exception) -> str:
+    """Stable route-specific context without private exception contents."""
+    if public_read_only_enabled():
+        return str(context) + ": internal operation unavailable."
+    return f"{context}: {exc}"
+
+
 @dataclass(frozen=True)
 class MutationAccess:
     allowed: bool

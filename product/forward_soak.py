@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -26,7 +27,7 @@ from product.forward_evidence import (
 )
 from product.live_safety import live_safety_projection
 from product.promotion_governance import assess_component, promotion_board
-from core.runtime_paths import logs_dir
+from core.runtime_paths import _require_existing_runtime, logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
 JOURNEY_PATH = logs_dir() / "product" / "forward_journey.json"
@@ -72,15 +73,15 @@ def _env_path(name: str, default: Path) -> Path:
 
 
 def journey_path() -> Path:
-    return _env_path("QT_FORWARD_JOURNEY", JOURNEY_PATH)
+    return _env_path("QT_FORWARD_JOURNEY", logs_dir() / "product" / "forward_journey.json")
 
 
 def daily_dir() -> Path:
-    return _env_path("QT_FORWARD_DAILY", DAILY_DIR)
+    return _env_path("QT_FORWARD_DAILY", logs_dir() / "product" / "forward_daily")
 
 
 def verify_state_path() -> Path:
-    return _env_path("QT_FORWARD_SOAK_VERIFY", VERIFY_PATH)
+    return _env_path("QT_FORWARD_SOAK_VERIFY", logs_dir() / "product" / "forward_soak_verify.json")
 
 
 def load_latest_verification() -> dict[str, Any]:
@@ -135,12 +136,44 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _write_text(path: Path, content: str) -> Path:
+    """Atomically publish one operator artifact without shared temp-file races.
+
+    A paper-cycle writer and the status/reconciliation lane can overlap. Each
+    owns its own temporary file; failed writers clean up only their own temp.
+    In installed-host mode, recheck the adopted runtime before *any* mkdir,
+    including against a symlink escape or a disconnected external volume.
+    """
+    target = Path(path)
+    if _require_existing_runtime():
+        # Resolves the currently configured root afresh; a vanished APFS mount
+        # cannot be recreated under /Volumes by a cached module-level Path.
+        expected_logs = logs_dir()
+        resolved_target = target.resolve(strict=False)
+        try:
+            resolved_target.relative_to(expected_logs)
+        except ValueError as exc:
+            raise RuntimeError(
+                "forward evidence write destination is outside the persistent runtime"
+            ) from exc
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(
+        prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent),
+    )
+    temporary = Path(name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return target
+
+
 def _write_json(path: Path, payload: Mapping[str, Any]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(dict(payload), indent=2, default=str), encoding="utf-8")
-    os.replace(tmp, path)
-    return path
+    return _write_text(path, json.dumps(dict(payload), indent=2, default=str))
 
 
 def _stage(name: str, *, status: str, input_artifact: str = "", output_artifact: str = "",
@@ -210,7 +243,7 @@ def settle_pending_from_market(
 
     getter = return_fn or (lambda symbol, as_of: _forward_return(symbol, as_of, horizon))
     entered = {str(k).upper(): bool(v) for k, v in dict(later_entered or {}).items()}
-    pending = [r for r in load_fwd() if not r.get("entered") and r.get("later_outcome") is None]
+    pending = [r for r in load_fwd(strict=True) if not r.get("entered") and r.get("later_outcome") is None]
     updated = 0
     pending_n = 0
     classifications: dict[str, int] = {}
@@ -255,25 +288,95 @@ def settle_pending_from_market(
 
 
 def attach_closed_trades(book, *, path=None) -> dict[str, Any]:
-    """Copy settled paper trades onto the ledger with execution-adjusted fields."""
+    """Attach exits only to the exact originating paper decision.
+
+    New paper positions carry canonical decision/intent ids. For already
+    persisted older ledger rows that lacked those ids, a one-to-one match
+    requires the original entry session and symbol. An ambiguous or unrelated
+    trade remains UNATTRIBUTED instead of contaminating forward expectancy.
+    """
     closed = list(getattr(book, "closed", []) or [])
+    pending = [
+        row for row in load_ledger(path, strict=True)
+        if row.get("entered") and row.get("later_outcome") is None
+    ]
+    by_decision: dict[str, list[dict[str, Any]]] = {}
+    by_intent: dict[str, list[dict[str, Any]]] = {}
+    legacy_entries_by_day: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for item in pending:
+        did = str(item.get("decision_id") or "")
+        iid = str(item.get("paper_intent_id") or "")
+        symbol = str(item.get("symbol") or "").upper()
+        day = str(item.get("entry_date") or item.get("market_timestamp") or "")[:10]
+        if did:
+            by_decision.setdefault(did, []).append(item)
+        if iid:
+            by_intent.setdefault(iid, []).append(item)
+        # Only old rows whose identity was generated by freeze_cycle may
+        # use a session/symbol fallback. Never match arbitrary canonical
+        # decisions based solely on a symbol.
+        if day and symbol and not iid and did.startswith(f"{day}|{symbol}|TAKEN|"):
+            legacy_entries_by_day.setdefault((day, symbol), []).append(item)
+
     attached = 0
+    unattributed = 0
+    ambiguous = 0
+    used_ids: set[str] = set()
     for trade in closed:
         row = trade.as_dict() if hasattr(trade, "as_dict") else dict(trade)
-        symbol = str(row.get("symbol") or "").upper()
+        symbol = str(row.get("symbol") or "").strip().upper()
+        did = str(row.get("decision_id") or "")
+        iid = str(row.get("paper_intent_id") or "")
+        day = str(row.get("entry_date") or "")[:10]
         if not symbol:
+            unattributed += 1
             continue
-        matches = [
-            r for r in load_ledger(path)
-            if r.get("entered") and str(r.get("symbol")) == symbol and r.get("later_outcome") is None
+        # NEVER downgrade a claimed canonical identity to symbol/date if it
+        # does not match. A wrong or stale ID must stay unattributed. Legacy
+        # fallback is allowed only when the closed trade has no identity.
+        choices: list[dict[str, Any]] = []
+        if did:
+            choices = by_decision.get(did, [])
+        elif iid:
+            choices = by_intent.get(iid, [])
+        elif day:
+            choices = legacy_entries_by_day.get((day, symbol), [])
+        # Every candidate must match the closed symbol, known entry day and
+        # every identity supplied by the paper book, not just one of them.
+        # A different intent behind the same decision_id is not equivalent.
+        choices = [
+            item for item in choices
+            if str(item.get("symbol") or "").upper() == symbol
+            and (not day or str(item.get("entry_date") or item.get("market_timestamp") or "")[:10] == day)
+            and (not did or str(item.get("decision_id") or "") == did)
+            and (not iid or not item.get("paper_intent_id") or str(item.get("paper_intent_id")) == iid)
+            and str(item.get("decision_id") or "") not in used_ids
         ]
-        if not matches:
+        if len(choices) != 1:
+            ambiguous += int(len(choices) > 1)
+            unattributed += int(len(choices) == 0)
             continue
-        target = matches[-1]
+        target = choices[0]
+        target_id = str(target.get("decision_id") or "")
+        if not target_id:
+            unattributed += 1
+            continue
+
+        taken = {}
+        try:
+            from product.paper_learning_loop import _lookup_taken
+            candidate = dict(_lookup_taken(symbol) or {})
+            # Latest-symbol evidence could be from a later position.
+            # Missing or conflicting identity is NOT execution proof.
+            if did and str(candidate.get("decision_id") or "") == did:
+                taken = candidate
+            elif iid and str(candidate.get("paper_intent_id") or "") == iid:
+                taken = candidate
+        except Exception:
+            pass
         try:
             from product.evidence_integrity import settled_learning_result
-            from product.paper_learning_loop import _lookup_taken
-            integrity = settled_learning_result(row, _lookup_taken(symbol))
+            integrity = settled_learning_result(row, taken)
         except Exception:
             integrity = {
                 "gross_realized_R": row.get("realized_R"),
@@ -281,16 +384,11 @@ def attach_closed_trades(book, *, path=None) -> dict[str, Any]:
                 "execution_coverage": 0.0,
                 "execution_complete": False,
             }
-        shadow = {}
-        try:
-            from product.paper_learning_loop import _lookup_taken
-            shadow = dict((_lookup_taken(symbol) or {}).get("execution_reality_shadow") or {})
-        except Exception:
-            shadow = {}
+        shadow = dict(taken.get("execution_reality_shadow") or {})
         charges = (shadow.get("execution_adjusted_result") or {}).get("charges_total")
         fill = dict(shadow.get("fill") or {})
-        attach_settlement(
-            str(target.get("decision_id")),
+        settled = attach_settlement(
+            target_id,
             classification=str(row.get("exit_reason") or "CLOSED"),
             gross_R=integrity.get("gross_realized_R"),
             execution_adjusted_R=integrity.get("execution_adjusted_R"),
@@ -306,8 +404,12 @@ def attach_closed_trades(book, *, path=None) -> dict[str, Any]:
             outcome_provenance=current_provenance(),
             path=path,
         )
+        if settled is None or settled.get("later_outcome") is None:
+            unattributed += 1
+            continue
+        used_ids.add(target_id)
         attached += 1
-    return {"attached": attached}
+    return {"attached": attached, "unattributed": unattributed, "ambiguous": ambiguous}
 
 
 def settle_and_report(
@@ -359,7 +461,7 @@ def build_runtime_journey(*, cycle: Mapping[str, Any] | None = None) -> dict[str
     latest = dict(cycle or journal.get("latest") or {})
     paper = read_paper_status()
     policies = load_policies()
-    ledger = load_ledger()
+    ledger = load_ledger(strict=True)
     ingested = _read_json(Path(os.environ.get("QT_LEARNING_INGESTED") or logs_dir() / "product" / "learning_ingested.json"))
     cycle_id = str(latest.get("cycle_id") or "")
     scan_payload = dict(scan.get("payload") or {})
@@ -528,7 +630,7 @@ def soak_status() -> dict[str, Any]:
         stale = bool(reco) and reco_is_stale(reco)
     except Exception:
         stale = False
-    ledger = load_ledger()
+    ledger = load_ledger(strict=True)
     real = real_forward_only(ledger)
     summary = journey.get("summary") or {}
     blockers: list[str] = []
@@ -693,7 +795,7 @@ def scoreboard() -> dict[str, Any]:
     from product.champion_challenger import load_store
     from product.live_readiness import evaluate_live_readiness
 
-    ledger = load_ledger()
+    ledger = load_ledger(strict=True)
     real = real_forward_only(ledger)
     use = real if real else []
     taken = [r for r in use if r.get("entered")]
@@ -803,7 +905,7 @@ def write_daily_report(as_of: str, *, book=None) -> dict[str, Any]:
     scan = _scan_payload()["payload"]
     reco = _reco_payload()["payload"]
     reco_n = sum(len(list(c.get("cards") or [])) for c in (reco.get("categories") or []))
-    ledger = load_ledger()
+    ledger = load_ledger(strict=True)
     day_rows = [r for r in ledger if str(r.get("market_timestamp") or "")[:10] == day]
     ident = ensemble_identity()
     closed_today = 0
@@ -839,7 +941,6 @@ def write_daily_report(as_of: str, *, book=None) -> dict[str, Any]:
         "provenance": current_provenance(),
     }
     folder = daily_dir()
-    folder.mkdir(parents=True, exist_ok=True)
     json_path = folder / f"{day}.json"
     md_path = folder / f"{day}.md"
     _write_json(json_path, payload)
@@ -861,7 +962,7 @@ def write_daily_report(as_of: str, *, book=None) -> dict[str, Any]:
         f"- live_lock_status: {payload['live_lock_status']}",
         "",
     ]
-    md_path.write_text("\n".join(lines), encoding="utf-8")
+    _write_text(md_path, "\n".join(lines))
     return {"json_path": str(json_path), "md_path": str(md_path), "report": payload}
 
 

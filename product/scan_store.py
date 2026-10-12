@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -343,12 +344,154 @@ def build_scan_payload(
     }
 
 
+def _scan_metadata_path(target: Path) -> Path:
+    """Sidecar metadata belonging to the exact canonical scan JSON file."""
+    return target.with_suffix(".meta.json")
+
+
+def _scan_file_identity(target: Path) -> dict[str, int] | None:
+    try:
+        stat = target.stat()
+        return {
+            "device": int(stat.st_dev),
+            "inode": int(stat.st_ino),
+            "size": int(stat.st_size),
+            "mtime_ns": int(stat.st_mtime_ns),
+        }
+    except OSError:
+        return None
+
+
+def _scan_metadata(payload: Mapping[str, Any], identity: dict[str, int]) -> dict[str, Any] | None:
+    """Bounded read projection of a published scan; never new price evidence."""
+    if int(payload.get("schema_version") or 0) not in SUPPORTED_SCHEMA_VERSIONS:
+        return None
+    records = payload.get("records")
+    if not isinstance(records, list):
+        return None
+    provenance = payload.get("provenance")
+    if not isinstance(provenance, Mapping):
+        # Legacy scans must use the original full-artifact read and uncertainty.
+        return None
+    return {
+        "schema_version": int(payload["schema_version"]),
+        "scanned_at": str(payload.get("scanned_at") or ""),
+        "as_of_session": str(payload.get("as_of_session") or ""),
+        "history_latest_date": str(payload.get("history_latest_date") or ""),
+        "provenance": dict(provenance),
+        "records_count": len(records),
+        "file_identity": identity,
+    }
+
+
+def load_scan_metadata(path: str | Path = DEFAULT_SCAN_PATH) -> dict[str, Any] | None:
+    """Inspect only verified metadata; absent/mismatched sidecar is UNKNOWN.
+
+    File identity proves the metadata was produced for the *same* atomic scan
+    publication. The disk-session authority is checked independently by the
+    caller. Never accept a sidecar after the JSON file was replaced or edited.
+    """
+    target = Path(path)
+    before = _scan_file_identity(target)
+    if before is None:
+        return None
+    sidecar = _scan_metadata_path(target)
+    try:
+        if not sidecar.is_file() or sidecar.stat().st_size > 16_384:
+            return None
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return None
+        if payload.get("file_identity") != before:
+            return None
+        if int(payload.get("schema_version") or 0) not in SUPPORTED_SCHEMA_VERSIONS:
+            return None
+        if not isinstance(payload.get("provenance"), dict):
+            return None
+        if not isinstance(payload.get("records_count"), int) or payload["records_count"] < 0:
+            return None
+        if _scan_file_identity(target) != before:
+            return None
+        return payload
+    except (OSError, ValueError, TypeError, UnicodeError):
+        return None
+
+
+def _prepare_scan_write_path(target: Path) -> None:
+    """Fail closed when installed-host external storage is missing/retargeted.
+
+    The module-level default Path is frozen at import time. The configured
+    persistent runtime root is freshly resolved before every publication so a
+    vanished /Volumes mount is not quietly recreated on the system drive.
+    """
+    from core.runtime_paths import _require_existing_runtime, logs_dir
+
+    if _require_existing_runtime():
+        # logs_dir() verifies and resolves the configured runtime volume.
+        # Do NOT resolve the "logs" child: a symlinked escape must remain
+        # visible to the destination path check below.
+        expected_root = logs_dir()
+        destination = target.resolve(strict=False)
+        try:
+            destination.relative_to(expected_root)
+        except ValueError as exc:
+            raise RuntimeError(
+                "scan write destination is outside the installed persistent runtime"
+            ) from exc
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+
 def save_scan(payload: Mapping[str, Any], path: str | Path = DEFAULT_SCAN_PATH) -> Path:
     target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(json.dumps(dict(payload), indent=2, default=str), encoding="utf-8")
-    os.replace(tmp, target)
+    _prepare_scan_write_path(target)
+
+    # Each writer owns a unique temporary file on the same filesystem. The
+    # pre-rename inode identity is the ONLY identity authorized to carry this
+    # writer's provenance: another process can win the publication race before
+    # metadata is emitted and must not inherit our market-session claim.
+    fd, name = tempfile.mkstemp(
+        prefix=f".{target.name}.", suffix=".tmp", dir=target.parent,
+    )
+    tmp = Path(name)
+    own_identity = None
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(dict(payload), handle, indent=2, default=str)
+        own_identity = _scan_file_identity(tmp)
+        os.replace(tmp, target)
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    # The source JSON was atomically published. Companion metadata is optional:
+    # if the canonical path no longer identifies OUR inode, another writer won
+    # the race and the status reader must fall back to the full authoritative
+    # file, never pair our provenance with another writer's result.
+    if own_identity is None or _scan_file_identity(target) != own_identity:
+        return target
+    try:
+        metadata = _scan_metadata(payload, own_identity)
+        if metadata is not None:
+            sidecar = _scan_metadata_path(target)
+            fd, name = tempfile.mkstemp(
+                prefix=f".{sidecar.name}.", suffix=".tmp", dir=sidecar.parent,
+            )
+            sidecar_tmp = Path(name)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    json.dump(metadata, handle, sort_keys=True, default=str)
+                # Still the exact source file? Otherwise discard this sidecar.
+                if _scan_file_identity(target) == own_identity:
+                    os.replace(sidecar_tmp, sidecar)
+            finally:
+                try:
+                    sidecar_tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
+    except (OSError, ValueError, TypeError):
+        pass
     return target
 
 

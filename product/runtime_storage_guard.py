@@ -100,14 +100,22 @@ def verify_runtime_storage(identity: RuntimeStorageIdentity) -> tuple[bool, str]
         if str(resolved) != identity.resolved_root:
             return False, f"runtime root changed identity: {resolved} != {identity.resolved_root}"
         stat = resolved.stat()
+        # Device/inode continuity is required even with a manifest. The
+        # manifest authenticates metadata content, not the physical directory:
+        # a newly created runtime on a different mount can carry an identical
+        # copied manifest, while silently splitting durable paper state.
+        if int(stat.st_dev) != identity.st_dev or int(stat.st_ino) != identity.st_ino:
+            return False, "runtime directory device/inode changed unexpectedly"
         manifest = resolved / MANIFEST_REL
         if identity.manifest_sha256:
             if not manifest.is_file():
                 return False, f"runtime identity manifest disappeared: {manifest}"
             if _sha256(manifest) != identity.manifest_sha256:
                 return False, "runtime identity manifest changed unexpectedly"
-        elif int(stat.st_dev) != identity.st_dev or int(stat.st_ino) != identity.st_ino:
-            return False, "runtime directory device/inode changed unexpectedly"
+        elif manifest.exists():
+            # When no manifest existed at adoption, do not let a replacement
+            # manifest silently redefine the adopted volume's identity.
+            return False, "runtime identity manifest appeared unexpectedly"
         _write_through_probe(resolved)
         return True, ""
     except Exception as exc:

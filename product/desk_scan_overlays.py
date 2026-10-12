@@ -9,10 +9,22 @@ not durable. GET endpoints read these files cache-only.
 from __future__ import annotations
 
 from typing import Any, Mapping
+import time
 
 ERROR = "error"
 SAVED = "saved"
 SKIPPED = "skipped"
+
+
+def _measure_phase(timings: dict[str, float], name: str, fn):
+    """Scalar-only per-stage latency; do not log candidate or account data."""
+    start = time.monotonic()
+    try:
+        return fn()
+    finally:
+        elapsed = round(max(0.0, time.monotonic() - start), 3)
+        timings[name] = elapsed
+        print(f"[SCAN OVERLAY] {name}={elapsed:.3f}s", flush=True)
 
 
 def _error_status(exc: BaseException) -> dict[str, str]:
@@ -37,6 +49,7 @@ def persist_recommendations_and_discovery(
     are immutable/content-addressed by scan/long-term/thesis identity.
     """
     scan = dict(scan_payload or {})
+    phase_timings: dict[str, float] = {}
     lt: dict[str, Any] = {}
     try:
         from product.long_term_store import load_long_term_scan
@@ -60,17 +73,20 @@ def persist_recommendations_and_discovery(
             slim_workspace_for_desk,
         )
 
-        reco = build_recommendations_workspace(
-            scan_payload=scan,
-            long_term_payload=lt,
-            refresh_technicals=False,
-            settle_cases=False,
-            deep_confirm=False,
-            persist_ledger=bool(persist_ledger),
+        reco = _measure_phase(
+            phase_timings, "build_recommendations",
+            lambda: build_recommendations_workspace(
+                scan_payload=scan,
+                long_term_payload=lt,
+                refresh_technicals=False,
+                settle_cases=False,
+                deep_confirm=False,
+                persist_ledger=bool(persist_ledger),
+            ),
         )
-        slim = slim_workspace_for_desk(reco)
+        slim = _measure_phase(phase_timings, "slim_recommendations", lambda: slim_workspace_for_desk(reco))
         slim["from_saved_market_scan"] = True
-        save_recommendations(slim)
+        _measure_phase(phase_timings, "save_recommendations", lambda: save_recommendations(slim))
         reco_status = SAVED
         reco_cards = int((slim.get("scan_meta") or {}).get("assigned_count") or 0)
 
@@ -79,7 +95,7 @@ def persist_recommendations_and_discovery(
             from product.decision_service import decision_board
             from product.trading_thesis import manifest as thesis_manifest
 
-            board = decision_board(workspace=reco, limit=40)
+            board = _measure_phase(phase_timings, "build_decision_board", lambda: decision_board(workspace=reco, limit=40))
             thesis = dict(thesis_manifest() or {})
             discovery_thesis_hash = str(thesis.get("thesis_hash") or "")
             try:
@@ -87,12 +103,12 @@ def persist_recommendations_and_discovery(
                 discovery_evolution_policy_fingerprint = current_evolution_policy_fingerprint()
             except Exception:
                 discovery_evolution_policy_fingerprint = ""
-            save_discovery(
+            _measure_phase(phase_timings, "save_decision_discovery", lambda: save_discovery(
                 board,
                 scan_scanned_at=str(scan.get("scanned_at") or ""),
                 long_term_scanned_at=str(lt.get("scanned_at") or ""),
                 thesis_hash=discovery_thesis_hash,
-            )
+            ))
             discovery_status = SAVED
             discovery_actionable = int(board.get("actionable") or 0)
         except Exception as exc:
@@ -113,12 +129,14 @@ def persist_recommendations_and_discovery(
         "decision_discovery_evolution_policy_fingerprint": discovery_evolution_policy_fingerprint,
         "scan_scanned_at": str(scan.get("scanned_at") or ""),
         "long_term_scanned_at": str(lt.get("scanned_at") or ""),
+        "projection_timings_s": phase_timings,
     }
 
 
 def persist_desks_from_market_scan(scan_payload: Mapping[str, Any] | None) -> dict[str, Any]:
     scan = dict(scan_payload or {})
     projection = persist_recommendations_and_discovery(scan)
+    timings = dict(projection.get("projection_timings_s") or {})
 
     reports_status = SKIPPED
     reports_error: dict[str, str] | None = None
@@ -126,12 +144,12 @@ def persist_desks_from_market_scan(scan_payload: Mapping[str, Any] | None) -> di
         from product.recommendations_workspace import build_market_reports_workspace
 
         news: dict[str, Any] = {}
-        build_market_reports_workspace(
+        _measure_phase(timings, "build_market_reports", lambda: build_market_reports_workspace(
             persist_today=True,
             news_payload=news,
             scan_payload=scan,
             rebuild=False,
-        )
+        ))
         reports_status = SAVED
     except Exception as exc:
         reports_error = _error_status(exc)
@@ -141,4 +159,5 @@ def persist_desks_from_market_scan(scan_payload: Mapping[str, Any] | None) -> di
         **projection,
         "market_reports": reports_status,
         "market_reports_error": reports_error,
+        "projection_timings_s": timings,
     }

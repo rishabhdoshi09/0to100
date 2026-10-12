@@ -166,3 +166,138 @@ export function reconcileDashboard(
     },
   }
 }
+
+
+/**
+ * Every browser-stored desk snapshot is historical on reload, regardless of
+ * whether it was FRESH when saved. A degraded/bootstrapping HTTP read also
+ * cannot restore the last operational permissions through a UI merge.
+ *
+ * Positions, scanned stocks and articles may remain as context, but no saved
+ * broker, paper-entry, F&O or approval capability is presented as current.
+ * Actual trading authority stays in the backend, never in sessionStorage.
+ */
+export function historicalDashboard(payload: DashboardPayload): DashboardPayload {
+  const oldCache = payload.dashboard_cache
+  return {
+    ...payload,
+    dashboard_cache: {
+      status: 'STALE',
+      snapshot_generated_at: oldCache?.snapshot_generated_at || payload.generated_at,
+      age_seconds: oldCache?.age_seconds ?? null,
+      refreshing: Boolean(oldCache?.refreshing),
+      read_only: true,
+    },
+    market: { ...payload.market, available: false },
+    scan: { ...payload.scan, available: false },
+    long_term: { ...payload.long_term, available: false },
+    news: { ...payload.news, available: false },
+    paper: {
+      ...payload.paper,
+      available: false,
+      enabled: false,
+      supervisor_running: false,
+    },
+    autonomy: {
+      ...payload.autonomy,
+      available: false,
+      running: false,
+      process_running: false,
+      new_paper_entries: false,
+      existing_exits: false,
+      research_enabled: false,
+      new_entry_capability: 'blocked',
+      existing_exit_capability: 'blocked',
+      research_capability: 'blocked',
+      active_job: {},
+      state: 'UNKNOWN',
+      plain_state: 'Historical dashboard; current execution capabilities unverified.',
+      broker: payload.autonomy.broker ? {
+        ...payload.autonomy.broker,
+        ready: false,
+        auth_ready: false,
+        live_data_ready: false,
+        execution_ready: false,
+        state: 'UNKNOWN',
+      } : undefined,
+      live_feed: {},
+    },
+    operations: {
+      ...payload.operations,
+      available: false,
+      running: false,
+      active: [],
+      active_lanes: {},
+    },
+    fno: {
+      ...payload.fno,
+      available: false,
+      directional: payload.fno.directional ? {
+        ...payload.fno.directional,
+        available: false,
+        status: 'STALE',
+        code: 'DASHBOARD_STATUS_STALE',
+        candidates: [],
+        candidate_count: 0,
+        live_execution_allowed: false,
+      } : undefined,
+      desk: payload.fno.desk ? {
+        ...payload.fno.desk,
+        status: 'BLOCKED',
+        reason: 'DASHBOARD_STATUS_STALE',
+        candidates: [],
+        candidate_count: 0,
+        paper_available: false,
+      } : undefined,
+      paper: payload.fno.paper ? {
+        ...payload.fno.paper,
+        available: false,
+        live_execution_allowed: false,
+      } : undefined,
+    },
+    data: {
+      ...payload.data,
+      ready: false,
+      history_current: false,
+      store_loaded: false,
+      snapshot: { ...payload.data.snapshot, ready: false },
+      bhavcopy: {
+        ...payload.data.bhavcopy,
+        ready: false,
+        current: false,
+        reason_code: 'DASHBOARD_STATUS_STALE',
+      },
+      scan_saved: false,
+      long_term_saved: false,
+      blockers: [
+        ...(payload.data.blockers || []),
+        'This dashboard is historical; live data and trading readiness are unverified.',
+      ],
+    },
+    conviction: [],
+    daily_wrap: [],
+  }
+}
+
+/** Merge only historical context from an interrupted/cold HTTP read. */
+export function reconcileHttpDashboard(
+  previous: DashboardPayload,
+  incoming: DashboardPayload,
+): DashboardPayload {
+  if (!incoming.dashboard_cache || incoming.dashboard_cache.status === 'FRESH') {
+    return incoming
+  }
+  // reconcileDashboard preserves durable rows where the HTTP read has no
+  // rows. Apply the fail-closed transform AFTER the merge so the old live
+  // flags can never be reintroduced into a warming/stale result.
+  const historical = historicalDashboard(reconcileDashboard(previous, incoming))
+  return {
+    ...historical,
+    dashboard_cache: {
+      ...historical.dashboard_cache!,
+      status: incoming.dashboard_cache.status,
+      refreshing: incoming.dashboard_cache.refreshing,
+      error: incoming.dashboard_cache.error,
+    },
+  }
+}

@@ -6,12 +6,15 @@ reading source. Missing stays missing — an empty blotter is a valid day.
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import os
+import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
-from core.runtime_paths import logs_dir
+from core.runtime_paths import _require_existing_runtime, logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PATH = logs_dir() / "product" / "paper_autopilot_journal.json"
@@ -24,15 +27,60 @@ def journal_path(path: str | Path | None = None) -> Path:
     override = os.environ.get("QT_PAPER_AUTOPILOT_JOURNAL")
     if override:
         return Path(override)
-    return DEFAULT_PATH
+    # A module-import-time default can point at a disconnected checkout after
+    # host migration. Resolve the canonical persistent runtime on every call.
+    return logs_dir() / "product" / "paper_autopilot_journal.json"
 
 
-def _read(path: Path) -> dict[str, Any]:
+def _require_safe_journal_destination(path: Path) -> None:
+    """Never recreate an unmounted installed runtime or escape its logs tree."""
+    if _require_existing_runtime():
+        expected = logs_dir()
+        try:
+            path.resolve(strict=False).relative_to(expected)
+        except ValueError as exc:
+            raise RuntimeError(
+                "paper journal destination is outside the installed persistent runtime"
+            ) from exc
+
+
+@contextmanager
+def _journal_write_lock(path: Path):
+    """Lock the entire read-modify-write, including across worker processes."""
+    _require_safe_journal_destination(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock = path.with_name(path.name + ".lock")
+    _require_safe_journal_destination(lock)
+    fd = os.open(
+        str(lock), os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600
+    )
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def _read(path: Path, *, strict: bool = False) -> dict[str, Any]:
+    if strict:
+        _require_safe_journal_destination(path)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except FileNotFoundError:
         return {}
-    return payload if isinstance(payload, dict) else {}
+    except Exception as exc:
+        if strict:
+            raise RuntimeError("paper journal is unreadable or corrupt") from exc
+        return {}
+    if not isinstance(payload, dict):
+        if strict:
+            raise RuntimeError("paper journal root must be a JSON object")
+        return {}
+    if strict and (not isinstance(payload.get("cycles", []), list)
+                   or not isinstance(payload.get("latest", {}), dict)):
+        raise RuntimeError("paper journal has an invalid cycle structure")
+    return payload
 
 
 def load_journal(path: str | Path | None = None) -> dict[str, Any]:
@@ -52,19 +100,31 @@ def load_journal(path: str | Path | None = None) -> dict[str, Any]:
 
 def record_cycle(cycle: Mapping[str, Any], *, path: str | Path | None = None) -> dict[str, Any]:
     target = journal_path(path)
-    payload = load_journal(target)
-    row = dict(cycle)
-    row.setdefault("recorded_at", datetime.now(timezone.utc).isoformat())
-    cycles = list(payload.get("cycles") or [])
-    cycles.append(row)
-    payload["cycles"] = cycles[-120:]
-    payload["latest"] = row
-    payload["schema_version"] = SCHEMA_VERSION
-    target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
-    os.replace(tmp, target)
-    return payload
+    with _journal_write_lock(target):
+        # Strict under the lock: a malformed journal must not be silently
+        # replaced with an empty history by the next paper cycle.
+        payload = _read(target, strict=True)
+        row = dict(cycle)
+        row.setdefault("recorded_at", datetime.now(timezone.utc).isoformat())
+        cycles = list(payload.get("cycles") or [])
+        cycles.append(row)
+        payload["cycles"] = cycles[-120:]
+        payload["latest"] = row
+        payload["schema_version"] = SCHEMA_VERSION
+        fd, name = tempfile.mkstemp(
+            prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent)
+        )
+        tmp = Path(name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, indent=2, default=str)
+                handle.flush()
+                os.fsync(handle.fileno())
+            _require_safe_journal_destination(target)
+            os.replace(tmp, target)
+        finally:
+            tmp.unlink(missing_ok=True)
+        return payload
 
 
 def why_no_trade(path: str | Path | None = None) -> dict[str, Any]:

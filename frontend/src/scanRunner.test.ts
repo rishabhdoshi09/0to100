@@ -44,8 +44,8 @@ describe('scanRunner semantics', () => {
   })
 
   it('keeps progress responsive without hammering the local API', () => {
-    expect(SCAN_POLL_MS).toBeGreaterThanOrEqual(750)
-    expect(SCAN_POLL_MS).toBeLessThanOrEqual(1500)
+    expect(SCAN_POLL_MS).toBeGreaterThanOrEqual(3000)
+    expect(SCAN_POLL_MS).toBeLessThanOrEqual(5000)
   })
 
   it('detects terminal and active statuses', () => {
