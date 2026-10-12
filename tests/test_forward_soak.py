@@ -1047,3 +1047,63 @@ def test_forward_ledger_parses_streaming_without_loading_entire_text(tmp_path, m
     with pytest.raises(RuntimeError, match="invalid JSON at line 1201"):
         evidence._read_jsonl(ledger, strict=True)
     assert len(evidence.load_ledger(ledger)) == 1200
+
+
+def test_duplicate_forward_settlement_does_not_rewrite_entire_historical_ledger(
+    tmp_path, monkeypatch,
+):
+    """A repeated paper settle check is a true no-op, including on disk."""
+    import product.forward_evidence as evidence
+
+    target = tmp_path / "forward_evidence.jsonl"
+    decision = evidence.freeze_observation(
+        {"symbol": "INFY", "decision": "ENTER_NOW", "reason_code": "ELIGIBLE",
+         "entry": 100, "stop": 94},
+        cycle_id="repeat-settle", as_of="2026-10-09",
+        group="TAKEN", entered=True, path=target,
+    )
+    assert decision is not None
+
+    original_write = evidence._write_jsonl
+    publications = []
+
+    def counted_write(path, rows):
+        publications.append(len(rows))
+        return original_write(path, rows)
+
+    monkeypatch.setattr(evidence, "_write_jsonl", counted_write)
+    first = evidence.attach_settlement(
+        decision["decision_id"], classification="TARGET", gross_R=1.5,
+        outcome_provenance=REAL_FORWARD_MARKET, path=target,
+    )
+    first_bytes = target.read_bytes()
+    second = evidence.attach_settlement(
+        decision["decision_id"], classification="STOP", gross_R=-1.0,
+        outcome_provenance=REAL_FORWARD_MARKET, path=target,
+    )
+    assert first["gross_R"] == second["gross_R"] == 1.5
+    assert publications == [1]
+    assert target.read_bytes() == first_bytes
+    assert len(evidence.load_ledger(target)) == 1
+
+
+def test_forward_paths_follow_runtime_root_after_import(tmp_path, monkeypatch):
+    """Store functions must not keep module-import-time runtime locations."""
+    import product.forward_evidence as evidence
+    import product.forward_soak as soak
+
+    for name in ("QT_FORWARD_LEDGER", "QT_FORWARD_JOURNEY",
+                 "QT_FORWARD_DAILY", "QT_FORWARD_SOAK_VERIFY"):
+        monkeypatch.delenv(name, raising=False)
+
+    for name in ("first-runtime", "second-runtime"):
+        root = tmp_path / name
+        monkeypatch.setenv("QT_RUNTIME_ROOT", str(root))
+        assert evidence.ledger_path() == root / "logs" / "product" / "forward_evidence.jsonl"
+        assert soak.journey_path() == root / "logs" / "product" / "forward_journey.json"
+        assert soak.daily_dir() == root / "logs" / "product" / "forward_daily"
+        assert soak.verify_state_path() == root / "logs" / "product" / "forward_soak_verify.json"
+
+    # No writer should have created a default checkout-relative logs folder.
+    assert not (tmp_path / "first-runtime").exists()
+    assert not (tmp_path / "second-runtime").exists()
