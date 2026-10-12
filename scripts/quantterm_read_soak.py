@@ -257,8 +257,11 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--expected-sha must be a full 40-character hexadecimal commit SHA")
     if not 20 <= args.samples <= 500:
         parser.error("--samples must be between 20 and 500")
-    if not math.isfinite(args.interval_seconds) or not 0 <= args.interval_seconds <= 60:
-        parser.error("--interval-seconds must be finite and between 0 and 60")
+    # At least one second between cycles forces a 20-sample run to cross
+    # the 15s decision-cache TTL. Bursting all reads at once measures only
+    # the happy warm cache and can hide a permanently wedged refresher.
+    if not math.isfinite(args.interval_seconds) or not 1 <= args.interval_seconds <= 60:
+        parser.error("--interval-seconds must be finite and between 1 and 60")
     if not math.isfinite(args.timeout_seconds) or not 0.5 <= args.timeout_seconds <= 120:
         parser.error("--timeout-seconds must be finite and between 0.5 and 120")
     if not math.isfinite(args.p95_budget_seconds) or not 0 < args.p95_budget_seconds <= 3.0:
