@@ -1167,3 +1167,133 @@ def test_strict_forward_evidence_read_rejects_disconnected_runtime(tmp_path, mon
 
     offline.rename(root)
     assert len(evidence.load_ledger(strict=True)) == 1
+
+
+def test_closed_trade_settles_only_its_original_decision_with_repeated_symbol(tmp_path):
+    from types import SimpleNamespace
+    from product.forward_evidence import freeze_observation, load_ledger
+    from product.forward_soak import attach_closed_trades
+
+    path = tmp_path / "forward_evidence.jsonl"
+    for day, did, intent in [
+        ("2026-10-09", "canonical-older", "intent-older"),
+        ("2026-10-12", "canonical-newer", "intent-newer"),
+    ]:
+        item = freeze_observation(
+            {"symbol": "TCS", "decision": "ENTER_NOW",
+             "reason_code": "ELIGIBLE", "entry": 100, "stop": 94,
+             "decision_id": did, "paper_intent_id": intent, "entry_date": day},
+            cycle_id=f"paper-{day}", as_of=day, group="TAKEN",
+            entered=True, path=path,
+        )
+        assert item["decision_id"] == did
+        assert item["paper_intent_id"] == intent
+
+    book = SimpleNamespace(closed=[{
+        "symbol": "TCS", "decision_id": "canonical-older",
+        "paper_intent_id": "intent-older",
+        "entry_date": "2026-10-09", "exit_date": "2026-10-13",
+        "realized_R": 1.4, "entry_price": 100, "stop_price": 94,
+        "exit_price": 109, "qty": 10, "exit_reason": "TARGET",
+    }])
+    result = attach_closed_trades(book, path=path)
+    assert result["attached"] == 1
+    rows = {r["decision_id"]: r for r in load_ledger(path, strict=True)}
+    assert rows["canonical-older"]["gross_R"] == 1.4
+    assert rows["canonical-older"]["later_outcome"] is not None
+    assert rows["canonical-newer"]["gross_R"] is None
+    assert rows["canonical-newer"]["later_outcome"] is None
+    assert attach_closed_trades(book, path=path)["attached"] == 0
+
+
+def test_closed_trade_wrong_canonical_identity_cannot_fallback_to_same_symbol_day(tmp_path):
+    from types import SimpleNamespace
+    from product.forward_evidence import freeze_observation, load_ledger
+    from product.forward_soak import attach_closed_trades
+
+    path = tmp_path / "forward_evidence.jsonl"
+    legacy = freeze_observation(
+        {"symbol": "INFY", "decision": "ENTER_NOW",
+         "reason_code": "ELIGIBLE", "entry": 100, "stop": 94},
+        cycle_id="legacy-1", as_of="2026-10-09",
+        group="TAKEN", entered=True, path=path,
+    )
+    assert legacy["decision_id"].startswith("2026-10-09|INFY|TAKEN|")
+
+    wrong = SimpleNamespace(closed=[{
+        "symbol": "INFY", "decision_id": "some-other-canonical-order",
+        "paper_intent_id": "different-intent",
+        "entry_date": "2026-10-09", "exit_date": "2026-10-12",
+        "realized_R": 1.9, "exit_reason": "TARGET",
+    }])
+    result = attach_closed_trades(wrong, path=path)
+    assert result["attached"] == 0
+    assert result["unattributed"] == 1
+    assert load_ledger(path, strict=True)[0]["later_outcome"] is None
+
+
+def test_conflicting_intent_does_not_settle_matching_decision(tmp_path):
+    from types import SimpleNamespace
+    from product.forward_evidence import freeze_observation, load_ledger
+    from product.forward_soak import attach_closed_trades
+
+    path = tmp_path / "forward_evidence.jsonl"
+    freeze_observation(
+        {"symbol": "RELIANCE", "decision": "ENTER_NOW",
+         "reason_code": "ELIGIBLE", "entry": 100, "stop": 94,
+         "decision_id": "decision-exact", "paper_intent_id": "intent-true"},
+        cycle_id="c1", as_of="2026-10-09", group="TAKEN",
+        entered=True, path=path,
+    )
+    conflicting = SimpleNamespace(closed=[{
+        "symbol": "RELIANCE", "decision_id": "decision-exact",
+        "paper_intent_id": "intent-false", "entry_date": "2026-10-09",
+        "realized_R": 2.1,
+    }])
+    result = attach_closed_trades(conflicting, path=path)
+    assert result["attached"] == 0
+    assert result["unattributed"] == 1
+    assert load_ledger(path, strict=True)[0]["later_outcome"] is None
+
+
+def test_legacy_paper_exit_requires_unique_matching_entry_session(tmp_path):
+    from types import SimpleNamespace
+    from product.forward_evidence import freeze_observation, load_ledger
+    from product.forward_soak import attach_closed_trades
+
+    path = tmp_path / "forward_evidence.jsonl"
+    older = freeze_observation(
+        {"symbol": "TCS", "decision": "ENTER_NOW",
+         "reason_code": "ELIGIBLE", "entry": 90, "stop": 84},
+        cycle_id="legacy-1", as_of="2026-10-09",
+        group="TAKEN", entered=True, path=path,
+    )
+    newer = freeze_observation(
+        {"symbol": "TCS", "decision": "ENTER_NOW",
+         "reason_code": "ELIGIBLE", "entry": 100, "stop": 94},
+        cycle_id="legacy-2", as_of="2026-10-12",
+        group="TAKEN", entered=True, path=path,
+    )
+    older_close = SimpleNamespace(closed=[{
+        "symbol": "TCS", "entry_date": "2026-10-09",
+        "exit_date": "2026-10-13", "realized_R": 1.0, "exit_reason": "TARGET",
+    }])
+    assert attach_closed_trades(older_close, path=path)["attached"] == 1
+    rows = {r["decision_id"]: r for r in load_ledger(path, strict=True)}
+    assert rows[older["decision_id"]]["later_outcome"] is not None
+    assert rows[newer["decision_id"]]["later_outcome"] is None
+
+    freeze_observation(
+        {"symbol": "TCS", "decision": "ENTER_NOW",
+         "reason_code": "ELIGIBLE", "entry": 101, "stop": 95},
+        cycle_id="legacy-3", as_of="2026-10-12",
+        group="TAKEN", entered=True, path=path,
+    )
+    ambiguous_close = SimpleNamespace(closed=[{
+        "symbol": "TCS", "entry_date": "2026-10-12",
+        "exit_date": "2026-10-13", "realized_R": 1.2,
+    }])
+    status = attach_closed_trades(ambiguous_close, path=path)
+    assert status["attached"] == 0
+    assert status["ambiguous"] == 1
+    assert sum(r["later_outcome"] is not None for r in load_ledger(path, strict=True)) == 1
