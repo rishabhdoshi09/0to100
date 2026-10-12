@@ -1139,3 +1139,31 @@ def test_corrupted_forward_ledger_cannot_produce_measured_or_healthy_report(tmp_
         forward.soak_status()
     with pytest.raises(RuntimeError, match="invalid JSON at line 26"):
         forward.settle_pending_from_market(return_fn=lambda _symbol, _day: None)
+
+
+def test_strict_forward_evidence_read_rejects_disconnected_runtime(tmp_path, monkeypatch):
+    import pytest
+    import product.forward_evidence as evidence
+
+    root = tmp_path / "external" / "QuantTerm" / "runtime"
+    root.mkdir(parents=True)
+    ledger = root / "logs" / "product" / "forward_evidence.jsonl"
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(root))
+    monkeypatch.setenv("QT_RUNTIME_ROOT_REQUIRE_EXISTING", "1")
+    monkeypatch.setenv("QT_FORWARD_LEDGER", str(ledger))
+
+    evidence.freeze_observation(
+        {"symbol": "INFY", "decision": "ENTER_NOW", "reason_code": "ELIGIBLE"},
+        cycle_id="host", as_of="2026-10-12", group="TAKEN",
+    )
+    assert len(evidence.load_ledger(strict=True)) == 1
+
+    offline = root.with_name("runtime.disconnected")
+    root.rename(offline)
+    with pytest.raises(RuntimeError, match="runtime root is missing"):
+        evidence.load_ledger(strict=True)
+    assert not root.exists()
+    assert evidence.load_ledger(strict=False) == []
+
+    offline.rename(root)
+    assert len(evidence.load_ledger(strict=True)) == 1
