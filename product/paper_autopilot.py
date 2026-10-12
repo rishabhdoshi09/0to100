@@ -1234,6 +1234,13 @@ def run_reco_paper_cycle(
             "thesis_hash": str(thesis.get("thesis_hash") or ""),
             "qty": getattr(pos, "qty", None),
             "entry_fill": getattr(pos, "entry_price", None),
+            # Preserve the exact paper-book identity in forward evidence.
+            # A closed paper trade MUST settle the decision that opened it;
+            # symbol-only matching is unsafe after multiple entries.
+            "decision_id": str(getattr(pos, "decision_id", "") or ""),
+            "paper_intent_id": str(getattr(pos, "paper_intent_id", "") or ""),
+            "context_key": str(getattr(pos, "context_key", "") or ""),
+            "entry_date": str(getattr(pos, "entry_date", "") or day),
             "status": "TAKEN",
             "group": "TAKEN",
         }
