@@ -99,6 +99,24 @@ embedded trading date where available. A corrupt or renamed prior-session
 file fails closed instead of promoting its filename; scans still rely on the
 authoritative full OHLCV store, not the metadata-only read.
 
+## Public caught-error redaction
+
+The public FastAPI exception handler covers unexpected 500 errors, but **does
+not** cover intentionally caught exceptions re-emitted as `HTTPException(500/502/503)`,
+or local failure payloads returned as HTTP 200 JSON. Public spectator mode now
+uses the shared `product.public_access` diagnostic sanitizers in the terminal
+and product API boundaries. Public responses retain a static route-level failure
+label and valid unavailability flags, but never publish the caught exception's
+filesystem paths, provider details, SQL messages, or secret-bearing values.
+Private/local operator mode retains detailed diagnostics for engineering.
+Regression tests exercise public and private cases for stock intelligence, chart
+history, target portfolio fallback, and the shared helpers.
+
+This is a **known error-boundary hardening step**, not a comprehensive review of
+every saved JSON payload, market-data redistributability, proxy access control,
+response size, rate limiting, or secrets in non-error fields. Public launch stays
+HOLD until those independent security checks are completed.
+
 ## Rollout
 
 - **Durable runtime identity:** the installed storage guard requires both the
