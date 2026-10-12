@@ -676,3 +676,97 @@ def test_rejection_gate_scorecard_keeps_counterfactuals_out_of_pnl():
     assert card["r_coverage"] == 1.0
     assert card["evidence"] == "MEASURED"
     assert card["not_pnl"] is True
+
+
+def test_forward_soak_concurrent_publication_uses_distinct_atomic_temps(tmp_path, monkeypatch):
+    """Two writers must never share the old forward_soak_verify.json.tmp."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    import product.forward_soak as forward
+
+    target = tmp_path / "forward_soak_verify.json"
+    barrier = threading.Barrier(2)
+    originals = forward.os.replace
+    seen = []
+    guard = threading.Lock()
+
+    def colliding_replace(source, destination):
+        with guard:
+            seen.append(str(source))
+        barrier.wait(timeout=8)
+        return originals(source, destination)
+
+    monkeypatch.setattr(forward.os, "replace", colliding_replace)
+    def writer(index):
+        return forward._write_json(target, {"schema_version": 1, "writer": index})
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(writer, (1, 2)))
+
+    assert results == [target, target]
+    assert len(seen) == 2 and len(set(seen)) == 2
+    assert json.loads(target.read_text(encoding="utf-8")) in (
+        {"schema_version": 1, "writer": 1},
+        {"schema_version": 1, "writer": 2},
+    )
+    assert not list(tmp_path.glob(".*.tmp"))
+
+
+def test_forward_soak_failed_rename_preserves_previous_artifact(tmp_path, monkeypatch):
+    import product.forward_soak as forward
+
+    target = tmp_path / "forward_journey.json"
+    forward._write_json(target, {"version": "previous"})
+
+    def fail_replace(_a, _b):
+        raise OSError("simulated atomic-rename error")
+
+    monkeypatch.setattr(forward.os, "replace", fail_replace)
+    import pytest
+    with pytest.raises(OSError, match="simulated"):
+        forward._write_json(target, {"version": "new"})
+    assert json.loads(target.read_text(encoding="utf-8")) == {"version": "previous"}
+    assert not list(tmp_path.glob(".*.tmp"))
+
+
+def test_forward_soak_unmounted_volume_fails_before_any_directory_created(tmp_path, monkeypatch):
+    import pytest
+    import product.forward_soak as forward
+
+    root = tmp_path / "external" / "QuantTerm" / "runtime"
+    root.mkdir(parents=True)
+    target = root / "logs" / "product" / "forward_soak_verify.json"
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(root))
+    monkeypatch.setenv("QT_RUNTIME_ROOT_REQUIRE_EXISTING", "1")
+
+    forward._write_json(target, {"status": "OLD"})
+    disconnected = root.with_name("runtime.offline")
+    root.rename(disconnected)
+
+    with pytest.raises(RuntimeError, match="runtime root is missing"):
+        forward._write_json(target, {"status": "NEW"})
+    assert not root.exists()
+    assert json.loads(
+        (disconnected / "logs" / "product" / "forward_soak_verify.json").read_text()
+    ) == {"status": "OLD"}
+    disconnected.rename(root)
+    forward._write_json(target, {"status": "RESTORED"})
+    assert json.loads(target.read_text()) == {"status": "RESTORED"}
+
+
+def test_forward_soak_strict_runtime_blocks_symlink_escape(tmp_path, monkeypatch):
+    import pytest
+    import product.forward_soak as forward
+
+    root = tmp_path / "external" / "QuantTerm" / "runtime"
+    root.mkdir(parents=True)
+    outside = tmp_path / "untrusted"
+    outside.mkdir()
+    (root / "logs").symlink_to(outside, target_is_directory=True)
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(root))
+    monkeypatch.setenv("QT_RUNTIME_ROOT_REQUIRE_EXISTING", "1")
+
+    target = root / "logs" / "product" / "forward_journey.json"
+    with pytest.raises(RuntimeError, match="outside the persistent runtime"):
+        forward._write_json(target, {"sensitive": "never outside"})
+    assert not (outside / "product").exists()
