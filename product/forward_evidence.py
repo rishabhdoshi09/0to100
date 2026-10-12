@@ -148,8 +148,15 @@ def _write_jsonl(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         tmp.unlink(missing_ok=True)
 
 
-def load_ledger(path: str | Path | None = None) -> list[dict[str, Any]]:
-    return _read_jsonl(ledger_path(path))
+def load_ledger(
+    path: str | Path | None = None, *, strict: bool = False,
+) -> list[dict[str, Any]]:
+    """Load forward evidence; require strict=True for decisions/readiness/P&L.
+
+    Forgiving reads are for diagnostic recovery only. A damaged record must
+    never disappear silently from statistics that claim real forward evidence.
+    """
+    return _read_jsonl(ledger_path(path), strict=strict)
 
 
 def real_forward_only(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
