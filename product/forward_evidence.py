@@ -66,24 +66,29 @@ def _read_jsonl(path: Path, *, strict: bool = False) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     rows: list[dict[str, Any]] = []
-    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            payload = json.loads(line)
-        except Exception as exc:
-            if strict:
-                # A writer must never rewrite a filtered ledger and silently
-                # erase any unparseable historical decisions.
+    # Do not build a second full-size raw UTF-8 string AND a splitlines list
+    # alongside parsed dicts. Stream one record at a time on low-memory Macs.
+    with path.open("r", encoding="utf-8") as handle:
+        for number, line in enumerate(handle, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except Exception as exc:
+                if strict:
+                    # Writers must not rewrite a filtered ledger and silently
+                    # erase earlier malformed point-in-time decisions.
+                    raise RuntimeError(
+                        f"forward evidence ledger has invalid JSON at line {number}"
+                    ) from exc
+                continue
+            if isinstance(payload, dict):
+                rows.append(payload)
+            elif strict:
                 raise RuntimeError(
-                    f"forward evidence ledger has invalid JSON at line {number}"
-                ) from exc
-            continue
-        if isinstance(payload, dict):
-            rows.append(payload)
-        elif strict:
-            raise RuntimeError(f"forward evidence ledger has a non-object row at line {number}")
+                    f"forward evidence ledger has a non-object row at line {number}"
+                )
     return rows
 
 
