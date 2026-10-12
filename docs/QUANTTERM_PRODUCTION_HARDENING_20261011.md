@@ -75,7 +75,11 @@ launchd service and canonical manual launcher set `QT_BUILD_SHA`; the API
 health handler does not run git or expose environment secrets.
 
 It samples four local GET endpoints sequentially (health, access, dashboard,
-decision-simulation-gate). It fails on any unsafe operational read or when
+decision-simulation-gate). HTTP 200 is not sufficient: /api/health must identify
+the canonical QuantTerm API, report lifecycle READY, operational_ready=true,
+evidence_ready=true, and positively verify that live money remains locked.
+A DEGRADED/RECOVERING API or stale evidence fails the release soak even if
+every response is fast. It fails on any unsafe operational read or when
 the endpoint's nearest-rank p95 exceeds three seconds. Single-flight cache
 TTL rollover may legitimately return a short **labelled, fail-closed STALE**
 snapshot while the asynchronous refresh runs: the soak allows at most two
