@@ -94,3 +94,89 @@ def test_public_health_redacts_even_successful_probes_with_private_details(monke
     private_result = terminal_api.health()
     assert private_result["reason"] == f"Loaded {secret}"
     assert secret in json.dumps(private_result)
+
+
+def test_public_caught_http_500_never_reflects_exception_in_route_detail(monkeypatch):
+    import pytest
+    from fastapi import HTTPException
+    import terminal_product_api as product_api
+
+    secret = "/Users/operator/QuantTerm/runtime/broker.db QT_OPERATOR_TOKEN=do-not-disclose"
+
+    def fail_workspace(symbol):
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(product_api, "build_stock_workspace", fail_workspace)
+    monkeypatch.setenv("QT_PUBLIC_READ_ONLY", "1")
+    with pytest.raises(HTTPException) as error:
+        product_api.stock_intelligence("INFY")
+    assert error.value.status_code == 500
+    assert secret not in str(error.value.detail)
+    assert "Stock intelligence failed" in str(error.value.detail)
+
+    monkeypatch.delenv("QT_PUBLIC_READ_ONLY", raising=False)
+    with pytest.raises(HTTPException) as local_error:
+        product_api.stock_intelligence("INFY")
+    assert secret in str(local_error.value.detail)
+
+
+def test_public_caught_chart_503_error_never_reflects_provider_details(monkeypatch):
+    import pytest
+    from fastapi import HTTPException
+    import data.bhavcopy_runtime as runtime
+
+    secret = "/Volumes/QuantTermStorage/operator-api-secret"
+
+    def broken_history(_symbol):
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(runtime, "get_ohlcv", broken_history)
+    monkeypatch.setenv("QT_PUBLIC_READ_ONLY", "1")
+    with pytest.raises(HTTPException) as error:
+        terminal_api.chart("INFY")
+    assert error.value.status_code == 503
+    assert secret not in str(error.value.detail)
+
+    monkeypatch.delenv("QT_PUBLIC_READ_ONLY", raising=False)
+    with pytest.raises(HTTPException) as private_error:
+        terminal_api.chart("INFY")
+    assert secret in str(private_error.value.detail)
+
+
+def test_public_projection_fallback_never_discloses_operator_storage(tmp_path, monkeypatch):
+    import terminal_product_api as product_api
+    import research.intelligence.event_store as event_store
+
+    secret = "/Users/operator/private/journal.sqlite?token=SECRET"
+    path = tmp_path / "events.jsonl"
+    path.write_text("", encoding="utf-8")
+
+    def broken_store(_path):
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(product_api, "TARGET_EVENT_STORE", path)
+    monkeypatch.setattr(event_store, "EventStore", broken_store)
+
+    monkeypatch.setenv("QT_PUBLIC_READ_ONLY", "1")
+    public = product_api.target_portfolio()
+    assert public["available"] is False
+    assert secret not in json.dumps(public)
+    assert public["error"] == "Internal diagnostic unavailable in public read-only mode."
+
+    monkeypatch.delenv("QT_PUBLIC_READ_ONLY", raising=False)
+    private = product_api.target_portfolio()
+    assert private["error"] == secret
+
+
+def test_public_exception_helpers_hide_secrets_without_weakening_private_diagnostics(monkeypatch):
+    from product.public_access import public_exception_text, public_http_error_detail
+
+    secret = "/private/BrokerAPI key=never-show"
+    error = OSError(secret)
+    monkeypatch.setenv("QT_PUBLIC_READ_ONLY", "1")
+    assert secret not in public_exception_text(error)
+    assert secret not in public_http_error_detail("Market data failed", error)
+
+    monkeypatch.delenv("QT_PUBLIC_READ_ONLY", raising=False)
+    assert public_exception_text(error) == secret
+    assert secret in public_http_error_detail("Market data failed", error)
