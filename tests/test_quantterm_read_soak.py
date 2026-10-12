@@ -187,7 +187,9 @@ def test_local_soak_ignores_proxy_environment(monkeypatch):
         def read(self, size):
             assert size > 100
             return json.dumps({
-                "ok": True, "live_locked": True,
+                "ok": True, "service": "quantterm-terminal-api",
+                "lifecycle": "READY", "operational_ready": True,
+                "evidence_ready": True, "live_locked": True,
                 "live_lock_verified": True, "live_execution_authorized": False,
             }).encode()
 
@@ -218,6 +220,8 @@ def test_health_sample_contains_sanitized_build_attestation(monkeypatch):
         def read(self, _size):
             return json.dumps({
                 "ok": True, "build_sha": expected,
+                "service": "quantterm-terminal-api", "lifecycle": "READY",
+                "operational_ready": True, "evidence_ready": True,
                 "live_locked": True, "live_lock_verified": True,
                 "live_execution_authorized": False,
             }).encode()
@@ -226,6 +230,40 @@ def test_health_sample_contains_sanitized_build_attestation(monkeypatch):
     row = sample_one("http://127.0.0.1:8765", "health", 2)
     assert row["ok"] is True
     assert row["build_sha"] == expected
+
+
+def test_read_soak_rejects_unready_health_even_if_http_200(monkeypatch):
+    import json
+    import scripts.quantterm_read_soak as soak
+
+    healthy = {
+        "ok": True, "service": "quantterm-terminal-api",
+        "lifecycle": "READY", "operational_ready": True,
+        "evidence_ready": True, "live_locked": True,
+        "live_lock_verified": True, "live_execution_authorized": False,
+    }
+
+    class Response:
+        status = 200
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+        def read(self, _size):
+            return json.dumps(healthy).encode()
+
+    monkeypatch.setattr(soak._LOCAL_OPENER, "open", lambda *_a, **_k: Response())
+    assert sample_one("http://127.0.0.1:8765", "health", 2)["ok"] is True
+
+    for field, unsafe in (
+        ("lifecycle", "DEGRADED"), ("lifecycle", "RECOVERING"),
+        ("operational_ready", False), ("evidence_ready", False),
+        ("service", "unexpected-http-server"),
+    ):
+        original = healthy[field]
+        healthy[field] = unsafe
+        assert sample_one("http://127.0.0.1:8765", "health", 2)["ok"] is False
+        healthy[field] = original
 
 
 def test_normal_single_flight_cache_ttl_transition_is_accepted():
