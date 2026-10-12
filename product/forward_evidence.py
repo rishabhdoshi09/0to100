@@ -9,12 +9,15 @@ Provenance is mandatory so test fixtures cannot pollute promotion stats.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
+import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
-from core.runtime_paths import logs_dir
+from core.runtime_paths import _require_existing_runtime, logs_dir, runtime_root
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PATH = logs_dir() / "product" / "forward_evidence.jsonl"
@@ -76,11 +79,57 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def _write_jsonl(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
+def _require_safe_ledger_destination(path: Path) -> None:
+    """Never recreate a vanished installed runtime or escape its logs tree."""
+    if _require_existing_runtime():
+        expected_logs = runtime_root() / "logs"
+        try:
+            path.resolve(strict=False).relative_to(expected_logs)
+        except ValueError as exc:
+            raise RuntimeError(
+                "forward ledger destination is outside the installed persistent runtime"
+            ) from exc
+
+
+@contextmanager
+def _ledger_write_lock(path: Path):
+    """Serialize the WHOLE read-modify-write across Mac worker processes.
+
+    The lock is on a stable sibling file, not the ledger inode (which atomic
+    rename replaces). Every frozen decision and settlement observes the most
+    recent authoritative JSONL under this lock.
+    """
+    _require_safe_ledger_destination(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text("".join(json.dumps(dict(r), default=str) + "\n" for r in rows), encoding="utf-8")
-    os.replace(tmp, path)
+    lock = path.with_name(path.name + ".lock")
+    _require_safe_ledger_destination(lock)
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(str(lock), flags, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def _write_jsonl(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
+    """Publish one complete JSONL snapshot, never an intermediate truncation."""
+    _require_safe_ledger_destination(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent),
+    )
+    tmp = Path(name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            for record in rows:
+                handle.write(json.dumps(dict(record), default=str) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def load_ledger(path: str | Path | None = None) -> list[dict[str, Any]]:
@@ -137,67 +186,68 @@ def freeze_observation(
         as_of=as_of, symbol=symbol, group=group, reason_code=reason, cycle_id=cycle_id,
     )
     target = ledger_path(path)
-    existing = load_ledger(target)
-    for prev in existing:
-        if str(prev.get("decision_id")) == did:
-            return dict(prev)
-    portfolio = row.get("portfolio_authority") if isinstance(row.get("portfolio_authority"), Mapping) else {}
-    policy = str(row.get("policy_effect") or (row.get("policy") or {}).get("final_effect") or "NEUTRAL")
-    payload = {
-        "schema_version": SCHEMA_VERSION,
-        "decision_id": did,
-        "cycle_id": str(cycle_id or ""),
-        "provenance": current_provenance(provenance),
-        "symbol": symbol,
-        "decision_timestamp": _now(),
-        "market_timestamp": str(as_of or "")[:32],
-        "rules_hash": str(rules_hash or row.get("rules_hash") or ""),
-        "freeze_id": str(row.get("freeze_id") or ""),
-        "decision_fingerprint": str(row.get("evidence_fingerprint") or row.get("decision_fingerprint") or ""),
-        "thesis_hash": str(row.get("thesis_hash") or ""),
-        "calibration_snapshot_id": str(row.get("calibration_snapshot_id") or ""),
-        "data_snapshot_id": str(row.get("data_snapshot_id") or row.get("source_snapshot_id") or ""),
-        "policy_version": str(row.get("policy_version") or ""),
-        "recommendation_tier": str(row.get("tier") or row.get("reco_tier") or ""),
-        "selection_result": str(row.get("decision") or group or ""),
-        "policy_result": policy,
-        "portfolio_result": str((portfolio or {}).get("decision") or row.get("portfolio_result") or ""),
-        "entry_state": str(row.get("entry_state") or ""),
-        "dd_status": str(row.get("dd_status") or row.get("dd_verdict") or ""),
-        "setup": str(row.get("setup_label") or row.get("setup") or row.get("primary_thesis") or ""),
-        "sector": str(row.get("sector") or ""),
-        "regime": str(row.get("regime") or ""),
-        "entry": row.get("entry") or row.get("entry_fill"),
-        "stop": row.get("stop"),
-        "target": row.get("target"),
-        "surfaced": bool(surfaced),
-        "entered": bool(entered),
-        "why": row.get("why") or row.get("detail") or "",
-        "reason_code": reason,
-        "group": str(group or row.get("group") or ""),
-        "later_outcome": None,
-        "gross_R": None,
-        "execution_adjusted_R": None,
-        "execution_coverage": None,
-        "execution_charges": None,
-        "spread_status": None,
-        "slippage_status": None,
-        "liquidity_assumptions": None,
-        "counterfactual_classification": None,
-        "pit_proof": {
-            "as_of": str(as_of or "")[:10],
+    with _ledger_write_lock(target):
+        existing = load_ledger(target)
+        for prev in existing:
+            if str(prev.get("decision_id")) == did:
+                return dict(prev)
+        portfolio = row.get("portfolio_authority") if isinstance(row.get("portfolio_authority"), Mapping) else {}
+        policy = str(row.get("policy_effect") or (row.get("policy") or {}).get("final_effect") or "NEUTRAL")
+        payload = {
+            "schema_version": SCHEMA_VERSION,
+            "decision_id": did,
+            "cycle_id": str(cycle_id or ""),
+            "provenance": current_provenance(provenance),
+            "symbol": symbol,
+            "decision_timestamp": _now(),
+            "market_timestamp": str(as_of or "")[:32],
             "rules_hash": str(rules_hash or row.get("rules_hash") or ""),
-            "scan_scanned_at": str(row.get("scan_scanned_at") or ""),
             "freeze_id": str(row.get("freeze_id") or ""),
             "decision_fingerprint": str(row.get("evidence_fingerprint") or row.get("decision_fingerprint") or ""),
-            "decision_frozen": True,
-            "future_data_used_for_decision": False,
-        },
-        "not_pnl": not entered,
-    }
-    existing.append(payload)
-    _write_jsonl(target, existing)
-    return payload
+            "thesis_hash": str(row.get("thesis_hash") or ""),
+            "calibration_snapshot_id": str(row.get("calibration_snapshot_id") or ""),
+            "data_snapshot_id": str(row.get("data_snapshot_id") or row.get("source_snapshot_id") or ""),
+            "policy_version": str(row.get("policy_version") or ""),
+            "recommendation_tier": str(row.get("tier") or row.get("reco_tier") or ""),
+            "selection_result": str(row.get("decision") or group or ""),
+            "policy_result": policy,
+            "portfolio_result": str((portfolio or {}).get("decision") or row.get("portfolio_result") or ""),
+            "entry_state": str(row.get("entry_state") or ""),
+            "dd_status": str(row.get("dd_status") or row.get("dd_verdict") or ""),
+            "setup": str(row.get("setup_label") or row.get("setup") or row.get("primary_thesis") or ""),
+            "sector": str(row.get("sector") or ""),
+            "regime": str(row.get("regime") or ""),
+            "entry": row.get("entry") or row.get("entry_fill"),
+            "stop": row.get("stop"),
+            "target": row.get("target"),
+            "surfaced": bool(surfaced),
+            "entered": bool(entered),
+            "why": row.get("why") or row.get("detail") or "",
+            "reason_code": reason,
+            "group": str(group or row.get("group") or ""),
+            "later_outcome": None,
+            "gross_R": None,
+            "execution_adjusted_R": None,
+            "execution_coverage": None,
+            "execution_charges": None,
+            "spread_status": None,
+            "slippage_status": None,
+            "liquidity_assumptions": None,
+            "counterfactual_classification": None,
+            "pit_proof": {
+                "as_of": str(as_of or "")[:10],
+                "rules_hash": str(rules_hash or row.get("rules_hash") or ""),
+                "scan_scanned_at": str(row.get("scan_scanned_at") or ""),
+                "freeze_id": str(row.get("freeze_id") or ""),
+                "decision_fingerprint": str(row.get("evidence_fingerprint") or row.get("decision_fingerprint") or ""),
+                "decision_frozen": True,
+                "future_data_used_for_decision": False,
+            },
+            "not_pnl": not entered,
+        }
+        existing.append(payload)
+        _write_jsonl(target, existing)
+        return payload
 
 
 def attach_settlement(
@@ -217,43 +267,44 @@ def attach_settlement(
 ) -> dict[str, Any] | None:
     """Write later outcome only. Never mutates PIT decision fields."""
     target = ledger_path(path)
-    rows = load_ledger(target)
-    found = None
-    out: list[dict[str, Any]] = []
-    for row in rows:
-        if str(row.get("decision_id")) != str(decision_id_value):
-            out.append(row)
-            continue
-        updated = dict(row)
-        if updated.get("later_outcome") is None:
-            updated["later_outcome"] = {
-                "forward_return_pct": forward_return_pct,
-                "settled_at": _now(),
-                "provenance": current_provenance(outcome_provenance),
-                "not_pnl": not bool(updated.get("entered")),
-            }
-            if classification and updated.get("counterfactual_classification") is None:
-                updated["counterfactual_classification"] = classification
-            if gross_R is not None and updated.get("gross_R") is None:
-                updated["gross_R"] = gross_R
-            if execution_adjusted_R is not None and updated.get("execution_adjusted_R") is None:
-                updated["execution_adjusted_R"] = execution_adjusted_R
-            if execution_coverage is not None and updated.get("execution_coverage") is None:
-                updated["execution_coverage"] = execution_coverage
-            if execution_charges is not None and updated.get("execution_charges") is None:
-                updated["execution_charges"] = execution_charges
-            if spread_status and updated.get("spread_status") is None:
-                updated["spread_status"] = spread_status
-            if slippage_status and updated.get("slippage_status") is None:
-                updated["slippage_status"] = slippage_status
-            if liquidity_assumptions and updated.get("liquidity_assumptions") is None:
-                updated["liquidity_assumptions"] = liquidity_assumptions
-        found = updated
-        out.append(updated)
-    if found is None:
-        return None
-    _write_jsonl(target, out)
-    return found
+    with _ledger_write_lock(target):
+        rows = load_ledger(target)
+        found = None
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            if str(row.get("decision_id")) != str(decision_id_value):
+                out.append(row)
+                continue
+            updated = dict(row)
+            if updated.get("later_outcome") is None:
+                updated["later_outcome"] = {
+                    "forward_return_pct": forward_return_pct,
+                    "settled_at": _now(),
+                    "provenance": current_provenance(outcome_provenance),
+                    "not_pnl": not bool(updated.get("entered")),
+                }
+                if classification and updated.get("counterfactual_classification") is None:
+                    updated["counterfactual_classification"] = classification
+                if gross_R is not None and updated.get("gross_R") is None:
+                    updated["gross_R"] = gross_R
+                if execution_adjusted_R is not None and updated.get("execution_adjusted_R") is None:
+                    updated["execution_adjusted_R"] = execution_adjusted_R
+                if execution_coverage is not None and updated.get("execution_coverage") is None:
+                    updated["execution_coverage"] = execution_coverage
+                if execution_charges is not None and updated.get("execution_charges") is None:
+                    updated["execution_charges"] = execution_charges
+                if spread_status and updated.get("spread_status") is None:
+                    updated["spread_status"] = spread_status
+                if slippage_status and updated.get("slippage_status") is None:
+                    updated["slippage_status"] = slippage_status
+                if liquidity_assumptions and updated.get("liquidity_assumptions") is None:
+                    updated["liquidity_assumptions"] = liquidity_assumptions
+            found = updated
+            out.append(updated)
+        if found is None:
+            return None
+        _write_jsonl(target, out)
+        return found
 
 
 def freeze_cycle(cycle: Mapping[str, Any], *, path: str | Path | None = None) -> dict[str, Any]:
