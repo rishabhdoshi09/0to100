@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
-from core.runtime_paths import _require_existing_runtime, logs_dir, runtime_root
+from core.runtime_paths import _require_existing_runtime, logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PATH = logs_dir() / "product" / "forward_evidence.jsonl"
@@ -90,7 +90,7 @@ def _read_jsonl(path: Path, *, strict: bool = False) -> list[dict[str, Any]]:
 def _require_safe_ledger_destination(path: Path) -> None:
     """Never recreate a vanished installed runtime or escape its logs tree."""
     if _require_existing_runtime():
-        expected_logs = runtime_root() / "logs"
+        expected_logs = logs_dir()
         try:
             path.resolve(strict=False).relative_to(expected_logs)
         except ValueError as exc:
