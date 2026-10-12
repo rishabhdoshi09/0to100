@@ -42,6 +42,12 @@ def evaluate(
 
     if health.get("ok") is not True:
         blockers.append("Canonical API liveness not verified")
+    if health.get("service") != "quantterm-terminal-api":
+        blockers.append("Canonical QuantTerm API identity is unverified")
+    if (health.get("lifecycle") != "READY"
+            or health.get("operational_ready") is not True
+            or health.get("evidence_ready") is not True):
+        blockers.append("Canonical stack is not READY with verified operations and evidence")
     if expected_sha:
         # A healthy old process is NOT evidence that the proposed release is
         # running. Require the full exact 40-digit SHA, not a short prefix.
