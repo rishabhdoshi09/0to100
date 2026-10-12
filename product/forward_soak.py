@@ -27,7 +27,7 @@ from product.forward_evidence import (
 )
 from product.live_safety import live_safety_projection
 from product.promotion_governance import assess_component, promotion_board
-from core.runtime_paths import _require_existing_runtime, logs_dir, runtime_root
+from core.runtime_paths import _require_existing_runtime, logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
 JOURNEY_PATH = logs_dir() / "product" / "forward_journey.json"
@@ -148,7 +148,7 @@ def _write_text(path: Path, content: str) -> Path:
     if _require_existing_runtime():
         # Resolves the currently configured root afresh; a vanished APFS mount
         # cannot be recreated under /Volumes by a cached module-level Path.
-        expected_logs = runtime_root() / "logs"
+        expected_logs = logs_dir()
         resolved_target = target.resolve(strict=False)
         try:
             resolved_target.relative_to(expected_logs)
