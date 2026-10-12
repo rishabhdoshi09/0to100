@@ -770,3 +770,178 @@ def test_forward_soak_strict_runtime_blocks_symlink_escape(tmp_path, monkeypatch
     with pytest.raises(RuntimeError, match="outside the persistent runtime"):
         forward._write_json(target, {"sensitive": "never outside"})
     assert not (outside / "product").exists()
+
+
+def test_concurrent_forward_ledger_freezes_preserve_all_unique_decisions(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    import product.forward_evidence as evidence
+
+    ledger = tmp_path / "forward_evidence.jsonl"
+    workers = 8
+    start = Barrier(workers)
+
+    def freeze(n):
+        start.wait(timeout=8)
+        return evidence.freeze_observation(
+            {"symbol": f"TEST{n}", "decision": "ENTER_NOW",
+             "reason_code": "ELIGIBLE", "entry": 100, "stop": 94},
+            cycle_id=f"cycle-{n}", as_of="2026-10-09",
+            group="TAKEN", entered=True, path=ledger,
+        )
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        out = list(pool.map(freeze, range(workers)))
+
+    assert len(out) == workers
+    rows = evidence.load_ledger(ledger)
+    assert len(rows) == workers
+    assert {r["symbol"] for r in rows} == {f"TEST{i}" for i in range(workers)}
+    assert len({r["decision_id"] for r in rows}) == workers
+
+    # Races for the same identity must deduplicate, never overwrite PIT data.
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        duplicates = list(pool.map(freeze, range(workers)))
+    assert len(duplicates) == workers
+    assert len(evidence.load_ledger(ledger)) == workers
+
+
+def test_freeze_cycle_batches_candidate_publication_into_one_atomic_write(tmp_path, monkeypatch):
+    import product.forward_evidence as evidence
+
+    ledger = tmp_path / "forward_evidence.jsonl"
+    original = evidence._write_jsonl
+    count = []
+
+    def counted_write(path, rows):
+        count.append(len(rows))
+        return original(path, rows)
+
+    monkeypatch.setattr(evidence, "_write_jsonl", counted_write)
+    cycle = {
+        "as_of": "2026-10-09", "cycle_id": "whole-market-1",
+        "taken": [
+            {"symbol": f"SYM{i}", "decision": "ENTER_NOW",
+             "reason_code": "ELIGIBLE", "entry": 100, "stop": 94}
+            for i in range(30)
+        ],
+        "rejections": [{"symbol": "WAITME", "decision": "REJECTED",
+                        "reason_code": "CHASE_RISK"}],
+    }
+    first = evidence.freeze_cycle(cycle, path=ledger)
+    assert first["written"] == 31
+    assert first["skipped_duplicates"] == 0
+    assert count == [31]
+    assert len(evidence.load_ledger(ledger)) == 31
+
+    second = evidence.freeze_cycle(cycle, path=ledger)
+    assert second["written"] == 0
+    assert second["skipped_duplicates"] == 31
+    assert count == [31]  # No redundant write on a duplicate replay.
+
+
+def test_settlement_and_concurrent_new_freeze_cannot_lose_one_another(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    import product.forward_evidence as evidence
+
+    ledger = tmp_path / "forward_evidence.jsonl"
+    orig = evidence.freeze_observation(
+        {"symbol": "INFY", "decision": "ENTER_NOW", "reason_code": "ELIGIBLE",
+         "entry": 100, "stop": 94},
+        cycle_id="orig", as_of="2026-10-09", group="TAKEN",
+        entered=True, path=ledger,
+    )
+    start = Barrier(2)
+
+    def settle():
+        start.wait(timeout=8)
+        return evidence.attach_settlement(
+            orig["decision_id"], classification="TARGET", gross_R=1.4,
+            outcome_provenance=REAL_FORWARD_MARKET, path=ledger,
+        )
+
+    def add():
+        start.wait(timeout=8)
+        return evidence.freeze_observation(
+            {"symbol": "TCS", "decision": "ENTER_NOW", "reason_code": "ELIGIBLE",
+             "entry": 200, "stop": 190},
+            cycle_id="new", as_of="2026-10-09", group="TAKEN",
+            entered=True, path=ledger,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(settle), pool.submit(add)]
+        for f in futures:
+            assert f.result(timeout=12) is not None
+
+    rows = evidence.load_ledger(ledger)
+    assert {row["symbol"] for row in rows} == {"INFY", "TCS"}
+    settled = next(row for row in rows if row["symbol"] == "INFY")
+    assert settled["entry"] == 100
+    assert settled["later_outcome"] is not None
+    assert settled["gross_R"] == 1.4
+    assert len(rows) == 2
+
+
+def test_corrupt_forward_ledger_cannot_be_silently_rewritten(tmp_path):
+    import product.forward_evidence as evidence
+    import pytest
+
+    ledger = tmp_path / "forward_evidence.jsonl"
+    first = evidence.freeze_observation(
+        {"symbol": "INFY", "decision": "ENTER_NOW",
+         "reason_code": "ELIGIBLE", "entry": 100, "stop": 94},
+        cycle_id="orig", as_of="2026-10-09", group="TAKEN", path=ledger,
+    )
+    with ledger.open("a", encoding="utf-8") as file:
+        file.write("{partially-written-old-decision\n")
+    before = ledger.read_bytes()
+
+    with pytest.raises(RuntimeError, match="invalid JSON at line 2"):
+        evidence.freeze_observation(
+            {"symbol": "TCS", "decision": "ENTER_NOW",
+             "reason_code": "ELIGIBLE", "entry": 200, "stop": 180},
+            cycle_id="another", as_of="2026-10-09", group="TAKEN", path=ledger,
+        )
+    with pytest.raises(RuntimeError, match="invalid JSON at line 2"):
+        evidence.attach_settlement(first["decision_id"], gross_R=1.5, path=ledger)
+    with pytest.raises(RuntimeError, match="invalid JSON at line 2"):
+        evidence.freeze_cycle({"as_of": "2026-10-09", "cycle_id": "batch",
+                               "taken": [{"symbol": "RELIANCE"}]}, path=ledger)
+
+    assert ledger.read_bytes() == before  # No silent permanent deletion.
+
+
+def test_forward_ledger_missing_volume_refuses_write_and_recovers(tmp_path, monkeypatch):
+    import product.forward_evidence as evidence
+    import pytest
+
+    root = tmp_path / "external" / "QuantTerm" / "runtime"
+    root.mkdir(parents=True)
+    ledger = root / "logs" / "product" / "forward_evidence.jsonl"
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(root))
+    monkeypatch.setenv("QT_RUNTIME_ROOT_REQUIRE_EXISTING", "1")
+    first = evidence.freeze_observation(
+        {"symbol": "INFY", "decision": "ENTER_NOW",
+         "reason_code": "ELIGIBLE", "entry": 100, "stop": 94},
+        cycle_id="orig", as_of="2026-10-09", group="TAKEN", path=ledger,
+    )
+    assert first is not None
+    offline = root.with_name("runtime.offline")
+    root.rename(offline)
+
+    with pytest.raises(RuntimeError, match="runtime root is missing"):
+        evidence.freeze_observation(
+            {"symbol": "TCS", "decision": "ENTER_NOW", "reason_code": "ELIGIBLE"},
+            cycle_id="new", as_of="2026-10-09", group="TAKEN", path=ledger,
+        )
+    assert not root.exists()
+    assert len(evidence.load_ledger(offline / "logs" / "product" / "forward_evidence.jsonl")) == 1
+
+    offline.rename(root)
+    evidence.freeze_observation(
+        {"symbol": "TCS", "decision": "ENTER_NOW", "reason_code": "ELIGIBLE"},
+        cycle_id="new", as_of="2026-10-09", group="TAKEN", path=ledger,
+    )
+    assert len(evidence.load_ledger(ledger)) == 2
