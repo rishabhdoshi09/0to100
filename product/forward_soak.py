@@ -331,19 +331,25 @@ def attach_closed_trades(book, *, path=None) -> dict[str, Any]:
         if not symbol:
             unattributed += 1
             continue
+        # NEVER downgrade a claimed canonical identity to symbol/date if it
+        # does not match. A wrong or stale ID must stay unattributed. Legacy
+        # fallback is allowed only when the closed trade has no identity.
         choices: list[dict[str, Any]] = []
         if did:
             choices = by_decision.get(did, [])
-        if not choices and iid:
+        elif iid:
             choices = by_intent.get(iid, [])
-        if not choices and day:
+        elif day:
             choices = legacy_by_session.get((day, symbol), [])
-        # Every candidate must match the closed symbol, its known entry day,
-        # and not have been used for another exit in this batch.
+        # Every candidate must match the closed symbol, known entry day and
+        # every identity supplied by the paper book, not just one of them.
+        # A different intent behind the same decision_id is not equivalent.
         choices = [
             item for item in choices
             if str(item.get("symbol") or "").upper() == symbol
             and (not day or str(item.get("entry_date") or item.get("market_timestamp") or "")[:10] == day)
+            and (not did or str(item.get("decision_id") or "") == did)
+            and (not iid or not item.get("paper_intent_id") or str(item.get("paper_intent_id")) == iid)
             and str(item.get("decision_id") or "") not in used_ids
         ]
         if len(choices) != 1:
