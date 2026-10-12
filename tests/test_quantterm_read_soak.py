@@ -77,6 +77,14 @@ def test_soak_rejects_single_sample_and_invalid_release_thresholds():
     assert assess_samples([_cycle() for _ in range(20)], max_p95_s=3.0)["verdict"] == "READ_SOAK_PASS"
 
 
+
+def test_soak_cli_rejects_zero_delay_to_prevent_warm_cache_only_pass():
+    from scripts.quantterm_read_soak import main
+    with pytest.raises(SystemExit) as exc:
+        main(["--samples", "20", "--interval-seconds", "0"])
+    assert exc.value.code == 2
+
+
 def test_percentile_nearest_rank_semantics():
     assert percentile_nearest_rank([], 95) is None
     assert percentile_nearest_rank([1.0] * 19 + [10.0], 95) == 1.0
