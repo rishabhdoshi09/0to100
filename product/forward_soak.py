@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -26,7 +27,7 @@ from product.forward_evidence import (
 )
 from product.live_safety import live_safety_projection
 from product.promotion_governance import assess_component, promotion_board
-from core.runtime_paths import logs_dir
+from core.runtime_paths import _require_existing_runtime, logs_dir, runtime_root
 
 ROOT = Path(__file__).resolve().parents[1]
 JOURNEY_PATH = logs_dir() / "product" / "forward_journey.json"
@@ -135,12 +136,44 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _write_text(path: Path, content: str) -> Path:
+    """Atomically publish one operator artifact without shared temp-file races.
+
+    A paper-cycle writer and the status/reconciliation lane can overlap. Each
+    owns its own temporary file; failed writers clean up only their own temp.
+    In installed-host mode, recheck the adopted runtime before *any* mkdir,
+    including against a symlink escape or a disconnected external volume.
+    """
+    target = Path(path)
+    if _require_existing_runtime():
+        # Resolves the currently configured root afresh; a vanished APFS mount
+        # cannot be recreated under /Volumes by a cached module-level Path.
+        expected_logs = runtime_root() / "logs"
+        resolved_target = target.resolve(strict=False)
+        try:
+            resolved_target.relative_to(expected_logs)
+        except ValueError as exc:
+            raise RuntimeError(
+                "forward evidence write destination is outside the persistent runtime"
+            ) from exc
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(
+        prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent),
+    )
+    temporary = Path(name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return target
+
+
 def _write_json(path: Path, payload: Mapping[str, Any]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(dict(payload), indent=2, default=str), encoding="utf-8")
-    os.replace(tmp, path)
-    return path
+    return _write_text(path, json.dumps(dict(payload), indent=2, default=str))
 
 
 def _stage(name: str, *, status: str, input_artifact: str = "", output_artifact: str = "",
@@ -839,7 +872,6 @@ def write_daily_report(as_of: str, *, book=None) -> dict[str, Any]:
         "provenance": current_provenance(),
     }
     folder = daily_dir()
-    folder.mkdir(parents=True, exist_ok=True)
     json_path = folder / f"{day}.json"
     md_path = folder / f"{day}.md"
     _write_json(json_path, payload)
@@ -861,7 +893,7 @@ def write_daily_report(as_of: str, *, book=None) -> dict[str, Any]:
         f"- live_lock_status: {payload['live_lock_status']}",
         "",
     ]
-    md_path.write_text("\n".join(lines), encoding="utf-8")
+    _write_text(md_path, "\n".join(lines))
     return {"json_path": str(json_path), "md_path": str(md_path), "report": payload}
 
 
