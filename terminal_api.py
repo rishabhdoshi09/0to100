@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse
 
 from logger import quiet_uvicorn_health_access
 from core.runtime_paths import logs_dir, logs_path
+from product.public_access import public_exception_text, public_http_error_detail
 
 ROOT = Path(__file__).resolve().parent
 OPS_ROOT = logs_dir() / "market_ops"
@@ -517,7 +518,7 @@ def _market_payload() -> dict:
             "vix": None,
             "nifty_price": None,
             "technical_details": {},
-            "error": str(exc),
+            "error": public_exception_text(exc),
         }
 
 
@@ -564,7 +565,7 @@ def _scan_payload() -> dict:
             "desk_overlays": {},
             "long_term_overlay": {},
             "overlay_timings_s": {},
-            "error": str(exc),
+            "error": public_exception_text(exc),
         }
 
 
@@ -617,7 +618,7 @@ def _long_term_payload() -> dict:
             "summary": {},
             "records": [],
             "job": {},
-            "error": str(exc),
+            "error": public_exception_text(exc),
         }
 
 
@@ -735,8 +736,8 @@ def _paper_payload() -> dict:
             "closed_trades": [],
             "refusals": [],
             "last_cycle": {},
-            "last_error": str(exc),
-            "error": str(exc),
+            "last_error": public_exception_text(exc),
+            "error": public_exception_text(exc),
             "learning": _paper_learning_payload(),
         }
 
@@ -763,7 +764,7 @@ def _autonomy_payload() -> dict:
             from product.telegram_delivery import delivery_status
             telegram = delivery_status()
         except Exception as exc:
-            telegram = {"configured": False, "state": "unavailable", "detail": str(exc)}
+            telegram = {"configured": False, "state": "unavailable", "detail": public_exception_text(exc)}
         explanation = str(raw.get("explanation") or "") or str(status.get("explanation") or "")
         reason_code = str(raw.get("reason_code") or status.get("reason_code") or "")
         return {
@@ -834,7 +835,7 @@ def _autonomy_payload() -> dict:
             "live_feed": {},
             "telegram": {"configured": False, "state": "unavailable"},
             "last_cycle": {},
-            "error": str(exc),
+            "error": public_exception_text(exc),
         }
 
 
@@ -937,7 +938,7 @@ def _operations_payload() -> dict[str, Any]:
             "active": [],
             "recent": [],
             "latest": {},
-            "error": str(exc),
+            "error": public_exception_text(exc),
         }
 
 
@@ -969,7 +970,7 @@ def _news_payload() -> dict[str, Any]:
             "articles": [],
             "source_health": [],
             "latest_refresh": {},
-            "error": str(exc),
+            "error": public_exception_text(exc),
         }
 
 
@@ -1159,7 +1160,7 @@ def _fo_paper_payload() -> dict[str, Any]:
             "production_evidence_enabled": False,
             "paper_only": True,
             "live_execution_allowed": False,
-            "error": str(exc)[:240],
+            "error": public_exception_text(exc)[:240],
         }
 
 
@@ -1170,7 +1171,7 @@ def _fno_learning_impact_payload(directional: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         return {
             "available": False,
-            "error": f"{type(exc).__name__}: {exc}"[:240],
+            "error": (public_exception_text(exc) if os.environ.get("QT_PUBLIC_READ_ONLY", "").strip().lower() in ("1", "true", "yes", "on") else f"{type(exc).__name__}: {exc}")[:240],
             "historical": {"available": False, "can_affect_ranking": False},
             "forward": {"available": False, "can_affect_ranking": False},
             "ranking_impact": {"status": "UNAVAILABLE", "plain": "Learning-impact projection unavailable."},
@@ -1224,7 +1225,7 @@ def _fno_payload() -> dict[str, Any]:
             "paper": paper,
             "learning_impact": learning_impact,
             "desk": desk,
-            "error": str(exc),
+            "error": public_exception_text(exc),
         }
 
 
@@ -1246,7 +1247,7 @@ def _data_payload(scan: dict, long_term: dict, operations: dict, fno: dict, news
             "latest_date": "",
             "csv_files": 0,
             "cache_exists": False,
-            "error": str(exc),
+            "error": public_exception_text(exc),
         }
     snapshot = _snapshot_payload()
     blockers: list[str] = []
@@ -1483,7 +1484,7 @@ def _compose_dashboard() -> dict:
                 "summary": {},
                 "records": [],
                 "provenance": {},
-                "error": str(exc),
+                "error": public_exception_text(exc),
             }
         try:
             market = _timed("market", _market_payload)
@@ -1520,7 +1521,7 @@ def _compose_dashboard() -> dict:
                 "daily_wrap": daily_wrap,
             })
         except Exception as exc:
-            degraded = _empty_dashboard(f"Dashboard degraded: {exc}", scan)
+            degraded = _empty_dashboard(public_http_error_detail("Dashboard degraded", exc), scan)
             try:
                 degraded["market"] = _market_payload()
             except Exception:
@@ -1615,7 +1616,7 @@ def chart(symbol: str, limit: int = 220) -> dict:
         frame = get_ohlcv(clean_symbol)
         readiness = bhavcopy_status(load_cache=False)
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Price history unavailable: {exc}") from exc
+        raise HTTPException(status_code=503, detail=public_http_error_detail("Price history unavailable", exc)) from exc
     if frame is None or len(frame) == 0:
         return {"symbol": clean_symbol, "bars": [], "history": readiness}
     frame = frame.tail(max(20, min(int(limit), 500))).copy()
