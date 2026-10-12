@@ -183,6 +183,13 @@ def sample_one(origin: str, path: str, timeout_s: float) -> dict[str, Any]:
             raise ValueError("API returned a non-object JSON payload")
         safe = bool(payload.get("ok") is True) if path == "health" else True
         if path == "health":
+            # /health can return HTTP 200 while autonomy/market operations
+            # are RECOVERING or evidence is DEGRADED. A green latency report
+            # must never mistake liveness for production readiness.
+            safe = safe and payload.get("service") == "quantterm-terminal-api"
+            safe = safe and payload.get("lifecycle") == "READY"
+            safe = safe and payload.get("operational_ready") is True
+            safe = safe and payload.get("evidence_ready") is True
             safe = safe and payload.get("live_locked") is True
             safe = safe and payload.get("live_lock_verified") is True
             safe = safe and payload.get("live_execution_authorized") is False
