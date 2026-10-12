@@ -7,7 +7,9 @@ from scripts.quantterm_readiness_gate import evaluate
 def valid_responses():
     return {
         "health": {
-            "ok": True, "live_locked": True, "live_lock_verified": True,
+            "ok": True, "service": "quantterm-terminal-api",
+            "lifecycle": "READY", "operational_ready": True, "evidence_ready": True,
+            "live_locked": True, "live_lock_verified": True,
             "live_execution_authorized": False,
         },
         "access": {
@@ -52,6 +54,22 @@ def test_local_readiness_requires_current_sources_but_not_paper_approval():
     assert result["verdict"] == "LOCAL_READ_GATE_PASS"
     assert result["blockers"] == []
 
+
+
+def test_release_readiness_rejects_live_but_unready_operational_stack():
+    for field, unsafe in (
+        ("lifecycle", "DEGRADED"),
+        ("lifecycle", "RECOVERING"),
+        ("operational_ready", False),
+        ("evidence_ready", False),
+        ("service", "other-service"),
+    ):
+        responses = valid_responses()
+        responses["health"][field] = unsafe
+        report = evaluate(responses, timings_s=timings())
+        assert report["verdict"] == "HOLD", (field, unsafe)
+        assert any("READY" in reason or "identity" in reason
+                   for reason in report["blockers"])
 
 
 def test_release_readiness_requires_exact_running_build_sha():
