@@ -73,15 +73,15 @@ def _env_path(name: str, default: Path) -> Path:
 
 
 def journey_path() -> Path:
-    return _env_path("QT_FORWARD_JOURNEY", JOURNEY_PATH)
+    return _env_path("QT_FORWARD_JOURNEY", logs_dir() / "product" / "forward_journey.json")
 
 
 def daily_dir() -> Path:
-    return _env_path("QT_FORWARD_DAILY", DAILY_DIR)
+    return _env_path("QT_FORWARD_DAILY", logs_dir() / "product" / "forward_daily")
 
 
 def verify_state_path() -> Path:
-    return _env_path("QT_FORWARD_SOAK_VERIFY", VERIFY_PATH)
+    return _env_path("QT_FORWARD_SOAK_VERIFY", logs_dir() / "product" / "forward_soak_verify.json")
 
 
 def load_latest_verification() -> dict[str, Any]:
