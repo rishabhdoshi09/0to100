@@ -156,7 +156,12 @@ def load_ledger(
     Forgiving reads are for diagnostic recovery only. A damaged record must
     never disappear silently from statistics that claim real forward evidence.
     """
-    return _read_jsonl(ledger_path(path), strict=strict)
+    target = ledger_path(path)
+    if strict:
+        # A disappeared installed runtime must never be mistaken for a valid
+        # zero-row ledger (and hence a successful no-trade day).
+        _require_safe_ledger_destination(target)
+    return _read_jsonl(target, strict=strict)
 
 
 def real_forward_only(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
