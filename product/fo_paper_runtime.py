@@ -628,26 +628,26 @@ def run_fo_paper_cycle(
                         continue
                     opened.append(pos.as_dict())
 
-            if ranked_candidates:
-                try:
-                    from product.fno_exposure_tracking import record_scan_exposure
-
-                    record_scan_exposure(
-                        ranked_candidates,
-                        opened_underlyings={str(pos.get("underlying") or "").upper() for pos in opened},
-                        now_iso=now_ist.isoformat(),
-                    )
-                except Exception:
-                    # Diagnostic-only instrumentation must never interrupt the
-                    # real paper cycle.
-                    pass
-
             # Durable SQLite settlement is the authority boundary. Never
             # publish learning evidence before this commit succeeds.
             store.commit_cycle(
                 settled_rows,
                 (pos.as_dict() for pos in book.open.values()),
             )
+        # Diagnostics must not claim opened positions before their SQLite
+        # commit actually succeeded, nor hold the account lock during I/O.
+        if ranked_candidates:
+            try:
+                from product.fno_exposure_tracking import record_scan_exposure
+                record_scan_exposure(
+                    ranked_candidates,
+                    opened_underlyings={
+                        str(pos.get("underlying") or "").upper() for pos in opened
+                    },
+                    now_iso=now_ist.isoformat(),
+                )
+            except Exception:
+                pass
         # Process learning AFTER the durable ledger transaction and release
         # the cross-book account mutex before any evidence-store I/O.
         # These writes are idempotent by settled trade ID; a failed best-effort
