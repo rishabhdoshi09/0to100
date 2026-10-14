@@ -35,7 +35,10 @@ def _f(value: Any, default: float = 0.0) -> float:
     return number
 
 
-def _daily_prefilter(frame: pd.DataFrame | None, *, lookback: int = 20) -> dict[str, Any]:
+def _daily_prefilter(
+    frame: pd.DataFrame | None, *, lookback: int = 20,
+    intraday_rvol: float | None = None, defer_volume: bool = False,
+) -> dict[str, Any]:
     if frame is None or len(frame) < max(60, lookback + 2):
         return {"eligible": False, "reason": "INSUFFICIENT_HISTORY"}
     try:
@@ -51,7 +54,8 @@ def _daily_prefilter(frame: pd.DataFrame | None, *, lookback: int = 20) -> dict[
     prior_high = float(high.iloc[-(lookback + 1):-1].max())
     prior_low = float(low.iloc[-(lookback + 1):-1].min())
     avg_vol = float(volume.iloc[-21:-1].mean())
-    rvol = float(volume.iloc[-1] / avg_vol) if avg_vol > 0 else 0.0
+    daily_rvol = float(volume.iloc[-1] / avg_vol) if avg_vol > 0 else 0.0
+    rvol = float(intraday_rvol) if intraday_rvol is not None else daily_rvol
     turnover_crore = float((close * volume).iloc[-20:].mean() / 1e7)
     directions: list[str] = []
     if price > prior_high:
@@ -65,12 +69,12 @@ def _daily_prefilter(frame: pd.DataFrame | None, *, lookback: int = 20) -> dict[
             "price": round(price, 4),
             "rvol": round(rvol, 4),
         }
-    if rvol < 1.0:
+    if not defer_volume and rvol < (1.2 if intraday_rvol is not None else 1.0):
         return {
             "eligible": False,
-            "reason": "BREAK_WITHOUT_VOLUME_CONFIRMATION",
-            "price": round(price, 4),
-            "rvol": round(rvol, 4),
+            "reason": "SAME_CLOCK_VOLUME_BELOW_THRESHOLD" if intraday_rvol is not None else "BREAK_WITHOUT_VOLUME_CONFIRMATION",
+            "price": round(price, 4), "rvol": round(rvol, 4),
+            "daily_rvol": round(daily_rvol, 4),
         }
     if turnover_crore < 5.0:
         return {
@@ -89,6 +93,8 @@ def _daily_prefilter(frame: pd.DataFrame | None, *, lookback: int = 20) -> dict[
         "directions": directions,
         "price": round(price, 4),
         "rvol": round(rvol, 4),
+        "daily_rvol": round(daily_rvol, 4),
+        "volume_basis": "KITE_PRIOR_MINUTE_CUMULATIVE" if intraday_rvol is not None else "DAILY_FULL_SESSION",
         "clearance_pct": round(clearance, 4),
         "priority": round(clearance * max(rvol, 1.0), 6),
     }
@@ -192,6 +198,8 @@ def run_fo_directional_scan(
                 "live_execution_allowed": False,
                 "probability_claim": None,
             }
+    # Real scanner must not compare a partial NSE session with full daily volume.
+    require_same_clock_volume = history_getter is None and quote_now.date() == as_of
     history_state: dict[str, Any] = {}
     if history_getter is None:
         from scan.bulk_fetcher import adopt_ready_store, get_cached
@@ -239,6 +247,15 @@ def run_fo_directional_scan(
     universe = list(getattr(report, "underlyings", ()) or ())
     considered: list[dict[str, Any]] = []
     deep: list[tuple[Any, pd.DataFrame, dict[str, Any]]] = []
+    nse_tokens = {
+        str(row.get("tradingsymbol") or "").upper(): int(row.get("instrument_token") or 0)
+        for row in instrument_rows
+        if str(row.get("exchange") or "").upper() == "NSE"
+        and str(row.get("instrument_token") or "").isdigit()
+    }
+    # Only price breakouts consume Kite minute-history calls, never the full F&O universe.
+    same_clock_requests = 0
+    max_same_clock_requests = 35
     for offset, item in enumerate(universe):
         if progress_callback and offset % 25 == 0:
             progress_callback("FNO_PREFILTER", "Checking F&O history and breakout gates", offset, len(universe))
@@ -252,7 +269,24 @@ def run_fo_directional_scan(
         if history_rejection:
             considered.append({"symbol": symbol, "stage": "history", "reason": history_rejection})
             continue
-        pre = _daily_prefilter(frame)
+        pre = _daily_prefilter(frame, defer_volume=require_same_clock_volume)
+        if pre.get("eligible") and require_same_clock_volume:
+            if same_clock_requests >= max_same_clock_requests:
+                pre = {**pre, "eligible": False, "reason": "SAME_CLOCK_QUERY_BUDGET_EXCEEDED"}
+            else:
+                from product.fno_intraday_volume import same_clock_rvol
+                same_clock_requests += 1
+                volume_state = same_clock_rvol(
+                    client=client, instrument_token=nse_tokens.get(symbol, 0),
+                    as_of=as_of, observed_at=quote_now,
+                    cumulative_volume=float(frame["volume"].iloc[-1]),
+                )
+                if not volume_state["available"]:
+                    pre = {**pre, "eligible": False, "reason": volume_state["reason"],
+                           "time_of_day_volume": volume_state}
+                else:
+                    pre = _daily_prefilter(frame, intraday_rvol=volume_state["rvol"])
+                    pre["time_of_day_volume"] = volume_state
         considered.append({"symbol": symbol, "stage": "prefilter", **pre})
         if pre.get("eligible"):
             deep.append((item, frame, pre))
@@ -541,6 +575,7 @@ def run_fo_directional_scan(
                 benchmark_20d_return_pct=float(nifty_20),
                 nifty_change_pct=float(nifty_change),
                 sector_relative_strength_pct=float(sector_strength),
+                time_of_day_rvol=(float(pre["rvol"]) if pre.get("volume_basis") == "KITE_PRIOR_MINUTE_CUMULATIVE" else None),
                 iv_percentile=(
                     float(iv_history["percentile_pct"])
                     if iv_history.get("available") and iv_history.get("percentile_pct") is not None
