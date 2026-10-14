@@ -93,3 +93,31 @@ def test_time_volume_changes_prefilter_decision_not_just_display():
     assert accepted["eligible"]
     assert accepted["daily_rvol"] < 1
     assert accepted["volume_basis"] == "KITE_PRIOR_MINUTE_CUMULATIVE"
+
+
+def test_missing_clock_history_reports_scan_blocked_not_no_market_setup(monkeypatch):
+    from types import SimpleNamespace
+
+    from product import fo_runtime, fo_live_history
+    from scan import bulk_fetcher
+
+    frame = pd.DataFrame({
+        "close": [100.0] * 59 + [110.0],
+        "high": [102.0] * 59 + [111.0],
+        "low": [98.0] * 59 + [109.0],
+        "volume": [1_000_000] * 59 + [40_000],
+    })
+    monkeypatch.setattr(bulk_fetcher, "adopt_ready_store", lambda **kwargs: 500)
+    monkeypatch.setattr(fo_live_history, "prepare_history", lambda *args, **kwargs: (
+        {"TEST": frame}, {"ready": True, "source": "kite_quotes", "rejected": {}}
+    ))
+    report = SimpleNamespace(underlyings=[SimpleNamespace(symbol="TEST")])
+    result = fo_runtime.run_fo_directional_scan(
+        report=report, instrument_rows=[], client=object(),
+        as_of=AS_OF, quote_now=datetime(2026, 10, 14, 10, 30, tzinfo=IST),
+    )
+    assert not result["available"]
+    assert result["status"] == "BLOCKED"
+    assert result["code"] == "FNO_INTRADAY_VOLUME_COVERAGE_UNAVAILABLE"
+    assert result["volume_coverage"]["unknown"] == 1
+    assert result["candidate_count"] == 0
