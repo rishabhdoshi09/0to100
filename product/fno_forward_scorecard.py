@@ -147,7 +147,7 @@ def read_forward_scorecard(*, limit: int = 5000, store=None) -> dict[str, Any]:
     try:
         with FoPaperStore(read_only=True) as ledger:
             return forward_scorecard(ledger.load_trades(limit=limit))
-    except (OSError, ValueError, Exception) as exc:
+    except Exception as exc:
         # Missing/unmounted/corrupt ledger is NOT a clean zero-trade session.
         return {
             "available": False, "reason": f"PAPER_LEDGER_UNAVAILABLE:{type(exc).__name__}",
