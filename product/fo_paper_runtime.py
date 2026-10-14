@@ -463,31 +463,6 @@ def run_fo_paper_cycle(
                 if not trade.exit_observation_complete:
                     partial_exit_interval_holdouts += 1
                 settled_rows.append(row)
-                # Fold a fully-costed, fully-observed settled trade into the
-                # same conditional-evidence store the equity desk's ranking
-                # engine reads (product.decision_ranking.rank). A settlement
-                # this loop does not trust as evidence (see
-                # evidence_exclusion_reason above) is never recorded under a
-                # different label -- record_fno_settlement enforces that by
-                # returning None rather than raising, so one bad row can
-                # never interrupt this settlement loop.
-                try:
-                    record_fno_settlement(
-                        row, context_key=str(row.get("ranking_context_key") or "")
-                    )
-                except Exception:
-                    pass
-                # Same honesty gate, contract-shape cell: a settlement this
-                # loop does not trust as underlying evidence is not trusted
-                # as contract evidence either -- record_contract_settlement
-                # enforces production_evidence_eligible itself.
-                try:
-                    record_contract_settlement(
-                        row, context_key=str(row.get("contract_context_key") or ""),
-                        modifier_keys=row.get("contract_modifier_keys"),
-                    )
-                except Exception:
-                    pass
                 row["contract_outcome"] = classify_contract_outcome(row)
 
         # Match the equity engines' cross-process account mutation lock:
@@ -667,10 +642,32 @@ def run_fo_paper_cycle(
                     # real paper cycle.
                     pass
 
+            # Durable SQLite settlement is the authority boundary. Never
+            # publish learning evidence before this commit succeeds.
             store.commit_cycle(
                 settled_rows,
                 (pos.as_dict() for pos in book.open.values()),
             )
+        # Process learning AFTER the durable ledger transaction and release
+        # the cross-book account mutex before any evidence-store I/O.
+        # These writes are idempotent by settled trade ID; a failed best-effort
+        # update must not roll back an already durable real paper settlement.
+        for row in settled_rows:
+            if not row.get("production_evidence_eligible"):
+                continue
+            try:
+                record_fno_settlement(
+                    row, context_key=str(row.get("ranking_context_key") or "")
+                )
+            except Exception:
+                pass
+            try:
+                record_contract_settlement(
+                    row, context_key=str(row.get("contract_context_key") or ""),
+                    modifier_keys=row.get("contract_modifier_keys"),
+                )
+            except Exception:
+                pass
         status = store.status()
         return {
             "available": True,
