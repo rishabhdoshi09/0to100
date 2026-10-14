@@ -469,7 +469,7 @@ def run_fo_paper_cycle(
         # one coherent combined equity+F&O risk snapshot and a durable F&O
         # ledger commit before any equity engine can open another position.
         from risk.portfolio_risk import (
-            _combined_open_rows, _max_positions, account_mutation_lock,
+            _capital, _combined_open_rows, _max_positions, account_mutation_lock,
         )
         equity_open_risk = 0.0
         equity_symbols: set[str] = set()
@@ -491,6 +491,20 @@ def run_fo_paper_cycle(
                     equity_symbols.add(str(row["symbol"]).upper())
                 book.external_open_risk = equity_open_risk
                 book.max_positions = max(0, min(book.max_positions, _max_positions() - len(equity_rows)))
+                # Equity and options paper engines may have different configured
+                # starting capitals. The *smaller* verified account basis controls
+                # the aggregate 5% stop-risk ceiling; never let F&O's default
+                # 100k paper capital override a smaller equity account budget.
+                equity_account_capital = float(_capital())
+                book_equity = float(book.capital + book.realized_pnl)
+                if (not math.isfinite(equity_account_capital)
+                        or not math.isfinite(book_equity)
+                        or equity_account_capital <= 0 or book_equity <= 0):
+                    raise RuntimeError("COMBINED_PAPER_CAPITAL_UNAVAILABLE")
+                account_risk_budget = min(equity_account_capital, book_equity) * 0.05
+                book.max_total_risk_pct = min(
+                    book.max_total_risk_pct, account_risk_budget / book_equity
+                )
             opened: list[dict[str, Any]] = []
             skipped: list[dict[str, str]] = []
             ranked_candidates = _candidate_rows(directional) if bool(directional.get("available")) else []
