@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import fields
 from datetime import datetime, timedelta
+import math
 from typing import Any, Callable, Mapping
 
 from data.nfo_market import (
@@ -508,7 +509,8 @@ def run_fo_paper_cycle(
                     qty = float(row["qty"])
                     entry = float(row["entry"])
                     stop = float(row["stop"])
-                    if qty <= 0 or entry <= stop or stop < 0:
+                    if (qty <= 0 or stop < 0 or entry <= stop
+                            or not all(math.isfinite(v) for v in (qty, entry, stop))):
                         raise RuntimeError("invalid equity open risk; F&O entries fail closed")
                     equity_open_risk += qty * (entry - stop)
                     equity_symbols.add(str(row["symbol"]).upper())
