@@ -18,6 +18,7 @@ the ticket can warn "is trade ke baad total risk X%% ho jayega".
 from __future__ import annotations
 
 import contextlib
+import math
 
 from logger import get_logger
 
@@ -87,7 +88,9 @@ def _combined_open_rows(extra_trade: dict | None = None, *, include_fno: bool = 
                     qty = int(p.get("quantity") or 0)
                     entry = float(p.get("entry_price") or 0.0)
                     stop = float(p.get("stop_price") or 0.0)
-                    if not symbol or qty <= 0 or entry <= stop or stop < 0:
+                    if (not symbol or qty <= 0 or stop < 0
+                            or not all(math.isfinite(v) for v in (float(qty), entry, stop))
+                            or entry <= stop):
                         raise RuntimeError("invalid F&O paper exposure; account entry locked")
                     rows.append({"symbol": symbol, "qty": qty, "entry": entry, "stop": stop})
     if extra_trade:
