@@ -83,7 +83,7 @@ def test_time_volume_changes_prefilter_decision_not_just_display():
         "close": [100.0] * 59 + [110.0],
         "high": [102.0] * 59 + [111.0],
         "low": [98.0] * 59 + [109.0],
-        "volume": [100_000] * 59 + [40_000],
+        "volume": [1_000_000] * 59 + [40_000],
     })
     assert not _daily_prefilter(frame)["eligible"]
     assert _daily_prefilter(frame, defer_volume=True)["eligible"]
