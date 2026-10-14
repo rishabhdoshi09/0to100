@@ -56,7 +56,8 @@ def _daily_prefilter(
     avg_vol = float(volume.iloc[-21:-1].mean())
     daily_rvol = float(volume.iloc[-1] / avg_vol) if avg_vol > 0 else 0.0
     rvol = float(intraday_rvol) if intraday_rvol is not None else daily_rvol
-    turnover_crore = float((close * volume).iloc[-20:].mean() / 1e7)
+    # Use 20 *completed* sessions; today's partial volume understates turnover.
+    turnover_crore = float((close * volume).iloc[-21:-1].mean() / 1e7)
     directions: list[str] = []
     if price > prior_high:
         directions.append("LONG")
