@@ -67,6 +67,7 @@ def build_fo_features(
     futures_price_change_pct: float | None,
     futures_oi_change_pct: float | None,
     is_fo: bool,
+    time_of_day_rvol: float | None = None,
     underlying_spread_bps: float | None = None,
     breakout_lookback: int = 20,
 ) -> dict[str, Any]:
@@ -100,7 +101,12 @@ def build_fo_features(
 
     prior_vol = volume.iloc[-21:-1]
     avg_vol20 = float(prior_vol.mean()) if len(prior_vol) else 0.0
-    rvol = float(volume.iloc[-1] / avg_vol20) if avg_vol20 > 0 else 0.0
+    daily_rvol = float(volume.iloc[-1] / avg_vol20) if avg_vol20 > 0 else 0.0
+    # Same-clock volume is observed from prior Kite minute bars, never an
+    # elapsed-time extrapolation of a completed day's volume.
+    rvol = float(time_of_day_rvol) if time_of_day_rvol is not None else daily_rvol
+    if not np.isfinite(rvol) or rvol < 0:
+        raise ValueError("invalid observed relative volume")
 
     prior_high = float(high.iloc[-(breakout_lookback + 1):-1].max())
     prior_low = float(low.iloc[-(breakout_lookback + 1):-1].min())
@@ -143,6 +149,8 @@ def build_fo_features(
         "rsi": round(rsi, 3),
         "adx": round(adx, 3),
         "rvol": round(rvol, 4),
+        "daily_rvol": round(daily_rvol, 4),
+        "volume_basis": "KITE_PRIOR_MINUTE_CUMULATIVE" if time_of_day_rvol is not None else "DAILY_FULL_SESSION",
         "relative_strength_pct": round(relative_strength, 4),
         "sector_strength_pct": round(float(sector_relative_strength_pct), 4),
         "nifty_change_pct": round(float(nifty_change_pct), 4),
