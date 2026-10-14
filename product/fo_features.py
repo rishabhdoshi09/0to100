@@ -119,7 +119,7 @@ def build_fo_features(
     )
     relative_strength = stock_return - float(benchmark_20d_return_pct)
 
-    turnover = (close * volume).iloc[-20:]
+    turnover = (close * volume).iloc[-21:-1]  # completed sessions only
     avg_turnover_crore = float(turnover.mean() / 1e7) if len(turnover) else 0.0
 
     trigger = prior_high if direction == "LONG" else prior_low
