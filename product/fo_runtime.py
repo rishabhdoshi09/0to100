@@ -292,6 +292,40 @@ def run_fo_directional_scan(
         if pre.get("eligible"):
             deep.append((item, frame, pre))
 
+    volume_checked = sum(
+        1 for row in considered
+        if isinstance(row.get("time_of_day_volume"), Mapping)
+    )
+    volume_supported = sum(
+        1 for row in considered
+        if isinstance(row.get("time_of_day_volume"), Mapping)
+        and bool(row["time_of_day_volume"].get("available"))
+    )
+    volume_unknown = sum(
+        1 for row in considered
+        if (isinstance(row.get("time_of_day_volume"), Mapping)
+            and not row["time_of_day_volume"].get("available"))
+        or row.get("reason") == "SAME_CLOCK_QUERY_BUDGET_EXCEEDED"
+    )
+    volume_coverage = {
+        "required": require_same_clock_volume,
+        "kite_minute_history_queries": same_clock_requests,
+        "checked": volume_checked, "confirmed_observable": volume_supported,
+        "unknown": volume_unknown,
+        "source": "KITE_PRIOR_MINUTE_CUMULATIVE" if require_same_clock_volume else "DAILY_OR_INJECTED_HISTORY",
+    }
+    # Zero qualifying trades and unavailable volume evidence are different
+    # outcomes. Do not call a provider failure an uneventful market session.
+    if require_same_clock_volume and volume_unknown and not deep:
+        return {
+            "available": False, "status": "BLOCKED",
+            "code": "FNO_INTRADAY_VOLUME_COVERAGE_UNAVAILABLE",
+            "as_of": as_of.isoformat(), "universe_size": len(universe),
+            "candidate_count": 0, "candidates": [], "considered": considered,
+            "volume_coverage": volume_coverage,
+            "paper_only": True, "live_execution_allowed": False,
+        }
+
     deep.sort(key=lambda row: float(row[2].get("priority") or 0.0), reverse=True)
     if progress_callback:
         progress_callback("FNO_PREFILTER", f"History checked; {len(deep)} passed prefilter", len(universe), len(universe))
@@ -311,6 +345,7 @@ def run_fo_directional_scan(
             "considered": considered,
             "quote_scope": {"deep_underlyings": 0, "option_contracts_requested": 0},
             "history_session": history_state,
+            "volume_coverage": volume_coverage if "volume_coverage" in locals() else {},
             "paper_only": True,
             "live_execution_allowed": False,
             "probability_claim": None,
@@ -641,6 +676,7 @@ def run_fo_directional_scan(
             "option_contracts_requested": len(option_symbols),
         },
         "history_session": history_state,
+        "volume_coverage": volume_coverage,
         "paper_only": True,
         "live_execution_allowed": False,
         "probability_claim": None,
