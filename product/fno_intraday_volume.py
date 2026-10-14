@@ -19,7 +19,8 @@ OPEN = time(9, 15)
 LAST_ENTRY = time(15, 30)
 PRIOR_SESSIONS = 5
 MAX_PRIOR_SESSIONS = 10
-MIN_MINUTE_COVERAGE = 0.80
+# Missing >5% of prior minute bars understates the baseline and inflates RVOL.
+MIN_MINUTE_COVERAGE = 0.95
 
 
 def _minute_stamp(value: Any) -> datetime | None:
