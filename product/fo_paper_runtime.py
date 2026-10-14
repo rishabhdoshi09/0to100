@@ -252,7 +252,8 @@ def run_fo_paper_cycle(
         # Closed-trade P&L is durable and must survive process restarts; otherwise
         # every cycle silently sizes from the original capital again.
         book.realized_pnl = float(store.realized_pnl())
-        for raw in store.load_positions():
+        initial_saved_positions = store.load_positions()
+        for raw in initial_saved_positions:
             pos = _restore_position(raw)
             if pos is not None:
                 book.open[pos.option_symbol] = pos
@@ -497,6 +498,10 @@ def run_fo_paper_cycle(
         equity_open_risk = 0.0
         equity_symbols: set[str] = set()
         with account_mutation_lock():
+            # The paper cycle may have spent seconds replaying minute bars.
+            # Reject a stale write rather than replace another worker's ledger.
+            if store.load_positions() != initial_saved_positions:
+                raise RuntimeError("FNO_PAPER_LEDGER_CHANGED_DURING_CYCLE")
             if allow_new_entries and bool(directional.get("available")):
                 equity_rows = _combined_open_rows(include_fno=False)
                 for row in equity_rows:
@@ -674,9 +679,14 @@ def run_fo_paper_cycle(
             "opened_count": len(opened),
             "settled_count": len(settled_rows),
             "open_count": len(book.open),
-            "equity_open_risk_in_combined_cap": round(equity_open_risk, 2),
+            "equity_open_risk_in_combined_cap": (
+                round(equity_open_risk, 2) if allow_new_entries and directional.get("available") else None
+            ),
             "fno_open_risk": round(sum(float(p.risk_amount) for p in book.open.values()), 2),
-            "combined_open_risk": round(equity_open_risk + sum(float(p.risk_amount) for p in book.open.values()), 2),
+            "combined_open_risk": (
+                round(equity_open_risk + sum(float(p.risk_amount) for p in book.open.values()), 2)
+                if allow_new_entries and directional.get("available") else None
+            ),
             "opened": opened,
             "settled": settled_rows,
             "skipped": skipped,
