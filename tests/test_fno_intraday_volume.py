@@ -121,3 +121,20 @@ def test_missing_clock_history_reports_scan_blocked_not_no_market_setup(monkeypa
     assert result["code"] == "FNO_INTRADAY_VOLUME_COVERAGE_UNAVAILABLE"
     assert result["volume_coverage"]["unknown"] == 1
     assert result["candidate_count"] == 0
+
+
+def test_partial_prior_session_cannot_artificially_inflate_rvol():
+    client = Client()
+    # Missing 1 of every 10 prior minute bars can understate reference
+    # volume while still satisfying the earlier 80% threshold.
+    client.bars = [
+        row for row in client.bars
+        if row["date"].minute % 10 != 0
+    ]
+    result = same_clock_rvol(
+        client=client, instrument_token=1234, as_of=AS_OF,
+        observed_at=datetime(2026, 10, 14, 10, 30, tzinfo=IST),
+        cumulative_volume=152_000,
+    )
+    assert result["available"] is False
+    assert result["reason"] == "SAME_CLOCK_HISTORY_INSUFFICIENT"
