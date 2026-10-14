@@ -76,7 +76,13 @@ def _combined_open_rows(extra_trade: dict | None = None, *, include_fno: bool = 
         path = logs_path("product", "fo_paper.sqlite3")
         if path.exists():
             with FoPaperStore(read_only=True) as store:
-                for p in store.load_positions():
+                positions = store.load_positions()
+                rows_on_disk = int(store.conn.execute(
+                    "SELECT COUNT(*) FROM fo_open_positions"
+                ).fetchone()[0])
+                if len(positions) != rows_on_disk:
+                    raise RuntimeError("unparseable F&O paper position; account entry locked")
+                for p in positions:
                     symbol = str(p.get("underlying") or "").upper()
                     qty = int(p.get("quantity") or 0)
                     entry = float(p.get("entry_price") or 0.0)
