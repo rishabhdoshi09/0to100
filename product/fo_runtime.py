@@ -256,7 +256,10 @@ def run_fo_directional_scan(
     }
     # Only price breakouts consume Kite minute-history calls, never the full F&O universe.
     same_clock_requests = 0
-    max_same_clock_requests = 35
+    # Bound per-scan Kite I/O on the Intel Mac; rank price breaks first rather
+    # than making F&O instrument-master ordering decide who gets the budget.
+    max_same_clock_requests = 16
+    prefilter_pending: list[tuple[Any, pd.DataFrame, dict[str, Any], int]] = []
     for offset, item in enumerate(universe):
         if progress_callback and offset % 25 == 0:
             progress_callback("FNO_PREFILTER", "Checking F&O history and breakout gates", offset, len(universe))
@@ -271,11 +274,31 @@ def run_fo_directional_scan(
             considered.append({"symbol": symbol, "stage": "history", "reason": history_rejection})
             continue
         pre = _daily_prefilter(frame, defer_volume=require_same_clock_volume)
-        if pre.get("eligible") and require_same_clock_volume:
-            if same_clock_requests >= max_same_clock_requests:
-                pre = {**pre, "eligible": False, "reason": "SAME_CLOCK_QUERY_BUDGET_EXCEEDED"}
+        considered_index = len(considered)
+        considered.append({"symbol": symbol, "stage": "prefilter", **pre})
+        if pre.get("eligible"):
+            if require_same_clock_volume:
+                prefilter_pending.append((item, frame, pre, considered_index))
             else:
-                from product.fno_intraday_volume import same_clock_rvol
+                deep.append((item, frame, pre))
+
+    if require_same_clock_volume and prefilter_pending:
+        from product.fno_intraday_volume import same_clock_rvol
+
+        # Clearance is a real point-in-time price property; today's partial
+        # daily RVOL is intentionally not a tie-breaker.
+        prefilter_pending.sort(
+            key=lambda row: (
+                -float(row[2]["clearance_pct"]),
+                str(getattr(row[0], "symbol", "")).upper(),
+            )
+        )
+        for rank, (item, frame, pre, considered_index) in enumerate(prefilter_pending):
+            symbol = str(getattr(item, "symbol", "") or "").upper()
+            if rank >= max_same_clock_requests:
+                pre = {**pre, "eligible": False,
+                       "reason": "SAME_CLOCK_QUERY_BUDGET_EXCEEDED"}
+            else:
                 same_clock_requests += 1
                 volume_state = same_clock_rvol(
                     client=client, instrument_token=nse_tokens.get(symbol, 0),
@@ -288,9 +311,11 @@ def run_fo_directional_scan(
                 else:
                     pre = _daily_prefilter(frame, intraday_rvol=volume_state["rvol"])
                     pre["time_of_day_volume"] = volume_state
-        considered.append({"symbol": symbol, "stage": "prefilter", **pre})
-        if pre.get("eligible"):
-            deep.append((item, frame, pre))
+                    if pre["eligible"]:
+                        deep.append((item, frame, pre))
+            considered[considered_index] = {
+                "symbol": symbol, "stage": "prefilter", **pre
+            }
 
     volume_checked = sum(
         1 for row in considered
@@ -310,6 +335,8 @@ def run_fo_directional_scan(
     volume_coverage = {
         "required": require_same_clock_volume,
         "kite_minute_history_queries": same_clock_requests,
+        "max_kite_minute_history_queries": max_same_clock_requests,
+        "price_breakouts_prioritized": len(prefilter_pending),
         "checked": volume_checked, "confirmed_observable": volume_supported,
         "unknown": volume_unknown,
         "source": "KITE_PRIOR_MINUTE_CUMULATIVE" if require_same_clock_volume else "DAILY_OR_INJECTED_HISTORY",
