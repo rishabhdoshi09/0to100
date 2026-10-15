@@ -1042,3 +1042,95 @@ def test_complete_1530_minute_is_recognized_for_historical_eod_exit():
         "2026-09-29T15:29:00+05:30",
         now_ist,
     ) is False
+
+
+
+def _settled_costed_case(tmp_path):
+    """Create a real fully observed paper exit, no Kite or broker mutations."""
+    opened_at = datetime(2026, 9, 26, 10, 15, 12, tzinfo=IST)
+    path = tmp_path / "settlement_boundary.sqlite3"
+    with FoPaperStore(path) as store:
+        seeded = run_fo_paper_cycle(
+            _directional_with_token(784),
+            client=_QuoteClient(last=50, high=50, low=50, bid=49),
+            now_ist=opened_at,
+            allow_new_entries=True,
+            store=store,
+            capital=200_000,
+        )
+        assert seeded["opened_count"] == 1
+    client = _IntradayQuoteClient(
+        last=72, high=75, low=49, bid=70,
+        entry_minute_rows=[{
+            "date": "2026-09-26T10:15:00+05:30",
+            "open": 49.0, "high": 55.0, "low": 45.0, "close": 51.0,
+        }],
+        intraday_rows=[{
+            "date": "2026-09-26T10:16:00+05:30",
+            "open": 52.0, "high": 72.0, "low": 50.0, "close": 71.0,
+        }],
+    )
+    return path, opened_at.replace(hour=10, minute=20, second=0), client
+
+
+def test_costed_learning_only_after_durable_paper_settlement(tmp_path, monkeypatch):
+    from product import fo_paper_runtime as runtime
+    path, now, client = _settled_costed_case(tmp_path)
+    with FoPaperStore(path) as store:
+        timeline = []
+        saved_commit = store.commit_cycle
+
+        def committed(*args, **kwargs):
+            result = saved_commit(*args, **kwargs)
+            timeline.append(("commit", store.status()["closed_trades"]))
+            return result
+
+        def recorded(*args, **kwargs):
+            timeline.append(("evidence", store.status()["closed_trades"]))
+
+        monkeypatch.setattr(store, "commit_cycle", committed)
+        monkeypatch.setattr(runtime, "record_fno_settlement", recorded)
+        monkeypatch.setattr(runtime, "record_contract_settlement", recorded)
+        result = run_fo_paper_cycle(
+            {"available": True, "candidates": []},
+            client=client, now_ist=now, allow_new_entries=False,
+            store=store, capital=200_000,
+            cost_model=lambda entry, exit, qty: 25.0,
+            cost_model_name="TEST_COSTS",
+        )
+        assert result["settled_count"] == 1
+        assert result["settled"][0]["production_evidence_eligible"]
+        assert timeline == [
+            ("commit", 1), ("evidence", 1), ("evidence", 1),
+        ]
+
+
+def test_commit_failure_never_publishes_phantom_fno_learning(tmp_path, monkeypatch):
+    import pytest
+    from product import fo_paper_runtime as runtime
+    path, now, client = _settled_costed_case(tmp_path)
+    with FoPaperStore(path) as store:
+        evidence_calls = []
+        monkeypatch.setattr(
+            runtime, "record_fno_settlement",
+            lambda *a, **k: evidence_calls.append("setup"),
+        )
+        monkeypatch.setattr(
+            runtime, "record_contract_settlement",
+            lambda *a, **k: evidence_calls.append("contract"),
+        )
+
+        def failed_commit(*args, **kwargs):
+            raise RuntimeError("simulated durable ledger failure")
+
+        monkeypatch.setattr(store, "commit_cycle", failed_commit)
+        with pytest.raises(RuntimeError, match="simulated durable ledger failure"):
+            run_fo_paper_cycle(
+                {"available": True, "candidates": []},
+                client=client, now_ist=now, allow_new_entries=False,
+                store=store, capital=200_000,
+                cost_model=lambda entry, exit, qty: 25.0,
+                cost_model_name="TEST_COSTS",
+            )
+        assert evidence_calls == []
+        assert store.status()["closed_trades"] == 0

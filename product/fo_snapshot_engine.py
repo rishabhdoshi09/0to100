@@ -64,6 +64,7 @@ def evaluate_fo_snapshot(
     benchmark_20d_return_pct: float,
     nifty_change_pct: float,
     sector_relative_strength_pct: float,
+    time_of_day_rvol: float | None = None,
     iv_percentile: float | None = None,
     as_of: date | None = None,
     path: str | None = None,
@@ -94,6 +95,7 @@ def evaluate_fo_snapshot(
         futures_price_change_pct=oi["futures_price_change_pct"],
         futures_oi_change_pct=oi["futures_oi_change_pct"],
         is_fo=symbol in universe and future is not None,
+        time_of_day_rvol=time_of_day_rvol,
         underlying_spread_bps=_spread_bps(underlying_quote),
     )
 
@@ -118,6 +120,7 @@ def evaluate_fo_snapshot(
     result["data_provenance"] = {
         "underlying": "POINT_IN_TIME_SUPPLIED_QUOTE",
         "daily_bars": "POINT_IN_TIME_SUPPLIED_BARS",
+        "volume_basis": features.get("volume_basis"),
         "futures": "NFO_CURRENT_PLUS_PREVIOUS_OI",
         "options": "NFO_QUOTE_DEPTH",
         "iv": "IMPLIED_FROM_MARKET_QUOTE",
@@ -168,6 +171,7 @@ def evaluate_fo_snapshot_auto(
     benchmark_20d_return_pct: float,
     nifty_change_pct: float,
     sector_relative_strength_pct: float,
+    time_of_day_rvol: float | None = None,
     iv_percentile: float | None = None,
     as_of: date | None = None,
     path: str | None = None,
@@ -187,6 +191,7 @@ def evaluate_fo_snapshot_auto(
             benchmark_20d_return_pct=benchmark_20d_return_pct,
             nifty_change_pct=nifty_change_pct,
             sector_relative_strength_pct=sector_relative_strength_pct,
+            time_of_day_rvol=time_of_day_rvol,
             iv_percentile=iv_percentile,
             as_of=as_of,
             path=path,

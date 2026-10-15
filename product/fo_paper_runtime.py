@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import fields
 from datetime import datetime, timedelta
+import math
 from typing import Any, Callable, Mapping
 
 from data.nfo_market import (
@@ -252,7 +253,8 @@ def run_fo_paper_cycle(
         # Closed-trade P&L is durable and must survive process restarts; otherwise
         # every cycle silently sizes from the original capital again.
         book.realized_pnl = float(store.realized_pnl())
-        for raw in store.load_positions():
+        initial_saved_positions = store.load_positions()
+        for raw in initial_saved_positions:
             pos = _restore_position(raw)
             if pos is not None:
                 book.open[pos.option_symbol] = pos
@@ -461,185 +463,225 @@ def run_fo_paper_cycle(
                 if not trade.exit_observation_complete:
                     partial_exit_interval_holdouts += 1
                 settled_rows.append(row)
-                # Fold a fully-costed, fully-observed settled trade into the
-                # same conditional-evidence store the equity desk's ranking
-                # engine reads (product.decision_ranking.rank). A settlement
-                # this loop does not trust as evidence (see
-                # evidence_exclusion_reason above) is never recorded under a
-                # different label -- record_fno_settlement enforces that by
-                # returning None rather than raising, so one bad row can
-                # never interrupt this settlement loop.
-                try:
-                    record_fno_settlement(
-                        row, context_key=str(row.get("ranking_context_key") or "")
-                    )
-                except Exception:
-                    pass
-                # Same honesty gate, contract-shape cell: a settlement this
-                # loop does not trust as underlying evidence is not trusted
-                # as contract evidence either -- record_contract_settlement
-                # enforces production_evidence_eligible itself.
-                try:
-                    record_contract_settlement(
-                        row, context_key=str(row.get("contract_context_key") or ""),
-                        modifier_keys=row.get("contract_modifier_keys"),
-                    )
-                except Exception:
-                    pass
                 row["contract_outcome"] = classify_contract_outcome(row)
 
-        opened: list[dict[str, Any]] = []
-        skipped: list[dict[str, str]] = []
-        ranked_candidates = _candidate_rows(directional) if bool(directional.get("available")) else []
-        if allow_new_entries and bool(directional.get("available")):
-            for candidate in ranked_candidates:
-                underlying = str(candidate.get("symbol") or "").upper()
-                if not underlying:
-                    skipped.append({"symbol": "", "reason": "MISSING_UNDERLYING"})
-                    continue
-                if underlying in settled_underlyings:
-                    skipped.append({"symbol": underlying, "reason": "SETTLED_THIS_CYCLE"})
-                    continue
-                setup = candidate.get("setup") if isinstance(candidate.get("setup"), Mapping) else {}
-                contract = (
-                    candidate.get("selected_contract")
-                    if isinstance(candidate.get("selected_contract"), Mapping)
-                    else {}
+        # Match the equity engines' cross-process account mutation lock:
+        # one coherent combined equity+F&O risk snapshot and a durable F&O
+        # ledger commit before any equity engine can open another position.
+        from risk.portfolio_risk import (
+            _capital, _combined_open_rows, _max_positions, account_mutation_lock,
+        )
+        equity_open_risk = 0.0
+        equity_symbols: set[str] = set()
+        with account_mutation_lock():
+            # The paper cycle may have spent seconds replaying minute bars.
+            # Reject a stale write rather than replace another worker's ledger.
+            if store.load_positions() != initial_saved_positions:
+                raise RuntimeError("FNO_PAPER_LEDGER_CHANGED_DURING_CYCLE")
+            if allow_new_entries and bool(directional.get("available")):
+                equity_rows = _combined_open_rows(include_fno=False)
+                for row in equity_rows:
+                    qty = float(row["qty"])
+                    entry = float(row["entry"])
+                    stop = float(row["stop"])
+                    if (qty <= 0 or stop < 0 or entry <= stop
+                            or not all(math.isfinite(v) for v in (qty, entry, stop))):
+                        raise RuntimeError("invalid equity open risk; F&O entries fail closed")
+                    equity_open_risk += qty * (entry - stop)
+                    equity_symbols.add(str(row["symbol"]).upper())
+                book.external_open_risk = equity_open_risk
+                book.max_positions = max(0, min(book.max_positions, _max_positions() - len(equity_rows)))
+                # Equity and options paper engines may have different configured
+                # starting capitals. The *smaller* verified account basis controls
+                # the aggregate 5% stop-risk ceiling; never let F&O's default
+                # 100k paper capital override a smaller equity account budget.
+                equity_account_capital = float(_capital())
+                book_equity = float(book.capital + book.realized_pnl)
+                if (not math.isfinite(equity_account_capital)
+                        or not math.isfinite(book_equity)
+                        or equity_account_capital <= 0 or book_equity <= 0):
+                    raise RuntimeError("COMBINED_PAPER_CAPITAL_UNAVAILABLE")
+                account_risk_budget = min(equity_account_capital, book_equity) * 0.05
+                book.max_total_risk_pct = min(
+                    book.max_total_risk_pct, account_risk_budget / book_equity
                 )
-                plan = contract.get("trade_plan") if isinstance(contract.get("trade_plan"), Mapping) else {}
-                option_symbol = str(contract.get("symbol") or "")
-                entry = float(plan.get("entry") or 0.0)
-                stop = float(plan.get("stop") or 0.0)
-                target = float(plan.get("target") or 0.0)
-                lot_size = int(contract.get("lot_size") or 0)
-                if (
-                    candidate.get("decision") != "PAPER_OPTION_CANDIDATE"
-                    or not option_symbol
-                    or not bool(contract.get("eligible"))
-                    or entry <= 0
-                    or stop <= 0
-                    or target <= entry
-                    or lot_size <= 0
-                ):
-                    skipped.append({"symbol": underlying, "reason": "CANDIDATE_NOT_EXECUTABLE"})
-                    continue
-                expected = setup.get("expected_move") if isinstance(setup.get("expected_move"), Mapping) else {}
-                if (now_ist.hour, now_ist.minute) < (
-                    FNO_ENTRY_START_HOUR,
-                    FNO_ENTRY_START_MINUTE,
-                ):
-                    skipped.append({"symbol": underlying, "reason": "FNO_ENTRY_WINDOW_NOT_OPEN"})
-                    continue
-                if _market_closed(now_ist):
-                    skipped.append({"symbol": underlying, "reason": "FNO_MARKET_CLOSED"})
-                    continue
-                if eod_exit_due:
-                    reason = (
-                        "INTRADAY_EOD_CUTOFF_REACHED"
-                        if str(expected.get("exit_policy") or "").upper() == "EOD"
-                        else "FNO_LATE_ENTRY_CUTOFF_REACHED"
+            opened: list[dict[str, Any]] = []
+            skipped: list[dict[str, str]] = []
+            ranked_candidates = _candidate_rows(directional) if bool(directional.get("available")) else []
+            if allow_new_entries and bool(directional.get("available")):
+                for candidate in ranked_candidates:
+                    underlying = str(candidate.get("symbol") or "").upper()
+                    if not underlying:
+                        skipped.append({"symbol": "", "reason": "MISSING_UNDERLYING"})
+                        continue
+                    if underlying in settled_underlyings:
+                        skipped.append({"symbol": underlying, "reason": "SETTLED_THIS_CYCLE"})
+                        continue
+                    if underlying in equity_symbols:
+                        skipped.append({"symbol": underlying, "reason": "UNDERLYING_ALREADY_OPEN_IN_EQUITY_BOOK"})
+                        continue
+                    setup = candidate.get("setup") if isinstance(candidate.get("setup"), Mapping) else {}
+                    contract = (
+                        candidate.get("selected_contract")
+                        if isinstance(candidate.get("selected_contract"), Mapping)
+                        else {}
                     )
-                    skipped.append({"symbol": underlying, "reason": reason})
-                    continue
-                pos = book.open_position(
-                    underlying=underlying,
-                    option_symbol=option_symbol,
-                    option_type=str(contract.get("option_type") or ""),
-                    entry=entry,
-                    stop=stop,
-                    target=target,
-                    lot_size=lot_size,
-                    opened_at=now_ist.isoformat(),
-                    max_holding_sessions=max(1, int(expected.get("holding_days") or 1)),
-                    # context_key here is fo_evidence.py's legacy FOCTX_V1
-                    # contract-level bucketing -- fo_snapshot_engine
-                    # .evaluate_fo_snapshot sets this on every real candidate
-                    # (never empty in production); the fallback only matters
-                    # for synthetic candidates in tests. It feeds the
-                    # existing "Forward evidence" UI panel
-                    # (_fo_forward_evidence_overlay) and must keep that exact
-                    # format. It is NOT the key product.fno_ranking reads --
-                    # ranking_context_key below is computed fresh from
-                    # `setup` every time specifically because this field
-                    # cannot be repurposed for that without breaking the
-                    # existing panel.
-                    context_key=(
-                        str(contract.get("context_key") or "")
-                        or fno_context_key(setup)
-                    ),
-                    # The ONLY key product.fno_ranking.rank_fno_candidates /
-                    # product.conditional_evidence.ranking_evidence ever look
-                    # up (product.fno_evidence.fno_context_key, the same
-                    # underlying-setup bucketing used at ranking time).
-                    # Always computed fresh from `setup`, never read from
-                    # `contract` -- conflating it with context_key above
-                    # silently disconnects every real settled trade from
-                    # ranking evidence, since the two bucketing schemes never
-                    # produce the same string.
-                    ranking_context_key=fno_context_key(setup),
-                    setup_score=float(setup.get("score") or 0.0),
-                    option_score=float(contract.get("score") or 0.0),
-                    instrument_token=int(contract.get("instrument_token") or 0),
-                    horizon=str(expected.get("horizon") or ""),
-                    exit_policy=str(expected.get("exit_policy") or "SESSION_HOLD"),
-                    strike=float(contract.get("strike") or 0.0),
-                    expiry=str(contract.get("expiry") or ""),
-                    entry_iv_pct=float(contract.get("iv") or 0.0),
-                    entry_underlying_spot=float(
-                        (setup.get("underlying_trade_plan") or {}).get("entry") or 0.0
-                    ),
-                    ask=float(contract.get("ask") or 0.0),
-                    # Contract-shape evidence fields (product.fno_contract_evidence),
-                    # captured from the REAL selected contract at open time --
-                    # never derived from the setup, never invented at
-                    # settlement. Empty/zero when the field genuinely was not
-                    # available on this contract (e.g. no IV percentile yet).
-                    contract_context_key=contract_context_key(contract),
-                    entry_delta=float(contract.get("delta") or 0.0),
-                    entry_spread_pct=(
-                        float(contract["spread_pct"])
-                        if contract.get("spread_pct") is not None else None
-                    ),
-                    entry_iv_percentile=(
-                        float(contract["iv_percentile"])
-                        if contract.get("iv_percentile") is not None else None
-                    ),
-                    entry_theta_per_day=float(contract.get("theta_per_day") or 0.0),
-                    entry_dte=int(contract.get("dte") or 0),
-                    entry_oi=int(contract.get("oi") or 0),
-                    entry_volume=int(contract.get("volume") or 0),
-                    # The SAME modifier keys product.fo_options_pipeline used
-                    # to rank this exact contract (same setup -> same
-                    # contract_selection_context), so settlement learns into
-                    # exactly the cells that decided the selection.
-                    contract_modifier_keys=contract_context_modifiers(
-                        contract, **contract_selection_context(setup)
-                    ),
-                )
-                if pos is None:
-                    reason = book.refusals[-1][1] if book.refusals else "PAPER_BOOK_REJECTED"
-                    skipped.append({"symbol": underlying, "reason": reason})
-                    continue
-                opened.append(pos.as_dict())
+                    plan = contract.get("trade_plan") if isinstance(contract.get("trade_plan"), Mapping) else {}
+                    option_symbol = str(contract.get("symbol") or "")
+                    entry = float(plan.get("entry") or 0.0)
+                    stop = float(plan.get("stop") or 0.0)
+                    target = float(plan.get("target") or 0.0)
+                    lot_size = int(contract.get("lot_size") or 0)
+                    if (
+                        candidate.get("decision") != "PAPER_OPTION_CANDIDATE"
+                        or not option_symbol
+                        or not bool(contract.get("eligible"))
+                        or entry <= 0
+                        or stop <= 0
+                        or target <= entry
+                        or lot_size <= 0
+                    ):
+                        skipped.append({"symbol": underlying, "reason": "CANDIDATE_NOT_EXECUTABLE"})
+                        continue
+                    expected = setup.get("expected_move") if isinstance(setup.get("expected_move"), Mapping) else {}
+                    if (now_ist.hour, now_ist.minute) < (
+                        FNO_ENTRY_START_HOUR,
+                        FNO_ENTRY_START_MINUTE,
+                    ):
+                        skipped.append({"symbol": underlying, "reason": "FNO_ENTRY_WINDOW_NOT_OPEN"})
+                        continue
+                    if _market_closed(now_ist):
+                        skipped.append({"symbol": underlying, "reason": "FNO_MARKET_CLOSED"})
+                        continue
+                    if eod_exit_due:
+                        reason = (
+                            "INTRADAY_EOD_CUTOFF_REACHED"
+                            if str(expected.get("exit_policy") or "").upper() == "EOD"
+                            else "FNO_LATE_ENTRY_CUTOFF_REACHED"
+                        )
+                        skipped.append({"symbol": underlying, "reason": reason})
+                        continue
+                    pos = book.open_position(
+                        underlying=underlying,
+                        option_symbol=option_symbol,
+                        option_type=str(contract.get("option_type") or ""),
+                        entry=entry,
+                        stop=stop,
+                        target=target,
+                        lot_size=lot_size,
+                        opened_at=now_ist.isoformat(),
+                        max_holding_sessions=max(1, int(expected.get("holding_days") or 1)),
+                        # context_key here is fo_evidence.py's legacy FOCTX_V1
+                        # contract-level bucketing -- fo_snapshot_engine
+                        # .evaluate_fo_snapshot sets this on every real candidate
+                        # (never empty in production); the fallback only matters
+                        # for synthetic candidates in tests. It feeds the
+                        # existing "Forward evidence" UI panel
+                        # (_fo_forward_evidence_overlay) and must keep that exact
+                        # format. It is NOT the key product.fno_ranking reads --
+                        # ranking_context_key below is computed fresh from
+                        # `setup` every time specifically because this field
+                        # cannot be repurposed for that without breaking the
+                        # existing panel.
+                        context_key=(
+                            str(contract.get("context_key") or "")
+                            or fno_context_key(setup)
+                        ),
+                        # The ONLY key product.fno_ranking.rank_fno_candidates /
+                        # product.conditional_evidence.ranking_evidence ever look
+                        # up (product.fno_evidence.fno_context_key, the same
+                        # underlying-setup bucketing used at ranking time).
+                        # Always computed fresh from `setup`, never read from
+                        # `contract` -- conflating it with context_key above
+                        # silently disconnects every real settled trade from
+                        # ranking evidence, since the two bucketing schemes never
+                        # produce the same string.
+                        ranking_context_key=fno_context_key(setup),
+                        setup_score=float(setup.get("score") or 0.0),
+                        option_score=float(contract.get("score") or 0.0),
+                        instrument_token=int(contract.get("instrument_token") or 0),
+                        horizon=str(expected.get("horizon") or ""),
+                        exit_policy=str(expected.get("exit_policy") or "SESSION_HOLD"),
+                        strike=float(contract.get("strike") or 0.0),
+                        expiry=str(contract.get("expiry") or ""),
+                        entry_iv_pct=float(contract.get("iv") or 0.0),
+                        entry_underlying_spot=float(
+                            (setup.get("underlying_trade_plan") or {}).get("entry") or 0.0
+                        ),
+                        ask=float(contract.get("ask") or 0.0),
+                        # Contract-shape evidence fields (product.fno_contract_evidence),
+                        # captured from the REAL selected contract at open time --
+                        # never derived from the setup, never invented at
+                        # settlement. Empty/zero when the field genuinely was not
+                        # available on this contract (e.g. no IV percentile yet).
+                        contract_context_key=contract_context_key(contract),
+                        entry_delta=float(contract.get("delta") or 0.0),
+                        entry_spread_pct=(
+                            float(contract["spread_pct"])
+                            if contract.get("spread_pct") is not None else None
+                        ),
+                        entry_iv_percentile=(
+                            float(contract["iv_percentile"])
+                            if contract.get("iv_percentile") is not None else None
+                        ),
+                        entry_theta_per_day=float(contract.get("theta_per_day") or 0.0),
+                        entry_dte=int(contract.get("dte") or 0),
+                        entry_oi=int(contract.get("oi") or 0),
+                        entry_volume=int(contract.get("volume") or 0),
+                        # The SAME modifier keys product.fo_options_pipeline used
+                        # to rank this exact contract (same setup -> same
+                        # contract_selection_context), so settlement learns into
+                        # exactly the cells that decided the selection.
+                        contract_modifier_keys=contract_context_modifiers(
+                            contract, **contract_selection_context(setup)
+                        ),
+                    )
+                    if pos is None:
+                        reason = book.refusals[-1][1] if book.refusals else "PAPER_BOOK_REJECTED"
+                        skipped.append({"symbol": underlying, "reason": reason})
+                        continue
+                    opened.append(pos.as_dict())
 
+            # Durable SQLite settlement is the authority boundary. Never
+            # publish learning evidence before this commit succeeds.
+            store.commit_cycle(
+                settled_rows,
+                (pos.as_dict() for pos in book.open.values()),
+            )
+        # Diagnostics must not claim opened positions before their SQLite
+        # commit actually succeeded, nor hold the account lock during I/O.
         if ranked_candidates:
             try:
                 from product.fno_exposure_tracking import record_scan_exposure
-
                 record_scan_exposure(
                     ranked_candidates,
-                    opened_underlyings={str(pos.get("underlying") or "").upper() for pos in opened},
+                    opened_underlyings={
+                        str(pos.get("underlying") or "").upper() for pos in opened
+                    },
                     now_iso=now_ist.isoformat(),
                 )
             except Exception:
-                # Diagnostic-only instrumentation must never interrupt the
-                # real paper cycle.
                 pass
-
-        store.commit_cycle(
-            settled_rows,
-            (pos.as_dict() for pos in book.open.values()),
-        )
+        # Process learning AFTER the durable ledger transaction and release
+        # the cross-book account mutex before any evidence-store I/O.
+        # These writes are idempotent by settled trade ID; a failed best-effort
+        # update must not roll back an already durable real paper settlement.
+        for row in settled_rows:
+            if not row.get("production_evidence_eligible"):
+                continue
+            try:
+                record_fno_settlement(
+                    row, context_key=str(row.get("ranking_context_key") or "")
+                )
+            except Exception:
+                pass
+            try:
+                record_contract_settlement(
+                    row, context_key=str(row.get("contract_context_key") or ""),
+                    modifier_keys=row.get("contract_modifier_keys"),
+                )
+            except Exception:
+                pass
         status = store.status()
         return {
             "available": True,
@@ -650,6 +692,14 @@ def run_fo_paper_cycle(
             "opened_count": len(opened),
             "settled_count": len(settled_rows),
             "open_count": len(book.open),
+            "equity_open_risk_in_combined_cap": (
+                round(equity_open_risk, 2) if allow_new_entries and directional.get("available") else None
+            ),
+            "fno_open_risk": round(sum(float(p.risk_amount) for p in book.open.values()), 2),
+            "combined_open_risk": (
+                round(equity_open_risk + sum(float(p.risk_amount) for p in book.open.values()), 2)
+                if allow_new_entries and directional.get("available") else None
+            ),
             "opened": opened,
             "settled": settled_rows,
             "skipped": skipped,
