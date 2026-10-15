@@ -138,3 +138,50 @@ def test_partial_prior_session_cannot_artificially_inflate_rvol():
     )
     assert result["available"] is False
     assert result["reason"] == "SAME_CLOCK_HISTORY_INSUFFICIENT"
+
+
+
+def test_minute_history_budget_is_assigned_to_strongest_price_breaks(monkeypatch):
+    """The first 16 instrument-master entries must not monopolize Kite I/O."""
+    from types import SimpleNamespace
+
+    from product import fo_runtime, fo_live_history, fno_intraday_volume
+    from scan import bulk_fetcher
+
+    symbols = [f"S{i:02d}" for i in range(36)]
+    def frame(symbol):
+        strong = symbol == "S35"
+        return pd.DataFrame({
+            "close": [100.0] * 59 + [125.0 if strong else 110.0],
+            "high": [102.0] * 59 + [126.0 if strong else 111.0],
+            "low": [98.0] * 59 + [124.0 if strong else 109.0],
+            "volume": [1_000_000] * 59 + [40_000],
+        })
+    frames = {symbol: frame(symbol) for symbol in symbols}
+    monkeypatch.setattr(bulk_fetcher, "adopt_ready_store", lambda **kwargs: 500)
+    monkeypatch.setattr(fo_live_history, "prepare_history", lambda *a, **k: (
+        frames, {"ready": True, "source": "kite_quotes", "rejected": {}},
+    ))
+    requested = []
+    def observe(**kwargs):
+        requested.append(kwargs["instrument_token"])
+        return {"available": False, "reason": "SAME_CLOCK_HISTORY_INSUFFICIENT"}
+    monkeypatch.setattr(fno_intraday_volume, "same_clock_rvol", observe)
+    report = SimpleNamespace(underlyings=[
+        SimpleNamespace(symbol=symbol) for symbol in symbols
+    ])
+    instruments = [
+        {"exchange": "NSE", "tradingsymbol": symbol, "instrument_token": 100 + i}
+        for i, symbol in enumerate(symbols)
+    ]
+    result = fo_runtime.run_fo_directional_scan(
+        report=report, instrument_rows=instruments, client=object(),
+        as_of=AS_OF, quote_now=datetime(2026, 10, 14, 10, 30, tzinfo=IST),
+    )
+    assert result["status"] == "BLOCKED"
+    assert requested[0] == 135  # strongest break is LAST in the original list
+    assert len(requested) == 16
+    assert result["volume_coverage"]["price_breakouts_prioritized"] == 36
+    assert result["volume_coverage"]["kite_minute_history_queries"] == 16
+    assert result["volume_coverage"]["unknown"] == 36
+    assert result["considered"][-1]["symbol"] == "S35"
