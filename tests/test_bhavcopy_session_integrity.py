@@ -120,3 +120,31 @@ def test_candidate_days_exclude_bundled_holiday(monkeypatch):
     days = BS._trading_days_back(10)
     assert date(2026, 10, 20) not in days
     assert date(2026, 10, 19) in days
+
+
+def test_saved_scan_claiming_holiday_is_not_loaded(tmp_path):
+    import json
+    from product.scan_store import load_scan
+    path = tmp_path / "latest_momentum_scan.json"
+    path.write_text(json.dumps({
+        "schema_version": 2, "records": [],
+        "as_of_session": "2026-10-20",
+        "provenance": {"market_session_date": "2026-10-20",
+                       "price_source": "official_nse_bhavcopy"},
+    }), encoding="utf-8")
+    assert load_scan(path) is None
+    # Forensic data is preserved, not automatically deleted.
+    assert path.exists()
+
+
+def test_valid_trading_session_saved_scan_still_loads(tmp_path):
+    import json
+    from product.scan_store import load_scan
+    path = tmp_path / "latest_momentum_scan.json"
+    path.write_text(json.dumps({
+        "schema_version": 2, "records": [],
+        "as_of_session": "2026-10-19",
+        "provenance": {"market_session_date": "2026-10-19",
+                       "price_source": "official_nse_bhavcopy"},
+    }), encoding="utf-8")
+    assert load_scan(path) is not None
