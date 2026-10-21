@@ -175,6 +175,7 @@ def main() -> int:
     # originals for investigation. New scan must republish these atomically.
     for filename in (
         "product/latest_momentum_scan.json",
+        "product/best_setups.json",
         "product/latest_recommendations.json",
         "product/startup_trade_discovery.json",
         "product/latest_scan_audit.json",
