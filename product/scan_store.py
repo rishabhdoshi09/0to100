@@ -382,6 +382,24 @@ def load_scan(path: str | Path = DEFAULT_SCAN_PATH) -> dict[str, Any] | None:
                 "provenance_available": False,
                 "provenance_reason": "scan predates session provenance (schema v1)",
             }
+        # A pre-repair scan can remain on disk after the history pickle has
+        # been corrected. Never serve a previously fabricated holiday-session
+        # recommendation as an actionable scan merely because it has schema v2.
+        provenance = payload.get("provenance") or {}
+        session = str(
+            payload.get("as_of_session")
+            or provenance.get("market_session_date")
+            or provenance.get("price_data_as_of")
+            or ""
+        )[:10]
+        if session:
+            try:
+                from datetime import date
+                from research.intelligence.data.nse_calendar import is_session, load_holidays
+                if not is_session(date.fromisoformat(session), load_holidays()):
+                    return None
+            except (ValueError, TypeError):
+                return None
         return payload
     except Exception:
         return None
