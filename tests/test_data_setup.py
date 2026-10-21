@@ -32,17 +32,17 @@ def _write_bhav(root: Path, n_days=65, symbols=("TCS", "INFY", "HAL"),
             if bad_cols:
                 rows = ["FOO,BAR\n1,2"]
             else:
-                hdr = ("SYMBOL,SERIES,OPEN_PRICE,HIGH_PRICE,LOW_PRICE,CLOSE_PRICE,"
+                hdr = ("SYMBOL,SERIES,DATE1,OPEN_PRICE,HIGH_PRICE,LOW_PRICE,CLOSE_PRICE,"
                        "TTL_TRD_QNTY,DELIV_PER")
                 rows = [hdr]
                 for s, base in zip(symbols, range(3000, 3000 + 500 * len(symbols), 500)):
                     p = base + made
                     if bad_ohlc:
-                        rows.append(f"{s},EQ,{p},{p-50},{p+50},{p},1000000,55")  # high<low
+                        rows.append(f"{s},EQ,{d.strftime('%d-%b-%Y')},{p},{p-50},{p+50},{p},1000000,55")  # high<low
                     else:
-                        rows.append(f"{s},EQ,{p},{p+5},{p-5},{p+2},1000000,55")
+                        rows.append(f"{s},EQ,{d.strftime('%d-%b-%Y')},{p},{p+5},{p-5},{p+2},1000000,55")
                     if dupe:
-                        rows.append(f"{s},EQ,{p},{p+5},{p-5},{p+2},1000000,55")   # dup symbol
+                        rows.append(f"{s},EQ,{d.strftime('%d-%b-%Y')},{p},{p+5},{p-5},{p+2},1000000,55")   # dup symbol
             (bhav / f"{d.strftime('%d%m%Y')}.csv").write_text("\n".join(rows) + "\n")
             made += 1
         d += dt.timedelta(days=1)
