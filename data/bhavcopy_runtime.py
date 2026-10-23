@@ -80,8 +80,20 @@ def _snapshot(store) -> dict[str, Any]:
         sessions = int(store._store_sessions or 0)
         latest = store._store_last_day
     dates = store._dates_on_disk()
+    # Existing processes may hold a poisoned pickle in memory. Cross-check
+    # its advertised last session with *validated* CSV dates, rather than
+    # marking stale/holiday data as READY until a restart.
+    invalid_session = False
+    if isinstance(latest, date):
+        from research.intelligence.data.nse_calendar import is_session, load_holidays
+        invalid_session = (
+            not is_session(latest, load_holidays())
+            or not dates
+            or latest > dates[-1]
+        )
     return {
-        "ready": symbols > 0,
+        "ready": symbols > 0 and not invalid_session,
+        "session_integrity": "INVALID" if invalid_session else "OK",
         "symbols": symbols,
         "sessions": sessions,
         "latest_date": latest.isoformat() if isinstance(latest, date) else str(latest or ""),
@@ -166,7 +178,7 @@ def official_history_freshness(
     unpickled ``store_cache.pkl``.
     """
     from research.intelligence.data.nse_calendar import (
-        load_holidays, publication_window, sessions_gap,
+        is_session, load_holidays, publication_window, sessions_gap,
     )
 
     current = dict(history) if history is not None else status(load_cache=load_cache)
@@ -210,6 +222,8 @@ def official_history_freshness(
         reason_code, current_ok, usable = "HISTORY_DATE_MISSING", False, False
     elif latest > today:
         reason_code, current_ok, usable = "HISTORY_FUTURE_DATED", False, False
+    elif not is_session(latest, hols):
+        reason_code, current_ok, usable = "HISTORY_NON_SESSION_DATE", False, False
     elif latest >= completed:
         reason_code, current_ok, usable = "HISTORY_CURRENT", True, True
     elif latest >= minimum_required:

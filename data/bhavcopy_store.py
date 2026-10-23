@@ -18,6 +18,7 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import lru_cache
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional
@@ -26,6 +27,7 @@ import pandas as pd
 
 from logger import get_logger
 from core.runtime_paths import logs_dir, logs_path
+from data.bhavcopy_integrity import parse_archive_date, validate_archive_bytes, validate_archive_path
 
 log = get_logger(__name__)
 
@@ -51,14 +53,44 @@ def _day_path(d: date) -> Path:
     return _BHAV_DIR / f"{d.strftime('%d%m%Y')}.csv"
 
 
+def _holidays() -> set[str]:
+    from research.intelligence.data.nse_calendar import load_holidays
+    return load_holidays()
+
+
+def _is_session(d: date, holidays: set[str] | None = None) -> bool:
+    hols = _holidays() if holidays is None else holidays
+    return d.weekday() < 5 and d.isoformat() not in hols
+
+
+@lru_cache(maxsize=8192)
+def _validated_disk_file(path: str, iso_day: str, size: int, mtime_ns: int) -> bool:
+    """Validation is cached by file identity, not just name, for cheap health reads."""
+    valid, _reason = validate_archive_path(path, date.fromisoformat(iso_day))
+    return valid
+
+
+def _is_valid_archive(path: Path, day: date) -> bool:
+    try:
+        stat = path.stat()
+        return _validated_disk_file(str(path), day.isoformat(), stat.st_size, stat.st_mtime_ns)
+    except OSError:
+        return False
+
+
 def _download_day(d: date, retries: int = 2) -> bool:
     """
     Fetch one bhavcopy to disk. 404 = holiday (no retry). Network errors
     retry with backoff so a flaky connection can't punch holes in history.
     """
+    if not _is_session(d):
+        return False
     path = _day_path(d)
     if path.exists():
-        return True
+        if _is_valid_archive(path, d):
+            return True
+        log.warning("bhav_existing_archive_invalid", day=str(d), path=str(path))
+        return False
     import requests
     url = _URL.format(d=d.strftime("%d%m%Y"))
     for attempt in range(retries + 1):
@@ -67,8 +99,17 @@ def _download_day(d: date, retries: int = 2) -> bool:
             if resp.status_code == 404:
                 return False          # holiday/weekend — retrying won't help
             if resp.status_code == 200 and len(resp.content) >= 1000:
+                valid, reason = validate_archive_bytes(resp.content, d)
+                if not valid:
+                    log.warning("bhav_download_session_rejected", day=str(d), reason=reason)
+                    return False
                 _BHAV_DIR.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(resp.content)
+                tmp = path.with_name(path.name + ".download.tmp")
+                try:
+                    tmp.write_bytes(resp.content)
+                    os.replace(tmp, path)
+                finally:
+                    tmp.unlink(missing_ok=True)
                 return True
         except Exception as exc:
             if attempt == retries:
@@ -92,6 +133,18 @@ def _read_day(d: date) -> Optional[pd.DataFrame]:
         except Exception:
             df = pd.read_csv(path, dtype=str, encoding="latin-1")
         df.columns = [c.strip().upper() for c in df.columns]
+        if "DATE1" not in df.columns:
+            log.warning("bhav_source_date_missing", day=str(d))
+            return None
+        embedded_dates = {
+            parse_archive_date(v) for v in df["DATE1"].astype(str).unique()
+        }
+        if embedded_dates != {d}:
+            log.warning(
+                "bhav_source_date_mismatch", day=str(d),
+                embedded=sorted(str(x) for x in embedded_dates),
+            )
+            return None
         df = df[df["SERIES"].str.strip() == "EQ"]
         out = pd.DataFrame({
             "symbol": df["SYMBOL"].str.strip().str.upper(),
@@ -123,9 +176,10 @@ def _trading_days_back(n_days: int) -> list[date]:
     horizon_days = max(target, int(target * 1.55))
     start = date.today()
     floor = start - timedelta(days=horizon_days - 1)
+    holidays = _holidays()
     out, d = [], start
     while d >= floor:
-        if d.weekday() < 5:
+        if _is_session(d, holidays):
             out.append(d)
         d -= timedelta(days=1)
     return out
@@ -158,6 +212,12 @@ def _load_pkl() -> bool:
             data = pickle.load(f)
         if not data.get("store"):
             return False
+        # An old pickle may already contain a holiday bar fabricated from a
+        # mismatched filename. Reject it; never declare that cache current.
+        last_day = data.get("last_day")
+        if not isinstance(last_day, date) or last_day not in _dates_on_disk():
+            log.warning("bhav_cached_session_rejected", last_day=str(last_day))
+            return False
         with _lock:
             _store = data["store"]
             _store_last_day = data["last_day"]
@@ -177,10 +237,12 @@ def _load_pkl() -> bool:
 def _full_build(available: list[date]) -> int:
     global _store, _store_last_day, _store_sessions
     frames = []
+    parsed_days = []
     for d in sorted(available):
         f = _read_day(d)
         if f is not None:
             frames.append(f)
+            parsed_days.append(d)
     if not frames:
         return 0
     allday = pd.concat(frames, ignore_index=True)
@@ -194,10 +256,10 @@ def _full_build(available: list[date]) -> int:
             new_store[sym] = g[[c for c in keep_cols if c in g.columns]]
     with _lock:
         _store = new_store
-        _store_last_day = max(available)
+        _store_last_day = max(parsed_days)
         _store_sessions = len(frames)
     log.info("bhav_store_built", symbols=len(new_store), sessions=len(frames),
-             latest=str(max(available)))
+             latest=str(max(parsed_days)))
     _save_pkl()
     return len(new_store)
 
@@ -205,10 +267,11 @@ def _full_build(available: list[date]) -> int:
 def _incremental_append(new_days: list[date]) -> None:
     """Append only the fresh sessions onto the loaded store."""
     global _store_last_day, _store_sessions
-    frames = [f for d in sorted(new_days)
+    parsed = [(d, f) for d in sorted(new_days)
               if (f := _read_day(d)) is not None]
-    if not frames:
+    if not parsed:
         return
+    frames = [f for _, f in parsed]
     allday = pd.concat(frames, ignore_index=True)
     with _lock:
         for sym, g in allday.groupby("symbol"):
@@ -222,9 +285,9 @@ def _incremental_append(new_days: list[date]) -> None:
                 _store[sym] = merged[~merged.index.duplicated(keep="last")]
             elif len(g) >= 1:
                 _store[sym] = g[cols]
-        _store_last_day = max(new_days)
+        _store_last_day = max(d for d, _ in parsed)
         _store_sessions += len(frames)
-    log.info("bhav_store_appended", days=len(frames), latest=str(max(new_days)))
+    log.info("bhav_store_appended", days=len(frames), latest=str(_store_last_day))
     _save_pkl()
 
 
@@ -249,7 +312,7 @@ def build_store(days: int = DEFAULT_DAYS, progress=None, should_stop=None) -> in
     candidates = _trading_days_back(days)
 
     # Download whatever is missing on disk, bounded concurrency
-    missing = [d for d in candidates if not _day_path(d).exists()]
+    missing = [d for d in candidates if not _is_valid_archive(_day_path(d), d)]
     if missing:
         log.info("bhav_download_start", missing=len(missing))
         done = 0
@@ -283,7 +346,7 @@ def build_store(days: int = DEFAULT_DAYS, progress=None, should_stop=None) -> in
                 f"History acquisition cancelled after {done}/{len(missing)} sessions"
             )
 
-    available = [d for d in candidates if _day_path(d).exists()]
+    available = [d for d in candidates if _is_valid_archive(_day_path(d), d)]
     if len(available) < _MIN_DAYS:
         log.warning("bhav_insufficient_history", have=len(available))
         return 0
@@ -319,10 +382,13 @@ def _dates_on_disk() -> list[date]:
     out: list[date] = []
     if not _BHAV_DIR.exists():
         return out
+    holidays = _holidays()
     for p in _BHAV_DIR.glob("*.csv"):
         try:
-            out.append(_dt.strptime(p.stem, "%d%m%Y").date())
-        except Exception:
+            day = _dt.strptime(p.stem, "%d%m%Y").date()
+            if _is_session(day, holidays) and _is_valid_archive(p, day):
+                out.append(day)
+        except (OSError, ValueError):
             continue
     return sorted(out)
 

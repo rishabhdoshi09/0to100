@@ -23,6 +23,12 @@ def test_api_process_loads_persisted_bhavcopy_cache(tmp_path, monkeypatch):
             protocol=pickle.HIGHEST_PROTOCOL,
         )
 
+    # The persisted cache must be backed by a verified source session;
+    # a free-floating pickle can no longer certify official market history.
+    (tmp_path / "30072026.csv").write_text(
+        "SYMBOL,SERIES,DATE1,OPEN_PRICE,HIGH_PRICE,LOW_PRICE,CLOSE_PRICE,TTL_TRD_QNTY\n"
+        "TEST,EQ,30-Jul-2026,100,104,99,103,1000\n"
+    )
     monkeypatch.setattr(bhavcopy_store, "_BHAV_DIR", tmp_path)
     monkeypatch.setattr(bhavcopy_store, "_PKL", cache)
     monkeypatch.setattr(bhavcopy_store, "_store", {})
