@@ -35,7 +35,10 @@ def _f(value: Any, default: float = 0.0) -> float:
     return number
 
 
-def _daily_prefilter(frame: pd.DataFrame | None, *, lookback: int = 20) -> dict[str, Any]:
+def _daily_prefilter(
+    frame: pd.DataFrame | None, *, lookback: int = 20,
+    intraday_rvol: float | None = None, defer_volume: bool = False,
+) -> dict[str, Any]:
     if frame is None or len(frame) < max(60, lookback + 2):
         return {"eligible": False, "reason": "INSUFFICIENT_HISTORY"}
     try:
@@ -51,8 +54,10 @@ def _daily_prefilter(frame: pd.DataFrame | None, *, lookback: int = 20) -> dict[
     prior_high = float(high.iloc[-(lookback + 1):-1].max())
     prior_low = float(low.iloc[-(lookback + 1):-1].min())
     avg_vol = float(volume.iloc[-21:-1].mean())
-    rvol = float(volume.iloc[-1] / avg_vol) if avg_vol > 0 else 0.0
-    turnover_crore = float((close * volume).iloc[-20:].mean() / 1e7)
+    daily_rvol = float(volume.iloc[-1] / avg_vol) if avg_vol > 0 else 0.0
+    rvol = float(intraday_rvol) if intraday_rvol is not None else daily_rvol
+    # Use 20 *completed* sessions; today's partial volume understates turnover.
+    turnover_crore = float((close * volume).iloc[-21:-1].mean() / 1e7)
     directions: list[str] = []
     if price > prior_high:
         directions.append("LONG")
@@ -65,12 +70,12 @@ def _daily_prefilter(frame: pd.DataFrame | None, *, lookback: int = 20) -> dict[
             "price": round(price, 4),
             "rvol": round(rvol, 4),
         }
-    if rvol < 1.0:
+    if not defer_volume and rvol < (1.2 if intraday_rvol is not None else 1.0):
         return {
             "eligible": False,
-            "reason": "BREAK_WITHOUT_VOLUME_CONFIRMATION",
-            "price": round(price, 4),
-            "rvol": round(rvol, 4),
+            "reason": "SAME_CLOCK_VOLUME_BELOW_THRESHOLD" if intraday_rvol is not None else "BREAK_WITHOUT_VOLUME_CONFIRMATION",
+            "price": round(price, 4), "rvol": round(rvol, 4),
+            "daily_rvol": round(daily_rvol, 4),
         }
     if turnover_crore < 5.0:
         return {
@@ -89,6 +94,8 @@ def _daily_prefilter(frame: pd.DataFrame | None, *, lookback: int = 20) -> dict[
         "directions": directions,
         "price": round(price, 4),
         "rvol": round(rvol, 4),
+        "daily_rvol": round(daily_rvol, 4),
+        "volume_basis": "KITE_PRIOR_MINUTE_CUMULATIVE" if intraday_rvol is not None else "DAILY_FULL_SESSION",
         "clearance_pct": round(clearance, 4),
         "priority": round(clearance * max(rvol, 1.0), 6),
     }
@@ -192,6 +199,8 @@ def run_fo_directional_scan(
                 "live_execution_allowed": False,
                 "probability_claim": None,
             }
+    # Real scanner must not compare a partial NSE session with full daily volume.
+    require_same_clock_volume = history_getter is None and quote_now.date() == as_of
     history_state: dict[str, Any] = {}
     if history_getter is None:
         from scan.bulk_fetcher import adopt_ready_store, get_cached
@@ -239,6 +248,18 @@ def run_fo_directional_scan(
     universe = list(getattr(report, "underlyings", ()) or ())
     considered: list[dict[str, Any]] = []
     deep: list[tuple[Any, pd.DataFrame, dict[str, Any]]] = []
+    nse_tokens = {
+        str(row.get("tradingsymbol") or "").upper(): int(row.get("instrument_token") or 0)
+        for row in instrument_rows
+        if str(row.get("exchange") or "").upper() == "NSE"
+        and str(row.get("instrument_token") or "").isdigit()
+    }
+    # Only price breakouts consume Kite minute-history calls, never the full F&O universe.
+    same_clock_requests = 0
+    # Bound per-scan Kite I/O on the Intel Mac; rank price breaks first rather
+    # than making F&O instrument-master ordering decide who gets the budget.
+    max_same_clock_requests = 16
+    prefilter_pending: list[tuple[Any, pd.DataFrame, dict[str, Any], int]] = []
     for offset, item in enumerate(universe):
         if progress_callback and offset % 25 == 0:
             progress_callback("FNO_PREFILTER", "Checking F&O history and breakout gates", offset, len(universe))
@@ -252,10 +273,85 @@ def run_fo_directional_scan(
         if history_rejection:
             considered.append({"symbol": symbol, "stage": "history", "reason": history_rejection})
             continue
-        pre = _daily_prefilter(frame)
+        pre = _daily_prefilter(frame, defer_volume=require_same_clock_volume)
+        considered_index = len(considered)
         considered.append({"symbol": symbol, "stage": "prefilter", **pre})
         if pre.get("eligible"):
-            deep.append((item, frame, pre))
+            if require_same_clock_volume:
+                prefilter_pending.append((item, frame, pre, considered_index))
+            else:
+                deep.append((item, frame, pre))
+
+    if require_same_clock_volume and prefilter_pending:
+        from product.fno_intraday_volume import same_clock_rvol
+
+        # Clearance is a real point-in-time price property; today's partial
+        # daily RVOL is intentionally not a tie-breaker.
+        prefilter_pending.sort(
+            key=lambda row: (
+                -float(row[2]["clearance_pct"]),
+                str(getattr(row[0], "symbol", "")).upper(),
+            )
+        )
+        for rank, (item, frame, pre, considered_index) in enumerate(prefilter_pending):
+            symbol = str(getattr(item, "symbol", "") or "").upper()
+            if rank >= max_same_clock_requests:
+                pre = {**pre, "eligible": False,
+                       "reason": "SAME_CLOCK_QUERY_BUDGET_EXCEEDED"}
+            else:
+                same_clock_requests += 1
+                volume_state = same_clock_rvol(
+                    client=client, instrument_token=nse_tokens.get(symbol, 0),
+                    as_of=as_of, observed_at=quote_now,
+                    cumulative_volume=float(frame["volume"].iloc[-1]),
+                )
+                if not volume_state["available"]:
+                    pre = {**pre, "eligible": False, "reason": volume_state["reason"],
+                           "time_of_day_volume": volume_state}
+                else:
+                    pre = _daily_prefilter(frame, intraday_rvol=volume_state["rvol"])
+                    pre["time_of_day_volume"] = volume_state
+                    if pre["eligible"]:
+                        deep.append((item, frame, pre))
+            considered[considered_index] = {
+                "symbol": symbol, "stage": "prefilter", **pre
+            }
+
+    volume_checked = sum(
+        1 for row in considered
+        if isinstance(row.get("time_of_day_volume"), Mapping)
+    )
+    volume_supported = sum(
+        1 for row in considered
+        if isinstance(row.get("time_of_day_volume"), Mapping)
+        and bool(row["time_of_day_volume"].get("available"))
+    )
+    volume_unknown = sum(
+        1 for row in considered
+        if (isinstance(row.get("time_of_day_volume"), Mapping)
+            and not row["time_of_day_volume"].get("available"))
+        or row.get("reason") == "SAME_CLOCK_QUERY_BUDGET_EXCEEDED"
+    )
+    volume_coverage = {
+        "required": require_same_clock_volume,
+        "kite_minute_history_queries": same_clock_requests,
+        "max_kite_minute_history_queries": max_same_clock_requests,
+        "price_breakouts_prioritized": len(prefilter_pending),
+        "checked": volume_checked, "confirmed_observable": volume_supported,
+        "unknown": volume_unknown,
+        "source": "KITE_PRIOR_MINUTE_CUMULATIVE" if require_same_clock_volume else "DAILY_OR_INJECTED_HISTORY",
+    }
+    # Zero qualifying trades and unavailable volume evidence are different
+    # outcomes. Do not call a provider failure an uneventful market session.
+    if require_same_clock_volume and volume_unknown and not deep:
+        return {
+            "available": False, "status": "BLOCKED",
+            "code": "FNO_INTRADAY_VOLUME_COVERAGE_UNAVAILABLE",
+            "as_of": as_of.isoformat(), "universe_size": len(universe),
+            "candidate_count": 0, "candidates": [], "considered": considered,
+            "volume_coverage": volume_coverage,
+            "paper_only": True, "live_execution_allowed": False,
+        }
 
     deep.sort(key=lambda row: float(row[2].get("priority") or 0.0), reverse=True)
     if progress_callback:
@@ -276,6 +372,7 @@ def run_fo_directional_scan(
             "considered": considered,
             "quote_scope": {"deep_underlyings": 0, "option_contracts_requested": 0},
             "history_session": history_state,
+            "volume_coverage": volume_coverage if "volume_coverage" in locals() else {},
             "paper_only": True,
             "live_execution_allowed": False,
             "probability_claim": None,
@@ -541,6 +638,7 @@ def run_fo_directional_scan(
                 benchmark_20d_return_pct=float(nifty_20),
                 nifty_change_pct=float(nifty_change),
                 sector_relative_strength_pct=float(sector_strength),
+                time_of_day_rvol=(float(pre["rvol"]) if pre.get("volume_basis") == "KITE_PRIOR_MINUTE_CUMULATIVE" else None),
                 iv_percentile=(
                     float(iv_history["percentile_pct"])
                     if iv_history.get("available") and iv_history.get("percentile_pct") is not None
@@ -605,6 +703,7 @@ def run_fo_directional_scan(
             "option_contracts_requested": len(option_symbols),
         },
         "history_session": history_state,
+        "volume_coverage": volume_coverage,
         "paper_only": True,
         "live_execution_allowed": False,
         "probability_claim": None,

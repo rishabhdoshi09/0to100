@@ -18,6 +18,7 @@ the ticket can warn "is trade ke baad total risk X%% ho jayega".
 from __future__ import annotations
 
 import contextlib
+import math
 
 from logger import get_logger
 
@@ -40,7 +41,7 @@ def _max_positions() -> int:
         return 5
 
 
-def _combined_open_rows(extra_trade: dict | None = None) -> list[dict]:
+def _combined_open_rows(extra_trade: dict | None = None, *, include_fno: bool = True) -> list[dict]:
     """The ONE read of combined equity PAPER exposure across BOTH engines'
     books. portfolio_risk_report() (the display) and account_exposure_gate()
     (the pre-mutation check both engines must call) are built on this same
@@ -66,6 +67,32 @@ def _combined_open_rows(extra_trade: dict | None = None) -> list[dict]:
         )
     except Exception as exc:
         log.debug("modern_engine_positions_read_failed", error=str(exc))
+    if include_fno:
+        # A genuine account-level 5% risk gate must also see open stock F&O
+        # PAPER contracts. This is a READ-ONLY SQLite projection, not an
+        # invitation to open broker orders. A missing first-run ledger is zero
+        # positions; a corrupt existing ledger is a safety error, not zero.
+        from core.runtime_paths import logs_path
+        from product.fo_paper_store import FoPaperStore
+        path = logs_path("product", "fo_paper.sqlite3")
+        if path.exists():
+            with FoPaperStore(read_only=True) as store:
+                positions = store.load_positions()
+                rows_on_disk = int(store.conn.execute(
+                    "SELECT COUNT(*) FROM fo_open_positions"
+                ).fetchone()[0])
+                if len(positions) != rows_on_disk:
+                    raise RuntimeError("unparseable F&O paper position; account entry locked")
+                for p in positions:
+                    symbol = str(p.get("underlying") or "").upper()
+                    qty = int(p.get("quantity") or 0)
+                    entry = float(p.get("entry_price") or 0.0)
+                    stop = float(p.get("stop_price") or 0.0)
+                    if (not symbol or qty <= 0 or stop < 0
+                            or not all(math.isfinite(v) for v in (float(qty), entry, stop))
+                            or entry <= stop):
+                        raise RuntimeError("invalid F&O paper exposure; account entry locked")
+                    rows.append({"symbol": symbol, "qty": qty, "entry": entry, "stop": stop})
     if extra_trade:
         rows.append(extra_trade)
     return rows

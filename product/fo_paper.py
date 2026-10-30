@@ -167,6 +167,7 @@ class FoPaperBook:
         premium_deployed_today: float = 0.0,
         max_positions: int = 5,
         max_total_risk_pct: float = 0.05,
+        external_open_risk: float = 0.0,
         slippage_bps: float = 5.0,
         trail_activation_r: float = 1.0,
         trail_distance_r: float = 1.0,
@@ -182,6 +183,7 @@ class FoPaperBook:
         self.premium_deployed_today = max(0.0, float(premium_deployed_today))
         self.max_positions = int(max_positions)
         self.max_total_risk_pct = float(max_total_risk_pct)
+        self.external_open_risk = max(0.0, float(external_open_risk))
         self.slippage_bps = float(slippage_bps)
         self.trail_activation_r = max(0.0, float(trail_activation_r))
         self.trail_distance_r = max(0.0, float(trail_distance_r))
@@ -284,7 +286,7 @@ class FoPaperBook:
         )
         premium_budget = min(per_trade_premium_budget, remaining_daily_premium)
         total_risk_budget = equity * self.max_total_risk_pct
-        open_risk = sum(float(pos.risk_amount) for pos in self.open.values())
+        open_risk = self.external_open_risk + sum(float(pos.risk_amount) for pos in self.open.values())
         remaining_total_risk = max(0.0, total_risk_budget - open_risk)
         risk_budget = min(risk_budget, remaining_total_risk)
         risk_per_lot = per_unit_risk * lot_size
