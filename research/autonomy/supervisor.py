@@ -577,16 +577,34 @@ class Supervisor:
             # current here deadlocked weekend/off-session startup even though
             # the canonical freshness policy truthfully marked that history as
             # usable_for_scan. Never bypass a genuinely stale history gate.
-            if not history.get("usable_for_scan"):
-                return
-            latest = str(
-                history.get("available_session")
-                or history.get("latest_date")
-                or ""
-            )[:10]
-            if not latest:
-                return
+            official_usable = bool(history.get("usable_for_scan"))
             identity = str(self.deps.active_snapshot_id() or "").strip()
+            if not official_usable:
+                # Discovery may bootstrap from the *verified current* Kite
+                # snapshot when the public NSE archive lags. Scheduling a scan
+                # is safe here: actual scan publication still validates the
+                # immutable active snapshot and exact bar-date provenance.
+                # Do not schedule stale snapshots or fabricated fallback bars.
+                if not identity:
+                    return
+                info = dict(self.deps.active_snapshot_info() or {})
+                if (
+                    str(info.get("snapshot_id") or "") != identity
+                    or str(info.get("source") or "").lower() != "kite"
+                ):
+                    return
+                latest = str(info.get("latest_date") or "")[:10]
+                from research.intelligence.data.nse_calendar import snapshot_freshness
+                if not latest or not snapshot_freshness(latest).get("fresh"):
+                    return
+            else:
+                latest = str(
+                    history.get("available_session")
+                    or history.get("latest_date")
+                    or ""
+                )[:10]
+                if not latest:
+                    return
             if not identity:
                 identity = f"market:official_nse:{latest}"
             self.jobs.enqueue(
