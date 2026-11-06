@@ -298,7 +298,7 @@ def build_fast_response(core, attach_authority=None) -> dict[str, Any]:
     # A persisted recommendation is not actionable when its source scan has
     # disappeared from the validated read path. Do not serve stale BUY cards
     # while the corrected Kite snapshot is being scanned.
-    if not scan.get("available"):
+    if scan.get("available") is False:
         return _empty_workspace(
             status="FAILED",
             error="Verified market scan is missing or stale; recommendations withheld.",
