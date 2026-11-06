@@ -234,3 +234,65 @@ def test_stale_kite_snapshot_is_not_published_even_if_scan_runs(monkeypatch, tmp
     assert result.ok is False
     assert result.error_code == "SCAN_INPUT_STALE"
     assert saved == []
+
+
+def test_production_paper_cycle_blocks_old_recommendations_before_entries(monkeypatch):
+    from datetime import datetime, timezone
+    from research.autonomy import jobs as J
+
+    sent = []
+    deps = J.Deps.__new__(J.Deps)
+    deps.now_ist = lambda: datetime(2026, 11, 6, 10, 0, tzinfo=timezone.utc)
+    deps.holidays = lambda: set()
+    deps.run_paper_cycle = lambda ok, reason, phase, failures: (
+        sent.append((ok, reason)) or {"eligibility": "NO_ELIGIBLE_TRADE"}
+    )
+    monkeypatch.setattr(J, "_entry_reason", lambda *_a: (True, "", "intraday"))
+    monkeypatch.setattr(J, "_paper_market_data_source", lambda *_a: (True, "snapshot:new"))
+    monkeypatch.setattr(
+        "product.scan_store.load_scan", lambda: {
+            "scanned_at": "2026-11-06T13:00:00+00:00",
+            "source_snapshot_id": "new",
+        },
+    )
+    monkeypatch.setattr(
+        "product.recommendations_store.load_recommendations", lambda: {
+            "scan_scanned_at": "2026-10-23T13:00:00+00:00",
+        },
+    )
+
+    result = J.run_paper_cycle(J._Ctx(deps))
+    assert sent == [(False, "STALE_SCAN_SNAPSHOT")]
+    assert result.new_entries_allowed is False
+    assert result.metadata["eligibility"] == "DATA_UNAVAILABLE"
+    assert result.metadata["entry_block_reason"] == "STALE_SCAN_SNAPSHOT"
+
+
+def test_production_paper_cycle_allows_verified_matching_scan_identity(monkeypatch):
+    from datetime import datetime, timezone
+    from research.autonomy import jobs as J
+
+    sent = []
+    deps = J.Deps.__new__(J.Deps)
+    deps.now_ist = lambda: datetime(2026, 11, 6, 10, 0, tzinfo=timezone.utc)
+    deps.holidays = lambda: set()
+    deps.run_paper_cycle = lambda ok, reason, phase, failures: (
+        sent.append((ok, reason)) or {"eligibility": "NO_ELIGIBLE_TRADE"}
+    )
+    monkeypatch.setattr(J, "_entry_reason", lambda *_a: (True, "", "intraday"))
+    monkeypatch.setattr(J, "_paper_market_data_source", lambda *_a: (True, "snapshot:new"))
+    monkeypatch.setattr(
+        "product.scan_store.load_scan", lambda: {
+            "scanned_at": "2026-11-06T13:00:00+00:00",
+            "source_snapshot_id": "new",
+        },
+    )
+    monkeypatch.setattr(
+        "product.recommendations_store.load_recommendations", lambda: {
+            "scan_scanned_at": "2026-11-06T13:00:00+00:00",
+        },
+    )
+
+    result = J.run_paper_cycle(J._Ctx(deps))
+    assert sent == [(True, "")]
+    assert result.new_entries_allowed is True
