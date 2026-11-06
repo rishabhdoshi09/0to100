@@ -29,7 +29,7 @@ EXPECTED_EXTERNAL_TOKENS = (
     "LOGIN_REQUIRED",
     "BROKER_LOGIN_REQUIRED",
 )
-EXPECTED_EXTERNAL_FEATURES = frozenset({"Data refresh", "F&O refresh"})
+EXPECTED_EXTERNAL_FEATURES = frozenset({"Data refresh", "F&O refresh", "Market Report"})
 EXPLICIT_BLOCKER_CODES = frozenset({
     "FNO_UNIVERSE_UNAVAILABLE",
     "BROKER_LOGIN_REQUIRED",
@@ -178,6 +178,18 @@ def is_expected_external_blocker(row: Mapping[str, Any]) -> bool:
         return False
     if status not in {"DEGRADED", "BLOCKED"}:
         return False
+    if feature == "Market Report":
+        # An isolated CI runner can have no genuine index source even while
+        # the cash bhavcopy and scan work. Permit precisely that witnessed
+        # external absence, but never generic regime failure or a missing scan.
+        return (
+            status == "DEGRADED"
+            and "NIFTY_INDEX_DATA_UNAVAILABLE" in reason
+            and "MISSING_LANES=REGIME" in reason
+            and "MISSING_LANES=NEWS" not in reason
+            and "MISSING_LANES=MARKET_SCAN" not in reason
+            and "MISSING_LANES=DESK_WRAP" not in reason
+        )
     return any(token in reason for token in EXPECTED_EXTERNAL_TOKENS)
 
 
