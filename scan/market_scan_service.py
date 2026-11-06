@@ -445,7 +445,15 @@ def run_whole_market_scan(
             if str(manifest.get("source") or "").lower() == "kite":
                 actual_date = str(manifest.get("last_trading_date") or "")[:10]
                 expected_date = str(provenance.get("expected_session_date") or "")[:10]
-                if not actual_date or actual_date != expected_date or not provenance.get("data_current"):
+                input_stale = (
+                    not actual_date
+                    or actual_date != expected_date
+                    or not provenance.get("data_current")
+                )
+                # Non-publishing scans are diagnostic, not authoritative
+                # evidence. Let them inspect data but label its real source/date.
+                # Persisted and actionable scans must fail closed.
+                if input_stale and save:
                     return MarketScanReport(
                         DATA_UNAVAILABLE, error_code="SCAN_INPUT_STALE",
                         error_message="Kite data is not from the expected NSE session.",
@@ -454,6 +462,13 @@ def run_whole_market_scan(
                 provenance["price_source"] = "kite_snapshot"
                 provenance["price_data_as_of"] = actual_date
                 provenance["market_session_date"] = actual_date
+                if input_stale:
+                    provenance["data_current"] = False
+                    provenance["data_freshness"] = "KITE_SNAPSHOT_STALE"
+                    provenance["provenance_reason"] = (
+                        f"Kite snapshot as of {actual_date or 'unknown'}, expected "
+                        f"{expected_date or 'unknown'}"
+                    )
                 payload["provenance"] = provenance
         except Exception as exc:
             return MarketScanReport(
