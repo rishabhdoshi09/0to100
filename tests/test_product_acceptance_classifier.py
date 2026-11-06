@@ -374,7 +374,8 @@ def test_canonical_health_lifecycle_ready_with_all_explicit_invariants_pass():
     assert grade_canonical_health(missing_ok)["status"] == "FAIL"
 
 
-def test_market_report_expected_external_blocker_requires_verified_nifty_absence():
+def test_market_report_expected_external_blocker_requires_verified_nifty_absence(monkeypatch):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
     blocked = classify_operation({
         "status": "SUCCEEDED",
         "result": {
@@ -394,6 +395,9 @@ def test_market_report_expected_external_blocker_requires_verified_nifty_absence
         live_locked=True, live_lock_verified=True,
     )["verdict"] == "PRODUCT ACCEPTANCE PASS"
 
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    assert not is_expected_external_blocker(row)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
     for fake in (
         {"feature": "Market Report", "status": "DEGRADED", "blocker_reason": "missing_lanes=regime"},
         {"feature": "Market Report", "status": "DEGRADED", "blocker_reason": "missing_lanes=regime; NIFTY_INDEX_DATA_UNAVAILABLE; missing_lanes=market_scan"},
