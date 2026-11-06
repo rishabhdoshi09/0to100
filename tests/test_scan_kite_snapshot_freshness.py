@@ -296,3 +296,57 @@ def test_production_paper_cycle_allows_verified_matching_scan_identity(monkeypat
     result = J.run_paper_cycle(J._Ctx(deps))
     assert sent == [(True, "")]
     assert result.new_entries_allowed is True
+
+
+def test_discovery_freshness_uses_verified_kite_instead_of_lagging_bhavcopy(
+    monkeypatch, tmp_path
+):
+    from product import desk_pipeline
+    from research.intelligence.data import nse_calendar
+
+    _install_snapshot(monkeypatch, tmp_path, active="new", day="2026-11-06")
+    monkeypatch.setattr(desk_pipeline, "logs_dir", lambda: tmp_path)
+    location = tmp_path / "product" / "latest_momentum_scan.json"
+    S.save_scan(_scan(sid="new"), location)
+    monkeypatch.setattr(
+        "data.bhavcopy_runtime.official_history_freshness",
+        lambda **_kw: {"usable_for_scan": False, "current": False},
+    )
+    # The scan's broker authority is independently verifiable. Missing public
+    # NSE archive does not justify a false negative in discovery readiness.
+    monkeypatch.setattr(
+        nse_calendar, "snapshot_freshness",
+        lambda *_args, **_kwargs: {"fresh": True},
+    )
+    assert desk_pipeline.scan_is_fresh() is True
+
+    # A once-current Kite snapshot must still expire under the exchange
+    # calendar: cached scan timestamps cannot bypass future session rollovers.
+    monkeypatch.setattr(
+        nse_calendar, "snapshot_freshness",
+        lambda *_args, **_kwargs: {"fresh": False},
+    )
+    assert desk_pipeline.scan_is_fresh() is False
+
+
+def test_discovery_freshness_rejects_rotated_or_unverified_kite_scan(
+    monkeypatch, tmp_path
+):
+    from product import desk_pipeline
+    from research.intelligence.data import nse_calendar
+
+    snapshot = _install_snapshot(monkeypatch, tmp_path, active="new")
+    monkeypatch.setattr(desk_pipeline, "logs_dir", lambda: tmp_path)
+    location = tmp_path / "product" / "latest_momentum_scan.json"
+    S.save_scan(_scan(sid="old"), location)
+    monkeypatch.setattr(
+        nse_calendar, "snapshot_freshness",
+        lambda *_args, **_kwargs: {"fresh": True},
+    )
+    assert desk_pipeline.scan_is_fresh() is False
+    S.save_scan(_scan(sid="new", source="official_nse_bhavcopy"), location)
+    assert desk_pipeline.scan_is_fresh() is False
+
+    S.save_scan(_scan(sid="new"), location)
+    snapshot.active = "old"
+    assert desk_pipeline.scan_is_fresh() is False
