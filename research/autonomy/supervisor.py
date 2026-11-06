@@ -1388,9 +1388,28 @@ class Supervisor:
         if str(getattr(refresh_job, "job_type", "") or "") != SCH.DATA_REFRESH:
             return
         key = str(getattr(refresh_job, "idempotency_key", "") or "")
-        if not key.startswith("data_refresh:") or key.endswith(":eod"):
-            # Manual REFRESH_DATA_NOW is data-only. The automatic per-session
-            # DATA_REFRESH identity is the only source of the auto scan->paper chain.
+        if key.startswith("data_refresh:") and key.endswith(":eod"):
+            # Refreshing at EOD can supersede the day's scan. Rebuild scan only:
+            # do NOT implicitly enqueue real-time paper entries after hours.
+            snap = str(self._snapshot_token(
+                output_snapshot_id or getattr(refresh_job, "output_snapshot_id", None),
+                metadata,
+            ) or "")
+            if snap:
+                try:
+                    from product.scan_store import load_scan
+                    existing = dict(load_scan() or {})
+                except Exception:
+                    existing = {}
+                if str(existing.get("source_snapshot_id") or "") != snap:
+                    self.jobs.enqueue(
+                        SCH.MARKET_SCAN,
+                        idempotency_key=f"eod:scan:{snap}",
+                        input_snapshot_id=snap,
+                    )
+            return
+        if not key.startswith("data_refresh:"):
+            # Manual REFRESH_DATA_NOW remains data-only.
             return
         snap = self._snapshot_token(
             output_snapshot_id or getattr(refresh_job, "output_snapshot_id", None),
