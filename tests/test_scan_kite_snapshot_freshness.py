@@ -124,3 +124,43 @@ def test_snapshot_switch_during_scan_blocks_publication(monkeypatch):
     assert not report.ok
     assert report.error_code == "SCAN_SNAPSHOT_CHANGED"
     assert report.payload == {}
+
+
+def test_health_does_not_claim_evidence_ready_for_stale_kite_scan(monkeypatch, tmp_path):
+    from product.startup_check import _scan_evidence_status
+
+    _install_snapshot(monkeypatch, tmp_path, active="0d50c14e22b06718")
+    old = _scan(sid="2ee235366f4818f5", source="official_nse_bhavcopy")
+    old["as_of_session"] = "2026-11-06"
+    status, detail = _scan_evidence_status(old, expected_session="2026-11-06")
+    assert status == "STALE"
+    assert "SNAPSHOT_ID_MISMATCH" in detail
+
+    current = _scan(sid="0d50c14e22b06718")
+    current["as_of_session"] = "2026-11-06"
+    status, detail = _scan_evidence_status(current, expected_session="2026-11-06")
+    assert status == "READY"
+
+
+def test_recommendations_hide_old_cards_when_scan_authority_is_missing(monkeypatch):
+    from types import SimpleNamespace
+    from product import recommendations_liveness as R
+
+    monkeypatch.setattr(
+        "product.recommendations_store.load_recommendations",
+        lambda: {"records_status": "READY", "categories": [
+            {"id": "buy", "cards": [{"symbol": "KRISHANA", "verdict": "BUY"}]}
+        ]},
+    )
+    monkeypatch.setattr(
+        R, "_ensure_rebuild",
+        lambda *_a: (_ for _ in ()).throw(AssertionError("must not rebuild from stale scan")),
+    )
+    core = SimpleNamespace(
+        _scan_payload=lambda: {"available": False},
+        _long_term_payload=lambda: {"available": True},
+    )
+    result = R.build_fast_response(core)
+    assert result["records_status"] == "FAILED"
+    assert "stale" in result["error"].lower()
+    assert all(not group.get("cards") for group in result.get("categories", []))
