@@ -445,10 +445,14 @@ def run_whole_market_scan(
             if str(manifest.get("source") or "").lower() == "kite":
                 actual_date = str(manifest.get("last_trading_date") or "")[:10]
                 expected_date = str(provenance.get("expected_session_date") or "")[:10]
+                # Kite is the OHLCV authority when configured. A delayed
+                # public NSE archive must not invalidate a genuinely current
+                # Kite snapshot; compare its verified last bar with the
+                # calendar's required completed session instead.
                 input_stale = (
                     not actual_date
-                    or actual_date != expected_date
-                    or not provenance.get("data_current")
+                    or not expected_date
+                    or actual_date < expected_date
                 )
                 # Non-publishing scans are diagnostic, not authoritative
                 # evidence. Let them inspect data but label its real source/date.
@@ -462,13 +466,14 @@ def run_whole_market_scan(
                 provenance["price_source"] = "kite_snapshot"
                 provenance["price_data_as_of"] = actual_date
                 provenance["market_session_date"] = actual_date
-                if input_stale:
-                    provenance["data_current"] = False
-                    provenance["data_freshness"] = "KITE_SNAPSHOT_STALE"
-                    provenance["provenance_reason"] = (
-                        f"Kite snapshot as of {actual_date or 'unknown'}, expected "
-                        f"{expected_date or 'unknown'}"
-                    )
+                provenance["data_current"] = not input_stale
+                provenance["data_freshness"] = (
+                    "KITE_SNAPSHOT_STALE" if input_stale else "KITE_SNAPSHOT_CURRENT"
+                )
+                provenance["provenance_reason"] = (
+                    f"Kite snapshot as of {actual_date or 'unknown'}, expected "
+                    f"{expected_date or 'unknown'}"
+                ) if input_stale else ""
                 payload["provenance"] = provenance
         except Exception as exc:
             return MarketScanReport(
