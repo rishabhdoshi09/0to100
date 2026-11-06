@@ -100,7 +100,11 @@ def collect_nested_blockers(result: Mapping[str, Any] | None) -> list[str]:
     missing = [str(item) for item in _as_list(payload.get("missing_lanes")) if str(item).strip()]
     for lane in missing:
         token = f"missing_lanes={lane}"
-        if token not in reasons and not any(lane in item for item in reasons):
+        # Preserve the exact missing-lane field even when a nested dependency
+        # path happens to contain that word (e.g. regime_dependency). Without
+        # this, strict acceptance cannot distinguish only-regime missing from
+        # regime + market_scan missing.
+        if token not in reasons:
             reasons.append(token)
     out: list[str] = []
     for item in reasons:
