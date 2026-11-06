@@ -164,3 +164,73 @@ def test_recommendations_hide_old_cards_when_scan_authority_is_missing(monkeypat
     assert result["records_status"] == "FAILED"
     assert "stale" in result["error"].lower()
     assert all(not group.get("cards") for group in result.get("categories", []))
+
+
+def _prepare_kite_publication(monkeypatch, tmp_path, *, kite_date):
+    from types import SimpleNamespace
+    from scan import market_scan_service as market
+    from scan import scan_coverage
+
+    _install_snapshot(monkeypatch, tmp_path, active="new", day=kite_date)
+    monkeypatch.setattr(market, "_saved_priority_inputs", lambda: (None, None, None, []))
+    monkeypatch.setattr(scan_coverage, "observe_scanner", _observe)
+    monkeypatch.setattr(scan_coverage, "save_audit", lambda *_: None)
+    monkeypatch.setattr("scan.bulk_fetcher.cached_symbols", lambda: ["AAA"])
+    monkeypatch.setattr(
+        S, "_history_freshness",
+        lambda: ({
+            "available_session": "2026-11-05",
+            "expected_latest_completed_session": "2026-11-06",
+            "reason_code": "HISTORY_STALE",
+            "current": False,
+        }, ""),
+    )
+    monkeypatch.setattr("product.sepa_setup.persist_public_best_setups", lambda *_: None)
+    monkeypatch.setattr(
+        "scan.long_term_service.overlay_long_term_from_market_scan",
+        lambda *_a, **_kw: SimpleNamespace(status="SUCCEEDED", payload={}, error_code=""),
+    )
+    monkeypatch.setattr(
+        "product.desk_scan_overlays.persist_desks_from_market_scan",
+        lambda *_: {},
+    )
+    saved = []
+    monkeypatch.setattr(S, "save_scan", lambda payload: saved.append(payload))
+    return market, saved
+
+
+def test_fresh_kite_snapshot_beats_lagging_bhavcopy_provenance(monkeypatch, tmp_path):
+    market, saved = _prepare_kite_publication(
+        monkeypatch, tmp_path, kite_date="2026-11-06",
+    )
+    result = market.run_whole_market_scan(
+        universe_provider=lambda: {"AAA": "Alpha"},
+        prefetch_fn=lambda *_a, **_kw: None,
+        scanner=_Scanner(),
+        fno_provider=lambda: set(),
+        save=True,
+    )
+    assert result.ok
+    assert len(saved) == 1
+    prov = saved[0]["provenance"]
+    assert saved[0]["source_snapshot_id"] == "new"
+    assert prov["price_data_as_of"] == "2026-11-06"
+    assert prov["price_source"] == "kite_snapshot"
+    assert prov["data_current"] is True
+    assert prov["data_freshness"] == "KITE_SNAPSHOT_CURRENT"
+
+
+def test_stale_kite_snapshot_is_not_published_even_if_scan_runs(monkeypatch, tmp_path):
+    market, saved = _prepare_kite_publication(
+        monkeypatch, tmp_path, kite_date="2026-11-05",
+    )
+    result = market.run_whole_market_scan(
+        universe_provider=lambda: {"AAA": "Alpha"},
+        prefetch_fn=lambda *_a, **_kw: None,
+        scanner=_Scanner(),
+        fno_provider=lambda: set(),
+        save=True,
+    )
+    assert result.ok is False
+    assert result.error_code == "SCAN_INPUT_STALE"
+    assert saved == []
