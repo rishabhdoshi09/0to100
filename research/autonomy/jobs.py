@@ -901,6 +901,20 @@ def run_market_scan(ctx) -> JobResult:
         payload = report.payload
     else:
         payload = report or {}
+    if isinstance(ctx.deps, Deps):
+        # No projections, alerts, or paper handoff from stale OHLCV.
+        from product.scan_store import scan_source_status
+        verified, reason = scan_source_status(payload)
+        if not verified:
+            return JobResult(
+                JS.RETRYABLE_FAILED,
+                "scan source is stale or unverified",
+                error_code=reason,
+                error_message="Scan no longer matches active Kite snapshot.",
+                failures={H.SNAPSHOT_STALE},
+                state_hint=ST.OBSERVING,
+                new_entries_allowed=False,
+            )
     summary = dict(payload.get("summary", {}))
     n = int(summary.get("with_any_setup", 0) or 0)
 
