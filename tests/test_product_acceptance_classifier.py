@@ -372,3 +372,32 @@ def test_canonical_health_lifecycle_ready_with_all_explicit_invariants_pass():
     missing_ok = dict(_READY_HEALTH)
     del missing_ok["ok"]
     assert grade_canonical_health(missing_ok)["status"] == "FAIL"
+
+
+def test_market_report_expected_external_blocker_requires_verified_nifty_absence():
+    blocked = classify_operation({
+        "status": "SUCCEEDED",
+        "result": {
+            "missing_lanes": ["regime"],
+            "regime_dependency": {
+                "blocked": True,
+                "code": "NIFTY_INDEX_DATA_UNAVAILABLE",
+                "error": "Official NSE index store, Kite, and Yahoo all lacked a usable Nifty series.",
+            },
+        },
+    })
+    row = {"feature": "Market Report", **blocked}
+    assert blocked["status"] == "DEGRADED"
+    assert is_expected_external_blocker(row)
+    assert product_acceptance_verdict(
+        [{"feature": "Market Scan", "status": "PASS"}, row],
+        live_locked=True, live_lock_verified=True,
+    )["verdict"] == "PRODUCT ACCEPTANCE PASS"
+
+    for fake in (
+        {"feature": "Market Report", "status": "DEGRADED", "blocker_reason": "missing_lanes=regime"},
+        {"feature": "Market Report", "status": "DEGRADED", "blocker_reason": "missing_lanes=regime; NIFTY_INDEX_DATA_UNAVAILABLE; missing_lanes=market_scan"},
+        {"feature": "Market Report", "status": "FAIL", "blocker_reason": "NIFTY_INDEX_DATA_UNAVAILABLE; missing_lanes=regime"},
+        {"feature": "Market Report", "status": "DEGRADED", "blocker_reason": "missing_lanes=news; NIFTY_INDEX_DATA_UNAVAILABLE; missing_lanes=regime"},
+    ):
+        assert not is_expected_external_blocker(fake)
