@@ -1429,6 +1429,7 @@ def build_market_reports_workspace(
                 "laggards": list(getattr(view, "laggards", ()) or []) if available else [],
                 "summary": getattr(view, "summary", "") or "",
                 "data_source": getattr(view, "data_source", "") or "",
+                "unavailable_reason": str(getattr(view, "unavailable_reason", "") or "")[:400],
             }
             if not available:
                 missing_lanes.append("regime")
