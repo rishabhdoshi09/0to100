@@ -295,6 +295,14 @@ def build_fast_response(core, attach_authority=None) -> dict[str, Any]:
     scan = dict(core._scan_payload() or {})
     long_term = dict(core._long_term_payload() or {})
     saved = load_recommendations()
+    # A persisted recommendation is not actionable when its source scan has
+    # disappeared from the validated read path. Do not serve stale BUY cards
+    # while the corrected Kite snapshot is being scanned.
+    if not scan.get("available"):
+        return _empty_workspace(
+            status="FAILED",
+            error="Verified market scan is missing or stale; recommendations withheld.",
+        )
     current = _matches(saved, scan, long_term)
 
     if not current:
