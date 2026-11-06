@@ -1069,6 +1069,29 @@ def run_paper_cycle(ctx) -> JobResult:
     # by the independent execution interlock.
     data_ready, data_source = _paper_market_data_source(ctx)
     data_failure = ""
+    # Source availability is insufficient: a previously published
+    # recommendation may still carry prices from a superseded Kite snapshot.
+    # The canonical paper cycle must agree with the *validated* saved scan.
+    # Management and settlement remain available even if new entries are
+    # blocked. Legacy injected unit-test dependency objects retain their
+    # existing paper-mode contract.
+    if entries_ok and isinstance(ctx.deps, Deps):
+        try:
+            from product.scan_store import load_scan
+            from product.recommendations_store import load_recommendations
+
+            source_scan = dict(load_scan() or {})
+            source_reco = dict(load_recommendations() or {})
+            scan_instant = str(source_scan.get("scanned_at") or "")
+            reco_instant = str(source_reco.get("scan_scanned_at") or "")
+            if not scan_instant or reco_instant != scan_instant:
+                data_failure = "STALE_SCAN_SNAPSHOT"
+                entries_ok = False
+                reason = data_failure
+        except Exception:
+            data_failure = "SCAN_SOURCE_UNVERIFIED"
+            entries_ok = False
+            reason = data_failure
     if not data_ready:
         # Missing trustworthy market data is still a hard paper-entry block.
         # Surface it as a data/provider failure, never as "no eligible trade"
