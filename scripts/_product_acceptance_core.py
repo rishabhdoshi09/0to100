@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -183,11 +184,13 @@ def is_expected_external_blocker(row: Mapping[str, Any]) -> bool:
     if status not in {"DEGRADED", "BLOCKED"}:
         return False
     if feature == "Market Report":
-        # An isolated CI runner can have no genuine index source even while
-        # the cash bhavcopy and scan work. Permit precisely that witnessed
-        # external absence, but never generic regime failure or a missing scan.
+        # Isolated GitHub runners have no broker credentials and can lack a
+        # reachable public index feed. Production must always HOLD if regime
+        # data is unavailable: a missing live stance is not launch-ready.
+        # An explicit CI-only exception is not a claimed feature PASS.
         return (
-            status == "DEGRADED"
+            os.environ.get("GITHUB_ACTIONS", "").lower() == "true"
+            and status == "DEGRADED"
             and "NIFTY_INDEX_DATA_UNAVAILABLE" in reason
             and "MISSING_LANES=REGIME" in reason
             and "MISSING_LANES=NEWS" not in reason
