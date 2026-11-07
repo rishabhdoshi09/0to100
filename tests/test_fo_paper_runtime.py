@@ -1112,3 +1112,33 @@ def test_fo_position_payload_identity_mismatch_blocks_read(tmp_path):
         with pytest.raises(ValueError, match="corrupt or mismatched"):
             store.load_positions()
         assert store.status()["open_positions"] == 1
+
+
+def test_recovered_fo_position_invalid_risk_or_quantity_fails_closed(tmp_path):
+    import pytest
+
+    path = tmp_path / "fo.sqlite3"
+    with FoPaperStore(path) as store:
+        opened = run_fo_paper_cycle(
+            _directional(), client=_QuoteClient(),
+            now_ist=datetime(2026, 9, 29, 10, 15, tzinfo=IST),
+            allow_new_entries=True, store=store, capital=200_000,
+        )
+        assert opened["opened_count"] == 1
+        original = store.load_positions()[0]
+        for invalid_fields in (
+            {"quantity": -100},
+            {"lots": 2},
+            {"risk_amount": float("nan")},
+            {"stop_price": 999.0},
+        ):
+            corrupted = {**original, **invalid_fields}
+            store.replace_positions([corrupted])
+            with pytest.raises(ValueError, match="could not be restored safely"):
+                run_fo_paper_cycle(
+                    {"available": True, "candidates": []},
+                    client=_QuoteClient(),
+                    now_ist=datetime(2026, 9, 29, 12, 0, tzinfo=IST),
+                    allow_new_entries=True, store=store, capital=200_000,
+                )
+            assert store.status()["open_positions"] == 1
