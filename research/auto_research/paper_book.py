@@ -299,9 +299,15 @@ class PaperBook:
         try:
             if not isinstance(snap, dict):
                 raise ValueError("paper book snapshot must be an object")
+            if strict and not {"capital", "realized_pnl", "equity_curve", "closed", "open"}.issubset(snap):
+                raise ValueError("persisted paper book is incomplete")
             capital = float(snap.get("capital", self.capital))
             realized = float(snap.get("realized_pnl", 0.0))
             curve = list(snap.get("equity_curve", [capital])) or [capital]
+            if not all(isfinite(x) for x in (capital, realized)) or capital <= 0:
+                raise ValueError("invalid persisted paper capital")
+            if not all(isfinite(float(value)) for value in curve):
+                raise ValueError("non-finite paper equity curve")
             closed = [ClosedTrade(**t) for t in snap.get("closed", [])]
             opened = {}
             for raw in snap.get("open", []):
