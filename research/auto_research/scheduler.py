@@ -107,7 +107,21 @@ class AutoResearchBrain:
                 from pathlib import Path as _P
                 p = _P(intel_book_path)
                 if p.exists():
-                    self.intel_book.restore(_json.loads(p.read_text()), strict=True)
+                    book_snapshot = _json.loads(p.read_text())
+                    self.intel_book.restore(book_snapshot, strict=True)
+                    marker = dict(book_snapshot.get("_runtime_commit") or {})
+                    saved_cycle = str(marker.get("last_completed_cycle") or "")
+                    current_cycle = str(self.runtime_state.last_completed_cycle or "")
+                    # The paper book and the cycle-idempotency record are two
+                    # separately replaced files. A disconnect between saves
+                    # can leave state marked DONE but paper exposure missing.
+                    if saved_cycle != current_cycle:
+                        raise ValueError("paper book / runtime cycle commit mismatch")
+                    if self.runtime_state.completed_cycles and not marker:
+                        raise ValueError("missing paper book / runtime commit marker")
+                    saved_count = marker.get("completed_cycle_count")
+                    if saved_count is not None and int(saved_count) != len(self.runtime_state.completed_cycles):
+                        raise ValueError("paper book / runtime cycle count mismatch")
                     self.runtime_state.reconcile(self.intel_book)
                 elif self.runtime_state.completed_cycles or self.runtime_state.strategies:
                     raise ValueError("paper book missing despite existing runtime history")
@@ -189,10 +203,21 @@ class AutoResearchBrain:
             import json as _json, os as _os
             from pathlib import Path as _P
             p = _P(self.intel_book_path); p.parent.mkdir(parents=True, exist_ok=True)
-            tmp = p.with_suffix(".tmp")
-            tmp.write_text(_json.dumps(self.intel_book.snapshot(), default=str))
-            _os.replace(tmp, p)                       # atomic (crash-safe)
-            return True
+            tmp = p.with_name(f".{p.name}.{_os.getpid()}.tmp")
+            payload = self.intel_book.snapshot()
+            payload["_runtime_commit"] = {
+                "last_completed_cycle": str(self.runtime_state.last_completed_cycle or ""),
+                "completed_cycle_count": len(self.runtime_state.completed_cycles),
+            }
+            try:
+                with tmp.open("w", encoding="utf-8") as handle:
+                    _json.dump(payload, handle, default=str)
+                    handle.flush()
+                    _os.fsync(handle.fileno())
+                _os.replace(tmp, p)                   # atomic file replacement
+                return True
+            finally:
+                tmp.unlink(missing_ok=True)
         except Exception:
             return False
 
@@ -409,7 +434,26 @@ class AutoResearchBrain:
                                          knowledge=self.knowledge,
                                          backtest_R=bt_R, backtest_trades=bt_n)
             self.state.last_intel_cycle = res.as_dict()
-            self._save_intel_book()
+            if not self._save_intel_book():
+                self.intel_book_recovery_error = "PAPER_BOOK_DURABILITY_FAILED"
+                self.runtime_state.reconciled = False
+                return {
+                    **res.as_dict(), "status": "BLOCKED_DURABILITY",
+                    "eligibility": "BLOCKED_SAFETY",
+                    "new_entries_allowed": False,
+                    "entry_block_reason": "PAPER_BOOK_DURABILITY_FAILED",
+                }
+            try:
+                self.runtime_state.save()
+            except Exception as exc:
+                self.intel_book_recovery_error = f"RUNTIME_STATE_DURABILITY_FAILED: {exc}"[:240]
+                self.runtime_state.reconciled = False
+                return {
+                    **res.as_dict(), "status": "BLOCKED_DURABILITY",
+                    "eligibility": "BLOCKED_SAFETY",
+                    "new_entries_allowed": False,
+                    "entry_block_reason": "RUNTIME_STATE_DURABILITY_FAILED",
+                }
             out = res.as_dict()
             if not res.data_ok:
                 out["eligibility"] = "NO_DATA"
@@ -487,7 +531,26 @@ class AutoResearchBrain:
                 runtime_state=self.runtime_state,
             )
             self.state.last_intel_cycle = res.as_dict()
-            self._save_intel_book()
+            if not self._save_intel_book():
+                self.intel_book_recovery_error = "PAPER_BOOK_DURABILITY_FAILED"
+                self.runtime_state.reconciled = False
+                return {
+                    **res.as_dict(), "status": "BLOCKED_DURABILITY",
+                    "eligibility": "BLOCKED_SAFETY",
+                    "new_entries_allowed": False,
+                    "entry_block_reason": "PAPER_BOOK_DURABILITY_FAILED",
+                }
+            try:
+                self.runtime_state.save()
+            except Exception as exc:
+                self.intel_book_recovery_error = f"RUNTIME_STATE_DURABILITY_FAILED: {exc}"[:240]
+                self.runtime_state.reconciled = False
+                return {
+                    **res.as_dict(), "status": "BLOCKED_DURABILITY",
+                    "eligibility": "BLOCKED_SAFETY",
+                    "new_entries_allowed": False,
+                    "entry_block_reason": "RUNTIME_STATE_DURABILITY_FAILED",
+                }
             out = res.as_dict()
             out["eligibility"] = "MANAGED" if res.positions_closed else "NO_ACTION"
             out["new_entries_allowed"] = False
