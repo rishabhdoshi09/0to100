@@ -777,3 +777,39 @@ def test_intelligence_paper_durability_failure_does_not_claim_success(tmp_path, 
     assert result["entry_block_reason"] == "PAPER_BOOK_DURABILITY_FAILED"
     assert brain.is_paper_auto_enabled() is False
     assert brain.run_intelligence_cycle_day()["status"] == "BLOCKED_RECOVERY"
+
+
+def test_valid_json_tampering_of_persisted_intelligence_book_blocks_restart(tmp_path):
+    import json
+
+    book_path = tmp_path / "book.json"
+    state_path = tmp_path / "state.json"
+    brain = AutoResearchBrain(intel_book_path=book_path, runtime_state_path=state_path)
+    brain.runtime_state.mark_cycle_done("committed")
+    brain.runtime_state.save()
+    assert brain._save_intel_book() is True
+
+    payload = json.loads(book_path.read_text(encoding="utf-8"))
+    payload["capital"] = 88888.0  # structurally valid, but not the committed book
+    book_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    restored = AutoResearchBrain(intel_book_path=book_path, runtime_state_path=state_path)
+    assert "checksum mismatch" in restored.intel_book_recovery_error
+    assert restored.run_intelligence_cycle_day()["status"] == "BLOCKED_RECOVERY"
+
+
+def test_runtime_state_durability_failure_blocks_followup_paper_entries(tmp_path, monkeypatch):
+    brain = AutoResearchBrain(
+        intel_book_path=tmp_path / "book.json",
+        runtime_state_path=tmp_path / "state.json",
+    )
+
+    def failed_state_save():
+        raise OSError("simulated disk I/O error")
+
+    monkeypatch.setattr(brain.runtime_state, "save", failed_state_save)
+    result = brain.run_intelligence_cycle_day(date="2026-11-08")
+    assert result["status"] == "BLOCKED_DURABILITY"
+    assert result["entry_block_reason"] == "RUNTIME_STATE_DURABILITY_FAILED"
+    assert brain.is_paper_auto_enabled() is False
+    assert brain.run_intelligence_cycle_day()["status"] == "BLOCKED_RECOVERY"
