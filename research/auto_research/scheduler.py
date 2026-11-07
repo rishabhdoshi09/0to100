@@ -110,6 +110,17 @@ class AutoResearchBrain:
                     book_snapshot = _json.loads(p.read_text())
                     self.intel_book.restore(book_snapshot, strict=True)
                     marker = dict(book_snapshot.get("_runtime_commit") or {})
+                    expected_hash = str(marker.get("book_sha256") or "")
+                    if expected_hash:
+                        import hashlib as _hashlib
+                        bare_book = {k: v for k, v in book_snapshot.items() if k != "_runtime_commit"}
+                        actual_hash = _hashlib.sha256(
+                            _json.dumps(bare_book, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
+                        ).hexdigest()
+                        if actual_hash != expected_hash:
+                            raise ValueError("persisted paper book checksum mismatch")
+                    elif self.runtime_state.completed_cycles:
+                        raise ValueError("persisted paper book checksum missing")
                     saved_cycle = str(marker.get("last_completed_cycle") or "")
                     current_cycle = str(self.runtime_state.last_completed_cycle or "")
                     # The paper book and the cycle-idempotency record are two
@@ -205,9 +216,14 @@ class AutoResearchBrain:
             p = _P(self.intel_book_path); p.parent.mkdir(parents=True, exist_ok=True)
             tmp = p.with_name(f".{p.name}.{_os.getpid()}.tmp")
             payload = self.intel_book.snapshot()
+            import hashlib as _hashlib
+            book_hash = _hashlib.sha256(
+                _json.dumps(payload, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
             payload["_runtime_commit"] = {
                 "last_completed_cycle": str(self.runtime_state.last_completed_cycle or ""),
                 "completed_cycle_count": len(self.runtime_state.completed_cycles),
+                "book_sha256": book_hash,
             }
             try:
                 with tmp.open("w", encoding="utf-8") as handle:
