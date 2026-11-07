@@ -64,7 +64,8 @@ def test_stale_recommendations_schedule_background_rebuild_and_return_immediatel
     assert len(calls) == 1
     assert result["records_status"] == "REFRESHING"
     assert result["rebuilding"] is True
-    assert "last persisted projection" in result["cmp_note"]
+    assert "withheld" in result["cmp_note"].lower()
+    assert all(not category.get("cards") for category in result["categories"])
 
 
 def test_missing_recommendations_return_truthful_empty_refreshing_shape(monkeypatch):
@@ -104,3 +105,27 @@ def test_route_replacement_leaves_exactly_one_fast_get(monkeypatch):
     ]
     assert len(matches) == 1
     assert matches[0].name == "recommendations_workspace_persisted_first"
+
+
+def test_mismatched_generation_never_returns_stale_buy_cards(monkeypatch):
+    """The React Recommendations view renders every returned card independently
+    of records_status, so API safety must omit stale BUY cards entirely."""
+    from product import recommendations_store as RS
+    from product import recommendations_workspace as RW
+
+    saved = _saved()
+    saved["categories"] = [{
+        "id": "momentum_breakouts",
+        "count": 1,
+        "cards": [{"symbol": "OLD_BUY", "action_badge": "BUY"}],
+    }]
+    monkeypatch.setattr(RS, "load_recommendations", lambda: saved)
+    monkeypatch.setattr(RS, "reco_matches_scan", lambda *args, **kwargs: False)
+    monkeypatch.setattr(RW, "slim_workspace_for_desk", lambda payload: dict(payload))
+    monkeypatch.setattr(RL, "_ensure_rebuild", lambda *_: True)
+
+    result = RL.build_fast_response(_Core())
+    assert result["records_status"] == "REFRESHING"
+    assert result["rebuilding"] is True
+    assert all(not category.get("cards") for category in result["categories"])
+    assert "OLD_BUY" not in str(result)
