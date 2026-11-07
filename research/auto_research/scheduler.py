@@ -100,7 +100,7 @@ class AutoResearchBrain:
         # Recovery is part of entry safety. An invalid or missing previously
         # persisted book must not be silently replaced by a fresh empty book:
         # that could hide old positions and permit duplicate paper exposure.
-        self.intel_book_recovery_error = ""
+        self.intel_book_recovery_error = str(self.runtime_state.load_error or "")
         if intel_book_path:
             try:
                 import json as _json
