@@ -312,6 +312,18 @@ class PaperBook:
             opened = {}
             for raw in snap.get("open", []):
                 pos = PaperPosition(**raw)
+                if strict:
+                    quantities = (pos.qty, pos.max_holding_days)
+                    prices = (pos.entry_price, pos.stop_price, pos.target_price, pos.risk_amount)
+                    if (
+                        not isinstance(pos.strategy_id, str) or not pos.strategy_id
+                        or not isinstance(pos.symbol, str) or not pos.symbol
+                        or any(type(v) is not int or v <= 0 for v in quantities)
+                        or any(type(v) not in (int, float) or not isfinite(v) for v in prices)
+                        or not 0 < pos.stop_price < pos.entry_price < pos.target_price
+                        or pos.risk_amount < 0
+                    ):
+                        raise ValueError("invalid restored paper position risk or quantity")
                 key = (pos.strategy_id, pos.symbol)
                 if key in opened:
                     raise ValueError("duplicate open paper position identity")
