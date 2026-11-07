@@ -98,8 +98,12 @@ class TestEventStore:
         assert record.record_id not in store._ids
 
         monkeypatch.setattr(store, "_write_line", original_write)
-        assert store.append(record) is True
-        assert store.append(record) is False
+        with pytest.raises(RuntimeError, match="unsafe"):
+            store.append(record)
+        # A new instance can retry only after verifying the persisted log.
+        recovered = EventStore(p)
+        assert recovered.append(record) is True
+        assert recovered.append(record) is False
         assert len(EventStore(p)) == 1
 
     def test_durable_event_append_fsyncs_before_ack(self, tmp_path, monkeypatch):
@@ -119,13 +123,46 @@ class TestEventStore:
         assert len(calls) == 1
         assert len(EventStore(p)) == 1
 
-    def test_torn_line_is_skipped(self, tmp_path):
+    def test_torn_line_blocks_recovery_without_mutating_original_log(self, tmp_path):
         p = tmp_path / "events.jsonl"
         s = EventStore(p); s.append(_sdef())
         with open(p, "a") as f:
             f.write("{ not json\n")
-        s2 = EventStore(p)
-        assert len(s2) == 1
+        before = p.read_bytes()
+        with pytest.raises(RuntimeError, match="recovery failed"):
+            EventStore(p)
+        assert p.read_bytes() == before
+
+    def test_invalid_middle_line_does_not_hide_later_valid_events(self, tmp_path):
+        p = tmp_path / "events.jsonl"
+        s = EventStore(p)
+        s.append(_sdef())
+        s.append(_card(EB.CONFIRMED))
+        original = p.read_text()
+        lines = original.splitlines(keepends=True)
+        p.write_text(lines[0] + "{ corrupt but valid lines follow\n" + lines[1])
+        with pytest.raises(RuntimeError, match="recovery failed"):
+            EventStore(p)
+        assert p.read_text() == lines[0] + "{ corrupt but valid lines follow\n" + lines[1]
+
+    def test_write_failure_after_partial_line_cannot_be_retried_in_same_process(self, tmp_path, monkeypatch):
+        p = tmp_path / "events.jsonl"
+        store = EventStore(p)
+        record = _sdef()
+
+        def partial_failure(_record):
+            with p.open("a", encoding="utf-8") as handle:
+                handle.write('{"kind":')
+            raise OSError("simulated partial write")
+
+        monkeypatch.setattr(store, "_write_line", partial_failure)
+        with pytest.raises(OSError, match="partial write"):
+            store.append(record)
+        with pytest.raises(RuntimeError, match="unsafe"):
+            store.append(record)
+        assert len(store) == 0
+        with pytest.raises(RuntimeError, match="recovery failed"):
+            EventStore(p)
 
 
 # ── 3,4: brain separation is structural ──────────────────────────────────────────
