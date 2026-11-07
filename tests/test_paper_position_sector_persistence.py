@@ -160,3 +160,22 @@ def test_strict_restore_rejects_nonfinite_book_capital_without_erasing_positions
     with pytest.raises(ValueError, match="invalid persisted paper book"):
         book.restore(corrupt, strict=True)
     assert book.snapshot() == before
+
+
+def test_strict_paper_restore_rejects_invalid_position_risk_and_quantity():
+    import pytest
+
+    book = PaperBook()
+    assert book.open_position("QT_RECO", "INFY", 100.0, 95.0, 115.0, "2026-09-18", 20)
+    before = book.snapshot()
+    for changes in (
+        {"qty": -1},
+        {"risk_amount": float("nan")},
+        {"stop_price": 120.0},
+        {"max_holding_days": 0},
+    ):
+        corrupt = book.snapshot()
+        corrupt["open"][0].update(changes)
+        with pytest.raises(ValueError, match="invalid persisted paper book"):
+            book.restore(corrupt, strict=True)
+        assert book.snapshot() == before
