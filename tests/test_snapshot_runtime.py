@@ -83,6 +83,32 @@ class TestSnapshotStore:
         (tmp_path / sid / "bars_equity.csv").unlink()
         assert s.verify_snapshot(sid)[0] is False
 
+    def test_index_file_tampering_is_detected(self, tmp_path):
+        s = SnapshotStore(tmp_path)
+        sid = s.commit_snapshot(
+            _eq_rows("AAA", [100, 101]),
+            index_rows=[("NIFTY", "d000", 100, 102, 98, 101)],
+        )
+        assert s.verify_snapshot(sid)[0] is True
+        index_path = tmp_path / sid / "index_daily.csv"
+        index_path.write_text(index_path.read_text().replace("NIFTY,d000,100", "NIFTY,d000,999"))
+        ok, failures = s.verify_snapshot(sid)
+        assert ok is False
+        assert "index data hash mismatch" in failures
+        with pytest.raises(ValueError, match="index data hash mismatch"):
+            s.open_snapshot(sid)
+
+    def test_missing_index_file_is_rejected(self, tmp_path):
+        s = SnapshotStore(tmp_path)
+        sid = s.commit_snapshot(
+            _eq_rows("AAA", [100, 101]),
+            index_rows=[("NIFTY", "d000", 100, 102, 98, 101)],
+        )
+        (tmp_path / sid / "index_daily.csv").unlink()
+        ok, failures = s.verify_snapshot(sid)
+        assert ok is False
+        assert "index data file missing" in failures
+
 
 # ── atomic activation ────────────────────────────────────────────────────────────
 

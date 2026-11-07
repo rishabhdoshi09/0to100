@@ -106,6 +106,18 @@ class SnapshotStore:
             fails.append("equity data file missing")
         elif hashlib.sha256(eqp.read_text().encode()).hexdigest() != m.get("equity_sha256"):
             fails.append("equity data hash mismatch")
+        # The snapshot id and manifest cover both equity and index bars.
+        # Treat the index file as an equally critical input: corrupted or
+        # missing NIFTY data must never pass as a verified market snapshot.
+        index_path = sdir / "index_daily.csv"
+        expected_index_hash = str(m.get("index_sha256") or "")
+        if expected_index_hash:
+            if not index_path.exists():
+                fails.append("index data file missing")
+            elif hashlib.sha256(index_path.read_bytes()).hexdigest() != expected_index_hash:
+                fails.append("index data hash mismatch")
+        elif m.get("has_benchmark") or m.get("index_bar_count"):
+            fails.append("index data checksum missing")
         if m.get("schema_version") != SCHEMA_VERSION:
             fails.append("unsupported schema version")
         return (not fails), fails
