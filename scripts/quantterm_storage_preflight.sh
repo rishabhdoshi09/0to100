@@ -100,7 +100,7 @@ import sys
 expected = os.path.realpath(sys.argv[1])
 mount = os.path.realpath(sys.argv[2])
 try:
-    images = plistlib.load(sys.stdin.buffer).get("images") or []
+    images = plistlib.loads(sys.stdin.buffer.read()).get("images") or []
     matched = []
     for item in images:
         entities = item.get("system-entities") or []
