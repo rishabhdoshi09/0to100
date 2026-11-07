@@ -11,6 +11,7 @@ rebuilt from the persisted JSONL — nothing important lives only in memory.
 from __future__ import annotations
 
 import json
+import os
 import threading
 from pathlib import Path
 
@@ -33,10 +34,13 @@ class EventStore:
         with self._lock:
             if record.record_id in self._ids:
                 return False
-            self._events.append(record)
-            self._ids.add(record.record_id)
+            # Never acknowledge an in-memory event before its durable append.
+            # A detachable-volume write error must propagate and block the
+            # caller, not leave a ghost event that dedupe treats as committed.
             if self.path:
                 self._write_line(record)
+            self._events.append(record)
+            self._ids.add(record.record_id)
             return True
 
     def extend(self, records) -> int:
@@ -121,6 +125,8 @@ class EventStore:
         with open(self.path, "a", encoding="utf-8") as f:
             f.write(json.dumps({"kind": type(record).__name__, "data": record.as_dict()},
                                ensure_ascii=False) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
 
     def _load(self) -> None:
         for line in self.path.read_text(encoding="utf-8").splitlines():
