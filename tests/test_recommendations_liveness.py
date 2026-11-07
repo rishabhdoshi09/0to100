@@ -64,7 +64,62 @@ def test_stale_recommendations_schedule_background_rebuild_and_return_immediatel
     assert len(calls) == 1
     assert result["records_status"] == "REFRESHING"
     assert result["rebuilding"] is True
-    assert "last persisted projection" in result["cmp_note"]
+    assert "have been withheld" in result["cmp_note"]
+    assert result["categories"] and all(not c["cards"] for c in result["categories"])
+    assert result["lifecycle"]["active"] == []
+
+
+def test_old_buy_cards_are_withheld_while_rebuilding(monkeypatch):
+    from product import recommendations_store as RS
+    from product import recommendations_workspace as RW
+
+    stale = _saved()
+    stale["categories"] = [{
+        "id": "momentum_breakouts",
+        "count": 1,
+        "cards": [{"symbol": "AAA", "action_badge": "Buy", "entry": 100}],
+    }]
+    stale["lifecycle"] = {
+        "active": [{"symbol": "AAA", "action_badge": "Buy"}],
+        "closed": [], "active_count": 1, "closed_count": 0,
+    }
+    stale["ensemble"]["high_conviction_count"] = 1
+    monkeypatch.setattr(RS, "load_recommendations", lambda: stale)
+    monkeypatch.setattr(RS, "reco_matches_scan", lambda *args, **kwargs: False)
+    monkeypatch.setattr(RW, "slim_workspace_for_desk", lambda payload: dict(payload))
+    monkeypatch.setattr(RL, "_ensure_rebuild", lambda *_args: True)
+
+    result = RL.build_fast_response(_Core())
+
+    assert result["records_status"] == "REFRESHING"
+    assert result["ensemble"]["high_conviction_count"] == 0
+    assert result["categories"] and all(c["count"] == 0 and not c["cards"] for c in result["categories"])
+    assert result["lifecycle"]["active"] == []
+    assert result["scan_scanned_at"] == _Core._scan_payload()["scanned_at"]
+
+
+def test_failed_rebuild_does_not_restore_old_buy_cards(monkeypatch):
+    from product import recommendations_store as RS
+    from product import recommendations_workspace as RW
+
+    stale = _saved()
+    stale["categories"] = [{"id": "momentum_breakouts", "count": 1, "cards": [{"symbol": "AAA", "action_badge": "Buy"}]}]
+    monkeypatch.setattr(RS, "load_recommendations", lambda: stale)
+    monkeypatch.setattr(RS, "reco_matches_scan", lambda *_a, **_k: False)
+    monkeypatch.setattr(RW, "slim_workspace_for_desk", lambda payload: dict(payload))
+    monkeypatch.setattr(RL, "_ensure_rebuild", lambda *_args: False)
+    monkeypatch.setattr(RL, "_read_state", lambda: {
+        **RL._target(_Core._scan_payload(), _Core._long_term_payload()),
+        "status": "FAILED",
+        "error": "test rebuild failure",
+    })
+
+    result = RL.build_fast_response(_Core())
+
+    assert result["records_status"] == "FAILED"
+    assert result["rebuilding"] is False
+    assert result["categories"] and all(not c["cards"] for c in result["categories"])
+    assert "test rebuild failure" in result["rebuild_error"]
 
 
 def test_missing_recommendations_return_truthful_empty_refreshing_shape(monkeypatch):
