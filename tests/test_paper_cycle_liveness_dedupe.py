@@ -713,3 +713,67 @@ def test_runtime_cycle_state_save_is_atomic_on_replace_failure(tmp_path, monkeyp
 
     assert path.read_bytes() == preserved
     assert not list(tmp_path.glob(".state.json.*.tmp"))
+
+
+def test_restart_blocks_if_cycle_state_was_committed_without_matching_paper_book(tmp_path):
+    book_path = tmp_path / "book.json"
+    state_path = tmp_path / "state.json"
+    brain = AutoResearchBrain(intel_book_path=book_path, runtime_state_path=state_path)
+    brain.runtime_state.mark_cycle_done("older-cycle")
+    brain.runtime_state.save()
+    assert brain._save_intel_book() is True
+
+    # Simulate a drive disconnection between the state and book atomic saves.
+    brain.runtime_state.mark_cycle_done("newer-cycle")
+    brain.runtime_state.save()
+
+    restored = AutoResearchBrain(intel_book_path=book_path, runtime_state_path=state_path)
+    assert "commit mismatch" in restored.intel_book_recovery_error
+    assert restored.run_intelligence_cycle_day()["status"] == "BLOCKED_RECOVERY"
+    assert restored.is_paper_auto_enabled() is False
+
+
+def test_book_and_cycle_state_marker_survive_clean_restart(tmp_path):
+    book_path = tmp_path / "book.json"
+    state_path = tmp_path / "state.json"
+    brain = AutoResearchBrain(intel_book_path=book_path, runtime_state_path=state_path)
+    brain.runtime_state.mark_cycle_done("verified-cycle")
+    brain.runtime_state.save()
+    assert brain._save_intel_book() is True
+
+    restored = AutoResearchBrain(intel_book_path=book_path, runtime_state_path=state_path)
+    assert restored.intel_book_recovery_error == ""
+    assert restored.runtime_state.is_cycle_done("verified-cycle")
+
+
+def test_legacy_book_without_runtime_commit_marker_blocks_unknown_recovery(tmp_path):
+    import json
+    from research.auto_research.paper_book import PaperBook
+    from research.intelligence.runtime.runtime_state import RuntimeState
+
+    book_path = tmp_path / "book.json"
+    book_path.write_text(json.dumps(PaperBook().snapshot()), encoding="utf-8")
+    state_path = tmp_path / "state.json"
+    state = RuntimeState(state_path)
+    state.mark_cycle_done("historical")
+    state.save()
+
+    restored = AutoResearchBrain(intel_book_path=book_path, runtime_state_path=state_path)
+    assert restored.intel_book_recovery_error
+    assert restored.run_intelligence_cycle_day()["status"] == "BLOCKED_RECOVERY"
+
+
+def test_intelligence_paper_durability_failure_does_not_claim_success(tmp_path, monkeypatch):
+    brain = AutoResearchBrain(
+        intel_book_path=tmp_path / "book.json",
+        runtime_state_path=tmp_path / "state.json",
+    )
+    monkeypatch.setattr(brain, "_save_intel_book", lambda: False)
+
+    result = brain.run_intelligence_cycle_day(date="2026-11-08")
+    assert result["status"] == "BLOCKED_DURABILITY"
+    assert result["eligibility"] == "BLOCKED_SAFETY"
+    assert result["new_entries_allowed"] is False
+    assert result["entry_block_reason"] == "PAPER_BOOK_DURABILITY_FAILED"
+    assert brain.is_paper_auto_enabled() is False
+    assert brain.run_intelligence_cycle_day()["status"] == "BLOCKED_RECOVERY"
