@@ -254,8 +254,11 @@ def run_fo_paper_cycle(
         book.realized_pnl = float(store.realized_pnl())
         for raw in store.load_positions():
             pos = _restore_position(raw)
-            if pos is not None:
-                book.open[pos.option_symbol] = pos
+            if pos is None or not pos.trade_id or not pos.option_symbol or not pos.underlying:
+                raise ValueError("F&O paper position could not be restored safely")
+            if pos.option_symbol in book.open:
+                raise ValueError("duplicate F&O option identity in persisted paper positions")
+            book.open[pos.option_symbol] = pos
 
         settled_rows: list[dict[str, Any]] = []
         settled_underlyings: set[str] = set()
