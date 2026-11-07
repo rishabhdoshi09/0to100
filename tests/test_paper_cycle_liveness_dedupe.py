@@ -625,3 +625,91 @@ def test_authorized_snapshot_paper_job_does_not_reread_mutable_approval_gate(mon
     assert result.status == JS.SUCCEEDED
     assert calls and calls[0][0] is True
     assert result.metadata["market_data_source"] == "snapshot:snap-authorized"
+
+
+def test_invalid_persisted_intelligence_book_blocks_restart_without_overwriting(tmp_path):
+    path = tmp_path / "intel_book.json"
+    path.write_text("{corrupted", encoding="utf-8")
+
+    brain = AutoResearchBrain(intel_book_path=path)
+    brain.paper_auto_enabled = True
+
+    assert brain.intel_book_recovery_error
+    assert brain.runtime_state.reconciled is False
+    assert brain.is_paper_auto_enabled() is False
+
+    cycle = brain.run_intelligence_cycle_day(date="2026-11-08")
+    management = brain.manage_intelligence_positions_day(date="2026-11-08")
+    assert cycle["status"] == "BLOCKED_RECOVERY"
+    assert management["status"] == "BLOCKED_RECOVERY"
+    assert cycle["entry_block_reason"] == "PAPER_BOOK_RECOVERY_FAILED"
+    assert cycle["positions_opened"] == []
+    assert path.read_text(encoding="utf-8") == "{corrupted"
+
+
+def test_missing_book_with_persisted_cycle_history_blocks_reentry(tmp_path):
+    from research.intelligence.runtime.runtime_state import RuntimeState
+
+    runtime_path = tmp_path / "runtime_state.json"
+    state = RuntimeState(runtime_path)
+    state.mark_cycle_done("previous-run")
+    state.save()
+    brain = AutoResearchBrain(
+        intel_book_path=tmp_path / "missing_paper_book.json",
+        runtime_state_path=runtime_path,
+    )
+    assert "missing" in brain.intel_book_recovery_error.lower()
+    assert brain.run_intelligence_cycle_day()["entry_block_reason"] == "PAPER_BOOK_RECOVERY_FAILED"
+
+
+def test_first_install_without_paper_book_does_not_block(tmp_path):
+    brain = AutoResearchBrain(intel_book_path=tmp_path / "new_book.json")
+    assert brain.intel_book_recovery_error == ""
+
+
+def test_corrupt_runtime_state_blocks_paper_cycle_even_with_valid_book(tmp_path):
+    from research.auto_research.paper_book import PaperBook
+    from research.intelligence.runtime.runtime_state import RuntimeState
+    import json
+    import pytest
+
+    book_path = tmp_path / "intel_book.json"
+    book_path.write_text(json.dumps(PaperBook().snapshot()), encoding="utf-8")
+    state_path = tmp_path / "runtime.json"
+    state_path.write_text("{corrupt state", encoding="utf-8")
+
+    state = RuntimeState(state_path)
+    assert state.load_error
+    assert state.reconciled is False
+    with pytest.raises(RuntimeError, match="refusing to overwrite"):
+        state.save()
+    assert state_path.read_text(encoding="utf-8") == "{corrupt state"
+
+    brain = AutoResearchBrain(intel_book_path=book_path, runtime_state_path=state_path)
+    assert brain.intel_book_recovery_error
+    assert brain.run_intelligence_cycle_day()["status"] == "BLOCKED_RECOVERY"
+    assert brain.manage_intelligence_positions_day()["status"] == "BLOCKED_RECOVERY"
+    assert state_path.read_text(encoding="utf-8") == "{corrupt state"
+
+
+def test_runtime_cycle_state_save_is_atomic_on_replace_failure(tmp_path, monkeypatch):
+    from research.intelligence.runtime import runtime_state as runtime_module
+    import pytest
+
+    path = tmp_path / "state.json"
+    state = runtime_module.RuntimeState(path)
+    state.mark_cycle_done("one")
+    state.save()
+    preserved = path.read_bytes()
+
+    state.mark_cycle_done("two")
+
+    def interrupted_replace(_src, _dst):
+        raise OSError("simulated failed atomic replace")
+
+    monkeypatch.setattr(runtime_module.os, "replace", interrupted_replace)
+    with pytest.raises(OSError, match="simulated"):
+        state.save()
+
+    assert path.read_bytes() == preserved
+    assert not list(tmp_path.glob(".state.json.*.tmp"))

@@ -289,20 +289,38 @@ class PaperBook:
                 "equity_curve": self.equity_curve, "closed": [t.as_dict() for t in self.closed],
                 "open": [p.as_dict() for p in self.open.values()], "risk_config": self._risk_config()}
 
-    def restore(self, snap: dict) -> None:
-        """Restore atomically. Corrupt/new risk contracts leave the current book untouched."""
+    def restore(self, snap: dict, *, strict: bool = False) -> bool:
+        """Restore atomically; strict production recovery must report invalid books.
+
+        Legacy callers retain the non-throwing behavior, but can inspect the
+        boolean result. Production restarts use strict=True so corrupt data
+        never silently becomes an empty, tradeable paper book.
+        """
         try:
+            if not isinstance(snap, dict):
+                raise ValueError("paper book snapshot must be an object")
+            if strict and not {"capital", "realized_pnl", "equity_curve", "closed", "open"}.issubset(snap):
+                raise ValueError("persisted paper book is incomplete")
             capital = float(snap.get("capital", self.capital))
             realized = float(snap.get("realized_pnl", 0.0))
             curve = list(snap.get("equity_curve", [capital])) or [capital]
+            if not all(isfinite(x) for x in (capital, realized)) or capital <= 0:
+                raise ValueError("invalid persisted paper capital")
+            if not all(isfinite(float(value)) for value in curve):
+                raise ValueError("non-finite paper equity curve")
             closed = [ClosedTrade(**t) for t in snap.get("closed", [])]
             opened = {}
             for raw in snap.get("open", []):
                 pos = PaperPosition(**raw)
-                opened[(pos.strategy_id, pos.symbol)] = pos
+                key = (pos.strategy_id, pos.symbol)
+                if key in opened:
+                    raise ValueError("duplicate open paper position identity")
+                opened[key] = pos
             risk = _validated_risk_config(snap["risk_config"]) if "risk_config" in snap else None
-        except Exception:
-            return
+        except Exception as exc:
+            if strict:
+                raise ValueError("invalid persisted paper book") from exc
+            return False
         self.capital = capital
         self.realized_pnl = realized
         self.equity_curve = curve
@@ -315,6 +333,7 @@ class PaperBook:
             self.max_positions = risk["max_positions"]
             self.slippage_bps = risk["slippage_bps"]
             self.cost_model = risk["cost_model"]
+        return True
 
 
 def _sizing_refusal(reason_code: str) -> str:

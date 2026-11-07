@@ -82,6 +82,9 @@ def prepare_runtime_storage_for_startup() -> str:
     env = os.environ.copy()
     env["QT_STORAGE_PREFLIGHT_REQUIRED"] = "1"
     env["QT_STORAGE_PREFLIGHT_ATTACH"] = "1"
+    # launchd may not provide an interactive PATH or a system python3.
+    # Use the known working interpreter that is already running this host.
+    env["QT_STORAGE_PREFLIGHT_PYTHON"] = sys.executable
     try:
         completed = subprocess.run(
             ["/bin/bash", str(script)],
