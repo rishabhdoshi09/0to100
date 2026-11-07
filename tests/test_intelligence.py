@@ -82,6 +82,43 @@ class TestEventStore:
         assert snap["n_events"] == 2
         assert "StrategyEvidenceCard" in snap["by_type"]
 
+    def test_failed_event_append_never_enters_memory_or_dedupe(self, tmp_path, monkeypatch):
+        p = tmp_path / "events.jsonl"
+        store = EventStore(p)
+        record = _sdef()
+
+        def disk_failure(_record):
+            raise OSError("simulated detached-volume write failure")
+
+        original_write = store._write_line
+        monkeypatch.setattr(store, "_write_line", disk_failure)
+        with pytest.raises(OSError, match="detached-volume"):
+            store.append(record)
+        assert len(store) == 0
+        assert record.record_id not in store._ids
+
+        monkeypatch.setattr(store, "_write_line", original_write)
+        assert store.append(record) is True
+        assert store.append(record) is False
+        assert len(EventStore(p)) == 1
+
+    def test_durable_event_append_fsyncs_before_ack(self, tmp_path, monkeypatch):
+        import research.intelligence.event_store as module
+
+        p = tmp_path / "events.jsonl"
+        store = EventStore(p)
+        calls = []
+        original_fsync = module.os.fsync
+
+        def tracking_fsync(fd):
+            calls.append(fd)
+            return original_fsync(fd)
+
+        monkeypatch.setattr(module.os, "fsync", tracking_fsync)
+        assert store.append(_sdef()) is True
+        assert len(calls) == 1
+        assert len(EventStore(p)) == 1
+
     def test_torn_line_is_skipped(self, tmp_path):
         p = tmp_path / "events.jsonl"
         s = EventStore(p); s.append(_sdef())
