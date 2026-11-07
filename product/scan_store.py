@@ -40,9 +40,18 @@ def scan_source_status(payload: Mapping[str, Any] | None) -> tuple[bool, str]:
 
         store = SnapshotStore()
         active = str(store.get_active_snapshot() or "").strip()
+        # get_active_snapshot() returns None for a missing or unreadable ACTIVE
+        # target. Distinguish a genuinely offline store (no pointer) from a
+        # damaged active pointer: the latter must never authorize an unbound
+        # official/NSE scan after a Kite refresh or storage incident.
+        if not active and (store.root / "ACTIVE").exists():
+            return False, "SNAPSHOT_POINTER_INVALID"
         if used != active:
             return False, "SNAPSHOT_ID_MISMATCH"
         if not active:
+            provenance = dict(payload.get("provenance") or {})
+            if str(provenance.get("price_source") or "") == "kite_snapshot":
+                return False, "KITE_SNAPSHOT_MISSING"
             return True, ""
         manifest = json.loads(
             (store.root / active / "manifest.json").read_text(encoding="utf-8")
@@ -57,7 +66,9 @@ def scan_source_status(payload: Mapping[str, Any] | None) -> tuple[bool, str]:
             return False, "SCAN_SOURCE_MISLABELLED"
         return True, ""
     except Exception:
-        return (False, "SNAPSHOT_VERIFICATION_FAILED") if used else (True, "")
+        # A failed snapshot probe cannot prove there is no active authority.
+        # Treat both bound and unbound artifacts as unverified.
+        return False, "SNAPSHOT_VERIFICATION_FAILED"
 
 
 
