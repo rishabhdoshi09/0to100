@@ -314,24 +314,23 @@ def build_fast_response(core, attach_authority=None) -> dict[str, Any]:
     state_error = str(target_state.get("error") or "")[:300]
 
     if saved:
-        payload = dict(saved)
         if not current:
+            # Showing the previous generation's BUY cards alongside a
+            # REFRESHING label is still misleading: the Recommendations UI
+            # renders category cards regardless of records_status. Withhold
+            # every card until the exact scan/long-term generation matches.
             failed = state_status == "FAILED"
-            payload["records_status"] = "FAILED" if failed else "REFRESHING"
-            payload["rebuilding"] = not failed
+            payload = _empty_workspace(
+                str(scan.get("scanned_at") or ""),
+                str(long_term.get("scanned_at") or ""),
+                status="FAILED" if failed else "REFRESHING",
+                error=state_error if failed else "",
+            )
             payload["rebuild_state"] = target_state
             payload["rebuild_error"] = state_error if failed else ""
-            payload["cmp_note"] = (
-                (
-                    "A newer scan/funds artifact exists, but its recommendation rebuild failed. "
-                    "Cards below are the last persisted projection and are NOT current. "
-                )
-                if failed
-                else (
-                    "A newer scan/funds artifact exists. QuantTerm is rebuilding the recommendation "
-                    "projection in the background; cards below are the last persisted projection. "
-                )
-            ) + str(payload.get("cmp_note") or "")
+            payload["cmp_note"] += " Previous-generation recommendations are withheld."
+        else:
+            payload = dict(saved)
         if callable(attach_authority):
             try:
                 payload = attach_authority(payload)
