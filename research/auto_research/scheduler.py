@@ -97,18 +97,25 @@ class AutoResearchBrain:
         # persistent PAPER_AUTO enablement: survives restart, so ordinary restart never
         # reverts it or asks for a new click. Paper config is NOT real-money authorization.
         self.paper_auto_enabled = self._load_paper_config()
-        # RECOVERY-FIRST: restore the paper book (open positions) then reconcile, so a restart
-        # resumes management/exits of existing positions before opening any new ones.
+        # Recovery is part of entry safety. An invalid or missing previously
+        # persisted book must not be silently replaced by a fresh empty book:
+        # that could hide old positions and permit duplicate paper exposure.
+        self.intel_book_recovery_error = ""
         if intel_book_path:
             try:
                 import json as _json
                 from pathlib import Path as _P
                 p = _P(intel_book_path)
                 if p.exists():
-                    self.intel_book.restore(_json.loads(p.read_text()))
+                    self.intel_book.restore(_json.loads(p.read_text()), strict=True)
                     self.runtime_state.reconcile(self.intel_book)
-            except Exception:
-                pass
+                elif self.runtime_state.completed_cycles or self.runtime_state.strategies:
+                    raise ValueError("paper book missing despite existing runtime history")
+            except Exception as exc:
+                self.intel_book_recovery_error = (
+                    f"{type(exc).__name__}: {exc}"[:240]
+                )
+                self.runtime_state.reconciled = False
         self._intel_lock = _th.Lock()                # prevents overlapping mutation jobs
         self._insample_cache: dict[str, tuple[float, int]] = self._load_insample_cache()
         self.state = BrainState()
@@ -139,7 +146,8 @@ class AutoResearchBrain:
         self._save_paper_config()
 
     def is_paper_auto_enabled(self) -> bool:
-        return bool(self.paper_auto_enabled) and self.mode == "PAPER_AUTO"
+        return (bool(self.paper_auto_enabled) and self.mode == "PAPER_AUTO"
+                and not self.intel_book_recovery_error)
 
     def _load_paper_config(self) -> bool:
         if not self.paper_config_path:
@@ -357,6 +365,14 @@ class AutoResearchBrain:
         and broker-free.
         """
         from research.intelligence.runtime import run_intelligence_cycle
+        if self.intel_book_recovery_error:
+            return {
+                "status": "BLOCKED_RECOVERY", "eligibility": "BLOCKED_SAFETY",
+                "new_entries_allowed": False,
+                "entry_block_reason": "PAPER_BOOK_RECOVERY_FAILED",
+                "positions_opened": [], "positions_closed": [],
+                "error": self.intel_book_recovery_error,
+            }
         if not self._intel_lock.acquire(blocking=False):
             return {"status": "SKIPPED_LOCKED", "eligibility": "ALREADY_DONE"}
         try:
@@ -425,6 +441,14 @@ class AutoResearchBrain:
         pass management-only prevents expensive in-sample evidence rebuilds from
         blocking the forward-paper critical path.
         """
+        if self.intel_book_recovery_error:
+            return {
+                "status": "BLOCKED_RECOVERY", "eligibility": "BLOCKED_SAFETY",
+                "new_entries_allowed": False,
+                "entry_block_reason": "PAPER_BOOK_RECOVERY_FAILED",
+                "positions_opened": [], "positions_closed": [],
+                "error": self.intel_book_recovery_error,
+            }
         if not self.intel_book.open:
             return {
                 "status": "NO_ACTION",
