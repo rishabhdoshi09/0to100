@@ -108,13 +108,22 @@ class FoPaperStore:
         return payload if isinstance(payload, dict) else None
 
     def load_positions(self) -> list[dict[str, Any]]:
+        # No tolerant filtering here: a skipped row becomes an invisible open
+        # position, and the next commit_cycle() would DELETE it permanently.
         rows = self.conn.execute(
-            "SELECT payload_json FROM fo_open_positions ORDER BY updated_at, trade_id"
+            "SELECT trade_id, option_symbol, underlying, payload_json "
+            "FROM fo_open_positions ORDER BY updated_at, trade_id"
         ).fetchall()
-        return [
-            payload for row in rows
-            if (payload := self._decode(row["payload_json"])) is not None
-        ]
+        positions: list[dict[str, Any]] = []
+        for row in rows:
+            payload = self._decode(row["payload_json"])
+            if payload is None or any(
+                str(payload.get(key) or "") != str(row[key])
+                for key in ("trade_id", "option_symbol", "underlying")
+            ):
+                raise ValueError("F&O paper open-position record is corrupt or mismatched")
+            positions.append(payload)
+        return positions
 
     def _replace_positions_in_transaction(
         self,

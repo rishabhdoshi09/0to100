@@ -1042,3 +1042,103 @@ def test_complete_1530_minute_is_recognized_for_historical_eod_exit():
         "2026-09-29T15:29:00+05:30",
         now_ist,
     ) is False
+
+
+def test_corrupt_fo_position_json_blocks_cycle_and_preserves_sqlite_row(tmp_path):
+    import pytest
+
+    path = tmp_path / "fo.sqlite3"
+    with FoPaperStore(path) as store:
+        store.replace_positions([{
+            "trade_id": "SAVED1", "option_symbol": "TESTCE", "underlying": "TEST",
+            "entry_price": 50.0, "quantity": 100,
+        }])
+        store.conn.execute(
+            "UPDATE fo_open_positions SET payload_json = ? WHERE trade_id = ?",
+            ("{corrupted", "SAVED1"),
+        )
+        store.conn.commit()
+
+        with pytest.raises(ValueError, match="corrupt or mismatched"):
+            run_fo_paper_cycle(
+                {"available": True, "candidates": []},
+                client=_QuoteClient(),
+                now_ist=datetime(2026, 9, 29, 11, 0, tzinfo=IST),
+                allow_new_entries=True,
+                store=store,
+            )
+        assert store.status()["open_positions"] == 1
+        raw = store.conn.execute(
+            "SELECT payload_json FROM fo_open_positions WHERE trade_id='SAVED1'"
+        ).fetchone()[0]
+        assert raw == "{corrupted"
+
+
+def test_malformed_fo_position_fields_block_cycle_without_truncating_book(tmp_path):
+    import pytest
+
+    path = tmp_path / "fo.sqlite3"
+    with FoPaperStore(path) as store:
+        # Valid JSON and table identities, but not sufficient to reconstruct
+        # FoPaperPosition. The runtime must never drop this position.
+        saved = {
+            "trade_id": "SAVED2", "option_symbol": "TESTCE", "underlying": "TEST",
+        }
+        store.replace_positions([saved])
+        with pytest.raises(ValueError, match="could not be restored safely"):
+            run_fo_paper_cycle(
+                {"available": True, "candidates": []},
+                client=_QuoteClient(),
+                now_ist=datetime(2026, 9, 29, 11, 0, tzinfo=IST),
+                allow_new_entries=True,
+                store=store,
+            )
+        assert store.status()["open_positions"] == 1
+        assert store.load_positions() == [saved]
+
+
+def test_fo_position_payload_identity_mismatch_blocks_read(tmp_path):
+    import pytest
+
+    with FoPaperStore(tmp_path / "fo.sqlite3") as store:
+        store.replace_positions([{
+            "trade_id": "T1", "option_symbol": "TESTCE", "underlying": "TEST",
+        }])
+        store.conn.execute(
+            "UPDATE fo_open_positions SET payload_json=? WHERE trade_id='T1'",
+            ('{"trade_id":"T1","option_symbol":"OTHERCE","underlying":"TEST"}',),
+        )
+        store.conn.commit()
+        with pytest.raises(ValueError, match="corrupt or mismatched"):
+            store.load_positions()
+        assert store.status()["open_positions"] == 1
+
+
+def test_recovered_fo_position_invalid_risk_or_quantity_fails_closed(tmp_path):
+    import pytest
+
+    path = tmp_path / "fo.sqlite3"
+    with FoPaperStore(path) as store:
+        opened = run_fo_paper_cycle(
+            _directional(), client=_QuoteClient(),
+            now_ist=datetime(2026, 9, 29, 10, 15, tzinfo=IST),
+            allow_new_entries=True, store=store, capital=200_000,
+        )
+        assert opened["opened_count"] == 1
+        original = store.load_positions()[0]
+        for invalid_fields in (
+            {"quantity": -100},
+            {"lots": 2},
+            {"risk_amount": float("nan")},
+            {"stop_price": 999.0},
+        ):
+            corrupted = {**original, **invalid_fields}
+            store.replace_positions([corrupted])
+            with pytest.raises(ValueError, match="could not be restored safely"):
+                run_fo_paper_cycle(
+                    {"available": True, "candidates": []},
+                    client=_QuoteClient(),
+                    now_ist=datetime(2026, 9, 29, 12, 0, tzinfo=IST),
+                    allow_new_entries=True, store=store, capital=200_000,
+                )
+            assert store.status()["open_positions"] == 1

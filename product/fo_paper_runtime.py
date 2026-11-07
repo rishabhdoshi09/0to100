@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import fields
 from datetime import datetime, timedelta
+from math import isfinite
 from typing import Any, Callable, Mapping
 
 from data.nfo_market import (
@@ -40,8 +41,28 @@ def _restore_position(payload: Mapping[str, Any]) -> FoPaperPosition | None:
     allowed = {field.name for field in fields(FoPaperPosition)}
     kwargs = {key: payload[key] for key in allowed if key in payload}
     try:
-        return FoPaperPosition(**kwargs)
-    except (TypeError, ValueError):
+        pos = FoPaperPosition(**kwargs)
+        integer_fields = (pos.lot_size, pos.lots, pos.quantity, pos.max_holding_sessions)
+        numerical_fields = (
+            pos.entry_price, pos.stop_price, pos.target_price, pos.risk_amount
+        )
+        if (
+            not isinstance(pos.trade_id, str) or not pos.trade_id
+            or not isinstance(pos.underlying, str) or not pos.underlying
+            or not isinstance(pos.option_symbol, str) or not pos.option_symbol
+            or pos.option_type not in {"CE", "PE"}
+            or any(type(value) is not int or value <= 0 for value in integer_fields)
+            or pos.quantity != pos.lots * pos.lot_size
+            or any(
+                type(value) not in (int, float) or not isfinite(value)
+                for value in numerical_fields
+            )
+            or not 0 < pos.stop_price < pos.entry_price < pos.target_price
+            or pos.risk_amount < 0
+        ):
+            return None
+        return pos
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -254,8 +275,11 @@ def run_fo_paper_cycle(
         book.realized_pnl = float(store.realized_pnl())
         for raw in store.load_positions():
             pos = _restore_position(raw)
-            if pos is not None:
-                book.open[pos.option_symbol] = pos
+            if pos is None or not pos.trade_id or not pos.option_symbol or not pos.underlying:
+                raise ValueError("F&O paper position could not be restored safely")
+            if pos.option_symbol in book.open:
+                raise ValueError("duplicate F&O option identity in persisted paper positions")
+            book.open[pos.option_symbol] = pos
 
         settled_rows: list[dict[str, Any]] = []
         settled_underlyings: set[str] = set()
