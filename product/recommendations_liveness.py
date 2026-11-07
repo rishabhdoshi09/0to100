@@ -335,7 +335,7 @@ def build_fast_response(core, attach_authority=None) -> dict[str, Any]:
     )
     if saved:
         payload["cmp_note"] = (
-            "Saved recommendations belong to an older scan/funds generation and "
+            "Saved recommendations are NOT current: they belong to an older scan/funds generation and "
             "have been withheld. "
             + str(payload.get("cmp_note") or "")
         )
