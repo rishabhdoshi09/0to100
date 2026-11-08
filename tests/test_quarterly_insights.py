@@ -198,3 +198,27 @@ def test_flat_metrics_are_neither_bull_case_nor_counter_case():
     assert out["metrics"]["pat"]["yoy_pct"] == 0
     assert out["thesis_evidence"] == []
     assert out["anti_thesis_evidence"] == []
+
+
+def test_loss_to_profit_is_not_fabricated_as_percent_growth():
+    rows = [
+        row("2026-09-30", "2026-11-01", {"revenue": 200, "pat": 10}),
+        row("2025-09-30", "2025-11-01", {"revenue": 100, "pat": -10}),
+    ]
+    out = compose_quarterly_insights("ABC", as_of="2026-11-08", rows=rows)
+    assert out["metrics"]["pat"]["yoy_pct"] is None
+    assert any(x["id"] == "pat_loss_to_profit" for x in out["thesis_evidence"])
+    assert "PAT_YOY" in out["unknowns"]
+    assert out["metrics"]["revenue"]["yoy_pct"] == 100
+    assert out["decision"] == "RESEARCH_ONLY"
+
+
+def test_two_loss_making_quarters_remain_counter_case():
+    rows = [
+        row("2026-09-30", "2026-11-01", {"revenue": 130, "pat": -4}),
+        row("2025-09-30", "2025-11-01", {"revenue": 100, "pat": -15}),
+    ]
+    out = compose_quarterly_insights("ABC", as_of="2026-11-08", rows=rows)
+    assert out["metrics"]["pat"]["yoy_pct"] is None
+    assert any(x["id"] == "pat_still_negative" for x in out["anti_thesis_evidence"])
+    assert not any(x["id"] == "pat_yoy" for x in out["thesis_evidence"])
