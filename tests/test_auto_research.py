@@ -393,3 +393,113 @@ def test_paper_auto_unreadable_config_fails_closed(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "read_text", disconnected)
     brain = AutoResearchBrain(paper_config_path=config)
     assert brain.paper_auto_enabled is False
+
+
+# ── production singleton: runtime paths unavailable must NOT yield a tradable brain ──
+
+class TestGetBrainRuntimePathsUnavailable:
+    """Installed hosts run with QT_RUNTIME_ROOT_REQUIRE_EXISTING=1, so a detached
+    external runtime makes ``logs_dir()`` raise. ``get_brain()`` used to swallow
+    that and build a path-less brain: in-memory empty paper book, paper autonomy
+    ON by first-run default, ``_save_intel_book`` reporting success with no file.
+    That is a manufactured empty portfolio with entry permission."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_singleton(self, monkeypatch):
+        from research.auto_research import scheduler as SCHED
+        monkeypatch.setattr(SCHED, "_BRAIN", None)
+        yield
+        monkeypatch.setattr(SCHED, "_BRAIN", None)
+
+    def _detach(self, monkeypatch):
+        from research.auto_research import scheduler as SCHED
+
+        def vanished():
+            raise RuntimeError("configured QuantTerm runtime root is missing: /Volumes/QT")
+
+        monkeypatch.setattr(SCHED, "logs_dir", vanished)
+        monkeypatch.setattr(SCHED, "logs_path", lambda *parts: vanished())
+
+    def test_blocked_brain_cannot_trade_or_claim_durability(self, monkeypatch):
+        from research.auto_research import scheduler as SCHED
+        self._detach(monkeypatch)
+
+        brain = SCHED.get_brain()
+
+        assert brain.is_paper_auto_enabled() is False
+        assert brain.paper_auto_enabled is False
+        assert "RUNTIME_PATHS_UNAVAILABLE" in brain.intel_book_recovery_error
+        assert brain.intel_book_path is None and brain.paper_config_path is None
+        # durable save must not report success when there is nowhere to save
+        assert brain._save_intel_book() is False
+        out = brain.run_intelligence_cycle_day(new_entries_allowed=True)
+        assert out["status"] == "BLOCKED_RECOVERY"
+        assert out["new_entries_allowed"] is False
+        assert out["positions_opened"] == []
+        managed = brain.manage_intelligence_positions_day()
+        assert managed["status"] == "BLOCKED_RECOVERY"
+
+    def test_blocked_brain_is_not_cached_so_recovery_rewires_real_paths(
+        self, monkeypatch, tmp_path
+    ):
+        from research.auto_research import scheduler as SCHED
+        self._detach(monkeypatch)
+        blocked = SCHED.get_brain()
+        assert SCHED._BRAIN is None, "a path-less brain must never become the process singleton"
+
+        # storage returns: the next call wires the real durable paths
+        logs = tmp_path / "logs"
+        monkeypatch.setattr(SCHED, "logs_dir", lambda: logs)
+        monkeypatch.setattr(SCHED, "logs_path", lambda *parts: logs.joinpath(*parts))
+        recovered = SCHED.get_brain()
+        assert recovered is not blocked
+        assert SCHED._BRAIN is recovered
+        assert recovered.intel_book_path == logs / "intelligence" / "intel_book.json"
+        assert recovered.paper_config_path == logs / "intelligence" / "paper_config.json"
+        assert recovered.intel_book_recovery_error == ""
+
+    def test_enable_control_on_blocked_brain_does_not_grant_entries(self, monkeypatch):
+        from research.auto_research import scheduler as SCHED
+        self._detach(monkeypatch)
+        brain = SCHED.get_brain()
+        brain.enable_paper_auto()          # supervisor ENABLE_PAPER_AUTO control path
+        assert brain.is_paper_auto_enabled() is False
+
+    def test_autonomy_paper_cycle_job_sees_paper_disabled_and_no_durability(
+        self, monkeypatch, tmp_path
+    ):
+        """The PAPER_CYCLE job hands the brain's book + enable flag to the
+        recommendation executor. With storage detached it must receive
+        paper_enabled=False and a durability callback that reports failure."""
+        import product.paper_autopilot as PA
+        from research.autonomy import jobs as JOBS
+        self._detach(monkeypatch)
+        monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+        seen: dict = {}
+
+        def fake_reco(**kwargs):
+            seen.update(kwargs)
+            return {
+                "positions_opened": [], "taken": [], "rejections": [], "waits": [],
+                "final_decision": "BLOCK", "eligibility": "BLOCKED_SAFETY",
+                "cycle_reasons": ["PAPER_TRADING_DISABLED"], "reason_counts": {},
+                "summary": "", "evolution": {"paper_book_durable_saved": False},
+            }
+
+        monkeypatch.setattr(PA, "run_reco_paper_cycle", fake_reco)
+
+        class _Telegram:
+            def notify_paper_cycle(self, *_a, **_k):
+                return None
+
+        deps = object.__new__(JOBS.Deps)
+        deps.live_feed = None
+        deps.telegram = _Telegram()
+        result = deps.run_paper_cycle(True)
+
+        assert seen["paper_enabled"] is False
+        assert seen["durable_book_save"]() is False
+        assert len(getattr(seen["book"], "open", {})) == 0
+        assert result["status"] == "BLOCKED_RECOVERY"
+        assert result["positions_opened"] == []
+        assert result["new_entries_allowed"] is False

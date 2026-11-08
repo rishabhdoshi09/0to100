@@ -126,6 +126,55 @@ def test_snapshot_switch_during_scan_blocks_publication(monkeypatch):
     assert report.payload == {}
 
 
+def test_snapshot_switch_before_publication_persists_no_sidecars(monkeypatch, tmp_path):
+    """Scan-derived sidecars must not outlive a withheld canonical scan.
+
+    The post-scan identity check passes, the manifest verifies, and then the
+    active Kite snapshot rotates before publication. Previously the coverage
+    audit, public best setups, long-term overlay and desk recommendations/
+    discovery were all written to disk before the final check withheld the
+    canonical scan, leaving stale projections with no matching scan file.
+    """
+    import product.desk_scan_overlays as desks
+    import product.sepa_setup as sepa
+    import scan.long_term_service as long_term
+    from scan import market_scan_service as market
+    from scan import scan_coverage
+
+    _install_snapshot(monkeypatch, tmp_path, active="old", day="2099-12-31")
+    persisted: list[str] = []
+    monkeypatch.setattr(
+        desks, "persist_desks_from_market_scan", lambda _p: persisted.append("desks") or {}
+    )
+    monkeypatch.setattr(
+        sepa, "persist_public_best_setups", lambda _p: persisted.append("public_best_setups")
+    )
+    monkeypatch.setattr(
+        long_term, "overlay_long_term_from_market_scan",
+        lambda *_a, **_k: persisted.append("long_term"),
+    )
+    monkeypatch.setattr(scan_coverage, "save_audit", lambda _a: persisted.append("audit"))
+    monkeypatch.setattr(S, "save_scan", lambda *_a, **_k: persisted.append("canonical_scan"))
+
+    # start · post-scan check · pre-sidecar check (rotated) · final check
+    seen = iter(["old", "old", "new", "new"])
+    monkeypatch.setattr(market, "_active_snapshot_id", lambda: next(seen))
+    monkeypatch.setattr(market, "_saved_priority_inputs", lambda: (None, None, None, []))
+    monkeypatch.setattr(scan_coverage, "observe_scanner", _observe)
+    monkeypatch.setattr("scan.bulk_fetcher.cached_symbols", lambda: ["AAA"])
+
+    report = market.run_whole_market_scan(
+        universe_provider=lambda: {"AAA": "Alpha"},
+        prefetch_fn=lambda *_a, **_k: None,
+        scanner=_Scanner(),
+        fno_provider=lambda: set(),
+        save=True,
+    )
+    assert not report.ok
+    assert report.error_code == "SCAN_SNAPSHOT_CHANGED"
+    assert persisted == []
+
+
 def test_health_does_not_claim_evidence_ready_for_stale_kite_scan(monkeypatch, tmp_path):
     from product.startup_check import _scan_evidence_status
 
@@ -350,3 +399,55 @@ def test_discovery_freshness_rejects_rotated_or_unverified_kite_scan(
     S.save_scan(_scan(sid="new"), location)
     snapshot.active = "old"
     assert desk_pipeline.scan_is_fresh() is False
+
+
+def test_corrupt_active_pointer_blocks_unbound_offline_scan(monkeypatch, tmp_path):
+    """An unreadable ACTIVE file is not proof that Kite authority is absent."""
+    from research.intelligence.data import snapshot_store
+
+    store = snapshot_store.SnapshotStore(root=tmp_path / "snapshots")
+    (store.root / "ACTIVE").write_text("{corrupt json", encoding="utf-8")
+    assert store.get_active_snapshot() is None
+    monkeypatch.setattr(snapshot_store, "SnapshotStore", lambda: store)
+
+    valid, reason = S.scan_source_status(
+        _scan(sid="", source="official_nse_bhavcopy")
+    )
+    assert valid is False
+    assert reason == "SNAPSHOT_POINTER_INVALID"
+
+
+def test_failed_snapshot_probe_blocks_unbound_scan(monkeypatch):
+    """IO errors cannot silently authorize a public-data fallback."""
+    from research.intelligence.data import snapshot_store
+
+    class BrokenStore:
+        def get_active_snapshot(self):
+            raise OSError("cannot read snapshot pointer")
+
+    monkeypatch.setattr(snapshot_store, "SnapshotStore", BrokenStore)
+    assert S.scan_source_status(
+        _scan(sid="", source="official_nse_bhavcopy")
+    ) == (False, "SNAPSHOT_VERIFICATION_FAILED")
+
+
+def test_unbound_kite_scan_is_invalid_even_when_store_is_offline(monkeypatch, tmp_path):
+    """A Kite-labelled scan always needs a matching active Kite identity."""
+    from research.intelligence.data import snapshot_store
+
+    store = snapshot_store.SnapshotStore(root=tmp_path / "snapshots")
+    monkeypatch.setattr(snapshot_store, "SnapshotStore", lambda: store)
+    assert S.scan_source_status(
+        _scan(sid="", source="kite_snapshot")
+    ) == (False, "KITE_SNAPSHOT_MISSING")
+
+
+def test_genuine_offline_nse_scan_remains_compatible(monkeypatch, tmp_path):
+    """No snapshot pointer and explicit NSE provenance retain offline reads."""
+    from research.intelligence.data import snapshot_store
+
+    store = snapshot_store.SnapshotStore(root=tmp_path / "snapshots")
+    monkeypatch.setattr(snapshot_store, "SnapshotStore", lambda: store)
+    assert S.scan_source_status(
+        _scan(sid="", source="official_nse_bhavcopy")
+    ) == (True, "")

@@ -511,6 +511,18 @@ def run_whole_market_scan(
 
     payload["scan_status"] = SUCCEEDED
     if save:
+        # Scan-derived sidecars (coverage audit, public best setups, long-term
+        # overlay, desk recommendations/discovery) are persisted independently
+        # of the canonical scan file. Re-verify the data authority right before
+        # the first sidecar write so a snapshot rotated during the manifest/
+        # payload build cannot leave projections on disk for a scan whose
+        # canonical publication is then withheld below.
+        if _active_snapshot_id() != snapshot_at_start:
+            return MarketScanReport(
+                DATA_UNAVAILABLE, error_code="SCAN_SNAPSHOT_CHANGED",
+                error_message="Active Kite snapshot changed before sidecar publication.",
+                source_snapshot_id=snapshot_at_start,
+            )
         try:
             from scan.scan_coverage import save_audit
             save_audit(audit)

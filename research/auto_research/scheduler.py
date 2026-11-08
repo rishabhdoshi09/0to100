@@ -101,6 +101,10 @@ class AutoResearchBrain:
         # persisted book must not be silently replaced by a fresh empty book:
         # that could hide old positions and permit duplicate paper exposure.
         self.intel_book_recovery_error = str(self.runtime_state.load_error or "")
+        # Set by get_brain() when the durable runtime root cannot be resolved.
+        # A brain in this state has nowhere to persist and must never report
+        # a durable save or permit paper entries.
+        self.durable_storage_unavailable = False
         if intel_book_path:
             try:
                 import json as _json
@@ -172,7 +176,21 @@ class AutoResearchBrain:
 
     def is_paper_auto_enabled(self) -> bool:
         return (bool(self.paper_auto_enabled) and self.mode == "PAPER_AUTO"
-                and not self.intel_book_recovery_error)
+                and not self.intel_book_recovery_error
+                and not self.durable_storage_unavailable)
+
+    def mark_durable_storage_unavailable(self, reason: str) -> None:
+        """Latch the fail-closed state for a brain whose runtime root is gone.
+
+        The persisted book, event store and opt-in flag all live under that
+        root, so nothing about this brain's empty in-memory state is evidence
+        of the real portfolio. Entries stay blocked until a brain is rebuilt
+        from the recovered storage.
+        """
+        self.durable_storage_unavailable = True
+        self.paper_auto_enabled = False
+        self.intel_book_recovery_error = str(reason or "RUNTIME_PATHS_UNAVAILABLE")[:240]
+        self.runtime_state.reconciled = False
 
     def _load_paper_config(self) -> bool:
         if not self.paper_config_path:
@@ -213,6 +231,8 @@ class AutoResearchBrain:
         The canonical PAPER owner uses it to ensure deferred Evolution work
         is not released until a real fill has reached durable storage.
         """
+        if self.durable_storage_unavailable:
+            return False
         if not self.intel_book_path:
             return True
         try:
@@ -740,12 +760,20 @@ def get_brain(**kwargs) -> AutoResearchBrain:
     global _BRAIN
     if _BRAIN is None:
         try:
-            from pathlib import Path
             from research.auto_research import providers as P
             kwargs.setdefault("evaluate_fn", P.backtest_evaluator)
             kwargs.setdefault("signal_fn", P.signals_for)
             kwargs.setdefault("bars_fn", P.daily_bars)
             kwargs.setdefault("regime_fn", P.current_regime)
+        except Exception:
+            pass
+        # Durable paths are resolved separately and fail CLOSED. Installed hosts
+        # run with QT_RUNTIME_ROOT_REQUIRE_EXISTING=1, so a detached external
+        # runtime makes logs_dir() raise. Swallowing that used to yield a
+        # path-less brain: empty in-memory paper book, paper autonomy ON by
+        # first-run default, and _save_intel_book() "succeeding" with no file —
+        # a manufactured empty portfolio with entry permission.
+        try:
             _logs = logs_dir()
             kwargs.setdefault("paper_state_path", _logs / "auto_research" / "paper_book.json")
             # the two-brain runtime persists to logs/intelligence/ (what Brain Observatory reads)
@@ -758,8 +786,15 @@ def get_brain(**kwargs) -> AutoResearchBrain:
                 "insample_cache_path",
                 _logs / "intelligence" / "insample_evidence_cache.json",
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            blocked = AutoResearchBrain(**kwargs)
+            blocked.mark_durable_storage_unavailable(
+                f"RUNTIME_PATHS_UNAVAILABLE: {type(exc).__name__}: {exc}"[:240]
+            )
+            # Deliberately NOT cached: once the runtime root is back, the next
+            # call must restore the real persisted book instead of keeping an
+            # ephemeral brain for the rest of the process lifetime.
+            return blocked
         _BRAIN = AutoResearchBrain(**kwargs)
         # wire the immutable snapshot store + a validated registry so the loop flips from
         # no-op to real-data-driven the moment a snapshot is activated (none in this sandbox).
