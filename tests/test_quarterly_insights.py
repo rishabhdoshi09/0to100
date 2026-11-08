@@ -1,0 +1,290 @@
+"""Regression gates for the read-only Q2-style company review contract."""
+from __future__ import annotations
+
+import pytest
+
+from product.due_diligence.quarterly_insights import compose_quarterly_insights
+
+
+def row(
+    period: str,
+    published: str,
+    facts: dict,
+    *,
+    symbol: str = "ABC",
+    consolidated: bool = True,
+    available: str | None = None,
+) -> dict:
+    quarter_start_month = int(period[5:7]) - 2
+    assert quarter_start_month in (1, 4, 7, 10)
+    return {
+        "symbol": symbol,
+        "period_start": f"{period[:4]}-{quarter_start_month:02d}-01",
+        "period_end": period,
+        "publication_date": published,
+        "available_from": available or published,
+        "evidence_id": f"test-{period}-{published}",
+        "source": "NSE company filing",
+        "source_url": "https://example.test/filing",
+        "parser_version": "test",
+        "consolidated": consolidated,
+        "facts": facts,
+    }
+
+
+def test_missing_quarters_never_become_a_positive_view():
+    out = compose_quarterly_insights("ABC", as_of="2026-11-08", rows=[])
+    assert out["status"] == "NO_VERIFIABLE_QUARTER"
+    assert out["thesis_evidence"] == []
+    assert out["anti_thesis_evidence"] == []
+    assert out["decision"] == "RESEARCH_ONLY"
+    assert out["places_orders"] is False
+    assert out["conviction"]["win_probability"] is None
+    assert out["price_track"]["status"] == "UNAVAILABLE"
+
+
+def test_reject_future_publication_even_when_period_is_past():
+    out = compose_quarterly_insights(
+        "ABC",
+        as_of="2026-11-08",
+        rows=[row("2026-09-30", "2026-11-09", {"revenue": 200, "pat": 30})],
+    )
+    assert out["status"] == "NO_VERIFIABLE_QUARTER"
+    assert out["source_documents"] == []
+
+
+def test_reject_future_available_from_even_if_publication_is_past():
+    out = compose_quarterly_insights(
+        "ABC",
+        as_of="2026-11-08",
+        rows=[row("2026-09-30", "2026-11-02", {"revenue": 200}, available="2026-11-10")],
+    )
+    assert out["status"] == "NO_VERIFIABLE_QUARTER"
+
+
+def test_only_same_quarter_last_year_counts_as_yoy():
+    data = [
+        row("2026-09-30", "2026-11-01", {"revenue": 150, "pat": 30}),
+        row("2026-06-30", "2026-08-01", {"revenue": 90, "pat": 10}),
+        row("2025-09-30", "2025-11-02", {"revenue": 100, "pat": 20}),
+    ]
+    out = compose_quarterly_insights("ABC", as_of="2026-11-08", rows=data)
+    assert out["status"] == "QUARTER_COMPARABLE"
+    assert out["comparison_period_end"] == "2025-09-30"
+    assert out["metrics"]["revenue"]["yoy_pct"] == 50
+    assert out["metrics"]["pat"]["yoy_pct"] == 50
+    assert len(out["thesis_evidence"]) == 2
+    assert all(note["sources"][0]["evidence_id"] for note in out["thesis_evidence"])
+
+
+def test_one_previous_quarter_is_not_mislabeled_yoy():
+    data = [
+        row("2026-09-30", "2026-11-01", {"revenue": 150, "pat": 30}),
+        row("2026-06-30", "2026-08-01", {"revenue": 100, "pat": 20}),
+    ]
+    out = compose_quarterly_insights("ABC", as_of="2026-11-08", rows=data)
+    assert out["status"] == "PARTIAL_QUARTER_EVIDENCE"
+    assert out["metrics"]["revenue"]["yoy_pct"] is None
+    assert out["thesis_evidence"] == []
+    assert "SAME_QUARTER_PRIOR_YEAR" in out["unknowns"]
+
+
+def test_debt_increase_is_counter_case_for_industrials_not_nbfc():
+    data = [
+        row("2026-09-30", "2026-11-01", {"revenue": 100, "pat": 15, "bs_total_debt": 200}),
+        row("2025-09-30", "2025-11-01", {"revenue": 110, "pat": 18, "bs_total_debt": 100}),
+    ]
+    industrial = compose_quarterly_insights("ABC", as_of="2026-11-08", rows=data, framework_id="industrials")
+    lending = compose_quarterly_insights("ABC", as_of="2026-11-08", rows=data, framework_id="nbfc")
+    assert any(x["id"] == "debt_growth" for x in industrial["anti_thesis_evidence"])
+    assert not any(x["id"] == "debt_growth" for x in lending["anti_thesis_evidence"])
+
+
+def test_does_not_mix_standalone_with_consolidated_in_yoy():
+    data = [
+        row("2026-09-30", "2026-11-01", {"revenue": 150, "pat": 30}, consolidated=True),
+        row("2025-09-30", "2025-11-01", {"revenue": 100, "pat": 20}, consolidated=False),
+    ]
+    out = compose_quarterly_insights("ABC", as_of="2026-11-08", rows=data)
+    assert out["status"] == "PARTIAL_QUARTER_EVIDENCE"
+    assert out["metrics"]["revenue"]["yoy_pct"] is None
+
+
+def test_malformed_and_non_finite_values_remain_unknown():
+    data = [
+        row("2026-09-30", "2026-11-01", {"revenue": float("nan"), "pat": float("inf")}),
+        row("2025-09-30", "2025-11-01", {"revenue": 100, "pat": 20}),
+    ]
+    out = compose_quarterly_insights("ABC", as_of="2026-11-08", rows=data)
+    assert out["thesis_evidence"] == []
+    assert out["metrics"]["pat"]["current"] is None
+    assert "PAT_YOY" in out["unknowns"]
+
+
+def test_requires_provenance_and_matching_symbol():
+    data = [
+        row("2026-09-30", "2026-11-01", {"revenue": 150}, symbol="XYZ"),
+        {**row("2026-09-30", "2026-11-01", {"revenue": 100}), "evidence_id": ""},
+        {**row("2026-09-30", "2026-11-01", {"revenue": 100}), "publication_date": ""},
+    ]
+    out = compose_quarterly_insights("ABC", as_of="2026-11-08", rows=data)
+    assert out["status"] == "NO_VERIFIABLE_QUARTER"
+
+
+@pytest.mark.parametrize("symbol,as_of", [
+    ("", "2026-11-08"), ("BAD/SYMBOL", "2026-11-08"), ("ABC", "2026-11-08junk"),
+    ("ABC", "not-a-date"),
+])
+def test_invalid_inputs_fail_explicitly(symbol, as_of):
+    with pytest.raises(ValueError):
+        compose_quarterly_insights(symbol, as_of=as_of, rows=[])
+
+
+def test_declining_profit_and_negative_cash_flow_create_counter_case():
+    data = [
+        row("2026-09-30", "2026-11-01", {"revenue": 150, "pat": -5, "cfo": -20}),
+        row("2025-09-30", "2025-11-01", {"revenue": 100, "pat": 10}),
+    ]
+    out = compose_quarterly_insights("ABC", as_of="2026-11-08", rows=data, framework_id="industrials")
+    assert {x["id"] for x in out["anti_thesis_evidence"]} >= {
+        "pat_yoy", "negative_operating_cash_flow"
+    }
+    assert {x["id"] for x in out["thesis_evidence"]} == {"revenue_yoy"}
+    assert out["places_orders"] is False
+
+
+def test_real_pit_warehouse_wiring_is_temporal(tmp_path):
+    """Exercise the production adapter, not only synthetic composer rows."""
+    from product.pit_warehouse import DOC_QUARTERLY_RESULT, persist
+    from product.due_diligence.quarterly_insights import quarterly_insights
+
+    db = tmp_path / "financials.db"
+    for period, pub, revenue, pat in (
+        ("2025-09-30", "2025-11-01", 100, 20),
+        ("2026-09-30", "2026-11-01", 150, 30),
+    ):
+        persist({
+            "symbol": "ABC",
+            "evidence_type": DOC_QUARTERLY_RESULT,
+            "period_start": period[:4] + "-07-01",
+            "period_end": period,
+            "publication_date": pub,
+            "available_from": pub,
+            "source": "NSE quarterly results",
+            "source_url": "https://example.test/filing",
+            "source_identity": "nse:" + period,
+            "extracted": {
+                "numbers_parsed": True,
+                "nature": "Consolidated",
+                "facts": {"revenue": revenue, "pat": pat},
+            },
+        }, path=db)
+
+    early = quarterly_insights("ABC", as_of="2026-10-31", path=db)
+    assert early["status"] == "PARTIAL_QUARTER_EVIDENCE"
+    assert early["latest_period_end"] == "2025-09-30"
+    assert early["metrics"]["revenue"]["current"] == 100
+
+    current = quarterly_insights("ABC", as_of="2026-11-08", path=db)
+    assert current["status"] == "QUARTER_COMPARABLE"
+    assert current["metrics"]["revenue"]["yoy_pct"] == 50
+    assert len(current["source_documents"]) == 2
+    assert current["decision"] == "RESEARCH_ONLY"
+
+
+def test_flat_metrics_are_neither_bull_case_nor_counter_case():
+    data = [
+        row("2026-09-30", "2026-11-01", {"revenue": 100, "pat": 10}),
+        row("2025-09-30", "2025-11-01", {"revenue": 100, "pat": 10}),
+    ]
+    out = compose_quarterly_insights("ABC", as_of="2026-11-08", rows=data)
+    assert out["status"] == "QUARTER_COMPARABLE"
+    assert out["metrics"]["pat"]["yoy_pct"] == 0
+    assert out["thesis_evidence"] == []
+    assert out["anti_thesis_evidence"] == []
+
+
+def test_loss_to_profit_is_not_fabricated_as_percent_growth():
+    rows = [
+        row("2026-09-30", "2026-11-01", {"revenue": 200, "pat": 10}),
+        row("2025-09-30", "2025-11-01", {"revenue": 100, "pat": -10}),
+    ]
+    out = compose_quarterly_insights("ABC", as_of="2026-11-08", rows=rows)
+    assert out["metrics"]["pat"]["yoy_pct"] is None
+    assert any(x["id"] == "pat_loss_to_profit" for x in out["thesis_evidence"])
+    assert "PAT_YOY" in out["unknowns"]
+    assert out["metrics"]["revenue"]["yoy_pct"] == 100
+    assert out["decision"] == "RESEARCH_ONLY"
+
+
+def test_two_loss_making_quarters_remain_counter_case():
+    rows = [
+        row("2026-09-30", "2026-11-01", {"revenue": 130, "pat": -4}),
+        row("2025-09-30", "2025-11-01", {"revenue": 100, "pat": -15}),
+    ]
+    out = compose_quarterly_insights("ABC", as_of="2026-11-08", rows=rows)
+    assert out["metrics"]["pat"]["yoy_pct"] is None
+    assert any(x["id"] == "pat_still_negative" for x in out["anti_thesis_evidence"])
+    assert not any(x["id"] == "pat_yoy" for x in out["thesis_evidence"])
+
+
+def test_six_month_h1_result_is_not_called_q2_quarterly_growth():
+    data = [
+        {**row("2026-09-30", "2026-11-01", {"revenue": 200, "pat": 25}),
+         "period_start": "2026-04-01"},
+        row("2025-09-30", "2025-11-01", {"revenue": 100, "pat": 20}),
+    ]
+    out = compose_quarterly_insights("ABC", as_of="2026-11-08", rows=data)
+    assert out["latest_period_end"] == "2025-09-30"
+    assert out["status"] == "PARTIAL_QUARTER_EVIDENCE"
+    assert out["thesis_evidence"] == []
+    assert "NON_QUARTER_OR_UNVERIFIED_REPORTING_PERIOD" in out["unknowns"]
+
+
+def test_missing_quarter_duration_does_not_create_yoy_evidence():
+    data = [
+        {**row("2026-09-30", "2026-11-01", {"revenue": 200}), "period_start": ""},
+        row("2025-09-30", "2025-11-01", {"revenue": 100}),
+    ]
+    out = compose_quarterly_insights("ABC", as_of="2026-11-08", rows=data)
+    assert out["metrics"]["revenue"]["yoy_pct"] is None
+    assert out["source_documents"][0]["period_end"] == "2025-09-30"
+
+
+def test_conflicting_xbrl_and_exchange_report_periods_are_withheld():
+    data = [
+        {**row("2026-09-30", "2026-11-01", {"revenue": 200}),
+         "extracted": {"period_start": "2026-04-01"}},
+        row("2025-09-30", "2025-11-01", {"revenue": 100}),
+    ]
+    out = compose_quarterly_insights("ABC", as_of="2026-11-08", rows=data)
+    assert out["latest_period_end"] == "2025-09-30"
+    assert "NON_QUARTER_OR_UNVERIFIED_REPORTING_PERIOD" in out["unknowns"]
+
+
+def test_unclassified_company_does_not_receive_manufacturing_risk_flags():
+    rows = [
+        row("2026-09-30", "2026-11-01",
+            {"revenue": 120, "pat": 10, "bs_total_debt": 300, "cfo": -20, "trade_receivables": 90}),
+        row("2025-09-30", "2025-11-01",
+            {"revenue": 100, "pat": 9, "bs_total_debt": 100, "trade_receivables": 20}),
+    ]
+    out = compose_quarterly_insights("ABC", as_of="2026-11-08", rows=rows)
+    ids = {x["id"] for x in out["anti_thesis_evidence"]}
+    assert not ids.intersection({
+        "debt_growth", "negative_operating_cash_flow", "receivables_outpace_revenue"
+    })
+    assert "SECTOR_SPECIFIC_RISK_FRAMEWORK_NOT_VERIFIED" in out["unknowns"]
+    assert out["decision"] == "RESEARCH_ONLY"
+
+
+def test_specialty_lenders_remain_exempt_from_generic_debt_and_cash_rules():
+    rows = [
+        row("2026-09-30", "2026-11-01", {"revenue": 120, "pat": 10, "bs_total_debt": 300, "cfo": -25}),
+        row("2025-09-30", "2025-11-01", {"revenue": 100, "pat": 9, "bs_total_debt": 100}),
+    ]
+    for sector in ("nbfc_gold", "nbfc_housing", "life_insurance", "bank", "generic", "unrecognized_framework"):
+        out = compose_quarterly_insights("ABC", as_of="2026-11-08", rows=rows, framework_id=sector)
+        assert not {x["id"] for x in out["anti_thesis_evidence"]}.intersection({
+            "debt_growth", "negative_operating_cash_flow"
+        })

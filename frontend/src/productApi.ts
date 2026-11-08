@@ -560,6 +560,64 @@ export type DueDiligenceReport = {
   question: string
 }
 
+export type QuarterlyEvidenceSource = {
+  evidence_id: string
+  publication_date: string
+  available_from: string
+  period_end: string
+  source: string
+  source_url: string
+  parser_version: string
+}
+
+export type QuarterlyEvidenceFinding = {
+  id: string
+  metric: string
+  observation: string
+  value: number
+  unit: string
+  sources: QuarterlyEvidenceSource[]
+}
+
+export type QuarterlyInsightsReport = {
+  schema_version: number
+  engine: string
+  symbol: string
+  as_of: string
+  status: 'NO_VERIFIABLE_QUARTER' | 'PARTIAL_QUARTER_EVIDENCE' | 'QUARTER_COMPARABLE'
+  publication_freshness: 'UNAVAILABLE' | 'STALE' | 'RECENT'
+  days_since_publication: number | null
+  latest_period_end: string | null
+  accounting_scope: string
+  comparison_period_end: string | null
+  metrics: Record<string, {
+    metric: string
+    label: string
+    current: number | null
+    prior_year_same_quarter: number | null
+    yoy_pct: number | null
+    comparison: string
+    unit: string
+    sources: QuarterlyEvidenceSource[]
+  }>
+  thesis_evidence: QuarterlyEvidenceFinding[]
+  anti_thesis_evidence: QuarterlyEvidenceFinding[]
+  unknowns: string[]
+  source_documents: QuarterlyEvidenceSource[]
+  price_track: { status: string; reason: string }
+  conviction: { status: string; win_probability: number | null }
+  decision: 'RESEARCH_ONLY'
+  places_orders: false
+  may_override_risk: false
+  note: string
+}
+
+export const fetchQuarterlyInsights = (symbol: string, asOf?: string): Promise<QuarterlyInsightsReport> =>
+  request(`/api/quarterly-insights/${encodeURIComponent(symbol)}` +
+    (asOf ? '?as_of=' + encodeURIComponent(asOf) : ''), {
+    headers: { Accept: 'application/json' },
+  })
+
 export const fetchDueDiligence = (symbol: string): Promise<DueDiligenceReport> =>
   request(`/api/due-diligence/${encodeURIComponent(symbol)}`, {
     headers: { Accept: 'application/json' },

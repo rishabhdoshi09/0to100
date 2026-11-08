@@ -30,6 +30,7 @@ import {
   type TradePlan,
 } from './productApi'
 import { keepRicher, markInvestigate, recall } from './sessionMemory'
+import { QuarterlyInsightsPanel } from './quarterlyInsightsView'
 import { fetchOperation } from './api'
 import { investigateIsAcquiring } from './investigateAcquire'
 import { isActionableScanRow } from './scannerFallback'
@@ -1535,6 +1536,7 @@ export function StockInvestigatorView(props: ViewProps) {
         onAcquire={(mode) => void runAcquire(mode)}
         busy={busy}
       />
+      <QuarterlyInsightsPanel symbol={selected || ''} refreshKey={report?.as_of?.generated_at || ''} />
     </section>
   )
 }
