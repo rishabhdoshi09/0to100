@@ -916,7 +916,25 @@ class TelegramNotifier:
         report: dict[str, Any] = {"sent": False, "reason": "skipped"}
         try:
             from product.recommendations_store import load_recommendations
-            recos = self.notify_recommendations(load_recommendations())
+            from product.scan_store import load_scan
+
+            workspace = load_recommendations()
+            # Recommendations are a scan-derived sidecar written before the
+            # canonical scan is published. Only the generation bound to the
+            # currently valid canonical scan may reach the operator — the same
+            # authority the paper executor requires before any new entry.
+            scan = dict(load_scan() or {})
+            scan_at = str(scan.get("scanned_at") or "")
+            reco_at = str((workspace or {}).get("scan_scanned_at") or "")
+            if workspace and (not scan_at or reco_at != scan_at):
+                recos = {
+                    "sent": False,
+                    "reason": "reco_generation_mismatch",
+                    "scan_scanned_at": scan_at,
+                    "reco_scan_scanned_at": reco_at,
+                }
+            else:
+                recos = self.notify_recommendations(workspace)
         except Exception as exc:
             recos = {"sent": False, "reason": "error", "error": str(exc)[:200]}
         try:

@@ -257,6 +257,14 @@ def run_whole_market_scan(
     # how long a scan took and, crucially, keep the run instant separate from
     # the market session its prices came from.
     scan_started_at = datetime.now(timezone.utc)
+    # Bind the scan to its data authority before any potentially long prefetch.
+    snapshot_at_start = _active_snapshot_id()
+    if save and snapshot_id is not None and snapshot_at_start and snapshot_id != snapshot_at_start:
+        return MarketScanReport(
+            DATA_UNAVAILABLE, error_code="SCAN_SNAPSHOT_CHANGED",
+            error_message="Requested snapshot is no longer active.",
+            source_snapshot_id=snapshot_id,
+        )
     universe_provider = universe_provider or _default_universe
     prefetch_fn = prefetch_fn or _default_prefetch
     scanner = scanner or _default_scanner()
@@ -339,6 +347,13 @@ def run_whole_market_scan(
             source_snapshot_id=snapshot_id or "",
         )
 
+    if save and _active_snapshot_id() != snapshot_at_start:
+        return MarketScanReport(
+            DATA_UNAVAILABLE, error_code="SCAN_SNAPSHOT_CHANGED",
+            error_message="Active snapshot changed during scanning.",
+            source_snapshot_id=snapshot_at_start,
+        )
+
     coverage = dict(audit.get("summary") or {})
     if not results:
         warm: list[str] = []
@@ -410,7 +425,7 @@ def run_whole_market_scan(
         )
     else:
         payload["coverage_warning"] = ""
-    sid = snapshot_id if snapshot_id is not None else _active_snapshot_id()
+    sid = snapshot_id if snapshot_id is not None else snapshot_at_start
     payload["source_snapshot_id"] = sid
     # Publish the authoritative market-session identity together with the scan
     # body, never in a later follow-up write. Readers such as the startup
@@ -418,6 +433,54 @@ def run_whole_market_scan(
     # temporarily missing session identity while post-scan overlays are still
     # being persisted.
     provenance = dict(payload.get("provenance") or {})
+    if snapshot_at_start:
+        try:
+            import json
+            from research.intelligence.data.snapshot_store import SnapshotStore
+
+            store = SnapshotStore()
+            manifest = json.loads(
+                (store.root / snapshot_at_start / "manifest.json").read_text(encoding="utf-8")
+            )
+            if str(manifest.get("source") or "").lower() == "kite":
+                actual_date = str(manifest.get("last_trading_date") or "")[:10]
+                expected_date = str(provenance.get("expected_session_date") or "")[:10]
+                # Kite is the OHLCV authority when configured. A delayed
+                # public NSE archive must not invalidate a genuinely current
+                # Kite snapshot; compare its verified last bar with the
+                # calendar's required completed session instead.
+                input_stale = (
+                    not actual_date
+                    or not expected_date
+                    or actual_date < expected_date
+                )
+                # Non-publishing scans are diagnostic, not authoritative
+                # evidence. Let them inspect data but label its real source/date.
+                # Persisted and actionable scans must fail closed.
+                if input_stale and save:
+                    return MarketScanReport(
+                        DATA_UNAVAILABLE, error_code="SCAN_INPUT_STALE",
+                        error_message="Kite data is not from the expected NSE session.",
+                        source_snapshot_id=snapshot_at_start,
+                    )
+                provenance["price_source"] = "kite_snapshot"
+                provenance["price_data_as_of"] = actual_date
+                provenance["market_session_date"] = actual_date
+                provenance["data_current"] = not input_stale
+                provenance["data_freshness"] = (
+                    "KITE_SNAPSHOT_STALE" if input_stale else "KITE_SNAPSHOT_CURRENT"
+                )
+                provenance["provenance_reason"] = (
+                    f"Kite snapshot as of {actual_date or 'unknown'}, expected "
+                    f"{expected_date or 'unknown'}"
+                ) if input_stale else ""
+                payload["provenance"] = provenance
+        except Exception as exc:
+            return MarketScanReport(
+                DATA_UNAVAILABLE, error_code="SCAN_SNAPSHOT_UNVERIFIED",
+                error_message=f"Cannot verify snapshot manifest: {type(exc).__name__}",
+                source_snapshot_id=snapshot_at_start,
+            )
     as_of_session = str(
         provenance.get("price_data_as_of")
         or provenance.get("market_session_date")
@@ -448,6 +511,18 @@ def run_whole_market_scan(
 
     payload["scan_status"] = SUCCEEDED
     if save:
+        # Scan-derived sidecars (coverage audit, public best setups, long-term
+        # overlay, desk recommendations/discovery) are persisted independently
+        # of the canonical scan file. Re-verify the data authority right before
+        # the first sidecar write so a snapshot rotated during the manifest/
+        # payload build cannot leave projections on disk for a scan whose
+        # canonical publication is then withheld below.
+        if _active_snapshot_id() != snapshot_at_start:
+            return MarketScanReport(
+                DATA_UNAVAILABLE, error_code="SCAN_SNAPSHOT_CHANGED",
+                error_message="Active Kite snapshot changed before sidecar publication.",
+                source_snapshot_id=snapshot_at_start,
+            )
         try:
             from scan.scan_coverage import save_audit
             save_audit(audit)
@@ -488,6 +563,12 @@ def run_whole_market_scan(
     # and keeps scan identity + recommendation projection atomic at the product
     # boundary. save_scan itself uses an atomic file replace.
     if save:
+        if _active_snapshot_id() != snapshot_at_start:
+            return MarketScanReport(
+                DATA_UNAVAILABLE, error_code="SCAN_SNAPSHOT_CHANGED",
+                error_message="Active Kite snapshot changed before publication.",
+                source_snapshot_id=snapshot_at_start,
+            )
         save_scan(payload)
         # Shadow learning must observe only the same fully-published canonical
         # scan readers can see. It never participates in publication success.

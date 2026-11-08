@@ -104,3 +104,70 @@ def test_old_book_snapshot_restores_with_new_audit_fields_defaulted():
     position = book.open[("legacy", "AAA")]
     assert position.requested_risk_pct == 0.0
     assert position.approved_risk_pct == 0.0
+
+
+def test_paper_risk_budget_shrinks_after_realized_losses():
+    book = PaperBook(capital=100_000)
+    book.realized_pnl = -50_000  # settled P&L; starting capital is unchanged
+    pos = book.open_position(
+        "strategy", "LOSS", 100, 90, 120, "2026-11-06", 5,
+    )
+    assert pos is not None
+    assert pos.qty == 50
+    assert pos.risk_amount == 500
+    assert pos.approved_risk_pct == 1.0
+    assert book.capital == 100_000
+
+
+def test_paper_risk_budget_grows_only_with_realized_gains():
+    book = PaperBook(capital=100_000)
+    book.realized_pnl = 50_000
+    pos = book.open_position(
+        "strategy", "WIN", 100, 90, 120, "2026-11-06", 5,
+    )
+    assert pos is not None
+    assert pos.qty == 150
+    assert pos.risk_amount == 1500
+
+
+def test_paper_risk_budget_never_counts_unrealized_marks_as_spendable():
+    book = PaperBook(capital=100_000)
+    book.open_position("old", "AAA", 100, 90, 120, "2026-11-05", 5)
+    assert book.equity({"AAA": (200, 210, 190, 200)}) > book.capital
+    pos = book.open_position("new", "BBB", 100, 90, 120, "2026-11-06", 5)
+    assert pos is not None
+    assert pos.qty == 100  # 1% of realized equity, not unrealized profit
+
+
+def test_paper_risk_budget_refuses_entries_when_equity_exhausted():
+    book = PaperBook(capital=100_000)
+    book.realized_pnl = -100_000
+    assert book.open_position("strategy", "AAA", 100, 90, 120, "2026-11-06", 5) is None
+    assert book.refusals[-1] == ("AAA", "non-positive realized paper equity")
+
+
+def test_paper_risk_budget_refuses_new_risk_after_drawdown_exceeds_portfolio_cap():
+    book = PaperBook(capital=100_000)
+    first = book.open_position("old", "AAA", 100, 90, 120, "2026-11-05", 5)
+    assert first is not None and first.risk_amount == 1000
+    book.realized_pnl = -80_000  # existing exposure consumes the 5% equity risk cap
+    assert book.open_position("new", "BBB", 100, 90, 120, "2026-11-06", 5) is None
+    assert book.refusals[-1] == ("BBB", "total open risk cap (5%) reached")
+
+
+def test_paper_risk_budget_refuses_unfunded_entry_after_large_realized_loss():
+    book = PaperBook(capital=100_000)
+    first = book.open_position("old", "AAA", 100, 90, 120, "2026-11-05", 5)
+    assert first is not None and first.qty == 100
+    book.realized_pnl = -91_000  # realized equity 9k, old shares already cost 10k
+    assert book.open_position("new", "BBB", 100, 90, 120, "2026-11-06", 5) is None
+    assert book.refusals[-1] == ("BBB", "insufficient uncommitted paper cash")
+
+
+def test_paper_book_restore_retains_realized_equity_sizing_contract():
+    book = PaperBook(capital=100_000)
+    book.realized_pnl = -50_000
+    restored = PaperBook()
+    assert restored.restore(book.snapshot(), strict=True)
+    pos = restored.open_position("strategy", "AAA", 100, 90, 120, "2026-11-06", 5)
+    assert pos is not None and pos.qty == 50

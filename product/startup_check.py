@@ -96,6 +96,16 @@ def _scan_evidence_status(
     if not scanned_at and not records:
         return "MISSING", "Scan artifact is empty"
 
+    # The official bhavcopy session can be current while this scan's Kite
+    # OHLCV snapshot has already been superseded. Never certify that as READY.
+    try:
+        from product.scan_store import scan_source_status
+        source_valid, source_reason = scan_source_status(payload)
+    except Exception as exc:
+        source_valid, source_reason = False, f"SNAPSHOT_PROBE_FAILED:{type(exc).__name__}"
+    if not source_valid:
+        return "STALE", f"Scan source integrity failed: {source_reason}"
+
     # Session identity is the authoritative market-freshness clock.  A Friday
     # scan remains current through a weekend/holiday even after six wall-clock
     # hours, while a scan for an older session is stale immediately once a newer

@@ -58,6 +58,7 @@ def test_required_mac_storage_preflight_attaches_before_runtime_use(tmp_path, mo
     assert kwargs["cwd"] == repo
     assert kwargs["env"]["QT_STORAGE_PREFLIGHT_REQUIRED"] == "1"
     assert kwargs["env"]["QT_STORAGE_PREFLIGHT_ATTACH"] == "1"
+    assert kwargs["env"]["QT_STORAGE_PREFLIGHT_PYTHON"] == HE.sys.executable
 
 
 def test_mac_storage_preflight_failure_is_fail_closed(tmp_path, monkeypatch):

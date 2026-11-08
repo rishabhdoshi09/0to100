@@ -19,6 +19,25 @@ def test_private_operator_mode_preserves_existing_mutation_workflow(monkeypatch)
     assert result.code == "PRIVATE_OPERATOR_MODE"
 
 
+def test_malformed_explicit_public_flag_never_grants_private_operator_access(monkeypatch):
+    monkeypatch.delenv("QT_OPERATOR_TOKEN", raising=False)
+    for invalid in ("tru", "enabled", "", "  ", "y", "maybe", "2"):
+        monkeypatch.setenv("QT_PUBLIC_READ_ONLY", invalid)
+        result = authorize_mutation("POST", {})
+        assert result.allowed is False, invalid
+        assert result.code == "PUBLIC_READ_ONLY", invalid
+        assert access_projection()["public_read_only"] is True
+
+
+def test_explicit_false_public_flag_preserves_private_local_workflow(monkeypatch):
+    monkeypatch.delenv("QT_OPERATOR_TOKEN", raising=False)
+    for disabled in ("0", "false", "no", "off", " FALSE "):
+        monkeypatch.setenv("QT_PUBLIC_READ_ONLY", disabled)
+        result = authorize_mutation("POST", {})
+        assert result.allowed is True, disabled
+        assert result.code == "PRIVATE_OPERATOR_MODE", disabled
+
+
 def test_public_mode_without_token_is_strictly_read_only(monkeypatch):
     monkeypatch.setenv("QT_PUBLIC_READ_ONLY", "1")
     monkeypatch.delenv("QT_OPERATOR_TOKEN", raising=False)
@@ -191,3 +210,92 @@ def test_private_market_reports_get_keeps_persistence(monkeypatch):
 
     assert seen["persist_today"] is True
     assert payload["load_note"] == "private default"
+
+
+def test_private_mode_rejects_cross_site_browser_mutation(monkeypatch):
+    """CORS only hides the response; a form/text-plain POST from any page the
+    operator has open is still delivered to the loopback API and executed."""
+    monkeypatch.delenv("QT_PUBLIC_READ_ONLY", raising=False)
+    monkeypatch.delenv("QT_OPERATOR_TOKEN", raising=False)
+
+    for headers in (
+        {"origin": "https://evil.example"},
+        {"origin": "http://rebind.attacker.example:8765"},
+        {"origin": "null"},
+        {"origin": "http://127.0.0.1:3000", "sec-fetch-site": "same-site"},
+        {"sec-fetch-site": "cross-site"},
+    ):
+        result = authorize_mutation("POST", headers)
+        assert result.allowed is False, headers
+        assert result.code == "CROSS_SITE_MUTATION"
+
+
+def test_desk_origin_and_non_browser_clients_keep_private_workflow(monkeypatch):
+    monkeypatch.delenv("QT_PUBLIC_READ_ONLY", raising=False)
+    monkeypatch.delenv("QT_OPERATOR_TOKEN", raising=False)
+
+    for headers in (
+        {},
+        {"origin": "http://127.0.0.1:5173", "sec-fetch-site": "same-origin"},
+        {"origin": "http://localhost:5173"},
+        {"origin": "http://127.0.0.1:5173", "sec-fetch-site": "same-site"},
+        {"sec-fetch-site": "none"},
+    ):
+        result = authorize_mutation("POST", headers)
+        assert result.allowed is True, headers
+        assert result.code == "PRIVATE_OPERATOR_MODE"
+    assert authorize_mutation("GET", {"origin": "https://evil.example"}).allowed is True
+
+
+def test_operator_token_authorizes_a_non_desk_origin(monkeypatch):
+    monkeypatch.setenv("QT_PUBLIC_READ_ONLY", "1")
+    monkeypatch.setenv("QT_OPERATOR_TOKEN", "correct-horse-battery-staple")
+    ok = authorize_mutation("POST", {
+        "origin": "https://desk.operator.example",
+        "authorization": "Bearer correct-horse-battery-staple",
+    })
+    assert ok.allowed is True
+    assert ok.code == "OPERATOR_AUTHORIZED"
+    assert authorize_mutation(
+        "POST", {"origin": "https://desk.operator.example"},
+    ).allowed is False
+
+
+def test_extra_desk_origins_are_explicit_opt_in(monkeypatch):
+    monkeypatch.delenv("QT_PUBLIC_READ_ONLY", raising=False)
+    monkeypatch.setenv("QT_DESK_ORIGINS", "http://127.0.0.1:4173, http://localhost:4173/")
+    assert authorize_mutation("POST", {"origin": "http://127.0.0.1:4173"}).allowed is True
+    assert authorize_mutation("POST", {"origin": "http://localhost:4173"}).allowed is True
+    assert authorize_mutation("POST", {"origin": "https://evil.example"}).allowed is False
+
+
+def test_cross_site_control_post_never_reaches_route(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.delenv("QT_PUBLIC_READ_ONLY", raising=False)
+    monkeypatch.delenv("QT_OPERATOR_TOKEN", raising=False)
+    client = TestClient(terminal_api.app, base_url="http://127.0.0.1:8765")
+    response = client.post(
+        "/api/controls/RESUME_NEW_PAPER_ENTRIES",
+        headers={"Origin": "https://evil.example", "Content-Type": "text/plain"},
+        content="x",
+    )
+    assert response.status_code == 403
+    assert response.json()["code"] == "CROSS_SITE_MUTATION"
+
+
+def test_cross_site_refusal_reports_true_access_mode(monkeypatch):
+    from fastapi.testclient import TestClient
+    import report_api
+
+    monkeypatch.delenv("QT_PUBLIC_READ_ONLY", raising=False)
+    for app, path in ((terminal_api.app, "/api/controls/RUN_CYCLE_NOW"), (report_api.app, "/anything")):
+        response = TestClient(app, base_url="http://127.0.0.1:8765").post(
+            path, headers={"Origin": "https://evil.example"},
+        )
+        assert response.status_code == 403
+        assert response.json() == {
+            "detail": "Mutations are accepted only from the QuantTerm desk origin.",
+            "code": "CROSS_SITE_MUTATION",
+            "public_read_only": False,
+        }

@@ -44,9 +44,26 @@ CREATE TABLE IF NOT EXISTS trades (
     entry_order_id TEXT,
     gtt_id TEXT,
     status TEXT,
-    note TEXT
+    note TEXT,
+    exit_price REAL,
+    orig_stop REAL,
+    signal_price REAL
 );
 """
+
+# Columns added after the first release; older journals are upgraded in place.
+_ADDED_COLUMNS = ("exit_price REAL", "orig_stop REAL", "signal_price REAL")
+
+
+def ensure_schema(conn) -> None:
+    """Create the trades table and add any missing later columns. Additive and
+    idempotent: rows and existing columns are never touched."""
+    conn.execute(_DDL)
+    have = {str(row[1]) for row in conn.execute("PRAGMA table_info(trades)").fetchall()}
+    for col in _ADDED_COLUMNS:
+        if col.split()[0] not in have:
+            conn.execute(f"ALTER TABLE trades ADD COLUMN {col}")
+    conn.commit()
 
 
 def connect():
@@ -65,12 +82,12 @@ def connect():
     return conn
 
 
-def _journal(row: dict) -> None:
+def _journal(row: dict) -> bool:
     try:
         with _db_lock:
             _DB.parent.mkdir(parents=True, exist_ok=True)
             conn = connect()
-            conn.execute(_DDL)
+            ensure_schema(conn)
             conn.execute(
                 """INSERT INTO trades (placed_at, mode, symbol, qty, entry_type,
                    entry_price, stop_price, target_price, product,
@@ -84,8 +101,10 @@ def _journal(row: dict) -> None:
                  row.get("status"), row.get("note", "")))
             conn.commit()
             conn.close()
+        return True
     except Exception as exc:
         log.warning("trade_journal_failed", error=str(exc))
+        return False
 
 
 def _validate(symbol: str, qty: int, entry_price: float,
@@ -133,10 +152,14 @@ def place_trade(symbol: str, qty: int, entry_type: str, entry_price: float,
 
     if paper or not kite_ready():
         # Existing compatibility behaviour. The response explicitly identifies PAPER.
-        _journal({"mode": "PAPER", "symbol": symbol, "qty": qty,
-                  "entry_type": entry_type, "entry_price": entry_price,
-                  "stop_price": stop, "target_price": target,
-                  "product": product, "status": "PAPER_OPEN", "note": note})
+        recorded = _journal({"mode": "PAPER", "symbol": symbol, "qty": qty,
+                             "entry_type": entry_type, "entry_price": entry_price,
+                             "stop_price": stop, "target_price": target,
+                             "product": product, "status": "PAPER_OPEN", "note": note})
+        if not recorded:
+            return {"ok": False, "mode": "PAPER", "fallback": not paper,
+                    "message": f"Paper trade not recorded: the trade journal could not be "
+                               f"written, so no {symbol} position exists."}
         log.info("paper_trade_placed", symbol=symbol, qty=qty)
         return {"ok": True, "mode": "PAPER", "fallback": not paper,
                 "message": f"📝 Paper trade recorded: {qty} × {symbol} @ "

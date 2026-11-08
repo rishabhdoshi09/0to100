@@ -80,6 +80,45 @@ FS_PERSONALITY="$(printf '%s\n' "$DISK_INFO" | awk -F: '/^[[:space:]]*File Syste
   "unexpected mount point: expected '$STORAGE_MOUNT', got '${MOUNT_POINT:-unknown}'"
 [[ "$FS_PERSONALITY" == "APFS" ]] || fail \
   "runtime volume must be APFS, got '${FS_PERSONALITY:-unknown}'"
+
+# A mount path and APFS label alone do not identify the backing image.
+# On a shared APFS volume name, Finder/Disk Arbitration may mount a restored
+# clone from a different sparsebundle at the expected mount point. Fail closed
+# unless DiskImages itself binds that mount point to the configured image.
+# Apple's hdiutil -plist is machine-readable and avoids fragile text parsing.
+PREFLIGHT_PYTHON="${QT_STORAGE_PREFLIGHT_PYTHON:-python3}"
+command -v "$PREFLIGHT_PYTHON" >/dev/null 2>&1 || fail \
+  "Python is required to verify sparsebundle mount identity"
+IMAGE_INFO="$(hdiutil info -plist 2>/dev/null)" || fail \
+  "could not inspect attached sparsebundle identities"
+IMAGE_BINDING="$(
+  printf '%s' "$IMAGE_INFO" | "$PREFLIGHT_PYTHON" -c '
+import os
+import plistlib
+import sys
+
+expected = os.path.realpath(sys.argv[1])
+mount = os.path.realpath(sys.argv[2])
+try:
+    images = plistlib.loads(sys.stdin.buffer.read()).get("images") or []
+    matched = []
+    for item in images:
+        entities = item.get("system-entities") or []
+        if any(
+            os.path.realpath(ent["mount-point"]) == mount
+            for ent in entities
+            if ent.get("mount-point")
+        ):
+            matched.append(os.path.realpath(str(item.get("image-path") or "")))
+    if len(matched) != 1 or matched[0] != expected:
+        raise ValueError("mounted APFS volume is not from configured sparsebundle")
+    print("verified")
+except Exception as exc:
+    print(str(exc), file=sys.stderr)
+    sys.exit(78)
+' "$SPARSEBUNDLE" "$STORAGE_MOUNT"
+)" || fail "mounted APFS volume backing image identity is missing or mismatched"
+[[ "$IMAGE_BINDING" == "verified" ]] || fail "unexpected sparsebundle binding result"
 [[ -d "$EXPECTED_RUNTIME" ]] || fail "expected runtime directory is missing: $EXPECTED_RUNTIME"
 [[ -r "$EXPECTED_RUNTIME" ]] || fail "runtime directory is not readable: $EXPECTED_RUNTIME"
 [[ -w "$EXPECTED_RUNTIME" ]] || fail "runtime directory is not writable: $EXPECTED_RUNTIME"

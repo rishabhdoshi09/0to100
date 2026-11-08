@@ -61,7 +61,7 @@ _DEFAULTS = {
     "allocation": float(os.getenv("QT_US_PAPER_CAPITAL", "100000") or 100000),  # virtual USD paper pool
     "realized_pnl": 0.0,
     "cash_reserve_pct": 0.10,
-    "per_trade_cap_pct": 0.20,
+    "per_trade_cap_pct": 0.10,
     "risk_per_trade_pct": 0.01,
     "max_open_positions": 3,
     "max_trades_per_day": 4,
@@ -155,6 +155,7 @@ def _notify(msg: str) -> None:
 
 def _reject_category(reason: str) -> str:
     r = (reason or "").lower()
+    if "open risk" in r:          return "total open-risk cap (5%)"
     if "window" in r:             return "time window (US band)"
     if "daily trade limit" in r:  return "daily limit hit (max/day)"
     if "max open positions" in r: return "position limit full"
@@ -198,7 +199,7 @@ def reject_funnel() -> dict:
 
 # ── Journal (shared DB, US_AUTOPILOT tag) ─────────────────────────────────────
 
-def _trades(statuses: tuple) -> list[dict]:
+def _trades(statuses: tuple, *, strict: bool = False) -> list[dict]:
     conn = None
     try:
         from execution.trade_executor import _DB, connect as _te_connect
@@ -211,6 +212,8 @@ def _trades(statuses: tuple) -> list[dict]:
         rows = conn.execute(q, (f"%{TAG}%", *statuses)).fetchall()
         return [dict(r) for r in rows]
     except Exception:
+        if strict:
+            raise
         return []
     finally:
         if conn is not None:
@@ -232,7 +235,7 @@ def _update(trade_id: int, sets: str, params: tuple) -> None:
         conn.execute(f"UPDATE trades SET {sets} WHERE id=?", (*params, trade_id))
         conn.commit()
     except Exception as exc:
-        log.debug("us_autopilot_update_failed", error=str(exc))
+        log.warning("us_autopilot_update_failed", trade_id=trade_id, error=str(exc))
     finally:
         if conn is not None:
             try:
@@ -261,7 +264,8 @@ def get_status() -> dict:
 def set_config(**kwargs) -> None:
     clamps = {
         "allocation": (0.0, 1e9), "cash_reserve_pct": (0.05, 0.50),
-        "per_trade_cap_pct": (0.05, 0.50), "risk_per_trade_pct": (0.0025, 0.02),
+        "per_trade_cap_pct": (0.05, MAX_PER_NAME_PCT),
+        "risk_per_trade_pct": (0.0025, MAX_RISK_PER_TRADE_PCT),
         "max_open_positions": (1, 10), "max_trades_per_day": (1, 15),
         "daily_loss_limit_pct": (0.01, 0.10), "min_score": (40.0, 95.0),
         "min_conviction": (0.0, 90.0), "target_pct": (1.0, 15.0),
@@ -393,13 +397,23 @@ def _conviction_mult(score: float, conviction: float) -> float:
     return min(1.5, max(0.5, m))
 
 
+MAX_RISK_PER_TRADE_PCT = 0.01
+MAX_PER_NAME_PCT = 0.10
+MAX_TOTAL_OPEN_RISK_PCT = 0.05
+
+
 def _size(entry: float, stop: float, mult: float) -> int:
+    """1% of pool at risk (conviction may only scale it DOWN), 10% of pool
+    per name. Persisted config above those ceilings is clamped here."""
     st = get_status()
     pool, available = st["pool"], st["available"]
     if pool <= 0 or available <= 0 or entry <= stop or entry <= 0:
         return 0
-    risk_qty = int((pool * _load()["risk_per_trade_pct"] * mult) / (entry - stop))
-    cap_qty = int((pool * _load()["per_trade_cap_pct"]) / entry)
+    s = _load()
+    risk_pct = min(float(s["risk_per_trade_pct"]), MAX_RISK_PER_TRADE_PCT) * min(float(mult), 1.0)
+    cap_pct = min(float(s["per_trade_cap_pct"]), MAX_PER_NAME_PCT)
+    risk_qty = int((pool * risk_pct) / (entry - stop))
+    cap_qty = int((pool * cap_pct) / entry)
     avail_qty = int(available / entry)
     return max(0, min(risk_qty, cap_qty, avail_qty))
 
@@ -514,6 +528,23 @@ def _consider_locked(symbol, entry, stop, score, conviction, source, meta=None) 
             _log_activity(f"SKIP {symbol}: {reason}")
             _note_reject("pool/1-share")
             return reject(reason)
+        try:
+            open_risk = sum(
+                int(t["qty"] or 0) * max(0.0, float(t["entry_price"] or 0) - float(t["stop_price"] or 0))
+                for t in _trades(_OPEN, strict=True)
+            )
+        except Exception as exc:
+            reason = f"open-risk unknown (US paper book unreadable: {type(exc).__name__})"
+            _log_activity(f"SKIP {symbol}: {reason}")
+            _note_reject("open risk cap")
+            return reject(reason)
+        pool = float(get_status()["pool"])
+        if open_risk + qty * (entry - stop) > pool * MAX_TOTAL_OPEN_RISK_PCT + 1e-6:
+            reason = (f"total open risk ${open_risk + qty * (entry - stop):,.0f} would exceed "
+                      f"{MAX_TOTAL_OPEN_RISK_PCT:.0%} of pool")
+            _log_activity(f"SKIP {symbol}: {reason}")
+            _note_reject("open risk cap")
+            return reject(reason)
 
         from execution.trade_executor import place_trade
         res = place_trade(symbol=symbol, qty=qty, entry_type="MARKET",
@@ -622,6 +653,17 @@ def _close_positions() -> None:
         live = us_live_prices(sorted({t["symbol"] for t in opens}))
     except Exception:
         return
+    conn = None
+    try:
+        from execution.trade_executor import connect as _te_connect, ensure_schema
+        conn = _te_connect()
+        ensure_schema(conn)
+    except Exception as exc:
+        log.warning("us_autopilot_schema_upgrade_failed", error=str(exc))
+        return
+    finally:
+        if conn is not None:
+            conn.close()
     s = _load()
     trig = 1 + s.get("breakeven_trigger_pct", 2.0) / 100
     max_days = int(s.get("max_hold_days", 5))
@@ -634,8 +676,9 @@ def _close_positions() -> None:
         stop = float(t["stop_price"] or 0)
         target = float(t["target_price"] or 0)
         if target and px >= target:
+            # A resting target fills AT the target; a later, higher poll is not the fill.
             _update(t["id"], "status=?, exit_price=?, note=note||?",
-                    ("PAPER_WIN", px, f" | target ${px:,.2f}"))
+                    ("PAPER_WIN", target, f" | target ${target:,.2f} (seen ${px:,.2f})"))
             continue
         if stop and px <= stop:
             _update(t["id"], "status=?, exit_price=?, note=note||?",

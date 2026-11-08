@@ -1,12 +1,12 @@
 """
 Bulk OHLCV prefetcher under QuantTerm's Kite-authoritative data policy.
 
-When Kite credentials are available:
+When a Kite snapshot is active or broker credentials are available:
   Primary : the immutable active Kite snapshot already produced by DATA_REFRESH.
-  Repair  : bounded Kite historical/day calls for only snapshot gaps.
+  Repair  : bounded Kite historical/day calls when broker credentials permit.
   Rule    : NSE bhavcopy/Yahoo never silently replace Kite-covered OHLCV.
 
-When Kite is unavailable:
+When neither an active Kite snapshot nor broker credentials is available:
   Fallback: official NSE bhavcopy, then Yahoo only as last-resort continuity.
 
 Usage:
@@ -19,6 +19,8 @@ from __future__ import annotations
 import threading
 import time
 import json
+from functools import lru_cache
+from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Any, Callable, Optional
 
@@ -38,12 +40,39 @@ _kite_load_lock = threading.Lock()
 _KITE_LOAD_CHUNK_ROWS = 100_000
 
 
+@lru_cache(maxsize=32)
+def _snapshot_is_kite(root: str, snapshot_id: str) -> bool:
+    """Immutable manifest provenance: read once per content-addressed identity.
+
+    A present but unreadable active snapshot must *block* the broker-data
+    lane, not silently make NSE/Yahoo a substitute for claimed Kite bars.
+    Verification of manifest checksum and actual bars happens at adoption.
+    """
+    try:
+        manifest = json.loads(
+            (Path(root) / snapshot_id / "manifest.json").read_text(encoding="utf-8")
+        )
+        return str(manifest.get("source") or "").lower() == "kite"
+    except Exception:
+        return True  # Fail closed: corrupt active snapshot cannot authorize fallback.
+
+
 def _kite_authoritative() -> bool:
+    # A saved, verified Kite snapshot remains the OHLCV authority after the
+    # broker token is no longer available. Credentials gate *new broker calls*,
+    # not the ability to read already committed immutable Kite data.
     try:
         from data.kite_client import kite_credentials_available
-        return bool(kite_credentials_available())
+        if kite_credentials_available():
+            return True
     except Exception:
-        return False
+        pass
+    store, snapshot_id = _current_kite_snapshot()
+    return bool(
+        store is not None
+        and snapshot_id
+        and _snapshot_is_kite(str(store.root), snapshot_id)
+    )
 
 
 def _current_kite_snapshot():

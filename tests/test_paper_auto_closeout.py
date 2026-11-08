@@ -251,7 +251,13 @@ class TestHeadlessSmoke:
             b.strategy_registry = StrategyRegistry().build([_spec("MOM", "cross_sectional_momentum")])
             return b
 
-        b1 = mk(); b1.run_intelligence_cycle_day(date="d298")
+        b1 = mk()
+        # Persist the explicit operator preference before creating a durable
+        # book. An absent preference alongside historical state must now fail
+        # closed rather than silently grant permission after a restart.
+        b1.enable_paper_auto()
+        assert (tmp_path / "p.json").exists()
+        b1.run_intelligence_cycle_day(date="d298")
         opened = len(b1.intel_book.open)
         assert opened == 1
         b2 = mk()                                             # restart — no re-approval

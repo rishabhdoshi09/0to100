@@ -21,7 +21,13 @@ def _open_position_count() -> int | None:
     try:
         from research.auto_research.scheduler import get_brain
 
-        book = get_brain().intel_book
+        brain = get_brain()
+        # A brain that could not restore (or reach) its persisted book holds
+        # an empty in-memory book that says nothing about real exposure.
+        # "0 open" from it would turn a recovery failure into a quiet no-op.
+        if getattr(brain, "intel_book_recovery_error", ""):
+            return None
+        book = brain.intel_book
         opened = getattr(book, "open", None)
         if opened is None:
             return None

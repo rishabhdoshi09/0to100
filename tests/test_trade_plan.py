@@ -66,6 +66,16 @@ def test_open_risk_before_after_and_danger_verdict():
     assert p.heat_warnings == ("open risk above 5%",)
 
 
+def test_unreadable_account_book_is_unknown_not_ok():
+    def _broken(_extra):
+        raise RuntimeError("intel_book.json unreadable")
+    p = TP.build_trade_plan("ACME", 100, 95, 120, capital=100_000, sizer=_fake_sizer,
+                            portfolio_report=_broken)
+    assert p.heat_verdict == "UNKNOWN"
+    assert p.open_risk_pct_before is None and p.open_risk_pct_after is None
+    assert "could not be read" in p.summary
+
+
 # ── correlation: new bet vs adding to an existing one ────────────────────────────
 def test_correlation_adds_to_existing_bet():
     p = TP.build_trade_plan("HDFCBANK", 100, 95, 120, capital=100_000, sizer=_fake_sizer,

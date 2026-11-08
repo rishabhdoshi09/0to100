@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -29,7 +30,7 @@ EXPECTED_EXTERNAL_TOKENS = (
     "LOGIN_REQUIRED",
     "BROKER_LOGIN_REQUIRED",
 )
-EXPECTED_EXTERNAL_FEATURES = frozenset({"Data refresh", "F&O refresh"})
+EXPECTED_EXTERNAL_FEATURES = frozenset({"Data refresh", "F&O refresh", "Market Report"})
 EXPLICIT_BLOCKER_CODES = frozenset({
     "FNO_UNIVERSE_UNAVAILABLE",
     "BROKER_LOGIN_REQUIRED",
@@ -100,7 +101,11 @@ def collect_nested_blockers(result: Mapping[str, Any] | None) -> list[str]:
     missing = [str(item) for item in _as_list(payload.get("missing_lanes")) if str(item).strip()]
     for lane in missing:
         token = f"missing_lanes={lane}"
-        if token not in reasons and not any(lane in item for item in reasons):
+        # Preserve the exact missing-lane field even when a nested dependency
+        # path happens to contain that word (e.g. regime_dependency). Without
+        # this, strict acceptance cannot distinguish only-regime missing from
+        # regime + market_scan missing.
+        if token not in reasons:
             reasons.append(token)
     out: list[str] = []
     for item in reasons:
@@ -178,6 +183,20 @@ def is_expected_external_blocker(row: Mapping[str, Any]) -> bool:
         return False
     if status not in {"DEGRADED", "BLOCKED"}:
         return False
+    if feature == "Market Report":
+        # Isolated GitHub runners have no broker credentials and can lack a
+        # reachable public index feed. Production must always HOLD if regime
+        # data is unavailable: a missing live stance is not launch-ready.
+        # An explicit CI-only exception is not a claimed feature PASS.
+        return (
+            os.environ.get("GITHUB_ACTIONS", "").lower() == "true"
+            and status == "DEGRADED"
+            and "NIFTY_INDEX_DATA_UNAVAILABLE" in reason
+            and "MISSING_LANES=REGIME" in reason
+            and "MISSING_LANES=NEWS" not in reason
+            and "MISSING_LANES=MARKET_SCAN" not in reason
+            and "MISSING_LANES=DESK_WRAP" not in reason
+        )
     return any(token in reason for token in EXPECTED_EXTERNAL_TOKENS)
 
 

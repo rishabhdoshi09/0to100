@@ -121,6 +121,26 @@ def prices_kind_due() -> str | None:
 
 def scan_is_fresh() -> bool:
     path = logs_dir() / "product" / "latest_momentum_scan.json"
+    # Kite-backed scans are independently authoritative. The loader already
+    # verifies that their source id, bar date and source label match the active
+    # immutable snapshot. A lagging or unavailable public NSE bhavcopy must
+    # not erase valid Kite discovery/Decision Simulation authority. Recheck
+    # the exchange calendar on every request so yesterday's verified snapshot
+    # cannot remain fresh indefinitely.
+    try:
+        from product.scan_store import load_scan
+        scan = dict(load_scan(path) or {})
+        provenance = dict(scan.get("provenance") or {})
+        if str(provenance.get("price_source") or "") == "kite_snapshot":
+            if not provenance.get("data_current"):
+                return False
+            latest = str(provenance.get("price_data_as_of") or "")[:10]
+            if not latest:
+                return False
+            from research.intelligence.data.nse_calendar import snapshot_freshness
+            return bool(snapshot_freshness(latest).get("fresh"))
+    except Exception:
+        return False
     try:
         from data.bhavcopy_runtime import official_history_freshness
 

@@ -920,6 +920,18 @@ class MarketOperationsWorker:
         pulse = dict(workspace.get("today_pulse") or {})
         wrap_n = len(list((workspace.get("desk_note") or {}).get("daily_wrap") or []))
         sourced = int((workspace.get("desk_note") or {}).get("wrap_sourced") or 0)
+        missing_lanes = list(workspace.get("missing_lanes") or [])
+        market_ctx = dict(workspace.get("market") or {})
+        regime_reason = str(market_ctx.get("unavailable_reason") or "")
+        # This is a *blocked* external feed, not a successful regime estimate.
+        # Only a measured absence of the canonical NIFTY index series can
+        # qualify. Internal exceptions and generic missing regime remain FAIL.
+        nifty_unavailable = (
+            missing_lanes == ["regime"]
+            and market_ctx.get("available") is False
+            and market_ctx.get("data_source") == "unavailable"
+            and "lacked a usable Nifty series" in regime_reason
+        )
         return {
             "as_of_ist": workspace.get("as_of_ist") or "",
             "takeaways": len(list(pulse.get("takeaways") or [])),
@@ -928,7 +940,12 @@ class MarketOperationsWorker:
             "wrap_sourced": sourced,
             "scan_rows": int((workspace.get("scan_highlights") or {}).get("row_count") or 0),
             "needs_refresh": bool(workspace.get("needs_refresh")),
-            "missing_lanes": list(workspace.get("missing_lanes") or []),
+            "missing_lanes": missing_lanes,
+            "regime_dependency": {
+                "blocked": True,
+                "code": "NIFTY_INDEX_DATA_UNAVAILABLE",
+                "error": regime_reason,
+            } if nifty_unavailable else {},
             "news": news_result,
         }
 
@@ -1191,7 +1208,7 @@ class MarketOperationsWorker:
         scope = str(payload.get("scope") or os.environ.get("QT_US_SCAN_SCOPE") or "S&P 500").strip()
         index = None if scope.lower() in {"", "all"} else scope
         self._progress(operation_id, "SCANNING_US", f"Scanning {scope} with the canonical US setup engine")
-        from scan.us_scanner import scan_us, persisted_us_scan
+        from scan.us_scanner import last_paper_feed_error, persisted_us_scan, scan_us
 
         previous = persisted_us_scan().get("scanned_at")
         rows = list(scan_us(index=index) or [])
@@ -1206,7 +1223,7 @@ class MarketOperationsWorker:
         except Exception as exc:
             paper = {"error": str(exc)[:200]}
             report = {}
-        return {
+        result = {
             "market": "US",
             "scope": str(persisted.get("scope") or scope),
             "scanned_at": str(persisted.get("scanned_at") or ""),
@@ -1224,6 +1241,15 @@ class MarketOperationsWorker:
             "paper_only": True,
             "live_locked": True,
         }
+        feed_error = last_paper_feed_error()
+        if feed_error:
+            result["paper_feed_error"] = feed_error
+            raise OperationBlocked(
+                "US scan persisted, but the US paper review/entry step failed",
+                code="US_PAPER_FEED_FAILED",
+                result=result,
+            )
+        return result
 
     def _execute(self, operation: dict[str, Any]) -> dict[str, Any]:
         kind = str(operation.get("kind", ""))

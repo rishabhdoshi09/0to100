@@ -51,3 +51,35 @@ def test_guard_fails_closed_when_position_state_unknown(monkeypatch):
     marker = object()
 
     assert OG.guarded_paper_cycle(_Ctx(), original_handler=lambda _ctx: marker) is marker
+
+
+def test_unrestored_brain_book_is_unknown_not_empty(monkeypatch):
+    """A brain whose persisted book failed to restore (or whose runtime root is
+    gone) holds an empty in-memory book. That emptiness is not evidence of zero
+    exposure, so the fast path must not swallow the cycle as a no-op."""
+    import research.auto_research.scheduler as scheduler
+
+    class _Brain:
+        intel_book_recovery_error = "RUNTIME_PATHS_UNAVAILABLE: detached"
+
+        class intel_book:
+            open: dict = {}
+
+    monkeypatch.setattr(scheduler, "get_brain", lambda: _Brain())
+    assert OG._open_position_count() is None
+
+    marker = object()
+    assert OG.guarded_paper_cycle(_Ctx(), original_handler=lambda _ctx: marker) is marker
+
+
+def test_restored_brain_reports_real_open_count(monkeypatch):
+    import research.auto_research.scheduler as scheduler
+
+    class _Brain:
+        intel_book_recovery_error = ""
+
+        class intel_book:
+            open = {("ensemble", "TCS"): object()}
+
+    monkeypatch.setattr(scheduler, "get_brain", lambda: _Brain())
+    assert OG._open_position_count() == 1
