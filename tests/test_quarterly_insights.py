@@ -145,7 +145,7 @@ def test_declining_profit_and_negative_cash_flow_create_counter_case():
         row("2026-09-30", "2026-11-01", {"revenue": 150, "pat": -5, "cfo": -20}),
         row("2025-09-30", "2025-11-01", {"revenue": 100, "pat": 10}),
     ]
-    out = compose_quarterly_insights("ABC", as_of="2026-11-08", rows=data)
+    out = compose_quarterly_insights("ABC", as_of="2026-11-08", rows=data, framework_id="industrials")
     assert {x["id"] for x in out["anti_thesis_evidence"]} >= {
         "pat_yoy", "negative_operating_cash_flow"
     }
@@ -260,3 +260,31 @@ def test_conflicting_xbrl_and_exchange_report_periods_are_withheld():
     out = compose_quarterly_insights("ABC", as_of="2026-11-08", rows=data)
     assert out["latest_period_end"] == "2025-09-30"
     assert "NON_QUARTER_OR_UNVERIFIED_REPORTING_PERIOD" in out["unknowns"]
+
+
+def test_unclassified_company_does_not_receive_manufacturing_risk_flags():
+    rows = [
+        row("2026-09-30", "2026-11-01",
+            {"revenue": 120, "pat": 10, "bs_total_debt": 300, "cfo": -20, "trade_receivables": 90}),
+        row("2025-09-30", "2025-11-01",
+            {"revenue": 100, "pat": 9, "bs_total_debt": 100, "trade_receivables": 20}),
+    ]
+    out = compose_quarterly_insights("ABC", as_of="2026-11-08", rows=rows)
+    ids = {x["id"] for x in out["anti_thesis_evidence"]}
+    assert not ids.intersection({
+        "debt_growth", "negative_operating_cash_flow", "receivables_outpace_revenue"
+    })
+    assert "SECTOR_SPECIFIC_RISK_FRAMEWORK_NOT_VERIFIED" in out["unknowns"]
+    assert out["decision"] == "RESEARCH_ONLY"
+
+
+def test_specialty_lenders_remain_exempt_from_generic_debt_and_cash_rules():
+    rows = [
+        row("2026-09-30", "2026-11-01", {"revenue": 120, "pat": 10, "bs_total_debt": 300, "cfo": -25}),
+        row("2025-09-30", "2025-11-01", {"revenue": 100, "pat": 9, "bs_total_debt": 100}),
+    ]
+    for sector in ("nbfc_gold", "nbfc_housing", "life_insurance", "bank", "generic", "unrecognized_framework"):
+        out = compose_quarterly_insights("ABC", as_of="2026-11-08", rows=rows, framework_id=sector)
+        assert not {x["id"] for x in out["anti_thesis_evidence"]}.intersection({
+            "debt_growth", "negative_operating_cash_flow"
+        })
