@@ -109,6 +109,10 @@ def first_touch_path(
     if since is None:
         return None
     try:
+        import pandas as pd
+        # The decision-day bar predates (EOD) or straddles (intraday) the
+        # signal, so like the walk-forward backtest the path starts next session.
+        since = since[since.index > pd.Timestamp(str(opened_at or "")[:10])]
         highs = since["high"].to_numpy(dtype=float)
         lows = since["low"].to_numpy(dtype=float)
         closes = since["close"].to_numpy(dtype=float)

@@ -99,6 +99,40 @@ def test_first_touch_stays_open_inside_horizon(monkeypatch):
     assert first_touch_path("HAL", "2026-08-03", 100.0, 96.0, 106.0) is None
 
 
+def test_first_touch_ignores_the_decision_day_bar(monkeypatch):
+    """The decision day's full OHLC is known before (EOD scan) or partly before
+    (intraday) the signal was logged; the walk-forward backtest starts at the
+    NEXT session, and so must the live outcome."""
+    from core.outcome_resolver import first_touch_path
+
+    idx = pd.bdate_range("2026-08-03", periods=3)
+    stop_on_decision_bar = pd.DataFrame(
+        {"high": [107, 101, 102], "low": [95, 99, 100], "close": [100, 100, 101]},
+        index=idx,
+    )
+    monkeypatch.setattr("data.bhavcopy_store.get_ohlcv", lambda s: stop_on_decision_bar)
+    assert first_touch_path("HAL", "2026-08-03", 100.0, 96.0, 106.0) is None
+
+    target_on_decision_bar = pd.DataFrame(
+        {"high": [108, 101, 102], "low": [99, 99, 100], "close": [107, 100, 101]},
+        index=idx,
+    )
+    monkeypatch.setattr("data.bhavcopy_store.get_ohlcv", lambda s: target_on_decision_bar)
+    assert first_touch_path("HAL", "2026-08-03", 100.0, 96.0, 106.0) is None
+
+
+def test_first_touch_horizon_counts_sessions_after_the_decision(monkeypatch):
+    from core.outcome_resolver import first_touch_path
+
+    flat = [100.0] * 4
+    idx = pd.bdate_range("2026-08-03", periods=4)
+    df = pd.DataFrame({"high": [101.0] * 4, "low": [99.0] * 4, "close": flat}, index=idx)
+    monkeypatch.setattr("data.bhavcopy_store.get_ohlcv", lambda s: df)
+    assert first_touch_path("HAL", "2026-08-03", 100.0, 96.0, 106.0, horizon=4) is None
+    price, _pct, worked = first_touch_path("HAL", "2026-08-03", 100.0, 96.0, 106.0, horizon=3)
+    assert (price, worked) == (100.0, 1)
+
+
 def _wait_frame(highs, lows, closes, start="2026-08-03"):
     idx = pd.bdate_range(start, periods=len(closes))
     return pd.DataFrame({"high": highs, "low": lows, "close": closes}, index=idx)
