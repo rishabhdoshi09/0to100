@@ -125,3 +125,37 @@ def test_report_input_is_not_modified_and_document_prices_are_opt_in():
     assert before == base["kpis"][0]["snapshot"]
     assert brief["price_arithmetic"]["computed_to_target_pct"] == 54.86
     assert any(x["code"] == "RETURN_MISMATCH" for x in brief["price_arithmetic"]["issues"])
+
+
+def test_canonical_investigator_includes_brief_without_execution():
+    """The user's existing Investigate action must return the new projection."""
+    from datetime import datetime, timezone
+    from product.due_diligence.engine import build_due_diligence
+
+    raw = {
+        "available": True,
+        "fetched_at": "2026-11-05T08:00:00+00:00",
+        "freshness": "FRESH",
+        "data": {
+            "url": "https://www.screener.in/company/TESTIT/",
+            "about": "Test IT Ltd provides financial software services.",
+            "quarterly_results": [
+                {"row_label": "Sales+", "Sep 2025": 100, "Sep 2026": 132},
+                {"row_label": "Net Profit+", "Sep 2025": 10, "Sep 2026": 16},
+                {"row_label": "OPM %", "Sep 2025": 20, "Sep 2026": 24},
+            ],
+            "shareholding": [],
+            "cash_flow": [],
+        },
+    }
+    report = build_due_diligence(
+        "TESTIT", raw_fundamentals=raw, news=[],
+        scan_payload={"records": []},
+        long_term_payload={"records": []},
+        now=datetime(2026, 11, 8, 12, 0, tzinfo=timezone.utc),
+    )
+    assert report["engine"] == "StockResearchEngine"
+    assert report["places_orders"] is False
+    assert report["quarterly_brief"]["symbol"] == "TESTIT"
+    assert report["quarterly_brief"]["execution_authority"] is False
+    assert report["quarterly_brief"]["not_a_buy_sell_signal"] is True
