@@ -71,3 +71,46 @@ def test_hidden_forward_ledger_resolver_error_blocks_learning(monkeypatch):
     assert result.error_code == "OFFICIAL_SETTLEMENT_PARTIAL"
     assert result.unblocks == ()
     assert result.metadata["official_settlement"]["failed"][0]["decision_id"] == "d1"
+
+
+def _settled_with(**extra):
+    return J.JobResult(
+        JS.SUCCEEDED,
+        "outcomes resolved",
+        unblocks=("OUTCOMES_RESOLVED:2026-09-04",),
+        metadata={"status": "EOD_SETTLED",
+                  "official_settlement": {"n_settled": 1, "failed": []}, **extra},
+    )
+
+
+def test_failed_paper_learning_ingest_does_not_unblock_learning(monkeypatch):
+    base = _settled_with(paper_learning={"error": "OperationalError: database is locked"})
+    monkeypatch.setattr(OI, "_BASE_HANDLER", lambda _ctx: base)
+    monkeypatch.setattr(OI, "_unreported_forward_failures", lambda: [])
+
+    result = OI.strict_outcome_resolution(object())
+
+    assert result.status == JS.RETRYABLE_FAILED
+    assert result.error_code == "PAPER_LEARNING_INGEST_FAILED"
+    assert "database is locked" in result.error_message
+    assert result.unblocks == ()
+
+
+def test_failed_forward_soak_settlement_does_not_unblock_learning(monkeypatch):
+    base = _settled_with(paper_learning={"ingested": 2},
+                         forward_soak={"error": "ValueError: corrupt soak ledger"})
+    monkeypatch.setattr(OI, "_BASE_HANDLER", lambda _ctx: base)
+    monkeypatch.setattr(OI, "_unreported_forward_failures", lambda: [])
+
+    result = OI.strict_outcome_resolution(object())
+
+    assert result.status == JS.RETRYABLE_FAILED
+    assert result.error_code == "PAPER_LEARNING_INGEST_FAILED"
+    assert "corrupt soak ledger" in result.error_message
+
+
+def test_clean_paper_learning_and_soak_preserve_success(monkeypatch):
+    base = _settled_with(paper_learning={"ingested": 2}, forward_soak={"settled": 1})
+    monkeypatch.setattr(OI, "_BASE_HANDLER", lambda _ctx: base)
+    monkeypatch.setattr(OI, "_unreported_forward_failures", lambda: [])
+    assert OI.strict_outcome_resolution(object()) is base
