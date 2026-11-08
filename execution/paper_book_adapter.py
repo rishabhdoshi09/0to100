@@ -26,8 +26,8 @@ class InstitutionalPaperBookAdapter:
         )
         return result.position if result.opened else None
 
-    def mark(self, bars: dict, date: str):
-        closed = self._book.mark(bars, date)
+    def mark(self, bars: dict, date: str, *, allow_entry_session: bool = True):
+        closed = self._book.mark(bars, date, allow_entry_session=allow_entry_session)
         for trade in closed:
             sync_paper_close(self._pipeline, trade)
         return closed
