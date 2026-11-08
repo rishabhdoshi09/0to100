@@ -557,8 +557,12 @@ def evaluate_candidate(
             )
 
         from research.intelligence.runtime.position_sizing import size_long_cash
+        risk_capital = getattr(book, "risk_capital", None)
         sizing = size_long_cash(
-            capital=float(getattr(book, "capital", 0.0) or 0.0),
+            capital=float(
+                risk_capital() if callable(risk_capital)
+                else getattr(book, "capital", 0.0) or 0.0
+            ),
             entry=entry,
             stop=stop,
             requested_risk_pct=DEFAULT_RISK_PCT,

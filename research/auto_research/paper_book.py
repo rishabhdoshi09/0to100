@@ -130,13 +130,8 @@ class PaperBook:
             self.refusals.append((symbol, "already open for this strategy")); return None
         if len(self.open) >= self.max_positions:
             self.refusals.append((symbol, "max open positions reached")); return None
-        # Risk capital is the book's current *realized* equity. Do not give a
-        # profitable/losing book the same quantity as one that still has its
-        # opening balance, and do not assume unpriced open positions are cash.
-        # Unrealized marks are excluded until settled, so missing prices cannot
-        # increase the buying/risk budget.
-        risk_capital = self.capital + self.realized_pnl
-        if not isfinite(risk_capital) or risk_capital <= 0:
+        risk_capital = self.risk_capital()
+        if risk_capital <= 0:
             self.refusals.append((symbol, "non-positive realized paper equity")); return None
         requested = self.risk_per_trade_pct * 100.0 if risk_pct_of_capital is None else risk_pct_of_capital
         sizing = size_long_cash(
@@ -174,6 +169,21 @@ class PaperBook:
             paper_intent_id=str(getattr(intent, "record_id", "") or ""),
             context_key=str(getattr(intent, "context_key", "") or ""),
         )
+
+    def risk_capital(self) -> float:
+        """The one rupee base for every paper risk fraction: realized equity.
+
+        Do not give a profitable/losing book the same quantity as one that
+        still has its opening balance, and do not assume unpriced open
+        positions are cash. Unrealized marks are excluded until settled, so
+        missing prices cannot increase the buying/risk budget. Anything that
+        pre-sizes a quantity for this book must use this base, or the book
+        refuses the quantity in a drawdown. Non-finite or non-positive → 0.
+        """
+        value = self.capital + self.realized_pnl
+        if not isfinite(value) or value <= 0:
+            return 0.0
+        return float(value)
 
     def open_risk(self) -> float:
         return sum(p.qty * p.r_unit for p in self.open.values())
