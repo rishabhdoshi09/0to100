@@ -411,6 +411,19 @@ def test_paper_auto_missing_config_with_existing_runtime_state_fails_closed(tmp_
     assert restored.is_paper_auto_enabled() is False
 
 
+def test_paper_auto_missing_config_with_event_journal_fails_closed(tmp_path):
+    config = tmp_path / "paper_config.json"
+    events = tmp_path / "events.jsonl"
+    events.write_text("", encoding="utf-8")  # a created durable journal is history
+
+    restored = AutoResearchBrain(
+        paper_config_path=config, event_store_path=events,
+    )
+    assert restored.event_store.load_error == ""
+    assert restored.paper_auto_enabled is False
+    assert restored.is_paper_auto_enabled() is False
+
+
 def test_paper_auto_missing_config_with_unreadable_runtime_history_fails_closed(tmp_path):
     config = tmp_path / "paper_config.json"
     state_path = tmp_path / "runtime_state.json"
