@@ -181,11 +181,16 @@ class AutoResearchBrain:
             import json as _json
             from pathlib import Path as _P
             p = _P(self.paper_config_path)
-            if p.exists():
-                return bool(_json.loads(p.read_text()).get("enabled", True))
+            if not p.exists():
+                return True  # first-run default only; a corrupt existing opt-out is not consent
+            payload = _json.loads(p.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict) or type(payload.get("enabled")) is not bool:
+                return False
+            return payload["enabled"]
         except Exception:
-            pass
-        return True
+            # A disconnected disk or unreadable config must never re-enable
+            # paper autonomy after the user explicitly disabled it.
+            return False
 
     def _save_paper_config(self) -> None:
         if not self.paper_config_path:
