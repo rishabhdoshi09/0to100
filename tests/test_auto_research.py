@@ -369,6 +369,53 @@ def test_paper_auto_missing_config_preserves_first_run_default(tmp_path):
     assert brain.paper_auto_enabled is True
 
 
+def test_first_run_default_is_persisted_so_restart_with_history_stays_enabled(tmp_path):
+    """The first-run default must become a durable preference immediately.
+    Otherwise the first durable book/journal write turns every ordinary
+    restart into 'missing preference with history' and silently disables
+    PAPER_AUTO (the restart-without-reapproval contract)."""
+    import json
+
+    config = tmp_path / "paper_config.json"
+    book = tmp_path / "intel_book.json"
+    first = AutoResearchBrain(paper_config_path=config, intel_book_path=book)
+    assert first.paper_auto_enabled is True
+    assert json.loads(config.read_text(encoding="utf-8"))["enabled"] is True
+    assert first._save_intel_book() is True and book.exists()
+
+    restarted = AutoResearchBrain(paper_config_path=config, intel_book_path=book)
+    assert restarted.paper_auto_enabled is True
+    assert restarted.is_paper_auto_enabled() is True
+
+
+def test_first_run_default_not_granted_when_it_cannot_be_recorded(tmp_path, monkeypatch):
+    """Consent that cannot be made durable is not consent: a read-only or
+    full runtime volume must leave PAPER_AUTO off rather than trade on an
+    in-memory default that the next restart would contradict."""
+    import os
+
+    config = tmp_path / "paper_config.json"
+
+    def refuse(*_a, **_k):
+        raise OSError(30, "Read-only file system")
+
+    monkeypatch.setattr(os, "replace", refuse)
+    brain = AutoResearchBrain(paper_config_path=config)
+    assert brain.paper_auto_enabled is False
+    assert not config.exists()
+
+
+def test_deleted_preference_with_history_still_fails_closed(tmp_path):
+    config = tmp_path / "paper_config.json"
+    book = tmp_path / "intel_book.json"
+    first = AutoResearchBrain(paper_config_path=config, intel_book_path=book)
+    assert first._save_intel_book() is True
+    config.unlink()
+    restarted = AutoResearchBrain(paper_config_path=config, intel_book_path=book)
+    assert restarted.paper_auto_enabled is False
+    assert not config.exists(), "fail-closed load must not rewrite the operator's preference"
+
+
 def test_paper_auto_explicit_opt_out_survives_restart(tmp_path):
     config = tmp_path / "paper_config.json"
     first = AutoResearchBrain(paper_config_path=config)

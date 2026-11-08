@@ -213,7 +213,11 @@ class AutoResearchBrain:
                 )
                 if any(path and _P(path).exists() for path in historical_paths):
                     return False
-                return True
+                # Genuine first run: record the default before granting it.
+                # An unpersisted default would make the first durable book
+                # write indistinguishable from a deleted opt-out on restart.
+                self.paper_auto_enabled = True
+                return self._save_paper_config()
             payload = _json.loads(p.read_text(encoding="utf-8"))
             if not isinstance(payload, dict) or type(payload.get("enabled")) is not bool:
                 return False
@@ -223,19 +227,27 @@ class AutoResearchBrain:
             # paper autonomy after the user explicitly disabled it.
             return False
 
-    def _save_paper_config(self) -> None:
+    def _save_paper_config(self) -> bool:
+        """Durably record the PAPER_AUTO preference; report whether it landed."""
         if not self.paper_config_path:
-            return
+            return True
         try:
             import json as _json, os as _os
             from pathlib import Path as _P
             p = _P(self.paper_config_path); p.parent.mkdir(parents=True, exist_ok=True)
             tmp = p.with_suffix(".tmp")
-            tmp.write_text(_json.dumps({"enabled": self.paper_auto_enabled,
-                                        "starting_capital": self.intel_book.capital}))
-            _os.replace(tmp, p)                       # atomic
+            try:
+                with tmp.open("w", encoding="utf-8") as handle:
+                    _json.dump({"enabled": self.paper_auto_enabled,
+                                "starting_capital": self.intel_book.capital}, handle)
+                    handle.flush()
+                    _os.fsync(handle.fileno())
+                _os.replace(tmp, p)                   # atomic
+            finally:
+                tmp.unlink(missing_ok=True)
+            return True
         except Exception:
-            pass
+            return False
 
     def _save_intel_book(self) -> bool:
         """Persist the PAPER book atomically and report durability truth.
