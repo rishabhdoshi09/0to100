@@ -97,18 +97,50 @@ class AutoResearchBrain:
         # persistent PAPER_AUTO enablement: survives restart, so ordinary restart never
         # reverts it or asks for a new click. Paper config is NOT real-money authorization.
         self.paper_auto_enabled = self._load_paper_config()
-        # RECOVERY-FIRST: restore the paper book (open positions) then reconcile, so a restart
-        # resumes management/exits of existing positions before opening any new ones.
+        # Recovery is part of entry safety. An invalid or missing previously
+        # persisted book must not be silently replaced by a fresh empty book:
+        # that could hide old positions and permit duplicate paper exposure.
+        self.intel_book_recovery_error = str(self.runtime_state.load_error or "")
         if intel_book_path:
             try:
                 import json as _json
                 from pathlib import Path as _P
                 p = _P(intel_book_path)
                 if p.exists():
-                    self.intel_book.restore(_json.loads(p.read_text()))
+                    book_snapshot = _json.loads(p.read_text())
+                    self.intel_book.restore(book_snapshot, strict=True)
+                    marker = dict(book_snapshot.get("_runtime_commit") or {})
+                    expected_hash = str(marker.get("book_sha256") or "")
+                    if expected_hash:
+                        import hashlib as _hashlib
+                        bare_book = {k: v for k, v in book_snapshot.items() if k != "_runtime_commit"}
+                        actual_hash = _hashlib.sha256(
+                            _json.dumps(bare_book, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
+                        ).hexdigest()
+                        if actual_hash != expected_hash:
+                            raise ValueError("persisted paper book checksum mismatch")
+                    elif self.runtime_state.completed_cycles:
+                        raise ValueError("persisted paper book checksum missing")
+                    saved_cycle = str(marker.get("last_completed_cycle") or "")
+                    current_cycle = str(self.runtime_state.last_completed_cycle or "")
+                    # The paper book and the cycle-idempotency record are two
+                    # separately replaced files. A disconnect between saves
+                    # can leave state marked DONE but paper exposure missing.
+                    if saved_cycle != current_cycle:
+                        raise ValueError("paper book / runtime cycle commit mismatch")
+                    if self.runtime_state.completed_cycles and not marker:
+                        raise ValueError("missing paper book / runtime commit marker")
+                    saved_count = marker.get("completed_cycle_count")
+                    if saved_count is not None and int(saved_count) != len(self.runtime_state.completed_cycles):
+                        raise ValueError("paper book / runtime cycle count mismatch")
                     self.runtime_state.reconcile(self.intel_book)
-            except Exception:
-                pass
+                elif self.runtime_state.completed_cycles or self.runtime_state.strategies:
+                    raise ValueError("paper book missing despite existing runtime history")
+            except Exception as exc:
+                self.intel_book_recovery_error = (
+                    f"{type(exc).__name__}: {exc}"[:240]
+                )
+                self.runtime_state.reconciled = False
         self._intel_lock = _th.Lock()                # prevents overlapping mutation jobs
         self._insample_cache: dict[str, tuple[float, int]] = self._load_insample_cache()
         self.state = BrainState()
@@ -139,7 +171,8 @@ class AutoResearchBrain:
         self._save_paper_config()
 
     def is_paper_auto_enabled(self) -> bool:
-        return bool(self.paper_auto_enabled) and self.mode == "PAPER_AUTO"
+        return (bool(self.paper_auto_enabled) and self.mode == "PAPER_AUTO"
+                and not self.intel_book_recovery_error)
 
     def _load_paper_config(self) -> bool:
         if not self.paper_config_path:
@@ -148,11 +181,16 @@ class AutoResearchBrain:
             import json as _json
             from pathlib import Path as _P
             p = _P(self.paper_config_path)
-            if p.exists():
-                return bool(_json.loads(p.read_text()).get("enabled", True))
+            if not p.exists():
+                return True  # first-run default only; a corrupt existing opt-out is not consent
+            payload = _json.loads(p.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict) or type(payload.get("enabled")) is not bool:
+                return False
+            return payload["enabled"]
         except Exception:
-            pass
-        return True
+            # A disconnected disk or unreadable config must never re-enable
+            # paper autonomy after the user explicitly disabled it.
+            return False
 
     def _save_paper_config(self) -> None:
         if not self.paper_config_path:
@@ -181,10 +219,26 @@ class AutoResearchBrain:
             import json as _json, os as _os
             from pathlib import Path as _P
             p = _P(self.intel_book_path); p.parent.mkdir(parents=True, exist_ok=True)
-            tmp = p.with_suffix(".tmp")
-            tmp.write_text(_json.dumps(self.intel_book.snapshot(), default=str))
-            _os.replace(tmp, p)                       # atomic (crash-safe)
-            return True
+            tmp = p.with_name(f".{p.name}.{_os.getpid()}.tmp")
+            payload = self.intel_book.snapshot()
+            import hashlib as _hashlib
+            book_hash = _hashlib.sha256(
+                _json.dumps(payload, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+            payload["_runtime_commit"] = {
+                "last_completed_cycle": str(self.runtime_state.last_completed_cycle or ""),
+                "completed_cycle_count": len(self.runtime_state.completed_cycles),
+                "book_sha256": book_hash,
+            }
+            try:
+                with tmp.open("w", encoding="utf-8") as handle:
+                    _json.dump(payload, handle, default=str)
+                    handle.flush()
+                    _os.fsync(handle.fileno())
+                _os.replace(tmp, p)                   # atomic file replacement
+                return True
+            finally:
+                tmp.unlink(missing_ok=True)
         except Exception:
             return False
 
@@ -357,6 +411,14 @@ class AutoResearchBrain:
         and broker-free.
         """
         from research.intelligence.runtime import run_intelligence_cycle
+        if self.intel_book_recovery_error:
+            return {
+                "status": "BLOCKED_RECOVERY", "eligibility": "BLOCKED_SAFETY",
+                "new_entries_allowed": False,
+                "entry_block_reason": "PAPER_BOOK_RECOVERY_FAILED",
+                "positions_opened": [], "positions_closed": [],
+                "error": self.intel_book_recovery_error,
+            }
         if not self._intel_lock.acquire(blocking=False):
             return {"status": "SKIPPED_LOCKED", "eligibility": "ALREADY_DONE"}
         try:
@@ -393,7 +455,26 @@ class AutoResearchBrain:
                                          knowledge=self.knowledge,
                                          backtest_R=bt_R, backtest_trades=bt_n)
             self.state.last_intel_cycle = res.as_dict()
-            self._save_intel_book()
+            if not self._save_intel_book():
+                self.intel_book_recovery_error = "PAPER_BOOK_DURABILITY_FAILED"
+                self.runtime_state.reconciled = False
+                return {
+                    **res.as_dict(), "status": "BLOCKED_DURABILITY",
+                    "eligibility": "BLOCKED_SAFETY",
+                    "new_entries_allowed": False,
+                    "entry_block_reason": "PAPER_BOOK_DURABILITY_FAILED",
+                }
+            try:
+                self.runtime_state.save()
+            except Exception as exc:
+                self.intel_book_recovery_error = f"RUNTIME_STATE_DURABILITY_FAILED: {exc}"[:240]
+                self.runtime_state.reconciled = False
+                return {
+                    **res.as_dict(), "status": "BLOCKED_DURABILITY",
+                    "eligibility": "BLOCKED_SAFETY",
+                    "new_entries_allowed": False,
+                    "entry_block_reason": "RUNTIME_STATE_DURABILITY_FAILED",
+                }
             out = res.as_dict()
             if not res.data_ok:
                 out["eligibility"] = "NO_DATA"
@@ -425,6 +506,14 @@ class AutoResearchBrain:
         pass management-only prevents expensive in-sample evidence rebuilds from
         blocking the forward-paper critical path.
         """
+        if self.intel_book_recovery_error:
+            return {
+                "status": "BLOCKED_RECOVERY", "eligibility": "BLOCKED_SAFETY",
+                "new_entries_allowed": False,
+                "entry_block_reason": "PAPER_BOOK_RECOVERY_FAILED",
+                "positions_opened": [], "positions_closed": [],
+                "error": self.intel_book_recovery_error,
+            }
         if not self.intel_book.open:
             return {
                 "status": "NO_ACTION",
@@ -463,7 +552,26 @@ class AutoResearchBrain:
                 runtime_state=self.runtime_state,
             )
             self.state.last_intel_cycle = res.as_dict()
-            self._save_intel_book()
+            if not self._save_intel_book():
+                self.intel_book_recovery_error = "PAPER_BOOK_DURABILITY_FAILED"
+                self.runtime_state.reconciled = False
+                return {
+                    **res.as_dict(), "status": "BLOCKED_DURABILITY",
+                    "eligibility": "BLOCKED_SAFETY",
+                    "new_entries_allowed": False,
+                    "entry_block_reason": "PAPER_BOOK_DURABILITY_FAILED",
+                }
+            try:
+                self.runtime_state.save()
+            except Exception as exc:
+                self.intel_book_recovery_error = f"RUNTIME_STATE_DURABILITY_FAILED: {exc}"[:240]
+                self.runtime_state.reconciled = False
+                return {
+                    **res.as_dict(), "status": "BLOCKED_DURABILITY",
+                    "eligibility": "BLOCKED_SAFETY",
+                    "new_entries_allowed": False,
+                    "entry_block_reason": "RUNTIME_STATE_DURABILITY_FAILED",
+                }
             out = res.as_dict()
             out["eligibility"] = "MANAGED" if res.positions_closed else "NO_ACTION"
             out["new_entries_allowed"] = False

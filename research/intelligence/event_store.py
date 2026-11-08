@@ -11,6 +11,7 @@ rebuilt from the persisted JSONL — nothing important lives only in memory.
 from __future__ import annotations
 
 import json
+import os
 import threading
 from pathlib import Path
 
@@ -23,6 +24,8 @@ class EventStore:
         self._lock = threading.Lock()          # single-writer
         self._events: list = []
         self._ids: set[str] = set()
+        self.load_error: str = ""
+        self.write_error: str = ""
         if self.path and self.path.exists():
             self._load()
 
@@ -31,12 +34,21 @@ class EventStore:
         """Append one canonical record. Returns True if stored, False if it was a duplicate
         (same deterministic id). Thread-safe; the store is the single writer."""
         with self._lock:
+            if self.load_error or self.write_error:
+                raise RuntimeError("event store is unsafe after recovery/write failure")
             if record.record_id in self._ids:
                 return False
+            # Never acknowledge an in-memory event before its durable append.
+            # A detachable-volume write error must propagate and block the
+            # caller, not leave a ghost event that dedupe treats as committed.
+            if self.path:
+                try:
+                    self._write_line(record)
+                except Exception as exc:
+                    self.write_error = f"{type(exc).__name__}: {exc}"[:240]
+                    raise
             self._events.append(record)
             self._ids.add(record.record_id)
-            if self.path:
-                self._write_line(record)
             return True
 
     def extend(self, records) -> int:
@@ -121,17 +133,26 @@ class EventStore:
         with open(self.path, "a", encoding="utf-8") as f:
             f.write(json.dumps({"kind": type(record).__name__, "data": record.as_dict()},
                                ensure_ascii=False) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
 
     def _load(self) -> None:
-        for line in self.path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                row = json.loads(line)
-                rec = SC.from_dict(row["kind"], row["data"])
+        # Silently skipping malformed JSONL can erase risk/evidence events from
+        # reconstructed state. Preserve the original file and fail closed.
+        try:
+            for lineno, line in enumerate(self.path.read_text(encoding="utf-8").splitlines(), 1):
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                    rec = SC.from_dict(row["kind"], row["data"])
+                except Exception as exc:
+                    raise ValueError(f"invalid event record at line {lineno}") from exc
                 if rec.record_id not in self._ids:
                     self._events.append(rec)
                     self._ids.add(rec.record_id)
-            except Exception:
-                continue                        # a torn/foreign line is skipped, never fatal
+        except Exception as exc:
+            self.load_error = f"{type(exc).__name__}: {exc}"[:240]
+            self._events.clear()
+            self._ids.clear()
+            raise RuntimeError("event store recovery failed; original JSONL preserved") from exc

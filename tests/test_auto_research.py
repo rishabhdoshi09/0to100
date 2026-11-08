@@ -269,7 +269,7 @@ class TestScheduler:
         # Presence of an open position forces the real management path. The
         # object value is irrelevant because runtime management is stubbed here.
         brain.intel_book.open[("sid", "ABC")] = object()
-        brain._save_intel_book = lambda: None
+        brain._save_intel_book = lambda: True  # successful stub must report durability
 
         ctx = SimpleNamespace(
             cycle_type="paper_session",
@@ -344,3 +344,52 @@ def _one_spec():
     cands = DISC.generate(budget)
     assert cands
     return cands[0]
+
+
+@pytest.mark.parametrize("invalid", [
+    "{torn json",
+    "null",
+    "[]",
+    "{}",
+    '{"enabled": "false"}',
+    '{"enabled": 0}',
+])
+def test_paper_auto_invalid_persisted_preference_fails_closed(tmp_path, invalid):
+    config = tmp_path / "paper_config.json"
+    config.write_text(invalid, encoding="utf-8")
+    brain = AutoResearchBrain(paper_config_path=config)
+    assert brain.paper_auto_enabled is False
+    assert brain.is_paper_auto_enabled() is False
+    assert config.read_text(encoding="utf-8") == invalid
+
+
+def test_paper_auto_missing_config_preserves_first_run_default(tmp_path):
+    config = tmp_path / "paper_config.json"
+    brain = AutoResearchBrain(paper_config_path=config)
+    assert brain.paper_auto_enabled is True
+
+
+def test_paper_auto_explicit_opt_out_survives_restart(tmp_path):
+    config = tmp_path / "paper_config.json"
+    first = AutoResearchBrain(paper_config_path=config)
+    first.disable_paper_auto()
+    second = AutoResearchBrain(paper_config_path=config)
+    assert second.paper_auto_enabled is False
+    assert second.is_paper_auto_enabled() is False
+
+
+def test_paper_auto_unreadable_config_fails_closed(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    config = tmp_path / "paper_config.json"
+    config.write_text('{"enabled": false}', encoding="utf-8")
+    original = Path.read_text
+
+    def disconnected(self, *args, **kwargs):
+        if self == config:
+            raise OSError("simulated external drive disconnect")
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", disconnected)
+    brain = AutoResearchBrain(paper_config_path=config)
+    assert brain.paper_auto_enabled is False

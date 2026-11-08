@@ -313,25 +313,8 @@ def build_fast_response(core, attach_authority=None) -> dict[str, Any]:
     state_status = str(target_state.get("status") or "")
     state_error = str(target_state.get("error") or "")[:300]
 
-    if saved:
+    if saved and current:
         payload = dict(saved)
-        if not current:
-            failed = state_status == "FAILED"
-            payload["records_status"] = "FAILED" if failed else "REFRESHING"
-            payload["rebuilding"] = not failed
-            payload["rebuild_state"] = target_state
-            payload["rebuild_error"] = state_error if failed else ""
-            payload["cmp_note"] = (
-                (
-                    "A newer scan/funds artifact exists, but its recommendation rebuild failed. "
-                    "Cards below are the last persisted projection and are NOT current. "
-                )
-                if failed
-                else (
-                    "A newer scan/funds artifact exists. QuantTerm is rebuilding the recommendation "
-                    "projection in the background; cards below are the last persisted projection. "
-                )
-            ) + str(payload.get("cmp_note") or "")
         if callable(attach_authority):
             try:
                 payload = attach_authority(payload)
@@ -339,6 +322,10 @@ def build_fast_response(core, attach_authority=None) -> dict[str, Any]:
                 payload["authority_warning"] = str(exc)[:200]
         return slim_workspace_for_desk(payload)
 
+    # Last-generation BUY cards must not remain on an actionable recommendation
+    # surface after a scan or long-term artifact changes. Even a clear "stale"
+    # label is insufficient: consumers might still rank/display those cards.
+    # Retain refresh/error status, never the previous generation's picks.
     status = "FAILED" if state_status == "FAILED" else "REFRESHING"
     payload = _empty_workspace(
         str(scan.get("scanned_at") or ""),
@@ -346,13 +333,20 @@ def build_fast_response(core, attach_authority=None) -> dict[str, Any]:
         status=status,
         error=state_error if status == "FAILED" else "",
     )
+    if saved:
+        payload["cmp_note"] = (
+            "Saved recommendations are NOT current: they belong to an older scan/funds generation and "
+            "have been withheld. "
+            + str(payload.get("cmp_note") or "")
+        )
     payload["rebuild_state"] = target_state
+    payload["rebuild_error"] = state_error if status == "FAILED" else ""
     if callable(attach_authority):
         try:
             payload = attach_authority(payload)
         except Exception as exc:
             payload["authority_warning"] = str(exc)[:200]
-    return payload
+    return slim_workspace_for_desk(payload)
 
 
 def _replace_route() -> None:

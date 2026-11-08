@@ -28,7 +28,32 @@ def _fake_diskutil(bin_dir: Path) -> None:
 
 def _fake_hdiutil(bin_dir: Path) -> None:
     path = bin_dir / "hdiutil"
-    path.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
+    # Mock Apple's machine-readable DiskImages inventory (not shell text).
+    path.write_text(
+        """#!/bin/sh
+if [ "$1" = "info" ] && [ "$2" = "-plist" ]; then
+  python3 - <<'PY'
+import os, plistlib, sys
+sys.stdout.buffer.write(plistlib.dumps({
+    "images": [{
+        "image-path": os.environ.get(
+            "QT_TEST_HDIUTIL_IMAGE_PATH", os.environ["QT_STORAGE_BUNDLE"]
+        ),
+        "system-entities": [
+            {"dev-entry": "/dev/disk3s1",
+             "mount-point": os.environ.get(
+                 "QT_TEST_HDIUTIL_MOUNT", os.environ["QT_STORAGE_MOUNT"]
+             )}
+        ],
+    }],
+}))
+PY
+  exit 0
+fi
+exit 99
+""",
+        encoding="utf-8",
+    )
     path.chmod(0o755)
 
 
@@ -75,6 +100,30 @@ def test_preflight_accepts_exact_apfs_runtime(tmp_path: Path):
     )
     assert proc.returncode == 0, proc.stderr
     assert "PASS: APFS runtime verified" in proc.stdout
+    assert not list(runtime.glob(".quantterm-storage-preflight.*"))
+
+
+def test_preflight_rejects_wrong_attached_sparsebundle(tmp_path: Path):
+    env, _, runtime, _ = _env_for_layout(tmp_path)
+    wrong = tmp_path / "Expansion" / "other_copy.sparsebundle"
+    wrong.mkdir()
+    env["QT_TEST_HDIUTIL_IMAGE_PATH"] = str(wrong)
+    proc = subprocess.run(
+        ["bash", str(PREFLIGHT)], env=env, text=True, capture_output=True, check=False
+    )
+    assert proc.returncode == 78
+    assert "backing image identity is missing or mismatched" in proc.stderr
+    assert not list(runtime.glob(".quantterm-storage-preflight.*"))
+
+
+def test_preflight_rejects_unidentified_mounted_volume(tmp_path: Path):
+    env, _, runtime, _ = _env_for_layout(tmp_path)
+    env["QT_TEST_HDIUTIL_MOUNT"] = str(tmp_path / "some_other_mount")
+    proc = subprocess.run(
+        ["bash", str(PREFLIGHT)], env=env, text=True, capture_output=True, check=False
+    )
+    assert proc.returncode == 78
+    assert "backing image identity is missing or mismatched" in proc.stderr
     assert not list(runtime.glob(".quantterm-storage-preflight.*"))
 
 
