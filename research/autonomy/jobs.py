@@ -462,6 +462,19 @@ class Deps:
             entry_block_reason="EOD_MANAGEMENT_ONLY", session_phase="eod",
             capability_failures=capability_failures,
         )
+        # No learning, soak or Telegram success after an unrestored paper book,
+        # invalid cycle or durability failure. A returned failure is just as
+        # authoritative as a raised exception; the outer job must report it.
+        upstream_status = str(
+            result.get("status") if isinstance(result, dict) else ""
+        ).upper()
+        if upstream_status not in {"OK", "NO_ACTION", "ALREADY_DONE"}:
+            blocked = dict(result) if isinstance(result, dict) else {}
+            blocked["status"] = upstream_status or "FAILED_SAFE"
+            blocked["eligibility"] = "BLOCKED_SAFETY"
+            blocked["new_entries_allowed"] = False
+            blocked.setdefault("error", "paper outcome cycle is unavailable")
+            return blocked
         try:
             from product.paper_learning_loop import ingest_closed_book
             learned = ingest_closed_book(brain.intel_book)
@@ -1306,6 +1319,28 @@ def run_outcome_resolution(ctx) -> JobResult:
     closed = len((result or {}).get("positions_closed", []))
     recorded = len((result or {}).get("outcomes_recorded", []))
     matured = int((official_settle or {}).get("n_settled") or 0)
+    if isinstance(result, dict):
+        upstream_status = str(result.get("status") or "").upper()
+        if upstream_status and upstream_status not in {"OK", "NO_ACTION", "ALREADY_DONE"}:
+            return JobResult(
+                JS.PERMANENT_FAILED,
+                "outcome resolution blocked by unsafe paper state; slot retired",
+                error_code="OUTCOME_PAPER_STATE_UNSAFE",
+                error_message=str(result.get("error") or upstream_status)[:240],
+                failures={H.UNRECONCILED},
+                new_entries_allowed=False,
+                metadata=result,
+            )
+    if official_settle.get("error"):
+        return JobResult(
+            JS.PERMANENT_FAILED,
+            "official settlement encountered an error; outcome job cannot succeed",
+            error_code="OFFICIAL_SETTLEMENT_ERROR",
+            error_message=str(official_settle["error"])[:240],
+            failures={H.UNRECONCILED},
+            new_entries_allowed=False,
+            metadata=result if isinstance(result, dict) else {},
+        )
     if resolve_error:
         # resolve_outcomes/run_paper_cycle is this job's entire purpose. Its
         # failure used to be swallowed here and the job still returned
