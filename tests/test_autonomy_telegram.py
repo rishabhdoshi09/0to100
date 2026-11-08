@@ -661,6 +661,10 @@ def test_drain_desk_alerts_retries_recos_and_report(tmp_path, monkeypatch):
         lambda: _reco_workspace(),
     )
     monkeypatch.setattr(
+        "product.scan_store.load_scan",
+        lambda: {"scanned_at": _reco_workspace()["scan_scanned_at"]},
+    )
+    monkeypatch.setattr(
         "product.recommendations_workspace.load_today_pulse",
         lambda: {"date": "2026-08-27", "takeaways": ["Breadth mixed"]},
     )
@@ -671,3 +675,57 @@ def test_drain_desk_alerts_retries_recos_and_report(tmp_path, monkeypatch):
     assert out["recommendations"]["sent"] is True
     assert out["market_report"]["sent"] is True
     assert len(engine.messages) == 2
+
+
+def _desk_notifier(tmp_path, monkeypatch, *, canonical_scan):
+    engine = FakeEngine()
+    monkeypatch.setattr(
+        "product.recommendations_store.load_recommendations",
+        lambda: _reco_workspace(),
+    )
+    monkeypatch.setattr("product.scan_store.load_scan", lambda: canonical_scan)
+    monkeypatch.setattr(
+        "product.recommendations_workspace.load_today_pulse",
+        lambda: {"date": "2026-08-27", "takeaways": ["Breadth mixed"]},
+    )
+    n = TelegramNotifier(
+        tmp_path, engine_factory=lambda: engine, now_fn=lambda: datetime(2026, 8, 27, 15, 45),
+    )
+    return n, engine
+
+
+def test_desk_alerts_withhold_recommendations_from_unpublished_generation(tmp_path, monkeypatch):
+    """Sidecar recommendations from a scan that never became the canonical
+    published scan (snapshot rotated or process killed mid-publication) must
+    not reach the operator. The paper executor already refuses this exact
+    generation mismatch; Telegram must agree with it."""
+    n, engine = _desk_notifier(
+        tmp_path, monkeypatch, canonical_scan={"scanned_at": "2026-08-27T09:30:00"},
+    )
+    out = n.drain_desk_alerts()
+    assert out["recommendations"]["sent"] is False
+    assert out["recommendations"]["reason"] == "reco_generation_mismatch"
+    assert not any("AAA" in m for m in engine.messages)
+    assert out["market_report"]["sent"] is True
+
+
+def test_desk_alerts_withhold_recommendations_without_valid_canonical_scan(tmp_path, monkeypatch):
+    """load_scan() returns None when the saved scan is bound to a superseded
+    or unverifiable snapshot. Unknown authority is not permission to alert."""
+    n, engine = _desk_notifier(tmp_path, monkeypatch, canonical_scan=None)
+    out = n.drain_desk_alerts()
+    assert out["recommendations"]["sent"] is False
+    assert out["recommendations"]["reason"] == "reco_generation_mismatch"
+    assert not any("AAA" in m for m in engine.messages)
+
+
+def test_desk_alerts_fail_closed_when_scan_store_raises(tmp_path, monkeypatch):
+    n, engine = _desk_notifier(tmp_path, monkeypatch, canonical_scan=None)
+
+    def broken():
+        raise OSError("runtime volume unavailable")
+
+    monkeypatch.setattr("product.scan_store.load_scan", broken)
+    out = n.drain_desk_alerts()
+    assert out["recommendations"]["sent"] is False
+    assert not any("AAA" in m for m in engine.messages)
