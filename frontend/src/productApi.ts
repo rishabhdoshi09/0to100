@@ -297,7 +297,49 @@ export type InvestigatorMatch = {
   match?: string
 }
 
+export type QuarterlyBriefEvidence = {
+  id: string
+  label?: string
+  title?: string
+  value?: number
+  period?: string
+  trend?: string
+  evidence?: string
+  source: string
+  source_url?: string
+  source_date?: string
+  source_status?: string
+  severity?: string
+}
+
+export type QuarterlyEvidenceBrief = {
+  schema_version: number
+  symbol: string
+  as_of: string | null
+  evidence_mode: string
+  review_status: string
+  thesis: QuarterlyBriefEvidence[]
+  anti_thesis: QuarterlyBriefEvidence[]
+  quarterly_evidence: QuarterlyBriefEvidence[]
+  risk_flags: QuarterlyBriefEvidence[]
+  missing_evidence: string[]
+  watch_next: string[]
+  quality_warnings: { code: string; id?: string; source_date?: string }[]
+  price_arithmetic?: {
+    computed_vs_buy_pct: number | null
+    computed_to_target_pct: number | null
+    arithmetic_valid: boolean
+    source_verified: boolean
+    issues: { code: string; field?: string }[]
+  } | null
+  source_verified_independently: boolean
+  execution_authority: false
+  not_a_buy_sell_signal: true
+  disclaimer: string
+}
+
 export type DueDiligenceReport = {
+  quarterly_brief?: QuarterlyEvidenceBrief
   schema_version: number
   symbol: string
   company: string
