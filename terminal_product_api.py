@@ -712,6 +712,24 @@ def stock_research(symbol: str) -> dict[str, Any]:
     return due_diligence(symbol)
 
 
+@app.get("/api/quarterly-insights/{symbol}")
+def company_quarterly_insights(symbol: str, as_of: str = "") -> dict[str, Any]:
+    """Read-only quarterly thesis/anti-thesis evidence; no market-data or order side effects.
+
+    Queries the dated PIT warehouse used by Investigate. An absent or stale
+    source is disclosed as missing; the API does not fabricate a current
+    quarter or a buy price/target.
+    """
+    try:
+        from product.due_diligence.quarterly_insights import quarterly_insights
+
+        return quarterly_insights(clean_symbol(symbol), as_of=as_of or None)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Quarterly research failed: {exc}") from exc
+
+
 @app.get("/api/stock-investigator/suggest")
 def stock_investigator_suggest(q: str = "", limit: int = 8) -> dict[str, Any]:
     """Typeahead for the manual Stock Investigator. Does not fetch fundamentals."""
