@@ -148,3 +148,41 @@ def test_declining_profit_and_negative_cash_flow_create_counter_case():
     }
     assert {x["id"] for x in out["thesis_evidence"]} == {"revenue_yoy"}
     assert out["places_orders"] is False
+
+
+def test_real_pit_warehouse_wiring_is_temporal(tmp_path):
+    """Exercise the production adapter, not only synthetic composer rows."""
+    from product.pit_warehouse import DOC_QUARTERLY_RESULT, persist
+    from product.due_diligence.quarterly_insights import quarterly_insights
+
+    db = tmp_path / "financials.db"
+    for period, pub, revenue, pat in (
+        ("2025-09-30", "2025-11-01", 100, 20),
+        ("2026-09-30", "2026-11-01", 150, 30),
+    ):
+        persist({
+            "symbol": "ABC",
+            "evidence_type": DOC_QUARTERLY_RESULT,
+            "period_end": period,
+            "publication_date": pub,
+            "available_from": pub,
+            "source": "NSE quarterly results",
+            "source_url": "https://example.test/filing",
+            "source_identity": "nse:" + period,
+            "extracted": {
+                "numbers_parsed": True,
+                "nature": "Consolidated",
+                "facts": {"revenue": revenue, "pat": pat},
+            },
+        }, path=db)
+
+    early = quarterly_insights("ABC", as_of="2026-10-31", path=db)
+    assert early["status"] == "PARTIAL_QUARTER_EVIDENCE"
+    assert early["latest_period_end"] == "2025-09-30"
+    assert early["metrics"]["revenue"]["current"] == 100
+
+    current = quarterly_insights("ABC", as_of="2026-11-08", path=db)
+    assert current["status"] == "QUARTER_COMPARABLE"
+    assert current["metrics"]["revenue"]["yoy_pct"] == 50
+    assert len(current["source_documents"]) == 2
+    assert current["decision"] == "RESEARCH_ONLY"
