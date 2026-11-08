@@ -294,7 +294,7 @@ def test_production_paper_cycle_blocks_old_recommendations_before_entries(monkey
     deps.now_ist = lambda: datetime(2026, 11, 6, 10, 0, tzinfo=timezone.utc)
     deps.holidays = lambda: set()
     deps.run_paper_cycle = lambda ok, reason, phase, failures: (
-        sent.append((ok, reason)) or {"eligibility": "NO_ELIGIBLE_TRADE"}
+        sent.append((ok, reason)) or {"status": "OK", "eligibility": "NO_ELIGIBLE_TRADE"}
     )
     monkeypatch.setattr(J, "_entry_reason", lambda *_a: (True, "", "intraday"))
     monkeypatch.setattr(J, "_paper_market_data_source", lambda *_a: (True, "snapshot:new"))
@@ -326,7 +326,7 @@ def test_production_paper_cycle_allows_verified_matching_scan_identity(monkeypat
     deps.now_ist = lambda: datetime(2026, 11, 6, 10, 0, tzinfo=timezone.utc)
     deps.holidays = lambda: set()
     deps.run_paper_cycle = lambda ok, reason, phase, failures: (
-        sent.append((ok, reason)) or {"eligibility": "NO_ELIGIBLE_TRADE"}
+        sent.append((ok, reason)) or {"status": "OK", "eligibility": "NO_ELIGIBLE_TRADE"}
     )
     monkeypatch.setattr(J, "_entry_reason", lambda *_a: (True, "", "intraday"))
     monkeypatch.setattr(J, "_paper_market_data_source", lambda *_a: (True, "snapshot:new"))
