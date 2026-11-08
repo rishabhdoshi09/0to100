@@ -613,7 +613,7 @@ export type QuarterlyInsightsReport = {
 }
 
 export const fetchQuarterlyInsights = (symbol: string, asOf?: string): Promise<QuarterlyInsightsReport> =>
-  request('/api/quarterly-insights/' + encodeURIComponent(symbol) +
+  request(`/api/quarterly-insights/${encodeURIComponent(symbol)}` +
     (asOf ? '?as_of=' + encodeURIComponent(asOf) : ''), {
     headers: { Accept: 'application/json' },
   })
