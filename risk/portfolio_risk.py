@@ -85,9 +85,12 @@ def _combined_open_rows(extra_trade: dict | None = None, *,
 
     try:
         trades = _open_trades(strict=True)
+        # US_AUTOPILOT rows share trades.db but are a separate virtual USD pool
+        # with its own rails (execution.us_autopilot); dollars are not rupees.
         rows = [{"symbol": t["symbol"], "qty": int(t["qty"] or 0),
                  "entry": float(t["entry_price"] or 0),
-                 "stop": float(t["stop_price"] or 0)} for t in trades]
+                 "stop": float(t["stop_price"] or 0)} for t in trades
+                if "US_AUTOPILOT" not in str(t.get("note") or "")]
     except Exception as exc:
         raise AccountRiskUnreadable(f"legacy paper book (trades.db) unreadable: {exc}") from exc
     try:

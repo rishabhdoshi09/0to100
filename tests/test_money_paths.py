@@ -5149,3 +5149,83 @@ class TestAccountOpenRiskSpansEveryPaperBook:
         )
         assert out["taken"], out["rejections"]
         assert lock_held_at_save and lock_held_at_save[0] is True
+
+
+class TestUsPaperLaneRiskRails:
+    """The US virtual-paper lane runs under the autonomy supervisor's US scans
+    and is armed by default. It must obey the same rails as NSE: 1% risk per
+    trade (conviction may only scale DOWN), 10% per name, 5% total open risk
+    on its own USD pool -- and its USD rows must not leak into the NSE gate."""
+
+    @staticmethod
+    def _setup(tmp_path, monkeypatch, **state):
+        import execution.trade_executor as te
+        import execution.us_autopilot as us
+        monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+        monkeypatch.setattr(te, "_DB", tmp_path / "logs" / "trades.db")
+        (tmp_path / "logs").mkdir(exist_ok=True)
+        monkeypatch.setattr(us, "_STATE_FILE", tmp_path / "us_ap.json")
+        monkeypatch.setattr(us, "_state", {})
+        st = us._load()
+        st.update({"allocation": 100_000.0, "realized_pnl": 0.0, "armed": True, **state})
+        monkeypatch.setattr(us, "_in_window", lambda now_et=None: True)
+        monkeypatch.setattr(us, "_anchor_live", lambda sym, e, s, c: (e, ""))
+        monkeypatch.setattr(us, "_notify", lambda m: None)
+        monkeypatch.setattr(us, "_record_learning_decision", lambda **kw: None)
+        return us, te
+
+    @staticmethod
+    def _open_us(te, symbol, qty, entry, stop, *, note="US_AUTOPILOT:us_scanner"):
+        conn = te.connect()
+        conn.executescript(te._DDL)
+        conn.execute(
+            "INSERT INTO trades(placed_at, mode, symbol, qty, entry_type, entry_price, "
+            "stop_price, target_price, status, note) VALUES "
+            "('2026-10-01T10:00', 'PAPER', ?, ?, 'MARKET', ?, ?, ?, 'PAPER_OPEN', ?)",
+            (symbol, qty, entry, stop, entry * 1.04, note),
+        )
+        conn.commit()
+        conn.close()
+
+    def test_conviction_cannot_stretch_risk_past_one_percent(self, tmp_path, monkeypatch):
+        us, _te = self._setup(tmp_path, monkeypatch)
+        # risk 20/share: 1% of 100k = 1,000 -> 50 sh; 1.5x would be 75 sh
+        assert us._size(100.0, 80.0, 1.5) == 50
+        assert us._size(100.0, 80.0, 0.5) == 25
+
+    def test_per_name_notional_capped_at_ten_percent_even_if_persisted_higher(
+            self, tmp_path, monkeypatch):
+        us, _te = self._setup(tmp_path, monkeypatch, per_trade_cap_pct=0.20,
+                              risk_per_trade_pct=0.02)
+        # tight stop: risk budget alone would allow 1,000 sh = Rs 100k notional
+        assert us._size(100.0, 99.0, 1.0) == 100
+        assert us._size(100.0, 80.0, 1.0) == 50
+
+    def test_total_open_risk_capped_at_five_percent_of_pool(self, tmp_path, monkeypatch):
+        us, te = self._setup(tmp_path, monkeypatch, max_open_positions=5)
+        self._open_us(te, "AAA", 240, 100.0, 90.0)   # 2,400
+        self._open_us(te, "BBB", 240, 100.0, 90.0)   # 2,400 -> 4,800 open
+        assert us.consider("CCC", 100.0, 80.0, 70.0, 60.0) is False   # +1,000
+        assert not [t for t in us._open_trades() if t["symbol"] == "CCC"]
+        # 10%-capped 100 sh x 1.0 risk = 100 -> 4,900 total still fits
+        assert us.consider("DDD", 100.0, 99.0, 70.0, 60.0) is True
+        opened = [t for t in us._open_trades() if t["symbol"] == "DDD"]
+        assert len(opened) == 1
+        risk = opened[0]["qty"] * (opened[0]["entry_price"] - opened[0]["stop_price"])
+        assert 4_800 + risk <= 5_000 + 1e-6
+
+    def test_unreadable_us_book_refuses_entries(self, tmp_path, monkeypatch):
+        us, te = self._setup(tmp_path, monkeypatch)
+        te._DB.write_bytes(b"not a sqlite database" * 64)
+        assert us.consider("CCC", 100.0, 80.0, 70.0, 60.0) is False
+
+    def test_us_rows_do_not_count_in_the_nse_account_gate(self, tmp_path, monkeypatch):
+        from risk.portfolio_risk import account_exposure_gate, portfolio_risk_report
+        us, te = self._setup(tmp_path, monkeypatch)
+        monkeypatch.setattr("risk.portfolio_risk._capital", lambda: 100_000.0)
+        monkeypatch.setattr("risk.portfolio_risk._max_positions", lambda: 5)
+        self._open_us(te, "TCS", 500, 100.0, 80.0)   # $10,000 at risk in the USD pool
+        report = portfolio_risk_report()
+        assert report["open_risk"] == 0 and report["n_positions"] == 0
+        assert account_exposure_gate("TCS", qty=10, entry=100.0, stop=95.0)["ok"] is True
+
