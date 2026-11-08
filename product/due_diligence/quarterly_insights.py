@@ -189,7 +189,11 @@ def compose_quarterly_insights(
                 "unit": "PCT",
                 "sources": fact["sources"],
             }
-            (supporting if change > 0 else challenging if change < 0 else supporting).append(note)
+            if change > 0:
+                supporting.append(note)
+            elif change < 0:
+                challenging.append(note)
+            # A flat comparison is neutral, never supportive.
 
         # Debt stock comparisons only use reported same-quarter balances.
         debt = metrics["total_debt"]
