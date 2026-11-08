@@ -126,6 +126,55 @@ def test_snapshot_switch_during_scan_blocks_publication(monkeypatch):
     assert report.payload == {}
 
 
+def test_snapshot_switch_before_publication_persists_no_sidecars(monkeypatch, tmp_path):
+    """Scan-derived sidecars must not outlive a withheld canonical scan.
+
+    The post-scan identity check passes, the manifest verifies, and then the
+    active Kite snapshot rotates before publication. Previously the coverage
+    audit, public best setups, long-term overlay and desk recommendations/
+    discovery were all written to disk before the final check withheld the
+    canonical scan, leaving stale projections with no matching scan file.
+    """
+    import product.desk_scan_overlays as desks
+    import product.sepa_setup as sepa
+    import scan.long_term_service as long_term
+    from scan import market_scan_service as market
+    from scan import scan_coverage
+
+    _install_snapshot(monkeypatch, tmp_path, active="old", day="2099-12-31")
+    persisted: list[str] = []
+    monkeypatch.setattr(
+        desks, "persist_desks_from_market_scan", lambda _p: persisted.append("desks") or {}
+    )
+    monkeypatch.setattr(
+        sepa, "persist_public_best_setups", lambda _p: persisted.append("public_best_setups")
+    )
+    monkeypatch.setattr(
+        long_term, "overlay_long_term_from_market_scan",
+        lambda *_a, **_k: persisted.append("long_term"),
+    )
+    monkeypatch.setattr(scan_coverage, "save_audit", lambda _a: persisted.append("audit"))
+    monkeypatch.setattr(S, "save_scan", lambda *_a, **_k: persisted.append("canonical_scan"))
+
+    # start · post-scan check · pre-sidecar check (rotated) · final check
+    seen = iter(["old", "old", "new", "new"])
+    monkeypatch.setattr(market, "_active_snapshot_id", lambda: next(seen))
+    monkeypatch.setattr(market, "_saved_priority_inputs", lambda: (None, None, None, []))
+    monkeypatch.setattr(scan_coverage, "observe_scanner", _observe)
+    monkeypatch.setattr("scan.bulk_fetcher.cached_symbols", lambda: ["AAA"])
+
+    report = market.run_whole_market_scan(
+        universe_provider=lambda: {"AAA": "Alpha"},
+        prefetch_fn=lambda *_a, **_k: None,
+        scanner=_Scanner(),
+        fno_provider=lambda: set(),
+        save=True,
+    )
+    assert not report.ok
+    assert report.error_code == "SCAN_SNAPSHOT_CHANGED"
+    assert persisted == []
+
+
 def test_health_does_not_claim_evidence_ready_for_stale_kite_scan(monkeypatch, tmp_path):
     from product.startup_check import _scan_evidence_status
 
