@@ -18,6 +18,7 @@ from typing import Mapping
 
 _UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+_FALSE_VALUES = frozenset({"0", "false", "no", "off"})
 
 
 def _env_flag(name: str) -> bool:
@@ -25,7 +26,16 @@ def _env_flag(name: str) -> bool:
 
 
 def public_read_only_enabled() -> bool:
-    return _env_flag("QT_PUBLIC_READ_ONLY")
+    """Invalid EXPLICIT public-mode configuration must not open mutations.
+
+    Unset preserves the original private/local workflow. Once a deployment
+    supplies the variable, only a recognized false value opts out; misspelled
+    true values, whitespace and other invalid strings fail CLOSED.
+    """
+    raw = os.environ.get("QT_PUBLIC_READ_ONLY")
+    if raw is None:
+        return False
+    return str(raw).strip().lower() not in _FALSE_VALUES
 
 
 def operator_token() -> str:
