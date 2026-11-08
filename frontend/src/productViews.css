@@ -391,5 +391,6 @@
 .risk-lens-heat.risk-lens-ok { border-color: #1f7a4d; }
 .risk-lens-heat.risk-lens-caution { border-color: #b7791f; }
 .risk-lens-heat.risk-lens-danger { border-color: #c0392b; }
+.risk-lens-heat.risk-lens-unknown { border-color: #b7791f; border-style: dashed; }
 .risk-lens-note { margin: 0.55rem 0 0; font-size: 0.78rem; color: var(--accent, #d9a441); }
 .risk-lens-summary { margin: 0.55rem 0 0; font-size: 0.82rem; color: var(--text, #cfe0f2); line-height: 1.5; }

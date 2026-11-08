@@ -2825,7 +2825,7 @@ class TestSymbolMemory:
         ap.arm()
         monkeypatch.setattr(ap, "_in_window", lambda now=None: True)
         import product.paper_status as ps
-        monkeypatch.setattr(ps, "modern_engine_open_positions", lambda: [
+        monkeypatch.setattr(ps, "modern_engine_open_positions", lambda **_kw: [
             {"symbol": "HAL", "qty": 10, "entry_price": 4000.0, "stop_price": 3800.0},
         ])
         assert ap.consider("HAL", 4500, 4300, 80, 0.2, "Defence", "t") is False
@@ -4933,3 +4933,219 @@ class TestPaperAutopilotSizesOnBookRiskCapital:
         assert book.risk_capital() == 0.0
         book.realized_pnl = -150_000.0
         assert book.risk_capital() == 0.0
+
+
+class TestAccountOpenRiskSpansEveryPaperBook:
+    """The 5% total open-risk ceiling is an ACCOUNT limit. Legacy equity
+    (trades.db), modern equity (intel_book.json) and the F&O options lane
+    (fo_paper.sqlite3) each kept their own cap, so together they could hold
+    far more than 5% of capital at risk; an unreadable book also read as
+    zero exposure and let new entries through."""
+
+    @staticmethod
+    def _isolate(tmp_path, monkeypatch):
+        monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+        monkeypatch.setattr("execution.trade_executor._DB", tmp_path / "logs" / "trades.db")
+        monkeypatch.setattr("risk.portfolio_risk._capital", lambda: 100_000.0)
+        monkeypatch.setattr("risk.portfolio_risk._max_positions", lambda: 5)
+
+    @staticmethod
+    def _write_fno_position(tmp_path, *, underlying="RELIANCE", entry=50.0, stop=30.0, qty=100):
+        from product.fo_paper_store import FoPaperStore
+        path = tmp_path / "logs" / "product" / "fo_paper.sqlite3"
+        with FoPaperStore(path) as store:
+            store.replace_positions([{
+                "trade_id": f"t-{underlying}", "option_symbol": f"{underlying}26OCTCE",
+                "underlying": underlying, "entry_price": entry, "stop_price": stop,
+                "quantity": qty, "lots": 1, "lot_size": qty,
+            }])
+
+    def test_account_gate_counts_open_fno_paper_risk(self, tmp_path, monkeypatch):
+        from risk.portfolio_risk import account_exposure_gate, portfolio_risk_report
+        self._isolate(tmp_path, monkeypatch)
+        self._write_fno_position(tmp_path, entry=50.0, stop=30.0, qty=200)  # Rs 4,000 at risk
+        assert portfolio_risk_report()["open_risk"] == 4_000
+        gate = account_exposure_gate("TCS", qty=100, entry=100.0, stop=85.0)  # +1,500
+        assert gate["ok"] is False
+        assert gate["reason_code"] == "MAX_PORTFOLIO_RISK"
+        assert account_exposure_gate("TCS", qty=100, entry=100.0, stop=95.0)["ok"] is True
+
+    def test_equity_entry_in_open_fno_underlying_is_a_duplicate(self, tmp_path, monkeypatch):
+        from risk.portfolio_risk import account_exposure_gate
+        self._isolate(tmp_path, monkeypatch)
+        self._write_fno_position(tmp_path, underlying="RELIANCE")
+        gate = account_exposure_gate("RELIANCE", qty=1, entry=100.0, stop=99.0)
+        assert gate["ok"] is False and gate["reason_code"] == "DUPLICATE_POSITION"
+
+    def test_fno_positions_do_not_consume_equity_position_slots(self, tmp_path, monkeypatch):
+        from risk.portfolio_risk import portfolio_risk_report
+        self._isolate(tmp_path, monkeypatch)
+        self._write_fno_position(tmp_path, entry=50.0, stop=49.0, qty=10)
+        assert portfolio_risk_report()["n_positions"] == 0
+
+    def test_trailed_fno_stop_above_entry_counts_as_zero_risk(self, tmp_path, monkeypatch):
+        from risk.portfolio_risk import account_exposure_gate, portfolio_risk_report
+        self._isolate(tmp_path, monkeypatch)
+        self._write_fno_position(tmp_path, entry=50.0, stop=60.0, qty=100)
+        assert portfolio_risk_report()["open_risk"] == 0
+        assert account_exposure_gate("TCS", qty=10, entry=100.0, stop=95.0)["ok"] is True
+
+    def test_corrupt_modern_book_blocks_instead_of_reading_as_empty(self, tmp_path, monkeypatch):
+        from risk.portfolio_risk import account_exposure_gate
+        self._isolate(tmp_path, monkeypatch)
+        book = tmp_path / "logs" / "intelligence" / "intel_book.json"
+        book.parent.mkdir(parents=True)
+        book.write_text('{"open": [{"symbol": "INFY", "qty": 10', encoding="utf-8")
+        gate = account_exposure_gate("TCS", qty=1, entry=100.0, stop=99.0)
+        assert gate["ok"] is False and gate["reason_code"] == "RISK_BOOK_UNREADABLE"
+
+    def test_unreadable_legacy_trades_db_blocks(self, tmp_path, monkeypatch):
+        from risk.portfolio_risk import account_exposure_gate
+        self._isolate(tmp_path, monkeypatch)
+        db = tmp_path / "logs" / "trades.db"
+        db.parent.mkdir(parents=True)
+        db.write_bytes(b"this is not a sqlite database" * 64)
+        gate = account_exposure_gate("TCS", qty=1, entry=100.0, stop=99.0)
+        assert gate["ok"] is False and gate["reason_code"] == "RISK_BOOK_UNREADABLE"
+
+    def test_corrupt_fno_ledger_blocks(self, tmp_path, monkeypatch):
+        import sqlite3
+        from risk.portfolio_risk import account_exposure_gate
+        self._isolate(tmp_path, monkeypatch)
+        self._write_fno_position(tmp_path)
+        path = tmp_path / "logs" / "product" / "fo_paper.sqlite3"
+        conn = sqlite3.connect(path)
+        conn.execute("UPDATE fo_open_positions SET payload_json='{broken'")
+        conn.commit()
+        conn.close()
+        gate = account_exposure_gate("TCS", qty=1, entry=100.0, stop=99.0)
+        assert gate["ok"] is False and gate["reason_code"] == "RISK_BOOK_UNREADABLE"
+
+    def test_missing_books_are_empty_not_unknown(self, tmp_path, monkeypatch):
+        from risk.portfolio_risk import account_exposure_gate
+        self._isolate(tmp_path, monkeypatch)
+        assert account_exposure_gate("TCS", qty=10, entry=100.0, stop=95.0)["ok"] is True
+
+    def test_fno_book_budget_subtracts_external_open_risk(self):
+        from product.fo_paper import FoPaperBook
+
+        def _open(book):
+            return book.open_position(
+                underlying="RELIANCE", option_symbol="RELIANCE26OCTCE", option_type="CE",
+                entry=50.0, stop=30.0, target=90.0, lot_size=25,
+                opened_at="2026-09-01T10:00:00+05:30", max_holding_sessions=2,
+                context_key="CTX", setup_score=80.0, option_score=80.0,
+            )
+
+        # one lot ~ 25 x 20 = Rs 500 of risk (plus entry slippage); 5% = Rs 5,000
+        assert _open(FoPaperBook(capital=100_000, external_open_risk=4_400)) is not None
+        blocked = FoPaperBook(capital=100_000, external_open_risk=4_900)
+        assert _open(blocked) is None
+        assert blocked.refusals[-1][1] == "RISK_OR_PREMIUM_BUDGET_TOO_SMALL_FOR_ONE_LOT"
+        # account capital smaller than the F&O lane capital caps the total
+        assert _open(FoPaperBook(capital=200_000, external_open_risk=4_900,
+                                 account_capital=100_000)) is None
+        assert _open(FoPaperBook(capital=200_000, external_open_risk=4_900)) is not None
+
+    @staticmethod
+    def _fo_directional():
+        return {
+            "available": True, "status": "READY", "decision": "PAPER_CANDIDATES",
+            "paper_only": True, "live_execution_allowed": False,
+            "candidates": [{
+                "symbol": "RELIANCE", "direction": "LONG", "decision": "PAPER_OPTION_CANDIDATE",
+                "setup": {"score": 82.0, "expected_move": {"holding_days": 2}},
+                "selected_contract": {
+                    "symbol": "RELIANCE26OCTCE", "option_type": "CE", "eligible": True,
+                    "lot_size": 25, "ask": 50.0, "score": 86.0, "context_key": "CTX",
+                    "trade_plan": {"entry": 50.0, "stop": 40.0, "target": 70.0},
+                },
+            }],
+        }
+
+    class _Quotes:
+        def quote(self, keys):
+            return {k: {"last_price": 52.0, "volume": 5000, "oi": 20000,
+                        "ohlc": {"open": 50.0, "high": 55.0, "low": 48.0, "close": 49.0},
+                        "depth": {"buy": [{"price": 51.0}], "sell": [{"price": 52.0}]}}
+                    for k in keys}
+
+    def _run_fo(self, tmp_path):
+        from datetime import datetime, timedelta, timezone
+        from product.fo_paper_runtime import run_fo_paper_cycle
+        from product.fo_paper_store import FoPaperStore
+        ist = timezone(timedelta(hours=5, minutes=30))
+        with FoPaperStore(tmp_path / "logs" / "product" / "fo_paper.sqlite3") as store:
+            return run_fo_paper_cycle(
+                self._fo_directional(), client=self._Quotes(),
+                now_ist=datetime(2026, 9, 28, 10, 15, tzinfo=ist),
+                allow_new_entries=True, store=store, capital=100_000,
+            )
+
+    def test_fno_cycle_respects_equity_open_risk(self, tmp_path, monkeypatch):
+        self._isolate(tmp_path, monkeypatch)
+        book = tmp_path / "logs" / "intelligence" / "intel_book.json"
+        book.parent.mkdir(parents=True)
+        book.write_text(json.dumps({"open": [
+            {"symbol": "TCS", "qty": 490, "entry_price": 100.0, "stop_price": 90.0},
+        ]}), encoding="utf-8")  # Rs 4,900 of equity risk already open
+        out = self._run_fo(tmp_path)
+        assert out["opened_count"] == 0
+        assert out["skipped"][0]["reason"] == "RISK_OR_PREMIUM_BUDGET_TOO_SMALL_FOR_ONE_LOT"
+
+    def test_fno_cycle_opens_when_account_has_room(self, tmp_path, monkeypatch):
+        self._isolate(tmp_path, monkeypatch)
+        assert self._run_fo(tmp_path)["opened_count"] == 1
+
+    def test_fno_cycle_refuses_entries_when_equity_books_unreadable(self, tmp_path, monkeypatch):
+        self._isolate(tmp_path, monkeypatch)
+        book = tmp_path / "logs" / "intelligence" / "intel_book.json"
+        book.parent.mkdir(parents=True)
+        book.write_text("{corrupt", encoding="utf-8")
+        out = self._run_fo(tmp_path)
+        assert out["opened_count"] == 0
+        assert out["skipped"] and out["skipped"][0]["reason"] == "ACCOUNT_RISK_UNREADABLE"
+
+    def test_modern_engine_open_is_durable_before_account_lock_release(self, tmp_path, monkeypatch):
+        import fcntl
+        from datetime import datetime, timezone
+        from core.runtime_paths import ensure_logs_path
+        from product.paper_autopilot import run_reco_paper_cycle
+        from research.auto_research.paper_book import PaperBook
+
+        self._isolate(tmp_path, monkeypatch)
+        book = PaperBook(capital=100_000.0)
+        lock_held_at_save: list[bool] = []
+
+        def _save():
+            with open(ensure_logs_path("risk", "account_exposure.lock"), "a+") as fh:
+                try:
+                    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    lock_held_at_save.append(True)
+                else:
+                    fcntl.flock(fh, fcntl.LOCK_UN)
+                    lock_held_at_save.append(False)
+            return True
+
+        now = datetime(2026, 9, 1, 10, 0, tzinfo=timezone.utc)
+        card = {
+            "symbol": "TCS", "reco_tier": "high_conviction", "entry_state": "ready",
+            "entry": 100.0, "stop": 89.0, "target": 125.0, "cmp": 100.0,
+            "chase_risk": False, "volume_ratio": 1.4, "sector": "Technology",
+            "family_confirms": 3, "score": 82, "allows_recommend": True,
+            "methods": [{"id": m, "status": "pass", "points": 80, "detail": ""}
+                        for m in ("tape", "sepa", "funds", "trend", "rs", "conviction", "sector")],
+        }
+        workspace = {
+            "schema_version": 4, "generated_at": now.isoformat(),
+            "scan_scanned_at": now.isoformat(),
+            "categories": [{"id": "wealth_builders", "count": 1, "cards": [card]}],
+        }
+        out = run_reco_paper_cycle(
+            book=book, cards=[card], workspace=workspace, now=now, as_of="2026-09-01",
+            entries_allowed=True, paper_enabled=True, persist_journal=False,
+            enforce_history=False, durable_book_save=_save,
+        )
+        assert out["taken"], out["rejections"]
+        assert lock_held_at_save and lock_held_at_save[0] is True

@@ -7,7 +7,7 @@ labels whether statutory/broker costs were configured for evidence use.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from math import floor
+from math import floor, isfinite
 from typing import Any, Callable, Mapping
 from uuid import uuid4
 
@@ -172,8 +172,14 @@ class FoPaperBook:
         trail_distance_r: float = 1.0,
         cost_model: CostModel | None = None,
         cost_model_name: str = "",
+        external_open_risk: float = 0.0,
+        account_capital: float | None = None,
     ) -> None:
         self.capital = float(capital)
+        # Rupees already at risk in the account's OTHER paper books (equity).
+        # The total-risk ceiling is an account limit, so it is shared.
+        self.external_open_risk = float(external_open_risk)
+        self.account_capital = None if account_capital is None else float(account_capital)
         self.risk_per_trade_pct = float(risk_per_trade_pct)
         self.max_premium_pct = float(max_premium_pct)
         self.max_daily_premium_pct = float(
@@ -284,8 +290,17 @@ class FoPaperBook:
         )
         premium_budget = min(per_trade_premium_budget, remaining_daily_premium)
         total_risk_budget = equity * self.max_total_risk_pct
+        if self.account_capital is not None:
+            total_risk_budget = min(
+                total_risk_budget,
+                max(0.0, self.account_capital) * self.max_total_risk_pct,
+            )
         open_risk = sum(float(pos.risk_amount) for pos in self.open.values())
-        remaining_total_risk = max(0.0, total_risk_budget - open_risk)
+        external = self.external_open_risk
+        if not isfinite(external) or external < 0 or not isfinite(total_risk_budget):
+            remaining_total_risk = 0.0
+        else:
+            remaining_total_risk = max(0.0, total_risk_budget - open_risk - external)
         risk_budget = min(risk_budget, remaining_total_risk)
         risk_per_lot = per_unit_risk * lot_size
         premium_per_lot = fill * lot_size

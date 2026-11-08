@@ -1183,6 +1183,7 @@ def run_reco_paper_cycle(
         # real approved qty/entry/stop WHILE holding the lock is what
         # actually closes the race, not the earlier unlocked probes.
         from risk.portfolio_risk import account_exposure_gate, account_mutation_lock
+        in_lock_saved = True
         with account_mutation_lock():
             gate = account_exposure_gate(
                 decision.symbol,
@@ -1207,6 +1208,18 @@ def run_reco_paper_cycle(
                 raise RuntimeError(
                     f"paper execution mutation failed for {decision.symbol}: {exc}"
                 ) from exc
+            # Other engines (legacy equity, F&O lane in the market-ops process)
+            # read this book from disk for the shared account risk ceiling, so
+            # the open must be durable before the lock is released.
+            if pos is not None and durable_book_save is not None:
+                try:
+                    pos.sector = str(decision.card.get("sector") or "")
+                except Exception:
+                    pass
+                try:
+                    in_lock_saved = durable_book_save() is not False
+                except Exception:
+                    in_lock_saved = False
         if pos is None:
             reason = ""
             refusals = list(getattr(book, "refusals", []) or [])
@@ -1260,6 +1273,10 @@ def run_reco_paper_cycle(
             note_later_entry(decision.symbol, path=policy_path)
         except Exception:
             pass
+        if not in_lock_saved:
+            # Undurable exposure is invisible to the other books' risk read;
+            # open nothing more. The boundary below re-saves and reports.
+            break
 
     # Durability boundary: production supplies brain._save_intel_book here so
     # the real PAPER mutation reaches disk immediately after the mutation loop,

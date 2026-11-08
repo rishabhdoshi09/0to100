@@ -18,6 +18,7 @@ the ticket can warn "is trade ke baad total risk X%% ho jayega".
 from __future__ import annotations
 
 import contextlib
+import math
 
 from logger import get_logger
 
@@ -40,35 +41,81 @@ def _max_positions() -> int:
         return 5
 
 
-def _combined_open_rows(extra_trade: dict | None = None) -> list[dict]:
-    """The ONE read of combined equity PAPER exposure across BOTH engines'
-    books. portfolio_risk_report() (the display) and account_exposure_gate()
-    (the pre-mutation check both engines must call) are built on this same
-    read, so the two can never disagree -- there must never be a "display
-    risk = whole account" while "execution risk = one engine only"."""
+class AccountRiskUnreadable(RuntimeError):
+    """A paper book exists but its open positions cannot be read. Account
+    exposure is UNKNOWN, which must block new entries rather than read as 0."""
+
+
+FNO_BOOK = "FNO"
+
+
+def _fno_open_rows() -> list[dict]:
+    from core.runtime_paths import logs_path
+    from product.fo_paper_store import FoPaperStore
+
+    if not logs_path("product", "fo_paper.sqlite3").exists():
+        return []
+    with FoPaperStore(read_only=True) as store:
+        positions = store.load_positions()
+    rows = []
+    for pos in positions:
+        qty = int(pos.get("quantity") or 0)
+        entry = float(pos.get("entry_price") or 0.0)
+        stop = float(pos.get("stop_price") or 0.0)
+        if qty <= 0 or not math.isfinite(entry) or not math.isfinite(stop) or entry <= 0:
+            raise ValueError(f"F&O paper position {pos.get('trade_id')} has invalid exposure")
+        rows.append({"symbol": str(pos.get("underlying") or "").upper(), "qty": qty,
+                     "entry": entry, "stop": stop, "book": FNO_BOOK})
+    return rows
+
+
+def _combined_open_rows(extra_trade: dict | None = None, *,
+                        include_fno: bool = True) -> list[dict]:
+    """The ONE read of combined PAPER exposure across every book that spends
+    the account's risk: legacy equity (trades.db), modern equity
+    (intel_book.json) and, unless include_fno=False, the F&O options lane
+    (fo_paper.sqlite3). portfolio_risk_report() (the display) and
+    account_exposure_gate() (the pre-mutation check) are built on this same
+    read, so the two can never disagree.
+
+    A missing book is empty. A book that exists but cannot be read raises
+    AccountRiskUnreadable: unknown exposure is not zero exposure."""
+    from product.paper_status import modern_engine_open_positions
     from risk.position_manager import _open_trades
-    trades = _open_trades()
-    rows = [{"symbol": t["symbol"], "qty": int(t["qty"] or 0),
-             "entry": float(t["entry_price"] or 0),
-             "stop": float(t["stop_price"] or 0)} for t in trades]
-    # The account-level risk meter must see the WHOLE book, not just the
-    # legacy execution.autopilot/trade_executor table. The modern automatic
-    # engine (product.paper_autopilot, the documented sole new-entry
-    # authority) keeps its own separate book -- without this, "5% total
-    # open risk" / sector-concentration warnings would silently ignore the
-    # positions actually being opened by real automatic trading today.
+
     try:
-        from product.paper_status import modern_engine_open_positions
+        trades = _open_trades(strict=True)
+        rows = [{"symbol": t["symbol"], "qty": int(t["qty"] or 0),
+                 "entry": float(t["entry_price"] or 0),
+                 "stop": float(t["stop_price"] or 0)} for t in trades]
+    except Exception as exc:
+        raise AccountRiskUnreadable(f"legacy paper book (trades.db) unreadable: {exc}") from exc
+    try:
         rows.extend(
             {"symbol": p["symbol"], "qty": p["qty"],
              "entry": p["entry_price"], "stop": p["stop_price"]}
-            for p in modern_engine_open_positions()
+            for p in modern_engine_open_positions(strict=True)
         )
     except Exception as exc:
-        log.debug("modern_engine_positions_read_failed", error=str(exc))
+        raise AccountRiskUnreadable(f"modern paper book (intel_book.json) unreadable: {exc}") from exc
+    if include_fno:
+        try:
+            rows.extend(_fno_open_rows())
+        except Exception as exc:
+            raise AccountRiskUnreadable(f"F&O paper ledger unreadable: {exc}") from exc
     if extra_trade:
         rows.append(extra_trade)
     return rows
+
+
+def _row_risk(row: dict) -> float:
+    return row["qty"] * max(0.0, row["entry"] - row["stop"])
+
+
+def equity_books_open_risk() -> float:
+    """Rupees at risk across both equity paper books, for the F&O lane's
+    share of the account ceiling. Raises AccountRiskUnreadable."""
+    return sum(_row_risk(r) for r in _combined_open_rows(include_fno=False))
 
 
 def portfolio_risk_report(extra_trade: dict | None = None) -> dict:
@@ -81,7 +128,7 @@ def portfolio_risk_report(extra_trade: dict | None = None) -> dict:
 
     cap = _capital()
     deployed = sum(r["qty"] * r["entry"] for r in rows)
-    open_risk = sum(r["qty"] * max(0.0, r["entry"] - r["stop"]) for r in rows)
+    open_risk = sum(_row_risk(r) for r in rows)
 
     # Sector packs
     sector_packs: dict[str, list[str]] = {}
@@ -97,7 +144,8 @@ def portfolio_risk_report(extra_trade: dict | None = None) -> dict:
 
     risk_pct = open_risk / cap * 100 if cap else 0
     dep_pct = deployed / cap * 100 if cap else 0
-    n = len(rows)
+    # MAX_OPEN_POSITIONS is the equity slot limit; the F&O lane has its own.
+    n = sum(1 for r in rows if r.get("book") != FNO_BOOK)
     max_n = _max_positions()
 
     warnings: list[str] = []
@@ -143,6 +191,7 @@ GATE_DUPLICATE_POSITION = "DUPLICATE_POSITION"
 GATE_MAX_POSITIONS = "MAX_POSITIONS"
 GATE_SECTOR_CAP = "SECTOR_CAP"
 GATE_MAX_PORTFOLIO_RISK = "MAX_PORTFOLIO_RISK"
+GATE_RISK_BOOK_UNREADABLE = "RISK_BOOK_UNREADABLE"
 
 
 def account_exposure_gate(
@@ -170,17 +219,23 @@ def account_exposure_gate(
     Returns {"ok": bool, "reason_code": str, "detail": str, "report": dict}.
     """
     symbol = str(symbol or "").upper()
-    existing = {r["symbol"] for r in _combined_open_rows()}
-    if symbol in existing:
-        return {
-            "ok": False, "reason_code": GATE_DUPLICATE_POSITION,
-            "detail": f"{symbol} already open in the account (legacy or modern engine book)",
-            "report": None,
-        }
+    try:
+        existing = {r["symbol"] for r in _combined_open_rows()}
+        if symbol in existing:
+            return {
+                "ok": False, "reason_code": GATE_DUPLICATE_POSITION,
+                "detail": f"{symbol} already open in the account "
+                          "(legacy/modern equity or F&O paper book)",
+                "report": None,
+            }
 
-    probe = {"symbol": symbol, "qty": int(qty or 0),
-              "entry": float(entry or 0.0), "stop": float(stop or 0.0)}
-    report = portfolio_risk_report(extra_trade=probe)
+        probe = {"symbol": symbol, "qty": int(qty or 0),
+                 "entry": float(entry or 0.0), "stop": float(stop or 0.0)}
+        report = portfolio_risk_report(extra_trade=probe)
+    except AccountRiskUnreadable as exc:
+        log.warning("account_risk_book_unreadable", error=str(exc))
+        return {"ok": False, "reason_code": GATE_RISK_BOOK_UNREADABLE,
+                "detail": str(exc), "report": None}
 
     if report["n_positions"] > report["max_positions"]:
         return {
