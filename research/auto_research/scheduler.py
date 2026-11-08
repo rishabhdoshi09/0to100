@@ -200,7 +200,16 @@ class AutoResearchBrain:
             from pathlib import Path as _P
             p = _P(self.paper_config_path)
             if not p.exists():
-                return True  # first-run default only; a corrupt existing opt-out is not consent
+                # A missing preference file is only a first-run default when
+                # there is no durable paper/runtime state to recover. An
+                # accidentally deleted opt-out must NOT reactivate autonomy
+                # on the next restart while an older book still exists.
+                if self.runtime_state.load_error:
+                    return False
+                historical_paths = (self.intel_book_path, self.runtime_state.path)
+                if any(path and _P(path).exists() for path in historical_paths):
+                    return False
+                return True
             payload = _json.loads(p.read_text(encoding="utf-8"))
             if not isinstance(payload, dict) or type(payload.get("enabled")) is not bool:
                 return False
