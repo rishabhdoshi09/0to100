@@ -4867,3 +4867,69 @@ class TestFnoRankingSafety:
         state = get_live_execution_state()
         assert state.locked is True
         assert state.authorized is False
+
+
+class TestPaperAutopilotSizesOnBookRiskCapital:
+    """product.paper_autopilot pre-sizes the quantity it hands to PaperBook.
+    It must use the book's own risk base (realized equity), or every entry
+    whose risk budget binds is refused by the book in a drawdown and
+    under-sized after gains."""
+
+    def _cycle(self, realized):
+        from datetime import datetime, timezone
+        from product.paper_autopilot import run_reco_paper_cycle
+        from research.auto_research.paper_book import PaperBook
+
+        book = PaperBook(capital=100_000.0)
+        book.realized_pnl = float(realized)
+        now = datetime(2026, 9, 1, 10, 0, tzinfo=timezone.utc)
+        card = {
+            "symbol": "TCS", "reco_tier": "high_conviction", "entry_state": "ready",
+            "entry": 100.0, "stop": 89.0, "target": 125.0, "cmp": 100.0,
+            "chase_risk": False, "volume_ratio": 1.4, "sector": "Technology",
+            "family_confirms": 3, "score": 82, "allows_recommend": True,
+            "methods": [
+                {"id": m, "status": "pass", "points": 80, "detail": ""}
+                for m in ("tape", "sepa", "funds", "trend", "rs", "conviction", "sector")
+            ],
+        }
+        workspace = {
+            "schema_version": 4, "generated_at": now.isoformat(),
+            "scan_scanned_at": now.isoformat(),
+            "categories": [{"id": "wealth_builders", "count": 1, "cards": [card]}],
+        }
+        out = run_reco_paper_cycle(
+            book=book, cards=[card], workspace=workspace, now=now, as_of="2026-09-01",
+            entries_allowed=True, paper_enabled=True, persist_journal=False,
+            enforce_history=False,
+        )
+        return book, out
+
+    def _standalone_qty(self, realized):
+        from research.auto_research.paper_book import PaperBook
+        book = PaperBook(capital=100_000.0)
+        book.realized_pnl = float(realized)
+        return book.open_position("s", "TCS", 100.0, 89.0, 125.0, "2026-09-01", 20).qty
+
+    def test_drawdown_entry_is_taken_at_drawn_down_size(self):
+        book, out = self._cycle(-30_000.0)
+        assert out["taken"], [(r["reason_code"], r.get("detail")) for r in out["rejections"]]
+        assert not book.refusals
+        pos = next(iter(book.open.values()))
+        assert pos.risk_amount <= 0.01 * 70_000.0 + 1e-6
+        assert pos.qty == self._standalone_qty(-30_000.0)
+
+    def test_profitable_book_is_sized_on_realized_equity(self):
+        book, out = self._cycle(+50_000.0)
+        assert out["taken"]
+        assert next(iter(book.open.values())).qty == self._standalone_qty(+50_000.0)
+
+    def test_risk_capital_is_the_single_sizing_base(self):
+        from research.auto_research.paper_book import PaperBook
+        book = PaperBook(capital=100_000.0)
+        book.realized_pnl = -30_000.0
+        assert book.risk_capital() == 70_000.0
+        book.realized_pnl = float("nan")
+        assert book.risk_capital() == 0.0
+        book.realized_pnl = -150_000.0
+        assert book.risk_capital() == 0.0
