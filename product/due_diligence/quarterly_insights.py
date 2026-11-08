@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 import re
 from datetime import date, datetime
+from zoneinfo import ZoneInfo
 from typing import Any, Mapping, Sequence
 
 from product.pit_financials import parsed_results
@@ -288,7 +289,7 @@ def quarterly_insights(
 ) -> dict[str, Any]:
     """Query canonical PIT storage only; never fetch network data or mutate state."""
     ticker = str(symbol or "").strip().upper()
-    cutoff = as_of or datetime.now().astimezone().date().isoformat()
+    cutoff = as_of or datetime.now(ZoneInfo("Asia/Kolkata")).date().isoformat()
     # Validate prior to touching the warehouse.
     if _date(cutoff) is None or not SYMBOL_RE.fullmatch(ticker):
         raise ValueError("Invalid symbol or as_of date")
