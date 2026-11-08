@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import re
+from calendar import monthrange
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 from typing import Any, Mapping, Sequence
@@ -68,6 +69,7 @@ def _source(row: Mapping[str, Any]) -> dict[str, Any]:
         "evidence_id": str(row.get("evidence_id") or ""),
         "publication_date": str(row.get("publication_date") or row.get("filing_date") or "")[:10],
         "available_from": str(row.get("available_from") or "")[:10],
+        "period_start": str(row.get("period_start") or "")[:10],
         "period_end": str(row.get("period_end") or "")[:10],
         "source": str(row.get("source") or ""),
         "source_url": str(row.get("source_url") or ""),
@@ -87,6 +89,29 @@ def _year_ago(period: date) -> date | None:
         return period.replace(year=period.year - 1)
     except ValueError:
         return None  # Feb 29 requires an explicit comparable-quarter policy.
+
+
+def _is_calendar_quarter(row: Mapping[str, Any]) -> bool:
+    """Only a proven three-month calendar quarter may be called quarterly.
+
+    NSE result metadata can describe H1 cumulative P&L while XBRL reports
+    quarter and year-to-date values. Reject ambiguous or conflicting periods
+    until their actual source contexts have been independently reconciled.
+    """
+    start = _date(row.get("period_start"))
+    end = _date(row.get("period_end"))
+    parsed = row.get("extracted")
+    parsed_start = _date(parsed.get("period_start")) if isinstance(parsed, Mapping) and parsed.get("period_start") else None
+    if start is not None and parsed_start is not None and start != parsed_start:
+        return False
+    start = parsed_start or start
+    if start is None or end is None or start.year != end.year:
+        return False
+    if start.day != 1 or start.month not in (1, 4, 7, 10):
+        return False
+    if end.month != start.month + 2 or end.day != monthrange(end.year, end.month)[1]:
+        return False
+    return True
 
 
 def _evidence_item(
@@ -127,6 +152,7 @@ def compose_quarterly_insights(
     if day is None:
         raise ValueError("as_of must be an ISO date YYYY-MM-DD")
     valid: list[dict[str, Any]] = []
+    unverified_periods = 0
     for raw in rows:
         if not isinstance(raw, Mapping):
             continue
@@ -142,6 +168,9 @@ def compose_quarterly_insights(
             or not str(row.get("evidence_id") or "")
             or not isinstance(row.get("facts"), Mapping)
         ):
+            continue
+        if not _is_calendar_quarter(row):
+            unverified_periods += 1
             continue
         valid.append(row)
     # Prefer the same accounting scope for every comparison. Do not conflate
@@ -170,6 +199,8 @@ def compose_quarterly_insights(
     challenging: list[dict[str, Any]] = []
     missing: list[str] = []
 
+    if unverified_periods:
+        missing.append("NON_QUARTER_OR_UNVERIFIED_REPORTING_PERIOD")
     if not latest:
         missing.extend(["PUBLISHED_PARSED_QUARTER", "THESIS_EVIDENCE", "ANTI_THESIS_EVIDENCE"])
     else:
