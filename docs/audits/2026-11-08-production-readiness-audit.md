@@ -234,3 +234,100 @@ Nothing here is VERIFIED ON HOST or RELEASE CERTIFIED.
 `#302 ← #308`, then `#303 → #307 ← #311 ← {#309, #312, #313, #314}`, with
 #310 rebased onto #311. The merge onto canonical needs its own CI run. That SHA,
 not any PR head above, is the first possible release candidate.
+
+## 8. Session 3 — integrated release candidate (2026-11-08, from 17:00 UTC)
+
+### 8.1 Release-candidate branch
+
+`cursor/release-candidate-f43f` (PR #319) is built on #310's head `1f1db28f`,
+which already contains the heads of #300–#307. On top of it, #311, #308, #309,
+#312, #313, #314 and #315 were merged in that order, and every merge was clean.
+#289 and #296–#315 are ancestors. The content of #291–#295 is present,
+and #290 is superseded. The session-3 fixes below are separate commits on top
+of merge head `ea3e61dd`.
+
+Not integrated:
+- #285 (perf bundle; CI-green at its own head `853c9cf7`): see QT-PRA-028.
+- #286: only its cross-book risk idea was ported (QT-PRA-016).
+- #287, #316 and #317 were excluded as features or duplicates.
+
+### 8.2 Evidence register (session 3)
+
+Every item below was reproduced by a test that failed before the fix and
+passes after it. Status: TESTED. It becomes INTEGRATED once CI is green at
+the RC SHA. Nothing here is VERIFIED ON HOST.
+
+**QT-PRA-017 (P0): EOD paper settlement crashed in production.**
+- Root cause: `providers.current_regime()` wraps `intel_book` in `InstitutionalPaperBookAdapter`. `settle_paper_session` and the intelligence loop call `mark(..., allow_entry_session=False)`, and the adapter's `mark()` did not accept that keyword. The result was a `TypeError`, `OUTCOME_RESOLUTION` retried forever, and no stop, target or time exit was ever applied.
+- Fix: `45b5a1b7`. The adapter forwards `allow_entry_session`.
+- Regression: two tests in `tests/test_outcome_liveness.py` exercise settlement through the adapter, including keeping the entry-session bar out of exits.
+
+**QT-PRA-016 (P1): the 5% total open-risk ceiling was per book, not per account.**
+- Root cause: legacy equity (`trades.db`), modern equity (`intel_book.json`) and F&O (`fo_paper.sqlite3`) each enforced their own 5%. A book that existed but couldn't be read counted as zero exposure.
+- Fix: `12190d5e`.
+  - `account_exposure_gate` reads the durable F&O ledger and returns `RISK_BOOK_UNREADABLE` when any existing book can't be read.
+  - `FoPaperBook` subtracts equity open risk and is capped at the account capital.
+  - The F&O cycle reads equity risk and commits its entries under `account_mutation_lock`.
+  - The modern engine saves its book before releasing the lock.
+  - The trade plan shows heat `UNKNOWN` instead of `OK` when risk can't be read.
+- Regression: `tests/test_money_paths.py::TestAccountOpenRiskSpansEveryPaperBook` (13 tests) and `tests/test_trade_plan.py::test_unreadable_account_book_is_unknown_not_ok`.
+
+**QT-PRA-018 (P1): outcome look-ahead from the decision-day bar.**
+- Root cause: `core.outcome_resolver.first_touch_path` included the decision date's own OHLC. An EOD signal could be settled as a stop or target from price action that happened before the signal existed. Affected: `signal_log` → `live_edge` / `ev_engine`, Case memory and Evolution grading. The walk-forward backtest starts at the next session.
+- Fix: `a775b773`.
+- Regression: `tests/test_outcome_resolver.py`, covering the decision-day bar and the horizon counted after the decision.
+
+**QT-PRA-019 (P1): US paper lane outside the 1% / 10% / 5% rails.**
+- Root cause: the lane is armed by default and fed by the supervisor's US scans. Conviction stretched risk to 1.5%, the per-name cap defaulted to 20%, and there was no total cap. Its USD rows also counted as rupee risk and used NSE slots in the account gate.
+- Fix: `241b0e5c`.
+  - Ceilings are clamped at sizing time, which also covers persisted config.
+  - Entries past 5% of the USD pool are refused.
+  - An unreadable US book refuses entries.
+  - `US_AUTOPILOT` rows are excluded from the NSE gate.
+- Regression: `TestUsPaperLaneRiskRails` (5 tests).
+
+**QT-PRA-020 (P1): a paper trade was reported placed when its journal write failed.**
+- Fix: `7f7b4fd2`. `place_trade(paper=True)` returns `ok=False` unless the row was written.
+- Regression: `TestPaperTradeIsOnlyOkWhenRecorded`.
+
+**QT-PRA-021 (P1): US paper positions never closed; target wins booked above target.**
+- Root cause: the `trades` DDL has no `exit_price` column; only the dormant legacy NSE autopilot adds it. On a journal written only by the US lane, every close `UPDATE` failed at debug log level. Separately, target exits booked the later polled price.
+- Fix: `c2baff61`. `trade_executor.ensure_schema()` adds the column idempotently, close failures log as warnings, and target exits book the target price.
+- Regression: `TestUsPaperTargetExitPrice` (2 tests, including an upgrade of a journal created with the old schema).
+- Host check needed: whether the owner's `trades.db` already has the column.
+
+**QT-PRA-022 (P1): US scan reported SUCCEEDED when its paper step failed.**
+- Fix: `f8bf2271`. The operation finishes `BLOCKED/US_PAPER_FEED_FAILED` and keeps the scan summary. The supervisor does not rescan the same slot.
+- Regression: 3 tests in `tests/test_us_parity_autonomy.py`.
+
+**QT-PRA-023 (P1): OUTCOME_RESOLUTION reported SUCCEEDED when learning ingest failed.**
+- Fix: `7f6886ad`. A `paper_learning` or `forward_soak` error gives `RETRYABLE_FAILED/PAPER_LEARNING_INGEST_FAILED`. Both ingests are keyed, so a retry is idempotent.
+- Regression: 3 tests in `tests/test_outcome_integrity.py`.
+
+Registered, not changed:
+- **QT-PRA-024 (P2, dormant):** the legacy NSE autopilot sizes up to 2× of 1% risk and caps a name at 20%, or 40% in fast-book mode. It is disarmed by default, and its entry points (`breakout_sniper`, `telegram_commands`) are not started by the canonical stack. The account 5% gate still applies. It must be fixed before anyone re-enables it.
+- **QT-PRA-025 (P2, dormant):** `PaperAutonomyManager.trade_day` marks the entry day's bar. Its signal source, `providers.signals_for`, reads legacy `auto_scan`, which is empty in the canonical stack. Existing tests encode the same-day behaviour.
+- **QT-PRA-026 (P2, disclosed model):** modern equity paper fills at the card's intended entry (cards must be `ready`, not chase-risk, and under 36 hours old). Execution-reality runs as a shadow and the cycle response says so.
+- **QT-PRA-027 (P2):** US live prices (yfinance `fast_info`) carry no timestamp, so their staleness can't be measured. They are used only for paper anchoring and exits.
+- **QT-PRA-028 (perf, not integrated):** #285 bundles 5,473 inserted lines across 52 files from an older base. A trial merge needed 11 hunks in `data/bhavcopy_store.py` to reconcile two parallel bhavcopy-integrity designs. After resolution, 11 tests failed on conflicting semantics: #285 accepts a legacy archive without `DATE1`, which the RC rejects; and its fixture CSVs fail the RC's archive validation. Merge aborted. Its latency evidence (dashboard GET 347 s) is host-measured and was not reproduced here. A dedicated port is needed.
+
+### 8.3 Release gates (supersedes 7.3)
+
+| Gate | State | Evidence / blocker |
+| --- | --- | --- |
+| P0 defects resolved and validated | PARTIAL | QT-PRA-017 fixed and tested. The audit is targeted, not exhaustive. |
+| No open P1 without a blocking decision | PASS (code) | QT-PRA-016 and 018–023 fixed. QT-PRA-013 resolved by #311 in the RC. |
+| CI at release SHA | PENDING | All 5 workflows must be green on PR #319's exact head. See the PR. |
+| Data / portfolio invariants under fault injection | PARTIAL | Hermetic: corrupt and unreadable books fail closed (QT-PRA-016). No physical detach. |
+| Backup restoration | BLOCKED | Owner's Mac required. Backups must not be modified. |
+| Hardware / external storage | BLOCKED | No host access. |
+| Real-host performance and 72 h soak | BLOCKED | No host access. #285 is not integrated (QT-PRA-028). |
+| Rollback verified | BLOCKED | No host access. |
+| Frontend / API / Telegram | PARTIAL | vitest 25 files / 127 tests and production build pass. No live-data browser session. No real Telegram delivery. |
+| Security controls | PARTIAL | Loopback binding, cross-site mutation guard, live interlock (`QT_ENABLE_UNSAFE_LEGACY_LIVE` off, `live_money_unlocked=False`): 24 test files pass. QT-PRA-008 tunnel residual and QT-PRA-015 pin remain open. |
+| Independent release review | NOT TESTED | PR #319 awaits review. |
+
+**Verdict: NOT READY.** The code-level P0 and P1 items found so far are fixed
+and tested on one branch. Host, storage, restore, rollback, performance and
+the 72 h soak gates are BLOCKED without access to the owner's Mac. CI at the
+RC SHA must be confirmed. Live execution stays locked; everything is paper.
