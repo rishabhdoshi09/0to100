@@ -19,6 +19,25 @@ def test_private_operator_mode_preserves_existing_mutation_workflow(monkeypatch)
     assert result.code == "PRIVATE_OPERATOR_MODE"
 
 
+def test_malformed_explicit_public_flag_never_grants_private_operator_access(monkeypatch):
+    monkeypatch.delenv("QT_OPERATOR_TOKEN", raising=False)
+    for invalid in ("tru", "enabled", "", "  ", "y", "maybe", "2"):
+        monkeypatch.setenv("QT_PUBLIC_READ_ONLY", invalid)
+        result = authorize_mutation("POST", {})
+        assert result.allowed is False, invalid
+        assert result.code == "PUBLIC_READ_ONLY", invalid
+        assert access_projection()["public_read_only"] is True
+
+
+def test_explicit_false_public_flag_preserves_private_local_workflow(monkeypatch):
+    monkeypatch.delenv("QT_OPERATOR_TOKEN", raising=False)
+    for disabled in ("0", "false", "no", "off", " FALSE "):
+        monkeypatch.setenv("QT_PUBLIC_READ_ONLY", disabled)
+        result = authorize_mutation("POST", {})
+        assert result.allowed is True, disabled
+        assert result.code == "PRIVATE_OPERATOR_MODE", disabled
+
+
 def test_public_mode_without_token_is_strictly_read_only(monkeypatch):
     monkeypatch.setenv("QT_PUBLIC_READ_ONLY", "1")
     monkeypatch.delenv("QT_OPERATOR_TOKEN", raising=False)
