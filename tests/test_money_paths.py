@@ -5246,3 +5246,38 @@ class TestPaperTradeIsOnlyOkWhenRecorded:
         res = te.place_trade("HAL", 5, "MARKET", 100.0, 95.0, 110.0, paper=True)
         assert res["ok"] is True
         assert [t["symbol"] for t in te.recent_trades(5)] == ["HAL"]
+
+
+class TestUsPaperTargetExitPrice:
+    def test_target_exit_books_the_target_not_a_later_higher_print(self, tmp_path, monkeypatch):
+        import data.us_data as usd
+        setup = TestUsPaperLaneRiskRails._setup
+        us, te = setup(tmp_path, monkeypatch)
+        TestUsPaperLaneRiskRails._open_us(te, "AAA", 10, 100.0, 95.0)  # target 104
+        monkeypatch.setattr(usd, "us_live_prices", lambda syms: {"AAA": {"price": 108.0}})
+        us._close_positions()
+        row = [t for t in us._trades(("PAPER_WIN",)) if t["symbol"] == "AAA"][0]
+        assert row["exit_price"] == 104.0
+
+    def test_pre_exit_price_journal_is_upgraded_and_stop_closes(self, tmp_path, monkeypatch):
+        import sqlite3
+        import data.us_data as usd
+        us, te = TestUsPaperLaneRiskRails._setup(tmp_path, monkeypatch)
+        conn = sqlite3.connect(te._DB)
+        conn.execute(
+            "CREATE TABLE trades (id INTEGER PRIMARY KEY AUTOINCREMENT, placed_at TEXT NOT NULL, "
+            "mode TEXT NOT NULL, symbol TEXT NOT NULL, qty INTEGER NOT NULL, entry_type TEXT NOT NULL, "
+            "entry_price REAL, stop_price REAL, target_price REAL, product TEXT, entry_order_id TEXT, "
+            "gtt_id TEXT, status TEXT, note TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO trades(placed_at, mode, symbol, qty, entry_type, entry_price, stop_price, "
+            "target_price, status, note) VALUES ('2026-10-01T10:00','PAPER','AAA',10,'MARKET',"
+            "100,95,104,'PAPER_OPEN','US_AUTOPILOT:us_scanner')"
+        )
+        conn.commit()
+        conn.close()
+        monkeypatch.setattr(usd, "us_live_prices", lambda syms: {"AAA": {"price": 94.0}})
+        us._close_positions()
+        assert us._open_trades() == []
+        assert us._trades(("PAPER_LOSS",))[0]["exit_price"] == 94.0

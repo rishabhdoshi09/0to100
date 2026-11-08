@@ -235,7 +235,7 @@ def _update(trade_id: int, sets: str, params: tuple) -> None:
         conn.execute(f"UPDATE trades SET {sets} WHERE id=?", (*params, trade_id))
         conn.commit()
     except Exception as exc:
-        log.debug("us_autopilot_update_failed", error=str(exc))
+        log.warning("us_autopilot_update_failed", trade_id=trade_id, error=str(exc))
     finally:
         if conn is not None:
             try:
@@ -653,6 +653,17 @@ def _close_positions() -> None:
         live = us_live_prices(sorted({t["symbol"] for t in opens}))
     except Exception:
         return
+    conn = None
+    try:
+        from execution.trade_executor import connect as _te_connect, ensure_schema
+        conn = _te_connect()
+        ensure_schema(conn)
+    except Exception as exc:
+        log.warning("us_autopilot_schema_upgrade_failed", error=str(exc))
+        return
+    finally:
+        if conn is not None:
+            conn.close()
     s = _load()
     trig = 1 + s.get("breakeven_trigger_pct", 2.0) / 100
     max_days = int(s.get("max_hold_days", 5))
@@ -665,8 +676,9 @@ def _close_positions() -> None:
         stop = float(t["stop_price"] or 0)
         target = float(t["target_price"] or 0)
         if target and px >= target:
+            # A resting target fills AT the target; a later, higher poll is not the fill.
             _update(t["id"], "status=?, exit_price=?, note=note||?",
-                    ("PAPER_WIN", px, f" | target ${px:,.2f}"))
+                    ("PAPER_WIN", target, f" | target ${target:,.2f} (seen ${px:,.2f})"))
             continue
         if stop and px <= stop:
             _update(t["id"], "status=?, exit_price=?, note=note||?",

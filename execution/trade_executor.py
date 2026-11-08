@@ -44,9 +44,26 @@ CREATE TABLE IF NOT EXISTS trades (
     entry_order_id TEXT,
     gtt_id TEXT,
     status TEXT,
-    note TEXT
+    note TEXT,
+    exit_price REAL,
+    orig_stop REAL,
+    signal_price REAL
 );
 """
+
+# Columns added after the first release; older journals are upgraded in place.
+_ADDED_COLUMNS = ("exit_price REAL", "orig_stop REAL", "signal_price REAL")
+
+
+def ensure_schema(conn) -> None:
+    """Create the trades table and add any missing later columns. Additive and
+    idempotent: rows and existing columns are never touched."""
+    conn.execute(_DDL)
+    have = {str(row[1]) for row in conn.execute("PRAGMA table_info(trades)").fetchall()}
+    for col in _ADDED_COLUMNS:
+        if col.split()[0] not in have:
+            conn.execute(f"ALTER TABLE trades ADD COLUMN {col}")
+    conn.commit()
 
 
 def connect():
@@ -70,7 +87,7 @@ def _journal(row: dict) -> bool:
         with _db_lock:
             _DB.parent.mkdir(parents=True, exist_ok=True)
             conn = connect()
-            conn.execute(_DDL)
+            ensure_schema(conn)
             conn.execute(
                 """INSERT INTO trades (placed_at, mode, symbol, qty, entry_type,
                    entry_price, stop_price, target_price, product,
