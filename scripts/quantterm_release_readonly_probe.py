@@ -15,7 +15,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
@@ -35,10 +35,18 @@ def _origin(raw: str) -> str:
     return raw.rstrip("/")
 
 
+class _NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def _fetch_json(url: str, timeout: float) -> tuple[float, dict]:
     request = Request(url, method="GET", headers={"Accept": "application/json"})
     started = time.perf_counter()
-    with urlopen(request, timeout=timeout) as response:
+    # Disable environment proxies and HTTP redirects: a local endpoint must
+    # never cause this probe to contact an arbitrary remote destination.
+    opener = build_opener(ProxyHandler({}), _NoRedirect())
+    with opener.open(request, timeout=timeout) as response:
         if response.status != 200:
             raise RuntimeError("non-200 HTTP response")
         raw = response.read(MAX_RESPONSE_BYTES + 1)
