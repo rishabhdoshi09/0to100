@@ -378,6 +378,64 @@ def test_paper_auto_explicit_opt_out_survives_restart(tmp_path):
     assert second.is_paper_auto_enabled() is False
 
 
+def test_paper_auto_deleted_opt_out_never_reenables_with_existing_book(tmp_path):
+    """Deleting the preferences file does not erase the user's paper opt-out."""
+    book = tmp_path / "intel_book.json"
+    config = tmp_path / "paper_config.json"
+    first = AutoResearchBrain(intel_book_path=book, paper_config_path=config)
+    assert first._save_intel_book() is True
+    first.disable_paper_auto()
+    assert config.exists()
+    config.unlink()  # simulated lost/partially restored operator preference
+
+    restored = AutoResearchBrain(intel_book_path=book, paper_config_path=config)
+    assert restored.intel_book_recovery_error == ""
+    assert restored.paper_auto_enabled is False
+    assert restored.is_paper_auto_enabled() is False
+    assert not config.exists()  # never silently fabricate a new operator choice
+
+
+def test_paper_auto_missing_config_with_existing_runtime_state_fails_closed(tmp_path):
+    import json
+    from research.intelligence.runtime.runtime_state import RuntimeState
+
+    config = tmp_path / "paper_config.json"
+    state_path = tmp_path / "runtime_state.json"
+    RuntimeState(state_path).save()  # durable state exists, even with no cycles
+    assert json.loads(state_path.read_text(encoding="utf-8"))["completed_cycles"] == []
+
+    restored = AutoResearchBrain(
+        paper_config_path=config, runtime_state_path=state_path,
+    )
+    assert restored.paper_auto_enabled is False
+    assert restored.is_paper_auto_enabled() is False
+
+
+def test_paper_auto_missing_config_with_event_journal_fails_closed(tmp_path):
+    config = tmp_path / "paper_config.json"
+    events = tmp_path / "events.jsonl"
+    events.write_text("", encoding="utf-8")  # a created durable journal is history
+
+    restored = AutoResearchBrain(
+        paper_config_path=config, event_store_path=events,
+    )
+    assert restored.event_store.load_error == ""
+    assert restored.paper_auto_enabled is False
+    assert restored.is_paper_auto_enabled() is False
+
+
+def test_paper_auto_missing_config_with_unreadable_runtime_history_fails_closed(tmp_path):
+    config = tmp_path / "paper_config.json"
+    state_path = tmp_path / "runtime_state.json"
+    state_path.write_text("{corrupt", encoding="utf-8")
+    restored = AutoResearchBrain(
+        paper_config_path=config, runtime_state_path=state_path,
+    )
+    assert restored.runtime_state.load_error
+    assert restored.paper_auto_enabled is False
+    assert restored.is_paper_auto_enabled() is False
+
+
 def test_paper_auto_unreadable_config_fails_closed(tmp_path, monkeypatch):
     from pathlib import Path
 
