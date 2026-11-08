@@ -186,3 +186,15 @@ def test_real_pit_warehouse_wiring_is_temporal(tmp_path):
     assert current["metrics"]["revenue"]["yoy_pct"] == 50
     assert len(current["source_documents"]) == 2
     assert current["decision"] == "RESEARCH_ONLY"
+
+
+def test_flat_metrics_are_neither_bull_case_nor_counter_case():
+    data = [
+        row("2026-09-30", "2026-11-01", {"revenue": 100, "pat": 10}),
+        row("2025-09-30", "2025-11-01", {"revenue": 100, "pat": 10}),
+    ]
+    out = compose_quarterly_insights("ABC", as_of="2026-11-08", rows=data)
+    assert out["status"] == "QUARTER_COMPARABLE"
+    assert out["metrics"]["pat"]["yoy_pct"] == 0
+    assert out["thesis_evidence"] == []
+    assert out["anti_thesis_evidence"] == []
