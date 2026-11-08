@@ -4,9 +4,13 @@ Status: IN PROGRESS. This document is the durable checkpoint for the master
 production-readiness directive. It records only what was verified against exact
 commit SHAs in this session; absence of a finding is not a pass.
 
-Production readiness verdict: **NOT READY**. Paper-only, live execution locked.
-No production deployment, live order, or transition to live trading is
-authorized by this audit.
+Production readiness verdict: **NOT READY — no merged release-candidate SHA;
+host, storage, restore, soak and rollback gates are BLOCKED / NOT TESTED.**
+Paper-only, live execution locked. No production deployment, live order, or
+transition to live trading is authorized by this audit.
+
+Section 7 (session 2) supersedes the status column of QT-PRA-005…008 in
+section 2 and the gate table in section 4.
 
 ## 1. Verified repository state (as of 2026-11-08 02:30 UTC)
 
@@ -98,3 +102,135 @@ inconsistency, observability; P3 cosmetic.
 3. QT-PRA-005: measure concurrent-scan incidence from `logs/market_ops/runtime.json` and autonomy job ledger on the host before adding a single-flight lock.
 4. QT-PRA-007/008 decisions.
 5. Add a security dependency scan (`pip-audit`) to CI as a non-blocking lane first.
+
+## 7. Session 2 — production engineering directive (2026-11-08, from 04:00 UTC)
+
+### 7.1 Verified stack state (exact head SHAs, actual workflow conclusions)
+
+`gh pr checks` lists superseded/cancelled runs as `fail`; the states below are
+the conclusions of the runs whose `headSha` equals the PR head, for both the
+`push` and `pull_request` events of CI, Product Acceptance, Terminal UI, Host
+Migration Gate and Dependency Vulnerability Advisory.
+
+| PR | Head | Result at that exact head |
+| --- | --- | --- |
+| #302 paper-auto missing config | `1c826f98` | all 5 workflows success (push + PR) |
+| #303 paper-book equity risk | `398a2bf7` | all 5 success |
+| #304 read-only host probe | `0144d9dd` | all 5 success |
+| #305 public-mode malformed flag | `6e7a5890` | all 5 success |
+| #306 paper mark atomicity | `124141b6` | all 5 success |
+| #307 paper-cycle upstream fail-closed | `44f4f4cf` | **CI failure** (push + PR); other 4 success. 5 tests, see QT-PRA-013 |
+| #310 outcomes-returned fail-closed (on #307) | `1f1db28f` | **CI failure**: exactly the same 5 inherited tests |
+| #308 (this session, on #302) | `5f6979e6` | all 5 success |
+| #311 (this session, on #307) | `7bc1e07a` | all 5 success |
+| #309 / #312 / #313 / #314 (this session, on #311) | `5e7a93d6` / `c74774ae` / `1b6d355c` / `06ed58e5` | all 5 success each |
+
+Local integration sweep: `7bc1e07a` with #309, #312, #313 and #314 merged
+(local merge `c6a8da07`, never pushed). 413/413 test files rc=0, one
+interpreter per file as in `ci.yml`. 4148 passed, 0 failed, 1 deselected.
+`tests/integration` was not run.
+
+### 7.2 Evidence register
+
+Status vocabulary: IMPLEMENTED → TESTED (local regression) → INTEGRATED (green
+at exact head on its dependency branch) → VERIFIED ON HOST → RELEASE CERTIFIED.
+Nothing here is VERIFIED ON HOST or RELEASE CERTIFIED.
+
+**QT-PRA-010 (P1): #302 disables PAPER_AUTO on the first restart of a fresh install.**
+- Root cause: the first-run default ON was granted but never recorded. After the first durable book save, history exists without a preference file, so the next load looks like a deleted opt-out.
+- Evidence: CI at `968fa2da` (`test_paper_auto_closeout::TestHeadlessSmoke::test_restart_restores_without_reapproval`). `1c826f98` changed that test to persist an explicit opt-in, and production behaviour was unchanged. 3 regression tests fail at `1c826f98`.
+- Fix SHA: `5f6979e6` (#308). The default is persisted (temp file, fsync, atomic replace) before it is granted. If it can't be recorded, it is not granted.
+- Regression: `tests/test_auto_research.py` first-run / EROFS / deleted-preference tests.
+- Integration: on #302 head. CI: all 5 success at `5f6979e6`.
+- Host verification: NOT TESTED.
+- Residual risk: a read-only runtime volume on first boot starts with PAPER_AUTO off.
+- Review: self-reviewed, plus the #302 author's alternative (test-only change) compared. Release impact: blocks a clean first-install experience; not a money path.
+
+**QT-PRA-011 (P1): Telegram delivers recommendations from an unpublished or invalid scan generation.**
+- Root cause: `drain_desk_alerts()` sent `load_recommendations()` without binding it to `load_scan()`. The sidecars are persisted before canonical publication, which can then be withheld.
+- Evidence: 3 regression tests were red (the alert was sent).
+- Fix SHA: `5e7a93d6` (#309). The alert requires `scan_scanned_at == load_scan().scanned_at`, and fails closed on store errors.
+- Integration: on #311. CI: all 5 success.
+- Host verification: NOT TESTED (no bot token in this environment).
+- Residual risk: none on the execution path.
+- Release impact: decision-truth consistency between Telegram and the paper executor.
+
+**QT-PRA-003 (update): sidecar-publication race.**
+- Every acting reader is now generation-bound:
+  - paper entries (`STALE_SCAN_SNAPSHOT`);
+  - Telegram (QT-PRA-011);
+  - discovery (`decision_simulation_gate`);
+  - Home cards (#292 liveness);
+  - public best setups (`load_persisted_best_setups(scanned_at)`).
+- Residual (P2, display-only): `long_term_scan.json` carries no market-scan binding, so a withheld publication can leave a long-term shortlist derived from an unpublished scan. No execution path consumes it.
+- Staged commit of four independent stores was set aside as too invasive for that residual.
+
+**QT-PRA-005 (closed, measured): duplicate whole-market scans.**
+- Measured in-process: after `run_supervisor()`'s `install_parallel_runtime()`, `JOBS.HANDLERS[MARKET_SCAN]` is `parallel_runtime._delegated_market_scan`. Autonomy only enqueues or observes a market_ops operation.
+- market_ops holds a process-exclusive `flock` (`logs/market_ops/worker.lock`) and runs scans on the single `market_scan` lane.
+- A bare `import research.autonomy` still shows `jobs.run_market_scan`. Only non-canonical entry points (`ui/retail_home_momentum.py`, archived Streamlit) call `run_whole_market_scan` directly.
+- No code change. Host incidence: NOT TESTED.
+
+**QT-PRA-006 (superseded by #303, follow-up QT-PRA-012).**
+- #303 sizes the book on realized equity (`capital + realized_pnl`) and adds a free-cash check.
+- Contract: every paper risk fraction (1 % per trade, 10 % per name, 5 % total open) applies to realized equity. Unrealized P&L is excluded, gains compound and drawdowns shrink exposure.
+- The combined-account gate `risk.portfolio_risk.account_exposure_gate` still uses `settings.trading_capital`. It is shared with the legacy engine and the live-facing display, and remains the looser outer bound.
+
+**QT-PRA-012 (P2): with #303, the autopilot pre-size and the book disagree, so drawdown entries are refused.**
+- Root cause: `product/paper_autopilot.py` pre-sized on `book.capital`, and the book refuses quantities above its realized-equity limit.
+- Evidence: on `398a2bf7`, realized −30k, a risk-bound entry gave `taken=[]` with `BOOK_REFUSED: target portfolio quantity exceeds house limits`.
+- Fix SHA: `c74774ae` (#312). `PaperBook.risk_capital()` is the single sizing base for both.
+- Regression: `tests/test_money_paths.py::TestPaperAutopilotSizesOnBookRiskCapital` (3 tests). All 63 PaperBook-related files pass per file (1074 tests).
+- CI: all 5 success.
+- Release impact: without it, the modern engine silently stops entering in a drawdown.
+
+**QT-PRA-013 (P1 release blocker on #307 / #310): CI red at #307 and #310 heads.**
+- Root cause: #307's new gate (`b00a5a81`) requires status `OK`, `NO_ACTION` or `ALREADY_DONE`. 5 test fakes returned no `status`.
+- The production `IntelligenceCycleResult.status` always exists and defaults to `OK`, so this is not a production defect.
+- Bisected: green at `124141b6`, red at `b00a5a81`.
+- Fix SHA: `7bc1e07a` (#311). The fakes match the real contract, and my #300 test now asserts the stronger "executor never invoked" invariant.
+- CI: all 5 success. #310 must rebase onto #311 (or carry an equivalent fix) before it can go green.
+- Review note: `SKIPPED_LOCKED` (intel-lock contention) is also mapped to `PERMANENT_FAILED` by the #307 gate, so a contended slot is retired instead of retried. This fails closed. It needs a deliberate owner decision.
+
+**QT-PRA-014 (P1): any web page can drive operator controls on the loopback API.**
+- Root cause: CORS hides responses but doesn't stop delivery of simple cross-site POSTs or DNS-rebound requests.
+- Evidence: a cross-site `text/plain` POST of `RESUME_NEW_PAPER_ENTRIES` returned 200 and was accepted, on a disposable runtime root.
+- Fix SHA: `06ed58e5` (#314). Browser-asserted provenance (`Origin` exact, else `Sec-Fetch-Site: cross-site`) other than the desk is refused. Headers can only refuse; a valid bearer token still authorizes; non-browser clients are unchanged.
+- Real-browser check: headless Chrome 148 against real uvicorn. The attacker form got 403; a desk-origin cross-port fetch reached the handler.
+- CI: all 5 success. Host verification: NOT TESTED.
+- Residual risk: a desk served from another origin needs `QT_DESK_ORIGINS`.
+
+**QT-PRA-008 (update): public posture.**
+- All APIs are hard-bound to `127.0.0.1` (`product/host_supervisor.py`, `scripts/run_quantterm_complete.sh`).
+- #305 makes a malformed `QT_PUBLIC_READ_ONLY` fail closed, and QT-PRA-014 covers browser-originated mutations in private mode.
+- Remaining: a tunnel or reverse proxy without `QT_PUBLIC_READ_ONLY` is still unauthenticated for non-browser clients. Public deployment (Stage B) is not authorized and must set the flag. OPEN (P2).
+
+**QT-PRA-015 (P2, accepted with gate): `autobahn==19.11.2` exact-pinned by `kiteconnect` 5.2.2.**
+- Advisories: PYSEC-2020-25 (CVE-2020-35678) and PYSEC-2026-4027 (CVE-2026-77528).
+- Exposure: client-only use (KiteTicker → `wss://ws.kite.trade`). The client never offers permessage-deflate, which CVE-2026-77528 requires.
+- Evidence: `tests/test_kite_ticker_wire_compat.py` (`1b6d355c`, #313) passes on 19.11.2. It also passes on 26.11.1 in a disposable venv, where `pip check` reports the pin conflict. A mutation check proved the deflate assertion can fail.
+- Decision: keep the pin. Don't force-override a declared exact dependency.
+- CI: all 5 success.
+
+### 7.3 Release gates (supersedes section 4)
+
+| Gate | State | Evidence / blocker |
+| --- | --- | --- |
+| P0 defects resolved and validated | PARTIAL | QT-PRA-001 integrated (#300). No new P0 found in session 2. Audit coverage is not exhaustive. |
+| No open P1 without blocking decision | FAIL | QT-PRA-013 until #311 lands under #307 and #310 rebases. QT-PRA-004 (#289 head never CI-complete) until the merge SHA runs. |
+| CI at release SHA | NOT TESTED | No merged release-candidate SHA exists. Every PR in 7.1 is verified only at its own head. |
+| Data / portfolio invariants under fault injection | PARTIAL | Hermetic only. No physical detach. |
+| Backup restoration | NOT TESTED | Owner's Mac required. Backups must not be modified. |
+| Hardware / external storage | BLOCKED | Untrusted until tested on the host. |
+| Real-host performance and soak | NOT TESTED | No latency, memory or swap numbers are claimed. #304 adds a read-only probe, not yet run on the host. |
+| Frontend / API / Telegram | PARTIAL | Product Acceptance + Terminal UI green at every head in 7.1. One real-browser security check (QT-PRA-014). No live-data browser session. No real Telegram delivery. |
+| Security controls | PARTIAL | QT-PRA-014 fixed. #305 merged into the stack. pip-audit lane (#301) green. QT-PRA-008 tunnel residual and QT-PRA-015 pin open. |
+| Dependency vulnerabilities | PARTIAL | QT-PRA-015 triaged and gated. Not remediated (upstream pin). |
+| Rollback verified | NOT TESTED | |
+| Independent release review | NOT TESTED | Session-2 PRs are drafts awaiting review. |
+
+### 7.4 Integration order (proposed)
+
+`#302 ← #308`, then `#303 → #307 ← #311 ← {#309, #312, #313, #314}`, with
+#310 rebased onto #311. The merge onto canonical needs its own CI run. That SHA,
+not any PR head above, is the first possible release candidate.
