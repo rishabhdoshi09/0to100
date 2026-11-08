@@ -32,6 +32,27 @@ LABELS = {
 }
 VERSION = "quarterly_insights.v1"
 
+# Avoid treating a lender's liability growth, receivables, or cash flow as
+# ordinary manufacturing-company risk. The public read API currently has no
+# independently verified as-of sector classification, so it must not assume
+# the company is non-financial.
+_FINANCIAL_FRAMEWORKS = frozenset({
+    "bank", "nbfc", "nbfc_gold", "nbfc_housing", "life_insurance",
+    "general_insurance", "broker", "amc", "exchange",
+})
+
+
+def _operating_risk_rules_applicable(framework_id: str) -> bool:
+    name = str(framework_id or "").strip().lower()
+    if not name or name == "generic" or name in _FINANCIAL_FRAMEWORKS:
+        return False
+    # Use the existing source of truth for supported sector frameworks, not
+    # an independent allowlist that can drift over time.
+    from product.due_diligence.sector_frameworks import list_frameworks
+
+    return name in list_frameworks()
+
+
 
 def _date(value: Any) -> date | None:
     try:
@@ -198,6 +219,10 @@ def compose_quarterly_insights(
     supporting: list[dict[str, Any]] = []
     challenging: list[dict[str, Any]] = []
     missing: list[str] = []
+    risk_framework = str(framework_id or "").strip().lower()
+    operating_risk_applicable = _operating_risk_rules_applicable(risk_framework)
+    if not operating_risk_applicable:
+        missing.append("SECTOR_SPECIFIC_RISK_FRAMEWORK_NOT_VERIFIED")
 
     if unverified_periods:
         missing.append("NON_QUARTER_OR_UNVERIFIED_REPORTING_PERIOD")
@@ -252,9 +277,10 @@ def compose_quarterly_insights(
 
         # Debt stock comparisons only use reported same-quarter balances.
         debt = metrics["total_debt"]
-        if debt["yoy_pct"] is not None and debt["yoy_pct"] >= 25 and framework_id.lower() not in {
-            "bank", "nbfc", "insurer", "insurance"
-        }:
+        if (
+            operating_risk_applicable and debt["yoy_pct"] is not None
+            and debt["yoy_pct"] >= 25
+        ):
             challenging.append({
                 "id": "debt_growth",
                 "metric": "total_debt",
@@ -264,9 +290,7 @@ def compose_quarterly_insights(
                 "sources": debt["sources"],
             })
         current_cfo = metrics["operating_cash_flow"]["current"]
-        if current_cfo is not None and current_cfo < 0 and framework_id.lower() not in {
-            "bank", "nbfc", "insurer", "insurance"
-        }:
+        if operating_risk_applicable and current_cfo is not None and current_cfo < 0:
             challenging.append({
                 "id": "negative_operating_cash_flow",
                 "metric": "operating_cash_flow",
@@ -282,7 +306,7 @@ def compose_quarterly_insights(
         if (
             recv["yoy_pct"] is not None and rev["yoy_pct"] is not None
             and recv["yoy_pct"] > max(20, rev["yoy_pct"] + 15)
-            and framework_id.lower() not in {"bank", "nbfc", "insurer", "insurance"}
+            and operating_risk_applicable
         ):
             challenging.append({
                 "id": "receivables_outpace_revenue",
