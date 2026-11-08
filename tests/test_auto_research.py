@@ -526,9 +526,10 @@ class TestGetBrainRuntimePathsUnavailable:
     def test_autonomy_paper_cycle_job_sees_paper_disabled_and_no_durability(
         self, monkeypatch, tmp_path
     ):
-        """The PAPER_CYCLE job hands the brain's book + enable flag to the
-        recommendation executor. With storage detached it must receive
-        paper_enabled=False and a durability callback that reports failure."""
+        """With storage detached the blocked brain's intelligence cycle reports
+        BLOCKED_RECOVERY, so the PAPER_CYCLE job must not hand its book to the
+        recommendation executor at all, and the brain itself still refuses
+        both entries and durability claims."""
         import product.paper_autopilot as PA
         from research.autonomy import jobs as JOBS
         self._detach(monkeypatch)
@@ -555,9 +556,13 @@ class TestGetBrainRuntimePathsUnavailable:
         deps.telegram = _Telegram()
         result = deps.run_paper_cycle(True)
 
-        assert seen["paper_enabled"] is False
-        assert seen["durable_book_save"]() is False
-        assert len(getattr(seen["book"], "open", {})) == 0
+        from research.auto_research.scheduler import get_brain
+        brain = get_brain()
+        assert seen == {}, "reco executor must not run after an unsafe upstream cycle"
+        assert brain.is_paper_auto_enabled() is False
+        assert brain._save_intel_book() is False
+        assert len(brain.intel_book.open) == 0
+        assert result["reco_autopilot"]["status"] == "BLOCKED_UPSTREAM"
         assert result["status"] == "BLOCKED_RECOVERY"
         assert result["positions_opened"] == []
         assert result["new_entries_allowed"] is False
