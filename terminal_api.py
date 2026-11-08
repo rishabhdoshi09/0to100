@@ -120,7 +120,7 @@ async def _public_mutation_boundary(request: Request, call_next):
     FastAPI application, including product-extension routes. It deliberately
     does not trust client IPs or forwarding headers.
     """
-    from product.public_access import authorize_mutation
+    from product.public_access import authorize_mutation, public_read_only_enabled
 
     access = authorize_mutation(request.method, request.headers)
     if not access.allowed:
@@ -128,7 +128,7 @@ async def _public_mutation_boundary(request: Request, call_next):
             {
                 "detail": access.detail,
                 "code": access.code,
-                "public_read_only": True,
+                "public_read_only": public_read_only_enabled(),
             },
             status_code=403,
             headers={"Cache-Control": "no-store"},
