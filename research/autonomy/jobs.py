@@ -358,14 +358,38 @@ class Deps:
             capability_failures=capability_failures,
             fresh_live_symbols=(live.fresh_symbols() if live is not None else ()),
         )
+        # No second paper mutation after an unverified/failed intelligence
+        # cycle. The recommendation runner is a separate entry producer and
+        # must not turn upstream failure into a new opening opportunity.
+        if not isinstance(result, dict):
+            result = {"status": "FAILED_SAFE", "error": "invalid intelligence cycle response"}
+        upstream_status = str(result.get("status") or "").upper()
+        if upstream_status not in {"OK", "NO_ACTION", "ALREADY_DONE"}:
+            result["reco_autopilot"] = {
+                "error": f"INTELLIGENCE_CYCLE_BLOCKED: {upstream_status or 'UNKNOWN'}",
+                "status": "BLOCKED_UPSTREAM",
+            }
+            result["eligibility"] = "BLOCKED_SAFETY"
+            result["new_entries_allowed"] = False
+            self.telegram.notify_paper_cycle(result, book=brain.intel_book)
+            return result
+
         reco = {}
         try:
             from product.paper_autopilot import run_reco_paper_cycle
-            paper_on = True
+            # Permission-read failure is UNKNOWN, never equivalent to ON.
             try:
                 paper_on = bool(brain.is_paper_auto_enabled())
-            except Exception:
-                paper_on = True
+            except Exception as exc:
+                result["reco_autopilot"] = {
+                    "error": f"PAPER_AUTO_AUTHORITY_UNAVAILABLE: {type(exc).__name__}",
+                    "status": "BLOCKED_SAFETY",
+                }
+                result["status"] = "FAILED_SAFE"
+                result["eligibility"] = "BLOCKED_SAFETY"
+                result["new_entries_allowed"] = False
+                self.telegram.notify_paper_cycle(result, book=brain.intel_book)
+                return result
             reco = run_reco_paper_cycle(
                 book=brain.intel_book,
                 as_of=str((result or {}).get("as_of_date") or ""),
@@ -1122,6 +1146,21 @@ def run_paper_cycle(ctx) -> JobResult:
             state_hint=ST.OBSERVING,
             new_entries_allowed=False,
         )
+    # The production dependency may report BLOCKED_RECOVERY, FAILED_SAFE or
+    # BLOCKED_DURABILITY without raising. These are NOT successful paper
+    # cycles, regardless of whether a recommendation runner was skipped.
+    if isinstance(ctx.deps, Deps):
+        core_status = str((result or {}).get("status") or "").upper()
+        if core_status not in {"OK", "NO_ACTION", "ALREADY_DONE"}:
+            return JobResult(
+                JS.PERMANENT_FAILED,
+                f"paper intelligence cycle blocked ({core_status or 'UNKNOWN'}); slot retired safely",
+                error_code="PAPER_CYCLE_UPSTREAM_UNSAFE",
+                error_message=str((result or {}).get("error") or core_status)[:240],
+                state_hint=ST.OBSERVING,
+                new_entries_allowed=False,
+                metadata={"intelligence_status": core_status or "UNKNOWN"},
+            )
     eligibility = (result or {}).get("eligibility", "")
     if data_failure:
         eligibility = "DATA_UNAVAILABLE"
