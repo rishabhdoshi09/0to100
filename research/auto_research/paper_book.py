@@ -179,25 +179,47 @@ class PaperBook:
         return sum(p.qty * p.r_unit for p in self.open.values())
 
     def mark(self, bars: dict, date: str, *, allow_entry_session: bool = True) -> list[ClosedTrade]:
-        closed_now = []
+        """Plan every mark/exit before mutating the paper book.
+
+        A bad bar or transaction-cost feed cannot partly close one position,
+        mark another session as completed, or poison realized equity.
+        """
         session = str(date or "")[:10]
-        marked_any = False
+        if not session:
+            return []
+
+        # Pre-validate every bar that can affect the existing book, including
+        # those of positions already marked for this session (equity uses them).
+        checked_bars: dict[str, tuple] = {}
+        for pos in self.open.values():
+            bar = bars.get(pos.symbol)
+            if bar is None or pos.symbol in checked_bars:
+                continue
+            try:
+                if len(bar) >= 4:
+                    op, high, low, close = map(float, bar[:4])
+                else:
+                    high, low, close = map(float, bar[:3])
+                    op = None
+            except (TypeError, ValueError, IndexError) as exc:
+                raise ValueError(f"invalid paper bar for {pos.symbol}") from exc
+            values = (high, low, close) if op is None else (op, high, low, close)
+            if not all(isfinite(x) and x > 0 for x in values):
+                raise ValueError(f"nonfinite or nonpositive paper bar for {pos.symbol}")
+            checked_bars[pos.symbol] = (op, high, low, close)
+
+        planned_marks: list[tuple[PaperPosition, int]] = []
+        planned_closes: list[tuple[tuple, ClosedTrade]] = []
         for key, pos in list(self.open.items()):
-            if not session or (not allow_entry_session and str(pos.entry_date or "")[:10] >= session):
+            if not allow_entry_session and str(pos.entry_date or "")[:10] >= session:
                 continue
             if str(pos.last_marked_session or "")[:10] == session:
                 continue
-            bar = bars.get(pos.symbol)
+            bar = checked_bars.get(pos.symbol)
             if bar is None:
                 continue
-            if len(bar) >= 4:
-                op, high, low, close = map(float, bar[:4])
-            else:
-                op = None
-                high, low, close = map(float, bar[:3])
-            pos.last_marked_session = session
-            pos.bars_held += 1
-            marked_any = True
+            op, high, low, close = bar
+            next_bars_held = pos.bars_held + 1
             exit_price = exit_reason = None
             if op is not None and op <= pos.stop_price:
                 exit_price, exit_reason = op, "GAP_STOP"
@@ -207,35 +229,63 @@ class PaperBook:
                 exit_price, exit_reason = pos.stop_price, "STOP"
             elif high >= pos.target_price:
                 exit_price, exit_reason = pos.target_price, "TARGET"
-            elif pos.bars_held >= pos.max_holding_days:
+            elif next_bars_held >= pos.max_holding_days:
                 exit_price, exit_reason = close, "MAX_HOLD"
-            if exit_price is not None:
-                closed_now.append(self._close(key, pos, exit_price, exit_reason, session))
-        if marked_any:
-            self.equity_curve.append(self.equity(bars))
-        return closed_now
 
-    def _close(self, key, pos: PaperPosition, exit_price: float, reason: str, date: str) -> ClosedTrade:
-        exit_fill = exit_price * (1.0 - self.slippage_bps / 1e4)
+            if exit_price is not None:
+                # Cost calculation can raise. Do not change ANY paper state
+                # until every closing trade has been successfully priced.
+                trade = self._build_closed_trade(
+                    pos, exit_price, exit_reason, session,
+                )
+                planned_closes.append((key, trade))
+            else:
+                planned_marks.append((pos, next_bars_held))
+
+        for pos, held in planned_marks:
+            pos.last_marked_session = session
+            pos.bars_held = held
+        for key, trade in planned_closes:
+            self._settle_trade(key, trade)
+
+        if planned_marks or planned_closes:
+            self.equity_curve.append(self.equity(bars))
+        return [trade for _, trade in planned_closes]
+
+    def _build_closed_trade(
+        self, pos: PaperPosition, exit_price: float, reason: str, date: str,
+    ) -> ClosedTrade:
+        exit_fill = float(exit_price) * (1.0 - self.slippage_bps / 1e4)
         gross = (exit_fill - pos.entry_price) * pos.qty
         cost = 0.0
         if self.cost_model is not None:
             try:
                 cost = float(self.cost_model(pos.entry_price, exit_fill, pos.qty))
-            except Exception:
-                cost = 0.0
+            except Exception as exc:
+                raise RuntimeError("paper transaction cost model failed") from exc
+        if not isfinite(cost) or cost < 0:
+            raise ValueError("invalid paper transaction cost")
         pnl = gross - cost
         realized_R = pnl / (pos.qty * pos.r_unit)
-        self.realized_pnl += pnl
-        trade = ClosedTrade(
+        if not all(isfinite(x) for x in (exit_fill, gross, pnl, realized_R)):
+            raise ValueError("nonfinite paper closeout economics")
+        return ClosedTrade(
             strategy_id=pos.strategy_id, symbol=pos.symbol, entry_price=pos.entry_price,
             exit_price=exit_fill, stop_price=pos.stop_price, qty=pos.qty, entry_date=pos.entry_date,
             exit_date=date, exit_reason=reason, realized_R=realized_R, pnl=pnl,
             decision_id=pos.decision_id or "", paper_intent_id=pos.paper_intent_id or "",
             context_key=pos.context_key or "",
         )
+
+    def _settle_trade(self, key, trade: ClosedTrade) -> None:
+        self.realized_pnl += trade.pnl
         self.closed.append(trade)
         del self.open[key]
+
+    def _close(self, key, pos: PaperPosition, exit_price: float, reason: str, date: str) -> ClosedTrade:
+        """Legacy direct close helper: never commit an unpriced fill."""
+        trade = self._build_closed_trade(pos, exit_price, reason, date)
+        self._settle_trade(key, trade)
         return trade
 
     def equity(self, bars: dict | None = None) -> float:
