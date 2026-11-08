@@ -50,7 +50,7 @@ def test_deferred_work_released_only_after_durable_paper_save(tmp_path, monkeypa
         intel_book = PaperBook(capital=100_000)
 
         def run_intelligence_cycle_day(self, **_kwargs):
-            return {"as_of_date": "2026-09-30", "positions_opened": []}
+            return {"status": "OK", "as_of_date": "2026-09-30", "positions_opened": []}
 
         def is_paper_auto_enabled(self):
             return True
@@ -105,7 +105,7 @@ def test_failed_durable_save_abandons_research_and_surfaces_paper_error(tmp_path
         intel_book = PaperBook(capital=100_000)
 
         def run_intelligence_cycle_day(self, **_kwargs):
-            return {"as_of_date": "2026-09-30", "positions_opened": []}
+            return {"status": "OK", "as_of_date": "2026-09-30", "positions_opened": []}
 
         def is_paper_auto_enabled(self):
             return True
