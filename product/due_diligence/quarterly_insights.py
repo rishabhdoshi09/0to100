@@ -76,7 +76,7 @@ def _source(row: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _pct(current: float | None, baseline: float | None) -> float | None:
-    if current is None or baseline is None or baseline == 0:
+    if current is None or baseline is None or baseline <= 0:
         return None
     result = (current - baseline) / abs(baseline) * 100.0
     return round(result, 2) if math.isfinite(result) else None
@@ -179,6 +179,30 @@ def compose_quarterly_insights(
             fact = metrics[metric]
             change = fact["yoy_pct"]
             if change is None:
+                # A negative/zero PAT base makes conventional percentage growth
+                # misleading. State a verified turnaround or continuing loss
+                # rather than printing a fictitious +200% YoY number.
+                if metric == "pat" and fact["current"] is not None and fact["prior_year_same_quarter"] is not None:
+                    current_pat = fact["current"]
+                    prior_pat = fact["prior_year_same_quarter"]
+                    if prior_pat <= 0 < current_pat:
+                        supporting.append({
+                            "id": "pat_loss_to_profit",
+                            "metric": "pat",
+                            "observation": "PAT moved from a non-positive prior-year base to profit; percentage growth is not meaningful.",
+                            "value": current_pat,
+                            "unit": "INR_CRORE",
+                            "sources": fact["sources"],
+                        })
+                    elif prior_pat < 0 and current_pat < 0:
+                        challenging.append({
+                            "id": "pat_still_negative",
+                            "metric": "pat",
+                            "observation": "PAT remains negative in both comparable quarters; conventional percentage growth is not meaningful.",
+                            "value": current_pat,
+                            "unit": "INR_CRORE",
+                            "sources": fact["sources"],
+                        })
                 missing.append(f"{metric.upper()}_YOY")
                 continue
             note = {
