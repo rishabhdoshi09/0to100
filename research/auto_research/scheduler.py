@@ -206,7 +206,11 @@ class AutoResearchBrain:
                 # on the next restart while an older book still exists.
                 if self.runtime_state.load_error:
                     return False
-                historical_paths = (self.intel_book_path, self.runtime_state.path)
+                historical_paths = (
+                    self.intel_book_path,
+                    self.runtime_state.path,
+                    self.event_store.path,
+                )
                 if any(path and _P(path).exists() for path in historical_paths):
                     return False
                 return True
