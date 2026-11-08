@@ -65,7 +65,7 @@ def connect():
     return conn
 
 
-def _journal(row: dict) -> None:
+def _journal(row: dict) -> bool:
     try:
         with _db_lock:
             _DB.parent.mkdir(parents=True, exist_ok=True)
@@ -84,8 +84,10 @@ def _journal(row: dict) -> None:
                  row.get("status"), row.get("note", "")))
             conn.commit()
             conn.close()
+        return True
     except Exception as exc:
         log.warning("trade_journal_failed", error=str(exc))
+        return False
 
 
 def _validate(symbol: str, qty: int, entry_price: float,
@@ -133,10 +135,14 @@ def place_trade(symbol: str, qty: int, entry_type: str, entry_price: float,
 
     if paper or not kite_ready():
         # Existing compatibility behaviour. The response explicitly identifies PAPER.
-        _journal({"mode": "PAPER", "symbol": symbol, "qty": qty,
-                  "entry_type": entry_type, "entry_price": entry_price,
-                  "stop_price": stop, "target_price": target,
-                  "product": product, "status": "PAPER_OPEN", "note": note})
+        recorded = _journal({"mode": "PAPER", "symbol": symbol, "qty": qty,
+                             "entry_type": entry_type, "entry_price": entry_price,
+                             "stop_price": stop, "target_price": target,
+                             "product": product, "status": "PAPER_OPEN", "note": note})
+        if not recorded:
+            return {"ok": False, "mode": "PAPER", "fallback": not paper,
+                    "message": f"Paper trade not recorded: the trade journal could not be "
+                               f"written, so no {symbol} position exists."}
         log.info("paper_trade_placed", symbol=symbol, qty=qty)
         return {"ok": True, "mode": "PAPER", "fallback": not paper,
                 "message": f"📝 Paper trade recorded: {qty} × {symbol} @ "

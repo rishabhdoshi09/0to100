@@ -5229,3 +5229,20 @@ class TestUsPaperLaneRiskRails:
         assert report["open_risk"] == 0 and report["n_positions"] == 0
         assert account_exposure_gate("TCS", qty=10, entry=100.0, stop=95.0)["ok"] is True
 
+
+class TestPaperTradeIsOnlyOkWhenRecorded:
+    def test_unrecorded_paper_trade_reports_failure(self, tmp_path, monkeypatch):
+        import execution.trade_executor as te
+        db = tmp_path / "trades.db"
+        db.write_bytes(b"not a sqlite database" * 64)
+        monkeypatch.setattr(te, "_DB", db)
+        res = te.place_trade("HAL", 5, "MARKET", 100.0, 95.0, 110.0, paper=True)
+        assert res["ok"] is False and res["mode"] == "PAPER"
+        assert "not recorded" in res["message"]
+
+    def test_recorded_paper_trade_reports_success(self, tmp_path, monkeypatch):
+        import execution.trade_executor as te
+        monkeypatch.setattr(te, "_DB", tmp_path / "trades.db")
+        res = te.place_trade("HAL", 5, "MARKET", 100.0, 95.0, 110.0, paper=True)
+        assert res["ok"] is True
+        assert [t["symbol"] for t in te.recent_trades(5)] == ["HAL"]
