@@ -1105,4 +1105,6 @@ def build_due_diligence(
     report["cache_schedule"] = cache_schedule(as_of)
     report["first_screen"] = first_screen(report)
     report["thesis"] = compose_thesis(report)
+    from product.due_diligence.quarterly_brief import compose_quarterly_brief
+    report["quarterly_brief"] = compose_quarterly_brief(report)
     return report
