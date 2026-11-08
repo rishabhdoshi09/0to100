@@ -65,7 +65,7 @@ inconsistency, observability; P3 cosmetic.
 - CI-equivalent canonical sweep on `12ec8cfc` working tree: 409 test files, one interpreter per file as in `.github/workflows/ci.yml`. 408 files rc=0; the single rc≠0 was `tests/test_auto_research.py`, executed while the new QT-PRA-001 regression tests existed and the fix did not yet (expected red).
 - After fixes: `tests/test_auto_research.py` (36 passed), `tests/test_scan_kite_snapshot_freshness.py` (17 passed), 54 files touching `scan_store`/`desk_pipeline`/`decision_simulation_gate`/`startup_check` (656 passed), 17 files touching `market_scan_service` (199 passed), neighbouring get_brain consumers (`test_autonomy*`, `test_evolution_*`, `test_paper_cycle_liveness_dedupe`, `test_paper_position_sector_persistence`, `test_parallel_release_followup`) all passed.
 - `python -m compileall` over the CI module list: OK.
-- Full canonical sweep on the committed branch head: see PR description for the final result.
+- Full canonical sweep on the committed branch head (`3ac04390` + docs; QT-PRA-009's files re-run afterwards at `1ad9be51`): 409/409 files rc=0, 4092 tests passed, 0 failed, 0 skipped, 0 errors. `tests/integration` (network-controlled, `continue-on-error` in CI) was not run here.
 
 ## 4. Release gates
 
