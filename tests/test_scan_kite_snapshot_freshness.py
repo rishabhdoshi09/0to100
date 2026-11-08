@@ -350,3 +350,55 @@ def test_discovery_freshness_rejects_rotated_or_unverified_kite_scan(
     S.save_scan(_scan(sid="new"), location)
     snapshot.active = "old"
     assert desk_pipeline.scan_is_fresh() is False
+
+
+def test_corrupt_active_pointer_blocks_unbound_offline_scan(monkeypatch, tmp_path):
+    """An unreadable ACTIVE file is not proof that Kite authority is absent."""
+    from research.intelligence.data import snapshot_store
+
+    store = snapshot_store.SnapshotStore(root=tmp_path / "snapshots")
+    (store.root / "ACTIVE").write_text("{corrupt json", encoding="utf-8")
+    assert store.get_active_snapshot() is None
+    monkeypatch.setattr(snapshot_store, "SnapshotStore", lambda: store)
+
+    valid, reason = S.scan_source_status(
+        _scan(sid="", source="official_nse_bhavcopy")
+    )
+    assert valid is False
+    assert reason == "SNAPSHOT_POINTER_INVALID"
+
+
+def test_failed_snapshot_probe_blocks_unbound_scan(monkeypatch):
+    """IO errors cannot silently authorize a public-data fallback."""
+    from research.intelligence.data import snapshot_store
+
+    class BrokenStore:
+        def get_active_snapshot(self):
+            raise OSError("cannot read snapshot pointer")
+
+    monkeypatch.setattr(snapshot_store, "SnapshotStore", BrokenStore)
+    assert S.scan_source_status(
+        _scan(sid="", source="official_nse_bhavcopy")
+    ) == (False, "SNAPSHOT_VERIFICATION_FAILED")
+
+
+def test_unbound_kite_scan_is_invalid_even_when_store_is_offline(monkeypatch, tmp_path):
+    """A Kite-labelled scan always needs a matching active Kite identity."""
+    from research.intelligence.data import snapshot_store
+
+    store = snapshot_store.SnapshotStore(root=tmp_path / "snapshots")
+    monkeypatch.setattr(snapshot_store, "SnapshotStore", lambda: store)
+    assert S.scan_source_status(
+        _scan(sid="", source="kite_snapshot")
+    ) == (False, "KITE_SNAPSHOT_MISSING")
+
+
+def test_genuine_offline_nse_scan_remains_compatible(monkeypatch, tmp_path):
+    """No snapshot pointer and explicit NSE provenance retain offline reads."""
+    from research.intelligence.data import snapshot_store
+
+    store = snapshot_store.SnapshotStore(root=tmp_path / "snapshots")
+    monkeypatch.setattr(snapshot_store, "SnapshotStore", lambda: store)
+    assert S.scan_source_status(
+        _scan(sid="", source="official_nse_bhavcopy")
+    ) == (True, "")
