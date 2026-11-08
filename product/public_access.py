@@ -19,6 +19,7 @@ from typing import Mapping
 _UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 _FALSE_VALUES = frozenset({"0", "false", "no", "off"})
+_DESK_ORIGINS = frozenset({"http://127.0.0.1:5173", "http://localhost:5173"})
 
 
 def _env_flag(name: str) -> bool:
@@ -59,34 +60,75 @@ def _bearer_token(authorization: str | None) -> str:
     return credential.strip()
 
 
+def _normalize_origin(value: str) -> str:
+    return str(value or "").strip().rstrip("/").lower()
+
+
+def desk_origins() -> frozenset[str]:
+    extra = {
+        _normalize_origin(item)
+        for item in str(os.environ.get("QT_DESK_ORIGINS") or "").split(",")
+        if _normalize_origin(item)
+    }
+    return _DESK_ORIGINS | frozenset(extra)
+
+
+def _browser_cross_site(headers: Mapping[str, str]) -> bool:
+    """True when the browser itself says the request did not come from the desk.
+
+    Only browser-asserted provenance (Origin / Sec-Fetch-Site) is read, and it
+    can only refuse a request, never authorize one. Clients that send neither
+    header (scripts, internal services) are unaffected.
+    """
+    origin = headers.get("origin")
+    if origin is not None:
+        # The desk page on :5173 calls the report API on :8766 directly; the
+        # browser labels that same-site, so Origin (exact) decides when present.
+        return _normalize_origin(origin) not in desk_origins()
+    return str(headers.get("sec-fetch-site") or "").strip().lower() == "cross-site"
+
+
 def authorize_mutation(
     method: str,
     headers: Mapping[str, str] | None = None,
 ) -> MutationAccess:
     """Authorize one HTTP method without trusting network topology.
 
-    Safe/read-only methods always pass. Outside explicit public mode the
-    existing private/local operator behavior is unchanged. In public mode an
-    unsafe method requires QT_OPERATOR_TOKEN and a matching Bearer credential.
+    Safe/read-only methods always pass. A valid operator bearer token always
+    authorizes. Otherwise an unsafe method carrying browser provenance from a
+    page other than the desk is refused in every mode: the API binds to
+    loopback, but CORS only hides responses — any page open in the operator's
+    browser can still deliver a simple POST (or DNS-rebind) to it. Outside
+    explicit public mode the private operator workflow is otherwise unchanged.
+    In public mode an unsafe method requires QT_OPERATOR_TOKEN and a matching
+    Bearer credential.
     """
     verb = str(method or "GET").upper()
     if verb not in _UNSAFE_METHODS:
         return MutationAccess(True, "READ_ONLY_METHOD", "Read-only request.")
 
+    headers = headers or {}
+    expected = operator_token()
+    supplied = _bearer_token(headers.get("authorization"))
+    if expected and supplied and secrets.compare_digest(supplied, expected):
+        return MutationAccess(True, "OPERATOR_AUTHORIZED", "Operator bearer token accepted.")
+
+    if _browser_cross_site(headers):
+        return MutationAccess(
+            False,
+            "CROSS_SITE_MUTATION",
+            "Mutations are accepted only from the QuantTerm desk origin.",
+        )
+
     if not public_read_only_enabled():
         return MutationAccess(True, "PRIVATE_OPERATOR_MODE", "Public read-only mode is disabled.")
 
-    expected = operator_token()
     if not expected:
         return MutationAccess(
             False,
             "PUBLIC_READ_ONLY",
             "This public QuantTerm instance is read-only. Operator mutations are disabled.",
         )
-
-    supplied = _bearer_token((headers or {}).get("authorization"))
-    if supplied and secrets.compare_digest(supplied, expected):
-        return MutationAccess(True, "OPERATOR_AUTHORIZED", "Operator bearer token accepted.")
 
     return MutationAccess(
         False,
