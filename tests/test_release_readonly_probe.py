@@ -1,6 +1,7 @@
 """Pure, network-free safety checks for the read-only release evidence probe."""
 import pytest
 
+from scripts import quantterm_release_readonly_probe as PROBE
 from scripts.quantterm_release_readonly_probe import (
     _origin, _quantile_ms, collect,
 )
@@ -88,3 +89,40 @@ def test_probe_preserves_a_failed_dashboard_measurement():
     assert report["endpoints"]["/api/dashboard"]["successes"] == 0
     assert report["endpoints"]["/api/dashboard"]["failures"] == 2
     assert report["endpoints"]["/api/dashboard"]["p95_ms"] is None
+
+
+
+def test_probe_http_transport_is_get_only_and_disables_redirects_proxies(monkeypatch):
+    seen = []
+
+    class Response:
+        status = 200
+        def read(self, n):
+            assert n == PROBE.MAX_RESPONSE_BYTES + 1
+            return b"{}"
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return None
+
+    class Opener:
+        def open(self, request, timeout):
+            assert request.get_method() == "GET"
+            assert request.full_url == "http://127.0.0.1:8765/api/health"
+            seen.append((request.full_url, timeout))
+            return Response()
+
+    def build(*handlers):
+        assert isinstance(handlers[0], PROBE.ProxyHandler)
+        assert handlers[0].proxies == {}
+        assert isinstance(handlers[1], PROBE._NoRedirect)
+        assert handlers[1].redirect_request(None, None, 302, "redirect", {}, "https://remote") is None
+        return Opener()
+
+    monkeypatch.setattr(PROBE, "build_opener", build)
+    elapsed, result = PROBE._fetch_json(
+        "http://127.0.0.1:8765/api/health", timeout=2.0,
+    )
+    assert elapsed >= 0
+    assert result == {}
+    assert seen == [("http://127.0.0.1:8765/api/health", 2.0)]
