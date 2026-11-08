@@ -130,15 +130,28 @@ class PaperBook:
             self.refusals.append((symbol, "already open for this strategy")); return None
         if len(self.open) >= self.max_positions:
             self.refusals.append((symbol, "max open positions reached")); return None
+        # Risk capital is the book's current *realized* equity. Do not give a
+        # profitable/losing book the same quantity as one that still has its
+        # opening balance, and do not assume unpriced open positions are cash.
+        # Unrealized marks are excluded until settled, so missing prices cannot
+        # increase the buying/risk budget.
+        risk_capital = self.capital + self.realized_pnl
+        if not isfinite(risk_capital) or risk_capital <= 0:
+            self.refusals.append((symbol, "non-positive realized paper equity")); return None
         requested = self.risk_per_trade_pct * 100.0 if risk_pct_of_capital is None else risk_pct_of_capital
         sizing = size_long_cash(
-            capital=self.capital, entry=entry, stop=stop, requested_risk_pct=requested,
+            capital=risk_capital, entry=entry, stop=stop, requested_risk_pct=requested,
             max_risk_fraction=self.risk_per_trade_pct, max_position_fraction=self.max_position_pct,
             slippage_bps=self.slippage_bps, requested_quantity=quantity,
         )
         if not sizing.ok:
             self.refusals.append((symbol, _sizing_refusal(sizing.reason_code))); return None
-        if self.open_risk() + sizing.risk_amount > self.capital * self.max_total_risk_pct + 1e-6:
+        # Existing simulated purchases already commit cash. Repricing to
+        # original capital after a drawdown can otherwise over-allocate it.
+        committed_cash = sum(p.qty * p.entry_price for p in self.open.values())
+        if not isfinite(committed_cash) or sizing.capital_amount > risk_capital - committed_cash + 1e-6:
+            self.refusals.append((symbol, "insufficient uncommitted paper cash")); return None
+        if self.open_risk() + sizing.risk_amount > risk_capital * self.max_total_risk_pct + 1e-6:
             self.refusals.append((symbol, "total open risk cap (5%) reached")); return None
         pos = PaperPosition(
             strategy_id=strategy_id, symbol=symbol, entry_price=sizing.effective_entry,
