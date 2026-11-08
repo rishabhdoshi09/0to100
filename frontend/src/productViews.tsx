@@ -654,6 +654,62 @@ function InvestigatePanel({
           <p>{report.thesis.text}</p>
         </aside>
       ) : null}
+      {report.quarterly_brief ? (
+        <section className="dd-quarterly-brief" aria-label="Quarterly thesis and anti-thesis">
+          <div className="dd-coverage-strip">
+            <header>
+              <strong>Quarterly evidence desk · {report.quarterly_brief.review_status.split('_').join(' ')}</strong>
+              <span>{report.quarterly_brief.as_of || 'Date unverified'} · {report.quarterly_brief.evidence_mode.split('_').join(' ')} · Read-only, not a buy/sell instruction</span>
+            </header>
+          </div>
+          <div className="stock-overview-grid">
+            <Panel title="THESIS" subtitle="Measured improvements; source retained">
+              {report.quarterly_brief.thesis.length ? (
+                <ul className="dd-flag-list">
+                  {report.quarterly_brief.thesis.map((claim) => (
+                    <li key={claim.id}>
+                      <strong>{claim.label}</strong>
+                      <span>{claim.evidence || (String(claim.value ?? 'Unavailable') + ' · ' + (claim.period || 'period missing'))}</span>
+                      <small>{claim.source} · {claim.source_date || 'Source date unverified'} · {claim.source_status}</small>
+                    </li>
+                  ))}
+                </ul>
+              ) : <EmptyState title="No measured positive thesis on file" detail="An absent claim is not a negative verdict." />}
+            </Panel>
+            <Panel title="ANTI-THESIS" subtitle="Contrary trends and prioritized risk flags">
+              {report.quarterly_brief.anti_thesis.length ? (
+                <ul className="dd-flag-list">
+                  {report.quarterly_brief.anti_thesis.map((claim) => (
+                    <li key={claim.id}>
+                      <strong>{claim.title || claim.label}{claim.severity ? ' · ' + claim.severity : ''}</strong>
+                      <span>{claim.evidence || (String(claim.value ?? 'Unavailable') + ' · ' + (claim.period || 'period missing'))}</span>
+                      <small>{claim.source} · {claim.source_date || 'Source date unverified'}</small>
+                    </li>
+                  ))}
+                </ul>
+              ) : <EmptyState title="No measured anti-thesis on file" detail="Unknown risks are not proof of safety." />}
+            </Panel>
+          </div>
+          <Panel title="QUARTERLY EVIDENCE" subtitle="Existing measured KPIs; no forecast or invented earnings">
+            {report.quarterly_brief.quarterly_evidence.length ? (
+              <ul className="dd-flag-list">
+                {report.quarterly_brief.quarterly_evidence.map((metric) => (
+                  <li key={metric.id}>
+                    <strong>{metric.label}: {metric.value} · {metric.period || 'Period unknown'}</strong>
+                    <small>{metric.source} · {metric.source_date || 'Source date unverified'} · {metric.source_status}</small>
+                  </li>
+                ))}
+              </ul>
+            ) : <EmptyState title="Quarterly figures unavailable" detail="Run Research Data acquisition; nothing is fabricated." />}
+          </Panel>
+          {report.quarterly_brief.quality_warnings.length ? (
+            <p className="api-warning">{report.quarterly_brief.quality_warnings.length} time-ineligible research item(s) withheld. Refresh the underlying evidence.</p>
+          ) : null}
+          {report.quarterly_brief.missing_evidence.length ? (
+            <p className="panel-copy">Still unmeasured: {report.quarterly_brief.missing_evidence.join(' · ')}</p>
+          ) : null}
+        </section>
+      ) : null}
       <SectionTabs
         tabs={screen?.sections || ['Overview', 'Thesis Breakers', 'Fundamentals', 'Sector KPIs', 'Quarterly', 'Cash Flow', 'Peers', 'Shareholding', 'News', 'Filings', 'Red Flags', 'Sources']}
         active={section}
