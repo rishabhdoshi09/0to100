@@ -658,8 +658,8 @@ function InvestigatePanel({
         <section className="dd-quarterly-brief" aria-label="Quarterly thesis and anti-thesis">
           <div className="dd-coverage-strip">
             <header>
-              <strong>Quarterly evidence desk · {report.quarterly_brief.review_status.replaceAll('_', ' ')}</strong>
-              <span>{report.quarterly_brief.as_of || 'Date unverified'} · {report.quarterly_brief.evidence_mode.replaceAll('_', ' ')} · Read-only, not a buy/sell instruction</span>
+              <strong>Quarterly evidence desk · {report.quarterly_brief.review_status.split('_').join(' ')}</strong>
+              <span>{report.quarterly_brief.as_of || 'Date unverified'} · {report.quarterly_brief.evidence_mode.split('_').join(' ')} · Read-only, not a buy/sell instruction</span>
             </header>
           </div>
           <div className="stock-overview-grid">
