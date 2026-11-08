@@ -1208,7 +1208,7 @@ class MarketOperationsWorker:
         scope = str(payload.get("scope") or os.environ.get("QT_US_SCAN_SCOPE") or "S&P 500").strip()
         index = None if scope.lower() in {"", "all"} else scope
         self._progress(operation_id, "SCANNING_US", f"Scanning {scope} with the canonical US setup engine")
-        from scan.us_scanner import scan_us, persisted_us_scan
+        from scan.us_scanner import last_paper_feed_error, persisted_us_scan, scan_us
 
         previous = persisted_us_scan().get("scanned_at")
         rows = list(scan_us(index=index) or [])
@@ -1223,7 +1223,7 @@ class MarketOperationsWorker:
         except Exception as exc:
             paper = {"error": str(exc)[:200]}
             report = {}
-        return {
+        result = {
             "market": "US",
             "scope": str(persisted.get("scope") or scope),
             "scanned_at": str(persisted.get("scanned_at") or ""),
@@ -1241,6 +1241,15 @@ class MarketOperationsWorker:
             "paper_only": True,
             "live_locked": True,
         }
+        feed_error = last_paper_feed_error()
+        if feed_error:
+            result["paper_feed_error"] = feed_error
+            raise OperationBlocked(
+                "US scan persisted, but the US paper review/entry step failed",
+                code="US_PAPER_FEED_FAILED",
+                result=result,
+            )
+        return result
 
     def _execute(self, operation: dict[str, Any]) -> dict[str, Any]:
         kind = str(operation.get("kind", ""))

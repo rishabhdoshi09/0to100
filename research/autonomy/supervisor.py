@@ -732,9 +732,11 @@ class Supervisor:
             store = OperationStore(logs_dir() / "market_ops" / "jobs.db")
             latest = dict(store.latest(US_MARKET_SCAN) or {})
             latest_payload = dict(latest.get("payload") or {})
-            if (
-                str(latest_payload.get("slot") or "") == slot
-                and str(latest.get("status") or "") in {PENDING, RUNNING, SUCCEEDED}
+            if str(latest_payload.get("slot") or "") == slot and (
+                str(latest.get("status") or "") in {PENDING, RUNNING, SUCCEEDED}
+                # The scan itself landed; rescanning this slot cannot repair the
+                # paper step and would rerun the whole universe back to back.
+                or str(latest.get("error_code") or "") == "US_PAPER_FEED_FAILED"
             ):
                 return
             scope = str(os.environ.get("QT_US_SCAN_SCOPE") or "S&P 500").strip() or "S&P 500"
