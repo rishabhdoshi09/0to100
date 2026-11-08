@@ -15,8 +15,11 @@ def row(
     consolidated: bool = True,
     available: str | None = None,
 ) -> dict:
+    quarter_start_month = int(period[5:7]) - 2
+    assert quarter_start_month in (1, 4, 7, 10)
     return {
         "symbol": symbol,
+        "period_start": f"{period[:4]}-{quarter_start_month:02d}-01",
         "period_end": period,
         "publication_date": published,
         "available_from": available or published,
@@ -163,6 +166,7 @@ def test_real_pit_warehouse_wiring_is_temporal(tmp_path):
         persist({
             "symbol": "ABC",
             "evidence_type": DOC_QUARTERLY_RESULT,
+            "period_start": period[:4] + "-07-01",
             "period_end": period,
             "publication_date": pub,
             "available_from": pub,
@@ -222,3 +226,37 @@ def test_two_loss_making_quarters_remain_counter_case():
     assert out["metrics"]["pat"]["yoy_pct"] is None
     assert any(x["id"] == "pat_still_negative" for x in out["anti_thesis_evidence"])
     assert not any(x["id"] == "pat_yoy" for x in out["thesis_evidence"])
+
+
+def test_six_month_h1_result_is_not_called_q2_quarterly_growth():
+    data = [
+        {**row("2026-09-30", "2026-11-01", {"revenue": 200, "pat": 25}),
+         "period_start": "2026-04-01"},
+        row("2025-09-30", "2025-11-01", {"revenue": 100, "pat": 20}),
+    ]
+    out = compose_quarterly_insights("ABC", as_of="2026-11-08", rows=data)
+    assert out["latest_period_end"] == "2025-09-30"
+    assert out["status"] == "PARTIAL_QUARTER_EVIDENCE"
+    assert out["thesis_evidence"] == []
+    assert "NON_QUARTER_OR_UNVERIFIED_REPORTING_PERIOD" in out["unknowns"]
+
+
+def test_missing_quarter_duration_does_not_create_yoy_evidence():
+    data = [
+        {**row("2026-09-30", "2026-11-01", {"revenue": 200}), "period_start": ""},
+        row("2025-09-30", "2025-11-01", {"revenue": 100}),
+    ]
+    out = compose_quarterly_insights("ABC", as_of="2026-11-08", rows=data)
+    assert out["metrics"]["revenue"]["yoy_pct"] is None
+    assert out["source_documents"][0]["period_end"] == "2025-09-30"
+
+
+def test_conflicting_xbrl_and_exchange_report_periods_are_withheld():
+    data = [
+        {**row("2026-09-30", "2026-11-01", {"revenue": 200}),
+         "extracted": {"period_start": "2026-04-01"}},
+        row("2025-09-30", "2025-11-01", {"revenue": 100}),
+    ]
+    out = compose_quarterly_insights("ABC", as_of="2026-11-08", rows=data)
+    assert out["latest_period_end"] == "2025-09-30"
+    assert "NON_QUARTER_OR_UNVERIFIED_REPORTING_PERIOD" in out["unknowns"]
