@@ -3,6 +3,9 @@
 Opening Recommendations must remain a read path.  Expensive projection work is rebuilt in the
 background from already-persisted scan/funds artifacts and never from broker/network calls.
 
+``api.app`` registers the one canonical GET route for this module at import time; no
+startup hook or launch-module detection decides which handler serves the desk.
+
 The rebuild claim is protected by an OS file lock, not merely a Python ``threading.Lock``.  That
 matters when Uvicorn is started with more than one worker: only one process may build a given
 artifact at a time.  The lock is released automatically by the OS if the process dies; a small
@@ -14,7 +17,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -22,7 +24,6 @@ from pathlib import Path
 from typing import Any, Mapping
 from core.runtime_paths import logs_dir
 
-_INSTALLED = False
 _BUILD_LOCK = threading.Lock()
 _BUILD_THREAD: threading.Thread | None = None
 _RETRY_AFTER_FAILURE_S = 30.0
@@ -287,6 +288,39 @@ def _ensure_rebuild(scan: dict[str, Any], long_term: dict[str, Any]) -> bool:
         return True
 
 
+def display_authority(
+    payload: Mapping[str, Any], scan: Mapping[str, Any], *, projection: str,
+) -> dict[str, Any]:
+    """Whether the desk may present this workspace as today's recommendations.
+
+    Computed here, at read time, from the canonical scan identity and the
+    canonical scan-freshness authority (``product.desk_pipeline.scan_is_fresh``),
+    so the browser never infers it from a separate, short-lived dashboard cache.
+    ``CURRENT`` requires the projection to be the one published for the current
+    scan generation AND that scan to be fresh. Anything else is shown as its own
+    explicit state, never as current recommendations.
+    """
+    scan_at = str(scan.get("scanned_at") or "")
+    try:
+        from product.desk_pipeline import scan_is_fresh
+        scan_current = bool(scan_at) and bool(scan_is_fresh())
+    except Exception:
+        scan_current = False
+    if projection == "CURRENT" and not scan_current:
+        status = "SCAN_NOT_CURRENT"
+    else:
+        status = projection
+    return {
+        "status": status,
+        "projection": projection,
+        "scan_current": scan_current,
+        "scan_scanned_at": scan_at,
+        "projection_scan_scanned_at": str(payload.get("scan_scanned_at") or ""),
+        "evaluated_at": datetime.now(timezone.utc).isoformat(),
+        "source": "product.recommendations_liveness",
+    }
+
+
 def build_fast_response(core, attach_authority=None) -> dict[str, Any]:
     """Return immediately from persisted state; schedule expensive projection if needed."""
     from product.recommendations_store import load_recommendations
@@ -299,10 +333,12 @@ def build_fast_response(core, attach_authority=None) -> dict[str, Any]:
     # disappeared from the validated read path. Do not serve stale BUY cards
     # while the corrected Kite snapshot is being scanned.
     if scan.get("available") is False:
-        return _empty_workspace(
+        payload = _empty_workspace(
             status="FAILED",
             error="Verified market scan is missing or stale; recommendations withheld.",
         )
+        payload["display_authority"] = display_authority(payload, scan, projection="SCAN_UNAVAILABLE")
+        return payload
     current = _matches(saved, scan, long_term)
 
     if not current:
@@ -320,7 +356,9 @@ def build_fast_response(core, attach_authority=None) -> dict[str, Any]:
                 payload = attach_authority(payload)
             except Exception as exc:
                 payload["authority_warning"] = str(exc)[:200]
-        return slim_workspace_for_desk(payload)
+        payload = slim_workspace_for_desk(payload)
+        payload["display_authority"] = display_authority(payload, scan, projection="CURRENT")
+        return payload
 
     # Last-generation BUY cards must not remain on an actionable recommendation
     # surface after a scan or long-term artifact changes. Even a clear "stale"
@@ -346,47 +384,6 @@ def build_fast_response(core, attach_authority=None) -> dict[str, Any]:
             payload = attach_authority(payload)
         except Exception as exc:
             payload["authority_warning"] = str(exc)[:200]
-    return slim_workspace_for_desk(payload)
-
-
-def _replace_route() -> None:
-    core = sys.modules.get("terminal_api")
-    parallel = sys.modules.get("terminal_product_api_parallel")
-    if core is None or parallel is None:
-        return
-
-    app = core.app
-    path = "/api/recommendations-workspace"
-    kept = []
-    for route in list(app.router.routes):
-        methods = set(getattr(route, "methods", set()) or set())
-        if getattr(route, "path", None) == path and "GET" in methods:
-            continue
-        kept.append(route)
-    app.router.routes[:] = kept
-
-    def _fast_recommendations_workspace() -> dict[str, Any]:
-        return build_fast_response(core, getattr(parallel, "_attach_authority", None))
-
-    app.add_api_route(
-        path,
-        _fast_recommendations_workspace,
-        methods=["GET"],
-        name="recommendations_workspace_persisted_first",
-    )
-
-
-def register_terminal_recommendations_liveness() -> None:
-    """Register only when terminal_api is already being assembled; never import it as a side effect."""
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    core = sys.modules.get("terminal_api")
-    if core is None or not hasattr(core, "app"):
-        return
-
-    @core.app.on_event("startup")
-    def _install_fast_recommendations_route() -> None:
-        _replace_route()
-
-    _INSTALLED = True
+    payload = slim_workspace_for_desk(payload)
+    payload["display_authority"] = display_authority(payload, scan, projection=status)
+    return payload

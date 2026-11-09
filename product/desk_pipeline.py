@@ -120,7 +120,9 @@ def prices_kind_due() -> str | None:
 
 
 def scan_is_fresh() -> bool:
-    path = logs_dir() / "product" / "latest_momentum_scan.json"
+    from product.scan_store import resolved_scan_path
+
+    path = resolved_scan_path()   # one scan-artifact identity for every reader
     # Kite-backed scans are independently authoritative. The loader already
     # verifies that their source id, bar date and source label match the active
     # immutable snapshot. A lagging or unavailable public NSE bhavcopy must

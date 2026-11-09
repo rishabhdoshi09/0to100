@@ -269,63 +269,6 @@ def radar_home_workspace() -> dict[str, Any]:
     return home
 
 
-def recommendations_workspace(
-    refresh: bool = Query(False, description="Recompute live technicals (slow)"),
-) -> dict[str, Any]:
-    """Reco-style research categories + Active/Closed lifecycle (evidence only).
-
-    Page-open is cache-only: the last Scan Now already wrote this file.
-    """
-    from product.recommendations_store import (
-        load_recommendations,
-        reco_matches_scan,
-        save_recommendations,
-    )
-    from product.recommendations_workspace import (
-        build_recommendations_workspace,
-        slim_workspace_for_desk,
-    )
-    scan = core._scan_payload()
-    long_term = core._long_term_payload()
-    scan_at = str(scan.get("scanned_at") or "")
-    lt_at = str(long_term.get("scanned_at") or "")
-    saved = load_recommendations()
-    if not refresh:
-        if reco_matches_scan(saved, scan_scanned_at=scan_at, long_term_scanned_at=lt_at):
-            return saved
-        if saved and (not scan_at or not (scan.get("records") or [])):
-            return saved
-    try:
-        payload = build_recommendations_workspace(
-            scan_payload=scan,
-            long_term_payload=long_term,
-            refresh_technicals=bool(refresh),
-            settle_cases=False,
-            deep_confirm=False,
-            persist_ledger=False,
-        )
-    except Exception as exc:
-        if saved:
-            out = dict(saved)
-            out["error"] = str(exc)[:200]
-            return out
-        fallback = build_recommendations_workspace(
-            scan_payload={"records": [], "scanned_at": ""},
-            long_term_payload={"records": []},
-            refresh_technicals=False,
-            settle_cases=False,
-        )
-        fallback["error"] = str(exc)[:200]
-        return fallback
-    slim = slim_workspace_for_desk(payload)
-    if scan_at:
-        try:
-            save_recommendations(slim)
-        except Exception:
-            pass
-    return slim
-
-
 def market_reports_workspace(
     rebuild: bool = Query(False, description="Rebuild today's pulse; page-open leaves this off"),
 ) -> dict[str, Any]:
@@ -522,12 +465,7 @@ def install(app) -> None:
         methods=["GET"],
         name="radar_home_workspace",
     )
-    app.add_api_route(
-        "/api/recommendations-workspace",
-        recommendations_workspace,
-        methods=["GET"],
-        name="recommendations_workspace",
-    )
+    # /api/recommendations-workspace is owned by api.app (persisted-first).
     app.add_api_route(
         "/api/market-reports-workspace",
         market_reports_workspace,
