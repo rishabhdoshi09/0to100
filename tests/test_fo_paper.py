@@ -3,7 +3,7 @@ from product.fo_paper import ENTRY_MINUTE_CLEAR, FoPaperBook
 
 def test_option_paper_book_enforces_lot_risk_and_premium_caps():
     book = FoPaperBook(
-        capital=100_000,
+        capital=200_000,
         risk_per_trade_pct=0.01,
         max_premium_pct=0.10,
         slippage_bps=0,
@@ -132,29 +132,29 @@ def test_total_open_risk_cap_is_enforced_across_positions():
     book = FoPaperBook(
         capital=100_000,
         risk_per_trade_pct=0.03,
-        max_total_risk_pct=0.05,
+        max_total_risk_pct=0.015,
         max_premium_pct=1.0,
         slippage_bps=0,
     )
     first = book.open_position(
         underlying="AAA", option_symbol="AAACE", option_type="CE",
-        entry=50, stop=40, target=80, lot_size=100,
+        entry=50, stop=40, target=80, lot_size=10,
         opened_at="2026-09-26", max_holding_sessions=2,
     )
     assert first is not None
     second = book.open_position(
         underlying="BBB", option_symbol="BBBCE", option_type="CE",
-        entry=50, stop=40, target=80, lot_size=100,
+        entry=50, stop=40, target=80, lot_size=10,
         opened_at="2026-09-26", max_holding_sessions=2,
     )
     assert second is not None
     third = book.open_position(
         underlying="CCC", option_symbol="CCCCE", option_type="CE",
-        entry=50, stop=40, target=80, lot_size=100,
+        entry=50, stop=40, target=80, lot_size=10,
         opened_at="2026-09-26", max_holding_sessions=2,
     )
     assert third is None
-    assert book.refusals[-1][1] == "RISK_OR_PREMIUM_BUDGET_TOO_SMALL_FOR_ONE_LOT"
+    assert book.refusals[-1][1] == "MAX_LOSS_PREMIUM_BUDGET_TOO_SMALL_FOR_ONE_LOT"
 
 
 def test_executable_ask_cannot_cross_above_target():
@@ -217,6 +217,7 @@ def test_daily_premium_cap_accumulates_across_multiple_positions():
         max_premium_pct=0.10,
         max_daily_premium_pct=0.10,
         max_total_risk_pct=0.50,
+        max_loss_per_trade_pct=0.10,
         slippage_bps=0,
     )
     first = book.open_position(

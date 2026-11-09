@@ -24,7 +24,7 @@ def _candidate():
             "symbol": "RELIANCE26OCTCE",
             "option_type": "CE",
             "eligible": True,
-            "lot_size": 25,
+            "lot_size": 10,
             "ask": 50.0,
             "score": 86.0,
             "context_key": "LONG|LONG_BUILDUP|CTX",

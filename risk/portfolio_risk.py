@@ -64,7 +64,7 @@ def _fno_open_rows() -> list[dict]:
         stop = float(pos.get("stop_price") or 0.0)
         premium_loss = float(pos.get("premium_loss_exposure") or 0.0)
         if (qty <= 0 or not math.isfinite(entry) or not math.isfinite(stop)
-                or entry <= 0 or stop <= 0 or stop >= entry
+                or entry <= 0 or stop <= 0
                 or not math.isfinite(premium_loss) or premium_loss < 0):
             raise ValueError(f"F&O paper position {pos.get('trade_id')} has invalid exposure")
         rows.append({"symbol": str(pos.get("underlying") or "").upper(), "qty": qty,

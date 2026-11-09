@@ -5006,7 +5006,7 @@ class TestAccountOpenRiskSpansEveryPaperBook:
     def test_account_gate_counts_open_fno_paper_risk(self, tmp_path, monkeypatch):
         from risk.portfolio_risk import account_exposure_gate, portfolio_risk_report
         self._isolate(tmp_path, monkeypatch)
-        self._write_fno_position(tmp_path, entry=50.0, stop=30.0, qty=200)  # Rs 4,000 at risk
+        self._write_fno_position(tmp_path, entry=50.0, stop=30.0, qty=80)  # Rs 4,000 of FULL premium exposed
         assert portfolio_risk_report()["open_risk"] == 4_000
         gate = account_exposure_gate("TCS", qty=100, entry=100.0, stop=85.0)  # +1,500
         assert gate["ok"] is False
@@ -5026,12 +5026,12 @@ class TestAccountOpenRiskSpansEveryPaperBook:
         self._write_fno_position(tmp_path, entry=50.0, stop=49.0, qty=10)
         assert portfolio_risk_report()["n_positions"] == 0
 
-    def test_trailed_fno_stop_above_entry_counts_as_zero_risk(self, tmp_path, monkeypatch):
+    def test_trailed_fno_stop_above_entry_still_counts_full_premium(self, tmp_path, monkeypatch):
         from risk.portfolio_risk import account_exposure_gate, portfolio_risk_report
         self._isolate(tmp_path, monkeypatch)
         self._write_fno_position(tmp_path, entry=50.0, stop=60.0, qty=100)
-        assert portfolio_risk_report()["open_risk"] == 0
-        assert account_exposure_gate("TCS", qty=10, entry=100.0, stop=95.0)["ok"] is True
+        assert portfolio_risk_report()["open_risk"] == 5_000
+        assert account_exposure_gate("TCS", qty=10, entry=100.0, stop=95.0)["ok"] is False
 
     def test_corrupt_modern_book_blocks_instead_of_reading_as_empty(self, tmp_path, monkeypatch):
         from risk.portfolio_risk import account_exposure_gate
@@ -5075,7 +5075,7 @@ class TestAccountOpenRiskSpansEveryPaperBook:
         def _open(book):
             return book.open_position(
                 underlying="RELIANCE", option_symbol="RELIANCE26OCTCE", option_type="CE",
-                entry=50.0, stop=30.0, target=90.0, lot_size=25,
+                entry=50.0, stop=30.0, target=90.0, lot_size=10,
                 opened_at="2026-09-01T10:00:00+05:30", max_holding_sessions=2,
                 context_key="CTX", setup_score=80.0, option_score=80.0,
             )
@@ -5084,7 +5084,7 @@ class TestAccountOpenRiskSpansEveryPaperBook:
         assert _open(FoPaperBook(capital=100_000, external_open_risk=4_400)) is not None
         blocked = FoPaperBook(capital=100_000, external_open_risk=4_900)
         assert _open(blocked) is None
-        assert blocked.refusals[-1][1] == "RISK_OR_PREMIUM_BUDGET_TOO_SMALL_FOR_ONE_LOT"
+        assert blocked.refusals[-1][1] == "MAX_LOSS_PREMIUM_BUDGET_TOO_SMALL_FOR_ONE_LOT"
         # account capital smaller than the F&O lane capital caps the total
         assert _open(FoPaperBook(capital=200_000, external_open_risk=4_900,
                                  account_capital=100_000)) is None
@@ -5100,7 +5100,7 @@ class TestAccountOpenRiskSpansEveryPaperBook:
                 "setup": {"score": 82.0, "expected_move": {"holding_days": 2}},
                 "selected_contract": {
                     "symbol": "RELIANCE26OCTCE", "option_type": "CE", "eligible": True,
-                    "lot_size": 25, "ask": 50.0, "score": 86.0, "context_key": "CTX",
+                    "lot_size": 10, "ask": 50.0, "score": 86.0, "context_key": "CTX",
                     "trade_plan": {"entry": 50.0, "stop": 40.0, "target": 70.0},
                 },
             }],
@@ -5134,7 +5134,7 @@ class TestAccountOpenRiskSpansEveryPaperBook:
         ]}), encoding="utf-8")  # Rs 4,900 of equity risk already open
         out = self._run_fo(tmp_path)
         assert out["opened_count"] == 0
-        assert out["skipped"][0]["reason"] == "RISK_OR_PREMIUM_BUDGET_TOO_SMALL_FOR_ONE_LOT"
+        assert out["skipped"][0]["reason"] == "MAX_LOSS_PREMIUM_BUDGET_TOO_SMALL_FOR_ONE_LOT"
 
     def test_fno_cycle_opens_when_account_has_room(self, tmp_path, monkeypatch):
         self._isolate(tmp_path, monkeypatch)
@@ -5340,7 +5340,7 @@ class TestFoExpiredPositionIsNeverSilentlyCarried:
             "setup": {"score": 82.0, "expected_move": {"holding_days": 4}},
             "selected_contract": {
                 "symbol": option_symbol, "option_type": "CE", "eligible": True,
-                "lot_size": 25, "ask": 50.0, "score": 86.0, "expiry": expiry,
+                "lot_size": 10, "ask": 50.0, "score": 86.0, "expiry": expiry,
                 "context_key": "LONG|LONG_BUILDUP|CTX",
                 "trade_plan": {"entry": 50.0, "stop": 40.0, "target": 70.0},
             },

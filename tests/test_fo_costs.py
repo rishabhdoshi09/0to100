@@ -41,7 +41,7 @@ def test_cost_schedule_supports_explicit_rate_overrides(monkeypatch):
 def test_configured_cost_model_makes_closed_paper_trade_net_and_evidence_eligible():
     schedule = NseLongOptionCostSchedule()
     book = FoPaperBook(
-        capital=100_000.0,
+        capital=200_000.0,
         cost_model=schedule.round_trip_cost,
         cost_model_name=schedule.name,
         slippage_bps=0.0,
