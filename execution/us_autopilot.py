@@ -15,6 +15,7 @@ journal so they never collide with the NSE ledger or Report Card.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sqlite3
 import threading
@@ -86,12 +87,61 @@ _DEFAULTS = {
 }
 
 _state: dict = {}
+# Latched for this process: never overwrite an unreadable owner state with defaults.
+_state_load_error = ""
 
 
 # ── Persistence ───────────────────────────────────────────────────────────────
 
+def _has_us_trade_history() -> bool:
+    """Check the journal *read-only* before treating a missing state as a new install.
+
+    An inaccessible or malformed journal raises. The caller then fails closed;
+    it must not infer zero paper positions from an unreadable database.
+    """
+    from urllib.parse import quote
+    from execution.trade_executor import _DB
+
+    if not _DB.exists():
+        return False
+    uri = "file:" + quote(str(_DB.absolute()), safe="/") + "?mode=ro"
+    with sqlite3.connect(uri, uri=True, timeout=2.0) as conn:
+        conn.execute("PRAGMA query_only=ON")
+        row = conn.execute(
+            "SELECT 1 FROM trades WHERE note LIKE ? LIMIT 1",
+            (f"%{TAG}%",),
+        ).fetchone()
+        return row is not None
+
+
+def _validate_saved_state(payload: object) -> dict:
+    """Do not convert damaged persisted consent/accounting into defaults."""
+    if not isinstance(payload, dict):
+        raise ValueError("US paper state is not a JSON object")
+    if not isinstance(payload.get("armed"), bool):
+        raise ValueError("US paper arm/disarm consent is absent or invalid")
+    # Older *disarmed* state files legitimately lacked the daily dictionaries.
+    # They remain disarmed. An armed state cannot silently lose its limits.
+    for key in ("trades_today", "traded_symbols"):
+        if key in payload and not isinstance(payload[key], dict):
+            raise ValueError(f"US paper {key} is invalid")
+        if payload["armed"] and key not in payload:
+            raise ValueError(f"armed US paper state is missing {key}")
+    if not isinstance(payload.get("max_accounted_id"), int) or isinstance(
+        payload.get("max_accounted_id"), bool
+    ):
+        raise ValueError("US paper P&L watermark is absent or invalid")
+    for key in ("allocation", "realized_pnl"):
+        value = payload.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"US paper {key} is absent or invalid")
+        if not math.isfinite(float(value)):
+            raise ValueError(f"US paper {key} is not finite")
+    return payload
+
+
 def _load() -> dict:
-    global _state
+    global _state, _state_load_error
     with _lock:
         if _state:
             return _state
@@ -99,40 +149,57 @@ def _load() -> dict:
         migrated = False
         try:
             if _STATE_FILE.exists():
-                on_disk = json.loads(_STATE_FILE.read_text())
+                on_disk = _validate_saved_state(json.loads(_STATE_FILE.read_text()))
                 _state.update({k: v for k, v in on_disk.items() if k in _DEFAULTS})
-                # Older builds shipped the US PAPER engine disabled with a zero
-                # allocation. That was a product-default placeholder, not an
-                # operator decision. Migrate only that untouched legacy state;
-                # an explicit disarm carries disarmed_reason and is preserved.
+                # An untouched old zero-allocation default may be migrated.
+                # Existing explicit disarm and accounting history must survive.
                 if (
                     float(_state.get("allocation") or 0.0) <= 0.0
                     and not str(_state.get("disarmed_reason") or "").strip()
                     and not list(_state.get("activity") or [])
                     and int(_state.get("max_accounted_id") or 0) == 0
                 ):
-                    _state["allocation"] = float(os.getenv("QT_US_PAPER_CAPITAL", "100000") or 100000)
-                    _state["armed"] = os.getenv("QT_US_PAPER_AUTO", "1").strip().lower() not in {"0", "false", "off", "no"}
+                    _state["allocation"] = float(
+                        os.getenv("QT_US_PAPER_CAPITAL", "100000") or 100000
+                    )
+                    _state["armed"] = os.getenv(
+                        "QT_US_PAPER_AUTO", "1"
+                    ).strip().lower() not in {"0", "false", "off", "no"}
                     migrated = True
+            elif _has_us_trade_history():
+                raise ValueError("US paper state file missing with existing trade history")
         except Exception as exc:
-            log.warning("us_autopilot_load_failed", error=str(exc))
+            _state_load_error = type(exc).__name__ + ":" + str(exc)[:160]
+            _state["armed"] = False
+            _state["disarmed_reason"] = "STATE_RECOVERY_REQUIRED"
+            log.warning("us_autopilot_state_recovery_required", error=_state_load_error)
+            return _state
+
+        _state_load_error = ""
         if migrated:
             _save()
             _log_activity("legacy zero-state migrated to autonomous virtual PAPER mode")
         return _state
 
-
-def _save() -> None:
+def _save() -> bool:
+    global _state_load_error
     try:
         with _lock:
             data = dict(_load())
+            if _state_load_error:
+                log.warning(
+                    "us_autopilot_state_save_blocked",
+                    reason="STATE_RECOVERY_REQUIRED",
+                )
+                return False
         _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         tmp = _STATE_FILE.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(data, indent=1))
         tmp.replace(_STATE_FILE)
+        return True
     except Exception as exc:
         log.warning("us_autopilot_save_failed", error=str(exc))
-
+        return False
 
 def _log_activity(msg: str) -> None:
     with _lock:
@@ -249,6 +316,7 @@ def _update(trade_id: int, sets: str, params: tuple) -> None:
 def get_status() -> dict:
     with _lock:
         s = dict(_load())
+    s["state_recovery_error"] = _state_load_error or None
     opens = _open_trades()
     s["open_trades"] = opens
     s["deployed"] = round(sum(float(t["entry_price"] or 0) * int(t["qty"] or 0)
@@ -262,6 +330,9 @@ def get_status() -> dict:
 
 
 def set_config(**kwargs) -> None:
+    _load()
+    if _state_load_error:
+        return  # An operator must restore the persisted state before editing it.
     clamps = {
         "allocation": (0.0, 1e9), "cash_reserve_pct": (0.05, 0.50),
         "per_trade_cap_pct": (0.05, MAX_PER_NAME_PCT),
@@ -324,6 +395,8 @@ def apply_preset(name: str) -> tuple[bool, str]:
 
 def arm() -> tuple[bool, str]:
     s = _load()
+    if _state_load_error:
+        return False, "US PAPER state recovery required; restore the saved state and restart."
     if s["allocation"] < 1000:
         return False, "Pehle allocation set karo (min $1,000)"
     with _lock:
@@ -709,6 +782,9 @@ def _account_closed() -> None:
     subsequent cycle, forever. Migrates any existing capped list once.)"""
     with _lock:
         s = _load()
+        if _state_load_error:
+            log.warning("us_paper_accounting_deferred", reason="STATE_RECOVERY_REQUIRED")
+            return
         watermark = int(s.get("max_accounted_id", 0) or 0)
         old_ids = s.get("accounted_ids")
         if not watermark and old_ids:
