@@ -298,10 +298,15 @@ def build_fast_response(core, attach_authority=None) -> dict[str, Any]:
     # A persisted recommendation is not actionable when its source scan has
     # disappeared from the validated read path. Do not serve stale BUY cards
     # while the corrected Kite snapshot is being scanned.
-    if scan.get("available") is False:
+    provenance = scan.get("provenance") or {}
+    unverified = (
+        scan.get("available") is False
+        or (isinstance(provenance, Mapping) and provenance.get("data_current") is False)
+    )
+    if unverified:
         return _empty_workspace(
-            status="FAILED",
-            error="Verified market scan is missing or stale; recommendations withheld.",
+            status="STALE",
+            error="Verified current market scan is missing or stale; recommendation cards withheld.",
         )
     current = _matches(saved, scan, long_term)
 
