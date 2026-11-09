@@ -310,9 +310,17 @@ def display_authority(
         status = "SCAN_NOT_CURRENT"
     else:
         status = projection
+    overlays = dict(scan.get("desk_overlays") or {})
+    publication = {
+        "recommendations": str(overlays.get("recommendations") or "UNKNOWN"),
+        "recommendation_cards": overlays.get("recommendation_cards"),
+        "error": overlays.get("recommendations_error"),
+        "scan_scanned_at": str(overlays.get("scan_scanned_at") or ""),
+    }
     return {
         "status": status,
         "projection": projection,
+        "publication": publication,
         "scan_current": scan_current,
         "scan_scanned_at": scan_at,
         "projection_scan_scanned_at": str(payload.get("scan_scanned_at") or ""),

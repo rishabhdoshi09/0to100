@@ -528,6 +528,9 @@ def _scan_payload() -> dict:
             "coverage_state": str(payload.get("coverage_state") or "UNKNOWN"),
             "coverage_warning": str(payload.get("coverage_warning") or ""),
             "coverage": dict(payload.get("coverage") or {}),
+            # What the scan published for downstream readers (recommendations,
+            # discovery), so a failed publication is explained, not silent.
+            "desk_overlays": dict(payload.get("desk_overlays") or {}),
         }
     except Exception as exc:
         return {

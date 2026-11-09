@@ -83,6 +83,26 @@ def test_current_projection_is_served_with_server_display_authority(saved_pipeli
     assert payload["scan_scanned_at"] == authority["scan_scanned_at"]
     assert authority["evaluated_at"]
     assert elapsed < 5.0
+    # The scan's own publication record travels with the answer.
+    assert authority["publication"]["recommendations"] == "saved"
+    assert authority["publication"]["scan_scanned_at"] == authority["scan_scanned_at"]
+
+
+def test_failed_publication_is_explained_not_silent(saved_pipeline, monkeypatch):
+    from api.app import app
+
+    scan = dict(saved_pipeline["scan"])
+    scan["scanned_at"] = "2026-11-09T16:45:00+00:00"
+    scan["desk_overlays"] = {"recommendations": "error", "scan_scanned_at": scan["scanned_at"],
+                             "recommendations_error": {"error_code": "DESK_PERSIST_FAILED",
+                                                       "error_type": "OSError",
+                                                       "error_message": "disk full"}}
+    saved_pipeline["scan_path"].write_text(json.dumps(scan), encoding="utf-8")
+    monkeypatch.setattr("product.recommendations_liveness._ensure_rebuild", lambda *a, **k: False)
+    authority = TestClient(app).get(PATH).json()["display_authority"]
+    assert authority["status"] == "REFRESHING"
+    assert authority["publication"]["recommendations"] == "error"
+    assert authority["publication"]["error"]["error_code"] == "DESK_PERSIST_FAILED"
 
 
 def test_new_scan_generation_is_never_rebuilt_inside_the_request(saved_pipeline, monkeypatch):
