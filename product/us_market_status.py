@@ -110,7 +110,8 @@ def status() -> dict[str, Any]:
             "paper_auto_execution": scope["us_new_entries_allowed"],
             "existing_positions_supervised": True,
             "forward_outcome_settlement": True,
-            "forward_counterfactuals": True,
+            # A paused lane evaluates no setups, so it records no counterfactuals.
+            "forward_counterfactuals": scope["us_new_entries_allowed"],
             "forward_learning": True,
             "learning_can_reorder_paper_only": True,
             "historical_pit_replay": False,

@@ -513,6 +513,52 @@ def grade_forward_soak(payload: Mapping[str, Any] | None) -> dict[str, str]:
     return {"status": "PASS", "blocker_reason": ""}
 
 
+def grade_us_market_truth(us_market: Mapping[str, Any] | None) -> dict[str, str]:
+    """The US projection must state its real scope, never a stale capability.
+
+    INDIA_ONLY (the default): no autonomous US scan, no auto-execution and no
+    counterfactuals, while existing positions are still supervised and
+    settled. INDIA_AND_US: the full forward-paper parity contract. Both
+    require paper-only, live-locked, and no survivorship-biased replay.
+    """
+    us = _as_dict(us_market)
+    parity = _as_dict(us.get("parity"))
+    paper = _as_dict(us.get("paper"))
+    scope = str(_as_dict(us.get("market_scope")).get("market_scope") or "")
+    common = bool(
+        us.get("paper_only") is True
+        and us.get("live_locked") is True
+        and parity.get("forward_outcome_settlement") is True
+        and parity.get("historical_pit_replay") is False
+        and parity.get("survivorship_biased_backtest_allowed") is False
+    )
+    if scope == "INDIA_ONLY":
+        ok = bool(
+            common
+            and str(parity.get("state") or "") == "PAUSED_INDIA_ONLY"
+            and parity.get("autonomous_scan") is False
+            and parity.get("paper_auto_execution") is False
+            and parity.get("forward_counterfactuals") is False
+            and parity.get("existing_positions_supervised") is True
+            and paper.get("new_entries_paused") is True
+        )
+        reason = "India-only US pause is not reported truthfully"
+    elif scope == "INDIA_AND_US":
+        ok = bool(
+            common
+            and str(parity.get("state") or "") == "FORWARD_PAPER_PARITY"
+            and parity.get("autonomous_scan") is True
+            and parity.get("paper_auto_execution") is True
+            and parity.get("forward_counterfactuals") is True
+            and parity.get("forward_learning") is True
+            and paper.get("new_entries_paused") is False
+        )
+        reason = "US forward-paper parity contract is missing/incomplete"
+    else:
+        ok, reason = False, "US market scope is not reported"
+    return {"status": "PASS" if ok else "FAIL", "blocker_reason": "" if ok else reason}
+
+
 def grade_paper_status(
     payload: Mapping[str, Any] | None,
     *,
@@ -1029,27 +1075,14 @@ def run(args: argparse.Namespace) -> int:
         code_sha=sha,
     ))
 
-    us_market = _as_dict(home_os.get("us_market"))
-    us_parity = _as_dict(us_market.get("parity"))
-    us_parity_ok = bool(
-        us_market.get("paper_only") is True
-        and us_market.get("live_locked") is True
-        and str(us_parity.get("state") or "") == "FORWARD_PAPER_PARITY"
-        and us_parity.get("autonomous_scan") is True
-        and us_parity.get("paper_auto_execution") is True
-        and us_parity.get("forward_outcome_settlement") is True
-        and us_parity.get("forward_counterfactuals") is True
-        and us_parity.get("forward_learning") is True
-        and us_parity.get("historical_pit_replay") is False
-        and us_parity.get("survivorship_biased_backtest_allowed") is False
-    )
+    us_grade = grade_us_market_truth(_as_dict(home_os.get("us_market")))
     rows.append(_row(
         feature="US forward-paper parity truth",
         trigger_tested="GET /api/radar-home → home_os.us_market.parity",
         backend_path="product.us_market_status + canonical US market-ops lane",
         durable_artifact="US scan/paper/learning stores",
-        status="PASS" if us_parity_ok else "FAIL",
-        blocker_reason="" if us_parity_ok else "US forward-paper parity contract is missing/incomplete",
+        status=us_grade["status"],
+        blocker_reason=us_grade["blocker_reason"],
         start_timestamp=_now(),
         finish_timestamp=_now(),
         code_sha=sha,

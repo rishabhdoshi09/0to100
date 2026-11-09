@@ -496,6 +496,12 @@ ON HOST.
 2. Each row goes through `recommendation_truth.project_candidate_truth` and must be canonical BUY and ENTER_NOW. At most 5 rows are kept.
 3. A win probability is shown only when forward-paper effective N ≥ `CLAIM_MIN_EFFECTIVE_N`, labelled by source (`trading_thesis.decision_quality`). Historical-only evidence cannot produce a claimed probability.
 
+**QT-PRA-047 (P1, caught by CI): the acceptance contract encoded the old US capability.**
+- Product Acceptance failed at `eb94a5d` (PR event): `internal FAILED feature: US forward-paper parity truth`, the only failing row. The check hard-required `FORWARD_PAPER_PARITY`, `autonomous_scan` and `paper_auto_execution`, which India-only mode correctly turns off. The intermediate pushes' Product Acceptance runs had been cancelled by later pushes, so it surfaced only here.
+- The projection also still claimed `forward_counterfactuals: true` while paused, though a paused lane records none.
+- Fix: `scripts/_product_acceptance_core.grade_us_market_truth()` grades by reported scope: INDIA_ONLY requires the pause to be stated truthfully; INDIA_AND_US requires full parity; a missing scope fails. The projection now reports `forward_counterfactuals` from scope.
+- Regression: 4 tests in `tests/test_market_scope_india_only.py` grade the real projection for both scopes and reject stale capability claims.
+
 Registered, not changed:
 - **QT-PRA-044 (P2):** the equity scanner's intraday `vratio` has the same partial-day bias as QT-PRA-041. A same-clock fix across ~2,000 symbols needs a bounded minute-history design (price breaks only, as in F&O). It is conservative today.
 - **QT-PRA-045 (owner decision):** F&O "1% risk" is stop-based. The worst case for a long option is the premium, capped at 10% of F&O equity per trade and 10% per day, and an overnight gap can pass through a paper stop.

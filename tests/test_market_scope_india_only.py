@@ -216,3 +216,38 @@ def test_home_projection_reports_the_pause_truthfully(monkeypatch):
     assert out["parity"]["autonomous_scan"] is False
     assert out["parity"]["existing_positions_supervised"] is True
     assert out["live_locked"] is True
+
+
+def _projection(monkeypatch):
+    import execution.us_autopilot as autopilot
+    from product import us_market_status
+    monkeypatch.setattr(autopilot, "get_status", lambda: {
+        "armed": True, "state_recovery_required": False, "open_trades": [],
+    })
+    return us_market_status.status()
+
+
+@pytest.mark.parametrize("scope", [None, "INDIA_AND_US"])
+def test_product_acceptance_grades_the_real_projection_for_each_scope(monkeypatch, scope):
+    from scripts._product_acceptance_core import grade_us_market_truth
+    if scope:
+        monkeypatch.setenv("QT_MARKET_SCOPE", scope)
+    out = _projection(monkeypatch)
+    assert grade_us_market_truth(out) == {"status": "PASS", "blocker_reason": ""}
+
+
+def test_product_acceptance_rejects_a_stale_capability_claim(monkeypatch):
+    from scripts._product_acceptance_core import grade_us_market_truth
+    out = _projection(monkeypatch)                       # INDIA_ONLY
+    claimed = dict(out, parity=dict(out["parity"], paper_auto_execution=True))
+    assert grade_us_market_truth(claimed)["status"] == "FAIL"
+    no_scope = {k: v for k, v in out.items() if k != "market_scope"}
+    assert grade_us_market_truth(no_scope)["blocker_reason"] == "US market scope is not reported"
+    unlocked = dict(out, live_locked=False)
+    assert grade_us_market_truth(unlocked)["status"] == "FAIL"
+
+
+def test_paused_lane_does_not_claim_counterfactuals(monkeypatch):
+    out = _projection(monkeypatch)
+    assert out["parity"]["forward_counterfactuals"] is False
+    assert out["parity"]["forward_outcome_settlement"] is True
