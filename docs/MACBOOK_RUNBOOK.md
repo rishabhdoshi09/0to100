@@ -118,3 +118,32 @@ scripts/quantterm_status.sh \
 ```
 
 Then open `http://127.0.0.1:5173` and confirm the UI reports the same backend truth as the status command. Empty/unavailable market data must appear empty, stale, blocked or degraded rather than be replaced with synthetic success.
+
+
+## 9. Read-only exact-SHA release evidence (after an approved test deployment)
+
+Once a candidate has been deliberately deployed to a **non-live-money** Mac
+host through the documented deployment process, inspect the installed service
+and measure the actual loopback API:
+
+```bash
+cd ~/0to100
+./venv/bin/python scripts/quantterm_release_readonly_probe.py \
+  --expected-sha "$(git rev-parse HEAD)" --samples 12
+```
+
+This GET-only command refuses to collect measurements unless all three
+identities match the **full** SHA: current checkout, installed deployment
+manifest, and running supervisor. It also requires a fresh healthy launchd
+host, all expected children healthy, and the verified live-money lock. Host
+identity is rechecked after sampling to detect changes during the probe.
+
+A nonzero exit or `BLOCKED_SHA_IDENTITY` means the release evidence is
+**invalid**; diagnose the mismatch rather than bypassing the check.
+`MEASURED_ONLY` indicates measured API latency, **not** production
+certification. The command does not install, restart, place orders, detach
+storage, restore backups, exercise browser/Telegram, or perform the required
+72-hour soak. Those gates need their own independently documented evidence.
+
+**Do not switch the production checkout to a draft release candidate merely
+to run this probe.** Validate it first in an isolated test deployment.
