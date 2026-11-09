@@ -9,6 +9,12 @@ export function deskRefreshBanner(error: string, hasDesk: boolean): DeskBanner {
   const text = String(error || '')
   const timedOut = text === REQUEST_TIMEOUT_MESSAGE || text.toLowerCase().includes('timed out')
   const apiDown = text === API_DOWN_MESSAGE || text.includes('Market API is not running')
+  if (text.startsWith('DESK_SNAPSHOT_REFRESHING')) {
+    return {
+      title: 'Desk snapshot refreshing · saved data only',
+      body: 'The market API is answering, but current read-only research is still being assembled. Previously saved rows are not current entry signals. Paper supervision continues independently.',
+    }
+  }
 
   if (hasDesk) {
     if (apiDown) {
