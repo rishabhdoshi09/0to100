@@ -15,6 +15,7 @@ journal so they never collide with the NSE ledger or Report Card.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sqlite3
 import threading
@@ -82,7 +83,8 @@ _DEFAULTS = {
     "accounted_close_ids": [],      # exact settled IDs; trades can close out of order
     "accounting_ids_migrated": False,
     "accounting_reconciliation_required": False,
-    "state_recovery_required": False,  # never bootstrap new money over lost/corrupt state
+    "state_recovery_required": False,  # runtime-only: this load failed closed
+    "state_recovery_error": "",        # runtime-only: why (never read from disk)
     "activity": [],
     "disarmed_reason": "",
     "reject_stats": {},            # {YYYY-MM-DD: {category: count}} — the funnel
@@ -92,8 +94,112 @@ _DEFAULTS = {
 
 _state: dict = {}
 
+# The single recovery authority is the in-memory state itself:
+# ``state_recovery_required`` / ``state_recovery_error`` describe the outcome of
+# THIS process's load. They are never trusted from disk (see ``_load``), and a
+# state carrying them is never written back (see ``_save``), so a damaged or
+# lost recovery source can only be replaced by an operator, never by defaults.
+_RECOVERY_REASON = "US_PAPER_STATE_RECOVERY_REQUIRED"
+_RUNTIME_ONLY_KEYS = ("state_recovery_required", "state_recovery_error")
+
 
 # ── Persistence ───────────────────────────────────────────────────────────────
+
+def _require_runtime_storage() -> None:
+    """Raise when the configured persistent runtime root is not present.
+
+    ``core.runtime_paths`` is the canonical authority: on an installed host
+    (``QT_RUNTIME_ROOT_REQUIRE_EXISTING``) it raises instead of falling back,
+    so a detached external volume is never mistaken for a fresh install and its
+    path is never recreated on the internal disk. In a dev checkout it is a
+    no-op that returns the repository root.
+    """
+    from core.runtime_paths import runtime_root
+    runtime_root()
+
+
+def _has_us_trade_history() -> bool:
+    """Check the journal *read-only* before treating a missing state as a new install.
+
+    An inaccessible or malformed journal raises. The caller then fails closed;
+    it must not infer zero paper positions from an unreadable database. A
+    journal that exists but has never had a ``trades`` table holds no history.
+    """
+    from urllib.parse import quote
+    from execution.trade_executor import _DB
+
+    if not _DB.exists():
+        return False
+    uri = "file:" + quote(str(_DB.absolute()), safe="/") + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, timeout=2.0)
+    try:
+        conn.execute("PRAGMA query_only=ON")
+        has_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='trades'"
+        ).fetchone()
+        if has_table is None:
+            return False
+        row = conn.execute(
+            "SELECT 1 FROM trades WHERE note LIKE ? LIMIT 1",
+            (f"%{TAG}%",),
+        ).fetchone()
+        return row is not None
+    finally:
+        conn.close()
+
+
+def _is_int_id(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _validate_saved_state(payload: object) -> dict:
+    """Do not convert damaged persisted consent/accounting into defaults."""
+    if not isinstance(payload, dict):
+        raise ValueError("US paper state is not a JSON object")
+    if not isinstance(payload.get("armed"), bool):
+        raise ValueError("US paper arm/disarm consent is absent or invalid")
+    # Older *disarmed* state files legitimately lacked the daily dictionaries.
+    # They remain disarmed. An armed state cannot silently lose its limits.
+    for key in ("trades_today", "traded_symbols"):
+        if key in payload and not isinstance(payload[key], dict):
+            raise ValueError(f"US paper {key} is invalid")
+        if payload["armed"] and key not in payload:
+            raise ValueError(f"armed US paper state is missing {key}")
+    if not isinstance(payload.get("max_accounted_id"), int) or isinstance(
+        payload.get("max_accounted_id"), bool
+    ):
+        raise ValueError("US paper P&L watermark is absent or invalid")
+    for key in ("allocation", "realized_pnl"):
+        value = payload.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"US paper {key} is absent or invalid")
+        if not math.isfinite(float(value)):
+            raise ValueError(f"US paper {key} is not finite")
+    # Exact-ID settlement ledger. A damaged list would either crash settlement
+    # or, worse, re-book every closed trade's P&L into the pool.
+    for key in ("accounted_ids", "accounted_close_ids"):
+        if key in payload:
+            ids = payload[key]
+            if not isinstance(ids, list) or not all(_is_int_id(i) for i in ids):
+                raise ValueError(f"US paper {key} is invalid")
+    for key in ("accounting_ids_migrated", "accounting_reconciliation_required"):
+        if key in payload and not isinstance(payload[key], bool):
+            raise ValueError(f"US paper {key} is invalid")
+    if payload.get("accounting_ids_migrated") is True and "accounted_close_ids" not in payload:
+        raise ValueError("migrated US paper state lost its settled close IDs")
+    return payload
+
+
+def _latch_recovery(reason: str) -> None:
+    """Fail closed in memory: no arming, no entries, no accounting, no saves."""
+    _state["armed"] = False
+    _state["allocation"] = 0.0          # unknown pool is not a $100k default
+    _state["disarmed_reason"] = _RECOVERY_REASON
+    _state["state_recovery_required"] = True
+    _state["state_recovery_error"] = reason
+    _state["accounting_reconciliation_required"] = True
+    log.warning("us_autopilot_state_recovery_required", error=reason)
+
 
 def _load() -> dict:
     global _state
@@ -104,37 +210,41 @@ def _load() -> dict:
         migrated = False
         try:
             if _STATE_FILE.exists():
-                on_disk = json.loads(_STATE_FILE.read_text(encoding="utf-8"))
-                if not isinstance(on_disk, dict):
-                    raise ValueError("US paper state must be a JSON object")
-                _state.update({k: v for k, v in on_disk.items() if k in _DEFAULTS})
-                # Older builds shipped the US PAPER engine disabled with a zero
-                # allocation. That was a product-default placeholder, not an
-                # operator decision. Migrate only that untouched legacy state;
-                # an explicit disarm carries disarmed_reason and is preserved.
+                on_disk = _validate_saved_state(
+                    json.loads(_STATE_FILE.read_text(encoding="utf-8"))
+                )
+                _state.update({k: v for k, v in on_disk.items()
+                               if k in _DEFAULTS and k not in _RUNTIME_ONLY_KEYS})
+                # An untouched old zero-allocation default may be migrated.
+                # Existing explicit disarm and accounting history must survive.
                 if (
                     float(_state.get("allocation") or 0.0) <= 0.0
                     and not str(_state.get("disarmed_reason") or "").strip()
                     and not list(_state.get("activity") or [])
                     and int(_state.get("max_accounted_id") or 0) == 0
+                    and not list(_state.get("accounted_close_ids") or [])
                 ):
-                    _state["allocation"] = float(os.getenv("QT_US_PAPER_CAPITAL", "100000") or 100000)
-                    _state["armed"] = os.getenv("QT_US_PAPER_AUTO", "1").strip().lower() not in {"0", "false", "off", "no"}
+                    _state["allocation"] = float(
+                        os.getenv("QT_US_PAPER_CAPITAL", "100000") or 100000
+                    )
+                    _state["armed"] = os.getenv(
+                        "QT_US_PAPER_AUTO", "1"
+                    ).strip().lower() not in {"0", "false", "off", "no"}
                     migrated = True
             else:
                 # A missing state file is normal only on a truly fresh install.
-                # Never reset virtual cash/P&L while an older US trade journal
-                # survives on disk. Restoring the original state is mandatory.
-                if _trades(_OPEN + _WIN + _LOSS, strict=True):
-                    raise ValueError("US paper state missing with trade history")
+                # A detached runtime volume also has no file: ask the runtime
+                # authority first. Never reset virtual cash/P&L while an older
+                # US trade journal survives; restoring the state is mandatory.
+                _require_runtime_storage()
+                if _has_us_trade_history():
+                    raise ValueError("US paper state file missing with existing trade history")
         except Exception as exc:
-            log.warning("us_autopilot_load_failed", error=str(exc))
-            _state["armed"] = False
-            _state["allocation"] = 0.0
-            _state["disarmed_reason"] = "US_PAPER_STATE_RECOVERY_REQUIRED"
-            _state["state_recovery_required"] = True
-            _state["accounting_reconciliation_required"] = True
-            migrated = False
+            _state = dict(_DEFAULTS)
+            _latch_recovery(type(exc).__name__ + ":" + str(exc)[:160])
+            return _state
+        _state["state_recovery_required"] = False
+        _state["state_recovery_error"] = ""
         if migrated:
             _save()
             _log_activity("legacy zero-state migrated to autonomous virtual PAPER mode")
@@ -146,13 +256,17 @@ def _save() -> bool:
 
     Serialize the full write under the process lock so a concurrent status or
     accounting update cannot overwrite a more recent checkpoint with stale JSON.
+    An unrestored state is never written: the file on disk is the recovery source.
     """
     try:
         with _lock:
             data = dict(_load())
             if data.get("state_recovery_required"):
-                log.warning("us_autopilot_save_blocked_unrestored_state")
+                log.warning("us_autopilot_save_blocked", reason=_RECOVERY_REASON)
                 return False
+            for key in _RUNTIME_ONLY_KEYS:
+                data.pop(key, None)
+            _require_runtime_storage()   # never recreate a vanished volume's path
             _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
             tmp = _STATE_FILE.with_suffix(".json.tmp")
             with tmp.open("w", encoding="utf-8") as handle:
@@ -160,6 +274,14 @@ def _save() -> bool:
                 handle.flush()
                 os.fsync(handle.fileno())
             tmp.replace(_STATE_FILE)
+            try:
+                dir_fd = os.open(str(_STATE_FILE.parent), os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except OSError:
+                pass  # directory fsync is unsupported on some filesystems
         return True
     except Exception as exc:
         log.warning("us_autopilot_save_failed", error=str(exc))
@@ -281,6 +403,7 @@ def _update(trade_id: int, sets: str, params: tuple) -> None:
 def get_status() -> dict:
     with _lock:
         s = dict(_load())
+    s["state_recovery_error"] = s.get("state_recovery_error") or None
     opens = _open_trades()
     s["open_trades"] = opens
     s["deployed"] = round(sum(float(t["entry_price"] or 0) * int(t["qty"] or 0)
@@ -293,7 +416,10 @@ def get_status() -> dict:
     return s
 
 
-def set_config(**kwargs) -> None:
+def set_config(**kwargs) -> bool:
+    """Apply clamped config; False when nothing could be durably recorded."""
+    if _load().get("state_recovery_required"):
+        return False  # An operator must restore the persisted state before editing it.
     clamps = {
         "allocation": (0.0, 1e9), "cash_reserve_pct": (0.05, 0.50),
         "per_trade_cap_pct": (0.05, MAX_PER_NAME_PCT),
@@ -318,7 +444,7 @@ def set_config(**kwargs) -> None:
             elif k in clamps:
                 lo, hi = clamps[k]
                 s[k] = type(_DEFAULTS[k])(min(hi, max(lo, v)))
-    _save()
+    return _save()
 
 
 # ── Aggressiveness presets — breadth only, never the safety rails ─────────────
@@ -343,11 +469,13 @@ def apply_preset(name: str) -> tuple[bool, str]:
     cfg = _PRESETS.get(name)
     if not cfg:
         return False, f"unknown preset '{name}'"
-    set_config(**cfg)
     with _lock:
-        s = _load()
-        s["preset"] = name
-    _save()
+        if _load().get("state_recovery_required"):
+            return False, "US PAPER state recovery required; preset not applied"
+        _load()["preset"] = name
+        # One durable write carries the preset name and its thresholds.
+        if not set_config(**cfg):
+            return False, "US PAPER state could not be saved; preset not applied"
     _log_activity(f"PRESET → {name} (min_score {cfg['min_score']:.0f}, "
                   f"{cfg['max_trades_per_day']}/day, "
                   f"{cfg['max_open_positions']} open)")
@@ -357,7 +485,8 @@ def apply_preset(name: str) -> tuple[bool, str]:
 def arm() -> tuple[bool, str]:
     s = _load()
     if s.get("state_recovery_required"):
-        return False, "US paper state recovery required; restore durable state before arming"
+        return False, ("US PAPER state recovery required; restore the saved "
+                       "state and restart before arming")
     if s["allocation"] < 1000:
         return False, "Pehle allocation set karo (min $1,000)"
     with _lock:
@@ -610,7 +739,7 @@ def _consider_locked(symbol, entry, stop, score, conviction, source, meta=None) 
         )
         _log_activity(f"BUY {qty}×{symbol} @ ${entry:,.2f} "
                       f"(stop ${stop:,.2f} / target ${target:,.2f}) [PAPER]")
-        _notify(f"BUY <b>{qty} × {symbol}</b> @ ${entry:,.2f}\\n"
+        _notify(f"BUY <b>{qty} × {symbol}</b> @ ${entry:,.2f}\n"
                 f"stop ${stop:,.2f} · target ${target:,.2f} (+{s['target_pct']}%)")
         return True
     except Exception as exc:
@@ -751,6 +880,10 @@ def _account_closed() -> None:
     notifications = []
     with _lock:
         s = _load()
+        if s.get("state_recovery_required"):
+            # Settlement against an unrestored ledger would re-book P&L that the
+            # lost state already counted. Deferred is a failure, not a success.
+            raise RuntimeError(_RECOVERY_REASON)
         closed = _trades(_WIN + _LOSS, strict=True)
         was_migrated = bool(s.get("accounting_ids_migrated"))
         accounted = {int(i) for i in (s.get("accounted_close_ids") or [])}
@@ -782,7 +915,7 @@ def _account_closed() -> None:
             changed = True
             notifications.append(
                 f"CLOSED <b>{t['symbol']}</b> {'🟢' if pnl >= 0 else '🔴'} "
-                f"${pnl:+,.2f} (net)\\nPool: ${s['allocation'] + realized:,.0f}"
+                f"${pnl:+,.2f} (net)\nPool: ${s['allocation'] + realized:,.0f}"
             )
 
         if changed:

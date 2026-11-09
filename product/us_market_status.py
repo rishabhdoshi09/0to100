@@ -81,6 +81,14 @@ def status() -> dict[str, Any]:
             "trades_today": int(paper.get("trades_today_count") or 0),
             "preset": paper.get("preset"),
             "disarmed_reason": paper.get("disarmed_reason"),
+            # Unreadable/unrecorded paper status is a blocker, never "OFF".
+            "state_recovery_required": bool(paper.get("state_recovery_required", not paper)),
+            "state_recovery_error": paper.get("state_recovery_error") or (
+                None if paper else "US paper status unavailable"
+            ),
+            "accounting_reconciliation_required": bool(
+                paper.get("accounting_reconciliation_required")
+            ),
             "report": report,
             "rejection_funnel": funnel,
         },
