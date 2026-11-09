@@ -230,13 +230,23 @@ def read_status(*, state_path, jobs_db=None, dialogue_path=None) -> dict:
 
     if jobs_db is not None:
         try:
-            from research.autonomy.job_store import JobStore
-            js = JobStore(jobs_db)
-            counts: dict = {}
-            for j in js.list(limit=500):
-                counts[j.status] = counts.get(j.status, 0) + 1
-            out["jobs"] = counts
-            js.close()
+            import sqlite3
+            from contextlib import closing
+
+            # This is a projection, not a scheduler. JobStore's constructor
+            # negotiates WAL mode, migrates schema and waits up to 30 seconds
+            # for locks. A frequently-polled UI must never do any of that.
+            # mode=ro sees committed WAL rows without ignoring them as
+            # immutable=1 would. Keep the exact newest-500 count semantics.
+            uri = Path(jobs_db).resolve().as_uri() + "?mode=ro"
+            with closing(sqlite3.connect(uri, uri=True, timeout=1.0)) as js:
+                counts: dict = {}
+                rows = js.execute(
+                    "SELECT status FROM jobs ORDER BY created_at DESC LIMIT 500"
+                )
+                for (status,) in rows:
+                    counts[status] = counts.get(status, 0) + 1
+                out["jobs"] = counts
         except Exception:
             pass
     if dialogue_path is not None:
