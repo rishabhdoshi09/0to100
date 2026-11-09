@@ -53,6 +53,13 @@ def _trade_session_date(trade: dict) -> str:
         if len(value) >= 10:
             return value[:10]
     return str(trade.get("placed_at") or "")[:10]
+
+
+def _trade_close_session(trade: dict) -> str:
+    closed_at = str(trade.get("closed_at") or "")
+    return closed_at[:10] if len(closed_at) >= 10 else _trade_session_date(trade)
+
+
 _OPEN = ("PAPER_OPEN",)
 _WIN = ("PAPER_WIN",)
 _LOSS = ("PAPER_LOSS",)
@@ -854,14 +861,15 @@ def _close_positions() -> None:
         entry = float(t["entry_price"] or 0)
         stop = float(t["stop_price"] or 0)
         target = float(t["target_price"] or 0)
+        closed_at = _us_now().isoformat()
         if target and px >= target:
             # A resting target fills AT the target; a later, higher poll is not the fill.
-            _update(t["id"], "status=?, exit_price=?, note=note||?",
-                    ("PAPER_WIN", target, f" | target ${target:,.2f} (seen ${px:,.2f})"))
+            _update(t["id"], "status=?, exit_price=?, closed_at=?, note=note||?",
+                    ("PAPER_WIN", target, closed_at, f" | target ${target:,.2f} (seen ${px:,.2f})"))
             continue
         if stop and px <= stop:
-            _update(t["id"], "status=?, exit_price=?, note=note||?",
-                    ("PAPER_LOSS", px, f" | stop ${px:,.2f}"))
+            _update(t["id"], "status=?, exit_price=?, closed_at=?, note=note||?",
+                    ("PAPER_LOSS", px, closed_at, f" | stop ${px:,.2f}"))
             continue
         # breakeven trail
         if s.get("trailing_enabled", True) and 0 < stop < entry and px >= entry * trig:
@@ -871,8 +879,8 @@ def _close_positions() -> None:
         try:
             placed = datetime.fromisoformat(str(t["placed_at"]))
             if (datetime.now() - placed).days >= max_days:
-                _update(t["id"], "status=?, exit_price=?, note=note||?",
-                        ("PAPER_WIN" if px >= entry else "PAPER_LOSS", px,
+                _update(t["id"], "status=?, exit_price=?, closed_at=?, note=note||?",
+                        ("PAPER_WIN" if px >= entry else "PAPER_LOSS", px, closed_at,
                          f" | time-stop day {max_days} @ ${px:,.2f}"))
         except Exception:
             pass
@@ -955,8 +963,10 @@ def _circuit_breaker() -> None:
     if pool <= 0:
         return
     today = _us_session_date()
+    # Realized P&L belongs to the session it was realized in. Rows closed
+    # before closed_at existed fall back to their entry session (unknown).
     day = sum(_net_pnl(t) for t in _trades(_WIN + _LOSS)
-              if _trade_session_date(t) == today)
+              if _trade_close_session(t) == today)
     # Include UNREALIZED on open positions — else three open trades could
     # bleed −8% and never trip the breaker until they close (NSE-parity).
     opens = _open_trades()

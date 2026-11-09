@@ -5234,6 +5234,41 @@ class TestUsPaperLaneRiskRails:
         # A different name is unaffected.
         assert us.consider("MSFT", 100.0, 99.0, 70.0, 60.0) is True
 
+    def test_daily_loss_breaker_counts_a_loss_on_the_day_it_is_realized(
+            self, tmp_path, monkeypatch):
+        """The breaker attributed closed trades to their ENTRY session, so a
+        position held from an earlier session and stopped out today added
+        nothing to today's loss and the 3% breaker never tripped."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        us, te = self._setup(tmp_path, monkeypatch, daily_loss_limit_pct=0.03)
+        monkeypatch.setattr(us, "_us_now", lambda: datetime(
+            2026, 11, 6, 11, 0, tzinfo=ZoneInfo("America/New_York")))
+        self._open_us(te, "HELD", 200, 100.0, 85.0,
+                      note="US_AUTOPILOT:us_scanner|session=2026-11-05")
+        monkeypatch.setattr("data.us_data.us_live_prices",
+                            lambda syms: {s: {"price": 84.0} for s in syms})
+        us._close_positions()
+        closed = us._trades(us._LOSS)
+        assert len(closed) == 1 and closed[0]["closed_at"].startswith("2026-11-06")
+        assert us._net_pnl(closed[0]) < -3_000            # > 3% of the 100k pool
+        us._circuit_breaker()
+        assert us._load()["armed"] is False
+        assert us._load()["disarmed_reason"].startswith("circuit breaker")
+
+    def test_breaker_still_attributes_legacy_closes_without_timestamp_by_entry(
+            self, tmp_path, monkeypatch):
+        us, te = self._setup(tmp_path, monkeypatch, daily_loss_limit_pct=0.03)
+        monkeypatch.setattr(us, "_us_session_date", lambda: "2026-11-06")
+        self._open_us(te, "OLD", 200, 100.0, 85.0,
+                      note="US_AUTOPILOT:us_scanner|session=2026-11-05")
+        conn = te.connect()
+        conn.execute("UPDATE trades SET status='PAPER_LOSS', exit_price=84.0")
+        conn.commit()
+        conn.close()
+        us._circuit_breaker()                                # closed_at unknown
+        assert us._load()["armed"] is True
+
     def test_us_rows_do_not_count_in_the_nse_account_gate(self, tmp_path, monkeypatch):
         from risk.portfolio_risk import account_exposure_gate, portfolio_risk_report
         us, te = self._setup(tmp_path, monkeypatch)
