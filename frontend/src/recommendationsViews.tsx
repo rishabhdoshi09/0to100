@@ -22,6 +22,7 @@ import { DailyWrapList, magazineWrapLines } from './dailyWrap'
 import { keepRicherMemory, markInvestigate, recallMemory } from './sessionMemory'
 import { recoCanonicalDecision } from './scannerFallback'
 import { shouldPollPage } from './pagePolling'
+import { recommendationsAreCurrent } from './recommendationAuthority'
 
 const CAT_ICONS: Record<string, string> = {
   wealth_builders: 'W',
@@ -540,7 +541,9 @@ export function RecommendationsView({
       void fetchRecommendationsWorkspace()
         .then((payload) => {
           if (!cancelled) {
-            const kept = keepRicherMemory('reco-workspace', payload, (row) => !(row.categories || []).some((c) => (c.count || 0) > 0 || (c.cards || []).length > 0))
+            // An authoritative REFRESHING/FAILED empty projection supersedes cached
+            // BUY cards. Never resurrect the previous scan's recommendations.
+            const kept = keepRicherMemory('reco-workspace', payload, () => false)
             setData(kept)
             const firstWithCards = kept.categories.find((c) => c.count > 0)
             if (firstWithCards) setCategoryId(firstWithCards.id)
@@ -563,6 +566,10 @@ export function RecommendationsView({
       window.clearInterval(timer)
     }
   }, [recommendationsVisible, dashboard.scan.scanned_at, dashboard.long_term.scanned_at, marketScan.succeeded, longTermScan.succeeded, marketScan.isBusy, longTermScan.isBusy, dashboard.market.available])
+
+  const recommendationsVerified = recommendationsAreCurrent(
+    data, dashboard.scan, dashboard.long_term.scanned_at, dashboard.data.ready,
+  )
 
   const category = useMemo(
     () => data?.categories.find((c) => c.id === categoryId) || data?.categories[0],
@@ -625,13 +632,16 @@ export function RecommendationsView({
       </div>
     )
   }
-  if (error || !data || !category) {
+  if (error || !data || !category || !recommendationsVerified) {
     return (
       <div className="reco-light">
         <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
         <LiveScanBanner scan={longTermScan} depth={depth} label="Funds refresh" />
         <div className="reco-empty">
-          <strong>{error || 'No recommendation data yet'}</strong>
+          <strong>{error || (!recommendationsVerified
+            ? 'Verifying current NSE stock recommendations'
+            : 'No recommendation data yet')}</strong>
+          {!recommendationsVerified && data?.cmp_note ? <p>{data.cmp_note}</p> : null}
           <p>This page starts the official-price and market-scan jobs if they are missing, then builds recommendations from verified scan evidence. Empty high-conviction is a real result when families do not agree.</p>
           <div className="reco-hero-actions">
             <button type="button" className="reco-primary" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
