@@ -159,3 +159,61 @@ def test_route_replacement_leaves_exactly_one_fast_get(monkeypatch):
     ]
     assert len(matches) == 1
     assert matches[0].name == "recommendations_workspace_persisted_first"
+
+
+def test_canonical_api_get_uses_persisted_first_recommendations(monkeypatch):
+    """The deployed api.app, not only a dormant compatibility hook, must use the fast route."""
+    import importlib
+
+    canonical = importlib.import_module("api.app")
+    routes = [
+        item for item in canonical.app.router.routes
+        if getattr(item, "path", None) == "/api/recommendations-workspace"
+        and "GET" in set(getattr(item, "methods", set()) or set())
+    ]
+    assert len(routes) == 1
+    assert routes[0].name == "recommendations_workspace_persisted_first"
+
+    from product import recommendations_workspace as RW
+
+    def forbidden_sync_builder(**_kwargs):
+        raise AssertionError("GET must never rebuild all recommendations synchronously")
+
+    monkeypatch.setattr(RW, "build_recommendations_workspace", forbidden_sync_builder)
+    monkeypatch.setattr(
+        RL, "build_fast_response",
+        lambda _core, attach_authority=None: {"records_status": "REFRESHING", "categories": []},
+    )
+    assert routes[0].endpoint()["records_status"] == "REFRESHING"
+
+
+def test_stale_scan_provenance_withholds_saved_buy_without_rebuild(monkeypatch):
+    """Same saved scan identity is insufficient when its data provenance was invalidated."""
+    from product import recommendations_store as RS
+    from product import recommendations_workspace as RW
+
+    stale = _saved()
+    stale["categories"] = [
+        {"id": "momentum_breakouts", "count": 1,
+         "cards": [{"symbol": "AAA", "action_badge": "Buy", "entry": 100}]},
+    ]
+    monkeypatch.setattr(RS, "load_recommendations", lambda: stale)
+    monkeypatch.setattr(RW, "slim_workspace_for_desk", lambda payload: dict(payload))
+    monkeypatch.setattr(
+        RL, "_ensure_rebuild",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("stale source cannot start rebuild")),
+    )
+
+    class StaleCore(_Core):
+        @staticmethod
+        def _scan_payload():
+            return {
+                **_Core._scan_payload(),
+                "available": True,
+                "provenance": {"data_current": False, "source_snapshot_id": "stale"},
+            }
+
+    result = RL.build_fast_response(StaleCore())
+    assert result["records_status"] == "STALE"
+    assert not any(category.get("cards") for category in result["categories"])
+    assert result["lifecycle"]["active"] == []
