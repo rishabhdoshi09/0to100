@@ -27,6 +27,7 @@ import {
 } from './productApi'
 import { RiskLensCard } from './productViews'
 import { shouldPollPage } from './pagePolling'
+import { verifiedHomeStockScan } from './homeStockTruth'
 import type { ControlName, DashboardPayload } from './types'
 import { LiveScanBanner, type ExperienceViewProps } from './experience'
 import { keepRicher, markInvestigate, recall, remember } from './sessionMemory'
@@ -478,6 +479,7 @@ function HomeOsCard({
   os,
   depth,
   busy,
+  stockScanVerified,
   onAction,
   onOpenPage,
   setSelected,
@@ -485,6 +487,7 @@ function HomeOsCard({
   os: HomeOperatingSystem
   depth: string
   busy: boolean
+  stockScanVerified: boolean
   onAction: (action: HomeAction) => void
   onOpenPage?: (page: string) => void
   setSelected?: (symbol: string) => void
@@ -507,7 +510,7 @@ function HomeOsCard({
       : 'Canonical broker-boundary lock has not been verified.'
   return (
     <section className={`home-os-card state-${(os.state || '').toLowerCase()}`}>
-      {(os.opportunities || []).length ? (
+      {stockScanVerified && (os.opportunities || []).length ? (
         <div className="home-os-opps home-os-best-trades" aria-label="Best trades">
           <span>BEST TRADES</span>
           <strong>Production-thesis qualified · rejected and extended names excluded</strong>
@@ -559,8 +562,10 @@ function HomeOsCard({
       ) : (
         <div className="home-os-past home-os-best-trades" aria-label="Best trades">
           <span>BEST TRADES</span>
-          <strong>No eligible trade</strong>
-          <small>The production thesis did not qualify a trade. Rejected, extended and WAIT names are kept out of this list.</small>
+          <strong>{stockScanVerified ? 'No eligible trade' : 'Verifying NSE stock recommendations'}</strong>
+          <small>{stockScanVerified
+            ? 'The current verified stock scan qualified no paper trade. Rejected, extended and WAIT names stay out.'
+            : 'The latest scan/data or Home projection is still refreshing. Prior BUY cards are not current trade signals.'}</small>
         </div>
       )}
       {(os.research_watchlist || []).length ? (
@@ -1068,6 +1073,9 @@ export function RadarHomeView(props: ExperienceViewProps & {
     || longTermRows.find((r) => r.symbol === selected)
 
   const homeOs = radar?.home_os || null
+  const stockScanVerified = verifiedHomeStockScan(
+    dashboard.scan, dashboard.data.ready, radar?.scan_scanned_at,
+  )
   const runHomeAction = (action: HomeAction) => {
     if (action.kind === 'instruction') return
     const control = String(action.control || '')
@@ -1118,6 +1126,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
           os={homeOs}
           depth={depth}
           busy={marketScan.isBusy || bootstrapBusy}
+          stockScanVerified={stockScanVerified}
           onAction={runHomeAction}
           onOpenPage={setActive}
           setSelected={setSelected}
