@@ -45,6 +45,7 @@ class DeskReadSnapshot:
             market = result.get("market")
             if isinstance(market, dict):
                 market["available"] = False
+                market["health"] = "Unavailable"
                 market["trade_stance"] = "Prior snapshot only; current market stance is unverified."
             result["conviction"] = []
             fno = result.get("fno")
