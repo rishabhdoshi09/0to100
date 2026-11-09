@@ -159,3 +159,63 @@ def test_scan_publication_filters_non_stock_funds(monkeypatch):
     assert [r["symbol"] for r in payload["records"]] == ["AAA"]
     assert payload["qualified_rows"] == 1
     assert payload["summary"]["setup_ready"] == 1
+
+
+def test_generation_publication_holds_the_cross_process_publication_lock(monkeypatch, tmp_path):
+    """The long-term overlay, the recommendation projection and the canonical
+    scan commit inside one publication critical section, so the API's
+    background rebuild cannot interleave an older generation between them."""
+    import threading
+
+    from product.recommendations_store import publication_lock
+
+    monkeypatch.setenv("QT_RECO_PUBLISH_LOCK", str(tmp_path / "publish.lock"))
+    held = {}
+
+    def probe(name):
+        out = []
+
+        def other_process_attempt():
+            try:
+                with publication_lock(timeout_s=0):
+                    out.append(False)
+            except TimeoutError:
+                out.append(True)
+
+        t = threading.Thread(target=other_process_attempt)
+        t.start()
+        t.join(5)
+        held[name] = out[0]
+
+    monkeypatch.setattr(S, "_saved_priority_inputs", lambda: (None, None, None, []))
+    monkeypatch.setattr(S, "_feature002_hook", lambda _rows: probe("feature002"))
+    monkeypatch.setattr("scan.scan_coverage.observe_scanner", _observe_scanner)
+    monkeypatch.setattr("scan.scan_coverage.save_audit", lambda _audit: None)
+    monkeypatch.setattr("scan.bulk_fetcher.cached_symbols", lambda: ["AAA"])
+    monkeypatch.setattr(
+        "product.scan_store._history_freshness",
+        lambda: ({"available_session": "2026-09-18", "expected_latest_completed_session": "2026-09-18",
+                  "reason_code": "HISTORY_CURRENT", "stale_sessions": 0, "current": True}, ""),
+    )
+    monkeypatch.setattr("product.scan_store.save_scan", lambda _p: probe("save"))
+    monkeypatch.setattr("product.sepa_setup.persist_public_best_setups", lambda _p: None)
+    monkeypatch.setattr(
+        "scan.long_term_service.overlay_long_term_from_market_scan",
+        lambda _p, **_k: probe("long") or SimpleNamespace(status="SUCCEEDED", payload={"records": []}, error_code=""),
+    )
+    monkeypatch.setattr(
+        "product.desk_scan_overlays.persist_desks_from_market_scan",
+        lambda _p: probe("desks") or {"recommendations": "saved"},
+    )
+
+    report = S.run_whole_market_scan(
+        universe_provider=lambda: {"AAA": "Alpha"},
+        prefetch_fn=lambda *_a, **_k: None,
+        scanner=_Scanner(),
+        fno_provider=lambda: set(),
+        save=True,
+    )
+    assert report.ok is True
+    assert held == {"long": True, "desks": True, "save": True, "feature002": False}
+    with publication_lock(timeout_s=0):      # released after publication
+        pass

@@ -27,6 +27,10 @@ from core.runtime_paths import logs_dir
 _BUILD_LOCK = threading.Lock()
 _BUILD_THREAD: threading.Thread | None = None
 _RETRY_AFTER_FAILURE_S = 30.0
+_MAX_RETRY_AFTER_FAILURE_S = 900.0
+# A pipeline publication holds the lock while it builds and saves one
+# generation; the rebuild waits that long at most, then reports FAILED.
+_PUBLISH_LOCK_TIMEOUT_S = 300.0
 _ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_LOCK_PATH = logs_dir() / "product" / "recommendations_rebuild.lock"
 _DEFAULT_STATE_PATH = logs_dir() / "product" / "recommendations_rebuild_state.json"
@@ -91,6 +95,13 @@ def _claim_rebuild(scan: Mapping[str, Any], long_term: Mapping[str, Any]):
         handle.truncate()
         handle.write(str(os.getpid()))
         handle.flush()
+        previous = _read_state()
+        carried = 0
+        if _same_target(previous, scan, long_term):
+            try:
+                carried = int(previous.get("failed_attempts") or 0)
+            except (TypeError, ValueError):
+                carried = 0
         _write_state({
             "schema_version": 1,
             **_target(scan, long_term),
@@ -99,6 +110,8 @@ def _claim_rebuild(scan: Mapping[str, Any], long_term: Mapping[str, Any]):
             "started_at": time.time(),
             "finished_at": None,
             "error": "",
+            # Retry backoff survives the claim; a new generation starts at 0.
+            "failed_attempts": carried,
         })
         return handle
     except Exception:
@@ -231,18 +244,24 @@ def _build_and_persist(scan: dict[str, Any], long_term: dict[str, Any], claim) -
             deep_confirm=False,
             persist_ledger=False,
         )
-        if not _current_generation_matches(scan, long_term):
-            _write_state({
-                "schema_version": 1,
-                **target,
-                "status": "SUPERSEDED",
-                "pid": os.getpid(),
-                "started_at": started,
-                "finished_at": time.time(),
-                "error": "A newer scan/funds generation arrived before this rebuild could commit.",
-            })
-            return
-        save_recommendations(payload)
+        from product.recommendations_store import publication_lock
+
+        # The generation check and the save are one critical section with the
+        # scan pipeline's publication: a newer generation published while this
+        # rebuild ran is never overwritten by this older projection.
+        with publication_lock(timeout_s=_PUBLISH_LOCK_TIMEOUT_S):
+            if not _current_generation_matches(scan, long_term):
+                _write_state({
+                    "schema_version": 1,
+                    **target,
+                    "status": "SUPERSEDED",
+                    "pid": os.getpid(),
+                    "started_at": started,
+                    "finished_at": time.time(),
+                    "error": "A newer scan/funds generation arrived before this rebuild could commit.",
+                })
+                return
+            save_recommendations(payload)
         _write_state({
             "schema_version": 1,
             **target,
@@ -254,6 +273,13 @@ def _build_and_persist(scan: dict[str, Any], long_term: dict[str, Any], claim) -
         })
     except Exception as exc:
         message = f"{type(exc).__name__}: {exc}"[:400]
+        previous = _read_state()
+        attempts = 1
+        if _same_target(previous, scan, long_term) and str(previous.get("status") or "") in {"FAILED", "RUNNING"}:
+            try:
+                attempts = int(previous.get("failed_attempts") or 0) + 1
+            except (TypeError, ValueError):
+                attempts = 1
         _write_state({
             "schema_version": 1,
             **target,
@@ -262,6 +288,7 @@ def _build_and_persist(scan: dict[str, Any], long_term: dict[str, Any], claim) -
             "started_at": started,
             "finished_at": time.time(),
             "error": message,
+            "failed_attempts": attempts,
         })
         print(f"[API] recommendation background rebuild failed: {message}", flush=True)
     finally:
@@ -270,15 +297,23 @@ def _build_and_persist(scan: dict[str, Any], long_term: dict[str, Any], claim) -
             _BUILD_THREAD = None
 
 
+def _retry_after_s(failed_attempts: int) -> float:
+    """30 s, 60 s, 120 s ... capped: a deterministic failure must not rebuild
+    the whole projection every 30 s for as long as the page is polled."""
+    n = max(1, int(failed_attempts or 1))
+    return min(_RETRY_AFTER_FAILURE_S * (2 ** (n - 1)), _MAX_RETRY_AFTER_FAILURE_S)
+
+
 def _recent_failed_target(scan: Mapping[str, Any], long_term: Mapping[str, Any]) -> bool:
     state = _read_state()
     if not _same_target(state, scan, long_term) or str(state.get("status") or "") != "FAILED":
         return False
     try:
         finished = float(state.get("finished_at") or 0.0)
+        attempts = int(state.get("failed_attempts") or 1)
     except (TypeError, ValueError):
         return False
-    return finished > 0 and (time.time() - finished) < _RETRY_AFTER_FAILURE_S
+    return finished > 0 and (time.time() - finished) < _retry_after_s(attempts)
 
 
 def _ensure_rebuild(scan: dict[str, Any], long_term: dict[str, Any]) -> bool:

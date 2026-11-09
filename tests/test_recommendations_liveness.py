@@ -243,3 +243,94 @@ def test_canonical_get_withholds_old_day_buy_even_when_saved_provenance_was_once
     assert response["display_authority"]["status"] == "SCAN_NOT_CURRENT"
     assert response["display_authority"]["scan_market_session"] == "2026-11-06"
     assert response["rebuilding"] is False
+
+
+def test_background_rebuild_never_overwrites_a_newer_pipeline_publication(monkeypatch, tmp_path):
+    """The scan pipeline saves generation B's recommendations, then B's scan.
+    A background rebuild for the older generation A that finishes in between
+    saw scan A still on disk and overwrote B's published recommendations with
+    A's. Publication (pipeline) and the rebuild's generation check + save must
+    be one critical section."""
+    import contextlib
+    import json
+    import threading
+    import time
+    from pathlib import Path
+
+    from product import long_term_store, recommendations_store as RS, scan_store
+    from product import recommendations_workspace as RW
+
+    reco_path = tmp_path / "latest_recommendations.json"
+    scan_path = tmp_path / "latest_momentum_scan.json"
+    monkeypatch.setenv("QT_RECO_PUBLISH_LOCK", str(tmp_path / "publish.lock"))
+    monkeypatch.setattr(RL, "_state_path", lambda: tmp_path / "rebuild_state.json")
+    real_save_reco, real_load_reco = RS.save_recommendations, RS.load_recommendations
+    monkeypatch.setattr(RS, "save_recommendations", lambda payload, path=reco_path: real_save_reco(payload, path))
+    monkeypatch.setattr(RS, "load_recommendations", lambda path=reco_path: real_load_reco(path))
+    monkeypatch.setattr(scan_store, "load_scan", lambda path=scan_path: json.loads(Path(path).read_text()))
+    monkeypatch.setattr(long_term_store, "load_long_term_scan", lambda *a, **k: {"scanned_at": "LT"})
+
+    def scan(gen):
+        return {"schema_version": 2, "scanned_at": gen, "records": [], "provenance": {}}
+
+    def reco(gen):
+        return {"schema_version": 4, "categories": [], "scan_scanned_at": gen, "long_term_scanned_at": "LT"}
+
+    scan_path.write_text(json.dumps(scan("A")))
+    monkeypatch.setattr(RW, "build_recommendations_workspace", lambda **_k: reco("A"))
+
+    reco_saved, go = threading.Event(), threading.Event()
+
+    def pipeline_b():
+        lock = getattr(RS, "publication_lock", None)
+        with (lock() if lock else contextlib.nullcontext()):
+            RS.save_recommendations(reco("B"))
+            reco_saved.set()
+            go.wait(5)
+            scan_path.write_text(json.dumps(scan("B")))
+
+    publisher = threading.Thread(target=pipeline_b)
+    publisher.start()
+    assert reco_saved.wait(5)
+    rebuild = threading.Thread(target=RL._build_and_persist, args=(scan("A"), {"scanned_at": "LT"}, None))
+    rebuild.start()
+    time.sleep(0.3)          # the rebuild is ready to commit while B is mid-publication
+    go.set()
+    publisher.join(5)
+    rebuild.join(5)
+    assert json.loads(reco_path.read_text())["scan_scanned_at"] == "B"
+    assert json.loads((tmp_path / "rebuild_state.json").read_text())["status"] == "SUPERSEDED"
+
+
+def test_a_deterministically_failing_rebuild_backs_off_instead_of_rebuilding_every_30s(monkeypatch, tmp_path):
+    """A projection that always fails was rebuilt every 30 s for as long as the
+    page was open -- a full projection build each time on an 8 GB host. Retries
+    back off per generation (30 s, 60 s, 120 s ... capped) and reset when the
+    generation changes."""
+    from product import recommendations_workspace as RW
+
+    monkeypatch.setattr(RL, "_state_path", lambda: tmp_path / "rebuild_state.json")
+    monkeypatch.setattr(RL, "_lock_path", lambda: tmp_path / "rebuild.lock")
+    monkeypatch.setattr(RL, "_current_generation_matches", lambda *_a: True)
+    monkeypatch.setattr(RW, "build_recommendations_workspace",
+                        lambda **_k: (_ for _ in ()).throw(RuntimeError("deterministic projection bug")))
+    clock = [1_000_000.0]
+    monkeypatch.setattr(RL.time, "time", lambda: clock[0])
+    scan, lt = {"scanned_at": "S1"}, {"scanned_at": "L1"}
+
+    waits = []
+    for _ in range(5):
+        claim = RL._claim_rebuild(scan, lt)          # the real claim path
+        assert claim is not None
+        RL._build_and_persist(dict(scan), dict(lt), claim)
+        assert RL._read_state()["status"] == "FAILED"
+        wait = 0
+        while RL._recent_failed_target(scan, lt):
+            clock[0] += 1
+            wait += 1
+        waits.append(wait)
+    assert waits[0] == 30
+    assert waits == sorted(waits) and waits[-1] > waits[0] * 4, waits
+    assert max(waits) <= 900
+    # A new generation is retried at once.
+    assert RL._recent_failed_target({"scanned_at": "S2"}, lt) is False
