@@ -945,10 +945,13 @@ export function RadarHomeView(props: ExperienceViewProps & {
         .catch(() => undefined)
     }
     load()
-    // Saved Home projections do not require a 4-second quote-tick poll.
-    const timer = window.setInterval(load, homeWatching ? 12_000 : 30_000)
+    // A just-opened Home must recover quickly if its first saved-projection
+    // fetch overlaps a scan publication or busy API. The 5s retry is ONLY for
+    // the uninitialized visible Home, with the in-flight guard above; after
+    // first success the warmed page is polled less frequently.
+    const timer = window.setInterval(load, radar ? (homeWatching ? 12_000 : 30_000) : 5_000)
     return () => { alive = false; window.clearInterval(timer) }
-  }, [homeVisible, homeWatching, dashboard.scan.scanned_at, dashboard.long_term.scanned_at])
+  }, [homeVisible, Boolean(radar), homeWatching, dashboard.scan.scanned_at, dashboard.long_term.scanned_at])
 
   useEffect(() => {
     if (!homeVisible) return
