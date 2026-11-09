@@ -62,10 +62,14 @@ def _fno_open_rows() -> list[dict]:
         qty = int(pos.get("quantity") or 0)
         entry = float(pos.get("entry_price") or 0.0)
         stop = float(pos.get("stop_price") or 0.0)
-        if qty <= 0 or not math.isfinite(entry) or not math.isfinite(stop) or entry <= 0:
+        premium_loss = float(pos.get("premium_loss_exposure") or 0.0)
+        if (qty <= 0 or not math.isfinite(entry) or not math.isfinite(stop)
+                or entry <= 0 or stop <= 0 or stop >= entry
+                or not math.isfinite(premium_loss) or premium_loss < 0):
             raise ValueError(f"F&O paper position {pos.get('trade_id')} has invalid exposure")
         rows.append({"symbol": str(pos.get("underlying") or "").upper(), "qty": qty,
-                     "entry": entry, "stop": stop, "book": FNO_BOOK})
+                     "entry": entry, "stop": stop, "book": FNO_BOOK,
+                     "premium_loss_exposure": premium_loss})
     return rows
 
 
@@ -112,6 +116,14 @@ def _combined_open_rows(extra_trade: dict | None = None, *,
 
 
 def _row_risk(row: dict) -> float:
+    if row.get("book") == FNO_BOOK:
+        # The stop may not fill, especially across a gap or at expiry.
+        # Legacy F&O rows contain no premium_loss_exposure; count at least
+        # their full paid premium rather than the old stop-distance risk.
+        return max(
+            row["qty"] * row["entry"],
+            float(row.get("premium_loss_exposure") or 0.0),
+        )
     return row["qty"] * max(0.0, row["entry"] - row["stop"])
 
 

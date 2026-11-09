@@ -46,7 +46,8 @@ def _restore_position(payload: Mapping[str, Any]) -> FoPaperPosition | None:
         pos = FoPaperPosition(**kwargs)
         integer_fields = (pos.lot_size, pos.lots, pos.quantity, pos.max_holding_sessions)
         numerical_fields = (
-            pos.entry_price, pos.stop_price, pos.target_price, pos.risk_amount
+            pos.entry_price, pos.stop_price, pos.target_price,
+            pos.risk_amount, pos.premium_loss_exposure,
         )
         if (
             not isinstance(pos.trade_id, str) or not pos.trade_id
@@ -61,6 +62,7 @@ def _restore_position(payload: Mapping[str, Any]) -> FoPaperPosition | None:
             )
             or not 0 < pos.stop_price < pos.entry_price < pos.target_price
             or pos.risk_amount < 0
+            or pos.premium_loss_exposure < 0
         ):
             return None
         return pos
@@ -264,6 +266,7 @@ def run_fo_paper_cycle(
         book = FoPaperBook(
             capital=capital,
             risk_per_trade_pct=0.01,
+            max_loss_per_trade_pct=0.01,
             max_premium_pct=0.10,
             max_daily_premium_pct=0.10,
             premium_deployed_today=store.premium_deployed_on_session(session),
