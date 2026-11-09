@@ -248,6 +248,9 @@ function App() {
   })
 
   const refresh = useCallback(async () => {
+    // Hidden browser tabs do not need expensive dashboard projections.
+    // Server-side paper supervision and market work continue independently.
+    if (document.visibilityState === 'hidden') return
     if (!refreshGate.current.tryEnter()) return
     try {
       const payload = await fetchDashboard()
@@ -530,6 +533,7 @@ function App() {
     longTermScan,
     marketReport,
     publicReadOnly: accessMode?.public_read_only ?? true,
+    activePage: active,
   }
 
   const primaryPages = [

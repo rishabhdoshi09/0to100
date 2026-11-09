@@ -43,6 +43,8 @@ export type ExperienceViewProps = {
   longTermScan: ScanRunnerHandle
   marketReport?: ScanRunnerHandle
   publicReadOnly?: boolean
+  /** Visible page; kept-alive hidden pages must not poll slow endpoints. */
+  activePage?: string
 }
 
 const scoreOf = (row: ScannerWorkspaceRow) => Number(
