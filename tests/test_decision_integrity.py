@@ -215,6 +215,9 @@ def test_scan_fresh_when_session_identity_current(monkeypatch, tmp_path):
     # Durable paths resolve through core.runtime_paths now, so the runtime
     # root is what redirects them — not a per-module _root() helper.
     monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    # scan_is_fresh() reads the same resolved scan path as every other reader;
+    # drop the suite-wide QT_SCAN_PATH override so the runtime root applies.
+    monkeypatch.delenv("QT_SCAN_PATH", raising=False)
     monkeypatch.setattr(
         "data.bhavcopy_runtime.official_history_freshness",
         lambda load_cache=False, require_store=False: {
