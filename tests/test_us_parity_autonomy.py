@@ -314,6 +314,9 @@ def test_us_scan_feed_exception_is_recorded(tmp_path, monkeypatch):
                           "close": [1.0] * 260, "volume": [1e6] * 260},
                          index=pd.bdate_range("2025-01-01", periods=260))
     monkeypatch.setattr(data, "get_us_daily", lambda *a, **k: frame, raising=False)
+    # scan_us fetches through the batch API; without this stub the test made a
+    # real network download for "AAA" and only passed where that succeeded.
+    monkeypatch.setattr(data, "get_us_daily_batch", lambda syms: {s: frame for s in syms})
     monkeypatch.setattr(unified.UnifiedScanner, "_analyze", lambda self, sym, df: None)
 
     def _boom():
