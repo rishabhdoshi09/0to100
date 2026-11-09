@@ -56,6 +56,7 @@ def _options():
         "ask": fair + 0.25,
         "volume": 5000,
         "oi": 30000,
+        "lot_size": 250,           # real contracts carry it from the instrument master
         "iv": 24.0,
         "delta": 0.62,
     }]
