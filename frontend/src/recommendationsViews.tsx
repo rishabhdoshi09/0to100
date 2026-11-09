@@ -21,6 +21,7 @@ import { LiveScanBanner } from './experience'
 import { DailyWrapList, magazineWrapLines } from './dailyWrap'
 import { keepRicherMemory, markInvestigate, recallMemory } from './sessionMemory'
 import { recoCanonicalDecision } from './scannerFallback'
+import { shouldPollPage } from './pagePolling'
 
 const CAT_ICONS: Record<string, string> = {
   wealth_builders: 'W',
@@ -469,6 +470,7 @@ export function RecommendationsView({
   marketScan,
   longTermScan,
   depth,
+  activePage,
 }: ExperienceViewProps) {
   const [data, setData] = useState<RecommendationsWorkspace | null>(() => recallMemory<RecommendationsWorkspace>('reco-workspace') ?? null)
   const [error, setError] = useState('')
@@ -481,9 +483,10 @@ export function RecommendationsView({
   const [simulationBusy, setSimulationBusy] = useState(false)
   const [simulationError, setSimulationError] = useState('')
   const autoPrep = useRef(false)
+  const recommendationsVisible = shouldPollPage(activePage, ['Recommendations'])
 
   useEffect(() => {
-    if (autoPrep.current) return
+    if (!recommendationsVisible || autoPrep.current) return
     const hasScan = Boolean(dashboard.scan.scanned_at || (dashboard.scan.records || []).length)
     if (hasScan || marketScan.isActive || marketScan.isBusy) {
       autoPrep.current = true
@@ -495,13 +498,14 @@ export function RecommendationsView({
         if (!marketScan.isActive && !marketScan.isBusy) void marketScan.start()
       })
       .catch(() => { autoPrep.current = false })
-  }, [dashboard.scan.scanned_at, dashboard.scan.records.length, marketScan.isActive, marketScan.isBusy, marketScan.start])
+  }, [recommendationsVisible, dashboard.scan.scanned_at, dashboard.scan.records.length, marketScan.isActive, marketScan.isBusy, marketScan.start])
 
   useEffect(() => {
+    if (!recommendationsVisible) return
     let cancelled = false
     let inFlight = false
     const loadGate = () => {
-      if (inFlight) return
+      if (document.visibilityState === 'hidden' || inFlight) return
       inFlight = true
       void fetchDecisionSimulationGate()
         .then((payload) => {
@@ -523,13 +527,14 @@ export function RecommendationsView({
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [dashboard.scan.scanned_at, marketScan.succeeded])
+  }, [recommendationsVisible, dashboard.scan.scanned_at, marketScan.succeeded])
 
   useEffect(() => {
+    if (!recommendationsVisible) return
     let cancelled = false
     let inFlight = false
     const load = () => {
-      if (inFlight) return
+      if (document.visibilityState === 'hidden' || inFlight) return
       inFlight = true
       if (!recallMemory('reco-workspace')) setLoading(true)
       void fetchRecommendationsWorkspace()
@@ -557,7 +562,7 @@ export function RecommendationsView({
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [dashboard.scan.scanned_at, dashboard.long_term.scanned_at, marketScan.succeeded, longTermScan.succeeded, marketScan.isBusy, longTermScan.isBusy, dashboard.market.available])
+  }, [recommendationsVisible, dashboard.scan.scanned_at, dashboard.long_term.scanned_at, marketScan.succeeded, longTermScan.succeeded, marketScan.isBusy, longTermScan.isBusy, dashboard.market.available])
 
   const category = useMemo(
     () => data?.categories.find((c) => c.id === categoryId) || data?.categories[0],
@@ -1070,7 +1075,7 @@ function DeskTile({
   )
 }
 
-export function MarketReportsView({ dashboard, setActive, setSelected, marketScan, marketReport, depth, runControl }: ExperienceViewProps) {
+export function MarketReportsView({ dashboard, setActive, setSelected, marketScan, marketReport, depth, runControl, activePage }: ExperienceViewProps) {
   const [data, setData] = useState<MarketReportsWorkspace | null>(() => recallMemory<MarketReportsWorkspace>('market-reports') ?? null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(() => !recallMemory('market-reports'))
@@ -1078,13 +1083,18 @@ export function MarketReportsView({ dashboard, setActive, setSelected, marketSca
   const [selected, setSelectedReport] = useState<MarketReportItem | null>(null)
   const [newsBusy, setNewsBusy] = useState(false)
   const autoReport = useRef(false)
+  const reportsVisible = shouldPollPage(activePage, ['Market Reports'])
   const newsStamp = dashboard.operations?.latest?.NEWS_REFRESH?.updated_at
     || dashboard.news?.latest_refresh?.updated_at
     || dashboard.operations?.latest?.MARKET_REPORT?.updated_at
 
   useEffect(() => {
+    if (!reportsVisible) return
     let cancelled = false
+    let inFlight = false
     const load = () => {
+      if (document.visibilityState === 'hidden' || inFlight) return
+      inFlight = true
       if (!recallMemory('market-reports')) setLoading(true)
       fetchMarketReportsWorkspace()
         .then((payload) => {
@@ -1114,16 +1124,17 @@ export function MarketReportsView({ dashboard, setActive, setSelected, marketSca
           if (!cancelled) setError(err.message || 'Failed to load market reports')
         })
         .finally(() => {
+          inFlight = false
           if (!cancelled) setLoading(false)
         })
     }
     load()
-    const timer = window.setInterval(load, marketScan.isBusy || marketReport?.isBusy ? 4000 : 20000)
+    const timer = window.setInterval(load, marketScan.isBusy || marketReport?.isBusy ? 12_000 : 30_000)
     return () => {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [dashboard.scan.scanned_at, marketScan.succeeded, marketReport?.succeeded, newsStamp, marketScan.isBusy, marketReport?.isBusy, dashboard.news.available, dashboard.market.available, marketReport])
+  }, [reportsVisible, dashboard.scan.scanned_at, marketScan.succeeded, marketReport?.succeeded, newsStamp, marketScan.isBusy, marketReport?.isBusy, dashboard.news.available, dashboard.market.available])
 
   const refreshNews = async () => {
     setNewsBusy(true)
