@@ -415,6 +415,46 @@ class TestUnifiedScanner:
         return pd.DataFrame({"close": close, "high": close * 1.01,
                              "low": close * 0.99, "volume": vol}, index=idx)
 
+    @staticmethod
+    def _two_year_frame(today_close, today_vol=5e6, *, old_peak=400.0):
+        """500 sessions (the bhavcopy store depth): an old peak ~300 sessions
+        ago, then a fresh one-year advance 100 -> 200."""
+        older = np.concatenate([np.linspace(150, old_peak, 200), np.linspace(old_peak, 100, 50)])
+        year = np.linspace(100, 200, 250)
+        year[-3] = year[-4] - 2.0
+        year[-8] = year[-9] - 2.0
+        year[-12] = year[-13] - 2.0
+        close = np.concatenate([older, year])
+        close[-1] = today_close
+        vol = np.full(len(close), 2e6)
+        vol[-1] = today_vol
+        return close, vol
+
+    def test_52_week_high_is_one_year_not_the_whole_store(self):
+        """The store holds ~2 years. A new 52-week high below a two-year-old
+        peak is still a 52-week-high breakout, not a laggard."""
+        from scan.unified_scanner import UnifiedScanner
+        close, vol = self._two_year_frame(212.0)
+        r = UnifiedScanner()._analyze("X", self._df(close, vol))
+        assert r and "BREAKOUT_52W" in r.signals
+        assert not any("52-week high se" in reason for reason in r.reasons)
+
+    def test_short_52_week_low_is_one_year_not_the_whole_store(self):
+        """Mirror: a new one-year low above a two-year-old trough is a
+        52-week-low breakdown."""
+        from scan.short_scanner import analyze_short
+        older = np.concatenate([np.linspace(300, 40, 200), np.linspace(40, 300, 50)])
+        year = np.linspace(300, 150, 250)
+        year[-3] = year[-4] + 2.0
+        year[-8] = year[-9] + 2.0
+        year[-12] = year[-13] + 2.0
+        close = np.concatenate([older, year])
+        close[-1] = 140.0
+        vol = np.full(len(close), 2e6)
+        vol[-1] = 5e6
+        r = analyze_short("X", self._df(close, vol))
+        assert r is not None and "BREAKDOWN_52W" in r.signals
+
     def test_breakout_detected_with_dated_reason(self):
         from scan.unified_scanner import UnifiedScanner
         close = np.linspace(100, 200, 260)
