@@ -231,6 +231,7 @@ def read_status(*, state_path, jobs_db=None, dialogue_path=None) -> dict:
     if jobs_db is not None:
         try:
             import sqlite3
+            from contextlib import closing
 
             # This is a projection, not a scheduler. JobStore's constructor
             # negotiates WAL mode, migrates schema and waits up to 30 seconds
@@ -238,7 +239,7 @@ def read_status(*, state_path, jobs_db=None, dialogue_path=None) -> dict:
             # mode=ro sees committed WAL rows without ignoring them as
             # immutable=1 would. Keep the exact newest-500 count semantics.
             uri = Path(jobs_db).resolve().as_uri() + "?mode=ro"
-            with sqlite3.connect(uri, uri=True, timeout=1.0) as js:
+            with closing(sqlite3.connect(uri, uri=True, timeout=1.0)) as js:
                 counts: dict = {}
                 rows = js.execute(
                     "SELECT status FROM jobs ORDER BY created_at DESC LIMIT 500"
