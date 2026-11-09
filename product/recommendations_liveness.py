@@ -338,12 +338,18 @@ def display_authority(
         "error": overlays.get("recommendations_error"),
         "scan_scanned_at": str(overlays.get("scan_scanned_at") or ""),
     }
+    provenance = scan.get("provenance") if isinstance(scan.get("provenance"), Mapping) else {}
     return {
         "status": status,
         "projection": projection,
         "publication": publication,
         "scan_current": scan_current,
         "scan_scanned_at": scan_at,
+        # Which artifact and which market session this verdict is about.
+        "scan_id": str(provenance.get("scan_id") or ""),
+        "scan_market_session": str(
+            provenance.get("market_session_date") or provenance.get("price_data_as_of") or ""
+        )[:10],
         "projection_scan_scanned_at": str(payload.get("scan_scanned_at") or ""),
         "evaluated_at": datetime.now(timezone.utc).isoformat(),
         "source": "product.recommendations_liveness",
@@ -351,25 +357,33 @@ def display_authority(
 
 
 def _withheld(scan: Mapping[str, Any], *, error: str, scan_current: bool | None) -> dict[str, Any]:
-    """Empty workspace for a scan that is not current: no cards, no rebuild."""
+    """Empty workspace for a scan that is not current (or absent): no cards, no rebuild."""
     payload = _empty_workspace(status="STALE", error=error)
+    projection = "SCAN_UNAVAILABLE" if scan.get("available") is False else "SCAN_NOT_CURRENT"
     payload["display_authority"] = display_authority(
-        payload, scan, projection="SCAN_NOT_CURRENT", scan_current=scan_current,
+        payload, scan, projection=projection, scan_current=scan_current,
     )
     return payload
 
 
-def build_fast_response(core, attach_authority=None, *, scan_current: bool | None = None) -> dict[str, Any]:
+def build_fast_response(
+    core,
+    attach_authority=None,
+    *,
+    scan_current: bool | None = None,
+    scan: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Return immediately from persisted state; schedule expensive projection if needed.
 
     ``attach_authority(payload, scan)`` receives the scan payload this read
     already loaded, so the scan artifact is parsed once per request.
-    ``scan_current`` is the freshness verdict a caller already obtained.
+    ``scan_current`` is the freshness verdict a caller already obtained for
+    ``scan`` -- the same parsed artifact, never a re-read of the file.
     """
     from product.recommendations_store import load_recommendations
     from product.recommendations_workspace import slim_workspace_for_desk
 
-    scan = dict(core._scan_payload() or {})
+    scan = dict(scan if scan is not None else (core._scan_payload() or {}))
     long_term = dict(core._long_term_payload() or {})
     saved = load_recommendations()
     # A persisted recommendation is not actionable when its source scan has
@@ -455,21 +469,30 @@ def build_current_scan_response(core, attach_authority=None) -> dict[str, Any]:
     verifies the active Kite snapshot identity and exchange-calendar date (or
     the current official EOD archive) on every read. An unverified scan is
     neither served nor rebuilt from: its saved BUY cards are withheld.
+
+    The scan is parsed ONCE: the freshness verdict and the served payload are
+    the same artifact, so a scan replaced mid-read cannot inherit a verdict.
     """
-    from product.desk_pipeline import scan_is_fresh
+    from product.desk_pipeline import scan_payload_is_fresh
+    from product.scan_store import load_scan, resolved_scan_path
 
     try:
-        fresh = bool(scan_is_fresh())
+        raw = load_scan(resolved_scan_path())
+    except Exception:
+        raw = None
+    try:
+        fresh = bool(scan_payload_is_fresh(raw))
     except Exception:
         fresh = False
+    view = getattr(core, "_scan_payload_from", None)
+    try:
+        scan = dict(view(raw) if callable(view) else (core._scan_payload() or {}))
+    except Exception:
+        scan = {}
     if not fresh:
-        try:
-            scan = dict(core._scan_payload() or {})
-        except Exception:
-            scan = {}
         return _withheld(
             scan,
             error="No current verified NSE scan; recommendation cards withheld.",
             scan_current=False,
         )
-    return build_fast_response(core, attach_authority, scan_current=True)
+    return build_fast_response(core, attach_authority, scan_current=True, scan=scan)

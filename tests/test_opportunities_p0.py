@@ -61,9 +61,13 @@ def saved_pipeline(monkeypatch, tmp_path):
                         lambda path=FIXTURE / "latest_recommendations.json": real_reco(path))
     monkeypatch.setattr(long_term_store, "load_long_term_scan",
                         lambda path=FIXTURE / "latest_long_term_scan.json": real_lt(path))
-    monkeypatch.setattr("product.desk_pipeline.scan_is_fresh", lambda: True)
+    from product import desk_pipeline
+    real = {"scan_is_fresh": desk_pipeline.scan_is_fresh,
+            "scan_payload_is_fresh": desk_pipeline.scan_payload_is_fresh}
+    monkeypatch.setattr(desk_pipeline, "scan_is_fresh", lambda: True)
+    monkeypatch.setattr(desk_pipeline, "scan_payload_is_fresh", lambda *_a, **_k: True)
     scan = json.loads(scan_path.read_text(encoding="utf-8"))
-    return {"scan": scan, "scan_path": scan_path}
+    return {"scan": scan, "scan_path": scan_path, "real": real}
 
 
 def test_every_launch_module_serves_one_canonical_recommendations_route():
@@ -171,7 +175,7 @@ def test_stale_official_scan_is_not_presented_as_current(saved_pipeline, monkeyp
     from api.app import app
     from product import recommendations_liveness as RL
 
-    monkeypatch.setattr("product.desk_pipeline.scan_is_fresh", lambda: False)
+    monkeypatch.setattr("product.desk_pipeline.scan_payload_is_fresh", lambda *_a, **_k: False)
     monkeypatch.setattr(RL, "_ensure_rebuild",
                         lambda *a, **k: pytest.fail("a stale scan must not start a rebuild"))
     payload = TestClient(app).get(PATH).json()
@@ -222,3 +226,51 @@ def test_scan_freshness_reads_the_same_scan_artifact_as_every_other_reader(monke
     monkeypatch.setattr(store, "load_scan", lambda path=None: seen.append(Path(path)) or real(path))
     desk_pipeline.scan_is_fresh()
     assert seen and seen[0] == target
+
+
+def test_freshness_is_judged_on_the_same_scan_artifact_that_is_served(saved_pipeline, monkeypatch):
+    """Read-time TOCTOU. The freshness verdict and the served scan must come from
+    one parse of one artifact. Here the scan file is replaced right after the
+    freshness check by an older-session scan with the same scanned_at (so the
+    saved projection still "matches"); it must never be served as CURRENT."""
+    from api.app import app
+    from product import desk_pipeline
+
+    session = saved_pipeline["scan"]["provenance"]["expected_session_date"]
+    monkeypatch.setattr(
+        "data.bhavcopy_runtime.official_history_freshness",
+        lambda **_k: {"usable_for_scan": True, "current": True, "available_session": session},
+    )
+    old = json.loads(saved_pipeline["scan_path"].read_text(encoding="utf-8"))
+    old["provenance"] = {**old["provenance"], "scan_id": "older-session",
+                         "market_session_date": "2026-11-06", "price_data_as_of": "2026-11-06"}
+
+    def swap_after(real):
+        def judged(*args, **kwargs):
+            verdict = real(*args, **kwargs)
+            saved_pipeline["scan_path"].write_text(json.dumps(old), encoding="utf-8")
+            return verdict
+        return judged
+
+    # This test needs the real freshness authority, not the fixture's stub.
+    for name, real in saved_pipeline["real"].items():
+        monkeypatch.setattr(desk_pipeline, name, swap_after(real))
+
+    authority = TestClient(app).get(PATH).json()["display_authority"]
+    # The artifact that was judged fresh is the one served; the swapped-in
+    # older scan is picked up (and judged) by the next read, not this one.
+    assert authority["status"] == "CURRENT", authority
+    assert authority["scan_market_session"] == session, authority
+    assert authority["scan_id"] != "older-session", authority
+    nxt = TestClient(app).get(PATH).json()["display_authority"]
+    assert nxt["status"] == "SCAN_NOT_CURRENT" and nxt["scan_market_session"] == "2026-11-06", nxt
+
+
+def test_absent_scan_is_reported_as_no_scan_not_as_stale(saved_pipeline, monkeypatch):
+    from api.app import app
+
+    monkeypatch.setenv("QT_SCAN_PATH", str(saved_pipeline["scan_path"].with_name("absent.json")))
+    monkeypatch.setattr("product.desk_pipeline.scan_payload_is_fresh", saved_pipeline["real"]["scan_payload_is_fresh"])
+    payload = TestClient(app).get(PATH).json()
+    assert payload["display_authority"]["status"] == "SCAN_UNAVAILABLE"
+    assert all(not cat.get("cards") for cat in payload["categories"])

@@ -158,7 +158,7 @@ def test_canonical_api_get_uses_persisted_first_recommendations(monkeypatch):
     from product import recommendations_workspace as RW
     from product import desk_pipeline
 
-    monkeypatch.setattr(desk_pipeline, "scan_is_fresh", lambda: True)
+    monkeypatch.setattr(desk_pipeline, "scan_payload_is_fresh", lambda *_a, **_k: True)
 
     def forbidden_sync_builder(**_kwargs):
         raise AssertionError("GET must never rebuild all recommendations synchronously")
@@ -216,7 +216,19 @@ def test_canonical_get_withholds_old_day_buy_even_when_saved_provenance_was_once
         and "GET" in set(getattr(row, "methods", set()) or set())
     )
 
-    monkeypatch.setattr(desk_pipeline, "scan_is_fresh", lambda: False)
+    import json
+    import os
+    from pathlib import Path
+
+    # A scan that was current on 6 Nov, still on disk on 9 Nov.
+    Path(os.environ["QT_SCAN_PATH"]).write_text(json.dumps({
+        "schema_version": 2,
+        "scanned_at": "2026-11-06T16:00:00+05:30",
+        "records": [{"symbol": "AAA"}],
+        "provenance": {"scan_id": "nov6", "data_current": True,
+                       "market_session_date": "2026-11-06", "price_data_as_of": "2026-11-06"},
+    }), encoding="utf-8")
+    monkeypatch.setattr(desk_pipeline, "scan_payload_is_fresh", lambda *_a, **_k: False)
     monkeypatch.setattr(
         RL, "build_fast_response",
         lambda *_a, **_k: (_ for _ in ()).throw(
@@ -229,4 +241,5 @@ def test_canonical_get_withholds_old_day_buy_even_when_saved_provenance_was_once
     assert response["lifecycle"]["active"] == []
     assert "No current verified NSE scan" in response["error"]
     assert response["display_authority"]["status"] == "SCAN_NOT_CURRENT"
+    assert response["display_authority"]["scan_market_session"] == "2026-11-06"
     assert response["rebuilding"] is False

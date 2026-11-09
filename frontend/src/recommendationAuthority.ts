@@ -5,6 +5,8 @@ export type DisplayAuthority = {
   projection?: string
   scan_current?: boolean
   scan_scanned_at?: string
+  scan_id?: string
+  scan_market_session?: string
   projection_scan_scanned_at?: string
   evaluated_at?: string
   publication?: {
