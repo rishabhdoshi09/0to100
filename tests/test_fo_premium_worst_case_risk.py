@@ -74,3 +74,15 @@ def test_invalid_cost_model_fails_closed_with_no_position_mutation():
     assert _enter(book) is None
     assert book.refusals[-1][1] == "OPTION_COST_ESTIMATE_UNAVAILABLE"
     assert book.open == {}
+
+
+def test_recorded_paisee_round_up_cannot_breach_1pct_cap():
+    book = FoPaperBook(
+        capital=100_000.50, slippage_bps=0,
+        cost_model=lambda *_args: 0.0,
+        cost_model_name="ZERO_FIXTURE_FEES",
+    )
+    # Raw premium is 1000.0048 <= 1% equity (1000.005), but the
+    # persisted maximum-loss exposure rounds up to 1000.01 and must refuse.
+    assert _enter(book, lot_size=10, entry=100.00048, stop=95.0) is None
+    assert book.open == {}

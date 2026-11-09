@@ -402,8 +402,12 @@ class FoPaperBook:
                     exposure = fill * proposed_qty + self._estimated_round_trip_fees(
                         fill, proposed_qty,
                     )
-                    if isfinite(exposure) and exposure <= worst_loss_budget + 1e-9:
-                        premium_loss_exposure = ceil(exposure * 100.0) / 100.0
+                    # Persisted exposure is rounded UP to paise. Check the
+                    # rounded number, not the pre-rounded estimate, against
+                    # the hard 1% cap (equity may itself include paise).
+                    rounded_exposure = ceil(exposure * 100.0) / 100.0 if isfinite(exposure) else float("inf")
+                    if rounded_exposure <= worst_loss_budget + 1e-9:
+                        premium_loss_exposure = rounded_exposure
                         break
                     lots -= 1
             except (TypeError, ValueError, ArithmeticError, OverflowError):
