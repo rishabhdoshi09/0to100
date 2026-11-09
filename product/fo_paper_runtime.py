@@ -18,6 +18,7 @@ from data.nfo_market import (
     read_option_intraday_bars,
 )
 from product.fo_paper import (
+    expired_unsettled_positions,
     ENTRY_MINUTE_AMBIGUOUS,
     ENTRY_MINUTE_CLEAR,
     ENTRY_MINUTE_EVIDENCE_OK,
@@ -302,6 +303,7 @@ def run_fo_paper_cycle(
         iv_crush_triggered = 0
         iv_crush_unavailable = 0
         eod_exit_due = _eod_exit_due(now_ist)
+        raw_quotes: Mapping[str, Any] = {}
         # Contract Challenger grading is deliberately deferred until the
         # non-entry/EOD side of the cycle so research never delays the
         # execution-critical window. Each shadow is resolved from its own
@@ -514,11 +516,26 @@ def run_fo_paper_cycle(
                     pass
                 row["contract_outcome"] = classify_contract_outcome(row)
 
+        # Supervision above skips a contract past expiry on every cycle (it is
+        # no longer quoted). It stays durable and counted as open risk, and new
+        # entries wait until an operator reconciles it. See the rule's owner.
+        expired_unsettled = expired_unsettled_positions(book.open.values(), session)
+        unquoted_open = sorted(
+            symbol for symbol in book.open if not isinstance(raw_quotes.get(symbol), Mapping)
+        )
+        blockers = ["FNO_EXPIRED_POSITION_UNSETTLED"] if expired_unsettled else []
+
         opened: list[dict[str, Any]] = []
         skipped: list[dict[str, str]] = []
         ranked_candidates = _candidate_rows(directional) if bool(directional.get("available")) else []
         account_risk_error = ""
-        if allow_new_entries and ranked_candidates:
+        if expired_unsettled:
+            skipped.extend(
+                {"symbol": str(c.get("symbol") or "").upper(),
+                 "reason": "EXPIRED_POSITION_UNSETTLED"}
+                for c in ranked_candidates
+            )
+        elif allow_new_entries and ranked_candidates:
             # The 5% open-risk ceiling is shared with both equity paper books.
             # Hold the account lock from this read until the new positions are
             # committed, so no equity engine can open in between.
@@ -535,7 +552,9 @@ def run_fo_paper_cycle(
                 book.account_capital = _capital()
             except AccountRiskUnreadable as exc:
                 account_risk_error = str(exc)
-        if account_risk_error:
+        if expired_unsettled:
+            pass
+        elif account_risk_error:
             skipped.extend(
                 {"symbol": str(c.get("symbol") or "").upper(),
                  "reason": "ACCOUNT_RISK_UNREADABLE"}
@@ -705,6 +724,10 @@ def run_fo_paper_cycle(
             "settled": settled_rows,
             "skipped": skipped,
             "open_positions": [pos.as_dict() for pos in book.open.values()],
+            "expired_unsettled_positions": expired_unsettled,
+            "unquoted_open_positions": unquoted_open,
+            "blockers": blockers,
+            "operator_action_required": bool(blockers),
             "store": status,
             "realized_pnl": round(book.realized_pnl, 2),
             "equity_for_sizing": round(max(0.0, book.capital + book.realized_pnl), 2),

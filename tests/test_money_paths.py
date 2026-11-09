@@ -415,6 +415,46 @@ class TestUnifiedScanner:
         return pd.DataFrame({"close": close, "high": close * 1.01,
                              "low": close * 0.99, "volume": vol}, index=idx)
 
+    @staticmethod
+    def _two_year_frame(today_close, today_vol=5e6, *, old_peak=400.0):
+        """500 sessions (the bhavcopy store depth): an old peak ~300 sessions
+        ago, then a fresh one-year advance 100 -> 200."""
+        older = np.concatenate([np.linspace(150, old_peak, 200), np.linspace(old_peak, 100, 50)])
+        year = np.linspace(100, 200, 250)
+        year[-3] = year[-4] - 2.0
+        year[-8] = year[-9] - 2.0
+        year[-12] = year[-13] - 2.0
+        close = np.concatenate([older, year])
+        close[-1] = today_close
+        vol = np.full(len(close), 2e6)
+        vol[-1] = today_vol
+        return close, vol
+
+    def test_52_week_high_is_one_year_not_the_whole_store(self):
+        """The store holds ~2 years. A new 52-week high below a two-year-old
+        peak is still a 52-week-high breakout, not a laggard."""
+        from scan.unified_scanner import UnifiedScanner
+        close, vol = self._two_year_frame(212.0)
+        r = UnifiedScanner()._analyze("X", self._df(close, vol))
+        assert r and "BREAKOUT_52W" in r.signals
+        assert not any("52-week high se" in reason for reason in r.reasons)
+
+    def test_short_52_week_low_is_one_year_not_the_whole_store(self):
+        """Mirror: a new one-year low above a two-year-old trough is a
+        52-week-low breakdown."""
+        from scan.short_scanner import analyze_short
+        older = np.concatenate([np.linspace(300, 40, 200), np.linspace(40, 300, 50)])
+        year = np.linspace(300, 150, 250)
+        year[-3] = year[-4] + 2.0
+        year[-8] = year[-9] + 2.0
+        year[-12] = year[-13] + 2.0
+        close = np.concatenate([older, year])
+        close[-1] = 140.0
+        vol = np.full(len(close), 2e6)
+        vol[-1] = 5e6
+        r = analyze_short("X", self._df(close, vol))
+        assert r is not None and "BREAKDOWN_52W" in r.signals
+
     def test_breakout_detected_with_dated_reason(self):
         from scan.unified_scanner import UnifiedScanner
         close = np.linspace(100, 200, 260)
@@ -4190,6 +4230,9 @@ class TestUSAutopilot:
         import execution.us_autopilot as ua
         import execution.trade_executor as te
         import data.us_data as ud
+        # These tests exercise the US lane's own gates, so it must be enabled;
+        # the India-only default is covered in test_market_scope_india_only.py.
+        monkeypatch.setenv("QT_MARKET_SCOPE", "INDIA_AND_US")
         monkeypatch.setattr(ua, "_STATE_FILE", tmp_path / "us_ap.json")
         monkeypatch.setattr(te, "_DB", tmp_path / "trades.db")
         ua._state = {}
@@ -5162,6 +5205,7 @@ class TestUsPaperLaneRiskRails:
         import execution.trade_executor as te
         import execution.us_autopilot as us
         monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+        monkeypatch.setenv("QT_MARKET_SCOPE", "INDIA_AND_US")   # US lane rails under test
         monkeypatch.setattr(te, "_DB", tmp_path / "logs" / "trades.db")
         (tmp_path / "logs").mkdir(exist_ok=True)
         monkeypatch.setattr(us, "_STATE_FILE", tmp_path / "us_ap.json")
@@ -5219,6 +5263,56 @@ class TestUsPaperLaneRiskRails:
         te._DB.write_bytes(b"not a sqlite database" * 64)
         assert us.consider("CCC", 100.0, 80.0, 70.0, 60.0) is False
 
+    def test_name_held_from_an_earlier_session_is_not_bought_again(
+            self, tmp_path, monkeypatch):
+        """traded_symbols resets each session; the open book does not. A second
+        10% position in a name still held would put 20% of the pool in it."""
+        us, te = self._setup(tmp_path, monkeypatch, max_open_positions=5)
+        self._open_us(te, "AAPL", 100, 100.0, 99.0)       # $10,000 = 10% of pool
+        assert us._load()["traded_symbols"] == {}           # a new session
+        assert us.consider("AAPL", 100.0, 99.0, 70.0, 60.0) is False
+        held = [t for t in us._open_trades() if t["symbol"] == "AAPL"]
+        assert len(held) == 1
+        assert sum(t["qty"] * t["entry_price"] for t in held) <= 10_000 + 1e-6
+        assert us.reject_funnel()["rejects"] == {"symbol already held (10% per name)": 1}
+        # A different name is unaffected.
+        assert us.consider("MSFT", 100.0, 99.0, 70.0, 60.0) is True
+
+    def test_daily_loss_breaker_counts_a_loss_on_the_day_it_is_realized(
+            self, tmp_path, monkeypatch):
+        """The breaker attributed closed trades to their ENTRY session, so a
+        position held from an earlier session and stopped out today added
+        nothing to today's loss and the 3% breaker never tripped."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        us, te = self._setup(tmp_path, monkeypatch, daily_loss_limit_pct=0.03)
+        monkeypatch.setattr(us, "_us_now", lambda: datetime(
+            2026, 11, 6, 11, 0, tzinfo=ZoneInfo("America/New_York")))
+        self._open_us(te, "HELD", 200, 100.0, 85.0,
+                      note="US_AUTOPILOT:us_scanner|session=2026-11-05")
+        monkeypatch.setattr("data.us_data.us_live_prices",
+                            lambda syms: {s: {"price": 84.0} for s in syms})
+        us._close_positions()
+        closed = us._trades(us._LOSS)
+        assert len(closed) == 1 and closed[0]["closed_at"].startswith("2026-11-06")
+        assert us._net_pnl(closed[0]) < -3_000            # > 3% of the 100k pool
+        us._circuit_breaker()
+        assert us._load()["armed"] is False
+        assert us._load()["disarmed_reason"].startswith("circuit breaker")
+
+    def test_breaker_still_attributes_legacy_closes_without_timestamp_by_entry(
+            self, tmp_path, monkeypatch):
+        us, te = self._setup(tmp_path, monkeypatch, daily_loss_limit_pct=0.03)
+        monkeypatch.setattr(us, "_us_session_date", lambda: "2026-11-06")
+        self._open_us(te, "OLD", 200, 100.0, 85.0,
+                      note="US_AUTOPILOT:us_scanner|session=2026-11-05")
+        conn = te.connect()
+        conn.execute("UPDATE trades SET status='PAPER_LOSS', exit_price=84.0")
+        conn.commit()
+        conn.close()
+        us._circuit_breaker()                                # closed_at unknown
+        assert us._load()["armed"] is True
+
     def test_us_rows_do_not_count_in_the_nse_account_gate(self, tmp_path, monkeypatch):
         from risk.portfolio_risk import account_exposure_gate, portfolio_risk_report
         us, te = self._setup(tmp_path, monkeypatch)
@@ -5228,6 +5322,135 @@ class TestUsPaperLaneRiskRails:
         report = portfolio_risk_report()
         assert report["open_risk"] == 0 and report["n_positions"] == 0
         assert account_exposure_gate("TCS", qty=10, entry=100.0, stop=95.0)["ok"] is True
+
+
+class TestFoExpiredPositionIsNeverSilentlyCarried:
+    """A held option whose contract has expired is no longer quoted by Kite.
+    The cycle used to skip it silently forever: its slot and premium risk
+    stayed in the 5% account budget and its outcome was never booked. It must
+    block new F&O entries and be surfaced for reconciliation. No settlement
+    price is invented for it."""
+
+    IST = __import__("datetime").timezone(__import__("datetime").timedelta(hours=5, minutes=30))
+
+    @staticmethod
+    def _candidate(underlying, option_symbol, *, expiry):
+        return {
+            "symbol": underlying, "direction": "LONG", "decision": "PAPER_OPTION_CANDIDATE",
+            "setup": {"score": 82.0, "expected_move": {"holding_days": 4}},
+            "selected_contract": {
+                "symbol": option_symbol, "option_type": "CE", "eligible": True,
+                "lot_size": 25, "ask": 50.0, "score": 86.0, "expiry": expiry,
+                "context_key": "LONG|LONG_BUILDUP|CTX",
+                "trade_plan": {"entry": 50.0, "stop": 40.0, "target": 70.0},
+            },
+        }
+
+    class _Client:
+        def __init__(self, unquoted=()):
+            self.unquoted = set(unquoted)
+
+        def quote(self, keys):
+            return {
+                key: {
+                    "last_price": 52.0, "volume": 5000, "oi": 20000,
+                    "ohlc": {"open": 50.0, "high": 55.0, "low": 48.0, "close": 49.0},
+                    "depth": {"buy": [{"price": 51.0}], "sell": [{"price": 52.0}]},
+                }
+                for key in keys if key.split(":", 1)[-1] not in self.unquoted
+            }
+
+    def test_expired_unquoted_position_blocks_new_entries(self, tmp_path):
+        from datetime import datetime
+        from product.fo_paper_runtime import run_fo_paper_cycle
+        from product.fo_paper_store import FoPaperStore
+
+        path = tmp_path / "fo.sqlite3"
+        opened_at = datetime(2026, 9, 24, 10, 15, tzinfo=self.IST)
+        with FoPaperStore(path) as store:
+            first = run_fo_paper_cycle(
+                {"available": True, "candidates": [
+                    self._candidate("RELIANCE", "RELIANCE26SEPCE", expiry="2026-09-29")]},
+                client=self._Client(), now_ist=opened_at, allow_new_entries=True,
+                store=store, capital=200_000,
+            )
+            assert first["opened_count"] == 1
+            assert first["expired_unsettled_positions"] == []
+            assert first["operator_action_required"] is False
+
+        after_expiry = datetime(2026, 10, 1, 11, 0, tzinfo=self.IST)
+        with FoPaperStore(path) as store:
+            later = run_fo_paper_cycle(
+                {"available": True, "candidates": [
+                    self._candidate("TCS", "TCS26OCTCE", expiry="2026-10-27")]},
+                client=self._Client(unquoted={"RELIANCE26SEPCE"}), now_ist=after_expiry,
+                allow_new_entries=True, store=store, capital=200_000,
+            )
+            assert later["opened_count"] == 0
+            assert later["settled_count"] == 0            # no invented settlement
+            assert later["open_count"] == 1
+            assert later["operator_action_required"] is True
+            assert "FNO_EXPIRED_POSITION_UNSETTLED" in later["blockers"]
+            expired = later["expired_unsettled_positions"]
+            assert [row["option_symbol"] for row in expired] == ["RELIANCE26SEPCE"]
+            assert expired[0]["expiry"] == "2026-09-29"
+            assert later["unquoted_open_positions"] == ["RELIANCE26SEPCE"]
+            assert {"symbol": "TCS", "reason": "EXPIRED_POSITION_UNSETTLED"} in later["skipped"]
+            # The position stays durable and counted; nothing is dropped.
+            assert [p["option_symbol"] for p in store.load_positions()] == ["RELIANCE26SEPCE"]
+
+    def test_unexpired_position_without_a_quote_is_reported_not_blocking(self, tmp_path):
+        from datetime import datetime
+        from product.fo_paper_runtime import run_fo_paper_cycle
+        from product.fo_paper_store import FoPaperStore
+
+        path = tmp_path / "fo.sqlite3"
+        opened_at = datetime(2026, 9, 24, 10, 15, tzinfo=self.IST)
+        with FoPaperStore(path) as store:
+            run_fo_paper_cycle(
+                {"available": True, "candidates": [
+                    self._candidate("RELIANCE", "RELIANCE26OCTCE", expiry="2026-10-27")]},
+                client=self._Client(), now_ist=opened_at, allow_new_entries=True,
+                store=store, capital=200_000,
+            )
+        with FoPaperStore(path) as store:
+            later = run_fo_paper_cycle(
+                {"available": True, "candidates": [
+                    self._candidate("TCS", "TCS26OCTCE", expiry="2026-10-27")]},
+                client=self._Client(unquoted={"RELIANCE26OCTCE"}),
+                now_ist=datetime(2026, 9, 25, 11, 0, tzinfo=self.IST),
+                allow_new_entries=True, store=store, capital=200_000,
+            )
+            assert later["unquoted_open_positions"] == ["RELIANCE26OCTCE"]
+            assert later["expired_unsettled_positions"] == []
+            assert later["operator_action_required"] is False
+            assert later["opened_count"] == 1
+
+
+    def test_desk_projection_surfaces_the_blocker_from_the_durable_book(self):
+        from datetime import datetime
+        from product.fo_desk import build_fo_desk
+        desk = build_fo_desk(
+            {}, {"available": True, "open_positions": [
+                {"option_symbol": "RELIANCE26SEPCE", "underlying": "RELIANCE",
+                 "trade_id": "T1", "expiry": "2026-09-29", "risk_amount": 250.0},
+                {"option_symbol": "TCS26OCTCE", "underlying": "TCS",
+                 "trade_id": "T2", "expiry": "2026-10-27", "risk_amount": 250.0},
+            ]},
+            now=datetime(2026, 10, 1, 11, 0, tzinfo=self.IST),
+        )
+        assert desk["operator_action_required"] is True
+        assert desk["blockers"][0] == {"reason": "FNO_EXPIRED_POSITION_UNSETTLED", "count": 1}
+        assert [r["trade_id"] for r in desk["expired_unsettled_positions"]] == ["T1"]
+        assert len(desk["open_positions"]) == 2    # still shown as held, not dropped
+
+    def test_expiry_day_itself_is_not_expired(self):
+        from product.fo_paper import expired_unsettled_positions
+        rows = [{"option_symbol": "X", "expiry": "2026-09-29"},
+                {"option_symbol": "Y", "expiry": "29SEP"},       # unparseable: unknown
+                {"option_symbol": "Z", "expiry": ""}]
+        assert expired_unsettled_positions(rows, "2026-09-29") == []
+        assert [r["option_symbol"] for r in expired_unsettled_positions(rows, "2026-09-30")] == ["X"]
 
 
 class TestPaperTradeIsOnlyOkWhenRecorded:

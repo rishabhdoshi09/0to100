@@ -15,12 +15,14 @@ journal so they never collide with the NSE ledger or Report Card.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sqlite3
 import threading
 from datetime import datetime, date
 
 from logger import get_logger
+from core.market_scope import scope_status, us_new_entries_allowed
 from core.runtime_paths import logs_path
 
 log = get_logger(__name__)
@@ -52,6 +54,13 @@ def _trade_session_date(trade: dict) -> str:
         if len(value) >= 10:
             return value[:10]
     return str(trade.get("placed_at") or "")[:10]
+
+
+def _trade_close_session(trade: dict) -> str:
+    closed_at = str(trade.get("closed_at") or "")
+    return closed_at[:10] if len(closed_at) >= 10 else _trade_session_date(trade)
+
+
 _OPEN = ("PAPER_OPEN",)
 _WIN = ("PAPER_WIN",)
 _LOSS = ("PAPER_LOSS",)
@@ -77,7 +86,13 @@ _DEFAULTS = {
     "breakeven_trigger_pct": 2.0,
     "trades_today": {},
     "traded_symbols": {},
-    "max_accounted_id": 0,         # high-water mark — see _account_closed()
+    "max_accounted_id": 0,         # legacy checkpoint; never infer closure order from IDs
+    "accounted_ids": [],            # legacy capped list; accepted only during migration
+    "accounted_close_ids": [],      # exact settled IDs; trades can close out of order
+    "accounting_ids_migrated": False,
+    "accounting_reconciliation_required": False,
+    "state_recovery_required": False,  # runtime-only: this load failed closed
+    "state_recovery_error": "",        # runtime-only: why (never read from disk)
     "activity": [],
     "disarmed_reason": "",
     "reject_stats": {},            # {YYYY-MM-DD: {category: count}} — the funnel
@@ -87,8 +102,112 @@ _DEFAULTS = {
 
 _state: dict = {}
 
+# The single recovery authority is the in-memory state itself:
+# ``state_recovery_required`` / ``state_recovery_error`` describe the outcome of
+# THIS process's load. They are never trusted from disk (see ``_load``), and a
+# state carrying them is never written back (see ``_save``), so a damaged or
+# lost recovery source can only be replaced by an operator, never by defaults.
+_RECOVERY_REASON = "US_PAPER_STATE_RECOVERY_REQUIRED"
+_RUNTIME_ONLY_KEYS = ("state_recovery_required", "state_recovery_error")
+
 
 # ── Persistence ───────────────────────────────────────────────────────────────
+
+def _require_runtime_storage() -> None:
+    """Raise when the configured persistent runtime root is not present.
+
+    ``core.runtime_paths`` is the canonical authority: on an installed host
+    (``QT_RUNTIME_ROOT_REQUIRE_EXISTING``) it raises instead of falling back,
+    so a detached external volume is never mistaken for a fresh install and its
+    path is never recreated on the internal disk. In a dev checkout it is a
+    no-op that returns the repository root.
+    """
+    from core.runtime_paths import runtime_root
+    runtime_root()
+
+
+def _has_us_trade_history() -> bool:
+    """Check the journal *read-only* before treating a missing state as a new install.
+
+    An inaccessible or malformed journal raises. The caller then fails closed;
+    it must not infer zero paper positions from an unreadable database. A
+    journal that exists but has never had a ``trades`` table holds no history.
+    """
+    from urllib.parse import quote
+    from execution.trade_executor import _DB
+
+    if not _DB.exists():
+        return False
+    uri = "file:" + quote(str(_DB.absolute()), safe="/") + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, timeout=2.0)
+    try:
+        conn.execute("PRAGMA query_only=ON")
+        has_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='trades'"
+        ).fetchone()
+        if has_table is None:
+            return False
+        row = conn.execute(
+            "SELECT 1 FROM trades WHERE note LIKE ? LIMIT 1",
+            (f"%{TAG}%",),
+        ).fetchone()
+        return row is not None
+    finally:
+        conn.close()
+
+
+def _is_int_id(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _validate_saved_state(payload: object) -> dict:
+    """Do not convert damaged persisted consent/accounting into defaults."""
+    if not isinstance(payload, dict):
+        raise ValueError("US paper state is not a JSON object")
+    if not isinstance(payload.get("armed"), bool):
+        raise ValueError("US paper arm/disarm consent is absent or invalid")
+    # Older *disarmed* state files legitimately lacked the daily dictionaries.
+    # They remain disarmed. An armed state cannot silently lose its limits.
+    for key in ("trades_today", "traded_symbols"):
+        if key in payload and not isinstance(payload[key], dict):
+            raise ValueError(f"US paper {key} is invalid")
+        if payload["armed"] and key not in payload:
+            raise ValueError(f"armed US paper state is missing {key}")
+    if not isinstance(payload.get("max_accounted_id"), int) or isinstance(
+        payload.get("max_accounted_id"), bool
+    ):
+        raise ValueError("US paper P&L watermark is absent or invalid")
+    for key in ("allocation", "realized_pnl"):
+        value = payload.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"US paper {key} is absent or invalid")
+        if not math.isfinite(float(value)):
+            raise ValueError(f"US paper {key} is not finite")
+    # Exact-ID settlement ledger. A damaged list would either crash settlement
+    # or, worse, re-book every closed trade's P&L into the pool.
+    for key in ("accounted_ids", "accounted_close_ids"):
+        if key in payload:
+            ids = payload[key]
+            if not isinstance(ids, list) or not all(_is_int_id(i) for i in ids):
+                raise ValueError(f"US paper {key} is invalid")
+    for key in ("accounting_ids_migrated", "accounting_reconciliation_required"):
+        if key in payload and not isinstance(payload[key], bool):
+            raise ValueError(f"US paper {key} is invalid")
+    if payload.get("accounting_ids_migrated") is True and "accounted_close_ids" not in payload:
+        raise ValueError("migrated US paper state lost its settled close IDs")
+    return payload
+
+
+def _latch_recovery(reason: str) -> None:
+    """Fail closed in memory: no arming, no entries, no accounting, no saves."""
+    _state["armed"] = False
+    _state["allocation"] = 0.0          # unknown pool is not a $100k default
+    _state["disarmed_reason"] = _RECOVERY_REASON
+    _state["state_recovery_required"] = True
+    _state["state_recovery_error"] = reason
+    _state["accounting_reconciliation_required"] = True
+    log.warning("us_autopilot_state_recovery_required", error=reason)
+
 
 def _load() -> dict:
     global _state
@@ -99,39 +218,82 @@ def _load() -> dict:
         migrated = False
         try:
             if _STATE_FILE.exists():
-                on_disk = json.loads(_STATE_FILE.read_text())
-                _state.update({k: v for k, v in on_disk.items() if k in _DEFAULTS})
-                # Older builds shipped the US PAPER engine disabled with a zero
-                # allocation. That was a product-default placeholder, not an
-                # operator decision. Migrate only that untouched legacy state;
-                # an explicit disarm carries disarmed_reason and is preserved.
+                on_disk = _validate_saved_state(
+                    json.loads(_STATE_FILE.read_text(encoding="utf-8"))
+                )
+                _state.update({k: v for k, v in on_disk.items()
+                               if k in _DEFAULTS and k not in _RUNTIME_ONLY_KEYS})
+                # An untouched old zero-allocation default may be migrated.
+                # Existing explicit disarm and accounting history must survive.
                 if (
                     float(_state.get("allocation") or 0.0) <= 0.0
                     and not str(_state.get("disarmed_reason") or "").strip()
                     and not list(_state.get("activity") or [])
                     and int(_state.get("max_accounted_id") or 0) == 0
+                    and not list(_state.get("accounted_close_ids") or [])
                 ):
-                    _state["allocation"] = float(os.getenv("QT_US_PAPER_CAPITAL", "100000") or 100000)
-                    _state["armed"] = os.getenv("QT_US_PAPER_AUTO", "1").strip().lower() not in {"0", "false", "off", "no"}
+                    _state["allocation"] = float(
+                        os.getenv("QT_US_PAPER_CAPITAL", "100000") or 100000
+                    )
+                    _state["armed"] = os.getenv(
+                        "QT_US_PAPER_AUTO", "1"
+                    ).strip().lower() not in {"0", "false", "off", "no"}
                     migrated = True
+            else:
+                # A missing state file is normal only on a truly fresh install.
+                # A detached runtime volume also has no file: ask the runtime
+                # authority first. Never reset virtual cash/P&L while an older
+                # US trade journal survives; restoring the state is mandatory.
+                _require_runtime_storage()
+                if _has_us_trade_history():
+                    raise ValueError("US paper state file missing with existing trade history")
         except Exception as exc:
-            log.warning("us_autopilot_load_failed", error=str(exc))
+            _state = dict(_DEFAULTS)
+            _latch_recovery(type(exc).__name__ + ":" + str(exc)[:160])
+            return _state
+        _state["state_recovery_required"] = False
+        _state["state_recovery_error"] = ""
         if migrated:
             _save()
             _log_activity("legacy zero-state migrated to autonomous virtual PAPER mode")
         return _state
 
 
-def _save() -> None:
+def _save() -> bool:
+    """Atomically persist the paper state; report failure to accounting callers.
+
+    Serialize the full write under the process lock so a concurrent status or
+    accounting update cannot overwrite a more recent checkpoint with stale JSON.
+    An unrestored state is never written: the file on disk is the recovery source.
+    """
     try:
         with _lock:
             data = dict(_load())
-        _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = _STATE_FILE.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(data, indent=1))
-        tmp.replace(_STATE_FILE)
+            if data.get("state_recovery_required"):
+                log.warning("us_autopilot_save_blocked", reason=_RECOVERY_REASON)
+                return False
+            for key in _RUNTIME_ONLY_KEYS:
+                data.pop(key, None)
+            _require_runtime_storage()   # never recreate a vanished volume's path
+            _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _STATE_FILE.with_suffix(".json.tmp")
+            with tmp.open("w", encoding="utf-8") as handle:
+                json.dump(data, handle, indent=1)
+                handle.flush()
+                os.fsync(handle.fileno())
+            tmp.replace(_STATE_FILE)
+            try:
+                dir_fd = os.open(str(_STATE_FILE.parent), os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except OSError:
+                pass  # directory fsync is unsupported on some filesystems
+        return True
     except Exception as exc:
         log.warning("us_autopilot_save_failed", error=str(exc))
+        return False
 
 
 def _log_activity(msg: str) -> None:
@@ -155,10 +317,12 @@ def _notify(msg: str) -> None:
 
 def _reject_category(reason: str) -> str:
     r = (reason or "").lower()
+    if "india-only" in r:         return "India-only mode (new US entries paused)"
     if "open risk" in r:          return "total open-risk cap (5%)"
     if "window" in r:             return "time window (US band)"
     if "daily trade limit" in r:  return "daily limit hit (max/day)"
     if "max open positions" in r: return "position limit full"
+    if "already holding" in r:    return "symbol already held (10% per name)"
     if "already traded" in r:     return "symbol already traded today"
     if "conviction" in r:         return "conviction kam"
     if "score" in r:              return "score kam"
@@ -249,6 +413,7 @@ def _update(trade_id: int, sets: str, params: tuple) -> None:
 def get_status() -> dict:
     with _lock:
         s = dict(_load())
+    s["state_recovery_error"] = s.get("state_recovery_error") or None
     opens = _open_trades()
     s["open_trades"] = opens
     s["deployed"] = round(sum(float(t["entry_price"] or 0) * int(t["qty"] or 0)
@@ -258,10 +423,17 @@ def get_status() -> dict:
         max(0.0, s["pool"] * (1 - s["cash_reserve_pct"]) - s["deployed"]), 2)
     today = _us_session_date()
     s["trades_today_count"] = int(s.get("trades_today", {}).get(today, 0))
+    scope = scope_status()
+    s["market_scope"] = scope["market_scope"]
+    s["new_entries_paused"] = not scope["us_new_entries_allowed"]
+    s["entries_paused_reason"] = scope["reason"] or None
     return s
 
 
-def set_config(**kwargs) -> None:
+def set_config(**kwargs) -> bool:
+    """Apply clamped config; False when nothing could be durably recorded."""
+    if _load().get("state_recovery_required"):
+        return False  # An operator must restore the persisted state before editing it.
     clamps = {
         "allocation": (0.0, 1e9), "cash_reserve_pct": (0.05, 0.50),
         "per_trade_cap_pct": (0.05, MAX_PER_NAME_PCT),
@@ -286,7 +458,7 @@ def set_config(**kwargs) -> None:
             elif k in clamps:
                 lo, hi = clamps[k]
                 s[k] = type(_DEFAULTS[k])(min(hi, max(lo, v)))
-    _save()
+    return _save()
 
 
 # ── Aggressiveness presets — breadth only, never the safety rails ─────────────
@@ -311,11 +483,13 @@ def apply_preset(name: str) -> tuple[bool, str]:
     cfg = _PRESETS.get(name)
     if not cfg:
         return False, f"unknown preset '{name}'"
-    set_config(**cfg)
     with _lock:
-        s = _load()
-        s["preset"] = name
-    _save()
+        if _load().get("state_recovery_required"):
+            return False, "US PAPER state recovery required; preset not applied"
+        _load()["preset"] = name
+        # One durable write carries the preset name and its thresholds.
+        if not set_config(**cfg):
+            return False, "US PAPER state could not be saved; preset not applied"
     _log_activity(f"PRESET → {name} (min_score {cfg['min_score']:.0f}, "
                   f"{cfg['max_trades_per_day']}/day, "
                   f"{cfg['max_open_positions']} open)")
@@ -324,6 +498,12 @@ def apply_preset(name: str) -> tuple[bool, str]:
 
 def arm() -> tuple[bool, str]:
     s = _load()
+    if s.get("state_recovery_required"):
+        return False, ("US PAPER state recovery required; restore the saved "
+                       "state and restart before arming")
+    if not us_new_entries_allowed():
+        return False, ("India-only mode: new US paper entries are paused. Existing "
+                       "US positions are still supervised.")
     if s["allocation"] < 1000:
         return False, "Pehle allocation set karo (min $1,000)"
     with _lock:
@@ -366,6 +546,10 @@ def _in_window(now_et=None) -> bool:
 
 def _passes_gates(symbol: str, score: float, conviction: float) -> str | None:
     s = _load()
+    if s.get("state_recovery_required"):
+        return "US paper state recovery required"
+    if not us_new_entries_allowed():
+        return "India-only mode: new US paper entries paused"
     if not s["armed"]:
         return "not armed"
     if not _in_window():
@@ -515,6 +699,22 @@ def _consider_locked(symbol, entry, stop, score, conviction, source, meta=None) 
             log.debug("us_autopilot_reject", symbol=symbol, reason=gate_reject)
             _note_reject(gate_reject)
             return reject(gate_reject)
+        # The open book is the authority for per-name and total exposure. Read
+        # it once, strictly: an unreadable book is unknown exposure, not zero.
+        try:
+            open_book = _trades(_OPEN, strict=True)
+        except Exception as exc:
+            reason = f"open-risk unknown (US paper book unreadable: {type(exc).__name__})"
+            _log_activity(f"SKIP {symbol}: {reason}")
+            _note_reject("open risk cap")
+            return reject(reason)
+        # traded_symbols only covers today's session. A name still held from an
+        # earlier session already uses its 10% allocation; a second position
+        # would double it.
+        if any(str(t.get("symbol") or "") == symbol for t in open_book):
+            reason = f"already holding an open US paper position in {symbol}"
+            _note_reject(reason)
+            return reject(reason)
         live_entry, why = _anchor_live(symbol, entry, stop, s["max_chase_pct"])
         if live_entry is None:
             _log_activity(f"SKIP {symbol}: {why}")
@@ -528,16 +728,10 @@ def _consider_locked(symbol, entry, stop, score, conviction, source, meta=None) 
             _log_activity(f"SKIP {symbol}: {reason}")
             _note_reject("pool/1-share")
             return reject(reason)
-        try:
-            open_risk = sum(
-                int(t["qty"] or 0) * max(0.0, float(t["entry_price"] or 0) - float(t["stop_price"] or 0))
-                for t in _trades(_OPEN, strict=True)
-            )
-        except Exception as exc:
-            reason = f"open-risk unknown (US paper book unreadable: {type(exc).__name__})"
-            _log_activity(f"SKIP {symbol}: {reason}")
-            _note_reject("open risk cap")
-            return reject(reason)
+        open_risk = sum(
+            int(t["qty"] or 0) * max(0.0, float(t["entry_price"] or 0) - float(t["stop_price"] or 0))
+            for t in open_book
+        )
         pool = float(get_status()["pool"])
         if open_risk + qty * (entry - stop) > pool * MAX_TOTAL_OPEN_RISK_PCT + 1e-6:
             reason = (f"total open risk ${open_risk + qty * (entry - stop):,.0f} would exceed "
@@ -574,7 +768,7 @@ def _consider_locked(symbol, entry, stop, score, conviction, source, meta=None) 
         )
         _log_activity(f"BUY {qty}×{symbol} @ ${entry:,.2f} "
                       f"(stop ${stop:,.2f} / target ${target:,.2f}) [PAPER]")
-        _notify(f"BUY <b>{qty} × {symbol}</b> @ ${entry:,.2f}\\n"
+        _notify(f"BUY <b>{qty} × {symbol}</b> @ ${entry:,.2f}\n"
                 f"stop ${stop:,.2f} · target ${target:,.2f} (+{s['target_pct']}%)")
         return True
     except Exception as exc:
@@ -583,6 +777,10 @@ def _consider_locked(symbol, entry, stop, score, conviction, source, meta=None) 
 
 
 def on_setups(results: list[dict]) -> None:
+    # A paused lane evaluates nothing, so it records no counterfactual
+    # REJECT decisions that would read as evidence about these setups.
+    if not us_new_entries_allowed():
+        return
     s = _load()
     if not s["armed"]:
         return
@@ -627,19 +825,22 @@ def _net_pnl(t: dict) -> float:
 
 def review_cycle() -> None:
     s = _load()
+    if s.get("state_recovery_required"):
+        raise RuntimeError("US_PAPER_STATE_RECOVERY_REQUIRED")
     if s["allocation"] <= 0:
         return
     try:
         _close_positions()
         _account_closed()
         _circuit_breaker()
-        try:
-            from product.us_learning import settle_pending
-            settle_pending()
-        except Exception as exc:
-            log.debug("us_learning_settle_skip", error=str(exc)[:120])
+        from product.us_learning import settle_pending
+        settle_pending()
     except Exception as exc:
-        log.debug("us_autopilot_review_failed", error=str(exc))
+        # US_MARKET_SCAN is responsible for marking the paper feed BLOCKED.
+        # Swallowing this error previously reported a successful scan even when
+        # settlement/accounting/learning had not completed.
+        log.warning("us_autopilot_review_failed", error=str(exc)[:160])
+        raise
 
 
 def _close_positions() -> None:
@@ -675,14 +876,15 @@ def _close_positions() -> None:
         entry = float(t["entry_price"] or 0)
         stop = float(t["stop_price"] or 0)
         target = float(t["target_price"] or 0)
+        closed_at = _us_now().isoformat()
         if target and px >= target:
             # A resting target fills AT the target; a later, higher poll is not the fill.
-            _update(t["id"], "status=?, exit_price=?, note=note||?",
-                    ("PAPER_WIN", target, f" | target ${target:,.2f} (seen ${px:,.2f})"))
+            _update(t["id"], "status=?, exit_price=?, closed_at=?, note=note||?",
+                    ("PAPER_WIN", target, closed_at, f" | target ${target:,.2f} (seen ${px:,.2f})"))
             continue
         if stop and px <= stop:
-            _update(t["id"], "status=?, exit_price=?, note=note||?",
-                    ("PAPER_LOSS", px, f" | stop ${px:,.2f}"))
+            _update(t["id"], "status=?, exit_price=?, closed_at=?, note=note||?",
+                    ("PAPER_LOSS", px, closed_at, f" | stop ${px:,.2f}"))
             continue
         # breakeven trail
         if s.get("trailing_enabled", True) and 0 < stop < entry and px >= entry * trig:
@@ -692,43 +894,80 @@ def _close_positions() -> None:
         try:
             placed = datetime.fromisoformat(str(t["placed_at"]))
             if (datetime.now() - placed).days >= max_days:
-                _update(t["id"], "status=?, exit_price=?, note=note||?",
-                        ("PAPER_WIN" if px >= entry else "PAPER_LOSS", px,
+                _update(t["id"], "status=?, exit_price=?, closed_at=?, note=note||?",
+                        ("PAPER_WIN" if px >= entry else "PAPER_LOSS", px, closed_at,
                          f" | time-stop day {max_days} @ ${px:,.2f}"))
         except Exception:
             pass
 
 
 def _account_closed() -> None:
-    """Fold closed trades into realized_pnl. High-water mark (max trade id
-    already folded in), not a bounded "seen ids" list — trade ids are
-    monotonic (SQLite autoincrement) so a watermark can never lose track,
-    however many trades accumulate. (A 500-id-capped list used to do this:
-    once total closed trades passed 500, the oldest ids fell out of the
-    truncated window and got re-folded into realized_pnl on every
-    subsequent cycle, forever. Migrates any existing capped list once.)"""
+    """Account each closed US paper trade exactly once, regardless of close order.
+
+    A highest-ID watermark is unsafe: trade 12 may close before trade 11.
+    During a one-time legacy migration preserve recorded realized P&L and seed
+    exact IDs from trades already closed at or below the historical watermark.
+    Existing open trades are deliberately NOT seeded, even with lower IDs.
+    Older historical accounting cannot be reconstructed reliably from the
+    watermark alone; expose that uncertainty for an explicit reconciliation.
+    """
+    notifications = []
     with _lock:
         s = _load()
-        watermark = int(s.get("max_accounted_id", 0) or 0)
-        old_ids = s.get("accounted_ids")
-        if not watermark and old_ids:
-            watermark = max(int(i) for i in old_ids)   # one-time migration
-        changed = bool(old_ids)
-        max_seen = watermark
-        for t in _trades(_WIN + _LOSS):        # ORDER BY id DESC — monotonic
+        if s.get("state_recovery_required"):
+            # Settlement against an unrestored ledger would re-book P&L that the
+            # lost state already counted. Deferred is a failure, not a success.
+            raise RuntimeError(_RECOVERY_REASON)
+        closed = _trades(_WIN + _LOSS, strict=True)
+        was_migrated = bool(s.get("accounting_ids_migrated"))
+        accounted = {int(i) for i in (s.get("accounted_close_ids") or [])}
+        previous_ids = {int(i) for i in (s.get("accounted_ids") or [])}
+        old_watermark = int(s.get("max_accounted_id") or 0)
+        changed = not was_migrated or bool(previous_ids)
+        if not was_migrated:
+            # Prior code used a high-water mark, or derived one from a capped
+            # accounted_ids list. Preserve its recorded P&L without replaying
+            # historical closures. Open positions remain eligible when closed.
+            legacy_cutoff = max(old_watermark, max(previous_ids, default=0))
+            accounted.update(previous_ids)
+            accounted.update(int(t["id"]) for t in closed
+                             if int(t["id"]) <= legacy_cutoff)
+            needs_review = bool(legacy_cutoff)
+        else:
+            needs_review = bool(s.get("accounting_reconciliation_required"))
+
+        realized = float(s.get("realized_pnl") or 0.0)
+        highest = old_watermark
+        for t in reversed(closed):
             tid = int(t["id"])
-            if tid <= watermark:
-                break
+            if tid in accounted:
+                continue
             pnl = round(_net_pnl(t), 2)
-            s["realized_pnl"] = round(s.get("realized_pnl", 0.0) + pnl, 2)
-            max_seen = max(max_seen, tid)
+            realized = round(realized + pnl, 2)
+            accounted.add(tid)
+            highest = max(highest, tid)
             changed = True
-            _notify(f"CLOSED <b>{t['symbol']}</b> {'🟢' if pnl >= 0 else '🔴'} "
-                    f"${pnl:+,.2f} (net)\nPool: ${s['allocation'] + s['realized_pnl']:,.0f}")
-        s["max_accounted_id"] = max_seen
-        s.pop("accounted_ids", None)
-    if changed:
-        _save()
+            notifications.append(
+                f"CLOSED <b>{t['symbol']}</b> {'🟢' if pnl >= 0 else '🔴'} "
+                f"${pnl:+,.2f} (net)\nPool: ${s['allocation'] + realized:,.0f}"
+            )
+
+        if changed:
+            before = dict(s)
+            s["realized_pnl"] = realized
+            s["accounted_close_ids"] = sorted(accounted)
+            s["accounting_ids_migrated"] = True
+            s["accounting_reconciliation_required"] = needs_review
+            s["max_accounted_id"] = highest  # for backward visibility only
+            s.pop("accounted_ids", None)
+            if _save() is False:
+                s.clear()
+                s.update(before)
+                raise OSError("US paper accounting checkpoint was not persisted")
+
+    # Notify only after the checkpoint is durable; never announce phantom P&L.
+    for message in notifications:
+        _notify(message)
 
 
 def _circuit_breaker() -> None:
@@ -739,8 +978,10 @@ def _circuit_breaker() -> None:
     if pool <= 0:
         return
     today = _us_session_date()
+    # Realized P&L belongs to the session it was realized in. Rows closed
+    # before closed_at existed fall back to their entry session (unknown).
     day = sum(_net_pnl(t) for t in _trades(_WIN + _LOSS)
-              if _trade_session_date(t) == today)
+              if _trade_close_session(t) == today)
     # Include UNREALIZED on open positions — else three open trades could
     # bleed −8% and never trip the breaker until they close (NSE-parity).
     opens = _open_trades()

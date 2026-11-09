@@ -34,6 +34,7 @@ import numpy as np
 
 # Reuse the long side's primitives — one math, one language for evidence.
 from scan.unified_scanner import (
+    YEAR_SESSIONS,
     _rsi, _atr, _ema_np, _norm, close_location_value, _market_is_live,
 )
 
@@ -187,7 +188,7 @@ def analyze_short(symbol: str, df) -> ShortSignal | None:
     breakdown_grade = ""
 
     # ── Confirmed breakdown — below 52-week low OR 20-day support ─────────────
-    lo52 = float(np.min(low[:-1]))
+    lo52 = float(np.min(low[-(YEAR_SESSIONS + 1):-1]))   # prior 52 weeks
     sup20 = float(np.min(low[-21:-1]))
     level, tag = (lo52, "52-week low") if price < lo52 else (sup20, "support")
     clv = close_location_value(close[-1], high[-1], low[-1])

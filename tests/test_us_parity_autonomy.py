@@ -217,6 +217,7 @@ def test_us_session_date_uses_new_york_calendar(monkeypatch):
 
 
 def test_us_status_truthfully_reports_forward_parity_without_fake_historical_pit(monkeypatch):
+    monkeypatch.setenv("QT_MARKET_SCOPE", "INDIA_AND_US")   # US-enabled behaviour under test
     import data.us_data as us_data
     import execution.us_autopilot as us
     import product.us_learning as learning
@@ -265,6 +266,7 @@ def test_us_status_truthfully_reports_forward_parity_without_fake_historical_pit
 
 
 def test_us_paper_feed_failure_is_not_reported_as_scan_success(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_MARKET_SCOPE", "INDIA_AND_US")   # US-enabled behaviour under test
     import execution.us_autopilot as autopilot
     import operations.market_ops as market_ops
     import scan.us_scanner as scanner
@@ -314,6 +316,9 @@ def test_us_scan_feed_exception_is_recorded(tmp_path, monkeypatch):
                           "close": [1.0] * 260, "volume": [1e6] * 260},
                          index=pd.bdate_range("2025-01-01", periods=260))
     monkeypatch.setattr(data, "get_us_daily", lambda *a, **k: frame, raising=False)
+    # scan_us fetches through the batch API; without this stub the test made a
+    # real network download for "AAA" and only passed where that succeeded.
+    monkeypatch.setattr(data, "get_us_daily_batch", lambda syms: {s: frame for s in syms})
     monkeypatch.setattr(unified.UnifiedScanner, "_analyze", lambda self, sym, df: None)
 
     def _boom():

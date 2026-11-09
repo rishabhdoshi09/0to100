@@ -37,6 +37,7 @@ def _contract(symbol: str, strike: float, delta=None, *, option_type="CE"):
         "ask": fair + 0.25,
         "volume": 5500,
         "oi": 32000,
+        "lot_size": 250,           # real contracts carry it from the instrument master
         "iv": 24.0,
     }
     if delta is not None:
@@ -438,3 +439,34 @@ def test_atm_reference_is_resolved_independently_per_expiry():
     assert by_symbol["W2"]["atm_reference_strike"] == 3075.0
     assert by_symbol["W1"]["moneyness"] == "ATM"
     assert by_symbol["W2"]["moneyness"] == "ATM"
+
+
+def _liquidity_case(*, lot_size, volume, oi):
+    row = _contract("RELIANCE27SEP3050CE", 3050.0, 0.62)
+    row.update(lot_size=lot_size, volume=volume, oi=oi)
+    return score_option_contract(
+        row, direction="LONG", spot=3050.0, expected_move_pct=2.0,
+        horizon="1_TO_2D", holding_days=2, underlying_stop_price=2995.0,
+        iv_percentile=45.0,
+    )
+
+
+def test_option_liquidity_floors_are_measured_in_lots_not_kite_units():
+    """Kite reports option volume/OI in units (shares). 500 units of OI is two
+    lots of a 250-share contract: such a contract has no real market to exit
+    into, so it must not pass the liquidity floor or earn liquidity points."""
+    thin = _liquidity_case(lot_size=250, volume=500, oi=2_500)      # 2 lots / 10 lots
+    assert thin["eligible"] is False
+    assert "OPTION_VOLUME_TOO_LOW" in thin["blockers"]
+    assert "OPTION_OI_TOO_LOW" in thin["blockers"]
+    assert thin["volume_lots"] == 2.0 and thin["oi_lots"] == 10.0
+
+    deep = _liquidity_case(lot_size=250, volume=12_500, oi=125_000)  # 50 lots / 500 lots
+    assert deep["eligible"] is True
+    assert deep["components"]["liquidity"] > thin["components"]["liquidity"]
+
+
+def test_unknown_lot_size_cannot_establish_option_liquidity():
+    result = _liquidity_case(lot_size=0, volume=1_000_000, oi=10_000_000)
+    assert result["eligible"] is False
+    assert "LOT_SIZE_UNAVAILABLE" in result["blockers"]

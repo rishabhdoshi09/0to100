@@ -7,6 +7,7 @@ labels whether statutory/broker costs were configured for evidence use.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from datetime import date
 from math import floor, isfinite
 from typing import Any, Callable, Mapping
 from uuid import uuid4
@@ -152,6 +153,37 @@ class FoPaperTrade:
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def expired_unsettled_positions(positions, session: str) -> list[dict[str, Any]]:
+    """Open long-premium positions whose contract expired before ``session``.
+
+    Single authority for the rule. Once a contract expires Kite stops quoting
+    it, so ordinary supervision can never mark or close it: it would hold its
+    slot and premium risk in the account budget forever with its outcome never
+    booked. Its value is unknown to the paper engine and no settlement price is
+    invented for it; it must be reconciled against the exchange settlement.
+    Accepts ``FoPaperPosition`` objects or their ``as_dict()`` rows.
+    """
+    rows: list[dict[str, Any]] = []
+    for pos in positions or ():
+        row = pos if isinstance(pos, Mapping) else pos.as_dict()
+        expiry = str(row.get("expiry") or "")[:10]
+        try:
+            expired = bool(expiry) and date.fromisoformat(expiry).isoformat() < str(session)[:10]
+        except ValueError:
+            expired = False
+        if expired:
+            rows.append({
+                "option_symbol": str(row.get("option_symbol") or ""),
+                "underlying": str(row.get("underlying") or ""),
+                "trade_id": str(row.get("trade_id") or ""),
+                "expiry": expiry,
+                "opened_at": str(row.get("opened_at") or ""),
+                "risk_amount": round(float(row.get("risk_amount") or 0.0), 2),
+                "action": "Reconcile against the exchange expiry settlement before new F&O entries.",
+            })
+    return rows
 
 
 class FoPaperBook:

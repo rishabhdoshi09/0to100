@@ -181,8 +181,12 @@ def implied_volatility(
 
 @dataclass(frozen=True)
 class OptionSelectionPolicy:
-    min_volume: int = 100
-    min_oi: int = 500
+    # Kite reports option volume and OI in contract UNITS (shares), not lots.
+    # Liquidity floors are therefore stated in lots and measured with each
+    # contract's own lot size; a raw unit floor would admit contracts with a
+    # fraction of one lot of open interest for most NSE stock options.
+    min_volume_lots: float = 10.0
+    min_oi_lots: float = 50.0
     max_spread_pct: float = 4.0
     min_premium: float = 2.0
     minimum_score: float = 60.0
@@ -338,11 +342,11 @@ def _expiry_score(trading_sessions_to_expiry: int, horizon: str) -> float:
     return 0.0
 
 
-def _liquidity_score(volume: float, oi: float, spread_pct: float | None, policy: OptionSelectionPolicy) -> float:
+def _liquidity_score(volume_lots: float, oi_lots: float, spread_pct: float | None, policy: OptionSelectionPolicy) -> float:
     if spread_pct is None:
         return 0.0
-    volume_score = 8.0 * _clamp(volume / max(policy.min_volume * 5.0, 1.0), 0.0, 1.0)
-    oi_score = 8.0 * _clamp(oi / max(policy.min_oi * 5.0, 1.0), 0.0, 1.0)
+    volume_score = 8.0 * _clamp(volume_lots / max(policy.min_volume_lots * 5.0, 1e-9), 0.0, 1.0)
+    oi_score = 8.0 * _clamp(oi_lots / max(policy.min_oi_lots * 5.0, 1e-9), 0.0, 1.0)
     spread_score = 9.0 * _clamp((policy.max_spread_pct - spread_pct) / max(policy.max_spread_pct, 0.01), 0.0, 1.0)
     return volume_score + oi_score + spread_score
 
@@ -467,10 +471,18 @@ def score_option_contract(
         blockers.append("IV_UNAVAILABLE")
     if iv_percentile is not None and float(iv_percentile) > policy.max_iv_percentile:
         blockers.append("IV_CRUSH_RISK_EXTREME_PERCENTILE")
-    if volume < policy.min_volume:
-        blockers.append("OPTION_VOLUME_TOO_LOW")
-    if oi < policy.min_oi:
-        blockers.append("OPTION_OI_TOO_LOW")
+    lot_size = _f(contract.get("lot_size"))
+    if lot_size <= 0:
+        # Liquidity cannot be expressed in tradable lots without it.
+        blockers.append("LOT_SIZE_UNAVAILABLE")
+        volume_lots = oi_lots = 0.0
+    else:
+        volume_lots = volume / lot_size
+        oi_lots = oi / lot_size
+        if volume_lots < policy.min_volume_lots:
+            blockers.append("OPTION_VOLUME_TOO_LOW")
+        if oi_lots < policy.min_oi_lots:
+            blockers.append("OPTION_OI_TOO_LOW")
     if spread_pct is None:
         blockers.append("BID_ASK_UNAVAILABLE")
     elif spread_pct > policy.max_spread_pct:
@@ -592,7 +604,7 @@ def score_option_contract(
 
     components = {
         "delta_fit": _delta_score(delta_abs),                     # 25
-        "liquidity": _liquidity_score(volume, oi, spread_pct, policy),  # 25
+        "liquidity": _liquidity_score(volume_lots, oi_lots, spread_pct, policy),  # 25
         "theta": _theta_score(theta, premium),                    # 12
         "iv": _iv_score(iv_percentile),                           # 12
         "expiry_fit": _expiry_score(trading_sessions_to_expiry, horizon),  # 10
@@ -641,6 +653,9 @@ def score_option_contract(
         "spread_pct": round(spread_pct, 3) if spread_pct is not None else None,
         "volume": int(volume),
         "oi": int(oi),
+        "volume_lots": round(volume_lots, 2),
+        "oi_lots": round(oi_lots, 2),
+        "liquidity_unit_basis": "KITE_UNITS_DIVIDED_BY_LOT_SIZE",
         "iv": round(iv * 100.0, 2),
         "iv_percentile": round(float(iv_percentile), 2) if iv_percentile is not None else None,
         "iv_percentile_available": iv_percentile is not None,

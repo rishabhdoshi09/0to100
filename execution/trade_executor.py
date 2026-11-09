@@ -47,12 +47,13 @@ CREATE TABLE IF NOT EXISTS trades (
     note TEXT,
     exit_price REAL,
     orig_stop REAL,
-    signal_price REAL
+    signal_price REAL,
+    closed_at TEXT
 );
 """
 
 # Columns added after the first release; older journals are upgraded in place.
-_ADDED_COLUMNS = ("exit_price REAL", "orig_stop REAL", "signal_price REAL")
+_ADDED_COLUMNS = ("exit_price REAL", "orig_stop REAL", "signal_price REAL", "closed_at TEXT")
 
 
 def ensure_schema(conn) -> None:

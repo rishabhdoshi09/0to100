@@ -7,6 +7,8 @@ import math
 from typing import Any, Mapping
 from zoneinfo import ZoneInfo
 
+from product.fo_paper import expired_unsettled_positions
+
 
 def _positive(value: Any) -> bool:
     try:
@@ -77,11 +79,20 @@ def build_fo_desk(
             blockers[str(row.get("reason") or row.get("code") or "OPTION_GATES_NOT_PASSED")] += 1
     if fresh and not candidates and scan.get("candidates"):
         reason = "NO_COMPLETE_CURRENT_OPTION_PLAN"
+    expired = expired_unsettled_positions(
+        [row for row in book.get("open_positions") or [] if isinstance(row, Mapping)], day,
+    )
+    gate_rows = [{"reason": key, "count": count} for key, count in blockers.most_common(5)]
+    if expired:
+        # A durable book problem outranks scan gates: it blocks every new entry.
+        gate_rows.insert(0, {"reason": "FNO_EXPIRED_POSITION_UNSETTLED", "count": len(expired)})
     return {
         "status": status, "reason": reason, "as_of": as_of,
         "generated_at": generated,
         "candidates": candidates[:5], "candidate_count": len(candidates),
-        "blockers": [{"reason": key, "count": count} for key, count in blockers.most_common(5)],
+        "blockers": gate_rows,
+        "expired_unsettled_positions": expired,
+        "operator_action_required": bool(expired),
         "paper_available": bool(book.get("available")),
         "paper_error": str(book.get("error") or book.get("reason") or ""),
         "open_positions": list(book.get("open_positions") or []),

@@ -51,6 +51,9 @@ log = get_logger(__name__)
 import os as _os
 _MAX_DROP = max(0.40, float(_os.getenv("QT_MAX_DROP_FROM_HIGH", "0.60") or 0.60))
 _DROP_LOOKBACK = 250
+# One definition of "52 weeks" for every 52-week extreme in the scanners. The
+# bhavcopy store holds ~500 sessions, so the whole frame is ~2 years, not one.
+YEAR_SESSIONS = _DROP_LOOKBACK
 
 
 # ── Breakout quality (the pro filter) ────────────────────────────────────────
@@ -602,7 +605,7 @@ class UnifiedScanner:
         breakout_watch_veto = False
         breakout_chase_risk = False
         if len(high) > 60:
-            hi52 = float(np.max(high[:-1]))
+            hi52 = float(np.max(high[-(YEAR_SESSIONS + 1):-1]))   # prior 52 weeks
             res20 = float(np.max(high[-21:-1]))
             level, tag = (hi52, "52-week high") if price > hi52 else (res20, "resistance")
             clv = close_location_value(close[-1], high[-1], low[-1])

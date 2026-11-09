@@ -723,9 +723,13 @@ class Supervisor:
             from operations.market_ops import LANES, US_MARKET_SCAN
             from operations.store import OperationStore, PENDING, RUNNING, SUCCEEDED
             from core.runtime_paths import logs_dir
+            from core.market_scope import us_new_entries_allowed
 
             if not us_market_open(now_ist):
                 return
+            # India-only mode: no US universe scan and no new US entries, but
+            # existing US paper positions are still supervised and settled.
+            mode = "SCAN_AND_TRADE" if us_new_entries_allowed() else "SUPERVISE_ONLY"
             now_et = now_ist.astimezone(ZoneInfo("America/New_York"))
             minute = (now_et.minute // 15) * 15
             slot = f"{now_et.date().isoformat()}T{now_et.hour:02d}:{minute:02d}"
@@ -736,7 +740,10 @@ class Supervisor:
                 str(latest.get("status") or "") in {PENDING, RUNNING, SUCCEEDED}
                 # The scan itself landed; rescanning this slot cannot repair the
                 # paper step and would rerun the whole universe back to back.
-                or str(latest.get("error_code") or "") == "US_PAPER_FEED_FAILED"
+                # A failed supervision pass retries next slot, not every tick.
+                or str(latest.get("error_code") or "") in {
+                    "US_PAPER_FEED_FAILED", "US_PAPER_SUPERVISION_FAILED",
+                }
             ):
                 return
             scope = str(os.environ.get("QT_US_SCAN_SCOPE") or "S&P 500").strip() or "S&P 500"
@@ -748,6 +755,7 @@ class Supervisor:
                     "slot": slot,
                     "session_date": now_et.date().isoformat(),
                     "scope": scope,
+                    "mode": mode,
                     "paper_only": True,
                     "live_locked": True,
                 },
