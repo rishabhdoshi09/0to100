@@ -22,6 +22,7 @@ import threading
 from datetime import datetime, date
 
 from logger import get_logger
+from core.market_scope import scope_status, us_new_entries_allowed
 from core.runtime_paths import logs_path
 
 log = get_logger(__name__)
@@ -316,6 +317,7 @@ def _notify(msg: str) -> None:
 
 def _reject_category(reason: str) -> str:
     r = (reason or "").lower()
+    if "india-only" in r:         return "India-only mode (new US entries paused)"
     if "open risk" in r:          return "total open-risk cap (5%)"
     if "window" in r:             return "time window (US band)"
     if "daily trade limit" in r:  return "daily limit hit (max/day)"
@@ -421,6 +423,10 @@ def get_status() -> dict:
         max(0.0, s["pool"] * (1 - s["cash_reserve_pct"]) - s["deployed"]), 2)
     today = _us_session_date()
     s["trades_today_count"] = int(s.get("trades_today", {}).get(today, 0))
+    scope = scope_status()
+    s["market_scope"] = scope["market_scope"]
+    s["new_entries_paused"] = not scope["us_new_entries_allowed"]
+    s["entries_paused_reason"] = scope["reason"] or None
     return s
 
 
@@ -495,6 +501,9 @@ def arm() -> tuple[bool, str]:
     if s.get("state_recovery_required"):
         return False, ("US PAPER state recovery required; restore the saved "
                        "state and restart before arming")
+    if not us_new_entries_allowed():
+        return False, ("India-only mode: new US paper entries are paused. Existing "
+                       "US positions are still supervised.")
     if s["allocation"] < 1000:
         return False, "Pehle allocation set karo (min $1,000)"
     with _lock:
@@ -539,6 +548,8 @@ def _passes_gates(symbol: str, score: float, conviction: float) -> str | None:
     s = _load()
     if s.get("state_recovery_required"):
         return "US paper state recovery required"
+    if not us_new_entries_allowed():
+        return "India-only mode: new US paper entries paused"
     if not s["armed"]:
         return "not armed"
     if not _in_window():
@@ -766,6 +777,10 @@ def _consider_locked(symbol, entry, stop, score, conviction, source, meta=None) 
 
 
 def on_setups(results: list[dict]) -> None:
+    # A paused lane evaluates nothing, so it records no counterfactual
+    # REJECT decisions that would read as evidence about these setups.
+    if not us_new_entries_allowed():
+        return
     s = _load()
     if not s["armed"]:
         return

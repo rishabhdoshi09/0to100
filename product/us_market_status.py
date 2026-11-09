@@ -30,6 +30,9 @@ def status() -> dict[str, Any]:
     except Exception:
         learning = {}
 
+    from core.market_scope import scope_status
+    scope = scope_status()
+
     market_open = False
     try:
         from data.us_data import us_market_open
@@ -89,14 +92,23 @@ def status() -> dict[str, Any]:
             "accounting_reconciliation_required": bool(
                 paper.get("accounting_reconciliation_required")
             ),
+            "new_entries_paused": not scope["us_new_entries_allowed"],
+            "entries_paused_reason": scope["reason"] or None,
             "report": report,
             "rejection_funnel": funnel,
         },
         "learning": learning,
+        "market_scope": scope,
         "parity": {
-            "state": "FORWARD_PAPER_PARITY",
-            "autonomous_scan": True,
-            "paper_auto_execution": True,
+            "state": (
+                "FORWARD_PAPER_PARITY" if scope["us_new_entries_allowed"]
+                else "PAUSED_INDIA_ONLY"
+            ),
+            # India-only: no universe scan, no new entries; existing positions
+            # are still supervised and settled on the US market lane.
+            "autonomous_scan": scope["us_new_entries_allowed"],
+            "paper_auto_execution": scope["us_new_entries_allowed"],
+            "existing_positions_supervised": True,
             "forward_outcome_settlement": True,
             "forward_counterfactuals": True,
             "forward_learning": True,

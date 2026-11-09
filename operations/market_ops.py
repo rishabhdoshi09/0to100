@@ -1197,6 +1197,46 @@ class MarketOperationsWorker:
                 "missing_lanes": ["fno"],
             }
 
+    def _supervise_us_paper(self, operation_id: str, market_scope: dict[str, Any]) -> dict[str, Any]:
+        """India-only mode: manage existing US paper positions, open nothing.
+
+        No US universe scan runs. ``review_cycle`` applies stops, targets,
+        trailing and time-stops, settles realized P&L exactly once and runs the
+        daily-loss breaker, so existing positions and records stay true.
+        """
+        self._progress(operation_id, "SUPERVISING_US", "India-only: supervising existing US paper positions")
+        from execution.us_autopilot import get_status, review_cycle
+
+        try:
+            review_cycle()
+            paper = dict(get_status() or {})
+        except Exception as exc:
+            raise OperationBlocked(
+                "US paper supervision failed; no US entries are possible in India-only mode",
+                code="US_PAPER_SUPERVISION_FAILED",
+                result={
+                    "market": "US", "mode": "SUPERVISE_ONLY",
+                    "market_scope": market_scope["market_scope"],
+                    "error": f"{type(exc).__name__}: {exc}"[:300],
+                    "paper_only": True, "live_locked": True,
+                },
+            )
+        return {
+            "market": "US",
+            "mode": "SUPERVISE_ONLY",
+            "market_scope": market_scope["market_scope"],
+            "scan": "SKIPPED_INDIA_ONLY",
+            "new_entries_allowed": False,
+            "paper": {
+                "armed": bool(paper.get("armed")),
+                "open_trades": len(list(paper.get("open_trades") or [])),
+                "realized_pnl": paper.get("realized_pnl"),
+                "state_recovery_required": bool(paper.get("state_recovery_required")),
+            },
+            "paper_only": True,
+            "live_locked": True,
+        }
+
     def _run_us_market_scan(self, operation: dict[str, Any]) -> dict[str, Any]:
         """Run the supervised US paper-market scan on the dedicated US lane.
 
@@ -1205,6 +1245,12 @@ class MarketOperationsWorker:
         """
         operation_id = str(operation["operation_id"])
         payload = dict(operation.get("payload") or {})
+        from core.market_scope import scope_status
+        market_scope = scope_status()
+        # Decided at execution time as well: the scope may change between
+        # enqueue and lease, and only the current scope may open US risk.
+        if str(payload.get("mode") or "") == "SUPERVISE_ONLY" or not market_scope["us_new_entries_allowed"]:
+            return self._supervise_us_paper(operation_id, market_scope)
         scope = str(payload.get("scope") or os.environ.get("QT_US_SCAN_SCOPE") or "S&P 500").strip()
         index = None if scope.lower() in {"", "all"} else scope
         self._progress(operation_id, "SCANNING_US", f"Scanning {scope} with the canonical US setup engine")

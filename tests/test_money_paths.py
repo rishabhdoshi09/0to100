@@ -4190,6 +4190,9 @@ class TestUSAutopilot:
         import execution.us_autopilot as ua
         import execution.trade_executor as te
         import data.us_data as ud
+        # These tests exercise the US lane's own gates, so it must be enabled;
+        # the India-only default is covered in test_market_scope_india_only.py.
+        monkeypatch.setenv("QT_MARKET_SCOPE", "INDIA_AND_US")
         monkeypatch.setattr(ua, "_STATE_FILE", tmp_path / "us_ap.json")
         monkeypatch.setattr(te, "_DB", tmp_path / "trades.db")
         ua._state = {}
@@ -5162,6 +5165,7 @@ class TestUsPaperLaneRiskRails:
         import execution.trade_executor as te
         import execution.us_autopilot as us
         monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+        monkeypatch.setenv("QT_MARKET_SCOPE", "INDIA_AND_US")   # US lane rails under test
         monkeypatch.setattr(te, "_DB", tmp_path / "logs" / "trades.db")
         (tmp_path / "logs").mkdir(exist_ok=True)
         monkeypatch.setattr(us, "_STATE_FILE", tmp_path / "us_ap.json")

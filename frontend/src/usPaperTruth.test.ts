@@ -31,6 +31,14 @@ describe('US paper Home-card truth', () => {
       .toBe(' · paper auto OFF (circuit breaker: day P&L $-3,100)')
   })
 
+  it('says India-only pauses new US entries without hiding open positions', () => {
+    expect(usPaperModeLabel({ armed: true, state_recovery_required: false, new_entries_paused: true }))
+      .toBe(' · paper entries paused (India-only); open positions still supervised')
+    // A recovery blocker still outranks the pause.
+    expect(usPaperModeLabel({ state_recovery_required: true, new_entries_paused: true }))
+      .toBe(' · paper BLOCKED: saved state must be restored')
+  })
+
   it('flags a legacy-watermark pool for reconciliation', () => {
     const rows = usPaperBlockers({ armed: true, accounting_reconciliation_required: true })
     expect(rows).toHaveLength(1)

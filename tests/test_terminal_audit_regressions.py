@@ -163,6 +163,7 @@ def test_us_scan_distinguishes_missing_data_from_complete_no_signal(us_scan, mon
 
 def test_us_batch_failure_replaces_old_success_and_blocks_operation(us_scan, monkeypatch):
     scanner, data, _ = us_scan
+    monkeypatch.setenv("QT_MARKET_SCOPE", "INDIA_AND_US")   # the US scan path under test
     from operations.market_ops import MarketOperationsWorker, OperationBlocked
     scanner._persist_results([{"symbol": "OLD"}], scope="All")
     def unavailable(_symbols):

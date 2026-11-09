@@ -898,6 +898,8 @@ export type HomeOperatingSystem = {
       state_recovery_required?: boolean
       state_recovery_error?: string | null
       accounting_reconciliation_required?: boolean
+      new_entries_paused?: boolean
+      entries_paused_reason?: string | null
       report?: Record<string, unknown>
       rejection_funnel?: Record<string, unknown>
     }

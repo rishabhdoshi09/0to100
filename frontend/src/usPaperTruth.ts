@@ -11,11 +11,14 @@ export type UsPaperState = {
   state_recovery_required?: boolean
   state_recovery_error?: string | null
   accounting_reconciliation_required?: boolean
+  new_entries_paused?: boolean
+  entries_paused_reason?: string | null
 }
 
 export function usPaperModeLabel(paper: UsPaperState | undefined): string {
   if (!paper) return ' · paper status unknown'
   if (paper.state_recovery_required) return ' · paper BLOCKED: saved state must be restored'
+  if (paper.new_entries_paused) return ' · paper entries paused (India-only); open positions still supervised'
   if (paper.armed === true) return ' · paper auto ON'
   const reason = String(paper.disarmed_reason || '').trim()
   return reason && reason !== 'user' ? ` · paper auto OFF (${reason})` : ' · paper auto OFF'
