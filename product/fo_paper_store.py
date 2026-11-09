@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -222,31 +223,61 @@ class FoPaperStore:
         ]
 
     def premium_deployed_on_session(self, session: str) -> float:
-        """Gross entry premium deployed on one session across open and closed trades."""
+        """Gross daily entry premium, refusing unknowable persisted exposure.
+
+        This value is a hard new-entry spending gate. A corrupt closed-trade
+        payload must never be silently skipped: a restart would then give the
+        F&O lane a fresh premium budget despite earlier trades that day.
+        """
         wanted = str(session or "")[:10]
         if not wanted:
             return 0.0
         total = 0.0
         seen_trade_ids: set[str] = set()
         for table in ("fo_open_positions", "fo_closed_trades"):
-            rows = self.conn.execute(f"SELECT payload_json FROM {table}").fetchall()
+            rows = self.conn.execute(
+                f"SELECT trade_id, payload_json FROM {table}"
+            ).fetchall()
             for row in rows:
                 payload = self._decode(row["payload_json"])
-                if not payload or str(payload.get("opened_at") or "")[:10] != wanted:
-                    continue
+                if payload is None:
+                    raise ValueError(
+                        f"F&O {table} contains corrupt premium-accounting data"
+                    )
                 trade_id = str(payload.get("trade_id") or "").strip()
-                if trade_id and trade_id in seen_trade_ids:
+                if not trade_id or trade_id != str(row["trade_id"]):
+                    raise ValueError(
+                        f"F&O {table} has mismatched premium-accounting identity"
+                    )
+                opened_at = str(payload.get("opened_at") or "")
+                if len(opened_at) < 10:
+                    # Without the original entry date a prior deployment cannot
+                    # be excluded from today's limit. Require reconciliation.
+                    raise ValueError(
+                        f"F&O {table} has missing entry date for premium accounting"
+                    )
+                if opened_at[:10] != wanted or trade_id in seen_trade_ids:
                     continue
                 try:
-                    entry = float(payload.get("entry_price") or 0.0)
-                    quantity = int(payload.get("quantity") or 0)
-                except (TypeError, ValueError):
-                    continue
-                if entry > 0 and quantity > 0:
-                    total += entry * quantity
-                    if trade_id:
-                        seen_trade_ids.add(trade_id)
-        return float(total)
+                    entry = float(payload["entry_price"])
+                    quantity_raw = payload["quantity"]
+                    quantity = int(quantity_raw)
+                    valid = (
+                        math.isfinite(entry) and entry > 0
+                        and not isinstance(quantity_raw, bool)
+                        and quantity > 0 and float(quantity_raw) == quantity
+                    )
+                except (KeyError, TypeError, ValueError, OverflowError):
+                    valid = False
+                if not valid:
+                    raise ValueError(
+                        f"F&O {table} has invalid current-session premium accounting"
+                    )
+                total += entry * quantity
+                if not math.isfinite(total):
+                    raise ValueError("F&O daily premium exposure overflow")
+                seen_trade_ids.add(trade_id)
+        return total
 
     def realized_pnl(self) -> float:
         row = self.conn.execute(
