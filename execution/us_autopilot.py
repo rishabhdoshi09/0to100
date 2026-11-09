@@ -77,7 +77,12 @@ _DEFAULTS = {
     "breakeven_trigger_pct": 2.0,
     "trades_today": {},
     "traded_symbols": {},
-    "max_accounted_id": 0,         # high-water mark — see _account_closed()
+    "max_accounted_id": 0,         # legacy checkpoint; never infer closure order from IDs
+    "accounted_ids": [],            # legacy capped list; accepted only during migration
+    "accounted_close_ids": [],      # exact settled IDs; trades can close out of order
+    "accounting_ids_migrated": False,
+    "accounting_reconciliation_required": False,
+    "state_recovery_required": False,  # never bootstrap new money over lost/corrupt state
     "activity": [],
     "disarmed_reason": "",
     "reject_stats": {},            # {YYYY-MM-DD: {category: count}} — the funnel
@@ -99,7 +104,9 @@ def _load() -> dict:
         migrated = False
         try:
             if _STATE_FILE.exists():
-                on_disk = json.loads(_STATE_FILE.read_text())
+                on_disk = json.loads(_STATE_FILE.read_text(encoding="utf-8"))
+                if not isinstance(on_disk, dict):
+                    raise ValueError("US paper state must be a JSON object")
                 _state.update({k: v for k, v in on_disk.items() if k in _DEFAULTS})
                 # Older builds shipped the US PAPER engine disabled with a zero
                 # allocation. That was a product-default placeholder, not an
@@ -114,24 +121,49 @@ def _load() -> dict:
                     _state["allocation"] = float(os.getenv("QT_US_PAPER_CAPITAL", "100000") or 100000)
                     _state["armed"] = os.getenv("QT_US_PAPER_AUTO", "1").strip().lower() not in {"0", "false", "off", "no"}
                     migrated = True
+            else:
+                # A missing state file is normal only on a truly fresh install.
+                # Never reset virtual cash/P&L while an older US trade journal
+                # survives on disk. Restoring the original state is mandatory.
+                if _trades(_OPEN + _WIN + _LOSS, strict=True):
+                    raise ValueError("US paper state missing with trade history")
         except Exception as exc:
             log.warning("us_autopilot_load_failed", error=str(exc))
+            _state["armed"] = False
+            _state["allocation"] = 0.0
+            _state["disarmed_reason"] = "US_PAPER_STATE_RECOVERY_REQUIRED"
+            _state["state_recovery_required"] = True
+            _state["accounting_reconciliation_required"] = True
+            migrated = False
         if migrated:
             _save()
             _log_activity("legacy zero-state migrated to autonomous virtual PAPER mode")
         return _state
 
 
-def _save() -> None:
+def _save() -> bool:
+    """Atomically persist the paper state; report failure to accounting callers.
+
+    Serialize the full write under the process lock so a concurrent status or
+    accounting update cannot overwrite a more recent checkpoint with stale JSON.
+    """
     try:
         with _lock:
             data = dict(_load())
-        _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = _STATE_FILE.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(data, indent=1))
-        tmp.replace(_STATE_FILE)
+            if data.get("state_recovery_required"):
+                log.warning("us_autopilot_save_blocked_unrestored_state")
+                return False
+            _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _STATE_FILE.with_suffix(".json.tmp")
+            with tmp.open("w", encoding="utf-8") as handle:
+                json.dump(data, handle, indent=1)
+                handle.flush()
+                os.fsync(handle.fileno())
+            tmp.replace(_STATE_FILE)
+        return True
     except Exception as exc:
         log.warning("us_autopilot_save_failed", error=str(exc))
+        return False
 
 
 def _log_activity(msg: str) -> None:
@@ -324,6 +356,8 @@ def apply_preset(name: str) -> tuple[bool, str]:
 
 def arm() -> tuple[bool, str]:
     s = _load()
+    if s.get("state_recovery_required"):
+        return False, "US paper state recovery required; restore durable state before arming"
     if s["allocation"] < 1000:
         return False, "Pehle allocation set karo (min $1,000)"
     with _lock:
@@ -366,6 +400,8 @@ def _in_window(now_et=None) -> bool:
 
 def _passes_gates(symbol: str, score: float, conviction: float) -> str | None:
     s = _load()
+    if s.get("state_recovery_required"):
+        return "US paper state recovery required"
     if not s["armed"]:
         return "not armed"
     if not _in_window():
@@ -627,19 +663,22 @@ def _net_pnl(t: dict) -> float:
 
 def review_cycle() -> None:
     s = _load()
+    if s.get("state_recovery_required"):
+        raise RuntimeError("US_PAPER_STATE_RECOVERY_REQUIRED")
     if s["allocation"] <= 0:
         return
     try:
         _close_positions()
         _account_closed()
         _circuit_breaker()
-        try:
-            from product.us_learning import settle_pending
-            settle_pending()
-        except Exception as exc:
-            log.debug("us_learning_settle_skip", error=str(exc)[:120])
+        from product.us_learning import settle_pending
+        settle_pending()
     except Exception as exc:
-        log.debug("us_autopilot_review_failed", error=str(exc))
+        # US_MARKET_SCAN is responsible for marking the paper feed BLOCKED.
+        # Swallowing this error previously reported a successful scan even when
+        # settlement/accounting/learning had not completed.
+        log.warning("us_autopilot_review_failed", error=str(exc)[:160])
+        raise
 
 
 def _close_positions() -> None:
@@ -700,35 +739,68 @@ def _close_positions() -> None:
 
 
 def _account_closed() -> None:
-    """Fold closed trades into realized_pnl. High-water mark (max trade id
-    already folded in), not a bounded "seen ids" list — trade ids are
-    monotonic (SQLite autoincrement) so a watermark can never lose track,
-    however many trades accumulate. (A 500-id-capped list used to do this:
-    once total closed trades passed 500, the oldest ids fell out of the
-    truncated window and got re-folded into realized_pnl on every
-    subsequent cycle, forever. Migrates any existing capped list once.)"""
+    """Account each closed US paper trade exactly once, regardless of close order.
+
+    A highest-ID watermark is unsafe: trade 12 may close before trade 11.
+    During a one-time legacy migration preserve recorded realized P&L and seed
+    exact IDs from trades already closed at or below the historical watermark.
+    Existing open trades are deliberately NOT seeded, even with lower IDs.
+    Older historical accounting cannot be reconstructed reliably from the
+    watermark alone; expose that uncertainty for an explicit reconciliation.
+    """
+    notifications = []
     with _lock:
         s = _load()
-        watermark = int(s.get("max_accounted_id", 0) or 0)
-        old_ids = s.get("accounted_ids")
-        if not watermark and old_ids:
-            watermark = max(int(i) for i in old_ids)   # one-time migration
-        changed = bool(old_ids)
-        max_seen = watermark
-        for t in _trades(_WIN + _LOSS):        # ORDER BY id DESC — monotonic
+        closed = _trades(_WIN + _LOSS, strict=True)
+        was_migrated = bool(s.get("accounting_ids_migrated"))
+        accounted = {int(i) for i in (s.get("accounted_close_ids") or [])}
+        previous_ids = {int(i) for i in (s.get("accounted_ids") or [])}
+        old_watermark = int(s.get("max_accounted_id") or 0)
+        changed = not was_migrated or bool(previous_ids)
+        if not was_migrated:
+            # Prior code used a high-water mark, or derived one from a capped
+            # accounted_ids list. Preserve its recorded P&L without replaying
+            # historical closures. Open positions remain eligible when closed.
+            legacy_cutoff = max(old_watermark, max(previous_ids, default=0))
+            accounted.update(previous_ids)
+            accounted.update(int(t["id"]) for t in closed
+                             if int(t["id"]) <= legacy_cutoff)
+            needs_review = bool(legacy_cutoff)
+        else:
+            needs_review = bool(s.get("accounting_reconciliation_required"))
+
+        realized = float(s.get("realized_pnl") or 0.0)
+        highest = old_watermark
+        for t in reversed(closed):
             tid = int(t["id"])
-            if tid <= watermark:
-                break
+            if tid in accounted:
+                continue
             pnl = round(_net_pnl(t), 2)
-            s["realized_pnl"] = round(s.get("realized_pnl", 0.0) + pnl, 2)
-            max_seen = max(max_seen, tid)
+            realized = round(realized + pnl, 2)
+            accounted.add(tid)
+            highest = max(highest, tid)
             changed = True
-            _notify(f"CLOSED <b>{t['symbol']}</b> {'🟢' if pnl >= 0 else '🔴'} "
-                    f"${pnl:+,.2f} (net)\nPool: ${s['allocation'] + s['realized_pnl']:,.0f}")
-        s["max_accounted_id"] = max_seen
-        s.pop("accounted_ids", None)
-    if changed:
-        _save()
+            notifications.append(
+                f"CLOSED <b>{t['symbol']}</b> {'🟢' if pnl >= 0 else '🔴'} "
+                f"${pnl:+,.2f} (net)\\nPool: ${s['allocation'] + realized:,.0f}"
+            )
+
+        if changed:
+            before = dict(s)
+            s["realized_pnl"] = realized
+            s["accounted_close_ids"] = sorted(accounted)
+            s["accounting_ids_migrated"] = True
+            s["accounting_reconciliation_required"] = needs_review
+            s["max_accounted_id"] = highest  # for backward visibility only
+            s.pop("accounted_ids", None)
+            if _save() is False:
+                s.clear()
+                s.update(before)
+                raise OSError("US paper accounting checkpoint was not persisted")
+
+    # Notify only after the checkpoint is durable; never announce phantom P&L.
+    for message in notifications:
+        _notify(message)
 
 
 def _circuit_breaker() -> None:
