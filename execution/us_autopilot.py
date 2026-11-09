@@ -82,6 +82,7 @@ _DEFAULTS = {
     "accounted_close_ids": [],      # exact settled IDs; trades can close out of order
     "accounting_ids_migrated": False,
     "accounting_reconciliation_required": False,
+    "state_recovery_required": False,  # never bootstrap new money over lost/corrupt state
     "activity": [],
     "disarmed_reason": "",
     "reject_stats": {},            # {YYYY-MM-DD: {category: count}} — the funnel
@@ -103,7 +104,9 @@ def _load() -> dict:
         migrated = False
         try:
             if _STATE_FILE.exists():
-                on_disk = json.loads(_STATE_FILE.read_text())
+                on_disk = json.loads(_STATE_FILE.read_text(encoding="utf-8"))
+                if not isinstance(on_disk, dict):
+                    raise ValueError("US paper state must be a JSON object")
                 _state.update({k: v for k, v in on_disk.items() if k in _DEFAULTS})
                 # Older builds shipped the US PAPER engine disabled with a zero
                 # allocation. That was a product-default placeholder, not an
@@ -118,8 +121,20 @@ def _load() -> dict:
                     _state["allocation"] = float(os.getenv("QT_US_PAPER_CAPITAL", "100000") or 100000)
                     _state["armed"] = os.getenv("QT_US_PAPER_AUTO", "1").strip().lower() not in {"0", "false", "off", "no"}
                     migrated = True
+            else:
+                # A missing state file is normal only on a truly fresh install.
+                # Never reset virtual cash/P&L while an older US trade journal
+                # survives on disk. Restoring the original state is mandatory.
+                if _trades(_OPEN + _WIN + _LOSS, strict=True):
+                    raise ValueError("US paper state missing with trade history")
         except Exception as exc:
             log.warning("us_autopilot_load_failed", error=str(exc))
+            _state["armed"] = False
+            _state["allocation"] = 0.0
+            _state["disarmed_reason"] = "US_PAPER_STATE_RECOVERY_REQUIRED"
+            _state["state_recovery_required"] = True
+            _state["accounting_reconciliation_required"] = True
+            migrated = False
         if migrated:
             _save()
             _log_activity("legacy zero-state migrated to autonomous virtual PAPER mode")
@@ -135,6 +150,9 @@ def _save() -> bool:
     try:
         with _lock:
             data = dict(_load())
+            if data.get("state_recovery_required"):
+                log.warning("us_autopilot_save_blocked_unrestored_state")
+                return False
             _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
             tmp = _STATE_FILE.with_suffix(".json.tmp")
             with tmp.open("w", encoding="utf-8") as handle:
@@ -338,6 +356,8 @@ def apply_preset(name: str) -> tuple[bool, str]:
 
 def arm() -> tuple[bool, str]:
     s = _load()
+    if s.get("state_recovery_required"):
+        return False, "US paper state recovery required; restore durable state before arming"
     if s["allocation"] < 1000:
         return False, "Pehle allocation set karo (min $1,000)"
     with _lock:
@@ -380,6 +400,8 @@ def _in_window(now_et=None) -> bool:
 
 def _passes_gates(symbol: str, score: float, conviction: float) -> str | None:
     s = _load()
+    if s.get("state_recovery_required"):
+        return "US paper state recovery required"
     if not s["armed"]:
         return "not armed"
     if not _in_window():
