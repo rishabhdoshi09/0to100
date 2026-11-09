@@ -136,16 +136,16 @@ export function reconcileDashboard(
       }
     : incoming.fno
 
-  const market = !incoming.market.available && previous.market.available
+  const market = staleProjection
     ? {
-        ...previous.market,
+        ...incoming.market,
         available: false,
-        health: staleProjection ? 'Unavailable' : previous.market.health,
-        trade_stance: staleProjection
-          ? 'Prior snapshot only; current market stance is unverified.'
-          : previous.market.trade_stance,
+        health: 'Unavailable',
+        trade_stance: 'Prior snapshot only; current market stance is unverified.',
       }
-    : incoming.market
+    : !incoming.market.available && previous.market.available
+      ? { ...previous.market, available: false }
+      : incoming.market
 
   return {
     ...incoming,
