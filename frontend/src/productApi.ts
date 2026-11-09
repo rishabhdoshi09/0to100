@@ -895,6 +895,9 @@ export type HomeOperatingSystem = {
       trades_today?: number
       preset?: string
       disarmed_reason?: string
+      state_recovery_required?: boolean
+      state_recovery_error?: string | null
+      accounting_reconciliation_required?: boolean
       report?: Record<string, unknown>
       rejection_funnel?: Record<string, unknown>
     }

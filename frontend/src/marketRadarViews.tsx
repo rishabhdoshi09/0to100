@@ -33,6 +33,7 @@ import { SystemLaneInspector, SystemLaneStrip } from './homeSystemInspector'
 import type { CheckSystemSnapshot, SystemLane } from './backendControlPlane'
 import { DailyWrapList, magazineWrapLines } from './dailyWrap'
 import { FnoHomePanel } from './fnoHome'
+import { usPaperBlockers, usPaperModeLabel } from './usPaperTruth'
 import {
   bestSetupsFromRadar,
   dashCell,
@@ -759,8 +760,11 @@ function HomeOsCard({
           <span>US PAPER MARKET</span>
           <strong>
             {os.us_market.market_open ? 'US market open' : 'US market closed'}
-            {os.us_market.paper?.armed ? ' · paper auto ON' : ' · paper auto OFF'}
+            {usPaperModeLabel(os.us_market.paper)}
           </strong>
+          {usPaperBlockers(os.us_market.paper).map((row) => (
+            <small key={row} className="home-os-blocker">{row}</small>
+          ))}
           <small>
             {os.us_market.scan?.status || 'idle'} · {os.us_market.scan?.scope || 'S&P 500'} ·
             {' '}{os.us_market.scan?.count ?? 0} setups ·
