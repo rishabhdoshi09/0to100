@@ -175,6 +175,9 @@ def test_canonical_api_get_uses_persisted_first_recommendations(monkeypatch):
     assert routes[0].name == "recommendations_workspace_persisted_first"
 
     from product import recommendations_workspace as RW
+    from product import desk_pipeline
+
+    monkeypatch.setattr(desk_pipeline, "scan_is_fresh", lambda: True)
 
     def forbidden_sync_builder(**_kwargs):
         raise AssertionError("GET must never rebuild all recommendations synchronously")
@@ -217,3 +220,30 @@ def test_stale_scan_provenance_withholds_saved_buy_without_rebuild(monkeypatch):
     assert result["records_status"] == "STALE"
     assert not any(category.get("cards") for category in result["categories"])
     assert result["lifecycle"]["active"] == []
+
+
+def test_canonical_get_withholds_old_day_buy_even_when_saved_provenance_was_once_current(monkeypatch):
+    """A 6-Nov scan can stay persisted on 9-Nov; calendar proof must be rechecked."""
+    import importlib
+
+    from product import desk_pipeline
+
+    canonical = importlib.import_module("api.app")
+    route = next(
+        row for row in canonical.app.router.routes
+        if getattr(row, "path", None) == "/api/recommendations-workspace"
+        and "GET" in set(getattr(row, "methods", set()) or set())
+    )
+
+    monkeypatch.setattr(desk_pipeline, "scan_is_fresh", lambda: False)
+    monkeypatch.setattr(
+        RL, "build_fast_response",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("old-day saved BUY cards must not reach presentation")
+        ),
+    )
+    response = route.endpoint()
+    assert response["records_status"] == "STALE"
+    assert response["categories"] and all(c["count"] == 0 and not c["cards"] for c in response["categories"])
+    assert response["lifecycle"]["active"] == []
+    assert "No current verified NSE scan" in response["error"]
