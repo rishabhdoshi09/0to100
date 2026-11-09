@@ -444,3 +444,77 @@ without the owner's Mac. Live execution stays locked; everything is paper.
 3. F&O expiry reconciliation tooling (QT-PRA-032): a reviewed operator command that closes an expired paper position at the exchange's published settlement for that expiry, recorded as non-evidence. Until then the blocker holds new F&O entries.
 4. Port #285's strict, locked `autopilot_journal` write (QT-PRA-036) on its own.
 5. Profile `/api/dashboard` on the host before porting #285's dashboard snapshot cache (QT-PRA-037).
+
+## 10. Session 4b — India-first directive (2026-11-09)
+
+Owner directive: NSE equities and NSE F&O only; pause new US paper entries
+without deleting or corrupting US state; live money stays locked. Work
+continues on `claude/quantterm-rc-finalization-20261109` (PR #323). Base
+`db42e6cc` and canonical `eda3d95f` are unchanged.
+
+### 10.1 Evidence register
+
+Each item was reproduced first, either by a failing test or by running the
+prior code and showing the wrong result. Status: TESTED. Nothing is VERIFIED
+ON HOST.
+
+**QT-PRA-040 (directive): India-only mode.** `85f977b`
+- `core/market_scope.py` is the one authority. `QT_MARKET_SCOPE=INDIA_ONLY` is the default; `INDIA_AND_US` opts back in; any other value fails closed to INDIA_ONLY.
+- The existing `QT_US_MARKET_ENABLED=0` was not usable for this. It stops US scheduling entirely, and US exits and settlement only run inside `scan_us → review_cycle`, so open US positions would freeze.
+- In INDIA_ONLY:
+  - us_autopilot refuses entries at the execution owner (`_passes_gates`, `arm`, `on_setups`). `on_setups` evaluates nothing, so it records no counterfactual REJECT evidence.
+  - The supervisor schedules `US_MARKET_SCAN` with `mode=SUPERVISE_ONLY`; market_ops runs `review_cycle` only (stops, targets, trailing, time-stops, exact-once settlement, breaker). No universe scan runs. Scope is re-checked at execution time.
+  - A failed pass is `BLOCKED/US_PAPER_SUPERVISION_FAILED` and retries next slot, not every tick.
+  - The Home projection and parity report `PAUSED_INDIA_ONLY`.
+- Arm consent, positions, journal rows and learning records are untouched.
+- Regression: `tests/test_market_scope_india_only.py` (16). Tests of the US lane's own gates now opt in explicitly.
+
+**QT-PRA-041 (P2, intelligence): F&O volume confirmation compared a partial day with full days.** `9c31503`
+- During the session the live scan's "today" bar holds Kite's cumulative volume so far, while RVOL divided by the 20 completed-day average. At 10:00, a stock trading at about three times normal read RVOL ≈ 0.7: the prefilter rejected it (< 1.0) and the false-breakout test (< 1.2) flagged it. The 20-day turnover also included today's partial volume.
+- This failed conservative: fewer trades, never an unsafe one.
+- Ported from #286 (head `c6b47995`, RVOL pieces only): `product/fno_intraday_volume.same_clock_rvol`.
+  - Today is compared with the median of ≥5 prior sessions' observed Kite minute volume from 09:15 to the same minute; sessions with < 95% minute coverage are skipped. Nothing is extrapolated.
+  - At most 16 minute-history calls per scan, spent on the strongest price breaks first. The threshold is ≥ 1.2.
+  - Unavailable volume evidence gives `BLOCKED/FNO_INTRADAY_VOLUME_COVERAGE_UNAVAILABLE`, not "no setup".
+  - Turnover now uses completed sessions only.
+- The paper cycle still marks and exits positions when the directional scan is BLOCKED.
+- Regression: `tests/test_fno_intraday_volume.py` (7).
+
+**QT-PRA-042 (P1): option liquidity floors were in the wrong unit.** `34ff008`
+- `min_volume=100` and `min_oi=500` had no unit and were compared with Kite quote volume/OI. A user report on Kite's developer forum (not official documentation) says Kite gives those in contract units (shares). On that basis 500 units is two lots of a 250-share contract: the floor barely bound, and the liquidity score saturated at 500 units.
+- Floors are now 10 lots of volume and 50 lots of OI, measured with each contract's `lot_size`. A missing lot size is `LOT_SIZE_UNAVAILABLE`. Selected contracts record `volume_lots` and `oi_lots`.
+- If Kite in fact reports lots, this only makes the filter stricter (fail closed).
+- Regression: 2 tests in `tests/test_directional_option_selector.py`.
+
+**QT-PRA-043 (P1): the "52-week" high and low were two-year extremes.** `1df8afd`
+- `hi52 = max(high[:-1])` (and the short side's `lo52`) spanned the whole frame, and the bhavcopy store holds ~500 sessions. A new 52-week high below an older peak was labelled `BREAKOUT_RES`, and the laggard conviction cut (> 30% below the 52-week high) penalised a stock that was at its 52-week high. The short side mirrored this.
+- Both now use the prior `YEAR_SESSIONS` (the scanner's existing 250-session falling-knife lookback).
+- Regression: 2 tests in `TestUnifiedScanner` (both failed: `BREAKOUT_RES` / `BREAKDOWN_SUP`).
+
+**Home best-five (no defect found).** The chain is:
+1. `home_os._canonical_best_trade_rows` → `decision_simulation_gate.status`. It requires `scan_fresh` and `discovery_ready`; `discovery_ready` itself requires a non-empty scan id.
+2. Each row goes through `recommendation_truth.project_candidate_truth` and must be canonical BUY and ENTER_NOW. At most 5 rows are kept.
+3. A win probability is shown only when forward-paper effective N ≥ `CLAIM_MIN_EFFECTIVE_N`, labelled by source (`trading_thesis.decision_quality`). Historical-only evidence cannot produce a claimed probability.
+
+Registered, not changed:
+- **QT-PRA-044 (P2):** the equity scanner's intraday `vratio` has the same partial-day bias as QT-PRA-041. A same-clock fix across ~2,000 symbols needs a bounded minute-history design (price breaks only, as in F&O). It is conservative today.
+- **QT-PRA-045 (owner decision):** F&O "1% risk" is stop-based. The worst case for a long option is the premium, capped at 10% of F&O equity per trade and 10% per day, and an overnight gap can pass through a paper stop.
+- **QT-PRA-046 (host check):** confirm on the Mac that Kite option `oi`/`volume` equal NSE option-chain lots × `lot_size`.
+
+### 10.2 Release gates (supersedes 9.4)
+
+| Gate | State | Evidence / blocker |
+| --- | --- | --- |
+| P0 defects resolved and validated | PASS (code, hermetic) | No P0 found in 4b. Targeted, not exhaustive. |
+| No open P1 without a blocking decision | PASS (code) | QT-PRA-042/043 fixed. QT-PRA-045 needs an owner decision (registered). |
+| CI at release SHA | PENDING | All five workflows, push and PR, at this branch's final head (see PR #323). |
+| Data / portfolio invariants under fault injection | PARTIAL | Hermetic only. |
+| Backup restoration, hardware/storage, rollback | BLOCKED | No host access. |
+| Kite data, Telegram delivery, real browser | BLOCKED | No broker session or bot token; QT-PRA-046 needs the host. |
+| Real-host performance and 72 h soak | BLOCKED | No host access. |
+| Security controls | PARTIAL | Unchanged; live interlock untouched. |
+| Independent release review | NOT TESTED | |
+
+**Verdict: NOT READY.** Same reasons as 9.4: host gates are BLOCKED and no
+independent review has happened. India-only mode is active by default; all
+trading is paper.
