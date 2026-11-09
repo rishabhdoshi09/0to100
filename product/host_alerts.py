@@ -19,6 +19,7 @@ class AlertResult:
     delivered: bool
     channel: str = ""
     detail: str = ""
+    message_id: int | None = None   # Telegram's own receipt when delivered there
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -44,6 +45,27 @@ def _safe_failure(exc: Exception) -> str:
     return f"{type(exc).__name__}: alert delivery failed"
 
 
+def _telegram_receipt(raw: bytes, chat: str) -> tuple[int | None, str]:
+    """Telegram's confirmation for the configured chat, or why there is none."""
+    try:
+        body = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return None, "unconfirmed: response is not Telegram JSON"
+    if not isinstance(body, dict) or body.get("ok") is not True:
+        return None, "unconfirmed: Telegram ok=false"
+    result = body.get("result") if isinstance(body.get("result"), dict) else {}
+    message_id = result.get("message_id")
+    if isinstance(message_id, bool) or not isinstance(message_id, int):
+        return None, "unconfirmed: no message_id"
+    got = result.get("chat") if isinstance(result.get("chat"), dict) else {}
+    wanted = str(chat or "").strip()
+    same = (str(got.get("username") or "").lower() == wanted[1:].lower()
+            if wanted.startswith("@") else str(got.get("id")) == wanted)
+    if not same:
+        return None, "unconfirmed: delivered to a different chat"
+    return message_id, "delivered"
+
+
 def send_operational_alert(message: str, *, timeout: float = 8.0) -> AlertResult:
     token, chat, webhook = _configured_destinations()
     body = str(message or "").strip()[:3500]
@@ -56,8 +78,15 @@ def send_operational_alert(message: str, *, timeout: float = 8.0) -> AlertResult
         request = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
-                ok = 200 <= int(response.status) < 300
-            return AlertResult(True, ok, "telegram", "delivered" if ok else "non-2xx response")
+                status = int(response.status)
+                raw = response.read(65536) if 200 <= status < 300 else b""
+            if not 200 <= status < 300:
+                return AlertResult(True, False, "telegram", "non-2xx response")
+            message_id, reason = _telegram_receipt(raw, chat)
+            if message_id is None:
+                # HTTP 2xx alone is not delivery (proxy/portal page, ok=false, other chat).
+                return AlertResult(True, False, "telegram", reason)
+            return AlertResult(True, True, "telegram", "delivered", message_id)
         except Exception as exc:
             return AlertResult(True, False, "telegram", _safe_failure(exc))
 

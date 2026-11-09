@@ -95,6 +95,9 @@ class AlertEngine:
         self._chat_id = _telegram_cred("TELEGRAM_CHAT_ID")
         self.enabled  = bool(self._token and self._chat_id)
         self.last_error = ""
+        # Telegram's own message ids for the chunks of the last send(): the
+        # only proof of delivery. Empty means nothing was confirmed.
+        self.last_message_ids: list[int] = []
 
     # ------------------------------------------------------------------
     # Public helpers
@@ -134,10 +137,47 @@ class AlertEngine:
         text = re.sub(r"<[^>]+>", "", text)
         return html.unescape(text)
 
+    def _confirmed_message_id(self, resp) -> int | None:
+        """The Bot API's own delivery confirmation, or None.
+
+        HTTP 2xx alone is not delivery: a proxy or captive-portal page, an
+        ``{"ok": false}`` body, or a reply for another chat must not count.
+        """
+        try:
+            body = resp.json()
+        except Exception:
+            self.last_error = f"HTTP {resp.status_code}: response is not Telegram JSON"
+            return None
+        if not isinstance(body, dict) or body.get("ok") is not True:
+            desc = str((body or {}).get("description") or "") if isinstance(body, dict) else ""
+            self.last_error = f"HTTP {resp.status_code}: Telegram ok=false {desc[:120]}".strip()
+            return None
+        result = body.get("result") if isinstance(body.get("result"), dict) else {}
+        message_id = result.get("message_id")
+        if isinstance(message_id, bool) or not isinstance(message_id, int):
+            self.last_error = "Telegram confirmed no message_id"
+            return None
+        chat = result.get("chat") if isinstance(result.get("chat"), dict) else {}
+        configured = str(self._chat_id or "").strip()
+        if configured.startswith("@"):
+            same_chat = str(chat.get("username") or "").lower() == configured[1:].lower()
+        else:
+            same_chat = str(chat.get("id")) == configured
+        if not same_chat:
+            self.last_error = "Telegram confirmed delivery to a different chat"
+            return None
+        return message_id
+
     def _post_chunk(self, url: str, payload: dict) -> bool:
         try:
             resp = requests.post(url, json=payload, timeout=8)
             if resp.ok:
+                message_id = self._confirmed_message_id(resp)
+                if message_id is None:
+                    logger.warning("Telegram delivery unconfirmed: %s", self.last_error)
+                    print(f"[TELEGRAM] send unconfirmed: {self.last_error}", flush=True)
+                    return False
+                self.last_message_ids.append(message_id)
                 self.last_error = ""
                 return True
             detail = (resp.text or "")[:180]
@@ -156,11 +196,14 @@ class AlertEngine:
         POST *message* to Telegram sendMessage. Optional reply_markup
         attaches inline action buttons (see alerts/telegram_actions.py).
         Long messages auto-split at the 4096-char API cap (buttons ride
-        on the last chunk). Returns True only if EVERY chunk delivered.
+        on the last chunk). Returns True only if Telegram confirmed EVERY
+        chunk (ok=true, a message_id, the configured chat); the confirmed
+        ids are in ``last_message_ids``.
         HTML parse failures retry the same chunk as plain text so a markup
         reject cannot silence setups / breakout watches.
         """
         self.last_error = ""
+        self.last_message_ids = []
         if not self.enabled:
             self.last_error = "not_configured"
             return False
