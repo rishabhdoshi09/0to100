@@ -77,7 +77,10 @@ _DEFAULTS = {
     "breakeven_trigger_pct": 2.0,
     "trades_today": {},
     "traded_symbols": {},
-    "max_accounted_id": 0,         # high-water mark — see _account_closed()
+    "max_accounted_id": 0,         # legacy checkpoint; never infer closure order from IDs
+    "accounted_close_ids": [],      # exact settled IDs; trades can close out of order
+    "accounting_ids_migrated": False,
+    "accounting_reconciliation_required": False,
     "activity": [],
     "disarmed_reason": "",
     "reject_stats": {},            # {YYYY-MM-DD: {category: count}} — the funnel
@@ -122,16 +125,26 @@ def _load() -> dict:
         return _state
 
 
-def _save() -> None:
+def _save() -> bool:
+    """Atomically persist the paper state; report failure to accounting callers.
+
+    Serialize the full write under the process lock so a concurrent status or
+    accounting update cannot overwrite a more recent checkpoint with stale JSON.
+    """
     try:
         with _lock:
             data = dict(_load())
-        _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = _STATE_FILE.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(data, indent=1))
-        tmp.replace(_STATE_FILE)
+            _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _STATE_FILE.with_suffix(".json.tmp")
+            with tmp.open("w", encoding="utf-8") as handle:
+                json.dump(data, handle, indent=1)
+                handle.flush()
+                os.fsync(handle.fileno())
+            tmp.replace(_STATE_FILE)
+        return True
     except Exception as exc:
         log.warning("us_autopilot_save_failed", error=str(exc))
+        return False
 
 
 def _log_activity(msg: str) -> None:
@@ -700,35 +713,68 @@ def _close_positions() -> None:
 
 
 def _account_closed() -> None:
-    """Fold closed trades into realized_pnl. High-water mark (max trade id
-    already folded in), not a bounded "seen ids" list — trade ids are
-    monotonic (SQLite autoincrement) so a watermark can never lose track,
-    however many trades accumulate. (A 500-id-capped list used to do this:
-    once total closed trades passed 500, the oldest ids fell out of the
-    truncated window and got re-folded into realized_pnl on every
-    subsequent cycle, forever. Migrates any existing capped list once.)"""
+    """Account each closed US paper trade exactly once, regardless of close order.
+
+    A highest-ID watermark is unsafe: trade 12 may close before trade 11.
+    During a one-time legacy migration preserve recorded realized P&L and seed
+    exact IDs from trades already closed at or below the historical watermark.
+    Existing open trades are deliberately NOT seeded, even with lower IDs.
+    Older historical accounting cannot be reconstructed reliably from the
+    watermark alone; expose that uncertainty for an explicit reconciliation.
+    """
+    notifications = []
     with _lock:
         s = _load()
-        watermark = int(s.get("max_accounted_id", 0) or 0)
-        old_ids = s.get("accounted_ids")
-        if not watermark and old_ids:
-            watermark = max(int(i) for i in old_ids)   # one-time migration
-        changed = bool(old_ids)
-        max_seen = watermark
-        for t in _trades(_WIN + _LOSS):        # ORDER BY id DESC — monotonic
+        closed = _trades(_WIN + _LOSS, strict=True)
+        was_migrated = bool(s.get("accounting_ids_migrated"))
+        accounted = {int(i) for i in (s.get("accounted_close_ids") or [])}
+        previous_ids = {int(i) for i in (s.get("accounted_ids") or [])}
+        old_watermark = int(s.get("max_accounted_id") or 0)
+        changed = not was_migrated or bool(previous_ids)
+        if not was_migrated:
+            # Prior code used a high-water mark, or derived one from a capped
+            # accounted_ids list. Preserve its recorded P&L without replaying
+            # historical closures. Open positions remain eligible when closed.
+            legacy_cutoff = max(old_watermark, max(previous_ids, default=0))
+            accounted.update(previous_ids)
+            accounted.update(int(t["id"]) for t in closed
+                             if int(t["id"]) <= legacy_cutoff)
+            needs_review = bool(legacy_cutoff)
+        else:
+            needs_review = bool(s.get("accounting_reconciliation_required"))
+
+        realized = float(s.get("realized_pnl") or 0.0)
+        highest = old_watermark
+        for t in reversed(closed):
             tid = int(t["id"])
-            if tid <= watermark:
-                break
+            if tid in accounted:
+                continue
             pnl = round(_net_pnl(t), 2)
-            s["realized_pnl"] = round(s.get("realized_pnl", 0.0) + pnl, 2)
-            max_seen = max(max_seen, tid)
+            realized = round(realized + pnl, 2)
+            accounted.add(tid)
+            highest = max(highest, tid)
             changed = True
-            _notify(f"CLOSED <b>{t['symbol']}</b> {'🟢' if pnl >= 0 else '🔴'} "
-                    f"${pnl:+,.2f} (net)\nPool: ${s['allocation'] + s['realized_pnl']:,.0f}")
-        s["max_accounted_id"] = max_seen
-        s.pop("accounted_ids", None)
-    if changed:
-        _save()
+            notifications.append(
+                f"CLOSED <b>{t['symbol']}</b> {'🟢' if pnl >= 0 else '🔴'} "
+                f"${pnl:+,.2f} (net)\\nPool: ${s['allocation'] + realized:,.0f}"
+            )
+
+        if changed:
+            before = dict(s)
+            s["realized_pnl"] = realized
+            s["accounted_close_ids"] = sorted(accounted)
+            s["accounting_ids_migrated"] = True
+            s["accounting_reconciliation_required"] = needs_review
+            s["max_accounted_id"] = highest  # for backward visibility only
+            s.pop("accounted_ids", None)
+            if _save() is False:
+                s.clear()
+                s.update(before)
+                raise OSError("US paper accounting checkpoint was not persisted")
+
+    # Notify only after the checkpoint is durable; never announce phantom P&L.
+    for message in notifications:
+        _notify(message)
 
 
 def _circuit_breaker() -> None:
