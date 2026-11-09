@@ -140,6 +140,7 @@ export function reconcileDashboard(
     ? {
         ...previous.market,
         available: false,
+        health: staleProjection ? 'Unavailable' : previous.market.health,
         trade_stance: staleProjection
           ? 'Prior snapshot only; current market stance is unverified.'
           : previous.market.trade_stance,
