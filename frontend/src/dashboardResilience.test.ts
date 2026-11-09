@@ -188,6 +188,27 @@ describe('reconcileDashboard', () => {
     expect(result.data.scan_records).toBe(1)
   })
 
+  it('keeps saved research but never revives BUY conviction from a stale server projection', () => {
+    const previous = dashboard()
+    const incoming = dashboard({
+      response_meta: {
+        source: 'READ_ONLY_DESK_PROJECTION', status: 'WARMING', stale: true, age_s: null,
+      },
+      scan: { available: false, universe_size: 0, records: [], summary: {}, provenance: { data_current: false } },
+      conviction: [],
+      data: { ...previous.data, ready: false, history_current: false, blockers: ['refreshing'] },
+    })
+    const result = reconcileDashboard(previous, incoming)
+    expect(result.scan.records).toHaveLength(1)
+    expect(result.scan.available).toBe(false)
+    expect(result.scan.provenance?.data_current).toBe(false)
+    expect(result.data.ready).toBe(false)
+    expect(result.conviction).toEqual([])
+    expect(result.response_meta?.stale).toBe(true)
+    expect(result.market.available).toBe(false)
+    expect(result.market.health).toBe('Unavailable')
+  })
+
   it('uses newer durable paper and autonomy history when the incoming read has it', () => {
     const previous = dashboard()
     const incoming = dashboard({

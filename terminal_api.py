@@ -24,11 +24,13 @@ from fastapi.responses import JSONResponse
 
 from logger import quiet_uvicorn_health_access
 from core.runtime_paths import logs_dir, logs_path
+from product.desk_read_snapshot import DeskReadSnapshot
 
 ROOT = Path(__file__).resolve().parent
 OPS_ROOT = logs_dir() / "market_ops"
 OPS_RUNTIME = OPS_ROOT / "runtime.json"
 OPS_DB = OPS_ROOT / "jobs.db"
+_DASHBOARD_READ_CACHE = DeskReadSnapshot()
 
 app = FastAPI(title="QuantTerm Terminal API", version="0.4.0")
 quiet_uvicorn_health_access()
@@ -1362,8 +1364,27 @@ def health() -> dict:
 
 
 @app.get("/api/dashboard")
+def dashboard_http() -> dict:
+    """Serve a bounded, explicitly labelled read projection, never trading authority.
+
+    Scan jobs, the paper supervisor and the Kite data refresh use independent
+    workers and must never be held hostage by browser dashboard polling. The
+    underlying expensive projection still retains the slow-read admission gate.
+    """
+    return _DASHBOARD_READ_CACHE.read(
+        dashboard,
+        lambda: _empty_dashboard(
+            "Desk read projection is warming. No current trade authority until verification completes.",
+            {
+                "available": False, "scanned_at": "", "universe_size": 0,
+                "summary": {}, "records": [], "provenance": {"data_current": False},
+            },
+        ),
+    )
+
+
 def dashboard() -> dict:
-    """Read-only desk snapshot with bounded work admission."""
+    """Synchronous bounded builder kept for explicit tests and background reads."""
     with _bounded_status_read("/api/dashboard"):
         return _compose_dashboard()
 

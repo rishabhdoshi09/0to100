@@ -256,13 +256,18 @@ function App() {
     if (!refreshGate.current.tryEnter()) return
     try {
       const payload = await fetchDashboard()
+      const staleProjection = payload.response_meta?.stale === true
       setDashboard((prev) => {
         const next = dashboardHasWork(prev) && !dashboardHasWork(payload)
           ? {
               ...payload,
-              scan: prev.scan.records.length ? prev.scan : payload.scan,
+              scan: prev.scan.records.length
+                ? staleProjection
+                  ? { ...prev.scan, available: false, provenance: { ...prev.scan.provenance, data_current: false } }
+                  : prev.scan
+                : payload.scan,
               long_term: prev.long_term.records.length ? prev.long_term : payload.long_term,
-              conviction: prev.conviction.length ? prev.conviction : payload.conviction,
+              conviction: staleProjection ? [] : prev.conviction.length ? prev.conviction : payload.conviction,
               data: {
                 ...payload.data,
                 scan_saved: payload.data.scan_saved || prev.data.scan_saved,
@@ -273,7 +278,7 @@ function App() {
         writeSessionJson('quantterm-dashboard', slimDashboard(next))
         return next
       })
-      setError('')
+      setError(staleProjection ? 'DESK_SNAPSHOT_REFRESHING: prior rows are research-only until a new verified read completes.' : '')
       const allSymbols = [
         ...payload.scan.records.map((row) => row.symbol),
         ...payload.long_term.records.map((row) => row.symbol),
