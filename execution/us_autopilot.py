@@ -78,6 +78,7 @@ _DEFAULTS = {
     "trades_today": {},
     "traded_symbols": {},
     "max_accounted_id": 0,         # legacy checkpoint; never infer closure order from IDs
+    "accounted_ids": [],            # legacy capped list; accepted only during migration
     "accounted_close_ids": [],      # exact settled IDs; trades can close out of order
     "accounting_ids_migrated": False,
     "accounting_reconciliation_required": False,
