@@ -205,6 +205,8 @@ describe('reconcileDashboard', () => {
     expect(result.data.ready).toBe(false)
     expect(result.conviction).toEqual([])
     expect(result.response_meta?.stale).toBe(true)
+    expect(result.market.available).toBe(false)
+    expect(result.market.health).toBe('Unavailable')
   })
 
   it('uses newer durable paper and autonomy history when the incoming read has it', () => {
