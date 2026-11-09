@@ -15,6 +15,7 @@ journal so they never collide with the NSE ledger or Report Card.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sqlite3
 import threading
@@ -119,10 +120,13 @@ def _validate_saved_state(payload: object) -> dict:
         raise ValueError("US paper state is not a JSON object")
     if not isinstance(payload.get("armed"), bool):
         raise ValueError("US paper arm/disarm consent is absent or invalid")
-    if not isinstance(payload.get("trades_today"), dict):
-        raise ValueError("US paper daily trade limits are absent or invalid")
-    if not isinstance(payload.get("traded_symbols"), dict):
-        raise ValueError("US paper traded-symbol history is absent or invalid")
+    # Older *disarmed* state files legitimately lacked the daily dictionaries.
+    # They remain disarmed. An armed state cannot silently lose its limits.
+    for key in ("trades_today", "traded_symbols"):
+        if key in payload and not isinstance(payload[key], dict):
+            raise ValueError(f"US paper {key} is invalid")
+        if payload["armed"] and key not in payload:
+            raise ValueError(f"armed US paper state is missing {key}")
     if not isinstance(payload.get("max_accounted_id"), int) or isinstance(
         payload.get("max_accounted_id"), bool
     ):
@@ -131,7 +135,7 @@ def _validate_saved_state(payload: object) -> dict:
         value = payload.get(key)
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError(f"US paper {key} is absent or invalid")
-        if not __import__("math").isfinite(float(value)):
+        if not math.isfinite(float(value)):
             raise ValueError(f"US paper {key} is not finite")
     return payload
 
