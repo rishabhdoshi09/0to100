@@ -83,6 +83,7 @@ def test_overdue_cache_returns_research_but_never_buy_authority():
     assert stale["scan"]["provenance"]["data_current"] is False
     assert stale["conviction"] == []
     assert stale["market"]["available"] is False
+    assert stale["market"]["health"] == "Unavailable"
     assert stale["fno"]["available"] is False
     assert len(cache.read(build, fallback)["scan"]["records"]) == 1
     assert builds[0] == 2
