@@ -5245,6 +5245,135 @@ class TestUsPaperLaneRiskRails:
         assert account_exposure_gate("TCS", qty=10, entry=100.0, stop=95.0)["ok"] is True
 
 
+class TestFoExpiredPositionIsNeverSilentlyCarried:
+    """A held option whose contract has expired is no longer quoted by Kite.
+    The cycle used to skip it silently forever: its slot and premium risk
+    stayed in the 5% account budget and its outcome was never booked. It must
+    block new F&O entries and be surfaced for reconciliation. No settlement
+    price is invented for it."""
+
+    IST = __import__("datetime").timezone(__import__("datetime").timedelta(hours=5, minutes=30))
+
+    @staticmethod
+    def _candidate(underlying, option_symbol, *, expiry):
+        return {
+            "symbol": underlying, "direction": "LONG", "decision": "PAPER_OPTION_CANDIDATE",
+            "setup": {"score": 82.0, "expected_move": {"holding_days": 4}},
+            "selected_contract": {
+                "symbol": option_symbol, "option_type": "CE", "eligible": True,
+                "lot_size": 25, "ask": 50.0, "score": 86.0, "expiry": expiry,
+                "context_key": "LONG|LONG_BUILDUP|CTX",
+                "trade_plan": {"entry": 50.0, "stop": 40.0, "target": 70.0},
+            },
+        }
+
+    class _Client:
+        def __init__(self, unquoted=()):
+            self.unquoted = set(unquoted)
+
+        def quote(self, keys):
+            return {
+                key: {
+                    "last_price": 52.0, "volume": 5000, "oi": 20000,
+                    "ohlc": {"open": 50.0, "high": 55.0, "low": 48.0, "close": 49.0},
+                    "depth": {"buy": [{"price": 51.0}], "sell": [{"price": 52.0}]},
+                }
+                for key in keys if key.split(":", 1)[-1] not in self.unquoted
+            }
+
+    def test_expired_unquoted_position_blocks_new_entries(self, tmp_path):
+        from datetime import datetime
+        from product.fo_paper_runtime import run_fo_paper_cycle
+        from product.fo_paper_store import FoPaperStore
+
+        path = tmp_path / "fo.sqlite3"
+        opened_at = datetime(2026, 9, 24, 10, 15, tzinfo=self.IST)
+        with FoPaperStore(path) as store:
+            first = run_fo_paper_cycle(
+                {"available": True, "candidates": [
+                    self._candidate("RELIANCE", "RELIANCE26SEPCE", expiry="2026-09-29")]},
+                client=self._Client(), now_ist=opened_at, allow_new_entries=True,
+                store=store, capital=200_000,
+            )
+            assert first["opened_count"] == 1
+            assert first["expired_unsettled_positions"] == []
+            assert first["operator_action_required"] is False
+
+        after_expiry = datetime(2026, 10, 1, 11, 0, tzinfo=self.IST)
+        with FoPaperStore(path) as store:
+            later = run_fo_paper_cycle(
+                {"available": True, "candidates": [
+                    self._candidate("TCS", "TCS26OCTCE", expiry="2026-10-27")]},
+                client=self._Client(unquoted={"RELIANCE26SEPCE"}), now_ist=after_expiry,
+                allow_new_entries=True, store=store, capital=200_000,
+            )
+            assert later["opened_count"] == 0
+            assert later["settled_count"] == 0            # no invented settlement
+            assert later["open_count"] == 1
+            assert later["operator_action_required"] is True
+            assert "FNO_EXPIRED_POSITION_UNSETTLED" in later["blockers"]
+            expired = later["expired_unsettled_positions"]
+            assert [row["option_symbol"] for row in expired] == ["RELIANCE26SEPCE"]
+            assert expired[0]["expiry"] == "2026-09-29"
+            assert later["unquoted_open_positions"] == ["RELIANCE26SEPCE"]
+            assert {"symbol": "TCS", "reason": "EXPIRED_POSITION_UNSETTLED"} in later["skipped"]
+            # The position stays durable and counted; nothing is dropped.
+            assert [p["option_symbol"] for p in store.load_positions()] == ["RELIANCE26SEPCE"]
+
+    def test_unexpired_position_without_a_quote_is_reported_not_blocking(self, tmp_path):
+        from datetime import datetime
+        from product.fo_paper_runtime import run_fo_paper_cycle
+        from product.fo_paper_store import FoPaperStore
+
+        path = tmp_path / "fo.sqlite3"
+        opened_at = datetime(2026, 9, 24, 10, 15, tzinfo=self.IST)
+        with FoPaperStore(path) as store:
+            run_fo_paper_cycle(
+                {"available": True, "candidates": [
+                    self._candidate("RELIANCE", "RELIANCE26OCTCE", expiry="2026-10-27")]},
+                client=self._Client(), now_ist=opened_at, allow_new_entries=True,
+                store=store, capital=200_000,
+            )
+        with FoPaperStore(path) as store:
+            later = run_fo_paper_cycle(
+                {"available": True, "candidates": [
+                    self._candidate("TCS", "TCS26OCTCE", expiry="2026-10-27")]},
+                client=self._Client(unquoted={"RELIANCE26OCTCE"}),
+                now_ist=datetime(2026, 9, 25, 11, 0, tzinfo=self.IST),
+                allow_new_entries=True, store=store, capital=200_000,
+            )
+            assert later["unquoted_open_positions"] == ["RELIANCE26OCTCE"]
+            assert later["expired_unsettled_positions"] == []
+            assert later["operator_action_required"] is False
+            assert later["opened_count"] == 1
+
+
+    def test_desk_projection_surfaces_the_blocker_from_the_durable_book(self):
+        from datetime import datetime
+        from product.fo_desk import build_fo_desk
+        desk = build_fo_desk(
+            {}, {"available": True, "open_positions": [
+                {"option_symbol": "RELIANCE26SEPCE", "underlying": "RELIANCE",
+                 "trade_id": "T1", "expiry": "2026-09-29", "risk_amount": 250.0},
+                {"option_symbol": "TCS26OCTCE", "underlying": "TCS",
+                 "trade_id": "T2", "expiry": "2026-10-27", "risk_amount": 250.0},
+            ]},
+            now=datetime(2026, 10, 1, 11, 0, tzinfo=self.IST),
+        )
+        assert desk["operator_action_required"] is True
+        assert desk["blockers"][0] == {"reason": "FNO_EXPIRED_POSITION_UNSETTLED", "count": 1}
+        assert [r["trade_id"] for r in desk["expired_unsettled_positions"]] == ["T1"]
+        assert len(desk["open_positions"]) == 2    # still shown as held, not dropped
+
+    def test_expiry_day_itself_is_not_expired(self):
+        from product.fo_paper import expired_unsettled_positions
+        rows = [{"option_symbol": "X", "expiry": "2026-09-29"},
+                {"option_symbol": "Y", "expiry": "29SEP"},       # unparseable: unknown
+                {"option_symbol": "Z", "expiry": ""}]
+        assert expired_unsettled_positions(rows, "2026-09-29") == []
+        assert [r["option_symbol"] for r in expired_unsettled_positions(rows, "2026-09-30")] == ["X"]
+
+
 class TestPaperTradeIsOnlyOkWhenRecorded:
     def test_unrecorded_paper_trade_reports_failure(self, tmp_path, monkeypatch):
         import execution.trade_executor as te
