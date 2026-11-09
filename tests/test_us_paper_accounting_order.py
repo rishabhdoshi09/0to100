@@ -202,3 +202,26 @@ def test_missing_us_state_with_existing_trade_history_never_rearms(
     assert us._save() is False
     assert not us._STATE_FILE.exists()
     assert not sent
+
+
+def test_review_cycle_propagates_accounting_failure_to_operation_layer(
+    tmp_path, monkeypatch,
+):
+    us, _, sent = _setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(us, "_close_positions", lambda: None)
+
+    def failed_accounting():
+        raise OSError("journal unavailable")
+
+    monkeypatch.setattr(us, "_account_closed", failed_accounting)
+    with pytest.raises(OSError, match="journal unavailable"):
+        us.review_cycle()
+    assert sent == []
+
+
+def test_review_cycle_refuses_unrestored_state(tmp_path, monkeypatch):
+    us, _, _ = _setup(tmp_path, monkeypatch)
+    us._STATE_FILE.write_text("not valid JSON", encoding="utf-8")
+    monkeypatch.setattr(us, "_state", {})
+    with pytest.raises(RuntimeError, match="US_PAPER_STATE_RECOVERY_REQUIRED"):
+        us.review_cycle()
