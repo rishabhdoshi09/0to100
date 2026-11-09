@@ -40,6 +40,7 @@ export function reconcileDashboard(
   previous: DashboardPayload,
   incoming: DashboardPayload,
 ): DashboardPayload {
+  const staleProjection = incoming.response_meta?.stale === true
   const preserveScan = incoming.scan.available === false
     && !hasScanRows(incoming.scan)
     && hasScanRows(previous.scan)
@@ -47,6 +48,9 @@ export function reconcileDashboard(
     ? {
         ...previous.scan,
         available: false,
+        provenance: staleProjection
+          ? { ...previous.scan.provenance, data_current: false }
+          : previous.scan.provenance,
       }
     : incoming.scan
 
@@ -61,9 +65,11 @@ export function reconcileDashboard(
       }
     : incoming.long_term
 
-  const conviction = preserveScan && incoming.conviction.length === 0 && previous.conviction.length > 0
-    ? previous.conviction
-    : incoming.conviction
+  const conviction = staleProjection
+    ? []
+    : preserveScan && incoming.conviction.length === 0 && previous.conviction.length > 0
+      ? previous.conviction
+      : incoming.conviction
 
   const preservePaper = incoming.paper.available === false
     && !hasPaperHistory(incoming.paper)
