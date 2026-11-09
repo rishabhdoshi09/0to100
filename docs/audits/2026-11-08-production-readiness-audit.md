@@ -524,3 +524,79 @@ Registered, not changed:
 **Verdict: NOT READY.** Same reasons as 9.4: host gates are BLOCKED and no
 independent review has happened. India-only mode is active by default; all
 trading is paper.
+
+## 11. P0 incident: a completed scan never reached Opportunities (2026-11-09)
+
+Branch `claude/opportunities-p0-recovery-20261109`, based on
+`integration/quantterm-india-universal-20261109` @ `980b922`. Paper only; the
+live interlock is untouched.
+
+**Host access: none.** No folder on the owner's Mac is shared with this cloud
+session (`list_computer_folders` returned none). Nothing here was run on the
+Mac: launchd, the sparsebundle runtime, the installed SHA, backups, Chrome on
+the host, deployment and host measurements are all BLOCKED.
+
+### 11.1 Reproduction (real app, real browser; sandbox, not the host)
+
+- **Fixture.** `tests/fixtures/opportunities` holds the output of the real `run_whole_market_scan(save=True)`: real scanner, coverage ledger, long-term overlay and recommendation publication. Only the OHLCV input is synthetic, because NSE archives are blocked by this environment's proxy. It has 100 records and 22 BUY verdicts. A larger runtime of the same kind (827 records) was used for browser and latency runs.
+- **Routes.** In `api.app:app`, which `run_quantterm_complete.sh → run_quantterm.sh` serves, there were two `GET /api/recommendations-workspace` routes, `product.observer_api` (served) and `api.runtime` (shadowed). Under `terminal_product_api_parallel:app`, which the launchd host supervisor serves, a startup hook replaced them with the persisted-first route. The handler therefore depended on the launch module.
+- **Browser.** Chromium (Playwright) against uvicorn plus the Vite desk:
+  - Opening Opportunities fired `POST /api/controls/RUN_SCAN_NOW` in the first second, because the dashboard read cache's WARMING placeholder had an empty scan.
+  - "Desk snapshot refreshing · saved data only" flapped on through the minute (25, 40, 45, 55 and 60 s), and recommendations were hidden while it showed.
+  - `/api/access` was requested once with a 4 s timeout; a failure would have set PUBLIC READ ONLY for the session.
+  - PREPARING DATA came from the dashboard cache flag, not official history.
+
+### 11.2 Defects fixed (each failed first, then passes)
+
+| ID | Pri | Defect | Fix | Regression | Residual risk |
+| --- | --- | --- | --- | --- | --- |
+| QT-PRA-048 | P0 | Duplicate synchronous Opportunities GET; persisted-first route only under one launch module; the request rebuilt the workspace ("read waited 5.0 s") | `7f63791` | `tests/test_opportunities_p0.py` | `?refresh=true` no longer recomputes on GET; refresh goes through a scan |
+| QT-PRA-049 | P1 | Observer GET served yesterday's saved cards when the scan was missing | `7f63791` | `test_missing_scan_withholds_saved_cards` | Opportunities stays empty during a scan outage (intended) |
+| QT-PRA-050 | P1 | The browser judged currency from the 15 s dashboard cache | `7f63791` (`display_authority`), `66c8829` | vitest `recommendationAuthority.test.ts` | Older backends fall back to the previous rule |
+| QT-PRA-051 | P0 | Opening Opportunities started a whole-market rescan | `66c8829` | vitest `opportunitiesReadOnly.test.ts`; browser: no `RUN_SCAN_NOW` | First-run scans now come from the scheduler / explicit click only |
+| QT-PRA-052 | P1 | Dashboard cache rebuilt only after expiry, so every other 10 s poll was REFRESHING | `6a11363` | `test_snapshot_refreshes_ahead_so_steady_polls_stay_current` (was 6/12 REFRESHING) | One background build per ~7.5 s while polled |
+| QT-PRA-053 | P1 | PREPARING DATA shown from cache staleness while official history was current | `66c8829` | vitest `deskStartupState.test.ts` | — |
+| QT-PRA-054 | P1 | One failed `/api/access` → PUBLIC READ ONLY for the session | `66c8829` | vitest `accessTruth.test.ts` | Relies on `/api/health` access projection (canonical) |
+| QT-PRA-055 | P2 | A failed recommendation publication was silent | `ccf37de` | `test_failed_publication_is_explained_not_silent` | — |
+| QT-PRA-056 | P2 | `scan_is_fresh()` ignored `QT_SCAN_PATH`; a Kite-freshness test had become vacuous | `7f63791` | `test_scan_freshness_reads_the_same_scan_artifact...` | — |
+| QT-PRA-057 | P1 | Telegram "sent" = any HTTP 2xx; no message id | `2c51fcd` | `tests/test_telegram_delivery_truth.py` (13) | A chat id written differently from what Telegram returns now reads as unconfirmed; check on host |
+| QT-PRA-058 | P2 | Scan JSON parsed twice per Opportunities read | `f45e2c0` | existing suites | `scan_is_fresh()` still re-reads the scan (shared authority) |
+
+**`owner_paused`: no defect.** It comes from `owner_state.json new_entries_paused` (the owner's PAUSE or HALT control, or a disabled PAPER_AUTO preference on first start). It blocks only new paper entries; exits, scans, research and alerts continue. It was not changed.
+
+### 11.3 After the fix (same browser harness, sandbox)
+
+- **As-is runtime** (no official history in the sandbox):
+  - no `RUN_SCAN_NOW`;
+  - the refreshing banner appears only during the first 10 s warm-up;
+  - the header shows HISTORY STALE, which is true here;
+  - Opportunities shows "Saved scan is not current for this session";
+  - no console errors.
+- **Scan freshness forced true** (display verification only): the published workspace renders. It shows the decision gate and the Super Trends category: "Checked 78 scored names… Good setups: 48; watch: 30".
+- **Latency** (4-vCPU Linux container, 827-record runtime, not the Mac):
+
+  | Route | Sequential p50 / p95 / p99 | 8-way concurrent p50 / p95 / p99 |
+  | --- | --- | --- |
+  | `/api/health` | 10 / 13 / 15 ms | 125 / 253 / 295 ms |
+  | `/api/recommendations-workspace` (before f45e2c0) | 69 / 165 / 174 ms | 1192 / 1377 / 1412 ms |
+
+  After `f45e2c0`, the Opportunities read took 47 ms (was 92 ms) in-process. API RSS was 255 → 323 MB and fds 10 → 90 under the load test.
+
+### 11.4 Release gates (supersedes 10.2 for this branch)
+
+| Gate | State |
+| --- | --- |
+| Incident root cause reproduced and fixed (code, sandbox browser) | PASS |
+| One canonical Opportunities route, reading never rebuilds or rescans | PASS |
+| Python suite / frontend vitest + build at the final SHA | See PR (exact-SHA evidence) |
+| All GitHub workflows at the final SHA | See PR |
+| Installed host SHA, launchd, sparsebundle, verified backup | BLOCKED (no host access) |
+| Deployment to the Mac and local-browser verification on the host | BLOCKED |
+| Real Telegram delivery with message ids | BLOCKED (no bot token here) |
+| Kite session and live data | BLOCKED |
+| Mac p50/p95/p99, memory, swap, fds | BLOCKED (sandbox figures only) |
+| 72 h soak, rollback | BLOCKED |
+
+**Verdict: NOT READY.** The P0 path is fixed and verified in a real browser
+against the real API in the sandbox. It has not been deployed or verified on
+the owner's Mac, and the host, soak and rollback gates are BLOCKED.
