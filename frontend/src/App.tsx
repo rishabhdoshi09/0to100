@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchAccessMode, fetchChart, fetchDashboard, fetchHealth, sendControl, type AccessMode } from './api'
 import { deskStartupLabel, deskStartupRecovery, deskStartupState, type DeskStartupState } from './deskStartupState'
+import { apiUnresponsiveAfter, brokerIndicator } from './deskStatusIndicators'
 import { createPollGate } from './pollGate'
 import { deskRefreshBanner } from './deskBanner'
 import {
@@ -238,6 +239,7 @@ function App() {
   const autoPrepareRef = useRef(false)
   const refreshGate = useRef(createPollGate())
   const healthGate = useRef(createPollGate())
+  const healthFailures = useRef(0)
   const [startupState, setStartupState] = useState<DeskStartupState>('PREPARING_DATA')
   const [healthReason, setHealthReason] = useState('')
   const [accessMode, setAccessMode] = useState<AccessMode | null>(null)
@@ -346,29 +348,39 @@ function App() {
     return () => window.clearInterval(timer)
   }, [refresh, scanPollingActive])
 
+  // Probe on a steady cadence, not every time an expensive dashboard response
+  // changes. Treat a single missed health request as transient, while a second
+  // consecutive miss still raises an explicit connectivity warning.
+  const hasSavedData = dashboardHasWork(dashboard)
+  const dataReady = dashboard.data.ready
   useEffect(() => {
+    let active = true
     const probe = async () => {
       if (!healthGate.current.tryEnter()) return
       try {
         const payload = await fetchHealth()
         healthGate.current.succeed()
+        healthFailures.current = 0
+        if (!active) return
         const resource = String(payload.resources?.state || '')
         const oldestAge = Number(payload.resources?.active_operation_age_s || 0)
         const next = deskStartupState({
           resourceState: resource,
           operationStuck: oldestAge >= 15 * 60,
           waitingForProvider: /provider|cooldown/i.test(String(payload.reason || payload.resources?.reason || '')),
-          historyStale: payload.history?.current === false && dashboardHasWork(dashboard),
-          dataReady: dashboard.data.ready,
-          hasSavedData: dashboardHasWork(dashboard),
+          historyStale: payload.history?.current === false && hasSavedData,
+          dataReady,
+          hasSavedData,
         })
         setStartupState(next)
         setHealthReason(String(payload.resources?.reason || payload.reason || deskStartupRecovery(next)))
       } catch {
         healthGate.current.fail(1500, 30_000)
+        healthFailures.current += 1
+        if (!active || !apiUnresponsiveAfter(healthFailures.current)) return
         const next = deskStartupState({
           apiUnresponsive: true,
-          hasSavedData: dashboardHasWork(dashboard),
+          hasSavedData,
           dataReady: false,
         })
         setStartupState(next)
@@ -377,8 +389,8 @@ function App() {
     }
     void probe()
     const timer = window.setInterval(() => void probe(), 10_000)
-    return () => window.clearInterval(timer)
-  }, [dashboard, error])
+    return () => { active = false; window.clearInterval(timer) }
+  }, [hasSavedData, dataReady])
 
   useEffect(() => {
     if (autoPrepareRef.current || loading || error || accessMode === null) return
@@ -550,20 +562,7 @@ function App() {
     'Market Overview',
     'Market Internals',
   ].includes(active)
-  const brokerState = dashboard.autonomy.broker
-  const brokerReady = brokerState?.live_data_ready === true
-  const brokerLabel = brokerReady
-    ? 'ZERODHA OK'
-    : brokerState?.state === 'LOGIN_REQUIRED'
-      ? 'ZERODHA LOGIN'
-      : brokerState?.state === 'SNAPSHOT_REQUIRED'
-        ? 'ZERODHA DATA'
-        : brokerState?.state === 'UNAVAILABLE'
-          ? 'ZERODHA OFFLINE'
-          : brokerState?.state === 'CONFIG_REQUIRED'
-            ? 'ZERODHA CONFIG'
-            : 'ZERODHA CHECK'
-  const brokerTitle = brokerState?.detail || 'Zerodha live-data readiness has not been reported yet.'
+  const brokerView = brokerIndicator(dashboard.autonomy.broker)
   const connectionBanner = error ? deskRefreshBanner(error, dashboardHasWork(dashboard)) : null
   const activePage = pageMeta(active)
 
@@ -675,8 +674,8 @@ function App() {
             >
               <i /> {deskStartupLabel(startupState)}
             </span>
-            <span className={brokerReady ? 'live-pill' : 'offline-pill'} title={brokerTitle}>
-              <i /> {brokerLabel}
+            <span className={brokerView.tone} title={brokerView.title}>
+              <i /> {brokerView.label}
             </span>
             <button type="button" onClick={() => void refresh()} aria-label="Refresh dashboard">↻</button>
           </div>
