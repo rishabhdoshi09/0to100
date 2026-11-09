@@ -10,7 +10,8 @@ Paper-only, live execution locked. No production deployment, live order, or
 transition to live trading is authorized by this audit.
 
 Section 7 (session 2) supersedes the status column of QT-PRA-005…008 in
-section 2 and the gate table in section 4.
+section 2 and the gate table in section 4. Section 9 (session 4) holds the
+current gate table and verdict.
 
 ## 1. Verified repository state (as of 2026-11-08 02:30 UTC)
 
@@ -331,3 +332,115 @@ Registered, not changed:
 and tested on one branch. Host, storage, restore, rollback, performance and
 the 72 h soak gates are BLOCKED without access to the owner's Mac. CI at the
 RC SHA must be confirmed. Live execution stays locked; everything is paper.
+
+## 9. Session 4 — RC finalization branch (2026-11-09, from 02:40 UTC)
+
+### 9.1 Branch and integration
+
+`claude/quantterm-rc-finalization-20261109`, created from PR #319's head
+`db42e6ccb17100b75b4844b892089593e29639e6` (`cursor/release-candidate-f43f`).
+Canonical `claude/build-ai-trading-system-miHHd` is still `eda3d95f`; nothing
+was pushed to it.
+
+Integrated in this order, each as a real merge commit so the PR history stays
+attributable:
+
+| PR | Head verified | Merge | Notes |
+| --- | --- | --- | --- |
+| #321 exact-SHA host probe | `9585e1f8` | `7727b59` | Clean. The probe's checked fields all exist in `product.host_install.host_status()` (`supervisor.production_sha` is written at `product/host_supervisor.py`). Read-only: `service_action("status")` only. 26 probe tests pass. |
+| #322 US settlement idempotency | `f54308db` | `d978322` | Clean. |
+| #320 US state fail-closed | `6a4b6110` | `a5bb8c7` | Conflicted with #322 in `execution/us_autopilot.py`; resolved into one behavior (QT-PRA-029). |
+
+Not integrated: #285 (see QT-PRA-036/037), #316/#317 (features, deferred as
+instructed), #287 (research).
+
+### 9.2 Evidence register (session 4)
+
+Every fix below was reproduced first, either by a regression test that failed
+before the fix or, where a failing test could only show a missing key, by a
+probe against the prior code showing the wrong behavior. Status: TESTED. It is
+INTEGRATED once the exact-head CI in 9.3 is green. Nothing is VERIFIED ON HOST.
+
+**QT-PRA-029 (P1): #320 and #322 were two incompatible fixes for one defect.**
+- #320 used a module-level `_state_load_error` latch and the label `STATE_RECOVERY_REQUIRED`; #322 used an in-state `state_recovery_required` flag and `US_PAPER_STATE_RECOVERY_REQUIRED`. Merging both verbatim gives two authorities for "is the US book trustworthy".
+- Resolution `a5bb8c7`: one authority in the state dict (`state_recovery_required`, `state_recovery_error`), runtime-only (never read from disk, never written). Kept from #322: exact-ID settlement, legacy watermark migration flagged for reconciliation, fsync'd save under the lock, checkpoint before alerts, `review_cycle` propagates failures. Kept from #320: saved-state schema validation, read-only journal probe, blocked `set_config`.
+- Gap neither PR closed: a migrated state that lost `accounted_close_ids` re-booked every closed trade. Probe on #322's head: realized P&L 97.50 → 196.67 after one settlement. The validator now type-checks the settlement ledger and requires the IDs once `accounting_ids_migrated` is true.
+- #320's tests were adapted to the unified label and to deferred settlement raising instead of silently returning; their safety assertions are unchanged.
+- Regression: `tests/test_us_paper_state_integration.py` (21 tests, all fail on both PR heads), plus both PRs' own files (18 tests).
+
+**QT-PRA-030 (P1): detached runtime volume looked like a fresh US install.**
+- With `QT_RUNTIME_ROOT_REQUIRE_EXISTING=1` and the volume gone, both `us_autopilot.json` and `trades.db` are missing. On #322's head the lane armed with the default $100k pool and `_save()` recreated the vanished volume path on the internal disk. The window is bounded by the 15 s `RuntimeStorageGuard`, but within it a US cycle could run.
+- Fix (`a5bb8c7`): `_load` asks `core.runtime_paths.runtime_root()` before treating a missing file as a fresh install, and `_save` asks again before `mkdir`. Strict mode raises → recovery latched; no path is created.
+- Regression: `test_detached_installed_runtime_is_not_a_fresh_install`, `test_save_refuses_to_recreate_a_volume_that_vanished_after_load`.
+
+**QT-PRA-031 (P1): US lane could put 20% of its pool in one name.**
+- `traded_symbols` resets each US session and was the only duplicate guard. A name still held from an earlier session could be bought again (two 10%-capped positions). NSE has `DUPLICATE_POSITION` in `portfolio_selection_authority`; F&O has `UNDERLYING_ALREADY_OPEN`.
+- Fix `882721d`: `consider()` reads the open book once, strictly, before the live quote; a held name is refused, and the same read feeds the 5% open-risk check.
+- Regression: `TestUsPaperLaneRiskRails::test_name_held_from_an_earlier_session_is_not_bought_again` (failed before: the second AAPL position opened).
+
+**QT-PRA-032 (P1): expired F&O paper options were carried forever.**
+- Supervision skips any open option without a quote, and Kite stops quoting a contract once it expires. `bars_held` advances only on quoted sessions, so missed sessions (e.g. no Kite login) can carry a position past the expiry the selector cleared. The position then kept its slot and premium risk in the 5% account budget, its outcome was never booked, and new entries continued. Probe on the RC: a 2026-09-29 contract was still open on 2026-10-07, and a new TCS position opened on 2026-10-01 beside it.
+- Fix `2375892`: `product.fo_paper.expired_unsettled_positions()` is the one rule, used by the paper cycle and the desk projection. The cycle refuses new F&O entries (`EXPIRED_POSITION_UNSETTLED`), keeps the position durable and counted, and reports `expired_unsettled_positions`, `unquoted_open_positions`, `blockers` and `operator_action_required`; the Home F&O panel renders the blocker. No settlement price is invented.
+- Regression: `TestFoExpiredPositionIsNeverSilentlyCarried` (4 tests).
+- Owner action defined: reconcile the position against the exchange's expiry settlement. A tooled reconciliation path does not exist yet (see 9.5).
+
+**QT-PRA-033 (P2): US daily-loss breaker attributed losses to the entry day.**
+- Closed trades were summed by entry session. Probe on the RC: a $3,230.50 loss realized today on a position entered yesterday, against a $3,000 (3%) limit, left the lane armed.
+- Fix `bf6549e`: additive nullable `trades.closed_at` (DDL + existing `ensure_schema` upgrade); US closes stamp it in US Eastern time; the breaker attributes by close session; legacy rows without it keep entry attribution.
+- Regression: 2 tests in `TestUsPaperLaneRiskRails`.
+- Host check needed: `ensure_schema` must add `closed_at` to the owner's existing `trades.db` on first US close (it is additive and idempotent).
+
+**QT-PRA-034 (P2): one "network-free" test made a real market-data download.**
+- `test_us_scan_feed_exception_is_recorded` stubbed `get_us_daily`, but `scan_us` uses `get_us_daily_batch`. It downloaded "AAA" and passed only where that request succeeded; it failed identically on the untouched RC base in this sandbox. Fixed in `b9c5fc4`.
+
+**QT-PRA-035 (P3):** US Telegram BUY and CLOSED alerts printed a literal `\n`. Fixed in `a5bb8c7`; regression `test_closed_trade_alert_uses_a_real_line_break`.
+
+**Display (`b101a55`):** an unrestored US paper state rendered as a routine "paper auto OFF". The Home card now shows BLOCKED with the reason, the disarm reason when present, and a reconciliation note for a legacy-watermark pool. `product/us_market_status.py` reports an unreadable US status as a blocker, not OFF. vitest: `frontend/src/usPaperTruth.test.ts`.
+
+Registered, not changed:
+- **QT-PRA-036 (P2):** `product/autopilot_journal.record_cycle` reads leniently, so a corrupt cycle journal is replaced by an empty one, and two writers can lose a row (no lock across the read-modify-write). It is a cycle blotter (latest 120 cycles), not financial state. #285 contains a locked, strict version that could be ported on its own.
+- **QT-PRA-037 (perf, measured, not ported):** #285's `OperationStore` schema/connection cache. Measured on the RC (Linux, Python 3.11): construct plus `latest_summary` p50 0.12 ms, p95 0.33 ms; a construct-and-read while another connection held a 1.5 s write transaction was not blocked (0 ms). The claimed writer-lock contention is not reproduced, so the change is not justified by evidence here.
+- **QT-PRA-038 (P3):** 12 private `_atomic_json` copies across `product/` and `research/`; no shared durable-write helper.
+- **QT-PRA-039 (P2):** the US breaker's unrealized term is P&L since entry for every open position, not the day's change. That over-counts, which is the conservative direction for a breaker.
+
+### 9.3 Tests executed this session
+
+All hermetic: Linux container, Python 3.11.x venv from `requirements.txt`, Node 22 for the frontend, credentials blank. None of this ran on the owner's Mac.
+
+- Integration-touching files run one by one at each step: US (`test_us_*`, `test_money_paths`, `test_home_os`, `test_momentum_breakout`, `test_runtime_root_isolation`, `test_terminal_audit_regressions`, `test_us_parity_autonomy`), F&O (`test_fo_*`, `test_fno_*`, `test_terminal_api`), the shared trades journal (18 files listed in the `bf6549e` run), and the release probe. All passed at the commit they were run against.
+- Frontend at `b101a55`: `npm test` 26 files / 131 tests passed; `npm run build` succeeded.
+- GitHub at `b9c5fc4` (push): CI, Product Acceptance, Terminal UI, Host Migration Gate, Dependency Vulnerability Advisory: all success.
+- Later heads: see the PR. The exact-head results for the final SHA are recorded there, not assumed here.
+
+Hermetic API latency (in-process `TestClient`, empty runtime root, 4 vCPU; **not** host evidence): `/api/health` cold 151 ms, warm p50 5 ms, max 6 ms; `/api/dashboard` cold 296 ms, warm p50 10 ms, max 12 ms. These numbers say nothing about a runtime with ~500 sessions of history and full-universe scans on an 8 GB Intel Mac.
+
+### 9.4 Release gates (supersedes 8.3)
+
+| Gate | State | Evidence / blocker |
+| --- | --- | --- |
+| P0 defects resolved and validated | PASS (code, hermetic) | No new P0 found in session 4. QT-PRA-001 and QT-PRA-017 remain fixed. The audit is targeted, not exhaustive. |
+| No open P1 without a blocking decision | PASS (code) | QT-PRA-029…032 fixed with regressions. |
+| CI at release SHA | PENDING | Must be all five green on this branch's final head (push and PR events). |
+| Data / portfolio invariants under fault injection | PARTIAL | Hermetic: corrupt/missing US state, damaged settlement ledger, detached strict runtime, unreadable journal, expired F&O contract. No physical detach. |
+| Backup restoration | BLOCKED | No host access. Recovery backups were not touched. |
+| Hardware / external storage | BLOCKED | No host access. |
+| Real-host performance and 72 h soak | BLOCKED | No host access. Only the hermetic numbers above exist. |
+| Rollback verified | BLOCKED | No host access. |
+| Kite data / Telegram delivery / real browser | BLOCKED | No broker session, bot token or host browser here. |
+| Frontend / API integration | PARTIAL | vitest + build + hermetic Product Acceptance. |
+| Security controls | PARTIAL | Unchanged from 8.3. Live interlock untouched; every change here is paper-only. QT-PRA-008 tunnel residual and QT-PRA-015 pin remain open. |
+| Independent release review | NOT TESTED | |
+
+**Verdict: NOT READY.** The code-level P0/P1 items found so far are fixed and
+regression-tested on one branch. Production approval still needs green CI at
+the final SHA, an independent review, and every host gate (storage, restore,
+rollback, Kite, Telegram, browser, performance, 72 h soak), which are BLOCKED
+without the owner's Mac. Live execution stays locked; everything is paper.
+
+### 9.5 Next actions (priority order)
+
+1. Review and merge this branch into `cursor/release-candidate-f43f`, then #319 into canonical; re-run all five workflows on the merge SHA.
+2. On the Mac, with the exact SHA installed: run `scripts/quantterm_release_readonly_probe.py --expected-sha <sha>` (#321), the detach/reattach drill from section 5, and the restore drill into a disposable location.
+3. F&O expiry reconciliation tooling (QT-PRA-032): a reviewed operator command that closes an expired paper position at the exchange's published settlement for that expiry, recorded as non-evidence. Until then the blocker holds new F&O entries.
+4. Port #285's strict, locked `autopilot_journal` write (QT-PRA-036) on its own.
+5. Profile `/api/dashboard` on the host before porting #285's dashboard snapshot cache (QT-PRA-037).
