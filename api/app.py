@@ -257,9 +257,9 @@ def recommendations_workspace_persisted_first() -> dict:
     This exact-route override only reads a saved generation or returns an explicit
     REFRESHING/STALE shell while the single background rebuild does its work.
     """
-    from product.recommendations_liveness import build_fast_response
+    from product.recommendations_liveness import build_current_scan_response
 
-    return build_fast_response(_core.core, _core._attach_authority)
+    return build_current_scan_response(_core.core, _core._attach_authority)
 
 
 _replace_route(
