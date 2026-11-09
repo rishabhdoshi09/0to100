@@ -29,7 +29,9 @@ export const fetchHealth = (): Promise<{
   service?: string
   lifecycle?: string
   reason?: string
-  history?: { current?: boolean }
+  history?: { current?: boolean | null }
+  /** Canonical non-secret access projection, re-verified on every probe. */
+  access?: unknown
   resources?: {
     state?: string
     reason?: string

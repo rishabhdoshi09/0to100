@@ -1,4 +1,5 @@
 import { fetchJson } from './http'
+import type { DisplayAuthority } from './recommendationAuthority'
 import type { ControlName, ConvictionRecord, LongTermRecord, NewsArticle, ScanRecord } from './types'
 
 export type ProductLane = {
@@ -1307,6 +1308,9 @@ export type RecommendationsWorkspace = {
   }
   disclaimer: string
   error?: string
+  rebuild_error?: string
+  /** Server-side currency verdict for this exact response (see recommendationAuthority). */
+  display_authority?: DisplayAuthority
 }
 
 export const fetchRecommendationsWorkspace = (): Promise<RecommendationsWorkspace> =>

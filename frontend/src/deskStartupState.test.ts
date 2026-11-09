@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { deskStartupLabel, deskStartupState } from './deskStartupState'
+import { deskStartupLabel, deskStartupState, effectiveDataReady } from './deskStartupState'
 
 describe('desk startup state', () => {
   it('never shows PREPARING DATA when the API is dead or resources are exhausted', () => {
@@ -21,5 +21,21 @@ describe('desk startup state', () => {
     })
     expect(state).toBe('WAITING_FOR_PROVIDER')
     expect(state).not.toBe('PREPARING_DATA')
+  })
+})
+
+describe('header data readiness (9 Nov P0: PREPARING DATA with current history)', () => {
+  it('a stale dashboard read cache defers to official history from /api/health', () => {
+    expect(effectiveDataReady({ dashboardReady: false, dashboardStale: true, officialHistoryCurrent: true })).toBe(true)
+    expect(effectiveDataReady({ dashboardReady: false, dashboardStale: true, officialHistoryCurrent: false })).toBe(false)
+    expect(effectiveDataReady({ dashboardReady: false, dashboardStale: true, officialHistoryCurrent: null })).toBe(false)
+  })
+  it('a current dashboard projection keeps its own verdict', () => {
+    expect(effectiveDataReady({ dashboardReady: true, dashboardStale: false, officialHistoryCurrent: false })).toBe(true)
+    expect(effectiveDataReady({ dashboardReady: false, dashboardStale: false, officialHistoryCurrent: true })).toBe(false)
+  })
+  it('yields DATA READY rather than PREPARING DATA in the incident state', () => {
+    const ready = effectiveDataReady({ dashboardReady: false, dashboardStale: true, officialHistoryCurrent: true })
+    expect(deskStartupLabel(deskStartupState({ dataReady: ready, hasSavedData: true }))).toBe('DATA READY')
   })
 })

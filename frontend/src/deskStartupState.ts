@@ -68,3 +68,20 @@ export function deskStartupRecovery(state: DeskStartupState): string {
       return 'Official prices or the market scan are still being prepared.'
   }
 }
+
+/** Data readiness for the header, from the authority that actually knows.
+ *
+ * The dashboard read cache marks its own projection data.ready=false whenever
+ * the snapshot is older than its short freshness window. That is a property of
+ * a UI cache, not of official NSE history. While the dashboard projection is
+ * stale or warming, use /api/health's official-history verdict instead, so a
+ * current, verified history is never shown as "PREPARING DATA".
+ */
+export function effectiveDataReady(input: {
+  dashboardReady?: boolean
+  dashboardStale?: boolean
+  officialHistoryCurrent?: boolean | null
+}): boolean {
+  if (input.dashboardStale) return input.officialHistoryCurrent === true
+  return input.dashboardReady === true
+}
