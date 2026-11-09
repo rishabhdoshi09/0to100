@@ -653,7 +653,6 @@ def best_setups_path() -> Any:
 
 def _write_persisted_best_setups(scanned_at: str, cards: list[dict[str, Any]], note: str) -> None:
     import json
-    import os
     target = best_setups_path()
     target.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -662,9 +661,8 @@ def _write_persisted_best_setups(scanned_at: str, cards: list[dict[str, Any]], n
         "cards": cards,
         "note": note,
     }
-    tmp = target.with_suffix(".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
-    os.replace(tmp, target)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(target, json.dumps(payload, indent=2, default=str))
 
 
 def persist_public_best_setups(scan_payload: Mapping[str, Any] | None) -> tuple[list[dict[str, Any]], str]:

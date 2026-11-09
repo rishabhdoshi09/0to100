@@ -166,9 +166,8 @@ class TelegramNotifier:
                     receipts.update((self.state.get("message_ids") or {}).get(day) or {})
                     if receipts:
                         self.state.setdefault("message_ids", {})[day] = receipts
-                    tmp = self.path.with_suffix(".tmp")
-                    tmp.write_text(json.dumps(self.state, indent=2, sort_keys=True), encoding="utf-8")
-                    os.replace(tmp, self.path)
+                    from core.atomic_io import atomic_write_text
+                    atomic_write_text(self.path, json.dumps(self.state, indent=2, sort_keys=True))
                 finally:
                     fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
         except Exception:

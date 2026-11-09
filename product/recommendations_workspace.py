@@ -1096,9 +1096,8 @@ def _persist_pulse(pulse: Mapping[str, Any]) -> Path | None:
             "created_at": datetime.now(timezone.utc).isoformat(),
             "pulse": dict(pulse),
         }
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
-        tmp.replace(path)
+        from core.atomic_io import atomic_write_text
+        atomic_write_text(path, json.dumps(payload, indent=2, default=str))
         return path
     except Exception:
         return None

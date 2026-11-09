@@ -958,9 +958,8 @@ def render_text(report: Mapping[str, Any]) -> str:
 def write_preflight(report: Mapping[str, Any]) -> Path:
     target = logs_dir() / "product" / "host_preflight.json"
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(".tmp")
-    tmp.write_text(json.dumps(dict(report), indent=2, default=str), encoding="utf-8")
-    os.replace(tmp, target)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(target, json.dumps(dict(report), indent=2, default=str))
     return target
 
 

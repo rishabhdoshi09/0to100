@@ -185,9 +185,8 @@ def _write_scheduler_status(payload: dict[str, Any]) -> None:
         # product.host_entrypoint.main() always enables strict mode before this
         # scheduler starts, so this branch is unreachable on the installed host.
         path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
-    os.replace(tmp, path)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(path, json.dumps(payload, indent=2, default=str))
 
 
 def _report_iteration() -> dict[str, Any]:

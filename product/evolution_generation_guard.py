@@ -97,9 +97,8 @@ def _write(path: Path, payload: Mapping[str, Any]) -> None:
     data = dict(payload)
     data["recorded_at"] = datetime.now(timezone.utc).isoformat()
     data["live_locked"] = True
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
-    os.replace(tmp, path)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(path, json.dumps(data, indent=2, default=str))
 
 
 def ensure_current_generation(*, identity: str | Path | None = None) -> dict[str, Any]:

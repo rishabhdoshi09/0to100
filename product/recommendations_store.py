@@ -5,7 +5,6 @@ GET reads this file. Scan Now writes it. Page-open does not rescan.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any, Mapping
 from core.runtime_paths import logs_path
@@ -16,9 +15,8 @@ DEFAULT_RECO_PATH = logs_path("product/latest_recommendations.json")
 def save_recommendations(payload: Mapping[str, Any], path: str | Path = DEFAULT_RECO_PATH) -> Path:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(json.dumps(dict(payload), indent=2, default=str), encoding="utf-8")
-    os.replace(tmp, target)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(target, json.dumps(dict(payload), indent=2, default=str))
     return target
 
 

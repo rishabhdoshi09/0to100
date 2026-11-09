@@ -159,9 +159,8 @@ def inventory_digest(rows: Mapping[str, Mapping[str, Any]]) -> str:
 
 def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(dict(payload), indent=2, default=str), encoding="utf-8")
-    os.replace(tmp, path)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(path, json.dumps(dict(payload), indent=2, default=str))
 
 
 def _inventory_bytes(rows: Mapping[str, Mapping[str, Any]]) -> int:
@@ -771,9 +770,8 @@ def install_service_definition(
     backup = path.with_suffix(path.suffix + ".previous")
     if previous is not None:
         backup.write_text(previous, encoding="utf-8")
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(content, encoding="utf-8")
-    os.replace(tmp, path)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(path, content)
     return {
         "manager": manager, "path": str(path), "label": label,
         "backup": str(backup) if previous is not None else "",

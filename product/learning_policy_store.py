@@ -82,9 +82,8 @@ def save_policies(payload: Mapping[str, Any], path: str | Path | None = None) ->
     data["schema_version"] = SCHEMA_VERSION
     data["updated_at"] = datetime.now(timezone.utc).isoformat()
     data["live_locked"] = True
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
-    os.replace(tmp, target)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(target, json.dumps(data, indent=2, default=str))
     return target
 
 

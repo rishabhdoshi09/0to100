@@ -56,11 +56,8 @@ def _read(path: str | Path | None = None) -> list[dict[str, Any]]:
 def _write(rows: Sequence[Mapping[str, Any]], path: str | Path | None = None) -> None:
     target = historical_evidence_path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as fh:
-        for row in rows:
-            fh.write(json.dumps(dict(row), sort_keys=True, default=str) + "\n")
-    tmp.replace(target)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(target, "".join(json.dumps(dict(row), sort_keys=True, default=str) + "\n" for row in rows))
 
 
 def _f(value: Any) -> float | None:

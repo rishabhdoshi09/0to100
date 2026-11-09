@@ -56,9 +56,8 @@ def write_runtime_pointer(target: Path, *, repo_root: Path | None = None) -> Pat
     repo = Path(repo_root or REPO_ROOT)
     resolved = _validated_pointer_target(str(target), repo_root=repo)
     pointer = runtime_pointer_path(repo)
-    tmp = pointer.with_suffix(pointer.suffix + ".tmp")
-    tmp.write_text(str(resolved) + "\n", encoding="utf-8")
-    os.replace(tmp, pointer)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(pointer, str(resolved) + "\n")
     return pointer
 
 

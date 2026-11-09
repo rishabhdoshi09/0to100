@@ -257,9 +257,8 @@ def _existing_rows(path) -> list[dict]:
 def _atomic_write_rows(path, rows: list[dict]) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(rows, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(path, json.dumps(rows, indent=2))
 
 
 def ledger_status(path=None) -> dict:

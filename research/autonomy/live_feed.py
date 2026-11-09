@@ -4,7 +4,6 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
-import os
 import time
 from pathlib import Path
 from core.runtime_paths import logs_dir
@@ -198,8 +197,7 @@ class LiveFeedController:
             return
         try:
             self.status_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.status_path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(self.health(), indent=2, default=str), encoding="utf-8")
-            os.replace(tmp, self.status_path)
+            from core.atomic_io import atomic_write_text
+            atomic_write_text(self.status_path, json.dumps(self.health(), indent=2, default=str))
         except Exception:
             pass

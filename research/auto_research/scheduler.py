@@ -232,19 +232,11 @@ class AutoResearchBrain:
         if not self.paper_config_path:
             return True
         try:
-            import json as _json, os as _os
             from pathlib import Path as _P
             p = _P(self.paper_config_path); p.parent.mkdir(parents=True, exist_ok=True)
-            tmp = p.with_suffix(".tmp")
-            try:
-                with tmp.open("w", encoding="utf-8") as handle:
-                    _json.dump({"enabled": self.paper_auto_enabled,
-                                "starting_capital": self.intel_book.capital}, handle)
-                    handle.flush()
-                    _os.fsync(handle.fileno())
-                _os.replace(tmp, p)                   # atomic
-            finally:
-                tmp.unlink(missing_ok=True)
+            from core.atomic_io import atomic_write_json
+            atomic_write_json(p, {"enabled": self.paper_auto_enabled,
+                                  "starting_capital": self.intel_book.capital}, indent=None, default=None)
             return True
         except Exception:
             return False
@@ -309,7 +301,7 @@ class AutoResearchBrain:
         if not self.insample_cache_path:
             return
         try:
-            import json as _json, os as _os
+            import json as _json
             from pathlib import Path as _P
             p = _P(self.insample_cache_path)
             p.parent.mkdir(parents=True, exist_ok=True)
@@ -317,9 +309,8 @@ class AutoResearchBrain:
                 "schema_version": 1,
                 "entries": {k: [float(v[0]), int(v[1])] for k, v in self._insample_cache.items()},
             }
-            tmp = p.with_suffix(p.suffix + ".tmp")
-            tmp.write_text(_json.dumps(payload, sort_keys=True))
-            _os.replace(tmp, p)
+            from core.atomic_io import atomic_write_text
+            atomic_write_text(p, _json.dumps(payload, sort_keys=True))
         except Exception:
             pass
 

@@ -58,9 +58,8 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(dict(payload), indent=2, default=str), encoding="utf-8")
-    tmp.replace(path)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(path, json.dumps(dict(payload), indent=2, default=str))
 
 
 def _reason_from_error(error: str) -> str:

@@ -100,9 +100,8 @@ class Supervisor:
         return H.canonicalize_failures(raw)
 
     def _save_failures(self) -> None:
-        tmp = self._failures_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(sorted(self.failures)), encoding="utf-8")
-        os.replace(tmp, self._failures_path)
+        from core.atomic_io import atomic_write_text
+        atomic_write_text(self._failures_path, json.dumps(sorted(self.failures)))
 
     def _load_owner_state(self) -> dict:
         try:
@@ -134,9 +133,8 @@ class Supervisor:
             }
 
     def _save_owner_state(self) -> None:
-        tmp = self._owner_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.owner_state, indent=2), encoding="utf-8")
-        os.replace(tmp, self._owner_path)
+        from core.atomic_io import atomic_write_text
+        atomic_write_text(self._owner_path, json.dumps(self.owner_state, indent=2))
 
     def start(self) -> bool:
         if not self.lock.acquire():
@@ -453,9 +451,8 @@ class Supervisor:
             "activity_truth": activity_truth,
             "current_activity": activity_truth.get("activity", "UNKNOWN"),
         })
-        tmp = self._status_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(d, indent=2, default=str), encoding="utf-8")
-        os.replace(tmp, self._status_path)
+        from core.atomic_io import atomic_write_text
+        atomic_write_text(self._status_path, json.dumps(d, indent=2, default=str))
 
     def _job_counts(self) -> dict:
         counts = {}
