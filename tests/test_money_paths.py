@@ -5219,6 +5219,21 @@ class TestUsPaperLaneRiskRails:
         te._DB.write_bytes(b"not a sqlite database" * 64)
         assert us.consider("CCC", 100.0, 80.0, 70.0, 60.0) is False
 
+    def test_name_held_from_an_earlier_session_is_not_bought_again(
+            self, tmp_path, monkeypatch):
+        """traded_symbols resets each session; the open book does not. A second
+        10% position in a name still held would put 20% of the pool in it."""
+        us, te = self._setup(tmp_path, monkeypatch, max_open_positions=5)
+        self._open_us(te, "AAPL", 100, 100.0, 99.0)       # $10,000 = 10% of pool
+        assert us._load()["traded_symbols"] == {}           # a new session
+        assert us.consider("AAPL", 100.0, 99.0, 70.0, 60.0) is False
+        held = [t for t in us._open_trades() if t["symbol"] == "AAPL"]
+        assert len(held) == 1
+        assert sum(t["qty"] * t["entry_price"] for t in held) <= 10_000 + 1e-6
+        assert us.reject_funnel()["rejects"] == {"symbol already held (10% per name)": 1}
+        # A different name is unaffected.
+        assert us.consider("MSFT", 100.0, 99.0, 70.0, 60.0) is True
+
     def test_us_rows_do_not_count_in_the_nse_account_gate(self, tmp_path, monkeypatch):
         from risk.portfolio_risk import account_exposure_gate, portfolio_risk_report
         us, te = self._setup(tmp_path, monkeypatch)

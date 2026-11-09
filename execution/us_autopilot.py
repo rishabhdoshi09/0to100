@@ -313,6 +313,7 @@ def _reject_category(reason: str) -> str:
     if "window" in r:             return "time window (US band)"
     if "daily trade limit" in r:  return "daily limit hit (max/day)"
     if "max open positions" in r: return "position limit full"
+    if "already holding" in r:    return "symbol already held (10% per name)"
     if "already traded" in r:     return "symbol already traded today"
     if "conviction" in r:         return "conviction kam"
     if "score" in r:              return "score kam"
@@ -680,6 +681,22 @@ def _consider_locked(symbol, entry, stop, score, conviction, source, meta=None) 
             log.debug("us_autopilot_reject", symbol=symbol, reason=gate_reject)
             _note_reject(gate_reject)
             return reject(gate_reject)
+        # The open book is the authority for per-name and total exposure. Read
+        # it once, strictly: an unreadable book is unknown exposure, not zero.
+        try:
+            open_book = _trades(_OPEN, strict=True)
+        except Exception as exc:
+            reason = f"open-risk unknown (US paper book unreadable: {type(exc).__name__})"
+            _log_activity(f"SKIP {symbol}: {reason}")
+            _note_reject("open risk cap")
+            return reject(reason)
+        # traded_symbols only covers today's session. A name still held from an
+        # earlier session already uses its 10% allocation; a second position
+        # would double it.
+        if any(str(t.get("symbol") or "") == symbol for t in open_book):
+            reason = f"already holding an open US paper position in {symbol}"
+            _note_reject(reason)
+            return reject(reason)
         live_entry, why = _anchor_live(symbol, entry, stop, s["max_chase_pct"])
         if live_entry is None:
             _log_activity(f"SKIP {symbol}: {why}")
@@ -693,16 +710,10 @@ def _consider_locked(symbol, entry, stop, score, conviction, source, meta=None) 
             _log_activity(f"SKIP {symbol}: {reason}")
             _note_reject("pool/1-share")
             return reject(reason)
-        try:
-            open_risk = sum(
-                int(t["qty"] or 0) * max(0.0, float(t["entry_price"] or 0) - float(t["stop_price"] or 0))
-                for t in _trades(_OPEN, strict=True)
-            )
-        except Exception as exc:
-            reason = f"open-risk unknown (US paper book unreadable: {type(exc).__name__})"
-            _log_activity(f"SKIP {symbol}: {reason}")
-            _note_reject("open risk cap")
-            return reject(reason)
+        open_risk = sum(
+            int(t["qty"] or 0) * max(0.0, float(t["entry_price"] or 0) - float(t["stop_price"] or 0))
+            for t in open_book
+        )
         pool = float(get_status()["pool"])
         if open_risk + qty * (entry - stop) > pool * MAX_TOTAL_OPEN_RISK_PCT + 1e-6:
             reason = (f"total open risk ${open_risk + qty * (entry - stop):,.0f} would exceed "
