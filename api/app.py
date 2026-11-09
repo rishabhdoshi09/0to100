@@ -248,3 +248,23 @@ _replace_route("/api/decision-simulator", decision_simulator_get, method="GET", 
 _replace_route("/api/decision-simulator", decision_simulator_run, method="POST", name="decision_simulator_run")
 _replace_route("/api/market-reports-workspace", market_reports_workspace, method="GET", name="market_reports_workspace")
 _replace_route("/api/product-contract", product_contract, method="GET", name="product_contract")
+
+
+def recommendations_workspace_persisted_first() -> dict:
+    """Never rebuild stock recommendations synchronously on an operator page poll.
+
+    The canonical API runtime still owns research, simulation, and all mutations.
+    This exact-route override only reads a saved generation or returns an explicit
+    REFRESHING/STALE shell while the single background rebuild does its work.
+    """
+    from product.recommendations_liveness import build_fast_response
+
+    return build_fast_response(_core.core, _core._attach_authority)
+
+
+_replace_route(
+    "/api/recommendations-workspace",
+    recommendations_workspace_persisted_first,
+    method="GET",
+    name="recommendations_workspace_persisted_first",
+)
