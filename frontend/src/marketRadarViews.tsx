@@ -1135,7 +1135,14 @@ export function RadarHomeView(props: ExperienceViewProps & {
           setSelected={setSelected}
         />
       ) : (
-        <p className="panel-copy">{radarNote || 'Loading Home operating system… Dashboard below still works.'}</p>
+        <section className="home-os-card state-data-refreshing" aria-label="NSE stock recommendations verification">
+          <div className="home-os-past home-os-best-trades">
+            <span>BEST NSE STOCK TRADES</span>
+            <strong>Verifying current NSE stock recommendations</strong>
+            <small>Waiting for the latest verified scan and Home projection. No stale BUY signals are actionable.</small>
+          </div>
+          <p className="panel-copy">{radarNote || 'Loading the saved Home workspace. NSE cash recommendations remain primary; the full market scan and paper supervisor continue independently.'}</p>
+        </section>
       )}
       {radarNote && homeOs ? <p className="panel-copy">{radarNote}</p> : null}
       <header className="radar-hero">
