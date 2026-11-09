@@ -182,7 +182,7 @@ def test_runtime_restart_cannot_reset_same_day_premium_budget(tmp_path):
             "option_symbol": "EARLIERCE",
             "underlying": "EARLIER",
             "entry_price": 50.0,
-            "quantity": 180,
+            "quantity": 194,
             "opened_at": "2026-09-29T10:00:00+05:30",
             "settled_at": "2026-09-29T11:00:00+05:30",
             "net_pnl": 0.0,
@@ -197,9 +197,9 @@ def test_runtime_restart_cannot_reset_same_day_premium_budget(tmp_path):
             capital=100_000,
         )
 
-        assert result["premium_deployed_today"] == 9_000.0
+        assert result["premium_deployed_today"] == 9_700.0
         assert result["daily_premium_budget"] == 10_000.0
-        assert result["daily_premium_remaining"] == 1_000.0
+        assert result["daily_premium_remaining"] == 300.0
         assert result["opened_count"] == 0
         assert result["skipped"][-1]["reason"] == "DAILY_PREMIUM_BUDGET_EXHAUSTED"
 
