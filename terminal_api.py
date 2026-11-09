@@ -892,7 +892,7 @@ def _operations_payload() -> dict[str, Any]:
 def _news_payload() -> dict[str, Any]:
     try:
         from news.curator_store import NewsCuratorStore
-        store = NewsCuratorStore(logs_dir() / "news_curator.sqlite3")
+        store = NewsCuratorStore(logs_dir() / "news_curator.sqlite3", read_only=True)
         try:
             articles = [item.as_dict() for item in store.recent(hours=168, limit=120)]
             health = [item.as_dict() for item in store.source_health()]
