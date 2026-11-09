@@ -355,6 +355,25 @@ def build_fast_response(core, attach_authority=None) -> dict[str, Any]:
     return slim_workspace_for_desk(payload)
 
 
+
+def build_current_scan_response(core, attach_authority=None) -> dict[str, Any]:
+    """Fail closed when the source scan expired across the NSE session boundary.
+
+    A persisted data_current=True flag describes the original scan, not today's
+    market. The canonical scan freshness authority independently verifies the
+    active Kite snapshot identity and exchange-calendar date (or current official
+    EOD archive). Do not rebuild or serve old BUY cards on an unverified scan.
+    """
+    from product.desk_pipeline import scan_is_fresh
+
+    if not scan_is_fresh():
+        return _empty_workspace(
+            status="STALE",
+            error="No current verified NSE scan; recommendation cards withheld.",
+        )
+    return build_fast_response(core, attach_authority)
+
+
 def _replace_route() -> None:
     core = sys.modules.get("terminal_api")
     parallel = sys.modules.get("terminal_product_api_parallel")
