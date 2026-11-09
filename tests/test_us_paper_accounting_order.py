@@ -134,3 +134,33 @@ def test_us_accounting_does_not_announce_or_advance_on_failed_checkpoint(
     assert us._load()["accounted_close_ids"] == []
     assert us._load()["accounting_ids_migrated"] is False
     assert not sent
+
+
+def test_legacy_capped_accounted_ids_do_not_replay_old_pnl(
+    tmp_path, monkeypatch,
+):
+    us, te, sent = _setup(tmp_path, monkeypatch)
+    old = _insert(te, "ALREADY", "PAPER_WIN", 110.0)
+    pnl = round(us._net_pnl(us._trades(us._WIN)[0]), 2)
+    state = dict(us._DEFAULTS)
+    state["max_accounted_id"] = 0
+    state["accounted_ids"] = [old]
+    state["realized_pnl"] = pnl
+    for key in ("accounted_close_ids", "accounting_ids_migrated",
+                "accounting_reconciliation_required"):
+        state.pop(key)
+    us._STATE_FILE.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.setattr(us, "_state", {})
+
+    us._account_closed()
+    assert us._load()["realized_pnl"] == pnl
+    assert us._load()["accounted_close_ids"] == [old]
+    assert sent == []
+    assert us._load()["accounting_reconciliation_required"] is True
+
+    # New positions settle exactly once despite an older legacy ID.
+    new = _insert(te, "NEXT", "PAPER_WIN", 110.0)
+    us._account_closed()
+    assert us._load()["accounted_close_ids"] == [old, new]
+    assert us._load()["realized_pnl"] == round(pnl * 2, 2)
+    assert len(sent) == 1
