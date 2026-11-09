@@ -663,19 +663,22 @@ def _net_pnl(t: dict) -> float:
 
 def review_cycle() -> None:
     s = _load()
+    if s.get("state_recovery_required"):
+        raise RuntimeError("US_PAPER_STATE_RECOVERY_REQUIRED")
     if s["allocation"] <= 0:
         return
     try:
         _close_positions()
         _account_closed()
         _circuit_breaker()
-        try:
-            from product.us_learning import settle_pending
-            settle_pending()
-        except Exception as exc:
-            log.debug("us_learning_settle_skip", error=str(exc)[:120])
+        from product.us_learning import settle_pending
+        settle_pending()
     except Exception as exc:
-        log.debug("us_autopilot_review_failed", error=str(exc))
+        # US_MARKET_SCAN is responsible for marking the paper feed BLOCKED.
+        # Swallowing this error previously reported a successful scan even when
+        # settlement/accounting/learning had not completed.
+        log.warning("us_autopilot_review_failed", error=str(exc)[:160])
+        raise
 
 
 def _close_positions() -> None:
