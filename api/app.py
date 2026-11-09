@@ -148,7 +148,10 @@ def recommendations_workspace() -> dict:
     """
     from product.recommendations_liveness import build_fast_response
 
-    return build_fast_response(_core.core, getattr(_core, "_attach_authority", None))
+    def attach(payload: dict, scan: dict) -> dict:
+        return _core._attach_authority(payload, scan_payload=scan)
+
+    return build_fast_response(_core.core, attach)
 
 
 def market_reports_workspace() -> dict:

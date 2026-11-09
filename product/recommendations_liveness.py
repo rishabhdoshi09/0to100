@@ -330,7 +330,11 @@ def display_authority(
 
 
 def build_fast_response(core, attach_authority=None) -> dict[str, Any]:
-    """Return immediately from persisted state; schedule expensive projection if needed."""
+    """Return immediately from persisted state; schedule expensive projection if needed.
+
+    ``attach_authority(payload, scan)`` receives the scan payload this read
+    already loaded, so the scan artifact is parsed once per request.
+    """
     from product.recommendations_store import load_recommendations
     from product.recommendations_workspace import slim_workspace_for_desk
 
@@ -361,7 +365,7 @@ def build_fast_response(core, attach_authority=None) -> dict[str, Any]:
         payload = dict(saved)
         if callable(attach_authority):
             try:
-                payload = attach_authority(payload)
+                payload = attach_authority(payload, scan)
             except Exception as exc:
                 payload["authority_warning"] = str(exc)[:200]
         payload = slim_workspace_for_desk(payload)
@@ -389,7 +393,7 @@ def build_fast_response(core, attach_authority=None) -> dict[str, Any]:
     payload["rebuild_error"] = state_error if status == "FAILED" else ""
     if callable(attach_authority):
         try:
-            payload = attach_authority(payload)
+            payload = attach_authority(payload, scan)
         except Exception as exc:
             payload["authority_warning"] = str(exc)[:200]
     payload = slim_workspace_for_desk(payload)
