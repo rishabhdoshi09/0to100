@@ -37,11 +37,24 @@ def _get_routes(app):
 
 @pytest.fixture
 def saved_pipeline(monkeypatch, tmp_path):
-    """Serve the real-pipeline scan, funds and recommendation files to the real loaders."""
+    """Serve the real-pipeline scan, funds and recommendation files to the real loaders.
+
+    The sandbox that produced the fixture had no official bhavcopy store, so its
+    provenance honestly says HISTORY_NOT_READY. The incident scan was a verified,
+    current one; stamp the provenance a current official-history scan records.
+    """
     from product import long_term_store, recommendations_store
+    from product.scan_store import PRICE_SOURCE
 
     scan_path = tmp_path / "latest_momentum_scan.json"
-    scan_path.write_bytes((FIXTURE / "latest_momentum_scan.json").read_bytes())
+    raw = json.loads((FIXTURE / "latest_momentum_scan.json").read_text(encoding="utf-8"))
+    session = raw["provenance"]["expected_session_date"]
+    raw["provenance"].update({
+        "data_current": True, "data_freshness": "CURRENT", "market_session_date": session,
+        "price_data_as_of": session, "price_source": PRICE_SOURCE, "sessions_behind": 0,
+        "provenance_available": True, "provenance_reason": "",
+    })
+    scan_path.write_text(json.dumps(raw), encoding="utf-8")
     monkeypatch.setenv("QT_SCAN_PATH", str(scan_path))
     real_reco, real_lt = recommendations_store.load_recommendations, long_term_store.load_long_term_scan
     monkeypatch.setattr(recommendations_store, "load_recommendations",
@@ -153,12 +166,35 @@ def test_new_scan_generation_is_never_rebuilt_inside_the_request(saved_pipeline,
 
 
 def test_stale_official_scan_is_not_presented_as_current(saved_pipeline, monkeypatch):
+    """An old-day scan: its saved BUY cards are withheld by the server, nothing is
+    rebuilt from it, and the page is told why (not "rebuilding")."""
     from api.app import app
+    from product import recommendations_liveness as RL
 
     monkeypatch.setattr("product.desk_pipeline.scan_is_fresh", lambda: False)
+    monkeypatch.setattr(RL, "_ensure_rebuild",
+                        lambda *a, **k: pytest.fail("a stale scan must not start a rebuild"))
     payload = TestClient(app).get(PATH).json()
+    authority = payload["display_authority"]
+    assert authority["status"] == "SCAN_NOT_CURRENT"
+    assert authority["scan_current"] is False
+    assert authority["scan_scanned_at"] == saved_pipeline["scan"]["scanned_at"]
+    assert payload["records_status"] == "STALE"
+    assert payload["rebuilding"] is False
+    assert all(not cat.get("cards") for cat in payload["categories"]), "old-day cards leaked"
+    assert "rebuilding" not in payload["cmp_note"].lower()
+
+
+def test_invalidated_scan_provenance_withholds_cards_with_authority(saved_pipeline):
+    from api.app import app
+
+    scan = dict(saved_pipeline["scan"])
+    scan["provenance"] = {**dict(scan.get("provenance") or {}), "data_current": False}
+    saved_pipeline["scan_path"].write_text(json.dumps(scan), encoding="utf-8")
+    payload = TestClient(app).get(PATH).json()
+    assert payload["records_status"] == "STALE"
     assert payload["display_authority"]["status"] == "SCAN_NOT_CURRENT"
-    assert payload["display_authority"]["scan_current"] is False
+    assert all(not cat.get("cards") for cat in payload["categories"])
 
 
 def test_missing_scan_withholds_saved_cards(saved_pipeline, monkeypatch):

@@ -141,17 +141,19 @@ def decision_simulator_run(
 def recommendations_workspace() -> dict:
     """The one Opportunities read. Persisted-first; never builds in the request.
 
-    Returns the projection the scan pipeline published for the current scan
+    Fails closed unless the canonical scan-freshness authority verifies today's
+    NSE scan (old-day BUY cards are withheld, never rebuilt from). For a current
+    scan it returns the projection the scan pipeline published for that
     generation, or an explicit REFRESHING/FAILED workspace while a bounded
     background rebuild runs. ``display_authority`` tells the desk, from the
     canonical scan identity and freshness, whether it is current.
     """
-    from product.recommendations_liveness import build_fast_response
+    from product.recommendations_liveness import build_current_scan_response
 
     def attach(payload: dict, scan: dict) -> dict:
         return _core._attach_authority(payload, scan_payload=scan)
 
-    return build_fast_response(_core.core, attach)
+    return build_current_scan_response(_core.core, attach)
 
 
 def market_reports_workspace() -> dict:
@@ -262,6 +264,11 @@ _replace_route("/api/paper-autopilot", paper_autopilot, method="GET", name="pape
 _replace_route("/api/decision-simulation-gate", decision_simulation_gate, method="GET", name="decision_simulation_gate")
 _replace_route("/api/decision-simulator", decision_simulator_get, method="GET", name="decision_simulator_get")
 _replace_route("/api/decision-simulator", decision_simulator_run, method="POST", name="decision_simulator_run")
-_replace_route("/api/recommendations-workspace", recommendations_workspace, method="GET", name="recommendations_workspace")
+_replace_route(
+    "/api/recommendations-workspace",
+    recommendations_workspace,
+    method="GET",
+    name="recommendations_workspace_persisted_first",
+)
 _replace_route("/api/market-reports-workspace", market_reports_workspace, method="GET", name="market_reports_workspace")
 _replace_route("/api/product-contract", product_contract, method="GET", name="product_contract")

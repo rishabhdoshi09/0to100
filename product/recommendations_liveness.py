@@ -129,6 +129,13 @@ def _empty_workspace(
     status: str = "REFRESHING",
     error: str = "",
 ) -> dict[str, Any]:
+    failed = status == "FAILED"
+    withheld = status == "STALE"
+    detail = (
+        "No current verified NSE scan for this session; cards are withheld until one is published."
+        if withheld
+        else "Recommendations are being rebuilt from the latest completed scan."
+    )
     try:
         from product.recommendations_workspace import CATEGORIES
         categories = [
@@ -136,13 +143,24 @@ def _empty_workspace(
                 **dict(meta),
                 "count": 0,
                 "cards": [],
-                "empty_detail": "Recommendations are being rebuilt from the latest completed scan.",
+                "empty_detail": detail,
             }
             for meta in CATEGORIES
         ]
     except Exception:
         categories = []
-    failed = status == "FAILED"
+    if failed:
+        cmp_note = "Latest recommendation projection failed to rebuild; no recommendation claim is being made."
+        empty_line = "Recommendation projection is unavailable."
+    elif withheld:
+        cmp_note = (
+            "The saved scan is not verified as current for today's NSE session; "
+            "recommendation cards are withheld and nothing is rebuilt from it."
+        )
+        empty_line = "No current verified NSE scan."
+    else:
+        cmp_note = "Latest scan is available; recommendation projection is rebuilding in the background."
+        empty_line = "Recommendation projection is rebuilding."
     return {
         "schema_version": 4,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -150,11 +168,7 @@ def _empty_workspace(
         "long_term_scanned_at": long_at,
         "records_status": status,
         "same_ist_day": False,
-        "cmp_note": (
-            "Latest recommendation projection failed to rebuild; no recommendation claim is being made."
-            if failed
-            else "Latest scan is available; recommendation projection is rebuilding in the background."
-        ),
+        "cmp_note": cmp_note,
         "methods_note": "No recommendation claim is made until the persisted projection is ready.",
         "ensemble": {
             "high_conviction_count": 0,
@@ -162,14 +176,14 @@ def _empty_workspace(
             "watch_count": 0,
             "avoid_count": 0,
             "empty_high_conviction": True,
-            "empty_line": "Recommendation projection is unavailable." if failed else "Recommendation projection is rebuilding.",
+            "empty_line": empty_line,
         },
         "categories": categories,
         "lifecycle": {"active": [], "closed": [], "active_count": 0, "closed_count": 0},
         "disclaimer": "Persisted evidence only; no recommendation was fabricated while rebuilding.",
         "error": error,
         "from_saved_market_scan": True,
-        "rebuilding": not failed,
+        "rebuilding": not (failed or withheld),
     }
 
 
@@ -289,7 +303,11 @@ def _ensure_rebuild(scan: dict[str, Any], long_term: dict[str, Any]) -> bool:
 
 
 def display_authority(
-    payload: Mapping[str, Any], scan: Mapping[str, Any], *, projection: str,
+    payload: Mapping[str, Any],
+    scan: Mapping[str, Any],
+    *,
+    projection: str,
+    scan_current: bool | None = None,
 ) -> dict[str, Any]:
     """Whether the desk may present this workspace as today's recommendations.
 
@@ -298,14 +316,17 @@ def display_authority(
     so the browser never infers it from a separate, short-lived dashboard cache.
     ``CURRENT`` requires the projection to be the one published for the current
     scan generation AND that scan to be fresh. Anything else is shown as its own
-    explicit state, never as current recommendations.
+    explicit state, never as current recommendations. ``scan_current`` is the
+    freshness verdict this read already obtained; ``None`` asks the authority.
     """
     scan_at = str(scan.get("scanned_at") or "")
-    try:
-        from product.desk_pipeline import scan_is_fresh
-        scan_current = bool(scan_at) and bool(scan_is_fresh())
-    except Exception:
-        scan_current = False
+    if scan_current is None:
+        try:
+            from product.desk_pipeline import scan_is_fresh
+            scan_current = bool(scan_is_fresh())
+        except Exception:
+            scan_current = False
+    scan_current = bool(scan_at) and bool(scan_current)
     if projection == "CURRENT" and not scan_current:
         status = "SCAN_NOT_CURRENT"
     else:
@@ -329,11 +350,21 @@ def display_authority(
     }
 
 
-def build_fast_response(core, attach_authority=None) -> dict[str, Any]:
+def _withheld(scan: Mapping[str, Any], *, error: str, scan_current: bool | None) -> dict[str, Any]:
+    """Empty workspace for a scan that is not current: no cards, no rebuild."""
+    payload = _empty_workspace(status="STALE", error=error)
+    payload["display_authority"] = display_authority(
+        payload, scan, projection="SCAN_NOT_CURRENT", scan_current=scan_current,
+    )
+    return payload
+
+
+def build_fast_response(core, attach_authority=None, *, scan_current: bool | None = None) -> dict[str, Any]:
     """Return immediately from persisted state; schedule expensive projection if needed.
 
     ``attach_authority(payload, scan)`` receives the scan payload this read
     already loaded, so the scan artifact is parsed once per request.
+    ``scan_current`` is the freshness verdict a caller already obtained.
     """
     from product.recommendations_store import load_recommendations
     from product.recommendations_workspace import slim_workspace_for_desk
@@ -349,8 +380,19 @@ def build_fast_response(core, attach_authority=None) -> dict[str, Any]:
             status="FAILED",
             error="Verified market scan is missing or stale; recommendations withheld.",
         )
-        payload["display_authority"] = display_authority(payload, scan, projection="SCAN_UNAVAILABLE")
+        payload["display_authority"] = display_authority(
+            payload, scan, projection="SCAN_UNAVAILABLE", scan_current=scan_current,
+        )
         return payload
+    # The same saved scan identity is not enough when the scan's own data
+    # provenance has been invalidated: withhold, and do not rebuild from it.
+    provenance = scan.get("provenance") or {}
+    if isinstance(provenance, Mapping) and provenance.get("data_current") is False:
+        return _withheld(
+            scan,
+            error="Current scan provenance is stale; recommendation cards withheld.",
+            scan_current=False,
+        )
     current = _matches(saved, scan, long_term)
 
     if not current:
@@ -369,7 +411,9 @@ def build_fast_response(core, attach_authority=None) -> dict[str, Any]:
             except Exception as exc:
                 payload["authority_warning"] = str(exc)[:200]
         payload = slim_workspace_for_desk(payload)
-        payload["display_authority"] = display_authority(payload, scan, projection="CURRENT")
+        payload["display_authority"] = display_authority(
+            payload, scan, projection="CURRENT", scan_current=scan_current,
+        )
         return payload
 
     # Last-generation BUY cards must not remain on an actionable recommendation
@@ -397,5 +441,35 @@ def build_fast_response(core, attach_authority=None) -> dict[str, Any]:
         except Exception as exc:
             payload["authority_warning"] = str(exc)[:200]
     payload = slim_workspace_for_desk(payload)
-    payload["display_authority"] = display_authority(payload, scan, projection=status)
+    payload["display_authority"] = display_authority(
+        payload, scan, projection=status, scan_current=scan_current,
+    )
     return payload
+
+
+def build_current_scan_response(core, attach_authority=None) -> dict[str, Any]:
+    """The one Opportunities read: fail closed unless today's NSE scan is verified.
+
+    A persisted ``data_current=True`` flag describes the original scan, not
+    today's market. The canonical scan-freshness authority independently
+    verifies the active Kite snapshot identity and exchange-calendar date (or
+    the current official EOD archive) on every read. An unverified scan is
+    neither served nor rebuilt from: its saved BUY cards are withheld.
+    """
+    from product.desk_pipeline import scan_is_fresh
+
+    try:
+        fresh = bool(scan_is_fresh())
+    except Exception:
+        fresh = False
+    if not fresh:
+        try:
+            scan = dict(core._scan_payload() or {})
+        except Exception:
+            scan = {}
+        return _withheld(
+            scan,
+            error="No current verified NSE scan; recommendation cards withheld.",
+            scan_current=False,
+        )
+    return build_fast_response(core, attach_authority, scan_current=True)

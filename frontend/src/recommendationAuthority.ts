@@ -90,11 +90,11 @@ export function recommendationStateMessage(workspace: Workspace): Recommendation
   if (status === 'SCAN_UNAVAILABLE') {
     return { state: 'NO_SCAN', title: 'No verified market scan', detail: 'Recommendations appear after the scheduler publishes a verified scan.' }
   }
-  if (status === 'SCAN_NOT_CURRENT') {
+  if (status === 'SCAN_NOT_CURRENT' || status === 'STALE') {
     return {
       state: 'STALE',
       title: 'Saved scan is not current for this session',
-      detail: 'These recommendations belong to a scan that is no longer current, so they are withheld until the next verified scan.',
+      detail: 'No verified NSE scan for the current session yet. Its recommendation cards are withheld (nothing is rebuilt from an old scan) until the scheduler publishes a verified scan.',
     }
   }
   return { state: 'VERIFYING', title: 'Verifying current NSE stock recommendations', detail: '' }

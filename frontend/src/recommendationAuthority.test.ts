@@ -76,6 +76,8 @@ describe('bounded, truthful Opportunities states', () => {
     expect(recommendationStateMessage(ws('FAILED', { rebuild_error: 'OSError: disk full' })).detail).toContain('disk full')
     expect(recommendationStateMessage(ws('SCAN_UNAVAILABLE')).state).toBe('NO_SCAN')
     expect(recommendationStateMessage(ws('SCAN_NOT_CURRENT')).state).toBe('STALE')
+    // A server that withheld old-day cards without display_authority still reads as STALE.
+    expect(recommendationStateMessage({ scan_scanned_at: '', long_term_scanned_at: '', records_status: 'STALE' }).state).toBe('STALE')
     expect(recommendationStateMessage(null).state).toBe('UNAVAILABLE')
   })
   it('explains a failed scan publication', () => {

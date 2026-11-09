@@ -140,3 +140,93 @@ def test_missing_recommendations_return_truthful_empty_refreshing_shape(monkeypa
 # The startup-time route swap was removed: api.app registers the one canonical
 # route at import. See tests/test_opportunities_p0.py::
 # test_every_launch_module_serves_one_canonical_recommendations_route.
+
+
+def test_canonical_api_get_uses_persisted_first_recommendations(monkeypatch):
+    """The deployed api.app, not only a dormant compatibility hook, must use the fast route."""
+    import importlib
+
+    canonical = importlib.import_module("api.app")
+    routes = [
+        item for item in canonical.app.router.routes
+        if getattr(item, "path", None) == "/api/recommendations-workspace"
+        and "GET" in set(getattr(item, "methods", set()) or set())
+    ]
+    assert len(routes) == 1
+    assert routes[0].name == "recommendations_workspace_persisted_first"
+
+    from product import recommendations_workspace as RW
+    from product import desk_pipeline
+
+    monkeypatch.setattr(desk_pipeline, "scan_is_fresh", lambda: True)
+
+    def forbidden_sync_builder(**_kwargs):
+        raise AssertionError("GET must never rebuild all recommendations synchronously")
+
+    monkeypatch.setattr(RW, "build_recommendations_workspace", forbidden_sync_builder)
+    monkeypatch.setattr(
+        RL, "build_fast_response",
+        lambda _core, attach_authority=None, **_kw: {"records_status": "REFRESHING", "categories": []},
+    )
+    assert routes[0].endpoint()["records_status"] == "REFRESHING"
+
+
+def test_stale_scan_provenance_withholds_saved_buy_without_rebuild(monkeypatch):
+    """Same saved scan identity is insufficient when its data provenance was invalidated."""
+    from product import recommendations_store as RS
+    from product import recommendations_workspace as RW
+
+    stale = _saved()
+    stale["categories"] = [
+        {"id": "momentum_breakouts", "count": 1,
+         "cards": [{"symbol": "AAA", "action_badge": "Buy", "entry": 100}]},
+    ]
+    monkeypatch.setattr(RS, "load_recommendations", lambda: stale)
+    monkeypatch.setattr(RW, "slim_workspace_for_desk", lambda payload: dict(payload))
+    monkeypatch.setattr(
+        RL, "_ensure_rebuild",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("stale source cannot start rebuild")),
+    )
+
+    class StaleCore(_Core):
+        @staticmethod
+        def _scan_payload():
+            return {
+                **_Core._scan_payload(),
+                "available": True,
+                "provenance": {"data_current": False, "source_snapshot_id": "stale"},
+            }
+
+    result = RL.build_fast_response(StaleCore())
+    assert result["records_status"] == "STALE"
+    assert not any(category.get("cards") for category in result["categories"])
+    assert result["lifecycle"]["active"] == []
+
+
+def test_canonical_get_withholds_old_day_buy_even_when_saved_provenance_was_once_current(monkeypatch):
+    """A 6-Nov scan can stay persisted on 9-Nov; calendar proof must be rechecked."""
+    import importlib
+
+    from product import desk_pipeline
+
+    canonical = importlib.import_module("api.app")
+    route = next(
+        row for row in canonical.app.router.routes
+        if getattr(row, "path", None) == "/api/recommendations-workspace"
+        and "GET" in set(getattr(row, "methods", set()) or set())
+    )
+
+    monkeypatch.setattr(desk_pipeline, "scan_is_fresh", lambda: False)
+    monkeypatch.setattr(
+        RL, "build_fast_response",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("old-day saved BUY cards must not reach presentation")
+        ),
+    )
+    response = route.endpoint()
+    assert response["records_status"] == "STALE"
+    assert response["categories"] and all(c["count"] == 0 and not c["cards"] for c in response["categories"])
+    assert response["lifecycle"]["active"] == []
+    assert "No current verified NSE scan" in response["error"]
+    assert response["display_authority"]["status"] == "SCAN_NOT_CURRENT"
+    assert response["rebuilding"] is False
