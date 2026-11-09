@@ -164,3 +164,41 @@ def test_legacy_capped_accounted_ids_do_not_replay_old_pnl(
     assert us._load()["accounted_close_ids"] == [old, new]
     assert us._load()["realized_pnl"] == round(pnl * 2, 2)
     assert len(sent) == 1
+
+
+def test_corrupt_us_state_fails_closed_without_overwriting_recovery_source(
+    tmp_path, monkeypatch,
+):
+    us, te, sent = _setup(tmp_path, monkeypatch)
+    bad_bytes = "{broken durable us state"
+    us._STATE_FILE.write_text(bad_bytes, encoding="utf-8")
+    monkeypatch.setattr(us, "_state", {})
+
+    st = us._load()
+    assert st["armed"] is False
+    assert st["state_recovery_required"] is True
+    assert st["accounting_reconciliation_required"] is True
+    assert st["disarmed_reason"] == "US_PAPER_STATE_RECOVERY_REQUIRED"
+    assert us._save() is False
+    us.set_config(allocation=20000.0)
+    assert us.arm()[0] is False
+    assert us._STATE_FILE.read_text(encoding="utf-8") == bad_bytes
+    assert not sent
+
+
+def test_missing_us_state_with_existing_trade_history_never_rearms(
+    tmp_path, monkeypatch,
+):
+    us, te, sent = _setup(tmp_path, monkeypatch)
+    _insert(te, "EXISTING", "PAPER_OPEN")
+    assert not us._STATE_FILE.exists()
+    monkeypatch.setattr(us, "_state", {})
+
+    st = us._load()
+    assert st["armed"] is False
+    assert st["state_recovery_required"] is True
+    assert st["allocation"] == 0.0
+    assert us.arm()[0] is False
+    assert us._save() is False
+    assert not us._STATE_FILE.exists()
+    assert not sent
