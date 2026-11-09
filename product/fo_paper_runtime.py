@@ -263,13 +263,22 @@ def run_fo_paper_cycle(
     account_lock = ExitStack()
     try:
         session = now_ist.date().isoformat()
+        premium_ledger_error = ""
+        try:
+            premium_deployed_today = store.premium_deployed_on_session(session)
+        except (ValueError, TypeError, OverflowError) as exc:
+            # A damaged settled-trade journal must stop NEW spending, but
+            # existing option positions still need stop/target supervision.
+            premium_ledger_error = str(exc)[:240]
+            premium_deployed_today = 0.0
+        allow_new_entries = bool(allow_new_entries and not premium_ledger_error)
         book = FoPaperBook(
             capital=capital,
             risk_per_trade_pct=0.01,
             max_loss_per_trade_pct=0.01,
             max_premium_pct=0.10,
             max_daily_premium_pct=0.10,
-            premium_deployed_today=store.premium_deployed_on_session(session),
+            premium_deployed_today=premium_deployed_today,
             max_positions=5,
             max_total_risk_pct=0.05,
             slippage_bps=5.0,
@@ -527,12 +536,20 @@ def run_fo_paper_cycle(
             symbol for symbol in book.open if not isinstance(raw_quotes.get(symbol), Mapping)
         )
         blockers = ["FNO_EXPIRED_POSITION_UNSETTLED"] if expired_unsettled else []
+        if premium_ledger_error:
+            blockers.append("FNO_DAILY_PREMIUM_LEDGER_UNTRUSTED")
 
         opened: list[dict[str, Any]] = []
         skipped: list[dict[str, str]] = []
         ranked_candidates = _candidate_rows(directional) if bool(directional.get("available")) else []
         account_risk_error = ""
-        if expired_unsettled:
+        if premium_ledger_error:
+            skipped.extend(
+                {"symbol": str(c.get("symbol") or "").upper(),
+                 "reason": "DAILY_PREMIUM_LEDGER_UNTRUSTED"}
+                for c in ranked_candidates
+            )
+        elif expired_unsettled:
             skipped.extend(
                 {"symbol": str(c.get("symbol") or "").upper(),
                  "reason": "EXPIRED_POSITION_UNSETTLED"}
@@ -735,18 +752,25 @@ def run_fo_paper_cycle(
             "realized_pnl": round(book.realized_pnl, 2),
             "equity_for_sizing": round(max(0.0, book.capital + book.realized_pnl), 2),
             "daily_premium_cap_pct": round(book.max_daily_premium_pct * 100.0, 2),
-            "premium_deployed_today": round(book.premium_deployed_today, 2),
-            "daily_premium_budget": round(
-                max(0.0, book.capital + book.realized_pnl) * book.max_daily_premium_pct,
-                2,
+            "premium_deployed_today": (
+                None if premium_ledger_error else round(book.premium_deployed_today, 2)
             ),
-            "daily_premium_remaining": round(
-                max(
-                    0.0,
-                    max(0.0, book.capital + book.realized_pnl) * book.max_daily_premium_pct
-                    - book.premium_deployed_today,
-                ),
-                2,
+            "daily_premium_ledger_error": premium_ledger_error or None,
+            "daily_premium_budget": (
+                None if premium_ledger_error else round(
+                    max(0.0, book.capital + book.realized_pnl) * book.max_daily_premium_pct,
+                    2,
+                )
+            ),
+            "daily_premium_remaining": (
+                None if premium_ledger_error else round(
+                    max(
+                        0.0,
+                        max(0.0, book.capital + book.realized_pnl) * book.max_daily_premium_pct
+                        - book.premium_deployed_today,
+                    ),
+                    2,
+                )
             ),
             "production_evidence_enabled": book.fully_costed,
             "same_day_intraday_marks_used": intraday_marks_used,
