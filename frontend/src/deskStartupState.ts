@@ -55,7 +55,7 @@ export function deskStartupRecovery(state: DeskStartupState): string {
     case 'RESOURCE_EXHAUSTED':
       return 'Restart the terminal API and market-ops worker. Do not keep polling until file descriptors drop.'
     case 'API_UNRESPONSIVE':
-      return 'The market API is not answering. Start it with bash scripts/run_quantterm_complete.sh.'
+      return 'Two consecutive health probes missed. Check the installed host and /api/health before considering a restart; do not start a duplicate service.'
     case 'OPERATION_STUCK':
       return 'A desk operation exceeded its deadline. Wait for recovery or restart market-ops; saved pages stay usable.'
     case 'WAITING_FOR_PROVIDER':
