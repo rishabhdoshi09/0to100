@@ -354,9 +354,23 @@ def persist_desk_pipeline_snapshot(payload: dict[str, Any], path: Path | None = 
     target.parent.mkdir(parents=True, exist_ok=True)
     blob = dict(payload)
     blob["persisted_at"] = datetime.now(timezone.utc).isoformat()
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(json.dumps(blob, default=str), encoding="utf-8")
-    tmp.replace(target)
+    # Multiple workers can publish desk status concurrently (API startup,
+    # owner bootstrap, and market-ops completion). A shared *.tmp pathname
+    # lets one writer replace the other's temp file and causes an HTTP 500.
+    # Give every write its own temporary inode, then publish atomically.
+    import threading
+
+    tmp = target.with_name(
+        f".{target.name}.{os.getpid()}.{threading.get_ident()}.{time.time_ns()}.tmp"
+    )
+    try:
+        tmp.write_text(json.dumps(blob, default=str), encoding="utf-8")
+        os.replace(tmp, target)
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
     return target
 
 
