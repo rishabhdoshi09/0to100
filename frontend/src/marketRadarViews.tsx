@@ -26,6 +26,7 @@ import {
   type WatchlistPayload,
 } from './productApi'
 import { RiskLensCard } from './productViews'
+import { shouldPollPage } from './pagePolling'
 import type { ControlName, DashboardPayload } from './types'
 import { LiveScanBanner, type ExperienceViewProps } from './experience'
 import { keepRicher, markInvestigate, recall, remember } from './sessionMemory'
@@ -890,11 +891,23 @@ export function RadarHomeView(props: ExperienceViewProps & {
   const [radarNote, setRadarNote] = useState('')
   const autoBootRef = useRef(false)
   const radarInFlight = useRef(false)
+  const homeVisible = shouldPollPage(props.activePage, ['Home', 'Command Center', 'Market'])
+  const homeWatching = marketScan.isActive
+    || Boolean(dashboard.scan_progress?.active)
+    || (dashboard.operations.active || []).some((item) => (
+      item.kind === 'DATA_PREPARE'
+      || item.kind === 'FNO_REFRESH'
+      || item.kind === 'MARKET_SCAN'
+      || item.kind === 'LONG_TERM_SCAN'
+      || item.kind === 'LONG_TERM_REFRESH'
+      || item.kind === 'NEWS_REFRESH'
+    ))
 
   useEffect(() => {
+    if (!homeVisible) return
     let alive = true
     const load = () => {
-      if (radarInFlight.current) return
+      if (document.visibilityState === 'hidden' || radarInFlight.current) return
       radarInFlight.current = true
       if (!recall('radar-home')) setRadarNote('Refreshing home workspace…')
       fetchRadarHome()
@@ -927,28 +940,20 @@ export function RadarHomeView(props: ExperienceViewProps & {
         .catch(() => undefined)
     }
     load()
-    const watching = marketScan.isActive
-      || Boolean(dashboard.scan_progress?.active)
-      || (dashboard.operations.active || []).some((item) => (
-        item.kind === 'DATA_PREPARE'
-        || item.kind === 'FNO_REFRESH'
-        || item.kind === 'MARKET_SCAN'
-        || item.kind === 'LONG_TERM_SCAN'
-        || item.kind === 'LONG_TERM_REFRESH'
-        || item.kind === 'NEWS_REFRESH'
-      ))
-    const timer = window.setInterval(load, watching ? 4000 : 20_000)
+    // Saved Home projections do not require a 4-second quote-tick poll.
+    const timer = window.setInterval(load, homeWatching ? 12_000 : 30_000)
     return () => { alive = false; window.clearInterval(timer) }
-  }, [dashboard.scan.scanned_at, dashboard.long_term.scanned_at, dashboard.generated_at, dashboard.scan_progress?.updated_at, dashboard.operations.active, marketScan.isActive])
+  }, [homeVisible, homeWatching, dashboard.scan.scanned_at, dashboard.long_term.scanned_at])
 
   useEffect(() => {
+    if (!homeVisible) return
     if (!selected) { setPlan(null); return }
     let alive = true
     fetchTradePlan(selected)
       .then((payload) => { if (alive) setPlan(payload) })
       .catch(() => { if (alive) setPlan(null) })
     return () => { alive = false }
-  }, [selected, dashboard.scan.scanned_at, dashboard.generated_at])
+  }, [homeVisible, selected, dashboard.scan.scanned_at])
 
   const scanAt = radar?.scan_scanned_at || dashboard.scan.scanned_at || ''
   const brokerStatus = String(radar?.home_os?.broker?.status || '').toUpperCase()
@@ -996,7 +1001,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
   }
 
   useEffect(() => {
-    if (autoBootRef.current) return
+    if (!homeVisible || autoBootRef.current) return
     if (publicReadOnly) {
       autoBootRef.current = true
       return
@@ -1011,7 +1016,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
     if (!deskNeedsWork) return
     autoBootRef.current = true
     void runBootstrap()
-  }, [emptyDesk, dashboard.data.ready, dashboard.scan.scanned_at, publicReadOnly])
+  }, [homeVisible, emptyDesk, dashboard.data.ready, dashboard.scan.scanned_at, publicReadOnly])
 
   const laneCard = (title: string, rows: RadarRow[], count: number, qualityHint?: number) => (
     <section className="radar-lane-card">
@@ -1183,8 +1188,6 @@ export function RadarHomeView(props: ExperienceViewProps & {
         </div>
       </div>
       {deskNote ? <p className="radar-desk-note">{deskNote}</p> : null}
-      <FnoHomePanel dashboard={dashboard} setActive={setActive} setSelected={setSelected} runControl={runControl} />
-
       <div className="radar-market-strip">
         <div>
           <span>NIFTY 1D</span>
@@ -1312,6 +1315,9 @@ export function RadarHomeView(props: ExperienceViewProps & {
           )}
         </Panel>
       </div>
+
+      {/* Primary Home workflow is NSE equity stock discovery, not F&O. */}
+      <FnoHomePanel dashboard={dashboard} setActive={setActive} setSelected={setSelected} runControl={runControl} />
     </section>
   )
 }
@@ -1335,8 +1341,10 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
 
   const activeScan = marketScan
   const hasScan = Boolean(dashboard.scan.scanned_at || dashboard.scan.records.length || meta.universe || meta.scanned_at)
+  const scannerVisible = shouldPollPage(props.activePage, ['Market Scanner', 'Scanner'])
 
   useEffect(() => {
+    if (!scannerVisible) return
     const seed = scannerFallbackRows(tab, dashboard) as RadarRow[]
     const seedMeta = scannerMetaFromDashboard(tab, dashboard)
     const cachedRows = recall<RadarRow[]>(`scanner:${tab}`)
@@ -1378,6 +1386,7 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
       })
       .catch(() => apply(opening, openingMeta))
   }, [
+    scannerVisible,
     tab,
     dashboard.scan.scanned_at,
     dashboard.long_term.scanned_at,
