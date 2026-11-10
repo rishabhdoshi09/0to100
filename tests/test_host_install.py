@@ -303,20 +303,103 @@ def test_macos_first_migration_quiesces_canonical_and_legacy_launchd(monkeypatch
     monkeypatch.setattr(HI.os, "getuid", lambda: 501)
     monkeypatch.setattr(HI.Path, "home", classmethod(lambda cls: tmp_path / "home"))
 
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
     def fake_run(args, *, check=True, timeout=30.0):
         calls.append(list(args))
         if args[:2] == ["launchctl", "print"]:
-            return type("Proc", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            stdout = f"\tworking directory = {repo}\n"
+            return type("Proc", (), {"returncode": 0, "stdout": stdout, "stderr": ""})()
         if args[:3] == ["ps", "-axo", "pid=,command="]:
             return type("Proc", (), {"returncode": 0, "stdout": "", "stderr": ""})()
         return type("Proc", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
     monkeypatch.setattr(HI, "_run", fake_run)
-    stopped = HI._quiesce_macos_quantterm_writers(tmp_path / "repo")
+    stopped = HI._quiesce_macos_quantterm_writers(repo)
 
     assert set(stopped) == set(HI.LEGACY_LAUNCHD_LABELS)
     for label in HI.LEGACY_LAUNCHD_LABELS:
         assert ["launchctl", "bootout", f"gui/501/{label}"] in calls
+
+
+def test_macos_migration_never_boots_out_a_service_serving_another_checkout(monkeypatch, tmp_path):
+    """QT-PRA-072: migrating checkout B must not stop the host serving checkout A.
+
+    Reproduced on the owner's Mac: running tests/test_host_install.py there
+    called the real ``launchctl bootout gui/501 .../com.quantterm.desk.plist``
+    for the production desk (which serves /Users/apple/0to100), because every
+    QuantTerm label was booted out regardless of which checkout it serves.
+    """
+    calls = []
+    home = tmp_path / "home"
+    agents = home / "Library" / "LaunchAgents"
+    agents.mkdir(parents=True)
+    production = tmp_path / "production-checkout"
+    production.mkdir()
+    repo = tmp_path / "candidate-checkout"
+    repo.mkdir()
+    import plistlib
+
+    with (agents / f"{HI.LAUNCHD_LABEL}.plist").open("wb") as handle:
+        plistlib.dump({
+            "Label": HI.LAUNCHD_LABEL,
+            "WorkingDirectory": str(production),
+            "EnvironmentVariables": {"PYTHONPATH": str(production)},
+            "ProgramArguments": ["/usr/bin/caffeinate", "-i", f"{production}/venv/bin/python", "-m", "product.host_entrypoint"],
+        }, handle)
+    monkeypatch.setattr(HI.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(HI.os, "getuid", lambda: 501)
+    monkeypatch.setattr(HI.os, "getpid", lambda: 999)
+    monkeypatch.setattr(HI.Path, "home", classmethod(lambda cls: home))
+    ps = "\n".join([
+        "200 /usr/bin/python3 -u -m product.host_entrypoint",
+        f"201 /usr/bin/caffeinate -i {production}/venv/bin/python -u -m product.host_entrypoint",
+        "202 /usr/bin/python3 -u main.py autonomy",
+        "203 /usr/bin/python3 -u -m uvicorn terminal_product_api_parallel:app --port 8765",
+    ])
+
+    def fake_run(args, *, check=True, timeout=30.0):
+        calls.append(list(args))
+        if args[:2] == ["launchctl", "print"]:
+            if args[2].endswith(HI.LAUNCHD_LABEL):
+                stdout = f"\tworking directory = {production}\n\t\tPYTHONPATH => {production}\n"
+                return type("Proc", (), {"returncode": 0, "stdout": stdout, "stderr": ""})()
+            return type("Proc", (), {"returncode": 113, "stdout": "", "stderr": "not found"})()
+        if args[:3] == ["ps", "-axo", "pid=,command="]:
+            return type("Proc", (), {"returncode": 0, "stdout": ps, "stderr": ""})()
+        if args[:1] == ["lsof"]:
+            out = "".join(f"p{pid}\nfcwd\nn{production}\n" for pid in (200, 201, 202, 203))
+            return type("Proc", (), {"returncode": 0, "stdout": out, "stderr": ""})()
+        return type("Proc", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(HI, "_run", fake_run)
+
+    stopped = HI._quiesce_macos_quantterm_writers(repo)
+
+    assert stopped == []
+    assert not [c for c in calls if c[:2] in (["launchctl", "bootout"], ["launchctl", "unload"])]
+    assert HI._macos_quantterm_processes(repo) == []
+    # The same processes are this checkout's writers when they run from it.
+    assert {row["pid"] for row in HI._macos_quantterm_processes(production)} == {200, 201, 202, 203}
+
+
+def test_macos_writer_probe_fails_closed_when_process_cwd_is_unknown(monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setattr(HI.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(HI.os, "getpid", lambda: 999)
+
+    def fake_run(args, *, check=True, timeout=30.0):
+        if args[:3] == ["ps", "-axo", "pid=,command="]:
+            stdout = "300 /usr/bin/python3 -u -m operations.market_ops\n"
+            return type("Proc", (), {"returncode": 0, "stdout": stdout, "stderr": ""})()
+        # lsof cannot read the cwd (permission / race): ownership unknown.
+        return type("Proc", (), {"returncode": 1, "stdout": "", "stderr": "denied"})()
+
+    monkeypatch.setattr(HI, "_run", fake_run)
+
+    assert [row["pid"] for row in HI._macos_quantterm_processes(repo)] == [300]
 
 
 
