@@ -13,6 +13,8 @@ Section 7 (session 2) supersedes the status column of QT-PRA-005…008 in
 section 2 and the gate table in section 4. Section 9 (session 4) holds the
 current gate table and verdict.
 
+**Current state (2026-11-10): section 13.** It covers the session on the owner's Mac. `92b311ca` is deployed there as a paper-only build with live money locked. Gates and verdict are in 13.10: NOT READY, pending the 72 h soak and a Kite session.
+
 ## 1. Verified repository state (as of 2026-11-08 02:30 UTC)
 
 | Ref | SHA | Verified CI at that SHA |
@@ -731,3 +733,213 @@ read-only until step 4, and live-money stays locked.
 10. Start the 72 h soak; rehearse rollback.
 
 **Needs the owner's explicit approval first:** a disk-detach test, a destructive restore, enabling live trading.
+
+## 13. On the owner's Mac (2026-11-10)
+
+The session ran on the production host itself (macOS 12.7.6, Intel i5-5250U,
+4 logical CPUs, 8 GB RAM). 10 November 2026 is an NSE holiday
+(Diwali-Balipratipada, `data/nse_holidays.json`), so no trading session was
+interrupted. Live money stayed LOCKED throughout, owner pauses were not
+touched, no runtime file was deleted, and new paper entries were already
+owner-paused (`owner_state.json new_entries_paused: true`).
+
+### 13.1 Host inventory (read-only, before any change)
+
+| Item | Finding |
+| --- | --- |
+| Installed SHA | `980b922` on `integration/quantterm-india-universal-20261109`; PR head was `9d89af0` |
+| Service owner | One launchd job, `com.quantterm.desk` (`caffeinate -i venv/bin/python -m product.host_entrypoint`), pid 89598, `runs = 1`; children: autonomy, market_ops, API :8765, report API :8766, Vite :5173 |
+| Runtime | `/Volumes/QuantTermStorage/QuantTerm/runtime` (16 GB; 10 GB of it two static logs from September), APFS inside `QuantTermStorage_WORKING_20261107.sparsebundle` on the exFAT USB disk `Expansion`. The older `QuantTermStorage.sparsebundle` is also attached but not mounted (same volume UUID) |
+| Backups found | Sparsebundle copies dated 2026-09-22, 09-24 and 11-07, and `rollback/runtime-2026-09-13`. None was verified this session; a new verified one was taken (13.4) |
+| Paper state | 0 open positions in every book. Modern book: capital 100,000, 0 closed. Legacy: 29 closed (18 win, 11 loss). F&O: 0/0. US: armed, realized PnL 1,017.26, paused by India-only scope |
+| Live interlock | `/api/health`: `live_lock_status LOCKED`, `live_execution_authorized false`, verified |
+| Kite | Broker observer: `TokenException: Incorrect api_key or access_token` (no daily login on the holiday) |
+| Telegram | Scan alerts delivered at 08:50 IST (5 setups, 4 pre-breakouts). The 2026-11-09 host crash-loop alert was **not** delivered (`URLError`): QT-PRA-078 |
+| Host resources | Swap 4.0 to 5.3 GB used of 6 GB; internal disk 9.9 GB free; QuantTerm footprint about 2.1 GB (supervisor 337 MB, autonomy 564 MB, market_ops 569 MB, API 504 MB) |
+
+### 13.2 Defects found on the host and fixed (each reproduced first)
+
+| ID | Pri | Defect | How it was found | Fix | Regression |
+| --- | --- | --- | --- | --- | --- |
+| QT-PRA-072 | P1 | Running `tests/test_host_install.py` on the Mac called the real `launchctl bootout gui/501 …/com.quantterm.desk.plist`. `_quiesce_macos_quantterm_writers` booted out every QuantTerm label, and the writer probe matched every QuantTerm process, regardless of which checkout they serve; a first-time migration from any other checkout would have stopped the installed host | A guard (PATH stubs plus an `os.kill` guard) intercepted it during the first host test run; production was not touched | `a331723f`, `3e2c37de`: bootout only labels proven to serve this checkout (`launchctl print`/plist working directory, PYTHONPATH, program arguments, matched lexically and resolved); writers by cwd (`lsof`); unknown cwd still blocks the migration (fail closed) | `test_macos_migration_never_boots_out_a_service_serving_another_checkout` (fails on the old code), `…fails_closed_when_process_cwd_is_unknown`, `…symlinked_venv_python_is_ours` |
+| QT-PRA-073 | P1 (host) | Home read the whole autonomy dialogue log (13 MB, ~17k records) seven times per request: 119,601 `json.loads`, 5.7 of 8.3 s warm | cProfile on an APFS clone of the real runtime | `0d3ce1d0`: `DialogueLog.recent` reads the tail backwards; identical to `all()[-n:]` | `tests/test_dialogue_recent_tail.py` (parses exactly n lines of a 20k log; fails on the old code) |
+| QT-PRA-074 | P2 | `_dates_on_disk` globbed, parsed and `stat`ed all 1,754 archives on every call, 5 times per Home request (~0.3 s each) | cProfile | `7372a28b`: listing cached by directory inode, mtime_ns and size plus the holiday set; per-file validation unchanged; racy-clean guard for coarse-mtime filesystems | `tests/test_bhavcopy_disk_listing_cache.py` |
+| QT-PRA-075 | P2 | Research director recomputed seeded drift permutation tests (16,856 statistics) on every GET, and scanned the feature store twice | cProfile | `bd1890e6`: memoised on (stream, parameters), since seeded tests are a pure function; data health computed once per overview | `tests/test_drift_memo.py` |
+| QT-PRA-076 | P2 (memory) | The long-lived supervisor held 337 MB because the history bootstrap unpickled the whole store (183 MB) in-process (13 MB → 319 MB; clearing it recovers only to 135 MB) | `top` footprint, then a reproduction | `f1480819`: bootstrap runs in a child interpreter with the same report contract, log forwarding, SIGTERM cancellation, and FAILED if the child dies without a report | `tests/test_host_bootstrap_isolation.py` |
+| QT-PRA-077 | P2 | On macOS the installer/preflight "ephemeral runtime root" guard never fired, because resolved `/tmp` is `/private/tmp` and `$TMPDIR` is `/private/var/folders`; `stack_supervision.pid_alive` reported every process dead because it reads `/proc` | Mac suite run (CI is Linux only) | `eb50a0f0`: macOS resolved prefixes; `ps` fallback without procfs; short AF_UNIX test path | `tests/test_macos_portability.py` |
+| QT-PRA-078 | P1 | Host alerts (crash loop, CRITICAL daily report) could never reach Telegram from the host: the python.org interpreter has no default CA store, so `urllib` HTTPS fails `CERTIFICATE_VERIFY_FAILED`. The 2026-11-09 crash-loop alert is recorded as undelivered | `host_failure_alert.json`, then a TLS reproduction on the Mac | `a1667cf3`: verifying context on certifi's bundle (the one `requests` already uses); verification never disabled. On the Mac, default context fails and the new context gets TLS OK | `tests/test_host_alert_tls.py`; receipt test asserts the verifying context |
+
+**Found during deployment (same session, each reproduced on the host):**
+
+| ID | Pri | Defect | Evidence | Fix | Regression |
+| --- | --- | --- | --- | --- | --- |
+| QT-PRA-079 | P1 | The whole host ran as a throttled background job. The plist's `ProcessType Adaptive` (no XPC) pinned every QuantTerm thread at priority 4 (`MAXPRI_THROTTLE`). Test agents on this Mac measured Adaptive 4, Standard/unset 20, Interactive 31 | The deployed API used about 13 s of CPU in 30 minutes while Home took 14 to 17 s; a 0.35 s dashboard build took 13.5 s in the service; the same code started from a shell served Home in 1 to 2 s | `07f1cf0b`: `ProcessType Standard` | The plist test asserts Standard |
+| QT-PRA-080 | P1 | Stopping the host orphaned `main.py autonomy` (ppid 1, still holding the scheduler lock). `stop_all` stopped the 5 children one after another with a 12 s grace each, while launchd SIGKILLs the supervisor shortly after bootout | Reproduced at both stops today | `00721998`: SIGTERM to every child group, then one shared deadline; `07f1cf0b`: `ExitTimeOut 45` | `tests/test_host_supervisor_stop.py` (old code 60.3 s, new about one grace) |
+| QT-PRA-081 | P1 | An `operations.zerodha_observer` started on 2026-11-09 10:49 outlived its API (ppid 1). It ran yesterday's code across 3 deployments, held `observer.lock` (so the deployed observer never started) and wrote into the runtime while the host was stopped | Backup diff, then `ps`: pid 55417, started 9 Nov 10:49 | `5a4d1ad7`: the worker exits when re-parented; the heartbeat records `parent_pid` and `build_sha`; the installer's writer probe knows the process | `tests/test_zerodha_observer_lifecycle.py` (the old code keeps looping) |
+
+### 13.3 Real-hardware performance
+
+**Live `980b922` during the day (holiday, background jobs idle):**
+- 57-route sweep: zero 5xx. Home 39.5 s, research-director 103.7 s, market-reports 65.6 s.
+- Later, with my own load removed: Home 40 to 52 s per request, Opportunities 6 to 10 s.
+- Production API trace since its start: dashboard/gate up to 87 s; earlier processes up to 903 s.
+
+**A/B on the same Mac and snapshot, interleaved, 10 rounds, ms.** A is the fixed code on an APFS clone; B is the installed `980b922` on a second clone. Both ran sandboxed, loopback only:
+
+| Route | B p50 | A p50 | B p95 | A p95 |
+| --- | --- | --- | --- | --- |
+| `/api/radar-home` (Home) | 8,868 | **1,962** | 15,484 | 2,749 |
+| `/api/command-center-workspace` | 1,570 | **136** | 2,280 | 337 |
+| `/api/learning-dashboard` | 3,287 | **376** | 5,576 | 1,210 |
+| `/api/paper-autopilot` | 614 | **20** | 1,905 | 58 |
+| `/api/health` | 478 | **81** | 1,028 | 237 |
+| `/api/research-director` | 14,212 | 7,229 | 32,229 | 13,104 |
+| `/api/market-reports-workspace` | 3,488 | 2,203 | 7,882 | 4,086 |
+| `/api/recommendations-workspace` | 1,238 | 1,211 | 2,565 | 2,017 |
+| `/api/autonomy-desk` | 1,844 | 1,717 | 2,526 | 2,696 |
+| `/api/dashboard` | 84 | 77 | 298 | 139 |
+
+Zero non-2xx on either side. Both servers plus the suite ran at once, so the absolute numbers are under contention. In-process warm Home on the clone was 0.9 to 1.0 s (was 8.3 s).
+
+**IO sensitivity.** A 15 MB/s backup copy on the same USB disk pushed production Home and Opportunities past 90 s timeouts. Bulk IO on that disk must stay outside market hours (recorded as an operational rule).
+
+### 13.4 Backup before deployment
+
+- **New image.** `/Volumes/Expansion/QuantTermStorage_BACKUP_20261110_preDeploy.sparsebundle`, an APFS sparsebundle. The source runtime was only read; nothing in it was deleted or modified.
+- **Bulk pass.** Unthrottled, while live on the holiday: 19,571 entries, 16.66 GB, 1,079 s.
+- **Final pass.** Run after the host was stopped, so the copy is consistent: 30.5 MB of changes, 18 s.
+- **Source manifest.** Taken while stopped: 18,057 files, 16.66 GB. SHA-256 covers every file up to 512 MB (6.65 GB). The two larger files are static logs from 13 September and are compared by size and mtime; rsync copied them in full.
+- **Backup vs stopped source.** 18,057 files on each side, zero size differences.
+  - 18,054 of the 18,055 hashed files are identical by SHA-256.
+  - The two unhashed logs match by size and whole-second mtime. macOS's bundled rsync 2.6.9 keeps mtime only to the second, so the sub-second differences are expected.
+  - The single difference is `logs/reconciliation/observer_runtime.json`. It was rewritten after the final pass by an unsupervised broker-observer process, the defect fixed as QT-PRA-081. Every file owned by the supervised host is identical.
+- **Restore drill.** See 13.6.
+
+### 13.5 Deployment and rollback rehearsal (paper only)
+
+Every step used the canonical `product.host_install install` (the one-shot upgrade path), with no second launcher. The steps were scripted and fail closed: stop, prove no checkout processes and free ports, fast-forward only, install, status.
+
+| Step | Time (IST) | Result |
+| --- | --- | --- |
+| Stop `980b922` | 10:51 | launchd unloaded, but `main.py autonomy` survived as an orphan of PID 1 (QT-PRA-080). Its identity was verified (ppid 1, cwd = checkout, user) and it was given SIGINT: clean shutdown in 17 s, scheduler lock released |
+| Deploy `a1667cf3` | 10:59 → 11:05 | Installer preflight `READY_FOR_PAPER_OPERATION`; supervisor RUNNING, 5/5 children healthy, bootstrap READY, live LOCKED (verified, not authorized), `host_verdict HEALTHY`. Downtime 14 min |
+| Post-deploy checks | 11:05 | `/api/health` READY, history current (2026-11-09). All 8 paper/execution state files byte-identical to pre-deploy (modern book, legacy trades, F&O, US, owner state, OMS orders, protection plans). Owner pause preserved. Supervisor footprint 337 → 91 MB; swap 5.2 → 3.9 GB |
+| GET sweep | 11:10 | 57 routes, zero 5xx (cold, first calls after restart) |
+| Rollback to `980b922` | 11:31 → 11:35 | The orphan reproduced (autonomy pid 43570) and was cleanly stopped. The old installer restored its plist; supervisor RUNNING, 5/5 healthy, live LOCKED, paper state byte-identical. Install took 3 min 19 s |
+| Stop `980b922` again | 11:57 | The pre-fix supervisor orphaned autonomy, market_ops and the report API; all were verified and stopped. The stale observer pid 55417 (QT-PRA-081) took SIGTERM, wrote STOPPED and released its lock, then sat in interpreter finalisation (GC over a swapped-out heap) and was SIGKILLed after identity checks |
+| Deploy `5a4d1ad7` | 12:00 → 12:02 | Install took **96 s**, against 3 to 5 minutes for the earlier installs (QT-PRA-079 effect). RUNNING, 5/5 healthy, live LOCKED, HEALTHY. All QuantTerm threads now run at priority 20 (were 4). The new observer runs the deployed SHA as the API's child. Paper state byte-identical |
+
+### 13.6 Restore drill (production untouched)
+
+- **Restore.** The backup image was attached read-only and copied to `restore-drill-20261110/runtime`: 16.66 GB in 771 s.
+- **Hash comparison.** Restored copy against backup: 18,057 files and **zero differences**, with 18,055 SHA-256 identical. Combined with 13.4, the chain source (stopped) → backup → restore is proven.
+- **JSON.** All 7,877 JSON state files parse.
+- **SQLite.** `PRAGMA integrity_check`: 64 of 65 databases ok. The exception, `logs/feature_store.db`, has an index missing a row and the wrong entry count. That corruption is **already present in production** (the backup is hash-identical), so it is QT-PRA-082; the 13 September copy is clean.
+- **Serving.** The deployed code serving the restored runtime (sandboxed, loopback only): health with history current and live LOCKED; paper books readable (0 open); Opportunities HTTP 200 with 1.38 MB. It reports DEGRADED only because no autonomy process runs in a drill.
+
+**QT-PRA-082 (P2, repaired).** Production `feature_store.db` (research learning observations) had a corrupt UNIQUE index: `sqlite_autoindex_observations_1`, with row 10505 (created 2026-10-05) missing and the wrong number of entries.
+- **Checks before repairing.** A forced table scan (`NOT INDEXED`) found 0 duplicate `observation_id`s.
+- **Repair.** `REINDEX` was rehearsed on the restored copy first: rows and digest unchanged, integrity ok. It was then applied to production in one transaction after a consistent pre-repair copy via SQLite's backup API (`restore-drill-20261110/feature_store.db.pre-reindex-20261110`). Rows and digest were unchanged and integrity is now ok.
+- **Root cause not proven.** The database uses rollback-journal mode on the USB disk, which logged I/O errors and a detach on 2026-11-09. Recommendation, not implemented: `PRAGMA fullfsync` for durable stores on macOS external disks, plus an integrity check in the daily operating report.
+
+### 13.7 Deployed host, measured (`5a4d1ad7`, Standard scheduling, holiday)
+
+**Sequential, warm, 20 requests per route, ms:**
+
+| Route | p50 | p95 | p99 | Morning, live `980b922` |
+| --- | --- | --- | --- | --- |
+| `/api/radar-home` (Home) | **2,085** | 2,828 | 3,009 | 39,453 (one request); 40–52 s sustained |
+| `/api/recommendations-workspace` (Opportunities) | **742** | 992 | 1,006 | 4,844; 6–10 s sustained |
+| `/api/command-center-workspace` | **449** | 501 | 603 | 13,790 |
+| `/api/learning-dashboard` | **871** | 1,055 | 1,098 | 24,648 |
+| `/api/paper-autopilot` | **168** | 188 | 200 | 3,606; 16,900 at first read |
+| `/api/autonomy-desk` | **52** | 406 | 1,675 | 4,454 |
+| `/api/research-status` | 471 | 685 | 690 | 5,355 |
+| `/api/decision-simulation-gate` | 72 | 96 | 330 | 395; production trace up to 858 s |
+| `/api/health` | 63 | 79 | 179 | 1,201 |
+| `/api/dashboard` | 8 | 22 | 35 | 188; production trace up to 903 s |
+
+- **4-way concurrent, 24 requests each.** Home p50 5.1 s / p99 6.4 s; Opportunities 6.1 s / 6.9 s; health 0.40 s; dashboard 0.25 s; paper-autopilot 0.25 s. A single API process serialises CPU-bound reads, which is fine for one desk user; heavy reads under concurrency remain a limit. Zero non-2xx anywhere.
+- **Footprint.** API 414 MB, market_ops 538 MB, autonomy 379 MB, observer 103 MB, supervisor 91 MB, Vite 63 MB, report API 43 MB: about 1.63 GB, against about 2.1 GB plus a hidden stale observer before. Swap 3.76 GB, was 5.26 GB.
+
+**Real browser on the Mac** (installed Google Chrome 150 via Playwright, against the production desk on :5173):
+- Every non-GET was aborted and recorded.
+- All five workspaces loaded: 54 API calls, all 2xx, zero mutation attempts, **no `RUN_SCAN_NOW` on open**, no page errors.
+- No "Desk snapshot refreshing" banner on any view (it was present on Opportunities in the morning run).
+- Content observed:
+  - Today: "No eligible trade", plus a research watchlist (RPEL, KALYANKJIL, HONASA, EMAMILTD, SPARC) labelled research-only.
+  - Opportunities: "No high-conviction opportunity: checked 103 names… good setups 17, watch 86".
+- Remaining: Research's first `research-director` call took 22.8 s (P2), and the desk has no favicon (a 404; P3).
+- That browser run also found QT-PRA-083.
+
+**QT-PRA-083 (P1, user-visible truth).** Home said "Everything is running automatically… paper trading" and offered "Pause paper entries" while the owner's PAUSE was in force: `owner_state.new_entries_paused`, with `/api/radar-home` reporting `paper_bot.paused false`. Fixed in `92b311ca`: paused is now derived from the config **or** the owner pause/halt; the headline says "paused by you"; halt shows a resume instruction. Three regressions in `tests/test_home_os.py`.
+
+**Telegram (real API, configured chat).**
+- Product scan-alert path (`TelegramNotifier._send_status`): status `sent`, receipt stored in `logs/autonomy/telegram_notifications.json` as `message_ids[2026-11-10]["host_receipt_check:…"] = [2548]`.
+- Host-alert path (`send_operational_alert`, broken before QT-PRA-078): delivered, `message_id 2549`.
+
+**Kite.** The broker observer reports `TokenException` because there was no daily login on the holiday. The Kite gate needs the owner's login on a trading day.
+
+### 13.8 Final deployment and stop test
+
+| Step | Time (IST) | Result |
+| --- | --- | --- |
+| Stop `5a4d1ad7` (first stop by a supervisor that has QT-PRA-080/081) | 12:28:32 → 12:28:38 | **6 s, zero orphans.** The supervisor wrote its own terminal state `STOPPED`; before the fix it was left at RUNNING. The observer stopped with its API (`STOPPED`, no error), and no QuantTerm worker remained |
+| Deploy `92b311ca` | 12:28:52 → 12:30:04 | Install took 72 s; total downtime 92 s. RUNNING, 5/5 healthy, bootstrap READY, live LOCKED (verified, not authorized), HEALTHY. Paper state byte-identical (the fifth restart today). Threads at priority 20. The observer runs `92b311ca` as the API's child. Home reports `paper_bot.paused true, paused_by OWNER` |
+
+- **Restarts today.** Five, in order: `980b922` → `a1667cf3` → `980b922` → `5a4d1ad7` → `92b311ca`. Every one went through `product.host_install`, ended HEALTHY with live LOCKED, and left identical paper and execution state.
+- **Tests on the Mac.**
+  - Full canonical suite at `a1667cf3`: 433/433 files exit 0 (4,498 s, one interpreter per file, guarded).
+  - Every test touching code changed since then: 23/23 at `5a4d1ad7`, 10/10 at `92b311ca`.
+  - Frontend: vitest 167/167, `tsc` clean.
+  - CI: all 10 workflow runs green at `a1667cf3`, `5a4d1ad7` and `92b311ca`.
+
+**Soak.** A read-only probe was written (`~/Library/Logs/QuantTerm/soak/`, launchd `com.quantterm.soakprobe`).
+- **What it records:** every 5 minutes, latencies, freshness and live lock, launchd restarts, memory, swap, disk and mount. It is set to boot itself out after 72 h.
+- **Not installed.** Installing a persistent launchd agent on the owner's Mac was refused by the session's permission policy (unauthorized persistence), and it was not worked around. So it is one owner command (13.10).
+- **Interim.** The same probe ran inside the session for about 2 hours after the final deploy. That is a post-deploy observation, not the soak.
+
+### 13.9 Evidence scorecard (rubric 12.3)
+
+| Area | §12.3 (cloud) | Now (Mac) | Evidence and what limits it |
+| --- | --- | --- | --- |
+| (a) User-visible workflow reliability | 5 | **7** | Real Chrome on the Mac, all 5 workspaces: 54 calls all 2xx, no rescan on open, no stale banner. The Home pause truth is fixed. No soak yet; Research's first load is 22.8 s (P2) |
+| (b) Data provenance/freshness and decision correctness | 6 | **6** | Official history current on the host; persisted scan generation served with authority; honest no-trade; corrupt research index found and repaired. The real Kite data path is unverified (no login on the holiday) |
+| (c) Paper risk and crash safety | 6 | **7** | Paper state byte-identical across 5 restarts; orphan writer and stale observer fixed and verified live; backup and restore proven. Disk-detach and crash-under-load tests not authorized |
+| (d) UI/API performance on real hardware | 3 | **6** | Measured on the 8 GB Mac. Home 39–52 s → 2.1 s p50; Opportunities 6–10 s → 0.74 s; command-center 13.8 → 0.45 s. Root causes fixed (QoS throttling, log/listing reparsing). Concurrency still serialises heavy reads; no sustained measurement |
+| (e) Unattended operations and alerts | 3 | **5** | Host alerts fixed, with real receipts (2548, 2549); clean stop and restart; supervisor slimmed. The 72 h soak has not run; the daily Kite login still depends on the owner |
+| (f) Recovery, backup and deployment | 2 | **7** | Verified backup (SHA-256), restore drill (hashes, JSON, SQLite, serving), deploy and rollback rehearsed through the canonical installer. Destructive disk-detach test not authorized |
+| (g) Test coverage and exact-SHA delivery | 8 | **8** | Mac suite 433/433 plus deltas; CI 10/10 at every SHA; a host-hermeticity hazard found and fixed. Not a full Mac run at the final SHA |
+| **Mean** | **4.7** | **6.6** | No known open P0/P1; limited by the soak, Kite and destructive-storage gates |
+
+### 13.10 Release gates and owner actions
+
+| Gate | State |
+| --- | --- |
+| Installed host SHA, launchd owner, sparsebundle identity, verified backup | **PASS** (13.1, 13.4) |
+| Controlled paper-only deployment through the canonical host process | **PASS** (`92b311ca` deployed, HEALTHY) |
+| Rollback rehearsal | **PASS** (`a1667cf3` → `980b922` → forward) |
+| Restore drill | **PASS** (13.6) |
+| Real-browser desk on the Mac, no rescan on open | **PASS** |
+| Telegram delivery with a stored message id, correct chat | **PASS** (2548 product path, 2549 host alerts) |
+| Mac p50/p95/p99, memory, swap, fds | **PASS** (measured, 13.3 and 13.7); budgets now proposed: Home p95 ≤ 3 s, Opportunities p95 ≤ 1.5 s, health p95 ≤ 250 ms sequential |
+| Live lock | **PASS** (LOCKED and verified at every step) |
+| Kite session and quotes | **BLOCKED** (owner login on a trading day) |
+| History gate open on official history; a paper cycle enters on its own | **PARTIAL** (`analysis_complete` true, gate APPROVED; entries held by the **owner's own pause**, which was left untouched) |
+| 72 h soak | **BLOCKED** (probe ready; persistent install needs owner approval) |
+| Controlled disk detach / destructive restore | **NOT AUTHORIZED** |
+
+**Verdict: NOT READY.** The host now runs the verified build. No known P0/P1 is open, and backup, restore, deploy, rollback, the browser journey and Telegram are proven on the Mac. The soak and Kite gates are unproved.
+
+**Smallest owner actions:**
+1. On a trading morning, log in to Kite: `cd ~/0to100 && venv/bin/python main.py login`.
+2. To start the 72 h soak probe (read-only; it stops itself after 72 h):
+   ```
+   cd ~/Library/Logs/QuantTerm/soak && /usr/local/bin/python3 -c "import json,time; s=time.time(); json.dump({'start_epoch':s,'end_epoch':s+72*3600}, open('config.json','w'))" && cp com.quantterm.soakprobe.plist ~/Library/LaunchAgents/ && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.quantterm.soakprobe.plist
+   ```
+   After 72 h, the summary is `/usr/local/bin/python3 ~/Library/Logs/QuantTerm/soak/soak_report.py`.
+3. Optional, the owner's decision: Resume paper entries on Home when new paper trades are wanted. They are paused by the owner.
+
+**Operational notes:**
+- **Bulk IO on the external disk.** A 15 MB/s copy on the same USB disk pushed Home and Opportunities past 90 s while the desk was throttled. Run backups outside market hours.
+- **Running the suite on the Mac.** With QT-PRA-072 fixed, the remaining host tool calls in tests are read-only (`launchctl print`, `pmset -g`). The guard used in this session is still recommended.
