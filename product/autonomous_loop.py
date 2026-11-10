@@ -726,43 +726,48 @@ def _should_download(trigger: str, prev: Mapping[str, Any], scan_run_id: str) ->
 def project_events(limit: int = 40) -> list[dict[str, Any]]:
     """Human-readable chronology from loop events plus existing job stores."""
     rows = list(event_log(max(limit, 24)))
-    try:
-        import sqlite3
+    from product.sqlite_runtime import connect_readonly, table_exists
 
-        con = sqlite3.connect(str(logs_dir() / "market_ops" / "jobs.db"))
-        con.row_factory = sqlite3.Row
-        for row in con.execute(
-            "SELECT kind, status, message, finished_at, requested_by FROM operations "
-            "WHERE finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 24"
-        ):
-            rows.append({
-                "at": row["finished_at"],
-                "kind": str(row["kind"] or "JOB"),
-                "text": f"{row['kind']} {row['status']} — {str(row['message'] or '')[:160]}",
-                "source": "market_ops",
-                "requested_by": row["requested_by"],
-            })
-        con.close()
+    # Read-only: a read must never create another component's job store.
+    con = None
+    try:
+        con = connect_readonly(logs_dir() / "market_ops" / "jobs.db")
+        if con is not None and table_exists(con, "operations"):
+            for row in con.execute(
+                "SELECT kind, status, message, finished_at, requested_by FROM operations "
+                "WHERE finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 24"
+            ):
+                rows.append({
+                    "at": row["finished_at"],
+                    "kind": str(row["kind"] or "JOB"),
+                    "text": f"{row['kind']} {row['status']} — {str(row['message'] or '')[:160]}",
+                    "source": "market_ops",
+                    "requested_by": row["requested_by"],
+                })
     except Exception:
         pass
+    finally:
+        if con is not None:
+            con.close()
+    con = None
     try:
-        import sqlite3
-
-        con = sqlite3.connect(str(logs_dir() / "autonomy" / "jobs.db"))
-        con.row_factory = sqlite3.Row
-        for row in con.execute(
-            "SELECT job_type, status, result_summary, finished_at FROM jobs "
-            "WHERE finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 24"
-        ):
-            rows.append({
-                "at": row["finished_at"],
-                "kind": str(row["job_type"] or "JOB"),
-                "text": f"{row['job_type']} {row['status']} — {str(row['result_summary'] or '')[:160]}",
-                "source": "autonomy",
-            })
-        con.close()
+        con = connect_readonly(logs_dir() / "autonomy" / "jobs.db")
+        if con is not None and table_exists(con, "jobs"):
+            for row in con.execute(
+                "SELECT job_type, status, result_summary, finished_at FROM jobs "
+                "WHERE finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 24"
+            ):
+                rows.append({
+                    "at": row["finished_at"],
+                    "kind": str(row["job_type"] or "JOB"),
+                    "text": f"{row['job_type']} {row['status']} — {str(row['result_summary'] or '')[:160]}",
+                    "source": "autonomy",
+                })
     except Exception:
         pass
+    finally:
+        if con is not None:
+            con.close()
     rows.sort(key=lambda r: str(r.get("at") or ""))
     return rows[-int(limit):]
 

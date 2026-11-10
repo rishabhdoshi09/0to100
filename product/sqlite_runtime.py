@@ -9,6 +9,27 @@ from pathlib import Path
 from core.runtime_paths import logs_dir, logs_path
 
 
+def connect_readonly(path: str | Path, *, timeout: float = 5.0) -> sqlite3.Connection | None:
+    """Open another component's store for READING without side effects.
+
+    A plain sqlite3.connect() creates a missing database file. A reader that
+    does that leaves an empty, schema-less store behind for every later reader
+    to trip over. Returns None when the store does not exist yet; mode=ro still
+    sees committed WAL rows.
+    """
+    target = Path(path)
+    if not target.exists():
+        return None
+    con = sqlite3.connect(target.resolve().as_uri() + "?mode=ro", uri=True, timeout=timeout)
+    con.row_factory = sqlite3.Row
+    return con
+
+
+def table_exists(con: sqlite3.Connection, table: str) -> bool:
+    row = con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+    return row is not None
+
+
 def connect(path: str | Path, *, timeout: float = 30.0, wal: bool = True) -> sqlite3.Connection:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
