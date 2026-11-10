@@ -501,7 +501,7 @@ def test_recovered_market_access_retries_degraded_bootstrap(monkeypatch):
     checks = [HP.Check("nse_official", HP.PASS, "ok", True, {})]
     monkeypatch.setattr(HP, "probe_market_access", lambda: (checks, {"market_blocked": False}))
     retried = []
-    monkeypatch.setattr(HB, "bootstrap_host_state", lambda **kwargs: retried.append(True) or {"state": "READY"})
+    monkeypatch.setattr(HB, "bootstrap_host_state_isolated", lambda **kwargs: retried.append(True) or {"state": "READY"})
     supervisor._probe_market_access_worker()
     assert retried == [True]
     assert supervisor.bootstrap["state"] == "READY"

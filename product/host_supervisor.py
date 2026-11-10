@@ -393,8 +393,10 @@ class HostSupervisor:
             pass
 
     def bootstrap_host(self) -> None:
-        from product.host_bootstrap import bootstrap_host_state
-        self.bootstrap = bootstrap_host_state(should_stop=lambda: self.stop_requested)
+        # Child interpreter: verifying history unpickles the whole official
+        # store, which must not stay resident in this long-lived supervisor.
+        from product.host_bootstrap import bootstrap_host_state_isolated
+        self.bootstrap = bootstrap_host_state_isolated(should_stop=lambda: self.stop_requested)
         state = str(self.bootstrap.get("state") or "FAILED")
         if state in {"FAILED", "CANCELLED"}:
             raise RuntimeError(
@@ -435,8 +437,8 @@ class HostSupervisor:
             }
             required_blocked = any(c.required and c.status in {FAIL, UNKNOWN} for c in checks)
             if str(self.bootstrap.get("state") or "") == "DEGRADED" and not required_blocked:
-                from product.host_bootstrap import bootstrap_host_state
-                self.bootstrap = bootstrap_host_state(should_stop=lambda: self.stop_requested)
+                from product.host_bootstrap import bootstrap_host_state_isolated
+                self.bootstrap = bootstrap_host_state_isolated(should_stop=lambda: self.stop_requested)
         except Exception as exc:
             self.market_access = {
                 "checked_at": _now(), "environment": {}, "checks": [],

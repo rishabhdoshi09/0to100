@@ -115,3 +115,146 @@ def bootstrap_host_state(*, should_stop: Callable[[], bool] | None = None) -> di
     except Exception:
         pass
     return report
+
+
+# ── Process isolation ──────────────────────────────────────────────────────────
+# Verifying official history means unpickling the canonical store (183 MB on
+# disk, 3,463 symbols on the owner's Mac). Run in-process, that left ~300 MB
+# resident in the long-lived host supervisor for the life of the host on an
+# 8 GB machine already deep in swap; clearing the store afterwards recovers only
+# part of it (pandas and allocator fragmentation stay). The supervisor therefore
+# runs the bootstrap in a child interpreter: the memory is returned when the
+# child exits, and a crash in the history path cannot take the supervisor down.
+
+_REPORT_PREFIX = "QT_HOST_BOOTSTRAP_REPORT "
+
+
+def _final_report(state: str, error: str, started_at: str) -> dict[str, Any]:
+    report: dict[str, Any] = {
+        "schema_version": 1,
+        "started_at": started_at,
+        "state": state,
+        "sqlite": {},
+        "history_before": {},
+        "history_after": {},
+        "history_build_attempted": False,
+        "error": error[:300],
+        "isolated": True,
+        "finished_at": _now(),
+    }
+    try:
+        _atomic_json(runtime_path(STATUS_PATH), report)
+    except Exception:
+        pass
+    return report
+
+
+def bootstrap_host_state_isolated(
+    *,
+    should_stop: Callable[[], bool] | None = None,
+    poll_s: float = 0.5,
+    term_grace_s: float = 30.0,
+    command: list[str] | None = None,
+) -> dict[str, Any]:
+    """``bootstrap_host_state`` in a child interpreter; same report contract.
+
+    The child's log lines are forwarded to this process's stdout unchanged. A
+    stop request is delivered as SIGTERM, which the child turns into the normal
+    cooperative cancellation (``should_stop``); a child that ignores it is
+    killed after ``term_grace_s``. A child that dies without a report is FAILED,
+    never READY.
+    """
+    import os
+    import subprocess
+    import sys
+    import threading
+    import time
+
+    from core.runtime_paths import REPO_ROOT
+
+    started_at = _now()
+    argv = list(command or [sys.executable, "-u", "-m", "product.host_bootstrap", "--child"])
+    try:
+        proc = subprocess.Popen(
+            argv, cwd=str(REPO_ROOT), env=dict(os.environ),
+            stdout=subprocess.PIPE, stderr=None, text=True, bufsize=1,
+        )
+    except Exception as exc:
+        return _final_report("FAILED", f"bootstrap child could not start: {type(exc).__name__}: {exc}", started_at)
+
+    captured: dict[str, Any] = {}
+
+    def pump() -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            if line.startswith(_REPORT_PREFIX):
+                try:
+                    payload = json.loads(line[len(_REPORT_PREFIX):])
+                    if isinstance(payload, dict):
+                        captured["report"] = payload
+                except ValueError:
+                    pass
+                continue
+            try:
+                sys.stdout.write(line)
+                sys.stdout.flush()
+            except Exception:
+                pass
+
+    reader = threading.Thread(target=pump, name="quantterm-bootstrap-log", daemon=True)
+    reader.start()
+    cancel_sent_at: float | None = None
+    while True:
+        try:
+            proc.wait(timeout=poll_s)
+            break
+        except subprocess.TimeoutExpired:
+            pass
+        if cancel_sent_at is None and should_stop is not None and should_stop():
+            cancel_sent_at = time.monotonic()
+            try:
+                proc.terminate()
+            except OSError:
+                pass
+        elif cancel_sent_at is not None and time.monotonic() - cancel_sent_at > term_grace_s:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+    reader.join(timeout=5.0)
+
+    report = captured.get("report")
+    if isinstance(report, dict) and report.get("state"):
+        report["isolated"] = True
+        return report
+    if cancel_sent_at is not None:
+        return _final_report("CANCELLED", "history bootstrap cancelled during shutdown", started_at)
+    return _final_report(
+        "FAILED",
+        f"bootstrap child exited rc={proc.returncode} without a report",
+        started_at,
+    )
+
+
+def _child_main() -> int:
+    import signal
+    import sys
+
+    stop = {"requested": False}
+
+    def _request_stop(_signum, _frame) -> None:
+        stop["requested"] = True
+
+    signal.signal(signal.SIGTERM, _request_stop)
+    report = bootstrap_host_state(should_stop=lambda: stop["requested"])
+    sys.stdout.write(_REPORT_PREFIX + json.dumps(report, default=str) + "\n")
+    sys.stdout.flush()
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+
+    if "--child" in sys.argv[1:]:
+        raise SystemExit(_child_main())
+    print(json.dumps(bootstrap_host_state(), indent=2, default=str))
