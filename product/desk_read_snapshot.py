@@ -75,6 +75,20 @@ class DeskReadSnapshot:
                     self._saved_at = self._clock()
                 self._building = False
 
+    def _start_build(self, build: Callable[[], dict[str, Any]]) -> None:
+        """Start the one background build. Caller holds ``self._lock``."""
+        self._building = True
+        try:
+            threading.Thread(
+                target=self._run_build,
+                args=(build,),
+                daemon=True,
+                name="qt-desk-read-refresh",
+            ).start()
+        except Exception:
+            self._building = False
+            raise
+
     def read(self, build: Callable[[], dict[str, Any]],
              fallback: Callable[[], dict[str, Any]]) -> dict[str, Any]:
         now = self._clock()
@@ -82,19 +96,14 @@ class DeskReadSnapshot:
             cached = self._payload
             age = max(0.0, now - self._saved_at) if cached is not None else 0.0
             if cached is not None and age <= self._fresh_s:
+                # Refresh ahead: start the single background rebuild once half
+                # the window has passed, so a steady poll cadence keeps finding
+                # a current snapshot instead of flapping to REFRESHING.
+                if age > self._fresh_s / 2.0 and not self._building:
+                    self._start_build(build)
                 return self._project(cached, age_s=age, stale=False)
             if not self._building:
-                self._building = True
-                try:
-                    threading.Thread(
-                        target=self._run_build,
-                        args=(build,),
-                        daemon=True,
-                        name="qt-desk-read-refresh",
-                    ).start()
-                except Exception:
-                    self._building = False
-                    raise
+                self._start_build(build)
             if cached is not None and age <= self._stale_cap_s:
                 return self._project(cached, age_s=age, stale=True)
 

@@ -649,9 +649,8 @@ def note_run(capability_id: str, *, status: str, reason: str = "") -> dict[str, 
     state = {"schema_version": 1, "updated_at": datetime.now(timezone.utc).isoformat(), "items": items}
     path = _state_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(path, json.dumps(state, indent=2))
     return items[capability_id]
 
 

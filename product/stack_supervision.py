@@ -31,8 +31,13 @@ def pid_alive(pid: int | None) -> bool:
         os.kill(value, 0)
     except OSError:
         return False
+    proc_stat = f"/proc/{value}/stat"
+    if not os.path.exists("/proc/self/stat"):
+        # macOS/BSD have no procfs: ask ps for the state letter instead of
+        # reporting every process (including our own) as dead.
+        return _ps_state_alive(value)
     try:
-        with open(f"/proc/{value}/stat", encoding="utf-8") as handle:
+        with open(proc_stat, encoding="utf-8") as handle:
             stat = handle.read()
         state = stat[stat.rfind(")") + 2 :].split()[0]
     except OSError:
@@ -40,6 +45,22 @@ def pid_alive(pid: int | None) -> bool:
     except (IndexError, ValueError):
         return True
     return state not in {"Z", "X"}
+
+
+def _ps_state_alive(pid: int) -> bool:
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            ["ps", "-o", "stat=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=5,
+        )
+    except Exception:
+        return True  # kill(pid, 0) succeeded; without ps, trust it
+    state = proc.stdout.strip()
+    if proc.returncode != 0 or not state:
+        return False
+    return not state.startswith("Z")
 
 
 @dataclass

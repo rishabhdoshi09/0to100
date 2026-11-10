@@ -267,6 +267,111 @@ def check_decisions_published_without_a_scan() -> Finding | None:
     return None
 
 
+_SQLITE_SUFFIXES = (".db", ".sqlite", ".sqlite3")
+
+
+def _live_sqlite_stores() -> list[Path]:
+    """Every live SQLite store: logs/*.db and logs/*/*.db (dated copies under
+    logs/backup are not live and are skipped). No recursive walk: the logs tree
+    holds tens of thousands of archive files on the owner's USB disk."""
+    root = logs_dir()
+    found: list[Path] = []
+    for pattern in ("*", "*/*"):
+        for path in root.glob(pattern):
+            if path.suffix in _SQLITE_SUFFIXES and path.is_file():
+                rel = path.relative_to(root).parts
+                if rel and rel[0] == "backup":
+                    continue
+                found.append(path)
+    return sorted(found)
+
+
+def _integrity_check_copy(path: Path, scratch: Path) -> list[str] | None:
+    """integrity_check a byte copy of ``path`` made on local scratch storage.
+
+    Checking the live file in place is the wrong tool on the owner's Mac: SQLite
+    reads pages at random, and through the APFS sparsebundle on the USB disk a
+    36 MB store took minutes (0.1 s for the same file on the internal SSD),
+    while slowing the desk for everyone. A sequential copy is fast, touches no
+    lock, and creates no -wal/-shm beside the live store. Returns the check
+    rows, or None if the store could not be copied or opened at all.
+
+    The full integrity_check (not quick_check) is required: quick_check does not
+    compare index entries with table rows, which is exactly the damage found
+    ("row 10505 missing from index") -- quick_check reported it as ok.
+    """
+    import shutil
+    import sqlite3
+
+    copy = scratch / "store.db"
+    try:
+        shutil.copyfile(path, copy)
+    except OSError:
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{copy}?mode=ro&immutable=1", uri=True)
+        try:
+            return [str(r[0]) for r in conn.execute("PRAGMA integrity_check(5)").fetchall()]
+        finally:
+            conn.close()
+    except sqlite3.DatabaseError as exc:
+        return [f"{type(exc).__name__}: {exc}"]
+    finally:
+        try:
+            copy.unlink()
+        except OSError:
+            pass
+
+
+def check_sqlite_store_integrity() -> Finding | None:
+    """A corrupt store reads as plausible data. Found on the owner's Mac
+    (2026-11-10): feature_store.db had a UNIQUE index missing a row for over a
+    month -- duplicates could be inserted and lookups could miss rows -- and
+    nothing noticed. Every live store is copied and checked off the USB disk;
+    a failure is re-copied and re-checked before it counts, so a write caught
+    mid-flight is not reported as corruption."""
+    import tempfile
+    import time as _time
+
+    root = logs_dir()
+    stores = _live_sqlite_stores()
+    corrupt: list[dict[str, str]] = []
+    busy: list[str] = []
+    unreadable: list[str] = []
+    with tempfile.TemporaryDirectory(prefix="qt-store-check-") as tmp:
+        scratch = Path(tmp)
+        for path in stores:
+            rel = str(path.relative_to(root))
+            if Path(str(path) + "-journal").exists():
+                busy.append(rel)  # a rollback-journal write is in flight right now
+                continue
+            rows = _integrity_check_copy(path, scratch)
+            if rows is not None and rows != ["ok"]:
+                _time.sleep(1.0)
+                rows = _integrity_check_copy(path, scratch)
+            if rows is None:
+                unreadable.append(rel)
+            elif rows != ["ok"]:
+                corrupt.append({"store": rel, "result": "; ".join(rows)[:240]})
+    evidence = {"checked": len(stores), "busy_skipped": busy[:10], "unreadable": unreadable[:10]}
+    if corrupt:
+        return Finding(
+            "sqlite_store_integrity", CRITICAL,
+            f"{len(corrupt)} SQLite store(s) failed PRAGMA integrity_check",
+            "back up the file, check for duplicate keys, then REINDEX or restore it; "
+            "readers are consuming damaged data until then",
+            {"corrupt": corrupt[:10], **evidence},
+        )
+    if unreadable:
+        return Finding(
+            "sqlite_store_integrity", UNKNOWN,
+            f"{len(unreadable)} SQLite store(s) could not be copied to check",
+            "an unchecked store is not a healthy store",
+            evidence,
+        )
+    return None
+
+
 CHECKS: tuple[Callable[[], Finding | None], ...] = (
     check_scan_complete_over_thin_coverage,
     check_universe_claimed_without_provenance,
@@ -277,6 +382,7 @@ CHECKS: tuple[Callable[[], Finding | None], ...] = (
     check_non_market_evidence_in_paper_cells,
     check_unattributable_open_positions,
     check_decisions_published_without_a_scan,
+    check_sqlite_store_integrity,
 )
 
 

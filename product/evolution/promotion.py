@@ -101,11 +101,8 @@ def _persist_proof(row: dict[str, Any], *, path: str | Path | None = None) -> di
     }
     rows = _read_proofs(path)
     rows.append(record)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as fh:
-        for item in rows[-5000:]:
-            fh.write(json.dumps(item, default=str, sort_keys=True) + "\n")
-    tmp.replace(target)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(target, "".join(json.dumps(item, default=str, sort_keys=True) + "\n" for item in rows[-5000:]))
     return record
 
 

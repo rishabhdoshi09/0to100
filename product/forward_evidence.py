@@ -78,9 +78,8 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 def _write_jsonl(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text("".join(json.dumps(dict(r), default=str) + "\n" for r in rows), encoding="utf-8")
-    os.replace(tmp, path)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(path, "".join(json.dumps(dict(r), default=str) + "\n" for r in rows))
 
 
 def load_ledger(path: str | Path | None = None) -> list[dict[str, Any]]:

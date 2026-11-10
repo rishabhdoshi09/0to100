@@ -414,9 +414,8 @@ def write_health(*, ledger_path: Path | None = None, dest: Path | None = None) -
         targets.append(HEALTH_DOC_PATH)
     for p in targets:
         p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(p.suffix + ".tmp")
-        tmp.write_text(blob, encoding="utf-8")
-        tmp.replace(p)
+        from core.atomic_io import atomic_write_text
+        atomic_write_text(p, blob)
     return health
 
 

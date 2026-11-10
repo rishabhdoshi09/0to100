@@ -458,6 +458,10 @@ def test_alert_engine_retries_plain_text_when_html_rejected(tmp_path, monkeypatc
             self.status_code = 200 if ok else 400
             self.text = text
 
+        def json(self):
+            # A real Bot API confirmation: delivery needs ok, a message_id and the chat.
+            return {"ok": True, "result": {"message_id": 7, "chat": {"id": 42}}}
+
     def post(url, json=None, timeout=8):
         calls.append(dict(json or {}))
         if json and json.get("parse_mode") == "HTML":
@@ -468,6 +472,7 @@ def test_alert_engine_retries_plain_text_when_html_rejected(tmp_path, monkeypatc
     from alerts.telegram_alerts import AlertEngine
     engine = AlertEngine()
     assert engine.send("<b>hello</b> & world") is True
+    assert engine.last_message_ids == [7]
     assert any(c.get("parse_mode") == "HTML" for c in calls)
     assert any("parse_mode" not in c for c in calls)
 

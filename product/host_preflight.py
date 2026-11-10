@@ -33,7 +33,13 @@ MIN_PYTHON = (3, 11)
 MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024
 MIN_AVAILABLE_MEMORY_BYTES = 4 * 1024 * 1024 * 1024
 DESK_PORTS = (8765, 8766, 5173)
-EPHEMERAL_PREFIXES = ("/tmp/", "/var/tmp/", "/dev/shm/")
+# Resolved forms matter: on macOS /tmp and /var are symlinks into /private, and
+# $TMPDIR lives under /private/var/folders (purged by dirhelper). Paths are
+# compared after resolve(), so the /private forms must be listed explicitly.
+EPHEMERAL_PREFIXES = (
+    "/tmp/", "/var/tmp/", "/dev/shm/",
+    "/private/tmp/", "/private/var/tmp/", "/var/folders/", "/private/var/folders/",
+)
 # A probe answers two different questions and conflating them is how a working
 # host gets declared unreachable. TRANSPORT asks whether this machine can reach
 # the provider at all; CAPABILITY asks whether QuantTerm can actually obtain the
@@ -958,9 +964,8 @@ def render_text(report: Mapping[str, Any]) -> str:
 def write_preflight(report: Mapping[str, Any]) -> Path:
     target = logs_dir() / "product" / "host_preflight.json"
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(".tmp")
-    tmp.write_text(json.dumps(dict(report), indent=2, default=str), encoding="utf-8")
-    os.replace(tmp, target)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(target, json.dumps(dict(report), indent=2, default=str))
     return target
 
 

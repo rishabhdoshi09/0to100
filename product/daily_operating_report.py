@@ -518,9 +518,8 @@ def write_daily_operating_report(report: Mapping[str, Any] | None = None) -> Pat
     day = str(payload.get("generated_at") or _now())[:10]
     target = logs_path("product", "operating_reports", f"{day}.json")
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
-    os.replace(tmp, target)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(target, json.dumps(payload, indent=2, default=str))
     return target
 
 

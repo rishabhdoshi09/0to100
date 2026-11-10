@@ -6,7 +6,6 @@ import {
   fetchRecommendationsWorkspace,
   fetchDecisionSimulationGate,
   simulatePastDecisions,
-  bootstrapProduct,
   type DeskNote,
   type DeskNoteCompany,
   type MarketReportItem,
@@ -22,7 +21,7 @@ import { DailyWrapList, magazineWrapLines } from './dailyWrap'
 import { keepRicherMemory, markInvestigate, recallMemory } from './sessionMemory'
 import { recoCanonicalDecision } from './scannerFallback'
 import { shouldPollPage } from './pagePolling'
-import { recommendationsAreCurrent } from './recommendationAuthority'
+import { recommendationStateMessage, recommendationsAreCurrent } from './recommendationAuthority'
 
 const CAT_ICONS: Record<string, string> = {
   wealth_builders: 'W',
@@ -483,23 +482,12 @@ export function RecommendationsView({
   const [simulationGate, setSimulationGate] = useState<DecisionSimulationGate | null>(null)
   const [simulationBusy, setSimulationBusy] = useState(false)
   const [simulationError, setSimulationError] = useState('')
-  const autoPrep = useRef(false)
   const recommendationsVisible = shouldPollPage(activePage, ['Recommendations'])
 
-  useEffect(() => {
-    if (!recommendationsVisible || autoPrep.current) return
-    const hasScan = Boolean(dashboard.scan.scanned_at || (dashboard.scan.records || []).length)
-    if (hasScan || marketScan.isActive || marketScan.isBusy) {
-      autoPrep.current = true
-      return
-    }
-    autoPrep.current = true
-    void bootstrapProduct()
-      .then(() => {
-        if (!marketScan.isActive && !marketScan.isBusy) void marketScan.start()
-      })
-      .catch(() => { autoPrep.current = false })
-  }, [recommendationsVisible, dashboard.scan.scanned_at, dashboard.scan.records.length, marketScan.isActive, marketScan.isBusy, marketScan.start])
+  // Reading Opportunities never starts a job. The autonomy scheduler publishes
+  // scans after official data is ready; this page used to fire RUN_SCAN_NOW
+  // whenever the dashboard read cache was still warming (empty scan), which
+  // rescanned an already-scanned NSE session.
 
   useEffect(() => {
     if (!recommendationsVisible) return
@@ -568,8 +556,10 @@ export function RecommendationsView({
   }, [recommendationsVisible, dashboard.scan.scanned_at, dashboard.long_term.scanned_at, marketScan.succeeded, longTermScan.succeeded, marketScan.isBusy, longTermScan.isBusy, dashboard.market.available])
 
   const recommendationsVerified = recommendationsAreCurrent(
-    data, dashboard.scan, dashboard.long_term.scanned_at, dashboard.data.ready,
+    data, dashboard.scan, dashboard.long_term.scanned_at,
+    dashboard.data.ready && dashboard.response_meta?.stale !== true,
   )
+  const notCurrent = recommendationStateMessage(data)
 
   const category = useMemo(
     () => data?.categories.find((c) => c.id === categoryId) || data?.categories[0],
@@ -639,10 +629,11 @@ export function RecommendationsView({
         <LiveScanBanner scan={longTermScan} depth={depth} label="Funds refresh" />
         <div className="reco-empty">
           <strong>{error || (!recommendationsVerified
-            ? 'Verifying current NSE stock recommendations'
+            ? notCurrent.title
             : 'No recommendation data yet')}</strong>
+          {!recommendationsVerified && !error && notCurrent.detail ? <p>{notCurrent.detail}</p> : null}
           {!recommendationsVerified && data?.cmp_note ? <p>{data.cmp_note}</p> : null}
-          <p>This page starts the official-price and market-scan jobs if they are missing, then builds recommendations from verified scan evidence. Empty high-conviction is a real result when families do not agree.</p>
+          <p>QuantTerm&apos;s scheduler runs the official-price and market-scan jobs by itself and publishes recommendations from verified scan evidence. Opening this page never starts a scan; use Scan market only to request one now. Empty high-conviction is a real result when families do not agree.</p>
           <div className="reco-hero-actions">
             <button type="button" className="reco-primary" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
               {marketScan.isBusy ? 'Scanning market…' : 'Scan market'}

@@ -119,9 +119,8 @@ def load_checkpoint(path: str | Path | None = None) -> dict[str, Any]:
 def _save_checkpoint(payload: Mapping[str, Any], path: str | Path | None = None) -> None:
     target = checkpoint_path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(json.dumps(dict(payload), indent=2, default=str), encoding="utf-8")
-    tmp.replace(target)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(target, json.dumps(dict(payload), indent=2, default=str))
 
 
 def _default_universe() -> list[str]:

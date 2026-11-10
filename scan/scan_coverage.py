@@ -15,7 +15,6 @@ second scanner:
 from __future__ import annotations
 
 import json
-import os
 import threading
 from contextlib import contextmanager
 from collections import Counter
@@ -282,9 +281,8 @@ def observe_scanner(scanner, symbols: Iterable[str]):
 def save_audit(audit: dict[str, Any], path: str | Path = AUDIT_PATH) -> Path:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(json.dumps(audit, indent=2, default=str), encoding="utf-8")
-    os.replace(tmp, target)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(target, json.dumps(audit, indent=2, default=str))
     return target
 
 

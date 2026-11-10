@@ -510,6 +510,17 @@ def _scan_payload() -> dict:
     try:
         from product.scan_store import load_scan, resolved_scan_path
         payload = load_scan(resolved_scan_path()) or {}
+    except Exception as exc:
+        return _scan_payload_from(None, error=str(exc))
+    return _scan_payload_from(payload)
+
+
+def _scan_payload_from(payload: dict | None, *, error: str = "") -> dict:
+    """Desk view of one already-parsed scan artifact (see ``_scan_payload``)."""
+    try:
+        if error:
+            raise RuntimeError(error)
+        payload = payload or {}
         records = [dict(row) for row in (payload.get("records", []) or []) if isinstance(row, dict)]
         provenance = payload.get("provenance")
         return {
@@ -528,6 +539,9 @@ def _scan_payload() -> dict:
             "coverage_state": str(payload.get("coverage_state") or "UNKNOWN"),
             "coverage_warning": str(payload.get("coverage_warning") or ""),
             "coverage": dict(payload.get("coverage") or {}),
+            # What the scan published for downstream readers (recommendations,
+            # discovery), so a failed publication is explained, not silent.
+            "desk_overlays": dict(payload.get("desk_overlays") or {}),
         }
     except Exception as exc:
         return {

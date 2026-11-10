@@ -275,32 +275,6 @@ def operator_health() -> dict:
     return core._autonomy_payload()
 
 
-@product.app.get("/api/recommendations-workspace")
-def recommendations_workspace() -> dict:
-    """Canonical Recommendations projection, protected from runaway UI polling."""
-    with core._bounded_status_read("/api/recommendations-workspace"):
-        return _build_recommendations_workspace_response()
-
-
-def _build_recommendations_workspace_response() -> dict:
-    """Read-only evidence projection; does not execute market scans."""
-    from product.recommendations_workspace import (
-        build_recommendations_workspace,
-        slim_workspace_for_desk,
-    )
-
-    scan = core._scan_payload()
-    payload = build_recommendations_workspace(
-        scan_payload=scan,
-        long_term_payload=core._long_term_payload(),
-        refresh_technicals=False,
-        settle_cases=False,
-        deep_confirm=False,
-        persist_ledger=False,
-    )
-    return slim_workspace_for_desk(_attach_authority(payload, scan_payload=scan))
-
-
 @product.app.get("/api/evidence-authority")
 def evidence_authority() -> dict:
     """Methodology, scan coverage, and measured outcome performance."""

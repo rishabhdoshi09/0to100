@@ -309,9 +309,8 @@ def strict_install_service_definition(
     backup = path.with_suffix(path.suffix + ".previous")
     if previous is not None:
         backup.write_text(previous, encoding="utf-8")
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(content, encoding="utf-8")
-    os.replace(tmp, path)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(path, content)
     return {
         "manager": selected,
         "path": str(path),

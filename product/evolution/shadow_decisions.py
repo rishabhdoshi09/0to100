@@ -64,11 +64,8 @@ def _read_ledger(path: Path) -> list[dict[str, Any]]:
 
 def _write_ledger(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as fh:
-        for row in rows:
-            fh.write(json.dumps(row, default=str) + "\n")
-    tmp.replace(path)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(path, "".join(json.dumps(row, default=str) + "\n" for row in rows))
 
 
 def freeze_shadow_decision(

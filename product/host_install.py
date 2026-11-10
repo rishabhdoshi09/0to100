@@ -33,7 +33,13 @@ from core.runtime_paths import (
 SERVICE_NAME = "quantterm"
 LAUNCHD_LABEL = "com.quantterm.desk"
 SCHEMA_VERSION = 1
-EPHEMERAL_PREFIXES = ("/tmp/", "/var/tmp/", "/dev/shm/")
+# Resolved forms matter: on macOS /tmp and /var are symlinks into /private, and
+# $TMPDIR lives under /private/var/folders (purged by dirhelper). Paths are
+# compared after resolve(), so the /private forms must be listed explicitly.
+EPHEMERAL_PREFIXES = (
+    "/tmp/", "/var/tmp/", "/dev/shm/",
+    "/private/tmp/", "/private/var/tmp/", "/var/folders/", "/private/var/folders/",
+)
 DURABLE_DIRS = (
     "logs", "db", "state", "cache", "evidence", "paper", "scans",
     "history", "provenance", "reports",
@@ -57,6 +63,18 @@ MIGRATION_HEADROOM_FRACTION = 0.10
 SQLITE_DATABASE_SUFFIXES = {".db", ".sqlite", ".sqlite3"}
 SQLITE_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
 MIGRATION_RECOVERABLE_CONFLICT_SUFFIXES = (".log", ".db", ".sqlite", ".sqlite3")
+# launchd scheduling class for the whole host (supervisor and children).
+# Measured on the owner's Mac (macOS 12.7.6, 2026-11-10): "Adaptive" without
+# XPC activity pins every thread at priority 4 (MAXPRI_THROTTLE, background
+# CPU/IO throttling) -- below even a nice-19 shell job -- which is what made
+# Home take 40-50 s there; "Standard" (= unset) runs at 20; "Interactive" at
+# 31 like apps. Standard keeps the owner's foreground apps ahead of a scan
+# while ending background throttling of the desk.
+LAUNCHD_PROCESS_TYPE = "Standard"
+# Seconds launchd waits after SIGTERM before SIGKILL. Must cover the
+# supervisor's loop tick, an in-flight health probe and the shared child stop
+# grace (host_supervisor.STOP_GRACE_S), or children are orphaned on stop.
+LAUNCHD_EXIT_TIMEOUT_S = 45
 LEGACY_LAUNCHD_LABELS = (
     LAUNCHD_LABEL,
     "com.quantterm.app",
@@ -159,9 +177,8 @@ def inventory_digest(rows: Mapping[str, Mapping[str, Any]]) -> str:
 
 def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(dict(payload), indent=2, default=str), encoding="utf-8")
-    os.replace(tmp, path)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(path, json.dumps(dict(payload), indent=2, default=str))
 
 
 def _inventory_bytes(rows: Mapping[str, Mapping[str, Any]]) -> int:
@@ -319,18 +336,57 @@ def _checkpoint_sqlite_sources(repo_root: Path) -> list[str]:
     return checkpointed
 
 
+def _process_cwds(pids: Iterable[int]) -> dict[int, Path]:
+    """Map pid -> current working directory via one ``lsof`` call.
+
+    A pid absent from the result has an unknown cwd; callers decide whether
+    unknown means "possibly ours" (fail closed) or "not proven ours".
+    """
+    wanted = sorted({int(pid) for pid in pids})
+    if not wanted:
+        return {}
+    try:
+        proc = _run(
+            ["lsof", "-nP", "-a", "-d", "cwd", "-p", ",".join(str(p) for p in wanted), "-Fpn"],
+            check=False, timeout=15,
+        )
+    except Exception:
+        return {}
+    cwds: dict[int, Path] = {}
+    current: int | None = None
+    for line in str(getattr(proc, "stdout", "") or "").splitlines():
+        if line.startswith("p"):
+            try:
+                current = int(line[1:])
+            except ValueError:
+                current = None
+        elif line.startswith("n") and current is not None and line[1:].startswith("/"):
+            cwds[current] = Path(line[1:])
+    return cwds
+
+
 def _macos_quantterm_processes(repo_root: Path) -> list[dict[str, Any]]:
+    """QuantTerm processes that may write this checkout's repo-local runtime.
+
+    A QuantTerm process belongs to ``repo_root`` when its command names the
+    checkout or its cwd is inside it. Processes proven to run from a different
+    checkout (another installed host on the same Mac, a test worktree) are not
+    this migration's writers and must never be reported or stopped for it. A
+    process whose cwd cannot be read is kept (fail closed: block, don't guess).
+    """
     if platform.system().lower() != "darwin":
         return []
     try:
         proc = _run(["ps", "-axo", "pid=,command="], check=False, timeout=10)
     except Exception:
         return []
-    repo_text = str(_resolved(repo_root))
+    repo = _resolved(repo_root)
+    repo_text = str(repo)
     strong_markers = (
         "run_quantterm",
         "product.host_",
         "operations.market_ops",
+        "operations.zerodha_observer",
         "research.autonomy",
         "main.py autonomy",
         "terminal_api",
@@ -339,7 +395,7 @@ def _macos_quantterm_processes(repo_root: Path) -> list[dict[str, Any]]:
         "report_api:app",
     )
     repo_scoped_markers = ("streamlit", "uvicorn", "vite")
-    rows: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
     for raw in proc.stdout.splitlines():
         raw = raw.strip()
         if not raw:
@@ -359,12 +415,78 @@ def _macos_quantterm_processes(repo_root: Path) -> list[dict[str, Any]]:
         scoped = repo_text in command and any(marker in lower for marker in repo_scoped_markers)
         if not strong and not scoped:
             continue
-        rows.append({"pid": pid, "command": command[:400]})
+        candidates.append({"pid": pid, "command": command[:400], "_names_repo": repo_text in command})
+    unresolved = [row["pid"] for row in candidates if not row["_names_repo"]]
+    cwds = _process_cwds(unresolved)
+    rows: list[dict[str, Any]] = []
+    for row in candidates:
+        names_repo = row.pop("_names_repo")
+        if not names_repo:
+            cwd = cwds.get(row["pid"])
+            if cwd is not None and not _under(cwd, repo):
+                continue
+        rows.append(row)
     return rows
 
 
+def _paths_reference_repo(values: Iterable[Any], repo: Path) -> bool:
+    for value in values:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        for chunk in text.split(os.pathsep):
+            chunk = chunk.strip().rstrip("/")
+            if not chunk.startswith("/"):
+                continue
+            # Lexical first: <repo>/venv/bin/python is a symlink that resolves
+            # outside the checkout, but it still names this checkout's venv.
+            if chunk == str(repo) or chunk.startswith(str(repo) + "/") or _under(Path(chunk), repo):
+                return True
+    return False
+
+
+def _launchd_label_serves_repo(label: str, print_stdout: str, plist: Path, repo_root: Path) -> bool:
+    """True only when a launchd job is proven to run this checkout.
+
+    Evidence is the job's working directory, PYTHONPATH or program arguments,
+    from ``launchctl print`` or the on-disk plist. A QuantTerm label that serves
+    a different checkout is someone else's service; booting it out to migrate
+    this checkout would stop that installed host.
+    """
+    repo = _resolved(repo_root)
+    values: list[str] = []
+    for line in str(print_stdout or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("working directory ="):
+            values.append(stripped.split("=", 1)[1])
+        elif stripped.startswith("PYTHONPATH =>"):
+            values.append(stripped.split("=>", 1)[1])
+    if plist.exists():
+        try:
+            import plistlib
+
+            with plist.open("rb") as handle:
+                payload = plistlib.load(handle)
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict):
+            values.append(str(payload.get("WorkingDirectory") or ""))
+            env = payload.get("EnvironmentVariables")
+            if isinstance(env, dict):
+                values.append(str(env.get("PYTHONPATH") or ""))
+            args = payload.get("ProgramArguments")
+            if isinstance(args, list):
+                values.extend(str(arg) for arg in args)
+    return _paths_reference_repo(values, repo)
+
+
 def _quiesce_macos_quantterm_writers(repo_root: Path) -> list[str]:
-    """Stop canonical + legacy launchd owners before first runtime migration."""
+    """Stop the launchd owners of *this checkout* before first runtime migration.
+
+    Only canonical/legacy labels proven to serve ``repo_root`` are booted out.
+    Labels serving another checkout are left running; if their processes still
+    write here (unknown cwd) the writer probe below blocks the migration.
+    """
     if platform.system().lower() != "darwin":
         return []
     stopped: list[str] = []
@@ -374,10 +496,15 @@ def _quiesce_macos_quantterm_writers(repo_root: Path) -> list[str]:
     for label in LEGACY_LAUNCHD_LABELS:
         target = f"{domain}/{label}"
         before = _run(["launchctl", "print", target], check=False, timeout=10)
-        if before.returncode == 0:
+        plist = home / "Library" / "LaunchAgents" / f"{label}.plist"
+        loaded = before.returncode == 0
+        if not loaded and not plist.exists():
+            continue
+        if not _launchd_label_serves_repo(label, getattr(before, "stdout", "") if loaded else "", plist, repo_root):
+            continue
+        if loaded:
             _run(["launchctl", "bootout", target], check=False, timeout=15)
             stopped.append(label)
-        plist = home / "Library" / "LaunchAgents" / f"{label}.plist"
         if plist.exists():
             _run(["launchctl", "bootout", domain, str(plist)], check=False, timeout=15)
             _run(["launchctl", "unload", str(plist)], check=False, timeout=15)
@@ -718,7 +845,8 @@ def render_launchd_plist(
   <key>KeepAlive</key>
   <dict><key>SuccessfulExit</key><false/></dict>
   <key>ThrottleInterval</key><integer>5</integer>
-  <key>ProcessType</key><string>Adaptive</string>
+  <key>ExitTimeOut</key><integer>{LAUNCHD_EXIT_TIMEOUT_S}</integer>
+  <key>ProcessType</key><string>{LAUNCHD_PROCESS_TYPE}</string>
   <key>StandardOutPath</key><string>{esc(str(service_logs / "launchd.out.log"))}</string>
   <key>StandardErrorPath</key><string>{esc(str(service_logs / "launchd.err.log"))}</string>
 </dict>
@@ -771,9 +899,8 @@ def install_service_definition(
     backup = path.with_suffix(path.suffix + ".previous")
     if previous is not None:
         backup.write_text(previous, encoding="utf-8")
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(content, encoding="utf-8")
-    os.replace(tmp, path)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(path, content)
     return {
         "manager": manager, "path": str(path), "label": label,
         "backup": str(backup) if previous is not None else "",

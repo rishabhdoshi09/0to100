@@ -9,7 +9,6 @@ manageable. The capability flags come from the state, not from a global green/re
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
 
@@ -119,6 +118,5 @@ class StatePersistence:
             return SupervisorState()
 
     def save(self, st: SupervisorState) -> None:
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(st.as_dict(), indent=2, default=str), encoding="utf-8")
-        os.replace(tmp, self.path)
+        from core.atomic_io import atomic_write_text
+        atomic_write_text(self.path, json.dumps(st.as_dict(), indent=2, default=str))

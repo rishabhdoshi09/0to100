@@ -225,13 +225,15 @@ def _write_instrument_cache(rows: list[dict[str, Any]]) -> Path:
     path = logs_dir() / "instruments_cache.csv"
     path.parent.mkdir(parents=True, exist_ok=True)
     fields = sorted({str(key) for row in rows for key in row})
-    tmp = path.with_suffix(".tmp")
-    with tmp.open("w", newline="", encoding="utf-8") as handle:
+    from core.atomic_io import atomic_write_with
+
+    def _fill(handle) -> None:
         writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         for row in rows:
             writer.writerow({key: row.get(key, "") for key in fields})
-    os.replace(tmp, path)
+
+    atomic_write_with(path, _fill, newline="")
     return path
 
 

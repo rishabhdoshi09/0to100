@@ -375,9 +375,8 @@ def save_report(report: Mapping[str, Any], *, latest: str | Path | None = None,
     payload = dict(report)
     target = latest_path(latest)
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
-    os.replace(tmp, target)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(target, json.dumps(payload, indent=2, default=str))
     day = str(payload.get("as_of") or "unknown")[:10] or "unknown"
     log_dir = reports_dir(directory)
     log_dir.mkdir(parents=True, exist_ok=True)

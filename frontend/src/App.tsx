@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchAccessMode, fetchChart, fetchDashboard, fetchHealth, sendControl, type AccessMode } from './api'
-import { deskStartupLabel, deskStartupRecovery, deskStartupState, type DeskStartupState } from './deskStartupState'
+import { deskStartupLabel, deskStartupRecovery, deskStartupState, effectiveDataReady, type DeskStartupState } from './deskStartupState'
+import { UNVERIFIED_ACCESS, accessPill, verifiedAccess } from './accessTruth'
 import { apiUnresponsiveAfter, brokerIndicator } from './deskStatusIndicators'
 import { createPollGate } from './pollGate'
 import { deskRefreshBanner } from './deskBanner'
@@ -301,15 +302,10 @@ function App() {
       .then((payload) => { if (alive) setAccessMode(payload) })
       .catch(() => {
         if (!alive) return
-        // UI fails closed if it cannot prove mutation access. The backend
-        // remains the actual security boundary.
-        setAccessMode({
-          public_read_only: true,
-          mutation_policy: 'UNKNOWN',
-          operator_token_configured: false,
-          unsafe_methods: ['POST', 'PUT', 'PATCH', 'DELETE'],
-          live_money_unlocked: false,
-        })
+        // UI fails closed if it cannot prove mutation access (the backend remains
+        // the actual security boundary), but says UNVERIFIED rather than claiming
+        // a public deployment. Health probes re-verify every 10 s.
+        setAccessMode((current) => current ?? UNVERIFIED_ACCESS)
       })
     return () => { alive = false }
   }, [])
@@ -357,7 +353,8 @@ function App() {
   // changes. Treat a single missed health request as transient, while a second
   // consecutive miss still raises an explicit connectivity warning.
   const hasSavedData = dashboardHasWork(dashboard)
-  const dataReady = dashboard.data.ready
+  const dashboardReady = dashboard.data.ready
+  const dashboardStale = dashboard.response_meta?.stale === true
   useEffect(() => {
     let active = true
     const probe = async () => {
@@ -367,6 +364,10 @@ function App() {
         healthGate.current.succeed()
         healthFailures.current = 0
         if (!active) return
+        // Every health probe carries the canonical access projection. A failed
+        // one-shot /api/access must not leave the desk mislabelled for the session.
+        const access = verifiedAccess(payload.access)
+        if (access) setAccessMode(access)
         const resource = String(payload.resources?.state || '')
         const oldestAge = Number(payload.resources?.active_operation_age_s || 0)
         const next = deskStartupState({
@@ -374,7 +375,11 @@ function App() {
           operationStuck: oldestAge >= 15 * 60,
           waitingForProvider: /provider|cooldown/i.test(String(payload.reason || payload.resources?.reason || '')),
           historyStale: payload.history?.current === false && hasSavedData,
-          dataReady,
+          dataReady: effectiveDataReady({
+            dashboardReady,
+            dashboardStale,
+            officialHistoryCurrent: payload.history?.current,
+          }),
           hasSavedData,
         })
         setStartupState(next)
@@ -395,7 +400,7 @@ function App() {
     void probe()
     const timer = window.setInterval(() => void probe(), 10_000)
     return () => { active = false; window.clearInterval(timer) }
-  }, [hasSavedData, dataReady])
+  }, [hasSavedData, dashboardReady, dashboardStale])
 
   useEffect(() => {
     if (autoPrepareRef.current || loading || error || accessMode === null) return
@@ -568,6 +573,7 @@ function App() {
     'Market Internals',
   ].includes(active)
   const brokerView = brokerIndicator(dashboard.autonomy.broker)
+  const accessView = accessPill(accessMode)
   const connectionBanner = error ? deskRefreshBanner(error, dashboardHasWork(dashboard)) : null
   const activePage = pageMeta(active)
 
@@ -665,12 +671,9 @@ function App() {
             <span className="reco-clock" title="Asia/Kolkata">{istClock || '—:—:—'} IST</span>
             <DisplayDepthToggle depth={depth} onChange={setDepth} />
             <button type="button" className="experience-help-trigger" onClick={() => setHelpOpen(true)}>What is this?</button>
-            {accessMode?.public_read_only && (
-              <span
-                className="read-only-pill"
-                title="Public visitor mode: market/research reads are available, state-changing operator actions are disabled."
-              >
-                <i /> PUBLIC READ ONLY
+            {accessView && (
+              <span className="read-only-pill" title={accessView.title}>
+                <i /> {accessView.label}
               </span>
             )}
             <span

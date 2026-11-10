@@ -13,7 +13,7 @@ import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from operations.market_ops import (
     DATA_PREPARE,
@@ -120,7 +120,26 @@ def prices_kind_due() -> str | None:
 
 
 def scan_is_fresh() -> bool:
-    path = logs_dir() / "product" / "latest_momentum_scan.json"
+    from product.scan_store import load_scan, resolved_scan_path
+
+    path = resolved_scan_path()   # one scan-artifact identity for every reader
+    try:
+        payload = load_scan(path)
+    except Exception:
+        return False
+    return scan_payload_is_fresh(payload, path=path)
+
+
+def scan_payload_is_fresh(payload: Mapping[str, Any] | None, *, path: Path | None = None) -> bool:
+    """Judge ONE already-parsed scan artifact.
+
+    A reader that will serve a scan must judge that same parse: re-reading the
+    file for the verdict lets a scan replaced in between inherit the previous
+    artifact's verdict (read-time TOCTOU). ``path`` only serves the legacy
+    mtime fallback for artifacts without ``scanned_at``.
+    """
+    if not payload:
+        return False
     # Kite-backed scans are independently authoritative. The loader already
     # verifies that their source id, bar date and source label match the active
     # immutable snapshot. A lagging or unavailable public NSE bhavcopy must
@@ -128,9 +147,7 @@ def scan_is_fresh() -> bool:
     # the exchange calendar on every request so yesterday's verified snapshot
     # cannot remain fresh indefinitely.
     try:
-        from product.scan_store import load_scan
-        scan = dict(load_scan(path) or {})
-        provenance = dict(scan.get("provenance") or {})
+        provenance = dict(payload.get("provenance") or {})
         if str(provenance.get("price_source") or "") == "kite_snapshot":
             if not provenance.get("data_current"):
                 return False
@@ -177,11 +194,8 @@ def scan_is_fresh() -> bool:
     except Exception:
         expected = ""
     try:
-        from product.scan_store import load_scan, scan_artifact_is_fresh
+        from product.scan_store import scan_age_hours
 
-        payload = load_scan(path)
-        if not payload:
-            return False
         provenance = payload.get("provenance") if isinstance(payload.get("provenance"), dict) else {}
         # Schema-v2 provenance is the authoritative identity of the official
         # price session actually consumed. Legacy top-level fields remain a
@@ -200,10 +214,11 @@ def scan_is_fresh() -> bool:
             # rescan solely because wall-clock age crossed SCAN_FRESH_S.
             return True
         if payload.get("scanned_at"):
-            return bool(scan_artifact_is_fresh(path, max_age_s=SCAN_FRESH_S))
+            age_h = scan_age_hours(payload)
+            return age_h is not None and age_h * 3600.0 <= float(SCAN_FRESH_S)
     except Exception:
         return False
-    return not _stale(path, SCAN_FRESH_S)
+    return path is not None and not _stale(path, SCAN_FRESH_S)
 
 
 def long_term_is_fresh() -> bool:
@@ -354,9 +369,23 @@ def persist_desk_pipeline_snapshot(payload: dict[str, Any], path: Path | None = 
     target.parent.mkdir(parents=True, exist_ok=True)
     blob = dict(payload)
     blob["persisted_at"] = datetime.now(timezone.utc).isoformat()
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(json.dumps(blob, default=str), encoding="utf-8")
-    tmp.replace(target)
+    # Multiple workers can publish desk status concurrently (API startup,
+    # owner bootstrap, and market-ops completion). A shared *.tmp pathname
+    # lets one writer replace the other's temp file and causes an HTTP 500.
+    # Give every write its own temporary inode, then publish atomically.
+    import threading
+
+    tmp = target.with_name(
+        f".{target.name}.{os.getpid()}.{threading.get_ident()}.{time.time_ns()}.tmp"
+    )
+    try:
+        tmp.write_text(json.dumps(blob, default=str), encoding="utf-8")
+        os.replace(tmp, target)
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
     return target
 
 

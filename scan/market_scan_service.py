@@ -6,6 +6,8 @@ is reported as failure; a healthy scan with zero setups is a valid result.
 """
 from __future__ import annotations
 
+from contextlib import ExitStack
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, Mapping, Any
@@ -510,66 +512,82 @@ def run_whole_market_scan(
         )
 
     payload["scan_status"] = SUCCEEDED
+    # One cross-process critical section for this generation: the scan's
+    # sidecars, its recommendation projection and the canonical scan commit
+    # together, and the API's background rebuild can never overwrite them
+    # with an older generation (product.recommendations_store).
+    publication = ExitStack()
     if save:
-        # Scan-derived sidecars (coverage audit, public best setups, long-term
-        # overlay, desk recommendations/discovery) are persisted independently
-        # of the canonical scan file. Re-verify the data authority right before
-        # the first sidecar write so a snapshot rotated during the manifest/
-        # payload build cannot leave projections on disk for a scan whose
-        # canonical publication is then withheld below.
-        if _active_snapshot_id() != snapshot_at_start:
+        try:
+            from product.recommendations_store import publication_lock
+            publication.enter_context(publication_lock())
+        except TimeoutError as exc:
             return MarketScanReport(
-                DATA_UNAVAILABLE, error_code="SCAN_SNAPSHOT_CHANGED",
-                error_message="Active Kite snapshot changed before sidecar publication.",
-                source_snapshot_id=snapshot_at_start,
+                DATA_UNAVAILABLE, error_code="SCAN_PUBLICATION_BUSY",
+                error_message=str(exc), source_snapshot_id=sid,
             )
-        try:
-            from scan.scan_coverage import save_audit
-            save_audit(audit)
-        except Exception:
-            pass
-        try:
-            from product.sepa_setup import persist_public_best_setups
-            persist_public_best_setups(payload)
-        except Exception:
-            pass
-        try:
-            from scan.long_term_service import overlay_long_term_from_market_scan
-            overlay = overlay_long_term_from_market_scan(
-                payload, refresh_fundamentals=False, save=True,
-            )
-            payload["long_term_overlay"] = {
-                "status": overlay.status,
-                "records": len((overlay.payload or {}).get("records") or []),
-                "error_code": overlay.error_code,
-            }
-        except Exception as exc:
-            payload["long_term_overlay"] = {
-                "status": FAILED,
-                "records": 0,
-                "error_code": type(exc).__name__,
-            }
-        try:
-            from product.desk_scan_overlays import persist_desks_from_market_scan
-            payload["desk_overlays"] = persist_desks_from_market_scan(payload)
-        except Exception as exc:
-            payload["desk_overlays"] = {"error": type(exc).__name__}
-    summary = dict(payload.get("summary", {}))
-    n_setups = int(summary.get("with_any_setup", 0) or 0)
-    status = SUCCEEDED if n_setups else NO_SETUPS
-    payload["scan_status"] = status
-    # The canonical scan becomes visible only after all scan-derived overlays
-    # have finished. This prevents readers from observing a half-published scan
-    # and keeps scan identity + recommendation projection atomic at the product
-    # boundary. save_scan itself uses an atomic file replace.
+    with publication:
+        if save:
+            # Scan-derived sidecars (coverage audit, public best setups, long-term
+            # overlay, desk recommendations/discovery) are persisted independently
+            # of the canonical scan file. Re-verify the data authority right before
+            # the first sidecar write so a snapshot rotated during the manifest/
+            # payload build cannot leave projections on disk for a scan whose
+            # canonical publication is then withheld below.
+            if _active_snapshot_id() != snapshot_at_start:
+                return MarketScanReport(
+                    DATA_UNAVAILABLE, error_code="SCAN_SNAPSHOT_CHANGED",
+                    error_message="Active Kite snapshot changed before sidecar publication.",
+                    source_snapshot_id=snapshot_at_start,
+                )
+            try:
+                from scan.scan_coverage import save_audit
+                save_audit(audit)
+            except Exception:
+                pass
+            try:
+                from product.sepa_setup import persist_public_best_setups
+                persist_public_best_setups(payload)
+            except Exception:
+                pass
+            try:
+                from scan.long_term_service import overlay_long_term_from_market_scan
+                overlay = overlay_long_term_from_market_scan(
+                    payload, refresh_fundamentals=False, save=True,
+                )
+                payload["long_term_overlay"] = {
+                    "status": overlay.status,
+                    "records": len((overlay.payload or {}).get("records") or []),
+                    "error_code": overlay.error_code,
+                }
+            except Exception as exc:
+                payload["long_term_overlay"] = {
+                    "status": FAILED,
+                    "records": 0,
+                    "error_code": type(exc).__name__,
+                }
+            try:
+                from product.desk_scan_overlays import persist_desks_from_market_scan
+                payload["desk_overlays"] = persist_desks_from_market_scan(payload)
+            except Exception as exc:
+                payload["desk_overlays"] = {"error": type(exc).__name__}
+        summary = dict(payload.get("summary", {}))
+        n_setups = int(summary.get("with_any_setup", 0) or 0)
+        status = SUCCEEDED if n_setups else NO_SETUPS
+        payload["scan_status"] = status
+        # The canonical scan becomes visible only after all scan-derived overlays
+        # have finished. This prevents readers from observing a half-published scan
+        # and keeps scan identity + recommendation projection atomic at the product
+        # boundary. save_scan itself uses an atomic file replace.
+        if save:
+            if _active_snapshot_id() != snapshot_at_start:
+                return MarketScanReport(
+                    DATA_UNAVAILABLE, error_code="SCAN_SNAPSHOT_CHANGED",
+                    error_message="Active Kite snapshot changed before publication.",
+                    source_snapshot_id=snapshot_at_start,
+                )
+            save_scan(payload)
     if save:
-        if _active_snapshot_id() != snapshot_at_start:
-            return MarketScanReport(
-                DATA_UNAVAILABLE, error_code="SCAN_SNAPSHOT_CHANGED",
-                error_message="Active Kite snapshot changed before publication.",
-                source_snapshot_id=snapshot_at_start,
-            )
-        save_scan(payload)
         # Shadow learning must observe only the same fully-published canonical
         # scan readers can see. It never participates in publication success.
         if _feature002_hook is not None:

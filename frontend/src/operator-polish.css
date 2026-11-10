@@ -248,6 +248,13 @@ button.home-os-quick-link:hover,
   font-size: 14px;
 }
 
+/* Rank line and reason line are separate facts; inline they read as
+   "rank 81.00RPEL: scored 81" (seen on the owner's Mac, 2026-11-10). */
+.home-os-opps > div small {
+  display: block;
+  line-height: 1.38;
+}
+
 .home-os-system-head,
 .home-os-system,
 .home-os-inspector,

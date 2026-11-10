@@ -15,7 +15,6 @@ previous good artifact with a partial file.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any, Mapping
 from core.runtime_paths import logs_dir, logs_path
@@ -112,17 +111,8 @@ def save_long_term_scan(payload: Mapping[str, Any], path: str | Path = DEFAULT_L
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     encoded = json.dumps(data, indent=2, default=str)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    try:
-        tmp.write_text(encoded, encoding="utf-8")
-        os.replace(tmp, target)
-    except Exception:
-        try:
-            if tmp.exists():
-                tmp.unlink()
-        except Exception:
-            pass
-        raise
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(target, encoded)
     return target
 
 

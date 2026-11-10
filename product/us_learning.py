@@ -53,12 +53,8 @@ def _read_jsonl(path: Path | None = None) -> list[dict[str, Any]]:
 def _write_jsonl(rows: list[Mapping[str, Any]], path: Path | None = None) -> None:
     path = path or LEDGER
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(
-        "".join(json.dumps(dict(row), default=str) + "\n" for row in rows),
-        encoding="utf-8",
-    )
-    os.replace(tmp, path)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(path, "".join(json.dumps(dict(row), default=str) + "\n" for row in rows))
 
 
 def _session_date() -> str:

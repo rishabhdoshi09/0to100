@@ -356,6 +356,7 @@ def test_discovery_freshness_uses_verified_kite_instead_of_lagging_bhavcopy(
     _install_snapshot(monkeypatch, tmp_path, active="new", day="2026-11-06")
     monkeypatch.setattr(desk_pipeline, "logs_dir", lambda: tmp_path)
     location = tmp_path / "product" / "latest_momentum_scan.json"
+    monkeypatch.setenv("QT_SCAN_PATH", str(location))   # the one scan-artifact identity
     S.save_scan(_scan(sid="new"), location)
     monkeypatch.setattr(
         "data.bhavcopy_runtime.official_history_freshness",
@@ -387,6 +388,7 @@ def test_discovery_freshness_rejects_rotated_or_unverified_kite_scan(
     snapshot = _install_snapshot(monkeypatch, tmp_path, active="new")
     monkeypatch.setattr(desk_pipeline, "logs_dir", lambda: tmp_path)
     location = tmp_path / "product" / "latest_momentum_scan.json"
+    monkeypatch.setenv("QT_SCAN_PATH", str(location))   # the one scan-artifact identity
     S.save_scan(_scan(sid="old"), location)
     monkeypatch.setattr(
         nse_calendar, "snapshot_freshness",

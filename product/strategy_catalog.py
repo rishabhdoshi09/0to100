@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -87,7 +88,17 @@ def ensemble_identity() -> dict[str, Any]:
 
 
 def method_identity(method_id: str) -> dict[str, Any]:
-    mid = str(method_id or "")
+    """Identity of one recommendation method (a fresh dict per call).
+
+    Every input is a module constant, so the identity (and its sha256 rules
+    hash) is computed once per method; the desk decorates ~9 methods x every
+    card on every Opportunities read.
+    """
+    return dict(_method_identity_cached(str(method_id or "")))
+
+
+@lru_cache(maxsize=64)
+def _method_identity_cached(mid: str) -> dict[str, Any]:
     rules = {
         "method_id": mid,
         "weight": METHOD_WEIGHTS.get(mid),

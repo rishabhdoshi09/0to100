@@ -61,9 +61,8 @@ def record_cycle(cycle: Mapping[str, Any], *, path: str | Path | None = None) ->
     payload["latest"] = row
     payload["schema_version"] = SCHEMA_VERSION
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
-    os.replace(tmp, target)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(target, json.dumps(payload, indent=2, default=str))
     return payload
 
 

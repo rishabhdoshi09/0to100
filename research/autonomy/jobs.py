@@ -141,20 +141,23 @@ class Deps:
         cache = self.logs / "instruments_cache.csv"
         cache.parent.mkdir(parents=True, exist_ok=True)
         fields = sorted({str(k) for row in rows for k in row})
-        tmp = cache.with_suffix(".tmp")
-        with open(tmp, "w", newline="", encoding="utf-8") as fh:
+        from core.atomic_io import atomic_write_text, atomic_write_with
+
+        def _fill(fh) -> None:
             writer = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
             writer.writeheader()
             for row in rows:
                 writer.writerow({k: row.get(k, "") for k in fields})
-        os.replace(tmp, cache)
+
+        # market_ops writes the same cache: never share a temporary file.
+        atomic_write_with(cache, _fill, newline="")
         report = build_fno_universe(rows, as_of=self.now_ist().date(), source="zerodha_kite")
         exclusions_path = self.root / "instrument_exclusions.json"
-        exclusions_path.write_text(json.dumps([
+        atomic_write_text(exclusions_path, json.dumps([
             {"underlying": x.underlying, "stage": x.stage, "reason": x.reason,
              "observed_at": self.now_ist().isoformat()}
             for x in report.exclusions
-        ], indent=2), encoding="utf-8")
+        ], indent=2))
         return {"rows": len(rows), "fno_underlyings": report.mapped_underlyings,
                 "exclusions": len(report.exclusions), "source": report.source}
 

@@ -155,7 +155,48 @@ def scanner_workspace(mode: str) -> dict[str, Any]:
     }
 
 
+_HOME_FLIGHT_LOCK = threading.Lock()
+_HOME_FLIGHT: dict[str, Any] = {"current": None}
+_HOME_FOLLOWER_WAIT_S = 120.0
+
+
 def radar_home_workspace() -> dict[str, Any]:
+    """Home read, coalesced: concurrent identical requests share one build.
+
+    The build is CPU- and IO-bound in one API process, so four simultaneous
+    Home reads on the owner's Mac took ~5 s each (p50) instead of ~1.3 s. A
+    request that arrives while a build is running waits for that build and
+    gets a copy of its result -- at most one build's worth older than its
+    arrival, exactly what queueing behind it would give. Nothing is cached:
+    the next request after the build finishes builds again.
+    """
+    import copy
+
+    with _HOME_FLIGHT_LOCK:
+        flight = _HOME_FLIGHT["current"]
+        leader = flight is None
+        if leader:
+            flight = {"done": threading.Event(), "result": None, "error": None}
+            _HOME_FLIGHT["current"] = flight
+    if leader:
+        try:
+            flight["result"] = _build_radar_home_workspace()
+            return flight["result"]
+        except BaseException as exc:
+            flight["error"] = exc
+            raise
+        finally:
+            with _HOME_FLIGHT_LOCK:
+                _HOME_FLIGHT["current"] = None
+            flight["done"].set()
+    if not flight["done"].wait(_HOME_FOLLOWER_WAIT_S):
+        return _build_radar_home_workspace()  # a stuck build must not hold followers hostage
+    if flight["error"] is not None:
+        raise flight["error"]
+    return copy.deepcopy(flight["result"])
+
+
+def _build_radar_home_workspace() -> dict[str, Any]:
     """Today/Setups bootstrap. Empty cards until the last scan JSON is readable."""
     scan: dict[str, Any] = {}
     sepa_cards: list[dict[str, Any]] = []
@@ -267,63 +308,6 @@ def radar_home_workspace() -> dict[str, Any]:
             "live_lock_source": "product.live_execution_interlock",
         }
     return home
-
-
-def recommendations_workspace(
-    refresh: bool = Query(False, description="Recompute live technicals (slow)"),
-) -> dict[str, Any]:
-    """Reco-style research categories + Active/Closed lifecycle (evidence only).
-
-    Page-open is cache-only: the last Scan Now already wrote this file.
-    """
-    from product.recommendations_store import (
-        load_recommendations,
-        reco_matches_scan,
-        save_recommendations,
-    )
-    from product.recommendations_workspace import (
-        build_recommendations_workspace,
-        slim_workspace_for_desk,
-    )
-    scan = core._scan_payload()
-    long_term = core._long_term_payload()
-    scan_at = str(scan.get("scanned_at") or "")
-    lt_at = str(long_term.get("scanned_at") or "")
-    saved = load_recommendations()
-    if not refresh:
-        if reco_matches_scan(saved, scan_scanned_at=scan_at, long_term_scanned_at=lt_at):
-            return saved
-        if saved and (not scan_at or not (scan.get("records") or [])):
-            return saved
-    try:
-        payload = build_recommendations_workspace(
-            scan_payload=scan,
-            long_term_payload=long_term,
-            refresh_technicals=bool(refresh),
-            settle_cases=False,
-            deep_confirm=False,
-            persist_ledger=False,
-        )
-    except Exception as exc:
-        if saved:
-            out = dict(saved)
-            out["error"] = str(exc)[:200]
-            return out
-        fallback = build_recommendations_workspace(
-            scan_payload={"records": [], "scanned_at": ""},
-            long_term_payload={"records": []},
-            refresh_technicals=False,
-            settle_cases=False,
-        )
-        fallback["error"] = str(exc)[:200]
-        return fallback
-    slim = slim_workspace_for_desk(payload)
-    if scan_at:
-        try:
-            save_recommendations(slim)
-        except Exception:
-            pass
-    return slim
 
 
 def market_reports_workspace(
@@ -522,12 +506,7 @@ def install(app) -> None:
         methods=["GET"],
         name="radar_home_workspace",
     )
-    app.add_api_route(
-        "/api/recommendations-workspace",
-        recommendations_workspace,
-        methods=["GET"],
-        name="recommendations_workspace",
-    )
+    # /api/recommendations-workspace is owned by api.app (persisted-first).
     app.add_api_route(
         "/api/market-reports-workspace",
         market_reports_workspace,

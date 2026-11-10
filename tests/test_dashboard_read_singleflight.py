@@ -106,3 +106,48 @@ def test_failed_refresh_stays_fail_closed_then_retries():
     # Retry is permitted but no failed build may be represented as CURRENT.
     assert cache.read(lambda: _payload(), fallback)["response_meta"]["status"] in {"WARMING", "CURRENT"}
     _eventually(lambda: cache.read(lambda: _payload(), fallback)["response_meta"]["status"] == "CURRENT")
+
+
+def test_snapshot_refreshes_ahead_so_steady_polls_stay_current():
+    """9 Nov incident: the rebuild started only after the 15 s window had lapsed,
+    so a 10 s poll cadence regularly got a REFRESHING desk (banner flapping and
+    recommendations hidden) even while every build succeeded quickly."""
+    clock = [100.0]
+    builds = []
+
+    def build():
+        builds.append(clock[0])
+        return _payload()
+
+    cache = DeskReadSnapshot(fresh_s=15.0, stale_cap_s=120.0, clock=lambda: clock[0])
+    cache.read(build, lambda: {"data": {"ready": False}})
+    _eventually(lambda: builds and cache.read(build, dict)["response_meta"]["status"] == "CURRENT")
+    statuses = []
+    for _ in range(12):                      # two minutes of 10 s polls
+        clock[0] += 10.0
+        statuses.append(cache.read(build, dict)["response_meta"]["status"])
+        _eventually(lambda: not cache._building)
+    assert statuses.count("REFRESHING") == 0, statuses
+    assert len(builds) <= 1 + 12             # still at most one build per poll
+
+
+def test_refresh_ahead_is_still_single_flight():
+    clock = [0.0]
+    release = threading.Event()
+    builds = []
+
+    def build():
+        builds.append(1)
+        assert release.wait(2)
+        return _payload()
+
+    cache = DeskReadSnapshot(fresh_s=15.0, clock=lambda: clock[0])
+    release.set()
+    cache.read(build, dict)
+    _eventually(lambda: not cache._building and builds)
+    release.clear()
+    clock[0] += 9.0                          # past half the window: refresh ahead
+    for _ in range(5):
+        assert cache.read(build, dict)["response_meta"]["status"] == "CURRENT"
+    assert len(builds) == 2
+    release.set()

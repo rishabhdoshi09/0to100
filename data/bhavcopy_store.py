@@ -70,12 +70,118 @@ def _validated_disk_file(path: str, iso_day: str, size: int, mtime_ns: int) -> b
     return valid
 
 
+# ── Persisted archive verdicts ────────────────────────────────────────────────
+# Validating an archive reads it. Every QuantTerm process (API, market_ops,
+# autonomy, the host bootstrap child) used to re-read all 1,754 archives on its
+# first history check: ~18 s of USB reads per process on the owner's Mac, on
+# every restart. Verdicts are now persisted, keyed by each file's identity
+# (size, mtime_ns, inode) and by the validator's own source, so a changed file
+# or changed validation rules always re-validate. A file modified within the
+# last few seconds is never persisted (coarse-timestamp safety).
+_VERDICT_LOCK = threading.Lock()
+_VERDICTS: Optional[dict] = None          # name -> (size, mtime_ns, ino, valid)
+_VERDICTS_SIG: Optional[tuple] = None
+_PENDING_VERDICTS: dict = {}
+_VERDICT_QUIET_S = 2.0
+
+
+@lru_cache(maxsize=1)
+def _validator_id() -> str:
+    import hashlib
+    import data.bhavcopy_integrity as integrity
+
+    try:
+        return hashlib.sha256(Path(integrity.__file__).read_bytes()).hexdigest()[:16]
+    except OSError:
+        return ""
+
+
+def _verdict_cache_path() -> Path:
+    # Beside the archive directory, not inside it: writing it must not change
+    # the directory identity that keys the archive listing cache.
+    return _BHAV_DIR.with_name(_BHAV_DIR.name + ".validation.json")
+
+
+def _read_verdict_file(path: Path) -> dict:
+    import json
+
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(raw, dict) or raw.get("schema") != 1 or raw.get("validator") != _validator_id():
+        return {}
+    out = {}
+    for name, row in dict(raw.get("entries") or {}).items():
+        if isinstance(row, (list, tuple)) and len(row) == 4:
+            out[str(name)] = (int(row[0]), int(row[1]), int(row[2]), bool(row[3]))
+    return out
+
+
+def _persisted_verdicts() -> dict:
+    """Caller holds _VERDICT_LOCK. Reload when another process rewrote the file."""
+    global _VERDICTS, _VERDICTS_SIG
+    path = _verdict_cache_path()
+    try:
+        st = path.stat()
+        sig = (str(path), st.st_ino, st.st_mtime_ns, st.st_size)
+    except OSError:
+        sig = (str(path), None)
+    if _VERDICTS is None or _VERDICTS_SIG != sig:
+        _VERDICTS = _read_verdict_file(path) if sig[1] is not None else {}
+        _VERDICTS_SIG = sig
+    return _VERDICTS
+
+
+def _flush_verdicts(listed_names: set[str]) -> None:
+    """Merge this process's new verdicts into the shared file (last writer wins)."""
+    global _VERDICTS, _VERDICTS_SIG
+    with _VERDICT_LOCK:
+        if not _PENDING_VERDICTS:
+            return
+        path = _verdict_cache_path()
+        merged = _read_verdict_file(path)
+        merged.update(_PENDING_VERDICTS)
+        merged = {k: v for k, v in merged.items() if k in listed_names}
+        try:
+            from core.atomic_io import atomic_write_json
+
+            atomic_write_json(
+                path,
+                {"schema": 1, "validator": _validator_id(),
+                 "entries": {k: list(v) for k, v in sorted(merged.items())}},
+                indent=None,
+            )
+        except OSError:
+            return
+        _PENDING_VERDICTS.clear()
+        _VERDICTS = merged
+        try:
+            st = path.stat()
+            _VERDICTS_SIG = (str(path), st.st_ino, st.st_mtime_ns, st.st_size)
+        except OSError:
+            _VERDICTS_SIG = None
+
+
 def _is_valid_archive(path: Path, day: date) -> bool:
     try:
         stat = path.stat()
-        return _validated_disk_file(str(path), day.isoformat(), stat.st_size, stat.st_mtime_ns)
     except OSError:
         return False
+    identity = (int(stat.st_size), int(stat.st_mtime_ns), int(stat.st_ino))
+    name = path.name
+    with _VERDICT_LOCK:
+        known = _PENDING_VERDICTS.get(name) or _persisted_verdicts().get(name)
+    if known is not None and tuple(known[:3]) == identity:
+        return bool(known[3])
+    try:
+        valid = _validated_disk_file(str(path), day.isoformat(), stat.st_size, stat.st_mtime_ns)
+    except OSError:
+        return False
+    if time.time() - stat.st_mtime > _VERDICT_QUIET_S:
+        with _VERDICT_LOCK:
+            _PENDING_VERDICTS[name] = (*identity, bool(valid))
+    return valid
 
 
 def _download_day(d: date, retries: int = 2) -> bool:
@@ -376,21 +482,68 @@ def build_store(days: int = DEFAULT_DAYS, progress=None, should_stop=None) -> in
     return _full_build(available)
 
 
-def _dates_on_disk() -> list[date]:
-    """Trading dates for every bhavcopy CSV already present in the store dir."""
+@lru_cache(maxsize=16384)
+def _archive_day_from_stem(stem: str) -> Optional[date]:
     from datetime import datetime as _dt
-    out: list[date] = []
-    if not _BHAV_DIR.exists():
-        return out
-    holidays = _holidays()
-    for p in _BHAV_DIR.glob("*.csv"):
-        try:
-            day = _dt.strptime(p.stem, "%d%m%Y").date()
-            if _is_session(day, holidays) and _is_valid_archive(p, day):
-                out.append(day)
-        except (OSError, ValueError):
-            continue
-    return sorted(out)
+    try:
+        return _dt.strptime(stem, "%d%m%Y").date()
+    except ValueError:
+        return None
+
+
+_SESSION_LISTING_LOCK = threading.Lock()
+_SESSION_LISTING: Optional[tuple[tuple, tuple[tuple[Path, date], ...]]] = None
+
+
+def _session_archives_listed(holidays: set[str]) -> tuple[tuple[Path, date], ...]:
+    """(path, session day) for every ``*.csv`` named like a session in the store dir.
+
+    The listing and name parsing are cached by the directory's identity (inode,
+    mtime_ns, size) and the holiday set: adding, removing or renaming an archive
+    changes the directory mtime and forces a fresh listing. File *contents* are
+    not trusted from this cache; ``_dates_on_disk`` still validates each file by
+    its own stat identity. On the owner's Mac (1,754 archives on an external
+    sparsebundle) the uncached listing cost ~0.3 s and Home called it 5 times.
+    """
+    global _SESSION_LISTING
+    st = os.stat(_BHAV_DIR)
+    key = (str(_BHAV_DIR), st.st_ino, st.st_mtime_ns, st.st_size, frozenset(holidays))
+    with _SESSION_LISTING_LOCK:
+        cached = _SESSION_LISTING
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    rows: list[tuple[Path, date]] = []
+    with os.scandir(_BHAV_DIR) as entries:
+        for entry in entries:
+            name = entry.name
+            if not name.endswith(".csv"):
+                continue
+            day = _archive_day_from_stem(name[: -len(".csv")])
+            if day is not None and _is_session(day, holidays):
+                rows.append((Path(entry.path), day))
+    listing = tuple(rows)
+    # Racy-clean guard: on filesystems with coarse timestamps (HFS+, exFAT) an
+    # archive added within the same tick would not move the directory mtime.
+    # Only trust a listing once its directory has been quiet for a while.
+    if time.time() - st.st_mtime > _LISTING_QUIET_S:
+        with _SESSION_LISTING_LOCK:
+            _SESSION_LISTING = (key, listing)
+    return listing
+
+
+_LISTING_QUIET_S = 2.0
+
+
+def _dates_on_disk() -> list[date]:
+    """Trading dates for every valid bhavcopy CSV already present in the store dir."""
+    try:
+        listed = _session_archives_listed(_holidays())
+    except OSError:
+        return []
+    days = sorted(day for path, day in listed if _is_valid_archive(path, day))
+    if _PENDING_VERDICTS:
+        _flush_verdicts({path.name for path, _day in listed})
+    return days
 
 
 def build_from_local() -> int:

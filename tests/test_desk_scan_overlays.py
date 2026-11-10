@@ -108,24 +108,10 @@ def test_persist_desks_failure_is_status_not_raise(monkeypatch):
     assert out["market_reports_error"]["error_type"] == "RuntimeError"
 
 
-def test_recommendations_get_is_cache_only_when_file_matches(monkeypatch):
-    saved = {"schema_version": 4, "categories": [{"id": "wealth_builders", "count": 0, "cards": []}], "scan_scanned_at": "S", "long_term_scanned_at": "L"}
-    monkeypatch.setattr("product.observer_api.core._scan_payload", lambda: {"scanned_at": "S", "records": [{"symbol": "AAA"}]})
-    monkeypatch.setattr("product.observer_api.core._long_term_payload", lambda: {"scanned_at": "L"})
-    monkeypatch.setattr("product.recommendations_store.load_recommendations", lambda: saved)
-    monkeypatch.setattr("product.recommendations_workspace.build_recommendations_workspace", lambda **_k: (_ for _ in ()).throw(AssertionError("GET must not rebuild")))
-    from product.observer_api import recommendations_workspace
-    assert recommendations_workspace(refresh=False) is saved
-
-
-def test_recommendations_get_keeps_saved_file_when_scan_missing(monkeypatch):
-    saved = {"schema_version": 4, "categories": [{"id": "wealth_builders", "count": 1, "cards": [{"symbol": "AAA"}]}], "scan_scanned_at": "yesterday", "long_term_scanned_at": "yesterday"}
-    monkeypatch.setattr("product.observer_api.core._scan_payload", lambda: {"scanned_at": "", "records": []})
-    monkeypatch.setattr("product.observer_api.core._long_term_payload", lambda: {"scanned_at": ""})
-    monkeypatch.setattr("product.recommendations_store.load_recommendations", lambda: saved)
-    monkeypatch.setattr("product.recommendations_workspace.build_recommendations_workspace", lambda **_k: (_ for _ in ()).throw(AssertionError("do not wipe recos")))
-    from product.observer_api import recommendations_workspace
-    assert recommendations_workspace(refresh=False) is saved
+# The synchronous observer_api GET handler was deleted (it shadowed the
+# persisted-first route and served yesterday's cards when the scan was
+# missing). Its replacement is covered by tests/test_opportunities_p0.py
+# (current projection served without rebuild; missing scan withholds cards).
 
 
 def test_discovery_projection_failure_does_not_erase_saved_recommendations(monkeypatch):
