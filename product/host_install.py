@@ -33,7 +33,13 @@ from core.runtime_paths import (
 SERVICE_NAME = "quantterm"
 LAUNCHD_LABEL = "com.quantterm.desk"
 SCHEMA_VERSION = 1
-EPHEMERAL_PREFIXES = ("/tmp/", "/var/tmp/", "/dev/shm/")
+# Resolved forms matter: on macOS /tmp and /var are symlinks into /private, and
+# $TMPDIR lives under /private/var/folders (purged by dirhelper). Paths are
+# compared after resolve(), so the /private forms must be listed explicitly.
+EPHEMERAL_PREFIXES = (
+    "/tmp/", "/var/tmp/", "/dev/shm/",
+    "/private/tmp/", "/private/var/tmp/", "/var/folders/", "/private/var/folders/",
+)
 DURABLE_DIRS = (
     "logs", "db", "state", "cache", "evidence", "paper", "scans",
     "history", "provenance", "reports",

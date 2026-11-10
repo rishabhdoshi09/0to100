@@ -123,8 +123,11 @@ def test_localhost_by_name_stays_open():
     assert not network_policy.take_attempts()
 
 
-def test_unix_sockets_stay_open(tmp_path):
-    path = str(tmp_path / "s.sock")
+def test_unix_sockets_stay_open():
+    import tempfile
+    # macOS caps AF_UNIX paths at 104 bytes and pytest's tmp_path there is a
+    # long /private/var/folders/... path; use a short directory instead.
+    path = str(Path(tempfile.mkdtemp(prefix="qt", dir="/tmp")) / "s.sock")
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server.bind(path)
     server.listen(1)
@@ -134,6 +137,8 @@ def test_unix_sockets_stay_open(tmp_path):
         client.close()
     finally:
         server.close()
+        import shutil
+        shutil.rmtree(Path(path).parent, ignore_errors=True)
     assert not network_policy.take_attempts()
 
 
