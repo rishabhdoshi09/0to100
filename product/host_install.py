@@ -63,6 +63,18 @@ MIGRATION_HEADROOM_FRACTION = 0.10
 SQLITE_DATABASE_SUFFIXES = {".db", ".sqlite", ".sqlite3"}
 SQLITE_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
 MIGRATION_RECOVERABLE_CONFLICT_SUFFIXES = (".log", ".db", ".sqlite", ".sqlite3")
+# launchd scheduling class for the whole host (supervisor and children).
+# Measured on the owner's Mac (macOS 12.7.6, 2026-11-10): "Adaptive" without
+# XPC activity pins every thread at priority 4 (MAXPRI_THROTTLE, background
+# CPU/IO throttling) -- below even a nice-19 shell job -- which is what made
+# Home take 40-50 s there; "Standard" (= unset) runs at 20; "Interactive" at
+# 31 like apps. Standard keeps the owner's foreground apps ahead of a scan
+# while ending background throttling of the desk.
+LAUNCHD_PROCESS_TYPE = "Standard"
+# Seconds launchd waits after SIGTERM before SIGKILL. Must cover the
+# supervisor's loop tick, an in-flight health probe and the shared child stop
+# grace (host_supervisor.STOP_GRACE_S), or children are orphaned on stop.
+LAUNCHD_EXIT_TIMEOUT_S = 45
 LEGACY_LAUNCHD_LABELS = (
     LAUNCHD_LABEL,
     "com.quantterm.app",
@@ -832,7 +844,8 @@ def render_launchd_plist(
   <key>KeepAlive</key>
   <dict><key>SuccessfulExit</key><false/></dict>
   <key>ThrottleInterval</key><integer>5</integer>
-  <key>ProcessType</key><string>Adaptive</string>
+  <key>ExitTimeOut</key><integer>{LAUNCHD_EXIT_TIMEOUT_S}</integer>
+  <key>ProcessType</key><string>{LAUNCHD_PROCESS_TYPE}</string>
   <key>StandardOutPath</key><string>{esc(str(service_logs / "launchd.out.log"))}</string>
   <key>StandardErrorPath</key><string>{esc(str(service_logs / "launchd.err.log"))}</string>
 </dict>

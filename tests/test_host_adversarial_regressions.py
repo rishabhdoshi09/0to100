@@ -290,7 +290,13 @@ def test_launchd_plist_has_bounded_success_semantics_and_caffeinate(tmp_path):
     )
     parsed = plistlib.loads(plist.encode("utf-8"))
     assert parsed["KeepAlive"] == {"SuccessfulExit": False}
-    assert parsed["ProcessType"] == "Adaptive"
+    # QT-PRA-079: "Adaptive" without XPC pinned the host at priority 4 (background
+    # throttling) on the owner's Mac; Standard runs at normal agent priority.
+    assert parsed["ProcessType"] == "Standard"
+    # QT-PRA-080: launchd must not SIGKILL the supervisor before it has stopped
+    # its children (loop tick + in-flight probe + shared child grace).
+    from product.host_supervisor import HEARTBEAT_SECONDS, STOP_GRACE_S
+    assert parsed["ExitTimeOut"] >= STOP_GRACE_S + HEARTBEAT_SECONDS + 20
     assert parsed["ProgramArguments"][:2] == ["/usr/bin/caffeinate", "-i"]
     assert parsed["ProgramArguments"][-2:] == ["-m", "product.host_entrypoint"]
 
