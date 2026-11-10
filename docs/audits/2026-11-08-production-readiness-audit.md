@@ -607,3 +607,37 @@ the host, deployment and host measurements are all BLOCKED.
 **Verdict: NOT READY.** The P0 path is fixed and verified in a real browser
 against the real API in the sandbox. It has not been deployed or verified on
 the owner's Mac, and the host, soak and rollback gates are BLOCKED.
+
+## 12. Owner mandate on PR #332: 4/10 toward 10/10 (2026-11-09/10)
+
+The standing specification is the owner directive on PR #332
+(comment 6748303757). Work continued on the same branch
+(`claude/opportunities-p0-recovery-20261109`), starting at `b2d850a`. Paper
+only; the live interlock and owner pauses are untouched.
+
+**Access.**
+- No folder on the owner's Mac is shared with this cloud session (`list_computer_folders` is empty).
+- NSE, Kite and Telegram hosts are unreachable from the container.
+- Everything below was measured in a 4-vCPU Linux sandbox. The 827-record runtime was produced by the real scan pipeline from synthetic OHLCV.
+- Every host, broker, Telegram, soak and rollback gate is BLOCKED, not PASS.
+
+### 12.1 Defects found and fixed (each reproduced first, then a regression test)
+
+| ID | Pri | Defect | Reproduction | Fix | Regression |
+| --- | --- | --- | --- | --- | --- |
+| QT-PRA-064 | P1 | Read-time TOCTOU: freshness was judged on one read of the scan file and the payload served from another, so a scan replaced in between inherited the old verdict | An older-session scan with the same `scanned_at`, swapped in after the freshness check, was served as CURRENT | `8b8ca6d`: `scan_payload_is_fresh(payload)`; the route parses once and judges and serves that parse; `display_authority` carries `scan_id` and `scan_market_session`; a missing scan reads SCAN_UNAVAILABLE | `test_freshness_is_judged_on_the_same_scan_artifact_that_is_served`, `test_absent_scan_is_reported_as_no_scan_not_as_stale` |
+| QT-PRA-065 | P1 | 65 durable writers used a fixed `<name>.tmp`, so concurrent writers shared one inode. Real collisions: recommendation publication (pipeline vs API rebuild), `save_scan` and `instruments_cache.csv` (market_ops vs autonomy) | 6 concurrent publications: 5 raised `FileNotFoundError` | `a72a1c0`: `core.atomic_io` (unique mkstemp file, fsync, keep permissions, atomic replace, clean up on failure) at all 65 sites; guard test against the idiom | `tests/test_atomic_writers.py` |
+| QT-PRA-066 | P1 | A background rebuild for generation A could overwrite generation B's recommendations, published by the pipeline while A was running | Deterministic interleaving test: final file held A | `ef03e92`: cross-process `publication_lock`, held by the pipeline from its first sidecar write through `save_scan` and by the rebuild around its generation check and save | `test_background_rebuild_never_overwrites_a_newer_pipeline_publication`, `test_generation_publication_holds_the_cross_process_publication_lock` |
+| QT-PRA-067 | P2 | A rebuild that failed deterministically was retried every 30 s, each retry a full projection build, for as long as the page was open | 5 failures, 5 retries at 30 s | `ef03e92`: per-generation backoff 30 s → 15 min cap; the attempt count survives the rebuild claim | `test_a_deterministically_failing_rebuild_backs_off_...` |
+| QT-PRA-068 | P1 | On a fresh runtime (autonomy not started yet), the first `GET /api/autonomy-desk` created an empty `logs/autonomy/jobs.db`; every later read was HTTP 500 "no such table: jobs" | Sweep of all 57 GET routes on a fresh runtime | `6eec070`: `connect_readonly` (mode=ro, None if absent); a missing store or table means no jobs | `tests/test_read_paths_no_side_effects.py`; sweep ×2: 0 errors |
+| QT-PRA-069 | P2 | One Home request parsed 11.3 MB of JSON (recommendations file ×3, scan ×9) | `json.loads` instrumentation | `94c19de`, `3ece956`: `core.json_cache.read_json_shared` (keyed by inode/mtime/size; never caches a version replaced mid-parse) for read-only callers; Telegram delivery status reads the resolved scan path | cache tests in `test_atomic_writers.py` |
+| QT-PRA-070 | P2 | Every Opportunities read re-hashed constant method rules about 780 times | cProfile | `4676cef6` (method identity memoised; each caller gets its own dict) | `test_method_identity_is_memoised_but_each_caller_gets_its_own_dict` |
+| QT-PRA-071 | P2 | `telegram_delivery.delivery_status` read the import-time default scan path, ignoring `QT_SCAN_PATH` | Code inspection | `3ece956` | existing Telegram suites |
+
+**Checked and not changed (evidence, no defect):**
+- **Paper risk caps.** 1% per trade, 10% per name and 5% total open risk are enforced by `PaperBook`. The combined legacy, modern and F&O account gate (`account_exposure_gate` under the cross-process `account_mutation_lock`) covers duplicates, position count, sector and 5% risk. F&O premium worst case counts against the same account. Covered by `test_cross_engine_account_exposure.py`, `test_fo_premium_worst_case_risk.py` and `test_money_paths.py`.
+- **Sandbox paper journey.** The 78 published cards produced NO_TRADE: 48 `HISTORICAL_EVIDENCE_PENDING`, because the history-first gate waits for the autonomous-evolution bootstrap, which needs official NSE history the sandbox lacks; 30 `LOW_QUALITY_SETUP`. This is the designed fail-closed result. Opening it on the host is a host gate.
+- **Historical bootstrap.** `run_bootstrap` already holds a cross-process lock, so no duplicate replays. Residual (P2): whichever process first evaluates policies hosts the replay thread. That includes `GET /api/decisions`, which no desk view currently calls.
+- **Regime warm-up.** A single-flight background thread; only Kite and Yahoo are network calls, after the official index store. Bounded, not on the request path.
+- **Hung rebuild.** The projection build is network-free (quotes are `None`, overlays are local files) and its lock wait is bounded (300 s, then FAILED with backoff). No watchdog added.
+- **Reverted experiment.** Pre-rendering the Opportunities JSON to skip FastAPI's encoder was 59 ms vs 49 ms p50 on FastAPI 0.162, whose pydantic-core serializer is faster. The 71 ms "encoder" cost seen in a profile was not on the request path.
