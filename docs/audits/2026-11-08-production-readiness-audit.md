@@ -13,7 +13,7 @@ Section 7 (session 2) supersedes the status column of QT-PRA-005…008 in
 section 2 and the gate table in section 4. Section 9 (session 4) holds the
 current gate table and verdict.
 
-**Current state (2026-11-10): section 13.** It covers the session on the owner's Mac. `92b311ca` is deployed there as a paper-only build with live money locked. Gates and verdict are in 13.10: NOT READY, pending the 72 h soak and a Kite session.
+**Current state (2026-11-10): section 13.** It covers the session on the owner's Mac. `c194d8c7` is deployed there as a paper-only build with live money locked. Gates and verdict are in 13.10: NOT READY, pending the 72 h soak and a Kite session.
 
 ## 1. Verified repository state (as of 2026-11-08 02:30 UTC)
 
@@ -887,12 +887,15 @@ Every step used the canonical `product.host_install install` (the one-shot upgra
 | Stop `5a4d1ad7` (first stop by a supervisor that has QT-PRA-080/081) | 12:28:32 → 12:28:38 | **6 s, zero orphans.** The supervisor wrote its own terminal state `STOPPED`; before the fix it was left at RUNNING. The observer stopped with its API (`STOPPED`, no error), and no QuantTerm worker remained |
 | Deploy `92b311ca` | 12:28:52 → 12:30:04 | Install took 72 s; total downtime 92 s. RUNNING, 5/5 healthy, bootstrap READY, live LOCKED (verified, not authorized), HEALTHY. Paper state byte-identical (the fifth restart today). Threads at priority 20. The observer runs `92b311ca` as the API's child. Home reports `paper_bot.paused true, paused_by OWNER` |
 
-- **Restarts today.** Five, in order: `980b922` → `a1667cf3` → `980b922` → `5a4d1ad7` → `92b311ca`. Every one went through `product.host_install`, ended HEALTHY with live LOCKED, and left identical paper and execution state.
+| Stop `92b311ca`, deploy `c194d8c7` | 12:48:32 → 12:49:50 | Stop took 4 s with no orphans for the second time running (`STOPPED`). Install HEALTHY; total downtime 78 s. Paper state byte-identical. This is the final deployed build: `92b311ca` plus a CSS fix (the research watchlist read "rank 81.00RPEL: scored…"; rank and reason are now separate lines, verified in Chrome against the production API) |
+
+- **Restarts today.** Six deployments, in order: `980b922` → `a1667cf3` → `980b922` → `5a4d1ad7` → `92b311ca` → `c194d8c7`. Every one went through `product.host_install`, ended HEALTHY with live LOCKED, and left identical paper and execution state.
+- **Home after the startup scan.** Production Home showed PAUSED, "New paper entries are paused by you.", with the action "Resume paper entries" (screenshot taken in Chrome on the Mac).
 - **Tests on the Mac.**
   - Full canonical suite at `a1667cf3`: 433/433 files exit 0 (4,498 s, one interpreter per file, guarded).
   - Every test touching code changed since then: 23/23 at `5a4d1ad7`, 10/10 at `92b311ca`.
   - Frontend: vitest 167/167, `tsc` clean.
-  - CI: all 10 workflow runs green at `a1667cf3`, `5a4d1ad7` and `92b311ca`.
+  - CI: all 10 workflow runs green at `a1667cf3`, `5a4d1ad7`, `92b311ca` and `c194d8c7`.
 
 **Soak.** A read-only probe was written (`~/Library/Logs/QuantTerm/soak/`, launchd `com.quantterm.soakprobe`).
 - **What it records:** every 5 minutes, latencies, freshness and live lock, launchd restarts, memory, swap, disk and mount. It is set to boot itself out after 72 h.
@@ -917,7 +920,7 @@ Every step used the canonical `product.host_install install` (the one-shot upgra
 | Gate | State |
 | --- | --- |
 | Installed host SHA, launchd owner, sparsebundle identity, verified backup | **PASS** (13.1, 13.4) |
-| Controlled paper-only deployment through the canonical host process | **PASS** (`92b311ca` deployed, HEALTHY) |
+| Controlled paper-only deployment through the canonical host process | **PASS** (`c194d8c7` deployed, HEALTHY) |
 | Rollback rehearsal | **PASS** (`a1667cf3` → `980b922` → forward) |
 | Restore drill | **PASS** (13.6) |
 | Real-browser desk on the Mac, no rescan on open | **PASS** |
