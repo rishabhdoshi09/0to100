@@ -376,21 +376,65 @@ def build_store(days: int = DEFAULT_DAYS, progress=None, should_stop=None) -> in
     return _full_build(available)
 
 
-def _dates_on_disk() -> list[date]:
-    """Trading dates for every bhavcopy CSV already present in the store dir."""
+@lru_cache(maxsize=16384)
+def _archive_day_from_stem(stem: str) -> Optional[date]:
     from datetime import datetime as _dt
-    out: list[date] = []
-    if not _BHAV_DIR.exists():
-        return out
-    holidays = _holidays()
-    for p in _BHAV_DIR.glob("*.csv"):
-        try:
-            day = _dt.strptime(p.stem, "%d%m%Y").date()
-            if _is_session(day, holidays) and _is_valid_archive(p, day):
-                out.append(day)
-        except (OSError, ValueError):
-            continue
-    return sorted(out)
+    try:
+        return _dt.strptime(stem, "%d%m%Y").date()
+    except ValueError:
+        return None
+
+
+_SESSION_LISTING_LOCK = threading.Lock()
+_SESSION_LISTING: Optional[tuple[tuple, tuple[tuple[Path, date], ...]]] = None
+
+
+def _session_archives_listed(holidays: set[str]) -> tuple[tuple[Path, date], ...]:
+    """(path, session day) for every ``*.csv`` named like a session in the store dir.
+
+    The listing and name parsing are cached by the directory's identity (inode,
+    mtime_ns, size) and the holiday set: adding, removing or renaming an archive
+    changes the directory mtime and forces a fresh listing. File *contents* are
+    not trusted from this cache; ``_dates_on_disk`` still validates each file by
+    its own stat identity. On the owner's Mac (1,754 archives on an external
+    sparsebundle) the uncached listing cost ~0.3 s and Home called it 5 times.
+    """
+    global _SESSION_LISTING
+    st = os.stat(_BHAV_DIR)
+    key = (str(_BHAV_DIR), st.st_ino, st.st_mtime_ns, st.st_size, frozenset(holidays))
+    with _SESSION_LISTING_LOCK:
+        cached = _SESSION_LISTING
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    rows: list[tuple[Path, date]] = []
+    with os.scandir(_BHAV_DIR) as entries:
+        for entry in entries:
+            name = entry.name
+            if not name.endswith(".csv"):
+                continue
+            day = _archive_day_from_stem(name[: -len(".csv")])
+            if day is not None and _is_session(day, holidays):
+                rows.append((Path(entry.path), day))
+    listing = tuple(rows)
+    # Racy-clean guard: on filesystems with coarse timestamps (HFS+, exFAT) an
+    # archive added within the same tick would not move the directory mtime.
+    # Only trust a listing once its directory has been quiet for a while.
+    if time.time() - st.st_mtime > _LISTING_QUIET_S:
+        with _SESSION_LISTING_LOCK:
+            _SESSION_LISTING = (key, listing)
+    return listing
+
+
+_LISTING_QUIET_S = 2.0
+
+
+def _dates_on_disk() -> list[date]:
+    """Trading dates for every valid bhavcopy CSV already present in the store dir."""
+    try:
+        listed = _session_archives_listed(_holidays())
+    except OSError:
+        return []
+    return sorted(day for path, day in listed if _is_valid_archive(path, day))
 
 
 def build_from_local() -> int:
