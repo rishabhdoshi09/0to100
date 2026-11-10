@@ -386,6 +386,7 @@ def _macos_quantterm_processes(repo_root: Path) -> list[dict[str, Any]]:
         "run_quantterm",
         "product.host_",
         "operations.market_ops",
+        "operations.zerodha_observer",
         "research.autonomy",
         "main.py autonomy",
         "terminal_api",

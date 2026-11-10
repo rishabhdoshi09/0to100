@@ -151,6 +151,8 @@ class ZerodhaObserverWorker:
             "process_running": bool(running),
             "running": bool(running),
             "worker_pid": os.getpid(),
+            "parent_pid": os.getppid(),
+            "build_sha": os.environ.get("QT_BUILD_SHA", ""),
             "heartbeat_epoch": time.time(),
             "heartbeat": datetime.now(IST).isoformat(),
             "phase": phase,
@@ -209,11 +211,22 @@ class ZerodhaObserverWorker:
     def run(self) -> int:
         if not self.lock.acquire():
             return 1
+        # The API starts this worker as its child and stops it on shutdown. If
+        # the API dies without that (crash, SIGKILL, storage loss), the worker
+        # is re-parented and nothing would ever stop it: on the owner's Mac one
+        # orphan ran yesterday's code for a day across three deployments, held
+        # the observer lock (so the deployed observer never started) and wrote
+        # into the runtime while the host was stopped for a backup. Exit when
+        # the process that started us is gone.
+        parent_pid = os.getppid()
         try:
             _atomic_json(RUNTIME_PATH, self._runtime(running=True, phase="STARTING"))
             startup_id = f"{datetime.now(IST).date().isoformat()}:startup:{os.getpid()}"
             self._run_slot(startup_id, "STARTUP")
             while not self.stop_event.wait(10.0):
+                if parent_pid > 1 and os.getppid() != parent_pid:
+                    self._last_error = "PARENT_EXITED"
+                    break
                 _atomic_json(RUNTIME_PATH, self._runtime(running=True, phase="IDLE"))
                 due = observation_slot(datetime.now(IST), self._completed_slots())
                 if due is not None:
