@@ -70,12 +70,118 @@ def _validated_disk_file(path: str, iso_day: str, size: int, mtime_ns: int) -> b
     return valid
 
 
+# ── Persisted archive verdicts ────────────────────────────────────────────────
+# Validating an archive reads it. Every QuantTerm process (API, market_ops,
+# autonomy, the host bootstrap child) used to re-read all 1,754 archives on its
+# first history check: ~18 s of USB reads per process on the owner's Mac, on
+# every restart. Verdicts are now persisted, keyed by each file's identity
+# (size, mtime_ns, inode) and by the validator's own source, so a changed file
+# or changed validation rules always re-validate. A file modified within the
+# last few seconds is never persisted (coarse-timestamp safety).
+_VERDICT_LOCK = threading.Lock()
+_VERDICTS: Optional[dict] = None          # name -> (size, mtime_ns, ino, valid)
+_VERDICTS_SIG: Optional[tuple] = None
+_PENDING_VERDICTS: dict = {}
+_VERDICT_QUIET_S = 2.0
+
+
+@lru_cache(maxsize=1)
+def _validator_id() -> str:
+    import hashlib
+    import data.bhavcopy_integrity as integrity
+
+    try:
+        return hashlib.sha256(Path(integrity.__file__).read_bytes()).hexdigest()[:16]
+    except OSError:
+        return ""
+
+
+def _verdict_cache_path() -> Path:
+    # Beside the archive directory, not inside it: writing it must not change
+    # the directory identity that keys the archive listing cache.
+    return _BHAV_DIR.with_name(_BHAV_DIR.name + ".validation.json")
+
+
+def _read_verdict_file(path: Path) -> dict:
+    import json
+
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(raw, dict) or raw.get("schema") != 1 or raw.get("validator") != _validator_id():
+        return {}
+    out = {}
+    for name, row in dict(raw.get("entries") or {}).items():
+        if isinstance(row, (list, tuple)) and len(row) == 4:
+            out[str(name)] = (int(row[0]), int(row[1]), int(row[2]), bool(row[3]))
+    return out
+
+
+def _persisted_verdicts() -> dict:
+    """Caller holds _VERDICT_LOCK. Reload when another process rewrote the file."""
+    global _VERDICTS, _VERDICTS_SIG
+    path = _verdict_cache_path()
+    try:
+        st = path.stat()
+        sig = (str(path), st.st_ino, st.st_mtime_ns, st.st_size)
+    except OSError:
+        sig = (str(path), None)
+    if _VERDICTS is None or _VERDICTS_SIG != sig:
+        _VERDICTS = _read_verdict_file(path) if sig[1] is not None else {}
+        _VERDICTS_SIG = sig
+    return _VERDICTS
+
+
+def _flush_verdicts(listed_names: set[str]) -> None:
+    """Merge this process's new verdicts into the shared file (last writer wins)."""
+    global _VERDICTS, _VERDICTS_SIG
+    with _VERDICT_LOCK:
+        if not _PENDING_VERDICTS:
+            return
+        path = _verdict_cache_path()
+        merged = _read_verdict_file(path)
+        merged.update(_PENDING_VERDICTS)
+        merged = {k: v for k, v in merged.items() if k in listed_names}
+        try:
+            from core.atomic_io import atomic_write_json
+
+            atomic_write_json(
+                path,
+                {"schema": 1, "validator": _validator_id(),
+                 "entries": {k: list(v) for k, v in sorted(merged.items())}},
+                indent=None,
+            )
+        except OSError:
+            return
+        _PENDING_VERDICTS.clear()
+        _VERDICTS = merged
+        try:
+            st = path.stat()
+            _VERDICTS_SIG = (str(path), st.st_ino, st.st_mtime_ns, st.st_size)
+        except OSError:
+            _VERDICTS_SIG = None
+
+
 def _is_valid_archive(path: Path, day: date) -> bool:
     try:
         stat = path.stat()
-        return _validated_disk_file(str(path), day.isoformat(), stat.st_size, stat.st_mtime_ns)
     except OSError:
         return False
+    identity = (int(stat.st_size), int(stat.st_mtime_ns), int(stat.st_ino))
+    name = path.name
+    with _VERDICT_LOCK:
+        known = _PENDING_VERDICTS.get(name) or _persisted_verdicts().get(name)
+    if known is not None and tuple(known[:3]) == identity:
+        return bool(known[3])
+    try:
+        valid = _validated_disk_file(str(path), day.isoformat(), stat.st_size, stat.st_mtime_ns)
+    except OSError:
+        return False
+    if time.time() - stat.st_mtime > _VERDICT_QUIET_S:
+        with _VERDICT_LOCK:
+            _PENDING_VERDICTS[name] = (*identity, bool(valid))
+    return valid
 
 
 def _download_day(d: date, retries: int = 2) -> bool:
@@ -434,7 +540,10 @@ def _dates_on_disk() -> list[date]:
         listed = _session_archives_listed(_holidays())
     except OSError:
         return []
-    return sorted(day for path, day in listed if _is_valid_archive(path, day))
+    days = sorted(day for path, day in listed if _is_valid_archive(path, day))
+    if _PENDING_VERDICTS:
+        _flush_verdicts({path.name for path, _day in listed})
+    return days
 
 
 def build_from_local() -> int:
