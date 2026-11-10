@@ -484,3 +484,34 @@ def test_service_definition_build_sha_returns_empty_for_unknown_backup(tmp_path)
     path = tmp_path / "bad.previous"
     path.write_text("no build pin here", encoding="utf-8")
     assert HI._service_definition_build_sha(path) == ""
+
+
+def test_macos_label_running_this_checkouts_symlinked_venv_python_is_ours(monkeypatch, tmp_path):
+    """A plist naming only <repo>/venv/bin/python (a symlink out of the checkout,
+    as on the owner's Mac) still serves this checkout and is booted out."""
+    import plistlib
+
+    repo = tmp_path / "repo"
+    (repo / "venv" / "bin").mkdir(parents=True)
+    (repo / "venv" / "bin" / "python").symlink_to("/usr/bin/true")
+    home = tmp_path / "home"
+    agents = home / "Library" / "LaunchAgents"
+    agents.mkdir(parents=True)
+    with (agents / f"{HI.LAUNCHD_LABEL}.plist").open("wb") as handle:
+        plistlib.dump({"Label": HI.LAUNCHD_LABEL,
+                       "ProgramArguments": [f"{repo}/venv/bin/python", "-m", "product.host_entrypoint"]}, handle)
+    calls = []
+    monkeypatch.setattr(HI.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(HI.os, "getuid", lambda: 501)
+    monkeypatch.setattr(HI.Path, "home", classmethod(lambda cls: home))
+
+    def fake_run(args, *, check=True, timeout=30.0):
+        calls.append(list(args))
+        if args[:2] == ["launchctl", "print"]:
+            return type("Proc", (), {"returncode": 113, "stdout": "", "stderr": "not found"})()
+        return type("Proc", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(HI, "_run", fake_run)
+    HI._quiesce_macos_quantterm_writers(repo)
+
+    assert ["launchctl", "unload", str(agents / f"{HI.LAUNCHD_LABEL}.plist")] in calls

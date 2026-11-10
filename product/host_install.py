@@ -422,8 +422,12 @@ def _paths_reference_repo(values: Iterable[Any], repo: Path) -> bool:
         if not text:
             continue
         for chunk in text.split(os.pathsep):
-            chunk = chunk.strip()
-            if chunk.startswith("/") and _under(Path(chunk), repo):
+            chunk = chunk.strip().rstrip("/")
+            if not chunk.startswith("/"):
+                continue
+            # Lexical first: <repo>/venv/bin/python is a symlink that resolves
+            # outside the checkout, but it still names this checkout's venv.
+            if chunk == str(repo) or chunk.startswith(str(repo) + "/") or _under(Path(chunk), repo):
                 return True
     return False
 
