@@ -532,7 +532,7 @@ def test_alert_failure_never_persists_secret_bearing_exception(monkeypatch):
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "42")
     monkeypatch.delenv("QT_ALERT_WEBHOOK_URL", raising=False)
 
-    def explode(request, timeout=0):
+    def explode(request, timeout=0, context=None):
         raise ValueError(f"bad URL {request.full_url}")
 
     monkeypatch.setattr(HA.urllib.request, "urlopen", explode)

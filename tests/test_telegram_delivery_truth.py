@@ -138,8 +138,17 @@ def test_host_operational_alert_needs_a_telegram_receipt(monkeypatch, body, deli
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:tok")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "42")
     monkeypatch.delenv("QT_ALERT_WEBHOOK_URL", raising=False)
-    monkeypatch.setattr(HA.urllib.request, "urlopen", lambda request, timeout=0: _HttpResponse(200, body))
+    contexts = []
+
+    def fake_urlopen(request, timeout=0, context=None):
+        contexts.append(context)
+        return _HttpResponse(200, body)
+
+    monkeypatch.setattr(HA.urllib.request, "urlopen", fake_urlopen)
     result = HA.send_operational_alert("host check")
+    import ssl
+    assert contexts and isinstance(contexts[0], ssl.SSLContext)
+    assert contexts[0].verify_mode == ssl.CERT_REQUIRED and contexts[0].check_hostname
     assert result.delivered is delivered
     assert result.message_id == (31 if delivered else None)
     assert "123:tok" not in result.detail

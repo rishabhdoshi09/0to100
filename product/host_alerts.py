@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import ssl
 import urllib.request
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -66,6 +67,24 @@ def _telegram_receipt(raw: bytes, chat: str) -> tuple[int | None, str]:
     return message_id, "delivered"
 
 
+def _https_context() -> ssl.SSLContext:
+    """Certificate-verifying TLS context with a real CA bundle.
+
+    The python.org macOS interpreter that runs the owner's host has no default
+    trust store (ssl.get_default_verify_paths().cafile is None), so a bare
+    urllib HTTPS call fails with CERTIFICATE_VERIFY_FAILED. That silently broke
+    every host alert there (crash-loop alert of 2026-11-09: "URLError").
+    Use certifi's bundle -- the same trust store requests uses for every other
+    external call in QuantTerm -- and never disable verification.
+    """
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
+
+
 def send_operational_alert(message: str, *, timeout: float = 8.0) -> AlertResult:
     token, chat, webhook = _configured_destinations()
     body = str(message or "").strip()[:3500]
@@ -77,7 +96,7 @@ def send_operational_alert(message: str, *, timeout: float = 8.0) -> AlertResult
         payload = json.dumps({"chat_id": chat, "text": body}).encode("utf-8")
         request = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            with urllib.request.urlopen(request, timeout=timeout, context=_https_context()) as response:
                 status = int(response.status)
                 raw = response.read(65536) if 200 <= status < 300 else b""
             if not 200 <= status < 300:
@@ -94,7 +113,7 @@ def send_operational_alert(message: str, *, timeout: float = 8.0) -> AlertResult
         payload = json.dumps({"text": body, "source": "quantterm"}).encode("utf-8")
         request = urllib.request.Request(webhook, data=payload, headers={"Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            with urllib.request.urlopen(request, timeout=timeout, context=_https_context()) as response:
                 ok = 200 <= int(response.status) < 300
             return AlertResult(True, ok, "webhook", "delivered" if ok else "non-2xx response")
         except Exception as exc:
