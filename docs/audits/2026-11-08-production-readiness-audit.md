@@ -942,11 +942,11 @@ The `market_ops crash loop` lines at the end of `launchd.err.log` predate this d
 | Live lock | **PASS** (LOCKED and verified at every step) |
 | Kite session and quotes | **BLOCKED** (owner login on a trading day) |
 | History gate open on official history; a paper cycle enters on its own | **PARTIAL** (`analysis_complete` true, gate APPROVED; entries held by the **owner's own pause**, which was left untouched) |
-| 72 h soak | **BLOCKED** (probe ready. The owner approved it in chat, but the session's auto-mode policy refuses to install persistent agents; it needs a permission rule or the owner running the one-line command) |
+| 72 h soak | **IN PROGRESS**. The read-only launchd probe `com.quantterm.soakprobe` was installed with the owner's approval and runs every 5 minutes from 2026-11-10 13:00 IST to 2026-11-13 13:01 IST, then boots itself out. First sample: all 6 routes 2xx, live LOCKED, runtime mounted, history current. Summary command: `/usr/local/bin/python3 ~/Library/Logs/QuantTerm/soak/soak_report.py`. The gate passes only if the report shows no 5xx or timeouts, no unexpected launchd restarts, live LOCKED throughout, the runtime always mounted, no memory growth trend, and freshness transitions across the 11, 12 and 13 Nov sessions. The dashboard snapshot reads WARMING at a 5-minute poll by design: the read cache stays warm only under the desk's 10-second polling |
 | Controlled disk detach | **PASS** (13.8a, owner-approved; host stopped first) |
 | Hot detach under live writes / destructive restore over production | Not done by design (the restore drill proves restorability) |
 
-**Verdict: NOT READY.** The host now runs the verified build. No known P0/P1 is open, and backup, restore, deploy, rollback, the browser journey and Telegram are proven on the Mac. The soak and Kite gates are unproved.
+**Verdict: NOT READY.** The host now runs the verified build. No known P0/P1 is open, and backup, restore, deploy, rollback, the disk-loss drill, the browser journey and Telegram are proven on the Mac. The 72 h soak is running (it ends 2026-11-13 13:01 IST) and the Kite gate is unproved.
 
 **Smallest owner actions:**
 1. On a trading morning, log in to Kite: `cd ~/0to100 && venv/bin/python main.py login`.
