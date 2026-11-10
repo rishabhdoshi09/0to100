@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Callable, IO
@@ -22,8 +23,42 @@ from typing import Any, Callable, IO
 _DEFAULT_MODE = 0o644
 
 
+def durable_sync(fd: int) -> None:
+    """Force ``fd``'s data to stable storage, not just to the drive's cache.
+
+    On macOS ``fsync`` only hands data to the drive; ``F_FULLFSYNC`` makes the
+    drive flush its write cache too (Apple's guidance for durability). On the
+    owner's USB-backed runtime that costs ~0.4 s per call, so only state whose
+    loss matters (paper book, owner pause/halt) asks for it. Elsewhere, or if
+    the filesystem refuses the request, plain ``fsync`` is used.
+    """
+    if sys.platform == "darwin":
+        try:
+            import fcntl
+
+            fcntl.fcntl(fd, fcntl.F_FULLFSYNC)
+            return
+        except (OSError, AttributeError, ValueError):
+            pass
+    os.fsync(fd)
+
+
+def _sync_directory(directory: Path) -> None:
+    """Make the rename itself durable (best effort; not every FS supports it)."""
+    try:
+        dfd = os.open(str(directory), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        durable_sync(dfd)
+    except OSError:
+        pass
+    finally:
+        os.close(dfd)
+
+
 def _replace_with(target: Path, fill: Callable[[IO[Any]], None], *, mode: str, encoding: str | None,
-                  newline: str | None, fsync: bool) -> Path:
+                  newline: str | None, fsync: bool, durable: bool = False) -> Path:
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
         perms = target.stat().st_mode & 0o777
@@ -35,9 +70,13 @@ def _replace_with(target: Path, fill: Callable[[IO[Any]], None], *, mode: str, e
         with os.fdopen(fd, mode, encoding=encoding, newline=newline) as handle:
             fill(handle)
             handle.flush()
-            if fsync:
+            if durable:
+                durable_sync(handle.fileno())
+            elif fsync:
                 os.fsync(handle.fileno())
         os.replace(tmp_name, target)
+        if durable:
+            _sync_directory(target.parent)
     except BaseException:
         try:
             os.unlink(tmp_name)
@@ -47,9 +86,11 @@ def _replace_with(target: Path, fill: Callable[[IO[Any]], None], *, mode: str, e
     return target
 
 
-def atomic_write_text(path: str | Path, text: str, *, encoding: str = "utf-8", fsync: bool = True) -> Path:
+def atomic_write_text(path: str | Path, text: str, *, encoding: str = "utf-8", fsync: bool = True,
+                      durable: bool = False) -> Path:
+    """``durable=True``: full flush to stable storage (file and directory); see ``durable_sync``."""
     return _replace_with(Path(path), lambda fh: fh.write(text), mode="w", encoding=encoding,
-                         newline=None, fsync=fsync)
+                         newline=None, fsync=fsync, durable=durable)
 
 
 def atomic_write_bytes(path: str | Path, data: bytes, *, fsync: bool = True) -> Path:
@@ -81,3 +122,19 @@ def atomic_write_with(
 ) -> Path:
     """Stream into the temporary file (CSV writers etc.), then replace atomically."""
     return _replace_with(Path(path), fill, mode="w", encoding=encoding, newline=newline, fsync=fsync)
+
+
+def make_sqlite_durable(connection: Any) -> None:
+    """Ask SQLite for real stable-storage syncs on macOS (``F_FULLFSYNC``).
+
+    For stores whose loss costs money or truth and that commit rarely (paper
+    F&O book, OMS orders, protection plans). Busy stores (job ledgers, caches)
+    must not use it: each commit then waits ~0.4 s on the owner's USB disk.
+    """
+    if sys.platform != "darwin":
+        return
+    try:
+        connection.execute("PRAGMA fullfsync=ON")
+        connection.execute("PRAGMA checkpoint_fullfsync=ON")
+    except Exception:
+        pass

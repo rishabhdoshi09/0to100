@@ -33,6 +33,8 @@ class FoPaperStore:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA busy_timeout=10000")
+        from core.atomic_io import make_sqlite_durable
+        make_sqlite_durable(self.conn)
         self._bootstrap()
 
     def _bootstrap(self) -> None:

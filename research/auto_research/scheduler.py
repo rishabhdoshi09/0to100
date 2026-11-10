@@ -271,8 +271,12 @@ class AutoResearchBrain:
                 with tmp.open("w", encoding="utf-8") as handle:
                     _json.dump(payload, handle, default=str)
                     handle.flush()
-                    _os.fsync(handle.fileno())
+                    # Durable means on stable storage, not in the USB drive's
+                    # cache: macOS fsync alone does not flush it (F_FULLFSYNC).
+                    from core.atomic_io import _sync_directory, durable_sync
+                    durable_sync(handle.fileno())
                 _os.replace(tmp, p)                   # atomic file replacement
+                _sync_directory(p.parent)
                 return True
             finally:
                 tmp.unlink(missing_ok=True)

@@ -134,7 +134,8 @@ class Supervisor:
 
     def _save_owner_state(self) -> None:
         from core.atomic_io import atomic_write_text
-        atomic_write_text(self._owner_path, json.dumps(self.owner_state, indent=2))
+        # The owner's pause/halt must survive a disk disconnect: full flush.
+        atomic_write_text(self._owner_path, json.dumps(self.owner_state, indent=2), durable=True)
 
     def start(self) -> bool:
         if not self.lock.acquire():
