@@ -157,16 +157,26 @@ def _stage(name: str, *, status: str, input_artifact: str = "", output_artifact:
 
 
 def _scan_payload() -> dict[str, Any]:
+    """Read-only view of the saved scan (shared parse; never mutate it)."""
+    from core.json_cache import read_json_shared
     from product.scan_store import resolved_scan_path
     path = resolved_scan_path()
-    payload = _read_json(path)
-    return {"path": str(path), "payload": payload}
+    try:
+        payload = read_json_shared(path)
+    except Exception:
+        payload = {}
+    return {"path": str(path), "payload": payload if isinstance(payload, dict) else {}}
 
 
 def _reco_payload() -> dict[str, Any]:
+    """Read-only view of the saved recommendations (shared parse; never mutate it)."""
+    from core.json_cache import read_json_shared
     from product.recommendations_store import DEFAULT_RECO_PATH, load_recommendations
     path = Path(os.environ["QT_RECO_PATH"]) if os.environ.get("QT_RECO_PATH") else DEFAULT_RECO_PATH
-    payload = load_recommendations(path) or {}
+    try:
+        payload = read_json_shared(path, loader=load_recommendations) or {}
+    except Exception:
+        payload = {}
     return {"path": str(path), "payload": payload}
 
 

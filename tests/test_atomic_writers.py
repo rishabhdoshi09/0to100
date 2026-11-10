@@ -102,3 +102,41 @@ def test_no_production_writer_uses_a_fixed_temp_name():
             if _FIXED_TEMP.search(line):
                 offenders.append(f"{rel}:{n}")
     assert offenders == [], "use core.atomic_io instead of a fixed .tmp path:\n" + "\n".join(offenders)
+
+
+def test_shared_parse_is_reused_until_the_artifact_is_replaced(tmp_path):
+    from core import json_cache
+    from core.atomic_io import atomic_write_json
+
+    json_cache.clear()
+    target = tmp_path / "latest.json"
+    atomic_write_json(target, {"generation": 1})
+    calls = []
+
+    def loader(path):
+        calls.append(path)
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    first = json_cache.read_json_shared(target, loader)
+    assert json_cache.read_json_shared(target, loader) is first and len(calls) == 1
+    atomic_write_json(target, {"generation": 2})          # same size, new inode
+    assert json_cache.read_json_shared(target, loader) == {"generation": 2} and len(calls) == 2
+    target.unlink()
+    assert json_cache.read_json_shared(target, loader) is None and len(calls) == 2
+
+
+def test_a_version_replaced_mid_parse_is_not_cached(tmp_path):
+    from core import json_cache
+    from core.atomic_io import atomic_write_json
+
+    json_cache.clear()
+    target = tmp_path / "latest.json"
+    atomic_write_json(target, {"generation": 1})
+
+    def racing_loader(path):
+        value = json.loads(path.read_text(encoding="utf-8"))
+        atomic_write_json(path, {"generation": 2})        # a writer lands during the parse
+        return value
+
+    assert json_cache.read_json_shared(target, racing_loader) == {"generation": 1}
+    assert json_cache.read_json_shared(target) == {"generation": 2}
