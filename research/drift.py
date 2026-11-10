@@ -24,7 +24,8 @@ streams; the I/O layer reads the real `signal_log` (same R formula as
 from __future__ import annotations
 
 import os as _os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from functools import lru_cache
 
 import numpy as np
 
@@ -237,6 +238,33 @@ def _dip_recovery_pvalue(x: np.ndarray, min_seg: int, n_perm: int,
 def assess_drift(r_stream, min_samples: int = _MIN_N, min_seg: int = _MIN_SEG,
                  alpha: float = _SIG_ALPHA, n_perm: int = 300,
                  seed: int | None = 0) -> DriftResult:
+    """Drift read for one R-stream; see ``_assess_drift``.
+
+    With a fixed seed the permutation tests are deterministic, so the result is
+    a pure function of (stream, parameters) and is memoised on exactly that.
+    Research views call this for every signal on every GET (16,856 split-t
+    statistics, ~4.5 s per /api/research-director read on the owner's Mac);
+    a new or resolved outcome changes the stream and therefore the key.
+    """
+    if seed is None:
+        return _assess_drift(r_stream, min_samples, min_seg, alpha, n_perm, seed)
+    try:
+        stream = tuple(float(v) for v in r_stream)
+    except (TypeError, ValueError):
+        return _assess_drift(r_stream, min_samples, min_seg, alpha, n_perm, seed)
+    cached = _assess_drift_memo(stream, int(min_samples), int(min_seg), float(alpha), int(n_perm), seed)
+    return replace(cached)
+
+
+@lru_cache(maxsize=512)
+def _assess_drift_memo(stream: tuple, min_samples: int, min_seg: int, alpha: float,
+                       n_perm: int, seed: int) -> DriftResult:
+    return _assess_drift(stream, min_samples, min_seg, alpha, n_perm, seed)
+
+
+def _assess_drift(r_stream, min_samples: int = _MIN_N, min_seg: int = _MIN_SEG,
+                  alpha: float = _SIG_ALPHA, n_perm: int = 300,
+                  seed: int | None = 0) -> DriftResult:
     """Locate the most likely change-point (max-|t| split), CONFIRM it by
     permutation p-value, then enrich the read:
       • RECOVERING — a decay that has since significantly rebounded.

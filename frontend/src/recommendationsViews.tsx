@@ -6,7 +6,6 @@ import {
   fetchRecommendationsWorkspace,
   fetchDecisionSimulationGate,
   simulatePastDecisions,
-  bootstrapProduct,
   type DeskNote,
   type DeskNoteCompany,
   type MarketReportItem,
@@ -21,6 +20,8 @@ import { LiveScanBanner } from './experience'
 import { DailyWrapList, magazineWrapLines } from './dailyWrap'
 import { keepRicherMemory, markInvestigate, recallMemory } from './sessionMemory'
 import { recoCanonicalDecision } from './scannerFallback'
+import { shouldPollPage } from './pagePolling'
+import { recommendationStateMessage, recommendationsAreCurrent } from './recommendationAuthority'
 
 const CAT_ICONS: Record<string, string> = {
   wealth_builders: 'W',
@@ -469,6 +470,7 @@ export function RecommendationsView({
   marketScan,
   longTermScan,
   depth,
+  activePage,
 }: ExperienceViewProps) {
   const [data, setData] = useState<RecommendationsWorkspace | null>(() => recallMemory<RecommendationsWorkspace>('reco-workspace') ?? null)
   const [error, setError] = useState('')
@@ -480,28 +482,19 @@ export function RecommendationsView({
   const [simulationGate, setSimulationGate] = useState<DecisionSimulationGate | null>(null)
   const [simulationBusy, setSimulationBusy] = useState(false)
   const [simulationError, setSimulationError] = useState('')
-  const autoPrep = useRef(false)
+  const recommendationsVisible = shouldPollPage(activePage, ['Recommendations'])
+
+  // Reading Opportunities never starts a job. The autonomy scheduler publishes
+  // scans after official data is ready; this page used to fire RUN_SCAN_NOW
+  // whenever the dashboard read cache was still warming (empty scan), which
+  // rescanned an already-scanned NSE session.
 
   useEffect(() => {
-    if (autoPrep.current) return
-    const hasScan = Boolean(dashboard.scan.scanned_at || (dashboard.scan.records || []).length)
-    if (hasScan || marketScan.isActive || marketScan.isBusy) {
-      autoPrep.current = true
-      return
-    }
-    autoPrep.current = true
-    void bootstrapProduct()
-      .then(() => {
-        if (!marketScan.isActive && !marketScan.isBusy) void marketScan.start()
-      })
-      .catch(() => { autoPrep.current = false })
-  }, [dashboard.scan.scanned_at, dashboard.scan.records.length, marketScan.isActive, marketScan.isBusy, marketScan.start])
-
-  useEffect(() => {
+    if (!recommendationsVisible) return
     let cancelled = false
     let inFlight = false
     const loadGate = () => {
-      if (inFlight) return
+      if (document.visibilityState === 'hidden' || inFlight) return
       inFlight = true
       void fetchDecisionSimulationGate()
         .then((payload) => {
@@ -523,19 +516,22 @@ export function RecommendationsView({
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [dashboard.scan.scanned_at, marketScan.succeeded])
+  }, [recommendationsVisible, dashboard.scan.scanned_at, marketScan.succeeded])
 
   useEffect(() => {
+    if (!recommendationsVisible) return
     let cancelled = false
     let inFlight = false
     const load = () => {
-      if (inFlight) return
+      if (document.visibilityState === 'hidden' || inFlight) return
       inFlight = true
       if (!recallMemory('reco-workspace')) setLoading(true)
       void fetchRecommendationsWorkspace()
         .then((payload) => {
           if (!cancelled) {
-            const kept = keepRicherMemory('reco-workspace', payload, (row) => !(row.categories || []).some((c) => (c.count || 0) > 0 || (c.cards || []).length > 0))
+            // An authoritative REFRESHING/FAILED empty projection supersedes cached
+            // BUY cards. Never resurrect the previous scan's recommendations.
+            const kept = keepRicherMemory('reco-workspace', payload, () => false)
             setData(kept)
             const firstWithCards = kept.categories.find((c) => c.count > 0)
             if (firstWithCards) setCategoryId(firstWithCards.id)
@@ -557,7 +553,13 @@ export function RecommendationsView({
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [dashboard.scan.scanned_at, dashboard.long_term.scanned_at, marketScan.succeeded, longTermScan.succeeded, marketScan.isBusy, longTermScan.isBusy, dashboard.market.available])
+  }, [recommendationsVisible, dashboard.scan.scanned_at, dashboard.long_term.scanned_at, marketScan.succeeded, longTermScan.succeeded, marketScan.isBusy, longTermScan.isBusy, dashboard.market.available])
+
+  const recommendationsVerified = recommendationsAreCurrent(
+    data, dashboard.scan, dashboard.long_term.scanned_at,
+    dashboard.data.ready && dashboard.response_meta?.stale !== true,
+  )
+  const notCurrent = recommendationStateMessage(data)
 
   const category = useMemo(
     () => data?.categories.find((c) => c.id === categoryId) || data?.categories[0],
@@ -620,14 +622,18 @@ export function RecommendationsView({
       </div>
     )
   }
-  if (error || !data || !category) {
+  if (error || !data || !category || !recommendationsVerified) {
     return (
       <div className="reco-light">
         <LiveScanBanner scan={marketScan} depth={depth} label="Market scan" />
         <LiveScanBanner scan={longTermScan} depth={depth} label="Funds refresh" />
         <div className="reco-empty">
-          <strong>{error || 'No recommendation data yet'}</strong>
-          <p>This page starts the official-price and market-scan jobs if they are missing, then builds recommendations from verified scan evidence. Empty high-conviction is a real result when families do not agree.</p>
+          <strong>{error || (!recommendationsVerified
+            ? notCurrent.title
+            : 'No recommendation data yet')}</strong>
+          {!recommendationsVerified && !error && notCurrent.detail ? <p>{notCurrent.detail}</p> : null}
+          {!recommendationsVerified && data?.cmp_note ? <p>{data.cmp_note}</p> : null}
+          <p>QuantTerm&apos;s scheduler runs the official-price and market-scan jobs by itself and publishes recommendations from verified scan evidence. Opening this page never starts a scan; use Scan market only to request one now. Empty high-conviction is a real result when families do not agree.</p>
           <div className="reco-hero-actions">
             <button type="button" className="reco-primary" disabled={marketScan.isBusy} onClick={() => void marketScan.start()}>
               {marketScan.isBusy ? 'Scanning market…' : 'Scan market'}
@@ -1070,7 +1076,7 @@ function DeskTile({
   )
 }
 
-export function MarketReportsView({ dashboard, setActive, setSelected, marketScan, marketReport, depth, runControl }: ExperienceViewProps) {
+export function MarketReportsView({ dashboard, setActive, setSelected, marketScan, marketReport, depth, runControl, activePage }: ExperienceViewProps) {
   const [data, setData] = useState<MarketReportsWorkspace | null>(() => recallMemory<MarketReportsWorkspace>('market-reports') ?? null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(() => !recallMemory('market-reports'))
@@ -1078,13 +1084,18 @@ export function MarketReportsView({ dashboard, setActive, setSelected, marketSca
   const [selected, setSelectedReport] = useState<MarketReportItem | null>(null)
   const [newsBusy, setNewsBusy] = useState(false)
   const autoReport = useRef(false)
+  const reportsVisible = shouldPollPage(activePage, ['Market Reports'])
   const newsStamp = dashboard.operations?.latest?.NEWS_REFRESH?.updated_at
     || dashboard.news?.latest_refresh?.updated_at
     || dashboard.operations?.latest?.MARKET_REPORT?.updated_at
 
   useEffect(() => {
+    if (!reportsVisible) return
     let cancelled = false
+    let inFlight = false
     const load = () => {
+      if (document.visibilityState === 'hidden' || inFlight) return
+      inFlight = true
       if (!recallMemory('market-reports')) setLoading(true)
       fetchMarketReportsWorkspace()
         .then((payload) => {
@@ -1114,16 +1125,17 @@ export function MarketReportsView({ dashboard, setActive, setSelected, marketSca
           if (!cancelled) setError(err.message || 'Failed to load market reports')
         })
         .finally(() => {
+          inFlight = false
           if (!cancelled) setLoading(false)
         })
     }
     load()
-    const timer = window.setInterval(load, marketScan.isBusy || marketReport?.isBusy ? 4000 : 20000)
+    const timer = window.setInterval(load, marketScan.isBusy || marketReport?.isBusy ? 12_000 : 30_000)
     return () => {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [dashboard.scan.scanned_at, marketScan.succeeded, marketReport?.succeeded, newsStamp, marketScan.isBusy, marketReport?.isBusy, dashboard.news.available, dashboard.market.available, marketReport])
+  }, [reportsVisible, dashboard.scan.scanned_at, marketScan.succeeded, marketReport?.succeeded, newsStamp, marketScan.isBusy, marketReport?.isBusy, dashboard.news.available, dashboard.market.available])
 
   const refreshNews = async () => {
     setNewsBusy(true)

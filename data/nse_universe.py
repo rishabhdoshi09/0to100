@@ -579,7 +579,6 @@ def refresh_universe_history(*, as_of=None, force: bool = False) -> dict:
     Does not invent IPO dates or delistings. First/last session in the on-disk
     official EQ archive is the membership window. Shallow stores stay incomplete.
     """
-    import os as _os
     import pandas as pd
     from data.bhavcopy_store import _MIN_DAYS, membership_rows
 
@@ -605,9 +604,8 @@ def refresh_universe_history(*, as_of=None, force: bool = False) -> dict:
         return info
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(rows, indent=2), encoding="utf-8")
-    _os.replace(tmp, path)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(path, json.dumps(rows, indent=2))
     info = point_in_time_universe(asof, path=path)
     info.update({
         "available": True,

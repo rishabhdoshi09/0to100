@@ -1,8 +1,10 @@
 """Durable paper-cycle orchestration for NSE long-premium option candidates."""
 from __future__ import annotations
 
+from contextlib import ExitStack
 from dataclasses import fields
 from datetime import datetime, timedelta
+from math import isfinite
 from typing import Any, Callable, Mapping
 
 from data.nfo_market import (
@@ -16,6 +18,7 @@ from data.nfo_market import (
     read_option_intraday_bars,
 )
 from product.fo_paper import (
+    expired_unsettled_positions,
     ENTRY_MINUTE_AMBIGUOUS,
     ENTRY_MINUTE_CLEAR,
     ENTRY_MINUTE_EVIDENCE_OK,
@@ -40,8 +43,30 @@ def _restore_position(payload: Mapping[str, Any]) -> FoPaperPosition | None:
     allowed = {field.name for field in fields(FoPaperPosition)}
     kwargs = {key: payload[key] for key in allowed if key in payload}
     try:
-        return FoPaperPosition(**kwargs)
-    except (TypeError, ValueError):
+        pos = FoPaperPosition(**kwargs)
+        integer_fields = (pos.lot_size, pos.lots, pos.quantity, pos.max_holding_sessions)
+        numerical_fields = (
+            pos.entry_price, pos.stop_price, pos.target_price,
+            pos.risk_amount, pos.premium_loss_exposure,
+        )
+        if (
+            not isinstance(pos.trade_id, str) or not pos.trade_id
+            or not isinstance(pos.underlying, str) or not pos.underlying
+            or not isinstance(pos.option_symbol, str) or not pos.option_symbol
+            or pos.option_type not in {"CE", "PE"}
+            or any(type(value) is not int or value <= 0 for value in integer_fields)
+            or pos.quantity != pos.lots * pos.lot_size
+            or any(
+                type(value) not in (int, float) or not isfinite(value)
+                for value in numerical_fields
+            )
+            or not 0 < pos.stop_price < pos.entry_price < pos.target_price
+            or pos.risk_amount < 0
+            or pos.premium_loss_exposure < 0
+        ):
+            return None
+        return pos
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -235,14 +260,25 @@ def run_fo_paper_cycle(
     """Settle existing paper options, then open fresh eligible paper candidates."""
     owned_store = store is None
     store = store or FoPaperStore()
+    account_lock = ExitStack()
     try:
         session = now_ist.date().isoformat()
+        premium_ledger_error = ""
+        try:
+            premium_deployed_today = store.premium_deployed_on_session(session)
+        except (ValueError, TypeError, OverflowError) as exc:
+            # A damaged settled-trade journal must stop NEW spending, but
+            # existing option positions still need stop/target supervision.
+            premium_ledger_error = str(exc)[:240]
+            premium_deployed_today = 0.0
+        allow_new_entries = bool(allow_new_entries and not premium_ledger_error)
         book = FoPaperBook(
             capital=capital,
             risk_per_trade_pct=0.01,
+            max_loss_per_trade_pct=0.01,
             max_premium_pct=0.10,
             max_daily_premium_pct=0.10,
-            premium_deployed_today=store.premium_deployed_on_session(session),
+            premium_deployed_today=premium_deployed_today,
             max_positions=5,
             max_total_risk_pct=0.05,
             slippage_bps=5.0,
@@ -254,8 +290,11 @@ def run_fo_paper_cycle(
         book.realized_pnl = float(store.realized_pnl())
         for raw in store.load_positions():
             pos = _restore_position(raw)
-            if pos is not None:
-                book.open[pos.option_symbol] = pos
+            if pos is None or not pos.trade_id or not pos.option_symbol or not pos.underlying:
+                raise ValueError("F&O paper position could not be restored safely")
+            if pos.option_symbol in book.open:
+                raise ValueError("duplicate F&O option identity in persisted paper positions")
+            book.open[pos.option_symbol] = pos
 
         settled_rows: list[dict[str, Any]] = []
         settled_underlyings: set[str] = set()
@@ -276,6 +315,7 @@ def run_fo_paper_cycle(
         iv_crush_triggered = 0
         iv_crush_unavailable = 0
         eod_exit_due = _eod_exit_due(now_ist)
+        raw_quotes: Mapping[str, Any] = {}
         # Contract Challenger grading is deliberately deferred until the
         # non-entry/EOD side of the cycle so research never delays the
         # execution-critical window. Each shadow is resolved from its own
@@ -488,10 +528,59 @@ def run_fo_paper_cycle(
                     pass
                 row["contract_outcome"] = classify_contract_outcome(row)
 
+        # Supervision above skips a contract past expiry on every cycle (it is
+        # no longer quoted). It stays durable and counted as open risk, and new
+        # entries wait until an operator reconciles it. See the rule's owner.
+        expired_unsettled = expired_unsettled_positions(book.open.values(), session)
+        unquoted_open = sorted(
+            symbol for symbol in book.open if not isinstance(raw_quotes.get(symbol), Mapping)
+        )
+        blockers = ["FNO_EXPIRED_POSITION_UNSETTLED"] if expired_unsettled else []
+        if premium_ledger_error:
+            blockers.append("FNO_DAILY_PREMIUM_LEDGER_UNTRUSTED")
+
         opened: list[dict[str, Any]] = []
         skipped: list[dict[str, str]] = []
         ranked_candidates = _candidate_rows(directional) if bool(directional.get("available")) else []
-        if allow_new_entries and bool(directional.get("available")):
+        account_risk_error = ""
+        if premium_ledger_error:
+            skipped.extend(
+                {"symbol": str(c.get("symbol") or "").upper(),
+                 "reason": "DAILY_PREMIUM_LEDGER_UNTRUSTED"}
+                for c in ranked_candidates
+            )
+        elif expired_unsettled:
+            skipped.extend(
+                {"symbol": str(c.get("symbol") or "").upper(),
+                 "reason": "EXPIRED_POSITION_UNSETTLED"}
+                for c in ranked_candidates
+            )
+        elif allow_new_entries and ranked_candidates:
+            # The 5% open-risk ceiling is shared with both equity paper books.
+            # Hold the account lock from this read until the new positions are
+            # committed, so no equity engine can open in between.
+            from risk.portfolio_risk import (
+                AccountRiskUnreadable,
+                _capital,
+                account_mutation_lock,
+                equity_books_open_risk,
+            )
+
+            account_lock.enter_context(account_mutation_lock())
+            try:
+                book.external_open_risk = equity_books_open_risk()
+                book.account_capital = _capital()
+            except AccountRiskUnreadable as exc:
+                account_risk_error = str(exc)
+        if expired_unsettled:
+            pass
+        elif account_risk_error:
+            skipped.extend(
+                {"symbol": str(c.get("symbol") or "").upper(),
+                 "reason": "ACCOUNT_RISK_UNREADABLE"}
+                for c in ranked_candidates
+            )
+        elif allow_new_entries and bool(directional.get("available")):
             for candidate in ranked_candidates:
                 underlying = str(candidate.get("symbol") or "").upper()
                 if not underlying:
@@ -640,6 +729,7 @@ def run_fo_paper_cycle(
             settled_rows,
             (pos.as_dict() for pos in book.open.values()),
         )
+        account_lock.close()
         status = store.status()
         return {
             "available": True,
@@ -654,22 +744,33 @@ def run_fo_paper_cycle(
             "settled": settled_rows,
             "skipped": skipped,
             "open_positions": [pos.as_dict() for pos in book.open.values()],
+            "expired_unsettled_positions": expired_unsettled,
+            "unquoted_open_positions": unquoted_open,
+            "blockers": blockers,
+            "operator_action_required": bool(blockers),
             "store": status,
             "realized_pnl": round(book.realized_pnl, 2),
             "equity_for_sizing": round(max(0.0, book.capital + book.realized_pnl), 2),
             "daily_premium_cap_pct": round(book.max_daily_premium_pct * 100.0, 2),
-            "premium_deployed_today": round(book.premium_deployed_today, 2),
-            "daily_premium_budget": round(
-                max(0.0, book.capital + book.realized_pnl) * book.max_daily_premium_pct,
-                2,
+            "premium_deployed_today": (
+                None if premium_ledger_error else round(book.premium_deployed_today, 2)
             ),
-            "daily_premium_remaining": round(
-                max(
-                    0.0,
-                    max(0.0, book.capital + book.realized_pnl) * book.max_daily_premium_pct
-                    - book.premium_deployed_today,
-                ),
-                2,
+            "daily_premium_ledger_error": premium_ledger_error or None,
+            "daily_premium_budget": (
+                None if premium_ledger_error else round(
+                    max(0.0, book.capital + book.realized_pnl) * book.max_daily_premium_pct,
+                    2,
+                )
+            ),
+            "daily_premium_remaining": (
+                None if premium_ledger_error else round(
+                    max(
+                        0.0,
+                        max(0.0, book.capital + book.realized_pnl) * book.max_daily_premium_pct
+                        - book.premium_deployed_today,
+                    ),
+                    2,
+                )
             ),
             "production_evidence_enabled": book.fully_costed,
             "same_day_intraday_marks_used": intraday_marks_used,
@@ -703,5 +804,6 @@ def run_fo_paper_cycle(
             ),
         }
     finally:
+        account_lock.close()
         if owned_store:
             store.close()

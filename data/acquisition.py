@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -265,9 +264,8 @@ def write_provenance(result: AcquisitionResult) -> Path | None:
         payload = result.provenance()
         latest = provenance_path(result.dataset)
         latest.parent.mkdir(parents=True, exist_ok=True)
-        tmp = latest.with_suffix(latest.suffix + ".tmp")
-        tmp.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
-        os.replace(tmp, latest)
+        from core.atomic_io import atomic_write_text
+        atomic_write_text(latest, json.dumps(payload, indent=2, default=str))
         with provenance_log_path(result.dataset).open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(payload, default=str) + "\n")
         return latest

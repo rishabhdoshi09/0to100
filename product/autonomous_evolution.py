@@ -124,9 +124,8 @@ def _write(path: Path, payload: Mapping[str, Any]) -> Path:
     data["schema_version"] = SCHEMA_VERSION
     data["updated_at"] = _now()
     data["live_locked"] = True
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
-    os.replace(tmp, path)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(path, json.dumps(data, indent=2, default=str))
     return path
 
 

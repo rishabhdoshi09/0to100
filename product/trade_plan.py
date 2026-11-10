@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict, field
 
 OK, CAUTION, DANGER = "OK", "CAUTION", "DANGER"
+HEAT_UNKNOWN = "UNKNOWN"
 NEW_BET, ADDS_TO_BET, UNKNOWN = "new_bet", "adds_to_bet", "unknown"
 
 
@@ -114,7 +115,8 @@ def build_trade_plan(symbol: str, entry: float, stop: float, target: float | Non
             heat_verdict = str(after.get("verdict", OK) or OK)
             warnings = tuple(after.get("warnings", []) or ())
         except Exception:
-            pass
+            before_pct = after_pct = None
+            heat_verdict = HEAT_UNKNOWN
 
     # correlation read — is this a NEW bet or adding to an existing one?
     if correlated_with is None:
@@ -158,6 +160,8 @@ def _summarize(symbol, qty, rupee_risk, risk_pct_cap, pct_cap, rr, capped, befor
         parts.append("🔴 This pushes the book past a safety limit — close something first.")
     elif verdict == CAUTION:
         parts.append("🟠 Book risk is getting full; size down or wait.")
+    elif verdict == HEAT_UNKNOWN:
+        parts.append("⚠️ Account open risk could not be read — do not treat the book as safe.")
     if corr_status == ADDS_TO_BET and correlated:
         parts.append(f"This is NOT a new bet — it moves with {', '.join(correlated)}; "
                      "sized together they are one exposure.")

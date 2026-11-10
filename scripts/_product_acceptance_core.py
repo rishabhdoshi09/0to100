@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -29,7 +30,7 @@ EXPECTED_EXTERNAL_TOKENS = (
     "LOGIN_REQUIRED",
     "BROKER_LOGIN_REQUIRED",
 )
-EXPECTED_EXTERNAL_FEATURES = frozenset({"Data refresh", "F&O refresh"})
+EXPECTED_EXTERNAL_FEATURES = frozenset({"Data refresh", "F&O refresh", "Market Report"})
 EXPLICIT_BLOCKER_CODES = frozenset({
     "FNO_UNIVERSE_UNAVAILABLE",
     "BROKER_LOGIN_REQUIRED",
@@ -100,7 +101,11 @@ def collect_nested_blockers(result: Mapping[str, Any] | None) -> list[str]:
     missing = [str(item) for item in _as_list(payload.get("missing_lanes")) if str(item).strip()]
     for lane in missing:
         token = f"missing_lanes={lane}"
-        if token not in reasons and not any(lane in item for item in reasons):
+        # Preserve the exact missing-lane field even when a nested dependency
+        # path happens to contain that word (e.g. regime_dependency). Without
+        # this, strict acceptance cannot distinguish only-regime missing from
+        # regime + market_scan missing.
+        if token not in reasons:
             reasons.append(token)
     out: list[str] = []
     for item in reasons:
@@ -178,6 +183,20 @@ def is_expected_external_blocker(row: Mapping[str, Any]) -> bool:
         return False
     if status not in {"DEGRADED", "BLOCKED"}:
         return False
+    if feature == "Market Report":
+        # Isolated GitHub runners have no broker credentials and can lack a
+        # reachable public index feed. Production must always HOLD if regime
+        # data is unavailable: a missing live stance is not launch-ready.
+        # An explicit CI-only exception is not a claimed feature PASS.
+        return (
+            os.environ.get("GITHUB_ACTIONS", "").lower() == "true"
+            and status == "DEGRADED"
+            and "NIFTY_INDEX_DATA_UNAVAILABLE" in reason
+            and "MISSING_LANES=REGIME" in reason
+            and "MISSING_LANES=NEWS" not in reason
+            and "MISSING_LANES=MARKET_SCAN" not in reason
+            and "MISSING_LANES=DESK_WRAP" not in reason
+        )
     return any(token in reason for token in EXPECTED_EXTERNAL_TOKENS)
 
 
@@ -492,6 +511,52 @@ def grade_forward_soak(payload: Mapping[str, Any] | None) -> dict[str, str]:
     if authorized is True:
         return {"status": "FAIL", "blocker_reason": "forward soak reports live execution authorized"}
     return {"status": "PASS", "blocker_reason": ""}
+
+
+def grade_us_market_truth(us_market: Mapping[str, Any] | None) -> dict[str, str]:
+    """The US projection must state its real scope, never a stale capability.
+
+    INDIA_ONLY (the default): no autonomous US scan, no auto-execution and no
+    counterfactuals, while existing positions are still supervised and
+    settled. INDIA_AND_US: the full forward-paper parity contract. Both
+    require paper-only, live-locked, and no survivorship-biased replay.
+    """
+    us = _as_dict(us_market)
+    parity = _as_dict(us.get("parity"))
+    paper = _as_dict(us.get("paper"))
+    scope = str(_as_dict(us.get("market_scope")).get("market_scope") or "")
+    common = bool(
+        us.get("paper_only") is True
+        and us.get("live_locked") is True
+        and parity.get("forward_outcome_settlement") is True
+        and parity.get("historical_pit_replay") is False
+        and parity.get("survivorship_biased_backtest_allowed") is False
+    )
+    if scope == "INDIA_ONLY":
+        ok = bool(
+            common
+            and str(parity.get("state") or "") == "PAUSED_INDIA_ONLY"
+            and parity.get("autonomous_scan") is False
+            and parity.get("paper_auto_execution") is False
+            and parity.get("forward_counterfactuals") is False
+            and parity.get("existing_positions_supervised") is True
+            and paper.get("new_entries_paused") is True
+        )
+        reason = "India-only US pause is not reported truthfully"
+    elif scope == "INDIA_AND_US":
+        ok = bool(
+            common
+            and str(parity.get("state") or "") == "FORWARD_PAPER_PARITY"
+            and parity.get("autonomous_scan") is True
+            and parity.get("paper_auto_execution") is True
+            and parity.get("forward_counterfactuals") is True
+            and parity.get("forward_learning") is True
+            and paper.get("new_entries_paused") is False
+        )
+        reason = "US forward-paper parity contract is missing/incomplete"
+    else:
+        ok, reason = False, "US market scope is not reported"
+    return {"status": "PASS" if ok else "FAIL", "blocker_reason": "" if ok else reason}
 
 
 def grade_paper_status(
@@ -1010,27 +1075,14 @@ def run(args: argparse.Namespace) -> int:
         code_sha=sha,
     ))
 
-    us_market = _as_dict(home_os.get("us_market"))
-    us_parity = _as_dict(us_market.get("parity"))
-    us_parity_ok = bool(
-        us_market.get("paper_only") is True
-        and us_market.get("live_locked") is True
-        and str(us_parity.get("state") or "") == "FORWARD_PAPER_PARITY"
-        and us_parity.get("autonomous_scan") is True
-        and us_parity.get("paper_auto_execution") is True
-        and us_parity.get("forward_outcome_settlement") is True
-        and us_parity.get("forward_counterfactuals") is True
-        and us_parity.get("forward_learning") is True
-        and us_parity.get("historical_pit_replay") is False
-        and us_parity.get("survivorship_biased_backtest_allowed") is False
-    )
+    us_grade = grade_us_market_truth(_as_dict(home_os.get("us_market")))
     rows.append(_row(
         feature="US forward-paper parity truth",
         trigger_tested="GET /api/radar-home → home_os.us_market.parity",
         backend_path="product.us_market_status + canonical US market-ops lane",
         durable_artifact="US scan/paper/learning stores",
-        status="PASS" if us_parity_ok else "FAIL",
-        blocker_reason="" if us_parity_ok else "US forward-paper parity contract is missing/incomplete",
+        status=us_grade["status"],
+        blocker_reason=us_grade["blocker_reason"],
         start_timestamp=_now(),
         finish_timestamp=_now(),
         code_sha=sha,

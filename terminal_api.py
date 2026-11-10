@@ -24,11 +24,13 @@ from fastapi.responses import JSONResponse
 
 from logger import quiet_uvicorn_health_access
 from core.runtime_paths import logs_dir, logs_path
+from product.desk_read_snapshot import DeskReadSnapshot
 
 ROOT = Path(__file__).resolve().parent
 OPS_ROOT = logs_dir() / "market_ops"
 OPS_RUNTIME = OPS_ROOT / "runtime.json"
 OPS_DB = OPS_ROOT / "jobs.db"
+_DASHBOARD_READ_CACHE = DeskReadSnapshot()
 
 app = FastAPI(title="QuantTerm Terminal API", version="0.4.0")
 quiet_uvicorn_health_access()
@@ -120,7 +122,7 @@ async def _public_mutation_boundary(request: Request, call_next):
     FastAPI application, including product-extension routes. It deliberately
     does not trust client IPs or forwarding headers.
     """
-    from product.public_access import authorize_mutation
+    from product.public_access import authorize_mutation, public_read_only_enabled
 
     access = authorize_mutation(request.method, request.headers)
     if not access.allowed:
@@ -128,7 +130,7 @@ async def _public_mutation_boundary(request: Request, call_next):
             {
                 "detail": access.detail,
                 "code": access.code,
-                "public_read_only": True,
+                "public_read_only": public_read_only_enabled(),
             },
             status_code=403,
             headers={"Cache-Control": "no-store"},
@@ -508,6 +510,17 @@ def _scan_payload() -> dict:
     try:
         from product.scan_store import load_scan, resolved_scan_path
         payload = load_scan(resolved_scan_path()) or {}
+    except Exception as exc:
+        return _scan_payload_from(None, error=str(exc))
+    return _scan_payload_from(payload)
+
+
+def _scan_payload_from(payload: dict | None, *, error: str = "") -> dict:
+    """Desk view of one already-parsed scan artifact (see ``_scan_payload``)."""
+    try:
+        if error:
+            raise RuntimeError(error)
+        payload = payload or {}
         records = [dict(row) for row in (payload.get("records", []) or []) if isinstance(row, dict)]
         provenance = payload.get("provenance")
         return {
@@ -526,6 +539,9 @@ def _scan_payload() -> dict:
             "coverage_state": str(payload.get("coverage_state") or "UNKNOWN"),
             "coverage_warning": str(payload.get("coverage_warning") or ""),
             "coverage": dict(payload.get("coverage") or {}),
+            # What the scan published for downstream readers (recommendations,
+            # discovery), so a failed publication is explained, not silent.
+            "desk_overlays": dict(payload.get("desk_overlays") or {}),
         }
     except Exception as exc:
         return {
@@ -892,7 +908,7 @@ def _operations_payload() -> dict[str, Any]:
 def _news_payload() -> dict[str, Any]:
     try:
         from news.curator_store import NewsCuratorStore
-        store = NewsCuratorStore(logs_dir() / "news_curator.sqlite3")
+        store = NewsCuratorStore(logs_dir() / "news_curator.sqlite3", read_only=True)
         try:
             articles = [item.as_dict() for item in store.recent(hours=168, limit=120)]
             health = [item.as_dict() for item in store.source_health()]
@@ -1362,8 +1378,27 @@ def health() -> dict:
 
 
 @app.get("/api/dashboard")
+def dashboard_http() -> dict:
+    """Serve a bounded, explicitly labelled read projection, never trading authority.
+
+    Scan jobs, the paper supervisor and the Kite data refresh use independent
+    workers and must never be held hostage by browser dashboard polling. The
+    underlying expensive projection still retains the slow-read admission gate.
+    """
+    return _DASHBOARD_READ_CACHE.read(
+        dashboard,
+        lambda: _empty_dashboard(
+            "Desk read projection is warming. No current trade authority until verification completes.",
+            {
+                "available": False, "scanned_at": "", "universe_size": 0,
+                "summary": {}, "records": [], "provenance": {"data_current": False},
+            },
+        ),
+    )
+
+
 def dashboard() -> dict:
-    """Read-only desk snapshot with bounded work admission."""
+    """Synchronous bounded builder kept for explicit tests and background reads."""
     with _bounded_status_read("/api/dashboard"):
         return _compose_dashboard()
 

@@ -13,20 +13,33 @@ from core.runtime_paths import logs_dir, logs_path
 
 
 class NewsCuratorStore:
-    def __init__(self, path: str | Path | None = None) -> None:
+    def __init__(self, path: str | Path | None = None, *, read_only: bool = False) -> None:
         # The default used to be the relative string "logs/news_curator.sqlite3",
         # which resolves against the current working directory. Anything run
         # from the checkout — the test suite included — therefore wrote the
         # real store. Resolve it through the runtime root instead.
         self.path = Path(path) if path is not None else logs_path("news_curator.sqlite3")
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
-        self._conn = sqlite3.connect(self.path, check_same_thread=False)
+        if read_only:
+            # Dashboard polls must not negotiate WAL mode or run schema DDL on
+            # the actively-written news DB. URI mode=ro still reads committed
+            # WAL transactions (unlike immutable=1, which can ignore them).
+            # Do not create the file or its parent when news is unavailable.
+            self._conn = sqlite3.connect(
+                self.path.resolve().as_uri() + "?mode=ro",
+                uri=True,
+                check_same_thread=False,
+                timeout=1.0,
+            )
+        else:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        with self._conn:
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA synchronous=NORMAL")
-        self._init_schema()
+        if not read_only:
+            with self._conn:
+                self._conn.execute("PRAGMA journal_mode=WAL")
+                self._conn.execute("PRAGMA synchronous=NORMAL")
+            self._init_schema()
 
     def _init_schema(self) -> None:
         with self._lock, self._conn:

@@ -175,13 +175,17 @@ def data_health() -> dict:
 # 🧾 Research debt — treat research like software engineering
 # ══════════════════════════════════════════════════════════════════════════════
 
-def research_debt() -> dict:
+def research_debt(data: dict | None = None) -> dict:
+    """``data`` lets ``overview`` pass the data-health read it already made:
+    that read scans every feature-store observation (~1.4 s on the owner's
+    Mac) and the overview used to run it twice per request."""
     from research import scientific_memory as SM
     exp = _safe(_experiments, {"registered": 0})
     overdue = _safe(lambda: SM.overdue_for_review(30), [])
     drift_unresolved = _safe(lambda: [d for d in _drift_report()
                                       if d.get("status") == "DECAYING"], [])
-    data = _safe(data_health, {})
+    if data is None:
+        data = _safe(data_health, {})
     schema_debt = 0 if data.get("on_current_schema", True) else 1
     return {
         "experiments_awaiting_validation": exp.get("registered", 0),
@@ -255,11 +259,12 @@ def knowledge_growth(days: int = 30) -> dict:
 def overview() -> dict:
     """The whole mission-control read in one call — for the dashboard and for
     JARVIS to query. Every section fail-open."""
+    data = _safe(data_health, {})
     return {
         "research_health": _safe(research_health, {}),
         "knowledge_growth": _safe(knowledge_growth, {}),
         "edge_health": _safe(edge_health, {}),
         "gate_scorecard": _safe(gate_scorecard, []),
-        "data_health": _safe(data_health, {}),
-        "research_debt": _safe(research_debt, {}),
+        "data_health": data,
+        "research_debt": _safe(lambda: research_debt(data), {}),
     }

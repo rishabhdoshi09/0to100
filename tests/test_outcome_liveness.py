@@ -141,3 +141,42 @@ def test_busy_paper_settlement_is_retryable_not_success(monkeypatch):
     assert result.status == JS.RETRYABLE_FAILED
     assert result.error_code == "PAPER_SETTLEMENT_BUSY"
     assert not result.unblocks
+
+
+class _NoOwnerOms:
+    def list_orders(self):
+        return []
+
+
+class _Pipeline:
+    oms = _NoOwnerOms()
+
+
+def _adapter_brain(bars):
+    from execution.paper_book_adapter import InstitutionalPaperBookAdapter
+
+    brain = _Brain(bars)
+    brain.intel_book = InstitutionalPaperBookAdapter(
+        brain.intel_book, pipeline=_Pipeline(), runtime_state=brain.runtime_state,
+    )
+    return brain
+
+
+def test_eod_settlement_through_production_institutional_adapter():
+    # Production wraps intel_book in InstitutionalPaperBookAdapter (providers.current_regime).
+    brain = _adapter_brain({"AAA": (101.0, 94.0, 99.0)})
+    assert brain.intel_book.open_position("S1", "AAA", 100.0, 95.0, 110.0, "2026-09-03", 5)
+
+    result = settle_paper_session(brain, "2026-09-04")
+    assert result["status"] == "EOD_SETTLED"
+    assert [row["exit_reason"] for row in result["positions_closed"]] == ["STOP"]
+
+
+def test_institutional_adapter_keeps_entry_session_bar_out_of_exits():
+    brain = _adapter_brain({"AAA": (100.0, 120.0, 90.0, 105.0)})
+    assert brain.intel_book.open_position("S1", "AAA", 100.0, 95.0, 110.0, "2026-09-04", 5)
+
+    result = settle_paper_session(brain, "2026-09-04")
+    assert result["status"] == "EOD_SETTLED"
+    assert result["positions_closed"] == []
+    assert ("S1", "AAA") in brain.intel_book.open

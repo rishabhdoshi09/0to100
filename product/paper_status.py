@@ -30,20 +30,34 @@ def _json(path, default):
         return default
 
 
-def modern_engine_open_positions() -> list[dict]:
+def modern_engine_open_positions(*, strict: bool = False) -> list[dict]:
     """Open positions the modern automatic paper engine currently holds,
     normalised to {symbol, qty, entry_price, stop_price} -- the shape
     risk/portfolio_risk.py already uses for the legacy engine's trades.db
     rows, so the two can be combined into one real account-level risk
-    picture. Read-only, tolerant of a missing/corrupt file.
+    picture. Read-only, tolerant of a missing/corrupt file unless
+    strict=True, where only a MISSING file is empty and an unreadable or
+    malformed book raises (a risk gate must not treat it as no exposure).
     """
-    book = _json(logs_path("intelligence", "intel_book.json"), {})
+    path = logs_path("intelligence", "intel_book.json")
+    if strict:
+        if not path.exists():
+            return []
+        book = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(book, dict) or not isinstance(book.get("open", []), list):
+            raise ValueError("intel_book.json is not a paper book")
+    else:
+        book = _json(path, {})
     out: list[dict] = []
     for pos in book.get("open", []) or []:
         if not isinstance(pos, dict):
+            if strict:
+                raise ValueError("intel_book.json open position is malformed")
             continue
         symbol = str(pos.get("symbol") or "").upper()
         if not symbol:
+            if strict:
+                raise ValueError("intel_book.json open position has no symbol")
             continue
         out.append({
             "symbol": symbol,

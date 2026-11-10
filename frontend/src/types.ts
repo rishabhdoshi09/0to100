@@ -571,6 +571,12 @@ export type ScanProvenance = {
 
 export type DashboardPayload = {
   generated_at: string
+  response_meta?: {
+    source: string
+    status: 'CURRENT' | 'REFRESHING' | 'WARMING'
+    stale: boolean
+    age_s: number | null
+  }
   market: {
     available: boolean
     health: string

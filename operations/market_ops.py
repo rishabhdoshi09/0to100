@@ -183,6 +183,26 @@ def _emit(kind: str, message: str) -> None:
     print(f"[{console_stamp()}] MARKET OPS {kind:<9} {message}", flush=True)
 
 
+def _operation_log_summary(result: dict[str, Any]) -> str:
+    """Log bounded completion facts; full scan/evidence remains in operation store."""
+    if not isinstance(result, dict):
+        return "result=unavailable"
+    payload = result.get("payload")
+    payload = payload if isinstance(payload, dict) else {}
+    parts = []
+    for name, value in (
+        ("status", result.get("status")),
+        ("records", result.get("records")),
+        ("scanned", payload.get("scanned")),
+        ("qualified", payload.get("qualified_rows")),
+        ("as_of_session", result.get("as_of_session")),
+        ("source_snapshot_id", result.get("source_snapshot_id")),
+    ):
+        if isinstance(value, (int, float, bool)) or (isinstance(value, str) and value):
+            parts.append(f"{name}={str(value)[:80]}")
+    return " ".join(parts) if parts else "result=persisted"
+
+
 def _operation_result(report: Any) -> dict[str, Any]:
     if hasattr(report, "as_dict"):
         return dict(report.as_dict())
@@ -205,13 +225,15 @@ def _write_instrument_cache(rows: list[dict[str, Any]]) -> Path:
     path = logs_dir() / "instruments_cache.csv"
     path.parent.mkdir(parents=True, exist_ok=True)
     fields = sorted({str(key) for row in rows for key in row})
-    tmp = path.with_suffix(".tmp")
-    with tmp.open("w", newline="", encoding="utf-8") as handle:
+    from core.atomic_io import atomic_write_with
+
+    def _fill(handle) -> None:
         writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         for row in rows:
             writer.writerow({key: row.get(key, "") for key in fields})
-    os.replace(tmp, path)
+
+    atomic_write_with(path, _fill, newline="")
     return path
 
 
@@ -920,6 +942,18 @@ class MarketOperationsWorker:
         pulse = dict(workspace.get("today_pulse") or {})
         wrap_n = len(list((workspace.get("desk_note") or {}).get("daily_wrap") or []))
         sourced = int((workspace.get("desk_note") or {}).get("wrap_sourced") or 0)
+        missing_lanes = list(workspace.get("missing_lanes") or [])
+        market_ctx = dict(workspace.get("market") or {})
+        regime_reason = str(market_ctx.get("unavailable_reason") or "")
+        # This is a *blocked* external feed, not a successful regime estimate.
+        # Only a measured absence of the canonical NIFTY index series can
+        # qualify. Internal exceptions and generic missing regime remain FAIL.
+        nifty_unavailable = (
+            missing_lanes == ["regime"]
+            and market_ctx.get("available") is False
+            and market_ctx.get("data_source") == "unavailable"
+            and "lacked a usable Nifty series" in regime_reason
+        )
         return {
             "as_of_ist": workspace.get("as_of_ist") or "",
             "takeaways": len(list(pulse.get("takeaways") or [])),
@@ -928,7 +962,12 @@ class MarketOperationsWorker:
             "wrap_sourced": sourced,
             "scan_rows": int((workspace.get("scan_highlights") or {}).get("row_count") or 0),
             "needs_refresh": bool(workspace.get("needs_refresh")),
-            "missing_lanes": list(workspace.get("missing_lanes") or []),
+            "missing_lanes": missing_lanes,
+            "regime_dependency": {
+                "blocked": True,
+                "code": "NIFTY_INDEX_DATA_UNAVAILABLE",
+                "error": regime_reason,
+            } if nifty_unavailable else {},
             "news": news_result,
         }
 
@@ -1180,6 +1219,46 @@ class MarketOperationsWorker:
                 "missing_lanes": ["fno"],
             }
 
+    def _supervise_us_paper(self, operation_id: str, market_scope: dict[str, Any]) -> dict[str, Any]:
+        """India-only mode: manage existing US paper positions, open nothing.
+
+        No US universe scan runs. ``review_cycle`` applies stops, targets,
+        trailing and time-stops, settles realized P&L exactly once and runs the
+        daily-loss breaker, so existing positions and records stay true.
+        """
+        self._progress(operation_id, "SUPERVISING_US", "India-only: supervising existing US paper positions")
+        from execution.us_autopilot import get_status, review_cycle
+
+        try:
+            review_cycle()
+            paper = dict(get_status() or {})
+        except Exception as exc:
+            raise OperationBlocked(
+                "US paper supervision failed; no US entries are possible in India-only mode",
+                code="US_PAPER_SUPERVISION_FAILED",
+                result={
+                    "market": "US", "mode": "SUPERVISE_ONLY",
+                    "market_scope": market_scope["market_scope"],
+                    "error": f"{type(exc).__name__}: {exc}"[:300],
+                    "paper_only": True, "live_locked": True,
+                },
+            )
+        return {
+            "market": "US",
+            "mode": "SUPERVISE_ONLY",
+            "market_scope": market_scope["market_scope"],
+            "scan": "SKIPPED_INDIA_ONLY",
+            "new_entries_allowed": False,
+            "paper": {
+                "armed": bool(paper.get("armed")),
+                "open_trades": len(list(paper.get("open_trades") or [])),
+                "realized_pnl": paper.get("realized_pnl"),
+                "state_recovery_required": bool(paper.get("state_recovery_required")),
+            },
+            "paper_only": True,
+            "live_locked": True,
+        }
+
     def _run_us_market_scan(self, operation: dict[str, Any]) -> dict[str, Any]:
         """Run the supervised US paper-market scan on the dedicated US lane.
 
@@ -1188,10 +1267,16 @@ class MarketOperationsWorker:
         """
         operation_id = str(operation["operation_id"])
         payload = dict(operation.get("payload") or {})
+        from core.market_scope import scope_status
+        market_scope = scope_status()
+        # Decided at execution time as well: the scope may change between
+        # enqueue and lease, and only the current scope may open US risk.
+        if str(payload.get("mode") or "") == "SUPERVISE_ONLY" or not market_scope["us_new_entries_allowed"]:
+            return self._supervise_us_paper(operation_id, market_scope)
         scope = str(payload.get("scope") or os.environ.get("QT_US_SCAN_SCOPE") or "S&P 500").strip()
         index = None if scope.lower() in {"", "all"} else scope
         self._progress(operation_id, "SCANNING_US", f"Scanning {scope} with the canonical US setup engine")
-        from scan.us_scanner import scan_us, persisted_us_scan
+        from scan.us_scanner import last_paper_feed_error, persisted_us_scan, scan_us
 
         previous = persisted_us_scan().get("scanned_at")
         rows = list(scan_us(index=index) or [])
@@ -1206,7 +1291,7 @@ class MarketOperationsWorker:
         except Exception as exc:
             paper = {"error": str(exc)[:200]}
             report = {}
-        return {
+        result = {
             "market": "US",
             "scope": str(persisted.get("scope") or scope),
             "scanned_at": str(persisted.get("scanned_at") or ""),
@@ -1224,6 +1309,15 @@ class MarketOperationsWorker:
             "paper_only": True,
             "live_locked": True,
         }
+        feed_error = last_paper_feed_error()
+        if feed_error:
+            result["paper_feed_error"] = feed_error
+            raise OperationBlocked(
+                "US scan persisted, but the US paper review/entry step failed",
+                code="US_PAPER_FEED_FAILED",
+                result=result,
+            )
+        return result
 
     def _execute(self, operation: dict[str, Any]) -> dict[str, Any]:
         kind = str(operation.get("kind", ""))
@@ -1277,7 +1371,7 @@ class MarketOperationsWorker:
                 elapsed = time.monotonic() - started
                 message = f"{kind} completed in {elapsed:.1f}s"
                 self.store.finish(operation_id, status=SUCCEEDED, message=message, result=result)
-                _emit("DONE", f"{kind} · id={operation_id} · {elapsed:.1f}s · {result}")
+                _emit("DONE", f"{kind} · id={operation_id} · {elapsed:.1f}s · {_operation_log_summary(result)}")
             except OperationBlocked as exc:
                 elapsed = time.monotonic() - started
                 self.store.finish(

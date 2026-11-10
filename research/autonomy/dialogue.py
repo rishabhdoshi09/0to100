@@ -97,4 +97,51 @@ class DialogueLog:
         return [r for r in self.all() if r.get("record_type") == record_type]
 
     def recent(self, limit: int = 20) -> list:
-        return self.all()[-limit:]
+        """The newest ``limit`` parseable records, oldest first.
+
+        Same result as ``all()[-limit:]`` but reads the file backwards in blocks
+        and parses only the tail. The log is append-only and grows for the life
+        of the install (13 MB / ~17k records on the owner's Mac by 2026-11), and
+        the Home and autonomy status reads call this several times per request:
+        parsing the whole file each time cost ~0.8 s per call on that host.
+        """
+        if limit <= 0:
+            return self.all()[-limit:]
+        try:
+            handle = open(self.path, "rb")
+        except FileNotFoundError:
+            return []
+        newest_first: list = []
+        with handle:
+            handle.seek(0, os.SEEK_END)
+            pos = handle.tell()
+            carry = b""
+            while pos > 0 and len(newest_first) < limit:
+                step = min(_TAIL_BLOCK, pos)
+                pos -= step
+                handle.seek(pos)
+                pieces = (handle.read(step) + carry).split(b"\n")
+                # Until the start of the file is reached, the first piece may be
+                # the tail end of a line that began in an earlier block.
+                carry = pieces.pop(0) if pos > 0 else b""
+                for raw in reversed(pieces):
+                    record = _parse_line(raw)
+                    if record is not None:
+                        newest_first.append(record)
+                        if len(newest_first) >= limit:
+                            break
+        newest_first.reverse()
+        return newest_first
+
+
+_TAIL_BLOCK = 64 * 1024
+
+
+def _parse_line(raw: bytes):
+    line = raw.strip()
+    if not line:
+        return None
+    try:
+        return json.loads(line.decode("utf-8"))
+    except Exception:
+        return None

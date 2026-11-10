@@ -269,7 +269,7 @@ class TestScheduler:
         # Presence of an open position forces the real management path. The
         # object value is irrelevant because runtime management is stubbed here.
         brain.intel_book.open[("sid", "ABC")] = object()
-        brain._save_intel_book = lambda: None
+        brain._save_intel_book = lambda: True  # successful stub must report durability
 
         ctx = SimpleNamespace(
             cycle_type="paper_session",
@@ -344,3 +344,272 @@ def _one_spec():
     cands = DISC.generate(budget)
     assert cands
     return cands[0]
+
+
+@pytest.mark.parametrize("invalid", [
+    "{torn json",
+    "null",
+    "[]",
+    "{}",
+    '{"enabled": "false"}',
+    '{"enabled": 0}',
+])
+def test_paper_auto_invalid_persisted_preference_fails_closed(tmp_path, invalid):
+    config = tmp_path / "paper_config.json"
+    config.write_text(invalid, encoding="utf-8")
+    brain = AutoResearchBrain(paper_config_path=config)
+    assert brain.paper_auto_enabled is False
+    assert brain.is_paper_auto_enabled() is False
+    assert config.read_text(encoding="utf-8") == invalid
+
+
+def test_paper_auto_missing_config_preserves_first_run_default(tmp_path):
+    config = tmp_path / "paper_config.json"
+    brain = AutoResearchBrain(paper_config_path=config)
+    assert brain.paper_auto_enabled is True
+
+
+def test_first_run_default_is_persisted_so_restart_with_history_stays_enabled(tmp_path):
+    """The first-run default must become a durable preference immediately.
+    Otherwise the first durable book/journal write turns every ordinary
+    restart into 'missing preference with history' and silently disables
+    PAPER_AUTO (the restart-without-reapproval contract)."""
+    import json
+
+    config = tmp_path / "paper_config.json"
+    book = tmp_path / "intel_book.json"
+    first = AutoResearchBrain(paper_config_path=config, intel_book_path=book)
+    assert first.paper_auto_enabled is True
+    assert json.loads(config.read_text(encoding="utf-8"))["enabled"] is True
+    assert first._save_intel_book() is True and book.exists()
+
+    restarted = AutoResearchBrain(paper_config_path=config, intel_book_path=book)
+    assert restarted.paper_auto_enabled is True
+    assert restarted.is_paper_auto_enabled() is True
+
+
+def test_first_run_default_not_granted_when_it_cannot_be_recorded(tmp_path, monkeypatch):
+    """Consent that cannot be made durable is not consent: a read-only or
+    full runtime volume must leave PAPER_AUTO off rather than trade on an
+    in-memory default that the next restart would contradict."""
+    import os
+
+    config = tmp_path / "paper_config.json"
+
+    def refuse(*_a, **_k):
+        raise OSError(30, "Read-only file system")
+
+    monkeypatch.setattr(os, "replace", refuse)
+    brain = AutoResearchBrain(paper_config_path=config)
+    assert brain.paper_auto_enabled is False
+    assert not config.exists()
+
+
+def test_deleted_preference_with_history_still_fails_closed(tmp_path):
+    config = tmp_path / "paper_config.json"
+    book = tmp_path / "intel_book.json"
+    first = AutoResearchBrain(paper_config_path=config, intel_book_path=book)
+    assert first._save_intel_book() is True
+    config.unlink()
+    restarted = AutoResearchBrain(paper_config_path=config, intel_book_path=book)
+    assert restarted.paper_auto_enabled is False
+    assert not config.exists(), "fail-closed load must not rewrite the operator's preference"
+
+
+def test_paper_auto_explicit_opt_out_survives_restart(tmp_path):
+    config = tmp_path / "paper_config.json"
+    first = AutoResearchBrain(paper_config_path=config)
+    first.disable_paper_auto()
+    second = AutoResearchBrain(paper_config_path=config)
+    assert second.paper_auto_enabled is False
+    assert second.is_paper_auto_enabled() is False
+
+
+def test_paper_auto_deleted_opt_out_never_reenables_with_existing_book(tmp_path):
+    """Deleting the preferences file does not erase the user's paper opt-out."""
+    book = tmp_path / "intel_book.json"
+    config = tmp_path / "paper_config.json"
+    first = AutoResearchBrain(intel_book_path=book, paper_config_path=config)
+    assert first._save_intel_book() is True
+    first.disable_paper_auto()
+    assert config.exists()
+    config.unlink()  # simulated lost/partially restored operator preference
+
+    restored = AutoResearchBrain(intel_book_path=book, paper_config_path=config)
+    assert restored.intel_book_recovery_error == ""
+    assert restored.paper_auto_enabled is False
+    assert restored.is_paper_auto_enabled() is False
+    assert not config.exists()  # never silently fabricate a new operator choice
+
+
+def test_paper_auto_missing_config_with_existing_runtime_state_fails_closed(tmp_path):
+    import json
+    from research.intelligence.runtime.runtime_state import RuntimeState
+
+    config = tmp_path / "paper_config.json"
+    state_path = tmp_path / "runtime_state.json"
+    RuntimeState(state_path).save()  # durable state exists, even with no cycles
+    assert json.loads(state_path.read_text(encoding="utf-8"))["completed_cycles"] == []
+
+    restored = AutoResearchBrain(
+        paper_config_path=config, runtime_state_path=state_path,
+    )
+    assert restored.paper_auto_enabled is False
+    assert restored.is_paper_auto_enabled() is False
+
+
+def test_paper_auto_missing_config_with_event_journal_fails_closed(tmp_path):
+    config = tmp_path / "paper_config.json"
+    events = tmp_path / "events.jsonl"
+    events.write_text("", encoding="utf-8")  # a created durable journal is history
+
+    restored = AutoResearchBrain(
+        paper_config_path=config, event_store_path=events,
+    )
+    assert restored.event_store.load_error == ""
+    assert restored.paper_auto_enabled is False
+    assert restored.is_paper_auto_enabled() is False
+
+
+def test_paper_auto_missing_config_with_unreadable_runtime_history_fails_closed(tmp_path):
+    config = tmp_path / "paper_config.json"
+    state_path = tmp_path / "runtime_state.json"
+    state_path.write_text("{corrupt", encoding="utf-8")
+    restored = AutoResearchBrain(
+        paper_config_path=config, runtime_state_path=state_path,
+    )
+    assert restored.runtime_state.load_error
+    assert restored.paper_auto_enabled is False
+    assert restored.is_paper_auto_enabled() is False
+
+
+def test_paper_auto_unreadable_config_fails_closed(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    config = tmp_path / "paper_config.json"
+    config.write_text('{"enabled": false}', encoding="utf-8")
+    original = Path.read_text
+
+    def disconnected(self, *args, **kwargs):
+        if self == config:
+            raise OSError("simulated external drive disconnect")
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", disconnected)
+    brain = AutoResearchBrain(paper_config_path=config)
+    assert brain.paper_auto_enabled is False
+
+
+# ── production singleton: runtime paths unavailable must NOT yield a tradable brain ──
+
+class TestGetBrainRuntimePathsUnavailable:
+    """Installed hosts run with QT_RUNTIME_ROOT_REQUIRE_EXISTING=1, so a detached
+    external runtime makes ``logs_dir()`` raise. ``get_brain()`` used to swallow
+    that and build a path-less brain: in-memory empty paper book, paper autonomy
+    ON by first-run default, ``_save_intel_book`` reporting success with no file.
+    That is a manufactured empty portfolio with entry permission."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_singleton(self, monkeypatch):
+        from research.auto_research import scheduler as SCHED
+        monkeypatch.setattr(SCHED, "_BRAIN", None)
+        yield
+        monkeypatch.setattr(SCHED, "_BRAIN", None)
+
+    def _detach(self, monkeypatch):
+        from research.auto_research import scheduler as SCHED
+
+        def vanished():
+            raise RuntimeError("configured QuantTerm runtime root is missing: /Volumes/QT")
+
+        monkeypatch.setattr(SCHED, "logs_dir", vanished)
+        monkeypatch.setattr(SCHED, "logs_path", lambda *parts: vanished())
+
+    def test_blocked_brain_cannot_trade_or_claim_durability(self, monkeypatch):
+        from research.auto_research import scheduler as SCHED
+        self._detach(monkeypatch)
+
+        brain = SCHED.get_brain()
+
+        assert brain.is_paper_auto_enabled() is False
+        assert brain.paper_auto_enabled is False
+        assert "RUNTIME_PATHS_UNAVAILABLE" in brain.intel_book_recovery_error
+        assert brain.intel_book_path is None and brain.paper_config_path is None
+        # durable save must not report success when there is nowhere to save
+        assert brain._save_intel_book() is False
+        out = brain.run_intelligence_cycle_day(new_entries_allowed=True)
+        assert out["status"] == "BLOCKED_RECOVERY"
+        assert out["new_entries_allowed"] is False
+        assert out["positions_opened"] == []
+        managed = brain.manage_intelligence_positions_day()
+        assert managed["status"] == "BLOCKED_RECOVERY"
+
+    def test_blocked_brain_is_not_cached_so_recovery_rewires_real_paths(
+        self, monkeypatch, tmp_path
+    ):
+        from research.auto_research import scheduler as SCHED
+        self._detach(monkeypatch)
+        blocked = SCHED.get_brain()
+        assert SCHED._BRAIN is None, "a path-less brain must never become the process singleton"
+
+        # storage returns: the next call wires the real durable paths
+        logs = tmp_path / "logs"
+        monkeypatch.setattr(SCHED, "logs_dir", lambda: logs)
+        monkeypatch.setattr(SCHED, "logs_path", lambda *parts: logs.joinpath(*parts))
+        recovered = SCHED.get_brain()
+        assert recovered is not blocked
+        assert SCHED._BRAIN is recovered
+        assert recovered.intel_book_path == logs / "intelligence" / "intel_book.json"
+        assert recovered.paper_config_path == logs / "intelligence" / "paper_config.json"
+        assert recovered.intel_book_recovery_error == ""
+
+    def test_enable_control_on_blocked_brain_does_not_grant_entries(self, monkeypatch):
+        from research.auto_research import scheduler as SCHED
+        self._detach(monkeypatch)
+        brain = SCHED.get_brain()
+        brain.enable_paper_auto()          # supervisor ENABLE_PAPER_AUTO control path
+        assert brain.is_paper_auto_enabled() is False
+
+    def test_autonomy_paper_cycle_job_sees_paper_disabled_and_no_durability(
+        self, monkeypatch, tmp_path
+    ):
+        """With storage detached the blocked brain's intelligence cycle reports
+        BLOCKED_RECOVERY, so the PAPER_CYCLE job must not hand its book to the
+        recommendation executor at all, and the brain itself still refuses
+        both entries and durability claims."""
+        import product.paper_autopilot as PA
+        from research.autonomy import jobs as JOBS
+        self._detach(monkeypatch)
+        monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+        seen: dict = {}
+
+        def fake_reco(**kwargs):
+            seen.update(kwargs)
+            return {
+                "positions_opened": [], "taken": [], "rejections": [], "waits": [],
+                "final_decision": "BLOCK", "eligibility": "BLOCKED_SAFETY",
+                "cycle_reasons": ["PAPER_TRADING_DISABLED"], "reason_counts": {},
+                "summary": "", "evolution": {"paper_book_durable_saved": False},
+            }
+
+        monkeypatch.setattr(PA, "run_reco_paper_cycle", fake_reco)
+
+        class _Telegram:
+            def notify_paper_cycle(self, *_a, **_k):
+                return None
+
+        deps = object.__new__(JOBS.Deps)
+        deps.live_feed = None
+        deps.telegram = _Telegram()
+        result = deps.run_paper_cycle(True)
+
+        from research.auto_research.scheduler import get_brain
+        brain = get_brain()
+        assert seen == {}, "reco executor must not run after an unsafe upstream cycle"
+        assert brain.is_paper_auto_enabled() is False
+        assert brain._save_intel_book() is False
+        assert len(brain.intel_book.open) == 0
+        assert result["reco_autopilot"]["status"] == "BLOCKED_UPSTREAM"
+        assert result["status"] == "BLOCKED_RECOVERY"
+        assert result["positions_opened"] == []
+        assert result["new_entries_allowed"] is False

@@ -85,7 +85,7 @@ def _candidate(symbol: str, *, setup: dict, option_score=86.0, instrument_token=
             "symbol": f"{symbol}26OCTCE",
             "option_type": "CE",
             "eligible": True,
-            "lot_size": 25,
+            "lot_size": 10,
             "ask": 50.0,
             "score": option_score,
             "instrument_token": instrument_token,
@@ -375,6 +375,8 @@ def test_real_candidate_shape_keeps_the_two_context_keys_separate(tmp_path, monk
     from product.fo_snapshot_engine import evaluate_fo_snapshot_auto
     from tests.test_fo_snapshot_engine import _bars, _nfo, _option_quotes
 
+    # Align simulated account authority with the lane capital for a realistic one-lot premium.
+    monkeypatch.setattr("risk.portfolio_risk._capital", lambda: 200_000.0)
     evidence_path = tmp_path / "conditional_evidence.json"
     monkeypatch.setenv("QT_CONDITIONAL_EVIDENCE", str(evidence_path))
 
@@ -491,6 +493,8 @@ def test_contract_evidence_full_lifecycle_through_real_production_path(tmp_path,
     from product.fo_snapshot_engine import evaluate_fo_snapshot_auto
     from tests.test_fo_snapshot_engine import _bars, _nfo, _option_quotes
 
+    # Align simulated account authority with the lane capital for a realistic one-lot premium.
+    monkeypatch.setattr("risk.portfolio_risk._capital", lambda: 200_000.0)
     evidence_path = tmp_path / "conditional_evidence.json"
     monkeypatch.setenv("QT_CONDITIONAL_EVIDENCE", str(evidence_path))
 

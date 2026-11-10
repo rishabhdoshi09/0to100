@@ -110,3 +110,72 @@ def test_corrupt_risk_contract_does_not_partially_restore_book():
 
     assert book.capital == 100_000
     assert book.max_positions == 5
+
+
+def test_duplicate_open_identity_does_not_discard_an_existing_position():
+    import pytest
+
+    book = PaperBook()
+    pos = book.open_position("QT_RECO", "INFY", 100.0, 95.0, 115.0, "2026-09-18", 20)
+    assert pos is not None
+    before = book.snapshot()
+    corrupt = book.snapshot()
+    corrupt["open"].append({**corrupt["open"][0], "entry_price": 999.0})
+
+    assert book.restore(corrupt) is False
+    assert book.snapshot() == before
+    with pytest.raises(ValueError, match="invalid persisted paper book"):
+        book.restore(corrupt, strict=True)
+    assert book.snapshot() == before
+
+
+def test_strict_restore_accepts_valid_persisted_positions():
+    book = PaperBook()
+    assert book.open_position("QT_RECO", "INFY", 100.0, 95.0, 115.0, "2026-09-18", 20)
+    restored = PaperBook()
+    assert restored.restore(book.snapshot(), strict=True) is True
+    assert set(restored.open) == {("QT_RECO", "INFY")}
+
+
+def test_strict_restore_rejects_truncated_paper_book_without_erasing_positions():
+    import pytest
+
+    book = PaperBook()
+    assert book.open_position("QT_RECO", "INFY", 100.0, 95.0, 115.0, "2026-09-18", 20)
+    before = book.snapshot()
+
+    with pytest.raises(ValueError, match="invalid persisted paper book"):
+        book.restore({}, strict=True)
+    assert book.snapshot() == before
+
+
+def test_strict_restore_rejects_nonfinite_book_capital_without_erasing_positions():
+    import pytest
+
+    book = PaperBook()
+    assert book.open_position("QT_RECO", "INFY", 100.0, 95.0, 115.0, "2026-09-18", 20)
+    before = book.snapshot()
+    corrupt = {**before, "capital": float("nan")}
+
+    with pytest.raises(ValueError, match="invalid persisted paper book"):
+        book.restore(corrupt, strict=True)
+    assert book.snapshot() == before
+
+
+def test_strict_paper_restore_rejects_invalid_position_risk_and_quantity():
+    import pytest
+
+    book = PaperBook()
+    assert book.open_position("QT_RECO", "INFY", 100.0, 95.0, 115.0, "2026-09-18", 20)
+    before = book.snapshot()
+    for changes in (
+        {"qty": -1},
+        {"risk_amount": float("nan")},
+        {"stop_price": 120.0},
+        {"max_holding_days": 0},
+    ):
+        corrupt = book.snapshot()
+        corrupt["open"][0].update(changes)
+        with pytest.raises(ValueError, match="invalid persisted paper book"):
+            book.restore(corrupt, strict=True)
+        assert book.snapshot() == before

@@ -82,6 +82,9 @@ def prepare_runtime_storage_for_startup() -> str:
     env = os.environ.copy()
     env["QT_STORAGE_PREFLIGHT_REQUIRED"] = "1"
     env["QT_STORAGE_PREFLIGHT_ATTACH"] = "1"
+    # launchd may not provide an interactive PATH or a system python3.
+    # Use the known working interpreter that is already running this host.
+    env["QT_STORAGE_PREFLIGHT_PYTHON"] = sys.executable
     try:
         completed = subprocess.run(
             ["/bin/bash", str(script)],
@@ -182,9 +185,8 @@ def _write_scheduler_status(payload: dict[str, Any]) -> None:
         # product.host_entrypoint.main() always enables strict mode before this
         # scheduler starts, so this branch is unreachable on the installed host.
         path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
-    os.replace(tmp, path)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(path, json.dumps(payload, indent=2, default=str))
 
 
 def _report_iteration() -> dict[str, Any]:

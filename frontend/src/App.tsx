@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchAccessMode, fetchChart, fetchDashboard, fetchHealth, sendControl, type AccessMode } from './api'
-import { deskStartupLabel, deskStartupRecovery, deskStartupState, type DeskStartupState } from './deskStartupState'
+import { deskStartupLabel, deskStartupRecovery, deskStartupState, effectiveDataReady, type DeskStartupState } from './deskStartupState'
+import { UNVERIFIED_ACCESS, accessPill, verifiedAccess } from './accessTruth'
+import { apiUnresponsiveAfter, brokerIndicator } from './deskStatusIndicators'
 import { createPollGate } from './pollGate'
 import { deskRefreshBanner } from './deskBanner'
 import {
@@ -238,6 +240,7 @@ function App() {
   const autoPrepareRef = useRef(false)
   const refreshGate = useRef(createPollGate())
   const healthGate = useRef(createPollGate())
+  const healthFailures = useRef(0)
   const [startupState, setStartupState] = useState<DeskStartupState>('PREPARING_DATA')
   const [healthReason, setHealthReason] = useState('')
   const [accessMode, setAccessMode] = useState<AccessMode | null>(null)
@@ -248,16 +251,24 @@ function App() {
   })
 
   const refresh = useCallback(async () => {
+    // Hidden browser tabs do not need expensive dashboard projections.
+    // Server-side paper supervision and market work continue independently.
+    if (document.visibilityState === 'hidden') return
     if (!refreshGate.current.tryEnter()) return
     try {
       const payload = await fetchDashboard()
+      const staleProjection = payload.response_meta?.stale === true
       setDashboard((prev) => {
         const next = dashboardHasWork(prev) && !dashboardHasWork(payload)
           ? {
               ...payload,
-              scan: prev.scan.records.length ? prev.scan : payload.scan,
+              scan: prev.scan.records.length
+                ? staleProjection
+                  ? { ...prev.scan, available: false, provenance: { ...prev.scan.provenance, data_current: false } }
+                  : prev.scan
+                : payload.scan,
               long_term: prev.long_term.records.length ? prev.long_term : payload.long_term,
-              conviction: prev.conviction.length ? prev.conviction : payload.conviction,
+              conviction: staleProjection ? [] : prev.conviction.length ? prev.conviction : payload.conviction,
               data: {
                 ...payload.data,
                 scan_saved: payload.data.scan_saved || prev.data.scan_saved,
@@ -268,7 +279,7 @@ function App() {
         writeSessionJson('quantterm-dashboard', slimDashboard(next))
         return next
       })
-      setError('')
+      setError(staleProjection ? 'DESK_SNAPSHOT_REFRESHING: prior rows are research-only until a new verified read completes.' : '')
       const allSymbols = [
         ...payload.scan.records.map((row) => row.symbol),
         ...payload.long_term.records.map((row) => row.symbol),
@@ -291,15 +302,10 @@ function App() {
       .then((payload) => { if (alive) setAccessMode(payload) })
       .catch(() => {
         if (!alive) return
-        // UI fails closed if it cannot prove mutation access. The backend
-        // remains the actual security boundary.
-        setAccessMode({
-          public_read_only: true,
-          mutation_policy: 'UNKNOWN',
-          operator_token_configured: false,
-          unsafe_methods: ['POST', 'PUT', 'PATCH', 'DELETE'],
-          live_money_unlocked: false,
-        })
+        // UI fails closed if it cannot prove mutation access (the backend remains
+        // the actual security boundary), but says UNVERIFIED rather than claiming
+        // a public deployment. Health probes re-verify every 10 s.
+        setAccessMode((current) => current ?? UNVERIFIED_ACCESS)
       })
     return () => { alive = false }
   }, [])
@@ -343,29 +349,48 @@ function App() {
     return () => window.clearInterval(timer)
   }, [refresh, scanPollingActive])
 
+  // Probe on a steady cadence, not every time an expensive dashboard response
+  // changes. Treat a single missed health request as transient, while a second
+  // consecutive miss still raises an explicit connectivity warning.
+  const hasSavedData = dashboardHasWork(dashboard)
+  const dashboardReady = dashboard.data.ready
+  const dashboardStale = dashboard.response_meta?.stale === true
   useEffect(() => {
+    let active = true
     const probe = async () => {
       if (!healthGate.current.tryEnter()) return
       try {
         const payload = await fetchHealth()
         healthGate.current.succeed()
+        healthFailures.current = 0
+        if (!active) return
+        // Every health probe carries the canonical access projection. A failed
+        // one-shot /api/access must not leave the desk mislabelled for the session.
+        const access = verifiedAccess(payload.access)
+        if (access) setAccessMode(access)
         const resource = String(payload.resources?.state || '')
         const oldestAge = Number(payload.resources?.active_operation_age_s || 0)
         const next = deskStartupState({
           resourceState: resource,
           operationStuck: oldestAge >= 15 * 60,
           waitingForProvider: /provider|cooldown/i.test(String(payload.reason || payload.resources?.reason || '')),
-          historyStale: payload.history?.current === false && dashboardHasWork(dashboard),
-          dataReady: dashboard.data.ready,
-          hasSavedData: dashboardHasWork(dashboard),
+          historyStale: payload.history?.current === false && hasSavedData,
+          dataReady: effectiveDataReady({
+            dashboardReady,
+            dashboardStale,
+            officialHistoryCurrent: payload.history?.current,
+          }),
+          hasSavedData,
         })
         setStartupState(next)
         setHealthReason(String(payload.resources?.reason || payload.reason || deskStartupRecovery(next)))
       } catch {
         healthGate.current.fail(1500, 30_000)
+        healthFailures.current += 1
+        if (!active || !apiUnresponsiveAfter(healthFailures.current)) return
         const next = deskStartupState({
           apiUnresponsive: true,
-          hasSavedData: dashboardHasWork(dashboard),
+          hasSavedData,
           dataReady: false,
         })
         setStartupState(next)
@@ -374,8 +399,8 @@ function App() {
     }
     void probe()
     const timer = window.setInterval(() => void probe(), 10_000)
-    return () => window.clearInterval(timer)
-  }, [dashboard, error])
+    return () => { active = false; window.clearInterval(timer) }
+  }, [hasSavedData, dashboardReady, dashboardStale])
 
   useEffect(() => {
     if (autoPrepareRef.current || loading || error || accessMode === null) return
@@ -530,6 +555,7 @@ function App() {
     longTermScan,
     marketReport,
     publicReadOnly: accessMode?.public_read_only ?? true,
+    activePage: active,
   }
 
   const primaryPages = [
@@ -546,20 +572,8 @@ function App() {
     'Market Overview',
     'Market Internals',
   ].includes(active)
-  const brokerState = dashboard.autonomy.broker
-  const brokerReady = brokerState?.live_data_ready === true
-  const brokerLabel = brokerReady
-    ? 'ZERODHA OK'
-    : brokerState?.state === 'LOGIN_REQUIRED'
-      ? 'ZERODHA LOGIN'
-      : brokerState?.state === 'SNAPSHOT_REQUIRED'
-        ? 'ZERODHA DATA'
-        : brokerState?.state === 'UNAVAILABLE'
-          ? 'ZERODHA OFFLINE'
-          : brokerState?.state === 'CONFIG_REQUIRED'
-            ? 'ZERODHA CONFIG'
-            : 'ZERODHA CHECK'
-  const brokerTitle = brokerState?.detail || 'Zerodha live-data readiness has not been reported yet.'
+  const brokerView = brokerIndicator(dashboard.autonomy.broker)
+  const accessView = accessPill(accessMode)
   const connectionBanner = error ? deskRefreshBanner(error, dashboardHasWork(dashboard)) : null
   const activePage = pageMeta(active)
 
@@ -657,12 +671,9 @@ function App() {
             <span className="reco-clock" title="Asia/Kolkata">{istClock || '—:—:—'} IST</span>
             <DisplayDepthToggle depth={depth} onChange={setDepth} />
             <button type="button" className="experience-help-trigger" onClick={() => setHelpOpen(true)}>What is this?</button>
-            {accessMode?.public_read_only && (
-              <span
-                className="read-only-pill"
-                title="Public visitor mode: market/research reads are available, state-changing operator actions are disabled."
-              >
-                <i /> PUBLIC READ ONLY
+            {accessView && (
+              <span className="read-only-pill" title={accessView.title}>
+                <i /> {accessView.label}
               </span>
             )}
             <span
@@ -671,8 +682,8 @@ function App() {
             >
               <i /> {deskStartupLabel(startupState)}
             </span>
-            <span className={brokerReady ? 'live-pill' : 'offline-pill'} title={brokerTitle}>
-              <i /> {brokerLabel}
+            <span className={brokerView.tone} title={brokerView.title}>
+              <i /> {brokerView.label}
             </span>
             <button type="button" onClick={() => void refresh()} aria-label="Refresh dashboard">↻</button>
           </div>

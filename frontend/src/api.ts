@@ -29,7 +29,9 @@ export const fetchHealth = (): Promise<{
   service?: string
   lifecycle?: string
   reason?: string
-  history?: { current?: boolean }
+  history?: { current?: boolean | null }
+  /** Canonical non-secret access projection, re-verified on every probe. */
+  access?: unknown
   resources?: {
     state?: string
     reason?: string
@@ -39,7 +41,7 @@ export const fetchHealth = (): Promise<{
     oldest_running_operation?: { kind?: string; age_s?: number; operation_id?: string } | null
   }
 }> =>
-  request('/api/health', { timeoutMs: 4_000 })
+  request('/api/health', { timeoutMs: 8_000 })
 
 export const fetchChart = (symbol: string): Promise<{ symbol: string; bars: ChartBar[] }> =>
   request<{ symbol: string; bars: ChartBar[] }>(`/api/chart/${encodeURIComponent(symbol)}`)

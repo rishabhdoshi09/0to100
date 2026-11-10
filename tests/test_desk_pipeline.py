@@ -129,3 +129,39 @@ def test_after_news_queues_investigate_acquire(tmp_path: Path, monkeypatch):
     assert payload["current"]["id"] == "investigate"
     assert {row["id"]: row["state"] for row in payload["steps"]}["news"] == "ready"
 
+
+
+def test_concurrent_pipeline_publish_uses_unique_atomic_temp_files(tmp_path: Path, monkeypatch):
+    """Regression: API bootstrap and ops publisher must not race on desk_pipeline.json.tmp."""
+    import json
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from product.desk_pipeline import persist_desk_pipeline_snapshot
+
+    target = tmp_path / "desk_pipeline.json"
+    writers = 8
+    barrier = Barrier(writers)
+    original_write = Path.write_text
+
+    def hold_after_write(path, content, *args, **kwargs):
+        n = original_write(path, content, *args, **kwargs)
+        if path.parent == tmp_path and path.name.endswith(".tmp"):
+            barrier.wait(timeout=15)
+        return n
+
+    monkeypatch.setattr(Path, "write_text", hold_after_write)
+
+    def publish(index: int) -> str:
+        persist_desk_pipeline_snapshot(
+            {"schema_version": 1, "generation": index, "state": "RUNNING"}, target
+        )
+        return "ok"
+
+    with ThreadPoolExecutor(max_workers=writers) as pool:
+        assert list(pool.map(publish, range(writers))) == ["ok"] * writers
+
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    assert payload["generation"] in range(writers)
+    assert payload["state"] == "RUNNING"
+    assert payload["persisted_at"]
+    assert not list(tmp_path.glob("*.tmp"))

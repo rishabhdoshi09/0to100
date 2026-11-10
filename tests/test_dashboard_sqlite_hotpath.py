@@ -77,8 +77,8 @@ def test_news_dashboard_queries_only_news_refresh_metadata(monkeypatch):
             raise AssertionError("news read full operation result")
 
     class FakeNewsStore:
-        def __init__(self, _path):
-            pass
+        def __init__(self, _path, *, read_only=False):
+            assert read_only is True
 
         def recent(self, **_kw):
             return []

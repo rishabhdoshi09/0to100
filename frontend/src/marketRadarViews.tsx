@@ -26,6 +26,8 @@ import {
   type WatchlistPayload,
 } from './productApi'
 import { RiskLensCard } from './productViews'
+import { shouldPollPage } from './pagePolling'
+import { verifiedHomeStockScan } from './homeStockTruth'
 import type { ControlName, DashboardPayload } from './types'
 import { LiveScanBanner, type ExperienceViewProps } from './experience'
 import { keepRicher, markInvestigate, recall, remember } from './sessionMemory'
@@ -33,6 +35,7 @@ import { SystemLaneInspector, SystemLaneStrip } from './homeSystemInspector'
 import type { CheckSystemSnapshot, SystemLane } from './backendControlPlane'
 import { DailyWrapList, magazineWrapLines } from './dailyWrap'
 import { FnoHomePanel } from './fnoHome'
+import { usPaperBlockers, usPaperModeLabel } from './usPaperTruth'
 import {
   bestSetupsFromRadar,
   dashCell,
@@ -476,6 +479,7 @@ function HomeOsCard({
   os,
   depth,
   busy,
+  stockScanVerified,
   onAction,
   onOpenPage,
   setSelected,
@@ -483,6 +487,7 @@ function HomeOsCard({
   os: HomeOperatingSystem
   depth: string
   busy: boolean
+  stockScanVerified: boolean
   onAction: (action: HomeAction) => void
   onOpenPage?: (page: string) => void
   setSelected?: (symbol: string) => void
@@ -505,7 +510,7 @@ function HomeOsCard({
       : 'Canonical broker-boundary lock has not been verified.'
   return (
     <section className={`home-os-card state-${(os.state || '').toLowerCase()}`}>
-      {(os.opportunities || []).length ? (
+      {stockScanVerified && (os.opportunities || []).length ? (
         <div className="home-os-opps home-os-best-trades" aria-label="Best trades">
           <span>BEST TRADES</span>
           <strong>Production-thesis qualified · rejected and extended names excluded</strong>
@@ -557,8 +562,10 @@ function HomeOsCard({
       ) : (
         <div className="home-os-past home-os-best-trades" aria-label="Best trades">
           <span>BEST TRADES</span>
-          <strong>No eligible trade</strong>
-          <small>The production thesis did not qualify a trade. Rejected, extended and WAIT names are kept out of this list.</small>
+          <strong>{stockScanVerified ? 'No eligible trade' : 'Verifying NSE stock recommendations'}</strong>
+          <small>{stockScanVerified
+            ? 'The current verified stock scan qualified no paper trade. Rejected, extended and WAIT names stay out.'
+            : 'The latest scan/data or Home projection is still refreshing. Prior BUY cards are not current trade signals.'}</small>
         </div>
       )}
       {(os.research_watchlist || []).length ? (
@@ -759,8 +766,11 @@ function HomeOsCard({
           <span>US PAPER MARKET</span>
           <strong>
             {os.us_market.market_open ? 'US market open' : 'US market closed'}
-            {os.us_market.paper?.armed ? ' · paper auto ON' : ' · paper auto OFF'}
+            {usPaperModeLabel(os.us_market.paper)}
           </strong>
+          {usPaperBlockers(os.us_market.paper).map((row) => (
+            <small key={row} className="home-os-blocker">{row}</small>
+          ))}
           <small>
             {os.us_market.scan?.status || 'idle'} · {os.us_market.scan?.scope || 'S&P 500'} ·
             {' '}{os.us_market.scan?.count ?? 0} setups ·
@@ -886,11 +896,23 @@ export function RadarHomeView(props: ExperienceViewProps & {
   const [radarNote, setRadarNote] = useState('')
   const autoBootRef = useRef(false)
   const radarInFlight = useRef(false)
+  const homeVisible = shouldPollPage(props.activePage, ['Home', 'Command Center', 'Market'])
+  const homeWatching = marketScan.isActive
+    || Boolean(dashboard.scan_progress?.active)
+    || (dashboard.operations.active || []).some((item) => (
+      item.kind === 'DATA_PREPARE'
+      || item.kind === 'FNO_REFRESH'
+      || item.kind === 'MARKET_SCAN'
+      || item.kind === 'LONG_TERM_SCAN'
+      || item.kind === 'LONG_TERM_REFRESH'
+      || item.kind === 'NEWS_REFRESH'
+    ))
 
   useEffect(() => {
+    if (!homeVisible) return
     let alive = true
     const load = () => {
-      if (radarInFlight.current) return
+      if (document.visibilityState === 'hidden' || radarInFlight.current) return
       radarInFlight.current = true
       if (!recall('radar-home')) setRadarNote('Refreshing home workspace…')
       fetchRadarHome()
@@ -923,28 +945,23 @@ export function RadarHomeView(props: ExperienceViewProps & {
         .catch(() => undefined)
     }
     load()
-    const watching = marketScan.isActive
-      || Boolean(dashboard.scan_progress?.active)
-      || (dashboard.operations.active || []).some((item) => (
-        item.kind === 'DATA_PREPARE'
-        || item.kind === 'FNO_REFRESH'
-        || item.kind === 'MARKET_SCAN'
-        || item.kind === 'LONG_TERM_SCAN'
-        || item.kind === 'LONG_TERM_REFRESH'
-        || item.kind === 'NEWS_REFRESH'
-      ))
-    const timer = window.setInterval(load, watching ? 4000 : 20_000)
+    // A just-opened Home must recover quickly if its first saved-projection
+    // fetch overlaps a scan publication or busy API. The 5s retry is ONLY for
+    // the uninitialized visible Home, with the in-flight guard above; after
+    // first success the warmed page is polled less frequently.
+    const timer = window.setInterval(load, radar ? (homeWatching ? 12_000 : 30_000) : 5_000)
     return () => { alive = false; window.clearInterval(timer) }
-  }, [dashboard.scan.scanned_at, dashboard.long_term.scanned_at, dashboard.generated_at, dashboard.scan_progress?.updated_at, dashboard.operations.active, marketScan.isActive])
+  }, [homeVisible, Boolean(radar), homeWatching, dashboard.scan.scanned_at, dashboard.long_term.scanned_at])
 
   useEffect(() => {
+    if (!homeVisible) return
     if (!selected) { setPlan(null); return }
     let alive = true
     fetchTradePlan(selected)
       .then((payload) => { if (alive) setPlan(payload) })
       .catch(() => { if (alive) setPlan(null) })
     return () => { alive = false }
-  }, [selected, dashboard.scan.scanned_at, dashboard.generated_at])
+  }, [homeVisible, selected, dashboard.scan.scanned_at])
 
   const scanAt = radar?.scan_scanned_at || dashboard.scan.scanned_at || ''
   const brokerStatus = String(radar?.home_os?.broker?.status || '').toUpperCase()
@@ -992,7 +1009,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
   }
 
   useEffect(() => {
-    if (autoBootRef.current) return
+    if (!homeVisible || autoBootRef.current) return
     if (publicReadOnly) {
       autoBootRef.current = true
       return
@@ -1007,7 +1024,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
     if (!deskNeedsWork) return
     autoBootRef.current = true
     void runBootstrap()
-  }, [emptyDesk, dashboard.data.ready, dashboard.scan.scanned_at, publicReadOnly])
+  }, [homeVisible, emptyDesk, dashboard.data.ready, dashboard.scan.scanned_at, publicReadOnly])
 
   const laneCard = (title: string, rows: RadarRow[], count: number, qualityHint?: number) => (
     <section className="radar-lane-card">
@@ -1059,6 +1076,9 @@ export function RadarHomeView(props: ExperienceViewProps & {
     || longTermRows.find((r) => r.symbol === selected)
 
   const homeOs = radar?.home_os || null
+  const stockScanVerified = verifiedHomeStockScan(
+    dashboard.scan, dashboard.data.ready, radar?.scan_scanned_at,
+  )
   const runHomeAction = (action: HomeAction) => {
     if (action.kind === 'instruction') return
     const control = String(action.control || '')
@@ -1109,12 +1129,20 @@ export function RadarHomeView(props: ExperienceViewProps & {
           os={homeOs}
           depth={depth}
           busy={marketScan.isBusy || bootstrapBusy}
+          stockScanVerified={stockScanVerified}
           onAction={runHomeAction}
           onOpenPage={setActive}
           setSelected={setSelected}
         />
       ) : (
-        <p className="panel-copy">{radarNote || 'Loading Home operating system… Dashboard below still works.'}</p>
+        <section className="home-os-card state-data-refreshing" aria-label="NSE stock recommendations verification">
+          <div className="home-os-past home-os-best-trades">
+            <span>BEST NSE STOCK TRADES</span>
+            <strong>Verifying current NSE stock recommendations</strong>
+            <small>Waiting for the latest verified scan and Home projection. No stale BUY signals are actionable.</small>
+          </div>
+          <p className="panel-copy">{radarNote || 'Loading the saved Home workspace. NSE cash recommendations remain primary; the full market scan and paper supervisor continue independently.'}</p>
+        </section>
       )}
       {radarNote && homeOs ? <p className="panel-copy">{radarNote}</p> : null}
       <header className="radar-hero">
@@ -1179,8 +1207,6 @@ export function RadarHomeView(props: ExperienceViewProps & {
         </div>
       </div>
       {deskNote ? <p className="radar-desk-note">{deskNote}</p> : null}
-      <FnoHomePanel dashboard={dashboard} setActive={setActive} setSelected={setSelected} runControl={runControl} />
-
       <div className="radar-market-strip">
         <div>
           <span>NIFTY 1D</span>
@@ -1308,6 +1334,9 @@ export function RadarHomeView(props: ExperienceViewProps & {
           )}
         </Panel>
       </div>
+
+      {/* Primary Home workflow is NSE equity stock discovery, not F&O. */}
+      <FnoHomePanel dashboard={dashboard} setActive={setActive} setSelected={setSelected} runControl={runControl} />
     </section>
   )
 }
@@ -1331,8 +1360,10 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
 
   const activeScan = marketScan
   const hasScan = Boolean(dashboard.scan.scanned_at || dashboard.scan.records.length || meta.universe || meta.scanned_at)
+  const scannerVisible = shouldPollPage(props.activePage, ['Market Scanner', 'Scanner'])
 
   useEffect(() => {
+    if (!scannerVisible) return
     const seed = scannerFallbackRows(tab, dashboard) as RadarRow[]
     const seedMeta = scannerMetaFromDashboard(tab, dashboard)
     const cachedRows = recall<RadarRow[]>(`scanner:${tab}`)
@@ -1374,6 +1405,7 @@ export function MarketScannerView(props: ExperienceViewProps & { onCompare: (sym
       })
       .catch(() => apply(opening, openingMeta))
   }, [
+    scannerVisible,
     tab,
     dashboard.scan.scanned_at,
     dashboard.long_term.scanned_at,

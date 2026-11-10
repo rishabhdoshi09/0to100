@@ -61,11 +61,8 @@ def _persist_report(report: dict[str, Any], *, path: str | Path | None = None) -
     rows = _read_reports(path)
     rows = [r for r in rows if not (r.get("domain") == report.get("domain") and r.get("as_of") == report.get("as_of"))]
     rows.append(report)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as fh:
-        for row in rows[-2000:]:
-            fh.write(json.dumps(row, default=str, sort_keys=True) + "\n")
-    tmp.replace(target)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(target, "".join(json.dumps(row, default=str, sort_keys=True) + "\n" for row in rows[-2000:]))
 
 
 def _storage_growth(domain: str, total_rows_today: int, *, path: str | Path | None = None) -> dict[str, Any]:

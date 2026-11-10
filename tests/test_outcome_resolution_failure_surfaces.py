@@ -77,3 +77,67 @@ def test_successful_resolution_clears_unreconciled_and_reports_real_counts(monke
     assert H.UNRECONCILED in result.clears
     assert not result.failures
     assert "outcomes resolved · 1 book closes · 1 decoded · 1 official" == result.summary
+
+
+
+def test_returned_blocked_paper_state_never_marks_outcome_job_succeeded(monkeypatch):
+    monkeypatch.setattr(
+        "product.autonomous_loop.settle_official_outcomes",
+        lambda session: {"n_settled": 0},
+    )
+
+    class BlockedDeps(_Deps):
+        def resolve_outcomes(self, session_date, active_failures):
+            return {
+                "status": "BLOCKED_RECOVERY",
+                "error": "persisted paper book has not been restored",
+                "positions_closed": [],
+            }
+
+    result = run_outcome_resolution(_ctx(BlockedDeps()))
+    assert result.status == JS.PERMANENT_FAILED
+    assert result.error_code == "OUTCOME_PAPER_STATE_UNSAFE"
+    assert H.UNRECONCILED in result.failures
+    assert result.new_entries_allowed is False
+    assert not result.unblocks
+    assert "persisted paper book" in result.error_message
+
+
+def test_official_settlement_error_is_not_a_fake_success(monkeypatch):
+    monkeypatch.setattr(
+        "product.autonomous_loop.settle_official_outcomes",
+        lambda session: {"error": "partial settlement"},
+    )
+    result = run_outcome_resolution(_ctx(_Deps()))
+    assert result.status == JS.PERMANENT_FAILED
+    assert result.error_code == "OFFICIAL_SETTLEMENT_ERROR"
+    assert H.UNRECONCILED in result.failures
+    assert result.unblocks == ()
+
+
+def test_dependency_outcome_resolution_skips_learning_when_book_unrecovered(monkeypatch):
+    from research.auto_research import scheduler
+    from research.autonomy import jobs
+
+    class Brain:
+        intel_book = object()
+        def run_intelligence_cycle_day(self, **kwargs):
+            return {
+                "status": "BLOCKED_RECOVERY",
+                "error": "paper book invalid",
+                "positions_closed": [],
+            }
+
+    monkeypatch.setattr(scheduler, "get_brain", lambda: Brain())
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("cannot learn/settle from an unverified paper book")
+
+    monkeypatch.setattr("product.paper_learning_loop.ingest_closed_book", forbidden)
+    monkeypatch.setattr("product.forward_soak.settle_and_report", forbidden)
+
+    deps = object.__new__(jobs.Deps)
+    result = deps.resolve_outcomes("2026-11-06")
+    assert result["status"] == "BLOCKED_RECOVERY"
+    assert result["eligibility"] == "BLOCKED_SAFETY"
+    assert result["new_entries_allowed"] is False

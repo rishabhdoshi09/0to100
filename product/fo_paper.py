@@ -7,7 +7,8 @@ labels whether statutory/broker costs were configured for evidence use.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from math import floor
+from datetime import date
+from math import ceil, floor, isfinite
 from typing import Any, Callable, Mapping
 from uuid import uuid4
 
@@ -95,9 +96,25 @@ class FoPaperPosition:
     # contract_selection_context) -- so what is learned from at settlement is
     # exactly what decided the selection, never re-derived differently later.
     contract_modifier_keys: dict[str, str] = field(default_factory=dict)
+    # Maximum capital that can be lost on a purchased option, including a
+    # conservative fee estimate. Legacy rows lack this additive field.
+    premium_loss_exposure: float = 0.0
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def long_option_max_loss_exposure(pos: FoPaperPosition) -> float:
+    """Account-risk truth for new and legacy long CE/PE positions.
+
+    Old books saved risk_amount as entry-to-stop only. Never let their missing
+    premium_loss_exposure make the shared account budget understate a total loss.
+    """
+    premium = float(pos.entry_price) * int(pos.quantity)
+    declared = float(getattr(pos, "premium_loss_exposure", 0.0) or 0.0)
+    if not isfinite(premium) or not isfinite(declared) or premium <= 0 or declared < 0:
+        raise ValueError("long option loss exposure is invalid")
+    return max(premium, declared)
 
 
 @dataclass
@@ -154,6 +171,37 @@ class FoPaperTrade:
         return asdict(self)
 
 
+def expired_unsettled_positions(positions, session: str) -> list[dict[str, Any]]:
+    """Open long-premium positions whose contract expired before ``session``.
+
+    Single authority for the rule. Once a contract expires Kite stops quoting
+    it, so ordinary supervision can never mark or close it: it would hold its
+    slot and premium risk in the account budget forever with its outcome never
+    booked. Its value is unknown to the paper engine and no settlement price is
+    invented for it; it must be reconciled against the exchange settlement.
+    Accepts ``FoPaperPosition`` objects or their ``as_dict()`` rows.
+    """
+    rows: list[dict[str, Any]] = []
+    for pos in positions or ():
+        row = pos if isinstance(pos, Mapping) else pos.as_dict()
+        expiry = str(row.get("expiry") or "")[:10]
+        try:
+            expired = bool(expiry) and date.fromisoformat(expiry).isoformat() < str(session)[:10]
+        except ValueError:
+            expired = False
+        if expired:
+            rows.append({
+                "option_symbol": str(row.get("option_symbol") or ""),
+                "underlying": str(row.get("underlying") or ""),
+                "trade_id": str(row.get("trade_id") or ""),
+                "expiry": expiry,
+                "opened_at": str(row.get("opened_at") or ""),
+                "risk_amount": round(float(row.get("risk_amount") or 0.0), 2),
+                "action": "Reconcile against the exchange expiry settlement before new F&O entries.",
+            })
+    return rows
+
+
 class FoPaperBook:
     """Long-premium options paper book with conservative same-bar exits."""
 
@@ -163,6 +211,7 @@ class FoPaperBook:
         *,
         risk_per_trade_pct: float = 0.01,
         max_premium_pct: float = 0.10,
+        max_loss_per_trade_pct: float = 0.01,
         max_daily_premium_pct: float | None = None,
         premium_deployed_today: float = 0.0,
         max_positions: int = 5,
@@ -172,9 +221,18 @@ class FoPaperBook:
         trail_distance_r: float = 1.0,
         cost_model: CostModel | None = None,
         cost_model_name: str = "",
+        external_open_risk: float = 0.0,
+        account_capital: float | None = None,
     ) -> None:
         self.capital = float(capital)
+        # Rupees already at risk in the account's OTHER paper books (equity).
+        # The total-risk ceiling is an account limit, so it is shared.
+        self.external_open_risk = float(external_open_risk)
+        self.account_capital = None if account_capital is None else float(account_capital)
         self.risk_per_trade_pct = float(risk_per_trade_pct)
+        # For purchased options the full premium can be lost through gaps or
+        # expiry. A stop distance is not a reliable maximum-loss definition.
+        self.max_loss_per_trade_pct = float(max_loss_per_trade_pct)
         self.max_premium_pct = float(max_premium_pct)
         self.max_daily_premium_pct = float(
             max_premium_pct if max_daily_premium_pct is None else max_daily_premium_pct
@@ -208,9 +266,27 @@ class FoPaperBook:
             return observed
         return float(price) * (1.0 - self.slippage_bps / 1e4)
 
+    def _estimated_round_trip_fees(self, fill: float, quantity: int) -> float:
+        """Conservative entry-fee reserve at unchanged exit premium.
+
+        The ordinary two-sided model overestimates entry-only charges; keeping
+        the extra reserve prevents a missing exit quote from making entry fees
+        disappear from worst-case sizing. An unconfigured evidence model uses
+        the versioned deterministic NSE fee schedule, not a zero-cost fill.
+        """
+        if self.cost_model is not None:
+            estimated = float(self.cost_model(fill, fill, quantity))
+        else:
+            from product.fo_costs import NseLongOptionCostSchedule
+            estimated = NseLongOptionCostSchedule().round_trip_cost(fill, fill, quantity)
+        if not isfinite(estimated) or estimated < 0:
+            raise ValueError("option cost estimate is invalid")
+        return estimated
+
     def open_position(
         self,
         *,
+
         underlying: str,
         option_symbol: str,
         option_type: str,
@@ -284,8 +360,17 @@ class FoPaperBook:
         )
         premium_budget = min(per_trade_premium_budget, remaining_daily_premium)
         total_risk_budget = equity * self.max_total_risk_pct
-        open_risk = sum(float(pos.risk_amount) for pos in self.open.values())
-        remaining_total_risk = max(0.0, total_risk_budget - open_risk)
+        if self.account_capital is not None:
+            total_risk_budget = min(
+                total_risk_budget,
+                max(0.0, self.account_capital) * self.max_total_risk_pct,
+            )
+        open_risk = sum(long_option_max_loss_exposure(pos) for pos in self.open.values())
+        external = self.external_open_risk
+        if not isfinite(external) or external < 0 or not isfinite(total_risk_budget):
+            remaining_total_risk = 0.0
+        else:
+            remaining_total_risk = max(0.0, total_risk_budget - open_risk - external)
         risk_budget = min(risk_budget, remaining_total_risk)
         risk_per_lot = per_unit_risk * lot_size
         premium_per_lot = fill * lot_size
@@ -294,9 +379,45 @@ class FoPaperBook:
         lots = min(lots_by_risk, lots_by_premium)
         if requested_lots is not None:
             lots = min(lots, max(0, int(requested_lots)))
+        premium_loss_exposure = 0.0
+        if not isfinite(self.max_loss_per_trade_pct) or self.max_loss_per_trade_pct <= 0:
+            self.refusals.append((symbol, "INVALID_MAX_LOSS_POLICY"))
+            return None
+        # 1% per name/trade is the worst possible purchased-premium loss,
+        # not the distance to a stop whose fill is never guaranteed.
+        worst_loss_budget = min(
+            equity * self.max_loss_per_trade_pct, remaining_total_risk
+        )
+        if self.account_capital is not None:
+            worst_loss_budget = min(
+                worst_loss_budget,
+                max(0.0, self.account_capital) * self.max_loss_per_trade_pct,
+            )
+        if lots > 0:
+            # Brokerage has flat components. Recompute exact estimated costs
+            # for the aggregate number of lots instead of extrapolating one lot.
+            try:
+                while lots > 0:
+                    proposed_qty = lots * lot_size
+                    exposure = fill * proposed_qty + self._estimated_round_trip_fees(
+                        fill, proposed_qty,
+                    )
+                    # Persisted exposure is rounded UP to paise. Check the
+                    # rounded number, not the pre-rounded estimate, against
+                    # the hard 1% cap (equity may itself include paise).
+                    rounded_exposure = ceil(exposure * 100.0) / 100.0 if isfinite(exposure) else float("inf")
+                    if rounded_exposure <= worst_loss_budget + 1e-9:
+                        premium_loss_exposure = rounded_exposure
+                        break
+                    lots -= 1
+            except (TypeError, ValueError, ArithmeticError, OverflowError):
+                self.refusals.append((symbol, "OPTION_COST_ESTIMATE_UNAVAILABLE"))
+                return None
         if lots < 1:
             if premium_per_lot > 0 and remaining_daily_premium < premium_per_lot:
                 self.refusals.append((symbol, "DAILY_PREMIUM_BUDGET_EXHAUSTED"))
+            elif worst_loss_budget < premium_per_lot:
+                self.refusals.append((symbol, "MAX_LOSS_PREMIUM_BUDGET_TOO_SMALL_FOR_ONE_LOT"))
             else:
                 self.refusals.append((symbol, "RISK_OR_PREMIUM_BUDGET_TOO_SMALL_FOR_ONE_LOT"))
             return None
@@ -318,6 +439,7 @@ class FoPaperBook:
             opened_at=str(opened_at),
             max_holding_sessions=max(1, int(max_holding_sessions)),
             risk_amount=round(per_unit_risk * qty, 2),
+            premium_loss_exposure=premium_loss_exposure,
             setup_score=float(setup_score),
             option_score=float(option_score),
             instrument_token=max(0, int(instrument_token or 0)),

@@ -62,9 +62,8 @@ def save_latest_consensus(
         }
 
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(json.dumps(board, indent=2, default=str, sort_keys=True), encoding="utf-8")
-    tmp.replace(target)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(target, json.dumps(board, indent=2, default=str, sort_keys=True))
 
 
 def get_consensus(symbol: str, *, path: str | Path | None = None) -> dict[str, Any] | None:

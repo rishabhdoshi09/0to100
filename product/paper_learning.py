@@ -194,9 +194,8 @@ def build_paper_memory(closed_trades: Iterable[Any], *, as_of: str,
 def save_paper_memory(memory: Mapping[str, Any], path: str | Path | None = None) -> Path:
     target = memory_path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(json.dumps(dict(memory), indent=2, default=str), encoding="utf-8")
-    os.replace(tmp, target)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(target, json.dumps(dict(memory), indent=2, default=str))
     return target
 
 

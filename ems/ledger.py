@@ -72,10 +72,8 @@ class ExecutionLedger:
             "positions": {k: v.as_dict() for k, v in self.positions.items()},
             "incidents": [i.as_dict() for i in self.incidents],
         }
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(blob, default=str), encoding="utf-8")
-        import os
-        os.replace(tmp, self.path)                       # atomic ledger write
+        from core.atomic_io import atomic_write_text
+        atomic_write_text(self.path, json.dumps(blob, default=str))
 
     def _load(self) -> None:
         try:

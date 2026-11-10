@@ -905,3 +905,97 @@ def test_gate_uses_paper_actionable_for_no_trade_truth(tmp_path, monkeypatch):
     assert payload["research_actionable"] == 1
     assert payload["best_trades"] == []
     assert payload["live_locked"] is True
+
+
+def test_startup_discovery_can_scan_current_kite_when_public_archive_is_stale(
+    tmp_path, monkeypatch
+):
+    from research.autonomy import schedules as SCH
+    from research.autonomy.supervisor import Supervisor
+    from research.intelligence.data import nse_calendar
+
+    class KiteDeps:
+        def active_snapshot_id(self):
+            return "kite-fresh-20261106"
+
+        def active_snapshot_info(self):
+            return {
+                "snapshot_id": "kite-fresh-20261106",
+                "latest_date": "2026-11-06",
+                "source": "kite",
+            }
+
+    monkeypatch.setattr(
+        "product.decision_simulation_gate.status",
+        lambda: {"discovery_ready": False},
+    )
+    monkeypatch.setattr(
+        "product.decision_simulation_gate.current_startup_id",
+        lambda: "startup-kite",
+    )
+    monkeypatch.setattr(
+        "product.readiness.official_history",
+        lambda: {"usable_for_scan": False, "reason_code": "HISTORY_STALE"},
+    )
+    monkeypatch.setattr(
+        nse_calendar, "snapshot_freshness", lambda *_: {"fresh": True},
+    )
+    sup = Supervisor(tmp_path / "auto", deps=KiteDeps())
+    sup._ensure_startup_trade_discovery()
+
+    scans = [j for j in sup.jobs.list(limit=20) if j.job_type == SCH.MARKET_SCAN]
+    assert len(scans) == 1
+    assert scans[0].input_snapshot_id == "kite-fresh-20261106"
+    assert scans[0].idempotency_key == (
+        "startup_discovery_scan:startup-kite:kite-fresh-20261106"
+    )
+
+
+def test_startup_discovery_cannot_bootstrap_stale_or_mislabeled_kite(
+    tmp_path, monkeypatch
+):
+    from research.autonomy import schedules as SCH
+    from research.autonomy.supervisor import Supervisor
+    from research.intelligence.data import nse_calendar
+
+    class KiteDeps:
+        def active_snapshot_id(self):
+            return "kite-current-id"
+
+        def active_snapshot_info(self):
+            return {
+                "snapshot_id": "kite-current-id",
+                "latest_date": "2026-10-19",
+                "source": "kite",
+            }
+
+    monkeypatch.setattr(
+        "product.decision_simulation_gate.status",
+        lambda: {"discovery_ready": False},
+    )
+    monkeypatch.setattr(
+        "product.decision_simulation_gate.current_startup_id",
+        lambda: "startup-stale-kite",
+    )
+    monkeypatch.setattr(
+        "product.readiness.official_history",
+        lambda: {"usable_for_scan": False, "reason_code": "HISTORY_STALE"},
+    )
+    monkeypatch.setattr(
+        nse_calendar, "snapshot_freshness", lambda *_: {"fresh": False},
+    )
+    deps = KiteDeps()
+    sup = Supervisor(tmp_path / "auto", deps=deps)
+    sup._ensure_startup_trade_discovery()
+    assert not [j for j in sup.jobs.list(limit=20) if j.job_type == SCH.MARKET_SCAN]
+
+    deps.active_snapshot_info = lambda: {
+        "snapshot_id": "kite-current-id",
+        "latest_date": "2026-11-06",
+        "source": "official_nse",
+    }
+    monkeypatch.setattr(
+        nse_calendar, "snapshot_freshness", lambda *_: {"fresh": True},
+    )
+    sup._ensure_startup_trade_discovery()
+    assert not [j for j in sup.jobs.list(limit=20) if j.job_type == SCH.MARKET_SCAN]

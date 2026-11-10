@@ -222,9 +222,8 @@ def save_registry(payload: Mapping[str, Any], path: str | Path | None = None) ->
     body = dict(payload)
     body["live_locked"] = True
     body["updated_at"] = _now()
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(json.dumps(body, indent=2, default=str, sort_keys=True), encoding="utf-8")
-    tmp.replace(target)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(target, json.dumps(body, indent=2, default=str, sort_keys=True))
     return target
 
 

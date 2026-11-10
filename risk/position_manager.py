@@ -31,7 +31,9 @@ _lock = threading.Lock()
 _alerted: dict[str, set] = {}      # {YYYY-MM-DD: {"SYM:TYPE", ...}}
 
 
-def _open_trades() -> list[dict]:
+def _open_trades(*, strict: bool = False) -> list[dict]:
+    """strict=True raises when trades.db exists but cannot be read, so an
+    account risk gate never mistakes an unreadable book for an empty one."""
     from execution.trade_executor import _DB, connect as _te_connect
     try:
         if not _DB.exists():
@@ -45,6 +47,8 @@ def _open_trades() -> list[dict]:
         conn.close()
         return [dict(r) for r in rows]
     except Exception as exc:
+        if strict:
+            raise
         log.debug("open_trades_read_failed", error=str(exc))
         return []
 

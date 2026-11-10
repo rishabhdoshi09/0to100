@@ -36,6 +36,7 @@ _total: int = 0              # universe size for this run
 _scan_running: bool = False  # only one scan at a time
 _scope: str = "All"          # "All" | "S&P 500" | "NASDAQ-100" | "Dow 30"
 _pushed: dict[str, set] = {}  # {YYYY-MM-DD: symbols alerted} — one/stock/day
+_paper_feed_error: str = ""   # last scan's US paper review/entry failure, "" = ran clean
 _STORE = logs_path("product", "us_scan.json")
 
 
@@ -191,12 +192,18 @@ def _index_universe(index: str | None) -> tuple[list[str], str]:
     return get_us_universe(), "All"
 
 
+def last_paper_feed_error() -> str:
+    """Why the last scan's US paper review/entry step failed; "" when it ran."""
+    return _paper_feed_error
+
+
 def scan_us(max_workers: int = 8, index: str | None = None) -> list[dict]:
     """Run the unified engine over the US universe. Returns serialized,
     conviction-ranked results and caches them. HEAVY when scanning the full
     listing — run it via start_us_scan() so it never blocks the UI thread.
     `index` scopes the scan to one index (S&P 500 / NASDAQ-100 / Dow 30)."""
     global _results, _last_ts, _status, _progress, _total, _scan_running, _scope
+    global _paper_feed_error
     from data.us_data import get_us_daily, sp500_return_30d
     from scan.unified_scanner import UnifiedScanner
 
@@ -206,6 +213,7 @@ def scan_us(max_workers: int = 8, index: str | None = None) -> list[dict]:
         _scan_running = True
         _status = "scanning"
         _progress = 0
+        _paper_feed_error = ""
     scope = str(index or "All")
     coverage = {"requested": 0, "history_available": 0, "evaluated": 0,
                 "missing_history": 0, "analysis_failed": 0, "batch_failed": 0,
@@ -307,7 +315,8 @@ def scan_us(max_workers: int = 8, index: str | None = None) -> list[dict]:
             review_cycle()
             on_setups(serialized)
         except Exception as exc:
-            log.debug("us_autopilot_feed_skip", error=str(exc))
+            _paper_feed_error = f"{type(exc).__name__}: {exc}"[:300]
+            log.warning("us_autopilot_feed_failed", error=_paper_feed_error)
         log.info("us_scan_done", requested=len(symbols), evaluated=coverage["evaluated"], status=status,
                  with_signals=len(serialized))
         return serialized

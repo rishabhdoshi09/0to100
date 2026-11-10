@@ -100,9 +100,8 @@ class Supervisor:
         return H.canonicalize_failures(raw)
 
     def _save_failures(self) -> None:
-        tmp = self._failures_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(sorted(self.failures)), encoding="utf-8")
-        os.replace(tmp, self._failures_path)
+        from core.atomic_io import atomic_write_text
+        atomic_write_text(self._failures_path, json.dumps(sorted(self.failures)))
 
     def _load_owner_state(self) -> dict:
         try:
@@ -134,9 +133,9 @@ class Supervisor:
             }
 
     def _save_owner_state(self) -> None:
-        tmp = self._owner_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.owner_state, indent=2), encoding="utf-8")
-        os.replace(tmp, self._owner_path)
+        from core.atomic_io import atomic_write_text
+        # The owner's pause/halt must survive a disk disconnect: full flush.
+        atomic_write_text(self._owner_path, json.dumps(self.owner_state, indent=2), durable=True)
 
     def start(self) -> bool:
         if not self.lock.acquire():
@@ -453,9 +452,8 @@ class Supervisor:
             "activity_truth": activity_truth,
             "current_activity": activity_truth.get("activity", "UNKNOWN"),
         })
-        tmp = self._status_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(d, indent=2, default=str), encoding="utf-8")
-        os.replace(tmp, self._status_path)
+        from core.atomic_io import atomic_write_text
+        atomic_write_text(self._status_path, json.dumps(d, indent=2, default=str))
 
     def _job_counts(self) -> dict:
         counts = {}
@@ -577,16 +575,34 @@ class Supervisor:
             # current here deadlocked weekend/off-session startup even though
             # the canonical freshness policy truthfully marked that history as
             # usable_for_scan. Never bypass a genuinely stale history gate.
-            if not history.get("usable_for_scan"):
-                return
-            latest = str(
-                history.get("available_session")
-                or history.get("latest_date")
-                or ""
-            )[:10]
-            if not latest:
-                return
+            official_usable = bool(history.get("usable_for_scan"))
             identity = str(self.deps.active_snapshot_id() or "").strip()
+            if not official_usable:
+                # Discovery may bootstrap from the *verified current* Kite
+                # snapshot when the public NSE archive lags. Scheduling a scan
+                # is safe here: actual scan publication still validates the
+                # immutable active snapshot and exact bar-date provenance.
+                # Do not schedule stale snapshots or fabricated fallback bars.
+                if not identity:
+                    return
+                info = dict(self.deps.active_snapshot_info() or {})
+                if (
+                    str(info.get("snapshot_id") or "") != identity
+                    or str(info.get("source") or "").lower() != "kite"
+                ):
+                    return
+                latest = str(info.get("latest_date") or "")[:10]
+                from research.intelligence.data.nse_calendar import snapshot_freshness
+                if not latest or not snapshot_freshness(latest).get("fresh"):
+                    return
+            else:
+                latest = str(
+                    history.get("available_session")
+                    or history.get("latest_date")
+                    or ""
+                )[:10]
+                if not latest:
+                    return
             if not identity:
                 identity = f"market:official_nse:{latest}"
             self.jobs.enqueue(
@@ -705,18 +721,27 @@ class Supervisor:
             from operations.market_ops import LANES, US_MARKET_SCAN
             from operations.store import OperationStore, PENDING, RUNNING, SUCCEEDED
             from core.runtime_paths import logs_dir
+            from core.market_scope import us_new_entries_allowed
 
             if not us_market_open(now_ist):
                 return
+            # India-only mode: no US universe scan and no new US entries, but
+            # existing US paper positions are still supervised and settled.
+            mode = "SCAN_AND_TRADE" if us_new_entries_allowed() else "SUPERVISE_ONLY"
             now_et = now_ist.astimezone(ZoneInfo("America/New_York"))
             minute = (now_et.minute // 15) * 15
             slot = f"{now_et.date().isoformat()}T{now_et.hour:02d}:{minute:02d}"
             store = OperationStore(logs_dir() / "market_ops" / "jobs.db")
             latest = dict(store.latest(US_MARKET_SCAN) or {})
             latest_payload = dict(latest.get("payload") or {})
-            if (
-                str(latest_payload.get("slot") or "") == slot
-                and str(latest.get("status") or "") in {PENDING, RUNNING, SUCCEEDED}
+            if str(latest_payload.get("slot") or "") == slot and (
+                str(latest.get("status") or "") in {PENDING, RUNNING, SUCCEEDED}
+                # The scan itself landed; rescanning this slot cannot repair the
+                # paper step and would rerun the whole universe back to back.
+                # A failed supervision pass retries next slot, not every tick.
+                or str(latest.get("error_code") or "") in {
+                    "US_PAPER_FEED_FAILED", "US_PAPER_SUPERVISION_FAILED",
+                }
             ):
                 return
             scope = str(os.environ.get("QT_US_SCAN_SCOPE") or "S&P 500").strip() or "S&P 500"
@@ -728,6 +753,7 @@ class Supervisor:
                     "slot": slot,
                     "session_date": now_et.date().isoformat(),
                     "scope": scope,
+                    "mode": mode,
                     "paper_only": True,
                     "live_locked": True,
                 },
@@ -1388,9 +1414,28 @@ class Supervisor:
         if str(getattr(refresh_job, "job_type", "") or "") != SCH.DATA_REFRESH:
             return
         key = str(getattr(refresh_job, "idempotency_key", "") or "")
-        if not key.startswith("data_refresh:") or key.endswith(":eod"):
-            # Manual REFRESH_DATA_NOW is data-only. The automatic per-session
-            # DATA_REFRESH identity is the only source of the auto scan->paper chain.
+        if key.startswith("data_refresh:") and key.endswith(":eod"):
+            # Refreshing at EOD can supersede the day's scan. Rebuild scan only:
+            # do NOT implicitly enqueue real-time paper entries after hours.
+            snap = str(self._snapshot_token(
+                output_snapshot_id or getattr(refresh_job, "output_snapshot_id", None),
+                metadata,
+            ) or "")
+            if snap:
+                try:
+                    from product.scan_store import load_scan
+                    existing = dict(load_scan() or {})
+                except Exception:
+                    existing = {}
+                if str(existing.get("source_snapshot_id") or "") != snap:
+                    self.jobs.enqueue(
+                        SCH.MARKET_SCAN,
+                        idempotency_key=f"eod:scan:{snap}",
+                        input_snapshot_id=snap,
+                    )
+            return
+        if not key.startswith("data_refresh:"):
+            # Manual REFRESH_DATA_NOW remains data-only.
             return
         snap = self._snapshot_token(
             output_snapshot_id or getattr(refresh_job, "output_snapshot_id", None),

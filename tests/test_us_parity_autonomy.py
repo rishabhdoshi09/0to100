@@ -217,6 +217,7 @@ def test_us_session_date_uses_new_york_calendar(monkeypatch):
 
 
 def test_us_status_truthfully_reports_forward_parity_without_fake_historical_pit(monkeypatch):
+    monkeypatch.setenv("QT_MARKET_SCOPE", "INDIA_AND_US")   # US-enabled behaviour under test
     import data.us_data as us_data
     import execution.us_autopilot as us
     import product.us_learning as learning
@@ -262,3 +263,96 @@ def test_us_status_truthfully_reports_forward_parity_without_fake_historical_pit
     assert parity["live_money_parity"] is False
     assert payload["paper_only"] is True
     assert payload["live_locked"] is True
+
+
+def test_us_paper_feed_failure_is_not_reported_as_scan_success(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_MARKET_SCOPE", "INDIA_AND_US")   # US-enabled behaviour under test
+    import execution.us_autopilot as autopilot
+    import operations.market_ops as market_ops
+    import scan.us_scanner as scanner
+
+    monkeypatch.setattr(scanner, "_STORE", tmp_path / "us_scan.json")
+    monkeypatch.setattr(scanner, "_scan_running", False)
+    monkeypatch.setattr(scanner, "_index_universe", lambda index: (["AAA"], "S&P 500"))
+    monkeypatch.setattr(scanner, "_liquid_first", lambda syms: list(syms))
+    monkeypatch.setattr(scanner, "_push_us_setups", lambda rows: None)
+
+    def _fake_scan(index=None):
+        scanner._persist_results([{"symbol": "AAA", "verdict": "BUY"}], scope="S&P 500",
+                                 status="ready", coverage={"requested": 1, "evaluated": 1},
+                                 reason="SCAN_COMPLETE")
+        scanner._paper_feed_error = "RuntimeError: review_cycle exploded"
+        return [{"symbol": "AAA"}]
+
+    monkeypatch.setattr(scanner, "scan_us", _fake_scan)
+    monkeypatch.setattr(autopilot, "get_status", lambda: {"armed": True})
+    monkeypatch.setattr(autopilot, "report_card", lambda: {})
+    ops = market_ops.MarketOperationsWorker.__new__(market_ops.MarketOperationsWorker)
+    monkeypatch.setattr(ops, "_progress", lambda *a, **k: None, raising=False)
+    try:
+        ops._run_us_market_scan({"operation_id": "op-1", "payload": {"scope": "S&P 500"}})
+    except market_ops.OperationBlocked as exc:
+        assert exc.code == "US_PAPER_FEED_FAILED"
+        assert "review_cycle exploded" in exc.result["paper_feed_error"]
+        assert exc.result["setups"] == 1
+    else:
+        raise AssertionError("a failed US paper step must not finish as SUCCEEDED")
+
+
+def test_us_scan_feed_exception_is_recorded(tmp_path, monkeypatch):
+    import execution.us_autopilot as autopilot
+    import data.us_data as data
+    import scan.unified_scanner as unified
+    import scan.us_scanner as scanner
+    import pandas as pd
+
+    monkeypatch.setattr(scanner, "_STORE", tmp_path / "us_scan.json")
+    monkeypatch.setattr(scanner, "_scan_running", False)
+    monkeypatch.setattr(scanner, "_index_universe", lambda index: (["AAA"], "S&P 500"))
+    monkeypatch.setattr(scanner, "_rank", lambda rows: [])
+    monkeypatch.setattr(scanner, "_push_us_setups", lambda rows: None)
+    monkeypatch.setattr(data, "sp500_return_30d", lambda: 0)
+    frame = pd.DataFrame({"open": [1.0] * 260, "high": [1.0] * 260, "low": [1.0] * 260,
+                          "close": [1.0] * 260, "volume": [1e6] * 260},
+                         index=pd.bdate_range("2025-01-01", periods=260))
+    monkeypatch.setattr(data, "get_us_daily", lambda *a, **k: frame, raising=False)
+    # scan_us fetches through the batch API; without this stub the test made a
+    # real network download for "AAA" and only passed where that succeeded.
+    monkeypatch.setattr(data, "get_us_daily_batch", lambda syms: {s: frame for s in syms})
+    monkeypatch.setattr(unified.UnifiedScanner, "_analyze", lambda self, sym, df: None)
+
+    def _boom():
+        raise RuntimeError("journal locked")
+
+    monkeypatch.setattr(autopilot, "review_cycle", _boom)
+    monkeypatch.setattr(autopilot, "on_setups", lambda rows: None)
+    scanner.scan_us(index="S&P 500")
+    assert scanner.persisted_us_scan().get("status") == "ready"
+    assert "journal locked" in scanner.last_paper_feed_error()
+
+
+def test_supervisor_does_not_rescan_a_slot_whose_paper_step_failed(monkeypatch):
+    import data.us_data as us_data
+    import operations.store as op_store
+    from research.autonomy.supervisor import Supervisor
+
+    captured = []
+    now = datetime(2026, 9, 25, 20, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+    slot = "2026-09-25T10:30"
+
+    class FakeStore:
+        def __init__(self, *_a, **_k):
+            pass
+
+        def latest(self, _kind):
+            return {"status": "BLOCKED", "error_code": "US_PAPER_FEED_FAILED",
+                    "payload": {"slot": slot}}
+
+        def enqueue(self, kind, **kwargs):
+            captured.append(kwargs)
+            return ({"status": "PENDING"}, True)
+
+    monkeypatch.setattr(op_store, "OperationStore", FakeStore)
+    monkeypatch.setattr(us_data, "us_market_open", lambda _now=None: True)
+    Supervisor._ensure_us_market_pipeline(SimpleNamespace(_incident=lambda *a, **k: None), now)
+    assert captured == []

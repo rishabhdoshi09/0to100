@@ -153,6 +153,29 @@ def _merge_official(base: Mapping[str, Any] | None, official: Mapping[str, Any] 
     merged["source_label"] = "NSE official XBRL warehouse"
     return merged
 
+def _has_financial_evidence(data: Mapping[str, Any] | None) -> bool:
+    """Reject HTML challenge/placeholder pages that parse as empty 'success'.
+
+    A description or URL is not financial evidence. A partial but genuine
+    financial row or explicit numeric metric is useful; missing fields remain
+    missing and must not be invented to make the report pass.
+    """
+    if not isinstance(data, Mapping):
+        return False
+    table_keys = (
+        "key_ratios", "quarterly_results", "profit_loss", "balance_sheet",
+        "cash_flow", "shareholding", "peer_comparison",
+    )
+    if any(isinstance(data.get(key), (list, tuple)) and bool(data[key])
+           for key in table_keys):
+        return True
+    direct_metrics = (
+        "pe", "roe", "roce", "debt_to_equity", "market_cap_cr",
+        "sales_growth_3y", "profit_growth_3y", "cfo_to_pat",
+        "promoter_holding", "promoter_pledge", "dividend_yield",
+    )
+    return any(data.get(key) is not None for key in direct_metrics)
+
 
 def get_deep_fundamentals(
     symbol: str,
@@ -166,11 +189,15 @@ def get_deep_fundamentals(
     secondary scrape. Official tables always win after a secondary enrichment.
     """
     symbol = symbol.upper().strip()
-    last_good = _cache.get(symbol, allow_stale=True)
+    cached_enrichment = _cache.get(symbol, allow_stale=True)
+    # Metadata-only cache can supply an "about" description when official
+    # financial tables exist. It must NEVER qualify as last-good financial
+    # evidence by itself after a failed secondary refresh.
+    last_good = cached_enrichment if _has_financial_evidence(cached_enrichment) else None
     official = _official_warehouse_snapshot(symbol)
     cached = None if force_refresh else _cache.get(symbol, allow_stale=False)
 
-    if cached is not None:
+    if cached is not None and (_has_financial_evidence(cached) or official):
         merged = _merge_official(cached, official)
         if official:
             _cache.set(symbol, merged)
@@ -187,7 +214,7 @@ def get_deep_fundamentals(
         official = _try_official_backfill(symbol)
 
     if official and not force_refresh:
-        merged = _merge_official(last_good, official)
+        merged = _merge_official(cached_enrichment, official)
         _cache.set(symbol, merged)
         log.info("fundamentals_served_from_official_warehouse", symbol=symbol)
         return merged
@@ -195,9 +222,14 @@ def get_deep_fundamentals(
     log.info("fundamentals_scraping", symbol=symbol, force=force_refresh)
     try:
         secondary = _scraper.fetch_all(symbol)
+        if not _has_financial_evidence(secondary):
+            # Screener may return HTTP 200 for bot challenges, login pages,
+            # or company placeholders. This is a failed refresh, not data.
+            log.warning("fundamentals_empty_secondary_rejected", symbol=symbol)
+            raise RuntimeError("Secondary fundamentals returned no financial evidence")
     except Exception as exc:
         if official:
-            merged = _merge_official(last_good, official)
+            merged = _merge_official(cached_enrichment, official)
             merged["secondary_refresh_error"] = str(exc)[:240]
             _cache.set(symbol, merged)
             log.info("fundamentals_served_official_after_secondary_failure", symbol=symbol)

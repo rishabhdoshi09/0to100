@@ -141,20 +141,23 @@ class Deps:
         cache = self.logs / "instruments_cache.csv"
         cache.parent.mkdir(parents=True, exist_ok=True)
         fields = sorted({str(k) for row in rows for k in row})
-        tmp = cache.with_suffix(".tmp")
-        with open(tmp, "w", newline="", encoding="utf-8") as fh:
+        from core.atomic_io import atomic_write_text, atomic_write_with
+
+        def _fill(fh) -> None:
             writer = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
             writer.writeheader()
             for row in rows:
                 writer.writerow({k: row.get(k, "") for k in fields})
-        os.replace(tmp, cache)
+
+        # market_ops writes the same cache: never share a temporary file.
+        atomic_write_with(cache, _fill, newline="")
         report = build_fno_universe(rows, as_of=self.now_ist().date(), source="zerodha_kite")
         exclusions_path = self.root / "instrument_exclusions.json"
-        exclusions_path.write_text(json.dumps([
+        atomic_write_text(exclusions_path, json.dumps([
             {"underlying": x.underlying, "stage": x.stage, "reason": x.reason,
              "observed_at": self.now_ist().isoformat()}
             for x in report.exclusions
-        ], indent=2), encoding="utf-8")
+        ], indent=2))
         return {"rows": len(rows), "fno_underlyings": report.mapped_underlyings,
                 "exclusions": len(report.exclusions), "source": report.source}
 
@@ -358,14 +361,38 @@ class Deps:
             capability_failures=capability_failures,
             fresh_live_symbols=(live.fresh_symbols() if live is not None else ()),
         )
+        # No second paper mutation after an unverified/failed intelligence
+        # cycle. The recommendation runner is a separate entry producer and
+        # must not turn upstream failure into a new opening opportunity.
+        if not isinstance(result, dict):
+            result = {"status": "FAILED_SAFE", "error": "invalid intelligence cycle response"}
+        upstream_status = str(result.get("status") or "").upper()
+        if upstream_status not in {"OK", "NO_ACTION", "ALREADY_DONE"}:
+            result["reco_autopilot"] = {
+                "error": f"INTELLIGENCE_CYCLE_BLOCKED: {upstream_status or 'UNKNOWN'}",
+                "status": "BLOCKED_UPSTREAM",
+            }
+            result["eligibility"] = "BLOCKED_SAFETY"
+            result["new_entries_allowed"] = False
+            self.telegram.notify_paper_cycle(result, book=brain.intel_book)
+            return result
+
         reco = {}
         try:
             from product.paper_autopilot import run_reco_paper_cycle
-            paper_on = True
+            # Permission-read failure is UNKNOWN, never equivalent to ON.
             try:
                 paper_on = bool(brain.is_paper_auto_enabled())
-            except Exception:
-                paper_on = True
+            except Exception as exc:
+                result["reco_autopilot"] = {
+                    "error": f"PAPER_AUTO_AUTHORITY_UNAVAILABLE: {type(exc).__name__}",
+                    "status": "BLOCKED_SAFETY",
+                }
+                result["status"] = "FAILED_SAFE"
+                result["eligibility"] = "BLOCKED_SAFETY"
+                result["new_entries_allowed"] = False
+                self.telegram.notify_paper_cycle(result, book=brain.intel_book)
+                return result
             reco = run_reco_paper_cycle(
                 book=brain.intel_book,
                 as_of=str((result or {}).get("as_of_date") or ""),
@@ -438,6 +465,19 @@ class Deps:
             entry_block_reason="EOD_MANAGEMENT_ONLY", session_phase="eod",
             capability_failures=capability_failures,
         )
+        # No learning, soak or Telegram success after an unrestored paper book,
+        # invalid cycle or durability failure. A returned failure is just as
+        # authoritative as a raised exception; the outer job must report it.
+        upstream_status = str(
+            result.get("status") if isinstance(result, dict) else ""
+        ).upper()
+        if upstream_status not in {"OK", "NO_ACTION", "ALREADY_DONE"}:
+            blocked = dict(result) if isinstance(result, dict) else {}
+            blocked["status"] = upstream_status or "FAILED_SAFE"
+            blocked["eligibility"] = "BLOCKED_SAFETY"
+            blocked["new_entries_allowed"] = False
+            blocked.setdefault("error", "paper outcome cycle is unavailable")
+            return blocked
         try:
             from product.paper_learning_loop import ingest_closed_book
             learned = ingest_closed_book(brain.intel_book)
@@ -901,6 +941,20 @@ def run_market_scan(ctx) -> JobResult:
         payload = report.payload
     else:
         payload = report or {}
+    if isinstance(ctx.deps, Deps):
+        # No projections, alerts, or paper handoff from stale OHLCV.
+        from product.scan_store import scan_source_status
+        verified, reason = scan_source_status(payload)
+        if not verified:
+            return JobResult(
+                JS.RETRYABLE_FAILED,
+                "scan source is stale or unverified",
+                error_code=reason,
+                error_message="Scan no longer matches active Kite snapshot.",
+                failures={H.SNAPSHOT_STALE},
+                state_hint=ST.OBSERVING,
+                new_entries_allowed=False,
+            )
     summary = dict(payload.get("summary", {}))
     n = int(summary.get("with_any_setup", 0) or 0)
 
@@ -1055,6 +1109,29 @@ def run_paper_cycle(ctx) -> JobResult:
     # by the independent execution interlock.
     data_ready, data_source = _paper_market_data_source(ctx)
     data_failure = ""
+    # Source availability is insufficient: a previously published
+    # recommendation may still carry prices from a superseded Kite snapshot.
+    # The canonical paper cycle must agree with the *validated* saved scan.
+    # Management and settlement remain available even if new entries are
+    # blocked. Legacy injected unit-test dependency objects retain their
+    # existing paper-mode contract.
+    if entries_ok and isinstance(ctx.deps, Deps):
+        try:
+            from product.scan_store import load_scan
+            from product.recommendations_store import load_recommendations
+
+            source_scan = dict(load_scan() or {})
+            source_reco = dict(load_recommendations() or {})
+            scan_instant = str(source_scan.get("scanned_at") or "")
+            reco_instant = str(source_reco.get("scan_scanned_at") or "")
+            if not scan_instant or reco_instant != scan_instant:
+                data_failure = "STALE_SCAN_SNAPSHOT"
+                entries_ok = False
+                reason = data_failure
+        except Exception:
+            data_failure = "SCAN_SOURCE_UNVERIFIED"
+            entries_ok = False
+            reason = data_failure
     if not data_ready:
         # Missing trustworthy market data is still a hard paper-entry block.
         # Surface it as a data/provider failure, never as "no eligible trade"
@@ -1085,6 +1162,21 @@ def run_paper_cycle(ctx) -> JobResult:
             state_hint=ST.OBSERVING,
             new_entries_allowed=False,
         )
+    # The production dependency may report BLOCKED_RECOVERY, FAILED_SAFE or
+    # BLOCKED_DURABILITY without raising. These are NOT successful paper
+    # cycles, regardless of whether a recommendation runner was skipped.
+    if isinstance(ctx.deps, Deps):
+        core_status = str((result or {}).get("status") or "").upper()
+        if core_status not in {"OK", "NO_ACTION", "ALREADY_DONE"}:
+            return JobResult(
+                JS.PERMANENT_FAILED,
+                f"paper intelligence cycle blocked ({core_status or 'UNKNOWN'}); slot retired safely",
+                error_code="PAPER_CYCLE_UPSTREAM_UNSAFE",
+                error_message=str((result or {}).get("error") or core_status)[:240],
+                state_hint=ST.OBSERVING,
+                new_entries_allowed=False,
+                metadata={"intelligence_status": core_status or "UNKNOWN"},
+            )
     eligibility = (result or {}).get("eligibility", "")
     if data_failure:
         eligibility = "DATA_UNAVAILABLE"
@@ -1230,6 +1322,28 @@ def run_outcome_resolution(ctx) -> JobResult:
     closed = len((result or {}).get("positions_closed", []))
     recorded = len((result or {}).get("outcomes_recorded", []))
     matured = int((official_settle or {}).get("n_settled") or 0)
+    if isinstance(result, dict):
+        upstream_status = str(result.get("status") or "").upper()
+        if upstream_status and upstream_status not in {"OK", "NO_ACTION", "ALREADY_DONE"}:
+            return JobResult(
+                JS.PERMANENT_FAILED,
+                "outcome resolution blocked by unsafe paper state; slot retired",
+                error_code="OUTCOME_PAPER_STATE_UNSAFE",
+                error_message=str(result.get("error") or upstream_status)[:240],
+                failures={H.UNRECONCILED},
+                new_entries_allowed=False,
+                metadata=result,
+            )
+    if official_settle.get("error"):
+        return JobResult(
+            JS.PERMANENT_FAILED,
+            "official settlement encountered an error; outcome job cannot succeed",
+            error_code="OFFICIAL_SETTLEMENT_ERROR",
+            error_message=str(official_settle["error"])[:240],
+            failures={H.UNRECONCILED},
+            new_entries_allowed=False,
+            metadata=result if isinstance(result, dict) else {},
+        )
     if resolve_error:
         # resolve_outcomes/run_paper_cycle is this job's entire purpose. Its
         # failure used to be swallowed here and the job still returned

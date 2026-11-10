@@ -26,6 +26,52 @@ def resolved_scan_path() -> Path:
 DEFAULT_SCAN_PATH = default_scan_path()
 
 
+def scan_source_status(payload: Mapping[str, Any] | None) -> tuple[bool, str]:
+    """Reject scans whose actual Kite input authority is not the active snapshot.
+
+    Official NSE history freshness alone cannot certify Kite-backed OHLCV.
+    An offline NSE-only scan is permitted when no snapshot is active.
+    """
+    if not isinstance(payload, Mapping) or not payload:
+        return False, "SCAN_MISSING"
+    used = str(payload.get("source_snapshot_id") or "").strip()
+    try:
+        from research.intelligence.data.snapshot_store import SnapshotStore
+
+        store = SnapshotStore()
+        active = str(store.get_active_snapshot() or "").strip()
+        # get_active_snapshot() returns None for a missing or unreadable ACTIVE
+        # target. Distinguish a genuinely offline store (no pointer) from a
+        # damaged active pointer: the latter must never authorize an unbound
+        # official/NSE scan after a Kite refresh or storage incident.
+        if not active and (store.root / "ACTIVE").exists():
+            return False, "SNAPSHOT_POINTER_INVALID"
+        if used != active:
+            return False, "SNAPSHOT_ID_MISMATCH"
+        if not active:
+            provenance = dict(payload.get("provenance") or {})
+            if str(provenance.get("price_source") or "") == "kite_snapshot":
+                return False, "KITE_SNAPSHOT_MISSING"
+            return True, ""
+        manifest = json.loads(
+            (store.root / active / "manifest.json").read_text(encoding="utf-8")
+        )
+        if str(manifest.get("source") or "").lower() != "kite":
+            return True, ""
+        latest = str(manifest.get("last_trading_date") or "")[:10]
+        provenance = dict(payload.get("provenance") or {})
+        if not latest or str(provenance.get("price_data_as_of") or "")[:10] != latest:
+            return False, "SNAPSHOT_DATE_MISMATCH"
+        if str(provenance.get("price_source") or "") != "kite_snapshot":
+            return False, "SCAN_SOURCE_MISLABELLED"
+        return True, ""
+    except Exception:
+        # A failed snapshot probe cannot prove there is no active authority.
+        # Treat both bound and unbound artifacts as unverified.
+        return False, "SNAPSHOT_VERIFICATION_FAILED"
+
+
+
 def _value(obj: Any, name: str, default: Any = None) -> Any:
     if isinstance(obj, Mapping):
         return obj.get(name, default)
@@ -346,9 +392,8 @@ def build_scan_payload(
 def save_scan(payload: Mapping[str, Any], path: str | Path = DEFAULT_SCAN_PATH) -> Path:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(json.dumps(dict(payload), indent=2, default=str), encoding="utf-8")
-    os.replace(tmp, target)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(target, json.dumps(dict(payload), indent=2, default=str))
     return target
 
 
@@ -400,6 +445,9 @@ def load_scan(path: str | Path = DEFAULT_SCAN_PATH) -> dict[str, Any] | None:
                     return None
             except (ValueError, TypeError):
                 return None
+        valid, _reason = scan_source_status(payload)
+        if not valid:
+            return None
         return payload
     except Exception:
         return None

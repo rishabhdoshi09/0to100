@@ -248,7 +248,7 @@ def _candidate_without_context_key(*, symbol="RELIANCE", score=82.0):
             "symbol": f"{symbol}26OCTCE",
             "option_type": "CE",
             "eligible": True,
-            "lot_size": 25,
+            "lot_size": 10,
             "ask": 50.0,
             "score": 86.0,
             # Deliberately no "context_key" here to test the fallback that

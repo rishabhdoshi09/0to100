@@ -1,4 +1,5 @@
 import { fetchJson } from './http'
+import type { DisplayAuthority } from './recommendationAuthority'
 import type { ControlName, ConvictionRecord, LongTermRecord, NewsArticle, ScanRecord } from './types'
 
 export type ProductLane = {
@@ -895,6 +896,11 @@ export type HomeOperatingSystem = {
       trades_today?: number
       preset?: string
       disarmed_reason?: string
+      state_recovery_required?: boolean
+      state_recovery_error?: string | null
+      accounting_reconciliation_required?: boolean
+      new_entries_paused?: boolean
+      entries_paused_reason?: string | null
       report?: Record<string, unknown>
       rejection_funnel?: Record<string, unknown>
     }
@@ -1302,6 +1308,9 @@ export type RecommendationsWorkspace = {
   }
   disclaimer: string
   error?: string
+  rebuild_error?: string
+  /** Server-side currency verdict for this exact response (see recommendationAuthority). */
+  display_authority?: DisplayAuthority
 }
 
 export const fetchRecommendationsWorkspace = (): Promise<RecommendationsWorkspace> =>

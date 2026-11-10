@@ -7,6 +7,10 @@ import pytest
 from scan import bulk_fetcher as bulk
 from research.intelligence.data import snapshot_store as snapshots
 
+# Fixture substitutes this helper for old tests. Preserve the real callable for
+# explicit no-credential/offline-authority regression coverage.
+_REAL_KITE_AUTHORITY = bulk._kite_authoritative
+
 
 @pytest.fixture
 def kite_store(monkeypatch, tmp_path):
@@ -158,3 +162,51 @@ def test_market_worker_scans_the_snapshot_universe_despite_warm_public_history(k
     assert set(seen) == set(names)
     assert len(seen) == 240
     assert result["scanned"] == 240
+
+
+def test_saved_kite_snapshot_is_still_authoritative_without_broker_token(
+    kite_store, monkeypatch
+):
+    """Restarts without a token must not read bhavcopy and mislabel its prices."""
+    from data import kite_client
+
+    sid = activate(kite_store, names=("AAA",))
+    monkeypatch.setattr(kite_client, "kite_credentials_available", lambda: False)
+    monkeypatch.setattr(bulk, "_kite_authoritative", _REAL_KITE_AUTHORITY)
+    bulk._snapshot_is_kite.cache_clear()
+
+    def forbidden_public_history(*_a, **_kw):
+        raise AssertionError("saved Kite bars cannot fall back to NSE/Yahoo")
+
+    monkeypatch.setattr(bulk, "adopt_ready_store", forbidden_public_history)
+    assert bulk._kite_authoritative() is True
+    assert bulk.prefetch(["AAA"]) == 1
+    frame = bulk.get_cached("AAA")
+    assert frame is not None
+    assert frame.attrs["quantterm_source"] == "kite_snapshot"
+    assert frame.attrs["quantterm_snapshot_id"] == sid
+
+
+def test_no_token_no_active_kite_snapshot_allows_offline_policy(kite_store, monkeypatch):
+    from data import kite_client
+
+    monkeypatch.setattr(kite_client, "kite_credentials_available", lambda: False)
+    monkeypatch.setattr(bulk, "_kite_authoritative", _REAL_KITE_AUTHORITY)
+    bulk._snapshot_is_kite.cache_clear()
+    assert kite_store.get_active_snapshot() is None
+    assert bulk._kite_authoritative() is False
+
+
+def test_corrupt_active_kite_snapshot_blocks_offline_fallback(kite_store, monkeypatch):
+    from data import kite_client
+
+    sid = activate(kite_store, names=("AAA",))
+    monkeypatch.setattr(kite_client, "kite_credentials_available", lambda: False)
+    monkeypatch.setattr(bulk, "_kite_authoritative", _REAL_KITE_AUTHORITY)
+    bulk._snapshot_is_kite.cache_clear()
+    (kite_store.root / sid / "manifest.json").write_text("{invalid json")
+    # With an active-but-corrupt pointer, never substitute official prices
+    # while continuing to publish a scan with a Kite snapshot identity.
+    assert bulk._kite_authoritative() is True
+    assert bulk._adopt_active_kite_snapshot(["AAA"]) == 0
+    assert bulk.get_cached("AAA") is None

@@ -97,18 +97,54 @@ class AutoResearchBrain:
         # persistent PAPER_AUTO enablement: survives restart, so ordinary restart never
         # reverts it or asks for a new click. Paper config is NOT real-money authorization.
         self.paper_auto_enabled = self._load_paper_config()
-        # RECOVERY-FIRST: restore the paper book (open positions) then reconcile, so a restart
-        # resumes management/exits of existing positions before opening any new ones.
+        # Recovery is part of entry safety. An invalid or missing previously
+        # persisted book must not be silently replaced by a fresh empty book:
+        # that could hide old positions and permit duplicate paper exposure.
+        self.intel_book_recovery_error = str(self.runtime_state.load_error or "")
+        # Set by get_brain() when the durable runtime root cannot be resolved.
+        # A brain in this state has nowhere to persist and must never report
+        # a durable save or permit paper entries.
+        self.durable_storage_unavailable = False
         if intel_book_path:
             try:
                 import json as _json
                 from pathlib import Path as _P
                 p = _P(intel_book_path)
                 if p.exists():
-                    self.intel_book.restore(_json.loads(p.read_text()))
+                    book_snapshot = _json.loads(p.read_text())
+                    self.intel_book.restore(book_snapshot, strict=True)
+                    marker = dict(book_snapshot.get("_runtime_commit") or {})
+                    expected_hash = str(marker.get("book_sha256") or "")
+                    if expected_hash:
+                        import hashlib as _hashlib
+                        bare_book = {k: v for k, v in book_snapshot.items() if k != "_runtime_commit"}
+                        actual_hash = _hashlib.sha256(
+                            _json.dumps(bare_book, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
+                        ).hexdigest()
+                        if actual_hash != expected_hash:
+                            raise ValueError("persisted paper book checksum mismatch")
+                    elif self.runtime_state.completed_cycles:
+                        raise ValueError("persisted paper book checksum missing")
+                    saved_cycle = str(marker.get("last_completed_cycle") or "")
+                    current_cycle = str(self.runtime_state.last_completed_cycle or "")
+                    # The paper book and the cycle-idempotency record are two
+                    # separately replaced files. A disconnect between saves
+                    # can leave state marked DONE but paper exposure missing.
+                    if saved_cycle != current_cycle:
+                        raise ValueError("paper book / runtime cycle commit mismatch")
+                    if self.runtime_state.completed_cycles and not marker:
+                        raise ValueError("missing paper book / runtime commit marker")
+                    saved_count = marker.get("completed_cycle_count")
+                    if saved_count is not None and int(saved_count) != len(self.runtime_state.completed_cycles):
+                        raise ValueError("paper book / runtime cycle count mismatch")
                     self.runtime_state.reconcile(self.intel_book)
-            except Exception:
-                pass
+                elif self.runtime_state.completed_cycles or self.runtime_state.strategies:
+                    raise ValueError("paper book missing despite existing runtime history")
+            except Exception as exc:
+                self.intel_book_recovery_error = (
+                    f"{type(exc).__name__}: {exc}"[:240]
+                )
+                self.runtime_state.reconciled = False
         self._intel_lock = _th.Lock()                # prevents overlapping mutation jobs
         self._insample_cache: dict[str, tuple[float, int]] = self._load_insample_cache()
         self.state = BrainState()
@@ -139,7 +175,22 @@ class AutoResearchBrain:
         self._save_paper_config()
 
     def is_paper_auto_enabled(self) -> bool:
-        return bool(self.paper_auto_enabled) and self.mode == "PAPER_AUTO"
+        return (bool(self.paper_auto_enabled) and self.mode == "PAPER_AUTO"
+                and not self.intel_book_recovery_error
+                and not self.durable_storage_unavailable)
+
+    def mark_durable_storage_unavailable(self, reason: str) -> None:
+        """Latch the fail-closed state for a brain whose runtime root is gone.
+
+        The persisted book, event store and opt-in flag all live under that
+        root, so nothing about this brain's empty in-memory state is evidence
+        of the real portfolio. Entries stay blocked until a brain is rebuilt
+        from the recovered storage.
+        """
+        self.durable_storage_unavailable = True
+        self.paper_auto_enabled = False
+        self.intel_book_recovery_error = str(reason or "RUNTIME_PATHS_UNAVAILABLE")[:240]
+        self.runtime_state.reconciled = False
 
     def _load_paper_config(self) -> bool:
         if not self.paper_config_path:
@@ -148,25 +199,47 @@ class AutoResearchBrain:
             import json as _json
             from pathlib import Path as _P
             p = _P(self.paper_config_path)
-            if p.exists():
-                return bool(_json.loads(p.read_text()).get("enabled", True))
+            if not p.exists():
+                # A missing preference file is only a first-run default when
+                # there is no durable paper/runtime state to recover. An
+                # accidentally deleted opt-out must NOT reactivate autonomy
+                # on the next restart while an older book still exists.
+                if self.runtime_state.load_error:
+                    return False
+                historical_paths = (
+                    self.intel_book_path,
+                    self.runtime_state.path,
+                    self.event_store.path,
+                )
+                if any(path and _P(path).exists() for path in historical_paths):
+                    return False
+                # Genuine first run: record the default before granting it.
+                # An unpersisted default would make the first durable book
+                # write indistinguishable from a deleted opt-out on restart.
+                self.paper_auto_enabled = True
+                return self._save_paper_config()
+            payload = _json.loads(p.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict) or type(payload.get("enabled")) is not bool:
+                return False
+            return payload["enabled"]
         except Exception:
-            pass
-        return True
+            # A disconnected disk or unreadable config must never re-enable
+            # paper autonomy after the user explicitly disabled it.
+            return False
 
-    def _save_paper_config(self) -> None:
+    def _save_paper_config(self) -> bool:
+        """Durably record the PAPER_AUTO preference; report whether it landed."""
         if not self.paper_config_path:
-            return
+            return True
         try:
-            import json as _json, os as _os
             from pathlib import Path as _P
             p = _P(self.paper_config_path); p.parent.mkdir(parents=True, exist_ok=True)
-            tmp = p.with_suffix(".tmp")
-            tmp.write_text(_json.dumps({"enabled": self.paper_auto_enabled,
-                                        "starting_capital": self.intel_book.capital}))
-            _os.replace(tmp, p)                       # atomic
+            from core.atomic_io import atomic_write_json
+            atomic_write_json(p, {"enabled": self.paper_auto_enabled,
+                                  "starting_capital": self.intel_book.capital}, indent=None, default=None)
+            return True
         except Exception:
-            pass
+            return False
 
     def _save_intel_book(self) -> bool:
         """Persist the PAPER book atomically and report durability truth.
@@ -175,16 +248,38 @@ class AutoResearchBrain:
         The canonical PAPER owner uses it to ensure deferred Evolution work
         is not released until a real fill has reached durable storage.
         """
+        if self.durable_storage_unavailable:
+            return False
         if not self.intel_book_path:
             return True
         try:
             import json as _json, os as _os
             from pathlib import Path as _P
             p = _P(self.intel_book_path); p.parent.mkdir(parents=True, exist_ok=True)
-            tmp = p.with_suffix(".tmp")
-            tmp.write_text(_json.dumps(self.intel_book.snapshot(), default=str))
-            _os.replace(tmp, p)                       # atomic (crash-safe)
-            return True
+            tmp = p.with_name(f".{p.name}.{_os.getpid()}.tmp")
+            payload = self.intel_book.snapshot()
+            import hashlib as _hashlib
+            book_hash = _hashlib.sha256(
+                _json.dumps(payload, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+            payload["_runtime_commit"] = {
+                "last_completed_cycle": str(self.runtime_state.last_completed_cycle or ""),
+                "completed_cycle_count": len(self.runtime_state.completed_cycles),
+                "book_sha256": book_hash,
+            }
+            try:
+                with tmp.open("w", encoding="utf-8") as handle:
+                    _json.dump(payload, handle, default=str)
+                    handle.flush()
+                    # Durable means on stable storage, not in the USB drive's
+                    # cache: macOS fsync alone does not flush it (F_FULLFSYNC).
+                    from core.atomic_io import _sync_directory, durable_sync
+                    durable_sync(handle.fileno())
+                _os.replace(tmp, p)                   # atomic file replacement
+                _sync_directory(p.parent)
+                return True
+            finally:
+                tmp.unlink(missing_ok=True)
         except Exception:
             return False
 
@@ -210,7 +305,7 @@ class AutoResearchBrain:
         if not self.insample_cache_path:
             return
         try:
-            import json as _json, os as _os
+            import json as _json
             from pathlib import Path as _P
             p = _P(self.insample_cache_path)
             p.parent.mkdir(parents=True, exist_ok=True)
@@ -218,9 +313,8 @@ class AutoResearchBrain:
                 "schema_version": 1,
                 "entries": {k: [float(v[0]), int(v[1])] for k, v in self._insample_cache.items()},
             }
-            tmp = p.with_suffix(p.suffix + ".tmp")
-            tmp.write_text(_json.dumps(payload, sort_keys=True))
-            _os.replace(tmp, p)
+            from core.atomic_io import atomic_write_text
+            atomic_write_text(p, _json.dumps(payload, sort_keys=True))
         except Exception:
             pass
 
@@ -357,6 +451,14 @@ class AutoResearchBrain:
         and broker-free.
         """
         from research.intelligence.runtime import run_intelligence_cycle
+        if self.intel_book_recovery_error:
+            return {
+                "status": "BLOCKED_RECOVERY", "eligibility": "BLOCKED_SAFETY",
+                "new_entries_allowed": False,
+                "entry_block_reason": "PAPER_BOOK_RECOVERY_FAILED",
+                "positions_opened": [], "positions_closed": [],
+                "error": self.intel_book_recovery_error,
+            }
         if not self._intel_lock.acquire(blocking=False):
             return {"status": "SKIPPED_LOCKED", "eligibility": "ALREADY_DONE"}
         try:
@@ -393,7 +495,26 @@ class AutoResearchBrain:
                                          knowledge=self.knowledge,
                                          backtest_R=bt_R, backtest_trades=bt_n)
             self.state.last_intel_cycle = res.as_dict()
-            self._save_intel_book()
+            if not self._save_intel_book():
+                self.intel_book_recovery_error = "PAPER_BOOK_DURABILITY_FAILED"
+                self.runtime_state.reconciled = False
+                return {
+                    **res.as_dict(), "status": "BLOCKED_DURABILITY",
+                    "eligibility": "BLOCKED_SAFETY",
+                    "new_entries_allowed": False,
+                    "entry_block_reason": "PAPER_BOOK_DURABILITY_FAILED",
+                }
+            try:
+                self.runtime_state.save()
+            except Exception as exc:
+                self.intel_book_recovery_error = f"RUNTIME_STATE_DURABILITY_FAILED: {exc}"[:240]
+                self.runtime_state.reconciled = False
+                return {
+                    **res.as_dict(), "status": "BLOCKED_DURABILITY",
+                    "eligibility": "BLOCKED_SAFETY",
+                    "new_entries_allowed": False,
+                    "entry_block_reason": "RUNTIME_STATE_DURABILITY_FAILED",
+                }
             out = res.as_dict()
             if not res.data_ok:
                 out["eligibility"] = "NO_DATA"
@@ -425,6 +546,14 @@ class AutoResearchBrain:
         pass management-only prevents expensive in-sample evidence rebuilds from
         blocking the forward-paper critical path.
         """
+        if self.intel_book_recovery_error:
+            return {
+                "status": "BLOCKED_RECOVERY", "eligibility": "BLOCKED_SAFETY",
+                "new_entries_allowed": False,
+                "entry_block_reason": "PAPER_BOOK_RECOVERY_FAILED",
+                "positions_opened": [], "positions_closed": [],
+                "error": self.intel_book_recovery_error,
+            }
         if not self.intel_book.open:
             return {
                 "status": "NO_ACTION",
@@ -463,7 +592,26 @@ class AutoResearchBrain:
                 runtime_state=self.runtime_state,
             )
             self.state.last_intel_cycle = res.as_dict()
-            self._save_intel_book()
+            if not self._save_intel_book():
+                self.intel_book_recovery_error = "PAPER_BOOK_DURABILITY_FAILED"
+                self.runtime_state.reconciled = False
+                return {
+                    **res.as_dict(), "status": "BLOCKED_DURABILITY",
+                    "eligibility": "BLOCKED_SAFETY",
+                    "new_entries_allowed": False,
+                    "entry_block_reason": "PAPER_BOOK_DURABILITY_FAILED",
+                }
+            try:
+                self.runtime_state.save()
+            except Exception as exc:
+                self.intel_book_recovery_error = f"RUNTIME_STATE_DURABILITY_FAILED: {exc}"[:240]
+                self.runtime_state.reconciled = False
+                return {
+                    **res.as_dict(), "status": "BLOCKED_DURABILITY",
+                    "eligibility": "BLOCKED_SAFETY",
+                    "new_entries_allowed": False,
+                    "entry_block_reason": "RUNTIME_STATE_DURABILITY_FAILED",
+                }
             out = res.as_dict()
             out["eligibility"] = "MANAGED" if res.positions_closed else "NO_ACTION"
             out["new_entries_allowed"] = False
@@ -632,12 +780,20 @@ def get_brain(**kwargs) -> AutoResearchBrain:
     global _BRAIN
     if _BRAIN is None:
         try:
-            from pathlib import Path
             from research.auto_research import providers as P
             kwargs.setdefault("evaluate_fn", P.backtest_evaluator)
             kwargs.setdefault("signal_fn", P.signals_for)
             kwargs.setdefault("bars_fn", P.daily_bars)
             kwargs.setdefault("regime_fn", P.current_regime)
+        except Exception:
+            pass
+        # Durable paths are resolved separately and fail CLOSED. Installed hosts
+        # run with QT_RUNTIME_ROOT_REQUIRE_EXISTING=1, so a detached external
+        # runtime makes logs_dir() raise. Swallowing that used to yield a
+        # path-less brain: empty in-memory paper book, paper autonomy ON by
+        # first-run default, and _save_intel_book() "succeeding" with no file —
+        # a manufactured empty portfolio with entry permission.
+        try:
             _logs = logs_dir()
             kwargs.setdefault("paper_state_path", _logs / "auto_research" / "paper_book.json")
             # the two-brain runtime persists to logs/intelligence/ (what Brain Observatory reads)
@@ -650,8 +806,15 @@ def get_brain(**kwargs) -> AutoResearchBrain:
                 "insample_cache_path",
                 _logs / "intelligence" / "insample_evidence_cache.json",
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            blocked = AutoResearchBrain(**kwargs)
+            blocked.mark_durable_storage_unavailable(
+                f"RUNTIME_PATHS_UNAVAILABLE: {type(exc).__name__}: {exc}"[:240]
+            )
+            # Deliberately NOT cached: once the runtime root is back, the next
+            # call must restore the real persisted book instead of keeping an
+            # ephemeral brain for the rest of the process lifetime.
+            return blocked
         _BRAIN = AutoResearchBrain(**kwargs)
         # wire the immutable snapshot store + a validated registry so the loop flips from
         # no-op to real-data-driven the moment a snapshot is activated (none in this sandbox).

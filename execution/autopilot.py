@@ -134,6 +134,7 @@ def _reject_category(reason: str) -> str:
         if "max_positions" in r:      return "position limit full (combined account)"
         if "sector_cap" in r:         return "sector concentration cap (combined account)"
         if "max_portfolio_risk" in r: return "account open-risk cap (combined)"
+        if "risk_book_unreadable" in r: return "account risk unknown (paper book unreadable)"
         return "account exposure cap (combined)"
     if "brain" in r or "stand_aside" in r: return "Brain STAND_ASIDE (survival)"
     if "symbol memory" in r:      return "symbol memory (serial false-breaker)"

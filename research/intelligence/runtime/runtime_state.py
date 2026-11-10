@@ -10,6 +10,8 @@ On restart: load → reconcile against the paper book → refuse new risk on con
 from __future__ import annotations
 
 import json
+import os
+import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
@@ -41,6 +43,7 @@ class RuntimeState:
         self.completed_cycles: set[str] = set()
         self.last_completed_cycle: str = ""
         self.reconciled: bool = True
+        self.load_error: str = ""
         if self.path and self.path.exists():
             self._load()
 
@@ -62,9 +65,10 @@ class RuntimeState:
 
     # ── recovery ─────────────────────────────────────────────────────────────────
     def reconcile(self, paper_book) -> bool:
-        """Cross-check persisted open strategies against the paper book. If a strategy the
-        state thinks is active has no book presence and vice-versa in a way we can't explain,
-        flag NOT reconciled so the loop refuses NEW risk until it's resolved."""
+        """Cross-check persisted state against the paper book before new risk."""
+        if self.load_error:
+            self.reconciled = False
+            return False
         try:
             open_strats = {p.strategy_id for p in paper_book.open.values()}
         except Exception:
@@ -78,19 +82,45 @@ class RuntimeState:
     def save(self) -> None:
         if not self.path:
             return
+        if self.load_error:
+            raise RuntimeError("refusing to overwrite unrecovered intelligence runtime state")
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps({
+        payload = json.dumps({
             "strategies": {k: v.as_dict() for k, v in self.strategies.items()},
             "completed_cycles": sorted(self.completed_cycles),
             "last_completed_cycle": self.last_completed_cycle,
-        }, ensure_ascii=False, indent=2))
+        }, ensure_ascii=False, indent=2)
+        # A torn write on detachable storage must not truncate the last
+        # successfully committed cycle-idempotency record.
+        tmp = self.path.with_name(
+            f".{self.path.name}.{os.getpid()}.{time.time_ns()}.tmp"
+        )
+        try:
+            with tmp.open("w", encoding="utf-8") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp, self.path)
+        finally:
+            tmp.unlink(missing_ok=True)
 
     def _load(self) -> None:
         try:
-            d = json.loads(self.path.read_text())
-            for k, v in d.get("strategies", {}).items():
-                self.strategies[k] = StrategyState(**v)
-            self.completed_cycles = set(d.get("completed_cycles", []))
-            self.last_completed_cycle = d.get("last_completed_cycle", "")
-        except Exception:
-            pass                                     # corrupt state ⇒ start clean, never crash
+            d = json.loads(self.path.read_text(encoding="utf-8"))
+            if not isinstance(d, dict):
+                raise ValueError("runtime state must be an object")
+            raw_strategies = d.get("strategies", {})
+            raw_cycles = d.get("completed_cycles", [])
+            if not isinstance(raw_strategies, dict) or not isinstance(raw_cycles, list):
+                raise ValueError("runtime state has invalid collection types")
+            strategies = {k: StrategyState(**v) for k, v in raw_strategies.items()}
+            completed = set(raw_cycles)
+            last = str(d.get("last_completed_cycle") or "")
+            self.strategies = strategies
+            self.completed_cycles = completed
+            self.last_completed_cycle = last
+        except Exception as exc:
+            # Do not promote an empty in-memory state to a new durable truth:
+            # losing completed cycle ids can replay paper entries after restart.
+            self.load_error = f"{type(exc).__name__}: {exc}"[:240]
+            self.reconciled = False

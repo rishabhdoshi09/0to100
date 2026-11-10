@@ -25,21 +25,30 @@
   border-color: rgba(122, 159, 199, 0.28) !important;
 }
 
-/* Home is not another Scanner. The autonomous operating system already tells
-   the operator what happened, what matters, what is next and whether anything
-   needs human attention. Discovery/ranking internals live on Scanner. */
-.radar-home > .radar-hero,
+/* Home is equity-first, not an empty status-only console. The previous
+   calm-mode override hid ALL research rankings, scanner lanes, risk preview
+   and the Scan Now action. These are already rendered with honest "research,
+   not a trade" semantics and should remain visible below the canonical
+   Best Trades decision gate. Keep only secondary internals collapsed. */
 .radar-home > .radar-pipeline-wrap,
-.radar-home > .radar-desk-strip,
 .radar-home > .radar-scan-share,
 .radar-home > .radar-rank-legend,
+.radar-home > .radar-sniper-pool {
+  display: none;
+}
+
+/* Separate scanner research from committee-approved Best Trades. Research
+   rankings and charts are informative, not fresh-entry authorization. */
 .radar-home > .radar-bob-hero,
 .radar-home > .radar-top-stocks,
 .radar-home > .radar-best-breakout,
-.radar-home > .radar-sniper-pool,
 .radar-home > .radar-three-lanes,
 .radar-home > .radar-workspace {
-  display: none;
+  margin-top: 14px;
+}
+
+.radar-home > .radar-hero {
+  margin-top: 12px;
 }
 
 /* Ambient context is intentionally quieter than the decision OS above it. */

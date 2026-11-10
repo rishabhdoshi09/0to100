@@ -341,9 +341,8 @@ def ingest_closed_book(book, *, path=None, floors: Mapping[str, int] | None = No
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "applied": applied,
     }
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    os.replace(tmp, target)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(target, json.dumps(payload, indent=2))
     return {"applied": applied, "last_policy": last}
 
 
@@ -492,9 +491,8 @@ def settle_pending_counterfactuals(
         cls = str(settled.get("classification") or FLAT)
         classifications[cls] = classifications.get(cls, 0) + 1
     if updated:
-        tmp = ledger.with_suffix(ledger.suffix + ".tmp")
-        tmp.write_text("".join(json.dumps(r, default=str) + "\n" for r in rewritten), encoding="utf-8")
-        os.replace(tmp, ledger)
+        from core.atomic_io import atomic_write_text
+        atomic_write_text(ledger, "".join(json.dumps(r, default=str) + "\n" for r in rewritten))
     return {"updated": updated, "classifications": classifications}
 
 

@@ -76,6 +76,24 @@ def strict_outcome_resolution(ctx):
         return result
 
     metadata = dict(getattr(result, "metadata", {}) or {})
+    # The book closes are already durable; learning ingest and the forward-soak
+    # ledger key every close idempotently, so a retry only redoes what failed.
+    ingest_errors = [
+        f"{stage}: {dict(metadata.get(stage) or {}).get('error')}"
+        for stage in ("paper_learning", "forward_soak")
+        if isinstance(metadata.get(stage), dict) and dict(metadata[stage]).get("error")
+    ]
+    if ingest_errors:
+        return J.JobResult(
+            JS.RETRYABLE_FAILED,
+            "paper outcomes settled but learning ingest failed",
+            error_code="PAPER_LEARNING_INGEST_FAILED",
+            error_message="; ".join(ingest_errors)[:240],
+            failures=set(getattr(result, "failures", set()) or set()),
+            state_hint=getattr(result, "state_hint", None),
+            new_entries_allowed=bool(getattr(result, "new_entries_allowed", True)),
+            metadata=metadata,
+        )
     official = dict(metadata.get("official_settlement") or {})
     failures = list(official.get("failed") or [])
     failures.extend(_unreported_forward_failures())

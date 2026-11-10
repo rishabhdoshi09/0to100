@@ -47,9 +47,8 @@ def _write(payload: Mapping[str, Any], path: str | Path | None = None) -> dict[s
     data = dict(payload)
     data["schema_version"] = SCHEMA_VERSION
     data["updated_at"] = _now()
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
-    os.replace(tmp, target)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(target, json.dumps(data, indent=2, default=str))
     return data
 
 

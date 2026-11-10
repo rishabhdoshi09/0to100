@@ -44,8 +44,11 @@ def delivery_status(root: Path | None = None) -> dict[str, Any]:
     fno_pushed = any(str(k).startswith(("fno_candidate:", "fno_paper_", "fno_status:")) for k in sent_today)
     watch = 0
     try:
-        from product.scan_store import load_scan
-        payload = load_scan() or {}
+        from core.json_cache import read_json_shared
+        from product.scan_store import load_scan, resolved_scan_path
+        # Same scan identity as every reader (QT_SCAN_PATH honoured); shared,
+        # read-only parse -- live_sniper_symbols never mutates it.
+        payload = read_json_shared(resolved_scan_path(), loader=load_scan) or {}
         watch = len(live_sniper_symbols(payload, limit=40))
         if not watch:
             watch = int(scan.get("sniper_watch") or 0)

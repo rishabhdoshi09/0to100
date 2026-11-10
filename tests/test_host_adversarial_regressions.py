@@ -290,7 +290,13 @@ def test_launchd_plist_has_bounded_success_semantics_and_caffeinate(tmp_path):
     )
     parsed = plistlib.loads(plist.encode("utf-8"))
     assert parsed["KeepAlive"] == {"SuccessfulExit": False}
-    assert parsed["ProcessType"] == "Adaptive"
+    # QT-PRA-079: "Adaptive" without XPC pinned the host at priority 4 (background
+    # throttling) on the owner's Mac; Standard runs at normal agent priority.
+    assert parsed["ProcessType"] == "Standard"
+    # QT-PRA-080: launchd must not SIGKILL the supervisor before it has stopped
+    # its children (loop tick + in-flight probe + shared child grace).
+    from product.host_supervisor import HEARTBEAT_SECONDS, STOP_GRACE_S
+    assert parsed["ExitTimeOut"] >= STOP_GRACE_S + HEARTBEAT_SECONDS + 20
     assert parsed["ProgramArguments"][:2] == ["/usr/bin/caffeinate", "-i"]
     assert parsed["ProgramArguments"][-2:] == ["-m", "product.host_entrypoint"]
 
@@ -501,7 +507,7 @@ def test_recovered_market_access_retries_degraded_bootstrap(monkeypatch):
     checks = [HP.Check("nse_official", HP.PASS, "ok", True, {})]
     monkeypatch.setattr(HP, "probe_market_access", lambda: (checks, {"market_blocked": False}))
     retried = []
-    monkeypatch.setattr(HB, "bootstrap_host_state", lambda **kwargs: retried.append(True) or {"state": "READY"})
+    monkeypatch.setattr(HB, "bootstrap_host_state_isolated", lambda **kwargs: retried.append(True) or {"state": "READY"})
     supervisor._probe_market_access_worker()
     assert retried == [True]
     assert supervisor.bootstrap["state"] == "READY"
@@ -532,7 +538,7 @@ def test_alert_failure_never_persists_secret_bearing_exception(monkeypatch):
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "42")
     monkeypatch.delenv("QT_ALERT_WEBHOOK_URL", raising=False)
 
-    def explode(request, timeout=0):
+    def explode(request, timeout=0, context=None):
         raise ValueError(f"bad URL {request.full_url}")
 
     monkeypatch.setattr(HA.urllib.request, "urlopen", explode)

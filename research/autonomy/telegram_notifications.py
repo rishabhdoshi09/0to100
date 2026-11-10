@@ -162,9 +162,12 @@ class TelegramNotifier:
                     sent = set((disk.get("sent") or {}).get(day) or [])
                     sent.update((self.state.get("sent") or {}).get(day) or [])
                     self.state.setdefault("sent", {})[day] = sorted(sent)
-                    tmp = self.path.with_suffix(".tmp")
-                    tmp.write_text(json.dumps(self.state, indent=2, sort_keys=True), encoding="utf-8")
-                    os.replace(tmp, self.path)
+                    receipts = dict((disk.get("message_ids") or {}).get(day) or {})
+                    receipts.update((self.state.get("message_ids") or {}).get(day) or {})
+                    if receipts:
+                        self.state.setdefault("message_ids", {})[day] = receipts
+                    from core.atomic_io import atomic_write_text
+                    atomic_write_text(self.path, json.dumps(self.state, indent=2, sort_keys=True))
                 finally:
                     fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
         except Exception:
@@ -205,6 +208,10 @@ class TelegramNotifier:
         for old in list(sent):
             if old != day:
                 del sent[old]
+        evidence = self.state.setdefault("message_ids", {})
+        for old in list(evidence):
+            if old != day:
+                del evidence[old]
         arms = self.state.setdefault("arms", {})
         for sym, arm in list(arms.items()):
             if str(arm.get("day", "")) != day:
@@ -214,12 +221,19 @@ class TelegramNotifier:
         day = day or self._day()
         return key in set(self.state.setdefault("sent", {}).setdefault(day, []))
 
-    def _mark_sent(self, keys: list[str], day: str | None = None) -> None:
+    def _mark_sent(self, keys: list[str], day: str | None = None, *, engine: Any = None) -> None:
         day = day or self._day()
         self._prune(day)
         bucket = set(self.state.setdefault("sent", {}).setdefault(day, []))
         bucket.update(keys)
         self.state["sent"][day] = sorted(bucket)
+        # Telegram's own message ids: "sent" is backed by a delivery receipt.
+        ids = [int(i) for i in (getattr(engine, "last_message_ids", None) or [])
+               if isinstance(i, int) and not isinstance(i, bool)]
+        if ids:
+            evidence = self.state.setdefault("message_ids", {}).setdefault(day, {})
+            for key in keys:
+                evidence[key] = ids
         self._save()
 
     def _engine_error(self, engine: Any) -> str:
@@ -249,7 +263,7 @@ class TelegramNotifier:
                 if "429" in err:
                     time.sleep(2.0)
                     if engine.send(message):
-                        self._mark_sent([key], day)
+                        self._mark_sent([key], day, engine=engine)
                         return "sent"
                     err = self._engine_error(engine) or err
                 print(f"[TELEGRAM] send failed for {key}" + (f" · {err}" if err else ""), flush=True)
@@ -257,7 +271,7 @@ class TelegramNotifier:
         except Exception as exc:
             print(f"[TELEGRAM] send error for {key}: {type(exc).__name__}: {exc}", flush=True)
             return "failed"
-        self._mark_sent([key], day)
+        self._mark_sent([key], day, engine=engine)
         return "sent"
 
     def _send_once(self, key: str, message: str) -> bool:
@@ -916,7 +930,25 @@ class TelegramNotifier:
         report: dict[str, Any] = {"sent": False, "reason": "skipped"}
         try:
             from product.recommendations_store import load_recommendations
-            recos = self.notify_recommendations(load_recommendations())
+            from product.scan_store import load_scan
+
+            workspace = load_recommendations()
+            # Recommendations are a scan-derived sidecar written before the
+            # canonical scan is published. Only the generation bound to the
+            # currently valid canonical scan may reach the operator — the same
+            # authority the paper executor requires before any new entry.
+            scan = dict(load_scan() or {})
+            scan_at = str(scan.get("scanned_at") or "")
+            reco_at = str((workspace or {}).get("scan_scanned_at") or "")
+            if workspace and (not scan_at or reco_at != scan_at):
+                recos = {
+                    "sent": False,
+                    "reason": "reco_generation_mismatch",
+                    "scan_scanned_at": scan_at,
+                    "reco_scan_scanned_at": reco_at,
+                }
+            else:
+                recos = self.notify_recommendations(workspace)
         except Exception as exc:
             recos = {"sent": False, "reason": "error", "error": str(exc)[:200]}
         try:

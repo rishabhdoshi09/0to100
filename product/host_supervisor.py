@@ -73,9 +73,8 @@ def machine_owner_path() -> Path:
 
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
-    os.replace(tmp, path)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(path, json.dumps(payload, indent=2, default=str))
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -276,10 +275,10 @@ class Child:
         self.last_health_ok = None
         self.health_bad_since = None
 
-    def terminate(self, grace_s: float = STOP_GRACE_S) -> None:
+    def signal_stop(self) -> None:
+        """Ask the child's whole process group to stop (SIGTERM); do not wait."""
         proc = self.proc
         if not proc or proc.poll() is not None:
-            self.close_log()
             return
         try:
             os.killpg(proc.pid, signal.SIGTERM)
@@ -288,7 +287,17 @@ class Child:
                 proc.terminate()
             except OSError:
                 pass
-        deadline = time.monotonic() + grace_s
+
+    def terminate(self, grace_s: float = STOP_GRACE_S) -> None:
+        self.signal_stop()
+        self.finish_stop(time.monotonic() + grace_s)
+
+    def finish_stop(self, deadline: float) -> None:
+        """Wait until ``deadline`` for an already-signalled child, then SIGKILL it."""
+        proc = self.proc
+        if not proc or proc.poll() is not None:
+            self.close_log()
+            return
         while proc.poll() is None and time.monotonic() < deadline:
             time.sleep(0.1)
         if proc.poll() is None:
@@ -394,8 +403,10 @@ class HostSupervisor:
             pass
 
     def bootstrap_host(self) -> None:
-        from product.host_bootstrap import bootstrap_host_state
-        self.bootstrap = bootstrap_host_state(should_stop=lambda: self.stop_requested)
+        # Child interpreter: verifying history unpickles the whole official
+        # store, which must not stay resident in this long-lived supervisor.
+        from product.host_bootstrap import bootstrap_host_state_isolated
+        self.bootstrap = bootstrap_host_state_isolated(should_stop=lambda: self.stop_requested)
         state = str(self.bootstrap.get("state") or "FAILED")
         if state in {"FAILED", "CANCELLED"}:
             raise RuntimeError(
@@ -436,8 +447,8 @@ class HostSupervisor:
             }
             required_blocked = any(c.required and c.status in {FAIL, UNKNOWN} for c in checks)
             if str(self.bootstrap.get("state") or "") == "DEGRADED" and not required_blocked:
-                from product.host_bootstrap import bootstrap_host_state
-                self.bootstrap = bootstrap_host_state(should_stop=lambda: self.stop_requested)
+                from product.host_bootstrap import bootstrap_host_state_isolated
+                self.bootstrap = bootstrap_host_state_isolated(should_stop=lambda: self.stop_requested)
         except Exception as exc:
             self.market_access = {
                 "checked_at": _now(), "environment": {}, "checks": [],
@@ -611,8 +622,18 @@ class HostSupervisor:
             pass
 
     def stop_all(self, *, terminal_state: str = "STOPPED", error: str = "") -> None:
-        for name in ("frontend", "market_api", "report_api", "market_ops", "autonomy"):
-            self.children[name].terminate()
+        # Signal every child first, then wait once against a shared deadline.
+        # Stopping them one by one (12 s grace each) could take over a minute,
+        # while launchd SIGKILLs the supervisor a few seconds after bootout:
+        # on the owner's Mac (2026-11-10) that left the autonomy writer running
+        # as an orphan of PID 1 still holding the scheduler lock. Children run
+        # in their own sessions, so launchd never reaps them for us.
+        order = ("frontend", "market_api", "report_api", "market_ops", "autonomy")
+        for name in order:
+            self.children[name].signal_stop()
+        deadline = time.monotonic() + STOP_GRACE_S
+        for name in order:
+            self.children[name].finish_stop(deadline)
         self.write_status(state=terminal_state, error=error)
 
     def run(self) -> int:

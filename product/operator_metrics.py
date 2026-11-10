@@ -7,7 +7,6 @@ work can continue without Kite.
 """
 from __future__ import annotations
 
-import sqlite3
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -71,55 +70,66 @@ def _classify(requested_by: str, kind: str) -> str:
 
 
 def _ops_rows() -> list[dict[str, Any]]:
+    """Job rows from both schedulers' stores, read-only.
+
+    A store that does not exist yet (or exists without its table) simply has
+    no jobs: a desk read must neither create it nor fail on it.
+    """
+    from product.sqlite_runtime import connect_readonly, table_exists
+
     rows: list[dict[str, Any]] = []
-    if OPS_DB.exists():
-        con = sqlite3.connect(str(OPS_DB))
-        con.row_factory = sqlite3.Row
-        for row in con.execute(
-            "SELECT kind, requested_by, requested_at, status FROM operations"
-        ):
-            rows.append(
-                {
-                    "source": "market_ops",
-                    "kind": row["kind"],
-                    "requested_by": row["requested_by"],
-                    "at": float(row["requested_at"] or 0),
-                    "status": row["status"],
-                    "class": _classify(row["requested_by"], row["kind"]),
-                }
+    con = connect_readonly(OPS_DB)
+    try:
+        if con is not None and table_exists(con, "operations"):
+            for row in con.execute(
+                "SELECT kind, requested_by, requested_at, status FROM operations"
+            ):
+                rows.append(
+                    {
+                        "source": "market_ops",
+                        "kind": row["kind"],
+                        "requested_by": row["requested_by"],
+                        "at": float(row["requested_at"] or 0),
+                        "status": row["status"],
+                        "class": _classify(row["requested_by"], row["kind"]),
+                    }
+                )
+    finally:
+        if con is not None:
+            con.close()
+    con = connect_readonly(AUTO_DB)
+    try:
+        if con is not None and table_exists(con, "jobs"):
+            cols = {r[1] for r in con.execute("PRAGMA table_info(jobs)").fetchall()}
+            at_col = "created_at" if "created_at" in cols else (
+                "requested_at" if "requested_at" in cols else "enqueued_at"
             )
-        con.close()
-    if AUTO_DB.exists():
-        con = sqlite3.connect(str(AUTO_DB))
-        con.row_factory = sqlite3.Row
-        cols = {r[1] for r in con.execute("PRAGMA table_info(jobs)").fetchall()}
-        at_col = "created_at" if "created_at" in cols else (
-            "requested_at" if "requested_at" in cols else "enqueued_at"
-        )
-        if at_col in cols:
-            q = f"SELECT job_type, status, {at_col} AS at FROM jobs"
-        else:
-            q = "SELECT job_type, status, 0 AS at FROM jobs"
-        for row in con.execute(q):
-            at = row["at"]
-            try:
-                at_f = float(at or 0)
-            except (TypeError, ValueError):
+            if at_col in cols:
+                q = f"SELECT job_type, status, {at_col} AS at FROM jobs"
+            else:
+                q = "SELECT job_type, status, 0 AS at FROM jobs"
+            for row in con.execute(q):
+                at = row["at"]
                 try:
-                    at_f = datetime.fromisoformat(str(at).replace("Z", "+00:00")).timestamp()
-                except Exception:
-                    at_f = 0.0
-            rows.append(
-                {
-                    "source": "autonomy",
-                    "kind": row["job_type"],
-                    "requested_by": "autonomy",
-                    "at": at_f,
-                    "status": row["status"],
-                    "class": _classify("autonomy", row["job_type"]),
-                }
-            )
-        con.close()
+                    at_f = float(at or 0)
+                except (TypeError, ValueError):
+                    try:
+                        at_f = datetime.fromisoformat(str(at).replace("Z", "+00:00")).timestamp()
+                    except Exception:
+                        at_f = 0.0
+                rows.append(
+                    {
+                        "source": "autonomy",
+                        "kind": row["job_type"],
+                        "requested_by": "autonomy",
+                        "at": at_f,
+                        "status": row["status"],
+                        "class": _classify("autonomy", row["job_type"]),
+                    }
+                )
+    finally:
+        if con is not None:
+            con.close()
     return rows
 
 

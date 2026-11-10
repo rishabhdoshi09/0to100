@@ -57,6 +57,7 @@ def _report(spot):
 def _instruments(spot):
     strike = round(spot / 10.0) * 10.0
     return [
+        {"instrument_token": 11, "tradingsymbol": "TEST", "exchange": "NSE", "segment": "NSE", "instrument_type": "EQ"},
         {
             "instrument_token": 1, "tradingsymbol": "TEST26OCTFUT",
             "name": "TEST", "expiry": "2026-10-29", "strike": 0,
@@ -144,6 +145,16 @@ class _Client:
                     "timestamp": self.option_quote_time,
                 }
         return out
+
+    def historical(self, token, from_date, to_date, interval="minute"):
+        assert token == 11 and interval == "minute"
+        prior = [AS_OF - timedelta(days=i) for i in range(1, 25)
+                 if (AS_OF - timedelta(days=i)).weekday() < 5][:8]
+        return [
+            {"date": datetime(day.year, day.month, day.day, 9 + (15 + m) // 60,
+                              (15 + m) % 60), "volume": 600}
+            for day in prior for m in range(76)
+        ]
 
     def historical_with_oi(self, token, from_date, to_date, interval="day"):
         assert token == 1
@@ -335,6 +346,8 @@ def test_default_history_waits_for_current_session_before_prefilter(monkeypatch)
     assert events[1] == ("quotes", True)
     assert events.index(("quotes", True)) < events.index(("history", "TEST"))
     assert result["history_session"]["source"] == "kite_quotes"
+    assert result["considered"][0]["volume_basis"] == "KITE_PRIOR_MINUTE_CUMULATIVE"
+    assert result["considered"][0]["time_of_day_volume"]["prior_sessions"] >= 5
     assert result["candidate_count"] == 1
 
 

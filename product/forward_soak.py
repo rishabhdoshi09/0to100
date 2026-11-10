@@ -137,9 +137,8 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(dict(payload), indent=2, default=str), encoding="utf-8")
-    os.replace(tmp, path)
+    from core.atomic_io import atomic_write_text
+    atomic_write_text(path, json.dumps(dict(payload), indent=2, default=str))
     return path
 
 
@@ -158,16 +157,26 @@ def _stage(name: str, *, status: str, input_artifact: str = "", output_artifact:
 
 
 def _scan_payload() -> dict[str, Any]:
+    """Read-only view of the saved scan (shared parse; never mutate it)."""
+    from core.json_cache import read_json_shared
     from product.scan_store import resolved_scan_path
     path = resolved_scan_path()
-    payload = _read_json(path)
-    return {"path": str(path), "payload": payload}
+    try:
+        payload = read_json_shared(path)
+    except Exception:
+        payload = {}
+    return {"path": str(path), "payload": payload if isinstance(payload, dict) else {}}
 
 
 def _reco_payload() -> dict[str, Any]:
+    """Read-only view of the saved recommendations (shared parse; never mutate it)."""
+    from core.json_cache import read_json_shared
     from product.recommendations_store import DEFAULT_RECO_PATH, load_recommendations
     path = Path(os.environ["QT_RECO_PATH"]) if os.environ.get("QT_RECO_PATH") else DEFAULT_RECO_PATH
-    payload = load_recommendations(path) or {}
+    try:
+        payload = read_json_shared(path, loader=load_recommendations) or {}
+    except Exception:
+        payload = {}
     return {"path": str(path), "payload": payload}
 
 
