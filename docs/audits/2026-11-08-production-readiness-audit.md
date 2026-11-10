@@ -902,18 +902,31 @@ Every step used the canonical `product.host_install install` (the one-shot upgra
 - **Not installed.** Installing a persistent launchd agent on the owner's Mac was refused by the session's permission policy (unauthorized persistence), and it was not worked around. So it is one owner command (13.10).
 - **Interim.** The same probe ran inside the session for about 2 hours after the final deploy. That is a post-deploy observation, not the soak.
 
+### 13.8a Controlled disk-loss drill (owner-approved, 12:55 IST)
+
+The owner granted permission in chat. The variant chosen does not risk data: the host was stopped cleanly first, so no writer was active at detach. A hot detach under live writes and a destructive restore over production were deliberately not done; the restore drill (13.6) already proves restorability.
+
+| Step | Result |
+| --- | --- |
+| Stop `c194d8c7` | Clean, no orphans (the third consecutive clean stop). The only remaining holder of volume files was a read-only `tail -F` from an owner terminal |
+| `hdiutil detach /Volumes/QuantTermStorage -force` (12:55:19) | The WORKING image was ejected and the mount point vanished. **No fallback directory** appeared at `/Volumes/QuantTermStorage` on the internal disk. The older original image (same APFS volume UUID, attached) was **not** auto-mounted |
+| `product.launchd_control start` with the volume absent (12:55:53) | The host's storage preflight re-attached the **configured** WORKING sparsebundle (`disk6s1`), verified that DiskImages binds the mount to that exact image (`PASS: APFS runtime verified`), and left the stale image unmounted |
+| Recovery | Supervisor RUNNING, 5/5 children healthy, bootstrap READY, live LOCKED, HEALTHY at 12:57:39, about 2.3 minutes after the detach. Paper state byte-identical; `/api/health` READY with history current |
+
+The `market_ops crash loop` lines at the end of `launchd.err.log` predate this drill: the file was last modified on 2026-11-09 at 13:20.
+
 ### 13.9 Evidence scorecard (rubric 12.3)
 
 | Area | §12.3 (cloud) | Now (Mac) | Evidence and what limits it |
 | --- | --- | --- | --- |
 | (a) User-visible workflow reliability | 5 | **7** | Real Chrome on the Mac, all 5 workspaces: 54 calls all 2xx, no rescan on open, no stale banner. The Home pause truth is fixed. No soak yet; Research's first load is 22.8 s (P2) |
 | (b) Data provenance/freshness and decision correctness | 6 | **6** | Official history current on the host; persisted scan generation served with authority; honest no-trade; corrupt research index found and repaired. The real Kite data path is unverified (no login on the holiday) |
-| (c) Paper risk and crash safety | 6 | **7** | Paper state byte-identical across 5 restarts; orphan writer and stale observer fixed and verified live; backup and restore proven. Disk-detach and crash-under-load tests not authorized |
+| (c) Paper risk and crash safety | 6 | **7** | Paper state byte-identical across every restart and the disk-loss drill; orphan writer and stale observer fixed and verified live; backup and restore proven. Crash under load and hot detach not tested |
 | (d) UI/API performance on real hardware | 3 | **6** | Measured on the 8 GB Mac. Home 39–52 s → 2.1 s p50; Opportunities 6–10 s → 0.74 s; command-center 13.8 → 0.45 s. Root causes fixed (QoS throttling, log/listing reparsing). Concurrency still serialises heavy reads; no sustained measurement |
 | (e) Unattended operations and alerts | 3 | **5** | Host alerts fixed, with real receipts (2548, 2549); clean stop and restart; supervisor slimmed. The 72 h soak has not run; the daily Kite login still depends on the owner |
-| (f) Recovery, backup and deployment | 2 | **7** | Verified backup (SHA-256), restore drill (hashes, JSON, SQLite, serving), deploy and rollback rehearsed through the canonical installer. Destructive disk-detach test not authorized |
+| (f) Recovery, backup and deployment | 2 | **8** | Verified backup (SHA-256), restore drill (hashes, JSON, SQLite, serving), deploy and rollback rehearsed through the canonical installer, and a controlled disk-loss drill: fail closed, correct image re-attached, HEALTHY in 2.3 minutes. No hot detach under live writes |
 | (g) Test coverage and exact-SHA delivery | 8 | **8** | Mac suite 433/433 plus deltas; CI 10/10 at every SHA; a host-hermeticity hazard found and fixed. Not a full Mac run at the final SHA |
-| **Mean** | **4.7** | **6.6** | No known open P0/P1; limited by the soak, Kite and destructive-storage gates |
+| **Mean** | **4.7** | **6.7** | No known open P0/P1; limited by the soak and Kite gates |
 
 ### 13.10 Release gates and owner actions
 
@@ -929,8 +942,9 @@ Every step used the canonical `product.host_install install` (the one-shot upgra
 | Live lock | **PASS** (LOCKED and verified at every step) |
 | Kite session and quotes | **BLOCKED** (owner login on a trading day) |
 | History gate open on official history; a paper cycle enters on its own | **PARTIAL** (`analysis_complete` true, gate APPROVED; entries held by the **owner's own pause**, which was left untouched) |
-| 72 h soak | **BLOCKED** (probe ready; persistent install needs owner approval) |
-| Controlled disk detach / destructive restore | **NOT AUTHORIZED** |
+| 72 h soak | **BLOCKED** (probe ready. The owner approved it in chat, but the session's auto-mode policy refuses to install persistent agents; it needs a permission rule or the owner running the one-line command) |
+| Controlled disk detach | **PASS** (13.8a, owner-approved; host stopped first) |
+| Hot detach under live writes / destructive restore over production | Not done by design (the restore drill proves restorability) |
 
 **Verdict: NOT READY.** The host now runs the verified build. No known P0/P1 is open, and backup, restore, deploy, rollback, the browser journey and Telegram are proven on the Mac. The soak and Kite gates are unproved.
 
