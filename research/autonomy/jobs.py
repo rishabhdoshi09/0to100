@@ -1359,6 +1359,15 @@ def run_outcome_resolution(ctx) -> JobResult:
             failures={H.UNRECONCILED},
             metadata=result or {},
         )
+    # Settle surfaced-BUY outcomes (signal_log) from official bars too; the
+    # learning stack (live edge, EV, drift) reads them. Best effort: the paper
+    # book settlement above is this job's authority, not the signal ledger.
+    try:
+        from core.signal_outcome_tracker import update_outcomes
+        update_outcomes()
+    except Exception as exc:
+        if isinstance(result, dict):
+            result["signal_outcomes_error"] = f"{type(exc).__name__}: {exc}"[:240]
     return JobResult(
         JS.SUCCEEDED,
         f"outcomes resolved · {closed} book closes · {recorded} decoded · {matured} official",

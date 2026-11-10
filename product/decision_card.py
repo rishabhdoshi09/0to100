@@ -116,6 +116,13 @@ def expected_payoff(row: Mapping[str, Any]) -> tuple[str, str]:
     lb_f = _f(lb)
     conf = str(row.get("ev_conf") or "LOW")
     detail = f"Conservative EV {lb_f:+.1f}% (n={n_i}, {conf})"
+    if row.get("ev_stale"):
+        last = str(row.get("ev_last_outcome") or "unknown date")
+        return (
+            "Unproven",
+            f"{detail} — last measured outcome {last}; older than "
+            "45 days, so no current payoff claim.",
+        )
     if lb_f > 0:
         return "Positive", detail
     if lb_f < 0:

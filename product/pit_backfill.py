@@ -14,6 +14,7 @@ from typing import Any, Mapping, Sequence
 
 from product.pit_ingest import harvest_symbol
 from product.pit_warehouse import persist_artifact
+from product.pit_xbrl import PARSER_VERSION as XBRL_PARSER_VERSION
 from core.runtime_paths import logs_dir, logs_path, RuntimeLogsPath
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -447,7 +448,7 @@ def backfill_structured_financials(
                     "local_path": downloaded.get("path"),
                     "bytes": downloaded.get("bytes"),
                     "document_type": "XBRL",
-                    "parser_version": "pit_xbrl.v1",
+                    "parser_version": XBRL_PARSER_VERSION,
                 })
                 xml_text = Path(ROOT / str(downloaded["path"])).read_text(encoding="utf-8", errors="ignore")
             stored = _persist_parsed_xbrl(

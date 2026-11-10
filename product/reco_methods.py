@@ -186,6 +186,11 @@ def _ev_method(row: Mapping[str, Any]) -> dict[str, Any]:
         return _method("ev", "unknown", "Live EV needs ≥30 comparable outcomes", None)
     if lb is None:
         return _method("ev", "unknown", f"n={n:.0f} but conservative EV missing", None)
+    if row.get("ev_stale"):
+        return _method(
+            "ev", "unknown",
+            f"Conservative EV {lb:+.1f}% (n={n:.0f}) is stale — last outcome "
+            f"{row.get('ev_last_outcome') or 'unknown'}", None)
     if lb > 0:
         return _method("ev", "pass", f"Conservative EV {lb:+.1f}% (n={n:.0f})", min(100.0, 50.0 + lb * 8))
     return _method("ev", "fail", f"Conservative EV {lb:+.1f}% (n={n:.0f})", 0.0)

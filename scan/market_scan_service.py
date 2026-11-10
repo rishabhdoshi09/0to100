@@ -239,6 +239,61 @@ def _coverage_exclusions(summary: Mapping[str, Any] | None) -> tuple[str, ...]:
     )
 
 
+def track_published_buys(payload: Mapping[str, Any], *, today=None) -> int:
+    """Log each published BUY into the outcome tracker; return how many.
+
+    Only on NSE sessions (a weekend/holiday rescan of the last session's bars
+    would re-log the same trades under a new date). log_signal itself dedupes
+    symbol+day, so the two schedulers that can trigger a scan never double-log.
+    Never raises: tracking must not affect scan publication.
+    """
+    try:
+        from core.market_clock import today_ist
+        from core.signal_outcome_tracker import log_signal
+        from research.intelligence.data.nse_calendar import is_session, load_holidays
+
+        if not is_session(today or today_ist(), load_holidays()):
+            return 0
+        regime = ""
+        try:
+            from core.regime_engine import compute_regime
+            regime = str(getattr(compute_regime(), "market_regime", "") or "")
+        except Exception:
+            regime = ""
+        logged = 0
+        for row in payload.get("records") or []:
+            if not isinstance(row, Mapping):
+                continue
+            if str(row.get("verdict") or "").strip().upper() not in {"BUY", "STRONG BUY"}:
+                continue
+            try:
+                entry = float(row.get("entry") or 0)
+                stop = float(row.get("stop") or 0)
+                target = float(row.get("target") or 0)
+            except (TypeError, ValueError):
+                continue
+            symbol = str(row.get("symbol") or "").strip().upper()
+            if not symbol or entry <= 0 or stop <= 0 or stop >= entry:
+                continue
+            log_signal(
+                symbol=symbol, signal_type="UNIFIED_BUY",
+                entry_price=entry, pivot_price=entry, stop_price=stop,
+                target_price=target, quality_score=float(row.get("score") or 0),
+                accum_score=0.0,
+                archetype="|".join(str(s) for s in (row.get("signals") or []) if s),
+                regime=regime,
+            )
+            logged += 1
+        return logged
+    except Exception as exc:
+        try:
+            from logger import get_logger
+            get_logger(__name__).debug("published_buy_tracking_skipped", error=str(exc)[:200])
+        except Exception:
+            pass
+        return 0
+
+
 def run_whole_market_scan(
     *,
     universe_provider: Callable[[], Mapping[str, str]] | None = None,
@@ -587,6 +642,11 @@ def run_whole_market_scan(
                     source_snapshot_id=snapshot_at_start,
                 )
             save_scan(payload)
+    if save and status == SUCCEEDED:
+        # Invariant 7: every published BUY is outcome-tracked. The legacy
+        # auto_scan loop that used to do this is not started by the canonical
+        # stack, so signal_log (live edge, EV, drift) froze on 2026-07-30.
+        track_published_buys(payload)
     if save:
         # Shadow learning must observe only the same fully-published canonical
         # scan readers can see. It never participates in publication success.

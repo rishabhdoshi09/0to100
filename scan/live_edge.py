@@ -32,8 +32,8 @@ def _closed_rows() -> list[dict]:
         from core.signal_outcome_tracker import _get_conn
         conn = _get_conn()
         rows = conn.execute(
-            """SELECT symbol, archetype, regime, entry_price, stop_price, quality_score,
-                      outcome_pct, worked
+            """SELECT symbol, logged_at, archetype, regime, entry_price, stop_price,
+                      quality_score, outcome_pct, worked
                FROM signal_log
                WHERE worked IS NOT NULL AND outcome_pct IS NOT NULL
                  AND entry_price > 0 AND stop_price > 0"""

@@ -67,6 +67,8 @@ _FUNDAMENTAL_BOUNDS: dict[str, tuple[float, float]] = {
     "debt_to_equity": (-100.0, 200.0),
     "sales_growth_3y": (-100.0, 2000.0),
     "profit_growth_3y": (-100.0, 2000.0),
+    "sales_growth_yoy": (-100.0, 2000.0),
+    "profit_growth_yoy": (-100.0, 5000.0),
     "cfo_to_pat": (-100.0, 100.0),
 }
 
@@ -190,6 +192,22 @@ def _extract_fundamentals(data: Dict) -> Dict:
             result["promoter_holding"] = latest
         if "pledge" in label:
             result["promoter_pledge"] = latest
+
+    # Official (NSE XBRL) derived ratios are recomputed from dated filings on
+    # every read; a cached secondary key_ratios table may be months old. When
+    # the pack is official they win, otherwise they only fill gaps.
+    official = bool(data.get("official")) or str(data.get("source_tier") or "").lower() == "official"
+    for field in ("roe", "roce", "interest_coverage", "debt_to_equity"):
+        value = _parse_float(data.get(field)) if data.get(field) is not None else None
+        if value is not None and (official or result.get(field) is None):
+            result[field] = value
+    # One-year (same period last year) growth and trailing EPS: weaker than a
+    # 3y CAGR, scored separately and only when the 3y figure is missing.
+    for field in ("sales_growth_yoy", "profit_growth_yoy", "ttm_eps"):
+        if data.get(field) is not None:
+            result[field] = _parse_float(data.get(field))
+    if data.get("is_financial"):
+        result["is_financial"] = True
 
     # Drop anything outside its field's sanity bounds (impossible percentage,
     # negative market cap, an obvious unit-conversion blowout) BEFORE

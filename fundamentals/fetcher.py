@@ -36,6 +36,24 @@ _OFFICIAL_TABLE_KEYS = (
 )
 
 
+# Top-level quality fields owned by the official derivation (target -> key in
+# pit_financials' derived dict). They are recomputed from the warehouse on
+# every read and must never be masked by an older cached derivation.
+_OFFICIAL_DERIVED_FIELDS = {
+    "debt_to_equity": "debt_to_equity",
+    "roe": "roe_approx_pct",
+    "roce": "roce_approx_pct",
+    "cfo_to_pat": "cash_conversion",
+    "interest_coverage": "interest_coverage",
+    "sales_growth_yoy": "revenue_yoy_pct",
+    "profit_growth_yoy": "pat_yoy_pct",
+    "ttm_eps": "ttm_eps",
+    "is_financial": "is_financial",
+    "net_worth_cr": "net_worth_cr",
+    "derivation_version": "derivation_version",
+}
+
+
 def _official_warehouse_snapshot(symbol: str) -> Dict[str, Any] | None:
     """Return latest dated official financial tables for live research.
 
@@ -62,12 +80,7 @@ def _official_warehouse_snapshot(symbol: str) -> Dict[str, Any] | None:
 
     # Preserve directly usable quality fields without inventing unavailable
     # ratios. These are derived from official facts already eligible today.
-    mapping = {
-        "debt_to_equity": "debt_to_equity",
-        "roe": "roe_approx_pct",
-        "roce": "roce_approx_pct",
-        "cfo_to_pat": "cash_conversion",
-    }
+    mapping = _OFFICIAL_DERIVED_FIELDS
     for target, source in mapping.items():
         if derived.get(source) is not None:
             data[target] = derived[source]
@@ -141,12 +154,18 @@ def _merge_official(base: Mapping[str, Any] | None, official: Mapping[str, Any] 
             "source_label", "source_tier", "official", "retrieved_at",
             "latest_publication", "latest_period_end", "latest_source_url",
             "latest_evidence_id", "official_facts", "official_derived",
-            "section_as_of", "debt_to_equity", "roe", "roce", "cfo_to_pat",
-        }:
+            "section_as_of",
+        } | set(_OFFICIAL_DERIVED_FIELDS):
             if value not in (None, "", {}, []):
                 merged[key] = value
         elif merged.get(key) in (None, "", {}, []):
             merged[key] = value
+
+    # An official field the current derivation no longer produces (e.g. a
+    # bank ROE that v1 computed on paid-up capital) must disappear, not linger.
+    for key in _OFFICIAL_DERIVED_FIELDS:
+        if official.get(key) in (None, "", {}, []):
+            merged.pop(key, None)
 
     merged["official"] = True
     merged["source_tier"] = "official"

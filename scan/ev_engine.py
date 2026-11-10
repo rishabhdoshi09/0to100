@@ -23,6 +23,15 @@ from logger import get_logger
 log = get_logger(__name__)
 
 MIN_N = 30                     # below this, no probability claim
+# The same stock logged again inside its own outcome window is the SAME trade
+# (overlapping 5-session holding periods), not new evidence.
+DEDUPE_WINDOW_DAYS = 7
+# Evidence older than this says what worked THEN, not now -> no payoff claim.
+STALE_AFTER_DAYS = 45
+# Confidence also needs breadth across market sessions: thousands of signals
+# from one three-week tape are one regime, not a high-confidence edge.
+HIGH_MIN_SESSIONS = 60
+MEDIUM_MIN_SESSIONS = 20
 
 
 def signal_stats() -> dict[str, dict]:
@@ -60,6 +69,68 @@ def signal_stats() -> dict[str, dict]:
     return out
 
 
+def outcome_table() -> list[dict]:
+    """One row per DISTINCT closed trade: {signals, r, day, symbol}.
+
+    Rows are deduplicated per symbol within DEDUPE_WINDOW_DAYS (a re-logged
+    signal on the same stock is the same holding window counted twice).
+    """
+    from datetime import date
+    from scan.live_edge import _closed_rows, _row_r
+
+    def _day(row: dict) -> str:
+        return str(row.get("logged_at") or "")[:10]
+
+    rows = sorted(_closed_rows(), key=_day)
+    last_kept: dict[str, date] = {}
+    table: list[dict] = []
+    for row in rows:
+        r = _row_r(row)
+        if r is None:
+            continue
+        day_s = _day(row)
+        symbol = str(row.get("symbol") or "").upper()
+        try:
+            day = date.fromisoformat(day_s)
+        except ValueError:
+            day = None
+        if symbol and day is not None:
+            prev = last_kept.get(symbol)
+            if prev is not None and (day - prev).days < DEDUPE_WINDOW_DAYS:
+                continue
+            last_kept[symbol] = day
+        signals = frozenset(s.strip() for s in str(row.get("archetype") or "").split("|") if s.strip())
+        if signals:
+            table.append({"signals": signals, "r": r, "day": day_s, "symbol": symbol})
+    return table
+
+
+def effective_n(days: list[str], wins: list[int]) -> tuple[float, int]:
+    """(effective sample size, sessions) under same-session clustering.
+
+    Outcomes logged on one session share that day's market move. The ANOVA
+    intra-class correlation of the win indicator gives the design effect
+    1 + (m-1)*rho; one session is one draw however many signals it holds.
+    """
+    groups: dict[str, list[int]] = {}
+    for d, w in zip(days, wins):
+        groups.setdefault(d, []).append(int(w))
+    n, k = len(wins), len(groups)
+    if n == 0:
+        return 0.0, 0
+    if k < 2:
+        return 1.0, k
+    mean = sum(wins) / n
+    msb = sum(len(g) * (sum(g) / len(g) - mean) ** 2 for g in groups.values()) / (k - 1)
+    msw = (sum(sum((y - sum(g) / len(g)) ** 2 for y in g) for g in groups.values()) / (n - k)
+           if n > k else 0.0)
+    n0 = (n - sum(len(g) ** 2 for g in groups.values()) / n) / (k - 1)
+    denom = msb + (n0 - 1) * msw
+    rho = 0.0 if denom <= 0 else max(0.0, min(1.0, (msb - msw) / denom))
+    design = 1.0 + (n / k - 1.0) * rho
+    return n / design, k
+
+
 def wilson_lb(p: float, n: int, z: float = 1.28) -> float:
     """Wilson score lower bound for a win probability — the Bayesian-flavoured
     shrinkage that makes the system trust 520 trades @ 67% MORE than 52 trades
@@ -88,32 +159,50 @@ def confidence_tier(p: float, n: int, z: float = 1.28) -> str:
 
 def estimate_ev(signals: list[str], entry: float, stop: float,
                 stats: dict[str, dict] | None = None,
-                min_n: int = MIN_N) -> dict | None:
-    """EV for one setup from its constituent signals' live stats.
+                min_n: int = MIN_N, table: list[dict] | None = None,
+                today: "date | None" = None) -> dict | None:
+    """EV for one setup from the DISTINCT closed trades carrying any of its signals.
 
-    Returns {ev_pct, ev_lb_pct, p_win, avg_win_pct, avg_loss_pct, n,
-    confidence} or None when the combined evidence is thinner than min_n
-    (no claim). Blend is sample-weighted so a 400-trade signal outweighs a
-    40-trade one. ev_lb_pct is the CONSERVATIVE EV (Wilson lower-bound win
-    probability) — ranking uses it, so thin samples can't outrank deep ones
-    on a lucky streak."""
-    if stats is None:
-        stats = signal_stats()
+    Returns {ev_pct, ev_lb_pct, p_win, avg_win_pct, avg_loss_pct, n, n_eff,
+    sessions, last_outcome, stale, confidence} or None when fewer than min_n
+    distinct trades exist (no claim). A trade tagged A|B counts ONCE for a
+    setup carrying A and B -- summing per-signal counts used to claim
+    n=4564 from 2884 trades. ev_lb_pct is the CONSERVATIVE EV (Wilson lower
+    bound on the effective sample) and ranking uses it. ``stats`` is accepted
+    for backward compatibility and unused."""
+    from datetime import date as _date
+
     if entry <= 0 or stop <= 0 or stop >= entry:
         return None
-    rows = [stats[s] for s in signals if s in stats and stats[s]["n"] > 0]
-    if not rows:
+    if table is None:
+        table = outcome_table()
+    wanted = {s for s in signals if s}
+    rows = [t for t in table if t["signals"] & wanted]
+    total_n = len(rows)
+    if total_n == 0 or total_n < min_n:
         return None
-    total_n = sum(d["n"] for d in rows)
-    if total_n < min_n:
-        return None
-    p_win = sum(d["p_win"] * d["n"] for d in rows) / total_n
-    avg_win_r = sum(d["avg_win_r"] * d["n"] for d in rows) / total_n
-    avg_loss_r = sum(d["avg_loss_r"] * d["n"] for d in rows) / total_n
+    wins = [t["r"] for t in rows if t["r"] > 0]
+    losses = [-t["r"] for t in rows if t["r"] < 0]
+    p_win = len(wins) / total_n
+    avg_win_r = sum(wins) / len(wins) if wins else 0.0
+    avg_loss_r = sum(losses) / len(losses) if losses else 0.0
+    n_eff, sessions = effective_n([t["day"] for t in rows], [1 if t["r"] > 0 else 0 for t in rows])
     risk_pct = (entry - stop) / entry * 100          # this setup's own risk
     ev_r = p_win * avg_win_r - (1 - p_win) * avg_loss_r
-    p_lb = wilson_lb(p_win, total_n)
+    n_bound = max(1, int(round(n_eff)))
+    p_lb = wilson_lb(p_win, n_bound)
     ev_lb_r = p_lb * avg_win_r - (1 - p_lb) * avg_loss_r
+    last = max((t["day"] for t in rows), default="")
+    try:
+        age = ((today or _date.today()) - _date.fromisoformat(last)).days
+    except ValueError:
+        age = None
+    stale = age is None or age > STALE_AFTER_DAYS
+    confidence = confidence_tier(p_win, n_bound)
+    if sessions < MEDIUM_MIN_SESSIONS or stale:
+        confidence = "LOW"
+    elif sessions < HIGH_MIN_SESSIONS and confidence == "HIGH":
+        confidence = "MEDIUM"
     return {
         "ev_pct": round(ev_r * risk_pct / 100 * 100, 2),   # EV in price %
         "ev_lb_pct": round(ev_lb_r * risk_pct / 100 * 100, 2),
@@ -121,7 +210,11 @@ def estimate_ev(signals: list[str], entry: float, stop: float,
         "avg_win_pct": round(avg_win_r * risk_pct, 2),
         "avg_loss_pct": round(avg_loss_r * risk_pct, 2),
         "n": total_n,
-        "confidence": confidence_tier(p_win, total_n),
+        "n_eff": round(n_eff, 1),
+        "sessions": sessions,
+        "last_outcome": last,
+        "stale": stale,
+        "confidence": confidence,
     }
 
 
@@ -130,11 +223,11 @@ def tag_ev(serialized: list[dict]) -> None:
     ADDITIVE — conviction_rank stays untouched as the fallback ranking for
     thin evidence. Uses signal LABELS mapped back to keys where needed."""
     try:
-        stats = signal_stats()
+        table = outcome_table()
     except Exception as exc:
         log.debug("ev_stats_failed", error=str(exc))
         return
-    if not stats:
+    if not table:
         return
     # results carry display labels; stats are keyed by signal KEYS. Build a
     # label→key map once from the scanner metadata.
@@ -147,12 +240,16 @@ def tag_ev(serialized: list[dict]) -> None:
         labels = r.get("signals") or []
         keys = [label_to_key.get(lbl, lbl) for lbl in labels]
         ev = estimate_ev(keys, float(r.get("entry") or 0),
-                         float(r.get("stop") or 0), stats=stats)
+                         float(r.get("stop") or 0), table=table)
         if ev:
             r["ev_pct"] = ev["ev_pct"]
             r["ev_lb_pct"] = ev["ev_lb_pct"]
             r["p_win"] = ev["p_win"]
             r["ev_n"] = ev["n"]
+            r["ev_n_eff"] = ev["n_eff"]
+            r["ev_sessions"] = ev["sessions"]
+            r["ev_last_outcome"] = ev["last_outcome"]
+            r["ev_stale"] = ev["stale"]
             r["ev_conf"] = ev["confidence"]
 
 

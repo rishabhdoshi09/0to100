@@ -9,7 +9,12 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 from typing import Any, Mapping
 
-PARSER_VERSION = "pit_xbrl.v1"
+PARSER_VERSION = "pit_xbrl.v2"
+# v1 divided INR values by 1e5 whenever the filing's LevelOfRounding said
+# "Lakhs", storing those filings 100x too large (about half the warehouse).
+# Rows parsed by these versions are normalised on read by
+# product.pit_financials.normalise_legacy_units().
+LEGACY_LAKH_SCALED_VERSIONS = frozenset({"pit_xbrl.v1"})
 
 # Local-name → canonical field. Works for in-capmkt and in-bse-fin.
 TAG_MAP = {
@@ -55,6 +60,9 @@ TAG_MAP = {
     "BasicEarningsLossPerShareFromContinuingOperations": "basic_eps_continuing",
     "DilutedEarningsLossPerShareFromContinuingOperations": "diluted_eps_continuing",
     "AmountOfTotalFinancialIndebtednessOfTheListedEntityIncludingShortTermAndLongTermDebtAtTheEndOfPeriod": "total_debt",
+    "BorrowingsNoncurrent": "borrowings_noncurrent",
+    "BorrowingsCurrent": "borrowings_current",
+    "Borrowings": "borrowings",
     "PropertyPlantAndEquipment": "ppe",
     "TotalAssets": "total_assets",
     "Equity": "equity",
@@ -101,12 +109,13 @@ def _f(text: str | None) -> float | None:
 
 
 def _scale_to_crore(value: float, *, decimals: str, rounding: str) -> float:
-    """XBRL values are INR. QuantTerm stores crore for P&L/BS levels."""
-    rounding = (rounding or "").lower()
-    if "crore" in rounding or decimals in {"-7", "-6"}:
-        return round(value / 1e7, 4)
-    if "lakh" in rounding:
-        return round(value / 1e5, 4)
+    """XBRL monetary facts are absolute INR; QuantTerm stores crore.
+
+    ``LevelOfRounding`` ("Lakhs" / "Crores" / "Millions") and ``decimals`` only
+    describe the *precision* the filer rounded to. The instance value itself is
+    still rupees (e.g. ``unitRef="INR" decimals="-3"`` 610265000 is Rs 61.03 cr
+    even when the filing says "Lakhs"), so the conversion is always / 1e7.
+    """
     return round(value / 1e7, 4)
 
 
@@ -174,6 +183,11 @@ def parse_xbrl(xml_text: str) -> dict[str, Any]:
         if value is None:
             continue
         field = TAG_MAP.get(name)
+        if not field:
+            # Unmapped tags never reach facts (v1 stored unmapped "pure"
+            # ratios under a None key, which serialised as a bogus "null" fact).
+            extra.setdefault(ctx, {})[name] = value
+            continue
         unit = node.attrib.get("unitRef") or ""
         decimals = node.attrib.get("decimals") or ""
         if field in PER_SHARE or unit == "INRPerShare":
@@ -220,6 +234,14 @@ def parse_xbrl(xml_text: str) -> dict[str, Any]:
         elif "total_income" in flat:
             flat["revenue"] = flat["total_income"]
             identities.setdefault("revenue", identities.get("total_income") or "Income")
+    if "bs_total_debt" not in flat:
+        parts = [flat[k] for k in ("bs_borrowings_noncurrent", "bs_borrowings_current") if k in flat]
+        if parts:
+            flat["bs_total_debt"] = round(sum(parts), 4)
+            identities.setdefault("bs_total_debt", "BorrowingsNoncurrent+BorrowingsCurrent")
+        elif "bs_borrowings" in flat:
+            flat["bs_total_debt"] = flat["bs_borrowings"]
+            identities.setdefault("bs_total_debt", "Borrowings")
     if "finance_costs" not in flat and "interest_expended" in flat:
         flat["finance_costs"] = flat["interest_expended"]
         identities.setdefault("finance_costs", identities.get("interest_expended") or "InterestExpended")

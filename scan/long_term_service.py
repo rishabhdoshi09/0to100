@@ -52,10 +52,33 @@ def _band(value: float, bands: list[tuple[float, float]], *, reverse=False) -> f
     return bands[-1][1]
 
 
+def _with_current_pe(fund: Mapping[str, Any] | None, price: Any) -> dict:
+    """P/E from today's price and trailing-twelve-month EPS from official filings.
+
+    A cached secondary P/E was taken at whatever price prevailed when it was
+    scraped (possibly months ago). When official TTM EPS exists the ratio is
+    recomputed; a loss-making TTM leaves P/E undefined rather than negative.
+    """
+    out = dict(fund or {})
+    eps = _f(out.get("ttm_eps"))
+    px = _f(price)
+    if eps is None or px is None or px <= 0:
+        return out
+    if eps > 0:
+        out["pe"] = round(px / eps, 2)
+        out["pe_basis"] = "PRICE_OVER_OFFICIAL_TTM_EPS"
+    else:
+        out.pop("pe", None)
+        out["pe_basis"] = "TTM_LOSS"
+    return out
+
+
 def score_current_fundamentals(fund: Mapping[str, Any] | None, *, sector: str = "") -> dict:
     fund = dict(fund or {})
-    financial = any(word in sector.lower() for word in
-                    ("bank", "finance", "financial", "insurance", "nbfc"))
+    # Sector names are missing for many symbols; the filing itself says bank
+    # (InterestEarned/InterestExpended), so ROCE/debt rules never score a bank.
+    financial = bool(fund.get("is_financial")) or any(
+        word in sector.lower() for word in ("bank", "finance", "financial", "insurance", "nbfc"))
     metrics: list[tuple[str, float, float]] = []
     factors: list[str] = []
     risks: list[str] = []
@@ -90,6 +113,21 @@ def score_current_fundamentals(fund: Mapping[str, Any] | None, *, sector: str = 
         _band(profit, [(15,100),(10,78),(5,52),(0,25),(-999,0)]) if profit is not None else 0,
         f"3y profit CAGR {profit:.1f}%" if profit is not None and profit >= 10 else "",
         f"Profit shrinking {profit:.1f}%" if profit is not None and profit < 0 else "")
+
+    # Without a 3-year history, same-period-last-year growth is a weaker but
+    # real signal: scored at lower weight, never relabelled as a 3y CAGR.
+    if sales is None:
+        sales_yoy = _f(fund.get("sales_growth_yoy"))
+        add("sales_growth_yoy", 8, sales_yoy,
+            _band(sales_yoy, [(15,100),(10,78),(5,52),(0,25),(-999,0)]) if sales_yoy is not None else 0,
+            f"Sales YoY {sales_yoy:+.1f}%" if sales_yoy is not None and sales_yoy >= 10 else "",
+            f"Sales falling YoY {sales_yoy:.1f}%" if sales_yoy is not None and sales_yoy < 0 else "")
+    if profit is None:
+        profit_yoy = _f(fund.get("profit_growth_yoy"))
+        add("profit_growth_yoy", 8, profit_yoy,
+            _band(profit_yoy, [(15,100),(10,78),(5,52),(0,25),(-999,0)]) if profit_yoy is not None else 0,
+            f"Profit YoY {profit_yoy:+.1f}%" if profit_yoy is not None and profit_yoy >= 10 else "",
+            f"Profit falling YoY {profit_yoy:.1f}%" if profit_yoy is not None and profit_yoy < 0 else "")
 
     debt = _f(fund.get("debt_to_equity"))
     if not financial:
@@ -506,6 +544,7 @@ def run_long_term_scan(
                     fund = _extract_fundamentals(raw_map)
                 except Exception as exc:
                     error = type(exc).__name__
+        fund = _with_current_pe(fund, row.get("price"))
         fq = score_current_fundamentals(fund, sector=sector)
         technical_score = float(row.get("score", 0) or 0)
         combined = round(technical_score * 0.45 + fq["score"] * 0.55, 1)
