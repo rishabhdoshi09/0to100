@@ -13,7 +13,7 @@ Section 7 (session 2) supersedes the status column of QT-PRA-005…008 in
 section 2 and the gate table in section 4. Section 9 (session 4) holds the
 current gate table and verdict.
 
-**Current state (2026-11-10): section 13.** It covers the session on the owner's Mac. `c194d8c7` is deployed there as a paper-only build with live money locked. Gates and verdict are in 13.10: NOT READY, pending the 72 h soak and a Kite session.
+**Current state (2026-11-10): section 13.** It covers the session on the owner's Mac. `b83409b1` is deployed there as a paper-only build with live money locked. Gates and verdict are in 13.10: NOT READY, pending the 72 h soak and a Kite session.
 
 ## 1. Verified repository state (as of 2026-11-08 02:30 UTC)
 
@@ -915,6 +915,36 @@ The owner granted permission in chat. The variant chosen does not risk data: the
 
 The `market_ops crash loop` lines at the end of `launchd.err.log` predate this drill: the file was last modified on 2026-11-09 at 13:20.
 
+### 13.8b Follow-up batch (owner: "you start"), 13:05–15:00 IST
+
+| ID | Pri | Change | Evidence | Regression |
+| --- | --- | --- | --- | --- |
+| QT-PRA-084 | P2 | Durable writes on macOS: `durable_sync` (`F_FULLFSYNC` plus directory sync) for the paper book and the owner pause/halt; `fullfsync`/`checkpoint_fullfsync` for the F&O paper, OMS and protection stores | Measured on the runtime disk: `fsync` 0.7 ms p50 (does not reach the platter) vs `F_FULLFSYNC` 415 ms p50, about 1 s with the directory. Hence opt-in for rarely written money and truth state only; heartbeats and caches are unchanged | `tests/test_durable_writes.py` |
+| QT-PRA-085 | P2 | Archive validation verdicts persisted by file identity (size, mtime_ns, inode) and validator source hash | On a clone of the real 1,754 archives: first-ever 263 s → restart **1.98 s** | `tests/test_bhavcopy_persisted_verdicts.py` |
+| QT-PRA-086 | P2 | Daily report check `sqlite_store_integrity` (CRITICAL → host alert): each live store is copied to local scratch and the full `integrity_check` runs on the copy | On the pre-repair clone it flagged `feature_store.db` with SQLite's exact message; 43 stores in 33 s | `tests/test_sqlite_store_integrity_check.py` |
+| QT-PRA-087 | P3 | Concurrent identical Home reads share one in-flight build; nothing is cached | Previously 4-way Home p50 was about 5 s | `tests/test_home_request_coalescing.py` |
+
+**Findings that shaped the design:**
+- In-place SQLite checks on the runtime are the wrong tool. Through the APFS sparsebundle on the exFAT USB disk, SQLite's random page reads took minutes per store, while the same `integrity_check` took 0.1 s on an SSD copy.
+- A `mode=ro` open of a closed WAL database created `-wal`/`-shm` beside it and stalled in the kernel.
+- `quick_check` does not compare index entries with rows, and passed the real corruption.
+- **Rejected after measurement:** a SQLite JSON1 rewrite of research `feature_coverage` gave identical results but was 3× slower (1.42 s vs 0.47 s). It was reverted.
+- **Research tab.** On the SSD copy that Python path takes 0.47 s, against 1.4 s on the USB runtime. The research tab is IO-bound on the storage stack, not CPU-bound.
+
+**Soak contamination.** From 13:52 to 14:25 my experiments on the clone (same USB disk) pushed production latencies up: Opportunities p95 to 75 s, autonomy-desk to 52 s. From 13:00 to 13:48 they were steady (Home about 4 s, Opportunities 1.2–2 s). The soak window is restarted after the next deploy so that it measures one build without experiments.
+
+**Deployed `b83409b1` at 15:22 IST.**
+- **Gates.** Exact-SHA CI 10/10 green, and the **full canonical suite on the Mac at this SHA: 443/443 files pass** (2,669 s, guarded).
+- **Deploy.** The stop was clean with no orphans; total downtime 69 s. HEALTHY, live LOCKED, paper state byte-identical.
+- **Verdict cache.** `logs/bhav.validation.json` was written by the first post-deploy history check, so later restarts reuse it.
+
+**Soak incident (my error, fixed).** The 72 h agent stopped sampling at 14:24.
+- **Cause.** The in-session copy of the probe, run with `QT_SOAK_DIR`, reached its own 2-hour end and called `launchctl bootout` with the hard-coded agent label.
+- **Fix.** The probe now removes itself only when launchd runs it under that label (`XPC_SERVICE_NAME`).
+- **Restart.** The agent was reloaded and the window restarted for `b83409b1`: **2026-11-10 15:23 → 2026-11-13 15:23 IST**. Earlier samples are kept in `soak_pre_b83409b1_20261110.jsonl`.
+
+**Biggest remaining lever (owner decision, hardware).** The runtime is on a USB hard disk behind an APFS sparsebundle on exFAT, where random reads are orders of magnitude slower than on SSD. Moving the runtime to an SSD (internal or external APFS) would improve every desk view, the restart time and the research tab. It is not done: it needs a disk and a maintenance window.
+
 ### 13.9 Evidence scorecard (rubric 12.3)
 
 | Area | §12.3 (cloud) | Now (Mac) | Evidence and what limits it |
@@ -933,7 +963,7 @@ The `market_ops crash loop` lines at the end of `launchd.err.log` predate this d
 | Gate | State |
 | --- | --- |
 | Installed host SHA, launchd owner, sparsebundle identity, verified backup | **PASS** (13.1, 13.4) |
-| Controlled paper-only deployment through the canonical host process | **PASS** (`c194d8c7` deployed, HEALTHY) |
+| Controlled paper-only deployment through the canonical host process | **PASS** (`b83409b1` deployed, HEALTHY; full Mac suite 443/443 at this SHA) |
 | Rollback rehearsal | **PASS** (`a1667cf3` → `980b922` → forward) |
 | Restore drill | **PASS** (13.6) |
 | Real-browser desk on the Mac, no rescan on open | **PASS** |
@@ -942,11 +972,11 @@ The `market_ops crash loop` lines at the end of `launchd.err.log` predate this d
 | Live lock | **PASS** (LOCKED and verified at every step) |
 | Kite session and quotes | **BLOCKED** (owner login on a trading day) |
 | History gate open on official history; a paper cycle enters on its own | **PARTIAL** (`analysis_complete` true, gate APPROVED; entries held by the **owner's own pause**, which was left untouched) |
-| 72 h soak | **IN PROGRESS**. The read-only launchd probe `com.quantterm.soakprobe` was installed with the owner's approval and runs every 5 minutes from 2026-11-10 13:00 IST to 2026-11-13 13:01 IST, then boots itself out. First sample: all 6 routes 2xx, live LOCKED, runtime mounted, history current. Summary command: `/usr/local/bin/python3 ~/Library/Logs/QuantTerm/soak/soak_report.py`. The gate passes only if the report shows no 5xx or timeouts, no unexpected launchd restarts, live LOCKED throughout, the runtime always mounted, no memory growth trend, and freshness transitions across the 11, 12 and 13 Nov sessions. The dashboard snapshot reads WARMING at a 5-minute poll by design: the read cache stays warm only under the desk's 10-second polling |
+| 72 h soak | **IN PROGRESS**. The read-only launchd probe `com.quantterm.soakprobe` was installed with the owner's approval. Its window was restarted for the deployed `b83409b1` and runs every 5 minutes from 2026-11-10 15:23 IST to 2026-11-13 15:23 IST, then it boots itself out. First sample: all 6 routes 2xx, live LOCKED, runtime mounted, history current. Summary command: `/usr/local/bin/python3 ~/Library/Logs/QuantTerm/soak/soak_report.py`. The gate passes only if the report shows no 5xx or timeouts, no unexpected launchd restarts, live LOCKED throughout, the runtime always mounted, no memory growth trend, and freshness transitions across the 11, 12 and 13 Nov sessions. The dashboard snapshot reads WARMING at a 5-minute poll by design: the read cache stays warm only under the desk's 10-second polling |
 | Controlled disk detach | **PASS** (13.8a, owner-approved; host stopped first) |
 | Hot detach under live writes / destructive restore over production | Not done by design (the restore drill proves restorability) |
 
-**Verdict: NOT READY.** The host now runs the verified build. No known P0/P1 is open, and backup, restore, deploy, rollback, the disk-loss drill, the browser journey and Telegram are proven on the Mac. The 72 h soak is running (it ends 2026-11-13 13:01 IST) and the Kite gate is unproved.
+**Verdict: NOT READY.** The host now runs the verified build. No known P0/P1 is open, and backup, restore, deploy, rollback, the disk-loss drill, the browser journey and Telegram are proven on the Mac. The 72 h soak is running on `b83409b1` (it ends 2026-11-13 15:23 IST) and the Kite gate is unproved.
 
 **Smallest owner actions:**
 1. On a trading morning, log in to Kite: `cd ~/0to100 && venv/bin/python main.py login`.
