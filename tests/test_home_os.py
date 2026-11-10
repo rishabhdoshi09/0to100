@@ -771,3 +771,46 @@ def test_home_separates_strict_best_trades_from_research_watchlist_and_learning(
     assert os["learning_impact"]["status"] == "LEARNING_BUT_NOT_PROMOTED"
     assert os["us_market"]["paper"]["armed"] is True
     assert os["live_locked"] is True
+
+
+def _paused_home(owner_state, *, paper_enabled=True):
+    return build_home_os(
+        dashboard={
+            "autonomy": {"state": "OBSERVING", "running": True, "owner_state": owner_state},
+            "data": {"ready": True, "bhavcopy": {"ready": True}},
+        },
+        paper={"enabled": paper_enabled, "open_positions": [], "closed_trades": []},
+        why={"available": True, "taken": [], "reasons": ["OWNER_PAUSED"]},
+        soak={"real_forward_observations": 0, "insufficient_evidence": True},
+        scan={"scanned_at": "2026-09-01T05:00:00+00:00", "records": [1]},
+        now=_open(),
+    )
+
+
+def test_owner_pause_is_shown_as_paused_not_running():
+    """QT-PRA-083: on the owner's Mac new entries were paused by the owner's PAUSE
+    control (owner_state.new_entries_paused) while Home said "Everything is running
+    automatically" and offered "Pause paper entries"."""
+    os = _paused_home({"new_entries_paused": True, "halted": False})
+    assert os["state"] == PAUSED
+    assert os["paper_bot"]["paused"] is True
+    assert os["paper_bot"]["on"] is True
+    assert os["paper_bot"]["paused_by"] == "OWNER"
+    assert os["primary_action"]["control"] == "RESUME_NEW_PAPER_ENTRIES"
+    assert "paused by you" in os["headline"].lower()
+    assert all(a.get("control") != "PAUSE_NEW_PAPER_ENTRIES" for a in os["secondary_actions"])
+
+
+def test_owner_halt_is_shown_with_a_resume_instruction_not_a_rejected_control():
+    os = _paused_home({"new_entries_paused": True, "halted": True})
+    assert os["state"] == PAUSED
+    assert os["paper_bot"]["paused_by"] == "OWNER_HALT"
+    assert os["primary_action"]["kind"] == "instruction"
+    assert os["primary_action"]["control"] == ""
+    assert "RESUME_AUTONOMY" in os["primary_action"]["instruction"]
+
+
+def test_unpaused_owner_state_keeps_paper_running():
+    os = _paused_home({"new_entries_paused": False, "halted": False})
+    assert os["paper_bot"]["paused"] is False
+    assert os["paper_bot"]["paused_by"] == ""

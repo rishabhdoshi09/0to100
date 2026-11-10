@@ -324,6 +324,13 @@ def build_home_os(
     kite_ok = broker_session_usable(auto)
     paper_enabled = paper_d.get("enabled", True) is not False
     owner_state = _as_dict(auto.get("owner_state"))
+    # The owner's PAUSE/HALT controls persist in the autonomy owner_state, not in
+    # the paper config. Home used to read only the config, so after the owner
+    # paused new entries it still said "Everything is running automatically"
+    # and offered "Pause paper entries" (owner's Mac, 2026-11-10).
+    owner_halted = bool(owner_state.get("halted"))
+    owner_paused = owner_halted or bool(owner_state.get("new_entries_paused"))
+    entries_paused = (not paper_enabled) or owner_paused
     observe_date = str(owner_state.get("observe_only_date") or "")[:10]
     today_ist = ""
     try:
@@ -474,11 +481,30 @@ def build_home_os(
                 now_line = f"Market scan running · {cur} / {tot}"
         elif any(str(o.get("kind")) == "DATA_PREPARE" for o in active_ops):
             now_line = "Preparing official data" if not history_current else "Finishing the official data store"
-    elif not paper_enabled:
+    elif entries_paused:
         state = PAUSED
-        headline = "The paper bot is paused."
-        subtext = "Open positions stay watched. New entries wait until you resume."
-        primary_action = _action("RESUME_NEW_PAPER_ENTRIES", label="Resume paper entries")
+        if owner_halted:
+            headline = "QuantTerm is halted by you. New paper entries are paused."
+            subtext = "Open positions stay watched. Resume autonomy, then resume paper entries, when you want new paper trades."
+            # RESUME_AUTONOMY is deliberately not a desk API control; show how
+            # the owner resumes instead of a button the API would reject.
+            primary_action = _action(
+                label="Resume autonomy",
+                kind="instruction",
+                instruction=(
+                    "In ~/0to100 run: venv/bin/python -c \"from research.autonomy.controls import "
+                    "request_control, RESUME_AUTONOMY; request_control(RESUME_AUTONOMY, reason='owner')\" "
+                    "then use Resume paper entries."
+                ),
+            )
+        else:
+            headline = (
+                "New paper entries are paused by you."
+                if owner_paused and paper_enabled
+                else "The paper bot is paused."
+            )
+            subtext = "Open positions stay watched. New entries wait until you resume."
+            primary_action = _action("RESUME_NEW_PAPER_ENTRIES", label="Resume paper entries")
         secondary = [_action("RUN_SCAN_NOW", label="Scan now")]
         now_line = "Watching open paper positions" if opens else "Paper entries paused"
         next_line = "Resume when you want new paper trades"
@@ -772,7 +798,8 @@ def build_home_os(
         "observe_only_date": observe_date if observe_only else "",
         "paper_bot": {
             "on": bool(paper_enabled),
-            "paused": not paper_enabled,
+            "paused": bool(entries_paused),
+            "paused_by": "OWNER_HALT" if owner_halted else "OWNER" if owner_paused else "CONFIG" if not paper_enabled else "",
             "positions_open": len(opens),
             "todays_entries": len(taken),
             "exits": len(closed),
