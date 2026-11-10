@@ -140,3 +140,15 @@ def test_a_version_replaced_mid_parse_is_not_cached(tmp_path):
 
     assert json_cache.read_json_shared(target, racing_loader) == {"generation": 1}
     assert json_cache.read_json_shared(target) == {"generation": 2}
+
+
+def test_method_identity_is_memoised_but_each_caller_gets_its_own_dict():
+    from product import strategy_catalog as SC
+
+    first = SC.method_identity("sepa")
+    first["label"] = "mutated by a caller"
+    again = SC.method_identity("sepa")
+    assert again["label"] != "mutated by a caller"
+    expected = SC._rules_hash({"method_id": "sepa", "weight": SC.METHOD_WEIGHTS.get("sepa"),
+                               "ensemble": SC.ensemble_rules()})
+    assert again["rules_hash"] == expected
