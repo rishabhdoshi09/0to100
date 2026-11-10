@@ -990,3 +990,30 @@ The `market_ops crash loop` lines at the end of `launchd.err.log` predate this d
 **Operational notes:**
 - **Bulk IO on the external disk.** A 15 MB/s copy on the same USB disk pushed Home and Opportunities past 90 s while the desk was throttled. Run backups outside market hours.
 - **Running the suite on the Mac.** With QT-PRA-072 fixed, the remaining host tool calls in tests are read-only (`launchctl print`, `pmset -g`). The guard used in this session is still recommended.
+
+## 14. Recommendation machinery audit (2026-11-11, branch `claude/reco-machinery-20261111`)
+
+The audit was run against the live desk on the Mac. The live desk reads were read-only. Analysis ran on SSD copies of the runtime stores.
+
+**What the desk showed (scan `7c6cfe849ab86e22`, session 2026-11-09).**
+- 103 cards: 17 raw Buy, 86 Watch. All 103 showed "Expected payoff: Negative, HIGH". Wealth Builders was empty: "40 names, all NEEDS_FUNDAMENTALS".
+- 84 cards showed stock quality "Unmeasured". 15 of the 17 Buys had no sector.
+
+| ID | Finding | Evidence | Fix |
+|---|---|---|---|
+| QT-REC-001 | `pit_xbrl.v1` divided INR by 1e5 when `LevelOfRounding` said "Lakhs". 52% of warehouse rows were stored 100x too large, so cross-filing growth was meaningless. | Raw MACPOWER filing: `unitRef="INR" decimals="-3"` value 610265000 (Rs 61.03 cr) was stored as 6102.65. | Parser v2 always divides by 1e7. v1 rows are normalised on read. `scripts/reparse_pit_xbrl.py` writes superseding revisions from the stored raw XBRL, with no network. The SSD-copy run gave 2,862 rows re-parsed, 7 parse failures and 0 missing artifacts. |
+| QT-REC-002 | ROE used paid-up capital when net worth was missing. | TCS 3707%, SBIN 2747%, HDFCBANK 1342%, PNB 253% | ROE is TTM (or annualised) PAT over net worth, and unknown without net worth. TCS is now 49.5%. |
+| QT-REC-003 | "YoY" compared the sequential quarter. | BANKBARODA `pat_yoy_pct` 277.8 | True same-period-last-year; QoQ is reported separately; growth from a loss base is undefined. |
+| QT-REC-004 | Borrowings were never parsed, so ROCE and D/E were unmeasurable. | `bs_total_debt` was present in 151 of 2,928 rows. | Borrowings tags are mapped. 1,342 filings recover debt. ROCE is computed only on capital employed. |
+| QT-REC-005 | The official `profit_loss` table carried quarterly values into the "3y CAGR". | `_extract_fundamentals` `_cagr` over quarters | Annual table only (complete fiscal years). |
+| QT-REC-006 | Official ratios were ignored, because the extractor read only Screener `key_ratios`. A stale cached official ROE also survived. | RPEL coverage 22%, SBIN cached ROE 2747 | Official ratios win when the pack is official, and are dropped when the derivation has none. P/E comes from price over official TTM EPS. Banks are recognised from the filing. |
+| QT-REC-007 | Screener secondary refresh returns HTTP 200 with zero sections parsed. | `fundamentals_empty_secondary_rejected` | Not fixed. Official XBRL is the primary source and Screener scraping is not pursued. Promoter holding and pledge therefore remain unmeasured. |
+| QT-REC-008 | The EV engine summed per-signal counts. | One card claimed n=4564; only 2,884 closed trades exist. | A setup counts each distinct trade once. |
+| QT-REC-009 | The same stock was re-logged inside its own 5-session window. | 2,884 → 1,174 distinct trades | Same-symbol re-logs within 7 days count as one trade. |
+| QT-REC-010 | "HIGH" confidence came from 15 July sessions that are 3.5 months old. | Win rate 24.4%; last outcome 2026-07-23 | Confidence uses a session-clustered effective n and needs 20 sessions for MEDIUM and 60 for HIGH. Evidence older than 45 days is STALE and the payoff label is "Unproven". |
+| QT-REC-011 | Outcome tracking was dead: `signal_log` last written 2026-07-30, `decisions.db` 2026-09-18 (Invariant 7). | Only legacy `auto_scan` called `log_signal`/`update_outcomes`. | The canonical scan logs every published BUY on NSE sessions; the OUTCOME_RESOLUTION job settles them from official bars. |
+| QT-REC-012 | The sector map covers 337 symbols. Large caps in the core list (TCS, HDFCBANK, PNB…) and most PSU banks have no sector. | `scan/sector_heat.py` parses only the NIFTY500 comment groups. | Open. Needs an official industry source; sector concentration checks are blind until then. |
+
+**Effect on the SSD warehouse copy.** About 300 of 375 symbols now get a measured quality score. Typical coverage is 48% before P/E, and 55% with P/E from price over TTM EPS. Banks remain unknown, because their results filings carry no net worth tag. Same-quarter YoY needs more than 4 quarters of history, which most symbols do not have yet.
+
+**Still open.** QT-REC-007 and QT-REC-012 above. In addition: the bank balance-sheet taxonomy, an official shareholding-pattern source for promoter holding and pledge, and history depth (8+ quarters) for YoY and 3-year growth.
