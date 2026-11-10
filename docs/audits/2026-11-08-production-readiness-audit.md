@@ -641,3 +641,93 @@ only; the live interlock and owner pauses are untouched.
 - **Regime warm-up.** A single-flight background thread; only Kite and Yahoo are network calls, after the official index store. Bounded, not on the request path.
 - **Hung rebuild.** The projection build is network-free (quotes are `None`, overlays are local files) and its lock wait is bounded (300 s, then FAILED with backoff). No watchdog added.
 - **Reverted experiment.** Pre-rendering the Opportunities JSON to skip FastAPI's encoder was 59 ms vs 49 ms p50 on FastAPI 0.162, whose pydantic-core serializer is faster. The 71 ms "encoder" cost seen in a profile was not on the request path.
+
+### 12.2 Verification at the code head `6eec070` (sandbox)
+
+- **Python suite:** 431 files and 4,357 collected tests, one interpreter per file in a clean worktree, credentials blanked. Every file exits 0; no failures, errors or skips.
+- **Advisory integration gate:** `tests/integration`, `continue-on-error` in CI with a 120 s limit, did not finish within 300 s here. Recorded as not run, not as a pass.
+- **Frontend:** vitest 33 files and 167 tests pass, `tsc` clean.
+- **GET sweep:** all 57 GET routes, twice, on a fresh runtime: zero 5xx and no job store created.
+- **Browser E2E:** Chromium against uvicorn plus the Vite desk, 60 s per scenario.
+  - Under `api.app:app` and under `terminal_product_api_parallel:app` (launchd), the stale sandbox scan shows "Saved scan is not current", with cards withheld by the server.
+  - With freshness forced and current provenance (display check only), the published workspace renders.
+  - All three: no `RUN_SCAN_NOW`, no console errors.
+
+**Latency.** 30 sequential plus 40 at 8-way concurrency per route, same 827-record runtime and machine, starting commit `b2d850a` vs head (ms):
+
+| Route | seq p50 b2d850a → head | seq p95 | 8x p50 | 8x p99 |
+| --- | --- | --- | --- | --- |
+| `/api/radar-home` (Home) | 130 → **71** | 216 → 178 | 1413 → **856** | 2049 → 1397 |
+| `/api/recommendations-workspace` (920 kB) | 46 → **35** | 133 → 103 | 780 → 743 | 954 → 959 |
+| `/api/research-director` | 37 → 19 | 132 → 30 | 666 → 427 | 878 → 566 |
+| `/api/learning-dashboard` | 28 → 13 | 121 → 43 | 398 → 175 | 678 → 335 |
+| `/api/research-status` | 15 → 8 | 21 → 8 | 169 → 88 | 328 → 128 |
+| `/api/command-center-workspace` | 20 → 13 | 88 → 16 | 265 → 188 | 484 → 286 |
+| `/api/health` | 9 → 8 | 66 → 10 | 92 → 90 | 208 → 175 |
+| `/api/dashboard` | 5 → 6 | 36 → 17 | 24 → 39 | 58 → 50 |
+
+API RSS after the same load: 337 MB → 316 MB.
+
+These are container figures. The 8 GB Intel Mac is expected to be slower and has not been measured.
+
+### 12.3 Evidence scorecard (1–10)
+
+**Rubric, per area:**
+- 1–3: known P0/P1 defects remain, or the area is unverified.
+- 4–5: defects fixed with tests and verified only in a sandbox; real-world gates unproven.
+- 6–7: no known P0/P1, verified end-to-end in a realistic environment, real-host evidence partial.
+- 8–9: verified on the real host under sustained operation, with budgets met.
+- 10: every relevant gate proven on the host, including soak, restore/rollback and real broker/Telegram receipts.
+
+A 10 is not awarded anywhere.
+
+| Area | Start (`b2d850a`) | Now | Evidence and what limits it |
+| --- | --- | --- | --- |
+| (a) User-visible workflow reliability | 4 | 5 | 57-route sweep clean ×2; Opportunities and Home verified in a sandbox browser under both launch modules. No browser check on the Mac. |
+| (b) Data provenance/freshness & decision correctness | 5 | 6 | One-parse freshness (TOCTOU closed); generation-safe publication; withheld old-day cards; history-first gate fails closed. Real NSE/Kite data path unverified. |
+| (c) Paper-risk & crash safety | 5 | 6 | Atomic, fsynced durable writes at all 65 sites plus a guard test; cross-engine 1%/10%/5% caps tested. Restart/recovery of the real paper state on the host unverified. |
+| (d) UI/API performance on real hardware | 3 | 3 | Sandbox: Home −45% p50, no memory increase. No measurement on the 8 GB Intel Mac, so not raised. |
+| (e) Unattended operations/alerts | 3 | 3 | Rebuild backoff, no-500 desk on a fresh runtime. No real Telegram receipt, no soak. |
+| (f) Recovery/backup/deployment | 2 | 2 | No host access: backups, restore, rollback and deployment unverified. |
+| (g) Test coverage & exact-SHA delivery | 7 | 8 | +15 regression tests (races, concurrency, side-effect-free reads); full suite and all workflows at the exact SHA (see PR). |
+| **Mean** | **4.1** | **4.7** | Limited by the BLOCKED host gates, not by known code defects. |
+
+### 12.4 Release gates
+
+| Gate | State |
+| --- | --- |
+| No known open P0/P1 in code reachable from the sandbox | PASS |
+| Python suite, vitest and typecheck at the code head | PASS |
+| All GitHub workflows at the final SHA | See PR #332 |
+| Real-browser desk verification (sandbox) | PASS |
+| Installed host SHA, launchd owners, sparsebundle identity/durability, backups | BLOCKED (no host access) |
+| Controlled paper-only deployment and browser check on the Mac | BLOCKED |
+| Real Kite session/quotes; real Telegram receipt with message id | BLOCKED (no network or credentials here) |
+| History-first gate opening on real official history (paper trades actually flow) | BLOCKED |
+| Mac p50/p95/p99, memory, swap, fds, CPU | BLOCKED |
+| 72 h supervised soak; restore and rollback drill | BLOCKED |
+
+**Verdict: NOT READY.** No known P0/P1 remains in code reachable here, but
+every host, broker, Telegram, soak and rollback gate is unproved.
+
+### 12.5 Host handoff (the one owner action needed)
+
+**Give a session access to the Mac.** Either share the QuantTerm folder via
+Remote Control (Claude desktop app → Settings → Claude Code → Remote Control),
+or run a Claude Code session on the Mac in that folder. Credentials stay in
+`.env`; none are needed in chat.
+
+**With access, the remaining gates run in this order.** Everything stays
+read-only until step 4, and live-money stays locked.
+1. Record the installed SHA vs `origin`, launchd owners, sparsebundle identity and mount, free space and the latest backup.
+2. Take a fresh verified backup and write a rollback note (previous SHA plus restore command).
+3. Run the suite on the Mac.
+4. Deploy the PR head through `scripts/run_quantterm_complete.sh` (no duplicate launcher), paper only.
+5. Real-browser check of Home, Opportunities and the autonomy desk under the persisted scan generation.
+6. One real Telegram message: confirm the receipt and that its message id is stored.
+7. Kite login and quote check.
+8. Confirm the history-first bootstrap reaches `analysis_complete` and that a paper cycle can enter on its own.
+9. Measure p50/p95/p99, RSS, swap and fds.
+10. Start the 72 h soak; rehearse rollback.
+
+**Needs the owner's explicit approval first:** a disk-detach test, a destructive restore, enabling live trading.
