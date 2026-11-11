@@ -57,7 +57,17 @@ def _load_map() -> dict[str, str]:
 
 
 def sector_of(symbol: str) -> str:
-    return _load_map().get(symbol.upper(), "")
+    """Static group from data/nse_universe.py, else NSE's own industry label
+    (captured from the live index snapshot) mapped onto the same groups."""
+    sym = str(symbol or "").upper()
+    sector = _load_map().get(sym, "")
+    if sector:
+        return sector
+    try:
+        from data.nse_industry import industry_of, normalise_industry
+        return normalise_industry(industry_of(sym))
+    except Exception:
+        return ""
 
 
 def sector_performance(min_members: int = 3) -> list[dict]:

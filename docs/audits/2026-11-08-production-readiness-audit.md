@@ -1012,8 +1012,13 @@ The audit was run against the live desk on the Mac. The live desk reads were rea
 | QT-REC-009 | The same stock was re-logged inside its own 5-session window. | 2,884 → 1,174 distinct trades | Same-symbol re-logs within 7 days count as one trade. |
 | QT-REC-010 | "HIGH" confidence came from 15 July sessions that are 3.5 months old. | Win rate 24.4%; last outcome 2026-07-23 | Confidence uses a session-clustered effective n and needs 20 sessions for MEDIUM and 60 for HIGH. Evidence older than 45 days is STALE and the payoff label is "Unproven". |
 | QT-REC-011 | Outcome tracking was dead: `signal_log` last written 2026-07-30, `decisions.db` 2026-09-18 (Invariant 7). | Only legacy `auto_scan` called `log_signal`/`update_outcomes`. | The canonical scan logs every published BUY on NSE sessions; the OUTCOME_RESOLUTION job settles them from official bars. |
-| QT-REC-012 | The sector map covers 337 symbols. Large caps in the core list (TCS, HDFCBANK, PNB…) and most PSU banks have no sector. | `scan/sector_heat.py` parses only the NIFTY500 comment groups. | Open. Needs an official industry source; sector concentration checks are blind until then. |
+| QT-REC-012 | The sector map covers 337 symbols. Large caps in the core list (TCS, HDFCBANK, PNB…) and most PSU banks have no sector. | `scan/sector_heat.py` parses only the NIFTY500 comment groups. | `data/nse_industry.py` persists NSE's own `meta.industry` from the equity-stockIndices rows that `data/nse_live.py` already fetches, so there is no extra request. `sector_of` falls back to it, mapped onto the static group names so one sector is never split across two spellings. The map fills during the first market-hours snapshot after deploy. |
 
 **Effect on the SSD warehouse copy.** About 300 of 375 symbols now get a measured quality score. Typical coverage is 48% before P/E, and 55% with P/E from price over TTM EPS. Banks file the banking schedule (`Capital` + `ReservesAndSurplus`). These tags are now mapped. On a bank-only copy, all 94 bank rows were re-parsed with no failures; ROE: SBIN 13.1%, HDFCBANK 13.3%, ICICIBANK 14.4%, PNB 15.5%, CANBK 15.9%. Same-quarter YoY needs more than 4 quarters of history, which most symbols do not have yet.
 
-**Still open.** QT-REC-007 and QT-REC-012 above. In addition: an official shareholding-pattern source for promoter holding and pledge, and history depth (8+ quarters) for YoY and 3-year growth.
+**Deployed 2026-11-11.**
+- 08:21 IST: `439f2766`. The canonical scan logged 22 BUYs at 08:24, the first since 2026-07-30. All 103 cards moved from "Negative, HIGH" to "Unproven (stale)".
+- 08:29–08:43 IST: `39eb76b5`, plus the production re-parse: 2,862 rows re-parsed, 1,342 with borrowings recovered, 7 parse failures, integrity ok.
+- After both: Wealth Builders went from 0 to 9 names. Stock quality: 10 Excellent, 5 Healthy, 12 Weak, 85 Unmeasured. Live stayed LOCKED and the owner pause was unchanged.
+
+**Still open.** QT-REC-007 above. In addition: an official shareholding-pattern source for promoter holding and pledge, and history depth (8+ quarters) for YoY and 3-year growth.

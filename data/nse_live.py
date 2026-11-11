@@ -64,6 +64,13 @@ def fetch_live_snapshot() -> dict[str, dict]:
                 if r.status_code != 200:
                     continue
                 data = r.json().get("data", [])
+                try:
+                    # Official NSE industry rides along in every row's meta;
+                    # persist it for the sector map (no extra request).
+                    from data.nse_industry import industries_from_index_rows, record_industries
+                    record_industries(industries_from_index_rows(data))
+                except Exception:
+                    pass
                 snap: dict[str, dict] = {}
                 for row in data:
                     sym = str(row.get("symbol", "")).strip().upper()
