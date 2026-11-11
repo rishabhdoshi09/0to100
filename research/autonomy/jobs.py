@@ -722,7 +722,17 @@ def run_universe_history(ctx) -> JobResult:
                      clears={H.UNIVERSE_INCOMPLETE}, metadata=info)
 
 
+OUTCOME_LOOKBACK_DAYS = 200
+
+
 def run_index_warmup(ctx) -> JobResult:
+    try:
+        # Sector labels ride along with the nightly reference upkeep; the
+        # refresh limits itself to once a week and never raises.
+        from data.nse_industry import refresh_industry_map
+        refresh_industry_map()
+    except Exception:
+        pass
     try:
         info = ctx.deps.warm_indices()
     except Exception as exc:
@@ -1364,7 +1374,10 @@ def run_outcome_resolution(ctx) -> JobResult:
     # book settlement above is this job's authority, not the signal ledger.
     try:
         from core.signal_outcome_tracker import update_outcomes
-        update_outcomes()
+        # 200-day window: 522 BUYs logged in July were never settled because
+        # nothing ran update_outcomes for months and the default window is 30
+        # days. Settled rows are skipped, so this only catches up open ones.
+        update_outcomes(lookback_days=OUTCOME_LOOKBACK_DAYS)
     except Exception as exc:
         if isinstance(result, dict):
             result["signal_outcomes_error"] = f"{type(exc).__name__}: {exc}"[:240]

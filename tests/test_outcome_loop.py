@@ -85,9 +85,10 @@ def test_outcome_job_settles_signal_ledger(monkeypatch):
     from research.autonomy import jobs as JOBS
 
     calls = []
-    monkeypatch.setattr(tk, "update_outcomes", lambda *a, **k: calls.append(1))
+    monkeypatch.setattr(tk, "update_outcomes", lambda *a, **k: calls.append(k.get("lookback_days")))
     result = JOBS.run_outcome_resolution(JOBS._Ctx(_Deps()))
-    assert result.status == JS.SUCCEEDED and calls == [1]
+    assert result.status == JS.SUCCEEDED and calls == [JOBS.OUTCOME_LOOKBACK_DAYS]
+    assert JOBS.OUTCOME_LOOKBACK_DAYS >= 120          # months-old open BUYs still settle
 
 
 def test_signal_ledger_failure_does_not_fail_the_outcome_job(monkeypatch):
