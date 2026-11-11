@@ -600,8 +600,27 @@ def run_long_term_scan(
         from product.long_term_store import save_long_term_scan
         save_long_term_scan(payload)
         if refresh_fundamentals:
+            payload["card_fundamentals_acquisition"] = acquire_card_fundamentals()
+            try:
+                from data.nse_industry import refresh_industry_map
+                payload["industry_map_refresh"] = refresh_industry_map()
+            except Exception as exc:
+                payload["industry_map_refresh"] = {"error": f"{type(exc).__name__}"}
             mark_fundamentals_refreshed(payload)
     return LongTermScanReport(SUCCEEDED if records else NO_CANDIDATES, payload)
+
+
+def acquire_card_fundamentals(limit: int = 25) -> dict:
+    """Official filings for current recommendation cards that have none yet."""
+    try:
+        from fundamentals.fetcher import acquire_official_for_symbols
+        from product.autopilot_journal import flatten_cards
+        from product.recommendations_store import load_recommendations
+
+        symbols = [c.get("symbol") for c in flatten_cards(load_recommendations() or {})]
+        return acquire_official_for_symbols(symbols, limit=limit)
+    except Exception as exc:
+        return {"error": f"{type(exc).__name__}: {exc}"[:200]}
 
 
 def fundamentals_refresh_marker() -> "Path":

@@ -82,3 +82,31 @@ def test_sector_of_falls_back_to_official_industry(tmp_path, monkeypatch):
     # The static comment map still wins where it has an answer.
     assert sector_of("EMAMILTD") == "FMCG / Consumer Staples"
     assert sector_of("NOPE") == ""
+
+
+def test_weekly_refresh_records_and_then_stays_fresh(tmp_path):
+    from data.nse_industry import industry_of, refresh_industry_map
+
+    path = tmp_path / "nse_industry_map.json"
+    fetched = []
+
+    def fetch():
+        fetched.append(1)
+        return [ROWS]
+
+    first = refresh_industry_map(path=path, fetch=fetch)
+    assert first == {"symbols": 3, "changed": 3}
+    assert industry_of("TCS", path=path) == "COMPUTERS - SOFTWARE"
+    assert refresh_industry_map(path=path, fetch=fetch)["skipped"] == "fresh"
+    assert fetched == [1]
+    assert refresh_industry_map(path=path, fetch=fetch, force=True)["changed"] == 0
+    assert fetched == [1, 1]
+
+
+def test_refresh_without_network_or_rows_is_a_no_op(tmp_path, monkeypatch):
+    from data.nse_industry import refresh_industry_map
+
+    path = tmp_path / "nse_industry_map.json"
+    assert refresh_industry_map(path=path)["skipped"] == "network_disabled"   # under pytest
+    assert refresh_industry_map(path=path, fetch=lambda: [[]])["skipped"] == "no_rows"
+    assert not path.exists()

@@ -137,6 +137,49 @@ def _try_official_backfill(symbol: str) -> Dict[str, Any] | None:
     return _official_warehouse_snapshot(symbol)
 
 
+def acquire_official_for_symbols(symbols, *, limit: int = 25, sleep_s: float = 0.4) -> Dict[str, Any]:
+    """Bounded official-filing acquisition for symbols with no warehouse evidence.
+
+    The long-term refresh only backfilled its own shortlist, so Opportunities
+    cards outside it stayed "Unmeasured" forever (warehouse stuck at 375
+    symbols on the owner's Mac). Never raises; network-gated like every
+    other acquisition path.
+    """
+    report: Dict[str, Any] = {"missing": 0, "attempted": 0, "acquired": [], "failed": []}
+    if not _network_backfill_allowed():
+        report["skipped"] = "network_disabled"
+        return report
+    try:
+        from product.pit_backfill import backfill_structured_financials
+        from product.pit_warehouse import DOC_QUARTERLY_RESULT, get_evidence
+    except Exception as exc:
+        report["skipped"] = f"unavailable: {type(exc).__name__}"
+        return report
+    missing = []
+    for symbol in dict.fromkeys(str(x or "").upper().strip() for x in (symbols or ())):
+        if not symbol:
+            continue
+        try:
+            if get_evidence(symbol, as_of="9999-12-31",
+                            evidence_types=(DOC_QUARTERLY_RESULT,), unsafe=True):
+                continue
+        except Exception:
+            continue
+        missing.append(symbol)
+    report["missing"] = len(missing)
+    batch = missing[: max(0, int(limit))]
+    report["attempted"] = len(batch)
+    for symbol in batch:
+        try:
+            result = backfill_structured_financials(symbol, max_xbrl=8, sleep_s=sleep_s)
+            (report["acquired"] if int(result.get("parsed") or 0) > 0 else report["failed"]).append(symbol)
+        except Exception:
+            report["failed"].append(symbol)
+    log.info("official_card_acquisition", missing=report["missing"], attempted=report["attempted"],
+             acquired=len(report["acquired"]), failed=len(report["failed"]))
+    return report
+
+
 def _merge_official(base: Mapping[str, Any] | None, official: Mapping[str, Any] | None) -> Dict[str, Any]:
     """Keep useful secondary fields, but official financials always win."""
     merged: Dict[str, Any] = dict(base or {})

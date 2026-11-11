@@ -13,6 +13,8 @@ static group names so one sector is never split across two spellings.
 from __future__ import annotations
 
 import json
+import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -147,3 +149,74 @@ def industry_of(symbol: str, *, path: Path | None = None) -> str:
             _cache["industries"] = {}
         _cache["mtime"] = key
     return str(_cache["industries"].get(str(symbol or "").strip().upper()) or "")
+
+
+REFRESH_MAX_AGE_S = 7 * 24 * 3600
+
+
+def _network_allowed() -> bool:
+    import os
+
+    if os.getenv("CI") and os.getenv("QT_ALLOW_NETWORK_ACQUIRE") != "1":
+        return False
+    return os.getenv("QT_OFFLINE") != "1" and not os.getenv("PYTEST_CURRENT_TEST")
+
+
+def refresh_industry_map(*, force: bool = False, path: Path | None = None, fetch=None) -> dict[str, Any]:
+    """Weekly pull of NSE's own industry labels, independent of the live overlay.
+
+    The snapshot path in data/nse_live.py only runs when Kite is not the
+    quote source, so with Kite logged in the map was never filled. This reuses
+    the same NSE index endpoint (two requests) at most once a week.
+    """
+    target = Path(path) if path else map_path()
+    try:
+        age = time.time() - target.stat().st_mtime
+    except OSError:
+        age = None
+    if not force and age is not None and age < REFRESH_MAX_AGE_S:
+        return {"skipped": "fresh", "age_h": round(age / 3600.0, 1)}
+    if fetch is None and not _network_allowed():
+        return {"skipped": "network_disabled"}
+    rows_by_index = fetch() if fetch is not None else _fetch_index_rows()
+    found: dict[str, str] = {}
+    for rows in rows_by_index:
+        found.update(industries_from_index_rows(rows))
+    if not found:
+        return {"skipped": "no_rows"}
+    changed = record_industries(found, path=target)
+    try:
+        if target.exists():
+            os.utime(target, None)          # checked now, even when unchanged
+    except OSError:
+        pass
+    return {"symbols": len(found), "changed": changed}
+
+
+def _fetch_index_rows() -> list[list[dict]]:
+    import requests
+    from urllib.parse import quote
+
+    from data.nse_live import _HEADERS, _INDICES
+
+    out: list[list[dict]] = []
+    session = requests.Session()
+    try:
+        session.headers.update(_HEADERS)
+        session.get("https://www.nseindia.com", timeout=10)
+        for idx in _INDICES:
+            try:
+                resp = session.get(
+                    f"https://www.nseindia.com/api/equity-stockIndices?index={quote(idx)}", timeout=15)
+                if resp.status_code == 200:
+                    out.append(list(resp.json().get("data") or []))
+            except Exception as exc:
+                log.debug("nse_industry_index_failed", index=idx, error=str(exc)[:120])
+    except Exception as exc:
+        log.debug("nse_industry_fetch_failed", error=str(exc)[:160])
+    finally:
+        try:
+            session.close()
+        except Exception:
+            pass
+    return out
