@@ -12,6 +12,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
+from logger import get_logger
+
+log = get_logger(__name__)
+
 SUCCEEDED = "SUCCEEDED"
 NO_CANDIDATES = "NO_CANDIDATES"
 DATA_UNAVAILABLE = "DATA_UNAVAILABLE"
@@ -604,6 +608,8 @@ def run_long_term_scan(
             try:
                 from data.nse_industry import refresh_industry_map
                 payload["industry_map_refresh"] = refresh_industry_map()
+                log.info("industry_map_refresh", **{k: v for k, v in dict(payload["industry_map_refresh"] or {}).items()
+                                                    if isinstance(v, (str, int, float))})
             except Exception as exc:
                 payload["industry_map_refresh"] = {"error": f"{type(exc).__name__}"}
             mark_fundamentals_refreshed(payload)

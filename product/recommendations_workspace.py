@@ -77,6 +77,12 @@ CATEGORIES: tuple[dict[str, str], ...] = (
         "blurb": "True turnarounds only — double-bottom / accumulation (not coils), ranked by independent evidence families.",
         "icon": "recovery",
     },
+    {
+        "id": "pullback_entries",
+        "label": "Pullback Entries",
+        "blurb": "Leaders in an intact uptrend resting quietly at their 20/50-day average (RSI 35–55, volume drying up) — not extended charts.",
+        "icon": "pullback",
+    },
 )
 
 # True recovery = turnaround evidence. Coils (CUP_HANDLE / POCKET_PIVOT / NR7)
@@ -520,6 +526,29 @@ def primary_scan_category(row: Mapping[str, Any]) -> tuple[str, str, list[str]] 
     return None
 
 
+def _pullback_cards(scan: Mapping[str, Any], buckets: Mapping[str, Any], *, scanned_at: str,
+                   market_ctx: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """Cards for scan/pullback_scanner rows a symbol not already shown elsewhere."""
+    shown = {str(c.get("symbol") or "").upper() for cards in buckets.values() for c in (cards or [])}
+    cards: list[dict[str, Any]] = []
+    for raw in scan.get("pullback_candidates") or []:
+        if not isinstance(raw, Mapping) or str(raw.get("symbol") or "").upper() in shown:
+            continue
+        try:
+            row = enrich_scan_row(dict(raw), scanned_at=scanned_at)
+            card = card_from_row(
+                row, category_id="pullback_entries", category_label="Pullback Entries",
+                qualify_reason=str(raw.get("why") or raw.get("setup") or ""),
+                evidence_tags=["Pullback to support"], market_ctx=market_ctx,
+            )
+        except Exception:
+            continue
+        if raw.get("stop_plan") and not card.get("stop_plan"):
+            card["stop_plan"] = raw.get("stop_plan")
+        cards.append(card)
+    return cards[:_BUCKET_CAP]
+
+
 def _empty_detail_for(
     category_id: str,
     *,
@@ -529,6 +558,9 @@ def _empty_detail_for(
 ) -> str:
     if cards:
         return ""
+    if category_id == "pullback_entries":
+        return ("No leader is resting at support right now (needs an intact uptrend, a quiet "
+                "1–8% dip to the 20/50-DMA, RSI 35–55 and volume drying up).")
     if category_id == "wealth_builders":
         if not lt_rows:
             return "No long-term shortlist on file — run a long-term scan with fundamentals."
@@ -946,6 +978,7 @@ def build_recommendations_workspace(
             pass
     desk = build_desk_context(scan_rows)
     buckets = _bucket_rows(scan_rows, lt_rows, market_ctx=desk)
+    buckets["pullback_entries"] = _pullback_cards(scan, buckets, scanned_at=scan_at, market_ctx=desk)
     if deep_confirm:
         buckets = _paint_deep_confirm(
             buckets, scan_payload=scan, long_term_payload=lt,

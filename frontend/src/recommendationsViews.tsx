@@ -28,6 +28,7 @@ const CAT_ICONS: Record<string, string> = {
   super_trends: 'S',
   momentum_breakouts: 'B',
   recovery_setups: 'R',
+  pullback_entries: 'P',
 }
 
 function badgeClass(action: string): string {

@@ -630,6 +630,13 @@ def run_whole_market_scan(
         n_setups = int(summary.get("with_any_setup", 0) or 0)
         status = SUCCEEDED if n_setups else NO_SETUPS
         payload["scan_status"] = status
+        try:
+            # Leaders resting at support (not extended breakouts) from the same
+            # official history the scan just used. Never affects publication.
+            from scan.pullback_scanner import find_pullbacks
+            payload["pullback_candidates"] = find_pullbacks(limit=25)
+        except Exception:
+            payload["pullback_candidates"] = []
         # The canonical scan becomes visible only after all scan-derived overlays
         # have finished. This prevents readers from observing a half-published scan
         # and keeps scan identity + recommendation projection atomic at the product
