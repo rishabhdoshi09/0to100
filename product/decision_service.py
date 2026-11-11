@@ -19,6 +19,35 @@ from __future__ import annotations
 from typing import Any, Mapping, Sequence
 
 from product.decision import BUY, Decision
+
+# Demote-only use of historical replay (Invariant 6: negative-edge combos
+# auto-demote to WATCH). Owner's Mac 2026-11-11: EMAMILTD showed BUY while its
+# own 50-analog replay said mean -0.37R, 37% winners, P(edge>0)=0.02. Replay
+# can never promote (forward evidence only); it may still say "do not buy".
+HISTORICAL_DEMOTE_MIN_EFFECTIVE_N = 30.0
+HISTORICAL_DEMOTE_MAX_P_EDGE = 0.05
+
+
+def historical_demotion(intelligence: Mapping[str, Any] | None) -> str:
+    """Reason text when replay evidence is strong enough to veto a BUY, else ''."""
+    data = dict(intelligence or {})
+    try:
+        n_eff = float(data.get("effective_n") or 0.0)
+        p_edge = data.get("p_edge_positive")
+        p_edge = None if p_edge is None else float(p_edge)
+        upper = data.get("upper_95_R")
+        upper = None if upper is None else float(upper)
+    except (TypeError, ValueError):
+        return ""
+    if n_eff < HISTORICAL_DEMOTE_MIN_EFFECTIVE_N or p_edge is None:
+        return ""
+    if p_edge >= HISTORICAL_DEMOTE_MAX_P_EDGE or (upper is not None and upper > 0.05):
+        return ""
+    mean = data.get("shrunk_mean_R", data.get("mean_R"))
+    return (
+        f"Demoted to WATCH: {data.get('raw_n') or int(n_eff)} historical analogs of this setup "
+        f"averaged {float(mean or 0.0):+.2f}R with P(edge>0)={p_edge:.2f}."
+    )
 from product.decision_adapter import decisions_from_cards
 from product.decision_explanation import explain, missing_sections
 from product.decision_ranking import decision_context_key, rank, ranking_explanation
@@ -300,9 +329,14 @@ def decision_board(
     counts: dict[str, int] = {}
     gaps: dict[str, int] = {}
     all_rows: list[dict[str, Any]] = []
+    demoted = 0
     for row in ranked:
         decision = row.decision
-        counts[decision.state] = counts.get(decision.state, 0) + 1
+        intelligence = dict((decision.historical_evidence or {}).get("evidence_intelligence") or {})
+        demotion = historical_demotion(intelligence) if decision.state == BUY else ""
+        shown_state = "WATCH" if demotion else decision.state
+        demoted += 1 if demotion else 0
+        counts[shown_state] = counts.get(shown_state, 0) + 1
         for item in decision.missing_evidence:
             gaps[item.id] = gaps.get(item.id, 0) + 1
         payload = row.to_dict()
@@ -314,9 +348,12 @@ def decision_board(
         payload["context_key"] = decision_context_key(decision)
         payload["evidence_counts"] = decision.evidence_counts()
         payload["why"] = ranking_explanation(row)
-        payload["evidence_intelligence"] = dict(
-            (decision.historical_evidence or {}).get("evidence_intelligence") or {}
-        )
+        payload["evidence_intelligence"] = intelligence
+        if demotion:
+            payload["state"] = shown_state
+            payload["engine_state"] = decision.state
+            payload["demoted_by"] = "HISTORICAL_NEGATIVE_EDGE"
+            payload["why"] = f"{payload['why']} {demotion}".strip()
         try:
             from product.trading_thesis import decision_quality
             payload["trade_quality"] = decision_quality(
@@ -359,8 +396,9 @@ def decision_board(
         "thesis": thesis,
         "counts": counts,
         # Research-actionable BUY states remain available to historical replay.
-        "actionable": sum(1 for r in ranked if r.decision.state == BUY),
-        "research_actionable": sum(1 for r in ranked if r.decision.state == BUY),
+        "actionable": sum(1 for r in ranked if r.decision.state == BUY) - demoted,
+        "research_actionable": sum(1 for r in ranked if r.decision.state == BUY) - demoted,
+        "historically_demoted": demoted,
         # Paper-actionable is the truth used by readiness/no-trade semantics.
         # Capacity reserves passed all entry gates but are not an execution slot.
         "paper_actionable": sum(
