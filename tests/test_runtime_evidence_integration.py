@@ -73,6 +73,9 @@ def test_autonomous_bootstrap_does_not_make_startup_evidence_ready(monkeypatch,t
 
 
 def test_startup_evidence_ready_does_not_skip_history_first_paper_gate(monkeypatch,tmp_path):
+    # Production entries never skip the gate; the tagged learning lane is
+    # pinned separately below (owner decision 2026-11-11).
+    monkeypatch.setenv("QT_PAPER_EXPLORATION","0")
     """All startup evidence can be ready while history-first policy still blocks an unreproduced setup."""
     _patch_operational_healthy(monkeypatch,tmp_path)
     monkeypatch.setattr(bhavcopy_runtime,"official_history_freshness",lambda **_k:{"current":True,"available_session":"2026-09-05","expected_latest_completed_session":"2026-09-05","reason_code":""})
@@ -88,6 +91,19 @@ def test_startup_evidence_ready_does_not_skip_history_first_paper_gate(monkeypat
     import product.autonomous_evolution as evolution
     monkeypatch.setattr(evolution,"bootstrap_status",lambda:{"status":"NOT_STARTED","analysis_complete":False,"paper_ready_setups":0}); monkeypatch.setattr(evolution,"ensure_started_async",lambda:{"status":"NOT_STARTED"})
     out=_cycle(_vcp_card()); assert not out["taken"]; assert out["rejections"][0]["reason_code"]==HISTORICAL_EVIDENCE_PENDING
+
+
+def test_history_gate_only_admits_the_tagged_half_risk_learning_lane(monkeypatch,tmp_path):
+    from research.auto_research.paper_book import PaperBook
+    import product.autonomous_evolution as evolution
+    monkeypatch.delenv("QT_PAPER_EXPLORATION",raising=False)
+    monkeypatch.setattr(evolution,"bootstrap_status",lambda:{"status":"NOT_STARTED","analysis_complete":False,"paper_ready_setups":0}); monkeypatch.setattr(evolution,"ensure_started_async",lambda:{"status":"NOT_STARTED"})
+    book=PaperBook(capital=100_000)
+    out=_cycle(_vcp_card(),book=book)
+    for row in out["taken"]:
+        assert row["lane"]=="EXPLORATION"
+    for pos in book.open.values():
+        assert float(pos.approved_risk_pct)<=0.5+1e-9
 
 
 def test_reproduced_setup_still_paper_eligible_after_runtime_merge(monkeypatch,tmp_path):

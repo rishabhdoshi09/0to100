@@ -58,3 +58,14 @@ def test_owner_can_switch_the_lane_off(tmp_path, monkeypatch):
     monkeypatch.setenv("QT_PAPER_EXPLORATION", "0")
     assert PA._exploration_pick([_decision("A")], day="2026-11-11", evaluate=_enter,
                                 path=tmp_path / "x.json") is None
+
+
+def test_history_gate_pending_names_are_explored_first(tmp_path):
+    decisions = [_decision("WATCHY", score=95),
+                 _decision("RPEL", score=81, reason="HISTORICAL_EVIDENCE_PENDING"),
+                 _decision("MISMATCH", score=99, reason="HISTORICAL_EVIDENCE_PENDING"),
+                 _decision("BAD", score=99, reason="EMPIRICAL_GATE_FAILED")]
+    decisions[1].detail = "history-first paper gate pending · HISTORICAL_UNPROVEN · paper_ready_setups=0"
+    decisions[2].detail = "history-first paper gate pending · HISTORICAL_GENERATION_MISMATCH · paper_ready_setups=0"
+    pick = PA._exploration_pick(decisions, day="2026-11-11", evaluate=_enter, path=tmp_path / "x.json")
+    assert pick.symbol == "RPEL"                      # unproven: explored; mismatch: never

@@ -490,6 +490,8 @@ def test_injected_policies_skip_history_unless_explicitly_enforced(monkeypatch):
 
 
 def test_explicit_policy_path_does_not_bypass_history_gate(monkeypatch, tmp_path):
+    # Production path only; the tagged learning lane has its own tests.
+    monkeypatch.setenv("QT_PAPER_EXPLORATION", "0")
     import product.autonomous_evolution as evolution
     import product.evolution_generation_guard as generation_guard
     from product.evidence_policy_engine import BLOCK, evaluate_policies

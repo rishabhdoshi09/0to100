@@ -103,6 +103,17 @@ def _record_exploration(day: str, symbol: str, *, path=None) -> None:
         pass
 
 
+# Only these refusals may be explored (owner decision 2026-11-11: "allow 1
+# learning trade/day"): the production tier, or the history-first gate (no
+# setup proven in replay yet -- forward evidence is exactly what the lane
+# gathers). The gate still holds for every production entry. Due-diligence,
+# empirical, data, risk and entry-state refusals are never bypassed.
+_EXPLORABLE_REASONS = ("HISTORICAL_EVIDENCE_PENDING", "LOW_QUALITY_SETUP")
+# Evidence merely absent or unproven. HISTORICAL_GENERATION_MISMATCH and
+# HISTORICAL_GATE_ERROR are integrity failures and stay blocked for every lane.
+_EXPLORABLE_HISTORY_STAGES = ("HISTORICAL_UNPROVEN", "HISTORICAL_BOOTSTRAP")
+
+
 def _exploration_pick(decisions, *, day: str, evaluate, path=None):
     """Best research candidate re-run through every gate at half risk, or None.
 
@@ -119,14 +130,18 @@ def _exploration_pick(decisions, *, day: str, evaluate, path=None):
     pool = []
     for decision in decisions:
         card = dict(decision.card or {})
-        if decision.reason_code != LOW_QUALITY_SETUP:
+        if decision.reason_code not in _EXPLORABLE_REASONS:
             continue
+        if decision.reason_code == HISTORICAL_EVIDENCE_PENDING and not any(
+                stage in str(decision.detail or "") for stage in _EXPLORABLE_HISTORY_STAGES):
+            continue      # mismatch / gate error is an integrity problem, never explored
         if str(card.get("entry_state") or "") != "ready" or bool(card.get("chase_risk")):
             continue
-        pool.append((float(_f(card.get("score")) or 0.0), decision.symbol, card))
-    pool.sort(key=lambda item: (-item[0], item[1]))
+        priority = _EXPLORABLE_REASONS.index(decision.reason_code)
+        pool.append((priority, -float(_f(card.get("score")) or 0.0), decision.symbol, card))
+    pool.sort()
     from product.reco_ensemble import TIER_GOOD
-    for _score, _symbol, card in pool[:3]:
+    for _priority, _score, _symbol, card in pool[:3]:
         probe = {**card, "reco_tier": TIER_GOOD, "lane": EXPLORATION,
                  "exploration_risk_pct": EXPLORATION_RISK_PCT}
         candidate = evaluate(probe)
@@ -1121,7 +1136,9 @@ def run_reco_paper_cycle(
                 c, book=book, workspace=payload or None, now=clock,
                 entries_allowed=entries_allowed, entry_block_reason=entry_block_reason,
                 paper_enabled=paper_enabled, regime=regime, policy_path=policy_path,
-                policies=policies, enforce_history=enforce_history,
+                # The tagged probe alone skips the history-first gate (see
+                # _EXPLORABLE_REASONS); every other gate still runs.
+                policies=policies, enforce_history=False,
                 family_risk=family_risk, cluster_risk=cluster_risk,
                 evolution_policy=evolution_champion,
             ),
