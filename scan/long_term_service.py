@@ -599,7 +599,37 @@ def run_long_term_scan(
     if save:
         from product.long_term_store import save_long_term_scan
         save_long_term_scan(payload)
+        if refresh_fundamentals:
+            mark_fundamentals_refreshed(payload)
     return LongTermScanReport(SUCCEEDED if records else NO_CANDIDATES, payload)
+
+
+def fundamentals_refresh_marker() -> "Path":
+    from pathlib import Path
+    from core.runtime_paths import logs_dir
+
+    return Path(logs_dir()) / "product" / "long_term_fundamentals_refresh.json"
+
+
+def mark_fundamentals_refreshed(payload: Mapping[str, Any]) -> None:
+    """Record a completed fundamentals refresh (the network acquisition pass).
+
+    The cache-only long-term scan rewrites latest_long_term_scan.json after
+    every market scan, so that file's age can never say when official filings
+    were last acquired. This marker is the refresh's own clock. Never raises.
+    """
+    try:
+        import json
+        from core.atomic_io import atomic_write_text
+
+        summary = dict(payload.get("summary") or {})
+        atomic_write_text(fundamentals_refresh_marker(), json.dumps({
+            "refreshed_at": datetime.now(timezone.utc).isoformat(),
+            "candidates": summary.get("candidates"),
+            "fundamentally_covered": summary.get("fundamentally_covered"),
+        }))
+    except Exception:
+        pass
 
 
 def _payload(records: list[dict], *, scope: str, refresh: bool,

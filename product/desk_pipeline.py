@@ -222,7 +222,18 @@ def scan_payload_is_fresh(payload: Mapping[str, Any] | None, *, path: Path | Non
 
 
 def long_term_is_fresh() -> bool:
-    return not _stale(logs_dir() / "product" / "latest_long_term_scan.json", LONG_TERM_FRESH_S)
+    """Fresh only when the shortlist AND its fundamentals refresh are recent.
+
+    The cache-only LONG_TERM_SCAN after every market scan keeps
+    latest_long_term_scan.json young, so judging by that file alone meant the
+    LONG_TERM_REFRESH (official-filing acquisition for new candidates) never
+    came due and the warehouse stopped growing.
+    """
+    product_dir = logs_dir() / "product"
+    return (
+        not _stale(product_dir / "latest_long_term_scan.json", LONG_TERM_FRESH_S)
+        and not _stale(product_dir / "long_term_fundamentals_refresh.json", LONG_TERM_FRESH_S)
+    )
 
 
 def news_is_fresh() -> bool:
