@@ -324,3 +324,30 @@ def test_yoy_growth_only_fills_a_missing_3y_cagr_at_lower_weight():
     both = score_current_fundamentals({**base, "sales_growth_3y": 20.0, "sales_growth_yoy": -50.0})
     assert yoy["coverage"] < three["coverage"]        # weaker evidence, less weight
     assert both["coverage"] == three["coverage"]      # 3y wins when present
+
+
+BANK_XBRL = """<?xml version="1.0" encoding="UTF-8"?>
+<xbrli:xbrl xmlns:xbrli="http://www.xbrl.org/2003/instance" xmlns:in-bse-fin="http://example/in-bse-fin">
+  <xbrli:context id="OneD"><xbrli:period><xbrli:startDate>2026-07-01</xbrli:startDate><xbrli:endDate>2026-09-30</xbrli:endDate></xbrli:period></xbrli:context>
+  <xbrli:context id="OneI"><xbrli:period><xbrli:instant>2026-09-30</xbrli:instant></xbrli:period></xbrli:context>
+  <in-bse-fin:LevelOfRounding contextRef="OneD">Lakhs</in-bse-fin:LevelOfRounding>
+  <in-bse-fin:InterestEarned contextRef="OneD" decimals="-5" unitRef="INR">335891700000</in-bse-fin:InterestEarned>
+  <in-bse-fin:ProfitLossForThePeriod contextRef="OneD" decimals="-5" unitRef="INR">58147200000</in-bse-fin:ProfitLossForThePeriod>
+  <in-bse-fin:Capital contextRef="OneI" decimals="-5" unitRef="INR">22985900000</in-bse-fin:Capital>
+  <in-bse-fin:ReservesAndSurplus contextRef="OneI" decimals="-5" unitRef="INR">1399482300000</in-bse-fin:ReservesAndSurplus>
+  <in-bse-fin:Assets contextRef="OneI" decimals="-5" unitRef="INR">19209351600000</in-bse-fin:Assets>
+</xbrli:xbrl>
+"""
+
+
+def test_bank_net_worth_is_capital_plus_reserves():
+    from product.pit_financials import _derive
+    from product.pit_xbrl import parse_xbrl
+
+    parsed = parse_xbrl(BANK_XBRL)
+    row = {"period_end": "2026-09-30", "facts": parsed["facts"], "period_months": 3}
+    derived = _derive(row, None, rows=[row])
+    assert derived["is_financial"] is True
+    assert derived["net_worth_cr"] == pytest.approx(142246.82)
+    # 5,814.72 cr a quarter, annualised, over 1.42 lakh cr of net worth.
+    assert derived["roe_approx_pct"] == pytest.approx(16.35, abs=0.01)

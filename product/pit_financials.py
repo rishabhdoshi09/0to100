@@ -222,6 +222,10 @@ def _balance_sheet(rows: Sequence[Mapping[str, Any]]) -> tuple[float | None, flo
             cap, other = _f(facts.get("bs_equity_share_capital")), _f(facts.get("bs_other_equity"))
             equity = None if cap is None or other is None else cap + other
         if equity is None:
+            # Banks file the banking schedule: Capital + Reserves and Surplus.
+            cap, reserves = _f(facts.get("bs_bank_capital")), _f(facts.get("bs_reserves_and_surplus"))
+            equity = None if cap is None or reserves is None else cap + reserves
+        if equity is None:
             continue
         debt = _f(facts.get("bs_total_debt"))
         if debt is None:

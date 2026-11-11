@@ -63,6 +63,12 @@ TAG_MAP = {
     "BorrowingsNoncurrent": "borrowings_noncurrent",
     "BorrowingsCurrent": "borrowings_current",
     "Borrowings": "borrowings",
+    # Banking-taxonomy balance sheet (Schedule: Capital, Reserves & Surplus...).
+    "Capital": "bank_capital",
+    "ReservesAndSurplus": "reserves_and_surplus",
+    "Assets": "total_assets",
+    "Advances": "advances",
+    "Deposits": "deposits",
     "PropertyPlantAndEquipment": "ppe",
     "TotalAssets": "total_assets",
     "Equity": "equity",
