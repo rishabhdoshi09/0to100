@@ -124,19 +124,39 @@ def why_no_trade(path: str | Path | None = None) -> dict[str, Any]:
     }
 
 
+_TIER_RANK = {"high_conviction": 0, "good_setup": 1}
+
+
+def _actionability(card: Mapping[str, Any]) -> tuple[int, int]:
+    tier = _TIER_RANK.get(str(card.get("reco_tier") or "").lower(), 2)
+    ready = 0 if str(card.get("entry_state") or "") == "ready" else 1
+    return tier, ready
+
+
 def flatten_cards(workspace: Mapping[str, Any] | None) -> list[dict[str, Any]]:
-    """Pull recommendation cards from the saved desk payload. Empty is valid."""
-    cards: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    """Pull recommendation cards from the saved desk payload, one per symbol.
+
+    A symbol can sit in several categories (e.g. a watch-tier Wealth Builders
+    "Hold / Research" card and a high-conviction Momentum Breakouts card). The
+    most actionable card wins (tier, then a ready entry); ties keep category
+    order. Keeping simply the first one let Wealth Builders -- listed first --
+    hide RPEL/KALYANKJIL/HONASA/SPARC Buy cards from the paper cycle as
+    LOW_QUALITY_SETUP (owner's Mac 2026-11-11). Output order is first-seen.
+    """
+    best: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
     for cat in list((workspace or {}).get("categories") or []):
         for card in list((cat or {}).get("cards") or []):
             if not isinstance(card, Mapping):
                 continue
             symbol = str(card.get("symbol") or "").strip().upper()
-            if not symbol or symbol in seen:
+            if not symbol:
                 continue
-            seen.add(symbol)
             row = dict(card)
             row["symbol"] = symbol
-            cards.append(row)
-    return cards
+            if symbol not in best:
+                best[symbol] = row
+                order.append(symbol)
+            elif _actionability(row) < _actionability(best[symbol]):
+                best[symbol] = row
+    return [best[symbol] for symbol in order]
