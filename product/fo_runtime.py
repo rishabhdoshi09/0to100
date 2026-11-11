@@ -399,6 +399,13 @@ def run_fo_directional_scan(
         quote_keys.append(f"NSE:{getattr(item, 'symbol', '')}")
         quote_keys.append(f"NFO:{getattr(item, 'future_symbol', '')}")
     quotes = read_market_quotes(quote_keys, client=client)
+    if live_clock:
+        # Judge these quotes against the moment they were fetched. History
+        # and prefilter work above can take over a minute on the external
+        # drive; a clock taken before it made fresh Kite quotes look like they
+        # came from the future (CURRENT_NIFTY_QUOTE_UNTRUSTED, owner's Mac
+        # 2026-11-11 11:20, age -76 s) and blanked the F&O desk.
+        quote_now = datetime.now(IST)
     nifty_quote = quotes.get("NSE:NIFTY 50")
     nifty_quote_state = quote_provenance(
         nifty_quote,
@@ -504,6 +511,8 @@ def run_fo_directional_scan(
         option_meta_by_symbol[symbol] = metas
         option_symbols.extend(str(row.get("tradingsymbol") or "") for row in metas)
     option_quotes = read_nfo_quotes(option_symbols, client=client)
+    if live_clock:
+        quote_now = datetime.now(IST)    # same rule: clock at fetch time
 
     owned_iv_history_store = False
     if iv_history_store is None:

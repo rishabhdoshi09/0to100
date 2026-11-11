@@ -642,3 +642,42 @@ def test_fresh_but_incoherent_option_quotes_are_filtered(monkeypatch):
         row["reason"] == "OPTION_QUOTE_SKEW_TOO_WIDE"
         for row in result["deep_failures"][0]["rejected_option_quotes"]
     )
+
+
+def test_live_clock_judges_quotes_at_fetch_time_not_before_slow_work(monkeypatch):
+    """Owner's Mac 2026-11-11 11:20: history/prefilter work took ~76 s on the
+    external drive after the clock was read, so the fresh NIFTY quote looked
+    76 s in the future and the whole F&O desk was CURRENT_NIFTY_QUOTE_UNTRUSTED."""
+    bars = _breakout_bars()
+    spot = float(bars["close"].iloc[-1])
+    instruments = _instruments(spot)
+    client = _Client(spot, instruments)
+    monkeypatch.setattr(
+        fo_runtime, "_index_context",
+        lambda: {"return_20d_pct": 1.0, "return_5d_pct": 0.5, "last_close": 21900.0},
+    )
+    monkeypatch.setattr(fo_runtime, "_sector_strength_map", lambda nifty: {"Tech": 1.2})
+    monkeypatch.setattr(fo_runtime, "_sector_for", lambda symbol: "Tech")
+
+    base = fo_runtime.datetime
+    clock = [client.quote_now - timedelta(seconds=90)]   # before the quotes exist
+    real_read = fo_runtime.read_market_quotes
+
+    def slow_read(keys, client=None):
+        out = real_read(keys, client=client)
+        clock[0] = client.quote_now                     # quotes arrive "now"
+        return out
+
+    class _Clock(base):
+        @classmethod
+        def now(cls, tz=None):
+            value = clock[0]
+            return value.replace(tzinfo=tz) if tz is not None and value.tzinfo is None else value
+
+    monkeypatch.setattr(fo_runtime, "datetime", _Clock)
+    monkeypatch.setattr(fo_runtime, "read_market_quotes", slow_read)
+    result = fo_runtime.run_fo_directional_scan(
+        report=_report(spot), instrument_rows=instruments, client=client, as_of=AS_OF,
+        history_getter=lambda symbol: bars,
+    )
+    assert result.get("code") != "CURRENT_NIFTY_QUOTE_UNTRUSTED"
