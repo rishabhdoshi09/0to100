@@ -913,6 +913,7 @@ class Supervisor:
                 idempotency_key=SCH.eod_data_refresh_key(session_date),
                 critical=True,
             )
+            self._enqueue_reference_upkeep(session_date)
 
         # First preserve the genuine forward-paper learning loop once per session.
         # A BLOCKED outcome job does not prevent historical backfill from running.
@@ -1290,6 +1291,25 @@ class Supervisor:
             return False
 
     AUTH_RETRY_S = 300.0
+
+    def _enqueue_reference_upkeep(self, session_date: str) -> None:
+        """Once per EOD: refresh corporate actions and the official index store.
+
+        Both handlers exist (the CA one runs in the background), but their
+        recurring rows were retired in a scheduler upgrade and nothing enqueued
+        them again: on the owner's Mac ca_events.json was last refreshed
+        2026-09-18 (splits/bonuses since then were not back-adjusted) and the
+        index store stopped at 2026-10-04 (regime/benchmark context). Daily
+        idempotency keys keep this to one run per session.
+        """
+        for job_type, key in (
+            (SCH.CORPORATE_ACTIONS, f"corporate_actions:{session_date}"),
+            (SCH.INDEX_WARMUP, f"index_warmup:{session_date}"),
+        ):
+            try:
+                self.jobs.enqueue(job_type, idempotency_key=key)
+            except Exception:
+                continue
 
     def _revive_blocked_auth(self, session_date: str) -> bool:
         """Re-check today's broker session after it blocked on CREDENTIAL_UPDATE.

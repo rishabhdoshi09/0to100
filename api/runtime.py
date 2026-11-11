@@ -307,6 +307,15 @@ def research_status() -> dict:
     return build_research_status(autonomy=core._autonomy_payload())
 
 
+@product.app.get("/api/system-vitals")
+def system_vitals() -> dict:
+    """Silent-failure detector: did today's must-happen work actually happen?"""
+    from product.system_vitals import collect, worst
+
+    vitals = collect()
+    return {"schema_version": 1, "status": worst(vitals), "vitals": vitals}
+
+
 @product.app.get("/api/research-director")
 def research_director_status() -> dict:
     """Single read-only mission-control view of the autonomous research loop."""

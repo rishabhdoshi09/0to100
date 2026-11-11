@@ -110,3 +110,32 @@ def test_refresh_without_network_or_rows_is_a_no_op(tmp_path, monkeypatch):
     assert refresh_industry_map(path=path)["skipped"] == "network_disabled"   # under pytest
     assert refresh_industry_map(path=path, fetch=lambda: [[]])["skipped"] == "no_rows"
     assert not path.exists()
+
+
+CSV = """Company Name,Industry,Symbol,Series,ISIN Code
+Punjab National Bank,Financial Services,PNB,EQ,INE160A01022
+Tata Consultancy Services Ltd.,Information Technology,TCS,EQ,INE467B01029
+Reliance Industries Ltd.,Oil Gas & Consumable Fuels,RELIANCE,EQ,INE002A01018
+UltraTech Cement Ltd.,Construction Materials,ULTRACEMCO,EQ,INE481G01011
+,,,,
+"""
+
+
+def test_constituent_csv_rows_feed_the_same_pipeline():
+    from data.nse_industry import industries_from_index_rows, normalise_industry, rows_from_constituent_csv
+
+    found = industries_from_index_rows(rows_from_constituent_csv(CSV))
+    assert found == {"PNB": "Financial Services", "TCS": "Information Technology",
+                     "RELIANCE": "Oil Gas & Consumable Fuels", "ULTRACEMCO": "Construction Materials"}
+    assert normalise_industry("Financial Services") == "Banking & Finance"
+    assert normalise_industry("Oil Gas & Consumable Fuels") == "Energy & Power"
+    assert normalise_industry("Information Technology") == "IT / Software"
+    assert normalise_industry("Construction Materials") == "Cement"
+
+
+def test_csv_fallback_used_when_api_returns_nothing(monkeypatch):
+    import data.nse_industry as ni
+
+    monkeypatch.setattr(ni, "_fetch_api_rows", lambda: [])
+    monkeypatch.setattr(ni, "_fetch_constituent_rows", lambda: [ni.rows_from_constituent_csv(CSV)])
+    assert len(ni._fetch_index_rows()[0]) == 4

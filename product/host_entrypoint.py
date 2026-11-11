@@ -294,6 +294,15 @@ def main() -> int:
             start_power_watch(storage_guard.shutdown)
         except Exception:
             pass
+    if os.environ.get("QT_VITALS_WATCH", "1") != "0":
+        try:
+            # Silent-failure detector: Telegram the owner when a daily vital
+            # (outcome logging, paper cycles, scan, F&O, reference data) fails.
+            from product.system_vitals import start_vitals_watch
+
+            start_vitals_watch(storage_guard.shutdown)
+        except Exception:
+            pass
     threading.Thread(
         target=_report_loop,
         args=(storage_guard,),

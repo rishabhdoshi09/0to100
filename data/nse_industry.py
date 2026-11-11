@@ -29,6 +29,13 @@ _cache: dict[str, Any] = {"mtime": None, "industries": {}}
 # scan.sector_heat so NSE-labelled and comment-labelled symbols share buckets.
 _GROUP_RULES: tuple[tuple[tuple[str, ...], str], ...] = (
     (("edible oil", "vanaspati"), "FMCG / Consumer Staples"),
+    # NSE index-constituent macro sectors (ind_*list.csv "Industry" column).
+    (("financial services",), "Banking & Finance"),
+    (("oil gas & consumable fuels", "oil, gas"), "Energy & Power"),
+    (("construction materials",), "Cement"),
+    (("fast moving consumer goods",), "FMCG / Consumer Staples"),
+    (("forest materials",), "Paper & Packaging"),
+    (("consumer services",), "Consumer & Retail / Apparel"),
     (("housing finance",), "Housing Finance"),
     (("microfinance", "micro finance"), "Microfinance"),
     (("bank",), "Banking & Finance"),
@@ -193,7 +200,58 @@ def refresh_industry_map(*, force: bool = False, path: Path | None = None, fetch
     return {"symbols": len(found), "changed": changed}
 
 
+_CONSTITUENT_CSVS = (
+    "https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv",
+    "https://nsearchives.nseindia.com/content/indices/ind_niftymicrocap250_list.csv",
+    "https://nsearchives.nseindia.com/content/indices/ind_niftytotalmarket_list.csv",
+)
+
+
+def rows_from_constituent_csv(text: str) -> list[dict]:
+    """NSE index constituent CSV (Company Name, Industry, Symbol, ...) -> API-shaped rows."""
+    import csv
+    import io
+
+    out: list[dict] = []
+    for record in csv.DictReader(io.StringIO(text or "")):
+        norm = {str(k or "").strip().lower(): str(v or "").strip() for k, v in record.items()}
+        symbol, industry = norm.get("symbol", ""), norm.get("industry", "")
+        if symbol and industry:
+            out.append({"symbol": symbol, "meta": {"industry": industry}})
+    return out
+
+
+def _fetch_constituent_rows() -> list[list[dict]]:
+    """Official archive CSVs (same host as bhavcopy/EQUITY_L), used when the
+    live index API returns nothing (it did on the owner's Mac: no_rows)."""
+    import requests
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/csv,text/plain,*/*;q=0.8",
+    }
+    out: list[list[dict]] = []
+    for url in _CONSTITUENT_CSVS:
+        try:
+            resp = requests.get(url, headers=headers, timeout=20)
+            if resp.status_code == 200:
+                rows = rows_from_constituent_csv(resp.text)
+                if rows:
+                    out.append(rows)
+        except Exception as exc:
+            log.debug("nse_industry_csv_failed", url=url, error=str(exc)[:120])
+    return out
+
+
 def _fetch_index_rows() -> list[list[dict]]:
+    rows = _fetch_api_rows()
+    if any(rows):
+        return rows
+    return _fetch_constituent_rows()
+
+
+def _fetch_api_rows() -> list[list[dict]]:
     import requests
     from urllib.parse import quote
 
