@@ -201,10 +201,17 @@ def _build_radar_home_workspace() -> dict[str, Any]:
     scan: dict[str, Any] = {}
     sepa_cards: list[dict[str, Any]] = []
     sepa_note = "Last scan is not readable yet."
+    import time as _time
+    marks: list[tuple[str, float]] = [("start", _time.perf_counter())]
+
+    def _mark(name: str) -> None:
+        marks.append((name, _time.perf_counter()))
+
     try:
         scan = core._scan_payload()
     except Exception:
         scan = {}
+    _mark("scan")
     try:
         from product.sepa_setup import load_persisted_best_setups
 
@@ -221,6 +228,7 @@ def _build_radar_home_workspace() -> dict[str, Any]:
     except Exception:
         sepa_cards = []
         sepa_note = "Persisted SEPA ranking is temporarily unavailable."
+    _mark("best_setups")
     try:
         market = core._market_payload()
         if not scan:
@@ -259,6 +267,7 @@ def _build_radar_home_workspace() -> dict[str, Any]:
             "sepa_rank_used": False,
             "error": str(exc),
         }
+    _mark("radar_build")
     home["best_setups"] = list(sepa_cards)
     home["best_setups_note"] = str(sepa_note or "")
     try:
@@ -266,6 +275,7 @@ def _build_radar_home_workspace() -> dict[str, Any]:
         home["scan_progress"] = read_progress()
     except Exception:
         home["scan_progress"] = {"active": False}
+    _mark("progress")
     try:
         from product.telegram_delivery import delivery_status
         home["telegram"] = delivery_status()
@@ -276,12 +286,14 @@ def _build_radar_home_workspace() -> dict[str, Any]:
             "headline": "Telegram status unavailable",
             "detail": str(exc),
         }
+    _mark("telegram")
     try:
         from product.desk_pipeline import load_desk_pipeline_status
 
         home["desk_pipeline"] = load_desk_pipeline_status()
     except Exception:
         home["desk_pipeline"] = None
+    _mark("pipeline")
     try:
         from product.home_os import build_home_os
         autonomy = {}
@@ -307,6 +319,13 @@ def _build_radar_home_workspace() -> dict[str, Any]:
             "live_lock_reason": "Home safety projection failed before canonical lock proof could be returned.",
             "live_lock_source": "product.live_execution_interlock",
         }
+    _mark("home_os")
+    total = marks[-1][1] - marks[0][1]
+    if total >= 2.0:
+        # Same diagnostic shape as the dashboard's [API SLOW] line.
+        stages = " ".join(f"{name}={t - prev:.3f}s" for (name, t), (_, prev) in
+                          zip(marks[1:], [(n, v) for n, v in marks[:-1]]))
+        print(f"[API SLOW] GET /api/radar-home total={total:.3f}s {stages}", flush=True)
     return home
 
 
