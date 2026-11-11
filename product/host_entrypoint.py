@@ -285,6 +285,15 @@ def main() -> int:
         storage_guard.close()
 
     storage_guard.start(storage_lost)
+    if os.environ.get("QT_POWER_WATCH", "1") != "0":
+        try:
+            # Telegram the owner when the host runs on battery: a drained
+            # battery cuts the USB runtime disk and stops the desk.
+            from product.host_power_watch import start_power_watch
+
+            start_power_watch(storage_guard.shutdown)
+        except Exception:
+            pass
     threading.Thread(
         target=_report_loop,
         args=(storage_guard,),
