@@ -33,7 +33,7 @@ def _logs(tmp_path, *, buys=1, cycles=1, scan_age_h=0.1, fno_age_h=0.2, ca_age_d
     con.commit(); con.close()
     for rel, age_s in (("product/latest_momentum_scan.json", scan_age_h * 3600),
                        ("ca_events.json", ca_age_d * 86400), ("nse_industry_map.json", 3600),
-                       ("product/pit_warehouse.db", 3600)):
+                       ("product/pit_warehouse.db", 3600), ("signal_backtest.json", 3600)):
         path = root / rel
         path.write_text("{}")
         stamp = NOW.timestamp() - age_s
@@ -78,3 +78,10 @@ def test_alerts_once_per_vital_per_day():
     assert alerter.observe(bad, "2026-11-11") == [] and len(sent) == 1
     assert alerter.observe(bad, "2026-11-12") and len(sent) == 2
     assert alerter.observe([{"key": "a", "label": "A", "status": OK, "detail": ""}], "2026-11-12") == []
+
+
+def test_stale_signal_calibration_warns(tmp_path):
+    root = _logs(tmp_path)
+    stamp = NOW.timestamp() - 82 * 86400
+    os.utime(root / "signal_backtest.json", (stamp, stamp))
+    assert _by_key(collect(now=NOW, logs=root, session_day=True))["signal_calibration"] == WARN

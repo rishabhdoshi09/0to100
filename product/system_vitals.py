@@ -118,6 +118,8 @@ def collect(*, now: datetime | None = None, logs: Path | None = None,
         ("index_store", "Official index store (regime/benchmark)", root / "indices", 96),
         ("industry_map", "NSE industry map (sectors)", root / "nse_industry_map.json", 24 * 14),
         ("fundamentals", "Official filings warehouse", root / "product" / "pit_warehouse.db", 24 * 7),
+        ("signal_calibration", "Scanner signal calibration (walk-forward backtest)",
+         root / "signal_backtest.json", 24 * 14),
     ):
         age = _age_hours(path, stamp)
         if age is None:
