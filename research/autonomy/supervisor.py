@@ -859,6 +859,7 @@ class Supervisor:
             if not SCH.in_scan_window(now_ist, holidays):
                 return
             session_date = now_ist.date().isoformat()
+            self._revive_blocked_auth(session_date)
             self.jobs.enqueue(
                 SCH.AUTH_HEALTH,
                 idempotency_key=f"auth:{session_date}",
@@ -1287,6 +1288,31 @@ class Supervisor:
             return bool(payload.get("open") or payload.get("open_positions"))
         except Exception:
             return False
+
+    AUTH_RETRY_S = 300.0
+
+    def _revive_blocked_auth(self, session_date: str) -> bool:
+        """Re-check today's broker session after it blocked on CREDENTIAL_UPDATE.
+
+        AUTH_HEALTH blocks on ``CREDENTIAL_UPDATE`` when the morning check runs
+        before the owner's daily Zerodha login, and nothing ever emits that
+        event. Today's foundation data job waits on the auth dependency and
+        every scan->paper slot waits on that job, so a later login left the
+        whole session without a paper cycle (owner's Mac 2026-11-11: logged in
+        09:33, slots 09:45-10:15 all skipped). Requeue only today's job, at most
+        every AUTH_RETRY_S; a success unblocks the dependency chain as usual.
+        """
+        try:
+            job = self.jobs.find_by_type_and_key(SCH.AUTH_HEALTH, f"auth:{session_date}")
+        except Exception:
+            return False
+        if job is None or job.status != JS.BLOCKED or str(job.blocked_on or "") != "CREDENTIAL_UPDATE":
+            return False
+        since = float(job.blocked_at or job.finished_at or 0.0)
+        if self.jobs.clock() - since < self.AUTH_RETRY_S:
+            return False
+        self.jobs.requeue(job.job_id)
+        return True
 
     def _paper_for_snapshot(
         self,
