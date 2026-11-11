@@ -310,9 +310,9 @@ def research_status() -> dict:
 @product.app.get("/api/research-director")
 def research_director_status() -> dict:
     """Single read-only mission-control view of the autonomous research loop."""
-    from product.research_director_status import build_research_director_status
+    from product.research_director_status import served_research_director_status
 
-    return build_research_director_status()
+    return served_research_director_status()
 
 
 @product.app.get("/api/paper-autopilot")

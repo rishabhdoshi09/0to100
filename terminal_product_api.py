@@ -505,6 +505,13 @@ def _startup_prepare_product() -> None:
     try:
         queue_product_bootstrap(requested_by="api_startup")
     except Exception:
+        pass
+    try:
+        # Research workspace: have a director view ready before the first visit.
+        from product.research_director_status import warm_research_director_status
+
+        warm_research_director_status()
+    except Exception:
         return
 
 

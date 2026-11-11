@@ -336,3 +336,80 @@ def build_research_director_status() -> dict[str, Any]:
             "evidence/knowledge state is not counted as learning."
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# Served view: stale-while-revalidate.
+#
+# build_research_director_status() composes ~10 persisted sources and took
+# 11 s cold / 2 s warm on the owner's Mac (USB runtime, 8 GB), so the Research
+# workspace timed out and said "Research Director state is unavailable". The
+# research loop changes on EOD cycles, not per second: serve the last build
+# immediately and refresh it in one background thread. The live-safety block
+# is never cached -- it is recomputed on every request.
+# ---------------------------------------------------------------------------
+import threading as _threading
+import time as _time
+
+REFRESH_AFTER_S = 60.0
+_served: dict[str, Any] = {"payload": None, "built_at": 0.0, "error": ""}
+_served_lock = _threading.Lock()
+_refreshing = _threading.Event()
+
+
+def _rebuild() -> None:
+    try:
+        payload = build_research_director_status()
+        with _served_lock:
+            _served.update({"payload": payload, "built_at": _time.time(), "error": ""})
+    except Exception as exc:
+        with _served_lock:
+            _served["error"] = f"{type(exc).__name__}: {exc}"[:200]
+    finally:
+        _refreshing.clear()
+
+
+def _refresh_in_background() -> bool:
+    if _refreshing.is_set():
+        return False
+    _refreshing.set()
+    try:
+        _threading.Thread(target=_rebuild, name="research-director-refresh", daemon=True).start()
+    except Exception:
+        _refreshing.clear()
+        return False
+    return True
+
+
+def warm_research_director_status() -> None:
+    """Start the first build without blocking (API startup)."""
+    with _served_lock:
+        empty = _served["payload"] is None
+    if empty:
+        _refresh_in_background()
+
+
+def served_research_director_status(*, now: float | None = None) -> dict[str, Any]:
+    clock = _time.time() if now is None else now
+    with _served_lock:
+        payload, built_at = _served["payload"], float(_served["built_at"] or 0.0)
+    if payload is None:
+        # Nothing built yet: build once in the request so the first caller
+        # still gets real data rather than a placeholder.
+        if not _refreshing.is_set():
+            _refreshing.set()
+            _rebuild()
+        with _served_lock:
+            payload, built_at = _served["payload"], float(_served["built_at"] or 0.0)
+        if payload is None:
+            return build_research_director_status()
+    age = max(0.0, clock - built_at)
+    refreshing = False
+    if age >= REFRESH_AFTER_S:
+        refreshing = _refresh_in_background() or _refreshing.is_set()
+    out = dict(payload)
+    out.update(live_safety_projection())
+    out["served_from_cache"] = True
+    out["cache_age_s"] = round(age, 1)
+    out["cache_refreshing"] = bool(refreshing)
+    return out
