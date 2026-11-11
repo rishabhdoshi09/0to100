@@ -582,6 +582,15 @@ function HomeOsCard({
                 {row.evidence_adjustment ? ` · evidence ${Number(row.evidence_adjustment) > 0 ? '+' : ''}${Number(row.evidence_adjustment).toFixed(2)}` : ''}
               </small>
               <small>{row.block_reason || row.why || 'Not currently eligible under the production thesis.'}</small>
+              {row.win_probability?.p_win != null ? (
+                <small>
+                  Win probability {Math.round(Number(row.win_probability.p_win) * 100)}%
+                  {row.win_probability.low_80 != null && row.win_probability.high_80 != null
+                    ? ` (80%: ${Math.round(Number(row.win_probability.low_80) * 100)}–${Math.round(Number(row.win_probability.high_80) * 100)}%)`
+                    : ''}
+                  {row.win_probability.label ? ` · ${String(row.win_probability.label).toLowerCase()}` : ''}
+                </small>
+              ) : null}
               {row.symbol && onOpenPage ? (
                 <button
                   type="button"

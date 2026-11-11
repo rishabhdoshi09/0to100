@@ -386,6 +386,18 @@ function DecisionSheet({
       {card.expected_payoff_detail ? (
         <p className="reco-pick-note">{card.expected_payoff_detail}</p>
       ) : null}
+      {card.win_probability?.text ? (
+        <p className="reco-pick-note" data-testid="win-probability">
+          <strong>Win probability:</strong> {card.win_probability.text.replace(/^Win probability /, '')}
+        </p>
+      ) : null}
+      {card.stop_plan?.text ? (
+        <p className="reco-pick-note" data-testid="stop-plan">
+          <strong>Stop plan:</strong> {card.stop_plan.text}
+          {card.stop_plan.trail ? <> · {card.stop_plan.trail}</> : null}
+          {card.stop_plan.time_stop ? <> · {card.stop_plan.time_stop}</> : null}
+        </p>
+      ) : null}
       <div className="reco-sheet-cols">
         <div>
           <h3>Why now</h3>

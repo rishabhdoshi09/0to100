@@ -824,6 +824,7 @@ export type HomeOperatingSystem = {
     why?: string
     research_only?: boolean
     not_a_trade?: boolean
+    win_probability?: WinProbability | null
   }>
   learning_impact?: {
     status?: string
@@ -1118,6 +1119,8 @@ export type RecommendationCard = {
   opportunity_label?: string
   expected_payoff?: string
   expected_payoff_detail?: string
+  win_probability?: WinProbability | null
+  stop_plan?: StopPlan | null
   evidence?: string
   setup_quality?: number | null
   setup_quality_label?: string
@@ -2280,3 +2283,29 @@ export const fetchEvolutionLab = (domain = 'EQUITY'): Promise<EvolutionLabBoard>
   request(`/api/evolution-lab?domain=${encodeURIComponent(domain)}`, {
     headers: { Accept: 'application/json' },
   })
+
+
+/** Beta-posterior P(trade closes with R > 0) from replay, tracked signals and forward paper. */
+export type WinProbability = {
+  p_win?: number
+  low_80?: number
+  high_80?: number
+  effective_n?: number
+  label?: 'MEASURED' | 'ESTIMATED' | 'THIN' | 'UNPROVEN' | string
+  text?: string
+}
+
+/** Evidence-based stop from the stock's own official price history. */
+export type StopPlan = {
+  recommended_stop?: number
+  method?: string
+  risk_pct?: number
+  too_wide?: boolean
+  noise_hit_rate?: number | null
+  scanner_stop?: number
+  scanner_noise_hit_rate?: number | null
+  gap_down_p95_pct?: number | null
+  trail?: string
+  time_stop?: string
+  text?: string
+}

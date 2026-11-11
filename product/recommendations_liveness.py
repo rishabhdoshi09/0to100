@@ -454,6 +454,12 @@ def build_fast_response(
 
     if saved and current:
         payload = dict(saved)
+        try:
+            from product.win_probability import overlay_cards
+
+            payload = overlay_cards(payload)
+        except Exception:
+            pass
         if callable(attach_authority):
             try:
                 payload = attach_authority(payload, scan)

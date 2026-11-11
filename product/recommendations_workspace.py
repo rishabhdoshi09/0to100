@@ -301,7 +301,34 @@ def card_from_row(
         **surface,
         "horizon": surface.get("horizon") or horizon,
     }
+    _attach_trade_evidence(card, scored)
     return _attach_key_points(card, row=scored)
+
+
+def _attach_trade_evidence(card: dict[str, Any], scored: Mapping[str, Any]) -> None:
+    """Per-trade win probability inputs/estimate and an evidence-based stop plan.
+
+    The historical-replay part of the win probability is joined at serve time
+    (product.recommendations_liveness) from the discovery board, which is
+    built after the cards. Never raises: a card without a plan is still a card.
+    """
+    live = {k: scored.get(k) for k in ("p_win", "ev_n", "ev_n_eff", "ev_last_outcome", "ev_stale")}
+    card["win_inputs"] = {k: v for k, v in live.items() if v is not None}
+    try:
+        from product.win_probability import estimate_win_probability
+
+        card["win_probability"] = estimate_win_probability(live=card["win_inputs"])
+    except Exception:
+        card["win_probability"] = None
+    entry = _f(card.get("entry") or scored.get("entry"))
+    if entry:
+        try:
+            from product.stop_engine import stop_plan
+
+            card["stop_plan"] = stop_plan(card.get("symbol") or "", entry,
+                                          _f(card.get("stop") or scored.get("stop")))
+        except Exception:
+            card["stop_plan"] = None
 
 
 def _trend_structure_ok(row: Mapping[str, Any]) -> bool:

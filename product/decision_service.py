@@ -349,6 +349,12 @@ def decision_board(
         payload["evidence_counts"] = decision.evidence_counts()
         payload["why"] = ranking_explanation(row)
         payload["evidence_intelligence"] = intelligence
+        try:
+            from product.win_probability import estimate_win_probability
+
+            payload["win_probability"] = estimate_win_probability(historical=intelligence)
+        except Exception:
+            payload["win_probability"] = None
         if demotion:
             payload["state"] = shown_state
             payload["engine_state"] = decision.state
