@@ -63,3 +63,25 @@ def test_failed_rebuild_keeps_last_good_view(RD, monkeypatch):
                         lambda: (_ for _ in ()).throw(RuntimeError("locked")))
     out = RD.served_research_director_status(now=RD._served["built_at"] + RD.REFRESH_AFTER_S + 1)
     assert out["n"] == 1 and "locked" in RD._served["error"]
+
+
+def test_first_request_waits_for_the_running_warm_build(RD, monkeypatch):
+    import threading
+    import time
+
+    gate = threading.Event()
+
+    def slow_build():
+        gate.wait(2)
+        RD.builds.append(1)
+        return {"n": len(RD.builds)}
+
+    monkeypatch.setattr(RD, "build_research_director_status", slow_build)
+    RD._refreshing.set()
+    worker = threading.Thread(target=RD._rebuild)
+    worker.start()
+    time.sleep(0.05)
+    gate.set()
+    out = RD.served_research_director_status()
+    worker.join()
+    assert out["n"] == 1 and RD.builds == [1]       # no second, competing build

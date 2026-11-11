@@ -352,6 +352,7 @@ import threading as _threading
 import time as _time
 
 REFRESH_AFTER_S = 60.0
+WARM_WAIT_S = 45.0
 _served: dict[str, Any] = {"payload": None, "built_at": 0.0, "error": ""}
 _served_lock = _threading.Lock()
 _refreshing = _threading.Event()
@@ -395,8 +396,14 @@ def served_research_director_status(*, now: float | None = None) -> dict[str, An
         payload, built_at = _served["payload"], float(_served["built_at"] or 0.0)
     if payload is None:
         # Nothing built yet: build once in the request so the first caller
-        # still gets real data rather than a placeholder.
-        if not _refreshing.is_set():
+        # still gets real data rather than a placeholder -- or, when the
+        # startup warm-up is already building, wait for it instead of running
+        # a second competing build (seen: 32 s first call after a restart).
+        if _refreshing.is_set():
+            deadline = _time.monotonic() + WARM_WAIT_S
+            while _refreshing.is_set() and _time.monotonic() < deadline:
+                _time.sleep(0.1)
+        else:
             _refreshing.set()
             _rebuild()
         with _served_lock:
