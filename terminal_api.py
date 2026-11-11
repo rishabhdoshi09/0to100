@@ -905,7 +905,43 @@ def _operations_payload() -> dict[str, Any]:
         }
 
 
+# The dashboard snapshot is rebuilt continuously; on the owner's 8 GB Mac with
+# the runtime on USB, its news stage took 2-7 s per build (the same reads take
+# ~0.09 s on SSD) although news only changes when NEWS_REFRESH writes the DB.
+# Reuse the built payload while the DB file is unchanged, for at most a minute.
+_NEWS_CACHE_TTL_S = 60.0
+_news_cache: dict[str, Any] = {"key": None, "at": 0.0, "payload": None}
+_news_cache_lock = threading.Lock()
+
+
+def _news_identity() -> tuple | None:
+    db = logs_dir() / "news_curator.sqlite3"
+    parts = []
+    for path in (db, db.with_name(db.name + "-wal")):
+        try:
+            st = path.stat()
+            parts.append((st.st_mtime_ns, st.st_size))
+        except OSError:
+            parts.append(None)
+    return tuple(parts) if parts[0] is not None else None
+
+
 def _news_payload() -> dict[str, Any]:
+    key = _news_identity()
+    now = time.monotonic()
+    with _news_cache_lock:
+        cached = _news_cache.get("payload")
+        if (key is not None and cached is not None and _news_cache.get("key") == key
+                and now - float(_news_cache.get("at") or 0.0) < _NEWS_CACHE_TTL_S):
+            return dict(cached)
+    payload = _build_news_payload()
+    if key is not None and not payload.get("error"):
+        with _news_cache_lock:
+            _news_cache.update({"key": key, "at": now, "payload": dict(payload)})
+    return payload
+
+
+def _build_news_payload() -> dict[str, Any]:
     try:
         from news.curator_store import NewsCuratorStore
         store = NewsCuratorStore(logs_dir() / "news_curator.sqlite3", read_only=True)

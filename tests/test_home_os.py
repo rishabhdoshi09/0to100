@@ -814,3 +814,25 @@ def test_unpaused_owner_state_keeps_paper_running():
     os = _paused_home({"new_entries_paused": False, "halted": False})
     assert os["paper_bot"]["paused"] is False
     assert os["paper_bot"]["paused_by"] == ""
+
+
+def test_research_watchlist_shows_each_symbol_once(monkeypatch):
+    """Owner's Mac 2026-11-11: RPEL and KALYANKJIL appeared twice on Home, once
+    as WATCH and once as BUY, because the discovery board lists a symbol per
+    category. Home keeps the first (highest-ranked) row per symbol."""
+    import product.decision_discovery_store as discovery
+    from product.home_os import _canonical_research_watchlist
+
+    monkeypatch.setattr(discovery, "load_current", lambda: {
+        "available": True,
+        "decisions": [
+            {"symbol": "RPEL", "state": "WATCH", "ranking_score": 81.0},
+            {"symbol": "RPEL", "state": "BUY", "ranking_score": 81.0},
+            {"symbol": "kalyankjil", "state": "WATCH", "ranking_score": 79.2},
+            {"symbol": "KALYANKJIL", "state": "BUY", "ranking_score": 79.2},
+            {"symbol": "HONASA", "state": "WATCH", "ranking_score": 79.0},
+        ],
+    })
+    rows = _canonical_research_watchlist(history_current=True)
+    assert [r["symbol"] for r in rows] == ["RPEL", "kalyankjil", "HONASA"]
+    assert [r["state"] for r in rows] == ["WATCH", "WATCH", "WATCH"]

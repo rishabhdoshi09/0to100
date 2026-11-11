@@ -276,6 +276,11 @@ def _canonical_research_watchlist(*, history_current: bool, exclude: set[str] | 
         symbol = str(row.get("symbol") or "").upper().strip()
         if not symbol or symbol in excluded:
             continue
+        # One stock, one row: the discovery board lists a symbol once per
+        # category (e.g. WATCH in Super Trends and BUY in Momentum), which put
+        # RPEL/KALYANKJIL on Home twice with contradictory labels. The board is
+        # rank-ordered, so the first occurrence is the one to keep.
+        excluded.add(symbol)
         row["research_only"] = True
         row["not_a_trade"] = True
         row["block_reason"] = str(
