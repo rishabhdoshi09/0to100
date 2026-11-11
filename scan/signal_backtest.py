@@ -30,6 +30,7 @@ from core.runtime_paths import logs_dir
 log = get_logger(__name__)
 
 _OUT = logs_dir() / "signal_backtest.json"
+MIN_SYMBOLS_TO_SAVE = 100
 
 # Breakeven-trail level for the per-signal expectancy sim — mirrors the live
 # autopilot's breakeven_trigger_pct (default 2.0). Backtesting WITH the trail
@@ -411,11 +412,16 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
            "target_sweep": target_sweep,
            "recommended_target_pct": recommended,
            "elapsed_s": round(time.time() - t0, 1)}
-    try:
-        _OUT.parent.mkdir(parents=True, exist_ok=True)
-        _OUT.write_text(json.dumps(out, indent=2))
-    except Exception as exc:
-        log.warning("backtest_save_failed", error=str(exc))
+    if len(symbols) < MIN_SYMBOLS_TO_SAVE or not report:
+        # Never replace a real calibration with an empty/thin one (e.g. a
+        # process whose bhavcopy store was not loaded).
+        log.warning("backtest_too_thin_not_saved", symbols=len(symbols), signals=len(report))
+    else:
+        try:
+            from core.atomic_io import atomic_write_text
+            atomic_write_text(_OUT, json.dumps(out, indent=2))
+        except Exception as exc:
+            log.warning("backtest_save_failed", error=str(exc))
 
     with _state_lock:
         _state["running"] = False

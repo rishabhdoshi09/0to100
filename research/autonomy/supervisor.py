@@ -902,6 +902,7 @@ class Supervisor:
 
         # Closed market: keep official completed-session data current once the
         # exchange publication window opens. These jobs never auto-chain a scan.
+        self._maybe_weekly_backtest(now_ist)
         if SCH.in_eod_window(now_ist, holidays):
             session_date = now_ist.date().isoformat()
             self.jobs.enqueue(
@@ -1291,6 +1292,38 @@ class Supervisor:
             return False
 
     AUTH_RETRY_S = 300.0
+
+    BACKTEST_MAX_AGE_S = 6 * 24 * 3600
+
+    def _maybe_weekly_backtest(self, now_ist) -> bool:
+        """Saturday refresh of the scanner's walk-forward signal calibration.
+
+        logs/signal_backtest.json drives the scanner's score calibration; the
+        idle trigger that refreshed it stopped (last run 2026-08-05), so scores
+        were weighted by an 80-day-old backtest. Runs at most weekly, only on a
+        Saturday from 09:00 IST with the market closed, in a background thread,
+        and never on an unloaded history store.
+        """
+        if now_ist.weekday() != 5 or now_ist.hour < 9:
+            return False
+        try:
+            from scan import signal_backtest as SB
+
+            if (SB.get_state() or {}).get("running"):
+                return False
+            out = Path(SB._OUT)
+            if out.exists() and time.time() - out.stat().st_mtime < self.BACKTEST_MAX_AGE_S:
+                return False
+            from data.bhavcopy_store import store_symbols
+            if len(store_symbols()) < SB.MIN_SYMBOLS_TO_SAVE:
+                from data.bhavcopy_runtime import ensure_loaded
+                ensure_loaded()
+                if len(store_symbols()) < SB.MIN_SYMBOLS_TO_SAVE:
+                    return False
+            SB.run_in_background()
+            return True
+        except Exception:
+            return False
 
     def _enqueue_reference_upkeep(self, session_date: str) -> None:
         """Once per EOD: refresh corporate actions and the official index store.
