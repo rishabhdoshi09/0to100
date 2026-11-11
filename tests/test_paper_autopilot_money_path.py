@@ -150,12 +150,27 @@ def test_pipeline_adapter_opens_protected_paper_position(tmp_path):
     assert orders[0].status == OM.PROTECTED
 
 
-def test_watch_tier_is_rejected_not_entered():
+def test_watch_tier_is_rejected_not_entered(monkeypatch):
+    # The production thesis itself never enters a watch-tier card.
+    monkeypatch.setenv("QT_PAPER_EXPLORATION", "0")
     book = PaperBook(capital=100_000)
     out = _cycle(book, [_eligible_card(reco_tier="watch")])
     assert not book.open
     assert out["rejections"][0]["reason_code"] == LOW_QUALITY_SETUP
     assert out["reason_counts"] == {LOW_QUALITY_SETUP: 1}
+
+
+def test_watch_tier_enters_only_via_learning_lane_at_half_risk_once_a_day(monkeypatch):
+    # Owner 2026-11-11: keep forward paper evidence flowing. When production
+    # takes nothing, one ready research name a day is taken at half risk.
+    monkeypatch.delenv("QT_PAPER_EXPLORATION", raising=False)
+    book = PaperBook(capital=100_000)
+    out = _cycle(book, [_eligible_card(reco_tier="watch")])
+    assert len(book.open) == 1 and out["taken"][0]["lane"] == "EXPLORATION"
+    pos = next(iter(book.open.values()))
+    assert 0 < float(pos.approved_risk_pct) <= 0.5 + 1e-9
+    again = _cycle(book, [_eligible_card(symbol="INFY", reco_tier="watch")])
+    assert not again["taken"] and len(book.open) == 1        # daily budget spent
 
 
 def test_duplicate_position_is_machine_readable():

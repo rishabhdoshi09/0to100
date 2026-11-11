@@ -64,6 +64,88 @@ STALE_MAX_AGE = timedelta(hours=36)
 HOLD_DAYS = 20
 DEFAULT_RISK_PCT = 1.0  # percentage points, matching PaperBook
 
+# Learning lane. When the production thesis admits nothing, one best-ranked
+# research candidate a day is taken at half risk through every other gate, so
+# the forward book keeps producing evidence (owner, 2026-11-11: "don't stop
+# taking paper trades"; the first live cycle saw 107 names and took 0).
+EXPLORATION = "EXPLORATION"
+EXPLORATION_RISK_PCT = 0.5
+EXPLORATION_MAX_PER_DAY = 1
+
+
+def _exploration_path():
+    from core.runtime_paths import logs_dir
+    return logs_dir() / "product" / "paper_exploration.json"
+
+
+def _exploration_taken(day: str, *, path=None) -> list[str]:
+    import json
+    try:
+        data = json.loads((path or _exploration_path()).read_text(encoding="utf-8") or "{}")
+    except Exception:
+        return []
+    return [str(s) for s in (data.get(str(day)) or [])]
+
+
+def _record_exploration(day: str, symbol: str, *, path=None) -> None:
+    import json
+    target = path or _exploration_path()
+    try:
+        data = json.loads(target.read_text(encoding="utf-8") or "{}") if target.exists() else {}
+    except Exception:
+        data = {}
+    data = {k: v for k, v in data.items() if str(k) >= str(day)[:7]}   # keep this month
+    data.setdefault(str(day), []).append(str(symbol).upper())
+    try:
+        from core.atomic_io import atomic_write_text
+        atomic_write_text(target, json.dumps(data, indent=1, sort_keys=True))
+    except Exception:
+        pass
+
+
+def _exploration_pick(decisions, *, day: str, evaluate, path=None):
+    """Best research candidate re-run through every gate at half risk, or None.
+
+    Only names the production thesis turned away for tier alone
+    (LOW_QUALITY_SETUP) and whose entry is ready now are considered; the
+    re-evaluation still applies entry-state, due-diligence, empirical,
+    portfolio-risk and sizing gates. QT_PAPER_EXPLORATION=0 disables it.
+    """
+    import os
+    if os.environ.get("QT_PAPER_EXPLORATION", "1") == "0":
+        return None
+    if len(_exploration_taken(day, path=path)) >= EXPLORATION_MAX_PER_DAY:
+        return None
+    pool = []
+    for decision in decisions:
+        card = dict(decision.card or {})
+        if decision.reason_code != LOW_QUALITY_SETUP:
+            continue
+        if str(card.get("entry_state") or "") != "ready" or bool(card.get("chase_risk")):
+            continue
+        pool.append((float(_f(card.get("score")) or 0.0), decision.symbol, card))
+    pool.sort(key=lambda item: (-item[0], item[1]))
+    from product.reco_ensemble import TIER_GOOD
+    for _score, _symbol, card in pool[:3]:
+        probe = {**card, "reco_tier": TIER_GOOD, "lane": EXPLORATION,
+                 "exploration_risk_pct": EXPLORATION_RISK_PCT}
+        candidate = evaluate(probe)
+        if candidate.decision == ENTER_NOW:
+            candidate.policy_effect = EXPLORATION
+            candidate.detail = (f"learning lane: production thesis took nothing; "
+                                f"{EXPLORATION_RISK_PCT:g}% risk; {candidate.detail}").strip()
+            return candidate
+    return None
+
+
+def _risk_pct_for(card: Mapping[str, Any] | None) -> float:
+    """Requested risk for this card; an exploration card may only ask for less."""
+    try:
+        value = float((card or {}).get("exploration_risk_pct") or 0.0)
+    except (TypeError, ValueError):
+        value = 0.0
+    return value if 0.0 < value < DEFAULT_RISK_PCT else DEFAULT_RISK_PCT
+
 
 def _f(value: Any) -> float | None:
     if value is None or value == "":
@@ -512,7 +594,7 @@ def evaluate_candidate(
             event_ts=(now or datetime.now(timezone.utc)).isoformat(),
             symbol=symbol,
             intended_entry=entry,
-            intended_risk_pct=DEFAULT_RISK_PCT,
+            intended_risk_pct=_risk_pct_for(card),
             stop_price=stop,
             target_price=target,
             holding_horizon_days=HOLD_DAYS,
@@ -565,7 +647,7 @@ def evaluate_candidate(
             ),
             entry=entry,
             stop=stop,
-            requested_risk_pct=DEFAULT_RISK_PCT,
+            requested_risk_pct=_risk_pct_for(card),
             max_risk_fraction=float(getattr(book, "risk_per_trade_pct", 0.01) or 0.01),
             max_position_fraction=float(getattr(book, "max_position_pct", 0.10) or 0.10),
             slippage_bps=float(getattr(book, "slippage_bps", 0.0) or 0.0),
@@ -821,7 +903,7 @@ def _intent_for(decision: AutopilotDecision, *, as_of: str, snapshot_id: str):
         cycle_id=f"reco:{as_of}",
         symbol=decision.symbol,
         intended_entry=float(_f(card.get("entry")) or _f(card.get("cmp")) or 0.0),
-        intended_risk_pct=DEFAULT_RISK_PCT,
+        intended_risk_pct=_risk_pct_for(card),
         stop_price=float(_f(card.get("stop")) or 0.0),
         target_price=float(_f(card.get("target")) or 0.0),
         holding_horizon_days=HOLD_DAYS,
@@ -1031,6 +1113,21 @@ def run_reco_paper_cycle(
         else:
             _freeze(decision, group="REJECTED")
             rejections.append(decision.as_dict())
+
+    if not ranked and entries_allowed and paper_enabled:
+        explorer = _exploration_pick(
+            decisions, day=day,
+            evaluate=lambda c: evaluate_selection_candidate(
+                c, book=book, workspace=payload or None, now=clock,
+                entries_allowed=entries_allowed, entry_block_reason=entry_block_reason,
+                paper_enabled=paper_enabled, regime=regime, policy_path=policy_path,
+                policies=policies, enforce_history=enforce_history,
+                family_risk=family_risk, cluster_risk=cluster_risk,
+                evolution_policy=evolution_champion,
+            ),
+        )
+        if explorer is not None:
+            ranked.append((float(explorer.selection_score or 0.0), explorer))
 
     ranked.sort(key=lambda item: (-item[0], item[1].symbol))
     individual_decisions_by_symbol = {
@@ -1243,11 +1340,15 @@ def run_reco_paper_cycle(
             pos.sector = sector
         except Exception:
             pass
-        family_risk[sector] = family_risk.get(sector, 0.0) + DEFAULT_RISK_PCT
-        cluster_risk[sector] = cluster_risk.get(sector, 0.0) + DEFAULT_RISK_PCT
+        family_risk[sector] = family_risk.get(sector, 0.0) + _risk_pct_for(decision.card)
+        cluster_risk[sector] = cluster_risk.get(sector, 0.0) + _risk_pct_for(decision.card)
         opened.append((ENSEMBLE_ID, decision.symbol))
+        lane = str((decision.card or {}).get("lane") or "PRODUCTION")
+        if lane == EXPLORATION:
+            _record_exploration(day, decision.symbol)
         taken_row = {
             **decision.as_dict(),
+            "lane": lane,
             "thesis_hash": str(thesis.get("thesis_hash") or ""),
             "qty": getattr(pos, "qty", None),
             "entry_fill": getattr(pos, "entry_price", None),
