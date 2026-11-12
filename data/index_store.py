@@ -100,6 +100,8 @@ _kite_pkl_checked_at = 0.0
 _KITE_STALE_RECHECK_S = 10 * 60.0
 _KITE_STALE_RETRY_S = 30 * 60.0
 _kite_stale_check_after = 0.0
+_KITE_LOGIN_RECHECK_S = 60.0
+_kite_login_checked_at = 0.0
 # A rejected session must not be retried by every dashboard/regime reader.
 # Keep failures separate from cached data, and allow token rotation immediately.
 _kite_failed_session: Optional[str] = None
@@ -167,12 +169,26 @@ def _kite_cache_behind() -> bool:
     Throttled so the scanner's per-symbol index reads never turn into per-call
     calendar reads or Kite requests.
     """
-    global _kite_stale_check_after
+    global _kite_stale_check_after, _kite_login_checked_at
     now = time.monotonic()
     with _kite_lock:
-        if now < _kite_stale_check_after:
-            return False
+        throttled = now < _kite_stale_check_after
+        failed = _kite_failed_session
+        login_due = bool(failed) and now - _kite_login_checked_at >= _KITE_LOGIN_RECHECK_S
+        if throttled and login_due:
+            _kite_login_checked_at = now
         last = _kite_last_day
+    if throttled:
+        # The last attempt was rejected (normally: before the daily login).
+        # A new login must not wait out the 30-minute window.
+        if not login_due:
+            return False
+        try:
+            from data.kite_client import kite_session_identity
+            if kite_session_identity() == failed:
+                return False
+        except Exception:
+            return False
     behind = last is None or last < _required_index_session()
     with _kite_lock:
         _kite_stale_check_after = now + (_KITE_STALE_RETRY_S if behind else _KITE_STALE_RECHECK_S)

@@ -207,7 +207,9 @@ def regime_calibration(regime: str, min_n: int = _MIN_N) -> dict[str, float]:
     CURRENT tape so the scorer can demote a signal that leaks *in this regime*
     even when it looks fine overall. Gated at min_n same-regime outcomes; empty
     (no claim) for an unknown regime or thin data."""
-    if not regime or str(regime).strip().upper() in ("", "UNKNOWN"):
+    # UNAVAILABLE = the regime engine withheld a read (e.g. stale index
+    # history). Rows logged then span many tapes, so they are not a regime.
+    if not regime or str(regime).strip().upper() in ("", "UNKNOWN", "UNAVAILABLE"):
         return {}
     reg = str(regime).strip()
     per_sig: dict[str, list[float]] = {}

@@ -226,3 +226,44 @@ def test_ca_failure_is_not_cleared_while_refresh_still_runs(monkeypatch):
     monkeypatch.setattr(PR, "_ca_status", lambda: {"coverage_complete": True})
     assert PR._clear_ca_failure_when_complete(sup, now=500.0) is False
     assert H.CA_INCOMPLETE in sup.failures
+
+
+def test_fresh_login_retries_a_rejected_index_refresh_without_waiting(monkeypatch, tmp_path):
+    idx, clock = _isolate_index_store(monkeypatch, tmp_path)
+    _write_cache(idx._KITE_PKL, "2026-10-01")
+    identity = ["expired-token"]
+    monkeypatch.setattr("data.kite_client.kite_session_identity", lambda: identity[0])
+    monkeypatch.setattr(idx, "_kite_login_checked_at", 0.0)
+    builds = []
+
+    def build(*_a, **_k):
+        builds.append(identity[0])
+        idx._kite_failed_session = identity[0]   # rejected, as before the login
+        return 0
+
+    monkeypatch.setattr(idx, "_kite_failed_session", None)
+    monkeypatch.setattr(idx, "_build_kite_index_store", build)
+    idx._kite_index_frame("^NSEI")
+    assert builds == ["expired-token"]
+
+    clock[0] += idx._KITE_LOGIN_RECHECK_S + 1
+    idx._kite_index_frame("^NSEI")               # same token: still throttled
+    assert builds == ["expired-token"]
+
+    identity[0] = "fresh-login-token"
+    idx._kite_index_frame("^NSEI")               # recheck window not reached
+    assert builds == ["expired-token"]
+    clock[0] += idx._KITE_LOGIN_RECHECK_S + 1
+    idx._kite_index_frame("^NSEI")
+    assert builds == ["expired-token", "fresh-login-token"]
+
+
+def test_regime_calibration_ignores_withheld_regime(monkeypatch):
+    from scan import live_edge
+
+    monkeypatch.setattr(
+        live_edge, "_closed_rows",
+        lambda: (_ for _ in ()).throw(AssertionError("must not learn from a withheld regime")),
+    )
+    assert live_edge.regime_calibration("UNAVAILABLE") == {}
+    assert live_edge.regime_calibration("unknown") == {}
