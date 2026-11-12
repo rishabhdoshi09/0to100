@@ -239,6 +239,11 @@ function App() {
   const [helpOpen, setHelpOpen] = useState(false)
   const autoPrepareRef = useRef(false)
   const refreshGate = useRef(createPollGate())
+  // A WARMING/REFRESHING projection is replaced server-side within seconds;
+  // re-read it once soon instead of showing a degraded desk for a whole
+  // 12 s poll interval (first open after idle used to read "Unavailable").
+  const quickRetry = useRef<number | null>(null)
+  const quickRetryCount = useRef(0)
   const healthGate = useRef(createPollGate())
   const healthFailures = useRef(0)
   const [startupState, setStartupState] = useState<DeskStartupState>('PREPARING_DATA')
@@ -288,6 +293,13 @@ function App() {
       const first = allSymbols[0] || ''
       setSelected((current) => current || first)
       refreshGate.current.succeed()
+      quickRetryCount.current = staleProjection ? quickRetryCount.current + 1 : 0
+      if (staleProjection && quickRetry.current === null && quickRetryCount.current <= 3) {
+        quickRetry.current = window.setTimeout(() => {
+          quickRetry.current = null
+          void refresh()
+        }, 3_000)
+      }
     } catch (reason) {
       refreshGate.current.fail()
       setError(reason instanceof Error ? reason.message : 'Waiting for the market API')

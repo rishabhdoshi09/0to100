@@ -240,9 +240,32 @@ class Supervisor:
           forward_*          -> once/session forward settlement/learning/research
           hist_*             -> closed-market historical paper/learning/research
           *:eod              -> once/session official-data recovery
+          eod:scan:<active>  -> the EOD rescan of the current snapshot
+          index_warmup:<day> -> tonight's/last session's reference upkeep
 
         Manual controls always survive.
+
+        This runs on EVERY tick, so anything the current scheduler enqueues
+        must be recognised here. It used to cancel the EOD rescan
+        (``eod:scan:<snap>``) and the nightly ``index_warmup:<day>`` within
+        ~15 s of enqueueing them (owner's Mac, 2026-11-09 and 2026-11-11): the
+        desk then had no verified scan from the close until the next morning's
+        first intraday slot, and the Kite index store froze on 2026-10-01.
         """
+        active_snapshot = ""
+        upkeep_days: set[str] = set()
+        try:
+            active_snapshot = str(self.deps.active_snapshot_id() or "")
+        except Exception:
+            active_snapshot = ""
+        try:
+            now_ist = self.deps.now_ist()
+            upkeep_days.add(now_ist.date().isoformat())
+            last = SCH.last_completed_session_date(now_ist, self.deps.holidays())
+            if last:
+                upkeep_days.add(str(last)[:10])
+        except Exception:
+            pass
         try:
             for job in self.jobs.list(limit=2000):
                 if job.status not in {JS.PENDING, JS.BLOCKED}:
@@ -266,6 +289,12 @@ class Supervisor:
                         or (
                             current_startup
                             and key.startswith(f"startup_discovery_scan:{current_startup}:")
+                        )
+                        # The EOD rescan is only worth running for the snapshot
+                        # that is still active; an older one is superseded.
+                        or (
+                            bool(active_snapshot)
+                            and key == f"eod:scan:{active_snapshot}"
                         )
                     )
                 elif job.job_type == SCH.PAPER_CYCLE:
@@ -301,11 +330,15 @@ class Supervisor:
                     # recovery jobs. Cancelling them here would undo recovery in
                     # the same startup transaction.
                     retire = False
+                elif job.job_type == SCH.INDEX_WARMUP:
+                    # _enqueue_reference_upkeep owns index_warmup:<session>.
+                    # Keep the current one; rows from older days are legacy.
+                    day = key[len("index_warmup:"):] if key.startswith("index_warmup:") else ""
+                    retire = day not in upkeep_days
                 elif job.job_type in {
                     SCH.LONG_TERM_SCAN,
                     SCH.LONG_TERM_REFRESH,
                     SCH.INSTRUMENT_REFRESH,
-                    SCH.INDEX_WARMUP,
                 }:
                     retire = True
 

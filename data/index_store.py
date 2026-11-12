@@ -87,6 +87,19 @@ _kite_lock = threading.Lock()
 _kite_build_lock = threading.Lock()
 _kite_store: dict[str, pd.DataFrame] = {}
 _kite_last_day: Optional[date] = None
+# The Kite cache is written by whichever process builds it (normally the
+# nightly INDEX_WARMUP job in autonomy) and read by every other process. A
+# reader that loaded it once used to keep that copy for its whole lifetime, so
+# the API and market-ops kept serving 2026-10-01 bars for six weeks. Re-stat the
+# pickle at most every _KITE_PKL_CHECK_S and reload it when it changes.
+_KITE_PKL_CHECK_S = 30.0
+_kite_loaded_mtime = 0.0
+_kite_pkl_checked_at = 0.0
+# A reader that finds the cache behind the latest required session may rebuild
+# it from Kite itself, but at most once per window, never per call.
+_KITE_STALE_RECHECK_S = 10 * 60.0
+_KITE_STALE_RETRY_S = 30 * 60.0
+_kite_stale_check_after = 0.0
 # A rejected session must not be retried by every dashboard/regime reader.
 # Keep failures separate from cached data, and allow token rotation immediately.
 _kite_failed_session: Optional[str] = None
@@ -102,36 +115,80 @@ def _kite_authoritative() -> bool:
 
 
 def _load_kite_cache() -> bool:
-    global _kite_store, _kite_last_day
+    global _kite_store, _kite_last_day, _kite_loaded_mtime, _kite_pkl_checked_at
+    now = time.monotonic()
     with _kite_lock:
-        if _kite_store:
+        have = bool(_kite_store)
+        loaded_mtime = _kite_loaded_mtime
+        if have and now - _kite_pkl_checked_at < _KITE_PKL_CHECK_S:
             return True
-    if not _KITE_PKL.exists():
-        return False
+        _kite_pkl_checked_at = now
+    try:
+        mtime = _KITE_PKL.stat().st_mtime
+    except OSError:
+        return have
+    if have and mtime <= loaded_mtime:
+        return True
     try:
         import pickle
         with open(_KITE_PKL, "rb") as fh:
             payload = pickle.load(fh)
         store = payload.get("store") or {}
         if not isinstance(store, dict):
-            return False
+            return have
         sample = next(iter(store.values()), None)
         if sample is not None and "Close" not in getattr(sample, "columns", []):
-            return False
+            return have
+        if not store:
+            return have
         with _kite_lock:
             _kite_store = store
             raw_day = payload.get("last_day")
             _kite_last_day = raw_day if isinstance(raw_day, date) else (
                 date.fromisoformat(str(raw_day)[:10]) if raw_day else None
             )
-        return bool(store)
+            _kite_loaded_mtime = mtime
+        return True
     except Exception:
-        return False
+        return have
+
+
+def _required_index_session() -> date:
+    try:
+        from research.intelligence.data import nse_calendar as CAL
+        return CAL.latest_required_session(CAL._now_ist(), CAL.load_holidays())
+    except Exception:
+        return date.today()
+
+
+def _kite_cache_behind() -> bool:
+    """True, at most once per window, when the cache misses a published session.
+
+    Throttled so the scanner's per-symbol index reads never turn into per-call
+    calendar reads or Kite requests.
+    """
+    global _kite_stale_check_after
+    now = time.monotonic()
+    with _kite_lock:
+        if now < _kite_stale_check_after:
+            return False
+        last = _kite_last_day
+    behind = last is None or last < _required_index_session()
+    with _kite_lock:
+        _kite_stale_check_after = now + (_KITE_STALE_RETRY_S if behind else _KITE_STALE_RECHECK_S)
+    return behind
+
+
+def kite_index_as_of() -> Optional[date]:
+    """Last session in the Kite index cache this process serves (None if empty)."""
+    _load_kite_cache()
+    with _kite_lock:
+        return _kite_last_day if _kite_store else None
 
 
 def _build_kite_index_store(days: int = 400) -> int:
     """Build all regime indices from Kite historical data in one bounded pass."""
-    global _kite_store, _kite_last_day, _kite_failed_session, _kite_retry_after
+    global _kite_store, _kite_last_day, _kite_failed_session, _kite_retry_after, _kite_loaded_mtime
     target = max(_REGIME_BOOTSTRAP_SESSIONS, int(days or 0))
     with _kite_build_lock:
         _load_kite_cache()
@@ -230,6 +287,8 @@ def _build_kite_index_store(days: int = 400) -> int:
                         "source": "zerodha_kite_historical",
                     }, fh)
                 tmp.replace(_KITE_PKL)
+                with _kite_lock:
+                    _kite_loaded_mtime = _KITE_PKL.stat().st_mtime
             except Exception:
                 pass
             log.info(
@@ -255,7 +314,10 @@ def _kite_index_frame(ticker: str, *, build: bool = True) -> Optional[pd.DataFra
     with _kite_lock:
         frame = _kite_store.get(name)
         depth = len(frame) if frame is not None else 0
-    if build and depth < _REGIME_BOOTSTRAP_SESSIONS:
+    # Depth alone used to gate a rebuild, so a deep-but-old cache was served
+    # forever. A cache behind the latest published session is refreshed too
+    # (throttled; the build itself is bounded and keeps its failure cooldown).
+    if build and (depth < _REGIME_BOOTSTRAP_SESSIONS or _kite_cache_behind()):
         _build_kite_index_store(_REGIME_BOOTSTRAP_SESSIONS)
         with _kite_lock:
             frame = _kite_store.get(name)

@@ -307,6 +307,10 @@ def _nifty_return_30d() -> float:
         df = get_index_ohlcv("^NSEI")
         if df is None or len(df) < 31:
             return 0.0
+        # A weeks-old Nifty series is a different market: neutral, not wrong.
+        from core.regime_engine import _index_history_stale_reason
+        if _index_history_stale_reason(df):
+            return 0.0
         col = next((c for c in df.columns if c.lower() == "close"), None)
         if not col:
             return 0.0

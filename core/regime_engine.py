@@ -911,6 +911,37 @@ def _unavailable_regime(reason: str) -> RegimeState:
     )
 
 
+#: Completed sessions the Nifty series may trail the latest published session
+#: before the regime is withheld. Covers the evening publication lag plus one
+#: missed nightly refresh; anything older is a different market.
+REGIME_MAX_SESSIONS_BEHIND = 2
+
+
+def _index_history_stale_reason(nifty_df: Optional[pd.DataFrame], *, now=None, holidays=None) -> str:
+    """Return why the Nifty series is too old to classify today's market, or ''."""
+    if nifty_df is None or len(nifty_df) == 0:
+        return ""
+    try:
+        last = pd.Timestamp(nifty_df.index[-1]).date()
+    except Exception:
+        return ""
+    try:
+        from research.intelligence.data import nse_calendar as CAL
+
+        hol = CAL.load_holidays() if holidays is None else holidays
+        required = CAL.latest_required_session(now or CAL._now_ist(), hol)
+        behind = CAL.sessions_gap(last, required, hol)
+    except Exception:
+        return ""
+    if behind <= REGIME_MAX_SESSIONS_BEHIND:
+        return ""
+    return (
+        f"Index history is stale: last Nifty bar {last.isoformat()}, "
+        f"{behind} session(s) behind {required.isoformat()}. "
+        "Market regime is not inferred from old bars."
+    )
+
+
 def compute_regime() -> RegimeState:
     """
     Compute and return the current 5-dimension market regime.
@@ -946,6 +977,16 @@ def compute_regime() -> RegimeState:
     nifty_df = raw_data.get("NIFTY")
     vix_df = raw_data.get("VIX")
     sector_data = {name: raw_data.get(name) for name in SECTOR_TICKERS}
+
+    stale_reason = _index_history_stale_reason(nifty_df)
+    if stale_reason:
+        # Stale must look stale: a regime classified from weeks-old bars was
+        # shown as today's Nifty/VIX and stamped onto every logged BUY outcome.
+        logger.warning("Regime withheld: %s", stale_reason)
+        state = _unavailable_regime(stale_reason)
+        _CACHE["regime_state"] = state
+        _CACHE["timestamp"] = now
+        return state
 
     # ---- classify each dimension --------------------------------------------
     market_regime, nifty_price, chg1d, chg5d, sma50, sma200 = _classify_market_regime(nifty_df)

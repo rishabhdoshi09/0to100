@@ -307,7 +307,13 @@ def test_eod_refreshes_official_data_without_starting_live_scan_pipeline(monkeyp
     )
     supervisor.enqueue_due()
     types = [job_type for job_type, _kwargs in jobs.enqueued]
-    assert types == [SCH.BHAVCOPY_UPDATE, SCH.DATA_REFRESH]
+    # EOD also enqueues once-per-session reference upkeep (CA + index store).
+    assert types == [
+        SCH.BHAVCOPY_UPDATE,
+        SCH.DATA_REFRESH,
+        SCH.CORPORATE_ACTIONS,
+        SCH.INDEX_WARMUP,
+    ]
     assert SCH.MARKET_SCAN not in types
     assert SCH.PAPER_CYCLE not in types
 

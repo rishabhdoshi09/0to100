@@ -456,6 +456,43 @@ def _reconcile_ca_failure(supervisor) -> None:
         supervisor._save_failures()
 
 
+_CA_CLEAR_INTERVAL_S = 120.0
+_ca_clear_last = 0.0
+
+
+def _clear_ca_failure_when_complete(supervisor, *, now: float | None = None) -> bool:
+    """Drop a stale CA_INCOMPLETE once the background refresh has finished.
+
+    The CORPORATE_ACTIONS job returns immediately and reports coverage as it
+    was *before* its background refresh. When a new half-year window opens the
+    job sees 10/11, raises CA_INCOMPLETE, and the refresh then completes 11/11
+    a minute later -- but nothing re-read coverage, so the flag (and the
+    "new paper entries: limited" capability) stayed up until the next EOD
+    (owner's Mac, 2026-11-11 18:06 onward). Read-only: this never starts a
+    refresh, it only clears the flag when coverage is verifiably complete.
+    """
+    global _ca_clear_last
+    from research.autonomy import health as H
+
+    if H.CA_INCOMPLETE not in supervisor.failures:
+        return False
+    if _ca_future is not None and not _ca_future.done():
+        return False
+    stamp = time.monotonic() if now is None else float(now)
+    if _ca_clear_last and stamp - _ca_clear_last < _CA_CLEAR_INTERVAL_S:
+        return False
+    _ca_clear_last = stamp
+    status = _ca_status()
+    if not status.get("coverage_complete"):
+        return False
+    supervisor.failures.discard(H.CA_INCOMPLETE)
+    try:
+        supervisor._save_failures()
+    except Exception:
+        pass
+    return True
+
+
 def install_parallel_runtime() -> None:
     """Install idempotent orchestration patches before the Supervisor is constructed."""
     global _installed
@@ -510,7 +547,18 @@ def install_parallel_runtime() -> None:
                 return None
             return original_incident(self, code, message, job)
 
+        original_tick = Supervisor.tick
+
+        def tick_parallel(self, now_ist=None):
+            job = original_tick(self, now_ist)
+            try:
+                _clear_ca_failure_when_complete(self)
+            except Exception:
+                pass
+            return job
+
         Supervisor._retry_or_fail = retry_or_fail_parallel
         Supervisor._incident = incident_parallel
+        Supervisor.tick = tick_parallel
         Supervisor._parallel_runtime_installed = True
         _installed = True

@@ -978,7 +978,11 @@ export function RadarHomeView(props: ExperienceViewProps & {
   const kiteLoginOptional = Boolean(radar?.home_os?.broker?.login_required)
   const telegram = radar?.telegram || dashboard.autonomy.telegram
   const telegramOn = Boolean(telegram?.configured)
+  // No telegram block yet means "not read yet", not "not configured": the
+  // first paint used to tell a configured owner to set TELEGRAM_BOT_TOKEN.
+  const telegramKnown = telegram != null
   const telegramWarn = telegramOn && telegram?.state !== 'live' && telegram?.state !== 'scan_sent'
+  const deskWarming = dashboard.response_meta?.status === 'WARMING'
   const breakoutRows = ((radar?.lanes.breakouts?.length
     ? radar.lanes.breakouts
     : scannerFallbackRows('Breakouts', dashboard)) || []) as RadarRow[]
@@ -1190,8 +1194,14 @@ export function RadarHomeView(props: ExperienceViewProps & {
         </div>
         <div>
           <span>PRICE DATA</span>
-          <strong>{dashboard.data.bhavcopy.latest_date || 'Preparing…'}</strong>
-          <small>{dashboard.data.ready ? 'official bhavcopy ready' : 'preparing official bhavcopy'}</small>
+          <strong>{dashboard.data.bhavcopy.latest_date || (deskWarming ? 'Loading…' : 'Preparing…')}</strong>
+          <small>
+            {dashboard.data.ready
+              ? 'official bhavcopy ready'
+              : deskWarming
+                ? 'reading the saved desk projection'
+                : 'preparing official bhavcopy'}
+          </small>
         </div>
         <div>
           <span>ZERODHA</span>
@@ -1206,12 +1216,14 @@ export function RadarHomeView(props: ExperienceViewProps & {
         </div>
         <div>
           <span>TELEGRAM</span>
-          <strong>{telegramOn ? (telegram?.headline || 'CONNECTED') : 'OFF'}</strong>
+          <strong>{telegramOn ? (telegram?.headline || 'CONNECTED') : telegramKnown ? 'OFF' : 'CHECKING'}</strong>
           <small>
             {telegram?.detail
               || (telegramOn
                 ? 'Setups and breakout watches send after each market scan'
-                : 'Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env')}
+                : telegramKnown
+                  ? 'Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env'
+                  : 'Reading alert delivery state…')}
           </small>
         </div>
       </div>
