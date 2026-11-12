@@ -503,6 +503,14 @@ def _window_covered(record: dict[str, Any], window: Window) -> bool:
     return str(record.get("covered_from") or "") <= window.start.isoformat() and str(record.get("covered_to") or "") >= window.end.isoformat()
 
 
+def _previous_session(today: date) -> date:
+    try:
+        from research.intelligence.data.nse_calendar import load_holidays, previous_session
+        return previous_session(today, load_holidays())
+    except Exception:
+        return today - timedelta(days=1)
+
+
 def coverage_status(*, years: int = 5, events_path: Path | None = None,
                     coverage_path: Path | None = None, today: date | None = None) -> dict[str, Any]:
     events_path = Path(events_path or DEFAULT_EVENTS_PATH)
@@ -511,7 +519,27 @@ def coverage_status(*, years: int = 5, events_path: Path | None = None,
     coverage = _coverage_file(coverage_path, years=years)
     windows = build_windows(today=today, years=years)
     records = dict(coverage.get("windows") or {})
-    missing = [w.window_id for w in windows if not _window_covered(dict(records.get(w.window_id) or {}), w)]
+    # The open window ends "today", but the nightly refresh can only have
+    # fetched through its own run day. Requiring today flipped coverage to
+    # incomplete at every midnight and raised corporate_actions_incomplete for
+    # each whole session until the evening refresh. Bars only exist through
+    # the previous session, so a successful fetch reaching it is complete.
+    open_floor = _previous_session(today)
+    missing = []
+    for w in windows:
+        record = dict(records.get(w.window_id) or {})
+        if _window_covered(record, w):
+            continue
+        if w.end == today:
+            if open_floor < w.start:
+                continue  # no completed session inside the window yet
+            if (
+                record.get("success")
+                and str(record.get("covered_from") or "") <= w.start.isoformat()
+                and str(record.get("covered_to") or "") >= open_floor.isoformat()
+            ):
+                continue
+        missing.append(w.window_id)
     events = CA.load_events(events_path)
     n_events = sum(len(v) for v in events.values())
     last_refresh = str(coverage.get("last_refresh_at") or "")

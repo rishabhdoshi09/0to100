@@ -267,3 +267,46 @@ def test_regime_calibration_ignores_withheld_regime(monkeypatch):
     )
     assert live_edge.regime_calibration("UNAVAILABLE") == {}
     assert live_edge.regime_calibration("unknown") == {}
+
+
+# --- 5. CA coverage of the open window does not expire at midnight ----------
+
+def _ca_coverage(tmp_path, covered_to: str, *, success: bool = True):
+    import json as _json
+    from data import corporate_actions_resilient as CAR
+
+    windows = CAR.build_windows(today=date(2026, 11, 12), years=1)
+    records = {
+        w.window_id: {
+            "window_id": w.window_id, "covered_from": w.start.isoformat(),
+            "covered_to": w.end.isoformat(), "success": True,
+        }
+        for w in windows
+    }
+    records["2026-H2"].update({"covered_to": covered_to, "success": success})
+    events = tmp_path / "ca_events.json"
+    coverage = tmp_path / "ca_coverage.json"
+    events.write_text("[]")
+    coverage.write_text(_json.dumps({"version": 1, "years": 1, "windows": records,
+                                     "last_refresh_at": "2026-11-11T18:06:49+05:30"}))
+    return CAR, events, coverage
+
+
+def test_open_window_refreshed_through_last_session_is_complete(tmp_path, monkeypatch):
+    CAR, events, coverage = _ca_coverage(tmp_path, "2026-11-11")
+    monkeypatch.setattr(CAR, "_previous_session", lambda today: date(2026, 11, 11))
+    status = CAR.coverage_status(years=1, today=date(2026, 11, 12), events_path=events, coverage_path=coverage)
+    assert status["coverage_complete"] is True, status["missing_windows"]
+
+
+def test_open_window_missing_the_last_session_is_still_incomplete(tmp_path, monkeypatch):
+    CAR, events, coverage = _ca_coverage(tmp_path, "2026-11-06")
+    monkeypatch.setattr(CAR, "_previous_session", lambda today: date(2026, 11, 11))
+    status = CAR.coverage_status(years=1, today=date(2026, 11, 12), events_path=events, coverage_path=coverage)
+    assert status["coverage_complete"] is False
+    assert status["missing_windows"] == ["2026-H2"]
+
+    CAR, events, coverage = _ca_coverage(tmp_path, "2026-11-11", success=False)
+    monkeypatch.setattr(CAR, "_previous_session", lambda today: date(2026, 11, 11))
+    status = CAR.coverage_status(years=1, today=date(2026, 11, 12), events_path=events, coverage_path=coverage)
+    assert status["coverage_complete"] is False
