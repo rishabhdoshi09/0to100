@@ -127,6 +127,16 @@ def build_fo_features(
         price - trigger if direction == "LONG" else trigger - price
     )
     chase_distance_atr = max(0.0, directional_clearance) / atr if atr > 0 else 0.0
+    # chase_distance_atr only measures distance past TODAY's trigger. A name
+    # that ran 30% in five days and then clears a fresh 20-day high is barely
+    # past its trigger yet several ATRs stretched -- the owner saw mostly such
+    # "already run" candidates (2026-11-12: 10 of 14 were 2.4-4.4 ATR above
+    # their 20-DMA). Measure the stretch itself, direction-aware.
+    stretch = (price - ema20) if direction == "LONG" else (ema20 - price)
+    ema20_extension_atr = stretch / atr if atr > 0 else 0.0
+    base_5d = float(close.iloc[-6]) if len(close) >= 6 else price
+    run = (price - base_5d) if direction == "LONG" else (base_5d - price)
+    run_5d_atr = run / atr if atr > 0 else 0.0
 
     latest_range = max(float(high.iloc[-1] - low.iloc[-1]), 1e-9)
     close_location = (
@@ -169,6 +179,8 @@ def build_fo_features(
             if underlying_spread_bps is not None else None
         ),
         "chase_distance_atr": round(chase_distance_atr, 4),
+        "ema20_extension_atr": round(ema20_extension_atr, 4),
+        "run_5d_atr": round(run_5d_atr, 4),
         "false_breakout": false_breakout,
         "close_location": round(close_location, 4),
         "feature_provenance": {

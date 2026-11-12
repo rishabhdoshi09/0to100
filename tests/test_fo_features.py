@@ -90,3 +90,21 @@ def test_insufficient_history_is_refused_instead_of_filled():
         assert "60" in str(exc)
     else:
         raise AssertionError("short history must fail closed")
+
+
+def test_stretch_features_measure_distance_from_ema20_and_5_day_run():
+    bars = _bars()
+    kw = dict(symbol="RELIANCE", intraday_vwap=float(bars["close"].iloc[-1] - 0.5),
+              benchmark_20d_return_pct=2.5, nifty_change_pct=0.6, sector_relative_strength_pct=1.0,
+              futures_price_change_pct=1.1, futures_oi_change_pct=6.0, is_fo=True, underlying_spread_bps=3.0)
+    calm = build_fo_features(daily_bars=bars, direction="LONG", **kw)
+    assert 0 < calm["ema20_extension_atr"] < 3.0
+
+    ran = bars.copy()
+    for i, step in zip(range(-5, 0), (4.0, 8.0, 12.0, 16.0, 20.0)):   # a 5-day run-away
+        ran.loc[ran.index[i], ["open", "high", "low", "close"]] += step
+    hot = build_fo_features(daily_bars=ran, direction="LONG", **kw)
+    assert hot["ema20_extension_atr"] > calm["ema20_extension_atr"]
+    assert hot["run_5d_atr"] > 4.0
+    short = build_fo_features(daily_bars=ran, direction="SHORT", **kw)
+    assert short["ema20_extension_atr"] < 0 and short["run_5d_atr"] < 0  # direction-aware

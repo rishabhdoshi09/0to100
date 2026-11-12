@@ -113,3 +113,29 @@ def test_exceptionally_strong_setup_is_explicit_intraday_eod():
     assert result["expected_move"]["horizon"] == "INTRADAY"
     assert result["expected_move"]["holding_days"] == 0
     assert result["expected_move"]["exit_policy"] == "EOD"
+
+
+def test_stretched_long_is_blocked_even_when_barely_past_its_trigger():
+    # Owner, 2026-11-12: F&O candidates were mostly names that had already run
+    # (e.g. +30% in 5 days, 4 ATR above the 20-DMA) yet only ~0.5 ATR past the
+    # fresh 20-day high, so the trigger-distance chase guard never fired.
+    base = score_fo_setup(dict(_features(), ema20_extension_atr=1.0, run_5d_atr=1.5), "LONG")
+    assert base["tradable"] is True and "extension_penalty" not in base["components"]
+
+    late = score_fo_setup(dict(_features(), ema20_extension_atr=4.1, run_5d_atr=6.0), "LONG")
+    assert late["tradable"] is False
+    assert {"EXTENDED_FROM_EMA20", "EXTENDED_5D_RUN"} <= set(late["blockers"])
+
+
+def test_getting_stretched_is_penalised_so_fresh_bases_rank_higher():
+    fresh = score_fo_setup(dict(_features(), ema20_extension_atr=1.2, run_5d_atr=1.5), "LONG")
+    stretched = score_fo_setup(dict(_features(), ema20_extension_atr=2.8, run_5d_atr=3.3), "LONG")
+    assert stretched["components"]["extension_penalty"] == -(12.0 + 4.8)
+    assert stretched["score"] < fresh["score"]
+    assert any("stretched" in r for r in stretched["reasons"])
+
+
+def test_missing_stretch_features_do_not_block_older_payloads():
+    out = score_fo_setup(_features(), "LONG")
+    assert "EXTENDED_FROM_EMA20" not in out["blockers"]
+    assert "EXTENDED_5D_RUN" not in out["blockers"]

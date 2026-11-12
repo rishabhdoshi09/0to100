@@ -713,6 +713,36 @@ def due_diligence(symbol: str) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Due diligence failed: {exc}") from exc
 
 
+_PLAN_ODDS_CACHE: dict[tuple, dict[str, Any] | None] = {}
+
+
+@app.get("/api/plan-odds/{symbol}")
+def plan_odds_endpoint(symbol: str, entry: float, stop: float, target: float) -> dict[str, Any]:
+    """No-edge odds for a LONG plan from the stock's own daily moves (read-only)."""
+    try:
+        sym = clean_symbol(symbol)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        from data.bhavcopy_store import get_ohlcv
+        from product.plan_odds import plan_odds
+
+        bars = get_ohlcv(sym)
+        as_of = str(bars.index[-1])[:10] if bars is not None and len(bars) else ""
+        key = (sym, round(float(entry), 2), round(float(stop), 2), round(float(target), 2), as_of)
+        if key not in _PLAN_ODDS_CACHE:
+            if len(_PLAN_ODDS_CACHE) > 2048:
+                _PLAN_ODDS_CACHE.clear()
+            _PLAN_ODDS_CACHE[key] = plan_odds(sym, entry, stop, target, bars=bars)
+        odds = _PLAN_ODDS_CACHE[key]
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Plan odds failed: {type(exc).__name__}") from exc
+    if odds is None:
+        return {"available": False, "symbol": sym,
+                "reason": "Needs a long plan (stop < entry < target) and at least 120 official sessions."}
+    return {"available": True, **odds}
+
+
 @app.get("/api/stock-research/{symbol}")
 def stock_research(symbol: str) -> dict[str, Any]:
     """Alias of due-diligence. Same StockResearchEngine, still cache-only — never scrapes."""

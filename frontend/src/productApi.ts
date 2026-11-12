@@ -1068,6 +1068,29 @@ export type HomeOperatingSystem = {
   }
 }
 
+export type PlanOdds = {
+  available: boolean
+  reason?: string
+  symbol: string
+  as_of?: string
+  horizon_sessions?: number
+  reward_risk?: number
+  p_target_first?: number
+  p_stop_first?: number
+  p_neither?: number
+  breakeven_win_rate?: number
+  no_edge_expected_r?: number
+  daily_vol_pct?: number
+  cone?: Array<{ sessions: number; p10_pct: number; p50_pct: number; p90_pct: number }>
+  method?: string
+}
+
+export const fetchPlanOdds = (symbol: string, entry: number, stop: number, target: number): Promise<PlanOdds> =>
+  request(
+    `/api/plan-odds/${encodeURIComponent(symbol)}?entry=${entry}&stop=${stop}&target=${target}`,
+    { headers: { Accept: 'application/json' } },
+  )
+
 /** `fresh` bypasses the server's short Home read cache; use it right after an operator action. */
 export const fetchRadarHome = (fresh = false): Promise<RadarHome> =>
   request(fresh ? '/api/radar-home?fresh=true' : '/api/radar-home', { headers: { Accept: 'application/json' } })

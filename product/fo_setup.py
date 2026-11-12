@@ -203,6 +203,8 @@ def score_fo_setup(
     *,
     minimum_score: float = 65.0,
     max_chase_atr: float = 1.5,
+    max_ema20_extension_atr: float = 3.0,
+    max_run_5d_atr: float = 4.0,
 ) -> dict[str, Any]:
     """Return a fail-closed directional F&O setup assessment."""
     direction = str(direction or "").upper()
@@ -245,6 +247,24 @@ def score_fo_setup(
     chase_atr = _f(features.get("chase_distance_atr"))
     if chase_atr > max_chase_atr:
         blockers.append("EXTENDED_CHASE")
+    # Stretch from the 20-EMA and the 5-day run, both in ATRs and in the
+    # trade's direction. Hard block when clearly late; a graded score penalty
+    # in the "getting stretched" band so fresh bases outrank run-away names.
+    ema_ext = _f(features.get("ema20_extension_atr"))
+    run_5d = _f(features.get("run_5d_atr"))
+    if ema_ext > max_ema20_extension_atr:
+        blockers.append("EXTENDED_FROM_EMA20")
+    if run_5d > max_run_5d_atr:
+        blockers.append("EXTENDED_5D_RUN")
+    stretch_penalty = round(
+        min(15.0, max(0.0, ema_ext - 2.0) * 15.0) + min(9.0, max(0.0, run_5d - 2.5) * 6.0),
+        1,
+    )
+    if stretch_penalty > 0:
+        reasons.append(
+            f"stretched {ema_ext:.1f} ATR from 20-EMA, 5-day run {run_5d:.1f} ATR "
+            f"(-{stretch_penalty:.0f}); pullback entry preferred"
+        )
     raw_spread_bps = features.get("underlying_spread_bps")
     if raw_spread_bps is None:
         blockers.append("UNDERLYING_SPREAD_UNAVAILABLE")
@@ -295,6 +315,8 @@ def score_fo_setup(
         "nifty_alignment": _signed_strength_score(nifty, direction, 5.0),
         "futures_oi": _oi_score(oi_state, direction), # 10
     }
+    if stretch_penalty > 0:
+        components["extension_penalty"] = -stretch_penalty
     score = round(_clamp(sum(components.values()), 0.0, 100.0), 1)
 
     if rvol >= 1.5:

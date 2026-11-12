@@ -14,6 +14,8 @@ import {
   type RecommendationsWorkspace,
   type MarketReportsWorkspace,
   type DecisionSimulationGate,
+  fetchPlanOdds,
+  type PlanOdds,
 } from './productApi'
 import type { ExperienceViewProps } from './experience'
 import { LiveScanBanner } from './experience'
@@ -266,6 +268,43 @@ function EvidencePanel({ card }: { card: RecommendationCard }) {
   )
 }
 
+function PlanOddsPanel({ symbol, entry, stop, target }: { symbol: string; entry: number; stop: number; target: number }) {
+  const [odds, setOdds] = useState<PlanOdds | null>(null)
+  const [failed, setFailed] = useState(false)
+  useEffect(() => {
+    let alive = true
+    setOdds(null)
+    setFailed(false)
+    fetchPlanOdds(symbol, entry, stop, target)
+      .then((payload) => { if (alive) setOdds(payload) })
+      .catch(() => { if (alive) setFailed(true) })
+    return () => { alive = false }
+  }, [symbol, entry, stop, target])
+  const oddsPct = (v?: number) => (v == null ? '—' : `${Math.round(v * 100)}%`)
+  const signed = (v?: number) => (v == null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(1)}%`)
+  if (failed) return null
+  if (!odds) return <p className="reco-pick-note">Odds: computing from this stock's own daily moves…</p>
+  if (!odds.available) return <p className="reco-pick-note">Odds: {odds.reason}</p>
+  const horizon = odds.horizon_sessions ?? 15
+  return (
+    <div className="reco-pick-note" data-testid="plan-odds">
+      <strong>Odds for this plan</strong> ({horizon} sessions, no edge assumed):{' '}
+      target first <strong>{oddsPct(odds.p_target_first)}</strong> · stop first {oddsPct(odds.p_stop_first)} ·
+      neither {oddsPct(odds.p_neither)} · breakeven needs {oddsPct(odds.breakeven_win_rate)} at {odds.reward_risk?.toFixed(2)}R
+      {(odds.cone || []).length ? (
+        <div>
+          Likely range:{' '}
+          {(odds.cone || []).map((c) => (
+            <span key={c.sessions}>{c.sessions}d {signed(c.p10_pct)} … {signed(c.p50_pct)} … {signed(c.p90_pct)}{c.sessions < horizon ? ' · ' : ''}</span>
+          ))}
+          {' '}(10th / median / 90th percentile)
+        </div>
+      ) : null}
+      <small>{odds.method} A real edge shows up only when the evidence-based win rate beats the target-first odds.</small>
+    </div>
+  )
+}
+
 function DecisionSheet({
   card,
   categoryLabel,
@@ -391,6 +430,9 @@ function DecisionSheet({
         <p className="reco-pick-note" data-testid="win-probability">
           <strong>Win probability:</strong> {card.win_probability.text.replace(/^Win probability /, '')}
         </p>
+      ) : null}
+      {card.entry && card.stop && card.target ? (
+        <PlanOddsPanel symbol={card.symbol} entry={card.entry} stop={card.stop} target={card.target} />
       ) : null}
       {card.stop_plan?.text ? (
         <p className="reco-pick-note" data-testid="stop-plan">

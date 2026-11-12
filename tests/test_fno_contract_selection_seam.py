@@ -57,7 +57,9 @@ INELIGIBLE_STRIKE_OFFSET = 60.0
 def _bars():
     n = 90
     x = np.arange(n, dtype=float)
-    close = 1000.0 + x * 1.3 + np.sin(x / 2.7) * 20.0
+    # A fresh breakout: at slope 1.3 the series sat 2.6 ATR above its 20-EMA,
+    # which the F&O stretch guard (2026-11-12) now treats as a late chase.
+    close = 1000.0 + x * 0.8 + np.sin(x / 2.7) * 20.0
     high = close + 8.0
     low = close - 8.0
     volume = np.full(n, 100_000.0)
