@@ -354,3 +354,15 @@ def test_matching_stale_or_in_flight_snapshot_does_not_rescan(tmp_path, monkeypa
     sup._market_scan_in_flight = lambda: False      # scan finished, still mismatched
     sup._ensure_scan_matches_snapshot()
     assert _scan_keys(sup) == ["eod:scan:snap-eod"]
+
+
+def test_as_of_index_read_handles_tz_aware_kite_bars(monkeypatch, tmp_path):
+    idx, _clock = _isolate_index_store(monkeypatch, tmp_path)
+    frame = _frame("2026-11-11")
+    frame.index = frame.index.tz_localize("Asia/Kolkata")         # as Kite returns them
+    monkeypatch.setattr(idx, "_kite_authoritative", lambda: True)
+    monkeypatch.setattr(idx, "_kite_store", {"Nifty 50": frame})
+    monkeypatch.setattr(idx, "_kite_last_day", date(2026, 11, 11))
+    monkeypatch.setattr(idx, "_kite_pkl_checked_at", 1e12)       # skip the disk check
+    out = idx.get_index_ohlcv_as_of_cached("^NSEI", "2026-11-06")
+    assert out is not None and str(out.index[-1].date()) == "2026-11-06"

@@ -405,7 +405,11 @@ def performance_summary() -> dict[str, Any]:
         "max_drawdown_pct": _max_drawdown_from_returns(returns),
         "benchmark_comparison": bench,
         "benchmark_note": (
-            "Computing the Nifty comparison over each signal's exact holding sessions…"
+            (
+                "Computing the Nifty comparison over each signal's exact holding sessions…"
+                if _BENCH_CACHE.get("building") or _BENCH_CACHE.get("key") is None else
+                "Unavailable: no settled signal's holding window is covered by the local Nifty series."
+            )
             if bench is None else
             (
                 f"Nifty 50 over the same sessions: signals {bench['mean_signal_pct']:+.2f}% vs "

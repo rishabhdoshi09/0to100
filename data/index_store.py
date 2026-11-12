@@ -690,7 +690,12 @@ def get_index_ohlcv_as_of_cached(ticker: str, as_of: str) -> Optional[pd.DataFra
             return None
     try:
         cutoff = pd.Timestamp(str(as_of)[:10]).normalize()
-        frame = frame.loc[frame.index.normalize() <= cutoff]
+        index = pd.DatetimeIndex(frame.index)
+        if index.tz is not None:
+            # Kite index bars are tz-aware (+05:30); comparing them with a
+            # naive cutoff raised and this returned None for every Kite frame.
+            cutoff = cutoff.tz_localize(index.tz)
+        frame = frame.loc[index.normalize() <= cutoff]
     except Exception:
         return None
     return frame.copy() if frame is not None and not frame.empty else None
