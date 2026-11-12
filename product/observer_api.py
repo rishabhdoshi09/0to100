@@ -160,7 +160,64 @@ _HOME_FLIGHT: dict[str, Any] = {"current": None}
 _HOME_FOLLOWER_WAIT_S = 120.0
 
 
-def radar_home_workspace() -> dict[str, Any]:
+_HOME_CACHE: dict[str, Any] = {"result": None, "at": 0.0, "refreshing": False}
+#: A Home build costs 8-15 s on the owner's Mac (home_os dominates) and the
+#: desk polls every 12-30 s, so every poll waited for a full rebuild. Serve a
+#: result up to _HOME_FRESH_S old as-is; up to _HOME_STALE_CAP_S old serve it
+#: immediately while ONE background rebuild runs. Older, or ?fresh=1 (used
+#: right after an operator action), builds synchronously as before.
+_HOME_FRESH_S = 10.0
+_HOME_STALE_CAP_S = 60.0
+
+
+def _refresh_home_cache() -> None:
+    try:
+        _coalesced_home_build()
+    except Exception:
+        pass
+    finally:
+        with _HOME_FLIGHT_LOCK:
+            _HOME_CACHE["refreshing"] = False
+
+
+def radar_home_workspace(
+    fresh: bool = Query(False, description="Bypass the short Home read cache (after an operator action)"),
+) -> dict[str, Any]:
+    """Home read: short read cache in front of the coalesced build."""
+    import copy
+    import time as _t
+
+    # Only an HTTP read (FastAPI resolves the default to False) uses the cache;
+    # a direct in-process call (default is the Query marker) always builds.
+    if fresh is False:
+        now = _t.monotonic()
+        start_refresh = False
+        result = None
+        with _HOME_FLIGHT_LOCK:
+            cached = _HOME_CACHE["result"]
+            age = now - float(_HOME_CACHE["at"] or 0.0)
+            if cached is not None and age <= _HOME_STALE_CAP_S:
+                start_refresh = (
+                    age > _HOME_FRESH_S
+                    and _HOME_FLIGHT["current"] is None
+                    and not _HOME_CACHE["refreshing"]
+                )
+                if start_refresh:
+                    _HOME_CACHE["refreshing"] = True
+                result = copy.deepcopy(cached)
+        if result is not None:
+            if start_refresh:
+                threading.Thread(target=_refresh_home_cache, daemon=True, name="qt-home-refresh").start()
+            result["response_meta"] = {
+                "source": "HOME_READ_CACHE",
+                "age_s": round(age, 2),
+                "refreshing": bool(start_refresh or age > _HOME_FRESH_S),
+            }
+            return result
+    return _coalesced_home_build()
+
+
+def _coalesced_home_build() -> dict[str, Any]:
     """Home read, coalesced: concurrent identical requests share one build.
 
     The build is CPU- and IO-bound in one API process, so four simultaneous
@@ -181,6 +238,11 @@ def radar_home_workspace() -> dict[str, Any]:
     if leader:
         try:
             flight["result"] = _build_radar_home_workspace()
+            import copy as _copy
+            import time as _t
+            with _HOME_FLIGHT_LOCK:
+                _HOME_CACHE["result"] = _copy.deepcopy(flight["result"])
+                _HOME_CACHE["at"] = _t.monotonic()
             return flight["result"]
         except BaseException as exc:
             flight["error"] = exc

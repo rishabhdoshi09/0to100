@@ -80,7 +80,7 @@ def session_close_return(
     return exit_px, (exit_px - entry) / entry * 100.0
 
 
-def first_touch_path(
+def first_touch_detail(
     symbol: str,
     opened_at: str,
     entry: float,
@@ -88,11 +88,13 @@ def first_touch_path(
     target: float,
     *,
     horizon: int = PATH_HORIZON_SESSIONS,
-) -> tuple[float, float, int] | None:
-    """First-touch target vs stop on official bars.
+) -> dict | None:
+    """first_touch_path plus the fill and exit session dates.
 
-    Returns (exit_price, outcome_pct, worked) where worked is 1/0/-1 (no fill).
-    None = still open or no usable path. Stop is checked before target.
+    Returns {"exit_price", "pct", "worked", "fill_date", "exit_date"} (dates
+    are ISO strings; both None for a no-fill, worked -1). None = still open or
+    no usable path. The dates let a benchmark be measured over exactly the
+    sessions the trade was held.
     """
     try:
         entry_f, stop_f, target_f = float(entry), float(stop), float(target)
@@ -116,27 +118,60 @@ def first_touch_path(
         highs = since["high"].to_numpy(dtype=float)
         lows = since["low"].to_numpy(dtype=float)
         closes = since["close"].to_numpy(dtype=float)
+        days = [pd.Timestamp(x).date().isoformat() for x in since.index]
     except Exception:
         return None
+
+    def _out(price, worked, fill_i, exit_i):
+        return {
+            "exit_price": float(price),
+            "pct": (float(price) - entry_f) / entry_f * 100.0 if worked != -1 else 0.0,
+            "worked": worked,
+            "fill_date": days[fill_i] if fill_i is not None else None,
+            "exit_date": days[exit_i] if exit_i is not None else None,
+        }
+
     n = len(highs)
     cap = min(n, int(horizon))
-    filled = False
+    fill_i = None
     for i in range(cap):
-        if not filled:
+        if fill_i is None:
             if highs[i] >= entry_f:
-                filled = True
+                fill_i = i
             else:
                 continue
         if lows[i] <= stop_f:
-            return (stop_f, (stop_f - entry_f) / entry_f * 100.0, 0)
+            return _out(stop_f, 0, fill_i, i)
         if highs[i] >= target_f:
-            return (target_f, (target_f - entry_f) / entry_f * 100.0, 1)
-    if not filled:
-        return (0.0, 0.0, -1) if n >= int(horizon) else None
+            return _out(target_f, 1, fill_i, i)
+    if fill_i is None:
+        return _out(0.0, -1, None, None) if n >= int(horizon) else None
     if n >= int(horizon):
         last = float(closes[cap - 1])
-        return (last, (last - entry_f) / entry_f * 100.0, 1 if last >= entry_f else 0)
+        return _out(last, 1 if last >= entry_f else 0, fill_i, cap - 1)
     return None
+
+
+def first_touch_path(
+    symbol: str,
+    opened_at: str,
+    entry: float,
+    stop: float,
+    target: float,
+    *,
+    horizon: int = PATH_HORIZON_SESSIONS,
+) -> tuple[float, float, int] | None:
+    """First-touch target vs stop on official bars.
+
+    Returns (exit_price, outcome_pct, worked) where worked is 1/0/-1 (no fill).
+    None = still open or no usable path. Stop is checked before target.
+    """
+    got = first_touch_detail(symbol, opened_at, entry, stop, target, horizon=horizon)
+    if got is None:
+        return None
+    if got["worked"] == -1:
+        return (0.0, 0.0, -1)
+    return (got["exit_price"], got["pct"], got["worked"])
 
 
 def wait_patience(

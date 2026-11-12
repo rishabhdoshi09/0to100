@@ -243,7 +243,47 @@ def _report_loop(storage_guard) -> None:
         storage_guard.shutdown.wait(REPORT_POLL_SECONDS)
 
 
+_LAUNCHD_LOG_MAX_BYTES = 32 * 1024 * 1024
+_LAUNCHD_LOG_KEEP_BYTES = 4 * 1024 * 1024
+
+
+def trim_inherited_log(fd: int, *, max_bytes: int = _LAUNCHD_LOG_MAX_BYTES,
+                       keep_bytes: int = _LAUNCHD_LOG_KEEP_BYTES) -> bool:
+    """Keep launchd's StandardErrorPath bounded (it reached 181 MB on the Mac).
+
+    launchd owns that file and keeps it open, so it cannot be rotated by
+    rename. It is trimmed in place to its newest ``keep_bytes`` -- but only
+    when ``fd`` is a regular file opened O_APPEND; otherwise later writes at
+    the old offset would leave a sparse hole, so nothing is touched.
+    """
+    try:
+        import fcntl
+        import stat as _stat
+
+        info = os.fstat(fd)
+        if not _stat.S_ISREG(info.st_mode) or info.st_size <= max_bytes:
+            return False
+        if not fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_APPEND:
+            return False
+        os.lseek(fd, info.st_size - keep_bytes, os.SEEK_SET)
+        tail = b""
+        while len(tail) < keep_bytes:
+            chunk = os.read(fd, keep_bytes - len(tail))
+            if not chunk:
+                break
+            tail += chunk
+        newline = tail.find(b"\n")
+        if 0 <= newline < len(tail) - 1:
+            tail = tail[newline + 1:]
+        os.ftruncate(fd, 0)
+        os.write(fd, b"[HOST LOG] trimmed launchd log to its newest %d bytes\n" % len(tail) + tail)
+        return True
+    except Exception:
+        return False
+
+
 def main() -> int:
+    trim_inherited_log(2)
     load_env_file(os.environ.get("QT_HOST_ENV_FILE"))
     storage = prepare_runtime_storage_for_startup()
     if storage != "NOT_REQUIRED":

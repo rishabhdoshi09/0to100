@@ -1096,7 +1096,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
     if (action.kind === 'instruction') return
     const control = String(action.control || '')
     if (control === 'CHECK_SYSTEM' || action.kind === 'refresh') {
-      void fetchRadarHome().then((payload) => setRadar(payload)).catch(() => undefined)
+      void fetchRadarHome(true).then((payload) => setRadar(payload)).catch(() => undefined)
       return
     }
     if (publicReadOnly) {
@@ -1109,7 +1109,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
       return
     }
     if (control === 'VERIFY_FORWARD_SOAK') {
-      void verifyForwardSoakNow().then(() => { void fetchRadarHome().then(setRadar) }).catch(() => undefined)
+      void verifyForwardSoakNow().then(() => { void fetchRadarHome(true).then(setRadar) }).catch(() => undefined)
       return
     }
     if (control === 'SIMULATE_PAST_DECISIONS') {
@@ -1125,7 +1125,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
           }
           remember('decision-simulator', latest)
           setDeskNote(latest.simple || latest.message || 'Historical replay finished.')
-          void fetchRadarHome().then(setRadar)
+          void fetchRadarHome(true).then(setRadar)
         })
         .catch((reason: unknown) => {
           setDeskNote(reason instanceof Error ? reason.message : 'Historical replay failed')

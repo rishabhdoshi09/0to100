@@ -890,6 +890,7 @@ class Supervisor:
         # Never let historical backfill compete with the live cash session.
         if SCH.market_is_open(now_ist, holidays):
             if not SCH.in_scan_window(now_ist, holidays):
+                self._ensure_scan_matches_snapshot()
                 return
             session_date = now_ist.date().isoformat()
             self._revive_blocked_auth(session_date)
@@ -932,6 +933,7 @@ class Supervisor:
         # latest completed official session. Once fresh discovery is ready, the
         # supervisor automatically authorizes paper/history simulation.
         self._ensure_startup_trade_discovery()
+        self._ensure_scan_matches_snapshot()
 
         # Closed market: keep official completed-session data current once the
         # exchange publication window opens. These jobs never auto-chain a scan.
@@ -1516,6 +1518,51 @@ class Supervisor:
         self._paper_for_snapshot(
             snap, slot=slot, session_date=session_date
         )
+
+    def _ensure_scan_matches_snapshot(self) -> None:
+        """Outside the entry window, rescan (scan only) when the snapshot moved.
+
+        Every activation of a new snapshot -- the morning Zerodha login, a
+        manual Refresh Data, the EOD refresh -- invalidates the saved scan by
+        identity (SNAPSHOT_ID_MISMATCH) and the desk withholds all cards. Only
+        the EOD refresh queued a rescan, so a login at 09:11 left the desk
+        empty until the 09:30 slot scan finished (owner's Mac, 2026-11-12).
+        Uses the same scan-only ``eod:scan:<snapshot>`` identity, so it is
+        idempotent per snapshot, survives the tick cleanup, and never chains
+        into a paper cycle. Checked once per snapshot identity.
+        """
+        try:
+            active = str(self.deps.active_snapshot_id() or "")
+        except Exception:
+            return
+        if not active or active == getattr(self, "_scan_match_checked", ""):
+            return
+        if self._market_scan_in_flight():
+            return
+        try:
+            from product.scan_store import load_scan
+            saved = str((load_scan() or {}).get("source_snapshot_id") or "")
+        except Exception:
+            return
+        if saved != active:
+            info_fn = getattr(self.deps, "active_snapshot_info", None)
+            if callable(info_fn):
+                try:
+                    info = dict(info_fn() or {})
+                    latest = str(info.get("latest_date") or "")[:10]
+                    from research.intelligence.data.nse_calendar import snapshot_freshness
+                    if str(info.get("snapshot_id") or "") == active and latest and not snapshot_freshness(latest).get("fresh"):
+                        # A stale snapshot would only be BLOCKED at publication.
+                        self._scan_match_checked = active
+                        return
+                except Exception:
+                    pass
+            self.jobs.enqueue(
+                SCH.MARKET_SCAN,
+                idempotency_key=f"eod:scan:{active}",
+                input_snapshot_id=active,
+            )
+        self._scan_match_checked = active
 
     def _enqueue_scan_after_refresh(
         self,

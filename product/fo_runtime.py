@@ -109,6 +109,14 @@ def _index_context() -> dict[str, float | None]:
         frame = None
     if frame is None or len(frame) < 21:
         return {"return_20d_pct": None, "return_5d_pct": None, "last_close": None}
+    try:
+        # A weeks-old Nifty series (the Kite index cache froze on 2026-10-01)
+        # is not market context: unknown, never a 6-week-old trend.
+        from core.regime_engine import _index_history_stale_reason
+        if _index_history_stale_reason(frame):
+            return {"return_20d_pct": None, "return_5d_pct": None, "last_close": None}
+    except Exception:
+        pass
     close_col = next((c for c in frame.columns if str(c).lower() == "close"), None)
     if close_col is None:
         return {"return_20d_pct": None, "return_5d_pct": None, "last_close": None}

@@ -548,8 +548,21 @@ export function LearningJournalView() {
           <div><span>Surfaced journal</span><strong>{journal?.counts?.surfaced_history ?? 0}</strong></div>
           <div><span>Latest scan rows</span><strong>{journal?.counts?.latest_scan_decisions ?? 0}</strong></div>
           <div><span>Tracked sample</span><strong>{journal?.performance?.sample_size ?? 0}</strong></div>
+          <div><span>Hit rate</span><strong>{signedPct(journal?.performance?.hit_rate_pct, false)}</strong></div>
+          <div><span>Avg outcome</span><strong>{signedPct(journal?.performance?.expectancy_pct)}</strong></div>
+          <div>
+            <span>vs Nifty, same days</span>
+            <strong>{signedPct(journal?.performance?.benchmark_comparison?.mean_excess_pct)}</strong>
+          </div>
+          <div>
+            <span>Beat Nifty</span>
+            <strong>{signedPct(journal?.performance?.benchmark_comparison?.beat_benchmark_pct, false)}</strong>
+          </div>
         </div>
         <p className="panel-copy">{journal?.performance?.sample_note || journal?.note || ''}</p>
+        {journal?.performance?.benchmark_note ? (
+          <p className="panel-copy">{journal.performance.benchmark_note}</p>
+        ) : null}
       </Panel>
       <Panel title="RECENT DECISIONS" subtitle="Surfaced recommendations and names the scan checked but did not qualify">
         {(journal?.entries || []).length === 0 ? (
@@ -566,6 +579,11 @@ export function LearningJournalView() {
       </Panel>
     </section>
   )
+}
+
+function signedPct(value: number | null | undefined, signed = true): string {
+  if (value == null || !Number.isFinite(value)) return '—'
+  return `${signed && value > 0 ? '+' : ''}${value.toFixed(signed ? 2 : 1)}%`
 }
 
 export function CoverageView() {

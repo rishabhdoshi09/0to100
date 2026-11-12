@@ -258,6 +258,121 @@ def _max_drawdown_from_returns(returns: Sequence[float]) -> float | None:
     return round(worst, 2)
 
 
+_BENCH_CACHE: dict[str, Any] = {"key": None, "at": 0.0, "value": None, "building": False}
+_BENCH_LOCK = __import__("threading").Lock()
+_BENCH_TTL_S = 30 * 60.0
+_BENCH_MIN_N = 30
+
+
+def _nifty_closes():
+    """Nifty 50 closes by ISO session date from the local index cache (no network)."""
+    import pandas as pd
+    from data.index_store import get_index_ohlcv_as_of_cached
+
+    frame = get_index_ohlcv_as_of_cached("^NSEI", datetime.now().date().isoformat())
+    if frame is None or getattr(frame, "empty", True):
+        return {}
+    col = next((c for c in frame.columns if str(c).lower() == "close"), None)
+    if col is None:
+        return {}
+    out: dict[str, float] = {}
+    for stamp, value in frame[col].items():
+        try:
+            price = float(value)
+        except (TypeError, ValueError):
+            continue
+        if price > 0:
+            out[pd.Timestamp(stamp).date().isoformat()] = price
+    return out
+
+
+def benchmark_comparison(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    """Settled signals vs Nifty 50 over exactly the sessions each was held.
+
+    Each signal's fill and exit sessions are recomputed from official bars by
+    the canonical first-touch resolver; Nifty is measured from the close before
+    the fill session to the close of the exit session. A row whose window the
+    index cache does not cover exactly is skipped, never approximated.
+    """
+    from statistics import median
+
+    from core.outcome_resolver import first_touch_detail
+
+    closes = _nifty_closes()
+    if not closes:
+        return None
+    sessions = sorted(closes)
+    pairs: list[tuple[float, float]] = []
+    for row in rows:
+        try:
+            got = first_touch_detail(
+                str(row.get("symbol") or ""), str(row.get("logged_at") or "")[:10],
+                float(row.get("entry_price") or 0), float(row.get("stop_price") or 0),
+                float(row.get("target_price") or 0),
+            )
+        except Exception:
+            got = None
+        if not got or got.get("worked") not in (0, 1):
+            continue
+        fill, exit_ = got.get("fill_date"), got.get("exit_date")
+        if not fill or not exit_ or exit_ not in closes:
+            continue
+        before = [d for d in sessions if d < fill]
+        if not before or before[-1] < str(row.get("logged_at") or "")[:10]:
+            continue  # the session before the fill is missing from the cache
+        bench = (closes[exit_] / closes[before[-1]] - 1.0) * 100.0
+        pairs.append((float(got["pct"]), bench))
+    n = len(pairs)
+    if n == 0:
+        return None
+    excess = [sig - bench for sig, bench in pairs]
+    return {
+        "benchmark": "Nifty 50",
+        "method": "same sessions as each settled signal (close before fill -> exit close)",
+        "n": n,
+        "sufficient_sample": n >= _BENCH_MIN_N,
+        "mean_signal_pct": round(sum(s for s, _ in pairs) / n, 2),
+        "mean_benchmark_pct": round(sum(b for _, b in pairs) / n, 2),
+        "mean_excess_pct": round(sum(excess) / n, 2),
+        "median_excess_pct": round(median(excess), 2),
+        "beat_benchmark_pct": round(sum(1 for x in excess if x > 0) / n * 100.0, 1),
+    }
+
+
+def _cached_benchmark(settled: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    """Never computes inside a request: a stale/missing value is rebuilt by one
+    background thread and the last value (or None) is returned meanwhile."""
+    import threading
+    import time as _t
+
+    key = (
+        len(settled),
+        str(max((str(r.get("outcome_checked_at") or "") for r in settled), default="")),
+    )
+    now = _t.monotonic()
+    with _BENCH_LOCK:
+        current = _BENCH_CACHE["key"] == key and now - float(_BENCH_CACHE["at"]) < _BENCH_TTL_S
+        if current or _BENCH_CACHE["building"]:
+            return _BENCH_CACHE["value"]
+        _BENCH_CACHE["building"] = True
+    rows = [dict(r) for r in settled]
+
+    def _build() -> None:
+        try:
+            value = benchmark_comparison(rows)
+        except Exception:
+            value = None
+        with _BENCH_LOCK:
+            _BENCH_CACHE.update({"key": key, "at": _t.monotonic(), "value": value, "building": False})
+
+    try:
+        threading.Thread(target=_build, daemon=True, name="qt-benchmark").start()
+    except Exception:
+        with _BENCH_LOCK:
+            _BENCH_CACHE["building"] = False
+    return _BENCH_CACHE["value"]
+
+
 def performance_summary() -> dict[str, Any]:
     """Performance of settled tracked scanner signals only; never marketing P&L."""
     try:
@@ -275,6 +390,7 @@ def performance_summary() -> dict[str, Any]:
     ]
     settled.sort(key=lambda r: str(r.get("logged_at") or ""))
     returns = [float(r["outcome_pct"]) for r in settled]
+    bench = _cached_benchmark(settled) if len(settled) >= 1 else None
     return {
         "source": "tracked_signal_outcomes",
         "scope": "paper/tracked research signals; not broker-verified live P&L",
@@ -287,10 +403,16 @@ def performance_summary() -> dict[str, Any]:
         "avg_gain_pct": _f(stats.get("avg_win_pct")) if wins else None,
         "avg_loss_pct": _f(stats.get("avg_loss_pct")) if losses else None,
         "max_drawdown_pct": _max_drawdown_from_returns(returns),
-        "benchmark_comparison": None,
+        "benchmark_comparison": bench,
         "benchmark_note": (
-            "Unavailable until a publication-dated benchmark series is attached "
-            "to the same settled sample."
+            "Computing the Nifty comparison over each signal's exact holding sessions…"
+            if bench is None else
+            (
+                f"Nifty 50 over the same sessions: signals {bench['mean_signal_pct']:+.2f}% vs "
+                f"Nifty {bench['mean_benchmark_pct']:+.2f}% (excess {bench['mean_excess_pct']:+.2f}%, "
+                f"n={bench['n']})."
+                + ("" if bench["sufficient_sample"] else " Descriptive only — under 30 matched outcomes.")
+            )
         ),
         "sufficient_sample": closed >= 30,
         "sample_note": (

@@ -310,3 +310,47 @@ def test_open_window_missing_the_last_session_is_still_incomplete(tmp_path, monk
     monkeypatch.setattr(CAR, "_previous_session", lambda today: date(2026, 11, 11))
     status = CAR.coverage_status(years=1, today=date(2026, 11, 12), events_path=events, coverage_path=coverage)
     assert status["coverage_complete"] is False
+
+
+# --- 6. a new snapshot outside the entry window gets a scan-only rescan -----
+
+def _rescan_sup(tmp_path, monkeypatch, *, saved_source, latest="2026-11-11", in_flight=False):
+    sup = Supervisor(tmp_path / "auto", deps=_Deps())
+    sup.deps.active_snapshot_info = lambda: {"snapshot_id": "snap-eod", "latest_date": latest, "source": "kite"}
+    monkeypatch.setattr(sup, "_market_scan_in_flight", lambda: in_flight)
+    monkeypatch.setattr("product.scan_store.load_scan", lambda *a, **k: {"source_snapshot_id": saved_source})
+    monkeypatch.setattr(
+        "research.intelligence.data.nse_calendar.snapshot_freshness",
+        lambda latest_iso, **_k: {"fresh": latest_iso >= "2026-11-11"},
+    )
+    return sup
+
+
+def _scan_keys(sup):
+    return [j.idempotency_key for j in sup.jobs.list(limit=50) if j.job_type == SCH.MARKET_SCAN]
+
+
+def test_new_snapshot_outside_entry_window_queues_one_scan_only_rescan(tmp_path, monkeypatch):
+    sup = _rescan_sup(tmp_path, monkeypatch, saved_source="snap-before-login")
+    sup._ensure_scan_matches_snapshot()
+    sup._ensure_scan_matches_snapshot()
+    assert _scan_keys(sup) == ["eod:scan:snap-eod"]
+    sup._retire_legacy_recurring_work()
+    assert _status(sup, "eod:scan:snap-eod") == JS.PENDING
+
+
+def test_matching_stale_or_in_flight_snapshot_does_not_rescan(tmp_path, monkeypatch):
+    sup = _rescan_sup(tmp_path / "a", monkeypatch, saved_source="snap-eod")
+    sup._ensure_scan_matches_snapshot()
+    assert _scan_keys(sup) == []
+
+    sup = _rescan_sup(tmp_path / "b", monkeypatch, saved_source="old", latest="2026-11-06")
+    sup._ensure_scan_matches_snapshot()
+    assert _scan_keys(sup) == []
+
+    sup = _rescan_sup(tmp_path / "c", monkeypatch, saved_source="old", in_flight=True)
+    sup._ensure_scan_matches_snapshot()
+    assert _scan_keys(sup) == []
+    sup._market_scan_in_flight = lambda: False      # scan finished, still mismatched
+    sup._ensure_scan_matches_snapshot()
+    assert _scan_keys(sup) == ["eod:scan:snap-eod"]

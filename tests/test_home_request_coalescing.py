@@ -73,3 +73,37 @@ def test_a_failed_build_fails_its_followers_and_does_not_stick(monkeypatch):
     assert errors == ["build failed"] * 3 and len(calls) == 1
     monkeypatch.setattr(O, "_build_radar_home_workspace", lambda: {"ok": True})
     assert O.radar_home_workspace() == {"ok": True}
+
+
+def test_http_reads_are_served_from_the_short_cache_with_one_background_refresh(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr("time.monotonic", lambda: clock[0])
+    calls: list[int] = []
+    monkeypatch.setattr(O, "_build_radar_home_workspace", _slow_builder(calls, delay=0.0))
+    monkeypatch.setattr(O, "_HOME_CACHE", {"result": None, "at": 0.0, "refreshing": False})
+    started: list[object] = []
+
+    class _InlineThread:
+        def __init__(self, target, **_k):
+            self.target = target
+
+        def start(self):
+            started.append(self.target)
+            self.target()
+
+    monkeypatch.setattr(O.threading, "Thread", _InlineThread)
+
+    first = O.radar_home_workspace(fresh=False)          # cold: synchronous build
+    assert first["home_os"]["n"] == 1 and "response_meta" not in first
+    clock[0] += 5
+    hit = O.radar_home_workspace(fresh=False)            # fresh cache hit, no build
+    assert hit["home_os"]["n"] == 1 and hit["response_meta"]["refreshing"] is False
+    assert len(calls) == 1
+    clock[0] += 10
+    stale = O.radar_home_workspace(fresh=False)          # served, refresh started
+    assert stale["home_os"]["n"] == 1 and stale["response_meta"]["refreshing"] is True
+    assert len(started) == 1 and len(calls) == 2
+    assert O.radar_home_workspace(fresh=False)["home_os"]["n"] == 2
+    assert O.radar_home_workspace(fresh=True)["home_os"]["n"] == 3   # operator bypass
+    clock[0] += O._HOME_STALE_CAP_S + 1
+    assert O.radar_home_workspace(fresh=False)["home_os"]["n"] == 4  # too old: rebuild

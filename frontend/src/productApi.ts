@@ -1068,8 +1068,9 @@ export type HomeOperatingSystem = {
   }
 }
 
-export const fetchRadarHome = (): Promise<RadarHome> =>
-  request('/api/radar-home', { headers: { Accept: 'application/json' } })
+/** `fresh` bypasses the server's short Home read cache; use it right after an operator action. */
+export const fetchRadarHome = (fresh = false): Promise<RadarHome> =>
+  request(fresh ? '/api/radar-home?fresh=true' : '/api/radar-home', { headers: { Accept: 'application/json' } })
 
 export type RecommendationEvidencePanel = {
   sample_size?: number | null
@@ -1674,6 +1675,17 @@ export type ResearchStatus = {
       sufficient_sample?: boolean
       sample_note?: string
       scope?: string
+      benchmark_comparison?: {
+        benchmark: string
+        n: number
+        sufficient_sample: boolean
+        mean_signal_pct: number
+        mean_benchmark_pct: number
+        mean_excess_pct: number
+        median_excess_pct: number
+        beat_benchmark_pct: number
+      } | null
+      benchmark_note?: string
     }
     entries?: Array<{
       kind?: string
