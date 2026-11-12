@@ -534,16 +534,61 @@ def _session_archives_listed(holidays: set[str]) -> tuple[tuple[Path, date], ...
 _LISTING_QUIET_S = 2.0
 
 
+#: _dates_on_disk() stat()s every archive (~1,755) to re-validate it. It sits
+#: behind official_history_freshness(), which /api/health, Home, the dashboard
+#: and data-readiness call on every poll. On the owner's Mac the archives live
+#: in an exFAT sparsebundle on a USB *spinning* disk; concurrent polls each
+#: issuing ~1,755 metadata reads starved the API for minutes (2026-11-12,
+#: /api/health > 120 s). Cache the validated result per directory identity for
+#: a short TTL, single-flight. Downloads write a temp file and rename it, which
+#: moves the directory mtime and invalidates the cache immediately.
+_DATES_CACHE_TTL_S = 60.0
+_DATES_CACHE: tuple | None = None
+_DATES_CACHE_LOCK = threading.Lock()
+_DATES_COMPUTE_LOCK = threading.Lock()
+
+
 def _dates_on_disk() -> list[date]:
     """Trading dates for every valid bhavcopy CSV already present in the store dir."""
+    global _DATES_CACHE
     try:
-        listed = _session_archives_listed(_holidays())
+        holidays = _holidays()
+        st = os.stat(_BHAV_DIR)
     except OSError:
         return []
-    days = sorted(day for path, day in listed if _is_valid_archive(path, day))
-    if _PENDING_VERDICTS:
-        _flush_verdicts({path.name for path, _day in listed})
-    return days
+    try:
+        validator = _validator_id()
+    except Exception:
+        validator = ""
+    # An in-place rewrite (no rename) is not visible in the directory identity;
+    # it is re-validated once the TTL lapses rather than on every poll.
+    key = (str(_BHAV_DIR), st.st_ino, st.st_mtime_ns, st.st_size, frozenset(holidays), validator)
+
+    def _cached() -> list[date] | None:
+        with _DATES_CACHE_LOCK:
+            hit = _DATES_CACHE
+        if hit is not None and hit[0] == key and time.monotonic() - hit[1] < _DATES_CACHE_TTL_S:
+            return list(hit[2])
+        return None
+
+    got = _cached()
+    if got is not None:
+        return got
+    with _DATES_COMPUTE_LOCK:
+        got = _cached()  # another reader may have just computed it
+        if got is not None:
+            return got
+        try:
+            listed = _session_archives_listed(holidays)
+        except OSError:
+            return []
+        days = sorted(day for path, day in listed if _is_valid_archive(path, day))
+        if _PENDING_VERDICTS:
+            _flush_verdicts({path.name for path, _day in listed})
+        if time.time() - st.st_mtime > _LISTING_QUIET_S:
+            with _DATES_CACHE_LOCK:
+                _DATES_CACHE = (key, time.monotonic(), tuple(days))
+        return days
 
 
 def build_from_local() -> int:

@@ -37,6 +37,7 @@ def _cold_process(monkeypatch):
     monkeypatch.setattr(BS, "_VERDICTS_SIG", None)
     monkeypatch.setattr(BS, "_PENDING_VERDICTS", {})
     monkeypatch.setattr(BS, "_SESSION_LISTING", None)
+    monkeypatch.setattr(BS, "_DATES_CACHE", None)
 
 
 @pytest.fixture
@@ -83,6 +84,9 @@ def test_a_rewritten_archive_is_revalidated(store, monkeypatch):
     _age(target)
     _cold_process(monkeypatch)
     calls["n"] = 0
+    # In-place rewrites do not move the directory identity; they are
+    # re-validated once the short read cache lapses (no per-poll stat storm).
+    monkeypatch.setattr(BS, "_DATES_CACHE_TTL_S", 0.0)
     assert BS._dates_on_disk() == [date(2026, 10, 19)]
     assert calls["n"] == 1
 
