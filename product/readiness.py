@@ -33,7 +33,43 @@ def official_history() -> dict[str, Any]:
         return {"current": False, "reason_code": "HISTORY_PROBE_FAILED", "error": str(exc)[:200]}
 
 
+import threading as _threading
+import time as _time
+
+#: broker_live() is a read projection called by every Home/dashboard/autonomy
+#: status read (2-3x per Home poll). Each uncached call was a live Zerodha
+#: profile() request on a new client: a fresh TLS handshake whose CA-bundle
+#: load holds the GIL for 0.3-0.5 s under OpenSSL 3 on the owner's Mac. Under
+#: market-hours polling the API starved and even /api/access timed out
+#: (2026-11-12 10:05). A login (new session identity) bypasses the cache.
+_BROKER_LIVE_TTL_OK_S = 60.0
+_BROKER_LIVE_TTL_FAIL_S = 20.0
+_BROKER_LIVE_LOCK = _threading.Lock()
+_BROKER_LIVE_CACHE: dict[str, Any] = {"key": None, "at": 0.0, "value": None}
+
+
+def _broker_session_key() -> str:
+    try:
+        from data.kite_client import kite_session_identity
+        return kite_session_identity()
+    except Exception:
+        return ""
+
+
 def broker_live() -> dict[str, Any]:
+    key = _broker_session_key()
+    with _BROKER_LIVE_LOCK:  # single flight: concurrent readers share one probe
+        cached = _BROKER_LIVE_CACHE["value"]
+        if cached is not None and _BROKER_LIVE_CACHE["key"] == key:
+            ttl = _BROKER_LIVE_TTL_OK_S if cached.get("ready") else _BROKER_LIVE_TTL_FAIL_S
+            if _time.monotonic() - float(_BROKER_LIVE_CACHE["at"]) < ttl:
+                return dict(cached)
+        value = _probe_broker_live()
+        _BROKER_LIVE_CACHE.update({"key": key, "at": _time.monotonic(), "value": dict(value)})
+        return value
+
+
+def _probe_broker_live() -> dict[str, Any]:
     try:
         from research.autonomy.auth import SESSION_VALID, probe_auth
 
