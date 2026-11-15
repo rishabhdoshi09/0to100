@@ -156,6 +156,10 @@ def _record(signal: Any, names: Mapping[str, str], fno_symbols: set[str]) -> dic
         "status_scope": "SCANNER_SETUP",
         "selection_required": True,
         "verdict": verdict,
+        # Measured combo edge behind the verdict (None = no evidence) and
+        # whether the evidence gate turned a BUY into this WATCH.
+        "edge_r": _opt_float(signal, "edge_r"),
+        "edge_gated": bool(_value(signal, "edge_gated", False)),
         # A trade level the scanner never produced is missing, not zero. Coercing
         # to 0.0 rendered "Stop Rs0.00" in the desk, which is a fabricated trade
         # plan rather than an absent one.

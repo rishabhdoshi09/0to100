@@ -53,7 +53,12 @@ def test_healthy_session_is_all_ok(tmp_path):
 
 
 def test_dead_outcome_loop_and_paper_bot_fail_loudly(tmp_path):
-    vitals = _by_key(collect(now=NOW, logs=_logs(tmp_path, buys=0, cycles=0), session_day=True))
+    root = _logs(tmp_path, buys=0, cycles=0)
+    scan = root / "product" / "latest_momentum_scan.json"
+    stamp = scan.stat().st_mtime
+    scan.write_text(json.dumps({"records": [{"symbol": "X", "verdict": "BUY"}]}))  # published, not logged
+    os.utime(scan, (stamp, stamp))
+    vitals = _by_key(collect(now=NOW, logs=root, session_day=True))
     assert vitals["outcome_logging"] == FAIL and vitals["paper_cycles"] == FAIL
 
 
@@ -176,3 +181,17 @@ def test_canonical_history_probe_accepts_the_tz_aware_desk_clock(monkeypatch):
     vital = _keys(collect(now=aware, session_day=False))["official_history"]
     assert seen["now"].tzinfo is None and seen["now"].hour == 21
     assert vital["status"] == WARN and "2026-11-13" in vital["detail"], vital
+
+
+def test_honest_zero_buy_day_is_not_a_dead_outcome_loop(tmp_path):
+    root = _logs(tmp_path, buys=0)
+    scan = root / "product" / "latest_momentum_scan.json"
+    stamp = scan.stat().st_mtime
+    scan.write_text(json.dumps({"records": [{"symbol": "X", "verdict": "WATCH"}]}))
+    os.utime(scan, (stamp, stamp))
+    vital = _keys(collect(now=NOW, logs=root, session_day=True))["outcome_logging"]
+    assert vital["status"] == OK and "evidence gate" in vital["detail"]
+    scan.write_text(json.dumps({"records": [{"symbol": "X", "verdict": "BUY"}]}))
+    os.utime(scan, (stamp, stamp))
+    vital = _keys(collect(now=NOW, logs=root, session_day=True))["outcome_logging"]
+    assert vital["status"] == FAIL and "published 1 BUY" in vital["detail"]

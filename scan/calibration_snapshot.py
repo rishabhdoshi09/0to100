@@ -76,6 +76,12 @@ def _bucket(expectancy_r: float) -> float:
     return 0.45
 
 
+def _backtest_edges(report: Mapping[str, Any] | None) -> dict[str, float]:
+    from scan.unified_scanner import backtest_edges
+
+    return backtest_edges(dict(report or {}))
+
+
 def backtest_multipliers(
     report: Mapping[str, Any] | None,
     *,
@@ -155,6 +161,9 @@ def build_snapshot(
         "multipliers": effective_multipliers(backtest, live),
         "backtest_multipliers": backtest_multipliers(backtest),
         "forward_multipliers": forward_multipliers(live),
+        # Raw evidenced expectancy behind the live scanner's evidence gate,
+        # frozen with the multipliers it was measured alongside.
+        "backtest_edges": _backtest_edges(backtest),
         "signal_registry": registry,
     }
 

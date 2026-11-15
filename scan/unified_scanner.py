@@ -126,19 +126,88 @@ _RSI_ROLLOVER_DROP = float(_os.getenv("QT_RSI_ROLLOVER_DROP", "5") or 5)
 _EXT_ABOVE_SMA50 = float(_os.getenv("QT_EXT_ABOVE_SMA50_PCT", "20") or 20)
 
 
+# ── Evidence gate (Invariant 6) ─────────────────────────────────────────────
+# Calibration multipliers only RESCALE scores against each other, so when the
+# walk-forward backtest measured 13 of 17 signals as net losers (owner's Mac,
+# 2026-11-15) the scanner still issued BUYs: the least-bad setups. And the
+# combo-edge veto that Invariant 6 describes lived only in the legacy
+# auto_scan loop, which the canonical stack never starts. A BUY now needs a
+# POSITIVE measured edge: the mean net-of-cost expectancy (R/trade) of the
+# setup's signals that have >= EVIDENCE_MIN_TRADES backtest trades must reach
+# the floor. The default +0.05R is signal_backtest.signal_verdict's own
+# POSITIVE line; between -0.05 and +0.05 is NEUTRAL, within noise of zero, and
+# a breakeven setup is not a reason to buy. A combo with no evidenced signal
+# makes no claim either way. The backtest counts every detected setup whatever
+# its verdict, so this gate cannot starve the evidence that judges it.
+EVIDENCE_MIN_TRADES = 30
+_MIN_BUY_EDGE_R = float(_os.getenv("QT_MIN_BUY_EDGE_R", "0.05") or 0.05)
+_OVERRIDE_BUY_SIGNALS = ("BREAKOUT_52W", "HIGH_TIGHT_FLAG")
+
+
+def backtest_edges(report: dict | None, min_trades: int = EVIDENCE_MIN_TRADES) -> dict[str, float]:
+    """{signal: net expectancy R} for signals with enough backtest trades."""
+    out: dict[str, float] = {}
+    for sig, row in dict((report or {}).get("signals") or {}).items():
+        try:
+            if int((row or {}).get("trades") or 0) >= int(min_trades):
+                out[str(sig)] = float((row or {}).get("expectancy_r") or 0.0)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def combo_edge_r(signals: list[str], edges: dict[str, float] | None) -> float | None:
+    """Mean evidenced expectancy of a setup's signals; None = no evidence."""
+    vals = [float(edges[s]) for s in signals if edges and s in edges]
+    return round(sum(vals) / len(vals), 3) if vals else None
+
+
+def _evidence_verdict(
+    score: float,
+    signals: list[str],
+    *,
+    breakout_watch_veto: bool = False,
+    signal_edges: dict[str, float] | None = None,
+) -> tuple[str, str]:
+    """(verdict, evidence-gate reason). Reason is '' unless evidence vetoed a BUY.
+
+    Without any evidence (no backtest report yet) the legacy rule stands. With
+    evidence, the 52-week-breakout / high-tight-flag shortcut applies only when
+    that signal itself measures a positive edge (52W: -0.08R on 26 trades and
+    HTF on 19 trades are no claim, not a licence), and every BUY must clear
+    the measured-edge floor.
+    """
+    edges = dict(signal_edges or {})
+    if edges:
+        override = any(s in _OVERRIDE_BUY_SIGNALS and s in edges and edges[s] >= _MIN_BUY_EDGE_R
+                       for s in signals)
+    else:
+        override = any(s in _OVERRIDE_BUY_SIGNALS for s in signals)
+    buy = (score >= 55 and len(signals) >= 2) or override
+    if breakout_watch_veto:
+        return "WATCH", ""
+    if not buy:
+        return "WATCH", ""
+    combo = combo_edge_r(signals, edges)
+    if edges and combo is not None and combo < _MIN_BUY_EDGE_R:
+        return "WATCH", (
+            f"⚖ Measured edge {combo:+.2f}R/trade (walk-forward backtest, net of costs) is "
+            f"below the {_MIN_BUY_EDGE_R:+.2f}R bar — no proven edge, so WATCH, not BUY"
+        )
+    return "BUY", ""
+
+
 def _composite_verdict(
     score: float,
     signals: list[str],
     *,
     breakout_watch_veto: bool = False,
+    signal_edges: dict[str, float] | None = None,
 ) -> str:
     """Final scanner stance; quality vetoes outrank additive signal count."""
-    buy = (score >= 55 and len(signals) >= 2) or any(
-        s in ("BREAKOUT_52W", "HIGH_TIGHT_FLAG") for s in signals
-    )
-    if breakout_watch_veto:
-        return "WATCH"
-    return "BUY" if buy else "WATCH"
+    return _evidence_verdict(
+        score, signals, breakout_watch_veto=breakout_watch_veto, signal_edges=signal_edges,
+    )[0]
 
 
 def close_location_value(close: float, high: float, low: float) -> float:
@@ -391,6 +460,8 @@ class StockSignal:
                                             # safety demotion, not a low-score
                                             # miss; downstream enrichment (buzz/
                                             # earnings) must never promote it back
+    edge_r: float | None = None            # measured combo edge (R/trade), None = no evidence
+    edge_gated: bool = False               # evidence gate turned a BUY into WATCH
 
     @property
     def categories(self) -> set[str]:
@@ -422,8 +493,14 @@ _LOGGED_CALIBRATION_SNAPSHOTS: set[str] = set()
 class UnifiedScanner:
     """Scans the full universe from the bulk cache. Compute-only, no network."""
 
-    def __init__(self, max_workers: int = 8, *, calibration_snapshot: dict | None = None):
+    def __init__(self, max_workers: int = 8, *, calibration_snapshot: dict | None = None,
+                 evidence_gate: bool = True):
         self._max_workers = max_workers
+        # Live scanning applies the evidence gate. Historical replay and the
+        # backtest construct with evidence_gate=False: today's backtest covers
+        # the sessions they replay, so gating them would filter past trades
+        # with hindsight and inflate the very evidence the gate relies on.
+        self._evidence_gate = bool(evidence_gate)
         try:
             from scan.calibration_snapshot import get_or_create_snapshot
             self._calibration_snapshot = dict(
@@ -454,6 +531,17 @@ class UnifiedScanner:
         self._signal_registry = dict(
             self._calibration_snapshot.get("signal_registry") or {}
         )
+        self._signal_edges: dict[str, float] = {}
+        if self._evidence_gate:
+            stored = self._calibration_snapshot.get("backtest_edges")
+            if isinstance(stored, dict):
+                self._signal_edges = {str(k): float(v) for k, v in stored.items()}
+            elif calibration_snapshot is None:
+                try:
+                    from scan.signal_backtest import load_report
+                    self._signal_edges = backtest_edges(load_report() or {})
+                except Exception:
+                    self._signal_edges = {}
         try:
             summary = dict(self._signal_registry.get("summary") or {})
             missing = list(summary.get("scanner_without_forward_calibration") or [])
@@ -782,11 +870,18 @@ class UnifiedScanner:
         trend_bonus = 10 if _above200 else 0
         score = min(100.0, base + trend_bonus + mom_score * 0.2)
 
-        verdict = _composite_verdict(
+        verdict, edge_note = _evidence_verdict(
             score,
             signals,
             breakout_watch_veto=breakout_watch_veto,
+            signal_edges=self._signal_edges,
         )
+        edge_r = combo_edge_r(signals, self._signal_edges)
+        edge_gated = bool(edge_note)
+        if edge_gated:
+            # Appended, never at reasons[0]: that slot is reserved for the one
+            # leading safety warning that zip(signals, reasons[1:]) skips.
+            reasons.append(edge_note)
 
         # ── Extension guard — DON'T CHASE ─────────────────────────────────────
         # A stock already up big in 5 days and stretched far above its 20-EMA,
@@ -856,6 +951,7 @@ class UnifiedScanner:
             volume_ratio=round(vratio, 2), signals=signals, reasons=reasons,
             score=round(score, 1), entry=round(entry, 1), stop=stop,
             target=target, verdict=verdict, chase_risk=chase_risk,
+            edge_r=edge_r, edge_gated=edge_gated,
             pivot_distance_pct=round(pivot_dist, 2),
             breakout_grade=breakout_grade,
             breakout_conviction=breakout_conv,

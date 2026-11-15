@@ -57,6 +57,18 @@ def _session_boundary(clock: datetime, session: str, hour: int, minute: int) -> 
         return None
 
 
+def _published_buys(path: Path) -> int | None:
+    """BUY records in the saved scan; None when it cannot be read."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8") or "{}")
+        return sum(
+            1 for r in (payload.get("records") or [])
+            if isinstance(r, dict) and str(r.get("verdict") or "").upper() in {"BUY", "STRONG BUY"}
+        )
+    except Exception:
+        return None
+
+
 def _naive_ist(clock: datetime) -> datetime:
     """nse_calendar works on naive IST datetimes; the desk clock is tz-aware."""
     if clock.tzinfo is None:
@@ -121,9 +133,20 @@ def collect(*, now: datetime | None = None, logs: Path | None = None,
         n = con.execute("SELECT count(*) FROM signal_log WHERE logged_at >= ?", (today,)).fetchone()[0]
         last = con.execute("SELECT max(logged_at) FROM signal_log").fetchone()[0]
         con.close()
-        status = FAIL if in_session and n == 0 else OK
-        vitals.append(_vital("outcome_logging", "BUY outcome logging", status,
-                             f"{n} BUY signal(s) logged today; last {last or 'never'}"))
+        detail = f"{n} BUY signal(s) logged today; last {last or 'never'}"
+        status = OK
+        if in_session and n == 0:
+            # Zero logged is a dead loop only if the scan published BUYs. Since
+            # the evidence gate, a day with no setup clearing the measured-edge
+            # bar is an honest zero, not a failure.
+            published = _published_buys(root / "product" / "latest_momentum_scan.json")
+            if published is None or published > 0:
+                status = FAIL
+                if published:
+                    detail += f"; latest scan published {published} BUY(s)"
+            else:
+                detail += "; latest scan published no BUY (none cleared the evidence gate)"
+        vitals.append(_vital("outcome_logging", "BUY outcome logging", status, detail))
     except Exception as exc:
         vitals.append(_vital("outcome_logging", "BUY outcome logging", WARN, f"unreadable: {type(exc).__name__}"))
 

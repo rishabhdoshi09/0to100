@@ -52,7 +52,9 @@ terminal_product_api.py   # FastAPI :8765
 │   ├── unified_scanner.py# 16 signals: breakouts, patterns (VCP/cup/triangle/
 │   │                     #   double-bottom/HTF), pre-breakout (accumulation,
 │   │                     #   delivery spike, NR7, pocket pivot), momentum.
-│   │                     #   Scores calibrated by backtest (_load_calibration).
+│   │                     #   Scores calibrated by backtest (_load_calibration);
+│   │                     #   evidence gate: BUY needs combo edge >= +0.05R
+│   │                     #   (_evidence_verdict, frozen in the calibration snapshot).
 │   │                     #   Close Location Value (Wyckoff): weak close (<0.5,
 │   │                     #   din ki low ke paas) demotes grade A→B / rejects
 │   │                     #   marginal breaks — ATR+volume alone miss bull-traps
@@ -218,7 +220,12 @@ terminal_product_api.py   # FastAPI :8765
 5. **1% risk per trade, 10% per name, 5% total open risk** — sizer + ticket +
    portfolio meter enforce; DANGER warns but the user keeps the final click.
 6. **Evidence over vibes** — signal weights come from the walk-forward
-   backtest; <30 trades = no claim; negative-edge combos auto-demote to WATCH.
+   backtest; <30 trades = no claim. On the live scanner a BUY needs a
+   POSITIVE measured edge: the setup's evidenced signals must average
+   >= +0.05R/trade net of costs (`QT_MIN_BUY_EDGE_R`), else WATCH with the
+   reason on the card; the 52W/HTF shortcut needs its own evidence too.
+   Historical replay and the backtest run with `evidence_gate=False`, because
+   gating them by today's backtest would be hindsight.
 7. **Every BUY is outcome-tracked** — Report Card equity curve decides
    whether the system deserves real money.
 

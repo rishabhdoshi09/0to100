@@ -315,6 +315,9 @@ def scan_session(
         scanner = UnifiedScanner(
             max_workers=1,
             calibration_snapshot=dict(calibration_snapshot or {}) or None,
+            # Today's backtest covers the sessions being replayed: gating
+            # them by it would be hindsight that inflates replay evidence.
+            evidence_gate=False,
         )
         analyzer = scanner._analyze
     from product.scan_store import build_scan_payload

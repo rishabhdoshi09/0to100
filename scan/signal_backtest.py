@@ -269,7 +269,9 @@ def run_backtest(sample_step: int = 5, lookback_sessions: int = 250,
     from data.bhavcopy_store import store_symbols, get_ohlcv
     from scan.unified_scanner import UnifiedScanner
 
-    sc = UnifiedScanner()
+    # Measure raw detections: the backtest is the evidence the live gate uses,
+    # so it must never be filtered by that gate (verdicts are unused here).
+    sc = UnifiedScanner(evidence_gate=False)
     stats: dict[str, dict] = {}
     symbols = _spread_sample(store_symbols(), max_symbols)
 
