@@ -188,6 +188,16 @@ def official_history_freshness(
     minimum_required = window["minimum_required_official_session"]
     expected = completed
     latest_raw = str(current.get("latest_date") or current.get("csv_latest_date") or "")[:10]
+    if not require_store:
+        # The date check reads the validated archives on disk. A process that
+        # unpickled the store earlier keeps an older in-memory latest_date
+        # until something reloads it; preferring that hid a session another
+        # process had already fetched. On the owner's Mac (2026-11-15) the API
+        # reported Friday's archive as "publishing" for good, although the
+        # missed-EOD catch-up had it on disk at 21:09.
+        csv_raw = str(current.get("csv_latest_date") or "")[:10]
+        if csv_raw > latest_raw:
+            latest_raw = csv_raw
     try:
         latest = date.fromisoformat(latest_raw) if latest_raw else None
     except ValueError:

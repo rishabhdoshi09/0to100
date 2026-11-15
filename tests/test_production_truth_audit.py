@@ -454,3 +454,27 @@ def test_setsid_shim_is_a_function_when_setsid_is_missing(tmp_path):
     assert result.returncode == 0, result.stderr
     combined = result.stdout + result.stderr
     assert "setsid is a function" in combined
+
+
+def test_disk_archive_newer_than_this_process_memory_counts_for_the_date_check():
+    """2026-11-15: the API held Thursday in memory while Friday's validated
+    archive was already on disk; the date check must see Friday."""
+    from data.bhavcopy_runtime import official_history_freshness
+
+    history = {
+        "ready": True,
+        "sessions": 500,
+        "latest_date": "2026-11-12",
+        "csv_latest_date": "2026-11-13",
+        "csv_files": 500,
+    }
+    sunday = datetime(2026, 11, 15, 21, 30)
+    disk = official_history_freshness(history, now=sunday, holidays=set(),
+                                      load_cache=False, require_store=False)
+    assert disk["reason_code"] == "HISTORY_CURRENT"
+    assert disk["available_session"] == "2026-11-13"
+    # The scan gate still judges the store this process can actually read.
+    store = official_history_freshness(history, now=sunday, holidays=set(),
+                                       load_cache=False, require_store=True)
+    assert store["available_session"] == "2026-11-12"
+    assert store["current"] is False
