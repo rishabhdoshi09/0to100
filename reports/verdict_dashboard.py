@@ -26,14 +26,18 @@ log = get_logger(__name__)
 
 def _closed_signals() -> list[dict]:
     try:
-        from core.signal_outcome_tracker import _get_conn
+        # The Report Card is what the desk RECOMMENDED. Withheld setups are
+        # forward-tracked as shadows for the evidence, never counted here.
+        from core.signal_outcome_tracker import SHADOW_SIGNAL_TYPE, _get_conn
         conn = _get_conn()
         rows = conn.execute(
             """SELECT symbol, logged_at, entry_price, stop_price, outcome_pct, worked
                FROM signal_log
                WHERE worked IS NOT NULL AND outcome_pct IS NOT NULL
                  AND entry_price > 0 AND stop_price > 0
-               ORDER BY logged_at ASC"""
+                 AND COALESCE(signal_type, '') != ?
+               ORDER BY logged_at ASC""",
+            (SHADOW_SIGNAL_TYPE,),
         ).fetchall()
         conn.close()
         return [dict(r) for r in rows]

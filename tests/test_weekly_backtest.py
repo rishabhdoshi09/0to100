@@ -17,7 +17,8 @@ def _patch(monkeypatch, tmp_path, *, symbols=900, age_days=10, running=False, le
     import scan.signal_backtest as SB
 
     out = tmp_path / "signal_backtest.json"
-    out.write_text("{}" if legacy else json.dumps({"sampling": SB.SAMPLING}))
+    out.write_text("{}" if legacy else json.dumps({"sampling": SB.SAMPLING,
+                                                   "report_schema": SB.REPORT_SCHEMA}))
     stamp = time.time() - age_days * 86400
     os.utime(out, (stamp, stamp))
     started = []
@@ -139,4 +140,13 @@ def test_saved_reports_record_the_sampler(monkeypatch, tmp_path):
     monkeypatch.setattr(SB, "_OUT", tmp_path / "signal_backtest.json")
     monkeypatch.setattr(store, "store_symbols", lambda: [])
     assert SB.run_backtest().get("sampling") == SB.SAMPLING
+
+
+def test_a_report_without_confidence_fields_is_due(monkeypatch, tmp_path):
+    import scan.signal_backtest as SB
+
+    started = _patch(monkeypatch, tmp_path, age_days=0.01)
+    (tmp_path / "signal_backtest.json").write_text(json.dumps({"sampling": SB.SAMPLING}))
+    assert Supervisor._maybe_weekly_backtest(_stub(), datetime(2026, 11, 15, 23, 30), set()) is True
+    assert started == [1]
 

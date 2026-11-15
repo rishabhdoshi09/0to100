@@ -62,6 +62,19 @@ CREATE INDEX IF NOT EXISTS idx_signal_log_worked ON signal_log(worked);
 """
 
 
+#: Forward-tracked setups the evidence gate withheld. Measured exactly like a
+#: published BUY so forward evidence keeps flowing on days with no BUY, but
+#: never a recommendation: the Report Card and the outcome-logging vital
+#: exclude them.
+SHADOW_SIGNAL_TYPE = "EDGE_GATED_SHADOW"
+
+
+def eval_spec_tag() -> str:
+    """Which rulebook resolved a row (legacy rows carry NULL)."""
+    from core.evaluation_spec import BREAKEVEN_TRIGGER_PCT, OUTCOME_HORIZON_SESSIONS
+    return f"sim:h{OUTCOME_HORIZON_SESSIONS}:be{BREAKEVEN_TRIGGER_PCT:g}:gap"
+
+
 def _get_conn() -> sqlite3.Connection:
     """Return a connection to the SQLite DB, creating the schema if needed."""
     os.makedirs(os.path.dirname(_DB_PATH), exist_ok=True)
@@ -72,6 +85,9 @@ def _get_conn() -> sqlite3.Connection:
         stmt = stmt.strip()
         if stmt:
             conn.execute(stmt)
+    cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(signal_log)").fetchall()}
+    if "eval_spec" not in cols:
+        conn.execute("ALTER TABLE signal_log ADD COLUMN eval_spec TEXT")
     conn.commit()
     return conn
 
@@ -131,15 +147,16 @@ def log_signal(
 # No geometry → close-to-close at the horizon-th trading session.
 # Never a live quote. A delayed runner must not mark day-8 as day-5.
 _OPEN = object()                         # sentinel: trade still live, leave NULL
-_HORIZON_SESSIONS = int(os.getenv("QT_OUTCOME_HORIZON", "15") or 15)
+from core.evaluation_spec import OUTCOME_HORIZON_SESSIONS as _HORIZON_SESSIONS  # noqa: E402
 
 
 def _resolve_via_path(row) -> object | None:
-    """First-touch outcome from official bars via the canonical resolver.
+    """Resolve one row by the backtest's own rules (core.evaluation_spec).
 
     Returns (id, price, pct, worked), the _OPEN sentinel (still live or
     missing bars), or None (no usable geometry — caller may use the
-    session-close path). Stop is checked before target.
+    session-close path). ``pct`` is the trade's return from its fill;
+    ``worked`` is 1 profit, 0 loss or scratch, -1 never filled.
     """
     try:
         entry = float(row["entry_price"] or 0)
@@ -150,8 +167,8 @@ def _resolve_via_path(row) -> object | None:
     if entry <= 0 or stop <= 0 or target <= entry or stop >= entry:
         return None
     try:
-        from core.outcome_resolver import first_touch_path
-        got = first_touch_path(
+        from core.outcome_resolver import resolve_trade
+        got = resolve_trade(
             row["symbol"],
             str(row["logged_at"] or "")[:10],
             entry, stop, target,
@@ -160,8 +177,10 @@ def _resolve_via_path(row) -> object | None:
         return _OPEN
     if got is None:
         return _OPEN
-    price, pct, worked = got
-    return (row["id"], price, pct, worked)
+    if not got.filled:
+        return (row["id"], 0.0, 0.0, -1)
+    pct = (got.exit_price - got.fill_price) / got.fill_price * 100.0
+    return (row["id"], float(got.exit_price), float(pct), got.worked)
 
 
 def update_outcomes(lookback_days: int = 30) -> None:
@@ -247,6 +266,7 @@ def update_outcomes(lookback_days: int = 30) -> None:
             return
 
         now_iso = _now().isoformat(timespec="seconds")
+        spec_tag = eval_spec_tag()
         conn = _get_conn()
         try:
             for (row_id, price, pct, worked) in results:
@@ -255,10 +275,11 @@ def update_outcomes(lookback_days: int = 30) -> None:
                 conn.execute(
                     """
                     UPDATE signal_log
-                    SET outcome_checked_at=?, outcome_price=?, outcome_pct=?, worked=?
+                    SET outcome_checked_at=?, outcome_price=?, outcome_pct=?, worked=?,
+                        eval_spec=?
                     WHERE id=?
                     """,
-                    (now_iso, _price, _pct, worked, row_id),
+                    (now_iso, _price, _pct, worked, spec_tag, row_id),
                 )
             conn.commit()
         finally:
@@ -282,13 +303,14 @@ def reresolve_history(max_rows: int = 8000) -> int:
         try:
             rows = conn.execute(
                 """SELECT id, symbol, entry_price, stop_price, target_price,
-                          logged_at, worked, outcome_pct
+                          logged_at, worked, outcome_pct, eval_spec
                    FROM signal_log
                    WHERE worked IS NOT NULL AND entry_price > 0
                      AND stop_price > 0 AND target_price > 0
                    ORDER BY id DESC LIMIT ?""", (max_rows,)).fetchall()
             updates = []
             now_iso = _now().isoformat(timespec="seconds")
+            spec_tag = eval_spec_tag()
             for row in rows:
                 pv = _resolve_via_path(dict(row))
                 if pv is _OPEN or pv is None:
@@ -302,12 +324,14 @@ def reresolve_history(max_rows: int = 8000) -> int:
                     changed = abs(float(new_pct) - float(row["outcome_pct"])) > 0.05
                 if not changed and (new_pct is None) != (row["outcome_pct"] is None):
                     changed = True
-                if changed:
-                    updates.append((now_iso, new_price, new_pct, worked, _id))
+                # A row judged under an older rulebook is re-stamped even when
+                # its result is unchanged, so every row says how it was judged.
+                if changed or row["eval_spec"] != spec_tag:
+                    updates.append((now_iso, new_price, new_pct, worked, spec_tag, _id))
             for u in updates:
                 conn.execute(
                     "UPDATE signal_log SET outcome_checked_at=?, outcome_price=?, "
-                    "outcome_pct=?, worked=? WHERE id=?", u)
+                    "outcome_pct=?, worked=?, eval_spec=? WHERE id=?", u)
             conn.commit()
             return len(updates)
         finally:

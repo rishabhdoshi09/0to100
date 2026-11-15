@@ -25,10 +25,21 @@ class PaperPosition:
     paper_intent_id: str = ""
     context_key: str = ""
     sector: str = ""
+    # Breakeven trail (core.evaluation_spec): once a session's high reaches
+    # entry * (1 + be_trigger_pct/100) the effective stop becomes the entry.
+    # Kept apart from stop_price so the R unit (entry - initial stop) never
+    # collapses. Positions restored from older books default to 0 = no trail:
+    # they keep the rules they were opened under.
+    be_trigger_pct: float = 0.0
+    trail_stop: float = 0.0
 
     @property
     def r_unit(self) -> float:
         return max(1e-9, self.entry_price - self.stop_price)
+
+    @property
+    def effective_stop(self) -> float:
+        return max(float(self.stop_price), float(self.trail_stop or 0.0))
 
     def as_dict(self):
         return asdict(self)
@@ -124,7 +135,8 @@ class PaperBook:
                       target: float, date: str, max_holding_days: int, *,
                       risk_pct_of_capital: float | None = None,
                       quantity: int | None = None, decision_id: str = "",
-                      paper_intent_id: str = "", context_key: str = "") -> PaperPosition | None:
+                      paper_intent_id: str = "", context_key: str = "",
+                      be_trigger_pct: float | None = None) -> PaperPosition | None:
         key = (strategy_id, symbol)
         if key in self.open:
             self.refusals.append((symbol, "already open for this strategy")); return None
@@ -155,6 +167,7 @@ class PaperBook:
             requested_risk_pct=sizing.requested_risk_pct, approved_risk_pct=sizing.actual_risk_pct,
             decision_id=str(decision_id or ""), paper_intent_id=str(paper_intent_id or ""),
             context_key=str(context_key or ""),
+            be_trigger_pct=float(_default_be_pct() if be_trigger_pct is None else be_trigger_pct),
         )
         self.open[key] = pos
         return pos
@@ -218,7 +231,7 @@ class PaperBook:
                 raise ValueError(f"nonfinite or nonpositive paper bar for {pos.symbol}")
             checked_bars[pos.symbol] = (op, high, low, close)
 
-        planned_marks: list[tuple[PaperPosition, int]] = []
+        planned_marks: list[tuple[PaperPosition, int, float]] = []
         planned_closes: list[tuple[tuple, ClosedTrade]] = []
         for key, pos in list(self.open.items()):
             if not allow_entry_session and str(pos.entry_date or "")[:10] >= session:
@@ -231,12 +244,14 @@ class PaperBook:
             op, high, low, close = bar
             next_bars_held = pos.bars_held + 1
             exit_price = exit_reason = None
-            if op is not None and op <= pos.stop_price:
-                exit_price, exit_reason = op, "GAP_STOP"
+            stop_level = pos.effective_stop
+            trailed = stop_level > pos.stop_price
+            if op is not None and op <= stop_level:
+                exit_price, exit_reason = op, "GAP_BREAKEVEN" if trailed else "GAP_STOP"
             elif op is not None and op >= pos.target_price:
                 exit_price, exit_reason = op, "GAP_TARGET"
-            elif low <= pos.stop_price:
-                exit_price, exit_reason = pos.stop_price, "STOP"
+            elif low <= stop_level:
+                exit_price, exit_reason = stop_level, "BREAKEVEN_STOP" if trailed else "STOP"
             elif high >= pos.target_price:
                 exit_price, exit_reason = pos.target_price, "TARGET"
             elif next_bars_held >= pos.max_holding_days:
@@ -250,11 +265,19 @@ class PaperBook:
                 )
                 planned_closes.append((key, trade))
             else:
-                planned_marks.append((pos, next_bars_held))
+                # Same order as core.evaluation_spec.simulate_trade: exits are
+                # judged on the stop in force, then the trail arms for the
+                # next session.
+                new_trail = float(pos.trail_stop or 0.0)
+                be = float(pos.be_trigger_pct or 0.0)
+                if be > 0 and new_trail < pos.entry_price and high >= pos.entry_price * (1 + be / 100):
+                    new_trail = float(pos.entry_price)
+                planned_marks.append((pos, next_bars_held, new_trail))
 
-        for pos, held in planned_marks:
+        for pos, held, trail in planned_marks:
             pos.last_marked_session = session
             pos.bars_held = held
+            pos.trail_stop = trail
         for key, trade in planned_closes:
             self._settle_trade(key, trade)
 
@@ -395,6 +418,10 @@ class PaperBook:
                         or any(type(v) not in (int, float) or not isfinite(v) for v in prices)
                         or not 0 < pos.stop_price < pos.entry_price < pos.target_price
                         or pos.risk_amount < 0
+                        or type(pos.trail_stop) not in (int, float) or not isfinite(pos.trail_stop)
+                        or not 0 <= pos.trail_stop <= pos.entry_price
+                        or type(pos.be_trigger_pct) not in (int, float) or not isfinite(pos.be_trigger_pct)
+                        or pos.be_trigger_pct < 0
                     ):
                         raise ValueError("invalid restored paper position risk or quantity")
                 key = (pos.strategy_id, pos.symbol)
@@ -419,6 +446,11 @@ class PaperBook:
             self.slippage_bps = risk["slippage_bps"]
             self.cost_model = risk["cost_model"]
         return True
+
+
+def _default_be_pct() -> float:
+    from core.evaluation_spec import BREAKEVEN_TRIGGER_PCT
+    return float(BREAKEVEN_TRIGGER_PCT)
 
 
 def _sizing_refusal(reason_code: str) -> str:

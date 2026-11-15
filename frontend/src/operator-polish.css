@@ -495,3 +495,46 @@ button.home-os-quick-link:hover,
     transition: none !important;
   }
 }
+
+/* Home · BUY only (2026-11-15). Every canonical BUY and nothing else; an
+   empty day states why. Accent marks it as the one actionable list. */
+.buy-only-card {
+  margin-bottom: 14px;
+  padding-top: 14px;
+  padding-bottom: 6px;
+  border-left: 3px solid #3fb27f;
+}
+
+.buy-only-head {
+  display: grid;
+  gap: 3px;
+  margin: 0 18px 4px;
+}
+
+.buy-only-head > span {
+  color: #3fb27f;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.buy-only-head > strong {
+  font-size: 17px;
+  line-height: 1.25;
+}
+
+.buy-only-head > small,
+.buy-only-edge {
+  color: #9faec0;
+  line-height: 1.38;
+}
+
+.buy-only-rows > div > span {
+  color: #3fb27f;
+  font-weight: 700;
+}
+
+.buy-only-empty {
+  margin-top: 8px;
+}
+

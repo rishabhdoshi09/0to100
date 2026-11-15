@@ -1363,12 +1363,15 @@ class Supervisor:
 
     @staticmethod
     def _legacy_calibration(path: Path, SB) -> bool:
-        """True when the saved report does not record the current sampler."""
+        """True when the saved report predates the current sampler or schema."""
         try:
             report = json.loads(path.read_text(encoding="utf-8") or "{}")
         except Exception:
             return False
-        return isinstance(report, dict) and report.get("sampling") != getattr(SB, "SAMPLING", None)
+        return isinstance(report, dict) and (
+            report.get("sampling") != getattr(SB, "SAMPLING", None)
+            or report.get("report_schema") != getattr(SB, "REPORT_SCHEMA", None)
+        )
 
     def _maybe_weekly_backtest(self, now_ist, holidays=None) -> bool:
         """Weekly refresh of the scanner's walk-forward signal calibration.

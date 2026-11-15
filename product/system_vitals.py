@@ -130,8 +130,10 @@ def collect(*, now: datetime | None = None, logs: Path | None = None,
     # 1. Every published BUY is outcome-tracked (Invariant 7).
     try:
         con = _ro(root / "signal_outcomes.db")
-        n = con.execute("SELECT count(*) FROM signal_log WHERE logged_at >= ?", (today,)).fetchone()[0]
-        last = con.execute("SELECT max(logged_at) FROM signal_log").fetchone()[0]
+        cols = {str(r[1]) for r in con.execute("PRAGMA table_info(signal_log)").fetchall()}
+        real = " AND COALESCE(signal_type, '') != 'EDGE_GATED_SHADOW'" if "signal_type" in cols else ""
+        n = con.execute(f"SELECT count(*) FROM signal_log WHERE logged_at >= ?{real}", (today,)).fetchone()[0]
+        last = con.execute(f"SELECT max(logged_at) FROM signal_log WHERE 1=1{real}").fetchone()[0]
         con.close()
         detail = f"{n} BUY signal(s) logged today; last {last or 'never'}"
         status = OK

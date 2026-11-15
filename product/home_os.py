@@ -183,7 +183,7 @@ def broker_session_usable(auto: Mapping[str, Any] | None) -> bool:
     return True
 
 
-def _canonical_best_trade_rows(*, history_current: bool) -> list[dict[str, Any]]:
+def _canonical_best_trade_rows(*, history_current: bool, limit: int = 5) -> list[dict[str, Any]]:
     """Read only the canonical production-thesis discovery shortlist for Home.
 
     Home's primary trade list must never mix scanner rankings, committee rejects,
@@ -251,9 +251,149 @@ def _canonical_best_trade_rows(*, history_current: bool) -> list[dict[str, Any]]
         row["home_candidate_status"] = "ENTER_NOW"
         out.append(row)
         seen.add(symbol)
-        if len(out) >= 5:
+        if len(out) >= int(limit):
             break
     return out
+
+
+#: The BUY-only section lists every canonical BUY, not just Home's top five.
+BUY_ONLY_LIMIT = 25
+_SCAN_EVIDENCE_CACHE: dict[str, Any] = {"key": None, "value": None}
+
+
+def _scan_evidence_index() -> dict[str, Any]:
+    """Per-symbol evidence from the saved scan, parsed once per scan file.
+
+    Home polls far more often than the scan changes; re-reading a 1.5 MB scan
+    on every poll is what made Home slow before. Keyed on the file identity.
+    """
+    empty = {"by_symbol": {}, "withheld": [], "withheld_count": 0, "scanner_buys": 0,
+             "session": "", "scanned_at": ""}
+    try:
+        from product.scan_store import DEFAULT_SCAN_PATH, load_scan
+        from pathlib import Path
+
+        st = Path(DEFAULT_SCAN_PATH).stat()
+        key = (str(DEFAULT_SCAN_PATH), st.st_mtime_ns, st.st_size)
+    except Exception:
+        return empty
+    if _SCAN_EVIDENCE_CACHE["key"] == key and _SCAN_EVIDENCE_CACHE["value"] is not None:
+        return _SCAN_EVIDENCE_CACHE["value"]
+    try:
+        payload = dict(load_scan() or {})
+    except Exception:
+        payload = {}
+    by_symbol: dict[str, dict[str, Any]] = {}
+    withheld: list[dict[str, Any]] = []
+    buys = 0
+    for raw in payload.get("records") or []:
+        if not isinstance(raw, Mapping):
+            continue
+        symbol = str(raw.get("symbol") or "").upper().strip()
+        if not symbol:
+            continue
+        ev = {
+            "edge_r": raw.get("edge_r"),
+            "edge_lower_r": raw.get("edge_lower_r"),
+            "edge_source": str(raw.get("edge_source") or ""),
+            "score": raw.get("score"),
+            "signals": list(raw.get("signals") or [])[:6],
+        }
+        by_symbol[symbol] = ev
+        if str(raw.get("verdict") or "").upper() in {"BUY", "STRONG BUY"}:
+            buys += 1
+        elif raw.get("edge_gated"):
+            withheld.append({"symbol": symbol, **ev})
+    withheld.sort(key=lambda r: -float(r.get("score") or 0.0))
+    provenance = dict(payload.get("provenance") or {})
+    value = {
+        "by_symbol": by_symbol,
+        "withheld": withheld[:3],
+        "withheld_count": len(withheld),
+        "scanner_buys": buys,
+        "session": str(provenance.get("market_session_date") or payload.get("as_of_session") or ""),
+        "scanned_at": str(payload.get("scanned_at") or ""),
+    }
+    _SCAN_EVIDENCE_CACHE.update(key=key, value=value)
+    return value
+
+
+def build_buy_only(best_rows: Sequence[Mapping[str, Any]], *, verified: bool) -> dict[str, Any]:
+    """Home's BUY-only section: every canonical BUY and nothing else.
+
+    A row is here only when the scanner's setup cleared the evidence gate AND
+    the committee/discovery authority says BUY · ENTER_NOW for the current
+    scan -- the same authority as Home's best trades, without the top-5 cap.
+    Watchlist, research, WAIT and withheld names never appear; when there is
+    no BUY the section says so and why, instead of showing a near-miss.
+    """
+    index = _scan_evidence_index()
+    rows: list[dict[str, Any]] = []
+    for raw in best_rows:
+        row = dict(raw)
+        symbol = str(row.get("symbol") or "").upper().strip()
+        if not symbol:
+            continue
+        explained = explain_opportunity(row)
+        ev = dict(index["by_symbol"].get(symbol) or {})
+        entry = explained.get("entry")
+        stop = explained.get("stop")
+        target = explained.get("target")
+        reward_r = None
+        try:
+            if entry and stop and target and float(entry) > float(stop):
+                reward_r = round((float(target) - float(entry)) / (float(entry) - float(stop)), 2)
+        except (TypeError, ValueError):
+            reward_r = None
+        rows.append({
+            "symbol": symbol,
+            "company": str(row.get("company") or row.get("name") or ""),
+            "cmp": explained.get("cmp"),
+            "entry": entry,
+            "stop": stop,
+            "target": target,
+            "reward_r": reward_r,
+            "downside_to_stop_pct": explained.get("downside_to_stop_pct"),
+            "upside_to_target_pct": explained.get("upside_to_target_pct"),
+            "edge_r": ev.get("edge_r"),
+            "edge_lower_r": ev.get("edge_lower_r"),
+            "edge_source": ev.get("edge_source") or "",
+            "signals": ev.get("signals") or [],
+            "win_probability_pct": explained.get("win_probability_pct"),
+            "why": explained.get("meaning") or explained.get("why") or "",
+        })
+    try:
+        from scan.unified_scanner import _MIN_BUY_EDGE_R as bar
+    except Exception:
+        bar = 0.05
+    if rows:
+        empty_reason = ""
+    elif not verified:
+        empty_reason = "Verifying the current scan — earlier BUYs are not current signals."
+    elif index["withheld_count"]:
+        best = index["withheld"][0]
+        edge = best.get("edge_r")
+        edge_txt = f" (closest: {best['symbol']} at {float(edge):+.2f}R/trade)" if edge is not None else ""
+        empty_reason = (
+            f"No BUY today. {index['withheld_count']} setup(s) looked technically ready but none has a "
+            f"proven edge{edge_txt}, so they are WATCH."
+        )
+    else:
+        empty_reason = "No BUY today. No setup in the current scan qualified."
+    return {
+        "rows": rows,
+        "count": len(rows),
+        "verified": bool(verified),
+        "withheld_count": int(index["withheld_count"]),
+        "scanner_buys": int(index["scanner_buys"]),
+        "session": index["session"],
+        "scanned_at": index["scanned_at"],
+        "empty_reason": empty_reason,
+        "rule": (
+            f"BUY only: setup's measured edge >= {bar:+.2f}R/trade with a 95% lower bound above zero "
+            "(walk-forward backtest, net of costs), and the committee says BUY · enter now. Paper only."
+        ),
+    }
 
 
 def _canonical_research_watchlist(*, history_current: bool, exclude: set[str] | None = None) -> list[dict[str, Any]]:
@@ -600,7 +740,9 @@ def build_home_os(
                 "status": op.get("status"),
             }
 
-    best_rows = _canonical_best_trade_rows(history_current=history_current)
+    buy_rows = _canonical_best_trade_rows(history_current=history_current, limit=BUY_ONLY_LIMIT)
+    best_rows = buy_rows[:5]
+    buy_only = build_buy_only(buy_rows, verified=bool(history_current))
     opportunities = [explain_opportunity(row) for row in best_rows]
     for opportunity, row in zip(opportunities, best_rows):
         opportunity["champion_policy_id"] = str(row.get("champion_policy_id") or "")
@@ -796,6 +938,7 @@ def build_home_os(
             "next_automatic_action": next_line,
         },
         "opportunities": opportunities[:8],
+        "buy_only": buy_only,
         "research_watchlist": research_watchlist[:5],
         "learning_impact": learning_impact,
         "us_market": us_market,

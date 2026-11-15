@@ -88,10 +88,13 @@ def test_backtest_edges_keep_only_evidenced_signals():
     report = {"signals": {"A": {"trades": 30, "expectancy_r": -0.2},
                           "B": {"trades": 29, "expectancy_r": 0.9},
                           "C": {"trades": "x", "expectancy_r": 1}}}
-    assert US.backtest_edges(report) == {"A": -0.2}
+    assert US.backtest_edges(report) == {"A": {"mean": -0.2, "lower": None, "n": 30}}
     assert US.backtest_edges(None) == {}
     assert US.combo_edge_r(["A", "B"], {"A": -0.2}) == -0.2
     assert US.combo_edge_r(["B"], {"A": -0.2}) is None
+    precise = {"signals": {"A": {"trades": 40, "expectancy_r": 0.1, "expectancy_r_precise": 0.0812,
+                                 "lower_r": -0.01}}}
+    assert US.backtest_edges(precise) == {"A": {"mean": 0.0812, "lower": -0.01, "n": 40}}
 
 
 # ── scanner integration ───────────────────────────────────────────────────────
@@ -147,7 +150,8 @@ def test_snapshot_freezes_the_gate_evidence(tmp_path):
                                      "HIGH_TIGHT_FLAG": {"trades": 19, "expectancy_r": 0.33}}},
         live_profile={}, data_identity="t", thesis_hash="t",
     )
-    assert snap["backtest_edges"] == {"VOL_SQUEEZE": 0.08}
+    assert snap["backtest_edges"] == {"VOL_SQUEEZE": {"mean": 0.08, "lower": None, "n": 545}}
+    assert snap["backtest_combo_edges"] == {}
 
 
 def test_scan_record_carries_the_edge_fields():
@@ -158,3 +162,45 @@ def test_scan_record_carries_the_edge_fields():
     row = _record(r, {}, set())
     assert row["verdict"] == "WATCH" and row["status"] != "Ready to trade"
     assert row["edge_gated"] is True and row["edge_r"] == pytest.approx(-0.5)
+
+
+# ── combinations and confidence (2026-11-15, second pass) ────────────────────
+
+def test_a_positive_average_that_noise_could_explain_is_not_proven():
+    edges = {"VOL_SQUEEZE": {"mean": 0.08, "lower": -0.03, "n": 545},
+             "DELIVERY_SPIKE": {"mean": 0.09, "lower": 0.01, "n": 239}}   # lower bounds average -0.01
+    verdict, why = US._evidence_verdict(90.0, ["VOL_SQUEEZE", "DELIVERY_SPIKE"], signal_edges=edges)
+    assert verdict == "WATCH" and "95% lower bound" in why and "could be noise" in why
+    proven = {"VOL_SQUEEZE": {"mean": 0.12, "lower": 0.03, "n": 545},
+              "DELIVERY_SPIKE": {"mean": 0.09, "lower": 0.02, "n": 239}}
+    assert US._evidence_verdict(90.0, ["VOL_SQUEEZE", "DELIVERY_SPIKE"], signal_edges=proven) == ("BUY", "")
+
+
+def test_the_exact_combination_outranks_the_average_of_its_signals():
+    edges = {"VOL_SQUEEZE": {"mean": 0.12, "lower": 0.03, "n": 545},
+             "POCKET_PIVOT": {"mean": 0.10, "lower": 0.02, "n": 1385}}
+    combos = {"POCKET_PIVOT|VOL_SQUEEZE": {"mean": -0.20, "lower": -0.35, "n": 64}}
+    verdict, why = US._evidence_verdict(90.0, ["VOL_SQUEEZE", "POCKET_PIVOT"],
+                                        signal_edges=edges, combo_edges=combos)
+    assert verdict == "WATCH" and "this exact combination" in why
+    ev = US.setup_evidence(["POCKET_PIVOT", "VOL_SQUEEZE"], edges, combos)
+    assert ev["source"] == "combination" and ev["mean"] == -0.20
+    # Without the combination's own record the signals' average decides.
+    assert US._evidence_verdict(90.0, ["VOL_SQUEEZE", "POCKET_PIVOT"], signal_edges=edges) == ("BUY", "")
+
+
+def test_the_52_week_shortcut_needs_proof_not_just_a_positive_average():
+    noisy = {"BREAKOUT_52W": {"mean": 0.20, "lower": -0.05, "n": 40}}
+    assert US._evidence_verdict(40.0, ["BREAKOUT_52W"], signal_edges=noisy)[0] == "WATCH"
+    proven = {"BREAKOUT_52W": {"mean": 0.20, "lower": 0.05, "n": 40}}
+    assert US._evidence_verdict(40.0, ["BREAKOUT_52W"], signal_edges=proven)[0] == "BUY"
+
+
+def test_scanner_reports_the_evidence_it_judged_on():
+    combos = {"BREAKOUT_52W|POCKET_PIVOT|VOL_SQUEEZE": {"mean": 0.30, "lower": 0.10, "n": 45}}
+    edges = {"VOL_SQUEEZE": {"mean": -0.5, "lower": -0.6, "n": 545}}
+    snap = {**_snap(edges), "backtest_combo_edges": combos}
+    r = US.UnifiedScanner(calibration_snapshot=snap)._analyze("X", _breakout_frame())
+    assert r.verdict == "BUY" and r.edge_source == "combination"
+    assert r.edge_r == pytest.approx(0.30) and r.edge_lower_r == pytest.approx(0.10)
+

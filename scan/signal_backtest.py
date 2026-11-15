@@ -36,7 +36,9 @@ MIN_SYMBOLS_TO_SAVE = 100
 # autopilot's breakeven_trigger_pct (default 2.0). Backtesting WITH the trail
 # measures the strategy the system actually trades, not a naked-stop strawman.
 # Env-tunable so it can track a changed autopilot setting.
-_BT_BREAKEVEN_PCT = float(_os.getenv("QT_BT_BREAKEVEN_PCT", "2.0") or 2.0)
+from core.evaluation_spec import BREAKEVEN_TRIGGER_PCT as _BT_BREAKEVEN_PCT  # noqa: E402
+from core.evaluation_spec import HORIZON_SESSIONS as _EVAL_HORIZON  # noqa: E402
+from core.evaluation_spec import simulate_trade  # noqa: E402
 
 # The slippage assumption baked into every ledger row (a MODELED cost, not a
 # measured one — an E0-evidence value, reconciled against real fills once paper
@@ -84,38 +86,13 @@ def _simulate_timed(entry: float, stop: float, target: float,
     each trade and pair a benchmark/factor return over its exact holding window —
     without them the alpha-vs-beta gate cannot be computed. Offsets are -1 on
     NO_FILL."""
-    risk = entry - stop
-    if risk <= 0:
-        return "NO_FILL", 0.0, -1, -1
-    filled = False
-    entry_off = -1
-    cur_stop = stop
-    be_level = entry * (1 + be_pct / 100) if be_pct > 0 else None
-    for i, (h, l, c) in enumerate(zip(fwd_high, fwd_low, fwd_close)):
-        if not filled:
-            if h >= entry:
-                filled = True
-                entry_off = i
-            else:
-                continue
-        if l <= cur_stop:                         # stop first (gap-conservative)
-            # LOSS only if the stop is still below entry; a trailed-to-entry
-            # stop that gets tagged is a SCRATCH (0R), not a loss.
-            if cur_stop < entry:
-                return "LOSS", -1.0, entry_off, i
-            return "SCRATCH", 0.0, entry_off, i
-        if h >= target:
-            return "WIN", (target - entry) / risk, entry_off, i
-        if be_level is not None and cur_stop < entry and h >= be_level:
-            cur_stop = entry                      # arm the breakeven trail
-    if filled:
-        return ("FLAT", (float(fwd_close[-1]) - entry) / risk,
-                entry_off, len(fwd_close) - 1)
-    return "NO_FILL", 0.0, -1, -1
+    res = simulate_trade(entry, stop, target, fwd_high, fwd_low, fwd_close, be_pct=be_pct)
+    return res.outcome, res.r, res.entry_offset, res.exit_offset
 
 
 def _emit_trade_record(on_trade, df, t, sym, r, outcome, gross_r, net_r,
-                       cost_r, e_off, x_off, regime, calib_version):
+                       cost_r, e_off, x_off, regime, calib_version,
+                       *, fill_price=None, exit_price=None):
     """Assemble the immutable core of one ledger row and hand it to the sink. Only
     the fields KNOWN at the trade level are set here (dates, prices, R, cost,
     regime, signals); the gauntlet's sink enriches with benchmark/factor returns
@@ -124,7 +101,8 @@ def _emit_trade_record(on_trade, df, t, sym, r, outcome, gross_r, net_r,
     risk = r.entry - r.stop
     entry_dt = df.index[t + e_off] if e_off >= 0 else df.index[min(t, len(df) - 1)]
     exit_dt = df.index[t + x_off] if x_off >= 0 else entry_dt
-    exit_price = r.entry + gross_r * risk            # exact for WIN/LOSS/SCRATCH/FLAT
+    if exit_price is None:
+        exit_price = r.entry + gross_r * risk        # exact when the fill was at entry
     sigs = tuple(r.signals) if getattr(r, "signals", None) else ()
     on_trade({
         "symbol": sym,
@@ -132,7 +110,7 @@ def _emit_trade_record(on_trade, df, t, sym, r, outcome, gross_r, net_r,
         "signal_id": sigs[0] if sigs else "",
         "entry_datetime": entry_dt,
         "exit_datetime": exit_dt,
-        "entry_price": float(r.entry),
+        "entry_price": float(fill_price if fill_price else r.entry),
         "exit_price": float(exit_price),
         "holding_period": int(x_off - e_off + 1) if x_off >= e_off >= 0 else 0,
         "stop_price": float(r.stop),
@@ -235,6 +213,61 @@ def sweep_targets(entry: float, stop: float, fwd_high, fwd_low, fwd_close,
     return out
 
 
+#: Bumped when the report gains fields the evidence gate relies on; the
+#: supervisor treats an older report as due for a rerun.
+REPORT_SCHEMA = 2
+#: Exact signal combinations need their own sample before they make a claim.
+COMBO_MIN_TRADES = 30
+#: One-sided 95% lower bound: mean - 1.645 * clustered standard error.
+LOWER_BOUND_Z = 1.645
+
+
+def combo_key(signals) -> str:
+    """Order-insensitive identity of an exact signal combination."""
+    return "|".join(sorted({str(s) for s in (signals or ()) if s}))
+
+
+def _add_cluster(clusters: dict, day: str, r: float) -> None:
+    row = clusters.setdefault(day, [0.0, 0])
+    row[0] += float(r)
+    row[1] += 1
+
+
+def clustered_mean_se(clusters: dict) -> tuple[float, float | None, int]:
+    """(mean R, cluster-robust standard error, n clusters).
+
+    Trades signalled on the same day share the market's next ten sessions, so
+    they are not independent: the naive standard error would overstate
+    certainty several-fold. Clusters are decision dates; the variance of the
+    mean sums each date's residual total (CR1 small-sample factor G/(G-1)).
+    """
+    n = sum(int(v[1]) for v in clusters.values())
+    g = len(clusters)
+    if n <= 0:
+        return 0.0, None, g
+    mean = sum(float(v[0]) for v in clusters.values()) / n
+    if g < 2:
+        return mean, None, g
+    resid = sum((float(v[0]) - mean * int(v[1])) ** 2 for v in clusters.values())
+    var = resid / (n * n) * g / (g - 1)
+    return mean, var ** 0.5, g
+
+
+def _evidence_fields(stats: dict) -> dict:
+    mean, se, g = clustered_mean_se(stats.get("clusters") or {})
+    lower = None if se is None else mean - LOWER_BOUND_Z * se
+    return {
+        "expectancy_r_precise": round(mean, 4),
+        "se_r": None if se is None else round(se, 4),
+        "lower_r": None if lower is None else round(lower, 4),
+        "clusters": g,
+    }
+
+
+def _eval_spec_tag(horizon: int) -> str:
+    return f"sim:h{int(horizon)}:be{_BT_BREAKEVEN_PCT:g}:gap"
+
+
 #: How run_backtest picks its symbols; recorded in every saved report so a
 #: calibration built by the old alphabetical prefix is recognisably legacy.
 SAMPLING = "even_stride"
@@ -257,7 +290,7 @@ def _spread_sample(symbols: list[str], limit: int) -> list[str]:
 
 
 def run_backtest(sample_step: int = 5, lookback_sessions: int = 250,
-                 horizon: int = 10, max_symbols: int = 800, on_trade=None) -> dict:
+                 horizon: int = _EVAL_HORIZON, max_symbols: int = 800, on_trade=None) -> dict:
     """
     Walk-forward backtest across the bhav store. Returns and persists
     per-signal stats. Needs ≥ (60 + lookback + horizon) sessions of data.
@@ -296,6 +329,7 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
     # the calibration is frozen for the whole run — hash it ONCE, not per trade
     _calib_version = _calibration_version() if on_trade is not None else ""
     tgt_stats: dict[str, dict] = {}             # target label → aggregate
+    combo_stats: dict[str, dict] = {}           # exact signal combination → aggregate
 
     for si, sym in enumerate(symbols):
         df = get_ohlcv(sym)
@@ -315,10 +349,16 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
             if risk <= 0:
                 continue
             fwd = df.iloc[t:t + horizon]
-            outcome, r_mult, _e_off, _x_off = _simulate_timed(
+            # The same rulebook as the forward tracker and the paper book
+            # (core.evaluation_spec): buy-stop fill at the open when it gaps
+            # above entry, gap-aware stop/target exits, breakeven trail.
+            sim = simulate_trade(
                 r.entry, r.stop, r.target,
                 fwd["high"].values, fwd["low"].values, fwd["close"].values,
+                opens=fwd["open"].values if "open" in fwd.columns else None,
                 be_pct=_BT_BREAKEVEN_PCT)
+            outcome, r_mult = sim.outcome, sim.r
+            _e_off, _x_off = sim.entry_offset, sim.exit_offset
             if outcome == "NO_FILL":
                 continue          # order never triggered — not a trade
             gross_r = r_mult      # before costs — the ledger keeps both
@@ -326,10 +366,11 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
             # the gross move. Same cost hits the target-geometry sweep below.
             try:
                 from core.costs import cost_in_r
-                _cost_r = cost_in_r(risk / r.entry, "CNC")
+                _cost_r = cost_in_r((sim.fill_price - r.stop) / sim.fill_price, "CNC")
             except Exception:
                 _cost_r = 0.0
             r_mult -= _cost_r
+            day_key = str(df.index[t])[:10]   # decision cluster: same-day trades co-move
 
             regime = ""
             if regime_series is not None:
@@ -343,7 +384,8 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                 try:
                     _emit_trade_record(on_trade, df, t, sym, r, outcome,
                                        gross_r, r_mult, _cost_r, _e_off, _x_off,
-                                       regime, _calib_version)
+                                       regime, _calib_version,
+                                       fill_price=sim.fill_price, exit_price=sim.exit_price)
                 except Exception:
                     pass          # ledger emission must never break the backtest
 
@@ -361,12 +403,22 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                 elif o2 == "LOSS":
                     ts["closed"] += 1
 
+            combo = combo_key(r.signals)
+            if combo:
+                cs = combo_stats.setdefault(combo, {"trades": 0, "wins": 0, "losses": 0,
+                                                    "r_sum": 0.0, "clusters": {}})
+                cs["trades"] += 1
+                cs["r_sum"] += r_mult
+                cs["wins"] += outcome == "WIN"
+                cs["losses"] += outcome == "LOSS"
+                _add_cluster(cs["clusters"], day_key, r_mult)
             for sig in r.signals:
                 s = stats.setdefault(sig, {"trades": 0, "wins": 0, "losses": 0,
                                            "flat": 0, "r_sum": 0.0,
-                                           "regimes": {}})
+                                           "regimes": {}, "clusters": {}})
                 s["trades"] += 1
                 s["r_sum"] += r_mult
+                _add_cluster(s.setdefault("clusters", {}), day_key, r_mult)
                 if outcome == "WIN":
                     s["wins"] += 1
                 elif outcome == "LOSS":
@@ -411,7 +463,15 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
             "verdict": signal_verdict(closed, exp),
             "flat": s["flat"],
             "by_regime": by_regime,
+            **_evidence_fields(s),
         }
+
+    combos: dict[str, dict] = {}
+    for key, cs in combo_stats.items():
+        if cs["trades"] < COMBO_MIN_TRADES:
+            continue
+        combos[key] = {"trades": cs["trades"], "wins": cs["wins"], "losses": cs["losses"],
+                       **_evidence_fields(cs)}
 
     target_sweep = {}
     for label, ts in tgt_stats.items():
@@ -432,7 +492,10 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
     out = {"generated_at": time.strftime("%Y-%m-%d %H:%M"),
            "symbols": len(symbols), "horizon_days": horizon,
            "sampling": SAMPLING,
+           "report_schema": REPORT_SCHEMA,
+           "eval_spec": _eval_spec_tag(horizon),
            "signals": report,
+           "combos": combos,
            "target_sweep": target_sweep,
            "recommended_target_pct": recommended,
            "elapsed_s": round(time.time() - t0, 1)}

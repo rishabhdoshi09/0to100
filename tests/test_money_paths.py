@@ -723,10 +723,11 @@ class TestOutcomeTracker:
                 "entry_price, stop_price) VALUES (?,?,?,?,?)",
                 (sym, logged, "UNIFIED_BUY", entry, entry * 0.96))
         conn.commit(); conn.close()
-        idx = pd.bdate_range("2026-08-01", periods=8)
+        from core.outcome_resolver import DECISION_HORIZON_SESSIONS as H
+        idx = pd.bdate_range("2026-08-01", periods=H + 3)
 
         def _df(entry, end):
-            closes = [entry] * 5 + [end, end, end]
+            closes = [entry] * H + [end, end, end]      # horizon-th session closes at `end`
             return pd.DataFrame(
                 {"high": [c + 1 for c in closes], "low": [c - 1 for c in closes],
                  "close": closes, "open": closes, "volume": 1},
@@ -2609,10 +2610,11 @@ class TestDecisionJournal:
         c = dj._conn()
         c.execute("UPDATE decisions SET decided_at='2026-08-01T10:00:00'")
         c.commit(); c.close()
-        idx = pd.bdate_range("2026-08-01", periods=8)
+        from core.outcome_resolver import DECISION_HORIZON_SESSIONS as H
+        idx = pd.bdate_range("2026-08-01", periods=H + 3)
 
         def _bars(end):
-            closes = [100.0] * 5 + [end, 9999.0, 9999.0]
+            closes = [100.0] * H + [end, 9999.0, 9999.0]  # horizon-th close; later bars unused
             return pd.DataFrame(
                 {"open": closes, "high": closes, "low": closes, "close": closes,
                  "volume": 1},
@@ -5507,3 +5509,174 @@ class TestUsPaperTargetExitPrice:
         us._close_positions()
         assert us._open_trades() == []
         assert us._trades(("PAPER_LOSS",))[0]["exit_price"] == 94.0
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# One rulebook: backtest, forward tracker and paper book judge a trade alike
+# (2026-11-15: they ran on 10/15/20-session horizons with different trails)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestOneRulebook:
+    def test_every_evidence_source_uses_the_same_horizon(self):
+        from core import evaluation_spec as ES
+        from core import outcome_resolver as OR
+        from core import signal_outcome_tracker as SOT
+        import product.paper_autopilot as PA
+        import scan.signal_backtest as SB
+        import inspect
+
+        assert ES.HORIZON_SESSIONS == 10
+        assert OR.PATH_HORIZON_SESSIONS == OR.DECISION_HORIZON_SESSIONS == ES.HORIZON_SESSIONS
+        assert SOT._HORIZON_SESSIONS == PA.HOLD_DAYS == ES.HORIZON_SESSIONS
+        assert inspect.signature(SB.run_backtest).parameters["horizon"].default == ES.HORIZON_SESSIONS
+        assert SB._BT_BREAKEVEN_PCT == ES.BREAKEVEN_TRIGGER_PCT == 2.0
+
+    def test_buy_stop_fills_only_when_traded_and_at_the_gap_open(self):
+        from core.evaluation_spec import simulate_trade
+        r = simulate_trade(100, 90, 120, highs=[99, 99], lows=[95, 95], closes=[98, 98])
+        assert r.outcome == "NO_FILL" and r.worked == -1
+        r = simulate_trade(100, 90, 120, highs=[106, 108], lows=[101, 103], closes=[105, 107],
+                           opens=[104, 105])
+        assert r.fill_price == 104 and r.outcome == "FLAT"       # gapped above the buy-stop
+        assert r.r == pytest.approx((107 - 104) / (104 - 90))   # R on the risk actually taken
+
+    def test_gap_through_the_stop_loses_more_than_one_r(self):
+        from core.evaluation_spec import simulate_trade
+        r = simulate_trade(100, 90, 120, highs=[101, 86], lows=[99, 80], closes=[100, 82],
+                           opens=[99.5, 85])
+        assert r.outcome == "LOSS" and r.exit_price == 85 and r.r == pytest.approx(-1.5)
+
+    def test_stop_before_target_and_the_breakeven_trail(self):
+        from core.evaluation_spec import simulate_trade
+        both = simulate_trade(100, 90, 120, highs=[121], lows=[89], closes=[110])
+        assert both.outcome == "LOSS"                              # conservative inside one bar
+        # +2% arms the trail; a later dip to entry is a scratch, not a loss.
+        r = simulate_trade(100, 90, 120, highs=[103, 101], lows=[99, 99.5], closes=[102, 100])
+        assert r.outcome == "SCRATCH" and r.r == 0.0 and r.worked == 0
+        no_trail = simulate_trade(100, 90, 120, highs=[103, 101], lows=[99, 99.5], closes=[102, 100],
+                                  be_pct=0.0)
+        assert no_trail.outcome == "FLAT"
+
+    def test_backtest_wrapper_is_unchanged_without_opens(self):
+        from scan.signal_backtest import _simulate, _simulate_timed
+        assert _simulate(100, 90, 120, np.array([101, 121.0]), np.array([95, 99.0]),
+                         np.array([100, 120.0])) == ("WIN", 2.0)
+        assert _simulate_timed(100, 90, 120, np.array([101.0]), np.array([89.0]),
+                               np.array([95.0]))[:2] == ("LOSS", -1.0)
+
+    def test_paper_book_trails_to_breakeven_without_breaking_its_r_unit(self):
+        from research.auto_research.paper_book import PaperBook
+        b = PaperBook(capital=100_000)
+        pos = b.open_position("s", "TRL", 100, 90, 130, "d1", 10)
+        assert pos.be_trigger_pct == 2.0 and pos.trail_stop == 0.0
+        assert b.mark({"TRL": (105, 101, 104)}, "d2") == []      # +5%: trail arms for next bar
+        assert pos.trail_stop == pos.entry_price and pos.r_unit == pytest.approx(10.0)
+        closed = b.mark({"TRL": (104, 99, 100)}, "d3")
+        assert closed[0].exit_reason == "BREAKEVEN_STOP" and closed[0].realized_R == pytest.approx(0.0)
+
+    def test_paper_gap_below_the_trailed_stop_is_an_honest_loss(self):
+        from research.auto_research.paper_book import PaperBook
+        b = PaperBook(capital=100_000)
+        b.open_position("s", "GAP", 100, 90, 130, "d1", 10)
+        b.mark({"GAP": (104, 101, 103)}, "d2")
+        closed = b.mark({"GAP": (97, 98, 95, 96)}, "d3")           # (open, high, low, close)
+        assert closed[0].exit_reason == "GAP_BREAKEVEN" and closed[0].realized_R == pytest.approx(-0.3)
+
+    def test_positions_from_older_books_keep_their_rules(self):
+        from research.auto_research.paper_book import PaperBook
+        b = PaperBook(capital=100_000)
+        legacy = {"strategy_id": "s", "symbol": "OLD", "entry_price": 100.0, "stop_price": 90.0,
+                  "target_price": 130.0, "qty": 10, "entry_date": "d1", "max_holding_days": 20,
+                  "risk_amount": 100.0}
+        snap = {"capital": 100_000.0, "realized_pnl": 0.0, "equity_curve": [100_000.0],
+                "closed": [], "open": [legacy]}
+        assert b.restore(snap, strict=True)
+        pos = b.open[("s", "OLD")]
+        assert pos.be_trigger_pct == 0.0 and pos.max_holding_days == 20
+        b.mark({"OLD": (110, 101, 109)}, "d2")
+        assert pos.trail_stop == 0.0                               # no trail it never had
+        bad = dict(legacy, trail_stop=150.0)
+        with pytest.raises(ValueError):
+            PaperBook(capital=100_000).restore({**snap, "open": [bad]}, strict=True)
+
+    def test_paper_never_fills_at_a_price_the_market_has_not_traded(self):
+        import product.paper_autopilot as PA
+        card = {"symbol": "INFY", "reco_tier": "good_setup", "entry_state": "ready",
+                "entry": 110.0, "stop": 100.0, "target": 130.0, "price": 105.0, "volume_ratio": 2.0}
+        waiting = PA.evaluate_candidate(card, book=None)
+        assert waiting.decision == PA.WAIT and waiting.reason_code == PA.WAIT_FOR_ENTRY
+        assert "not traded yet" in waiting.detail
+        crossed = PA.evaluate_candidate({**card, "price": 110.05}, book=None)
+        assert crossed.reason_code != PA.WAIT_FOR_ENTRY
+
+    def test_learning_lane_explores_a_setup_the_evidence_gate_withheld(self, tmp_path):
+        import product.paper_autopilot as PA
+        card = {"symbol": "GATED", "entry_state": "watch", "score": 80.0, "chase_risk": False,
+                "reco_tier": "watch", "edge_gated": True, "volume_ratio": 2.0, "rsi": 60}
+        seen = []
+
+        def evaluate(c):
+            seen.append(c)
+            return PA.AutopilotDecision(c["symbol"], PA.ENTER_NOW, "OK", card=c, selection_score=1.0)
+
+        decisions = [PA.AutopilotDecision("GATED", PA.WATCH, PA.LOW_QUALITY_SETUP, card=card),
+                     PA.AutopilotDecision("PLAIN", PA.WATCH, PA.LOW_QUALITY_SETUP,
+                                          card={**card, "symbol": "PLAIN", "edge_gated": False})]
+        pick = PA._exploration_pick(decisions, day="2026-11-16", evaluate=evaluate, path=tmp_path / "x.json")
+        assert pick.symbol == "GATED" and seen[0]["entry_state"] == "ready"
+        assert seen[0]["exploration_source"] == "EDGE_GATED"
+        assert seen[0]["exploration_risk_pct"] == PA.EXPLORATION_RISK_PCT
+
+    def test_clustered_error_is_wider_than_naive_when_days_co_move(self):
+        from scan.signal_backtest import _add_cluster, clustered_mean_se
+        clusters: dict = {}
+        for day, rs in {"d1": [1.0] * 10, "d2": [-1.0] * 10, "d3": [1.0] * 10, "d4": [-1.0] * 10}.items():
+            for r in rs:
+                _add_cluster(clusters, day, r)
+        mean, se, g = clustered_mean_se(clusters)
+        naive = (1.0 / (40 - 1) * 40) ** 0.5 / 40 ** 0.5           # sd ≈ 1, n = 40
+        assert mean == 0.0 and g == 4 and se > 2 * naive
+
+    def test_tracker_resolves_like_the_backtest_and_stamps_its_rulebook(self, tmp_path, monkeypatch):
+        import core.signal_outcome_tracker as SOT
+        import core.outcome_resolver as OR
+        monkeypatch.setattr(SOT, "_DB_PATH", str(tmp_path / "so.db"))
+        idx = pd.bdate_range("2026-11-02", periods=14)
+        bars = pd.DataFrame({"open": [100.0] * 14, "high": [100.5] * 14, "low": [99.5] * 14,
+                             "close": [100.0] * 14}, index=idx)
+        bars.loc[idx[2], ["open", "high", "low", "close"]] = [100.5, 103.5, 100.2, 102.5]  # fill + arm (>=103.02)
+        bars.loc[idx[3], ["open", "high", "low", "close"]] = [101.0, 101.5, 100.5, 101.0]  # tags entry
+        monkeypatch.setattr(OR, "_ohlcv", lambda s: bars)
+        SOT.log_signal("TST", "UNIFIED_BUY", 101.0, 101.0, 95.0, 113.0, 70.0, 0.0, "MOMENTUM", "")
+        conn = SOT._get_conn()
+        conn.execute("UPDATE signal_log SET logged_at='2026-11-02T18:00:00'")
+        conn.commit(); conn.close()
+        monkeypatch.setattr(SOT, "_now", lambda: __import__("datetime").datetime(2026, 11, 20, 18))
+        SOT.update_outcomes(lookback_days=60)
+        conn = SOT._get_conn()
+        row = dict(conn.execute("SELECT worked, outcome_pct, eval_spec FROM signal_log").fetchone())
+        conn.close()
+        assert row["worked"] == 0 and row["outcome_pct"] == pytest.approx(0.0)   # scratch at entry
+        assert row["eval_spec"] == SOT.eval_spec_tag() == "sim:h10:be2:gap"
+
+    def test_withheld_setups_are_shadow_tracked_but_never_on_the_report_card(self, tmp_path, monkeypatch):
+        import core.signal_outcome_tracker as SOT
+        import scan.market_scan_service as MSS
+        import reports.verdict_dashboard as VD
+        monkeypatch.setattr(SOT, "_DB_PATH", str(tmp_path / "so.db"))
+        monkeypatch.setattr("research.intelligence.data.nse_calendar.is_session", lambda d, h: True)
+        payload = {"records": [
+            {"symbol": "BUYME", "verdict": "BUY", "entry": 100, "stop": 90, "target": 120, "signals": ["MOMENTUM"]},
+            {"symbol": "HELD", "verdict": "WATCH", "edge_gated": True, "entry": 50, "stop": 45, "target": 60,
+             "signals": ["FLAT_BASE"]},
+            {"symbol": "CHASE", "verdict": "WATCH", "edge_gated": True, "chase_risk": True, "entry": 50,
+             "stop": 45, "target": 60},
+            {"symbol": "PLAIN", "verdict": "WATCH", "entry": 50, "stop": 45, "target": 60},
+        ]}
+        assert MSS.track_published_buys(payload, today=date(2026, 11, 16)) == 1
+        conn = SOT._get_conn()
+        rows = {r["symbol"]: r["signal_type"] for r in conn.execute("SELECT symbol, signal_type FROM signal_log")}
+        conn.execute("UPDATE signal_log SET worked=1, outcome_pct=5.0")
+        conn.commit(); conn.close()
+        assert rows == {"BUYME": "UNIFIED_BUY", "HELD": SOT.SHADOW_SIGNAL_TYPE}
+        assert [r["symbol"] for r in VD._closed_signals()] == ["BUYME"]

@@ -242,6 +242,10 @@ def _coverage_exclusions(summary: Mapping[str, Any] | None) -> tuple[str, ...]:
 def track_published_buys(payload: Mapping[str, Any], *, today=None) -> int:
     """Log each published BUY into the outcome tracker; return how many.
 
+    Setups the evidence gate withheld are logged too, as SHADOW_SIGNAL_TYPE
+    rows resolved by the same rules (not counted in the return value, never in
+    the Report Card), so forward evidence keeps flowing when nothing is a BUY.
+
     Only on NSE sessions (a weekend/holiday rescan of the last session's bars
     would re-log the same trades under a new date). log_signal itself dedupes
     symbol+day, so the two schedulers that can trigger a scan never double-log.
@@ -260,11 +264,18 @@ def track_published_buys(payload: Mapping[str, Any], *, today=None) -> int:
             regime = str(getattr(compute_regime(), "market_regime", "") or "")
         except Exception:
             regime = ""
+        from core.signal_outcome_tracker import SHADOW_SIGNAL_TYPE
+
         logged = 0
         for row in payload.get("records") or []:
             if not isinstance(row, Mapping):
                 continue
-            if str(row.get("verdict") or "").strip().upper() not in {"BUY", "STRONG BUY"}:
+            is_buy = str(row.get("verdict") or "").strip().upper() in {"BUY", "STRONG BUY"}
+            # Forward test of the evidence gate itself: a setup it withheld is
+            # tracked as a shadow by the same rules, so the record can show
+            # whether withheld setups really did worse than published BUYs.
+            is_shadow = not is_buy and bool(row.get("edge_gated")) and not bool(row.get("chase_risk"))
+            if not (is_buy or is_shadow):
                 continue
             try:
                 entry = float(row.get("entry") or 0)
@@ -276,14 +287,14 @@ def track_published_buys(payload: Mapping[str, Any], *, today=None) -> int:
             if not symbol or entry <= 0 or stop <= 0 or stop >= entry:
                 continue
             log_signal(
-                symbol=symbol, signal_type="UNIFIED_BUY",
+                symbol=symbol, signal_type="UNIFIED_BUY" if is_buy else SHADOW_SIGNAL_TYPE,
                 entry_price=entry, pivot_price=entry, stop_price=stop,
                 target_price=target, quality_score=float(row.get("score") or 0),
                 accum_score=0.0,
                 archetype="|".join(str(s) for s in (row.get("signals") or []) if s),
                 regime=regime,
             )
-            logged += 1
+            logged += 1 if is_buy else 0
         return logged
     except Exception as exc:
         try:

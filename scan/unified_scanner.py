@@ -131,35 +131,99 @@ _EXT_ABOVE_SMA50 = float(_os.getenv("QT_EXT_ABOVE_SMA50_PCT", "20") or 20)
 # walk-forward backtest measured 13 of 17 signals as net losers (owner's Mac,
 # 2026-11-15) the scanner still issued BUYs: the least-bad setups. And the
 # combo-edge veto that Invariant 6 describes lived only in the legacy
-# auto_scan loop, which the canonical stack never starts. A BUY now needs a
-# POSITIVE measured edge: the mean net-of-cost expectancy (R/trade) of the
-# setup's signals that have >= EVIDENCE_MIN_TRADES backtest trades must reach
-# the floor. The default +0.05R is signal_backtest.signal_verdict's own
-# POSITIVE line; between -0.05 and +0.05 is NEUTRAL, within noise of zero, and
-# a breakeven setup is not a reason to buy. A combo with no evidenced signal
-# makes no claim either way. The backtest counts every detected setup whatever
-# its verdict, so this gate cannot starve the evidence that judges it.
+# auto_scan loop, which the canonical stack never starts.
+#
+# A BUY needs PROVEN positive evidence for the setup it actually is:
+#   * the exact signal combination's own backtest record when it has
+#     >= COMBO_MIN_TRADES trades, else the average of its evidenced signals
+#     (>= EVIDENCE_MIN_TRADES each) -- signals overlap, so the combination's
+#     own record is preferred whenever it exists;
+#   * mean net-of-cost expectancy >= _MIN_BUY_EDGE_R (+0.05R, the backtest's
+#     own POSITIVE line; -0.05..+0.05 is NEUTRAL, within noise of zero), AND
+#   * its one-sided 95% lower bound (date-clustered standard error) above
+#     zero, so an edge the noise could explain does not count. Older reports
+#     without a standard error fall back to the mean-only rule.
+# No evidenced signal = no claim either way. The backtest counts every
+# detected setup whatever its verdict, so the gate cannot starve its evidence.
 EVIDENCE_MIN_TRADES = 30
 _MIN_BUY_EDGE_R = float(_os.getenv("QT_MIN_BUY_EDGE_R", "0.05") or 0.05)
 _OVERRIDE_BUY_SIGNALS = ("BREAKOUT_52W", "HIGH_TIGHT_FLAG")
 
 
-def backtest_edges(report: dict | None, min_trades: int = EVIDENCE_MIN_TRADES) -> dict[str, float]:
-    """{signal: net expectancy R} for signals with enough backtest trades."""
-    out: dict[str, float] = {}
-    for sig, row in dict((report or {}).get("signals") or {}).items():
+def _evidence_row(value) -> dict | None:
+    """Normalise one evidence entry: a bare float (older snapshots) or a dict."""
+    if isinstance(value, dict):
         try:
-            if int((row or {}).get("trades") or 0) >= int(min_trades):
-                out[str(sig)] = float((row or {}).get("expectancy_r") or 0.0)
+            mean = float(value.get("mean"))
         except (TypeError, ValueError):
+            return None
+        lower = value.get("lower")
+        try:
+            lower = None if lower is None else float(lower)
+        except (TypeError, ValueError):
+            lower = None
+        return {"mean": mean, "lower": lower, "n": int(value.get("n") or 0)}
+    try:
+        return {"mean": float(value), "lower": None, "n": 0}
+    except (TypeError, ValueError):
+        return None
+
+
+def _report_rows(rows: dict, min_trades: int) -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    for key, row in dict(rows or {}).items():
+        try:
+            n = int((row or {}).get("trades") or 0)
+            if n < int(min_trades):
+                continue
+            mean = row.get("expectancy_r_precise")
+            mean = float(row.get("expectancy_r") if mean is None else mean)
+            lower = row.get("lower_r")
+            out[str(key)] = {"mean": mean, "lower": None if lower is None else float(lower), "n": n}
+        except (TypeError, ValueError, AttributeError):
             continue
     return out
 
 
-def combo_edge_r(signals: list[str], edges: dict[str, float] | None) -> float | None:
-    """Mean evidenced expectancy of a setup's signals; None = no evidence."""
-    vals = [float(edges[s]) for s in signals if edges and s in edges]
-    return round(sum(vals) / len(vals), 3) if vals else None
+def backtest_edges(report: dict | None, min_trades: int = EVIDENCE_MIN_TRADES) -> dict[str, dict]:
+    """{signal: {mean, lower, n}} for signals with enough backtest trades."""
+    return _report_rows((report or {}).get("signals") or {}, min_trades)
+
+
+def backtest_combo_edges(report: dict | None) -> dict[str, dict]:
+    """{exact combination key: {mean, lower, n}} for evidenced combinations."""
+    from scan.signal_backtest import COMBO_MIN_TRADES
+    return _report_rows((report or {}).get("combos") or {}, COMBO_MIN_TRADES)
+
+
+def setup_evidence(signals: list[str], edges: dict | None, combos: dict | None = None) -> dict | None:
+    """The evidence a setup is judged on: its exact combination, else its signals."""
+    if combos:
+        from scan.signal_backtest import combo_key
+        row = _evidence_row(combos.get(combo_key(signals)))
+        if row is not None:
+            return {**row, "source": "combination"}
+    rows = [r for r in (_evidence_row((edges or {}).get(s)) for s in signals if edges and s in edges) if r]
+    if not rows:
+        return None
+    lowers = [r["lower"] for r in rows]
+    return {
+        "mean": sum(r["mean"] for r in rows) / len(rows),
+        # Averaging lower bounds is conservative for overlapping signals.
+        "lower": None if any(x is None for x in lowers) else sum(lowers) / len(lowers),
+        "n": min(r["n"] for r in rows),
+        "source": "signals",
+    }
+
+
+def combo_edge_r(signals: list[str], edges: dict | None, combos: dict | None = None) -> float | None:
+    """Mean measured edge of a setup (R/trade); None = no evidence."""
+    ev = setup_evidence(signals, edges, combos)
+    return None if ev is None else round(ev["mean"], 3)
+
+
+def _proven(ev: dict | None) -> bool:
+    return bool(ev) and ev["mean"] >= _MIN_BUY_EDGE_R and (ev["lower"] is None or ev["lower"] > 0)
 
 
 def _evidence_verdict(
@@ -167,20 +231,20 @@ def _evidence_verdict(
     signals: list[str],
     *,
     breakout_watch_veto: bool = False,
-    signal_edges: dict[str, float] | None = None,
+    signal_edges: dict | None = None,
+    combo_edges: dict | None = None,
 ) -> tuple[str, str]:
     """(verdict, evidence-gate reason). Reason is '' unless evidence vetoed a BUY.
 
     Without any evidence (no backtest report yet) the legacy rule stands. With
     evidence, the 52-week-breakout / high-tight-flag shortcut applies only when
-    that signal itself measures a positive edge (52W: -0.08R on 26 trades and
-    HTF on 19 trades are no claim, not a licence), and every BUY must clear
-    the measured-edge floor.
+    that signal itself is proven (52W: -0.08R on 26 trades and HTF on 19
+    trades are no claim, not a licence), and every BUY must be proven.
     """
     edges = dict(signal_edges or {})
     if edges:
-        override = any(s in _OVERRIDE_BUY_SIGNALS and s in edges and edges[s] >= _MIN_BUY_EDGE_R
-                       for s in signals)
+        override = any(s in _OVERRIDE_BUY_SIGNALS and _proven(_evidence_row(edges.get(s)))
+                       for s in signals if s in edges)
     else:
         override = any(s in _OVERRIDE_BUY_SIGNALS for s in signals)
     buy = (score >= 55 and len(signals) >= 2) or override
@@ -188,11 +252,16 @@ def _evidence_verdict(
         return "WATCH", ""
     if not buy:
         return "WATCH", ""
-    combo = combo_edge_r(signals, edges)
-    if edges and combo is not None and combo < _MIN_BUY_EDGE_R:
+    ev = setup_evidence(signals, edges, combo_edges) if edges or combo_edges else None
+    if ev is not None and not _proven(ev):
+        basis = "this exact combination" if ev["source"] == "combination" else "its signals"
+        if ev["mean"] < _MIN_BUY_EDGE_R:
+            why = f"below the {_MIN_BUY_EDGE_R:+.2f}R bar"
+        else:
+            why = f"but its 95% lower bound {ev['lower']:+.2f}R is not above zero (could be noise)"
         return "WATCH", (
-            f"⚖ Measured edge {combo:+.2f}R/trade (walk-forward backtest, net of costs) is "
-            f"below the {_MIN_BUY_EDGE_R:+.2f}R bar — no proven edge, so WATCH, not BUY"
+            f"⚖ Measured edge {ev['mean']:+.2f}R/trade for {basis} (walk-forward backtest, "
+            f"net of costs) {why} — no proven edge, so WATCH, not BUY"
         )
     return "BUY", ""
 
@@ -202,11 +271,13 @@ def _composite_verdict(
     signals: list[str],
     *,
     breakout_watch_veto: bool = False,
-    signal_edges: dict[str, float] | None = None,
+    signal_edges: dict | None = None,
+    combo_edges: dict | None = None,
 ) -> str:
     """Final scanner stance; quality vetoes outrank additive signal count."""
     return _evidence_verdict(
-        score, signals, breakout_watch_veto=breakout_watch_veto, signal_edges=signal_edges,
+        score, signals, breakout_watch_veto=breakout_watch_veto,
+        signal_edges=signal_edges, combo_edges=combo_edges,
     )[0]
 
 
@@ -460,7 +531,9 @@ class StockSignal:
                                             # safety demotion, not a low-score
                                             # miss; downstream enrichment (buzz/
                                             # earnings) must never promote it back
-    edge_r: float | None = None            # measured combo edge (R/trade), None = no evidence
+    edge_r: float | None = None            # measured setup edge (R/trade), None = no evidence
+    edge_lower_r: float | None = None      # its one-sided 95% lower bound, None = unknown
+    edge_source: str = ""                  # "combination" | "signals" | ""
     edge_gated: bool = False               # evidence gate turned a BUY into WATCH
 
     @property
@@ -531,17 +604,21 @@ class UnifiedScanner:
         self._signal_registry = dict(
             self._calibration_snapshot.get("signal_registry") or {}
         )
-        self._signal_edges: dict[str, float] = {}
+        self._signal_edges: dict = {}
+        self._combo_edges: dict = {}
         if self._evidence_gate:
             stored = self._calibration_snapshot.get("backtest_edges")
             if isinstance(stored, dict):
-                self._signal_edges = {str(k): float(v) for k, v in stored.items()}
+                self._signal_edges = dict(stored)
+                self._combo_edges = dict(self._calibration_snapshot.get("backtest_combo_edges") or {})
             elif calibration_snapshot is None:
                 try:
                     from scan.signal_backtest import load_report
-                    self._signal_edges = backtest_edges(load_report() or {})
+                    report = load_report() or {}
+                    self._signal_edges = backtest_edges(report)
+                    self._combo_edges = backtest_combo_edges(report)
                 except Exception:
-                    self._signal_edges = {}
+                    self._signal_edges, self._combo_edges = {}, {}
         try:
             summary = dict(self._signal_registry.get("summary") or {})
             missing = list(summary.get("scanner_without_forward_calibration") or [])
@@ -875,8 +952,13 @@ class UnifiedScanner:
             signals,
             breakout_watch_veto=breakout_watch_veto,
             signal_edges=self._signal_edges,
+            combo_edges=self._combo_edges,
         )
-        edge_r = combo_edge_r(signals, self._signal_edges)
+        _ev = setup_evidence(signals, self._signal_edges, self._combo_edges) \
+            if (self._signal_edges or self._combo_edges) else None
+        edge_r = None if _ev is None else round(_ev["mean"], 3)
+        edge_lower_r = None if _ev is None or _ev["lower"] is None else round(_ev["lower"], 3)
+        edge_source = "" if _ev is None else str(_ev["source"])
         edge_gated = bool(edge_note)
         if edge_gated:
             # Appended, never at reasons[0]: that slot is reserved for the one
@@ -951,7 +1033,8 @@ class UnifiedScanner:
             volume_ratio=round(vratio, 2), signals=signals, reasons=reasons,
             score=round(score, 1), entry=round(entry, 1), stop=stop,
             target=target, verdict=verdict, chase_risk=chase_risk,
-            edge_r=edge_r, edge_gated=edge_gated,
+            edge_r=edge_r, edge_lower_r=edge_lower_r, edge_source=edge_source,
+            edge_gated=edge_gated,
             pivot_distance_pct=round(pivot_dist, 2),
             breakout_grade=breakout_grade,
             breakout_conviction=breakout_conv,

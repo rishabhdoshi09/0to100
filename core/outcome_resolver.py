@@ -25,8 +25,12 @@ from __future__ import annotations
 import os
 from typing import Any, Mapping
 
-DECISION_HORIZON_SESSIONS = int(os.getenv("QT_DECISION_HORIZON", "5") or 5)
-PATH_HORIZON_SESSIONS = int(os.getenv("QT_OUTCOME_HORIZON", "15") or 15)
+# One rulebook (core.evaluation_spec): decisions, the forward tracker and the
+# backtest judge a trade over the same horizon (were 5, 15 and 10 sessions).
+from core.evaluation_spec import (  # noqa: E402
+    DECISION_HORIZON_SESSIONS,
+    OUTCOME_HORIZON_SESSIONS as PATH_HORIZON_SESSIONS,
+)
 WAIT_PULLBACK_PCT = float(os.getenv("QT_WAIT_PULLBACK", "3") or 3)
 WAIT_RUN_PCT = float(os.getenv("QT_WAIT_RUN", "2") or 2)
 
@@ -54,6 +58,51 @@ def _after(df, from_date: str):
     if since is None or getattr(since, "empty", True):
         return None
     return since
+
+
+def resolve_trade(
+    symbol: str,
+    opened_at: str,
+    entry: float,
+    stop: float,
+    target: float,
+    *,
+    horizon: int | None = None,
+):
+    """Resolve a logged signal exactly as the walk-forward backtest does.
+
+    Uses core.evaluation_spec.simulate_trade on the official bars after the
+    signal day (buy-stop fill, gap-aware exits, breakeven trail, mark to the
+    close at the horizon). Returns the TradeResult, or None while the trade is
+    still open or the bars are not there yet: a trade that has not exited is
+    final only once the horizon-th session exists.
+    """
+    from core.evaluation_spec import simulate_trade
+
+    horizon = int(horizon or PATH_HORIZON_SESSIONS)
+    df = _ohlcv(symbol)
+    if df is None or getattr(df, "empty", True) or not {"high", "low", "close"} <= set(df.columns):
+        return None
+    try:
+        import pandas as pd
+
+        since = df[df.index > pd.Timestamp(str(opened_at or "")[:10])]
+    except Exception:
+        return None
+    window = since.iloc[:horizon]
+    if window.empty:
+        return None
+    opens = window["open"].to_numpy(dtype=float) if "open" in window.columns else None
+    result = simulate_trade(
+        entry, stop, target,
+        window["high"].to_numpy(dtype=float),
+        window["low"].to_numpy(dtype=float),
+        window["close"].to_numpy(dtype=float),
+        opens=opens,
+    )
+    if result.outcome in ("WIN", "LOSS", "SCRATCH"):
+        return result
+    return result if len(window) >= horizon else None
 
 
 def session_close_return(

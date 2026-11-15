@@ -150,7 +150,9 @@ class TestPaperBook:
         c1 = b.mark({"WIN": (121, 101, 120), "LOSE": (100, 89, 90), "HOLD": (105, 99, 104)}, "d2")
         reasons = {t.symbol: t.exit_reason for t in c1}
         assert reasons["WIN"] == "TARGET" and reasons["LOSE"] == "STOP"
-        c2 = b.mark({"HOLD": (106, 100, 105)}, "d3")           # 2nd bar → max hold
+        # 2nd bar → max hold. (Day 2's high armed the breakeven trail at 100;
+        # day 3 stays above it, so the time stop is what closes the trade.)
+        c2 = b.mark({"HOLD": (106, 101, 105)}, "d3")
         assert c2[0].exit_reason == "MAX_HOLD"
         # realized R: win = +2R, loss = -1R
         rr = {t.symbol: round(t.realized_R, 2) for t in b.closed}

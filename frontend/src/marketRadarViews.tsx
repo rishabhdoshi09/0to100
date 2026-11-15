@@ -13,6 +13,7 @@ import {
   verifyForwardSoakNow,
   fetchDecisionSimulator,
   simulatePastDecisions,
+  type BuyOnlySection,
   type HomeAction,
   type HomeOperatingSystem,
   removeWatchlistItem,
@@ -473,6 +474,73 @@ function sessionTone(dashboard: DashboardPayload): string {
   const prov = dashboard.scan.provenance
   if (!prov?.market_session_date) return 'scan-session-unknown'
   return prov.data_current ? 'scan-session-current' : 'scan-session-stale'
+}
+
+/** Home's BUY-only section: every canonical BUY and nothing else.
+ *  Rows come from the same authority as Best Trades (evidence-gated scanner
+ *  setup + committee BUY · enter now), uncapped. Watchlist, research and
+ *  withheld names never appear here; an empty day says why instead. */
+export function BuyOnlyPanel({
+  section,
+  onOpenPage,
+  setSelected,
+}: {
+  section?: BuyOnlySection | null
+  onOpenPage?: (page: string) => void
+  setSelected?: (symbol: string) => void
+}) {
+  if (!section) return null
+  const rows = section.rows || []
+  const edge = (value?: number | null) => (value == null ? '—' : `${Number(value) >= 0 ? '+' : ''}${Number(value).toFixed(2)}R`)
+  return (
+    <section className="home-os-card buy-only-card" aria-label="BUY only">
+      <div className="buy-only-head">
+        <span>BUY ONLY</span>
+        <strong>{rows.length ? `${rows.length} BUY${rows.length === 1 ? '' : 's'} now` : 'No BUY right now'}</strong>
+        <small>{section.session ? `Session ${section.session}` : ''}{section.rule ? ` · ${section.rule}` : ''}</small>
+      </div>
+      {rows.length ? (
+        <div className="home-os-opps buy-only-rows">
+          {rows.map((row) => (
+            <div key={row.symbol}>
+              <span>BUY</span>
+              <strong>{row.symbol}{row.company ? ` · ${row.company}` : ''}</strong>
+              <small className="home-os-trade-levels">
+                CMP {row.cmp != null ? money(row.cmp, 2) : '—'} ·
+                {' '}Entry {row.entry != null ? money(row.entry, 2) : '—'} ·
+                {' '}Stop {row.stop != null ? money(row.stop, 2) : '—'} ·
+                {' '}Target {row.target != null ? money(row.target, 2) : '—'}
+                {row.reward_r != null ? ` · reward ${Number(row.reward_r).toFixed(1)}R` : ''}
+              </small>
+              <small className="buy-only-edge">
+                Measured edge {edge(row.edge_r)}/trade
+                {row.edge_lower_r != null ? ` (95% floor ${edge(row.edge_lower_r)})` : ''}
+                {row.edge_source === 'combination' ? ' · this exact setup' : row.edge_source ? ' · from its signals' : ''}
+                {row.win_probability_pct != null ? ` · +R odds ${Number(row.win_probability_pct).toFixed(0)}%` : ''}
+              </small>
+              {row.why ? <small>{row.why}</small> : null}
+              {onOpenPage ? (
+                <button
+                  type="button"
+                  className="home-os-inspect-link"
+                  onClick={() => {
+                    setSelected?.(row.symbol)
+                    onOpenPage('Stock Intelligence')
+                  }}
+                >
+                  Research
+                </button>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="home-os-past buy-only-empty">
+          <small>{section.empty_reason || 'No BUY in the current scan.'}</small>
+        </div>
+      )}
+    </section>
+  )
 }
 
 function HomeOsCard({
@@ -1137,6 +1205,7 @@ export function RadarHomeView(props: ExperienceViewProps & {
 
   return (
     <section className="radar-home">
+      <BuyOnlyPanel section={homeOs?.buy_only} onOpenPage={setActive} setSelected={setSelected} />
       {homeOs ? (
         <HomeOsCard
           os={homeOs}

@@ -159,6 +159,8 @@ def _record(signal: Any, names: Mapping[str, str], fno_symbols: set[str]) -> dic
         # Measured combo edge behind the verdict (None = no evidence) and
         # whether the evidence gate turned a BUY into this WATCH.
         "edge_r": _opt_float(signal, "edge_r"),
+        "edge_lower_r": _opt_float(signal, "edge_lower_r"),
+        "edge_source": str(_value(signal, "edge_source", "") or ""),
         "edge_gated": bool(_value(signal, "edge_gated", False)),
         # A trade level the scanner never produced is missing, not zero. Coercing
         # to 0.0 rendered "Stop Rs0.00" in the desk, which is a fabricated trade

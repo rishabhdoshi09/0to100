@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, Mapping, Sequence
 
+from core.evaluation_spec import HORIZON_SESSIONS
 from product.breakout_quality import MIN_VOLUME_RATIO
 from product.reco_ensemble import TIER_GOOD, TIER_HIGH, TIER_WATCH
 from product.strategy_catalog import ENSEMBLE_ID, ensemble_identity
@@ -61,7 +62,9 @@ PORTFOLIO_BLOCK = "PORTFOLIO_BLOCK"
 
 ELIGIBLE_TIERS = {TIER_HIGH, TIER_GOOD}
 STALE_MAX_AGE = timedelta(hours=36)
-HOLD_DAYS = 20
+# One rulebook (core.evaluation_spec): paper holds a trade for the same number
+# of sessions the backtest and the forward tracker judge it over (was 20).
+HOLD_DAYS = HORIZON_SESSIONS
 DEFAULT_RISK_PCT = 1.0  # percentage points, matching PaperBook
 
 # Learning lane. When the production thesis admits nothing, one best-ranked
@@ -69,6 +72,9 @@ DEFAULT_RISK_PCT = 1.0  # percentage points, matching PaperBook
 # the forward book keeps producing evidence (owner, 2026-11-11: "don't stop
 # taking paper trades"; the first live cycle saw 107 names and took 0).
 EXPLORATION = "EXPLORATION"
+#: Paper fills only once the market has traded at the entry (0.1% tick slack).
+ENTRY_FILL_TOLERANCE = 0.001
+
 EXPLORATION_RISK_PCT = 0.5
 EXPLORATION_MAX_PER_DAY = 1
 
@@ -135,8 +141,19 @@ def _exploration_pick(decisions, *, day: str, evaluate, path=None):
         if decision.reason_code == HISTORICAL_EVIDENCE_PENDING and not any(
                 stage in str(decision.detail or "") for stage in _EXPLORABLE_HISTORY_STAGES):
             continue      # mismatch / gate error is an integrity problem, never explored
-        if str(card.get("entry_state") or "") != "ready" or bool(card.get("chase_risk")):
+        if bool(card.get("chase_risk")):
             continue
+        if str(card.get("entry_state") or "") != "ready":
+            # The evidence gate turns technically-ready BUYs into WATCH, which
+            # left the lane with nothing to learn from and stopped forward
+            # paper evidence entirely. A gated setup is explored as the BUY it
+            # would have been, through every other gate, at exploration risk.
+            if not card.get("edge_gated"):
+                continue
+            from product.reco_ensemble import ENTRY_READY, entry_state as _entry_state
+            if _entry_state({**card, "status": "Ready to trade", "verdict": "BUY"}) != ENTRY_READY:
+                continue
+            card = {**card, "entry_state": ENTRY_READY, "exploration_source": "EDGE_GATED"}
         priority = _EXPLORABLE_REASONS.index(decision.reason_code)
         pool.append((priority, -float(_f(card.get("score")) or 0.0), decision.symbol, card))
     pool.sort()
@@ -571,6 +588,16 @@ def evaluate_candidate(
         return AutopilotDecision(symbol, BLOCK, INVALID_STOP, f"stop {stop} >= entry {entry}", row)
     if target is None or target <= entry:
         return AutopilotDecision(symbol, WAIT, NO_VALID_ENTRY, "missing/invalid target", row)
+    # A breakout entry is a buy-stop above the market. Opening the paper
+    # position at a price the market has not traded is a fill that never
+    # happened (the backtest and forward tracker both require the high to
+    # reach entry). Wait for a later cycle in which price has crossed it.
+    last = _f(row.get("cmp") or row.get("price"))
+    if last is not None and last > 0 and entry > last * (1.0 + ENTRY_FILL_TOLERANCE):
+        return AutopilotDecision(
+            symbol, WAIT, WAIT_FOR_ENTRY,
+            f"entry {entry:.2f} not traded yet (last {last:.2f}); buy-stop pending", row,
+        )
 
     vol = _f(row.get("volume_ratio"))
     if vol is not None and vol < MIN_VOLUME_RATIO:

@@ -756,6 +756,36 @@ export type HomeAction = {
   instruction?: string
 }
 
+export type BuyOnlyRow = {
+  symbol: string
+  company?: string
+  cmp?: number | null
+  entry?: number | null
+  stop?: number | null
+  target?: number | null
+  reward_r?: number | null
+  downside_to_stop_pct?: number | null
+  upside_to_target_pct?: number | null
+  edge_r?: number | null
+  edge_lower_r?: number | null
+  edge_source?: string
+  signals?: string[]
+  win_probability_pct?: number | null
+  why?: string
+}
+
+export type BuyOnlySection = {
+  rows: BuyOnlyRow[]
+  count: number
+  verified: boolean
+  withheld_count: number
+  scanner_buys?: number
+  session?: string
+  scanned_at?: string
+  empty_reason?: string
+  rule?: string
+}
+
 export type HomeOperatingSystem = {
   schema_version?: number
   state: string
@@ -813,6 +843,7 @@ export type HomeOperatingSystem = {
       dissent_breakdown?: Record<string, number>
     }
   }>
+  buy_only?: BuyOnlySection | null
   research_watchlist?: Array<{
     symbol?: string
     state?: string
