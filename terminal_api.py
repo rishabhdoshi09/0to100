@@ -1477,8 +1477,9 @@ def _compose_dashboard() -> dict:
             daily_wrap: list = []
             try:
                 from product.desk_note import daily_wrap as build_daily_wrap
+                from product.desk_note import session_news_articles
                 daily_wrap = build_daily_wrap(
-                    articles=list(news.get("articles") or []),
+                    articles=session_news_articles(news.get("articles") or []),
                     scan_payload=scan,
                 )
             except Exception:

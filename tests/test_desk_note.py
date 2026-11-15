@@ -330,8 +330,13 @@ def test_desk_note_module_does_not_hardcode_blog_prints():
 
 def test_market_reports_workspace_embeds_desk_note(tmp_path, monkeypatch):
     import product.recommendations_workspace as rw
+    import product.desk_note as DN
+    from datetime import datetime, timezone
 
     monkeypatch.setattr(rw, "REPORTS_DIR", tmp_path)
+    # The workspace reads the current session's news; date the article now.
+    monkeypatch.setattr(DN, "_SESSION_NEWS_CACHE", {"key": None, "at": 0.0, "rows": None})
+    now_iso = datetime.now(timezone.utc).isoformat()
     monkeypatch.setattr(
         "reports.street_pulse.build_pulse",
         lambda **_k: {"date": "24 August 2026", "takeaways": ["Nifty steady"], "gainers": [], "losers": [], "breakouts_today": []},
@@ -344,6 +349,7 @@ def test_market_reports_workspace_embeds_desk_note(tmp_path, monkeypatch):
                     article_id="lt-order",
                     headline="L&T bags Middle East gas compression order",
                     mentioned_symbols=["LT"],
+                    published_at=now_iso,
                 )
             ]
         },

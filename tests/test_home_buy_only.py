@@ -67,3 +67,20 @@ def test_scan_is_parsed_once_per_scan_file(tmp_path, monkeypatch):
     path.write_text(json.dumps({"changed": True}))
     HO._scan_evidence_index()
     assert calls == [1, 1]
+
+
+def test_closest_withheld_means_best_measured_edge_not_best_score(tmp_path, monkeypatch):
+    import product.scan_store as SS
+
+    path = tmp_path / "scan.json"
+    path.write_text("{}")
+    payload = {"records": [
+        {"symbol": "DCBBANK", "verdict": "WATCH", "edge_gated": True, "edge_r": -0.05, "score": 77.5},
+        {"symbol": "APOLLO", "verdict": "WATCH", "edge_gated": True, "edge_r": 0.003, "score": 68.8},
+        {"symbol": "NOEDGE", "verdict": "WATCH", "edge_gated": True, "edge_r": None, "score": 99},
+    ], "provenance": {}, "scanned_at": "x"}
+    monkeypatch.setattr(SS, "DEFAULT_SCAN_PATH", path)
+    monkeypatch.setattr(SS, "load_scan", lambda *a, **k: payload)
+    monkeypatch.setattr(HO, "_SCAN_EVIDENCE_CACHE", {"key": None, "value": None})
+    assert [w["symbol"] for w in HO._scan_evidence_index()["withheld"]] == ["APOLLO", "DCBBANK", "NOEDGE"]
+

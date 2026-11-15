@@ -304,7 +304,9 @@ def _scan_evidence_index() -> dict[str, Any]:
             buys += 1
         elif raw.get("edge_gated"):
             withheld.append({"symbol": symbol, **ev})
-    withheld.sort(key=lambda r: -float(r.get("score") or 0.0))
+    # "Closest" = nearest the evidence bar, i.e. the best measured edge.
+    withheld.sort(key=lambda r: (r.get("edge_r") is None, -float(r.get("edge_r") or 0.0),
+                                 -float(r.get("score") or 0.0)))
     provenance = dict(payload.get("provenance") or {})
     value = {
         "by_symbol": by_symbol,

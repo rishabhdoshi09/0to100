@@ -1396,10 +1396,17 @@ def build_market_reports_workspace(
     highlights = _scan_highlights(scan_payload)
     pulse = _enrich_pulse_from_scan(pulse, highlights)
 
-    articles = list((news_payload or {}).get("articles") or [])
+    # The wrap is about the current session: read that window, not the
+    # 7-day top-by-impact list (which led with week-old stories).
+    try:
+        from product.desk_note import session_news_articles
+        articles = session_news_articles((news_payload or {}).get("articles") or [])
+    except Exception:
+        articles = []
     news_meta = {
         "article_count": len(articles),
         "available": bool((news_payload or {}).get("available")),
+        "window": "current_session",
     }
 
     desk_note: dict[str, Any] = {}

@@ -557,6 +557,95 @@ def official_session_wrap(*, scan_payload: Mapping[str, Any] | None = None) -> l
     }]
 
 
+#: Session-window news, cached briefly: the dashboard polls far more often
+#: than the curator store changes.
+_SESSION_NEWS_TTL_S = 120.0
+_SESSION_NEWS_CACHE: dict[str, Any] = {"key": None, "at": 0.0, "rows": None}
+
+
+def session_window_start(now: datetime | None = None) -> datetime:
+    """UTC instant of 00:00 IST on the last completed NSE session.
+
+    "The wrap of the day" covers that session and everything since: on a
+    Monday morning that is Friday, the weekend and Monday so far; after
+    Monday's close it is Monday only.
+    """
+    from core.market_clock import IST, now_ist
+    from research.autonomy.schedules import last_completed_session_date
+
+    clock = now or now_ist()
+    if clock.tzinfo is None:
+        clock = clock.replace(tzinfo=IST)
+    day = last_completed_session_date(clock) or clock.date().isoformat()
+    start = datetime.fromisoformat(str(day)[:10]).replace(tzinfo=IST)
+    return start.astimezone(timezone.utc)
+
+
+def _published_utc(article: Mapping[str, Any]) -> datetime | None:
+    raw = str(article.get("published_at") or "").strip()
+    if not raw:
+        return None
+    try:
+        when = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+
+
+def session_news_articles(
+    fallback: Sequence[Mapping[str, Any]] | None = None,
+    *,
+    now: datetime | None = None,
+    limit: int = 200,
+    store_path=None,
+) -> list[dict[str, Any]]:
+    """Curated articles published in the current session window, best first.
+
+    The desk's general news payload is the top 120 by impact over seven days,
+    and the wrap ranked those by impact again: on the owner's Mac
+    (2026-11-16) only 6 of the 120 were from Friday onward although the
+    store held 363, so "the wrap of the day" led with Tuesday's stories. The
+    wrap reads its own window from the curator store; if the store cannot be
+    read, it filters ``fallback`` to the same window. Never older news.
+    """
+    import math
+    import time as _time
+
+    start = session_window_start(now)
+    now_utc = (now.astimezone(timezone.utc) if now and now.tzinfo else datetime.now(timezone.utc))
+    try:
+        from core.runtime_paths import logs_dir
+        from pathlib import Path
+
+        path = Path(store_path) if store_path else Path(logs_dir()) / "news_curator.sqlite3"
+        key = (start.isoformat(), str(path), path.stat().st_mtime_ns)
+    except Exception:
+        path, key = None, None
+    cached = _SESSION_NEWS_CACHE
+    if key is not None and cached["key"] == key and cached["rows"] is not None \
+            and _time.monotonic() - float(cached["at"]) < _SESSION_NEWS_TTL_S:
+        return [dict(r) for r in cached["rows"]]
+    rows: list[dict[str, Any]] | None = None
+    if path is not None:
+        try:
+            from news.curator_store import NewsCuratorStore
+
+            hours = max(1, math.ceil((now_utc - start).total_seconds() / 3600.0) + 1)
+            store = NewsCuratorStore(path, read_only=True)
+            try:
+                rows = [item.as_dict() for item in store.recent(hours=hours, limit=limit)]
+            finally:
+                store.close()
+        except Exception:
+            rows = None
+    if rows is None:
+        rows = [dict(a) for a in (fallback or []) if isinstance(a, Mapping)]
+    rows = [r for r in rows if (when := _published_utc(r)) is not None and when >= start]
+    if key is not None:
+        _SESSION_NEWS_CACHE.update(key=key, at=_time.monotonic(), rows=[dict(r) for r in rows])
+    return rows
+
+
 def news_wrap_lines(
     articles: Sequence[Mapping[str, Any]] | None,
     *,

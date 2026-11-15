@@ -739,9 +739,27 @@ def run_index_warmup(ctx) -> JobResult:
         return JobResult(JS.RETRYABLE_FAILED, "index warm-up failed", error_code="INDEX_WARMUP_ERROR",
                          error_message=str(exc))
     if int(info.get("indices", 0)) <= 0:
+        # The index store is built from Kite when Kite credentials exist, so
+        # without the day's Zerodha session it cannot build. That is a broker
+        # wait, not a system fault: on the owner's Mac (2026-11-15) the
+        # missed-EOD catch-up ran it while logged out, it burned five retries,
+        # went PERMANENT_FAILED and Home showed "Automation: Problem" although
+        # the next login rebuilt the store. Block on the auth dependency
+        # instead; the next successful auth check unblocks it.
+        if _index_store_needs_broker() and not _auth_health(ctx.deps).valid:
+            return JobResult(JS.BLOCKED, "index store waits for the daily Zerodha login",
+                             blocked_on=DEP_AUTH, metadata={"reason": "KITE_SESSION_REQUIRED"})
         return JobResult(JS.RETRYABLE_FAILED, "official index store unavailable",
                          error_code="INDEX_DATA_UNAVAILABLE")
     return JobResult(JS.SUCCEEDED, f"index store warm · {info.get('indices')} indices", metadata=info)
+
+
+def _index_store_needs_broker() -> bool:
+    try:
+        from data.index_store import _kite_authoritative
+        return bool(_kite_authoritative())
+    except Exception:
+        return False
 
 
 def _run_long_term(ctx, *, refresh_fundamentals: bool) -> JobResult:
