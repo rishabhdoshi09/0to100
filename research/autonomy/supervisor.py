@@ -1361,6 +1361,15 @@ class Supervisor:
         overdue = age_s is None or age_s >= cls.BACKTEST_OVERDUE_S
         return overdue and (hour >= 20 or hour < 5)
 
+    @staticmethod
+    def _legacy_calibration(path: Path, SB) -> bool:
+        """True when the saved report does not record the current sampler."""
+        try:
+            report = json.loads(path.read_text(encoding="utf-8") or "{}")
+        except Exception:
+            return False
+        return isinstance(report, dict) and report.get("sampling") != getattr(SB, "SAMPLING", None)
+
     def _maybe_weekly_backtest(self, now_ist, holidays=None) -> bool:
         """Weekly refresh of the scanner's walk-forward signal calibration.
 
@@ -1384,6 +1393,10 @@ class Supervisor:
                 return False
             out = Path(SB._OUT)
             age_s = time.time() - out.stat().st_mtime if out.exists() else None
+            if age_s is not None and Supervisor._legacy_calibration(out, SB):
+                # Built by the old alphabetical-prefix sampler (A-D names
+                # only): due now, whatever its age.
+                age_s = None
             if age_s is not None and age_s < self.BACKTEST_MAX_AGE_S:
                 return False
             if not Supervisor._backtest_window_open(now_ist, holidays, age_s=age_s):

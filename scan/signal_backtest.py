@@ -235,6 +235,27 @@ def sweep_targets(entry: float, stop: float, fwd_high, fwd_low, fwd_close,
     return out
 
 
+#: How run_backtest picks its symbols; recorded in every saved report so a
+#: calibration built by the old alphabetical prefix is recognisably legacy.
+SAMPLING = "even_stride"
+
+
+def _spread_sample(symbols: list[str], limit: int) -> list[str]:
+    """Deterministic, evenly spaced ``limit`` symbols across the whole store.
+
+    store_symbols() is alphabetical (the store is built with groupby), so the
+    old ``[:max_symbols]`` prefix calibrated every signal on roughly the A-D
+    names only (first weekly run on the owner's Mac, 2026-11-15: 800 of 3,466
+    symbols). An even stride keeps the same runtime budget, covers the whole
+    alphabet, and picks the same names for the same store.
+    """
+    names = list(symbols)
+    n = len(names)
+    if limit <= 0 or n <= limit:
+        return names
+    return [names[(i * n) // limit] for i in range(limit)]
+
+
 def run_backtest(sample_step: int = 5, lookback_sessions: int = 250,
                  horizon: int = 10, max_symbols: int = 800, on_trade=None) -> dict:
     """
@@ -250,7 +271,7 @@ def run_backtest(sample_step: int = 5, lookback_sessions: int = 250,
 
     sc = UnifiedScanner()
     stats: dict[str, dict] = {}
-    symbols = store_symbols()[:max_symbols]
+    symbols = _spread_sample(store_symbols(), max_symbols)
 
     with _state_lock:
         _state.update(running=True, progress=0, total=len(symbols))
@@ -408,6 +429,7 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
 
     out = {"generated_at": time.strftime("%Y-%m-%d %H:%M"),
            "symbols": len(symbols), "horizon_days": horizon,
+           "sampling": SAMPLING,
            "signals": report,
            "target_sweep": target_sweep,
            "recommended_target_pct": recommended,

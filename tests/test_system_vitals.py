@@ -150,3 +150,29 @@ def test_watch_runs_in_session_and_after_the_eod_window():
     assert watch_due(datetime(2026, 11, 15, 20, 30))
     assert not watch_due(datetime(2026, 11, 13, 18, 30))
     assert not watch_due(datetime(2026, 11, 14, 3, 0))
+
+
+def test_canonical_history_probe_accepts_the_tz_aware_desk_clock(monkeypatch):
+    # Production passes now_ist() (tz-aware); nse_calendar compares naive IST
+    # datetimes, so the probe raised TypeError and the vital read "unreadable".
+    from zoneinfo import ZoneInfo
+
+    import data.bhavcopy_runtime as runtime
+    import product.system_vitals as vitals_mod
+
+    seen = {}
+    real = runtime.official_history_freshness
+
+    def fake_freshness(history=None, *, now=None, **kwargs):
+        seen["now"] = now
+        return real(
+            {"latest_date": "2026-11-12", "sessions": 500, "ready": True},
+            now=now, holidays=set(), load_cache=False, require_store=False,
+        )
+
+    monkeypatch.setattr(runtime, "official_history_freshness", fake_freshness)
+    monkeypatch.setattr(vitals_mod, "_logs", lambda: __import__("pathlib").Path("/nonexistent-qt-logs"))
+    aware = datetime(2026, 11, 15, 21, 20, tzinfo=ZoneInfo("Asia/Kolkata"))
+    vital = _keys(collect(now=aware, session_day=False))["official_history"]
+    assert seen["now"].tzinfo is None and seen["now"].hour == 21
+    assert vital["status"] == WARN and "2026-11-13" in vital["detail"], vital

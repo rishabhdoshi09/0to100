@@ -57,6 +57,14 @@ def _session_boundary(clock: datetime, session: str, hour: int, minute: int) -> 
         return None
 
 
+def _naive_ist(clock: datetime) -> datetime:
+    """nse_calendar works on naive IST datetimes; the desk clock is tz-aware."""
+    if clock.tzinfo is None:
+        return clock
+    from core.market_clock import IST
+    return clock.astimezone(IST).replace(tzinfo=None)
+
+
 def _last_completed_session(clock: datetime) -> str:
     try:
         from research.autonomy.schedules import last_completed_session_date
@@ -188,7 +196,7 @@ def collect(*, now: datetime | None = None, logs: Path | None = None,
     if history is None and logs is None:
         try:
             from data.bhavcopy_runtime import official_history_freshness
-            history = official_history_freshness(now=clock, load_cache=False, require_store=False)
+            history = official_history_freshness(now=_naive_ist(clock), load_cache=False, require_store=False)
         except Exception as exc:
             vitals.append(_vital("official_history", "Official NSE history (bhavcopy)", WARN,
                                  f"unreadable: {type(exc).__name__}"))

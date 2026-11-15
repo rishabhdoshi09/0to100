@@ -12,12 +12,12 @@ from research.autonomy.supervisor import Supervisor
 SAT = datetime(2026, 11, 14, 10, 0)
 
 
-def _patch(monkeypatch, tmp_path, *, symbols=900, age_days=10, running=False):
+def _patch(monkeypatch, tmp_path, *, symbols=900, age_days=10, running=False, legacy=False):
     import data.bhavcopy_store as store
     import scan.signal_backtest as SB
 
     out = tmp_path / "signal_backtest.json"
-    out.write_text("{}")
+    out.write_text("{}" if legacy else json.dumps({"sampling": SB.SAMPLING}))
     stamp = time.time() - age_days * 86400
     os.utime(out, (stamp, stamp))
     started = []
@@ -107,3 +107,36 @@ def test_a_run_that_did_not_save_is_not_relaunched_every_tick(monkeypatch, tmp_p
     stub._backtest_launched_at -= Supervisor.BACKTEST_RETRY_S + 1
     assert Supervisor._maybe_weekly_backtest(stub, sunday, set()) is True
     assert started == [1, 1]
+
+
+def test_calibration_sample_spans_the_whole_alphabet_not_a_prefix():
+    from scan.signal_backtest import _spread_sample
+
+    store = sorted(f"{chr(65 + i % 26)}{i:05d}" for i in range(3466))
+    sample = _spread_sample(store, 800)
+    assert len(sample) == 800 == len(set(sample))
+    assert sample[0] == store[0] and sample[-1].startswith("Z")
+    assert len({s[0] for s in sample}) == 26
+    assert sample == _spread_sample(store, 800)            # deterministic
+    assert _spread_sample(store[:50], 800) == store[:50]   # small store: everything
+
+
+def test_a_prefix_sampled_calibration_is_due_whatever_its_age(monkeypatch, tmp_path):
+    sunday = datetime(2026, 11, 15, 21, 30)
+    started = _patch(monkeypatch, tmp_path, age_days=0.01, legacy=True)
+    assert Supervisor._maybe_weekly_backtest(_stub(), sunday, set()) is True and started == [1]
+    started = _patch(monkeypatch, tmp_path, age_days=0.01)
+    assert Supervisor._maybe_weekly_backtest(_stub(), sunday, set()) is False and started == []
+    # Never during a session, even when legacy.
+    started = _patch(monkeypatch, tmp_path, age_days=0.01, legacy=True)
+    assert Supervisor._maybe_weekly_backtest(_stub(), datetime(2026, 11, 17, 11), set()) is False
+
+
+def test_saved_reports_record_the_sampler(monkeypatch, tmp_path):
+    import data.bhavcopy_store as store
+    import scan.signal_backtest as SB
+
+    monkeypatch.setattr(SB, "_OUT", tmp_path / "signal_backtest.json")
+    monkeypatch.setattr(store, "store_symbols", lambda: [])
+    assert SB.run_backtest().get("sampling") == SB.SAMPLING
+
