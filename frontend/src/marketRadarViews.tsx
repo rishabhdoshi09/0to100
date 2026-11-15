@@ -493,7 +493,7 @@ export function BuyOnlyPanel({
   const rows = section.rows || []
   const edge = (value?: number | null) => (value == null ? '—' : `${Number(value) >= 0 ? '+' : ''}${Number(value).toFixed(2)}R`)
   return (
-    <section className="home-os-card buy-only-card" aria-label="BUY only">
+    <section className="buy-only-card" aria-label="BUY only">
       <div className="buy-only-head">
         <span>BUY ONLY</span>
         <strong>{rows.length ? `${rows.length} BUY${rows.length === 1 ? '' : 's'} now` : 'No BUY right now'}</strong>
@@ -536,6 +536,7 @@ export function BuyOnlyPanel({
         </div>
       ) : (
         <div className="home-os-past buy-only-empty">
+          <strong>{section.verified ? 'Nothing to buy today' : 'Verifying the current scan'}</strong>
           <small>{section.empty_reason || 'No BUY in the current scan.'}</small>
         </div>
       )}

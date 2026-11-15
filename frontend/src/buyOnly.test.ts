@@ -36,6 +36,15 @@ describe('Home BUY-only section', () => {
     expect(html).toContain('No BUY right now')
     expect(html).toContain('19 setup(s)')
     expect(html).not.toContain('home-os-inspect-link')
+    // Same block convention as Home's other cards: a headline and a detail line.
+    expect(html).toMatch(/home-os-past buy-only-empty"><strong>Nothing to buy today<\/strong><small>/)
+  })
+
+  it('is its own block, never a second .home-os-card', () => {
+    const html = renderToStaticMarkup(createElement(BuyOnlyPanel, {
+      section: { rows: [], count: 0, verified: true, withheld_count: 0 },
+    }))
+    expect(html).not.toContain('home-os-card')
   })
 
   it('is rendered first on Home, before the operating-system card', () => {
