@@ -85,3 +85,68 @@ def test_stale_signal_calibration_warns(tmp_path):
     stamp = NOW.timestamp() - 82 * 86400
     os.utime(root / "signal_backtest.json", (stamp, stamp))
     assert _by_key(collect(now=NOW, logs=root, session_day=True))["signal_calibration"] == WARN
+
+
+def _keys(vitals):
+    return {v["key"]: v for v in vitals}
+
+
+def test_off_session_scan_older_than_last_close_is_stale_not_ok(tmp_path):
+    # Sunday 2026-11-15 20:30: the newest scan is Thursday's (host slept through Friday).
+    sunday = datetime(2026, 11, 15, 20, 30)
+    root = _logs(tmp_path)
+    scan = root / "product" / "latest_momentum_scan.json"
+    thursday = datetime(2026, 11, 12, 18, 23).timestamp()
+    os.utime(scan, (thursday, thursday))
+    vital = _keys(collect(now=sunday, logs=root, session_day=False))["scan_fresh"]
+    assert vital["status"] == WARN and "2026-11-13" in vital["detail"]
+
+
+def test_off_session_scan_after_last_close_is_ok(tmp_path):
+    sunday = datetime(2026, 11, 15, 20, 30)
+    root = _logs(tmp_path)
+    scan = root / "product" / "latest_momentum_scan.json"
+    friday_eod = datetime(2026, 11, 13, 18, 20).timestamp()
+    os.utime(scan, (friday_eod, friday_eod))
+    assert _keys(collect(now=sunday, logs=root, session_day=False))["scan_fresh"]["status"] == OK
+
+
+def test_scan_before_tonights_eod_rescan_is_not_flagged_early(tmp_path):
+    # 18:00 on a session day: today's EOD rescan is still due.
+    evening = datetime(2026, 11, 13, 18, 0)
+    root = _logs(tmp_path)
+    scan = root / "product" / "latest_momentum_scan.json"
+    midday = datetime(2026, 11, 13, 15, 0).timestamp()
+    os.utime(scan, (midday, midday))
+    assert _keys(collect(now=evening, logs=root, session_day=True))["scan_fresh"]["status"] == OK
+
+
+def test_official_history_vital_states(tmp_path):
+    root = _logs(tmp_path)
+    sunday = datetime(2026, 11, 15, 20, 30)
+    friday_evening = datetime(2026, 11, 13, 18, 30)
+    pending = {"reason_code": "HISTORY_PUBLICATION_PENDING", "available_session": "2026-11-12",
+               "completed_session": "2026-11-13"}
+    missed = _keys(collect(now=sunday, logs=root, session_day=False, history=pending))["official_history"]
+    assert missed["status"] == WARN and "2026-11-13" in missed["detail"]
+    publishing = _keys(collect(now=friday_evening, logs=root, session_day=True, history=pending))
+    assert publishing["official_history"]["status"] == OK
+    current = {"reason_code": "HISTORY_CURRENT", "available_session": "2026-11-13",
+               "completed_session": "2026-11-13"}
+    assert _keys(collect(now=sunday, logs=root, session_day=False, history=current))["official_history"]["status"] == OK
+    stale = {"reason_code": "HISTORY_STALE", "available_session": "2026-11-05",
+             "completed_session": "2026-11-13"}
+    assert _keys(collect(now=sunday, logs=root, session_day=False, history=stale))["official_history"]["status"] == FAIL
+
+
+def test_foreign_logs_root_without_history_skips_the_canonical_probe(tmp_path):
+    assert "official_history" not in _keys(collect(now=NOW, logs=_logs(tmp_path), session_day=True))
+
+
+def test_watch_runs_in_session_and_after_the_eod_window():
+    from product.system_vitals import watch_due
+
+    assert watch_due(datetime(2026, 11, 13, 10, 0))
+    assert watch_due(datetime(2026, 11, 15, 20, 30))
+    assert not watch_due(datetime(2026, 11, 13, 18, 30))
+    assert not watch_due(datetime(2026, 11, 14, 3, 0))

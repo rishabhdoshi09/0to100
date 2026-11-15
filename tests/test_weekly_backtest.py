@@ -66,3 +66,44 @@ def test_thin_backtest_never_overwrites_calibration(monkeypatch, tmp_path):
     monkeypatch.setattr(store, "store_symbols", lambda: [])
     SB.run_backtest()
     assert json.loads(out.read_text()) == {"signals": {"KEEP": {}}}
+
+
+def test_sunday_catches_up_a_saturday_the_host_slept_through(monkeypatch, tmp_path):
+    # Owner's Mac slept 2026-11-12 20:05 -> 2026-11-15 20:22: Saturday never ticked.
+    started = _patch(monkeypatch, tmp_path, age_days=86)
+    assert Supervisor._maybe_weekly_backtest(_stub(), datetime(2026, 11, 15, 20, 30), set()) is True
+    assert started == [1]
+
+
+def test_exchange_holiday_counts_as_a_closed_day(monkeypatch, tmp_path):
+    started = _patch(monkeypatch, tmp_path)
+    holidays = {"2026-11-24"}
+    assert Supervisor._maybe_weekly_backtest(_stub(), datetime(2026, 11, 24, 11), holidays) is True
+    assert started == [1]
+
+
+def test_weeknight_only_when_two_cadences_overdue(monkeypatch, tmp_path):
+    tuesday_night = datetime(2026, 11, 17, 21, 0)
+    started = _patch(monkeypatch, tmp_path, age_days=10)
+    assert Supervisor._maybe_weekly_backtest(_stub(), tuesday_night, set()) is False
+    started = _patch(monkeypatch, tmp_path, age_days=14)
+    assert Supervisor._maybe_weekly_backtest(_stub(), tuesday_night, set()) is True
+    assert started == [1]
+    # Never during the session or the morning run-up, however overdue.
+    for hour in (5, 9, 12, 15, 19):
+        started = _patch(monkeypatch, tmp_path, age_days=90)
+        assert Supervisor._maybe_weekly_backtest(_stub(), datetime(2026, 11, 17, hour), set()) is False
+        assert started == []
+
+
+def test_a_run_that_did_not_save_is_not_relaunched_every_tick(monkeypatch, tmp_path):
+    started = _patch(monkeypatch, tmp_path, age_days=86)
+    stub = _stub()
+    sunday = datetime(2026, 11, 15, 20, 30)
+    assert Supervisor._maybe_weekly_backtest(stub, sunday, set()) is True
+    # The run ended without writing (file still 86 days old): the next ticks wait.
+    assert Supervisor._maybe_weekly_backtest(stub, sunday, set()) is False
+    assert started == [1]
+    stub._backtest_launched_at -= Supervisor.BACKTEST_RETRY_S + 1
+    assert Supervisor._maybe_weekly_backtest(stub, sunday, set()) is True
+    assert started == [1, 1]

@@ -31,6 +31,13 @@ _started = False
 _lock = threading.Lock()
 
 
+def _safe_error(exc: BaseException) -> str:
+    """Exception text with the bot token masked (requests embeds the URL)."""
+    from core.redact import redact_secrets
+
+    return redact_secrets(str(exc))[:160]
+
+
 def build_setup_keyboard(setups: list[dict]) -> dict:
     """Inline keyboard: one row per setup with paper-trade + watchlist."""
     rows = []
@@ -150,7 +157,7 @@ def _handle_message(msg: dict, token: str, allowed_chat: str) -> None:
                                 "parse_mode": "HTML"}, timeout=8)
             log.info("telegram_command", cmd=text.split()[0])
     except Exception as exc:
-        log.debug("telegram_command_error", error=str(exc)[:100])
+        log.debug("telegram_command_error", error=_safe_error(exc))
 
 
 def _listener() -> None:
@@ -189,9 +196,9 @@ def _listener() -> None:
             # network must not fill the log at 6 lines/minute.
             if fails == 3:
                 log.warning("telegram_listener_offline_backoff",
-                            error=str(exc)[:100])
+                            error=_safe_error(exc))
             elif fails < 3:
-                log.debug("telegram_listener_hiccup", error=str(exc)[:100])
+                log.debug("telegram_listener_hiccup", error=_safe_error(exc))
             time.sleep(60 if fails >= 3 else 10)
 
 

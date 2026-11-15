@@ -9,7 +9,8 @@ thing that should have happened today actually happen?".
 
 collect() answers that from durable artifacts only (cheap reads, no network):
 each vital is OK / WARN / FAIL with a plain reason. run_vitals_watch() checks
-every 15 minutes during NSE sessions (09:45-16:30 IST), persists
+every 15 minutes during NSE sessions (09:45-16:30 IST) and again in the
+evening after the EOD window (20:15-23:00 IST), persists
 logs/product/system_vitals.json for the desk, and sends one Telegram alert per
 vital per day when it newly fails or warns.
 """
@@ -47,8 +48,50 @@ def _ro(path: Path):
     return sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=10)
 
 
+def _session_boundary(clock: datetime, session: str, hour: int, minute: int) -> float | None:
+    """Epoch of ``session`` at hour:minute in the clock's own timezone."""
+    try:
+        day = datetime.fromisoformat(str(session)[:10]).date()
+        return datetime(day.year, day.month, day.day, hour, minute, tzinfo=clock.tzinfo).timestamp()
+    except Exception:
+        return None
+
+
+def _last_completed_session(clock: datetime) -> str:
+    try:
+        from research.autonomy.schedules import last_completed_session_date
+        return str(last_completed_session_date(clock) or "")
+    except Exception:
+        return ""
+
+
+def _official_history_vital(clock: datetime, stamp: float, history: dict[str, Any]) -> dict[str, str]:
+    """Is the last completed session's official archive on disk?
+
+    A missing archive is normal between the close and its EOD publication,
+    so it only warns once that session's EOD window (to 20:00 IST) is over:
+    then the host missed the window (asleep, offline) and nothing will fetch
+    it until the next window unless someone notices.
+    """
+    label = "Official NSE history (bhavcopy)"
+    reason = str(history.get("reason_code") or "")
+    available = str(history.get("available_session") or "unknown")
+    completed = str(history.get("completed_session") or history.get("expected_latest_completed_session") or "")
+    if reason == "HISTORY_CURRENT":
+        return _vital("official_history", label, OK, f"current through {available}")
+    if reason == "HISTORY_PUBLICATION_PENDING":
+        due = _session_boundary(clock, completed, 20, 0)
+        if due is not None and stamp > due:
+            return _vital("official_history", label, WARN,
+                          f"{completed} archive missing after its EOD window; latest {available}")
+        return _vital("official_history", label, OK, f"{completed} archive publishing; latest {available}")
+    return _vital("official_history", label, FAIL,
+                  f"{reason or 'UNKNOWN'}: latest {available}, expected {completed or 'unknown'}")
+
+
 def collect(*, now: datetime | None = None, logs: Path | None = None,
-            session_day: bool | None = None) -> list[dict[str, str]]:
+            session_day: bool | None = None,
+            history: dict[str, Any] | None = None) -> list[dict[str, str]]:
     from core.market_clock import now_ist
 
     clock = now or now_ist()
@@ -91,13 +134,25 @@ def collect(*, now: datetime | None = None, logs: Path | None = None,
     except Exception as exc:
         vitals.append(_vital("paper_cycles", "Paper cycles", WARN, f"unreadable: {type(exc).__name__}"))
 
-    # 3. Scan freshness during the session.
+    # 3. Scan freshness. In session: saved within the hour. Off-session: the
+    # scan must postdate the last completed session's close once that
+    # session's EOD rescan window is over -- a 3-day-old scan after a missed
+    # Friday is stale, not "OK" (Invariant 2).
     age = _age_hours(root / "product" / "latest_momentum_scan.json", stamp)
     if age is None:
         vitals.append(_vital("scan_fresh", "Market scan", FAIL if in_session else WARN, "no saved scan"))
     else:
         status = FAIL if in_session and age > 1.0 else OK
-        vitals.append(_vital("scan_fresh", "Market scan", status, f"latest scan saved {age * 60:.0f} min ago"))
+        detail = f"latest scan saved {age * 60:.0f} min ago"
+        if not in_session:
+            last = _last_completed_session(clock)
+            closed_at = _session_boundary(clock, last, 15, 30) if last else None
+            eod_over = _session_boundary(clock, last, 20, 0) if last else None
+            saved_at = stamp - age * 3600.0
+            if closed_at is not None and eod_over is not None and stamp > eod_over and saved_at < closed_at:
+                status = WARN
+                detail += f"; predates the {last} close"
+        vitals.append(_vital("scan_fresh", "Market scan", status, detail))
 
     # 4. F&O desk refreshes during the session.
     try:
@@ -127,6 +182,19 @@ def collect(*, now: datetime | None = None, logs: Path | None = None,
         else:
             status = WARN if age > max_h else OK
             vitals.append(_vital(key, label, status, f"updated {age / 24:.1f} day(s) ago (limit {max_h / 24:.0f})"))
+
+    # 6. Official completed-session archive. Read from the canonical runtime;
+    # a caller inspecting another logs root must pass ``history`` itself.
+    if history is None and logs is None:
+        try:
+            from data.bhavcopy_runtime import official_history_freshness
+            history = official_history_freshness(now=clock, load_cache=False, require_store=False)
+        except Exception as exc:
+            vitals.append(_vital("official_history", "Official NSE history (bhavcopy)", WARN,
+                                 f"unreadable: {type(exc).__name__}"))
+            history = None
+    if history is not None:
+        vitals.append(_official_history_vital(clock, stamp, dict(history)))
     return vitals
 
 
@@ -175,6 +243,17 @@ def _telegram(message: str) -> None:
     AlertEngine().send(message)
 
 
+def watch_due(clock: datetime) -> bool:
+    """Session hours, plus an evening pass after the EOD window.
+
+    The evening pass is what reports a missed EOD (official archive, EOD
+    rescan, reference upkeep) the same night -- or on the first evening the
+    host is awake again after sleeping through one.
+    """
+    hm = (clock.hour, clock.minute)
+    return (9, 45) <= hm <= (16, 30) or (20, 15) <= hm <= (23, 0)
+
+
 def run_vitals_watch(stop: threading.Event, *, send: Callable[[str], Any] | None = None,
                      poll_s: float = POLL_S) -> None:
     from core.market_clock import now_ist
@@ -183,7 +262,7 @@ def run_vitals_watch(stop: threading.Event, *, send: Callable[[str], Any] | None
     while not stop.is_set():
         try:
             clock = now_ist()
-            if (9, 45) <= (clock.hour, clock.minute) <= (16, 30):
+            if watch_due(clock):
                 vitals = collect(now=clock)
                 persist(vitals)
                 alerter.observe(vitals, clock.date().isoformat())

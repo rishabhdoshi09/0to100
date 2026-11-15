@@ -535,8 +535,8 @@ def _probe_flows(market: str) -> dict:
     if market == "US":
         return {}
     try:
-        from data.institutional_flows import get_flows
-        return get_flows() or {}
+        from data.institutional_flows import get_flows, usable_flows
+        return usable_flows(get_flows())
     except Exception:
         return {}
 

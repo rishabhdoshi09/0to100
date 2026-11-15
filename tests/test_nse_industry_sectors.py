@@ -95,7 +95,7 @@ def test_weekly_refresh_records_and_then_stays_fresh(tmp_path):
         return [ROWS]
 
     first = refresh_industry_map(path=path, fetch=fetch)
-    assert first == {"symbols": 3, "changed": 3}
+    assert first == {"symbols": 3, "changed": 3, "source": "NSE equity-stockIndices meta.industry"}
     assert industry_of("TCS", path=path) == "COMPUTERS - SOFTWARE"
     assert refresh_industry_map(path=path, fetch=fetch)["skipped"] == "fresh"
     assert fetched == [1]
@@ -139,3 +139,21 @@ def test_csv_fallback_used_when_api_returns_nothing(monkeypatch):
     monkeypatch.setattr(ni, "_fetch_api_rows", lambda: [])
     monkeypatch.setattr(ni, "_fetch_constituent_rows", lambda: [ni.rows_from_constituent_csv(CSV)])
     assert len(ni._fetch_index_rows()[0]) == 4
+
+
+def test_csv_fallback_is_labelled_as_csv_not_api(monkeypatch, tmp_path):
+    import json
+
+    import data.nse_industry as ni
+
+    monkeypatch.setattr(ni, "_network_allowed", lambda: True)
+    monkeypatch.setattr(ni, "_fetch_api_rows", lambda: [])
+    monkeypatch.setattr(ni, "_fetch_constituent_rows", lambda: [ni.rows_from_constituent_csv(CSV)])
+    path = tmp_path / "map.json"
+    result = ni.refresh_industry_map(path=path)
+    assert result["source"] == ni.CSV_SOURCE
+    assert json.loads(path.read_text())["source"] == ni.CSV_SOURCE
+
+    monkeypatch.setattr(ni, "_fetch_api_rows", lambda: [[{"symbol": "INFY", "meta": {"industry": "IT"}}]])
+    ni.refresh_industry_map(path=path, force=True)
+    assert json.loads(path.read_text())["source"] == ni.API_SOURCE

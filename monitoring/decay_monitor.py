@@ -252,4 +252,6 @@ class ModelDecayMonitor:
                 timeout=10,
             )
         except Exception as exc:
-            log.warning("telegram_alert_failed", error=str(exc))
+            from core.redact import redact_secrets
+
+            log.warning("telegram_alert_failed", error=redact_secrets(exc))

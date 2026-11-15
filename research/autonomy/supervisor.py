@@ -240,6 +240,8 @@ class Supervisor:
           forward_*          -> once/session forward settlement/learning/research
           hist_*             -> closed-market historical paper/learning/research
           *:eod              -> once/session official-data recovery
+          bhavcopy_update:<day>:catchup:<hour>
+                             -> missed-EOD archive recovery after host downtime
           eod:scan:<active>  -> the EOD rescan of the current snapshot
           index_warmup:<day> -> tonight's/last session's reference upkeep
 
@@ -321,7 +323,7 @@ class Supervisor:
                 elif job.job_type == SCH.DATA_REFRESH:
                     retire = False  # current session + eod refresh are both valid
                 elif job.job_type == SCH.BHAVCOPY_UPDATE:
-                    retire = not key.endswith(":eod")
+                    retire = not (key.endswith(":eod") or ":catchup:" in key)
                 elif job.job_type in {
                     SCH.CORPORATE_ACTIONS,
                     SCH.UNIVERSE_HISTORY,
@@ -937,7 +939,7 @@ class Supervisor:
 
         # Closed market: keep official completed-session data current once the
         # exchange publication window opens. These jobs never auto-chain a scan.
-        self._maybe_weekly_backtest(now_ist)
+        self._maybe_weekly_backtest(now_ist, holidays)
         if SCH.in_eod_window(now_ist, holidays):
             session_date = now_ist.date().isoformat()
             self.jobs.enqueue(
@@ -950,6 +952,8 @@ class Supervisor:
                 critical=True,
             )
             self._enqueue_reference_upkeep(session_date)
+        else:
+            self._enqueue_missed_eod_catchup(now_ist, holidays)
 
         # First preserve the genuine forward-paper learning loop once per session.
         # A BLOCKED outcome job does not prevent historical backfill from running.
@@ -1330,16 +1334,48 @@ class Supervisor:
 
     BACKTEST_MAX_AGE_S = 6 * 24 * 3600
 
-    def _maybe_weekly_backtest(self, now_ist) -> bool:
-        """Saturday refresh of the scanner's walk-forward signal calibration.
+    BACKTEST_OVERDUE_S = 13 * 24 * 3600
+    # A launched run that ends without saving (an exception, a thin store)
+    # leaves the file old; without this the closed-market tick would relaunch
+    # it every 15 s for the rest of the window.
+    BACKTEST_RETRY_S = 6 * 3600
+
+    @classmethod
+    def _backtest_window_open(cls, now_ist, holidays=None, *, age_s: float | None = None) -> bool:
+        """When the weekly calibration may run.
+
+        The normal slot is the weekend from Saturday 09:00 IST (Friday's
+        official archive is in by then). Saturday alone was not enough: on the
+        owner's Mac the host slept lid-closed on battery from Thursday night to
+        Sunday evening (2026-11-12 -> 2026-11-15), so the one Saturday chance
+        passed and calibration stayed 86 days old. Any non-session day after
+        that point (Sunday, an exchange holiday) also qualifies, and a run that
+        is overdue by two cadences may use a weeknight 20:00-05:00 IST, well
+        clear of the EOD window and the morning scan.
+        """
+        weekday, hour = now_ist.weekday(), now_ist.hour
+        if weekday == 5:
+            return hour >= 9
+        if not SCH._is_session_day(now_ist, holidays):
+            return True
+        overdue = age_s is None or age_s >= cls.BACKTEST_OVERDUE_S
+        return overdue and (hour >= 20 or hour < 5)
+
+    def _maybe_weekly_backtest(self, now_ist, holidays=None) -> bool:
+        """Weekly refresh of the scanner's walk-forward signal calibration.
 
         logs/signal_backtest.json drives the scanner's score calibration; the
         idle trigger that refreshed it stopped (last run 2026-08-05), so scores
-        were weighted by an 80-day-old backtest. Runs at most weekly, only on a
-        Saturday from 09:00 IST with the market closed, in a background thread,
-        and never on an unloaded history store.
+        were weighted by an 80-day-old backtest. Runs at most weekly, only in
+        the closed-market window from ``_backtest_window_open``, in a
+        background thread, and never on an unloaded history store.
         """
-        if now_ist.weekday() != 5 or now_ist.hour < 9:
+        # Cheap clock gate first (an unknown age is treated as overdue, the
+        # most permissive case) so session-day ticks never stat the file.
+        if not Supervisor._backtest_window_open(now_ist, holidays):
+            return False
+        launched = float(getattr(self, "_backtest_launched_at", 0.0) or 0.0)
+        if launched and time.time() - launched < Supervisor.BACKTEST_RETRY_S:
             return False
         try:
             from scan import signal_backtest as SB
@@ -1347,7 +1383,10 @@ class Supervisor:
             if (SB.get_state() or {}).get("running"):
                 return False
             out = Path(SB._OUT)
-            if out.exists() and time.time() - out.stat().st_mtime < self.BACKTEST_MAX_AGE_S:
+            age_s = time.time() - out.stat().st_mtime if out.exists() else None
+            if age_s is not None and age_s < self.BACKTEST_MAX_AGE_S:
+                return False
+            if not Supervisor._backtest_window_open(now_ist, holidays, age_s=age_s):
                 return False
             from data.bhavcopy_store import store_symbols
             if len(store_symbols()) < SB.MIN_SYMBOLS_TO_SAVE:
@@ -1356,6 +1395,7 @@ class Supervisor:
                 if len(store_symbols()) < SB.MIN_SYMBOLS_TO_SAVE:
                     return False
             SB.run_in_background()
+            self._backtest_launched_at = time.time()
             return True
         except Exception:
             return False
@@ -1378,6 +1418,51 @@ class Supervisor:
                 self.jobs.enqueue(job_type, idempotency_key=key)
             except Exception:
                 continue
+
+    def _enqueue_missed_eod_catchup(self, now_ist, holidays=None) -> str | None:
+        """Recover a completed session whose EOD window the host slept through.
+
+        The official archive is fetched only inside the same-day EOD window
+        (18:05-20:00 IST). On the owner's Mac the host slept lid-closed on
+        battery from Thursday 2026-11-12 20:05 until Sunday 20:22, so Friday's
+        window never ran: Friday's bhavcopy, its outcome resolution, the
+        corporate-action and index upkeep all waited for Monday, the desk
+        showed Thursday's scan all weekend, and the closed-market tick had no
+        path that would ever notice.
+
+        When the last completed session's official archive is still missing
+        and that session's own EOD window has passed, enqueue the official
+        bhavcopy update and the reference upkeep for that session. The
+        bhavcopy key is bucketed by hour, so a still-unpublished archive is
+        retried at most hourly and the work stops as soon as the archive
+        lands. It never chains a scan (broker data still needs the owner's
+        login) and never touches paper or live money.
+        """
+        try:
+            session_date = SCH.last_completed_session_date(now_ist, holidays)
+        except Exception:
+            return None
+        if not session_date:
+            return None
+        if session_date == now_ist.date().isoformat() and now_ist.time() <= SCH.EOD_WINDOW_END:
+            # Today's archive belongs to today's EOD window, not to recovery.
+            return None
+        try:
+            from product.readiness import official_history
+
+            hist = official_history() or {}
+        except Exception:
+            return None
+        available = str(hist.get("available_session") or hist.get("latest_date") or "")[:10]
+        if not available or available >= session_date:
+            return None
+        key = SCH.catchup_bhavcopy_key(session_date, now_ist)
+        try:
+            self.jobs.enqueue(SCH.BHAVCOPY_UPDATE, idempotency_key=key)
+        except Exception:
+            return None
+        self._enqueue_reference_upkeep(session_date)
+        return key
 
     def _revive_blocked_auth(self, session_date: str) -> bool:
         """Re-check today's broker session after it blocked on CREDENTIAL_UPDATE.

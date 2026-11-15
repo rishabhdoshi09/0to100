@@ -241,6 +241,11 @@ def eod_bhavcopy_key(session_date: str) -> str:
     return f"bhavcopy_update:{session_date}:eod"
 
 
+def catchup_bhavcopy_key(session_date: str, now_ist) -> str:
+    """Missed-EOD recovery of one session's official archive, at most hourly."""
+    return f"bhavcopy_update:{session_date}:catchup:{now_ist.strftime('%Y-%m-%dT%H')}"
+
+
 def instrument_key(session_date: str) -> str:
     return f"instrument_refresh:{session_date}"
 

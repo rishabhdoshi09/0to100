@@ -146,6 +146,30 @@ def _fetch() -> dict:
     return out
 
 
+#: Older than this, flows are not "today's" context any more. One fetch can
+#: lag a session (NSE publishes FII/DII in the evening), so allow ~1.5 days.
+USABLE_MAX_AGE_S = 36 * 3600
+
+
+def usable_flows(data: dict | None, *, now: float | None = None) -> dict:
+    """``data`` when it was fetched recently enough to present as current, else {}.
+
+    get_flows() falls back to the last cache on a failed fetch. The owner's
+    cache was last written 2026-08-26, so a morning brief built on it would
+    have announced August's FII/DII net and "bulk-deal buying aaj" as today's
+    (Invariant 2: stale must look stale -- here, it must not be shown at all).
+    """
+    if not isinstance(data, dict) or not data:
+        return {}
+    try:
+        age = (time.time() if now is None else float(now)) - float(data.get("ts", 0) or 0)
+    except (TypeError, ValueError):
+        return {}
+    if age < 0 or age > USABLE_MAX_AGE_S:
+        return {}
+    return data
+
+
 def get_flows(max_age_s: int = _TTL_S) -> dict:
     """Cached institutional flows: {fii_dii: {...}|absent, bulk_deals: [...],
     bulk_buys: [...]}. Cache-first (3h TTL); fetch fail → purana cache

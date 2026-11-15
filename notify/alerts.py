@@ -43,6 +43,12 @@ _TYPE_EMOJI = {
 }
 
 
+def _redact(text: str) -> str:
+    from core.redact import redact_secrets
+
+    return redact_secrets(text)
+
+
 class AlertManager:
     """
     Sends alerts via Telegram (primary) with structured-log fallback.
@@ -192,9 +198,9 @@ class AlertManager:
             if resp.status_code == 200 and resp.json().get("ok"):
                 log.debug("telegram_sent")
                 return True
-            log.warning("telegram_api_error", status=resp.status_code, body=resp.text[:200])
+            log.warning("telegram_api_error", status=resp.status_code, body=_redact(resp.text[:200]))
         except Exception as exc:
-            log.warning("telegram_request_exception", error=str(exc))
+            log.warning("telegram_request_exception", error=_redact(str(exc)))
         return False
 
 

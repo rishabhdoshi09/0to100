@@ -180,13 +180,18 @@ class AlertEngine:
                 self.last_message_ids.append(message_id)
                 self.last_error = ""
                 return True
-            detail = (resp.text or "")[:180]
+            from core.redact import redact_secrets
+
+            detail = redact_secrets((resp.text or "")[:180])
             self.last_error = f"HTTP {resp.status_code}: {detail}"
             logger.warning("Telegram send failed: %s", self.last_error)
             print(f"[TELEGRAM] send {self.last_error}", flush=True)
             return False
         except Exception as exc:
-            self.last_error = f"{type(exc).__name__}: {exc}"
+            # requests embeds the URL (and so the bot token) in its message.
+            from core.redact import redact_secrets
+
+            self.last_error = redact_secrets(f"{type(exc).__name__}: {exc}")
             logger.warning("Telegram send failed: %s", self.last_error)
             print(f"[TELEGRAM] send error: {self.last_error}", flush=True)
             return False

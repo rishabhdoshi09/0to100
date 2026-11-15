@@ -110,10 +110,18 @@ def industries_from_index_rows(rows: Iterable[Mapping[str, Any]]) -> dict[str, s
     return out
 
 
-def record_industries(found: Mapping[str, str], *, path: Path | None = None) -> int:
+API_SOURCE = "NSE equity-stockIndices meta.industry"
+CSV_SOURCE = "NSE index constituent CSV Industry column"
+
+
+def record_industries(found: Mapping[str, str], *, path: Path | None = None,
+                      source: str = API_SOURCE) -> int:
     """Merge newly observed official labels into the persisted map.
 
-    Returns the number of symbols added or changed. Never raises.
+    ``source`` names where this batch came from; the file's label always
+    describes the latest write (it said "API" even when the CSV fallback
+    filled the map). Returns the number of symbols added or changed. Never
+    raises.
     """
     if not found:
         return 0
@@ -130,7 +138,7 @@ def record_industries(found: Mapping[str, str], *, path: Path | None = None) -> 
         from core.atomic_io import atomic_write_text
 
         atomic_write_text(target, json.dumps({
-            "source": "NSE equity-stockIndices meta.industry",
+            "source": str(source or API_SOURCE),
             "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "industries": dict(sorted(industries.items())),
         }, indent=1))
@@ -185,19 +193,22 @@ def refresh_industry_map(*, force: bool = False, path: Path | None = None, fetch
         return {"skipped": "fresh", "age_h": round(age / 3600.0, 1)}
     if fetch is None and not _network_allowed():
         return {"skipped": "network_disabled"}
-    rows_by_index = fetch() if fetch is not None else _fetch_index_rows()
+    if fetch is not None:
+        rows_by_index, source = fetch(), API_SOURCE
+    else:
+        rows_by_index, source = _fetch_index_rows_with_source()
     found: dict[str, str] = {}
     for rows in rows_by_index:
         found.update(industries_from_index_rows(rows))
     if not found:
         return {"skipped": "no_rows"}
-    changed = record_industries(found, path=target)
+    changed = record_industries(found, path=target, source=source)
     try:
         if target.exists():
             os.utime(target, None)          # checked now, even when unchanged
     except OSError:
         pass
-    return {"symbols": len(found), "changed": changed}
+    return {"symbols": len(found), "changed": changed, "source": source}
 
 
 _CONSTITUENT_CSVS = (
@@ -244,11 +255,15 @@ def _fetch_constituent_rows() -> list[list[dict]]:
     return out
 
 
-def _fetch_index_rows() -> list[list[dict]]:
+def _fetch_index_rows_with_source() -> tuple[list[list[dict]], str]:
     rows = _fetch_api_rows()
     if any(rows):
-        return rows
-    return _fetch_constituent_rows()
+        return rows, API_SOURCE
+    return _fetch_constituent_rows(), CSV_SOURCE
+
+
+def _fetch_index_rows() -> list[list[dict]]:
+    return _fetch_index_rows_with_source()[0]
 
 
 def _fetch_api_rows() -> list[list[dict]]:

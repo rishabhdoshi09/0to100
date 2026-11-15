@@ -19,10 +19,23 @@ def _quoted_literals(text: str):
     inside ``${...}``, producing fake API paths such as
     ``/api/controls/${action === 'history' ``. This tiny lexer only needs to find the
     matching outer quote; it is intentionally not a JavaScript parser.
+
+    Comments are skipped: an apostrophe in prose (``the server's cache`` in a
+    ``/** ... */`` doc comment, 2026-11-12) otherwise opened a fake string that
+    swallowed the next 124 lines of productApi.ts, hiding /api/radar-home,
+    /api/recommendations-workspace and others from the cross-wire audit.
     """
     i = 0
     size = len(text)
     while i < size:
+        if text.startswith("//", i):
+            end = text.find("\n", i)
+            i = size if end < 0 else end + 1
+            continue
+        if text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            i = size if end < 0 else end + 2
+            continue
         quote = text[i]
         if quote not in {"'", '"', '`'}:
             i += 1
@@ -126,3 +139,16 @@ def test_template_literal_scanner_keeps_inner_quotes_inside_expression():
     literals = list(_quoted_literals(text))
     assert "/api/controls/${action === 'history' ? 'A' : 'B'}" in literals
     assert _normalise(next(item for item in literals if item.startswith('/api/'))) == "/api/controls/{}"
+
+
+def test_comment_apostrophes_never_hide_later_literals():
+    text = (
+        "/** `fresh` bypasses the server's short cache. */\n"
+        "// don't refetch here\n"
+        "const a = fetch('/api/radar-home')\n"
+        "const b = 'https://example.test/x' // trailing note's apostrophe\n"
+        "const c = fetch('/api/research-director')\n"
+    )
+    literals = list(_quoted_literals(text))
+    assert "/api/radar-home" in literals and "/api/research-director" in literals
+    assert "https://example.test/x" in literals
