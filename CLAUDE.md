@@ -69,8 +69,9 @@ terminal_product_api.py   # FastAPI :8765
 │   │                     #   deep in laggard territory; thins mediocre
 │   │                     #   laggards, never blanket-vetoes the category)
 │   ├── bulk_fetcher.py   # prefetch(): bhav store first, yfinance last resort
-│   ├── signal_backtest.py# Walk-forward per-signal accuracy → JSON report →
-│   │                     #   score calibration + per-card combo_edge
+│   ├── signal_backtest.py# Walk-forward per-signal AND per-combination
+│   │                     #   expectancy + date-clustered 95% lower bound →
+│   │                     #   JSON report (schema 2) → calibration + evidence gate
 │   ├── live_edge.py      # LIVE feedback loop: mines signal_log's real tracked
 │   │                     #   outcomes → per-signal / per-regime / per-combo
 │   │                     #   expectancy (R). Blended CONSERVATIVELY into scorer
@@ -221,11 +222,21 @@ terminal_product_api.py   # FastAPI :8765
    portfolio meter enforce; DANGER warns but the user keeps the final click.
 6. **Evidence over vibes** — signal weights come from the walk-forward
    backtest; <30 trades = no claim. On the live scanner a BUY needs a
-   POSITIVE measured edge: the setup's evidenced signals must average
-   >= +0.05R/trade net of costs (`QT_MIN_BUY_EDGE_R`), else WATCH with the
-   reason on the card; the 52W/HTF shortcut needs its own evidence too.
-   Historical replay and the backtest run with `evidence_gate=False`, because
-   gating them by today's backtest would be hindsight.
+   PROVEN measured edge: mean >= +0.05R/trade net of costs
+   (`QT_MIN_BUY_EDGE_R`) AND a one-sided 95% lower bound (date-clustered
+   standard error) above zero, judged on the exact signal combination's own
+   record when it has >= 30 trades, else the average of its signals. Else
+   WATCH with the reason on the card; the 52W/HTF shortcut needs the same
+   proof. Historical replay and the backtest run with `evidence_gate=False`,
+   because gating them by today's backtest would be hindsight. Withheld
+   setups are forward-tracked as `EDGE_GATED_SHADOW` rows, never on the
+   Report Card.
+8. **One rulebook for "did it work"** — `core/evaluation_spec.py`:
+   10-session horizon, breakeven trail at +2%, gap-aware fills/exits,
+   `simulate_trade()`. The backtest, the forward outcome tracker, the
+   decision journal and the paper book all use it; never give one source
+   its own horizon or exit rules again. Paper never fills at an entry the
+   market has not traded.
 7. **Every BUY is outcome-tracked** — Report Card equity curve decides
    whether the system deserves real money.
 
