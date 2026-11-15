@@ -411,7 +411,10 @@ class TestUnifiedScanner:
     def _df(self, close, vol=None):
         n = len(close)
         vol = vol if vol is not None else np.full(n, 2e6)
-        idx = pd.date_range(end=pd.Timestamp(date.today()), periods=n, freq="B")
+        # Anchor on the last business day: with a weekend ``end`` pandas
+        # returns n-1 dates, so this fixture failed every Saturday/Sunday.
+        last_bday = pd.offsets.BDay().rollback(pd.Timestamp(date.today()))
+        idx = pd.date_range(end=last_bday, periods=n, freq="B")
         return pd.DataFrame({"close": close, "high": close * 1.01,
                              "low": close * 0.99, "volume": vol}, index=idx)
 
