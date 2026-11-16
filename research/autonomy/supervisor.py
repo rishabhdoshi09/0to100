@@ -1028,18 +1028,32 @@ class Supervisor:
                         )
                 except Exception:
                     pass
-                self.jobs.enqueue(
+                learning = self.jobs.enqueue(
                     SCH.LEARNING_CYCLE,
                     idempotency_key=SCH.historical_learning_key(batch_id),
                     input_snapshot_id=batch_id,
                 )
+                if self._finished_earlier(learning):
+                    # Learning for this batch already succeeded in an earlier
+                    # run; the deterministic key will never run it again.
+                    from product.historical_paper_loop import mark_learning_complete
+                    mark_learning_complete(batch_id)
+                else:
+                    self._retry_if_failed(learning, SCH.LEARNING_CYCLE,
+                                          SCH.historical_learning_key(batch_id), batch_id)
                 return
             if phase == "AWAITING_RESEARCH" and batch_id:
-                self.jobs.enqueue(
+                research = self.jobs.enqueue(
                     SCH.RESEARCH_CYCLE,
                     idempotency_key=SCH.historical_research_key(batch_id),
                     input_snapshot_id=batch_id,
                 )
+                if self._finished_earlier(research):
+                    from product.historical_paper_loop import mark_research_complete
+                    mark_research_complete(batch_id)
+                else:
+                    self._retry_if_failed(research, SCH.RESEARCH_CYCLE,
+                                          SCH.historical_research_key(batch_id), batch_id)
                 return
 
             # Learning/research may consume already-produced evidence, but heavy
@@ -1075,16 +1089,9 @@ class Supervisor:
                 return
 
 
-            nxt = peek_next_batch()
-            if nxt.get("available"):
-                bid = str(nxt.get("batch_id") or "")
-                if bid:
-                    self.jobs.enqueue(
-                        SCH.HISTORICAL_PAPER_CYCLE,
-                        idempotency_key=SCH.historical_paper_key(bid),
-                        input_snapshot_id=bid,
-                    )
-                    return
+            handled, nxt = self._schedule_replay_batch(peek_next_batch)
+            if handled:
+                return
 
             # No runnable historical batch is still a meaningful scheduler
             # state. Give the Research Director one idempotent chance to close,
@@ -1434,6 +1441,94 @@ class Supervisor:
                 self.jobs.enqueue(job_type, idempotency_key=key)
             except Exception:
                 continue
+
+    #: Batches recorded per tick when the loop re-proposes batches an earlier
+    #: run finished (222 such batches existed on the owner's Mac).
+    REPLAY_RECONCILE_MAX = 50
+
+    _FINISHED_OK = frozenset({JS.SUCCEEDED, JS.SKIPPED_IDEMPOTENT})
+    _FINISHED_BAD = frozenset({JS.PERMANENT_FAILED, JS.CANCELLED, "FAILED"})
+
+    def _finished_earlier(self, job) -> bool:
+        """An idempotent enqueue handed back a job that already succeeded."""
+        return str(getattr(job, "status", "") or "") in self._FINISHED_OK
+
+    def _schedule_replay_batch(self, peek) -> tuple[bool, dict]:
+        """Queue the next historical replay batch; (handled, last peek result).
+
+        A batch the loop proposes whose deterministic job already finished is
+        either recorded as processed (it completed in an earlier run) or
+        retried under a fresh daily key (it never completed). Without this the
+        loop re-proposed one finished batch forever: replay was IDLE on the
+        owner's Mac from 2026-11-06 with 1,600+ sessions still unreplayed.
+        """
+        nxt = dict(peek() or {})
+        reconciled = 0
+        try:
+            while nxt.get("available"):
+                bid = str(nxt.get("batch_id") or "")
+                if not bid:
+                    break
+                paper = self.jobs.enqueue(
+                    SCH.HISTORICAL_PAPER_CYCLE,
+                    idempotency_key=SCH.historical_paper_key(bid),
+                    input_snapshot_id=bid,
+                )
+                outcome = self._replay_batch_outcome(paper, bid)
+                if outcome == "COMPLETED_EARLIER" and reconciled < self.REPLAY_RECONCILE_MAX:
+                    from product.historical_paper_loop import reconcile_completed_batch
+
+                    reconcile_completed_batch(bid, list(nxt.get("sessions") or []))
+                    reconciled += 1
+                    nxt = dict(peek() or {})
+                    continue
+                if outcome == "FAILED_EARLIER":
+                    self._retry_if_failed(paper, SCH.HISTORICAL_PAPER_CYCLE,
+                                          SCH.historical_paper_key(bid), bid, force=True)
+                return True, nxt
+            return False, nxt
+        finally:
+            if reconciled:
+                self._incident(
+                    "HISTORICAL_REPLAY_RECONCILED",
+                    f"Recorded {reconciled} replay batch(es) completed in an earlier run as processed.",
+                )
+
+    def _retry_if_failed(self, job, job_type: str, key: str, batch_id: str, *, force: bool = False):
+        """Re-run a historical step whose deterministic job ended badly.
+
+        At most once per day per step (the retry key carries the date), so a
+        step that keeps failing cannot spin, and retry keys keep their
+        hist_* prefix (the handlers and legacy retirement key on it).
+        """
+        if not force and str(getattr(job, "status", "") or "") not in self._FINISHED_BAD:
+            return None
+        return self.jobs.enqueue(
+            job_type,
+            idempotency_key=f"{key}:retry:{self.deps.now_ist().date().isoformat()}",
+            input_snapshot_id=batch_id,
+        )
+
+    def _replay_batch_outcome(self, paper_job, batch_id: str) -> str:
+        """NEW | COMPLETED_EARLIER | FAILED_EARLIER for a replay batch's paper job.
+
+        COMPLETED_EARLIER needs the batch's learning to have succeeded too, so
+        a batch whose evidence was never learned is not silently skipped.
+        """
+        status = str(getattr(paper_job, "status", "") or "")
+        if status in self._FINISHED_BAD:
+            return "FAILED_EARLIER"
+        if status not in self._FINISHED_OK:
+            return "NEW"
+        try:
+            learning = self.jobs.find_by_type_and_key(
+                SCH.LEARNING_CYCLE, SCH.historical_learning_key(batch_id),
+            )
+        except Exception:
+            learning = None
+        if learning is not None and str(learning.status) == JS.SUCCEEDED:
+            return "COMPLETED_EARLIER"
+        return "FAILED_EARLIER"
 
     def _enqueue_missed_eod_catchup(self, now_ist, holidays=None) -> str | None:
         """Recover a completed session whose EOD window the host slept through.

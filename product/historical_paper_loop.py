@@ -1393,6 +1393,41 @@ def ensure_next_batch_started(
         return {"status": "RUNNING", "batch_id": bid, "sessions": list(batch["sessions"])}
 
 
+def reconcile_completed_batch(
+    batch_id: str,
+    sessions: Sequence[str],
+    *,
+    state_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Record a batch that already completed in an earlier run as processed.
+
+    The supervisor's job ids are deterministic per batch. When the state's
+    processed-session list lost sessions that an earlier run had fully
+    replayed, learned and researched (owner's Mac: batches from 2026-09-21),
+    peek_next_batch proposed that batch again, the job store returned the old
+    finished job, nothing ran, nothing was recorded -- and the same batch was
+    proposed forever (replay IDLE from 2026-11-06). Only touches an IDLE loop.
+    """
+    state = load_state(state_path)
+    if state["phase"] != PHASE_IDLE:
+        return state
+    days = {str(day)[:10] for day in (sessions or []) if len(str(day)) >= 10}
+    if not days:
+        return state
+    processed = set(state.get("processed_sessions") or []) | days
+    return _save_state({
+        "processed_sessions": sorted(processed),
+        "last_completed_session": max(processed),
+        "last_error": "",
+        "selection_details": {
+            "reconciled_batch_id": str(batch_id),
+            "reconciled_sessions": sorted(days),
+            "reconciled_at": _now(),
+            "reason": "batch already completed in an earlier run",
+        },
+    }, state_path)
+
+
 def mark_learning_complete(batch_id: str, *, state_path: str | Path | None = None) -> dict[str, Any]:
     state = load_state(state_path)
     if (
