@@ -290,6 +290,15 @@ def card_from_row(
         "reco_tier": scored.get("reco_tier") or "watch",
         "reco_tier_label": scored.get("reco_tier_label") or "Watch",
         "entry_state": scored.get("entry_state") or "watch",
+        # Scanner evidence gate (Invariant 6). Without these the card could not
+        # show that a technically-ready setup was withheld for lack of a proven
+        # edge, and the paper learning lane could never explore one (it saw
+        # 94 cards and took nothing on 2026-11-16).
+        "edge_gated": bool(scored.get("edge_gated")),
+        "edge_r": scored.get("edge_r"),
+        "edge_lower_r": scored.get("edge_lower_r"),
+        "edge_source": str(scored.get("edge_source") or ""),
+        "chase_risk": bool(scored.get("chase_risk")),
         "stock_quality": scored.get("stock_quality") or "Unmeasured",
         "timing": scored.get("timing") or "Not ready",
         "conflicts": list(scored.get("conflicts") or []),
