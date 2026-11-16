@@ -512,7 +512,45 @@ def _startup_prepare_product() -> None:
 
         warm_research_director_status()
     except Exception:
-        return
+        pass
+    _warm_projections()
+
+
+def _warm_projections() -> None:
+    """Precompute the slow desk screens so the first viewer never waits.
+
+    The decision board is watched: rebuilt whenever a new scan lands. The rest
+    are built once in the background and then refreshed stale-while-revalidate.
+    """
+    try:
+        DECISION_BOARD_CACHE.watch(
+            ("board", 40), lambda: _build_decision_board(40), identity=_decision_board_identity,
+            interval_s=20.0,
+        )
+    except Exception:
+        pass
+
+    def _once() -> None:
+        try:
+            from product.evolution.api import evolution_lab_board as build_board
+
+            EVOLUTION_LAB_CACHE.get(("board", "EQUITY"), lambda: build_board("EQUITY"))
+        except Exception:
+            pass
+        try:
+            from api.runtime import warm_runtime_projections
+
+            warm_runtime_projections()
+        except Exception:
+            pass
+        try:
+            from product.due_diligence.suggest import warm_suggest_index
+
+            warm_suggest_index()
+        except Exception:
+            pass
+
+    threading.Thread(target=_once, name="projection-warm", daemon=True).start()
 
 
 _startup_bootstrap_lock = threading.Lock()
@@ -617,7 +655,8 @@ def evolution_lab_board(domain: str = "EQUITY") -> dict[str, Any]:
     try:
         from product.evolution.api import evolution_lab_board as build_board
 
-        return build_board(domain)
+        key = str(domain or "EQUITY").strip().upper() or "EQUITY"
+        return EVOLUTION_LAB_CACHE.get(("board", key), lambda: build_board(key))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Evolution Lab board failed: {exc}") from exc
 
@@ -662,13 +701,36 @@ def evolution_explain(policy_id: str, domain: str = "EQUITY") -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Evolution explain failed: {exc}") from exc
 
 
+from product.projection_cache import ProjectionCache, file_identity  # noqa: E402
+
+#: The board changes when a scan lands or the regime label moves; it took
+#: 15-35 s per request on the owner's Mac because every GET re-enriched and
+#: re-froze every card. Precomputed by a watcher; evidence that settles later
+#: is picked up within ``fresh_s``.
+DECISION_BOARD_CACHE = ProjectionCache("decision_board", fresh_s=300.0)
+EVOLUTION_LAB_CACHE = ProjectionCache("evolution_lab", fresh_s=300.0)
+
+
+def _decision_board_identity() -> tuple:
+    from product.recommendations_store import DEFAULT_RECO_PATH
+
+    return (file_identity(DEFAULT_RECO_PATH), _market_regime())
+
+
+def _build_decision_board(limit: int) -> dict[str, Any]:
+    from product.decision_service import decision_board
+
+    return decision_board(market_state=_market_regime(), limit=limit)
+
+
 @app.get("/api/decisions")
 def decisions_board(limit: int = 40) -> dict[str, Any]:
     """The canonical ranked decision board. Reads the saved scan, never runs one."""
     try:
-        from product.decision_service import decision_board
-
-        return decision_board(market_state=_market_regime(), limit=limit)
+        cap = max(1, min(int(limit or 40), 500))
+        return DECISION_BOARD_CACHE.get(
+            ("board", cap), lambda: _build_decision_board(cap), identity=_decision_board_identity,
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Decision board failed: {exc}") from exc
 

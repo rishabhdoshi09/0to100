@@ -5,6 +5,7 @@ import { UNVERIFIED_ACCESS, accessPill, verifiedAccess } from './accessTruth'
 import { apiUnresponsiveAfter, brokerIndicator } from './deskStatusIndicators'
 import { createPollGate } from './pollGate'
 import { deskRefreshBanner } from './deskBanner'
+import { COMMAND_FUNCTIONS, parseCommand, shouldFocusCommandLine } from './commandLine'
 import {
   CompareView,
   MarketScannerView,
@@ -480,21 +481,42 @@ function App() {
     return [...new Set(values)].sort()
   }, [dashboard.fno.underlyings, dashboard.long_term.records, dashboard.scan.records])
 
+  const commandLineRef = useRef<HTMLInputElement | null>(null)
+
+  useEffect(() => {
+    // `/` jumps to the command line from anywhere on the desk (not while typing).
+    const onKey = (event: KeyboardEvent) => {
+      if (!shouldFocusCommandLine(event.key, event.target)) return
+      event.preventDefault()
+      commandLineRef.current?.focus()
+      commandLineRef.current?.select()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   const openSearch = () => {
-    const clean = query.trim().toUpperCase()
-    if (!clean) return
-    if (!/^[A-Z0-9&.-]{1,32}$/.test(clean)) {
-      setControlState('Use a valid NSE symbol such as RELIANCE, TCS or HDFCBANK')
+    if (!query.trim()) return
+    const parsed = parseCommand(query, symbols)
+    if (parsed.kind === 'error') {
+      setControlState(parsed.message)
+      window.setTimeout(() => setControlState(''), 4000)
       return
     }
-    const match = symbols.find((symbol) => symbol === clean)
-      || symbols.find((symbol) => symbol.startsWith(clean))
-      || clean
-    setSelected(match)
-    setQuery(match)
-    markInvestigate(match)
-    openPage('Stock Intelligence')
-    setControlState(`Opening verified workspace for ${match}`)
+    if (parsed.kind === 'symbol') {
+      setSelected(parsed.symbol)
+      setQuery(parsed.symbol)
+      markInvestigate(parsed.symbol)
+      openPage('Stock Intelligence')
+      setControlState(`Opening verified workspace for ${parsed.symbol}`)
+    } else {
+      if (parsed.symbol) {
+        setSelected(parsed.symbol)
+        markInvestigate(parsed.symbol)
+      }
+      openPage(parsed.page)
+      setControlState(`${parsed.symbol ? `${parsed.symbol} ` : ''}${parsed.code} → ${parsed.page}`)
+    }
     window.setTimeout(() => setControlState(''), 2500)
   }
 
@@ -669,15 +691,23 @@ function App() {
           <div className="search-box">
             ⌕
             <input
-              aria-label="Search NSE symbol"
-              placeholder="Search any NSE share…"
+              ref={commandLineRef}
+              aria-label="Search NSE symbol or type a command"
+              placeholder="Symbol or command ( / ) — RELIANCE DD · TCS WHY · FNO · PORT · HELP"
+              title="Type a symbol, or <SYMBOL> <FUNCTION> (DES, GP, DD, FA, WHY, DATA), or a page (HOME, SCAN, RECO, N, RPT, MKT, LT, FNO, PORT, W, EVID, BT, EVO, LEARN, STRAT, COV, SYS, HELP). Press / to jump here."
               value={query}
               onChange={(event: { target: { value: string } }) => setQuery(event.target.value)}
-              onKeyDown={(event: { key: string }) => { if (event.key === 'Enter') openSearch() }}
+              onKeyDown={(event: { key: string; currentTarget: HTMLInputElement }) => {
+                if (event.key === 'Enter') openSearch()
+                if (event.key === 'Escape') event.currentTarget.blur()
+              }}
               list="quantterm-symbols"
             />
-            <datalist id="quantterm-symbols">{symbols.slice(0, 800).map((symbol) => <option value={symbol} key={symbol} />)}</datalist>
-            <button type="button" onClick={openSearch}>Open stock</button>
+            <datalist id="quantterm-symbols">
+              {COMMAND_FUNCTIONS.filter((fn) => !fn.needsSymbol).map((fn) => <option value={fn.code} key={`fn-${fn.code}`}>{fn.label}</option>)}
+              {symbols.slice(0, 800).map((symbol) => <option value={symbol} key={symbol} />)}
+            </datalist>
+            <button type="button" onClick={openSearch}>Go</button>
           </div>
           <div className="top-status">
             <span className="reco-clock" title="Asia/Kolkata">{istClock || '—:—:—'} IST</span>

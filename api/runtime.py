@@ -282,11 +282,43 @@ def evidence_authority() -> dict:
     return build_authority_contract(core._scan_payload())
 
 
+from product.projection_cache import ProjectionCache  # noqa: E402
+
+#: Read-only display projections served stale-while-revalidate (2026-11-16:
+#: learning dashboard 5-7 s, autonomous learning 1-5 s, decision journal 2 s
+#: per request). Live-safety blocks are never cached.
+LEARNING_DASHBOARD_CACHE = ProjectionCache("learning_dashboard", fresh_s=120.0)
+AUTONOMOUS_LEARNING_CACHE = ProjectionCache("autonomous_learning", fresh_s=30.0)
+DECISION_JOURNAL_CACHE = ProjectionCache("decision_journal", fresh_s=60.0, max_entries=64)
+
+
+def _learning_dashboard_cached() -> dict:
+    from product.paper_learning_loop import learning_dashboard
+    return LEARNING_DASHBOARD_CACHE.get("dashboard", learning_dashboard)
+
+
+def warm_runtime_projections() -> None:
+    """Build the slow runtime screens once in the background (API startup)."""
+    for warm in (
+        _learning_dashboard_cached,
+        lambda: _autonomous_learning_dashboard_cached(),
+        lambda: decision_journal(),
+    ):
+        try:
+            warm()
+        except Exception:
+            continue
+
+
 @product.app.get("/api/decision-journal")
 def decision_journal(symbol: str = "", limit: int = 120) -> dict:
     """Public audit trail for surfaced and non-surfaced market decisions."""
     from product.evidence_authority import build_decision_journal
-    return build_decision_journal(symbol=symbol, limit=max(1, min(int(limit or 120), 1000)))
+    sym = str(symbol or "").strip().upper()
+    cap = max(1, min(int(limit or 120), 1000))
+    return DECISION_JOURNAL_CACHE.get(
+        (sym, cap), lambda: build_decision_journal(symbol=sym, limit=cap),
+    )
 
 
 @product.app.get("/api/strategy-catalog")
@@ -371,22 +403,24 @@ def why_no_trade_today() -> dict:
 
 @product.app.get("/api/learning-policies")
 def learning_policies() -> dict:
-    from product.paper_learning_loop import learning_dashboard
-    return learning_dashboard()
+    return _learning_dashboard_cached()
 
 
 @product.app.get("/api/learning-dashboard")
 def learning_dashboard_api() -> dict:
     """Explicit policy layer + counterfactual counts. Never 'AI is learning'."""
-    from product.paper_learning_loop import learning_dashboard
-    return learning_dashboard()
+    return _learning_dashboard_cached()
+
+
+def _autonomous_learning_dashboard_cached() -> dict:
+    from product.autonomous_learning import dashboard
+    return AUTONOMOUS_LEARNING_CACHE.get("dashboard", dashboard)
 
 
 @product.app.get("/api/autonomous-learning")
 def autonomous_learning_get() -> dict:
-    from product.autonomous_learning import dashboard
-    payload = dashboard()
-    payload.update(live_safety_projection())
+    payload = _autonomous_learning_dashboard_cached()
+    payload.update(live_safety_projection())     # recomputed on every request, never cached
     return payload
 
 
@@ -399,6 +433,7 @@ def autonomous_learning_set(enabled: str = "", mode: str = "") -> dict:
     if str(mode or "").strip():
         kwargs["mode"] = str(mode).strip().upper()
     payload = set_control(**kwargs) if kwargs else dashboard()
+    AUTONOMOUS_LEARNING_CACHE.invalidate()       # a changed control is visible at once
     payload.update(live_safety_projection())
     return payload
 
@@ -407,6 +442,7 @@ def autonomous_learning_set(enabled: str = "", mode: str = "") -> dict:
 def autonomous_learning_replay() -> dict:
     from product.autonomous_learning import maybe_run_closed_market_replay
     payload = maybe_run_closed_market_replay(force=True)
+    AUTONOMOUS_LEARNING_CACHE.invalidate()
     payload.update(live_safety_projection())
     payload["opens_paper_trades"] = False
     payload["evidence_class"] = payload.get("evidence_class") or "HISTORICAL_REPLAY"

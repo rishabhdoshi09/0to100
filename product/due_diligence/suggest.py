@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import threading
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -27,7 +28,50 @@ def _fallback_names() -> dict[str, str]:
     return out
 
 
+#: Type-ahead must answer as you type. Rebuilding the index parsed the full
+#: saved scan and long-term scan on every keystroke (9 s cold on the owner's
+#: Mac, 2026-11-16). The merged index is kept until one of its sources
+#: changes, or 10 minutes pass (the universe list has no file to watch).
+_INDEX_TTL_S = 600.0
+_INDEX_LOCK = threading.Lock()
+_INDEX: dict[str, Any] = {"key": None, "at": 0.0, "names": None}
+
+
+def _index_key() -> tuple:
+    from product.projection_cache import file_identity
+    paths = []
+    try:
+        from product.scan_store import DEFAULT_SCAN_PATH
+        paths.append(DEFAULT_SCAN_PATH)
+    except Exception:
+        pass
+    try:
+        from product.long_term_store import DEFAULT_LONG_TERM_PATH
+        paths.append(DEFAULT_LONG_TERM_PATH)
+    except Exception:
+        pass
+    return file_identity(*paths)
+
+
 def _universe_names() -> dict[str, str]:
+    import time as _time
+
+    key = _index_key()
+    with _INDEX_LOCK:
+        cached = _INDEX["names"]
+        if cached is not None and _INDEX["key"] == key and _time.monotonic() - _INDEX["at"] < _INDEX_TTL_S:
+            return cached
+        names = _build_universe_names()
+        _INDEX.update(key=key, at=_time.monotonic(), names=names)
+        return names
+
+
+def warm_suggest_index() -> int:
+    """Build the type-ahead index ahead of the first keystroke (API startup)."""
+    return len(_universe_names())
+
+
+def _build_universe_names() -> dict[str, str]:
     names = dict(_fallback_names())
     try:
         from data.nse_universe import get_nse_universe_with_names
