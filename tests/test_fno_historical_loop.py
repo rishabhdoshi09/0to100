@@ -196,3 +196,33 @@ def test_fno_historical_loop_exports_underlying_only_evolution_prior(tmp_path, m
     assert evo["option_evidence_status"] == "UNDERLYING_ONLY_COUNTERFACTUAL"
     assert evo["not_promotion_evidence"] is True
     assert evo["historical_rows_evaluated"] == result["settled"]
+
+
+def test_default_universe_reads_the_real_report_property(monkeypatch):
+    """`FnoUniverseReport.symbols` is a property; calling it raised TypeError that
+    was swallowed into NO_UNIVERSE every night (2026-11-16). Use the real report."""
+    import product.fno_historical_loop as loop
+    import data.fno_universe as FU
+
+    rows = [
+        {"exchange": "NSE", "tradingsymbol": "RELIANCE", "name": "RELIANCE INDUSTRIES", "instrument_type": "EQ",
+         "segment": "NSE", "instrument_token": "1", "expiry": "", "lot_size": "1"},
+        {"exchange": "NFO", "tradingsymbol": "RELIANCE26NOVFUT", "name": "RELIANCE", "instrument_type": "FUT",
+         "segment": "NFO-FUT", "instrument_token": "2", "expiry": "2026-11-26", "lot_size": "500"},
+    ]
+    real = FU.build_fno_universe(rows, source="instrument_cache")
+    monkeypatch.setattr(FU, "current_fno_universe", lambda *a, **k: real)
+    assert real.symbols == ["RELIANCE"]
+    assert loop._default_universe() == ["RELIANCE"]
+
+
+def test_a_universe_load_failure_is_reported_not_silent(monkeypatch):
+    import product.fno_historical_loop as loop
+    import data.fno_universe as FU
+
+    def boom(*a, **k):
+        raise RuntimeError("instrument master unreadable")
+
+    monkeypatch.setattr(FU, "current_fno_universe", boom)
+    assert loop._default_universe() == []
+    assert "instrument master unreadable" in loop._LAST_UNIVERSE_ERROR

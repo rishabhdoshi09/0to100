@@ -131,9 +131,19 @@ def _default_universe() -> list[str]:
     try:
         from data.fno_universe import current_fno_universe
 
-        return list(current_fno_universe().symbols())
-    except Exception:
+        # ``symbols`` is a property. Calling it raised TypeError, which the old
+        # bare except turned into an empty universe: the walk-forward reported
+        # NO_UNIVERSE every night from #256 until 2026-11-16 and never ran.
+        return list(current_fno_universe().symbols)
+    except Exception as exc:
+        global _LAST_UNIVERSE_ERROR
+        _LAST_UNIVERSE_ERROR = f"{type(exc).__name__}: {exc}"[:200]
+        print(f"[FNO WALKFORWARD] universe unavailable: {_LAST_UNIVERSE_ERROR}", flush=True)
         return []
+
+
+#: Why the last universe load came back empty (surfaced in NO_UNIVERSE results).
+_LAST_UNIVERSE_ERROR = ""
 
 
 def _default_history_provider(symbol: str):
@@ -182,6 +192,7 @@ def run_next_batch(
             "candidates_evaluated": 0,
             "settled": 0,
             "checked_at": _now(),
+            "universe_error": _LAST_UNIVERSE_ERROR if universe is None else "",
         }
         return result
 
