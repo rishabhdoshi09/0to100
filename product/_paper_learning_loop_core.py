@@ -257,6 +257,11 @@ def ingest_closed_trade(
         "context_key": str(row.get("context_key") or ""),
         "evidence_update_id": str((conditional or {}).get("evidence_update_id") or ""),
     }
+    # One closed trade is one independent observation for every policy it feeds.
+    obs = {
+        "observation_key": f"trade:{_trade_key(row)}",
+        "session": str(row.get("entry_date") or "")[:10] or None,
+    }
     last = record_measured_outcome(
         policy_id=f"SETUP::{setup}",
         dimension="setup",
@@ -266,6 +271,7 @@ def ingest_closed_trade(
         path=path,
         floors=floors,
         extra=extra_base,
+        **obs,
     )
     # At most two 2-way conditionals — never a combinatorial explosion.
     if setup and sector:
@@ -278,6 +284,7 @@ def ingest_closed_trade(
             path=path,
             floors=floors,
             extra=extra_base,
+            **obs,
         )
     if setup and regime:
         record_measured_outcome(
@@ -289,6 +296,7 @@ def ingest_closed_trade(
             path=path,
             floors=floors,
             extra=extra_base,
+            **obs,
         )
     if entry_state:
         record_measured_outcome(
@@ -300,6 +308,7 @@ def ingest_closed_trade(
             path=path,
             floors=floors,
             extra=extra_base,
+            **obs,
         )
     # Exit quality is evidence-only until an owner promotes an exit policy.
     exit_reason = str(row.get("exit_reason") or "")
@@ -313,6 +322,7 @@ def ingest_closed_trade(
             path=path,
             floors=floors,
             extra={**extra_base, "affects_selection": False},
+            **obs,
         )
     if isinstance(last, dict) and conditional:
         last = {**last, "conditional_evidence": conditional}
@@ -337,13 +347,36 @@ def ingest_closed_book(book, *, path=None, floors: Mapping[str, int] | None = No
     target = ingested_path()
     target.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "keys": sorted(seen)[-2000:],
+        # Every key is kept. A cap (formerly sorted(seen)[-2000:]) dropped the
+        # alphabetically-first keys, so those trades would be ingested again.
+        "keys": sorted(seen),
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "applied": applied,
     }
     from core.atomic_io import atomic_write_text
     atomic_write_text(target, json.dumps(payload, indent=2))
     return {"applied": applied, "last_policy": last}
+
+
+def counterfactual_observation_key(settled: Mapping[str, Any]) -> tuple[str, str] | None:
+    """(key, session) for the independent unit a settled counterfactual is.
+
+    Every paper cycle re-freezes the names it rejects, so one symbol rejected for
+    one reason on one day appears once per cycle. It is one observation.
+    """
+    evidence = dict(settled.get("evidence") or {})
+    day = str(
+        settled.get("as_of")
+        or evidence.get("as_of")
+        or settled.get("market_timestamp")
+        or (settled.get("pit_proof") or {}).get("as_of")
+        or ""
+    )[:10]
+    symbol = str(settled.get("symbol") or "").upper()
+    reason = str(settled.get("reason_code") or "REJECTED")
+    if len(day) != 10 or not symbol:
+        return None
+    return f"cf:{day}|{symbol}|{reason}", day
 
 
 def ingest_counterfactual(
@@ -360,6 +393,18 @@ def ingest_counterfactual(
     classification = str(settled.get("classification") or "")
     reason = str(settled.get("reason_code") or "REJECTED")
     evidence = dict(settled.get("evidence") or {})
+    keyed = counterfactual_observation_key(settled)
+    obs: dict[str, Any] = {}
+    if keyed is not None:
+        from product import learning_observations as LO
+        from product.learning_policy_store import policy_path
+
+        key, day = keyed
+        # Whole-ingest dedupe: a repeat of an independent unit updates nothing,
+        # not the policy ladder and not the calibration record below.
+        if not LO.claim(LO.ledger_path_for(policy_path(path)), "COUNTERFACTUAL", key, day):
+            return {"duplicate_observation": True, "observation_key": key}
+        obs = {"observation_key": key, "session": day}
     decision_id = str(evidence.get("decision_id") or settled.get("decision_id") or "")
     counterfactual_r = settled.get("counterfactual_R")
     if decision_id and counterfactual_r is not None:
@@ -420,6 +465,7 @@ def ingest_counterfactual(
             "regime": (settled.get("evidence") or {}).get("regime") or settled.get("regime") or "",
             **historical_bridge,
         },
+        **obs,
     )
     setup = str(evidence.get("setup_label") or settled.get("setup") or "")
     # Learned setup overlay can be weakened by missed winners; hard gates cannot.
@@ -433,6 +479,7 @@ def ingest_counterfactual(
             path=path,
             floors=floors,
             extra={"classification": classification, "not_pnl": True, "symbol": settled.get("symbol")},
+            **obs,
         )
     if classification == GOOD_WAIT:
         last = record_measured_outcome(
@@ -444,6 +491,7 @@ def ingest_counterfactual(
             path=path,
             floors=floors,
             extra={"classification": GOOD_WAIT, "not_pnl": True, "symbol": settled.get("symbol")},
+            **obs,
         )
     return last
 

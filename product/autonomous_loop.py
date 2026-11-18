@@ -652,6 +652,10 @@ def consume_learning_memory(session: str | None = None) -> dict[str, Any]:
     by_setup: Counter[str] = Counter()
     by_reason_detail: dict[str, dict[str, int]] = {}
     observations = 0
+    ledger_rows = 0
+    # Every paper cycle re-freezes the names it rejects, so one decision (day,
+    # symbol, reason) has a row per cycle. Memory counts the decision once.
+    seen_units: set[tuple[str, str, str]] = set()
     try:
         from product.counterfactual_learning import ledger_path
 
@@ -667,6 +671,15 @@ def consume_learning_memory(session: str | None = None) -> dict[str, Any]:
                 classification = str(row.get("classification") or "")
                 if not classification:
                     continue
+                ledger_rows += 1
+                unit = (
+                    str(row.get("as_of") or "")[:10],
+                    str(row.get("symbol") or "").upper(),
+                    str(row.get("reason_code") or ""),
+                )
+                if unit in seen_units:
+                    continue
+                seen_units.add(unit)
                 observations += 1
                 by_class[classification] += 1
                 if row.get("reason_code"):
@@ -696,6 +709,8 @@ def consume_learning_memory(session: str | None = None) -> dict[str, Any]:
         "as_of": as_of,
         "generated_at": _now(),
         "observations": observations,
+        "ledger_rows": ledger_rows,
+        "observation_unit": "decision session x symbol x reason_code (one per unit, not per cycle)",
         "classification_counts": dict(by_class),
         "reason_code_stats": dict(by_reason),
         "reason_aggregations": by_reason_detail,

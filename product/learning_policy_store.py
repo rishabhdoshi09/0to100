@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -38,6 +39,21 @@ MIN_ABS_EDGE_R = 0.25
 SHRINKAGE_K = 8.0
 # Two-way conditionals need more samples to avoid combinatorial overfitting.
 CONDITIONAL_SAMPLE_MULT = 2
+# Session diversity. A large n from few sessions is one market path counted
+# many times: outcomes are measured over a 5-session horizon, so decisions made
+# within the same 5 sessions share most of their forward move. 20 distinct
+# decision sessions ~ 4 non-overlapping horizons before a policy may influence
+# paper selection (ELIGIBLE); 40 ~ 8, matching the 40-trading-day floor of the
+# forward-soak live-readiness contract, before it may BLOCK (ACTIVE). Below the
+# floor a policy stays EXPERIMENTAL: recorded, shown, never acted on.
+MIN_SESSIONS_ELIGIBLE = 20
+MIN_SESSIONS_ACTIVE = 40
+
+
+def _today_ist() -> str:
+    from zoneinfo import ZoneInfo
+
+    return datetime.now(ZoneInfo("Asia/Kolkata")).date().isoformat()
 
 
 def policy_path(path: str | Path | None = None) -> Path:
@@ -94,6 +110,7 @@ def _status_for(
     floors: Mapping[str, int] | None = None,
     source: str = "",
     conditional: bool = False,
+    sessions: int | None = None,
 ) -> str:
     floors = dict(floors or {})
     n_exp = int(floors.get("experimental", MIN_SAMPLE_EXPERIMENTAL))
@@ -121,11 +138,17 @@ def _status_for(
         if n >= n_eli:
             return EXPERIMENTAL
         return OBSERVING
-    if n >= n_act:
-        return ACTIVE
-    if n >= n_eli:
-        return ELIGIBLE
-    return EXPERIMENTAL
+    status = ACTIVE if n >= n_act else ELIGIBLE if n >= n_eli else EXPERIMENTAL
+    # Forward evidence must also span enough distinct sessions. Unknown session
+    # coverage (None) is treated as zero: fail closed, never promote on count.
+    s_eli = int(floors.get("sessions_eligible", MIN_SESSIONS_ELIGIBLE))
+    s_act = int(floors.get("sessions_active", MIN_SESSIONS_ACTIVE))
+    covered = int(sessions or 0)
+    if status == ACTIVE and covered < s_act:
+        status = ELIGIBLE
+    if status == ELIGIBLE and covered < s_eli:
+        status = EXPERIMENTAL
+    return status
 
 
 def upsert_policy(
@@ -149,14 +172,17 @@ def upsert_policy(
     n = max(1, int(sample_size))
     shrunk = (n / (n + k)) * edge
     conditional = "|" in str(dimension)
+    extra_payload = dict(extra or {})
+    sessions_raw = extra_payload.pop("sessions_observed", None)
+    sessions = None if sessions_raw is None else int(sessions_raw)
     status = _status_for(
         int(sample_size), abs(shrunk), floors=floors, source=source, conditional=conditional,
+        sessions=sessions,
     )
     existing = next((p for p in policies if p.get("policy_id") == policy_id), None)
     version = int((existing or {}).get("version") or 0) + 1
     first_seen = str((existing or {}).get("first_seen") or datetime.now(timezone.utc).isoformat())
     regimes = list((existing or {}).get("regimes_tested") or [])
-    extra_payload = dict(extra or {})
     regime = str(extra_payload.pop("regime", "") or "")
     if regime and regime not in regimes:
         regimes.append(regime)
@@ -185,6 +211,7 @@ def upsert_policy(
             "last": datetime.now(timezone.utc).isoformat(),
         },
         "regimes_tested": regimes,
+        "sessions_observed": sessions,
         "affects_selection": bool(affects),
         "live_locked": True,
         **extra_payload,
@@ -206,8 +233,17 @@ def record_measured_outcome(
     path: str | Path | None = None,
     floors: Mapping[str, int] | None = None,
     extra: Mapping[str, Any] | None = None,
+    observation_key: str | None = None,
+    session: str | None = None,
 ) -> dict[str, Any]:
     """Increment a policy from one settled observation. Never silent; never invents BUY.
+
+    ``observation_key`` names the independent unit this observation is (for a
+    counterfactual: decision day, symbol, reason). A key already recorded for
+    this policy is a duplicate and changes nothing. Without a key the call is
+    counted but cannot be deduplicated. ``session`` (the decision session,
+    YYYY-MM-DD) feeds the session-diversity floor; it defaults to today's IST
+    date, which can only under-state diversity when a backlog settles at once.
 
     Gross-only positive evidence is audit-only: without execution-adjusted evidence
     it cannot SUPPORT or promote a setup. Gross-only *negative* evidence is a
@@ -216,17 +252,28 @@ def record_measured_outcome(
     a better conservative edge. This keeps old downside protection while preventing
     optimistic gross P&L from being mistaken for tradable alpha.
     """
+    from product import learning_observations as LO
+
     store = load_policies(path)
     existing = next(
         (dict(p) for p in (store.get("policies") or []) if p.get("policy_id") == policy_id),
         None,
     )
+    ledger = LO.ledger_path_for(policy_path(path))
+    key = str(observation_key or f"unkeyed:{uuid.uuid4().hex}")
+    session_day = str(session or _today_ist())[:10]
+    # Claim BEFORE incrementing: a crash in between under-counts, never doubles.
+    if not LO.claim(ledger, policy_id, key, session_day):
+        return {**(existing or {"policy_id": policy_id}), "duplicate_observation": True,
+                "observation_key": key}
+    sessions = LO.distinct_sessions(ledger, policy_id)
     n_old = int((existing or {}).get("sample_size") or 0)
     mean_old = float((existing or {}).get("expectancy_R") or 0.0)
     n = n_old + 1
     mean = mean_old + (float(realized_R) - mean_old) / n
     payload = dict(extra or {})
     payload["last_observation_R"] = round(float(realized_R), 4)
+    payload["sessions_observed"] = sessions
     if str(source) == "paper_forward_taken_gross_only":
         if mean < 0.0:
             # Veto-only asymmetry: negative gross evidence is already an upper

@@ -91,6 +91,37 @@ def real_forward_only(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]
     return [dict(r) for r in rows if str(r.get("provenance") or "") == REAL_FORWARD_MARKET]
 
 
+def decision_unit(row: Mapping[str, Any]) -> tuple[str, str, str, str]:
+    """(decision session, symbol, group, reason_code): one independent decision.
+
+    Every paper cycle re-freezes the names it rejects, so a decision repeats
+    once per cycle (owner's Mac 2026-11-11: 36 cycles, 3,744 rows, 175 symbols).
+    """
+    day = str(row.get("market_timestamp") or (row.get("pit_proof") or {}).get("as_of") or "")[:10]
+    return (
+        day,
+        str(row.get("symbol") or "").upper(),
+        str(row.get("group") or ""),
+        str(row.get("reason_code") or ""),
+    )
+
+
+def independent_decisions(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """One row per decision unit; a settled copy is preferred over an unsettled one.
+
+    Statistics must count decisions, not cycle copies. The ledger itself keeps
+    every cycle's row as the audit trail.
+    """
+    kept: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    for raw in rows:
+        row = dict(raw)
+        unit = decision_unit(row)
+        current = kept.get(unit)
+        if current is None or (current.get("later_outcome") is None and row.get("later_outcome") is not None):
+            kept[unit] = row
+    return list(kept.values())
+
+
 def decision_id(
     *,
     as_of: str,

@@ -259,6 +259,9 @@ def settle_pending_from_market(
                     "hypothetical_target": row.get("target"),
                     "reason_code": row.get("reason_code"),
                     "symbol": symbol,
+                    # The decision session: with symbol + reason it names the
+                    # independent unit the learning ladder counts once.
+                    "as_of": as_of,
                     "evidence": {
                         "setup_label": row.get("setup"),
                         "regime": row.get("regime"),
@@ -729,9 +732,12 @@ def scoreboard() -> dict[str, Any]:
     from product.champion_challenger import load_store
     from product.live_readiness import evaluate_live_readiness
 
+    from product.forward_evidence import independent_decisions
+
     ledger = load_ledger()
     real = real_forward_only(ledger)
-    use = real if real else []
+    # Count decisions, not the per-cycle copies of a decision.
+    use = independent_decisions(real) if real else []
     taken = [r for r in use if r.get("entered")]
     settled_taken = [r for r in taken if r.get("gross_R") is not None]
     rejected_settled = [r for r in use if not r.get("entered") and r.get("counterfactual_classification")]
@@ -762,7 +768,10 @@ def scoreboard() -> dict[str, Any]:
         eq += v
         peak = max(peak, eq)
         dd = max(dd, peak - eq)
-    insufficient = len(use) < MIN_SCOREBOARD_N
+    # Trade statistics (win rate, drawdown, expectancy) are measured from
+    # settled TAKEN trades. Thousands of settled rejections do not make an
+    # unmeasured trade record "MEASURED".
+    insufficient = len(settled_taken) < MIN_SCOREBOARD_N
     safety = live_safety_projection()
     live_component_status = (
         "LOCKED"
@@ -793,9 +802,14 @@ def scoreboard() -> dict[str, Any]:
         **safety,
         "provenance_filter": REAL_FORWARD_MARKET,
         "real_forward_observations": len(use),
+        "real_forward_ledger_rows": len(real),
+        "observation_unit": "decision session x symbol x group x reason_code",
         "paper_trades_taken": len(taken),
         "settled_trades": len(settled_taken),
         "rejected_candidates_settled": len(rejected_settled),
+        "rejected_ledger_rows_settled": sum(
+            1 for r in real if not r.get("entered") and r.get("counterfactual_classification")
+        ),
         "rejection_gate_evidence": rejection_gate_scorecard(rejected_settled),
         "missed_winners": counts.get("MISSED_WINNER", 0),
         "avoided_losers": counts.get("AVOIDED_LOSER", 0),

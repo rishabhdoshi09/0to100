@@ -55,6 +55,14 @@ def _workspace(cards):
     }
 
 
+def _independent_copies(trade, n):
+    base = trade.as_dict() if hasattr(trade, "as_dict") else dict(trade)
+    return [
+        {**base, "entry_date": f"2026-08-{i + 1:02d}", "exit_date": f"2026-08-{i + 2:02d}"}
+        for i in range(n)
+    ]
+
+
 def test_active_block_policy_is_consumed_on_next_cycle(tmp_path):
     path = tmp_path / "policies.json"
     upsert_policy(
@@ -66,6 +74,7 @@ def test_active_block_policy_is_consumed_on_next_cycle(tmp_path):
         baseline_R=0.20,
         path=path,
         floors={"experimental": 3, "eligible": 5, "active": 10},
+        extra={"sessions_observed": 40},
     )
     stored = __import__("json").loads(path.read_text())
     assert stored["policies"][0]["production_status"] == ACTIVE
@@ -154,6 +163,7 @@ def test_taken_trade_updates_policy_consumed_next_cycle(tmp_path):
         baseline_R=0.10,
         path=path,
         floors={"experimental": 3, "eligible": 5, "active": 10},
+        extra={"sessions_observed": 32},
     )
     book = PaperBook(capital=100_000)
     card = _eligible_card()
@@ -175,7 +185,8 @@ def test_settled_losing_trades_update_policy_consumed_on_next_cycle(tmp_path):
     from product.paper_learning_loop import ingest_closed_trade, record_taken_evidence
 
     policy_path = tmp_path / "policies.json"
-    floors = {"experimental": 2, "eligible": 3, "active": 4}
+    floors = {"experimental": 2, "eligible": 3, "active": 4,
+              "sessions_eligible": 3, "sessions_active": 4}
     book = PaperBook(capital=100_000)
     card = _eligible_card()
     out = run_reco_paper_cycle(
@@ -192,8 +203,10 @@ def test_settled_losing_trades_update_policy_consumed_on_next_cycle(tmp_path):
     closed = book.mark({"TCS": (93.0, 95.0, 92.0, 93.5)}, "2026-09-02")
     assert closed and closed[0].exit_reason in {"STOP", "GAP_STOP"}
     assert closed[0].realized_R < 0
-    for _ in range(5):
-        ingest_closed_trade(closed[0], path=policy_path, floors=floors)
+    # Five independent trades on five sessions. Re-ingesting one trade five
+    # times is one observation (it used to count five).
+    for trade in _independent_copies(closed[0], 5):
+        ingest_closed_trade(trade, path=policy_path, floors=floors)
 
     book2 = PaperBook(capital=100_000)
     next_card = dict(_eligible_card())
@@ -262,7 +275,8 @@ def test_winning_taken_trade_updates_policy_consumed_next_cycle(tmp_path):
     from product.paper_learning_loop import ingest_closed_trade, record_taken_evidence
 
     policy_path = tmp_path / "policies.json"
-    floors = {"experimental": 2, "eligible": 3, "active": 4, "conditional_mult": 1}
+    floors = {"experimental": 2, "eligible": 3, "active": 4, "conditional_mult": 1,
+              "sessions_eligible": 3, "sessions_active": 4}
     book = PaperBook(capital=100_000)
     card = _eligible_card()
     out = run_reco_paper_cycle(
@@ -276,8 +290,10 @@ def test_winning_taken_trade_updates_policy_consumed_next_cycle(tmp_path):
     closed = book.mark({"TCS": (100.0, 116.0, 99.0, 115.0)}, "2026-09-02")
     assert closed and closed[0].exit_reason in {"TARGET", "GAP_TARGET"}
     assert closed[0].realized_R > 0
-    for _ in range(5):
-        ingest_closed_trade(closed[0], path=policy_path, floors=floors)
+    # Five independent trades on five sessions. Re-ingesting one trade five
+    # times is one observation (it used to count five).
+    for trade in _independent_copies(closed[0], 5):
+        ingest_closed_trade(trade, path=policy_path, floors=floors)
 
     book2 = PaperBook(capital=100_000)
     nxt = dict(_eligible_card())
@@ -398,18 +414,19 @@ def test_conditional_setup_sector_is_not_a_global_vcp_slogan(tmp_path):
     from product.paper_learning_loop import ingest_closed_trade
 
     policy_path = tmp_path / "policies.json"
-    floors = {"experimental": 2, "eligible": 3, "active": 4, "conditional_mult": 1}
+    floors = {"experimental": 2, "eligible": 3, "active": 4, "conditional_mult": 1,
+              "sessions_eligible": 3, "sessions_active": 4}
     for i in range(6):
         ingest_closed_trade(
             {"symbol": "TCS", "setup_label": "VCP", "sector": "Technology",
              "regime": "RISK_ON", "realized_R": 0.80, "exit_reason": "TARGET",
-             "entry_date": "2026-08-01", "exit_date": f"2026-08-{i+10:02d}"},
+             "entry_date": f"2026-08-{i+1:02d}", "exit_date": f"2026-08-{i+10:02d}"},
             path=policy_path, floors=floors,
         )
         ingest_closed_trade(
             {"symbol": "ONGC", "setup_label": "VCP", "sector": "Energy",
              "regime": "RISK_ON", "realized_R": -0.90, "exit_reason": "STOP",
-             "entry_date": "2026-08-01", "exit_date": f"2026-08-{i+10:02d}"},
+             "entry_date": f"2026-08-{i+1:02d}", "exit_date": f"2026-08-{i+10:02d}"},
             path=policy_path, floors=floors,
         )
     tech = dict(_eligible_card())
