@@ -150,7 +150,7 @@ _OPEN = object()                         # sentinel: trade still live, leave NUL
 from core.evaluation_spec import OUTCOME_HORIZON_SESSIONS as _HORIZON_SESSIONS  # noqa: E402
 
 
-def _resolve_via_path(row) -> object | None:
+def _resolve_via_path(row, diag: dict | None = None) -> object | None:
     """Resolve one row by the backtest's own rules (core.evaluation_spec).
 
     Returns (id, price, pct, worked), the _OPEN sentinel (still live or
@@ -173,9 +173,14 @@ def _resolve_via_path(row) -> object | None:
             str(row["logged_at"] or "")[:10],
             entry, stop, target,
         )
-    except Exception:
+    except Exception as exc:
+        if diag is not None:
+            diag["reason"] = f"RESOLVER_ERROR:{type(exc).__name__}"
+            diag["detail"] = str(exc)[:160]
         return _OPEN
     if got is None:
+        if diag is not None:
+            diag["reason"] = "NO_BARS_OR_WITHIN_HORIZON"
         return _OPEN
     if not got.filled:
         return (row["id"], 0.0, 0.0, -1)
@@ -183,15 +188,62 @@ def _resolve_via_path(row) -> object | None:
     return (row["id"], float(got.exit_price), float(pct), got.worked)
 
 
-def update_outcomes(lookback_days: int = 30) -> None:
+# A row still open this many calendar days after it was logged is past any
+# 10-session horizon plus holidays: it is stuck, not "still live".
+_STUCK_AFTER_DAYS = 25
+RESOLUTION_REPORT = "signal_outcome_resolution.json"
+
+
+def _write_resolution_report(summary: dict) -> None:
+    try:
+        import json
+        from core.atomic_io import atomic_write_text
+        target = logs_path("product", RESOLUTION_REPORT)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(target, json.dumps(summary, indent=2, default=str))
+    except Exception:
+        pass
+
+
+def update_outcomes(lookback_days: int = 30) -> dict:
     """Settle OPEN signals through the canonical outcome resolver.
 
     Lookback is only a search window. A row is due when official bars
     actually contain the horizon-th session — never because five
     calendar days have passed and a live quote exists.
+
+    Returns (and persists to logs/product/signal_outcome_resolution.json) a
+    summary of what happened to every candidate row. This used to return
+    None behind ``except Exception: pass``: owner's Mac 2026-11-18, the
+    outcome job reported SUCCEEDED nightly while no signal_log row had been
+    written by this function since 2026-07-30 (395 July/May BUYs stuck,
+    107 November BUYs queued behind them). Never crashes; never silent.
     """
+    from collections import Counter
+
+    summary: dict = {
+        "ran_at": _now().isoformat(timespec="seconds"),
+        "lookback_days": int(lookback_days),
+        "db_path": _DB_PATH,
+        "candidates": 0,
+        "resolved": 0,
+        "never_filled": 0,
+        "dead_symbol": 0,
+        "open_within_horizon": 0,
+        "stuck_past_horizon": 0,
+        "open_reasons": {},
+        "stuck_examples": [],
+        "row_errors": {},
+        "written": 0,
+        "write_error": None,
+        "fatal_error": None,
+    }
+    open_reasons: Counter = Counter()
+    row_errors: Counter = Counter()
     try:
-        too_old = (_now() - timedelta(days=lookback_days)).isoformat(timespec="seconds")
+        now = _now()
+        too_old = (now - timedelta(days=lookback_days)).isoformat(timespec="seconds")
+        stuck_before = (now - timedelta(days=_STUCK_AFTER_DAYS)).isoformat(timespec="seconds")
 
         conn = _get_conn()
         try:
@@ -206,9 +258,11 @@ def update_outcomes(lookback_days: int = 30) -> None:
             ).fetchall()
         finally:
             conn.close()
+        summary["candidates"] = len(rows)
 
         if not rows:
-            return
+            _write_resolution_report(summary)
+            return summary
 
         def _entry_was_triggered(symbol: str, entry: float, logged_at: str) -> bool:
             """Fill-awareness: a breakout entry sits ABOVE the market."""
@@ -225,68 +279,99 @@ def update_outcomes(lookback_days: int = 30) -> None:
             except Exception:
                 return True
 
+        def _still_open(row, reason: str) -> None:
+            if str(row["logged_at"] or "") < stuck_before:
+                summary["stuck_past_horizon"] += 1
+                open_reasons[reason] += 1
+                if len(summary["stuck_examples"]) < 10:
+                    summary["stuck_examples"].append(
+                        {"id": row["id"], "symbol": row["symbol"], "logged_at": row["logged_at"], "reason": reason}
+                    )
+            else:
+                summary["open_within_horizon"] += 1
+
         results: list[tuple[int, float, float, int | None]] = []
         for row in rows:
-            symbol = row["symbol"]
-            entry = row["entry_price"]
             try:
-                from data.dead_symbols import is_dead
-                if is_dead(symbol):
+                symbol = row["symbol"]
+                entry = row["entry_price"]
+                try:
+                    from data.dead_symbols import is_dead
+                    if is_dead(symbol):
+                        results.append((row["id"], 0.0, 0.0, -1))
+                        summary["dead_symbol"] += 1
+                        continue
+                except Exception:
+                    pass
+                diag: dict = {}
+                pv = _resolve_via_path(row, diag)
+                if pv is _OPEN:
+                    _still_open(row, str(diag.get("reason") or "OPEN"))
+                    continue
+                if pv is not None:
+                    results.append(pv)
+                    continue
+                if entry and not _entry_was_triggered(symbol, float(entry), row["logged_at"]):
                     results.append((row["id"], 0.0, 0.0, -1))
                     continue
-            except Exception:
-                pass
-            pv = _resolve_via_path(row)
-            if pv is _OPEN:
-                continue
-            if pv is not None:
-                results.append(pv)
-                continue
-            if entry and not _entry_was_triggered(symbol, float(entry),
-                                                  row["logged_at"]):
-                results.append((row["id"], 0.0, 0.0, -1))
-                continue
-            if not entry or float(entry) <= 0:
-                continue
+                if not entry or float(entry) <= 0:
+                    _still_open(row, "NO_ENTRY_PRICE")
+                    continue
+                try:
+                    from core.outcome_resolver import session_close_return
+                    resolved = session_close_return(
+                        symbol, str(row["logged_at"] or "")[:10],
+                    )
+                except Exception as exc:
+                    row_errors[f"session_close_return:{type(exc).__name__}"] += 1
+                    _still_open(row, f"CLOSE_RESOLVER_ERROR:{type(exc).__name__}")
+                    continue
+                if resolved is None:
+                    _still_open(row, "NO_BARS_OR_WITHIN_HORIZON")
+                    continue
+                price, _ = resolved
+                pct = (float(price) - float(entry)) / float(entry) * 100.0
+                worked = 1 if pct >= 2.0 else (0 if pct <= -1.0 else None)
+                results.append((row["id"], float(price), pct, worked))
+            except Exception as exc:  # one bad row must not discard the batch
+                row_errors[type(exc).__name__] += 1
+
+        for (_rid, _price, _pct, worked) in results:
+            if worked == -1:
+                summary["never_filled"] += 1
+            else:
+                summary["resolved"] += 1
+
+        if results:
+            now_iso = _now().isoformat(timespec="seconds")
+            spec_tag = eval_spec_tag()
             try:
-                from core.outcome_resolver import session_close_return
-                resolved = session_close_return(
-                    symbol, str(row["logged_at"] or "")[:10],
-                )
-            except Exception:
-                continue
-            if resolved is None:
-                continue
-            price, _ = resolved
-            pct = (float(price) - float(entry)) / float(entry) * 100.0
-            worked = 1 if pct >= 2.0 else (0 if pct <= -1.0 else None)
-            results.append((row["id"], float(price), pct, worked))
-
-        if not results:
-            return
-
-        now_iso = _now().isoformat(timespec="seconds")
-        spec_tag = eval_spec_tag()
-        conn = _get_conn()
-        try:
-            for (row_id, price, pct, worked) in results:
-                _price = None if worked == -1 else price
-                _pct = None if worked == -1 else pct
-                conn.execute(
-                    """
-                    UPDATE signal_log
-                    SET outcome_checked_at=?, outcome_price=?, outcome_pct=?, worked=?,
-                        eval_spec=?
-                    WHERE id=?
-                    """,
-                    (now_iso, _price, _pct, worked, spec_tag, row_id),
-                )
-            conn.commit()
-        finally:
-            conn.close()
-
-    except Exception:
-        pass  # never crash
+                conn = _get_conn()
+                try:
+                    for (row_id, price, pct, worked) in results:
+                        _price = None if worked == -1 else price
+                        _pct = None if worked == -1 else pct
+                        conn.execute(
+                            """
+                            UPDATE signal_log
+                            SET outcome_checked_at=?, outcome_price=?, outcome_pct=?, worked=?,
+                                eval_spec=?
+                            WHERE id=?
+                            """,
+                            (now_iso, _price, _pct, worked, spec_tag, row_id),
+                        )
+                    conn.commit()
+                    summary["written"] = len(results)
+                finally:
+                    conn.close()
+            except Exception as exc:
+                summary["write_error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
+    except Exception as exc:
+        summary["fatal_error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
+    summary["open_reasons"] = dict(open_reasons)
+    summary["row_errors"] = dict(row_errors)
+    _write_resolution_report(summary)
+    return summary
 
 
 def reresolve_history(max_rows: int = 8000) -> int:

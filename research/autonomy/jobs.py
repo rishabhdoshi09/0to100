@@ -1390,18 +1390,33 @@ def run_outcome_resolution(ctx) -> JobResult:
     # Settle surfaced-BUY outcomes (signal_log) from official bars too; the
     # learning stack (live edge, EV, drift) reads them. Best effort: the paper
     # book settlement above is this job's authority, not the signal ledger.
+    signal_note = ""
     try:
         from core.signal_outcome_tracker import update_outcomes
         # 200-day window: 522 BUYs logged in July were never settled because
         # nothing ran update_outcomes for months and the default window is 30
         # days. Settled rows are skipped, so this only catches up open ones.
-        update_outcomes(lookback_days=OUTCOME_LOOKBACK_DAYS)
+        signal_summary = update_outcomes(lookback_days=OUTCOME_LOOKBACK_DAYS)
+        if isinstance(signal_summary, dict):
+            if isinstance(result, dict):
+                result["signal_outcomes"] = signal_summary
+            problem = signal_summary.get("fatal_error") or signal_summary.get("write_error")
+            if problem and isinstance(result, dict):
+                result["signal_outcomes_error"] = str(problem)[:240]
+            written = int(signal_summary.get("written") or 0)
+            stuck = int(signal_summary.get("stuck_past_horizon") or 0)
+            if written or stuck or problem:
+                signal_note = (
+                    f" · signal_log {written} settled/{stuck} stuck"
+                    + (" · signal_log ERROR" if problem else "")
+                )
     except Exception as exc:
         if isinstance(result, dict):
             result["signal_outcomes_error"] = f"{type(exc).__name__}: {exc}"[:240]
+        signal_note = " · signal_log ERROR"
     return JobResult(
         JS.SUCCEEDED,
-        f"outcomes resolved · {closed} book closes · {recorded} decoded · {matured} official",
+        f"outcomes resolved · {closed} book closes · {recorded} decoded · {matured} official{signal_note}",
         clears={H.UNRECONCILED},
         unblocks=(f"{DEP_OUTCOMES}:{session_date}",),
         metadata=result or {},

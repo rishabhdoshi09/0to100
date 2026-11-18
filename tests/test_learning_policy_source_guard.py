@@ -26,5 +26,11 @@ def test_replay_only_sources_never_become_selection_active(source):
 
 
 def test_forward_paper_source_can_promote_after_sample_and_edge_floors():
-    status = _status_for(100, 1.0, source="paper_forward")
+    # Forward evidence is not caught by the historical-source guard: with the
+    # sample, edge and session-diversity floors met it promotes.
+    status = _status_for(100, 1.0, source="paper_forward", sessions=40)
     assert status in {ELIGIBLE, ACTIVE}
+
+
+def test_forward_paper_source_without_session_coverage_fails_closed():
+    assert _status_for(100, 1.0, source="paper_forward") not in {ELIGIBLE, ACTIVE}

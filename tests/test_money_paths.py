@@ -822,6 +822,83 @@ class TestOutcomeTracker:
         # idempotent — a second pass changes nothing
         assert tr.reresolve_history() == 0
 
+    def _seed_signal(self, tr, symbol, logged_at, entry=100.0, stop=96.0, target=106.0):
+        conn = tr._get_conn()
+        conn.execute(
+            "INSERT INTO signal_log (symbol, logged_at, signal_type, entry_price, stop_price, "
+            "target_price) VALUES (?,?,?,?,?,?)",
+            (symbol, logged_at, "UNIFIED_BUY", entry, stop, target))
+        conn.commit(); conn.close()
+
+    def test_update_outcomes_reports_every_rows_fate(self, tmp_path, monkeypatch):
+        """Owner's Mac 2026-11-18: no row written since 30 Jul behind `except: pass`."""
+        from datetime import datetime, timedelta
+        import pandas as pd
+        import core.signal_outcome_tracker as tr
+        import data.bhavcopy_store as bs
+        monkeypatch.setattr(tr, "_DB_PATH", str(tmp_path / "o.db"))
+        old = (datetime.now() - timedelta(days=60)).isoformat(timespec="seconds")
+        fresh = (datetime.now() - timedelta(days=2)).isoformat(timespec="seconds")
+        self._seed_signal(tr, "WIN", old)
+        self._seed_signal(tr, "NOBARS", old)      # past horizon, no bars → stuck, named
+        self._seed_signal(tr, "YOUNG", fresh)     # within horizon → open, not stuck
+        idx = pd.bdate_range(datetime.now() - timedelta(days=59), periods=12)
+        win = pd.DataFrame({"open": [100.0] * 12, "high": [101, 107] + [108] * 10,
+                            "low": [99, 100] + [101] * 10, "close": [100, 106] + [107] * 10}, index=idx)
+        monkeypatch.setattr(bs, "get_ohlcv", lambda s: win if s.upper() == "WIN" else None)
+        out = tr.update_outcomes(lookback_days=400)
+        assert out["candidates"] == 3
+        assert out["resolved"] == 1 and out["written"] == 1
+        assert out["stuck_past_horizon"] == 1
+        assert out["open_reasons"] == {"NO_BARS_OR_WITHIN_HORIZON": 1}
+        assert out["stuck_examples"][0]["symbol"] == "NOBARS"
+        assert out["open_within_horizon"] == 1
+        assert out["fatal_error"] is None and out["write_error"] is None
+        import json as _json
+        from core.runtime_paths import logs_path
+        report = _json.loads(logs_path("product", tr.RESOLUTION_REPORT).read_text())
+        assert report["stuck_past_horizon"] == 1 and report["written"] == 1
+
+    def test_update_outcomes_names_resolver_errors_instead_of_hiding_them(self, tmp_path, monkeypatch):
+        from datetime import datetime, timedelta
+        import core.signal_outcome_tracker as tr
+        import core.outcome_resolver as orr
+        monkeypatch.setattr(tr, "_DB_PATH", str(tmp_path / "o.db"))
+        self._seed_signal(tr, "BOOM", (datetime.now() - timedelta(days=60)).isoformat(timespec="seconds"))
+
+        def boom(*a, **k):
+            raise ValueError("bad bars")
+        monkeypatch.setattr(orr, "resolve_trade", boom)
+        out = tr.update_outcomes(lookback_days=400)
+        assert out["stuck_past_horizon"] == 1
+        assert out["open_reasons"] == {"RESOLVER_ERROR:ValueError": 1}
+
+    def test_update_outcomes_reports_write_failure(self, tmp_path, monkeypatch):
+        from datetime import datetime, timedelta
+        import pandas as pd
+        import core.signal_outcome_tracker as tr
+        import data.bhavcopy_store as bs
+        monkeypatch.setattr(tr, "_DB_PATH", str(tmp_path / "o.db"))
+        old = (datetime.now() - timedelta(days=60)).isoformat(timespec="seconds")
+        self._seed_signal(tr, "WIN", old)
+        idx = pd.bdate_range(datetime.now() - timedelta(days=59), periods=12)
+        win = pd.DataFrame({"open": [100.0] * 12, "high": [101, 107] + [108] * 10,
+                            "low": [99, 100] + [101] * 10, "close": [100, 106] + [107] * 10}, index=idx)
+        monkeypatch.setattr(bs, "get_ohlcv", lambda s: win)
+        real_conn = tr._get_conn
+        calls = {"n": 0}
+
+        def flaky_conn():
+            calls["n"] += 1
+            if calls["n"] == 2:   # the write connection
+                raise RuntimeError("database is locked")
+            return real_conn()
+        monkeypatch.setattr(tr, "_get_conn", flaky_conn)
+        out = tr.update_outcomes(lookback_days=400)
+        assert out["resolved"] == 1
+        assert out["written"] == 0
+        assert out["write_error"].startswith("RuntimeError: database is locked")
+
     def test_fresh_signals_not_judged_early(self, tmp_path, monkeypatch):
         from datetime import datetime
         import core.signal_outcome_tracker as tr
