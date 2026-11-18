@@ -59,3 +59,42 @@ def test_succeeded_or_missing_auth_is_left_alone(tmp_path):
     store.complete(job.job_id, JS.SUCCEEDED, result_summary="AUTH_READY")
     clock[0] += 10_000
     assert _revive(store, "2026-11-11") is False
+
+
+def _provider_failed_auth(store, key, clock, *, error_code="CONNECTIONERROR"):
+    """Owner's Mac 2026-11-18: blocked at 11:02 (expired token), revived after
+    the login, then a post-wake DNS outage spent the retry budget by 11:12."""
+    job = _blocked_auth(store, key)
+    clock[0] += Supervisor.AUTH_RETRY_S + 1
+    store.requeue(job.job_id)
+    clock[0] += 90
+    store.complete(job.job_id, JS.PERMANENT_FAILED, error_code=error_code,
+                   error_message="NameResolutionError: api.kite.trade",
+                   result_summary="Zerodha provider temporarily unavailable")
+    return job
+
+
+def test_provider_failure_that_spent_the_retry_budget_is_reprobed(tmp_path):
+    clock = [1000.0]
+    store = _store(tmp_path, clock)
+    job = _provider_failed_auth(store, "auth:2026-11-18", clock)
+    # The stale blocked_at from the earlier CREDENTIAL_UPDATE block must not
+    # count: the timer runs from the permanent failure.
+    clock[0] += 60
+    assert _revive(store, "2026-11-18") is False
+    clock[0] += Supervisor.AUTH_RETRY_S
+    assert _revive(store, "2026-11-18") is True
+    assert store.get(job.job_id).status == JS.PENDING
+    assert store.lease_due("t") is not None
+
+
+def test_permanent_failures_from_other_days_or_no_handler_stay_failed(tmp_path):
+    clock = [1000.0]
+    store = _store(tmp_path, clock)
+    old = _provider_failed_auth(store, "auth:2026-11-16", clock)
+    today = store.enqueue(SCH.AUTH_HEALTH, idempotency_key="auth:2026-11-18", critical=True)
+    store.complete(today.job_id, JS.PERMANENT_FAILED, error_code="NO_HANDLER")
+    clock[0] += 10_000
+    assert _revive(store, "2026-11-18") is False
+    assert store.get(old.job_id).status == JS.PERMANENT_FAILED
+    assert store.get(today.job_id).status == JS.PERMANENT_FAILED

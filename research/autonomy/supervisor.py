@@ -1585,14 +1585,29 @@ class Supervisor:
         whole session without a paper cycle (owner's Mac 2026-11-11: logged in
         09:33, slots 09:45-10:15 all skipped). Requeue only today's job, at most
         every AUTH_RETRY_S; a success unblocks the dependency chain as usual.
+
+        A provider/network failure is revived the same way. AUTH_HEALTH only
+        retries PROVIDER_UNAVAILABLE (credential problems BLOCK instead), and
+        ``requeue`` keeps the attempt count, so a brief DNS outage right after
+        the Mac woke used up the retry budget in ~90 s and left the day's job
+        PERMANENT_FAILED. Nothing re-probed it, AUTH_READY was never emitted and
+        the whole session stayed without a scan->paper slot (owner's Mac
+        2026-11-18 11:12, NameResolutionError for api.kite.trade). One probe
+        every AUTH_RETRY_S is cheap and bounded.
         """
         try:
             job = self.jobs.find_by_type_and_key(SCH.AUTH_HEALTH, f"auth:{session_date}")
         except Exception:
             return False
-        if job is None or job.status != JS.BLOCKED or str(job.blocked_on or "") != "CREDENTIAL_UPDATE":
+        if job is None:
             return False
-        since = float(job.blocked_at or job.finished_at or 0.0)
+        if job.status == JS.BLOCKED and str(job.blocked_on or "") == "CREDENTIAL_UPDATE":
+            since = float(job.blocked_at or job.finished_at or 0.0)
+        elif job.status == JS.PERMANENT_FAILED and str(job.error_code or "") != "NO_HANDLER":
+            # blocked_at may still hold an earlier CREDENTIAL_UPDATE block.
+            since = float(job.finished_at or job.blocked_at or 0.0)
+        else:
+            return False
         if self.jobs.clock() - since < self.AUTH_RETRY_S:
             return False
         self.jobs.requeue(job.job_id)
