@@ -183,3 +183,24 @@ def test_api_serves_snapshot_and_reevaluates_graduation(monkeypatch):
     assert out["graduation"]["verdicts"]["AUTONOMOUS LIVE ELIGIBLE"] == "NOT ELIGIBLE"
     assert any("data" in u for u in out["graduation"]["unmet"]["RESEARCH READY"])
     assert out["history"]
+
+
+def test_home_summary_before_first_snapshot_is_honest(monkeypatch):
+    monkeypatch.setattr(LS, "load_snapshot", lambda: None)
+    out = LS.home_summary()
+    assert out["available"] is False
+    assert "not computed yet" in out["headline"]
+    assert out["live_trading"] == "LOCKED"
+
+
+def test_home_summary_never_reads_unproven_evidence_as_an_edge():
+    random.seed(8)
+    rows = [_row(s, random.gauss(-0.5, 6.0)) for s in _sessions(16) for _ in range(20)]
+    card = LS.build_scorecard(signal_rows=rows, forward_rows=[], policies=[], outcome_pipeline={},
+                              include_challengers=False)
+    out = LS.home_summary(card)
+    assert out["available"] is True
+    assert out["headline"].startswith("No proven edge yet")
+    assert out["net_edge"]["verdict"] == LS.INSUFFICIENT
+    assert out["verdicts"]["AUTONOMOUS LIVE ELIGIBLE"] == "NOT ELIGIBLE"
+    assert out["blockers"]["FORWARD PAPER READY"]

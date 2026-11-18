@@ -723,6 +723,51 @@ def load_history(limit: int = 60) -> list[dict[str, Any]]:
     return rows
 
 
+def home_summary(card: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Small Home section: never a green badge over unproven evidence."""
+    card = card if card is not None else load_snapshot()
+    if not card:
+        return {
+            "available": False,
+            "headline": "Scorecard not computed yet: it runs after the next nightly learning cycle.",
+            "live_trading": "LOCKED",
+        }
+    sig = (card.get("tracked_signals") or {}).get("overall_net") or {}
+    cal = card.get("calibration") or {}
+    fwd = card.get("forward") or {}
+    inf = card.get("learning_influence") or {}
+    grad = card.get("graduation") or {}
+    top = (cal.get("reliability") or [{}])[-1] if cal.get("reliability") else {}
+    verdict = sig.get("verdict") or INSUFFICIENT
+    headline = (
+        f"No proven edge yet: tracked BUYs {sig.get('mean_of_session_means_R')}R per session over "
+        f"{sig.get('sessions')} sessions (95% CI {sig.get('ci95_R')}) - {verdict.lower()}."
+        if verdict != CREDIBLE_POSITIVE
+        else f"Tracked BUYs net positive: {sig.get('mean_of_session_means_R')}R per session (CI {sig.get('ci95_R')})."
+    )
+    return {
+        "available": True,
+        "generated_at": card.get("generated_at"),
+        "headline": headline,
+        "net_edge": {
+            "verdict": verdict, "sessions": sig.get("sessions"), "n": sig.get("n"),
+            "mean_R_per_session": sig.get("mean_of_session_means_R"), "ci95_R": sig.get("ci95_R"),
+            "sessions_needed_for_0_10R": sig.get("sessions_needed_for_0_10R"),
+        },
+        "calibration": {
+            "verdict": cal.get("verdict"), "auc": cal.get("auc"), "brier_skill": cal.get("brier_skill"),
+            "top_bucket_score_as_prob": top.get("mean_score_as_prob"),
+            "top_bucket_realized_win_rate": top.get("realized_win_rate"),
+        },
+        "paper_trades_settled": fwd.get("paper_trades_settled"),
+        "decisions_changed_by_learning": inf.get("decisions_changed_by_learning"),
+        "stage": grad.get("current_stage"),
+        "verdicts": grad.get("verdicts") or {},
+        "blockers": {k: list(v or [])[:2] for k, v in (grad.get("unmet") or {}).items()},
+        "live_trading": "LOCKED",
+    }
+
+
 def refresh_snapshot(session: str) -> dict[str, Any]:
     """Nightly: rebuild from the ledgers and persist. Read-only on every ledger."""
     card = build_scorecard()

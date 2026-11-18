@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { LearningScorecardBlock } from './homeScorecard'
 import { ChartWorkspace, Panel } from './components'
 import { money, pct, relativeAge, words } from './format'
 import {
@@ -839,6 +840,7 @@ function HomeOsCard({
           ) : null}
         </div>
       ) : null}
+      <LearningScorecardBlock card={os.learning_scorecard} />
       {os.us_market ? (
         <div className="home-os-past">
           <span>US PAPER MARKET</span>

@@ -943,6 +943,7 @@ def build_home_os(
         "buy_only": buy_only,
         "research_watchlist": research_watchlist[:5],
         "learning_impact": learning_impact,
+        "learning_scorecard": _learning_scorecard_summary(),
         "us_market": us_market,
         "observe_only": observe_only,
         "observe_only_date": observe_date if observe_only else "",
@@ -1013,6 +1014,17 @@ def build_home_os(
             "action": (primary_action or {}).get("label") if need_me else "Nothing. Leave it running.",
         },
     }
+
+
+def _learning_scorecard_summary() -> dict[str, Any]:
+    """Nightly scorecard snapshot (file read only; never recomputed on a Home poll)."""
+    try:
+        from product.learning_scorecard import home_summary
+
+        return home_summary()
+    except Exception as exc:
+        return {"available": False, "headline": f"Scorecard unavailable ({type(exc).__name__}).",
+                "live_trading": "LOCKED"}
 
 
 def _history_freshness(

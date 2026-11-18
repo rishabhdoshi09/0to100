@@ -786,6 +786,33 @@ export type BuyOnlySection = {
   rule?: string
 }
 
+export type LearningScorecardSummary = {
+  available?: boolean
+  generated_at?: string
+  headline?: string
+  net_edge?: {
+    verdict?: string
+    sessions?: number | null
+    n?: number | null
+    mean_R_per_session?: number | null
+    ci95_R?: number[] | null
+    sessions_needed_for_0_10R?: number | null
+  }
+  calibration?: {
+    verdict?: string
+    auc?: number | null
+    brier_skill?: number | null
+    top_bucket_score_as_prob?: number | null
+    top_bucket_realized_win_rate?: number | null
+  }
+  paper_trades_settled?: number | null
+  decisions_changed_by_learning?: number | null
+  stage?: number | null
+  verdicts?: Record<string, string>
+  blockers?: Record<string, string[]>
+  live_trading?: string
+}
+
 export type HomeOperatingSystem = {
   schema_version?: number
   state: string
@@ -857,6 +884,7 @@ export type HomeOperatingSystem = {
     not_a_trade?: boolean
     win_probability?: WinProbability | null
   }>
+  learning_scorecard?: LearningScorecardSummary | null
   learning_impact?: {
     status?: string
     plain?: string
