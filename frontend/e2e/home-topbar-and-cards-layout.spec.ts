@@ -60,11 +60,10 @@ test('home-os-past cards give strong/small children a line break, not run-on tex
     const strong = block.locator('strong').first()
     const small = block.locator('small').first()
     if ((await strong.count()) === 0 || (await small.count()) === 0) continue
-    const [strongDisplay, smallDisplay] = await Promise.all([
-      strong.evaluate((el) => getComputedStyle(el).display),
-      small.evaluate((el) => getComputedStyle(el).display),
-    ])
-    expect(strongDisplay).toBe('block')
-    expect(smallDisplay).toBe('block')
+    // toHaveCSS retries: a one-shot getComputedStyle read raced the dev
+    // server's stylesheet injection and saw "inline" (flaked in CI on
+    // 2026-11-18 with no frontend change; the rerun passed).
+    await expect(strong).toHaveCSS('display', 'block')
+    await expect(small).toHaveCSS('display', 'block')
   }
 })
