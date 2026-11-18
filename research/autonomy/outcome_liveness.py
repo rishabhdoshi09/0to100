@@ -31,6 +31,50 @@ def _trade_row(trade: Any) -> dict[str, Any]:
         return {}
 
 
+# Calendar days scanned back for sessions an outage skipped (~30 NSE sessions,
+# beyond any max_holding_days the paper book uses).
+_CATCH_UP_MAX_DAYS = 45
+
+
+def catch_up_missed_sessions(book, bars_fn, day: str) -> dict[str, Any]:
+    """Mark every completed session an open position missed, oldest first.
+
+    The EOD settlement marks one session. When the host is down (owner's Mac
+    16-18 Nov 2026: two sessions) the skipped sessions were never checked, so a
+    stop or target touched only on a missed day was silently survived — P&L a
+    real exchange-side GTT would not have allowed. Each missed weekday is read
+    with the same exact-session official bars (``bars_fn``); a holiday returns
+    no bars and is skipped. ``PaperBook.mark`` refuses out-of-order sessions.
+    """
+    from datetime import date as _date, timedelta
+
+    opens = list((getattr(book, "open", {}) or {}).values())
+    out: dict[str, Any] = {"sessions": [], "closed": []}
+    if not opens or not callable(bars_fn):
+        return out
+    starts = []
+    for pos in opens:
+        start = str(getattr(pos, "last_marked_session", "") or "")[:10] or str(getattr(pos, "entry_date", "") or "")[:10]
+        if len(start) == 10:
+            starts.append(start)
+    if not starts:
+        return out
+    try:
+        end = _date.fromisoformat(str(day)[:10])
+        cursor = max(_date.fromisoformat(min(starts)), end - timedelta(days=_CATCH_UP_MAX_DAYS)) + timedelta(days=1)
+    except ValueError:
+        return out
+    while cursor < end:
+        if cursor.weekday() < 5:
+            session = cursor.isoformat()
+            bars = dict(bars_fn(session) or {})
+            if bars:
+                out["closed"].extend(book.mark(bars, session, allow_entry_session=False))
+                out["sessions"].append(session)
+        cursor += timedelta(days=1)
+    return out
+
+
 def settle_paper_session(brain, session_date: str) -> dict[str, Any]:
     """Mark the existing PAPER book once for one official session.
 
@@ -107,7 +151,14 @@ def settle_paper_session(brain, session_date: str) -> dict[str, Any]:
                 "live_locked": True,
             }
 
-        closed = list(book.mark(bars, day, allow_entry_session=False) if bars else [])
+        catch_up: dict[str, Any] = {"sessions": [], "closed": []}
+        if callable(bars_fn):
+            try:
+                catch_up = catch_up_missed_sessions(book, bars_fn, day)
+            except Exception as exc:
+                catch_up = {"sessions": [], "closed": [], "error": f"{type(exc).__name__}: {exc}"[:240]}
+        closed = list(catch_up.get("closed") or [])
+        closed += list(book.mark(bars, day, allow_entry_session=False) if bars else [])
         rows = [_trade_row(trade) for trade in closed]
 
         # Persist book state first. Audit/event projection is useful, but it must never
@@ -176,7 +227,8 @@ def settle_paper_session(brain, session_date: str) -> dict[str, Any]:
             "open_before": open_before,
             "open_after": len(getattr(book, "open", {}) or {}),
             "bars": len(bars),
-            "warnings": warnings,
+            "missed_sessions_marked": list(catch_up.get("sessions") or []),
+            "warnings": warnings + ([f"missed-session catch-up failed: {catch_up['error']}"] if catch_up.get("error") else []),
             "settlement_lane": "EOD_ONLY",
             "full_intelligence_cycle": False,
             "historical_backtest": False,

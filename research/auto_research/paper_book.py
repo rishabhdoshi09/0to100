@@ -236,7 +236,10 @@ class PaperBook:
         for key, pos in list(self.open.items()):
             if not allow_entry_session and str(pos.entry_date or "")[:10] >= session:
                 continue
-            if str(pos.last_marked_session or "")[:10] == session:
+            last = str(pos.last_marked_session or "")[:10]
+            if last and session <= last:
+                # Already marked for this session or a later one: a session is
+                # never applied twice, nor out of order after a newer one.
                 continue
             bar = checked_bars.get(pos.symbol)
             if bar is None:

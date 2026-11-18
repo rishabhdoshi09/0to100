@@ -5757,3 +5757,39 @@ class TestOneRulebook:
         conn.commit(); conn.close()
         assert rows == {"BUYME": "UNIFIED_BUY", "HELD": SOT.SHADOW_SIGNAL_TYPE}
         assert [r["symbol"] for r in VD._closed_signals()] == ["BUYME"]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Paper book after an outage — missed sessions are marked, never survived
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestPaperOutageCatchUp:
+    def test_stop_hit_on_a_missed_session_is_not_survived(self):
+        from research.auto_research.paper_book import PaperBook
+        from research.autonomy.outcome_liveness import catch_up_missed_sessions
+
+        bars = {
+            "2026-09-02": {"AAA": (100.0, 101.0, 99.0, 100.5)},
+            "2026-09-03": {"AAA": (99.0, 100.0, 94.0, 99.5)},   # stop 95 breached, recovers
+            "2026-09-04": {"AAA": (100.0, 103.0, 99.0, 102.0)},
+        }
+        book = PaperBook(capital=100_000.0)
+        book.open_position("S1", "AAA", 100.0, 95.0, 110.0, "2026-09-01", 20)
+        out = catch_up_missed_sessions(book, lambda d: bars.get(d, {}), "2026-09-07")
+        assert [t.exit_reason for t in out["closed"]] == ["STOP"]
+        assert out["closed"][0].exit_date[:10] == "2026-09-03"
+        assert not book.open
+
+    def test_catch_up_never_reaches_past_the_settlement_session(self):
+        from research.auto_research.paper_book import PaperBook
+        from research.autonomy.outcome_liveness import catch_up_missed_sessions
+
+        seen = []
+        book = PaperBook(capital=100_000.0)
+        book.open_position("S1", "AAA", 100.0, 95.0, 110.0, "2026-09-01", 20)
+
+        def bars_fn(day):
+            seen.append(day)
+            return {"AAA": (100.0, 101.0, 99.0, 100.5)}
+        catch_up_missed_sessions(book, bars_fn, "2026-09-04")
+        assert seen == ["2026-09-02", "2026-09-03"]   # the settlement day itself is marked by the caller

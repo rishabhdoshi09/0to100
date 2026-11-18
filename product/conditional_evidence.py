@@ -223,6 +223,8 @@ def record_outcome(
                 bucket=policy_bucket or context_key,
                 realized_R=float(outcome.realized_R),
                 source="paper_forward",
+                observation_key=f"cond:{outcome.outcome_id}",
+                session=str(outcome.resolved_at or "")[:10] or None,
             )
         except Exception:
             # The ladder is an additional consumer, never a gate on recording.

@@ -180,3 +180,59 @@ def test_institutional_adapter_keeps_entry_session_bar_out_of_exits():
     assert result["status"] == "EOD_SETTLED"
     assert result["positions_closed"] == []
     assert ("S1", "AAA") in brain.intel_book.open
+
+
+class _DayBrain(_Brain):
+    """Exact-session bars per day; a missing day is a holiday (no bhavcopy)."""
+
+    def __init__(self, by_day):
+        super().__init__({})
+        self.bars_fn = lambda day: dict(by_day.get(str(day)[:10], {}))
+
+
+def test_stop_touched_only_on_a_missed_session_closes_on_that_session():
+    """Owner's Mac 16-18 Nov 2026: sessions skipped by an outage were never marked."""
+    brain = _DayBrain({
+        "2026-09-02": {"AAA": (100.0, 101.0, 99.0, 100.5)},
+        "2026-09-03": {"AAA": (99.0, 100.0, 94.0, 99.5)},   # breaches the 95 stop, recovers
+        "2026-09-04": {"AAA": (100.0, 103.0, 99.0, 102.0)},
+        "2026-09-07": {"AAA": (102.0, 104.0, 101.0, 103.0)},
+    })
+    assert brain.intel_book.open_position("S1", "AAA", 100.0, 95.0, 110.0, "2026-09-01", 20) is not None
+    # The host was down 2-4 Sep; the first settlement after recovery is for 7 Sep.
+    out = settle_paper_session(brain, "2026-09-07")
+    assert out["status"] == "EOD_SETTLED"
+    assert len(out["positions_closed"]) == 1
+    trade = out["positions_closed"][0]
+    assert trade["exit_reason"] == "STOP"
+    assert str(trade.get("exit_date") or "")[:10] == "2026-09-03"
+    assert out["missed_sessions_marked"] == ["2026-09-02", "2026-09-03", "2026-09-04"]
+    assert not brain.intel_book.open
+
+
+def test_missed_sessions_age_the_position_and_holidays_are_skipped():
+    brain = _DayBrain({
+        "2026-09-02": {"AAA": (100.0, 101.0, 99.0, 100.5)},
+        # 2026-09-03: exchange holiday, no bhavcopy
+        "2026-09-04": {"AAA": (100.0, 101.0, 99.0, 100.5)},
+        "2026-09-07": {"AAA": (100.0, 101.0, 99.0, 100.5)},
+    })
+    brain.intel_book.open_position("S1", "AAA", 100.0, 95.0, 110.0, "2026-09-01", 20)
+    out = settle_paper_session(brain, "2026-09-07")
+    assert out["missed_sessions_marked"] == ["2026-09-02", "2026-09-04"]
+    pos = next(iter(brain.intel_book.open.values()))
+    assert pos.bars_held == 3          # 2 Sep, 4 Sep, 7 Sep — not the holiday
+    assert pos.last_marked_session == "2026-09-07"
+    again = settle_paper_session(brain, "2026-09-07")
+    assert again["missed_sessions_marked"] == []
+    assert next(iter(brain.intel_book.open.values())).bars_held == 3
+
+
+def test_a_session_older_than_the_last_mark_is_never_applied():
+    book = PaperBook(capital=100_000.0)
+    book.open_position("S1", "AAA", 100.0, 95.0, 110.0, "2026-09-01", 20)
+    book.mark({"AAA": (100.0, 101.0, 99.0, 100.5)}, "2026-09-07", allow_entry_session=False)
+    closed = book.mark({"AAA": (99.0, 100.0, 90.0, 92.0)}, "2026-09-03", allow_entry_session=False)
+    assert closed == []
+    pos = next(iter(book.open.values()))
+    assert pos.bars_held == 1 and pos.last_marked_session == "2026-09-07"
