@@ -1024,11 +1024,36 @@ def _safe_research_value() -> dict[str, Any]:
         return {"n": 0, "note": "No research-value observations yet."}
 
 
+def _live_broker(persisted: Any) -> dict[str, Any]:
+    """Broker state as of now, never as of the last loop run.
+
+    The loop summary is persisted, so its readiness block can be days old.
+    Owner's Mac 2026-11-18: with an expired token the desk still showed
+    "SESSION_VALID" from the 16 Nov summary. broker_status() is a cached,
+    fail-closed probe; if it cannot run, the persisted value is returned
+    explicitly marked stale and not ready.
+    """
+    try:
+        return dict(RDY.broker_status() or {})
+    except Exception as exc:
+        stale = dict(persisted or {})
+        stale.update({
+            "ready": False,
+            "live_data_ready": False,
+            "execution_ready": False,
+            "stale": True,
+            "detail": f"Live broker check failed ({type(exc).__name__}); "
+                      "showing the last loop's broker state.",
+        })
+        return stale
+
+
 def desk_projection() -> dict[str, Any]:
     summary = load_summary()
     readiness = summary.get("readiness") or RDY.inspect_readiness()
     session = str(summary.get("session_date") or "")
     committee = list((summary.get("paper") or {}).get("committee") or [])
+    broker = _live_broker(readiness.get("broker"))
     return {
         "schema_version": 2,
         "generated_at": _now(),
@@ -1036,7 +1061,7 @@ def desk_projection() -> dict[str, Any]:
         "what_it_found": summary.get("census") or {},
         "what_it_is_doing": {"trigger": summary.get("trigger"), "session": session},
         "what_is_blocked": {
-            "broker": readiness.get("broker"),
+            "broker": broker,
             "execution": [
                 {
                     "symbol": r.get("symbol"),
@@ -1052,7 +1077,7 @@ def desk_projection() -> dict[str, Any]:
             "paper": (summary.get("paper") or {}).get("intents") or [],
             "outcomes_pending": (summary.get("outcomes") or {}).get("pending") or [],
         },
-        "what_needs_the_operator": readiness.get("broker"),
+        "what_needs_the_operator": broker,
         "what_changed": {
             "scan_run_id": summary.get("scan_run_id"),
             "candidates_touched": summary.get("candidates_touched"),
