@@ -285,7 +285,16 @@ def trim_inherited_log(fd: int, *, max_bytes: int = _LAUNCHD_LOG_MAX_BYTES,
 def main() -> int:
     trim_inherited_log(2)
     load_env_file(os.environ.get("QT_HOST_ENV_FILE"))
-    storage = prepare_runtime_storage_for_startup()
+    from product import host_storage_alert as storage_alert
+
+    try:
+        storage = prepare_runtime_storage_for_startup()
+    except Exception as exc:
+        # launchd restarts us; each failed start is noted on the internal disk
+        # so the owner hears about an outage that outlasts the grace period.
+        storage_alert.note_storage_down(f"startup storage check failed: {exc}")
+        raise
+    storage_alert.note_storage_recovered()
     if storage != "NOT_REQUIRED":
         print(f"[HOST STORAGE] {storage}", flush=True)
     npm = prepare_frontend_toolchain()
@@ -315,6 +324,15 @@ def main() -> int:
             file=sys.stderr,
             flush=True,
         )
+        try:
+            storage_alert.note_storage_down(loss_reason["detail"])
+            storage_alert.watch_outage(
+                storage_guard.lost.is_set,
+                lambda: loss_reason["detail"],
+                stop=storage_guard.shutdown,
+            )
+        except Exception:
+            pass
         # host_supervisor.main owns SIGTERM while it is running. Its handler only
         # requests shutdown, so the supervisor's finally block still reaps every
         # child and releases the machine lock cleanly.
@@ -379,6 +397,7 @@ def main() -> int:
                 flush=True,
             )
             loss_reason["detail"] = ""
+            storage_alert.note_storage_recovered()
         return 0
     finally:
         storage_guard.close()
