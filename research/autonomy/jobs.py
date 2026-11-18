@@ -1625,6 +1625,14 @@ def run_learning_cycle(ctx) -> JobResult:
         except Exception as exc:
             memory_error = str(exc)[:200]
             result["settled_memory"] = {"error": memory_error}
+        # Measurement, not learning: the scorecard reads the ledgers and records
+        # whether decisions are improving. Its failure never fails learning.
+        try:
+            from product.learning_scorecard import refresh_snapshot
+
+            result["learning_scorecard"] = refresh_snapshot(session_date).get("summary")
+        except Exception as exc:
+            result["learning_scorecard"] = {"error": f"{type(exc).__name__}: {str(exc)[:160]}"}
 
     summary = (
         f"learning complete · {result.get('diagnostics', 0)} diagnostics · "

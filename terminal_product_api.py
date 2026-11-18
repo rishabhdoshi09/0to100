@@ -374,6 +374,39 @@ def institutional_readiness() -> dict[str, Any]:
     )
 
 
+_SCORECARD_INSTITUTIONAL: dict[str, Any] = {"at": 0.0, "payload": None}
+
+
+@app.get("/api/learning-scorecard")
+def learning_scorecard(refresh: bool = False) -> dict[str, Any]:
+    """Learning Effectiveness Scorecard + graduation verdicts (read-only).
+
+    Serves the nightly snapshot written by the learning cycle; ``refresh=true``
+    rebuilds from the ledgers (seconds on the USB runtime, so not for polling).
+    Graduation is re-evaluated here with institutional readiness (cached 10 min).
+    """
+    import time as _time
+    from product import learning_scorecard as LSC
+
+    card = None if refresh else LSC.load_snapshot()
+    source = "nightly_snapshot"
+    if card is None:
+        card = LSC.build_scorecard()
+        source = "computed_now"
+    now = _time.monotonic()
+    if _SCORECARD_INSTITUTIONAL["payload"] is None or now - _SCORECARD_INSTITUTIONAL["at"] > 600:
+        try:
+            _SCORECARD_INSTITUTIONAL["payload"] = institutional_readiness()
+            _SCORECARD_INSTITUTIONAL["at"] = now
+        except Exception:
+            _SCORECARD_INSTITUTIONAL["payload"] = None
+    card = dict(card)
+    card["graduation"] = LSC.graduation(card, institutional=_SCORECARD_INSTITUTIONAL["payload"])
+    card["source"] = source
+    card["history"] = LSC.load_history()
+    return card
+
+
 @app.get("/api/target-portfolio")
 def target_portfolio() -> dict[str, Any]:
     """Return the latest immutable target-versus-current portfolio projection."""
