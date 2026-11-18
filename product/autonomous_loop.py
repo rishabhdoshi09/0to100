@@ -529,11 +529,15 @@ def _consume_paper(
     }
 
 
+# Rows per forward-ledger rewrite while settling (bounds redo work after a crash).
+_SETTLE_FLUSH_EVERY = 500
+
+
 def settle_official_outcomes(session: str | None = None) -> dict[str, Any]:
     """Resolve frozen decisions from official completed bars. No Kite."""
     from core.outcome_resolver import session_close_return
     from product.counterfactual_learning import classify_forward, ledger_path as cf_path
-    from product.forward_evidence import attach_settlement, load_ledger
+    from product.forward_evidence import attach_settlements, load_ledger
 
     as_of = session or session_date()
     settled, pending, failed = [], [], []
@@ -604,25 +608,37 @@ def settle_official_outcomes(session: str | None = None) -> dict[str, Any]:
     except Exception as exc:
         failed.append({"error": str(exc)[:200]})
 
-    for row in load_ledger():
-        if row.get("later_outcome") or not row.get("decision_id"):
-            continue
-        symbol = str(row.get("symbol") or "")
-        day = str(row.get("market_timestamp") or row.get("pit_proof", {}).get("as_of") or as_of)[:10]
-        try:
-            resolved = session_close_return(symbol, day, horizon=5)
-        except Exception:
-            continue
-        if resolved is None:
-            pending.append({"symbol": symbol, "decision_id": row.get("decision_id"), "reason": "HORIZON_NOT_REACHED"})
-            continue
-        _exit, ret = resolved
-        classification = classify_forward(
-            entry=row.get("entry"), stop=row.get("stop"), target=row.get("target"),
-            forward_return_pct=ret,
-        )
-        attach_settlement(str(row["decision_id"]), classification=classification, forward_return_pct=ret)
-        settled.append({"symbol": symbol, "decision_id": row.get("decision_id"), "classification": classification, "return_pct": ret})
+    # The ledger is rewritten whole on every write, so settle in batches: one
+    # rewrite per _SETTLE_FLUSH_EVERY rows, not one per row (see
+    # forward_evidence.attach_settlements). Flushed in `finally` so rows
+    # already resolved are kept even if a later row raises.
+    queued: list[dict[str, Any]] = []
+    try:
+        for row in load_ledger():
+            if row.get("later_outcome") or not row.get("decision_id"):
+                continue
+            symbol = str(row.get("symbol") or "")
+            day = str(row.get("market_timestamp") or row.get("pit_proof", {}).get("as_of") or as_of)[:10]
+            try:
+                resolved = session_close_return(symbol, day, horizon=5)
+            except Exception:
+                continue
+            if resolved is None:
+                pending.append({"symbol": symbol, "decision_id": row.get("decision_id"), "reason": "HORIZON_NOT_REACHED"})
+                continue
+            _exit, ret = resolved
+            classification = classify_forward(
+                entry=row.get("entry"), stop=row.get("stop"), target=row.get("target"),
+                forward_return_pct=ret,
+            )
+            queued.append({"decision_id": str(row["decision_id"]), "classification": classification, "forward_return_pct": ret})
+            settled.append({"symbol": symbol, "decision_id": row.get("decision_id"), "classification": classification, "return_pct": ret})
+            if len(queued) >= _SETTLE_FLUSH_EVERY:
+                attach_settlements(queued)
+                queued = []
+    finally:
+        if queued:
+            attach_settlements(queued)
     return {"settled": settled, "pending": pending, "failed": failed, "n_settled": len(settled)}
 
 

@@ -19,6 +19,7 @@ from product.forward_evidence import (
     REAL_FORWARD_MARKET,
     TEST_FIXTURE,
     attach_settlement,
+    attach_settlements,
     current_provenance,
     freeze_cycle,
     load_ledger,
@@ -201,6 +202,10 @@ def _forward_return(symbol: str, from_date: str, horizon: int = SETTLE_HORIZON) 
         return None
 
 
+# Counterfactual rows per forward-ledger rewrite (bounds redo work after a crash).
+_SETTLE_FLUSH_EVERY = 250
+
+
 def settle_pending_from_market(
     *,
     horizon: int = SETTLE_HORIZON,
@@ -223,42 +228,64 @@ def settle_pending_from_market(
     updated = 0
     pending_n = 0
     classifications: dict[str, int] = {}
-    for row in pending:
-        symbol = str(row.get("symbol") or "").upper()
-        as_of = str(row.get("market_timestamp") or row.get("pit_proof", {}).get("as_of") or "")[:10]
-        fwd = getter(symbol, as_of) if as_of else None
-        later = entered.get(symbol, False)
-        if fwd is None and not later:
-            pending_n += 1
-            continue
-        settled = cf_settle(
-            {
-                "hypothetical_entry": row.get("entry"),
-                "hypothetical_stop": row.get("stop"),
-                "hypothetical_target": row.get("target"),
-                "reason_code": row.get("reason_code"),
-                "symbol": symbol,
-                "evidence": {
-                    "setup_label": row.get("setup"),
+    chunk: list[tuple[dict[str, Any], dict[str, Any]]] = []
+
+    def _flush() -> None:
+        # One ledger rewrite per chunk, not per row (forward_evidence.attach_settlements).
+        # Ledger FIRST, then the learning ingest: record_measured_outcome has no
+        # dedupe and the next run skips rows the ledger marks settled, so a crash
+        # between the two can only under-count a counterfactual, never ingest it twice.
+        if not chunk:
+            return
+        batch = list(chunk)
+        chunk.clear()  # before ingesting: a raise here must not re-flush (re-ingest) it
+        attach_settlements([item for item, _settled in batch])
+        for _item, settled_row in batch:
+            ingest_counterfactual(settled_row, path=policy_path, floors=floors)
+
+    try:
+        for row in pending:
+            symbol = str(row.get("symbol") or "").upper()
+            as_of = str(row.get("market_timestamp") or row.get("pit_proof", {}).get("as_of") or "")[:10]
+            fwd = getter(symbol, as_of) if as_of else None
+            later = entered.get(symbol, False)
+            if fwd is None and not later:
+                pending_n += 1
+                continue
+            settled = cf_settle(
+                {
+                    "hypothetical_entry": row.get("entry"),
+                    "hypothetical_stop": row.get("stop"),
+                    "hypothetical_target": row.get("target"),
+                    "reason_code": row.get("reason_code"),
+                    "symbol": symbol,
+                    "evidence": {
+                        "setup_label": row.get("setup"),
+                        "regime": row.get("regime"),
+                        "rules_hash": row.get("rules_hash"),
+                    },
+                    "setup": row.get("setup"),
                     "regime": row.get("regime"),
-                    "rules_hash": row.get("rules_hash"),
                 },
-                "setup": row.get("setup"),
-                "regime": row.get("regime"),
-            },
-            forward_return_pct=fwd,
-            later_entered=later,
-        )
-        ingest_counterfactual(settled, path=policy_path, floors=floors)
-        attach_settlement(
-            str(row.get("decision_id")),
-            classification=str(settled.get("classification") or ""),
-            forward_return_pct=fwd,
-            outcome_provenance=COUNTERFACTUAL if later or fwd is not None else None,
-        )
-        updated += 1
-        cls = str(settled.get("classification") or "")
-        classifications[cls] = classifications.get(cls, 0) + 1
+                forward_return_pct=fwd,
+                later_entered=later,
+            )
+            chunk.append((
+                {
+                    "decision_id": str(row.get("decision_id")),
+                    "classification": str(settled.get("classification") or ""),
+                    "forward_return_pct": fwd,
+                    "outcome_provenance": COUNTERFACTUAL if later or fwd is not None else None,
+                },
+                settled,
+            ))
+            updated += 1
+            cls = str(settled.get("classification") or "")
+            classifications[cls] = classifications.get(cls, 0) + 1
+            if len(chunk) >= _SETTLE_FLUSH_EVERY:
+                _flush()
+    finally:
+        _flush()
     _ = cf_path
     return {"updated": updated, "pending": pending_n, "classifications": classifications}
 

@@ -199,6 +199,88 @@ def freeze_observation(
     return payload
 
 
+def _apply_settlement(
+    row: Mapping[str, Any],
+    *,
+    settled_at: str,
+    classification: str | None = None,
+    forward_return_pct: float | None = None,
+    gross_R: float | None = None,
+    execution_adjusted_R: float | None = None,
+    execution_coverage: float | None = None,
+    execution_charges: float | None = None,
+    spread_status: str | None = None,
+    slippage_status: str | None = None,
+    liquidity_assumptions: str | None = None,
+    outcome_provenance: str | None = None,
+) -> dict[str, Any]:
+    updated = dict(row)
+    if updated.get("later_outcome") is None:
+        updated["later_outcome"] = {
+            "forward_return_pct": forward_return_pct,
+            "settled_at": settled_at,
+            "provenance": current_provenance(outcome_provenance),
+            "not_pnl": not bool(updated.get("entered")),
+        }
+        if classification and updated.get("counterfactual_classification") is None:
+            updated["counterfactual_classification"] = classification
+        if gross_R is not None and updated.get("gross_R") is None:
+            updated["gross_R"] = gross_R
+        if execution_adjusted_R is not None and updated.get("execution_adjusted_R") is None:
+            updated["execution_adjusted_R"] = execution_adjusted_R
+        if execution_coverage is not None and updated.get("execution_coverage") is None:
+            updated["execution_coverage"] = execution_coverage
+        if execution_charges is not None and updated.get("execution_charges") is None:
+            updated["execution_charges"] = execution_charges
+        if spread_status and updated.get("spread_status") is None:
+            updated["spread_status"] = spread_status
+        if slippage_status and updated.get("slippage_status") is None:
+            updated["slippage_status"] = slippage_status
+        if liquidity_assumptions and updated.get("liquidity_assumptions") is None:
+            updated["liquidity_assumptions"] = liquidity_assumptions
+    return updated
+
+
+def attach_settlements(
+    settlements: Sequence[Mapping[str, Any]],
+    *,
+    path: str | Path | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Batch ``attach_settlement``: one read and one atomic rewrite.
+
+    Each item is ``{"decision_id": ..., **attach_settlement keyword fields}``.
+    The ledger is rewritten whole, so settling rows one call at a time costs
+    O(rows) per row. Owner's Mac 2026-11-18: after a 3-day outage the backlog
+    was ~4,000 rows against an 11 MB ledger on the USB HDD, and the outcome
+    job ran ~1 row/s for over an hour. If an id repeats, the first item wins,
+    matching sequential calls (a settled row is never re-settled). Returns
+    ``{decision_id: updated row}`` for every id present in the ledger.
+    """
+    by_id: dict[str, dict[str, Any]] = {}
+    for item in settlements:
+        fields = dict(item)
+        key = str(fields.pop("decision_id", None))
+        by_id.setdefault(key, fields)
+    if not by_id:
+        return {}
+    target = ledger_path(path)
+    settled_at = _now()
+    found: dict[str, dict[str, Any]] = {}
+    out: list[dict[str, Any]] = []
+    for row in load_ledger(target):
+        key = str(row.get("decision_id"))
+        fields = by_id.get(key)
+        if fields is None:
+            out.append(row)
+            continue
+        updated = _apply_settlement(row, settled_at=settled_at, **fields)
+        found[key] = updated
+        out.append(updated)
+    if found:
+        _write_jsonl(target, out)
+    return found
+
+
 def attach_settlement(
     decision_id_value: str,
     *,
@@ -214,45 +296,27 @@ def attach_settlement(
     outcome_provenance: str | None = None,
     path: str | Path | None = None,
 ) -> dict[str, Any] | None:
-    """Write later outcome only. Never mutates PIT decision fields."""
-    target = ledger_path(path)
-    rows = load_ledger(target)
-    found = None
-    out: list[dict[str, Any]] = []
-    for row in rows:
-        if str(row.get("decision_id")) != str(decision_id_value):
-            out.append(row)
-            continue
-        updated = dict(row)
-        if updated.get("later_outcome") is None:
-            updated["later_outcome"] = {
-                "forward_return_pct": forward_return_pct,
-                "settled_at": _now(),
-                "provenance": current_provenance(outcome_provenance),
-                "not_pnl": not bool(updated.get("entered")),
-            }
-            if classification and updated.get("counterfactual_classification") is None:
-                updated["counterfactual_classification"] = classification
-            if gross_R is not None and updated.get("gross_R") is None:
-                updated["gross_R"] = gross_R
-            if execution_adjusted_R is not None and updated.get("execution_adjusted_R") is None:
-                updated["execution_adjusted_R"] = execution_adjusted_R
-            if execution_coverage is not None and updated.get("execution_coverage") is None:
-                updated["execution_coverage"] = execution_coverage
-            if execution_charges is not None and updated.get("execution_charges") is None:
-                updated["execution_charges"] = execution_charges
-            if spread_status and updated.get("spread_status") is None:
-                updated["spread_status"] = spread_status
-            if slippage_status and updated.get("slippage_status") is None:
-                updated["slippage_status"] = slippage_status
-            if liquidity_assumptions and updated.get("liquidity_assumptions") is None:
-                updated["liquidity_assumptions"] = liquidity_assumptions
-        found = updated
-        out.append(updated)
-    if found is None:
-        return None
-    _write_jsonl(target, out)
-    return found
+    """Write later outcome only. Never mutates PIT decision fields.
+
+    Settling many rows? Use ``attach_settlements`` (one rewrite, not one per row).
+    """
+    found = attach_settlements(
+        [{
+            "decision_id": decision_id_value,
+            "classification": classification,
+            "forward_return_pct": forward_return_pct,
+            "gross_R": gross_R,
+            "execution_adjusted_R": execution_adjusted_R,
+            "execution_coverage": execution_coverage,
+            "execution_charges": execution_charges,
+            "spread_status": spread_status,
+            "slippage_status": slippage_status,
+            "liquidity_assumptions": liquidity_assumptions,
+            "outcome_provenance": outcome_provenance,
+        }],
+        path=path,
+    )
+    return found.get(str(decision_id_value))
 
 
 def freeze_cycle(cycle: Mapping[str, Any], *, path: str | Path | None = None) -> dict[str, Any]:
