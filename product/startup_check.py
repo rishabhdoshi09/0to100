@@ -80,6 +80,37 @@ def _history_readiness() -> tuple[str, str]:
     return ("STALE", detail) if available else ("MISSING", detail)
 
 
+def expected_scan_session_date() -> str:
+    """The market session a scan must cover to be current ("" if unknown)."""
+    try:
+        from data.bhavcopy_runtime import official_history_freshness
+        history_freshness = official_history_freshness(load_cache=False, require_store=False)
+        if history_freshness.get("usable_for_scan"):
+            return str(
+                history_freshness.get("available_session")
+                or history_freshness.get("minimum_required_official_session")
+                or ""
+            )[:10]
+        return str(
+            history_freshness.get("expected_latest_completed_session")
+            or history_freshness.get("available_session")
+            or ""
+        )[:10]
+    except Exception:
+        return ""
+
+
+def scan_session_verdict(payload: dict[str, Any] | None = None) -> tuple[str, str]:
+    """The same scan verdict /api/health reports, for other readiness surfaces."""
+    if payload is None:
+        try:
+            from product.scan_store import default_scan_path, load_scan
+            payload = load_scan(default_scan_path())
+        except Exception as exc:
+            return "MISSING", f"Scan artifact unreadable: {str(exc)[:160]}"
+    return _scan_evidence_status(payload, expected_session=expected_scan_session_date())
+
+
 def _scan_evidence_status(
     payload: dict[str, Any] | None,
     *,
@@ -250,24 +281,7 @@ def build_startup_check(*, probe_network: bool = True) -> dict[str, Any]:
         ops_running = False
 
     data_status, data_detail = _history_readiness()
-    expected_scan_session = ""
-    try:
-        from data.bhavcopy_runtime import official_history_freshness
-        history_freshness = official_history_freshness(load_cache=False, require_store=False)
-        if history_freshness.get("usable_for_scan"):
-            expected_scan_session = str(
-                history_freshness.get("available_session")
-                or history_freshness.get("minimum_required_official_session")
-                or ""
-            )[:10]
-        else:
-            expected_scan_session = str(
-                history_freshness.get("expected_latest_completed_session")
-                or history_freshness.get("available_session")
-                or ""
-            )[:10]
-    except Exception:
-        expected_scan_session = ""
+    expected_scan_session = expected_scan_session_date()
     try:
         from product.scan_store import default_scan_path, load_scan
         scan_status, scan_detail = _scan_evidence_status(

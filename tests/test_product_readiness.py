@@ -35,3 +35,45 @@ def test_stale_scan_does_not_receive_full_credit():
     scan = next(item for item in payload["lanes"] if item["key"] == "scanner")
     assert scan["status"] == "STALE"
     assert scan["earned_weight"] < scan["weight"]
+
+
+def _all_fresh(now):
+    return dict(
+        market={"available": True, "summary": "ok", "as_of": now.isoformat(), "updated_at": now.isoformat()},
+        scan={"available": True, "scanned_at": now.isoformat(), "universe_size": 2000, "records": [{"symbol": "AAA"}]},
+        long_term={"available": True, "scanned_at": now.isoformat(), "summary": {"coverage_pct": 90}, "records": [{"symbol": "AAA"}]},
+        news={"available": True, "articles": [{"published_at": now.isoformat()}]},
+        fno={"available": True, "mapped_underlyings": 200, "updated_at": now.isoformat(), "as_of": now.isoformat()},
+        data={"bhavcopy": {"ready": True, "sessions": 500, "symbols": 2000, "latest_date": now.date().isoformat()}},
+        operations={"running": True, "heartbeat": now.isoformat(), "active": []},
+    )
+
+
+def test_previous_session_scan_is_not_fresh_however_recent_its_wall_clock():
+    """Owner's Mac 2026-11-18: READY/100 while health said the scan was a session behind."""
+    now = datetime(2026, 11, 18, 17, 0, tzinfo=timezone.utc)
+    payloads = _all_fresh(now)
+    baseline = build_product_readiness(**payloads, now=now)
+    behind = build_product_readiness(
+        **payloads, now=now,
+        scan_verdict=("STALE", "Scan session 2026-11-17 behind expected 2026-11-18"),
+    )
+    scan = next(item for item in behind["lanes"] if item["key"] == "scanner")
+    assert scan["status"] == "STALE"
+    assert "behind expected 2026-11-18" in scan["details"]
+    assert behind["state"] != "READY"
+    assert any("Whole-market scanner" in b for b in behind["blockers"])
+    assert behind["score"] < baseline["score"]
+
+
+def test_current_session_verdict_keeps_fresh_scan_fresh():
+    now = datetime(2026, 11, 18, 17, 0, tzinfo=timezone.utc)
+    out = build_product_readiness(**_all_fresh(now), now=now, scan_verdict=("READY", "553 records"))
+    scan = next(item for item in out["lanes"] if item["key"] == "scanner")
+    assert scan["status"] == "FRESH"
+
+
+def test_ready_is_never_reported_alongside_a_blocker():
+    now = datetime(2026, 11, 18, 17, 0, tzinfo=timezone.utc)
+    out = build_product_readiness(**_all_fresh(now), now=now, scan_verdict=("STALE", "behind"))
+    assert not (out["state"] == "READY" and out["blockers"])

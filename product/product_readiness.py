@@ -93,8 +93,15 @@ def build_product_readiness(
     data: Mapping[str, Any] | None,
     operations: Mapping[str, Any] | None,
     now: datetime | None = None,
+    scan_verdict: tuple[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Build the readiness score shown in the product shell."""
+    """Build the readiness score shown in the product shell.
+
+    ``scan_verdict`` is health's session-based scan verdict
+    (``startup_check.scan_session_verdict``). Wall-clock age alone called a
+    scan of the previous session FRESH for 8 hours (owner's Mac 2026-11-18:
+    score 100 / READY while /api/health was DEGRADED "scan stale").
+    """
     now = now or datetime.now(timezone.utc)
     market = dict(market or {})
     scan = dict(scan or {})
@@ -197,6 +204,14 @@ def build_product_readiness(
             now=now,
         ),
     ]
+    if scan_verdict is not None:
+        verdict, verdict_detail = str(scan_verdict[0] or ""), str(scan_verdict[1] or "")
+        for item in lanes:
+            if item["key"] == "scanner" and verdict != "READY" and item["status"] == "FRESH":
+                item["status"] = verdict if verdict in {"STALE", "MISSING", "INCOMPLETE"} else "STALE"
+                item["earned_weight"] = round(item["weight"] * (0.0 if item["status"] == "MISSING" else 0.45), 2)
+                item["details"] = f"{item['details']} · {verdict_detail}"
+                item["session_verdict"] = verdict
     score = round(sum(float(item["earned_weight"]) for item in lanes))
     if score >= 90:
         state = "READY"
@@ -215,6 +230,10 @@ def build_product_readiness(
         for item in lanes
         if item["status"] != "FRESH" and item["weight"] >= 10
     ]
+    if state == "READY" and blockers:
+        # A score is not allowed to average a blocker away.
+        state = "PARTIAL"
+        summary = "Core research works, but a required data lane is not current: " + "; ".join(blockers)
     return {
         "schema_version": 1,
         "generated_at": now.isoformat(),

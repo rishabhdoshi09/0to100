@@ -351,7 +351,12 @@ def _tca_payload() -> dict[str, Any]:
 @app.get("/api/product-readiness")
 def product_readiness() -> dict[str, Any]:
     payloads = _current_product_payloads()
-    return build_product_readiness(**payloads)
+    try:
+        from product.startup_check import scan_session_verdict
+        verdict = scan_session_verdict()
+    except Exception as exc:
+        verdict = ("STALE", f"scan session verdict unavailable: {type(exc).__name__}")
+    return build_product_readiness(**payloads, scan_verdict=verdict)
 
 
 @app.get("/api/institutional-readiness")
