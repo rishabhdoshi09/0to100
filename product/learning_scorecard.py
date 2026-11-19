@@ -57,6 +57,10 @@ _Z_ALPHA_ONE_SIDED, _Z_POWER = 1.6449, 0.8416  # alpha 0.05 one-sided, power 0.8
 # ~0.1% stops turned 0.5% moves into -5R. They stay in the net-% series and are
 # counted and named, never silently dropped.
 MIN_RISK_FRAC_FOR_R = 0.01
+# A signal counts only once its whole outcome horizon has passed (10 sessions
+# ~ 16 calendar days with weekends). Otherwise the newest sessions include only
+# the trades that resolved EARLY (fast stops/targets) - a maturation bias.
+MATURITY_CALENDAR_DAYS = 16
 
 
 # ── small statistics ─────────────────────────────────────────────────────────
@@ -220,8 +224,23 @@ def _group_stats(trades: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     return out
 
 
-def tracked_signal_evidence(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+def _matured(row: Mapping[str, Any], today) -> bool:
+    from datetime import date, timedelta
+
+    try:
+        logged = date.fromisoformat(str(row.get("logged_at") or "")[:10])
+    except ValueError:
+        return False
+    return logged + timedelta(days=MATURITY_CALENDAR_DAYS) <= today
+
+
+def tracked_signal_evidence(rows: Iterable[Mapping[str, Any]], *, today=None) -> dict[str, Any]:
+    from datetime import date
+
     rows = list(rows)
+    today = today or date.today()
+    immature = sum(1 for r in rows if not _matured(r, today))
+    rows = [r for r in rows if _matured(r, today)]
     trades = [t for t in (_settled_trade(r) for r in rows) if t is not None]
     never_filled = sum(1 for r in rows if r.get("worked") == -1)
     open_rows = sum(1 for r in rows if r.get("worked") is None)
@@ -256,6 +275,8 @@ def tracked_signal_evidence(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]
     return {
         "source": "signal_log (surfaced BUYs, official-bar settlement, core.evaluation_spec)",
         "rows_logged": len(rows),
+        "excluded_not_yet_matured": immature,
+        "maturity_rule": f"logged >= {MATURITY_CALENDAR_DAYS} calendar days ago (full 10-session horizon)",
         "settled_filled": len(trades),
         "never_filled": never_filled,
         "open_or_unresolved": open_rows,

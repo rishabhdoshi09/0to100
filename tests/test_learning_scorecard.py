@@ -204,3 +204,13 @@ def test_home_summary_never_reads_unproven_evidence_as_an_edge():
     assert out["net_edge"]["verdict"] == LS.INSUFFICIENT
     assert out["verdicts"]["AUTONOMOUS LIVE ELIGIBLE"] == "NOT ELIGIBLE"
     assert out["blockers"]["FORWARD PAPER READY"]
+
+
+def test_young_signals_are_excluded_until_their_horizon_has_passed():
+    from datetime import date
+
+    old = [_row("2026-07-01", 3.0), _row("2026-07-02", -4.0)]
+    young = [_row("2026-11-12", 5.0)]                       # resolved early, horizon not over
+    ev = LS.tracked_signal_evidence(old + young, today=date(2026, 11, 19))
+    assert ev["excluded_not_yet_matured"] == 1
+    assert ev["settled_filled"] == 2
