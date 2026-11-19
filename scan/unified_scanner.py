@@ -223,7 +223,17 @@ def combo_edge_r(signals: list[str], edges: dict | None, combos: dict | None = N
 
 
 def _proven(ev: dict | None) -> bool:
-    return bool(ev) and ev["mean"] >= _MIN_BUY_EDGE_R and (ev["lower"] is None or ev["lower"] > 0)
+    """Mean clears the bar AND the lower bound is above zero.
+
+    A measured sample (n > 0) without a lower bound (e.g. every trade on one
+    session, so no dispersion can be estimated) is NOT proven. Only a bare
+    legacy float (n == 0, no uncertainty ever recorded) keeps the mean-only rule.
+    """
+    if not ev or ev["mean"] < _MIN_BUY_EDGE_R:
+        return False
+    if ev["lower"] is None:
+        return int(ev.get("n") or 0) == 0
+    return ev["lower"] > 0
 
 
 def _evidence_verdict(
@@ -258,7 +268,9 @@ def _evidence_verdict(
         if ev["mean"] < _MIN_BUY_EDGE_R:
             why = f"below the {_MIN_BUY_EDGE_R:+.2f}R bar"
         else:
-            why = f"but its 95% lower bound {ev['lower']:+.2f}R is not above zero (could be noise)"
+            why = (f"but its 95% lower bound {ev['lower']:+.2f}R is not above zero (could be noise)"
+                   if ev["lower"] is not None else
+                   "but its uncertainty cannot be measured (no independent sessions to compare)")
         return "WATCH", (
             f"⚖ Measured edge {ev['mean']:+.2f}R/trade for {basis} (walk-forward backtest, "
             f"net of costs) {why} — no proven edge, so WATCH, not BUY"

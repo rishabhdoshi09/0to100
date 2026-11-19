@@ -5777,6 +5777,16 @@ class TestOneRulebook:
         honest = {"clusters": {k: v for k, v in stats["clusters"].items() if int(k[1:]) % 2 == 0}}
         assert _evidence_fields(stats, index, 10)["se_r"] >= 0.95 * _evidence_fields(honest, index, 10)["se_r"]
 
+    def test_a_measured_edge_without_a_lower_bound_is_not_proven(self):
+        from scan.unified_scanner import _evidence_verdict, _proven
+        assert _proven({"mean": 0.4, "lower": None, "n": 0}) is True          # legacy bare float
+        assert _proven({"mean": 0.4, "lower": None, "n": 45}) is False        # one session, no dispersion
+        assert _proven({"mean": 0.4, "lower": 0.01, "n": 45}) is True
+        verdict, why = _evidence_verdict(70, ["VCP", "MOMENTUM"],
+                                         signal_edges={"VCP": {"mean": 0.4, "lower": None, "n": 45},
+                                                       "MOMENTUM": {"mean": 0.4, "lower": None, "n": 45}})
+        assert verdict == "WATCH" and "cannot be measured" in why
+
     def test_backtest_session_index_is_the_realised_official_sessions(self):
         from scan.signal_backtest import realised_session_index
         idx = realised_session_index(["2026-11-09", "2026-11-10", "2026-11-11", "2026-11-14", "2025-03-14"])
