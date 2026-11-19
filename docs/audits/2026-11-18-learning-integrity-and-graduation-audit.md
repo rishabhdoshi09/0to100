@@ -409,3 +409,71 @@ On the operational side, the OMS, reconciliation, protection and risk-governor m
 
 1. **"deploy <final SHA>"** activates BUY settlement, the Home count fix, `bars_held` reconciliation, the maturity rule and the schema-3 rerun. Rollback is to `125880a6`.
 2. **"apply repair"** rewrites the 7 inflated counterfactual policies to independent counts. No status changes; the backup is verified.
+
+## 10. Validation fixes and the paper-only release plan (19 Nov, after owner review)
+
+### 10.1 Scientific-validation fixes
+
+- **`2d023f6d`: confirmation and exit-variant inference.**
+  - Spearman IC now uses tie-corrected ranks (equal to `scipy.spearmanr`). A constant feature or outcome yields no IC.
+  - Daily values are averaged in non-overlapping 10-session NSE blocks, then tested with a Student t (df = blocks − 1) and BH across candidates.
+  - Any verdict beyond INSUFFICIENT EVIDENCE needs ≥ 20 independent blocks and non-zero dispersion. A zero-dispersion sample is `DEGENERATE_ZERO_DISPERSION`, never decisive.
+  - A missing or empty holiday calendar returns `EXCHANGE_CALENDAR_UNAVAILABLE`.
+  - Adversarial tests cover identical perfect ICs, 19 blocks, 300 days packed into 5 blocks, pure noise, ties, constants, and a missing calendar.
+- **`f0e80fe4`: scorecard maturity.**
+  - A signal is MATURED only when its first 10 NSE sessions (holidays included) have completed **and** each has a verified official bhavcopy on disk.
+  - It is IMMATURE before that. It is NOT_YET_VERIFIED when bars are missing or the calendar or verified-dates source is unavailable; that is never assumed matured.
+  - Production check (read-only): 4,815 MATURED, 123 IMMATURE, 0 NOT_YET_VERIFIED. Tracked BUYs: −0.129 R/session over 24 sessions, CI [−0.28, +0.02], not distinguishable from zero.
+- **`3ae98541`: prospective shadow test** (`product/challenger_shadow.py`). Each night the learning cycle freezes the challenger composite's and the champion's ranks of that session's scan before outcomes exist, and settles only MATURED sessions with the same block inference. SHADOW_ONLY: no orders, no ranking change, no policy write.
+
+### 10.2 Production effects of deploying (125880a6 → final SHA)
+
+| Change | Effect | Risk |
+|---|---|---|
+| BUY settlement in the installed handler | Nightly writes to `signal_log`; the store is loaded first; an empty store is reported | Low; idempotent |
+| `install_runtime_handlers` | Identical install calls in identical order (verified by diff) | None |
+| `reconcile_bars_held` | RPEL goes from 3 to 5 at the first EOD settlement, so max-hold fires 2 sessions earlier (correct) | Low; paper only |
+| Observation-claims store | `learning_policies.observations.sqlite3` is created on the first deduplicated ingest | Low; additive |
+| Report schema 3 | The walk-forward reruns on the first closed-market night (about 10 min, background) and refreshes calibration a few days before the weekly run | Low; the same job was healthy on 16 Nov |
+| Challenger shadow | Appends about 450 frozen rows per session to `logs/product/challenger_shadow.jsonl` | Low; additive |
+| Scorecard maturity, Home counts | Display only | None |
+
+**Rollback** is `git reset --hard 125880a6` on `host/mac-release-20261110`, then `host_install install`. Every new artefact is additive. The old code treats a schema-3 report as stale and rebuilds its own, ignores the claims store and the shadow ledger, and runs normally with RPEL's corrected count.
+
+### 10.3 Paper-only deploy runbook (requires the owner's explicit "deploy <SHA>")
+
+Read-only preflight, verified at 10:16 IST on 19 Nov:
+
+- AC power at 100%;
+- image `QuantTermStorage_WORKING_20261107` mounted;
+- 103 GB free on the runtime volume and 15 GB on the SSD;
+- checkout clean on `host/mac-release-20261110` at `125880a6`;
+- a fast-forward to the release is possible;
+- no RUNNING jobs; health READY.
+
+Run all of it after 15:30 IST and before the EOD outcome job:
+
+```bash
+cd /Users/apple/0to100 && date                          # outside 09:15-15:30 IST
+sqlite3 "file:/Volumes/QuantTermStorage/QuantTerm/runtime/logs/autonomy/jobs.db?mode=ro" \
+  "select job_type from jobs where status='RUNNING'"    # must be empty
+R=/Volumes/QuantTermStorage/QuantTerm/runtime/logs; TS=$(date +%Y%m%d_%H%M%S)
+sqlite3 $R/signal_outcomes.db ".backup '$R/backup/signal_outcomes_${TS}_pre_deploy.db'"
+cp $R/intelligence/intel_book.json $R/backup/intel_book_${TS}_pre_deploy.json
+cp $R/product/learning_policies.json $R/backup/learning_policies_${TS}_pre_deploy.json
+shasum -a 256 $R/intel_book.json $R/backup/intel_book_${TS}_pre_deploy.json 2>/dev/null; # compare each pair
+venv/bin/python -m product.launchd_control stop && launchctl list | grep quantterm   # wait until gone
+git fetch origin claude/settlement-batch-20261118 && git merge --ff-only <SHA>
+venv/bin/python -m product.host_install install --runtime-root /Volumes/QuantTermStorage/QuantTerm/runtime --env-file .env --manager launchd
+curl -s http://127.0.0.1:8765/api/health
+```
+
+**Verify the next morning:**
+
+- the outcome job summary contains "signal_log N settled";
+- `logs/product/signal_outcome_resolution.json` is fresh;
+- `bars_held_reconciled` lists RPEL 3 → 5;
+- `logs/signal_backtest.json` has `report_schema: 3` with `exit_variants` and `feature_confirmation`;
+- `challenger_shadow.jsonl` has the session recorded.
+
+The learning-policy repair is **not** part of this deploy. It needs a separate "apply repair".
