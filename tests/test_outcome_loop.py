@@ -79,10 +79,19 @@ class _Deps:
         return {"positions_closed": [], "outcomes_recorded": [], "as_of": session_date}
 
 
+def _official_store_loaded(monkeypatch):
+    # settle_signal_log loads the official store first and refuses to treat
+    # every BUY as "still open" when this process has no bars.
+    monkeypatch.setattr("data.bhavcopy_runtime.ensure_loaded", lambda **_k: {"ready": True})
+    monkeypatch.setattr("data.bhavcopy_store.is_ready", lambda: True)
+
+
 def test_outcome_job_settles_signal_ledger(monkeypatch):
     import core.signal_outcome_tracker as tk
     from research.autonomy import job_store as JS
     from research.autonomy import jobs as JOBS
+
+    _official_store_loaded(monkeypatch)
 
     calls = []
     monkeypatch.setattr(tk, "update_outcomes", lambda *a, **k: calls.append(k.get("lookback_days")))
@@ -95,6 +104,8 @@ def test_signal_ledger_failure_does_not_fail_the_outcome_job(monkeypatch):
     import core.signal_outcome_tracker as tk
     from research.autonomy import job_store as JS
     from research.autonomy import jobs as JOBS
+
+    _official_store_loaded(monkeypatch)
 
     def boom(*a, **k):
         raise RuntimeError("bhav store locked")

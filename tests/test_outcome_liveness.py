@@ -268,10 +268,15 @@ def test_production_outcome_handler_settles_signal_log(monkeypatch):
     replaced handler called update_outcomes, so no surfaced BUY was settled.
     """
     from research.autonomy import jobs as J
+    from research.autonomy import outcome_liveness as OL
     from research.autonomy import schedules as SCH
-    from research.autonomy.outcome_liveness import install_outcome_liveness
 
-    install_outcome_liveness()
+    # install_outcome_liveness mutates module globals; restore them after.
+    monkeypatch.setattr(J, "run_outcome_resolution", J.run_outcome_resolution)
+    monkeypatch.setitem(J.HANDLERS, SCH.OUTCOME_RESOLUTION, J.HANDLERS[SCH.OUTCOME_RESOLUTION])
+    monkeypatch.setattr(J.Deps, "resolve_outcomes", J.Deps.resolve_outcomes)
+    monkeypatch.setattr(OL, "_INSTALLED", False)
+    OL.install_outcome_liveness()
     handler = J.HANDLERS[SCH.OUTCOME_RESOLUTION]
     assert handler is _run_outcome_resolution_light
     calls = []
