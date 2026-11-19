@@ -174,7 +174,7 @@ def test_a_cli_that_would_start_another_session_disables_the_relay(world):
     out = world.relay.poll()
     assert out["delivered"]["why"] == "WRONG_SESSION" and world.relay.disabled
     world.cli_reply = None
-    world.comment(_instr(sha=OLD))
+    world.comment(_instr(nonce="rt-after-disable"))
     assert world.relay.poll() == {"status": "DISABLED"} and len(world.sent) == 1
 
 
@@ -188,11 +188,8 @@ def test_failed_sends_retry_at_most_three_times(world):
 
 def test_daily_delivery_cap(world, monkeypatch):
     monkeypatch.setattr(QR, "MAX_DELIVERIES_PER_DAY", 2)
-    shas = [f"{i:x}" * 40 for i in range(1, 5)]
-    world.ancestors |= set(shas)
-    for s in shas:
-        world.ci[s] = "success"
-        world.comment(_instr(sha=s))
+    for i in range(4):                                   # round-trip tests share the delivery cap
+        world.comment(_instr(nonce=f"rt-cap-{i}"))
     for _ in range(5):
         world.relay.poll()
     assert len(world.sent) == 2
@@ -234,10 +231,18 @@ def test_reports_need_the_green_exact_head_and_make_older_reviews_stale(world, t
     world.relay.poll()
     world.relay.poll()
     rows = _rows(world)
-    assert rows[cur]["kind"] == "CURRENT" and rows[old]["kind"] == "STALE_REVIEW"
-    too_old = world.comment(_instr(sha=OLD, text="ancient"), age=timedelta(days=8))
+    assert rows[cur]["kind"] == "CURRENT" and rows[cur]["status"] == "DELIVERED"
+    assert rows[old]["status"] == "REJECTED" and rows[old]["reason"] == "NOT_THE_LATEST_CYCLE"
+    assert len(world.sent) == 1 and "review of an older commit" not in world.sent[0]
+
+
+def test_only_the_latest_reported_cycle_is_acted_on(world):
+    """After a newer report, a late review of the previous cycle is never delivered."""
+    world.ancestors.add(OLD)
+    world.relay.set_meta("latest_reported_sha", HEAD)
+    late = world.comment(_instr(sha=OLD, text="late review of the previous cycle"))
     world.relay.poll()
-    assert _rows(world)[too_old]["status"] == "REJECTED"
+    assert world.sent == [] and _rows(world)[late]["reason"] == "NOT_THE_LATEST_CYCLE"
 
 
 def test_an_edit_before_delivery_is_rejected_not_delivered(world):
@@ -269,3 +274,13 @@ def test_state_survives_a_restart(world, tmp_path):
     again = QR.Relay(world.relay.home, runner=world.run, clock=lambda: world.now, config=dict(CFG))
     again.poll()
     assert len(world.sent) == 1 and {r["comment_id"]: r for r in again.status()["recent"]}[cid]["status"] == "DELIVERED"
+
+
+def test_reports_carry_the_delivery_and_ack_ledger(world):
+    world.comment(_instr(nonce="rt-ledger"))
+    out = world.relay.poll()
+    world.relay.ack(out["delivered"]["delivery_id"])
+    world.relay.report(HEAD, "## Cycle")
+    posted = world.posted[-1]
+    assert "Relay delivery ledger" in posted and out["delivered"]["delivery_id"] in posted and "ACKED" in posted
+
