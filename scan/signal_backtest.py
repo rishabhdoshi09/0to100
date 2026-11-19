@@ -264,6 +264,80 @@ def _evidence_fields(stats: dict) -> dict:
     }
 
 
+# Pre-declared exit-construction experiment (research only; never changes the
+# calibration, the evidence gate or any live/paper rule). The forward sample
+# (2026-11-19, 24 sessions) pointed at the breakeven trail: V0 -0.086R,
+# V3 +0.102R, none significant after BH. These four are fixed BEFORE the
+# large-sample run so the weekly walk-forward can confirm or reject them.
+# (name, breakeven trigger % or None = no trail, horizon multiple)
+EXIT_VARIANTS = (
+    ("V0_prod_be_h", "trail", 1),
+    ("V1_no_trail_h", None, 1),
+    ("V2_be_2h", "trail", 2),
+    ("V3_no_trail_2h", None, 2),
+)
+
+
+def exit_variant_results(entry: float, stop: float, target: float, fwd, horizon: int) -> list[tuple[str, str, float]]:
+    """Net R of the same signal under each pre-declared exit construction.
+
+    ``fwd`` must hold at least 2 * horizon bars after the signal so every
+    variant is judged on the same trades. NO_FILL trades are omitted.
+    """
+    out: list[tuple[str, str, float]] = []
+    from core.costs import cost_in_r
+
+    for name, trail, mult in EXIT_VARIANTS:
+        window = fwd.iloc[: int(horizon) * int(mult)]
+        sim = simulate_trade(
+            entry, stop, target,
+            window["high"].values, window["low"].values, window["close"].values,
+            opens=window["open"].values if "open" in window.columns else None,
+            be_pct=_BT_BREAKEVEN_PCT if trail else 1e9,
+        )
+        if sim.outcome == "NO_FILL":
+            continue
+        cost = cost_in_r((sim.fill_price - stop) / sim.fill_price, "CNC") if sim.fill_price > stop else 0.0
+        out.append((name, sim.outcome, float(sim.r) - cost))
+    return out
+
+
+def exit_variant_report(exit_stats: dict) -> dict:
+    """Cluster-robust net expectancy per variant + Benjamini-Hochberg across them."""
+    import math
+
+    rows = {}
+    pvals, names = [], []
+    for name, _trail, _mult in EXIT_VARIANTS:
+        st = exit_stats.get(name)
+        if not st or not st.get("trades"):
+            continue
+        ev = _evidence_fields(st)
+        se = ev.get("se_r")
+        z = (ev["expectancy_r_precise"] / se) if se else 0.0
+        p = math.erfc(abs(z) / math.sqrt(2.0))
+        rows[name] = {"trades": st["trades"], "win_rate": round(st["wins"] / st["trades"] * 100, 1),
+                      "scratch_rate": round(st.get("scratches", 0) / st["trades"] * 100, 1),
+                      "p_two_sided": round(p, 6), **ev}
+        pvals.append(p)
+        names.append(name)
+    if pvals:
+        from research.harness import benjamini_hochberg
+
+        bh = benjamini_hochberg(pvals)
+        rejected = [bool(x) for x in bh.get("rejected", [])]       # numpy mask, input order
+        qvalues = [float(x) for x in bh.get("qvalues", [])]
+        for i, name in enumerate(names):
+            rows[name]["bh_significant"] = rejected[i] if i < len(rejected) else False
+            rows[name]["bh_q"] = round(qvalues[i], 6) if i < len(qvalues) else None
+    return {
+        "variants": rows,
+        "status": "RESEARCH_ONLY",
+        "note": ("Same trades, same fills, four pre-declared exits; costs included. A "
+                 "construction change reaches PAPER only through a champion/challenger gate."),
+    }
+
+
 def _eval_spec_tag(horizon: int) -> str:
     return f"sim:h{int(horizon)}:be{_BT_BREAKEVEN_PCT:g}:gap"
 
@@ -329,6 +403,7 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
     # the calibration is frozen for the whole run — hash it ONCE, not per trade
     _calib_version = _calibration_version() if on_trade is not None else ""
     tgt_stats: dict[str, dict] = {}             # target label → aggregate
+    exit_stats: dict[str, dict] = {}            # exit variant → aggregate (research only)
     combo_stats: dict[str, dict] = {}           # exact signal combination → aggregate
 
     for si, sym in enumerate(symbols):
@@ -388,6 +463,18 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                                        fill_price=sim.fill_price, exit_price=sim.exit_price)
                 except Exception:
                     pass          # ledger emission must never break the backtest
+
+            # Pre-declared exit-construction experiment on the same trade.
+            if t + 2 * horizon <= n:
+                for vname, voutcome, vr in exit_variant_results(
+                        r.entry, r.stop, r.target, df.iloc[t:t + 2 * horizon], horizon):
+                    es = exit_stats.setdefault(vname, {"trades": 0, "wins": 0, "scratches": 0,
+                                                       "r_sum": 0.0, "clusters": {}})
+                    es["trades"] += 1
+                    es["r_sum"] += vr
+                    es["wins"] += voutcome == "WIN"
+                    es["scratches"] += voutcome == "SCRATCH"
+                    _add_cluster(es["clusters"], day_key, vr)
 
             # Target geometry sweep — same fill, +2/+3/+4% targets
             for label, (o2, r2) in sweep_targets(
@@ -497,6 +584,7 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
            "signals": report,
            "combos": combos,
            "target_sweep": target_sweep,
+           "exit_variants": exit_variant_report(exit_stats),
            "recommended_target_pct": recommended,
            "elapsed_s": round(time.time() - t0, 1)}
     if len(symbols) < MIN_SYMBOLS_TO_SAVE or not report:
