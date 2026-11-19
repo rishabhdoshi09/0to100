@@ -435,7 +435,7 @@ On the operational side, the OMS, reconciliation, protection and risk-governor m
 | `reconcile_bars_held` | RPEL goes from 3 to 5 at the first EOD settlement, so max-hold fires 2 sessions earlier (correct) | Low; paper only |
 | Observation-claims store | `learning_policies.observations.sqlite3` is created on the first deduplicated ingest | Low; additive |
 | Report schema 3 | The walk-forward reruns on the first closed-market night (about 10 min, background) and refreshes calibration a few days before the weekly run | Low; the same job was healthy on 16 Nov |
-| Challenger shadow | Appends about 450 frozen rows per session to `logs/product/challenger_shadow.jsonl` | Low; additive |
+| Challenger shadow | One SQLite transaction per session in `logs/product/challenger_shadow.db` (§11; replaces the JSONL) | Low; additive |
 | Scorecard maturity, Home counts | Display only | None |
 
 **Rollback** is `git reset --hard 125880a6` on `host/mac-release-20261110`, then `host_install install`. Every new artefact is additive. The old code treats a schema-3 report as stale and rebuilds its own, ignores the claims store and the shadow ledger, and runs normally with RPEL's corrected count.
@@ -476,6 +476,108 @@ curl -s http://127.0.0.1:8765/api/health
 - `logs/product/signal_outcome_resolution.json` is fresh;
 - `bars_held_reconciled` lists RPEL 3 → 5;
 - `logs/signal_backtest.json` has `report_schema: 3` with `exit_variants` and `feature_confirmation`;
-- `challenger_shadow.jsonl` has the session recorded.
+- `logs/product/challenger_shadow.db` has the session recorded (`sessions` row FROZEN, or MISSED with its reason). §11 replaced the JSONL.
 
 The learning-policy repair is **not** part of this deploy. It needs a separate "apply repair".
+
+## 11. Scientific-integrity pass (19 Nov, owner directive after `71166a1b`)
+
+Branch `claude/settlement-batch-20261118`, on top of `71166a1b`. Live trading stays HARD-LOCKED. Nothing was deployed and no production ledger was modified.
+
+### 11.1 Residual dependence between 10-session outcome windows (finding)
+
+The 2026-11-19 method averaged daily values in non-overlapping 10-session blocks and treated the block means as independent. They are not:
+
+- The last sessions of a block share nine of ten outcome sessions with the first sessions of the next block.
+- Slow regimes add dependence beyond the overlap.
+
+Monte Carlo on null data (no true effect, two-sided 5% nominal, 2,000 simulations):
+
+| Null structure | Superseded block t | Day-clustered error | `research/overlap_inference.py` |
+|---|---|---|---|
+| Overlapping 10-session windows | 10.2% | 52.7% | 3.0% |
+| + slow regime (AR 0.8) | 15.4% | 63.2% | 5.6% |
+| + very slow regime (AR 0.9) | 25.6% | 70.5% | 5.2% |
+| A 10-session block copied into the next window (400 simulations) | 28.2% | 66.7% | 1.3% |
+
+The BUY gate's one-sided bound (day-clustered, z = 1.645) marked 45 of 120 null setups "proven". The new bound marks 8.
+
+On the real tracked BUYs (SSD copy of `signal_outcomes.db`):
+
+- 3,203 settled trades come from only 24 sessions, which is 4 independent 10-session blocks.
+- The session means are autocorrelated: +0.28 at lag 1 and +0.12 at lag 5.
+- The honest variance is 5.4 × the day-clustered one. The CI moves from [−0.31, +0.05] R to [−0.81, +0.55] R, and the verdict is INSUFFICIENT EVIDENCE (4 of 20 blocks).
+- 16 `(session, symbol)` rows in `signal_log` are duplicated decisions.
+
+### 11.2 Method (`research/overlap_inference.py`)
+
+1. **Session cells.** Values are keyed by NSE session ordinal; rows on one session form one cluster, so duplicating rows changes nothing.
+2. **Offset subsamples.** The cells are split by `ordinal mod 10`. Within a subsample no two windows overlap. The standard error is the weighted sum of the subsample errors, an upper bound by Minkowski's inequality whatever their cross-correlation. It is never below the day-clustered error.
+3. **Residual dependence.** The lag-10 residual autocorrelation widens the variance with an AR(1) factor (bias-corrected). A Bartlett Newey–West term at lags 10 and 20 is the floor.
+4. **Degrees of freedom and floor.** Student t uses df = independent blocks − 1. A verdict needs ≥ 20 blocks and non-zero dispersion.
+
+The method is used by:
+
+- the walk-forward BUY-gate bound (`_evidence_fields`; the realised official-bar session index; worst case √10 × the clustered error if no index);
+- the exit variants and the feature confirmation;
+- the scorecard (`session_series_verdict`, `trend`);
+- the challenger shadow.
+
+Regression tests: `tests/test_overlap_inference.py`, `TestOneRulebook` in `tests/test_money_paths.py`.
+
+### 11.3 Exchange calendar fails closed
+
+`data/nse_holidays.json` lists **2026 only**, and there is no runtime amendment file on the host.
+
+- `nse_calendar.covered_years` counts a year as covered only with ≥ 8 listed holidays.
+- `calendar_gap`, `forward_sessions` and `strict_session_ordinals` return "not covered" for any year outside that set.
+- `maturity_checker` returns NOT_YET_VERIFIED, with reasons (`EXCHANGE_CALENDAR_UNAVAILABLE`, `…NOT_COVERED:<year>`), for an empty, stray-entry or uncovered calendar. It never assumes weekdays. A window still in the future by a weekdays-only count stays IMMATURE.
+- **Operational consequence:** signals from 17 Dec 2026 onwards, whose 10-session window reaches into 2027, are NOT_YET_VERIFIED until NSE's 2027 holiday list is added to `data/nse_holidays.json`. This is by design. Freezing still works until 31 Dec, because the shadow gate needs the calendar only through the next session.
+
+### 11.4 Prospective challenger shadow (`product/challenger_shadow.py`, schema 2)
+
+- **What may be frozen.** Only the live session-close scan of the latest completed NSE session, before the first eligible forward entry (the next session's 09:15 IST open).
+  - The scan must carry an identity (`scan_id`) and current input (`data_current`, expected session).
+  - It must have completed after the 15:30 close.
+  - The session's official bar must be published.
+  - Replays (`pit`), stale or anonymous scans, and late writes freeze nothing.
+- **What is frozen** in one SQLite transaction (`logs/product/challenger_shadow.db`):
+  - per symbol: the champion's actual score, rank and verdict, and the challenger's composite score and rank;
+  - per session: the model version (hypothesis, challenger spec hash, `QT_BUILD_SHA`, horizon), the instrument universe (approved and scanned counts, candidate-list SHA-256), the exclusions, and a payload hash.
+  - Zero candidates still write the session marker. A crash rolls back the marker and the predictions together. The primary key makes writes idempotent.
+- **What is never evidence.** A deadline that passed unfrozen becomes MISSED. Evaluation also refuses rows that were:
+  - frozen after the deadline;
+  - inserted after a later session's row (a backfill);
+  - edited after freezing (payload hash).
+- **How outcomes are measured.**
+  - Over exactly the 10 official NSE sessions after the signal: the open of the 1st to the close of the 10th.
+  - Every bar must exist for the symbol. A missing bar excludes that symbol and is counted; more than 20% missing excludes the session.
+- **How the decision is made.**
+  - It is the paired IC improvement (challenger minus champion, same candidates, same window), tested with the overlap-robust error.
+  - It has a top-quintile spread as the second member of a Holm-corrected family of two.
+  - Two separately positive ICs are not evidence; a test shows that.
+- Seven mutation tests (each guard removed in turn) all make the suite fail.
+
+### 11.5 Review relay (development-only)
+
+`scripts/quantterm_relay.py` is installed as the launchd agent `com.quantterm.relay` with state in `~/Library/Application Support/QuantTermRelay`.
+
+- It polls issue #333 every 5 minutes.
+- It accepts only owner comments whose first line is `<!-- quantterm-relay-v1 sha=<40 hex> -->`, for a SHA on the engineering branch with all five workflows green.
+- It delivers once per SHA with `claude -p --cloud <session>`. The text arrives as a peer message, never as owner approval.
+- Delivery is at-most-once (SENDING → UNCERTAIN on a crash), with acknowledgements, a cap of 8 deliveries per day, and a self-disable if the CLI ever reports another session.
+- It runs only while the Mac is awake and online.
+
+### 11.6 Unchanged
+
+The BUY-settlement chain, `bars_held` reconciliation, the observation-claims dedupe, the scorecard maturity rules, the paper accounting and the live interlock are unchanged. The money-path suite passes in full.
+
+### 11.7 Rollback
+
+As in §10.2, `git reset --hard 125880a6` on `host/mac-release-20261110`, then `host_install install`. The new artefacts are additive:
+
+- `challenger_shadow.db` is ignored by the old code.
+- The schema-3 report's stricter `lower_r` is read by the old gate unchanged and only withholds more.
+
+The relay is independent of the desk. To stop it: `launchctl bootout gui/501/com.quantterm.relay`, or create the `DISABLED` file.
+

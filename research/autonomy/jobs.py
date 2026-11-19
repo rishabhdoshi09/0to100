@@ -1661,9 +1661,13 @@ def run_learning_cycle(ctx) -> JobResult:
             from product.challenger_shadow import nightly as challenger_shadow_nightly
 
             shadow = challenger_shadow_nightly()
+            evaluation = shadow.get("evaluation") or {}
             result["challenger_shadow"] = {
                 "recorded": shadow.get("recorded"),
-                "results": (shadow.get("evaluation") or {}).get("results"),
+                "missed_marked": shadow.get("missed_marked"),
+                "decision": evaluation.get("decision"),
+                "session_outcomes": evaluation.get("session_outcomes"),
+                "results": evaluation.get("results"),
                 "error": shadow.get("error"),
             }
         except Exception as exc:
