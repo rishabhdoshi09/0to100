@@ -750,3 +750,86 @@ Power (300 sessions; the true mean shift is in per-session SD units):
 - The shadow ledger freezes a Friday session before Saturday 09:15.
 - F&O and sniper Telegram messages are labelled as research.
 
+## 14. Admission-proof challenge (20 Nov; ChatGPT review of `845ad743`)
+
+The review was delivered at 21:58:24Z and acknowledged. Nothing was deployed and no production data was changed. Live trading is HARD-LOCKED.
+
+### 14.1 Multiple testing for individual BUY admission (P0)
+
+The 845ad743 gate used Benjamini–Hochberg. The review was right that this is the wrong guarantee for this decision:
+
+- BH controls the expected *share* of false discoveries.
+- It assumes positive dependence.
+- It says nothing about whether one admitted BUY is real.
+
+A BUY admission is an individual decision, so the predeclared procedure is now **Holm-Bonferroni (family-wise)**. Holm bounds P(any false admission) at 5% per report under **arbitrary** dependence. The choice was made on theory, not tuned on the runs below.
+
+`research/admission_stress.py` builds a reproducible null of the real gate's structure (seeds 501–504; 100 simulations × 13 weekly looks on a rolling 250-session window):
+
+- 12 signals and their pairwise combinations, loading on shared market and style factors;
+- overlapping 10-session outcome windows, with firing that co-moves with a slow regime;
+- a trade floor of 30.
+
+Two families were tested: a production-like family (every row with ≥ 30 trades), and an adversarial one that picks combinations by in-sample mean and then tests them on the same data. The admission rule is mean ≥ +0.05R plus a one-sided p below the procedure's threshold.
+
+| Family | Procedure | False admission per look | Any false admission in 13 looks |
+|---|---|---|---|
+| production family | none | 1.00% [0.59%, 1.70%] | 1.0% [0.2%, 5.5%] |
+| production family | bh | 0.00% [0.00%, 0.29%] | 0.0% [0.0%, 3.7%] |
+| production family | by | 0.00% [0.00%, 0.29%] | 0.0% [0.0%, 3.7%] |
+| production family | holm | 0.00% [0.00%, 0.29%] | 0.0% [0.0%, 3.7%] |
+| production family | bonferroni | 0.00% [0.00%, 0.29%] | 0.0% [0.0%, 3.7%] |
+| mean-selected family | none | 0.00% [0.00%, 0.29%] | 0.0% [0.0%, 3.7%] |
+| mean-selected family | bh | 0.00% [0.00%, 0.29%] | 0.0% [0.0%, 3.7%] |
+| mean-selected family | by | 0.00% [0.00%, 0.29%] | 0.0% [0.0%, 3.7%] |
+| mean-selected family | holm | 0.00% [0.00%, 0.29%] | 0.0% [0.0%, 3.7%] |
+| mean-selected family | bonferroni | 0.00% [0.00%, 0.29%] | 0.0% [0.0%, 3.7%] |
+
+| True per-trade edge in one signal | none | BH | Holm |
+|---|---|---|---|
+| +0.15R | 0.008 | 0.000 | 0.000 |
+| +0.30R | 0.027 | 0.000 | 0.000 |
+
+Reading:
+
+- Under factor-driven dependence the overlap-robust per-row test is already so conservative that no procedure produced a false admission in 1,300 looks. Only the uncorrected test did, at 1%.
+- The same conservatism leaves **almost no power**. A large +0.30R edge is admitted in 2.7% of looks uncorrected, and in **0%** after any correction, within one 250-session window.
+- The simulations therefore cannot tell BH from Holm. Theory decides, and Holm costs no measurable power here.
+- Not covered: weekly re-tests across a full year (52 looks). The measured 13-look rate is 0 of 100 runs (Wilson upper bound 3.7%).
+- These are synthetic stress tests, not a guarantee for Indian market returns.
+
+### 14.2 Decision-time provenance (P0)
+
+- **A fresh timestamp alone certifies nothing.** `evidence_provenance_note` requires all of:
+  - report schema ≥ 4;
+  - the current rulebook's `eval_spec` and horizon;
+  - the predeclared family method;
+  - the generating code SHA (`QT_BUILD_SHA`, or else git HEAD);
+  - a date ≤ 21 days old.
+
+  The report writes `evidence_provenance`, and the calibration snapshot freezes it as `backtest_provenance`.
+- **One immutable binding per scan.** The scanner deep-copies its evidence, so a refresh mid-scan does not change that scan's verdicts.
+- **Each row carries its certificate.** Every result carries `edge_evidence_id`, and the payload names its `evidence_identity`.
+- **Every consumer re-checks the certificate.** `scan_store.bind_evidence` runs in `load_scan()` and in the recommendation workspace for in-memory payloads. A BUY row whose id is missing or different reads as WATCH, with the reason. That covers:
+  - a legacy artifact (no identity);
+  - a rolled-back or mixed one.
+
+  The paper autopilot, Home and Telegram all read through these, and historical replays (`pit`) are exempt.
+- **Other cases tested:** a duplicated signal no longer doubles its weight; a truncated or corrupt report file is no evidence; a restart gives the same answer.
+- **Fixture changes.** Three recommendation tests built synthetic BUY payloads with no evidence identity. They now carry one, as a real gated scan does. The tests' subject (quality ranking, breakout grading, watchlist order) is unchanged.
+
+### 14.3 Shadow and calendar integrity (P1)
+
+- **Migration.** A ledger from before the unique index, with duplicate `scan_id` rows, is migrated on open, not broken. The earliest row stays FROZEN and the later ones become MISSED, `QUARANTINED_DUPLICATE_SCAN_ID`. Nothing is deleted.
+- **kill -9 mid-transaction.** A real separate process killed inside `BEGIN IMMEDIATE` leaves no row, and the lock is released.
+- **A corrupt ledger** raises and the nightly job reports `LEDGER_UNREADABLE`. It is never recreated, so the record of what was frozen is never erased.
+- **Exceptional sessions.** An unrecorded Saturday bar inside a shadow window makes the session NOT_YET_VERIFIED instead of stretching or shortening it.
+- **Exact horizons in the walk-forward.** It measured outcomes over the next 10 *bars* of each symbol, which a suspension or a missing bar silently stretches. `window_is_exact` now requires the 10 consecutive official sessions after the signal bar, from the bhavcopy dates on disk. Other trades are skipped and counted (`horizon_gap_windows_skipped`).
+- **Calendar.** Live amendment freshness remains BLOCKED offline. Historical completeness is the verified manifest plus the official-bars cross-check (§13.2).
+
+### 14.4 Reproducing the statistics (P1)
+
+- The seeded `research.overlap_stress` run (2,000 simulations per null) was repeated from scratch and compared with the committed JSON. Every scenario, the selection and tuning arms, and power came out **identical** (numpy 2.4.4, scipy 1.17.1). The output now records those versions. A different numpy random stream would change the numbers; the pinned-fixture test below does not depend on it.
+- `test_the_conservative_estimator_is_pinned` pins the exact SE, df and lower bound on three RNG-free fixtures. Any change to the estimator fails, and a less conservative change is named as such.
+- Synthetic nulls remain a stress test, not a guarantee.
+

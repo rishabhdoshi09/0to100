@@ -254,7 +254,9 @@ def main(argv=None) -> int:
     ap.add_argument("--out")
     args = ap.parse_args(argv)
     t0 = time.time()
+    import scipy
     out = {"method": OI.METHOD, "horizon_sessions": H, "nominal": 0.05,
+           "versions": {"numpy": np.__version__, "scipy": scipy.__version__},
            "definition": "two-sided p < 0.05 with status OK (>= 20 independent blocks), under a true null",
            "scenarios": {name: run_scenario(gen, seed, args.sims) for name, (seed, gen) in SCENARIOS.items()},
            "selection_20_features_bh": run_selection(201, args.selection_sims),

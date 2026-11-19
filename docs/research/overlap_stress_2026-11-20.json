@@ -2,6 +2,10 @@
   "method": "offset-subsample Minkowski bound + lag-h residual widening (research/overlap_inference.py)",
   "horizon_sessions": 10,
   "nominal": 0.05,
+  "versions": {
+    "numpy": "2.4.4",
+    "scipy": "1.17.1"
+  },
   "definition": "two-sided p < 0.05 with status OK (>= 20 independent blocks), under a true null",
   "scenarios": {
     "overlapping_windows": {
@@ -297,5 +301,5 @@
       }
     }
   },
-  "elapsed_s": 131.5
+  "elapsed_s": 167.3
 }

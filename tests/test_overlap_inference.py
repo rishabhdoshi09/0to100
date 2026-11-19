@@ -176,3 +176,29 @@ def test_effective_df_shrinks_with_residual_dependence():
     slow = OI.overlap_robust_test(_cells(_overlap_series(rng, 400, phi=0.9)), H)
     assert slow["df"] < slow["df_raw"] and slow["residual_dependence"]["variance_widening"] > 1.0
 
+
+
+# ── pinned estimator (2026-11-20 review, P1-4): any change must be deliberate ──
+
+GOLDEN = {   # RNG-free fixtures; values from research/overlap_inference.py at the effective-df commit
+    "oscillating": {"se": 0.04375862920207197, "df": 25, "lower": -0.05124439331792591},
+    "weighted_sparse": {"se": 0.10050032748094702, "df": 13, "lower": -0.16707918983928624},
+    "persistent": {"se": 0.16810017551563805, "df": 1, "lower": -1.0587284597856634},
+}
+
+
+def _golden_fixtures():
+    a = {o: [0.02 + 0.3 * math.sin(o / 3.0) + 0.1 * math.cos(o * 1.7), 1] for o in range(260)}
+    b = {o: [(0.01 + 0.5 * math.sin(o / 9.0)) * (1 + o % 3), 1 + o % 3] for o in range(0, 400, 2)}
+    c = {o: [0.05 * ((o * 7919) % 13 - 6) / 6.0 + 0.2 * math.sin(o / 25.0), 1] for o in range(300)}
+    return {"oscillating": a, "weighted_sparse": b, "persistent": c}
+
+
+@pytest.mark.parametrize("name", sorted(GOLDEN))
+def test_the_conservative_estimator_is_pinned(name):
+    rep = OI.overlap_robust_test(_golden_fixtures()[name], H)
+    want = GOLDEN[name]
+    weaker = rep["se"] < want["se"] * (1 - 1e-9) or rep["df"] > want["df"] or rep["lower_95_one_sided"] > want["lower"] + 1e-12
+    assert not weaker, f"inference became LESS conservative on {name}: {rep['se']}, df {rep['df']}"
+    assert rep["se"] == pytest.approx(want["se"], rel=1e-9), "estimator changed: re-run research.overlap_stress and re-pin"
+    assert rep["df"] == want["df"] and rep["lower_95_one_sided"] == pytest.approx(want["lower"], rel=1e-9)
