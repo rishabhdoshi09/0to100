@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "segment": "CM",
+  "years": {
+    "2026": {
+      "note": "Weekday CM trading holidays as published by NSE. Asterisked entries are exchange-notified special sessions (e.g. Muhurat); they are not regular sessions and are not counted in 10-session outcome windows.",
+      "retrieved_at": "2026-11-19T19:04:43+00:00",
+      "source": "https://www.nseindia.com/api/holiday-master?type=trading (segment CM)",
+      "special_session_markers": [
+        "2026-11-08 Diwali Laxmi Pujan*"
+      ],
+      "status": "VERIFIED_COMPLETE",
+      "weekday_holidays": 16,
+      "weekday_holidays_sha256": "9cf00f043a2d669cf384b871e444196e045dc9885f97534fe63cbb75819f400f",
+      "weekend_dated_entries": [
+        "2026-02-15",
+        "2026-03-21",
+        "2026-08-15",
+        "2026-11-08"
+      ]
+    }
+  }
+}
