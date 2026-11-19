@@ -216,7 +216,11 @@ def sweep_targets(entry: float, stop: float, fwd_high, fwd_low, fwd_close,
 
 #: Bumped when the report gains fields the evidence gate relies on; the
 #: supervisor treats an older report as due for a rerun.
-REPORT_SCHEMA = 2
+# 3: adds exit_variants + feature_confirmation (pre-registered 2026-11-19). A
+# schema change makes the supervisor rerun the walk-forward in the next
+# closed-market window, so the out-of-sample verdicts arrive the first night
+# after deploy instead of the following Saturday.
+REPORT_SCHEMA = 3
 #: Exact signal combinations need their own sample before they make a claim.
 COMBO_MIN_TRADES = 30
 #: One-sided 95% lower bound: mean - 1.645 * clustered standard error.
