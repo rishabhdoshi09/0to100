@@ -333,6 +333,39 @@ def exit_variant_results(entry: float, stop: float, target: float, fwd, horizon:
     return out
 
 
+def apply_family_correction(signals: dict, combos: dict, *, alpha: float = 0.05) -> dict:
+    """Benjamini-Hochberg across every row the live BUY gate can use.
+
+    The gate judges each signal and each exact combination at a one-sided 5%;
+    with ~15 signals and ~30 combinations a global null would still "prove"
+    one or two. Each row gets its one-sided p for "edge > 0" (overlap-robust t
+    and df), and bh_significant only when it survives BH across the whole
+    family. Rows that cannot be tested (not OVERLAP_ROBUST, zero or missing
+    error) count with p = 1, so they enlarge the family and never pass.
+    Mutates and returns a summary.
+    """
+    from research.harness import benjamini_hochberg
+    from research.overlap_inference import _t_sf
+
+    rows = [r for r in list((signals or {}).values()) + list((combos or {}).values()) if isinstance(r, dict)]
+    pvals = []
+    for r in rows:
+        try:
+            mean, se, df = float(r.get("expectancy_r_precise")), float(r.get("se_r") or 0.0), int(r.get("df") or 0)
+        except (TypeError, ValueError):
+            mean, se, df = 0.0, 0.0, 0
+        ok = r.get("inference") == "OVERLAP_ROBUST" and se > 0 and df > 0
+        p = _t_sf(mean / se, df) if ok else 1.0
+        r["p_one_sided"] = round(float(p), 6)
+        pvals.append(float(p))
+    rejected = list(benjamini_hochberg(pvals, alpha=alpha).get("rejected", [])) if pvals else []
+    for r, rej in zip(rows, rejected):
+        r["bh_significant"] = bool(rej)
+        r["bh_family_size"] = len(rows)
+    return {"family_size": len(rows), "alpha": alpha, "method": "Benjamini-Hochberg, one-sided edge > 0",
+            "survivors": int(sum(bool(x) for x in rejected))}
+
+
 def _day_clustered_reference(stats: dict) -> dict:
     mean, se, g = clustered_mean_se(stats.get("clusters") or {})
     return {"expectancy_r_precise": round(mean, 4), "se_r": None if se is None else round(se, 4),
@@ -849,6 +882,8 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
         combos[key] = {"trades": cs["trades"], "wins": cs["wins"], "losses": cs["losses"],
                        **_evidence_fields(cs, session_index, horizon)}
 
+    family = apply_family_correction(report, combos)
+
     target_sweep = {}
     for label, ts in tgt_stats.items():
         target_sweep[label] = {
@@ -877,7 +912,7 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
            "feature_confirmation": confirmation_report(confirm_rows, horizon=horizon,
                                                        session_index=session_index),
            "evidence_inference": {"method": "research.overlap_inference", "session_index": "realised official bars",
-                                  "sessions_indexed": len(session_index)},
+                                  "sessions_indexed": len(session_index), "family_correction": family},
            "recommended_target_pct": recommended,
            "elapsed_s": round(time.time() - t0, 1)}
     if len(symbols) < MIN_SYMBOLS_TO_SAVE or not report:

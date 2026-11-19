@@ -5779,7 +5779,7 @@ class TestOneRulebook:
 
     def test_a_measured_edge_without_a_lower_bound_is_not_proven(self):
         from scan.unified_scanner import _evidence_row, _evidence_verdict, _proven
-        robust = {"inference": "OVERLAP_ROBUST", "blocks": 24}
+        robust = {"inference": "OVERLAP_ROBUST", "blocks": 24, "bh": True}
         assert _proven(_evidence_row(0.4)) is False                                 # legacy bare float (2026-11-20)
         assert _proven(_evidence_row({"mean": 0.4, "lower": None, "n": 45, **robust})) is False   # one session
         assert _proven(_evidence_row({"mean": 0.4, "lower": 0.01, "n": 45})) is False             # pre-rerun bound
@@ -5795,6 +5795,22 @@ class TestOneRulebook:
         assert _evidence_verdict(95, ["VCP", "MOMENTUM"], gate=True)[0] == "WATCH"
         assert _evidence_verdict(95, ["VCP", "MOMENTUM"], signal_edges={"OTHER": 0.5}, gate=True)[0] == "WATCH"
         assert _evidence_verdict(95, ["VCP", "MOMENTUM"], gate=False)[0] == "BUY"   # research measurement only
+
+    def test_the_gate_family_is_corrected_for_multiple_testing(self):
+        """30 null rows and one real edge: only the real one may survive BH."""
+        from scan.signal_backtest import apply_family_correction
+        import numpy as np
+        rng = np.random.default_rng(11)
+        signals = {f"N{i}": {"expectancy_r_precise": float(rng.normal(0, 0.02)), "se_r": 0.02, "df": 22,
+                             "inference": "OVERLAP_ROBUST"} for i in range(30)}
+        signals["REAL"] = {"expectancy_r_precise": 0.20, "se_r": 0.03, "df": 22, "inference": "OVERLAP_ROBUST"}
+        combos = {"LEGACY": {"expectancy_r_precise": 0.5, "se_r": 0.01}}          # untestable: p = 1
+        out = apply_family_correction(signals, combos)
+        assert out["family_size"] == 32 and signals["REAL"]["bh_significant"] is True
+        assert combos["LEGACY"]["bh_significant"] is False and combos["LEGACY"]["p_one_sided"] == 1.0
+        raw = sum(1 for r in signals.values() if r["p_one_sided"] < 0.05) - 1
+        survivors = sum(1 for k, r in signals.items() if k != "REAL" and r["bh_significant"])
+        assert survivors <= raw and survivors <= 1
 
     def test_backtest_session_index_is_the_realised_official_sessions(self):
         from scan.signal_backtest import realised_session_index

@@ -170,6 +170,9 @@ def build_snapshot(
         # Raw evidenced expectancy behind the live scanner's evidence gate,
         # frozen with the multipliers it was measured alongside.
         "backtest_edges": _backtest_edges(backtest),
+        # When the walk-forward behind these edges ran: the live gate refuses
+        # undated or stale evidence (scan.unified_scanner.evidence_age_note).
+        "backtest_generated_at": str((backtest or {}).get("generated_at") or ""),
         "backtest_combo_edges": _backtest_combo_edges(backtest),
         "signal_registry": registry,
     }

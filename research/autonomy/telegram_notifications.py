@@ -647,13 +647,19 @@ class TelegramNotifier:
         keys = []
         for r, price in confirmed:
             sym = str(r.get("symbol", "")).upper()
+            proven = str(r.get("verdict", "")).upper() in ("BUY", "STRONG BUY")
+            # A price cross is tape, not evidence: a row the evidence gate held
+            # at WATCH is announced as research, never as an entry plan.
+            levels = (f"   PAPER plan: stop ₹{self._f(r.get('stop')):,.2f} · "
+                      f"target ₹{self._f(r.get('target')):,.2f}") if proven else (
+                      f"   ⚖ WATCH — no proven edge; research alert, not a recommendation "
+                      f"(levels: stop ₹{self._f(r.get('stop')):,.2f} · target ₹{self._f(r.get('target')):,.2f})")
             lines.append(
                 f"\n⚡ <b>{self._esc(sym)}</b> crossed ₹{self._f(r.get('entry')):,.2f} "
                 f"and held above it\n"
                 f"   LTP ₹{price:,.2f} · Score {self._f(r.get('score')):.0f} · "
                 f"Scan volume {self._f(r.get('volume_ratio')):.1f}×\n"
-                f"   PAPER plan: stop ₹{self._f(r.get('stop')):,.2f} · "
-                f"target ₹{self._f(r.get('target')):,.2f}"
+                f"{levels}"
             )
             keys.append(f"breakout:{sym}")
         last_error = ""
@@ -867,7 +873,8 @@ class TelegramNotifier:
                 f"stop {amount(plan['stop'])} · target {amount(plan['target'])}\n"
                 f"Setup {self._esc((row.get('setup') or {}).get('score'))}/100 · "
                 f"option {self._esc(contract.get('score'))}/100 (quality scores, not win probabilities).\n"
-                "<i>Candidate only; execution requires paper entry-window and risk gates. No live order.</i>",
+                "<i>Candidate only; execution requires paper entry-window and risk gates. No live order. "
+                "No proven edge: F&amp;O paper is an unvalidated research lane.</i>",
                 "candidates",
             )
         for rows, kind, date_field, prefix in (

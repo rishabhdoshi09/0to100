@@ -17,13 +17,21 @@ import pytest
 from scan import unified_scanner as US
 
 
-def _snap(edges):
-    return {"snapshot_id": "test", "multipliers": {}, "signal_registry": {}, "backtest_edges": edges}
+def _fresh_stamp(days_ago=1):
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
 
 
-def _ok(mean, lower=0.05, n=60, blocks=24, inference="OVERLAP_ROBUST"):
-    """Evidence that meets the full standard: dependence-aware bound over >= 20 blocks."""
-    return {"mean": mean, "lower": lower, "n": n, "blocks": blocks, "inference": inference}
+def _snap(edges, generated_at="fresh"):
+    snap = {"snapshot_id": "test", "multipliers": {}, "signal_registry": {}, "backtest_edges": edges}
+    if generated_at is not None:
+        snap["backtest_generated_at"] = _fresh_stamp() if generated_at == "fresh" else generated_at
+    return snap
+
+
+def _ok(mean, lower=0.05, n=60, blocks=24, inference="OVERLAP_ROBUST", bh=True):
+    """Evidence that meets the full standard: dependence-aware bound over >= 20 blocks, BH survivor."""
+    return {"mean": mean, "lower": lower, "n": n, "blocks": blocks, "inference": inference, "bh": bh}
 
 
 def _breakout_frame():
@@ -106,17 +114,17 @@ def test_backtest_edges_keep_only_evidenced_signals():
     report = {"signals": {"A": {"trades": 30, "expectancy_r": -0.2},
                           "B": {"trades": 29, "expectancy_r": 0.9},
                           "C": {"trades": "x", "expectancy_r": 1}}}
-    assert US.backtest_edges(report) == {"A": {"mean": -0.2, "lower": None, "n": 30, "blocks": 0, "inference": ""}}
+    assert US.backtest_edges(report) == {"A": {"mean": -0.2, "lower": None, "n": 30, "blocks": 0, "inference": "", "bh": None}}
     assert US.backtest_edges(None) == {}
     assert US.combo_edge_r(["A", "B"], {"A": -0.2}) == -0.2
     assert US.combo_edge_r(["B"], {"A": -0.2}) is None
     precise = {"signals": {"A": {"trades": 40, "expectancy_r": 0.1, "expectancy_r_precise": 0.0812,
                                  "lower_r": -0.01}}}
-    assert US.backtest_edges(precise) == {"A": {"mean": 0.0812, "lower": -0.01, "n": 40, "blocks": 0, "inference": ""}}
+    assert US.backtest_edges(precise) == {"A": {"mean": 0.0812, "lower": -0.01, "n": 40, "blocks": 0, "inference": "", "bh": None}}
     robust = {"signals": {"A": {"trades": 90, "expectancy_r_precise": 0.11, "lower_r": 0.02,
-                                "independent_sessions": 23, "inference": "OVERLAP_ROBUST"}}}
+                                "independent_sessions": 23, "inference": "OVERLAP_ROBUST", "bh_significant": True}}}
     assert US.backtest_edges(robust) == {"A": {"mean": 0.11, "lower": 0.02, "n": 90, "blocks": 23,
-                                               "inference": "OVERLAP_ROBUST"}}
+                                               "inference": "OVERLAP_ROBUST", "bh": True}}
     assert US.backtest_edges({"signals": {"A": {"trades": 90, "expectancy_r": float("nan")}}}) == {}
 
 
@@ -181,7 +189,8 @@ def test_snapshot_freezes_the_gate_evidence(tmp_path):
         live_profile={}, data_identity="t", thesis_hash="t",
     )
     assert snap["backtest_edges"] == {"VOL_SQUEEZE": {"mean": 0.08, "lower": None, "n": 545, "blocks": 0,
-                                                      "inference": ""}}
+                                                      "inference": "", "bh": None}}
+    assert snap["backtest_generated_at"] == ""                       # undated report: the gate refuses it
     assert snap["backtest_combo_edges"] == {}
 
 
@@ -291,3 +300,32 @@ def test_the_research_path_is_unchanged_by_the_live_gate():
     r = US.UnifiedScanner(calibration_snapshot=_snap(losing), evidence_gate=False)._analyze("X", _breakout_frame())
     assert r.verdict == "BUY" and r.edge_gated is False
 
+
+@pytest.mark.parametrize("stamp,reason", [
+    (None, "has no generation date"),
+    ("not a date", "unreadable"),
+    ("2026-01-01 10:00", "days old"),
+    ("2999-01-01T00:00:00+00:00", "dated in the future"),
+])
+def test_stale_undated_or_future_evidence_cannot_prove_a_buy(stamp, reason):
+    edges = {"VOL_SQUEEZE": _ok(0.30), "POCKET_PIVOT": _ok(0.30)}
+    r = US.UnifiedScanner(calibration_snapshot=_snap(edges, generated_at=stamp))._analyze("X", _breakout_frame())
+    assert r.verdict == "WATCH" and r.edge_gated is True and reason in r.reasons[-1]
+    fresh = US.UnifiedScanner(calibration_snapshot=_snap(edges))._analyze("X", _breakout_frame())
+    assert fresh.verdict == "BUY"
+
+
+def test_the_report_timestamp_format_is_understood():
+    from datetime import datetime, timezone
+    now = datetime(2026, 11, 20, 0, 0, tzinfo=timezone.utc)
+    assert US.evidence_age_note("2026-11-16 00:51", now=now) == ""            # report format (IST wall time)
+    assert "days old" in US.evidence_age_note("2026-10-01 00:51", now=now)
+
+
+def test_a_bound_that_does_not_survive_the_family_correction_is_not_proof():
+    for bh, reason in ((False, "multiple-testing correction"), (None, "multiple-testing correction")):
+        edges = {"VOL_SQUEEZE": _ok(0.30, bh=bh), "MOMENTUM": _ok(0.30, bh=bh)}
+        verdict, why = US._evidence_verdict(90.0, ["VOL_SQUEEZE", "MOMENTUM"], signal_edges=edges)
+        assert verdict == "WATCH" and reason in why
+    mixed = {"VOL_SQUEEZE": _ok(0.30), "MOMENTUM": _ok(0.30, bh=False)}
+    assert US._evidence_verdict(90.0, ["VOL_SQUEEZE", "MOMENTUM"], signal_edges=mixed)[0] == "WATCH"

@@ -151,6 +151,9 @@ _EXT_ABOVE_SMA50 = float(_os.getenv("QT_EXT_ABOVE_SMA50_PCT", "20") or 20)
 # own evidence.
 EVIDENCE_MIN_TRADES = 30
 _MIN_BUY_EDGE_R = float(_os.getenv("QT_MIN_BUY_EDGE_R", "0.05") or 0.05)
+#: Walk-forward evidence older than this cannot prove a live BUY (the weekly
+#: run plus its catch-up windows; a stalled backtest must not keep certifying).
+EVIDENCE_MAX_AGE_DAYS = 21
 _OVERRIDE_BUY_SIGNALS = ("BREAKOUT_52W", "HIGH_TIGHT_FLAG")
 
 
@@ -193,14 +196,16 @@ def _evidence_row(value) -> dict | None:
             blocks = max(0, int(value.get("blocks") or 0))
         except (TypeError, ValueError):
             blocks = 0
+        bh = value.get("bh")
         return {"mean": mean, "lower": lower, "n": n, "blocks": blocks,
                 "inference": str(value.get("inference") or ""),
-                "lower_invalid": raw_lower is not None and lower is None}
+                "lower_invalid": raw_lower is not None and lower is None,
+                "bh": bh if isinstance(bh, bool) else None}
     mean = _finite(value)
     if mean is None:
         return None
     return {"mean": mean, "lower": None, "n": 0, "blocks": 0, "inference": _LEGACY_FLOAT,
-            "lower_invalid": False}
+            "lower_invalid": False, "bh": None}
 
 
 def _report_rows(rows: dict, min_trades: int) -> dict[str, dict]:
@@ -215,9 +220,11 @@ def _report_rows(rows: dict, min_trades: int) -> dict[str, dict]:
             if mean is None:
                 continue
             lower = row.get("lower_r")
+            bh = row.get("bh_significant")
             out[str(key)] = {"mean": mean, "lower": None if lower is None else _finite(lower), "n": n,
                              "blocks": int(row.get("independent_sessions") or 0),
-                             "inference": str(row.get("inference") or "")}
+                             "inference": str(row.get("inference") or ""),
+                             "bh": bh if isinstance(bh, bool) else None}
         except (TypeError, ValueError, AttributeError):
             continue
     return out
@@ -254,6 +261,8 @@ def setup_evidence(signals: list[str], edges: dict | None, combos: dict | None =
         "blocks": min(r["blocks"] for r in rows),
         "inference": kinds.pop() if len(kinds) == 1 else "MIXED",
         "lower_invalid": any(r["lower_invalid"] for r in rows),
+        "bh": True if all(r.get("bh") is True for r in rows) else (False if any(r.get("bh") is False for r in rows)
+                                                                     else None),
         "source": "signals",
     }
 
@@ -269,7 +278,9 @@ def unproven_reason(ev: dict | None) -> str:
 
     Proof needs ALL of: a finite mean >= _MIN_BUY_EDGE_R, >= EVIDENCE_MIN_TRADES
     trades, a finite one-sided 95% lower bound above zero from the
-    dependence-aware inference, and >= 20 independent 10-session blocks.
+    dependence-aware inference, >= 20 independent 10-session blocks, and
+    survival of Benjamini-Hochberg across every signal and combination the
+    gate judges (scan.signal_backtest.apply_family_correction).
     Missing, legacy, partial or mixed evidence fails closed.
     """
     from research.overlap_inference import MIN_INDEPENDENT_BLOCKS
@@ -293,11 +304,44 @@ def unproven_reason(ev: dict | None) -> str:
         return f"but only {int(ev.get('blocks') or 0)} independent 10-session windows (< {MIN_INDEPENDENT_BLOCKS})"
     if ev["lower"] <= 0:
         return f"but its 95% lower bound {ev['lower']:+.2f}R is not above zero (could be noise)"
+    if ev.get("bh") is not True:
+        return ("but it does not survive the multiple-testing correction across the walk-forward's "
+                "signals and combinations (Benjamini-Hochberg)")
     return ""
 
 
 def _proven(ev: dict | None) -> bool:
     return bool(ev) and unproven_reason(ev) == ""
+
+
+def evidence_age_note(generated_at, *, now=None, max_age_days: int | None = None) -> str:
+    """'' when the walk-forward evidence is dated and fresh, else why it cannot prove a BUY."""
+    from datetime import datetime, timezone
+
+    max_age_days = EVIDENCE_MAX_AGE_DAYS if max_age_days is None else max_age_days
+    text = str(generated_at or "").strip()
+    if not text:
+        return "the walk-forward evidence has no generation date"
+    stamp = None
+    for parse in (lambda t: datetime.fromisoformat(t.replace("Z", "+00:00")),
+                  lambda t: datetime.strptime(t, "%Y-%m-%d %H:%M")):
+        try:
+            stamp = parse(text)
+            break
+        except ValueError:
+            continue
+    if stamp is None:
+        return "the walk-forward evidence date is unreadable"
+    if stamp.tzinfo is None:            # the report stamps local (IST) wall time
+        from datetime import timedelta
+        stamp = stamp.replace(tzinfo=timezone(timedelta(hours=5, minutes=30)))
+    now = now or datetime.now(timezone.utc)
+    age = (now - stamp).total_seconds() / 86400.0
+    if age < -1.0:
+        return "the walk-forward evidence is dated in the future"
+    if age > max_age_days:
+        return f"the walk-forward evidence is {age:.0f} days old (> {max_age_days})"
+    return ""
 
 
 def _evidence_verdict(
@@ -308,6 +352,7 @@ def _evidence_verdict(
     signal_edges: dict | None = None,
     combo_edges: dict | None = None,
     gate: bool | None = None,
+    evidence_note: str = "",
 ) -> tuple[str, str]:
     """(verdict, evidence-gate reason). Reason is '' unless evidence withheld a BUY.
 
@@ -321,6 +366,12 @@ def _evidence_verdict(
     edges = dict(signal_edges or {})
     combos = dict(combo_edges or {})
     active = bool(edges or combos) if gate is None else bool(gate)
+    if active and evidence_note and (edges or combos):
+        # Stale or undated evidence proves nothing, including the 52W shortcut.
+        if (score >= 55 and len(signals) >= 2) or any(s in _OVERRIDE_BUY_SIGNALS for s in signals):
+            if not breakout_watch_veto:
+                return "WATCH", f"⚖ No proven edge: {evidence_note} — WATCH, not BUY"
+        return "WATCH", ""
     if edges:
         override = any(s in _OVERRIDE_BUY_SIGNALS and _proven(_evidence_row(edges.get(s)))
                        for s in signals if s in edges)
@@ -688,19 +739,27 @@ class UnifiedScanner:
         )
         self._signal_edges: dict = {}
         self._combo_edges: dict = {}
+        self._evidence_note = ""
         if self._evidence_gate:
             stored = self._calibration_snapshot.get("backtest_edges")
             if isinstance(stored, dict):
                 self._signal_edges = dict(stored)
                 self._combo_edges = dict(self._calibration_snapshot.get("backtest_combo_edges") or {})
+                generated = self._calibration_snapshot.get("backtest_generated_at")
             elif calibration_snapshot is None:
                 try:
                     from scan.signal_backtest import load_report
                     report = load_report() or {}
                     self._signal_edges = backtest_edges(report)
                     self._combo_edges = backtest_combo_edges(report)
+                    generated = report.get("generated_at")
                 except Exception:
                     self._signal_edges, self._combo_edges = {}, {}
+                    generated = None
+            else:
+                generated = None
+            if self._signal_edges or self._combo_edges:
+                self._evidence_note = evidence_age_note(generated)
         try:
             summary = dict(self._signal_registry.get("summary") or {})
             missing = list(summary.get("scanner_without_forward_calibration") or [])
@@ -1036,6 +1095,7 @@ class UnifiedScanner:
             signal_edges=self._signal_edges,
             combo_edges=self._combo_edges,
             gate=self._evidence_gate,
+            evidence_note=self._evidence_note,
         )
         _ev = setup_evidence(signals, self._signal_edges, self._combo_edges) \
             if (self._signal_edges or self._combo_edges) else None
