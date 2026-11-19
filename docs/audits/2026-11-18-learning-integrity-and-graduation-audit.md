@@ -103,7 +103,25 @@ taken from the running API's `/api/chart/{symbol}`. It settled **527 of 607**
 candidates in 29.5 s: 423 resolved, 104 never filled, 78 still inside their
 horizon and 2 stuck (AMIRCHAND, too few bars), with no errors. That rules
 out the code and the data. Only the nightly autonomy process's environment
-remains. `update_outcomes` now returns and persists
+remains.
+
+**Root cause (found 2026-11-19 08:33 IST).** `install_outcome_liveness()`
+(`98bb38ba`, 2026-09-06) replaces `jobs.run_outcome_resolution` with
+`_run_outcome_resolution_light`, and the light handler never called
+`update_outcomes`. The only other caller was the legacy `auto_scan` loop,
+which the canonical stack does not start, so the last write was
+2026-07-30. The 200-day catch-up (`0bc1f6a3`, 2026-11-11) and the
+diagnostics (`4349bfd6`) both landed in the replaced handler, which never
+runs, and both summaries read "outcomes resolved". Variant (A) reproduces
+the symptom exactly: with an empty store in the process, 0 rows are
+written and 500 are reported as "no bars".
+
+Fix: `jobs.settle_signal_log()` is now called by **both** handlers. It
+loads the official store first, and an empty store reports
+`OFFICIAL_STORE_NOT_LOADED` instead of "every BUY still open". A test pins
+the handler that production installs. The 527 stuck outcomes were
+backfilled at 08:20 IST on owner approval (backup:
+`backup/signal_outcomes_20261119_081833_pre_backfill.db`). `update_outcomes` now returns and persists
 `logs/product/signal_outcome_resolution.json`, with per-row fates, stuck rows
 and their reason, row errors, write errors and fatal errors. The outcome job
 carries this summary. **The first nightly run after deploy will name the

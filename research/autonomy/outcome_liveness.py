@@ -342,9 +342,12 @@ def _run_outcome_resolution_light(ctx):
     closed = len((result or {}).get("positions_closed", []))
     recorded = len((result or {}).get("outcomes_recorded", []))
     matured = int((official_settle or {}).get("n_settled") or 0)
+    # Surfaced-BUY outcomes: this is the handler production runs, so the
+    # signal_log settlement must live here (it was only in the replaced one).
+    signal_note = J.settle_signal_log(result)
     return J.JobResult(
         JS.SUCCEEDED,
-        f"outcomes resolved · {closed} book closes · {recorded} decoded · {matured} official",
+        f"outcomes resolved · {closed} book closes · {recorded} decoded · {matured} official{signal_note}",
         unblocks=(f"{J.DEP_OUTCOMES}:{session_date}",),
         metadata=result or {},
     )

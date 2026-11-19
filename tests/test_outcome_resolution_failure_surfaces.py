@@ -63,6 +63,9 @@ def test_resolve_outcomes_exception_fails_the_job_not_a_fake_success(monkeypatch
 
 def test_successful_resolution_clears_unreconciled_and_reports_real_counts(monkeypatch):
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    # Paper-settlement counts only; signal_log settlement has its own tests
+    # (test_outcome_liveness) and would report this process's empty store.
+    monkeypatch.setattr("research.autonomy.jobs.settle_signal_log", lambda _result: "")
     monkeypatch.setattr(
         "product.autonomous_loop.settle_official_outcomes",
         lambda session: {"n_settled": 1},

@@ -236,3 +236,73 @@ def test_a_session_older_than_the_last_mark_is_never_applied():
     assert closed == []
     pos = next(iter(book.open.values()))
     assert pos.bars_held == 1 and pos.last_marked_session == "2026-09-07"
+
+
+def _eod_ctx():
+    class Deps:
+        def now_ist(self):
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+            return datetime(2026, 9, 7, 19, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+
+        def holidays(self):
+            return set()
+
+        def official_history(self):
+            return {"current": True, "available_session": "2026-09-07"}
+
+        def resolve_outcomes(self, *_args, **_kwargs):
+            return {"status": "EOD_SETTLED", "positions_closed": [], "outcomes_recorded": []}
+
+    class Ctx:
+        deps = Deps()
+        active_failures = set()
+
+    return Ctx()
+
+
+def test_production_outcome_handler_settles_signal_log(monkeypatch):
+    """Root cause of the 2026-07-30 -> 2026-11-19 BUY-outcome stall.
+
+    install_outcome_liveness replaces run_outcome_resolution, and only the
+    replaced handler called update_outcomes, so no surfaced BUY was settled.
+    """
+    from research.autonomy import jobs as J
+    from research.autonomy import schedules as SCH
+    from research.autonomy.outcome_liveness import install_outcome_liveness
+
+    install_outcome_liveness()
+    handler = J.HANDLERS[SCH.OUTCOME_RESOLUTION]
+    assert handler is _run_outcome_resolution_light
+    calls = []
+    monkeypatch.setattr("product.autonomous_loop.settle_official_outcomes",
+                        lambda *_a, **_k: {"n_settled": 0})
+    monkeypatch.setattr("data.bhavcopy_runtime.ensure_loaded", lambda **_k: {"ready": True})
+    monkeypatch.setattr("data.bhavcopy_store.is_ready", lambda: True)
+    monkeypatch.setattr(
+        "core.signal_outcome_tracker.update_outcomes",
+        lambda lookback_days=30: calls.append(lookback_days) or
+        {"written": 7, "stuck_past_horizon": 0, "fatal_error": None, "write_error": None},
+    )
+    result = handler(_eod_ctx())
+    assert result.status == JS.SUCCEEDED
+    assert calls == [J.OUTCOME_LOOKBACK_DAYS]
+    assert "signal_log 7 settled/0 stuck" in result.summary
+    assert result.metadata["signal_outcomes"]["written"] == 7
+
+
+def test_empty_official_store_is_reported_not_treated_as_open_buys(monkeypatch):
+    from research.autonomy import jobs as J
+
+    called = []
+    monkeypatch.setattr("product.autonomous_loop.settle_official_outcomes",
+                        lambda *_a, **_k: {"n_settled": 0})
+    monkeypatch.setattr("data.bhavcopy_runtime.ensure_loaded", lambda **_k: {"ready": False})
+    monkeypatch.setattr("data.bhavcopy_store.is_ready", lambda: False)
+    monkeypatch.setattr("core.signal_outcome_tracker.update_outcomes",
+                        lambda **_k: called.append(1) or {})
+    result = _run_outcome_resolution_light(_eod_ctx())
+    assert result.status == JS.SUCCEEDED          # paper settlement is the job's authority
+    assert "official store not loaded" in result.summary
+    assert result.metadata["signal_outcomes_error"] == "OFFICIAL_STORE_NOT_LOADED"
+    assert called == []

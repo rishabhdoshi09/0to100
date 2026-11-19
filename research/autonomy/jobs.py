@@ -1305,6 +1305,51 @@ def run_paper_cycle(ctx) -> JobResult:
                      metadata=metadata)
 
 
+def settle_signal_log(result) -> str:
+    """Settle surfaced-BUY outcomes (signal_log) from official bars.
+
+    Shared by BOTH outcome handlers. Production installs
+    outcome_liveness._run_outcome_resolution_light over run_outcome_resolution
+    (98bb38ba, 2026-09-06), and only this function called update_outcomes, so
+    no BUY outcome was written from 2026-07-30 until a manual backfill on
+    2026-11-19 (the 0bc1f6a3 200-day catch-up landed in the replaced handler).
+    The official store is loaded first; an empty store is an error, never
+    "every BUY is still open". Best effort: never fails the paper settlement.
+    Returns a summary-line note (empty when nothing happened).
+    """
+    try:
+        from data import bhavcopy_runtime, bhavcopy_store
+
+        try:
+            bhavcopy_runtime.ensure_loaded(rebuild_from_local=False)
+        except Exception:
+            pass
+        if not bhavcopy_store.is_ready():
+            # Without official bars every BUY would look "still open". Say so.
+            if isinstance(result, dict):
+                result["signal_outcomes_error"] = "OFFICIAL_STORE_NOT_LOADED"
+            return " · signal_log ERROR (official store not loaded)"
+        from core.signal_outcome_tracker import update_outcomes
+        # 200-day window: settled rows are skipped, so this only catches up open ones.
+        summary = update_outcomes(lookback_days=OUTCOME_LOOKBACK_DAYS)
+    except Exception as exc:
+        if isinstance(result, dict):
+            result["signal_outcomes_error"] = f"{type(exc).__name__}: {exc}"[:240]
+        return " · signal_log ERROR"
+    if not isinstance(summary, dict):
+        return ""
+    if isinstance(result, dict):
+        result["signal_outcomes"] = summary
+    problem = summary.get("fatal_error") or summary.get("write_error")
+    if problem and isinstance(result, dict):
+        result["signal_outcomes_error"] = str(problem)[:240]
+    written = int(summary.get("written") or 0)
+    stuck = int(summary.get("stuck_past_horizon") or 0)
+    if not (written or stuck or problem):
+        return ""
+    return f" · signal_log {written} settled/{stuck} stuck" + (" · signal_log ERROR" if problem else "")
+
+
 def run_outcome_resolution(ctx) -> JobResult:
     now = ctx.deps.now_ist()
     holidays = ctx.deps.holidays() if hasattr(ctx.deps, "holidays") else None
@@ -1390,30 +1435,7 @@ def run_outcome_resolution(ctx) -> JobResult:
     # Settle surfaced-BUY outcomes (signal_log) from official bars too; the
     # learning stack (live edge, EV, drift) reads them. Best effort: the paper
     # book settlement above is this job's authority, not the signal ledger.
-    signal_note = ""
-    try:
-        from core.signal_outcome_tracker import update_outcomes
-        # 200-day window: 522 BUYs logged in July were never settled because
-        # nothing ran update_outcomes for months and the default window is 30
-        # days. Settled rows are skipped, so this only catches up open ones.
-        signal_summary = update_outcomes(lookback_days=OUTCOME_LOOKBACK_DAYS)
-        if isinstance(signal_summary, dict):
-            if isinstance(result, dict):
-                result["signal_outcomes"] = signal_summary
-            problem = signal_summary.get("fatal_error") or signal_summary.get("write_error")
-            if problem and isinstance(result, dict):
-                result["signal_outcomes_error"] = str(problem)[:240]
-            written = int(signal_summary.get("written") or 0)
-            stuck = int(signal_summary.get("stuck_past_horizon") or 0)
-            if written or stuck or problem:
-                signal_note = (
-                    f" · signal_log {written} settled/{stuck} stuck"
-                    + (" · signal_log ERROR" if problem else "")
-                )
-    except Exception as exc:
-        if isinstance(result, dict):
-            result["signal_outcomes_error"] = f"{type(exc).__name__}: {exc}"[:240]
-        signal_note = " · signal_log ERROR"
+    signal_note = settle_signal_log(result)
     return JobResult(
         JS.SUCCEEDED,
         f"outcomes resolved · {closed} book closes · {recorded} decoded · {matured} official{signal_note}",
