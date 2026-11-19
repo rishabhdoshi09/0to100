@@ -39,15 +39,15 @@ def _existing_owner(root) -> tuple[str, str]:
     return pid, state
 
 
-def run_supervisor(*, root=None, interval_s: float = 15.0, max_iterations=None) -> int:
-    """Entrypoint for ``python main.py autonomy``.
+def install_runtime_handlers() -> None:
+    """Install every production handler wrapper, in production order.
 
-    Acquires the single-instance lock and runs the visible, fault-contained console loop. Streamlit
-    and the dedicated React terminal are optional observers; neither owns the scheduler.
+    Several modules REPLACE entries in research.autonomy.jobs.HANDLERS
+    (outcome_liveness, outcome_integrity, data_refresh_parallel, ...). The
+    nightly BUY-outcome settlement was lost for months because a fix went
+    into a replaced handler. Keeping the sequence in one function lets tests
+    exercise exactly the chain run_supervisor() installs.
     """
-    import os
-    import traceback
-
     from research.autonomy.operational_guards import install_operational_guards
     install_operational_guards()
     try:
@@ -109,6 +109,18 @@ def run_supervisor(*, root=None, interval_s: float = 15.0, max_iterations=None) 
     # construction; the lock file is stable and its PID is rewritten only after ownership.
     from research.autonomy.safe_singleton_lock import install_supervisor_singleton_lock
     install_supervisor_singleton_lock()
+
+
+def run_supervisor(*, root=None, interval_s: float = 15.0, max_iterations=None) -> int:
+    """Entrypoint for ``python main.py autonomy``.
+
+    Acquires the single-instance lock and runs the visible, fault-contained console loop. Streamlit
+    and the dedicated React terminal are optional observers; neither owns the scheduler.
+    """
+    import os
+    import traceback
+
+    install_runtime_handlers()
 
     from research.autonomy.supervisor import Supervisor
     from research.autonomy.console_runtime import run_visible_loop
