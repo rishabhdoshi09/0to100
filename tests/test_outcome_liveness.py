@@ -311,3 +311,34 @@ def test_empty_official_store_is_reported_not_treated_as_open_buys(monkeypatch):
     assert "official store not loaded" in result.summary
     assert result.metadata["signal_outcomes_error"] == "OFFICIAL_STORE_NOT_LOADED"
     assert called == []
+
+
+def test_bars_held_counts_sessions_since_entry_not_marks_applied():
+    """RPEL: entered 11 Nov, marked 12, 13, 18 -> bars_held 3 though 5 sessions passed."""
+    from research.autonomy.outcome_liveness import reconcile_bars_held
+
+    by_day = {d: {"AAA": (100.0, 101.0, 99.0, 100.5)} for d in
+              ("2026-11-12", "2026-11-13", "2026-11-16", "2026-11-17", "2026-11-18")}
+    book = PaperBook(capital=100_000.0)
+    book.open_position("S1", "AAA", 100.0, 95.0, 110.0, "2026-11-11", 20)
+    for d in ("2026-11-12", "2026-11-13", "2026-11-18"):        # the outage skipped 16-17
+        book.mark(by_day[d], d, allow_entry_session=False)
+    pos = next(iter(book.open.values()))
+    assert pos.bars_held == 3
+    fixes = reconcile_bars_held(book, lambda d: by_day.get(d, {}))
+    assert fixes == [{"symbol": "AAA", "from": 3, "to": 5}]
+    assert pos.bars_held == 5
+    assert reconcile_bars_held(book, lambda d: by_day.get(d, {})) == []   # idempotent
+
+
+def test_a_suspended_day_without_a_bar_is_not_a_session_for_that_symbol():
+    from research.autonomy.outcome_liveness import reconcile_bars_held
+
+    by_day = {"2026-11-12": {"AAA": (1, 1, 1, 1)}, "2026-11-13": {"BBB": (1, 1, 1, 1)},
+              "2026-11-16": {"AAA": (1, 1, 1, 1)}}
+    book = PaperBook(capital=100_000.0)
+    book.open_position("S1", "AAA", 100.0, 95.0, 110.0, "2026-11-11", 20)
+    pos = next(iter(book.open.values()))
+    pos.last_marked_session, pos.bars_held = "2026-11-16", 1
+    reconcile_bars_held(book, lambda d: by_day.get(d, {}))
+    assert pos.bars_held == 2                                    # 12 and 16; AAA did not trade on 13

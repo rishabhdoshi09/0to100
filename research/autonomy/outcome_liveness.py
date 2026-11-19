@@ -75,6 +75,48 @@ def catch_up_missed_sessions(book, bars_fn, day: str) -> dict[str, Any]:
     return out
 
 
+def reconcile_bars_held(book, bars_fn, *, max_days: int = _CATCH_UP_MAX_DAYS) -> list[dict[str, Any]]:
+    """Make ``bars_held`` mean completed sessions since entry, not marks applied.
+
+    A position that missed marks before the catch-up existed keeps a short
+    count forever (RPEL, entered 2026-11-11: bars_held 3 after 5 sessions,
+    because 16-17 Nov were never marked), so MAX_HOLD fires late. The count is
+    rebuilt from the same exact-session official bars: a weekday counts when
+    the symbol traded that day, from the day after entry through the last
+    marked session. Returns the corrections made.
+    """
+    from datetime import date as _date, timedelta
+
+    cache: dict[str, dict] = {}
+
+    def traded(day: str, symbol: str) -> bool:
+        if day not in cache:
+            cache[day] = dict(bars_fn(day) or {})
+        return symbol in cache[day]
+
+    changes: list[dict[str, Any]] = []
+    for pos in list((getattr(book, "open", {}) or {}).values()):
+        entry = str(getattr(pos, "entry_date", "") or "")[:10]
+        last = str(getattr(pos, "last_marked_session", "") or "")[:10]
+        if len(entry) != 10 or len(last) != 10 or last <= entry:
+            continue
+        try:
+            day, end = _date.fromisoformat(entry) + timedelta(days=1), _date.fromisoformat(last)
+        except ValueError:
+            continue
+        if (end - day).days > max_days:
+            continue
+        sessions = 0
+        while day <= end:
+            if day.weekday() < 5 and traded(day.isoformat(), str(pos.symbol)):
+                sessions += 1
+            day += timedelta(days=1)
+        if sessions and sessions != int(getattr(pos, "bars_held", 0) or 0):
+            changes.append({"symbol": pos.symbol, "from": int(pos.bars_held or 0), "to": sessions})
+            pos.bars_held = sessions
+    return changes
+
+
 def settle_paper_session(brain, session_date: str) -> dict[str, Any]:
     """Mark the existing PAPER book once for one official session.
 
@@ -159,6 +201,12 @@ def settle_paper_session(brain, session_date: str) -> dict[str, Any]:
                 catch_up = {"sessions": [], "closed": [], "error": f"{type(exc).__name__}: {exc}"[:240]}
         closed = list(catch_up.get("closed") or [])
         closed += list(book.mark(bars, day, allow_entry_session=False) if bars else [])
+        bars_held_fixes: list[dict[str, Any]] = []
+        if callable(bars_fn):
+            try:
+                bars_held_fixes = reconcile_bars_held(book, bars_fn)
+            except Exception:
+                bars_held_fixes = []
         rows = [_trade_row(trade) for trade in closed]
 
         # Persist book state first. Audit/event projection is useful, but it must never
@@ -228,6 +276,7 @@ def settle_paper_session(brain, session_date: str) -> dict[str, Any]:
             "open_after": len(getattr(book, "open", {}) or {}),
             "bars": len(bars),
             "missed_sessions_marked": list(catch_up.get("sessions") or []),
+            "bars_held_reconciled": bars_held_fixes,
             "warnings": warnings + ([f"missed-session catch-up failed: {catch_up['error']}"] if catch_up.get("error") else []),
             "settlement_lane": "EOD_ONLY",
             "full_intelligence_cycle": False,
