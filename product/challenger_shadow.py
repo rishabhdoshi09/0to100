@@ -90,8 +90,6 @@ CREATE TABLE IF NOT EXISTS sessions(
     universe TEXT NOT NULL DEFAULT '{}',
     payload_sha256 TEXT NOT NULL
 );
-CREATE UNIQUE INDEX IF NOT EXISTS one_session_per_scan_id ON sessions(scan_id)
-    WHERE status = 'FROZEN' AND scan_id <> '';
 CREATE TABLE IF NOT EXISTS predictions(
     session TEXT NOT NULL,
     symbol TEXT NOT NULL,
@@ -117,12 +115,45 @@ def ledger_path() -> Path:
     return logs_path("product", LEDGER_FILE)
 
 
+_SCAN_ID_INDEX = ("CREATE UNIQUE INDEX IF NOT EXISTS one_session_per_scan_id ON sessions(scan_id) "
+                  "WHERE status = 'FROZEN' AND scan_id <> ''")
+QUARANTINED = "QUARANTINED_DUPLICATE_SCAN_ID"
+
+
 def _connect(path: Path) -> sqlite3.Connection:
+    """Open the ledger; an unreadable file raises (sqlite3.DatabaseError), never gets replaced."""
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), timeout=30, isolation_level=None)
     conn.execute("PRAGMA synchronous=FULL")
     conn.executescript(_SCHEMA)
+    try:
+        conn.execute(_SCAN_ID_INDEX)
+    except sqlite3.IntegrityError:
+        _quarantine_duplicate_scan_ids(conn)
+        conn.execute(_SCAN_ID_INDEX)
     return conn
+
+
+def _quarantine_duplicate_scan_ids(conn: sqlite3.Connection) -> int:
+    """Migration from a pre-index ledger: one FROZEN session per scan_id survives.
+
+    The earliest-inserted row keeps FROZEN; every later row with the same
+    scan_id becomes MISSED (never evidence) with reason QUARANTINED. Rows
+    are kept, not deleted, so the audit trail stays complete.
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        dupes = conn.execute(
+            "SELECT s.rowid FROM sessions s WHERE s.status='FROZEN' AND s.scan_id<>'' AND EXISTS ("
+            " SELECT 1 FROM sessions e WHERE e.scan_id=s.scan_id AND e.status='FROZEN' AND e.rowid < s.rowid)"
+        ).fetchall()
+        for (rowid,) in dupes:
+            conn.execute("UPDATE sessions SET status='MISSED', reason=? WHERE rowid=?", (QUARANTINED, rowid))
+        conn.execute("COMMIT")
+        return len(dupes)
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
 
 
 # ── model identity ───────────────────────────────────────────────────────────
@@ -662,7 +693,12 @@ def nightly() -> dict[str, Any]:
         published = date.fromisoformat(session) in set(bhavcopy_store._dates_on_disk())
     except Exception:
         published = False
-    recorded = record_session(scan, bhavcopy_store.get_ohlcv, holidays=holidays, session_published=published)
-    missed = mark_missed(now=_wall_clock(), holidays=holidays)
-    report = evaluate(bhavcopy_store.get_ohlcv, maturity=maturity_checker(holidays=holidays), holidays=holidays)
+    try:
+        recorded = record_session(scan, bhavcopy_store.get_ohlcv, holidays=holidays, session_published=published)
+        missed = mark_missed(now=_wall_clock(), holidays=holidays)
+        report = evaluate(bhavcopy_store.get_ohlcv, maturity=maturity_checker(holidays=holidays), holidays=holidays)
+    except sqlite3.DatabaseError as exc:
+        # A corrupt or unreadable ledger is reported, never silently recreated:
+        # recreating it would erase the record of which sessions were frozen.
+        return {"error": f"LEDGER_UNREADABLE: {type(exc).__name__}: {str(exc)[:160]}"}
     return {"recorded": recorded, "missed_marked": missed, "evaluation": report}

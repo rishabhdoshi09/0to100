@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from contextlib import closing
 
 from product import challenger_shadow as CS
 from product import learning_scorecard as LS
@@ -459,3 +460,70 @@ def test_the_deadline_never_depends_on_the_holiday_calendar():
     friday = date(2026, 11, 20)
     assert CS.entry_deadline(friday).isoformat() == "2026-11-21T09:15:00+05:30"      # Saturday, not Monday
     assert CS.entry_deadline(date(2026, 11, 23), set()) == CS.entry_deadline(date(2026, 11, 23), HOLIDAYS)
+
+
+# ── migration, hard crash, corruption, exceptional sessions (2026-11-20 review) ──
+
+def test_a_pre_index_ledger_with_duplicate_scan_ids_is_migrated_not_broken(tmp_path):
+    path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(CS._SCHEMA)                                       # the old schema: no unique index
+    for i, session in enumerate(("2026-11-16", "2026-11-17", "2026-11-18")):
+        h = _header(session, scan_id="dup")
+        conn.execute("INSERT INTO sessions(session,status,reason,hypothesis,schema_version,frozen_at,entry_deadline,"
+                     "scan_id,scan_completed_at,model_version,candidates,frozen,exclusions,universe,payload_sha256) "
+                     "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                     (session, "FROZEN", "", CS.HYPOTHESIS, CS.SCHEMA_VERSION, h["frozen_at"], h["entry_deadline"],
+                      "dup", h["scan_completed_at"], "{}", 0, 0, "{}", "{}", "x"))
+    conn.commit()
+    conn.close()
+    with closing(CS._connect(path)) as c:                                 # migrates instead of raising
+        rows = c.execute("SELECT session, status, reason FROM sessions ORDER BY rowid").fetchall()
+        assert c.execute("SELECT name FROM sqlite_master WHERE name='one_session_per_scan_id'").fetchone()
+    assert rows[0] == ("2026-11-16", "FROZEN", "")
+    assert [r[1:] for r in rows[1:]] == [("MISSED", CS.QUARANTINED)] * 2
+
+
+def test_a_writer_killed_mid_transaction_leaves_nothing_and_releases_the_lock(tmp_path):
+    import signal, subprocess, sys, time as _time
+    path = tmp_path / "shadow.db"
+    CS._write(path, _header("2026-11-01", scan_id="seed"), [])
+    root = str(Path(__file__).resolve().parents[1])
+    code = ("import sys, time, sqlite3; sys.path.insert(0, %r); from product import challenger_shadow as CS; "
+            "c = CS._connect(__import__('pathlib').Path(%r)); c.execute('BEGIN IMMEDIATE'); "
+            "c.execute(\"INSERT INTO sessions(session,status,reason,hypothesis,schema_version,frozen_at,entry_deadline,"
+            "scan_id,scan_completed_at,model_version,candidates,frozen,exclusions,universe,payload_sha256) VALUES"
+            "('2026-11-18','FROZEN','','h',2,'t','d','killed','t','{}',0,0,'{}','{}','x')\"); "
+            "print('inside', flush=True); time.sleep(60)") % (root, str(path))
+    proc = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True, cwd=root)
+    assert proc.stdout.readline().strip() == "inside"
+    proc.send_signal(signal.SIGKILL)
+    proc.wait(timeout=30)
+    assert CS._write(path, _header("2026-11-18", scan_id="after-crash"), []) is True     # lock released
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM sessions WHERE scan_id='killed'").fetchone()[0] == 0
+
+
+def test_a_corrupt_ledger_is_reported_never_recreated(tmp_path, monkeypatch):
+    path = tmp_path / "shadow.db"
+    path.write_bytes(b"this is not a sqlite database" * 100)
+    with pytest.raises(sqlite3.DatabaseError):
+        CS.evaluate({}.get, maturity=lambda s: LS.MATURED, holidays=HOLIDAYS, path=path)
+    with pytest.raises(sqlite3.DatabaseError):
+        CS.record_session(_scan([]), {}.get, clock=EVENING, holidays=HOLIDAYS, path=path)
+    assert path.read_bytes().startswith(b"this is not a sqlite database")            # untouched
+
+
+def test_an_unrecorded_exceptional_session_never_silently_changes_the_horizon(tmp_path):
+    path = tmp_path / "shadow.db"
+    cut = {k: v[v.index <= SESSION] for k, v in _full_frames().items()}
+    CS.record_session(_scan(cut), cut.get, clock=EVENING, holidays=HOLIDAYS, path=path)
+    full = _full_frames()
+    verified = [d.date() for d in _sessions("2026-01-01", "2026-12-31")]
+    normal = LS.maturity_checker(verified_sessions=verified, holidays=HOLIDAYS, last_completed=date(2026, 12, 31))
+    assert CS.evaluate(full.get, maturity=normal, holidays=HOLIDAYS, path=path)["sessions_evaluated"] == 1
+    saturday = verified + [date(2026, 11, 28)]                    # an official bar on a Saturday in the window
+    odd = LS.maturity_checker(verified_sessions=saturday, holidays=HOLIDAYS, last_completed=date(2026, 12, 31))
+    rep = CS.evaluate(full.get, maturity=odd, holidays=HOLIDAYS, path=path)
+    assert rep["sessions_evaluated"] == 0
+    assert rep["session_outcomes"] == {"WINDOW_NOT_YET_VERIFIED": 1}
