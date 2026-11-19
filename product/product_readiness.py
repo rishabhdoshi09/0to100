@@ -207,11 +207,20 @@ def build_product_readiness(
     if scan_verdict is not None:
         verdict, verdict_detail = str(scan_verdict[0] or ""), str(scan_verdict[1] or "")
         for item in lanes:
-            if item["key"] == "scanner" and verdict != "READY" and item["status"] == "FRESH":
+            if item["key"] != "scanner":
+                continue
+            item["session_verdict"] = verdict
+            if verdict != "READY" and item["status"] == "FRESH":
                 item["status"] = verdict if verdict in {"STALE", "MISSING", "INCOMPLETE"} else "STALE"
                 item["earned_weight"] = round(item["weight"] * (0.0 if item["status"] == "MISSING" else 0.45), 2)
                 item["details"] = f"{item['details']} · {verdict_detail}"
-                item["session_verdict"] = verdict
+            elif verdict == "READY" and item["status"] in {"STALE", "UNKNOWN_DATE"} and item["available"]:
+                # Session identity is the market-freshness clock (same rule as
+                # /api/health): last night's EOD scan is current before the open
+                # and through a weekend, however many wall-clock hours old.
+                item["status"] = "FRESH"
+                item["earned_weight"] = float(item["weight"])
+                item["details"] = f"{item['details']} · current for its market session"
     score = round(sum(float(item["earned_weight"]) for item in lanes))
     if score >= 90:
         state = "READY"

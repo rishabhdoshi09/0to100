@@ -77,3 +77,27 @@ def test_ready_is_never_reported_alongside_a_blocker():
     now = datetime(2026, 11, 18, 17, 0, tzinfo=timezone.utc)
     out = build_product_readiness(**_all_fresh(now), now=now, scan_verdict=("STALE", "behind"))
     assert not (out["state"] == "READY" and out["blockers"])
+
+
+def test_session_current_scan_is_fresh_before_the_open_despite_wall_clock_age():
+    """Owner's Mac 2026-11-19 08:08 IST: health READY, readiness 'scanner STALE' (22:45 EOD scan)."""
+    now = datetime(2026, 11, 19, 2, 40, tzinfo=timezone.utc)  # 08:10 IST
+    payloads = _all_fresh(now)
+    payloads["scan"] = {**payloads["scan"], "scanned_at": "2026-11-18T17:15:00+00:00"}  # 9.4 h old
+    stale_by_clock = build_product_readiness(**payloads, now=now)
+    scan = next(item for item in stale_by_clock["lanes"] if item["key"] == "scanner")
+    assert scan["status"] == "STALE"
+    current = build_product_readiness(**payloads, now=now, scan_verdict=("READY", "449 records · session 2026-11-18"))
+    scan = next(item for item in current["lanes"] if item["key"] == "scanner")
+    assert scan["status"] == "FRESH"
+    assert scan["earned_weight"] == scan["weight"]
+    assert not any("Whole-market scanner" in b for b in current["blockers"])
+
+
+def test_session_verdict_never_revives_a_missing_scan():
+    now = datetime(2026, 11, 19, 2, 40, tzinfo=timezone.utc)
+    payloads = _all_fresh(now)
+    payloads["scan"] = {"available": False, "records": []}
+    out = build_product_readiness(**payloads, now=now, scan_verdict=("READY", "x"))
+    scan = next(item for item in out["lanes"] if item["key"] == "scanner")
+    assert scan["status"] == "MISSING"
