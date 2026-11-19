@@ -461,7 +461,9 @@ R=/Volumes/QuantTermStorage/QuantTerm/runtime/logs; TS=$(date +%Y%m%d_%H%M%S)
 sqlite3 $R/signal_outcomes.db ".backup '$R/backup/signal_outcomes_${TS}_pre_deploy.db'"
 cp $R/intelligence/intel_book.json $R/backup/intel_book_${TS}_pre_deploy.json
 cp $R/product/learning_policies.json $R/backup/learning_policies_${TS}_pre_deploy.json
-shasum -a 256 $R/intel_book.json $R/backup/intel_book_${TS}_pre_deploy.json 2>/dev/null; # compare each pair
+shasum -a 256 $R/intelligence/intel_book.json $R/backup/intel_book_${TS}_pre_deploy.json \
+  $R/product/learning_policies.json $R/backup/learning_policies_${TS}_pre_deploy.json   # each pair must match
+sqlite3 $R/backup/signal_outcomes_${TS}_pre_deploy.db "pragma integrity_check"         # must print ok
 venv/bin/python -m product.launchd_control stop && launchctl list | grep quantterm   # wait until gone
 git fetch origin claude/settlement-batch-20261118 && git merge --ff-only <SHA>
 venv/bin/python -m product.host_install install --runtime-root /Volumes/QuantTermStorage/QuantTerm/runtime --env-file .env --manager launchd
