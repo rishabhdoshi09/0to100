@@ -1655,6 +1655,19 @@ def run_learning_cycle(ctx) -> JobResult:
             result["learning_scorecard"] = refresh_snapshot(session_date).get("summary")
         except Exception as exc:
             result["learning_scorecard"] = {"error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+        # Prospective shadow test of the pre-registered ranking challenger:
+        # freezes tonight's ranks before outcomes exist; never trades or ranks.
+        try:
+            from product.challenger_shadow import nightly as challenger_shadow_nightly
+
+            shadow = challenger_shadow_nightly()
+            result["challenger_shadow"] = {
+                "recorded": shadow.get("recorded"),
+                "results": (shadow.get("evaluation") or {}).get("results"),
+                "error": shadow.get("error"),
+            }
+        except Exception as exc:
+            result["challenger_shadow"] = {"error": f"{type(exc).__name__}: {str(exc)[:160]}"}
 
     summary = (
         f"learning complete · {result.get('diagnostics', 0)} diagnostics · "
