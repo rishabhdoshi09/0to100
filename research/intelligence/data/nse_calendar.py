@@ -266,6 +266,40 @@ def covered_years(holidays, manifest: dict | None = None) -> set[int]:
     return out
 
 
+def documented_special_sessions(manifest: dict | None = None) -> set[str]:
+    """Dates the manifest records as exchange-notified special sessions (e.g. Muhurat)."""
+    manifest = load_manifest() if manifest is None else manifest
+    out: set[str] = set()
+    for entry in dict(manifest.get("years") or {}).values():
+        for marker in (entry or {}).get("special_session_markers") or []:
+            out.add(str(marker)[:10])
+    return out
+
+
+def provenance_summary(holidays=None, manifest: dict | None = None, now: datetime | None = None) -> dict:
+    """What the calendar can and cannot vouch for, for the scorecard (read-only)."""
+    holidays = load_holidays() if holidays is None else holidays
+    manifest = load_manifest() if manifest is None else manifest
+    now = now or _now_ist()
+    years = {}
+    for key, entry in sorted(dict(manifest.get("years") or {}).items()):
+        stamp = str((entry or {}).get("retrieved_at") or "")
+        try:
+            age = (now.date() - date.fromisoformat(stamp[:10])).days
+        except ValueError:
+            age = None
+        years[key] = {"status": (entry or {}).get("status"), "source": (entry or {}).get("source"),
+                      "retrieved_at": stamp, "age_days": age,
+                      "matches_loaded_holidays": int(key) in covered_years(holidays, manifest)}
+    return {
+        "years": years,
+        "live_freshness": "BLOCKED: NSE amendments after retrieved_at cannot be verified offline",
+        "completed_windows": ("cross-checked against official bhavcopy dates: a missing bar or a bar on a "
+                              "calendar-closed day makes the window NOT_YET_VERIFIED"),
+        "freeze_deadline": "next calendar day 09:15 IST (calendar-independent)",
+    }
+
+
 def calendar_gap(start: date, end: date, holidays, manifest: dict | None = None) -> str:
     """'' when every year in [start, end] is covered, else the reason it is not."""
     if not holidays:

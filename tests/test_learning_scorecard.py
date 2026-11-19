@@ -334,3 +334,42 @@ def test_a_decision_logged_twice_on_one_session_counts_once():
     for key in ("n", "sessions", "mean_of_session_means_R", "ci95_R", "verdict"):
         assert copied["overall_net"][key] == once["overall_net"][key], key
 
+
+def test_an_official_bar_on_a_calendar_closed_day_means_the_calendar_is_stale():
+    """Offline freshness: the bhavcopy archive contradicts an unrecorded special session."""
+    from datetime import date
+    import pandas as pd
+
+    weekdays = [d.date() for d in pd.bdate_range("2026-11-01", "2026-12-31") if d.strftime("%F") not in _HOLIDAYS_2026]
+    check = LS.maturity_checker(verified_sessions=weekdays, holidays=_HOLIDAYS_2026,
+                                last_completed=date(2026, 12, 31), horizon=10)
+    assert check("2026-11-25") == LS.MATURED
+    saturday = weekdays + [date(2026, 12, 5)]                       # an exceptional Saturday session traded
+    check = LS.maturity_checker(verified_sessions=saturday, holidays=_HOLIDAYS_2026,
+                                last_completed=date(2026, 12, 31), horizon=10)
+    assert check("2026-11-25") == LS.NOT_YET_VERIFIED
+    assert dict(check.reasons) == {"CALENDAR_CONTRADICTED_BY_OFFICIAL_BARS": 1}
+    assert check("2026-12-08") == LS.MATURED                        # windows after it are unaffected
+    muhurat = weekdays + [date(2026, 11, 8)]                         # documented in the manifest
+    check = LS.maturity_checker(verified_sessions=muhurat, holidays=_HOLIDAYS_2026,
+                                last_completed=date(2026, 12, 31), horizon=10)
+    assert check("2026-11-05") == LS.MATURED
+
+
+def test_an_emergency_closure_leaves_a_window_unverified():
+    from datetime import date
+    import pandas as pd
+
+    closed = [d.date() for d in pd.bdate_range("2026-11-01", "2026-12-31")
+              if d.strftime("%F") not in _HOLIDAYS_2026 and d.strftime("%F") != "2026-12-02"]
+    check = LS.maturity_checker(verified_sessions=closed, holidays=_HOLIDAYS_2026,
+                                last_completed=date(2026, 12, 31), horizon=10)
+    assert check("2026-11-25") == LS.NOT_YET_VERIFIED and dict(check.reasons) == {"VERIFIED_BAR_MISSING": 1}
+
+
+def test_the_scorecard_states_what_calendar_freshness_cannot_prove():
+    ev = LS.tracked_signal_evidence([], maturity=_MATURE)
+    prov = ev["calendar_provenance"]
+    assert prov["years"]["2026"]["status"] == "VERIFIED_COMPLETE"
+    assert prov["live_freshness"].startswith("BLOCKED")
+

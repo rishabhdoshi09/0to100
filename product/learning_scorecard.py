@@ -306,6 +306,15 @@ def maturity_checker(*, verified_sessions=None, holidays=None, last_completed=No
         return _closed("EXCHANGE_CALENDAR_UNAVAILABLE")
     if not verified or last_completed is None:
         return _closed("VERIFIED_SESSIONS_UNAVAILABLE")
+    # Official bars on days the calendar calls closed (weekends, holidays)
+    # mean the calendar missed a session: unless the manifest documents it as
+    # a special session (e.g. Muhurat), a window spanning it is not counted.
+    import bisect
+    try:
+        special = CAL.documented_special_sessions()
+    except Exception:
+        special = set()
+    extras = sorted(d for d in verified if not CAL.is_session(d, holidays) and d.isoformat() not in special)
     cache: dict[str, str] = {}
 
     def check(day: str) -> str:
@@ -331,10 +340,14 @@ def maturity_checker(*, verified_sessions=None, holidays=None, last_completed=No
                                                  or "EXCHANGE_CALENDAR_NOT_COVERED")
             elif window[-1] > last_completed:
                 status, why = IMMATURE, ""
-            elif all(d in verified for d in window):
-                status, why = MATURED, ""
-            else:
+            elif not all(d in verified for d in window):
                 status, why = NOT_YET_VERIFIED, "VERIFIED_BAR_MISSING"
+            else:
+                i = bisect.bisect_right(extras, start)
+                if i < len(extras) and extras[i] <= window[-1]:
+                    status, why = NOT_YET_VERIFIED, "CALENDAR_CONTRADICTED_BY_OFFICIAL_BARS"
+                else:
+                    status, why = MATURED, ""
         cache[key] = status
         if status == NOT_YET_VERIFIED:
             _why[key] = why
@@ -369,6 +382,14 @@ def dedupe_decisions(rows: Iterable[Mapping[str, Any]]) -> tuple[list[Mapping[st
         best[key] = r
         order.append(key)
     return [best[k] for k in order], dropped
+
+
+def _calendar_provenance() -> dict[str, Any]:
+    try:
+        from research.intelligence.data.nse_calendar import provenance_summary
+        return provenance_summary()
+    except Exception as exc:
+        return {"error": type(exc).__name__}
 
 
 def tracked_signal_evidence(rows: Iterable[Mapping[str, Any]], *, maturity=None) -> dict[str, Any]:
@@ -416,6 +437,7 @@ def tracked_signal_evidence(rows: Iterable[Mapping[str, Any]], *, maturity=None)
         "rows_matured": len(rows),
         "maturity": counts,
         "maturity_not_verified_reasons": dict(getattr(check, "reasons", {}) or {}),
+        "calendar_provenance": _calendar_provenance(),
         "maturity_rule": ("first horizon NSE sessions after the signal completed AND each has a verified "
                           "official bhavcopy; otherwise IMMATURE or NOT_YET_VERIFIED (excluded)"),
         "settled_filled": len(trades),
