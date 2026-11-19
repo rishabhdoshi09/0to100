@@ -133,3 +133,31 @@ def test_cells_from_clusters_merges_days_and_drops_unindexed_days():
     cells = OI.cells_from_clusters({"2026-11-02": [1.0, 2], "2026-11-03": [3.0, 1], "x": [9.0, 9]},
                                    {"2026-11-02": 5, "2026-11-03": 5})
     assert cells == {5: [4.0, 3]}
+
+
+# ── adversarial nulls (2026-11-20 review; full study: research/overlap_stress.py) ──
+
+@pytest.mark.parametrize("name", ["heavy_tails_t3", "cross_sectional_concentration",
+                                  "missing_sessions_40pct_plus_month_gap", "duplicated_outcomes_lag1to3",
+                                  "overlapping_event_windows", "exactly_20_blocks", "regime_persistence_ar0.9"])
+def test_adversarial_nulls_stay_near_nominal(name):
+    from research import overlap_stress as ST
+    seed, gen = ST.SCENARIOS[name]
+    out = ST.run_scenario(gen, seed, 300)
+    assert out["verdict_eligible"] > 0
+    assert out["false_confirmation_rate"] <= 0.08, out
+    assert out["false_confirmation_rate"] <= out["superseded_block_t_rate"], out
+
+
+def test_selecting_the_best_of_twenty_null_features_is_controlled_by_bh():
+    from research import overlap_stress as ST
+    out = ST.run_selection(201, 120)
+    assert out["any_raw_p_below_0.05"] > 0.25           # picking the best raw p "finds" something
+    assert out["any_bh_rejection"] <= 0.10              # BH across the family does not
+
+
+def test_student_t_is_more_conservative_than_a_normal_reference():
+    from research import overlap_stress as ST
+    seed, gen = ST.SCENARIOS["exactly_20_blocks"]
+    out = ST.run_scenario(gen, seed, 300)
+    assert out["false_confirmation_rate"] <= out["same_se_normal_reference_rate"]

@@ -25,9 +25,10 @@ The method here:
    standard error used; it needs no model of the overlap.
 3. Residual dependence. Dependence that survives a gap of ``h`` sessions
    (regime persistence, copied evidence) is measured as the autocorrelation
-   of cell residuals at exactly lag ``h`` and, when positive, widens every
-   subsample variance by the AR(1) long-run factor (1+rho)/(1-rho) after a
-   small-sample bias correction.
+   of cell residuals at exactly lag ``h``. Every subsample variance is
+   widened by the AR(1) long-run factor (1+r)/(1-r), where r is the larger of
+   rho's one-sided 95% upper bound and its bias-corrected value, so an
+   uncertain rho is treated as possibly positive.
 4. Degrees of freedom are the number of non-overlapping h-session blocks that
    hold data, minus one. Fewer than MIN_INDEPENDENT_BLOCKS blocks, or zero
    dispersion, is never a verdict.
@@ -158,10 +159,17 @@ def overlap_robust_test(cells: Mapping[int, Sequence[float]], horizon: int, *,
     widening = 1.0
     if pairs >= MIN_PAIRS_FOR_RESIDUAL_RHO:
         rho = (pair_sum / pairs) / (ss / g)
+        # Widen with the larger of a one-sided 95% UPPER bound on rho and the
+        # small-sample bias-corrected rho: the estimate itself is noisy, and
+        # under strong regime persistence (AR 0.9) the point estimate alone
+        # left the false-confirmation rate at 5.9% (research.overlap_stress).
+        k_eff = max(2, blocks)
+        candidates = [rho + 1.645 * math.sqrt(max(0.0, 1.0 - rho * rho) / pairs)]
         if rho > 0:
-            k_eff = max(2, blocks)
-            rho_bc = min(MAX_RESIDUAL_RHO, rho + (1.0 + 3.0 * rho) / k_eff)
-            widening = (1.0 + rho_bc) / (1.0 - rho_bc)
+            candidates.append(rho + (1.0 + 3.0 * rho) / k_eff)
+        r = min(MAX_RESIDUAL_RHO, max(candidates))
+        if r > 0:
+            widening = (1.0 + r) / (1.0 - r)
     out["residual_dependence"] = {
         "lag_h_autocorr": None if rho is None else round(rho, 4),
         "pairs": pairs,

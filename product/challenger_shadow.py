@@ -61,6 +61,9 @@ LEGACY_FILE = "challenger_shadow.jsonl"
 FROZEN = "FROZEN"
 MISSED = "MISSED"
 ENTRY_OPEN_HM = (9, 15)          # first eligible forward entry: next session's open (IST)
+#: A freeze must land this long BEFORE the entry deadline: a host clock a few
+#: minutes slow must not let a write after the real open pass as prospective.
+FREEZE_MARGIN = timedelta(minutes=30)
 SESSION_CLOSE_HM = (15, 30)
 MIN_CANDIDATES_FOR_IC = 5
 #: A session where more than this share of frozen candidates lack a bar in
@@ -225,7 +228,7 @@ def prospective_gate(scan: Mapping[str, Any] | None, *, now: datetime, holidays)
         return out
     deadline = entry_deadline(session, holidays)
     out["entry_deadline"] = deadline.isoformat()
-    if now >= deadline:
+    if now >= deadline - FREEZE_MARGIN:
         out.update(reason="ENTRY_DEADLINE_PASSED", retry=False)
         return out
     completed = _parse_utc(prov.get("scan_completed_at") or scan.get("scanned_at"))
@@ -349,10 +352,19 @@ def record_session(scan: Mapping[str, Any] | None, ohlcv_fn: Callable[[str], Any
         from core.evaluation_spec import OUTCOME_HORIZON_SESSIONS as horizon  # type: ignore[no-redef]
     holidays = load_holidays() if holidays is None else holidays
     now = clock()
-    now = now if now.tzinfo else now.replace(tzinfo=IST)
+    if now.tzinfo is None:                 # a naive reading could be off by 5.5 h: refuse it
+        return {"recorded": 0, "session": "", "reason": "CLOCK_NOT_TIMEZONE_AWARE", "retry": False}
     gate = prospective_gate(scan, now=now, holidays=holidays)
     if not gate["ok"]:
         return {"recorded": 0, "session": gate["session"], "reason": gate["reason"], "retry": gate["retry"]}
+    ledger = path or ledger_path()
+    if ledger.exists():
+        with closing(_connect(ledger)) as conn:
+            reused = conn.execute("SELECT session FROM sessions WHERE scan_id=? AND session<>?",
+                                  (gate["scan_id"], gate["session"])).fetchone()
+        if reused:
+            return {"recorded": 0, "session": gate["session"], "reason": "SCAN_ID_ALREADY_FROZEN_FOR_ANOTHER_SESSION",
+                    "retry": False}
     if not session_published:
         return {"recorded": 0, "session": gate["session"], "reason": "OFFICIAL_SESSION_BAR_NOT_PUBLISHED",
                 "retry": True}
@@ -429,7 +441,7 @@ def _admissible(meta: Mapping[str, Any], rows: list[Mapping[str, Any]], holidays
         deadline = entry_deadline(date.fromisoformat(str(meta["session"])), holidays)
     except Exception:
         return "DEADLINE_UNKNOWN"
-    if frozen is None or frozen >= deadline:
+    if frozen is None or frozen >= deadline - FREEZE_MARGIN:
         return "FROZEN_AFTER_ENTRY_DEADLINE"
     try:
         model = json.loads(meta.get("model_version") or "{}")

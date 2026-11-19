@@ -108,6 +108,13 @@ def test_after_the_first_eligible_entry_nothing_can_be_frozen(tmp_path, frames):
     late = CS.record_session(_scan(frames), frames.get, clock=_clock("2026-11-19T09:15:00"),
                              holidays=HOLIDAYS, path=path)
     assert late["reason"] == "ENTRY_DEADLINE_PASSED" and late["retry"] is False
+    skew = CS.record_session(_scan(frames), frames.get, clock=_clock("2026-11-19T08:50:00"),
+                             holidays=HOLIDAYS, path=path)          # inside the clock-skew margin
+    assert skew["reason"] == "ENTRY_DEADLINE_PASSED"
+    ok = CS.record_session(_scan(frames), frames.get, clock=_clock("2026-11-19T08:40:00"),
+                           holidays=HOLIDAYS, path=path)
+    assert ok["reason"] == "PROSPECTIVE"
+    path.unlink()
     stale = CS.record_session(_scan(frames), frames.get, clock=_clock("2026-11-20T21:00:00"),
                               holidays=HOLIDAYS, path=path)
     assert stale["reason"] == "SCAN_NOT_THE_LATEST_COMPLETED_SESSION" and stale["retry"] is False
@@ -129,6 +136,20 @@ def test_only_a_fresh_identified_live_session_close_scan_is_prospective(tmp_path
     out = CS.record_session(scan, {}.get, clock=EVENING, holidays=HOLIDAYS, path=path)
     assert (out["reason"], out["retry"], out["recorded"]) == (reason, retry, 0)
     assert not path.exists()
+
+
+def test_a_naive_clock_is_refused(tmp_path, frames):
+    naive = lambda: datetime(2026, 11, 18, 20, 0)
+    out = CS.record_session(_scan(frames), frames.get, clock=naive, holidays=HOLIDAYS, path=tmp_path / "s.db")
+    assert out["reason"] == "CLOCK_NOT_TIMEZONE_AWARE" and not (tmp_path / "s.db").exists()
+
+
+def test_a_scan_id_cannot_be_frozen_for_a_second_session(tmp_path):
+    path = tmp_path / "shadow.db"
+    CS.record_session(_scan([], session="2026-11-17", completed="2026-11-17T12:30:00+00:00"), {}.get,
+                      clock=_clock("2026-11-17T20:00:00"), holidays=HOLIDAYS, path=path)
+    again = CS.record_session(_scan([]), {}.get, clock=EVENING, holidays=HOLIDAYS, path=path)   # same scan_id
+    assert again["reason"] == "SCAN_ID_ALREADY_FROZEN_FOR_ANOTHER_SESSION"
 
 
 def test_an_unpublished_official_bar_waits_instead_of_freezing_an_empty_session(tmp_path, frames):
@@ -244,7 +265,7 @@ def test_backfilled_late_or_edited_rows_are_never_evidence(tmp_path):
     late = "2026-11-19"
     cut19 = {k: v[v.index <= late] for k, v in _full_frames().items()}
     rows19, _, n19 = CS.build_predictions(late, _scan(cut19, session=late)["records"], cut19.get)
-    CS._write(path, {"session": late, "status": CS.FROZEN, "frozen_at": "2026-11-20T06:00:00+00:00",
+    CS._write(path, {"session": late, "status": CS.FROZEN, "frozen_at": "2026-11-20T03:30:00+00:00",
                      "entry_deadline": "2026-11-20T09:15:00+05:30", "scan_id": "y", "model_version": model,
                      "candidates": n19, "payload_sha256": CS._payload_sha(late, model, "y", rows19)}, rows19)
     full = _full_frames()
@@ -296,6 +317,11 @@ def test_a_consistent_paired_improvement_is_detected():
     assert res["paired_ic_improvement"]["verdict"] == "CHALLENGER_BETTER"
     assert res["paired_ic_improvement"]["independent_sessions"] >= 20
     assert res["paired_ic_improvement"]["holm_adjusted_p"] < 0.05
+
+
+def test_a_consistently_worse_challenger_is_called_worse_not_better():
+    res = CS.shadow_inference(_daily(220, edge=-0.03, noise=0.02, seed=4), holidays=HOLIDAYS, horizon=10)
+    assert res["paired_ic_improvement"]["verdict"] == "CHALLENGER_WORSE"
 
 
 def test_a_marginal_paired_win_must_survive_the_multiple_testing_correction(monkeypatch):

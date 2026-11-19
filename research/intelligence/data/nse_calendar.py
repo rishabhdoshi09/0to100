@@ -208,33 +208,69 @@ def has_duplicate_sessions(rows) -> bool:
 # load_holidays() degrades to weekends-only when no file is usable, and a file
 # that lists only 2026 says nothing about 2025 or 2027. Anything that turns a
 # date range into a count of NSE sessions for EVIDENCE (maturity of a
-# 10-session outcome window, independence of observations) must therefore
-# first prove that the holiday list actually covers every year it touches.
-# An uncovered year is unknown, never "all weekdays are sessions".
+# 10-session outcome window, independence of observations) must first prove
+# the holiday list covers every year it touches. An uncovered year is unknown,
+# never "all weekdays are sessions".
+#
+# Proof is provenance, not plausibility: data/nse_calendar_manifest.json
+# records each year verified against NSE's own published trading-holiday list
+# (segment CM), with the source, the retrieval time and a SHA-256 of that
+# year's weekday holidays. A year is covered only when the manifest marks it
+# VERIFIED_COMPLETE AND the holidays loaded now hash to the same value, so a
+# partial list, a stray list, or an amendment (a newly announced holiday)
+# that has not been re-verified all fail closed. Refresh with
+# scripts/verify_nse_calendar.py when NSE publishes or amends a year.
 
-#: NSE declares roughly 12-19 trading holidays a year. A year with fewer
-#: listed entries is a stray amendment, not a published calendar.
-MIN_HOLIDAYS_FOR_COVERED_YEAR = 8
+MANIFEST_PATH = Path(__file__).resolve().parents[3] / "data" / "nse_calendar_manifest.json"
+VERIFIED_COMPLETE = "VERIFIED_COMPLETE"
 
 
-def covered_years(holidays) -> set[int]:
-    """Calendar years for which the holiday list looks like a full calendar."""
-    counts: dict[int, int] = {}
+def load_manifest(path: Path | None = None) -> dict:
+    try:
+        payload = json.loads(Path(path or MANIFEST_PATH).read_text())
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def weekday_holiday_digest(holidays, year: int) -> tuple[int, str]:
+    """(count, sha256) of the weekday holidays of ``year`` in a holiday list."""
+    import hashlib
+
+    days = []
     for item in holidays or ():
-        text = str(item)[:10]
         try:
-            year = date.fromisoformat(text).year
+            d = date.fromisoformat(str(item)[:10])
         except ValueError:
             continue
-        counts[year] = counts.get(year, 0) + 1
-    return {y for y, n in counts.items() if n >= MIN_HOLIDAYS_FOR_COVERED_YEAR}
+        if d.year == int(year) and d.weekday() < 5:
+            days.append(d.isoformat())
+    days = sorted(set(days))
+    return len(days), hashlib.sha256("\n".join(days).encode("utf-8")).hexdigest()
 
 
-def calendar_gap(start: date, end: date, holidays) -> str:
+def covered_years(holidays, manifest: dict | None = None) -> set[int]:
+    """Years whose loaded weekday holidays match a VERIFIED_COMPLETE manifest entry."""
+    manifest = load_manifest() if manifest is None else manifest
+    out: set[int] = set()
+    for key, entry in dict(manifest.get("years") or {}).items():
+        try:
+            year = int(key)
+        except ValueError:
+            continue
+        if not isinstance(entry, dict) or entry.get("status") != VERIFIED_COMPLETE:
+            continue
+        count, digest = weekday_holiday_digest(holidays, year)
+        if count == int(entry.get("weekday_holidays") or -1) and digest == entry.get("weekday_holidays_sha256"):
+            out.add(year)
+    return out
+
+
+def calendar_gap(start: date, end: date, holidays, manifest: dict | None = None) -> str:
     """'' when every year in [start, end] is covered, else the reason it is not."""
     if not holidays:
         return "EXCHANGE_CALENDAR_UNAVAILABLE"
-    years = covered_years(holidays)
+    years = covered_years(holidays, manifest)
     missing = [y for y in range(min(start, end).year, max(start, end).year + 1) if y not in years]
     if missing:
         return "EXCHANGE_CALENDAR_NOT_COVERED:" + ",".join(str(y) for y in missing)

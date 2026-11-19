@@ -581,3 +581,81 @@ As in §10.2, `git reset --hard 125880a6` on `host/mac-release-20261110`, then `
 
 The relay is independent of the desk. To stop it: `launchctl bootout gui/501/com.quantterm.relay`, or create the `DISABLED` file.
 
+## 12. Fail-closed admission pass (20 Nov; ChatGPT review of `de061791`, delivered by the relay)
+
+The review arrived while this session was idle and started a turn by itself: posted 18:43:49Z, delivered 18:45:57Z, acknowledged 18:46:03Z. Nothing was deployed and no production data was changed. Live trading is HARD-LOCKED.
+
+### 12.1 BUY gate: every legacy exception traced and closed
+
+Production path: walk-forward report → `backtest_edges` → calibration snapshot → `UnifiedScanner._signal_edges` → `_evidence_verdict` / `setup_evidence`.
+
+Three paths let a BUY through without proof:
+
+- **H1.** A bare float, or a row without `n`, got BUY on its mean alone, and an infinite mean or lower bound passed as "proven".
+- **H2.** If evidence was loaded but none of the setup's signals had ≥ 30 trades, the setup got BUY on score alone. That violated "< 30 trades = no claim".
+- **H3.** With the gate on but no report loaded, the legacy score rule applied.
+
+A BUY now needs `unproven_reason(ev) == ""`:
+
+- a finite mean ≥ +0.05R;
+- ≥ 30 trades;
+- a finite one-sided 95% lower bound above 0, from the `OVERLAP_ROBUST` inference;
+- ≥ 20 independent blocks.
+
+Legacy, pre-rerun, mixed, partial and non-finite evidence, and setups with no evidenced signal, are WATCH, and the card shows the reason.
+
+- The backtest and historical replay construct the scanner with the gate off and keep their raw verdicts. A test checks this.
+- **Production effect:** the schema-2 report on the host predates the dependence-aware bound, so every BUY is withheld until the schema-3 walk-forward reruns. That happens on the first closed-market night after a deploy. Today there are zero BUYs either way.
+
+### 12.2 Exchange calendar: provenance, not plausibility
+
+`data/nse_calendar_manifest.json` records 2026 as VERIFIED_COMPLETE against NSE's own list (`api/holiday-master?type=trading`, segment CM). The 16 weekday holidays match exactly.
+
+- **Covered year:** only a manifest entry that is VERIFIED_COMPLETE and whose weekday-holiday SHA-256 matches the loaded holidays.
+- **Fails closed:** a partial list (even 8 real holidays), a stray list, an unverified amendment (a newly announced holiday), or a missing manifest.
+- **Special sessions:** the Diwali Laxmi Pujan* entry (Sunday 8 Nov, Muhurat) is recorded and is not a regular session.
+- **Refresh tool:** `scripts/verify_nse_calendar.py` writes nothing unless the lists match exactly. 2027 is not published yet, so the tool refuses it, as designed.
+
+### 12.3 Stress study of `research/overlap_inference.py`
+
+The study is reproducible: `python -m research.overlap_stress --sims 2000` (seeds in the table). A false confirmation is a two-sided p < 0.05 with ≥ 20 blocks, under a true null.
+
+Under strong regime persistence the point-estimate widening gave 5.9% [5.0%, 7.1%]. The widening now uses the larger of rho's one-sided 95% upper bound and its bias-corrected value, giving 5.3%.
+
+| Null scenario | seed | robust (Wilson 95%) | superseded block t | same SE, normal reference |
+|---|---|---|---|---|
+| overlapping windows | 101 | 3.0% [2.3%, 3.8%] | 11.2% | 3.5% |
+| heavy tails t3 | 102 | 0.2% [0.1%, 0.5%] | 8.6% | 0.3% |
+| regime persistence ar0.9 | 103 | 5.3% [4.5%, 6.4%] | 24.4% | 6.2% |
+| cross sectional concentration | 104 | 0.1% [0.1%, 0.4%] | 9.2% | 0.1% |
+| missing sessions 40pct plus month gap | 105 | 0.6% [0.3%, 1.1%] | 10.8% | 0.8% |
+| duplicated outcomes lag1to3 | 106 | 3.4% [2.7%, 4.3%] | 21.4% | 3.7% |
+| overlapping event windows | 107 | 3.4% [2.7%, 4.3%] | 11.1% | 4.0% |
+| exactly 20 blocks | 108 | 2.1% [1.6%, 2.9%] | 10.0% | 2.9% |
+
+Selection: the best of 20 correlated null features (seed 201, 500 simulations) has p < 0.05 in 47% of runs, but BH across the family rejects in only 3.2% [2.0%, 5.1%].
+
+Student-t (df = blocks − 1) is more conservative than a normal reference in every scenario. Full output: `docs/research/overlap_stress_2026-11-20.json`.
+
+### 12.4 Challenger shadow audit
+
+Three concrete holes were fixed:
+
+1. **Clock skew.** A freeze must land at least 30 minutes before the 09:15 IST entry deadline, checked at write time and again at evaluation.
+2. **Naive clock.** A naive (timezone-less) reading is refused.
+3. **Scan-ID reuse.** A `scan_id` already frozen for another session is refused.
+
+Unchanged and checked:
+
+- IST has no DST and every deadline is a fixed +05:30 time.
+- Late and stale scans, SQLite rollback, missing symbol bars, and pairing on the same frozen candidates and window.
+- A schema mismatch raises instead of writing.
+
+Eleven guard-removal mutations are all caught. The paired lower bound turned out to be redundant with Holm; a worse-challenger test now pins it.
+
+### 12.5 Tests
+
+- The 50 scanner-dependent files pass.
+- The 39 calendar, inference, shadow, scorecard, gate and relay files pass: 903 tests.
+- All of these ran on the Mac under the guard, one interpreter per file.
+
