@@ -140,33 +140,67 @@ _EXT_ABOVE_SMA50 = float(_os.getenv("QT_EXT_ABOVE_SMA50_PCT", "20") or 20)
 #     own record is preferred whenever it exists;
 #   * mean net-of-cost expectancy >= _MIN_BUY_EDGE_R (+0.05R, the backtest's
 #     own POSITIVE line; -0.05..+0.05 is NEUTRAL, within noise of zero), AND
-#   * its one-sided 95% lower bound (date-clustered standard error) above
-#     zero, so an edge the noise could explain does not count. Older reports
-#     without a standard error fall back to the mean-only rule.
-# No evidenced signal = no claim either way. The backtest counts every
-# detected setup whatever its verdict, so the gate cannot starve its evidence.
+#   * its one-sided 95% lower bound above zero, from the dependence-aware
+#     inference (overlapping 10-session windows; research.overlap_inference)
+#     over >= 20 independent blocks, so an edge the noise could explain does
+#     not count.
+# Fail closed (2026-11-20): legacy bare floats, rows without a sample size or
+# a finite lower bound, pre-rerun reports, and setups with no evidenced signal
+# are WATCH with the reason on the card, never a BUY on score alone. The
+# backtest and replay run with the gate off, so the gate cannot starve its
+# own evidence.
 EVIDENCE_MIN_TRADES = 30
 _MIN_BUY_EDGE_R = float(_os.getenv("QT_MIN_BUY_EDGE_R", "0.05") or 0.05)
 _OVERRIDE_BUY_SIGNALS = ("BREAKOUT_52W", "HIGH_TIGHT_FLAG")
 
 
-def _evidence_row(value) -> dict | None:
-    """Normalise one evidence entry: a bare float (older snapshots) or a dict."""
-    if isinstance(value, dict):
-        try:
-            mean = float(value.get("mean"))
-        except (TypeError, ValueError):
-            return None
-        lower = value.get("lower")
-        try:
-            lower = None if lower is None else float(lower)
-        except (TypeError, ValueError):
-            lower = None
-        return {"mean": mean, "lower": lower, "n": int(value.get("n") or 0)}
+#: Only dependence-aware evidence can prove a BUY: the walk-forward bound
+#: computed by scan.signal_backtest._evidence_fields on the realised NSE
+#: session index (research.overlap_inference). Everything else is shown, but
+#: is never proof.
+_ROBUST_INFERENCE = "OVERLAP_ROBUST"
+_LEGACY_FLOAT = "LEGACY_FLOAT"
+
+
+def _finite(value) -> float | None:
     try:
-        return {"mean": float(value), "lower": None, "n": 0}
+        x = float(value)
     except (TypeError, ValueError):
         return None
+    return x if x == x and x not in (float("inf"), float("-inf")) else None
+
+
+def _evidence_row(value) -> dict | None:
+    """Normalise one evidence entry; None when it carries no usable number.
+
+    A dict row keeps mean, lower bound, trades (n), independent 10-session
+    blocks and the inference that produced the bound. A bare float (snapshots
+    from before 16 Nov) has no sample size, uncertainty or provenance: it is
+    kept for display and marked LEGACY_FLOAT so it can never prove a BUY.
+    Non-finite means are dropped; a non-finite lower bound is flagged.
+    """
+    if isinstance(value, dict):
+        mean = _finite(value.get("mean"))
+        if mean is None:
+            return None
+        raw_lower = value.get("lower")
+        lower = None if raw_lower is None else _finite(raw_lower)
+        try:
+            n = max(0, int(value.get("n") or 0))
+        except (TypeError, ValueError):
+            n = 0
+        try:
+            blocks = max(0, int(value.get("blocks") or 0))
+        except (TypeError, ValueError):
+            blocks = 0
+        return {"mean": mean, "lower": lower, "n": n, "blocks": blocks,
+                "inference": str(value.get("inference") or ""),
+                "lower_invalid": raw_lower is not None and lower is None}
+    mean = _finite(value)
+    if mean is None:
+        return None
+    return {"mean": mean, "lower": None, "n": 0, "blocks": 0, "inference": _LEGACY_FLOAT,
+            "lower_invalid": False}
 
 
 def _report_rows(rows: dict, min_trades: int) -> dict[str, dict]:
@@ -177,21 +211,25 @@ def _report_rows(rows: dict, min_trades: int) -> dict[str, dict]:
             if n < int(min_trades):
                 continue
             mean = row.get("expectancy_r_precise")
-            mean = float(row.get("expectancy_r") if mean is None else mean)
+            mean = _finite(row.get("expectancy_r") if mean is None else mean)
+            if mean is None:
+                continue
             lower = row.get("lower_r")
-            out[str(key)] = {"mean": mean, "lower": None if lower is None else float(lower), "n": n}
+            out[str(key)] = {"mean": mean, "lower": None if lower is None else _finite(lower), "n": n,
+                             "blocks": int(row.get("independent_sessions") or 0),
+                             "inference": str(row.get("inference") or "")}
         except (TypeError, ValueError, AttributeError):
             continue
     return out
 
 
 def backtest_edges(report: dict | None, min_trades: int = EVIDENCE_MIN_TRADES) -> dict[str, dict]:
-    """{signal: {mean, lower, n}} for signals with enough backtest trades."""
+    """{signal: {mean, lower, n, blocks, inference}} for signals with enough backtest trades."""
     return _report_rows((report or {}).get("signals") or {}, min_trades)
 
 
 def backtest_combo_edges(report: dict | None) -> dict[str, dict]:
-    """{exact combination key: {mean, lower, n}} for evidenced combinations."""
+    """{exact combination key: {mean, lower, n, blocks, inference}} for evidenced combinations."""
     from scan.signal_backtest import COMBO_MIN_TRADES
     return _report_rows((report or {}).get("combos") or {}, COMBO_MIN_TRADES)
 
@@ -207,33 +245,59 @@ def setup_evidence(signals: list[str], edges: dict | None, combos: dict | None =
     if not rows:
         return None
     lowers = [r["lower"] for r in rows]
+    kinds = {r["inference"] for r in rows}
     return {
         "mean": sum(r["mean"] for r in rows) / len(rows),
         # Averaging lower bounds is conservative for overlapping signals.
         "lower": None if any(x is None for x in lowers) else sum(lowers) / len(lowers),
         "n": min(r["n"] for r in rows),
+        "blocks": min(r["blocks"] for r in rows),
+        "inference": kinds.pop() if len(kinds) == 1 else "MIXED",
+        "lower_invalid": any(r["lower_invalid"] for r in rows),
         "source": "signals",
     }
 
 
 def combo_edge_r(signals: list[str], edges: dict | None, combos: dict | None = None) -> float | None:
-    """Mean measured edge of a setup (R/trade); None = no evidence."""
+    """Mean measured edge of a setup (R/trade); None = no evidence. Display only."""
     ev = setup_evidence(signals, edges, combos)
     return None if ev is None else round(ev["mean"], 3)
 
 
-def _proven(ev: dict | None) -> bool:
-    """Mean clears the bar AND the lower bound is above zero.
+def unproven_reason(ev: dict | None) -> str:
+    """'' when ``ev`` proves an edge, else the honest reason it does not.
 
-    A measured sample (n > 0) without a lower bound (e.g. every trade on one
-    session, so no dispersion can be estimated) is NOT proven. Only a bare
-    legacy float (n == 0, no uncertainty ever recorded) keeps the mean-only rule.
+    Proof needs ALL of: a finite mean >= _MIN_BUY_EDGE_R, >= EVIDENCE_MIN_TRADES
+    trades, a finite one-sided 95% lower bound above zero from the
+    dependence-aware inference, and >= 20 independent 10-session blocks.
+    Missing, legacy, partial or mixed evidence fails closed.
     """
-    if not ev or ev["mean"] < _MIN_BUY_EDGE_R:
-        return False
-    if ev["lower"] is None:
-        return int(ev.get("n") or 0) == 0
-    return ev["lower"] > 0
+    from research.overlap_inference import MIN_INDEPENDENT_BLOCKS
+
+    if not ev:
+        return "no measured evidence"
+    if ev["mean"] < _MIN_BUY_EDGE_R:
+        return f"below the {_MIN_BUY_EDGE_R:+.2f}R bar"
+    if ev.get("inference") == _LEGACY_FLOAT or int(ev.get("n") or 0) <= 0:
+        return "but it is legacy evidence with no sample size or uncertainty"
+    if int(ev.get("n") or 0) < EVIDENCE_MIN_TRADES:
+        return f"but only {int(ev['n'])} trades (< {EVIDENCE_MIN_TRADES})"
+    if ev.get("lower_invalid"):
+        return "but its lower bound is not a finite number"
+    if ev.get("lower") is None:
+        return "but its uncertainty cannot be measured (no independent sessions to compare)"
+    if ev.get("inference") != _ROBUST_INFERENCE:
+        return ("but its lower bound ignores overlapping 10-session windows (the report predates the "
+                "dependence-aware walk-forward)")
+    if int(ev.get("blocks") or 0) < MIN_INDEPENDENT_BLOCKS:
+        return f"but only {int(ev.get('blocks') or 0)} independent 10-session windows (< {MIN_INDEPENDENT_BLOCKS})"
+    if ev["lower"] <= 0:
+        return f"but its 95% lower bound {ev['lower']:+.2f}R is not above zero (could be noise)"
+    return ""
+
+
+def _proven(ev: dict | None) -> bool:
+    return bool(ev) and unproven_reason(ev) == ""
 
 
 def _evidence_verdict(
@@ -243,39 +307,45 @@ def _evidence_verdict(
     breakout_watch_veto: bool = False,
     signal_edges: dict | None = None,
     combo_edges: dict | None = None,
+    gate: bool | None = None,
 ) -> tuple[str, str]:
-    """(verdict, evidence-gate reason). Reason is '' unless evidence vetoed a BUY.
+    """(verdict, evidence-gate reason). Reason is '' unless evidence withheld a BUY.
 
-    Without any evidence (no backtest report yet) the legacy rule stands. With
-    evidence, the 52-week-breakout / high-tight-flag shortcut applies only when
-    that signal itself is proven (52W: -0.08R on 26 trades and HTF on 19
-    trades are no claim, not a licence), and every BUY must be proven.
+    ``gate``: True = the live evidence gate (fail closed: a BUY needs proof,
+    and missing or unverifiable evidence is a WATCH with its reason); False =
+    research measurement (backtest, historical replay) on the legacy score
+    rule; None = active exactly when evidence is supplied (direct callers).
+    The 52-week-breakout / high-tight-flag shortcut applies only when that
+    signal itself is proven.
     """
     edges = dict(signal_edges or {})
+    combos = dict(combo_edges or {})
+    active = bool(edges or combos) if gate is None else bool(gate)
     if edges:
         override = any(s in _OVERRIDE_BUY_SIGNALS and _proven(_evidence_row(edges.get(s)))
                        for s in signals if s in edges)
     else:
-        override = any(s in _OVERRIDE_BUY_SIGNALS for s in signals)
+        override = (not active) and any(s in _OVERRIDE_BUY_SIGNALS for s in signals)
     buy = (score >= 55 and len(signals) >= 2) or override
-    if breakout_watch_veto:
+    if breakout_watch_veto or not buy:
         return "WATCH", ""
-    if not buy:
-        return "WATCH", ""
-    ev = setup_evidence(signals, edges, combo_edges) if edges or combo_edges else None
-    if ev is not None and not _proven(ev):
-        basis = "this exact combination" if ev["source"] == "combination" else "its signals"
-        if ev["mean"] < _MIN_BUY_EDGE_R:
-            why = f"below the {_MIN_BUY_EDGE_R:+.2f}R bar"
-        else:
-            why = (f"but its 95% lower bound {ev['lower']:+.2f}R is not above zero (could be noise)"
-                   if ev["lower"] is not None else
-                   "but its uncertainty cannot be measured (no independent sessions to compare)")
+    if not active:
+        return "BUY", ""
+    ev = setup_evidence(signals, edges, combos)
+    why = unproven_reason(ev)
+    if not why:
+        return "BUY", ""
+    if ev is None:
+        loaded = "" if (edges or combos) else "; no walk-forward evidence is loaded"
         return "WATCH", (
-            f"⚖ Measured edge {ev['mean']:+.2f}R/trade for {basis} (walk-forward backtest, "
-            f"net of costs) {why} — no proven edge, so WATCH, not BUY"
+            f"⚖ No measured edge for these signals (each needs >= {EVIDENCE_MIN_TRADES} walk-forward "
+            f"trades{loaded}) — no proven edge, so WATCH, not BUY"
         )
-    return "BUY", ""
+    basis = "this exact combination" if ev["source"] == "combination" else "its signals"
+    return "WATCH", (
+        f"⚖ Measured edge {ev['mean']:+.2f}R/trade for {basis} (walk-forward backtest, "
+        f"net of costs) {why} — no proven edge, so WATCH, not BUY"
+    )
 
 
 def _composite_verdict(
@@ -965,6 +1035,7 @@ class UnifiedScanner:
             breakout_watch_veto=breakout_watch_veto,
             signal_edges=self._signal_edges,
             combo_edges=self._combo_edges,
+            gate=self._evidence_gate,
         )
         _ev = setup_evidence(signals, self._signal_edges, self._combo_edges) \
             if (self._signal_edges or self._combo_edges) else None

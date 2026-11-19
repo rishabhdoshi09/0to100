@@ -5778,14 +5778,23 @@ class TestOneRulebook:
         assert _evidence_fields(stats, index, 10)["se_r"] >= 0.95 * _evidence_fields(honest, index, 10)["se_r"]
 
     def test_a_measured_edge_without_a_lower_bound_is_not_proven(self):
-        from scan.unified_scanner import _evidence_verdict, _proven
-        assert _proven({"mean": 0.4, "lower": None, "n": 0}) is True          # legacy bare float
-        assert _proven({"mean": 0.4, "lower": None, "n": 45}) is False        # one session, no dispersion
-        assert _proven({"mean": 0.4, "lower": 0.01, "n": 45}) is True
+        from scan.unified_scanner import _evidence_row, _evidence_verdict, _proven
+        robust = {"inference": "OVERLAP_ROBUST", "blocks": 24}
+        assert _proven(_evidence_row(0.4)) is False                                 # legacy bare float (2026-11-20)
+        assert _proven(_evidence_row({"mean": 0.4, "lower": None, "n": 45, **robust})) is False   # one session
+        assert _proven(_evidence_row({"mean": 0.4, "lower": 0.01, "n": 45})) is False             # pre-rerun bound
+        assert _proven(_evidence_row({"mean": 0.4, "lower": 0.01, "n": 45, **robust})) is True
         verdict, why = _evidence_verdict(70, ["VCP", "MOMENTUM"],
-                                         signal_edges={"VCP": {"mean": 0.4, "lower": None, "n": 45},
-                                                       "MOMENTUM": {"mean": 0.4, "lower": None, "n": 45}})
+                                         signal_edges={"VCP": {"mean": 0.4, "lower": None, "n": 45, **robust},
+                                                       "MOMENTUM": {"mean": 0.4, "lower": None, "n": 45, **robust}})
         assert verdict == "WATCH" and "cannot be measured" in why
+
+    def test_live_gate_never_buys_on_score_alone(self):
+        """No evidence loaded, or none for the setup's signals: WATCH with the reason, never BUY."""
+        from scan.unified_scanner import _evidence_verdict
+        assert _evidence_verdict(95, ["VCP", "MOMENTUM"], gate=True)[0] == "WATCH"
+        assert _evidence_verdict(95, ["VCP", "MOMENTUM"], signal_edges={"OTHER": 0.5}, gate=True)[0] == "WATCH"
+        assert _evidence_verdict(95, ["VCP", "MOMENTUM"], gate=False)[0] == "BUY"   # research measurement only
 
     def test_backtest_session_index_is_the_realised_official_sessions(self):
         from scan.signal_backtest import realised_session_index

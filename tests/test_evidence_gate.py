@@ -21,6 +21,11 @@ def _snap(edges):
     return {"snapshot_id": "test", "multipliers": {}, "signal_registry": {}, "backtest_edges": edges}
 
 
+def _ok(mean, lower=0.05, n=60, blocks=24, inference="OVERLAP_ROBUST"):
+    """Evidence that meets the full standard: dependence-aware bound over >= 20 blocks."""
+    return {"mean": mean, "lower": lower, "n": n, "blocks": blocks, "inference": inference}
+
+
 def _breakout_frame():
     close = np.linspace(100, 200, 260)
     close[-3] = close[-4] - 2.0
@@ -36,17 +41,27 @@ def _breakout_frame():
 
 # ── verdict rule ──────────────────────────────────────────────────────────────
 
-def test_without_any_evidence_the_legacy_rule_stands():
-    assert US._evidence_verdict(40.0, ["BREAKOUT_52W"]) == ("BUY", "")
-    assert US._evidence_verdict(80.0, ["MOMENTUM", "CUP_HANDLE"]) == ("BUY", "")
-    assert US._evidence_verdict(40.0, ["MOMENTUM", "CUP_HANDLE"]) == ("WATCH", "")
+def test_without_the_gate_research_scanners_keep_the_legacy_score_rule():
+    for gate in (None, False):              # None = a direct caller that supplies no evidence
+        assert US._evidence_verdict(40.0, ["BREAKOUT_52W"], gate=gate) == ("BUY", "")
+        assert US._evidence_verdict(80.0, ["MOMENTUM", "CUP_HANDLE"], gate=gate) == ("BUY", "")
+        assert US._evidence_verdict(40.0, ["MOMENTUM", "CUP_HANDLE"], gate=gate) == ("WATCH", "")
+
+
+def test_the_live_gate_with_no_evidence_loaded_fails_closed():
+    verdict, why = US._evidence_verdict(80.0, ["MOMENTUM", "CUP_HANDLE"], gate=True)
+    assert verdict == "WATCH" and "no walk-forward evidence is loaded" in why
+    verdict, why = US._evidence_verdict(40.0, ["BREAKOUT_52W"], gate=True)   # no unproven 52W shortcut
+    assert verdict == "WATCH"
 
 
 def test_52_week_shortcut_needs_its_own_positive_evidence():
-    unproven = {"MOMENTUM": 0.05}                        # 52W has < 30 trades: absent
+    unproven = {"MOMENTUM": _ok(0.05)}                  # 52W has < 30 trades: absent
     assert US._evidence_verdict(40.0, ["BREAKOUT_52W"], signal_edges=unproven)[0] == "WATCH"
-    proven = {"BREAKOUT_52W": 0.20}
+    proven = {"BREAKOUT_52W": _ok(0.20)}
     assert US._evidence_verdict(40.0, ["BREAKOUT_52W"], signal_edges=proven)[0] == "BUY"
+    legacy = {"BREAKOUT_52W": 0.20}                      # a bare float proves nothing
+    assert US._evidence_verdict(40.0, ["BREAKOUT_52W"], signal_edges=legacy)[0] == "WATCH"
     losing = {"HIGH_TIGHT_FLAG": -0.30}
     assert US._evidence_verdict(40.0, ["HIGH_TIGHT_FLAG"], signal_edges=losing)[0] == "WATCH"
 
@@ -59,14 +74,17 @@ def test_buy_needs_a_positive_measured_combo_edge():
     # two survivors of the 2026-11-12 scan measured +0.003R.
     verdict, why = US._evidence_verdict(90.0, ["VOL_SQUEEZE", "MOMENTUM"], signal_edges=edges)
     assert verdict == "WATCH" and "+0.03R" in why and "+0.05R bar" in why
-    positive = {"VOL_SQUEEZE": 0.08, "DELIVERY_SPIKE": 0.04}
+    positive = {"VOL_SQUEEZE": _ok(0.08), "DELIVERY_SPIKE": _ok(0.04, lower=0.01)}
     assert US._evidence_verdict(90.0, ["VOL_SQUEEZE", "DELIVERY_SPIKE"], signal_edges=positive) == ("BUY", "")
     assert US._MIN_BUY_EDGE_R == 0.05
 
 
-def test_unevidenced_combo_makes_no_claim_either_way():
+def test_a_setup_with_no_evidenced_signal_is_watch_not_a_score_only_buy():
+    """<30 trades = no claim: before 2026-11-20 such a setup became BUY on score alone."""
     edges = {"FLAT_BASE": -0.83}
-    assert US._evidence_verdict(90.0, ["MOMENTUM", "CUP_HANDLE"], signal_edges=edges) == ("BUY", "")
+    verdict, why = US._evidence_verdict(90.0, ["MOMENTUM", "CUP_HANDLE"], signal_edges=edges)
+    assert verdict == "WATCH" and "No measured edge for these signals" in why
+    assert "no walk-forward evidence is loaded" not in why
 
 
 def test_quality_veto_still_outranks_everything():
@@ -78,23 +96,28 @@ def test_quality_veto_still_outranks_everything():
 def test_floor_is_tunable(monkeypatch):
     monkeypatch.setattr(US, "_MIN_BUY_EDGE_R", 0.10)
     assert US._evidence_verdict(90.0, ["VOL_SQUEEZE", "MOMENTUM"],
-                                signal_edges={"VOL_SQUEEZE": 0.08, "MOMENTUM": 0.06})[0] == "WATCH"
+                                signal_edges={"VOL_SQUEEZE": _ok(0.08), "MOMENTUM": _ok(0.06)})[0] == "WATCH"
     monkeypatch.setattr(US, "_MIN_BUY_EDGE_R", 0.0)
     assert US._evidence_verdict(90.0, ["VOL_SQUEEZE", "MOMENTUM"],
-                                signal_edges={"VOL_SQUEEZE": 0.08, "MOMENTUM": -0.03})[0] == "BUY"
+                                signal_edges={"VOL_SQUEEZE": _ok(0.08), "MOMENTUM": _ok(-0.03, lower=0.01)})[0] == "BUY"
 
 
 def test_backtest_edges_keep_only_evidenced_signals():
     report = {"signals": {"A": {"trades": 30, "expectancy_r": -0.2},
                           "B": {"trades": 29, "expectancy_r": 0.9},
                           "C": {"trades": "x", "expectancy_r": 1}}}
-    assert US.backtest_edges(report) == {"A": {"mean": -0.2, "lower": None, "n": 30}}
+    assert US.backtest_edges(report) == {"A": {"mean": -0.2, "lower": None, "n": 30, "blocks": 0, "inference": ""}}
     assert US.backtest_edges(None) == {}
     assert US.combo_edge_r(["A", "B"], {"A": -0.2}) == -0.2
     assert US.combo_edge_r(["B"], {"A": -0.2}) is None
     precise = {"signals": {"A": {"trades": 40, "expectancy_r": 0.1, "expectancy_r_precise": 0.0812,
                                  "lower_r": -0.01}}}
-    assert US.backtest_edges(precise) == {"A": {"mean": 0.0812, "lower": -0.01, "n": 40}}
+    assert US.backtest_edges(precise) == {"A": {"mean": 0.0812, "lower": -0.01, "n": 40, "blocks": 0, "inference": ""}}
+    robust = {"signals": {"A": {"trades": 90, "expectancy_r_precise": 0.11, "lower_r": 0.02,
+                                "independent_sessions": 23, "inference": "OVERLAP_ROBUST"}}}
+    assert US.backtest_edges(robust) == {"A": {"mean": 0.11, "lower": 0.02, "n": 90, "blocks": 23,
+                                               "inference": "OVERLAP_ROBUST"}}
+    assert US.backtest_edges({"signals": {"A": {"trades": 90, "expectancy_r": float("nan")}}}) == {}
 
 
 # ── scanner integration ───────────────────────────────────────────────────────
@@ -109,9 +132,16 @@ def test_scanner_turns_a_losing_buy_into_an_explained_watch():
 
 
 def test_scanner_keeps_an_evidenced_positive_buy():
-    edges = {"VOL_SQUEEZE": 0.12, "POCKET_PIVOT": 0.0}
+    edges = {"VOL_SQUEEZE": _ok(0.12), "POCKET_PIVOT": _ok(0.04, lower=0.01)}
     r = US.UnifiedScanner(calibration_snapshot=_snap(edges))._analyze("X", _breakout_frame())
-    assert r.verdict == "BUY" and r.edge_gated is False and r.edge_r == pytest.approx(0.06)
+    assert r.verdict == "BUY" and r.edge_gated is False and r.edge_r == pytest.approx(0.08)
+
+
+def test_scanner_with_legacy_float_evidence_shows_why_it_is_not_a_buy():
+    r = US.UnifiedScanner(calibration_snapshot=_snap({"VOL_SQUEEZE": 0.12, "POCKET_PIVOT": 0.04}))._analyze(
+        "X", _breakout_frame())
+    assert r.verdict == "WATCH" and r.edge_gated is True and r.edge_r == pytest.approx(0.08)
+    assert "legacy evidence" in r.reasons[-1] and r.edge_lower_r is None
 
 
 def test_replay_and_backtest_scanners_measure_raw_setups():
@@ -150,7 +180,8 @@ def test_snapshot_freezes_the_gate_evidence(tmp_path):
                                      "HIGH_TIGHT_FLAG": {"trades": 19, "expectancy_r": 0.33}}},
         live_profile={}, data_identity="t", thesis_hash="t",
     )
-    assert snap["backtest_edges"] == {"VOL_SQUEEZE": {"mean": 0.08, "lower": None, "n": 545}}
+    assert snap["backtest_edges"] == {"VOL_SQUEEZE": {"mean": 0.08, "lower": None, "n": 545, "blocks": 0,
+                                                      "inference": ""}}
     assert snap["backtest_combo_edges"] == {}
 
 
@@ -167,19 +198,19 @@ def test_scan_record_carries_the_edge_fields():
 # ── combinations and confidence (2026-11-15, second pass) ────────────────────
 
 def test_a_positive_average_that_noise_could_explain_is_not_proven():
-    edges = {"VOL_SQUEEZE": {"mean": 0.08, "lower": -0.03, "n": 545},
-             "DELIVERY_SPIKE": {"mean": 0.09, "lower": 0.01, "n": 239}}   # lower bounds average -0.01
+    edges = {"VOL_SQUEEZE": _ok(0.08, lower=-0.03, n=545),
+             "DELIVERY_SPIKE": _ok(0.09, lower=0.01, n=239)}   # lower bounds average -0.01
     verdict, why = US._evidence_verdict(90.0, ["VOL_SQUEEZE", "DELIVERY_SPIKE"], signal_edges=edges)
     assert verdict == "WATCH" and "95% lower bound" in why and "could be noise" in why
-    proven = {"VOL_SQUEEZE": {"mean": 0.12, "lower": 0.03, "n": 545},
-              "DELIVERY_SPIKE": {"mean": 0.09, "lower": 0.02, "n": 239}}
+    proven = {"VOL_SQUEEZE": _ok(0.12, lower=0.03, n=545),
+              "DELIVERY_SPIKE": _ok(0.09, lower=0.02, n=239)}
     assert US._evidence_verdict(90.0, ["VOL_SQUEEZE", "DELIVERY_SPIKE"], signal_edges=proven) == ("BUY", "")
 
 
 def test_the_exact_combination_outranks_the_average_of_its_signals():
-    edges = {"VOL_SQUEEZE": {"mean": 0.12, "lower": 0.03, "n": 545},
-             "POCKET_PIVOT": {"mean": 0.10, "lower": 0.02, "n": 1385}}
-    combos = {"POCKET_PIVOT|VOL_SQUEEZE": {"mean": -0.20, "lower": -0.35, "n": 64}}
+    edges = {"VOL_SQUEEZE": _ok(0.12, lower=0.03, n=545),
+             "POCKET_PIVOT": _ok(0.10, lower=0.02, n=1385)}
+    combos = {"POCKET_PIVOT|VOL_SQUEEZE": _ok(-0.20, lower=-0.35, n=64)}
     verdict, why = US._evidence_verdict(90.0, ["VOL_SQUEEZE", "POCKET_PIVOT"],
                                         signal_edges=edges, combo_edges=combos)
     assert verdict == "WATCH" and "this exact combination" in why
@@ -190,17 +221,73 @@ def test_the_exact_combination_outranks_the_average_of_its_signals():
 
 
 def test_the_52_week_shortcut_needs_proof_not_just_a_positive_average():
-    noisy = {"BREAKOUT_52W": {"mean": 0.20, "lower": -0.05, "n": 40}}
+    noisy = {"BREAKOUT_52W": _ok(0.20, lower=-0.05, n=40)}
     assert US._evidence_verdict(40.0, ["BREAKOUT_52W"], signal_edges=noisy)[0] == "WATCH"
-    proven = {"BREAKOUT_52W": {"mean": 0.20, "lower": 0.05, "n": 40}}
+    proven = {"BREAKOUT_52W": _ok(0.20, lower=0.05, n=40)}
     assert US._evidence_verdict(40.0, ["BREAKOUT_52W"], signal_edges=proven)[0] == "BUY"
 
 
 def test_scanner_reports_the_evidence_it_judged_on():
-    combos = {"BREAKOUT_52W|POCKET_PIVOT|VOL_SQUEEZE": {"mean": 0.30, "lower": 0.10, "n": 45}}
-    edges = {"VOL_SQUEEZE": {"mean": -0.5, "lower": -0.6, "n": 545}}
+    combos = {"BREAKOUT_52W|POCKET_PIVOT|VOL_SQUEEZE": _ok(0.30, lower=0.10, n=45)}
+    edges = {"VOL_SQUEEZE": _ok(-0.5, lower=-0.6, n=545)}
     snap = {**_snap(edges), "backtest_combo_edges": combos}
     r = US.UnifiedScanner(calibration_snapshot=snap)._analyze("X", _breakout_frame())
     assert r.verdict == "BUY" and r.edge_source == "combination"
     assert r.edge_r == pytest.approx(0.30) and r.edge_lower_r == pytest.approx(0.10)
+
+
+# ── fail-closed admission (2026-11-20 review) ────────────────────────────────
+
+INF, NAN = float("inf"), float("nan")
+
+
+@pytest.mark.parametrize("row,reason", [
+    (0.40, "legacy evidence"),                                                     # float only
+    ({"mean": 0.40, "lower": 0.10}, "legacy evidence"),                            # missing n
+    ({"mean": 0.40, "lower": 0.10, "n": 12, "blocks": 24, "inference": "OVERLAP_ROBUST"}, "only 12 trades"),
+    ({"mean": 0.40, "lower": None, "n": 45, "blocks": 1, "inference": "OVERLAP_ROBUST"},
+     "uncertainty cannot be measured"),                                            # all on one day
+    ({"mean": 0.40, "lower": NAN, "n": 45, "blocks": 24, "inference": "OVERLAP_ROBUST"}, "not a finite number"),
+    ({"mean": 0.40, "lower": INF, "n": 45, "blocks": 24, "inference": "OVERLAP_ROBUST"}, "not a finite number"),
+    ({"mean": 0.40, "lower": "x", "n": 45, "blocks": 24, "inference": "OVERLAP_ROBUST"}, "not a finite number"),
+    ({"mean": 0.40, "lower": 0.10, "n": 45}, "ignores overlapping 10-session windows"),      # pre-rerun report
+    ({"mean": 0.40, "lower": 0.10, "n": 45, "blocks": 24, "inference": "WORST_CASE_NO_SESSION_INDEX"},
+     "ignores overlapping 10-session windows"),
+    ({"mean": 0.40, "lower": 0.10, "n": 45, "blocks": 7, "inference": "OVERLAP_ROBUST"},
+     "only 7 independent 10-session windows"),
+])
+def test_unverifiable_evidence_never_buys_and_says_why(row, reason):
+    verdict, why = US._evidence_verdict(90.0, ["VOL_SQUEEZE", "MOMENTUM"],
+                                        signal_edges={"VOL_SQUEEZE": row, "MOMENTUM": row})
+    assert verdict == "WATCH" and reason in why, why
+    assert not US._proven(US._evidence_row(row))
+
+
+@pytest.mark.parametrize("mean", [INF, -INF, NAN, "x", None])
+def test_a_non_finite_mean_is_no_evidence(mean):
+    assert US._evidence_row(mean) is None
+    assert US._evidence_row({"mean": mean, "lower": 0.1, "n": 90}) is None
+    verdict, why = US._evidence_verdict(90.0, ["VOL_SQUEEZE", "MOMENTUM"],
+                                        signal_edges={"VOL_SQUEEZE": {"mean": mean, "n": 90}, "OTHER": _ok(0.2)})
+    assert verdict == "WATCH" and "No measured edge" in why
+
+
+def test_mixed_legacy_and_verified_rows_fail_closed():
+    edges = {"VOL_SQUEEZE": _ok(0.30, lower=0.20), "MOMENTUM": 0.30}
+    verdict, why = US._evidence_verdict(90.0, ["VOL_SQUEEZE", "MOMENTUM"], signal_edges=edges)
+    assert verdict == "WATCH" and "legacy evidence" in why
+    ev = US.setup_evidence(["VOL_SQUEEZE", "MOMENTUM"], edges)
+    assert ev["inference"] == "MIXED" and ev["n"] == 0 and ev["lower"] is None
+
+
+def test_only_fully_verified_evidence_proves_a_buy():
+    assert US._proven(US._evidence_row(_ok(0.30))) is True
+    assert US.unproven_reason(US._evidence_row(_ok(0.30))) == ""
+
+
+def test_the_research_path_is_unchanged_by_the_live_gate():
+    """Backtest and replay (gate off) still measure raw setups, even with legacy evidence around."""
+    losing = {"BREAKOUT_52W": 0.9, "VOL_SQUEEZE": 0.9}
+    r = US.UnifiedScanner(calibration_snapshot=_snap(losing), evidence_gate=False)._analyze("X", _breakout_frame())
+    assert r.verdict == "BUY" and r.edge_gated is False
 
