@@ -307,37 +307,83 @@ def exit_variant_results(entry: float, stop: float, target: float, fwd, horizon:
     return out
 
 
-def exit_variant_report(exit_stats: dict) -> dict:
-    """Cluster-robust net expectancy per variant + Benjamini-Hochberg across them."""
+def exit_variant_report(exit_stats: dict, *, horizon: int = _EVAL_HORIZON,
+                        session_index: dict[str, int] | None = None) -> dict:
+    """Net expectancy per pre-declared exit variant, with honest inference.
+
+    Same unit as confirmation_report: trades are pooled into non-overlapping
+    blocks of ``horizon`` NSE sessions (trade-weighted mean R per block); a
+    one-sample Student t on the block means; Benjamini-Hochberg across the
+    variants. Fewer than MIN_INDEPENDENT_SESSIONS blocks, or zero dispersion,
+    is INSUFFICIENT EVIDENCE. The day-clustered fields are kept for reference;
+    they understate uncertainty because consecutive days share outcome windows.
+    """
     import math
 
-    rows = {}
+    all_days = sorted({d for st in exit_stats.values() for d in (st.get("clusters") or {})})
+    ordinals = session_index if session_index is not None else _session_ordinals(all_days)
+    rows: dict = {}
     pvals, names = [], []
     for name, _trail, _mult in EXIT_VARIANTS:
         st = exit_stats.get(name)
         if not st or not st.get("trades"):
             continue
-        ev = _evidence_fields(st)
-        se = ev.get("se_r")
-        z = (ev["expectancy_r_precise"] / se) if se else 0.0
-        p = math.erfc(abs(z) / math.sqrt(2.0))
-        rows[name] = {"trades": st["trades"], "win_rate": round(st["wins"] / st["trades"] * 100, 1),
-                      "scratch_rate": round(st.get("scratches", 0) / st["trades"] * 100, 1),
-                      "p_two_sided": round(p, 6), **ev}
-        pvals.append(p)
+        row = {"trades": st["trades"], "win_rate": round(st["wins"] / st["trades"] * 100, 1),
+               "scratch_rate": round(st.get("scratches", 0) / st["trades"] * 100, 1),
+               "day_clustered": _evidence_fields(st)}
+        rows[name] = row
+        if ordinals is None:
+            row.update({"verdict": "INSUFFICIENT EVIDENCE", "reason": "EXCHANGE_CALENDAR_UNAVAILABLE"})
+            continue
+        blocks: dict[int, list[float]] = {}
+        for day, (r_sum, n) in (st.get("clusters") or {}).items():
+            if day in ordinals and n:
+                b = blocks.setdefault(ordinals[day] // max(1, int(horizon)), [0.0, 0])
+                b[0] += float(r_sum)
+                b[1] += int(n)
+        means = [v[0] / v[1] for _, v in sorted(blocks.items()) if v[1]]
+        k = len(means)
+        row["independent_sessions"] = k
+        if k < MIN_INDEPENDENT_SESSIONS:
+            row.update({"verdict": "INSUFFICIENT EVIDENCE",
+                        "reason": f"{k} independent blocks < {MIN_INDEPENDENT_SESSIONS}"})
+            continue
+        m = sum(means) / k
+        sd = math.sqrt(sum((x - m) ** 2 for x in means) / (k - 1))
+        row["block_mean_r"] = round(m, 4)
+        if not math.isfinite(sd) or sd <= 1e-9:
+            row.update({"verdict": "INSUFFICIENT EVIDENCE", "reason": "DEGENERATE_ZERO_DISPERSION"})
+            continue
+        t = m / (sd / math.sqrt(k))
+        try:
+            from scipy.stats import t as student_t
+
+            pval = float(2.0 * student_t.sf(abs(t), df=k - 1))
+        except Exception:
+            pval = math.erfc(abs(t) / math.sqrt(2.0))
+        half = 1.96 * sd / math.sqrt(k)
+        row.update({"t": round(t, 3), "df": k - 1, "p_two_sided": round(pval, 6),
+                    "block_ci95_r": [round(m - half, 4), round(m + half, 4)]})
+        pvals.append(pval)
         names.append(name)
     if pvals:
         from research.harness import benjamini_hochberg
 
         bh = benjamini_hochberg(pvals)
-        rejected = [bool(x) for x in bh.get("rejected", [])]       # numpy mask, input order
+        rejected = [bool(x) for x in bh.get("rejected", [])]
         qvalues = [float(x) for x in bh.get("qvalues", [])]
         for i, name in enumerate(names):
-            rows[name]["bh_significant"] = rejected[i] if i < len(rejected) else False
+            ok = rejected[i] if i < len(rejected) else False
+            rows[name]["bh_significant"] = ok
             rows[name]["bh_q"] = round(qvalues[i], 6) if i < len(qvalues) else None
+            rows[name]["verdict"] = ("POSITIVE" if ok and rows[name]["block_mean_r"] > 0 else
+                                     "NEGATIVE" if ok and rows[name]["block_mean_r"] < 0 else
+                                     "NOT_DISTINGUISHABLE_FROM_ZERO")
     return {
         "variants": rows,
         "status": "RESEARCH_ONLY",
+        "inference": (f"trade-weighted mean R per non-overlapping {int(horizon)}-session NSE block; "
+                      f"Student t (df=blocks-1); BH across variants; >= {MIN_INDEPENDENT_SESSIONS} blocks"),
         "note": ("Same trades, same fills, four pre-declared exits; costs included. A "
                  "construction change reaches PAPER only through a champion/challenger gate."),
     }
@@ -379,56 +425,150 @@ def confirmation_features(hist) -> dict[str, float] | None:
     return {"low_atr": -atr_pct, "near_high": -(hi - last) / hi, "not_extended": -(last / sma50 - 1.0)}
 
 
-def confirmation_report(rows: list[dict]) -> dict:
-    """Per-day Spearman IC of each pre-registered feature vs net R, discovery window excluded."""
+#: A verdict other than INSUFFICIENT EVIDENCE needs at least this many
+#: non-overlapping horizon blocks, i.e. ~independent outcome windows.
+MIN_INDEPENDENT_SESSIONS = 20
+
+
+def _average_ranks(values: list[float]) -> list[float]:
+    """Fractional ranks: tied values share the mean of their positions."""
+    order = sorted(range(len(values)), key=lambda i: values[i])
+    ranks = [0.0] * len(values)
+    i = 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and values[order[j + 1]] == values[order[i]]:
+            j += 1
+        mean_rank = (i + j) / 2.0
+        for k in range(i, j + 1):
+            ranks[order[k]] = mean_rank
+        i = j + 1
+    return ranks
+
+
+def spearman_ic(xs: list[float], ys: list[float]) -> float | None:
+    """Spearman rank correlation with tie-corrected (average) ranks.
+
+    None when either side has no rank variation: a constant feature or a
+    constant outcome on a day carries no ranking information, so it must not
+    contribute an IC of 0 or ±1.
+    """
+    import math
+
+    if len(xs) != len(ys) or len(xs) < 3:
+        return None
+    rx, ry = _average_ranks(list(xs)), _average_ranks(list(ys))
+    mx, my = sum(rx) / len(rx), sum(ry) / len(ry)
+    sxy = sum((a - mx) * (b - my) for a, b in zip(rx, ry))
+    sxx = sum((a - mx) ** 2 for a in rx)
+    syy = sum((b - my) ** 2 for b in ry)
+    if sxx <= 1e-12 or syy <= 1e-12:
+        return None
+    return sxy / math.sqrt(sxx * syy)
+
+
+def _session_ordinals(days: list[str]) -> dict[str, int] | None:
+    """NSE session number of each day (holidays and weekends skipped).
+
+    None when the exchange calendar is unavailable: independence cannot then
+    be established, and the caller must not reach a verdict.
+    """
+    from datetime import date as _date, timedelta
+
+    try:
+        from research.intelligence.data.nse_calendar import is_session, load_holidays
+
+        holidays = load_holidays()
+        parsed = sorted({_date.fromisoformat(str(d)[:10]) for d in days})
+    except Exception:
+        return None
+    if not holidays:
+        # load_holidays() silently degrades to weekends-only; counting holidays
+        # as sessions would inflate the independent-block count.
+        return None
+    if not parsed:
+        return {}
+    ordinals: dict[str, int] = {}
+    n, cur = 0, parsed[0]
+    wanted = {d.isoformat() for d in parsed}
+    while cur <= parsed[-1]:
+        if is_session(cur, holidays):
+            n += 1
+        if cur.isoformat() in wanted:
+            ordinals[cur.isoformat()] = n
+        cur += timedelta(days=1)
+    return ordinals
+
+
+def confirmation_report(rows: list[dict], *, horizon: int = _EVAL_HORIZON,
+                        session_index: dict[str, int] | None = None) -> dict:
+    """Out-of-sample test of the pre-registered features (discovery window excluded).
+
+    Inference unit: daily ICs (tie-corrected Spearman, feature vs net R) are
+    averaged within consecutive, non-overlapping blocks of ``horizon`` NSE
+    sessions. Trades a few sessions apart share most of their outcome window,
+    so days are not independent; blocks one horizon long are approximately
+    so. The test is a one-sample Student t on the block means (df = blocks-1),
+    Benjamini-Hochberg across features. A verdict other than INSUFFICIENT
+    EVIDENCE needs >= MIN_INDEPENDENT_SESSIONS blocks and non-zero dispersion:
+    identical block means are a degenerate sample, never a decisive one.
+    """
     import math
 
     lo, hi = DISCOVERY_WINDOW
-    usable = [r for r in rows if not (lo <= r["day"] <= hi)]
+    usable = [r for r in rows if not (lo <= str(r["day"]) <= hi)]
     by_day: dict[str, list[dict]] = {}
     for r in usable:
-        by_day.setdefault(r["day"], []).append(r)
+        by_day.setdefault(str(r["day"])[:10], []).append(r)
     days = {d: rs for d, rs in by_day.items() if len(rs) >= MIN_TRADES_PER_DAY_FOR_IC}
-
-    def ranks(vals):
-        order = sorted(range(len(vals)), key=lambda i: vals[i])
-        out = [0.0] * len(vals)
-        for k, i in enumerate(order):
-            out[i] = float(k)
-        return out
-
-    def spearman(xs, ys):
-        rx, ry = ranks(xs), ranks(ys)
-        mx, my = sum(rx) / len(rx), sum(ry) / len(ry)
-        sxy = sum((a - mx) * (b - my) for a, b in zip(rx, ry))
-        sxx = sum((a - mx) ** 2 for a in rx)
-        syy = sum((b - my) ** 2 for b in ry)
-        return sxy / math.sqrt(sxx * syy) if sxx > 0 and syy > 0 else None
+    ordinals = session_index if session_index is not None else _session_ordinals(sorted(days))
 
     results, pvals, names = {}, [], []
     for feat in CONFIRM_FEATURES:
-        ics = []
-        for rs in days.values():
+        daily: list[tuple[str, float]] = []
+        for day, rs in sorted(days.items()):
             if feat == "composite":
-                parts = [ranks([r[f] for r in rs]) for f in ("low_atr", "near_high", "not_extended")]
-                xs = [sum(p[i] for p in parts) for i in range(len(rs))]
+                parts = [_average_ranks([float(r[f]) for r in rs]) for f in ("low_atr", "near_high", "not_extended")]
+                xs = [sum(part[i] for part in parts) for i in range(len(rs))]
             else:
-                xs = [r[feat] for r in rs]
-            ic = spearman(xs, [r["r"] for r in rs])
-            if ic is not None:
-                ics.append(ic)
-        if len(ics) < 2:
-            results[feat] = {"days": len(ics), "verdict": "INSUFFICIENT EVIDENCE"}
+                xs = [float(r[feat]) for r in rs]
+            ic = spearman_ic(xs, [float(r["r"]) for r in rs])
+            if ic is not None and math.isfinite(ic):
+                daily.append((day, ic))
+        res: dict = {"days_with_ic": len(daily)}
+        if ordinals is None:
+            res.update({"independent_sessions": 0, "verdict": "INSUFFICIENT EVIDENCE",
+                        "reason": "EXCHANGE_CALENDAR_UNAVAILABLE"})
+            results[feat] = res
             continue
-        m = sum(ics) / len(ics)
-        sd = math.sqrt(sum((x - m) ** 2 for x in ics) / (len(ics) - 1))
-        if sd > 0:
-            t = m / (sd / math.sqrt(len(ics)))
-        else:   # identical IC every day: no dispersion, so any non-zero mean is decisive
-            t = math.copysign(1e9, m) if m != 0 else 0.0
-        p = math.erfc(min(abs(t), 50.0) / math.sqrt(2.0))
-        results[feat] = {"days": len(ics), "mean_ic": round(m, 4), "t": round(max(min(t, 1e6), -1e6), 2),
-                         "p_two_sided": round(p, 6)}
+        blocks: dict[int, list[float]] = {}
+        for day, ic in daily:
+            if day in ordinals:
+                blocks.setdefault(ordinals[day] // max(1, int(horizon)), []).append(ic)
+        means = [sum(v) / len(v) for _, v in sorted(blocks.items())]
+        k = len(means)
+        res["independent_sessions"] = k
+        if k < MIN_INDEPENDENT_SESSIONS:
+            res.update({"verdict": "INSUFFICIENT EVIDENCE",
+                        "reason": f"{k} independent blocks < {MIN_INDEPENDENT_SESSIONS}"})
+            results[feat] = res
+            continue
+        m = sum(means) / k
+        sd = math.sqrt(sum((x - m) ** 2 for x in means) / (k - 1))
+        res["mean_ic"] = round(m, 4)
+        if not math.isfinite(sd) or sd <= 1e-9:
+            res.update({"verdict": "INSUFFICIENT EVIDENCE", "reason": "DEGENERATE_ZERO_DISPERSION"})
+            results[feat] = res
+            continue
+        t = m / (sd / math.sqrt(k))
+        try:
+            from scipy.stats import t as student_t
+
+            p = float(2.0 * student_t.sf(abs(t), df=k - 1))
+        except Exception:
+            p = math.erfc(abs(t) / math.sqrt(2.0))
+        res.update({"t": round(t, 3), "df": k - 1, "p_two_sided": round(p, 6)})
+        results[feat] = res
         pvals.append(p)
         names.append(feat)
     if pvals:
@@ -436,18 +576,20 @@ def confirmation_report(rows: list[dict]) -> dict:
 
         bh = benjamini_hochberg(pvals)
         rejected = [bool(x) for x in bh.get("rejected", [])]
+        qvalues = [float(x) for x in bh.get("qvalues", [])]
         for i, feat in enumerate(names):
-            ok = rejected[i] if i < len(rejected) else False
             res = results[feat]
+            ok = rejected[i] if i < len(rejected) else False
+            res["bh_q"] = round(qvalues[i], 6) if i < len(qvalues) else None
             res["bh_significant"] = ok
-            res["verdict"] = (
-                "CONFIRMED" if ok and res["mean_ic"] > 0 else
-                "CONTRADICTED" if ok and res["mean_ic"] < 0 else
-                "NOT_CONFIRMED" if res["days"] >= 20 else "INSUFFICIENT EVIDENCE"
-            )
+            res["verdict"] = ("CONFIRMED" if ok and res["mean_ic"] > 0 else
+                              "CONTRADICTED" if ok and res["mean_ic"] < 0 else "NOT_CONFIRMED")
     return {
         "status": "RESEARCH_ONLY",
         "discovery_window_excluded": list(DISCOVERY_WINDOW),
+        "inference": (f"tie-corrected Spearman IC per day; means of non-overlapping {int(horizon)}-session "
+                      f"NSE blocks; Student t (df=blocks-1); BH across features; "
+                      f">= {MIN_INDEPENDENT_SESSIONS} blocks and non-zero dispersion required"),
         "trades_used": len(usable),
         "days_used": len(days),
         "features": results,

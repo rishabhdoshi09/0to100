@@ -32,24 +32,6 @@ def test_no_fill_is_not_a_trade_in_any_variant():
     assert out == []
 
 
-def test_report_is_research_only_with_cluster_bounds_and_bh():
-    stats = {}
-    for i in range(40):
-        day = f"2025-{1 + i // 20:02d}-{i % 20 + 1:02d}"
-        for name, r in (("V0_prod_be_h", -0.2), ("V3_no_trail_2h", 0.4 if i % 2 else 0.2)):
-            st = stats.setdefault(name, {"trades": 0, "wins": 0, "scratches": 0, "r_sum": 0.0, "clusters": {}})
-            st["trades"] += 1
-            st["wins"] += r > 0
-            st["r_sum"] += r
-            SB._add_cluster(st["clusters"], day, r)
-    rep = SB.exit_variant_report(stats)
-    assert rep["status"] == "RESEARCH_ONLY"
-    v3 = rep["variants"]["V3_no_trail_2h"]
-    assert v3["clusters"] == 40 and v3["lower_r"] is not None
-    assert "bh_significant" in v3 and "p_two_sided" in v3
-    assert rep["variants"]["V0_prod_be_h"]["expectancy_r_precise"] < 0
-
-
 def _hist(n=300, drift=0.0, vol=1.0, seed=0):
     import numpy as np
     rng = np.random.default_rng(seed)
@@ -64,21 +46,132 @@ def test_confirmation_features_are_pit_and_oriented_higher_is_better():
     assert SB.confirmation_features(_hist(n=40)) is None      # too little history: no value invented
 
 
-def test_confirmation_excludes_the_discovery_window_and_needs_bh():
-    rows = []
-    for d in range(30):
-        day = f"2025-{1 + d // 28:02d}-{d % 28 + 1:02d}"
-        for k in range(6):
-            rows.append({"day": day, "r": float(k), "low_atr": float(k), "near_high": float(-k), "not_extended": 0.1 * k})
-    for k in range(6):   # discovery-window rows must not count
-        rows.append({"day": "2026-06-15", "r": float(k), "low_atr": float(-k), "near_high": 0.0, "not_extended": 0.0})
-    rep = SB.confirmation_report(rows)
-    assert rep["status"] == "RESEARCH_ONLY" and rep["days_used"] == 30
-    assert rep["features"]["low_atr"]["verdict"] == "CONFIRMED"
-    assert rep["features"]["near_high"]["verdict"] == "CONTRADICTED"
-    assert rep["features"]["composite"]["mean_ic"] > 0
+def _day(i: int) -> str:
+    from datetime import date, timedelta
+    return (date(2024, 1, 1) + timedelta(days=i)).isoformat()
 
 
-def test_confirmation_with_too_few_days_is_insufficient():
-    rows = [{"day": "2025-01-02", "r": float(k), "low_atr": float(k), "near_high": 0.0, "not_extended": 0.0} for k in range(6)]
-    assert SB.confirmation_report(rows)["features"]["low_atr"]["verdict"] == "INSUFFICIENT EVIDENCE"
+def _rows(n_days, ic_sign=1.0, noise=0.0, per_day=8, seed=0, start=0, feats=("low_atr",)):
+    import random
+    rng = random.Random(seed)
+    rows, index = [], {}
+    for d in range(n_days):
+        day = _day(start + d)
+        index[day] = start + d
+        for k in range(per_day):
+            x = float(k)
+            r = ic_sign * x + rng.gauss(0, noise)
+            row = {"day": day, "r": r, "low_atr": x, "near_high": rng.random(), "not_extended": rng.random()}
+            rows.append(row)
+    return rows, index
+
+
+def test_zero_dispersion_is_never_decisive():
+    """Perfect, identical daily ICs: a degenerate sample, not maximal significance."""
+    rows, index = _rows(400, ic_sign=1.0, noise=0.0)               # 40 blocks, IC = 1 every day
+    rep = SB.confirmation_report(rows, horizon=10, session_index=index)
+    f = rep["features"]["low_atr"]
+    assert f["verdict"] == "INSUFFICIENT EVIDENCE"
+    assert f["reason"] == "DEGENERATE_ZERO_DISPERSION"
+    assert "p_two_sided" not in f
+
+
+def test_fewer_than_twenty_independent_blocks_cannot_confirm():
+    rows, index = _rows(190, ic_sign=1.0, noise=2.0)               # 19 blocks of 10 sessions
+    f = SB.confirmation_report(rows, horizon=10, session_index=index)["features"]["low_atr"]
+    assert f["independent_sessions"] == 19
+    assert f["verdict"] == "INSUFFICIENT EVIDENCE"
+
+
+def test_many_overlapping_days_do_not_count_as_independent():
+    rows, index = _rows(300, ic_sign=1.0, noise=2.0)
+    packed = {day: i // 6 for i, day in enumerate(sorted(index))}  # 300 days squeezed into 50 sessions
+    f = SB.confirmation_report(rows, horizon=10, session_index=packed)["features"]["low_atr"]
+    assert f["independent_sessions"] == 5
+    assert f["verdict"] == "INSUFFICIENT EVIDENCE"
+
+
+def test_real_relationship_over_enough_blocks_is_confirmed_and_reversed_is_contradicted():
+    rows, index = _rows(400, ic_sign=1.0, noise=6.0, seed=1)
+    assert SB.confirmation_report(rows, horizon=10, session_index=index)["features"]["low_atr"]["verdict"] == "CONFIRMED"
+    rows, index = _rows(400, ic_sign=-1.0, noise=6.0, seed=2)
+    assert SB.confirmation_report(rows, horizon=10, session_index=index)["features"]["low_atr"]["verdict"] == "CONTRADICTED"
+
+
+def test_pure_noise_is_not_confirmed():
+    rows, index = _rows(400, ic_sign=0.0, noise=1.0, seed=3)
+    for feat in ("low_atr", "near_high", "not_extended", "composite"):
+        v = SB.confirmation_report(rows, horizon=10, session_index=index)["features"][feat]["verdict"]
+        assert v in {"NOT_CONFIRMED", "INSUFFICIENT EVIDENCE"}, (feat, v)
+
+
+def test_tie_corrected_spearman_matches_scipy():
+    from scipy.stats import spearmanr
+    xs, ys = [1, 1, 2, 3, 3, 3, 7], [2, 1, 4, 3, 5, 5, 9]
+    assert abs(SB.spearman_ic(xs, ys) - spearmanr(xs, ys).correlation) < 1e-12
+
+
+def test_constant_feature_or_outcome_carries_no_ic():
+    assert SB.spearman_ic([5, 5, 5, 5], [1, 2, 3, 4]) is None
+    assert SB.spearman_ic([1, 2, 3, 4], [0, 0, 0, 0]) is None
+    rows, index = _rows(400, ic_sign=1.0, noise=1.0)
+    for r in rows:
+        r["low_atr"] = 1.0                                         # tied within every day
+    f = SB.confirmation_report(rows, horizon=10, session_index=index)["features"]["low_atr"]
+    assert f["days_with_ic"] == 0 and f["verdict"] == "INSUFFICIENT EVIDENCE"
+
+
+def test_unavailable_calendar_reaches_no_verdict(monkeypatch):
+    monkeypatch.setattr(SB, "_session_ordinals", lambda days: None)
+    rows, _ = _rows(400, ic_sign=1.0, noise=6.0, seed=1)
+    f = SB.confirmation_report(rows, horizon=10)["features"]["low_atr"]
+    assert f["verdict"] == "INSUFFICIENT EVIDENCE" and f["reason"] == "EXCHANGE_CALENDAR_UNAVAILABLE"
+
+
+def test_discovery_window_rows_never_count():
+    rows, index = _rows(60, ic_sign=1.0, noise=6.0, start=(905))   # 2026-06-23 onward: inside the window
+    inside = [r for r in rows if "2026-05-26" <= r["day"] <= "2026-07-30"]
+    assert len(inside) >= 200                                      # a real discovery-window sample
+    rep = SB.confirmation_report(inside, horizon=10, session_index=index)
+    assert rep["days_used"] == 0 and rep["trades_used"] == 0
+
+
+def test_real_calendar_skips_holidays_and_weekends():
+    idx = SB._session_ordinals(["2026-10-30", "2026-11-02"])        # Fri, then Mon
+    assert idx is not None and idx["2026-11-02"] - idx["2026-10-30"] == 1
+
+
+def _exit_stats(n_days, mean, noise, seed=0, index_from=0):
+    import random
+    rng = random.Random(seed)
+    st, index = {"trades": 0, "wins": 0, "scratches": 0, "r_sum": 0.0, "clusters": {}}, {}
+    for d in range(n_days):
+        day = _day(index_from + d)
+        index[day] = index_from + d
+        for _ in range(5):
+            r = mean + rng.gauss(0, noise)
+            st["trades"] += 1
+            st["wins"] += r > 0
+            st["r_sum"] += r
+            SB._add_cluster(st["clusters"], day, r)
+    return st, index
+
+
+def test_exit_report_uses_blocks_and_refuses_thin_or_degenerate_samples():
+    st, index = _exit_stats(400, 0.3, 0.5, seed=4)                     # 40 blocks
+    rep = SB.exit_variant_report({"V3_no_trail_2h": st}, horizon=10, session_index=index)
+    v = rep["variants"]["V3_no_trail_2h"]
+    assert v["independent_sessions"] == 40 and v["verdict"] == "POSITIVE"
+    st, index = _exit_stats(150, 0.3, 0.5, seed=5)                     # 15 blocks
+    assert SB.exit_variant_report({"V0_prod_be_h": st}, horizon=10, session_index=index)[
+        "variants"]["V0_prod_be_h"]["verdict"] == "INSUFFICIENT EVIDENCE"
+    st, index = _exit_stats(400, 0.3, 0.0, seed=6)                     # identical R everywhere
+    v = SB.exit_variant_report({"V1_no_trail_h": st}, horizon=10, session_index=index)["variants"]["V1_no_trail_h"]
+    assert v["verdict"] == "INSUFFICIENT EVIDENCE" and v["reason"] == "DEGENERATE_ZERO_DISPERSION"
+    assert rep["status"] == "RESEARCH_ONLY"
+
+
+def test_missing_holiday_calendar_is_treated_as_unavailable(monkeypatch):
+    import research.intelligence.data.nse_calendar as CAL
+    monkeypatch.setattr(CAL, "load_holidays", lambda: set())
+    assert SB._session_ordinals(["2026-10-30", "2026-11-02"]) is None
