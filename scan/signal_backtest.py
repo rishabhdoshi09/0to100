@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os as _os
+from datetime import datetime, timezone
 import threading
 import time
 from pathlib import Path
@@ -220,7 +221,16 @@ def sweep_targets(entry: float, stop: float, fwd_high, fwd_low, fwd_close,
 # schema change makes the supervisor rerun the walk-forward in the next
 # closed-market window, so the out-of-sample verdicts arrive the first night
 # after deploy instead of the following Saturday.
-REPORT_SCHEMA = 3
+# 4: evidence_provenance (code SHA, eval spec, horizon, family-correction
+# method) and per-row family correction; the live gate refuses anything older.
+REPORT_SCHEMA = 4
+#: The predeclared multiple-testing procedure for the live gate's family.
+#: Holm (family-wise) rather than BH: a BUY admission is an individual
+#: decision. BH controls the expected share of false discoveries, needs
+#: positive dependence, and says nothing about one admitted row. Holm bounds
+#: P(any false admission) at alpha under arbitrary dependence
+#: (research/admission_stress.py; 2026-11-20 review).
+FAMILY_METHOD = "Holm-Bonferroni (family-wise), one-sided edge > 0"
 #: Exact signal combinations need their own sample before they make a claim.
 COMBO_MIN_TRADES = 30
 #: One-sided 95% lower bound: mean - 1.645 * clustered standard error.
@@ -334,17 +344,17 @@ def exit_variant_results(entry: float, stop: float, target: float, fwd, horizon:
 
 
 def apply_family_correction(signals: dict, combos: dict, *, alpha: float = 0.05) -> dict:
-    """Benjamini-Hochberg across every row the live BUY gate can use.
+    """Holm-Bonferroni (family-wise) across every row the live BUY gate can use.
 
     The gate judges each signal and each exact combination at a one-sided 5%;
     with ~15 signals and ~30 combinations a global null would still "prove"
     one or two. Each row gets its one-sided p for "edge > 0" (overlap-robust t
-    and df), and bh_significant only when it survives BH across the whole
-    family. Rows that cannot be tested (not OVERLAP_ROBUST, zero or missing
-    error) count with p = 1, so they enlarge the family and never pass.
-    Mutates and returns a summary.
+    and df), and family_significant only when it survives Holm's step-down
+    across the whole family: P(any false admission) <= alpha under ARBITRARY
+    dependence. Rows that cannot be tested (not OVERLAP_ROBUST, zero or
+    missing error) count with p = 1, so they enlarge the family and never
+    pass. Mutates and returns a summary.
     """
-    from research.harness import benjamini_hochberg
     from research.overlap_inference import _t_sf
 
     rows = [r for r in list((signals or {}).values()) + list((combos or {}).values()) if isinstance(r, dict)]
@@ -358,12 +368,32 @@ def apply_family_correction(signals: dict, combos: dict, *, alpha: float = 0.05)
         p = _t_sf(mean / se, df) if ok else 1.0
         r["p_one_sided"] = round(float(p), 6)
         pvals.append(float(p))
-    rejected = list(benjamini_hochberg(pvals, alpha=alpha).get("rejected", [])) if pvals else []
+    m = len(pvals)
+    rejected = [False] * m
+    for rank, i in enumerate(sorted(range(m), key=lambda i: pvals[i])):      # Holm step-down
+        if pvals[i] < alpha / (m - rank):
+            rejected[i] = True
+        else:
+            break
     for r, rej in zip(rows, rejected):
-        r["bh_significant"] = bool(rej)
-        r["bh_family_size"] = len(rows)
-    return {"family_size": len(rows), "alpha": alpha, "method": "Benjamini-Hochberg, one-sided edge > 0",
+        r["family_significant"] = bool(rej)
+        r["family_size"] = m
+    return {"family_size": len(rows), "alpha": alpha, "method": FAMILY_METHOD,
             "survivors": int(sum(bool(x) for x in rejected))}
+
+
+def _code_sha() -> str:
+    """The build that produced the evidence: QT_BUILD_SHA on the host, else git HEAD."""
+    sha = _os.environ.get("QT_BUILD_SHA", "").strip()
+    if sha:
+        return sha
+    try:
+        import subprocess
+        out = subprocess.run(["git", "-C", str(Path(__file__).resolve().parents[1]), "rev-parse", "HEAD"],
+                             capture_output=True, text=True, timeout=5)
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except Exception:
+        return ""
 
 
 def _day_clustered_reference(stats: dict) -> dict:
@@ -529,6 +559,24 @@ def _session_ordinals(days: list[str]) -> dict[str, int] | None:
         return strict_session_ordinals(days, load_holidays())
     except Exception:
         return None
+
+
+def window_is_exact(day_keys, t: int, horizon: int, session_index: dict[str, int] | None) -> bool:
+    """True when bars t .. t+horizon-1 are exactly the next ``horizon`` official sessions after bar t-1.
+
+    Positional bars silently stretch the outcome window over a symbol's
+    suspension or missing bars (and an unofficial bar would shorten it). With
+    the realised session index, a trade's window must be consecutive official
+    sessions starting the session after its signal bar; otherwise the trade is
+    not measured. Without an index (tests, no store) nothing is checked.
+    """
+    if not session_index:
+        return True
+    try:
+        prev = session_index[day_keys[t - 1]]
+        return all(session_index.get(day_keys[t + k]) == prev + 1 + k for k in range(int(horizon)))
+    except (KeyError, IndexError):
+        return False
 
 
 def realised_session_index(dates) -> dict[str, int]:
@@ -716,6 +764,12 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
     confirm_rows: list[dict] = []               # pre-registered feature confirmation (research only)
     combo_stats: dict[str, dict] = {}           # exact signal combination → aggregate
     seen_dates: set[str] = set()                # realised NSE sessions (official bars present)
+    try:
+        from data.bhavcopy_store import _dates_on_disk
+        official_index = realised_session_index(d.isoformat() for d in _dates_on_disk())
+    except Exception:
+        official_index = {}
+    horizon_gaps = 0                            # trades whose window is not exactly `horizon` sessions
 
     for si, sym in enumerate(symbols):
         df = get_ohlcv(sym)
@@ -727,7 +781,11 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
             seen_dates.update(str(x)[:10] for x in df.index)
         n = len(df)
         start = max(60, n - horizon - lookback_sessions)
+        day_keys = list(pd.DatetimeIndex(df.index).strftime("%Y-%m-%d")) if official_index else []
         for t in range(start, n - horizon, sample_step):
+            if official_index and not window_is_exact(day_keys, t, horizon, official_index):
+                horizon_gaps += 1
+                continue
             hist = df.iloc[:t]
             try:
                 r = sc._analyze(sym, hist)
@@ -913,6 +971,13 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                                                        session_index=session_index),
            "evidence_inference": {"method": "research.overlap_inference", "session_index": "realised official bars",
                                   "sessions_indexed": len(session_index), "family_correction": family},
+           "evidence_provenance": {"generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                   "report_schema": REPORT_SCHEMA, "eval_spec": _eval_spec_tag(horizon),
+                                   "horizon_sessions": int(horizon), "code_sha": _code_sha(),
+                                   "family_method": family.get("method"), "family_size": family.get("family_size"),
+                                   "sessions_indexed": len(session_index), "sampling": SAMPLING,
+                                   "exact_horizon_check": bool(official_index),
+                                   "horizon_gap_windows_skipped": horizon_gaps},
            "recommended_target_pct": recommended,
            "elapsed_s": round(time.time() - t0, 1)}
     if len(symbols) < MIN_SYMBOLS_TO_SAVE or not report:

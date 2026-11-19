@@ -175,3 +175,15 @@ def test_missing_holiday_calendar_is_treated_as_unavailable(monkeypatch):
     import research.intelligence.data.nse_calendar as CAL
     monkeypatch.setattr(CAL, "load_holidays", lambda: set())
     assert SB._session_ordinals(["2026-10-30", "2026-11-02"]) is None
+
+
+def test_the_walk_forward_measures_only_exact_ten_session_windows():
+    days = ["2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-09",
+            "2026-11-11", "2026-11-12", "2026-11-13", "2026-11-16", "2026-11-17", "2026-11-18"]
+    index = {d: i for i, d in enumerate(days)}
+    assert SB.window_is_exact(days, 1, 10, index)                    # sessions 1..10 after 2 Nov
+    gap = days[:5] + days[6:]                                         # the symbol has no bar on 9 Nov
+    assert not SB.window_is_exact(gap, 1, 10, index)                  # positional bars would stretch it
+    odd = days[:5] + ["2026-11-07"] + days[5:]                        # an unofficial Saturday bar
+    assert not SB.window_is_exact(odd, 1, 10, index)
+    assert SB.window_is_exact(gap, 1, 10, {})                         # no index: not checked (tests only)

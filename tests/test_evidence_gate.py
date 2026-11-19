@@ -22,16 +22,26 @@ def _fresh_stamp(days_ago=1):
     return (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
 
 
-def _snap(edges, generated_at="fresh"):
+def _provenance(generated_at="fresh", **over):
+    import scan.signal_backtest as SB
+    from core.evaluation_spec import HORIZON_SESSIONS
+    prov = {"generated_at": _fresh_stamp() if generated_at == "fresh" else generated_at,
+            "report_schema": SB.REPORT_SCHEMA, "eval_spec": SB._eval_spec_tag(HORIZON_SESSIONS),
+            "horizon_sessions": HORIZON_SESSIONS, "family_method": SB.FAMILY_METHOD, "code_sha": "test-sha"}
+    prov.update(over)
+    return {k: v for k, v in prov.items() if v is not None}
+
+
+def _snap(edges, generated_at="fresh", **prov):
     snap = {"snapshot_id": "test", "multipliers": {}, "signal_registry": {}, "backtest_edges": edges}
     if generated_at is not None:
-        snap["backtest_generated_at"] = _fresh_stamp() if generated_at == "fresh" else generated_at
+        snap["backtest_provenance"] = _provenance(generated_at, **prov)
     return snap
 
 
-def _ok(mean, lower=0.05, n=60, blocks=24, inference="OVERLAP_ROBUST", bh=True):
-    """Evidence that meets the full standard: dependence-aware bound over >= 20 blocks, BH survivor."""
-    return {"mean": mean, "lower": lower, "n": n, "blocks": blocks, "inference": inference, "bh": bh}
+def _ok(mean, lower=0.05, n=60, blocks=24, inference="OVERLAP_ROBUST", family=True):
+    """Evidence that meets the full standard: dependence-aware bound over >= 20 blocks, Holm survivor."""
+    return {"mean": mean, "lower": lower, "n": n, "blocks": blocks, "inference": inference, "family": family}
 
 
 def _breakout_frame():
@@ -114,17 +124,17 @@ def test_backtest_edges_keep_only_evidenced_signals():
     report = {"signals": {"A": {"trades": 30, "expectancy_r": -0.2},
                           "B": {"trades": 29, "expectancy_r": 0.9},
                           "C": {"trades": "x", "expectancy_r": 1}}}
-    assert US.backtest_edges(report) == {"A": {"mean": -0.2, "lower": None, "n": 30, "blocks": 0, "inference": "", "bh": None}}
+    assert US.backtest_edges(report) == {"A": {"mean": -0.2, "lower": None, "n": 30, "blocks": 0, "inference": "", "family": None}}
     assert US.backtest_edges(None) == {}
     assert US.combo_edge_r(["A", "B"], {"A": -0.2}) == -0.2
     assert US.combo_edge_r(["B"], {"A": -0.2}) is None
     precise = {"signals": {"A": {"trades": 40, "expectancy_r": 0.1, "expectancy_r_precise": 0.0812,
                                  "lower_r": -0.01}}}
-    assert US.backtest_edges(precise) == {"A": {"mean": 0.0812, "lower": -0.01, "n": 40, "blocks": 0, "inference": "", "bh": None}}
+    assert US.backtest_edges(precise) == {"A": {"mean": 0.0812, "lower": -0.01, "n": 40, "blocks": 0, "inference": "", "family": None}}
     robust = {"signals": {"A": {"trades": 90, "expectancy_r_precise": 0.11, "lower_r": 0.02,
-                                "independent_sessions": 23, "inference": "OVERLAP_ROBUST", "bh_significant": True}}}
+                                "independent_sessions": 23, "inference": "OVERLAP_ROBUST", "family_significant": True}}}
     assert US.backtest_edges(robust) == {"A": {"mean": 0.11, "lower": 0.02, "n": 90, "blocks": 23,
-                                               "inference": "OVERLAP_ROBUST", "bh": True}}
+                                               "inference": "OVERLAP_ROBUST", "family": True}}
     assert US.backtest_edges({"signals": {"A": {"trades": 90, "expectancy_r": float("nan")}}}) == {}
 
 
@@ -189,7 +199,7 @@ def test_snapshot_freezes_the_gate_evidence(tmp_path):
         live_profile={}, data_identity="t", thesis_hash="t",
     )
     assert snap["backtest_edges"] == {"VOL_SQUEEZE": {"mean": 0.08, "lower": None, "n": 545, "blocks": 0,
-                                                      "inference": "", "bh": None}}
+                                                      "inference": "", "family": None}}
     assert snap["backtest_generated_at"] == ""                       # undated report: the gate refuses it
     assert snap["backtest_combo_edges"] == {}
 
@@ -302,7 +312,7 @@ def test_the_research_path_is_unchanged_by_the_live_gate():
 
 
 @pytest.mark.parametrize("stamp,reason", [
-    (None, "has no generation date"),
+    (None, "has no provenance record"),
     ("not a date", "unreadable"),
     ("2026-01-01 10:00", "days old"),
     ("2999-01-01T00:00:00+00:00", "dated in the future"),
@@ -323,9 +333,100 @@ def test_the_report_timestamp_format_is_understood():
 
 
 def test_a_bound_that_does_not_survive_the_family_correction_is_not_proof():
-    for bh, reason in ((False, "multiple-testing correction"), (None, "multiple-testing correction")):
-        edges = {"VOL_SQUEEZE": _ok(0.30, bh=bh), "MOMENTUM": _ok(0.30, bh=bh)}
+    for fam, reason in ((False, "multiple-testing correction"), (None, "multiple-testing correction")):
+        edges = {"VOL_SQUEEZE": _ok(0.30, family=fam), "MOMENTUM": _ok(0.30, family=fam)}
         verdict, why = US._evidence_verdict(90.0, ["VOL_SQUEEZE", "MOMENTUM"], signal_edges=edges)
         assert verdict == "WATCH" and reason in why
-    mixed = {"VOL_SQUEEZE": _ok(0.30), "MOMENTUM": _ok(0.30, bh=False)}
+    mixed = {"VOL_SQUEEZE": _ok(0.30), "MOMENTUM": _ok(0.30, family=False)}
     assert US._evidence_verdict(90.0, ["VOL_SQUEEZE", "MOMENTUM"], signal_edges=mixed)[0] == "WATCH"
+
+
+# ── decision-time provenance (2026-11-20 review, P0-2) ───────────────────────
+
+@pytest.mark.parametrize("override,reason", [
+    ({"report_schema": 3}, "schema 3 predates"),
+    ({"report_schema": None}, "schema unknown predates"),
+    ({"eval_spec": "sim:h15:be2:gap"}, "different evaluation rulebook"),
+    ({"horizon_sessions": 15}, "15-session horizon"),
+    ({"family_method": "Benjamini-Hochberg, one-sided edge > 0"}, "predeclared multiple-testing procedure"),
+    ({"code_sha": ""}, "does not name the code"),
+])
+def test_a_fresh_timestamp_on_a_mismatched_report_never_certifies_a_buy(override, reason):
+    edges = {"VOL_SQUEEZE": _ok(0.30), "POCKET_PIVOT": _ok(0.30)}
+    r = US.UnifiedScanner(calibration_snapshot=_snap(edges, **override))._analyze("X", _breakout_frame())
+    assert r.verdict == "WATCH" and reason in r.reasons[-1], r.reasons[-1]
+
+
+def test_the_scanner_binds_one_immutable_snapshot_for_the_whole_scan():
+    edges = {"VOL_SQUEEZE": _ok(0.30), "POCKET_PIVOT": _ok(0.30)}
+    snap = _snap(edges)
+    sc = US.UnifiedScanner(calibration_snapshot=snap)
+    first = sc._analyze("X", _breakout_frame())
+    snap["backtest_edges"]["VOL_SQUEEZE"]["mean"] = -9.0            # a refresh lands mid-scan
+    snap["backtest_provenance"]["report_schema"] = 1
+    again = sc._analyze("X", _breakout_frame())
+    assert first.verdict == again.verdict == "BUY" and first.edge_r == again.edge_r
+    assert first.edge_evidence_id == "test" == again.edge_evidence_id
+    fresh = {"VOL_SQUEEZE": _ok(0.30), "POCKET_PIVOT": _ok(0.30)}
+    restarted = US.UnifiedScanner(calibration_snapshot=_snap(fresh))._analyze("X", _breakout_frame())
+    assert (restarted.verdict, restarted.edge_r) == (first.verdict, first.edge_r)           # restart: same answer
+
+
+def test_a_duplicated_signal_cannot_double_its_weight():
+    edges = {"VOL_SQUEEZE": _ok(0.30), "MOMENTUM": _ok(-0.50, lower=-0.6)}
+    once = US.setup_evidence(["VOL_SQUEEZE", "MOMENTUM"], edges)
+    twice = US.setup_evidence(["VOL_SQUEEZE", "VOL_SQUEEZE", "VOL_SQUEEZE", "MOMENTUM"], edges)
+    assert once["mean"] == twice["mean"] == pytest.approx(-0.10)
+
+
+def test_a_partial_or_corrupt_report_file_is_no_evidence(tmp_path, monkeypatch):
+    import scan.signal_backtest as SB
+    bad = tmp_path / "signal_backtest.json"
+    bad.write_text('{"signals": {"VOL_SQUEEZE": {"trades": 90, "expectancy_r_pre')    # truncated write
+    monkeypatch.setattr(SB, "_OUT", bad)
+    assert SB.load_report() is None
+    r = US.UnifiedScanner(calibration_snapshot={"snapshot_id": "none", "multipliers": {}, "signal_registry": {}}
+                          )._analyze("X", _breakout_frame())
+    assert r.verdict == "WATCH"
+
+
+def _payload(rows, ident="test", pit=False):
+    return {"schema_version": 2, "records": rows, "evidence_identity": {"id": ident} if ident is not None else {},
+            **({"pit": True} if pit else {})}
+
+
+def _row(sym, verdict="BUY", evidence="test"):
+    return {"symbol": sym, "verdict": verdict, "status": "Ready to trade" if verdict == "BUY" else "Watch",
+            "edge_evidence_id": evidence, "reasons": ["setup"]}
+
+
+def test_a_legacy_rolled_back_or_mixed_artifact_cannot_certify_a_buy():
+    from product.scan_store import bind_evidence, EVIDENCE_WITHHELD
+    legacy = bind_evidence(_payload([_row("A")], ident=None))
+    assert legacy["records"][0]["verdict"] == "WATCH" and EVIDENCE_WITHHELD in legacy["records"][0]["reasons"]
+    mixed = bind_evidence(_payload([_row("A"), _row("B", evidence="older-snapshot"), _row("C", evidence="")]))
+    assert [r["verdict"] for r in mixed["records"]] == ["BUY", "WATCH", "WATCH"]
+    assert mixed["records"][1]["status"] == "Watch" and mixed["evidence_binding"]["buy_rows_withheld"] == 2
+    replay = bind_evidence(_payload([_row("A", evidence="")], ident=None, pit=True))
+    assert replay["records"][0]["verdict"] == "BUY"                           # research replay untouched
+
+
+def test_load_scan_and_the_recommendation_workspace_apply_the_binding(tmp_path):
+    from product.scan_store import save_scan, load_scan
+    from product.recommendations_workspace import build_recommendations_workspace
+    payload = _payload([_row("AAA"), _row("BBB", evidence="stale")])
+    path = save_scan(payload, tmp_path / "scan.json")
+    loaded = load_scan(path)
+    assert [r["verdict"] for r in loaded["records"]] == ["BUY", "WATCH"]
+    original = [dict(r) for r in payload["records"]]
+    build_recommendations_workspace(scan_payload=payload)
+    assert payload["records"] == original                                     # caller's payload not mutated
+
+
+def test_the_scan_payload_names_its_evidence_identity():
+    from product.scan_store import build_scan_payload
+    edges = {"VOL_SQUEEZE": _ok(0.30), "POCKET_PIVOT": _ok(0.30)}
+    r = US.UnifiedScanner(calibration_snapshot=_snap(edges))._analyze("X", _breakout_frame())
+    payload = build_scan_payload({"X": "X"}, [r], freshness={})
+    assert payload["evidence_identity"]["id"] == "test" and payload["records"][0]["edge_evidence_id"] == "test"
+

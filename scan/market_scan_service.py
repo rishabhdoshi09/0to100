@@ -473,6 +473,15 @@ def run_whole_market_scan(
     # while exposing the full requested set separately. This is the distinction
     # the product previously lacked.
     payload["requested_universe"] = requested_n
+    try:
+        # Provenance of the evidence that judged this scan (one bound snapshot).
+        payload["evidence_identity"].update({
+            "scanner_evidence_id": str(getattr(scanner, "_evidence_id", "") or ""),
+            "provenance": dict(getattr(scanner, "_evidence_provenance", {}) or {}),
+            "note": str(getattr(scanner, "_evidence_note", "") or ""),
+        })
+    except Exception:
+        pass
     payload["coverage"] = coverage
     payload["coverage_state"] = str(coverage.get("state") or "UNKNOWN")
     if coverage.get("state") == "DEGRADED":

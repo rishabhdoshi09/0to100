@@ -13,6 +13,7 @@ class Signal:
         self.chase_risk = chase; self.score = score; self.reasons = ["plain reason"]
         self.price = 100; self.momentum_5d = 7; self.rsi = 62; self.volume_ratio = 1.6
         self.entry = 101; self.stop = 95; self.target = 113
+        self.edge_evidence_id = "ev"         # a gated scanner stamps every row with its evidence
 
 
 def test_saved_scan_preserves_full_universe_and_watchlist(tmp_path):

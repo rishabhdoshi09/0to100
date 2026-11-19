@@ -1,0 +1,298 @@
+{
+  "rule": "mean >= 0.05R, overlap-robust one-sided p < alpha after the family procedure, >= 30 trades",
+  "versions": {
+    "numpy": "2.4.4",
+    "scipy": "1.17.1"
+  },
+  "null_production_family": {
+    "seed": 501,
+    "sims": 100,
+    "looks": 13,
+    "adaptive_family": false,
+    "edge": {},
+    "procedures": {
+      "none": {
+        "per_look_false_admission": 0.01,
+        "per_look_wilson95": [
+          0.0059,
+          0.017
+        ],
+        "any_false_admission_in_13_looks": 0.01,
+        "across_looks_wilson95": [
+          0.0018,
+          0.0545
+        ]
+      },
+      "bh": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0029
+        ],
+        "any_false_admission_in_13_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.037
+        ]
+      },
+      "by": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0029
+        ],
+        "any_false_admission_in_13_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.037
+        ]
+      },
+      "holm": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0029
+        ],
+        "any_false_admission_in_13_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.037
+        ]
+      },
+      "bonferroni": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0029
+        ],
+        "any_false_admission_in_13_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.037
+        ]
+      }
+    }
+  },
+  "null_adaptive_family": {
+    "seed": 502,
+    "sims": 100,
+    "looks": 13,
+    "adaptive_family": true,
+    "edge": {},
+    "procedures": {
+      "none": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0029
+        ],
+        "any_false_admission_in_13_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.037
+        ]
+      },
+      "bh": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0029
+        ],
+        "any_false_admission_in_13_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.037
+        ]
+      },
+      "by": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0029
+        ],
+        "any_false_admission_in_13_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.037
+        ]
+      },
+      "holm": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0029
+        ],
+        "any_false_admission_in_13_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.037
+        ]
+      },
+      "bonferroni": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0029
+        ],
+        "any_false_admission_in_13_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.037
+        ]
+      }
+    }
+  },
+  "power_edge_0.15R": {
+    "seed": 503,
+    "sims": 40,
+    "looks": 13,
+    "adaptive_family": false,
+    "edge": {
+      "S0": 0.15
+    },
+    "procedures": {
+      "none": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0073
+        ],
+        "any_false_admission_in_13_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.0876
+        ],
+        "true_row_admissions_per_look": 0.008
+      },
+      "bh": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0073
+        ],
+        "any_false_admission_in_13_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.0876
+        ],
+        "true_row_admissions_per_look": 0.0
+      },
+      "by": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0073
+        ],
+        "any_false_admission_in_13_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.0876
+        ],
+        "true_row_admissions_per_look": 0.0
+      },
+      "holm": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0073
+        ],
+        "any_false_admission_in_13_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.0876
+        ],
+        "true_row_admissions_per_look": 0.0
+      },
+      "bonferroni": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0073
+        ],
+        "any_false_admission_in_13_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.0876
+        ],
+        "true_row_admissions_per_look": 0.0
+      }
+    }
+  },
+  "power_edge_0.30R": {
+    "seed": 504,
+    "sims": 40,
+    "looks": 13,
+    "adaptive_family": false,
+    "edge": {
+      "S0": 0.3
+    },
+    "procedures": {
+      "none": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0073
+        ],
+        "any_false_admission_in_13_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.0876
+        ],
+        "true_row_admissions_per_look": 0.027
+      },
+      "bh": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0073
+        ],
+        "any_false_admission_in_13_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.0876
+        ],
+        "true_row_admissions_per_look": 0.0
+      },
+      "by": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0073
+        ],
+        "any_false_admission_in_13_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.0876
+        ],
+        "true_row_admissions_per_look": 0.0
+      },
+      "holm": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0073
+        ],
+        "any_false_admission_in_13_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.0876
+        ],
+        "true_row_admissions_per_look": 0.0
+      },
+      "bonferroni": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0073
+        ],
+        "any_false_admission_in_13_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.0876
+        ],
+        "true_row_admissions_per_look": 0.0
+      }
+    }
+  },
+  "elapsed_s": 264.5
+}

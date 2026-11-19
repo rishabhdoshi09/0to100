@@ -934,6 +934,11 @@ def build_recommendations_workspace(
     Those lanes are marked degraded instead of filled from later evidence.
     """
     scan = dict(scan_payload or {})
+    if not point_in_time and scan:
+        # An in-memory payload gets the same evidence binding load_scan() applies.
+        from product.scan_store import bind_evidence
+        scan = bind_evidence({**scan, "records": [dict(r) for r in (scan.get("records") or [])
+                                                    if isinstance(r, Mapping)]})
     lt = dict(long_term_payload or {})
     scan_at = str(scan.get("scanned_at") or as_of or "")
     lt_at = str(lt.get("scanned_at") or "")

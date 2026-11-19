@@ -173,6 +173,9 @@ def build_snapshot(
         # When the walk-forward behind these edges ran: the live gate refuses
         # undated or stale evidence (scan.unified_scanner.evidence_age_note).
         "backtest_generated_at": str((backtest or {}).get("generated_at") or ""),
+        # Everything the gate checks before a bound can certify a BUY: report
+        # schema, rulebook (eval spec, horizon), family method, code SHA, time.
+        "backtest_provenance": dict((backtest or {}).get("evidence_provenance") or {}),
         "backtest_combo_edges": _backtest_combo_edges(backtest),
         "signal_registry": registry,
     }

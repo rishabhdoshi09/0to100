@@ -48,6 +48,7 @@ log = get_logger(__name__)
 # ignored EVERYWHERE — scanner signals, pulse, movers, autopilot, all of
 # it. A −60% name is a delisting/insolvency risk or a knife still falling;
 # the system does not chase it. Tunable via .env, never below 40%.
+import json
 import os as _os
 _MAX_DROP = max(0.40, float(_os.getenv("QT_MAX_DROP_FROM_HIGH", "0.60") or 0.60))
 _DROP_LOOKBACK = 250
@@ -196,16 +197,16 @@ def _evidence_row(value) -> dict | None:
             blocks = max(0, int(value.get("blocks") or 0))
         except (TypeError, ValueError):
             blocks = 0
-        bh = value.get("bh")
+        fam = value.get("family")
         return {"mean": mean, "lower": lower, "n": n, "blocks": blocks,
                 "inference": str(value.get("inference") or ""),
                 "lower_invalid": raw_lower is not None and lower is None,
-                "bh": bh if isinstance(bh, bool) else None}
+                "family": fam if isinstance(fam, bool) else None}
     mean = _finite(value)
     if mean is None:
         return None
     return {"mean": mean, "lower": None, "n": 0, "blocks": 0, "inference": _LEGACY_FLOAT,
-            "lower_invalid": False, "bh": None}
+            "lower_invalid": False, "family": None}
 
 
 def _report_rows(rows: dict, min_trades: int) -> dict[str, dict]:
@@ -220,11 +221,11 @@ def _report_rows(rows: dict, min_trades: int) -> dict[str, dict]:
             if mean is None:
                 continue
             lower = row.get("lower_r")
-            bh = row.get("bh_significant")
+            fam = row.get("family_significant")
             out[str(key)] = {"mean": mean, "lower": None if lower is None else _finite(lower), "n": n,
                              "blocks": int(row.get("independent_sessions") or 0),
                              "inference": str(row.get("inference") or ""),
-                             "bh": bh if isinstance(bh, bool) else None}
+                             "family": fam if isinstance(fam, bool) else None}
         except (TypeError, ValueError, AttributeError):
             continue
     return out
@@ -248,7 +249,8 @@ def setup_evidence(signals: list[str], edges: dict | None, combos: dict | None =
         row = _evidence_row(combos.get(combo_key(signals)))
         if row is not None:
             return {**row, "source": "combination"}
-    rows = [r for r in (_evidence_row((edges or {}).get(s)) for s in signals if edges and s in edges) if r]
+    rows = [r for r in (_evidence_row((edges or {}).get(s)) for s in dict.fromkeys(signals) if edges and s in edges)
+            if r]                                  # a duplicated signal must not double its weight
     if not rows:
         return None
     lowers = [r["lower"] for r in rows]
@@ -261,8 +263,8 @@ def setup_evidence(signals: list[str], edges: dict | None, combos: dict | None =
         "blocks": min(r["blocks"] for r in rows),
         "inference": kinds.pop() if len(kinds) == 1 else "MIXED",
         "lower_invalid": any(r["lower_invalid"] for r in rows),
-        "bh": True if all(r.get("bh") is True for r in rows) else (False if any(r.get("bh") is False for r in rows)
-                                                                     else None),
+        "family": True if all(r.get("family") is True for r in rows) else (
+            False if any(r.get("family") is False for r in rows) else None),
         "source": "signals",
     }
 
@@ -279,8 +281,8 @@ def unproven_reason(ev: dict | None) -> str:
     Proof needs ALL of: a finite mean >= _MIN_BUY_EDGE_R, >= EVIDENCE_MIN_TRADES
     trades, a finite one-sided 95% lower bound above zero from the
     dependence-aware inference, >= 20 independent 10-session blocks, and
-    survival of Benjamini-Hochberg across every signal and combination the
-    gate judges (scan.signal_backtest.apply_family_correction).
+    survival of the family-wise (Holm) correction across every signal and
+    combination the gate judges (scan.signal_backtest.apply_family_correction).
     Missing, legacy, partial or mixed evidence fails closed.
     """
     from research.overlap_inference import MIN_INDEPENDENT_BLOCKS
@@ -304,14 +306,56 @@ def unproven_reason(ev: dict | None) -> str:
         return f"but only {int(ev.get('blocks') or 0)} independent 10-session windows (< {MIN_INDEPENDENT_BLOCKS})"
     if ev["lower"] <= 0:
         return f"but its 95% lower bound {ev['lower']:+.2f}R is not above zero (could be noise)"
-    if ev.get("bh") is not True:
-        return ("but it does not survive the multiple-testing correction across the walk-forward's "
-                "signals and combinations (Benjamini-Hochberg)")
+    if ev.get("family") is not True:
+        return ("but it does not survive the family-wise multiple-testing correction across the "
+                "walk-forward's signals and combinations (Holm)")
     return ""
 
 
 def _proven(ev: dict | None) -> bool:
     return bool(ev) and unproven_reason(ev) == ""
+
+
+#: The oldest walk-forward report schema whose bounds may certify a BUY.
+EVIDENCE_MIN_SCHEMA = 4
+
+
+def evidence_provenance_note(provenance, *, now=None) -> str:
+    """'' when the evidence behind the gate is current and bound to this rulebook, else why not.
+
+    A fresh timestamp alone certifies nothing: the report must also be of the
+    dependence-aware schema, measured under the current evaluation rulebook
+    and horizon, corrected with the predeclared family procedure, and name
+    the code that produced it.
+    """
+    from core.evaluation_spec import HORIZON_SESSIONS
+    from scan.signal_backtest import FAMILY_METHOD, _eval_spec_tag
+
+    prov = dict(provenance or {})
+    if not prov:
+        return "the walk-forward evidence has no provenance record"
+    age = evidence_age_note(prov.get("generated_at"), now=now)
+    if age:
+        return age
+    try:
+        schema = int(prov.get("report_schema") or 0)
+    except (TypeError, ValueError):
+        schema = 0
+    if schema < EVIDENCE_MIN_SCHEMA:
+        return f"the walk-forward report schema {schema or 'unknown'} predates the current evidence standard"
+    if str(prov.get("eval_spec") or "") != _eval_spec_tag(HORIZON_SESSIONS):
+        return "the walk-forward evidence was measured under a different evaluation rulebook"
+    try:
+        horizon = int(prov.get("horizon_sessions") or 0)
+    except (TypeError, ValueError):
+        horizon = 0
+    if horizon != int(HORIZON_SESSIONS):
+        return f"the walk-forward evidence used a {horizon or 'unknown'}-session horizon, not {HORIZON_SESSIONS}"
+    if str(prov.get("family_method") or "") != FAMILY_METHOD:
+        return "the walk-forward evidence was not corrected with the predeclared multiple-testing procedure"
+    if not str(prov.get("code_sha") or "").strip():
+        return "the walk-forward evidence does not name the code that produced it"
+    return ""
 
 
 def evidence_age_note(generated_at, *, now=None, max_age_days: int | None = None) -> str:
@@ -668,6 +712,7 @@ class StockSignal:
     edge_lower_r: float | None = None      # its one-sided 95% lower bound, None = unknown
     edge_source: str = ""                  # "combination" | "signals" | ""
     edge_gated: bool = False               # evidence gate turned a BUY into WATCH
+    edge_evidence_id: str = ""             # the evidence snapshot that judged this verdict
 
     @property
     def categories(self) -> set[str]:
@@ -740,26 +785,36 @@ class UnifiedScanner:
         self._signal_edges: dict = {}
         self._combo_edges: dict = {}
         self._evidence_note = ""
+        self._evidence_provenance: dict = {}
+        self._evidence_id = ""
         if self._evidence_gate:
+            # Bound once per scanner (one scan): a report or snapshot that
+            # changes mid-scan cannot change this scan's verdicts.
+            import copy
+            import hashlib
             stored = self._calibration_snapshot.get("backtest_edges")
             if isinstance(stored, dict):
-                self._signal_edges = dict(stored)
-                self._combo_edges = dict(self._calibration_snapshot.get("backtest_combo_edges") or {})
-                generated = self._calibration_snapshot.get("backtest_generated_at")
+                self._signal_edges = copy.deepcopy(dict(stored))
+                self._combo_edges = copy.deepcopy(dict(self._calibration_snapshot.get("backtest_combo_edges") or {}))
+                prov = dict(self._calibration_snapshot.get("backtest_provenance") or {})
+                if not prov and self._calibration_snapshot.get("backtest_generated_at"):
+                    prov = {"generated_at": self._calibration_snapshot.get("backtest_generated_at")}
+                self._evidence_provenance = prov
+                self._evidence_id = str(self._calibration_snapshot.get("snapshot_id") or "")
             elif calibration_snapshot is None:
                 try:
                     from scan.signal_backtest import load_report
                     report = load_report() or {}
                     self._signal_edges = backtest_edges(report)
                     self._combo_edges = backtest_combo_edges(report)
-                    generated = report.get("generated_at")
+                    self._evidence_provenance = dict(report.get("evidence_provenance") or {})
                 except Exception:
                     self._signal_edges, self._combo_edges = {}, {}
-                    generated = None
-            else:
-                generated = None
             if self._signal_edges or self._combo_edges:
-                self._evidence_note = evidence_age_note(generated)
+                self._evidence_note = evidence_provenance_note(self._evidence_provenance)
+                if not self._evidence_id:
+                    self._evidence_id = "report:" + hashlib.sha256(json.dumps(
+                        self._evidence_provenance, sort_keys=True, default=str).encode()).hexdigest()[:16]
         try:
             summary = dict(self._signal_registry.get("summary") or {})
             missing = list(summary.get("scanner_without_forward_calibration") or [])
@@ -1177,7 +1232,7 @@ class UnifiedScanner:
             score=round(score, 1), entry=round(entry, 1), stop=stop,
             target=target, verdict=verdict, chase_risk=chase_risk,
             edge_r=edge_r, edge_lower_r=edge_lower_r, edge_source=edge_source,
-            edge_gated=edge_gated,
+            edge_gated=edge_gated, edge_evidence_id=self._evidence_id,
             pivot_distance_pct=round(pivot_dist, 2),
             breakout_grade=breakout_grade,
             breakout_conviction=breakout_conv,

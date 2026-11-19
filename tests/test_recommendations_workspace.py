@@ -611,8 +611,9 @@ def test_graded_breakout_with_volume_stays_buy():
     payload = build_recommendations_workspace(
         scan_payload={
             "scanned_at": "2026-08-26T04:00:00+00:00",
+            "evidence_identity": {"id": "ev"},          # BUYs certified by the scan's own evidence
             "records": [{
-                "symbol": "GRADED", "score": 80,
+                "symbol": "GRADED", "score": 80, "edge_evidence_id": "ev",
                 "signals": ["BREAKOUT_52W"], "verdict": "BUY", "status": "Ready to trade",
                 "categories": ["Breakout"], "chase_risk": False, "rsi": 55,
                 "volume_ratio": 1.6, "avg_vol20": 2e6, "breakout_grade": "A",

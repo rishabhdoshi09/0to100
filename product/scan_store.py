@@ -162,6 +162,7 @@ def _record(signal: Any, names: Mapping[str, str], fno_symbols: set[str]) -> dic
         "edge_lower_r": _opt_float(signal, "edge_lower_r"),
         "edge_source": str(_value(signal, "edge_source", "") or ""),
         "edge_gated": bool(_value(signal, "edge_gated", False)),
+        "edge_evidence_id": str(_value(signal, "edge_evidence_id", "") or ""),
         # A trade level the scanner never produced is missing, not zero. Coercing
         # to 0.0 rendered "Stop Rs0.00" in the desk, which is a fabricated trade
         # plan rather than an absent one.
@@ -365,8 +366,14 @@ def build_scan_payload(
     normalized_n = len({str(s).strip().upper() for s in names if str(s).strip()})
     scanned_n = int(scanned) if scanned is not None else normalized_n
     qualified_n = len(records)
+    buy_ids = sorted({str(r.get("edge_evidence_id") or "") for r in records if r.get("verdict") == "BUY"})
+    all_ids = sorted({str(r.get("edge_evidence_id") or "") for r in records} - {""})
     return {
         "schema_version": 2,
+        # The evidence identity this scan's BUY verdicts were certified by.
+        # load_scan() withholds any BUY row that does not carry it.
+        "evidence_identity": {"id": all_ids[0] if len(all_ids) == 1 else "",
+                              "ids_seen": len(all_ids), "buy_ids": buy_ids},
         "scanned_at": now.isoformat(),
         "provenance": scan_provenance(
             started_at=started_at,
@@ -401,6 +408,42 @@ def save_scan(payload: Mapping[str, Any], path: str | Path = DEFAULT_SCAN_PATH) 
     from core.atomic_io import atomic_write_text
     atomic_write_text(target, json.dumps(dict(payload), indent=2, default=str))
     return target
+
+
+EVIDENCE_WITHHELD = ("⚖ BUY withheld: its evidence identity does not match this scan's (legacy, "
+                     "rolled-back or mixed artifact) — WATCH, not BUY")
+
+
+def bind_evidence(payload: dict[str, Any]) -> dict[str, Any]:
+    """In memory, withhold every BUY row not certified by the scan's own evidence identity.
+
+    A BUY counts only when the payload names exactly one evidence identity and
+    the row carries that same id. A legacy artifact (no identity), a
+    rolled-back or mixed one, or a row with a missing or different id is read
+    as WATCH, with the reason. Historical point-in-time replays (``pit``)
+    are research measurement and are left as they are. Never writes the file.
+    """
+    if not isinstance(payload, dict) or payload.get("pit"):
+        return payload
+    ident = payload.get("evidence_identity") if isinstance(payload.get("evidence_identity"), Mapping) else {}
+    expected = str(ident.get("id") or "")
+    withheld = 0
+    for row in payload.get("records") or []:
+        if not isinstance(row, dict) or str(row.get("verdict") or "").upper() not in ("BUY", "STRONG BUY"):
+            continue
+        if expected and str(row.get("edge_evidence_id") or "") == expected:
+            continue
+        row["verdict"] = "WATCH"
+        if row.get("status") == "Ready to trade":
+            row["status"] = "Watch"
+        row["edge_gated"] = True
+        reasons = list(row.get("reasons") or [])
+        if EVIDENCE_WITHHELD not in reasons:
+            reasons.append(EVIDENCE_WITHHELD)
+        row["reasons"] = reasons
+        withheld += 1
+    payload["evidence_binding"] = {"expected_id": expected, "buy_rows_withheld": withheld}
+    return payload
 
 
 def load_scan(path: str | Path = DEFAULT_SCAN_PATH) -> dict[str, Any] | None:
@@ -454,7 +497,7 @@ def load_scan(path: str | Path = DEFAULT_SCAN_PATH) -> dict[str, Any] | None:
         valid, _reason = scan_source_status(payload)
         if not valid:
             return None
-        return payload
+        return bind_evidence(payload)
     except Exception:
         return None
 

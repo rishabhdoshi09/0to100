@@ -49,15 +49,20 @@ def _frame():
 
 
 def _ok(mean=0.30, **kw):
-    row = {"mean": mean, "lower": 0.10, "n": 90, "blocks": 24, "inference": "OVERLAP_ROBUST", "bh": True}
+    row = {"mean": mean, "lower": 0.10, "n": 90, "blocks": 24, "inference": "OVERLAP_ROBUST", "family": True}
     row.update(kw)
     return row
 
 
 def _snap(edges, generated_at=FRESH):
+    import scan.signal_backtest as SB
+    from core.evaluation_spec import HORIZON_SESSIONS
     snap = {"snapshot_id": "e2e", "multipliers": {}, "signal_registry": {}, "backtest_edges": edges}
     if generated_at is not None:
-        snap["backtest_generated_at"] = generated_at
+        snap["backtest_provenance"] = {"generated_at": generated_at, "report_schema": SB.REPORT_SCHEMA,
+                                       "eval_spec": SB._eval_spec_tag(HORIZON_SESSIONS),
+                                       "horizon_sessions": HORIZON_SESSIONS, "family_method": SB.FAMILY_METHOD,
+                                       "code_sha": "e2e-sha"}
     return snap
 
 
@@ -72,7 +77,7 @@ CONDITIONS = {
     "low_n": _snap({s: _ok(n=12) for s in SIGNALS}),
     "too_few_independent_blocks": _snap({s: _ok(blocks=6) for s in SIGNALS}),
     "pre_rerun_bound": _snap({s: _ok(inference="") for s in SIGNALS}),
-    "fails_family_correction": _snap({s: _ok(bh=False) for s in SIGNALS}),
+    "fails_family_correction": _snap({s: _ok(family=False) for s in SIGNALS}),
 }
 
 
