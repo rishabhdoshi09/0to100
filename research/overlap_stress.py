@@ -114,6 +114,38 @@ def s_threshold(rng):                                          # exactly 20 bloc
     return _cells(_windows(rng.normal(size=200 + H + 1), 200) + 0.1 * rng.normal(size=200))
 
 
+def s_regime_switch(rng):                                      # Markov volatility regimes, zero mean
+    n = 300 + H + 1
+    state, z = 0, np.empty(n)
+    for i in range(n):
+        if rng.random() > 0.98:
+            state = 1 - state
+        z[i] = rng.normal(0, 2.0 if state else 0.5)
+    return _cells(_windows(z, 300) + 0.1 * rng.normal(size=300))
+
+
+def s_nonstationary(rng):                                      # volatility trending 0.5 -> 2.0
+    n = 300 + H + 1
+    z = rng.normal(size=n) * np.linspace(0.5, 2.0, n)
+    return _cells(_windows(z, 300) + 0.1 * rng.normal(size=300))
+
+
+def s_symbol_dependence(rng, symbols: int = 30):
+    """Per-session rank IC of a fixed (null) feature across symbols whose outcomes overlap in time."""
+    n = 300
+    feature = rng.normal(size=symbols)
+    shocks = rng.normal(size=(symbols, n + H + 1)) + 0.7 * rng.normal(size=(1, n + H + 1))   # market factor
+    c = np.concatenate([np.zeros((symbols, 1)), np.cumsum(shocks, axis=1)], axis=1)
+    outcome = (c[:, H + 1:n + H + 1] - c[:, 1:n + 1]) / H                                     # symbols x sessions
+    fr = np.argsort(np.argsort(feature))
+    ics = []
+    for s_ in range(n):
+        excess = outcome[:, s_] - outcome[:, s_].mean()
+        orank = np.argsort(np.argsort(excess))
+        ics.append(float(np.corrcoef(fr, orank)[0, 1]))
+    return _cells(np.array(ics))
+
+
 SCENARIOS: dict[str, tuple[int, Callable]] = {
     "overlapping_windows": (101, s_overlap),
     "heavy_tails_t3": (102, s_heavy_tails),
@@ -123,6 +155,9 @@ SCENARIOS: dict[str, tuple[int, Callable]] = {
     "duplicated_outcomes_lag1to3": (106, s_duplicates),
     "overlapping_event_windows": (107, s_events),
     "exactly_20_blocks": (108, s_threshold),
+    "volatility_regime_switches": (109, s_regime_switch),
+    "nonstationary_variance": (110, s_nonstationary),
+    "symbol_dependence_rank_ic": (111, s_symbol_dependence),
 }
 
 
@@ -166,6 +201,52 @@ def run_selection(seed: int, sims: int, family: int = 20) -> dict:
             "any_bh_rejection": round(any_bh / sims, 4), "bh_wilson95": wilson(any_bh, sims)}
 
 
+def run_tuning(seed: int, sims: int, horizons=(5, 8, 10, 12, 15)) -> dict:
+    """Repeated tuning: test the same null under 5 horizon definitions and keep the best."""
+    from research.harness import benjamini_hochberg
+
+    rng = np.random.default_rng(seed)
+    best_raw = holm = bh = 0
+    for _ in range(sims):
+        z = rng.normal(size=300 + max(horizons) + 1)
+        pvals = []
+        for h in horizons:
+            c = np.concatenate([[0.0], np.cumsum(z)])
+            x = (c[h + 1:300 + h + 1] - c[1:301]) / h + 0.1 * rng.normal(size=300)
+            rep = OI.overlap_robust_test(_cells(x), h)
+            pvals.append(rep["p_two_sided"] if rep["status"] == OI.OK else 1.0)
+        best_raw += min(pvals) < 0.05
+        holm += min(pvals) * len(pvals) < 0.05
+        bh += any(bool(r) for r in benjamini_hochberg(pvals).get("rejected", []))
+    return {"seed": seed, "sims": sims, "variants": len(horizons),
+            "best_of_variants_raw": round(best_raw / sims, 4), "raw_wilson95": wilson(best_raw, sims),
+            "holm": round(holm / sims, 4), "holm_wilson95": wilson(holm, sims),
+            "bh": round(bh / sims, 4), "bh_wilson95": wilson(bh, sims)}
+
+
+def run_power(seed: int, sims: int, effects=(0.1, 0.2, 0.3, 0.5)) -> dict:
+    """Detection rate (status OK, two-sided p < 0.05, correct sign) for a true mean shift.
+
+    The shift is in units of the per-session standard deviation of the null series.
+    """
+    out = {}
+    for name, gen in (("overlapping_windows", s_overlap), ("regime_persistence_ar0.9", s_regime)):
+        rng = np.random.default_rng(seed)
+        probe = np.concatenate([[v[0] for v in gen(rng).values()] for _ in range(20)])
+        sd = float(np.std(probe))
+        rows = {}
+        for eff in effects:
+            rng = np.random.default_rng(seed + int(eff * 1000))
+            hits = 0
+            for _ in range(sims):
+                cells = {o: [s_ + eff * sd * c, c] for o, (s_, c) in gen(rng).items()}
+                rep = OI.overlap_robust_test(cells, H)
+                hits += rep["status"] == OI.OK and rep["p_two_sided"] < 0.05 and rep["mean"] > 0
+            rows[f"{eff:.1f}sd"] = {"power": round(hits / sims, 4), "wilson95": wilson(hits, sims)}
+        out[name] = {"per_session_sd": round(sd, 4), "sessions": 300, "effects": rows}
+    return out
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--sims", type=int, default=2000)
@@ -176,7 +257,9 @@ def main(argv=None) -> int:
     out = {"method": OI.METHOD, "horizon_sessions": H, "nominal": 0.05,
            "definition": "two-sided p < 0.05 with status OK (>= 20 independent blocks), under a true null",
            "scenarios": {name: run_scenario(gen, seed, args.sims) for name, (seed, gen) in SCENARIOS.items()},
-           "selection_20_features_bh": run_selection(201, args.selection_sims)}
+           "selection_20_features_bh": run_selection(201, args.selection_sims),
+           "repeated_tuning_5_horizons": run_tuning(301, args.selection_sims),
+           "power": run_power(401, args.selection_sims)}
     out["elapsed_s"] = round(time.time() - t0, 1)
     text = json.dumps(out, indent=2)
     if args.out:

@@ -139,7 +139,9 @@ def test_cells_from_clusters_merges_days_and_drops_unindexed_days():
 
 @pytest.mark.parametrize("name", ["heavy_tails_t3", "cross_sectional_concentration",
                                   "missing_sessions_40pct_plus_month_gap", "duplicated_outcomes_lag1to3",
-                                  "overlapping_event_windows", "exactly_20_blocks", "regime_persistence_ar0.9"])
+                                  "overlapping_event_windows", "exactly_20_blocks", "regime_persistence_ar0.9",
+                                  "volatility_regime_switches", "nonstationary_variance",
+                                  "symbol_dependence_rank_ic"])
 def test_adversarial_nulls_stay_near_nominal(name):
     from research import overlap_stress as ST
     seed, gen = ST.SCENARIOS[name]
@@ -161,3 +163,16 @@ def test_student_t_is_more_conservative_than_a_normal_reference():
     seed, gen = ST.SCENARIOS["exactly_20_blocks"]
     out = ST.run_scenario(gen, seed, 300)
     assert out["false_confirmation_rate"] <= out["same_se_normal_reference_rate"]
+
+
+def test_repeated_tuning_needs_the_family_correction():
+    from research import overlap_stress as ST
+    out = ST.run_tuning(301, 120)
+    assert out["holm"] <= out["best_of_variants_raw"] and out["holm"] <= 0.06
+
+
+def test_effective_df_shrinks_with_residual_dependence():
+    rng = np.random.default_rng(12)
+    slow = OI.overlap_robust_test(_cells(_overlap_series(rng, 400, phi=0.9)), H)
+    assert slow["df"] < slow["df_raw"] and slow["residual_dependence"]["variance_widening"] > 1.0
+

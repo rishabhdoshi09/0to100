@@ -25,10 +25,10 @@
       "seed": 102,
       "sims": 2000,
       "verdict_eligible": 2000,
-      "false_confirmation_rate": 0.002,
+      "false_confirmation_rate": 0.0015,
       "wilson95": [
-        0.0008,
-        0.0051
+        0.0005,
+        0.0044
       ],
       "superseded_block_t_rate": 0.086,
       "superseded_wilson95": [
@@ -42,10 +42,10 @@
       "seed": 103,
       "sims": 2000,
       "verdict_eligible": 2000,
-      "false_confirmation_rate": 0.0535,
+      "false_confirmation_rate": 0.0445,
       "wilson95": [
-        0.0445,
-        0.0642
+        0.0363,
+        0.0544
       ],
       "superseded_block_t_rate": 0.244,
       "superseded_wilson95": [
@@ -93,10 +93,10 @@
       "seed": 106,
       "sims": 2000,
       "verdict_eligible": 2000,
-      "false_confirmation_rate": 0.034,
+      "false_confirmation_rate": 0.0265,
       "wilson95": [
-        0.0269,
-        0.0429
+        0.0203,
+        0.0345
       ],
       "superseded_block_t_rate": 0.2145,
       "superseded_wilson95": [
@@ -110,10 +110,10 @@
       "seed": 107,
       "sims": 2000,
       "verdict_eligible": 2000,
-      "false_confirmation_rate": 0.034,
+      "false_confirmation_rate": 0.033,
       "wilson95": [
-        0.0269,
-        0.0429
+        0.026,
+        0.0418
       ],
       "superseded_block_t_rate": 0.1105,
       "superseded_wilson95": [
@@ -139,22 +139,163 @@
       ],
       "same_se_normal_reference_rate": 0.029,
       "median_variance_inflation": 11.25
+    },
+    "volatility_regime_switches": {
+      "seed": 109,
+      "sims": 2000,
+      "verdict_eligible": 2000,
+      "false_confirmation_rate": 0.0235,
+      "wilson95": [
+        0.0177,
+        0.0311
+      ],
+      "superseded_block_t_rate": 0.0995,
+      "superseded_wilson95": [
+        0.0871,
+        0.1134
+      ],
+      "same_se_normal_reference_rate": 0.0295,
+      "median_variance_inflation": 11.2
+    },
+    "nonstationary_variance": {
+      "seed": 110,
+      "sims": 2000,
+      "verdict_eligible": 2000,
+      "false_confirmation_rate": 0.026,
+      "wilson95": [
+        0.0199,
+        0.0339
+      ],
+      "superseded_block_t_rate": 0.102,
+      "superseded_wilson95": [
+        0.0895,
+        0.116
+      ],
+      "same_se_normal_reference_rate": 0.0345,
+      "median_variance_inflation": 11.12
+    },
+    "symbol_dependence_rank_ic": {
+      "seed": 111,
+      "sims": 2000,
+      "verdict_eligible": 2000,
+      "false_confirmation_rate": 0.0265,
+      "wilson95": [
+        0.0203,
+        0.0345
+      ],
+      "superseded_block_t_rate": 0.0925,
+      "superseded_wilson95": [
+        0.0806,
+        0.106
+      ],
+      "same_se_normal_reference_rate": 0.032,
+      "median_variance_inflation": 11.35
     }
   },
   "selection_20_features_bh": {
     "seed": 201,
     "sims": 500,
     "family": 20,
-    "any_raw_p_below_0.05": 0.474,
+    "any_raw_p_below_0.05": 0.464,
     "raw_wilson95": [
-      0.4306,
-      0.5178
+      0.4207,
+      0.5078
     ],
-    "any_bh_rejection": 0.032,
+    "any_bh_rejection": 0.03,
     "bh_wilson95": [
-      0.0198,
-      0.0513
+      0.0183,
+      0.0489
     ]
   },
-  "elapsed_s": 45.4
+  "repeated_tuning_5_horizons": {
+    "seed": 301,
+    "sims": 500,
+    "variants": 5,
+    "best_of_variants_raw": 0.048,
+    "raw_wilson95": [
+      0.0325,
+      0.0704
+    ],
+    "holm": 0.008,
+    "holm_wilson95": [
+      0.0031,
+      0.0204
+    ],
+    "bh": 0.028,
+    "bh_wilson95": [
+      0.0168,
+      0.0464
+    ]
+  },
+  "power": {
+    "overlapping_windows": {
+      "per_session_sd": 0.3256,
+      "sessions": 300,
+      "effects": {
+        "0.1sd": {
+          "power": 0.04,
+          "wilson95": [
+            0.026,
+            0.061
+          ]
+        },
+        "0.2sd": {
+          "power": 0.138,
+          "wilson95": [
+            0.1105,
+            0.171
+          ]
+        },
+        "0.3sd": {
+          "power": 0.256,
+          "wilson95": [
+            0.2197,
+            0.296
+          ]
+        },
+        "0.5sd": {
+          "power": 0.678,
+          "wilson95": [
+            0.6358,
+            0.7175
+          ]
+        }
+      }
+    },
+    "regime_persistence_ar0.9": {
+      "per_session_sd": 0.856,
+      "sessions": 300,
+      "effects": {
+        "0.1sd": {
+          "power": 0.034,
+          "wilson95": [
+            0.0213,
+            0.0538
+          ]
+        },
+        "0.2sd": {
+          "power": 0.08,
+          "wilson95": [
+            0.0593,
+            0.1071
+          ]
+        },
+        "0.3sd": {
+          "power": 0.106,
+          "wilson95": [
+            0.082,
+            0.1361
+          ]
+        },
+        "0.5sd": {
+          "power": 0.222,
+          "wilson95": [
+            0.1878,
+            0.2605
+          ]
+        }
+      }
+    }
+  },
+  "elapsed_s": 131.5
 }

@@ -659,3 +659,94 @@ Eleven guard-removal mutations are all caught. The paired lower bound turned out
 - The 39 calendar, inference, shadow, scorecard, gate and relay files pass: 903 tests.
 - All of these ran on the Mac under the guard, one interpreter per file.
 
+## 13. End-to-end admission audit (20 Nov; ChatGPT review of `b60df3b2`)
+
+The review was delivered at 20:47:32Z and acknowledged at 20:48:09Z, with no human in the loop. Nothing was deployed and no production data was changed. Live trading is HARD-LOCKED.
+
+### 13.1 Every route to a BUY label or an entry (P0)
+
+The only producer of verdict BUY and status "Ready to trade" is the live scanner's gate (`_evidence_verdict` → `scan_store._record`). The routes that consume it:
+
+| Route | Keys on | Covered by the gate |
+|---|---|---|
+| Recommendation tiers (`reco_ensemble.entry_state` → `decide_tier`) | READY needs "Ready to trade", or grade A/B with verdict BUY | yes |
+| Paper autopilot (`evaluate_candidate`) | `reco_tier` ∈ {high, good} | yes |
+| Home BUY-only, Telegram "qualified setups" | verdict BUY | yes |
+| Paper learning lane (`_exploration_pick`) | edge-gated cards, explicitly; 1/day, 0.5% risk, labelled EXPLORATION; `QT_PAPER_EXPLORATION=0` disables | deliberate research exception |
+| Telegram live-tick "SNIPER BREAKOUT CONFIRMED" | any sniper-watch row, **including gated WATCH rows, with a paper plan** | **fixed:** an unproven row now reads "WATCH — no proven edge; research alert, not a recommendation" |
+| F&O paper (`fo_runtime` → `fo_paper_runtime`) | its own directional breakout scan and risk gates; **no proven-edge gate** (no historical option-chain data exists) | paper research lane, labelled "PAPER_OPTION_CANDIDATE"/"Candidate only"; Telegram now adds "No proven edge" |
+| `breakout_sniper` ticks, `auto_scan`, the Telegram tap-to-paper listener | — | not started by the canonical stack (legacy_app/auto_scan only) |
+
+Also fixed:
+
+- **Stale evidence.** Snapshots now carry `backtest_generated_at`. Undated, unreadable, future-dated or older-than-21-days evidence is WATCH with its reason.
+- **Tests.** `tests/test_buy_admission_end_to_end.py` runs scanner → record → tier → paper decision, plus Home/Telegram, for each case: stale or undated snapshot, no report, empty evidence, mixed legacy rows, NaN/Inf, low n, too few blocks, a pre-rerun bound, a failed family correction, no market data, and an unavailable calendar. Three mutations (score-only BUY, accepting stale evidence, the old sniper wording) are each caught.
+
+### 13.2 Calendar freshness (P1)
+
+A verified digest proves consistency with the list retrieved on its date. It does not prove that NSE has not amended the calendar since.
+
+- **Live freshness is BLOCKED offline**, and the scorecard says so in `calendar_provenance`.
+- **What is checkable offline:** completed windows are cross-checked against the official bhavcopy dates.
+  - A missing bar (an emergency closure or a new holiday) makes the window NOT_YET_VERIFIED, as before.
+  - A bar on a calendar-closed day that the manifest does not document (an unrecorded special session such as an exceptional Saturday) now does too: `CALENDAR_CONTRADICTED_BY_OFFICIAL_BARS`.
+  - The documented Muhurat session is not a contradiction.
+- **Point-in-time session counting.** What is frozen at freeze time is the definition (the first 10 official sessions after the signal). The realised sessions come from the verified calendar plus the official bars at evaluation, so a holiday declared after the freeze is counted correctly.
+- **Freeze deadline.** It is now the next calendar day's 09:15 IST, independent of the calendar. An unannounced special session can never make a late freeze look prospective.
+
+### 13.3 Shadow freeze TOCTOU (P1)
+
+- **Atomic scan-ID uniqueness.** It is enforced at the database boundary: a partial unique index `one_session_per_scan_id`, plus the check inside the same `BEGIN IMMEDIATE` transaction as the insert.
+  - 8 racing threads: exactly one write. 4 separate OS processes: exactly one.
+  - Same-session writes under a race stay idempotent: 1 write and 5 already_recorded.
+- **Crash and restart.** A simulated I/O error mid-insert leaves nothing, and a retry writes once.
+- **Scan completion is checked on its own.** Evaluation re-checks that the *scan* completed after the session close, before the cutoff, and no later than 5 minutes after its own `frozen_at`. The margin can no longer certify a scan completed after the entry, even with a backdated `frozen_at`.
+
+### 13.4 Inference connections and calibration (P1)
+
+- **Effective df.** The Student-t df is now (blocks − 1) / residual widening; the ≥ 20 raw-block floor is unchanged.
+  - Under AR(0.9) regimes: seed 103 gives 4.45% [3.63%, 5.44%] and seed 1103 gives 3.10% [2.43%, 3.95%]. Pooled over 4,000 simulations: 3.77% [3.23%, 4.41%].
+  - Nominal control is therefore supported in the pooled estimate, but not shown at the single-seed upper bound.
+- **Selection hole in the BUY gate, now closed.** The gate judged about 15 signals and 29 combinations at a one-sided 5% each with no multiplicity correction. `apply_family_correction` now runs BH across every row the gate can use. Untestable rows count with p = 1, and proof needs `bh_significant`.
+- **The pieces are now connected:**
+  - research verdicts (confirmation, exit variants): two-sided p with BH;
+  - BUY gate: one-sided lower bound, plus BH across the gate family;
+  - shadow: one-sided lower bound, plus Holm across a fixed family of two.
+
+Adversarial nulls (`python -m research.overlap_stress --sims 2000`; a false confirmation is a two-sided p < 0.05 with ≥ 20 blocks):
+
+| Null scenario | seed | robust (Wilson 95%) | superseded block t |
+|---|---|---|---|
+| overlapping windows | 101 | 3.00% [2.34%, 3.84%] | 11.2% |
+| heavy tails t3 | 102 | 0.15% [0.05%, 0.44%] | 8.6% |
+| regime persistence ar0.9 | 103 | 4.45% [3.63%, 5.44%] | 24.4% |
+| cross sectional concentration | 104 | 0.15% [0.05%, 0.44%] | 9.2% |
+| missing sessions 40pct plus month gap | 105 | 0.60% [0.34%, 1.05%] | 10.8% |
+| duplicated outcomes lag1to3 | 106 | 2.65% [2.03%, 3.45%] | 21.4% |
+| overlapping event windows | 107 | 3.30% [2.60%, 4.18%] | 11.1% |
+| exactly 20 blocks | 108 | 2.15% [1.60%, 2.88%] | 10.0% |
+| volatility regime switches | 109 | 2.35% [1.77%, 3.11%] | 10.0% |
+| nonstationary variance | 110 | 2.60% [1.99%, 3.39%] | 10.2% |
+| symbol dependence rank ic | 111 | 2.65% [2.03%, 3.45%] | 9.2% |
+
+Selection and tuning:
+
+- Best of 20 correlated null features: 46% raw, 3.0% after BH.
+- Best of 5 horizon definitions on one null: 4.8% raw, 0.8% with Holm, 2.8% with BH.
+
+Power (300 sessions; the true mean shift is in per-session SD units):
+
+| Scenario | 0.1 SD | 0.2 SD | 0.3 SD | 0.5 SD |
+|---|---|---|---|---|
+| overlapping windows | 4% | 14% | 26% | 68% |
+| regime persistence ar0.9 | 3% | 8% | 11% | 22% |
+
+**Limits.** These nulls are synthetic. Under strong persistence, the power to see even a large edge in about 300 sessions is low. That is the honest price of not confirming noise, and it is why evidence graduation needs real forward sessions.
+
+### 13.5 Production effects if deployed
+
+- No BUY is possible until the schema-3 walk-forward reruns on the first closed-market night. The rerun report carries the overlap-robust bounds, the family correction and the timestamp. A BUY after that needs a BH survivor.
+- More cards are edge-gated: they become EDGE_GATED shadow rows and feed the paper learning lane.
+- The shadow ledger freezes a Friday session before Saturday 09:15.
+- F&O and sniper Telegram messages are labelled as research.
+
