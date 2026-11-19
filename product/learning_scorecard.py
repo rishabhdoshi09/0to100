@@ -114,34 +114,69 @@ def auc(scores: Sequence[float], labels: Sequence[int]) -> float | None:
     return (rank_sum - pos * (pos + 1) / 2) / (pos * neg)
 
 
-def session_series_verdict(session_means: Sequence[float], n_obs: int) -> dict[str, Any]:
-    """CI for the mean of per-session means, respecting serial dependence."""
-    sessions = len(session_means)
+def session_series_verdict(session_means: Sequence[float], n_obs: int,
+                           sessions: Sequence[str] | None = None, *,
+                           horizon: int | None = None) -> dict[str, Any]:
+    """CI for the mean of per-session means, respecting OVERLAPPING outcome windows.
+
+    Each session's mean is a 10-session outcome, so sessions fewer than ten
+    apart share outcome days and consecutive blocks still share their
+    boundary. Inference is research.overlap_inference on the sessions' NSE
+    ordinals (strict calendar: an uncovered year is no verdict). A claim
+    needs >= MIN_SESSIONS sessions, >= MIN_N observations AND >= 20
+    independent 10-session blocks; anything less is INSUFFICIENT EVIDENCE.
+    """
+    count = len(session_means)
     out: dict[str, Any] = {
-        "sessions": sessions,
+        "sessions": count,
         "n": int(n_obs),
-        "mean_of_session_means_R": None if not sessions else round(sum(session_means) / sessions, 4),
+        "mean_of_session_means_R": None if not count else round(sum(session_means) / count, 4),
         "ci95_R": None,
         "verdict": INSUFFICIENT,
         "minimum_detectable_edge_R": None,
         "sessions_needed_for_0_10R": None,
+        "independent_blocks": 0,
     }
-    if sessions < 2:
+    if count < 2:
         return out
-    from research.harness import block_bootstrap_mean_ci, min_samples_for_edge
+    if sessions is None or len(sessions) != count:
+        out["reason"] = "SESSION_DATES_UNKNOWN"
+        return out
+    if horizon is None:
+        from core.evaluation_spec import OUTCOME_HORIZON_SESSIONS as horizon  # type: ignore[no-redef]
+    from research.overlap_inference import METHOD, OK, cells_from_pairs, overlap_robust_test
+    from research.intelligence.data.nse_calendar import load_holidays, strict_session_ordinals
 
-    ci = block_bootstrap_mean_ci(list(session_means), n_boot=4000, seed=20261118)
-    out["ci95_R"] = [round(float(ci["ci_lower"]), 4), round(float(ci["ci_upper"]), 4)]
-    out["effective_sessions"] = round(float(ci.get("n_eff") or sessions), 1)
-    sd = _std(session_means) or 0.0
-    if sd > 0:
-        out["minimum_detectable_edge_R"] = round((_Z_ALPHA_ONE_SIDED + _Z_POWER) * sd / math.sqrt(sessions), 4)
-        out["sessions_needed_for_0_10R"] = int(min_samples_for_edge(0.10, sd))
-    if sessions < MIN_SESSIONS or n_obs < MIN_N:
+    try:
+        ordinals = strict_session_ordinals(list(sessions), load_holidays())
+    except Exception:
+        ordinals = None
+    if ordinals is None:
+        out["reason"] = "EXCHANGE_CALENDAR_UNAVAILABLE_OR_NOT_COVERED"
         return out
-    if ci["ci_lower"] > 0:
+    rep = overlap_robust_test(
+        cells_from_pairs((ordinals[str(d)[:10]], float(m)) for d, m in zip(sessions, session_means)),
+        int(horizon))
+    out.update({"independent_blocks": rep["independent_sessions"], "inference": METHOD,
+                "variance_inflation": rep["variance_inflation"],
+                "residual_dependence": rep["residual_dependence"]})
+    if rep["ci95"] is not None:
+        out["ci95_R"] = [round(float(rep["ci95"][0]), 4), round(float(rep["ci95"][1]), 4)]
+    se = rep["se"]
+    if se:
+        mde = (_Z_ALPHA_ONE_SIDED + _Z_POWER) * float(se)
+        out["minimum_detectable_edge_R"] = round(mde, 4)
+        out["sessions_needed_for_0_10R"] = int(math.ceil(count * (mde / 0.10) ** 2))
+    if count < MIN_SESSIONS or n_obs < MIN_N:
+        out["reason"] = f"{count} sessions / {int(n_obs)} observations below the floor"
+        return out
+    if rep["status"] != OK:
+        out["reason"] = rep["reason"]
+        return out
+    lo, hi = rep["ci95"]
+    if lo > 0:
         out["verdict"] = CREDIBLE_POSITIVE
-    elif ci["ci_upper"] < 0:
+    elif hi < 0:
         out["verdict"] = CREDIBLE_NEGATIVE
     else:
         out["verdict"] = NOT_DISTINGUISHABLE
@@ -206,7 +241,7 @@ def _group_stats(trades: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         by_session[t["session"]].append(float(t["net_R"]))
     sessions = sorted(by_session)
     means = [sum(by_session[s]) / len(by_session[s]) for s in sessions]
-    out = session_series_verdict(means, len(trades))
+    out = session_series_verdict(means, len(trades), sessions)
     wins = sum(1 for t in trades if t["won"])
     out["hit_rate"] = round(wins / len(trades), 4) if trades else None
     out["hit_rate_ci95"] = wilson_interval(wins, len(trades))
@@ -230,12 +265,26 @@ def maturity_checker(*, verified_sessions=None, holidays=None, last_completed=No
     """fn(logged_day 'YYYY-MM-DD') -> MATURED | IMMATURE | NOT_YET_VERIFIED.
 
     MATURED: the first ``horizon`` NSE sessions after the signal day have all
-    completed AND each has a verified official bhavcopy on disk. IMMATURE: the
-    calendar says they have not all completed yet. NOT_YET_VERIFIED: they
-    should have completed but a verified bar is missing, or the calendar /
-    verified-dates source is unavailable - never assumed matured.
+    completed AND each has a verified official bhavcopy on disk. IMMATURE: not
+    even a weekdays-only count could have completed them yet. NOT_YET_VERIFIED:
+    everything else that is not provably matured - a verified bar is missing,
+    the verified-dates source is unavailable, or the exchange holiday calendar
+    is unavailable, malformed or does not cover every year the window touches
+    (nse_calendar.calendar_gap). The calendar is never assumed: treating an
+    uncovered year's weekdays as sessions would count holidays as outcome days.
+    ``check.reasons`` counts why rows were NOT_YET_VERIFIED.
     """
+    from collections import Counter
     from datetime import date as _date, timedelta
+
+    reasons: Counter = Counter()
+
+    def _closed(reason: str):
+        def check(_day: str) -> str:
+            reasons[reason] += 1
+            return NOT_YET_VERIFIED
+        check.reasons = reasons  # type: ignore[attr-defined]
+        return check
 
     try:
         if horizon is None:
@@ -244,50 +293,87 @@ def maturity_checker(*, verified_sessions=None, holidays=None, last_completed=No
 
         if holidays is None:
             holidays = CAL.load_holidays()
+        holidays = {str(x)[:10] for x in (holidays or ())}
         if last_completed is None:
             last_completed = CAL.completed_session(CAL._now_ist(), holidays)
         if verified_sessions is None:
             from data.bhavcopy_store import _dates_on_disk
             verified_sessions = _dates_on_disk()
         verified = {d if isinstance(d, _date) else _date.fromisoformat(str(d)[:10]) for d in verified_sessions}
-        is_session = CAL.is_session
     except Exception:
-        return lambda _day: NOT_YET_VERIFIED
+        return _closed("SOURCE_UNAVAILABLE")
+    if not holidays:
+        return _closed("EXCHANGE_CALENDAR_UNAVAILABLE")
     if not verified or last_completed is None:
-        return lambda _day: NOT_YET_VERIFIED
+        return _closed("VERIFIED_SESSIONS_UNAVAILABLE")
     cache: dict[str, str] = {}
 
     def check(day: str) -> str:
         key = str(day)[:10]
         if key in cache:
+            if cache[key] == NOT_YET_VERIFIED:
+                reasons[_why[key]] += 1
             return cache[key]
         try:
-            cur = _date.fromisoformat(key)
+            start = _date.fromisoformat(key)
         except ValueError:
-            cache[key] = NOT_YET_VERIFIED
-            return NOT_YET_VERIFIED
-        window: list = []
-        for _ in range(int(horizon) * 3 + 30):       # bounded walk over the calendar
-            cur += timedelta(days=1)
-            if is_session(cur, holidays):
-                window.append(cur)
-                if len(window) >= int(horizon):
-                    break
-        if len(window) < int(horizon) or window[-1] > last_completed:
-            status = IMMATURE
-        elif all(d in verified for d in window):
-            status = MATURED
+            status, why = NOT_YET_VERIFIED, "UNPARSEABLE_DATE"
         else:
-            status = NOT_YET_VERIFIED
+            earliest, weekdays = start, 0         # weekdays-only: the earliest the window can end
+            while weekdays < int(horizon):
+                earliest += timedelta(days=1)
+                weekdays += earliest.weekday() < 5
+            window = CAL.forward_sessions(start, int(horizon), holidays)
+            if earliest > last_completed:
+                status, why = IMMATURE, ""
+            elif window is None:
+                status, why = NOT_YET_VERIFIED, (CAL.calendar_gap(start, earliest, holidays)
+                                                 or "EXCHANGE_CALENDAR_NOT_COVERED")
+            elif window[-1] > last_completed:
+                status, why = IMMATURE, ""
+            elif all(d in verified for d in window):
+                status, why = MATURED, ""
+            else:
+                status, why = NOT_YET_VERIFIED, "VERIFIED_BAR_MISSING"
         cache[key] = status
+        if status == NOT_YET_VERIFIED:
+            _why[key] = why
+            reasons[why] += 1
         return status
 
+    _why: dict[str, str] = {}
+    check.reasons = reasons  # type: ignore[attr-defined]
     return check
 
 
+def dedupe_decisions(rows: Iterable[Mapping[str, Any]]) -> tuple[list[Mapping[str, Any]], int]:
+    """One tracked decision per (session, symbol): the earliest logged row.
+
+    The same symbol surfaced twice on one session shares one outcome window;
+    counting both would double that observation's weight in the evidence.
+    """
+    best: dict[tuple[str, str], Mapping[str, Any]] = {}
+    order: list[tuple[str, str]] = []
+    dropped = 0
+    for r in rows:
+        key = (str(r.get("logged_at") or "")[:10], str(r.get("symbol") or "").upper())
+        if not key[1]:
+            order.append(("", str(id(r))))
+            best[order[-1]] = r
+            continue
+        if key in best:
+            dropped += 1
+            if str(r.get("logged_at") or "") < str(best[key].get("logged_at") or ""):
+                best[key] = r
+            continue
+        best[key] = r
+        order.append(key)
+    return [best[k] for k in order], dropped
+
+
 def tracked_signal_evidence(rows: Iterable[Mapping[str, Any]], *, maturity=None) -> dict[str, Any]:
-    rows = list(rows)
-    total_rows = len(rows)
+    rows, duplicates = dedupe_decisions(list(rows))
+    total_rows = len(rows) + duplicates
     check = maturity or maturity_checker()
     statuses = [check(str(r.get("logged_at") or "")[:10]) for r in rows]
     counts = {k: statuses.count(k) for k in (MATURED, IMMATURE, NOT_YET_VERIFIED)}
@@ -305,7 +391,7 @@ def tracked_signal_evidence(rows: Iterable[Mapping[str, Any]], *, maturity=None)
         pct_by_session[t["session"]].append(float(t["net_pct"]))
     pct_sessions = sorted(pct_by_session)
     net_pct = session_series_verdict(
-        [sum(pct_by_session[s]) / len(pct_by_session[s]) for s in pct_sessions], len(trades),
+        [sum(pct_by_session[s]) / len(pct_by_session[s]) for s in pct_sessions], len(trades), pct_sessions,
     )
     net_pct = {("mean_of_session_means_pct" if k == "mean_of_session_means_R" else
                 "ci95_pct" if k == "ci95_R" else k): v
@@ -326,8 +412,10 @@ def tracked_signal_evidence(rows: Iterable[Mapping[str, Any]], *, maturity=None)
     return {
         "source": "signal_log (surfaced BUYs, official-bar settlement, core.evaluation_spec)",
         "rows_logged": total_rows,
+        "duplicate_decision_rows_dropped": duplicates,
         "rows_matured": len(rows),
         "maturity": counts,
+        "maturity_not_verified_reasons": dict(getattr(check, "reasons", {}) or {}),
         "maturity_rule": ("first horizon NSE sessions after the signal completed AND each has a verified "
                           "official bhavcopy; otherwise IMMATURE or NOT_YET_VERIFIED (excluded)"),
         "settled_filled": len(trades),
@@ -413,15 +501,38 @@ def trend(trades: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
                            "required_sessions": MIN_SESSIONS_TREND}
     if len(sessions) < MIN_SESSIONS_TREND:
         return out
+    # Each half's error is overlap-robust (10-session windows); each half
+    # needs half of the 20-block floor, so the comparison as a whole rests on
+    # >= 20 independent blocks like every other claim.
+    from core.evaluation_spec import OUTCOME_HORIZON_SESSIONS
+    from research.intelligence.data.nse_calendar import load_holidays, strict_session_ordinals
+    from research.overlap_inference import MIN_INDEPENDENT_BLOCKS, _t_ppf, cells_from_pairs, overlap_robust_test
+
+    ordinals = strict_session_ordinals(sessions, load_holidays())
+    if ordinals is None:
+        out["reason"] = "EXCHANGE_CALENDAR_UNAVAILABLE_OR_NOT_COVERED"
+        return out
     half = len(sessions) // 2
-    early = [sum(by_session[s]) / len(by_session[s]) for s in sessions[:half]]
-    late = [sum(by_session[s]) / len(by_session[s]) for s in sessions[half:]]
-    diff = _mean(late) - _mean(early)
-    se = math.sqrt((_std(early) or 0) ** 2 / len(early) + (_std(late) or 0) ** 2 / len(late))
-    lo, hi = diff - 1.96 * se, diff + 1.96 * se
+    reps = []
+    for part in (sessions[:half], sessions[half:]):
+        reps.append(overlap_robust_test(
+            cells_from_pairs((ordinals[s], sum(by_session[s]) / len(by_session[s])) for s in part),
+            OUTCOME_HORIZON_SESSIONS, min_blocks=MIN_INDEPENDENT_BLOCKS // 2))
+    early, late = reps
+    out["independent_blocks"] = [early["independent_sessions"], late["independent_sessions"]]
+    if early["mean"] is None or late["mean"] is None:
+        return out
+    diff = late["mean"] - early["mean"]
+    out.update({"early_mean_R": round(early["mean"], 4), "late_mean_R": round(late["mean"], 4),
+                "difference_R": round(diff, 4)})
+    if early["status"] != "OK" or late["status"] != "OK":
+        out["reason"] = early["reason"] or late["reason"]
+        return out
+    se = math.sqrt(early["se"] ** 2 + late["se"] ** 2)
+    half_width = _t_ppf(0.975, min(early["df"], late["df"])) * se
+    lo, hi = diff - half_width, diff + half_width
     out.update({
-        "early_mean_R": round(_mean(early), 4), "late_mean_R": round(_mean(late), 4),
-        "difference_R": round(diff, 4), "difference_ci95_R": [round(lo, 4), round(hi, 4)],
+        "difference_ci95_R": [round(lo, 4), round(hi, 4)],
         "verdict": "IMPROVING" if lo > 0 else "DETERIORATING" if hi < 0 else "NO_CREDIBLE_CHANGE",
     })
     return out

@@ -201,3 +201,83 @@ def has_duplicate_sessions(rows) -> bool:
             return True
         seen.add(key)
     return False
+
+
+# ── fail-closed coverage (learning maturity and inference) ────────────────────
+#
+# load_holidays() degrades to weekends-only when no file is usable, and a file
+# that lists only 2026 says nothing about 2025 or 2027. Anything that turns a
+# date range into a count of NSE sessions for EVIDENCE (maturity of a
+# 10-session outcome window, independence of observations) must therefore
+# first prove that the holiday list actually covers every year it touches.
+# An uncovered year is unknown, never "all weekdays are sessions".
+
+#: NSE declares roughly 12-19 trading holidays a year. A year with fewer
+#: listed entries is a stray amendment, not a published calendar.
+MIN_HOLIDAYS_FOR_COVERED_YEAR = 8
+
+
+def covered_years(holidays) -> set[int]:
+    """Calendar years for which the holiday list looks like a full calendar."""
+    counts: dict[int, int] = {}
+    for item in holidays or ():
+        text = str(item)[:10]
+        try:
+            year = date.fromisoformat(text).year
+        except ValueError:
+            continue
+        counts[year] = counts.get(year, 0) + 1
+    return {y for y, n in counts.items() if n >= MIN_HOLIDAYS_FOR_COVERED_YEAR}
+
+
+def calendar_gap(start: date, end: date, holidays) -> str:
+    """'' when every year in [start, end] is covered, else the reason it is not."""
+    if not holidays:
+        return "EXCHANGE_CALENDAR_UNAVAILABLE"
+    years = covered_years(holidays)
+    missing = [y for y in range(min(start, end).year, max(start, end).year + 1) if y not in years]
+    if missing:
+        return "EXCHANGE_CALENDAR_NOT_COVERED:" + ",".join(str(y) for y in missing)
+    return ""
+
+
+def forward_sessions(day: date, count: int, holidays) -> list[date] | None:
+    """The first ``count`` NSE sessions strictly after ``day``.
+
+    None when the calendar cannot vouch for every date walked (unavailable or
+    an uncovered year): the caller must treat the window as unverifiable.
+    """
+    out: list[date] = []
+    cur = day
+    for _ in range(int(count) * 3 + 30):           # bounded walk
+        cur += timedelta(days=1)
+        if is_session(cur, holidays):
+            out.append(cur)
+            if len(out) >= int(count):
+                break
+    if len(out) < int(count) or calendar_gap(day, out[-1], holidays):
+        return None
+    return out
+
+
+def strict_session_ordinals(days, holidays=None) -> dict[str, int] | None:
+    """NSE session number of each day, or None unless the calendar covers them all."""
+    holidays = load_holidays() if holidays is None else holidays
+    try:
+        parsed = sorted({date.fromisoformat(str(d)[:10]) for d in days})
+    except (TypeError, ValueError):
+        return None
+    if not parsed:
+        return {}
+    if calendar_gap(parsed[0], parsed[-1], holidays):
+        return None
+    wanted = {d.isoformat() for d in parsed}
+    out: dict[str, int] = {}
+    n, cur = 0, parsed[0]
+    while cur <= parsed[-1]:
+        if is_session(cur, holidays):
+            n += 1
+        if cur.isoformat() in wanted:
+            out[cur.isoformat()] = n
+        cur += timedelta(days=1)
+    return out

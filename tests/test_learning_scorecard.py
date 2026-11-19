@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import itertools
 import random
 
 from product import learning_scorecard as LS
+
+_SYMBOL_IDS = itertools.count()
 
 _MATURE = lambda _day: LS.MATURED   # these tests measure statistics, not maturation
 
@@ -13,14 +16,28 @@ def _row(session, outcome_pct, *, entry=100.0, stop=95.0, worked=None, score=60.
     if worked is None:
         worked = 1 if outcome_pct > 0 else 0
     return {
-        "symbol": f"S{random.randint(0, 10**6)}", "logged_at": f"{session}T10:00:00",
+        "symbol": f"S{next(_SYMBOL_IDS)}", "logged_at": f"{session}T10:00:00",       # distinct decisions
         "entry_price": entry, "stop_price": stop, "outcome_pct": outcome_pct, "worked": worked,
         "quality_score": score, "archetype": archetype, "regime": regime,
     }
 
 
 def _sessions(n, start_month=1):
-    return [f"2026-{start_month + i // 28:02d}-{i % 28 + 1:02d}" for i in range(n)]
+    """The first ``n`` real NSE sessions of 2026 from ``start_month`` (holidays skipped).
+
+    Real sessions, because the verdicts now place each session on the exchange
+    calendar: outcome windows overlap, so independence is counted in blocks
+    of NSE sessions, never in rows or calendar dates.
+    """
+    from datetime import date, timedelta
+    import research.intelligence.data.nse_calendar as CAL
+
+    holidays, out = CAL.load_holidays(), []
+    day = date(2026, start_month, 1) - timedelta(days=1)
+    while len(out) < n:
+        day = CAL.next_session(day, holidays)
+        out.append(day.isoformat())
+    return out
 
 
 def test_thousands_of_rows_from_few_sessions_make_no_claim():
@@ -33,20 +50,38 @@ def test_thousands_of_rows_from_few_sessions_make_no_claim():
 
 def test_consistent_positive_edge_over_enough_sessions_is_credible():
     random.seed(1)
-    rows = [_row(s, random.gauss(4.0, 1.0)) for s in _sessions(30) for _ in range(10)]
-    assert LS.tracked_signal_evidence(rows, maturity=_MATURE)["overall_net"]["verdict"] == LS.CREDIBLE_POSITIVE
+    rows = [_row(s, random.gauss(4.0, 1.0)) for s in _sessions(210) for _ in range(3)]   # 21 blocks
+    ov = LS.tracked_signal_evidence(rows, maturity=_MATURE)["overall_net"]
+    assert ov["verdict"] == LS.CREDIBLE_POSITIVE and ov["independent_blocks"] >= 20
 
 
 def test_consistent_negative_edge_over_enough_sessions_is_credible_negative():
     random.seed(2)
-    rows = [_row(s, random.gauss(-4.0, 1.0)) for s in _sessions(30) for _ in range(10)]
+    rows = [_row(s, random.gauss(-4.0, 1.0)) for s in _sessions(210) for _ in range(3)]
     assert LS.tracked_signal_evidence(rows, maturity=_MATURE)["overall_net"]["verdict"] == LS.CREDIBLE_NEGATIVE
+
+
+def test_thirty_consecutive_sessions_are_three_windows_not_thirty_observations():
+    """The old floor (20 sessions) claimed on what is ~2-3 independent 10-session windows."""
+    random.seed(9)
+    rows = [_row(s, random.gauss(4.0, 1.0)) for s in _sessions(30) for _ in range(10)]
+    ov = LS.tracked_signal_evidence(rows, maturity=_MATURE)["overall_net"]
+    assert ov["independent_blocks"] <= 4 and ov["verdict"] == LS.INSUFFICIENT
 
 
 def test_noise_around_zero_is_not_distinguishable():
     random.seed(3)
-    rows = [_row(s, random.gauss(0.32, 8.0)) for s in _sessions(30) for _ in range(5)]  # ~0 net of costs
+    rows = [_row(s, random.gauss(0.32, 8.0)) for s in _sessions(210) for _ in range(5)]  # ~0 net of costs
     assert LS.tracked_signal_evidence(rows, maturity=_MATURE)["overall_net"]["verdict"] in {LS.NOT_DISTINGUISHABLE}
+
+
+def test_unknown_or_uncovered_calendar_makes_no_claim(monkeypatch):
+    random.seed(10)
+    rows = [_row(s, random.gauss(4.0, 1.0)) for s in _sessions(210) for _ in range(3)]
+    import research.intelligence.data.nse_calendar as CAL
+    monkeypatch.setattr(CAL, "load_holidays", lambda: {"2026-11-10"})       # a stray amendment, not a calendar
+    ov = LS.tracked_signal_evidence(rows, maturity=_MATURE)["overall_net"]
+    assert ov["verdict"] == LS.INSUFFICIENT and ov["reason"].startswith("EXCHANGE_CALENDAR")
 
 
 def test_costs_are_charged_in_r():
@@ -102,8 +137,11 @@ def test_trend_needs_two_independent_halves():
     rows = [_row(s, 2.0) for s in _sessions(30)]
     trades = [t for t in (LS._settled_trade(r) for r in rows) if t]
     assert LS.trend(trades)["verdict"] == LS.INSUFFICIENT
+    random.seed(11)                                   # 60 sessions: 3 blocks a half, no claim
+    rows = [_row(s, random.gauss(-3 if i < 30 else 4, 0.5)) for i, s in enumerate(_sessions(60))]
+    assert LS.trend([t for t in (LS._settled_trade(r) for r in rows) if t])["verdict"] == LS.INSUFFICIENT
     random.seed(6)
-    rows = [_row(s, random.gauss(-3 if i < 25 else 4, 0.5)) for i, s in enumerate(_sessions(50))]
+    rows = [_row(s, random.gauss(-3 if i < 110 else 4, 0.5)) for i, s in enumerate(_sessions(220))]
     trades = [t for t in (LS._settled_trade(r) for r in rows) if t]
     assert LS.trend(trades)["verdict"] == "IMPROVING"
 
@@ -213,13 +251,21 @@ def _calendar(days):
     return [date.fromisoformat(d) for d in days]
 
 
+def _holidays_2026():
+    import json
+    from pathlib import Path
+    return set(json.loads((Path(__file__).resolve().parents[1] / "data" / "nse_holidays.json").read_text()))
+
+
+_HOLIDAYS_2026 = _holidays_2026()
+
 SESSIONS = ["2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-09", "2026-11-11",  # 10 Nov holiday
             "2026-11-12", "2026-11-13", "2026-11-16", "2026-11-17", "2026-11-18"]
 
 
 def test_maturity_counts_exchange_sessions_and_skips_holidays():
     from datetime import date
-    check = LS.maturity_checker(verified_sessions=_calendar(SESSIONS), holidays={"2026-11-10"},
+    check = LS.maturity_checker(verified_sessions=_calendar(SESSIONS), holidays=_HOLIDAYS_2026,
                                 last_completed=date(2026, 11, 18), horizon=10)
     assert check("2026-11-02") == LS.MATURED                   # 10 sessions 3..17 Nov, holiday skipped
     assert check("2026-11-09") == LS.IMMATURE                  # only 6 sessions completed since
@@ -229,7 +275,7 @@ def test_maturity_counts_exchange_sessions_and_skips_holidays():
 def test_a_missing_official_bar_is_not_yet_verified_never_matured():
     from datetime import date
     verified = _calendar([d for d in SESSIONS if d != "2026-11-12"])
-    check = LS.maturity_checker(verified_sessions=verified, holidays={"2026-11-10"},
+    check = LS.maturity_checker(verified_sessions=verified, holidays=_HOLIDAYS_2026,
                                 last_completed=date(2026, 11, 18), horizon=10)
     assert check("2026-11-02") == LS.NOT_YET_VERIFIED
 
@@ -243,6 +289,31 @@ def test_unavailable_evidence_is_not_yet_verified(monkeypatch):
     assert LS.maturity_checker()("2026-07-01") == LS.NOT_YET_VERIFIED
 
 
+def test_an_unusable_holiday_calendar_fails_closed_never_weekdays():
+    """Every weekday has a 'verified' bar; only the calendar is wrong. Never MATURED."""
+    from datetime import date
+    import pandas as pd
+
+    weekdays = [d.date() for d in pd.bdate_range("2026-01-01", "2027-02-26")]
+    for holidays, reason in ((set(), "EXCHANGE_CALENDAR_UNAVAILABLE"),
+                             ({"2026-11-10"}, "EXCHANGE_CALENDAR_NOT_COVERED:2026"),
+                             ({"2026-11-10", "garbage", "2026-13-40"}, "EXCHANGE_CALENDAR_NOT_COVERED:2026")):
+        check = LS.maturity_checker(verified_sessions=weekdays, holidays=holidays,
+                                    last_completed=date(2026, 11, 18), horizon=10)
+        assert check("2026-11-02") == LS.NOT_YET_VERIFIED, holidays
+        assert dict(check.reasons) == {reason: 1}
+    # a covered year matures; a window reaching into an uncovered year does not
+    check = LS.maturity_checker(verified_sessions=weekdays, holidays=_HOLIDAYS_2026,
+                                last_completed=date(2027, 2, 26), horizon=10)
+    assert check("2026-12-10") == LS.MATURED
+    assert check("2026-12-22") == LS.NOT_YET_VERIFIED
+    assert dict(check.reasons) == {"EXCHANGE_CALENDAR_NOT_COVERED:2027": 1}
+    # with no calendar at all nothing is classified, not even a window still in the future
+    check = LS.maturity_checker(verified_sessions=weekdays, holidays=set(),
+                                last_completed=date(2026, 11, 18), horizon=10)
+    assert check("2026-11-17") == LS.NOT_YET_VERIFIED
+
+
 def test_only_matured_signals_enter_the_statistics_and_exclusions_are_reported():
     rows = [_row("2026-07-01", 3.0), _row("2026-07-02", -4.0), _row("2026-11-12", 5.0), _row("2026-11-13", 1.0)]
     status = {"2026-07-01": LS.MATURED, "2026-07-02": LS.MATURED, "2026-11-12": LS.IMMATURE,
@@ -251,4 +322,15 @@ def test_only_matured_signals_enter_the_statistics_and_exclusions_are_reported()
     assert ev["maturity"] == {LS.MATURED: 2, LS.IMMATURE: 1, LS.NOT_YET_VERIFIED: 1}
     assert ev["rows_logged"] == 4 and ev["rows_matured"] == 2
     assert ev["settled_filled"] == 2
+
+
+def test_a_decision_logged_twice_on_one_session_counts_once():
+    random.seed(12)
+    rows = [_row(s, random.gauss(4.0, 1.0)) for s in _sessions(210) for _ in range(3)]
+    once = LS.tracked_signal_evidence(rows, maturity=_MATURE)
+    copied = LS.tracked_signal_evidence(rows + [dict(r, logged_at=r["logged_at"][:10] + "T14:00:00") for r in rows],
+                                        maturity=_MATURE)
+    assert copied["duplicate_decision_rows_dropped"] == len(rows) and copied["rows_logged"] == 2 * len(rows)
+    for key in ("n", "sessions", "mean_of_session_means_R", "ci95_R", "verdict"):
+        assert copied["overall_net"][key] == once["overall_net"][key], key
 
