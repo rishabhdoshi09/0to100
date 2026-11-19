@@ -356,3 +356,106 @@ def test_shadow_writes_nothing_but_its_own_ledger(tmp_path, frames):
     CS.evaluate(frames.get, maturity=lambda s: LS.MATURED, holidays=HOLIDAYS, path=path)
     after = {p for p in logs_dir().rglob("*") if p.is_file()} if logs_dir().exists() else set()
     assert after == before
+
+
+# ── TOCTOU, crash/restart, timing (2026-11-20 review) ────────────────────────
+
+def _header(session, scan_id="race-scan", status=None, frozen_at="2026-11-18T14:30:00+00:00"):
+    model = CS.model_version({}, 10)
+    return {"session": session, "status": status or CS.FROZEN, "frozen_at": frozen_at,
+            "entry_deadline": "2026-11-19T09:15:00+05:30", "scan_id": scan_id,
+            "scan_completed_at": "2026-11-18T12:30:00+00:00", "model_version": model, "candidates": 0,
+            "payload_sha256": CS._payload_sha(session, model, scan_id, [])}
+
+
+def test_concurrent_threads_cannot_freeze_one_scan_id_twice(tmp_path):
+    import threading
+    path = tmp_path / "shadow.db"
+    CS._write(path, _header("2026-11-01", scan_id="seed"), [])          # schema exists
+    barrier, results = threading.Barrier(8), []
+
+    def worker(i):
+        barrier.wait()
+        results.append(CS._write(path, _header(f"2026-11-{10 + i:02d}"), []))
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert results.count(True) == 1
+    assert results.count("SCAN_ID_ALREADY_FROZEN_FOR_ANOTHER_SESSION") == 7
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM sessions WHERE scan_id='race-scan'").fetchone()[0] == 1
+
+
+def test_concurrent_processes_respect_the_database_boundary(tmp_path):
+    import subprocess, sys
+    path = tmp_path / "shadow.db"
+    CS._write(path, _header("2026-11-01", scan_id="seed"), [])
+    code = ("import sys, json; sys.path.insert(0, %r); from product import challenger_shadow as CS; "
+            "from tests.test_challenger_shadow import _header; "
+            "print(json.dumps(CS._write(__import__('pathlib').Path(%r), _header(sys.argv[1]), [])))")
+    root = str(Path(__file__).resolve().parents[1])
+    procs = [subprocess.Popen([sys.executable, "-c", code % (root, str(path)), f"2026-11-{12 + i:02d}"],
+                              stdout=subprocess.PIPE, text=True, cwd=root) for i in range(4)]
+    outs = [json.loads(p.communicate(timeout=60)[0].strip().splitlines()[-1]) for p in procs]
+    assert outs.count(True) == 1 and outs.count("SCAN_ID_ALREADY_FROZEN_FOR_ANOTHER_SESSION") == 3
+
+
+def test_same_session_writes_stay_idempotent_under_a_race(tmp_path):
+    import threading
+    path = tmp_path / "shadow.db"
+    CS._write(path, _header("2026-11-01", scan_id="seed"), [])
+    barrier, results = threading.Barrier(6), []
+
+    def worker():
+        barrier.wait()
+        results.append(CS._write(path, _header("2026-11-18", scan_id="same"), []))
+
+    threads = [threading.Thread(target=worker) for _ in range(6)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert results.count(True) == 1 and results.count("already_recorded") == 5
+
+
+def test_a_restart_after_a_crash_resumes_without_duplicates(tmp_path, frames, monkeypatch):
+    path = tmp_path / "shadow.db"
+    real = CS._connect
+    calls = {"n": 0}
+
+    def crash_once(p):
+        conn = real(p)
+        calls["n"] += 1
+        if calls["n"] == 1:
+            class Dying:
+                def __getattr__(self, name):
+                    return getattr(conn, name)
+
+                def executemany(self, *a, **k):
+                    raise sqlite3.OperationalError("disk I/O error (simulated power loss)")
+            return Dying()
+        return conn
+
+    monkeypatch.setattr(CS, "_connect", crash_once)
+    with pytest.raises(sqlite3.OperationalError):
+        CS.record_session(_scan(frames), frames.get, clock=EVENING, holidays=HOLIDAYS, path=path)
+    monkeypatch.setattr(CS, "_connect", real)
+    assert _rows(path) == ([], [])
+    assert CS.record_session(_scan(frames), frames.get, clock=EVENING, holidays=HOLIDAYS, path=path)["recorded"] == 8
+    assert CS.record_session(_scan(frames), frames.get, clock=EVENING, holidays=HOLIDAYS,
+                             path=path)["reason"] == "already_recorded"
+
+
+def test_the_margin_cannot_certify_a_scan_completed_after_the_cutoff(tmp_path):
+    path = tmp_path / "shadow.db"
+    h = _header("2026-11-18", scan_id="late-scan")
+    h["scan_completed_at"] = "2026-11-19T03:50:00+00:00"           # 09:20 IST, after the open
+    h["frozen_at"] = "2026-11-18T14:30:00+00:00"                   # a backdated write timestamp
+    assert CS._write(path, h, []) is True
+    rep = CS.evaluate({}.get, maturity=lambda s: LS.MATURED, holidays=HOLIDAYS, path=path)
+    assert rep["session_outcomes"] == {"SCAN_COMPLETED_OUTSIDE_THE_FREEZE_WINDOW": 1}
+
+
+def test_the_deadline_never_depends_on_the_holiday_calendar():
+    friday = date(2026, 11, 20)
+    assert CS.entry_deadline(friday).isoformat() == "2026-11-21T09:15:00+05:30"      # Saturday, not Monday
+    assert CS.entry_deadline(date(2026, 11, 23), set()) == CS.entry_deadline(date(2026, 11, 23), HOLIDAYS)

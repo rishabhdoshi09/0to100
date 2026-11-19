@@ -90,6 +90,8 @@ CREATE TABLE IF NOT EXISTS sessions(
     universe TEXT NOT NULL DEFAULT '{}',
     payload_sha256 TEXT NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS one_session_per_scan_id ON sessions(scan_id)
+    WHERE status = 'FROZEN' AND scan_id <> '';
 CREATE TABLE IF NOT EXISTS predictions(
     session TEXT NOT NULL,
     symbol TEXT NOT NULL,
@@ -172,11 +174,16 @@ def _parse_utc(text: Any) -> datetime | None:
     return stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
 
 
-def entry_deadline(session: date, holidays) -> datetime:
-    """First eligible forward entry for a signal on ``session`` (IST-aware)."""
-    from research.intelligence.data.nse_calendar import next_session
+def entry_deadline(session: date, holidays=None) -> datetime:
+    """Latest instant a freeze for ``session`` can still be prospective (IST-aware).
 
-    return datetime.combine(next_session(session, holidays), time(*ENTRY_OPEN_HM), tzinfo=IST)
+    The next CALENDAR day's 09:15 IST open, never the calendar's predicted
+    next session. An unannounced special session (an exceptional Saturday,
+    say) would make the real first entry earlier than a calendar-based
+    deadline; the next calendar day is never later than any possible entry.
+    ``holidays`` is accepted for compatibility and deliberately unused.
+    """
+    return datetime.combine(session + timedelta(days=1), time(*ENTRY_OPEN_HM), tzinfo=IST)
 
 
 def prospective_gate(scan: Mapping[str, Any] | None, *, now: datetime, holidays) -> dict[str, Any]:
@@ -307,14 +314,27 @@ def build_predictions(session: str, records: Iterable[Mapping[str, Any]],
     return rows, excluded, len(records)
 
 
-def _write(path: Path, header: dict[str, Any], rows: list[dict[str, Any]]) -> bool:
-    """One transaction: marker + predictions, or nothing. False if already recorded."""
+def _write(path: Path, header: dict[str, Any], rows: list[dict[str, Any]]):
+    """One transaction: marker + predictions, or nothing.
+
+    True when written; "already_recorded" when the session exists (same-session
+    idempotency); "SCAN_ID_ALREADY_FROZEN_FOR_ANOTHER_SESSION" when this scan
+    identity is already frozen under another session. Both checks run inside
+    the same BEGIN IMMEDIATE transaction as the insert, and the partial unique
+    index on scan_id enforces the second at the database boundary, so two
+    concurrent writers cannot both pass a check and then both insert.
+    """
     with closing(_connect(path)) as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
             if conn.execute("SELECT 1 FROM sessions WHERE session=?", (header["session"],)).fetchone():
                 conn.execute("ROLLBACK")
-                return False
+                return "already_recorded"
+            scan_id = header.get("scan_id", "")
+            if header["status"] == FROZEN and scan_id and conn.execute(
+                    "SELECT 1 FROM sessions WHERE scan_id=? AND status='FROZEN'", (scan_id,)).fetchone():
+                conn.execute("ROLLBACK")
+                return "SCAN_ID_ALREADY_FROZEN_FOR_ANOTHER_SESSION"
             conn.execute(
                 "INSERT INTO sessions(session,status,reason,hypothesis,schema_version,frozen_at,entry_deadline,"
                 "scan_id,scan_completed_at,model_version,candidates,frozen,exclusions,universe,payload_sha256) "
@@ -357,14 +377,7 @@ def record_session(scan: Mapping[str, Any] | None, ohlcv_fn: Callable[[str], Any
     gate = prospective_gate(scan, now=now, holidays=holidays)
     if not gate["ok"]:
         return {"recorded": 0, "session": gate["session"], "reason": gate["reason"], "retry": gate["retry"]}
-    ledger = path or ledger_path()
-    if ledger.exists():
-        with closing(_connect(ledger)) as conn:
-            reused = conn.execute("SELECT session FROM sessions WHERE scan_id=? AND session<>?",
-                                  (gate["scan_id"], gate["session"])).fetchone()
-        if reused:
-            return {"recorded": 0, "session": gate["session"], "reason": "SCAN_ID_ALREADY_FROZEN_FOR_ANOTHER_SESSION",
-                    "retry": False}
+
     if not session_published:
         return {"recorded": 0, "session": gate["session"], "reason": "OFFICIAL_SESSION_BAR_NOT_PUBLISHED",
                 "retry": True}
@@ -378,8 +391,9 @@ def record_session(scan: Mapping[str, Any] | None, ohlcv_fn: Callable[[str], Any
               "scan_completed_at": gate["scan_completed_at"], "model_version": model,
               "candidates": candidates, "exclusions": excluded, "universe": universe,
               "payload_sha256": _payload_sha(session, model, gate["scan_id"], rows, universe)}
-    if not _write(path or ledger_path(), header, rows):
-        return {"recorded": 0, "session": session, "reason": "already_recorded", "retry": False}
+    written = _write(path or ledger_path(), header, rows)
+    if written is not True:
+        return {"recorded": 0, "session": session, "reason": written or "already_recorded", "retry": False}
     return {"recorded": len(rows), "session": session, "reason": "PROSPECTIVE", "candidates": candidates,
             "exclusions": excluded, "retry": False}
 
@@ -410,7 +424,7 @@ def mark_missed(*, now: datetime, holidays, path: Path | None = None) -> list[st
                   "frozen_at": now.astimezone(timezone.utc).isoformat(), "entry_deadline": deadline.isoformat(),
                   "model_version": {"hypothesis": HYPOTHESIS, "schema_version": SCHEMA_VERSION},
                   "candidates": 0, "payload_sha256": ""}
-        if _write(path, header, []):
+        if _write(path, header, []) is True:
             missed.append(key)
     return missed
 
@@ -443,6 +457,12 @@ def _admissible(meta: Mapping[str, Any], rows: list[Mapping[str, Any]], holidays
         return "DEADLINE_UNKNOWN"
     if frozen is None or frozen >= deadline - FREEZE_MARGIN:
         return "FROZEN_AFTER_ENTRY_DEADLINE"
+    # The margin certifies the WRITE, not the scan: the scan itself must also
+    # have completed before the cutoff (and after the session close).
+    completed = _parse_utc(meta.get("scan_completed_at"))
+    close_at = datetime.combine(date.fromisoformat(str(meta["session"])), time(*SESSION_CLOSE_HM), tzinfo=IST)
+    if completed is None or completed >= deadline - FREEZE_MARGIN or completed < close_at or completed > frozen + timedelta(minutes=5):
+        return "SCAN_COMPLETED_OUTSIDE_THE_FREEZE_WINDOW"
     try:
         model = json.loads(meta.get("model_version") or "{}")
         universe = json.loads(meta.get("universe") or "{}")
