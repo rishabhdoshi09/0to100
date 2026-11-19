@@ -23,6 +23,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 from logger import get_logger
 from core.runtime_paths import logs_dir
@@ -338,6 +339,119 @@ def exit_variant_report(exit_stats: dict) -> dict:
     }
 
 
+# Pre-registered confirmation (2026-11-19). On the forward tracked sample
+# (4,804 BUY signals, 20 sessions, May-Jul 2026) three point-in-time features
+# ranked 10-session excess returns after Benjamini-Hochberg: lower ATR %
+# (IC +0.078, t 4.76), closer to the 52-week high (+0.089, t 3.36), less
+# extended above the 50-DMA (-0.060, t -2.96). quality_score had no skill
+# (+0.040, t 0.94). The walk-forward re-tests exactly these, plus one
+# pre-declared composite, on sessions OUTSIDE that discovery window.
+DISCOVERY_WINDOW = ("2026-05-26", "2026-07-30")
+CONFIRM_FEATURES = ("low_atr", "near_high", "not_extended", "composite")
+MIN_TRADES_PER_DAY_FOR_IC = 5
+
+
+def confirmation_features(hist) -> dict[str, float] | None:
+    """PIT features from bars up to (not including) the trade's first session.
+
+    Signs are oriented so that HIGHER = predicted better, as pre-registered.
+    """
+    try:
+        close = hist["close"].astype(float)
+        high = hist["high"].astype(float)
+        low = hist["low"].astype(float)
+    except Exception:
+        return None
+    if len(close) < 60 or float(close.iloc[-1]) <= 0:
+        return None
+    last = float(close.iloc[-1])
+    prev = close.shift(1)
+    tr = pd.concat([high - low, (high - prev).abs(), (low - prev).abs()], axis=1).max(axis=1)
+    atr_pct = float(tr.iloc[-14:].mean()) / last
+    hi = float(close.iloc[-252:].max())
+    sma50 = float(close.iloc[-50:].mean())
+    if hi <= 0 or sma50 <= 0:
+        return None
+    return {"low_atr": -atr_pct, "near_high": -(hi - last) / hi, "not_extended": -(last / sma50 - 1.0)}
+
+
+def confirmation_report(rows: list[dict]) -> dict:
+    """Per-day Spearman IC of each pre-registered feature vs net R, discovery window excluded."""
+    import math
+
+    lo, hi = DISCOVERY_WINDOW
+    usable = [r for r in rows if not (lo <= r["day"] <= hi)]
+    by_day: dict[str, list[dict]] = {}
+    for r in usable:
+        by_day.setdefault(r["day"], []).append(r)
+    days = {d: rs for d, rs in by_day.items() if len(rs) >= MIN_TRADES_PER_DAY_FOR_IC}
+
+    def ranks(vals):
+        order = sorted(range(len(vals)), key=lambda i: vals[i])
+        out = [0.0] * len(vals)
+        for k, i in enumerate(order):
+            out[i] = float(k)
+        return out
+
+    def spearman(xs, ys):
+        rx, ry = ranks(xs), ranks(ys)
+        mx, my = sum(rx) / len(rx), sum(ry) / len(ry)
+        sxy = sum((a - mx) * (b - my) for a, b in zip(rx, ry))
+        sxx = sum((a - mx) ** 2 for a in rx)
+        syy = sum((b - my) ** 2 for b in ry)
+        return sxy / math.sqrt(sxx * syy) if sxx > 0 and syy > 0 else None
+
+    results, pvals, names = {}, [], []
+    for feat in CONFIRM_FEATURES:
+        ics = []
+        for rs in days.values():
+            if feat == "composite":
+                parts = [ranks([r[f] for r in rs]) for f in ("low_atr", "near_high", "not_extended")]
+                xs = [sum(p[i] for p in parts) for i in range(len(rs))]
+            else:
+                xs = [r[feat] for r in rs]
+            ic = spearman(xs, [r["r"] for r in rs])
+            if ic is not None:
+                ics.append(ic)
+        if len(ics) < 2:
+            results[feat] = {"days": len(ics), "verdict": "INSUFFICIENT EVIDENCE"}
+            continue
+        m = sum(ics) / len(ics)
+        sd = math.sqrt(sum((x - m) ** 2 for x in ics) / (len(ics) - 1))
+        if sd > 0:
+            t = m / (sd / math.sqrt(len(ics)))
+        else:   # identical IC every day: no dispersion, so any non-zero mean is decisive
+            t = math.copysign(1e9, m) if m != 0 else 0.0
+        p = math.erfc(min(abs(t), 50.0) / math.sqrt(2.0))
+        results[feat] = {"days": len(ics), "mean_ic": round(m, 4), "t": round(max(min(t, 1e6), -1e6), 2),
+                         "p_two_sided": round(p, 6)}
+        pvals.append(p)
+        names.append(feat)
+    if pvals:
+        from research.harness import benjamini_hochberg
+
+        bh = benjamini_hochberg(pvals)
+        rejected = [bool(x) for x in bh.get("rejected", [])]
+        for i, feat in enumerate(names):
+            ok = rejected[i] if i < len(rejected) else False
+            res = results[feat]
+            res["bh_significant"] = ok
+            res["verdict"] = (
+                "CONFIRMED" if ok and res["mean_ic"] > 0 else
+                "CONTRADICTED" if ok and res["mean_ic"] < 0 else
+                "NOT_CONFIRMED" if res["days"] >= 20 else "INSUFFICIENT EVIDENCE"
+            )
+    return {
+        "status": "RESEARCH_ONLY",
+        "discovery_window_excluded": list(DISCOVERY_WINDOW),
+        "trades_used": len(usable),
+        "days_used": len(days),
+        "features": results,
+        "note": "Pre-registered 2026-11-19. CONFIRMED is required before a challenger may use a feature; "
+                "even then it reaches PAPER only through the champion/challenger gate.",
+    }
+
+
 def _eval_spec_tag(horizon: int) -> str:
     return f"sim:h{int(horizon)}:be{_BT_BREAKEVEN_PCT:g}:gap"
 
@@ -404,6 +518,7 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
     _calib_version = _calibration_version() if on_trade is not None else ""
     tgt_stats: dict[str, dict] = {}             # target label → aggregate
     exit_stats: dict[str, dict] = {}            # exit variant → aggregate (research only)
+    confirm_rows: list[dict] = []               # pre-registered feature confirmation (research only)
     combo_stats: dict[str, dict] = {}           # exact signal combination → aggregate
 
     for si, sym in enumerate(symbols):
@@ -463,6 +578,10 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                                        fill_price=sim.fill_price, exit_price=sim.exit_price)
                 except Exception:
                     pass          # ledger emission must never break the backtest
+
+            feats = confirmation_features(hist)
+            if feats is not None:
+                confirm_rows.append({"day": day_key, "r": r_mult, **feats})
 
             # Pre-declared exit-construction experiment on the same trade.
             if t + 2 * horizon <= n:
@@ -585,6 +704,7 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
            "combos": combos,
            "target_sweep": target_sweep,
            "exit_variants": exit_variant_report(exit_stats),
+           "feature_confirmation": confirmation_report(confirm_rows),
            "recommended_target_pct": recommended,
            "elapsed_s": round(time.time() - t0, 1)}
     if len(symbols) < MIN_SYMBOLS_TO_SAVE or not report:
