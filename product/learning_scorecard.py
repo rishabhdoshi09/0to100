@@ -57,10 +57,12 @@ _Z_ALPHA_ONE_SIDED, _Z_POWER = 1.6449, 0.8416  # alpha 0.05 one-sided, power 0.8
 # ~0.1% stops turned 0.5% moves into -5R. They stay in the net-% series and are
 # counted and named, never silently dropped.
 MIN_RISK_FRAC_FOR_R = 0.01
-# A signal counts only once its whole outcome horizon has passed (10 sessions
-# ~ 16 calendar days with weekends). Otherwise the newest sessions include only
-# the trades that resolved EARLY (fast stops/targets) - a maturation bias.
-MATURITY_CALENDAR_DAYS = 16
+# Maturation. A signal counts only once its whole outcome horizon has passed;
+# otherwise the newest sessions include only trades that resolved EARLY (fast
+# stops/targets) - a maturation bias. "Passed" is measured in real NSE sessions
+# (exchange calendar, holidays included) AND requires a verified official
+# bhavcopy on disk for each of them; anything unprovable is NOT_YET_VERIFIED.
+MATURED, IMMATURE, NOT_YET_VERIFIED = "MATURED", "IMMATURE", "NOT_YET_VERIFIED"
 
 
 # ── small statistics ─────────────────────────────────────────────────────────
@@ -224,23 +226,72 @@ def _group_stats(trades: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     return out
 
 
-def _matured(row: Mapping[str, Any], today) -> bool:
-    from datetime import date, timedelta
+def maturity_checker(*, verified_sessions=None, holidays=None, last_completed=None, horizon: int | None = None):
+    """fn(logged_day 'YYYY-MM-DD') -> MATURED | IMMATURE | NOT_YET_VERIFIED.
+
+    MATURED: the first ``horizon`` NSE sessions after the signal day have all
+    completed AND each has a verified official bhavcopy on disk. IMMATURE: the
+    calendar says they have not all completed yet. NOT_YET_VERIFIED: they
+    should have completed but a verified bar is missing, or the calendar /
+    verified-dates source is unavailable - never assumed matured.
+    """
+    from datetime import date as _date, timedelta
 
     try:
-        logged = date.fromisoformat(str(row.get("logged_at") or "")[:10])
-    except ValueError:
-        return False
-    return logged + timedelta(days=MATURITY_CALENDAR_DAYS) <= today
+        if horizon is None:
+            from core.evaluation_spec import OUTCOME_HORIZON_SESSIONS as horizon  # type: ignore[no-redef]
+        from research.intelligence.data import nse_calendar as CAL
+
+        if holidays is None:
+            holidays = CAL.load_holidays()
+        if last_completed is None:
+            last_completed = CAL.completed_session(CAL._now_ist(), holidays)
+        if verified_sessions is None:
+            from data.bhavcopy_store import _dates_on_disk
+            verified_sessions = _dates_on_disk()
+        verified = {d if isinstance(d, _date) else _date.fromisoformat(str(d)[:10]) for d in verified_sessions}
+        is_session = CAL.is_session
+    except Exception:
+        return lambda _day: NOT_YET_VERIFIED
+    if not verified or last_completed is None:
+        return lambda _day: NOT_YET_VERIFIED
+    cache: dict[str, str] = {}
+
+    def check(day: str) -> str:
+        key = str(day)[:10]
+        if key in cache:
+            return cache[key]
+        try:
+            cur = _date.fromisoformat(key)
+        except ValueError:
+            cache[key] = NOT_YET_VERIFIED
+            return NOT_YET_VERIFIED
+        window: list = []
+        for _ in range(int(horizon) * 3 + 30):       # bounded walk over the calendar
+            cur += timedelta(days=1)
+            if is_session(cur, holidays):
+                window.append(cur)
+                if len(window) >= int(horizon):
+                    break
+        if len(window) < int(horizon) or window[-1] > last_completed:
+            status = IMMATURE
+        elif all(d in verified for d in window):
+            status = MATURED
+        else:
+            status = NOT_YET_VERIFIED
+        cache[key] = status
+        return status
+
+    return check
 
 
-def tracked_signal_evidence(rows: Iterable[Mapping[str, Any]], *, today=None) -> dict[str, Any]:
-    from datetime import date
-
+def tracked_signal_evidence(rows: Iterable[Mapping[str, Any]], *, maturity=None) -> dict[str, Any]:
     rows = list(rows)
-    today = today or date.today()
-    immature = sum(1 for r in rows if not _matured(r, today))
-    rows = [r for r in rows if _matured(r, today)]
+    total_rows = len(rows)
+    check = maturity or maturity_checker()
+    statuses = [check(str(r.get("logged_at") or "")[:10]) for r in rows]
+    counts = {k: statuses.count(k) for k in (MATURED, IMMATURE, NOT_YET_VERIFIED)}
+    rows = [r for r, st in zip(rows, statuses) if st == MATURED]
     trades = [t for t in (_settled_trade(r) for r in rows) if t is not None]
     never_filled = sum(1 for r in rows if r.get("worked") == -1)
     open_rows = sum(1 for r in rows if r.get("worked") is None)
@@ -274,9 +325,11 @@ def tracked_signal_evidence(rows: Iterable[Mapping[str, Any]], *, today=None) ->
     unlabelled_regime = sum(1 for t in trades if t["regime"] == "UNLABELLED")
     return {
         "source": "signal_log (surfaced BUYs, official-bar settlement, core.evaluation_spec)",
-        "rows_logged": len(rows),
-        "excluded_not_yet_matured": immature,
-        "maturity_rule": f"logged >= {MATURITY_CALENDAR_DAYS} calendar days ago (full 10-session horizon)",
+        "rows_logged": total_rows,
+        "rows_matured": len(rows),
+        "maturity": counts,
+        "maturity_rule": ("first horizon NSE sessions after the signal completed AND each has a verified "
+                          "official bhavcopy; otherwise IMMATURE or NOT_YET_VERIFIED (excluded)"),
         "settled_filled": len(trades),
         "never_filled": never_filled,
         "open_or_unresolved": open_rows,
@@ -611,6 +664,7 @@ def build_scorecard(
     institutional: Mapping[str, Any] | None = None,
     outcome_pipeline: Mapping[str, Any] | None = None,
     include_challengers: bool = True,
+    maturity=None,
 ) -> dict[str, Any]:
     if signal_rows is None:
         signal_rows = load_signal_rows()
@@ -627,7 +681,7 @@ def build_scorecard(
             outcome_pipeline = json.loads(logs_path("product", RESOLUTION_REPORT).read_text())
         except Exception:
             outcome_pipeline = {"status": "NOT_YET_REPORTED"}
-    tracked = tracked_signal_evidence(signal_rows)
+    tracked = tracked_signal_evidence(signal_rows, maturity=maturity)
     trades = tracked.pop("_trades")
     try:
         from product.live_execution_interlock import get_live_execution_state

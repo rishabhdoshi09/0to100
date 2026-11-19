@@ -6,6 +6,8 @@ import random
 
 from product import learning_scorecard as LS
 
+_MATURE = lambda _day: LS.MATURED   # these tests measure statistics, not maturation
+
 
 def _row(session, outcome_pct, *, entry=100.0, stop=95.0, worked=None, score=60.0, archetype="VCP", regime="RISK_ON"):
     if worked is None:
@@ -23,7 +25,7 @@ def _sessions(n, start_month=1):
 
 def test_thousands_of_rows_from_few_sessions_make_no_claim():
     rows = [_row(s, 3.0) for s in _sessions(5) for _ in range(400)]  # 2,000 rows, 5 sessions
-    ev = LS.tracked_signal_evidence(rows)
+    ev = LS.tracked_signal_evidence(rows, maturity=_MATURE)
     assert ev["overall_net"]["n"] == 2000
     assert ev["overall_net"]["sessions"] == 5
     assert ev["overall_net"]["verdict"] == LS.INSUFFICIENT
@@ -32,24 +34,24 @@ def test_thousands_of_rows_from_few_sessions_make_no_claim():
 def test_consistent_positive_edge_over_enough_sessions_is_credible():
     random.seed(1)
     rows = [_row(s, random.gauss(4.0, 1.0)) for s in _sessions(30) for _ in range(10)]
-    assert LS.tracked_signal_evidence(rows)["overall_net"]["verdict"] == LS.CREDIBLE_POSITIVE
+    assert LS.tracked_signal_evidence(rows, maturity=_MATURE)["overall_net"]["verdict"] == LS.CREDIBLE_POSITIVE
 
 
 def test_consistent_negative_edge_over_enough_sessions_is_credible_negative():
     random.seed(2)
     rows = [_row(s, random.gauss(-4.0, 1.0)) for s in _sessions(30) for _ in range(10)]
-    assert LS.tracked_signal_evidence(rows)["overall_net"]["verdict"] == LS.CREDIBLE_NEGATIVE
+    assert LS.tracked_signal_evidence(rows, maturity=_MATURE)["overall_net"]["verdict"] == LS.CREDIBLE_NEGATIVE
 
 
 def test_noise_around_zero_is_not_distinguishable():
     random.seed(3)
     rows = [_row(s, random.gauss(0.32, 8.0)) for s in _sessions(30) for _ in range(5)]  # ~0 net of costs
-    assert LS.tracked_signal_evidence(rows)["overall_net"]["verdict"] in {LS.NOT_DISTINGUISHABLE}
+    assert LS.tracked_signal_evidence(rows, maturity=_MATURE)["overall_net"]["verdict"] in {LS.NOT_DISTINGUISHABLE}
 
 
 def test_costs_are_charged_in_r():
     rows = [_row(s, 0.0, worked=0) for s in _sessions(25)]  # flat gross, 5% stop
-    ov = LS.tracked_signal_evidence(rows)["overall_net"]
+    ov = LS.tracked_signal_evidence(rows, maturity=_MATURE)["overall_net"]
     assert ov["mean_gross_R_naive"] == 0.0
     assert ov["mean_net_R_naive"] < 0  # 0.32% round trip / 5% risk = -0.064R
 
@@ -57,7 +59,7 @@ def test_costs_are_charged_in_r():
 def test_tight_stop_cash_like_signals_are_excluded_from_r_but_counted():
     rows = [_row(s, 3.0) for s in _sessions(25)]
     rows += [dict(_row("2026-07-21", -0.5, entry=1000.0, stop=999.0), symbol="LIQUIDBEES")]
-    ev = LS.tracked_signal_evidence(rows)
+    ev = LS.tracked_signal_evidence(rows, maturity=_MATURE)
     assert ev["overall_net"]["n"] == 25
     assert ev["excluded_from_R_tight_stop"]["n"] == 1
     assert ev["excluded_from_R_tight_stop"]["symbols"] == {"LIQUIDBEES": 1}
@@ -68,7 +70,7 @@ def test_never_filled_and_open_rows_are_not_outcomes():
     rows = [_row("2026-01-01", 2.0)]
     rows.append({**_row("2026-01-02", 0.0), "worked": -1, "outcome_pct": None})
     rows.append({**_row("2026-01-03", 0.0), "worked": None, "outcome_pct": None})
-    ev = LS.tracked_signal_evidence(rows)
+    ev = LS.tracked_signal_evidence(rows, maturity=_MATURE)
     assert (ev["settled_filled"], ev["never_filled"], ev["open_or_unresolved"]) == (1, 1, 1)
     assert ev["fill_rate"] == 0.5
 
@@ -148,7 +150,7 @@ def test_even_perfect_evidence_cannot_make_live_eligible():
     random.seed(7)
     rows = [_row(s, random.gauss(5.0, 0.5), score=90 if random.random() < 0.5 else 50)
             for s in _sessions(60) for _ in range(5)]
-    card = LS.build_scorecard(signal_rows=rows, forward_rows=[], policies=[], outcome_pipeline={},
+    card = LS.build_scorecard(signal_rows=rows, maturity=_MATURE, forward_rows=[], policies=[], outcome_pipeline={},
                               include_challengers=False,
                               institutional={"domains": [{"key": k, "status": "READY"} for k in
                                                          ("data", "operations", "reconciliation",
@@ -196,7 +198,7 @@ def test_home_summary_before_first_snapshot_is_honest(monkeypatch):
 def test_home_summary_never_reads_unproven_evidence_as_an_edge():
     random.seed(8)
     rows = [_row(s, random.gauss(-0.5, 6.0)) for s in _sessions(16) for _ in range(20)]
-    card = LS.build_scorecard(signal_rows=rows, forward_rows=[], policies=[], outcome_pipeline={},
+    card = LS.build_scorecard(signal_rows=rows, maturity=_MATURE, forward_rows=[], policies=[], outcome_pipeline={},
                               include_challengers=False)
     out = LS.home_summary(card)
     assert out["available"] is True
@@ -206,11 +208,47 @@ def test_home_summary_never_reads_unproven_evidence_as_an_edge():
     assert out["blockers"]["FORWARD PAPER READY"]
 
 
-def test_young_signals_are_excluded_until_their_horizon_has_passed():
+def _calendar(days):
     from datetime import date
+    return [date.fromisoformat(d) for d in days]
 
-    old = [_row("2026-07-01", 3.0), _row("2026-07-02", -4.0)]
-    young = [_row("2026-11-12", 5.0)]                       # resolved early, horizon not over
-    ev = LS.tracked_signal_evidence(old + young, today=date(2026, 11, 19))
-    assert ev["excluded_not_yet_matured"] == 1
+
+SESSIONS = ["2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-09", "2026-11-11",  # 10 Nov holiday
+            "2026-11-12", "2026-11-13", "2026-11-16", "2026-11-17", "2026-11-18"]
+
+
+def test_maturity_counts_exchange_sessions_and_skips_holidays():
+    from datetime import date
+    check = LS.maturity_checker(verified_sessions=_calendar(SESSIONS), holidays={"2026-11-10"},
+                                last_completed=date(2026, 11, 18), horizon=10)
+    assert check("2026-11-02") == LS.MATURED                   # 10 sessions 3..17 Nov, holiday skipped
+    assert check("2026-11-09") == LS.IMMATURE                  # only 6 sessions completed since
+    assert check("2026-11-18") == LS.IMMATURE
+
+
+def test_a_missing_official_bar_is_not_yet_verified_never_matured():
+    from datetime import date
+    verified = _calendar([d for d in SESSIONS if d != "2026-11-12"])
+    check = LS.maturity_checker(verified_sessions=verified, holidays={"2026-11-10"},
+                                last_completed=date(2026, 11, 18), horizon=10)
+    assert check("2026-11-02") == LS.NOT_YET_VERIFIED
+
+
+def test_unavailable_evidence_is_not_yet_verified(monkeypatch):
+    from datetime import date
+    assert LS.maturity_checker(verified_sessions=[], holidays=set(), last_completed=date(2026, 11, 18),
+                               horizon=10)("2026-07-01") == LS.NOT_YET_VERIFIED
+    import research.intelligence.data.nse_calendar as CAL
+    monkeypatch.setattr(CAL, "load_holidays", lambda: (_ for _ in ()).throw(OSError("no calendar")))
+    assert LS.maturity_checker()("2026-07-01") == LS.NOT_YET_VERIFIED
+
+
+def test_only_matured_signals_enter_the_statistics_and_exclusions_are_reported():
+    rows = [_row("2026-07-01", 3.0), _row("2026-07-02", -4.0), _row("2026-11-12", 5.0), _row("2026-11-13", 1.0)]
+    status = {"2026-07-01": LS.MATURED, "2026-07-02": LS.MATURED, "2026-11-12": LS.IMMATURE,
+              "2026-11-13": LS.NOT_YET_VERIFIED}
+    ev = LS.tracked_signal_evidence(rows, maturity=lambda d: status[d])
+    assert ev["maturity"] == {LS.MATURED: 2, LS.IMMATURE: 1, LS.NOT_YET_VERIFIED: 1}
+    assert ev["rows_logged"] == 4 and ev["rows_matured"] == 2
     assert ev["settled_filled"] == 2
+
