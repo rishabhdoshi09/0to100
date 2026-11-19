@@ -711,8 +711,9 @@ def score_decision(decision, *, path: str | Path | None = None) -> dict[str, Any
             "live_locked": True,
         }
     try:
-        from product.evidence_intelligence import decision_features
-        p = _score_features(decision_features(decision), model)
+        # Same features the model was trained on (no train/serve skew).
+        from product.evidence_intelligence import learning_features
+        p = _score_features(learning_features(decision)[0], model)
     except Exception:
         p = None
     return {

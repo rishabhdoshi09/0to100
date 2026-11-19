@@ -169,6 +169,24 @@ def decision_features(decision: Decision) -> dict[str, Any]:
     return FS.canonicalize(raw)
 
 
+def learning_features(decision: Decision) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Features for the LEARNING record (freeze + challenger scoring).
+
+    ``decision_features`` plus point-in-time technical features computed from
+    official bars that existed at decision time (product.pit_features), filled
+    only where the decision itself carried no value. The live analog query
+    keeps using ``decision_features`` so current rankings do not change; a
+    model that wants the richer features must earn promotion as a challenger.
+    """
+    base = decision_features(decision)
+    try:
+        from product.pit_features import fill_missing
+
+        return fill_missing(base, decision.symbol, decision.generated_at)
+    except Exception as exc:
+        return base, {"filled": [], "error": type(exc).__name__}
+
+
 def _observation_id(decision_id: str) -> str:
     return f"decision::{decision_id}"
 
@@ -213,11 +231,13 @@ def freeze_decision(
         "thesis_hash": str((decision.provenance or {}).get("thesis_hash") or ""),
         "not_live": True,
     }
+    features, pit = learning_features(decision)
+    meta["pit_features"] = pit
     return snapshot(
         _observation_id(decision.decision_id),
         decision.symbol,
         "DECISION",
-        decision_features(decision),
+        features,
         ts=decision.generated_at,
         reason=decision.state,
         meta=meta,

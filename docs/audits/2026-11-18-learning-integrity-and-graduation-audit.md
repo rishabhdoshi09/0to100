@@ -95,7 +95,15 @@ The resolver itself is sound:
   rows.
 
 So the failure is specific to the production run, and I have not yet
-identified the cause. `update_outcomes` now returns and persists
+identified the cause.
+
+2026-11-19 07:39 IST reproduction: the same code ran on a copy of the
+production database, in a separate process, with each symbol's real bars
+taken from the running API's `/api/chart/{symbol}`. It settled **527 of 607**
+candidates in 29.5 s: 423 resolved, 104 never filled, 78 still inside their
+horizon and 2 stuck (AMIRCHAND, too few bars), with no errors. That rules
+out the code and the data. Only the nightly autonomy process's environment
+remains. `update_outcomes` now returns and persists
 `logs/product/signal_outcome_resolution.json`, with per-row fates, stuck rows
 and their reason, row errors, write errors and fatal errors. The outcome job
 carries this summary. **The first nightly run after deploy will name the
@@ -121,9 +129,24 @@ now refuses any session at or before a position's last mark.
 - **The setup score is not a probability and barely ranks.** `quality_score`
   AUC is 0.511. Read as P(win), its Brier score is 0.424 against a base-rate
   Brier of 0.159 (skill −1.67). The top quintile implies 91% and wins 19.9%.
-- **The ML challenger's features are mostly dead.** 21 of its 25 features are
-  constant zero, which points to a feature-store population gap. Its
-  out-of-fold Brier of 0.237 is about base-rate. It has 0 forward outcomes.
+- **The ML challenger's features had no producer (fixed in this release).**
+  The schema names 25 features. Recommendation cards and saved scan records
+  carry only rsi, volume_ratio and quality_score, with reward_risk derived.
+  Every frozen DECISION observation therefore stored the other 21 as
+  missing, and they became constant zero after imputation (out-of-fold
+  Brier 0.237, about base-rate).
+  - `product/pit_features.py` now computes 8 of them from official bars
+    that existed at decision time: atr_pct, adr_pct, dist_from_high_pct,
+    clv, volume_z, liquidity_cr, dist_20ema_pct and dist_50dma_pct. It
+    uses bars up to the decision date if the decision came after 15:30
+    IST, otherwise up to the previous session. Look-ahead is tested.
+  - These features fill only the frozen learning record and the
+    challenger's scoring, so training and serving see the same input. The
+    live nearest-neighbour analog query is unchanged, so current rankings
+    do not move.
+  - Still unproduced: the cross-sectional features (rel_strength, the
+    rs/sector/volatility percentiles), delivery_pct, breadth, VIX and base
+    geometry.
 - **Regime labels** are missing for every tracked BUY before 16 Jul (69% of
   settled rows). Paper decision context records `regime=UNKNOWN` and
   `sector=UNKNOWN` (RPEL). Learning cannot be regime-conditional yet.
@@ -238,8 +261,10 @@ difference is claimed.
    evidence ends on 25 Jul.
 2. **Run `product.learning_policy_repair --apply`** after deploy, between
    outcome jobs, to correct the inflated counterfactual policies.
-3. **Populate the ML feature store.** 21 of 25 features are zero. Re-validate
-   the challenger out-of-sample before it is allowed to rank anything.
+3. **ML features.** 8 point-in-time features are now produced for new
+   decisions. Next, produce the cross-sectional features, let replay batches
+   accumulate rows with the real features, and re-validate the challenger
+   out-of-sample before it may rank anything.
 4. **Settle real paper trades.** Forward evidence is at 0 settled. Keep paper
    enabled. The learning lane needs gated setups to explore.
 5. **Regime and sector labels on every decision context.**
