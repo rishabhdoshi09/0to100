@@ -5714,6 +5714,76 @@ class TestOneRulebook:
         naive = (1.0 / (40 - 1) * 40) ** 0.5 / 40 ** 0.5           # sd ≈ 1, n = 40
         assert mean == 0.0 and g == 4 and se > 2 * naive
 
+    @staticmethod
+    def _overlapping_evidence(edge=0.08, days=260, per_day=4, seed=0):
+        """Backtest-like trades: each day's R is a 10-session window of shared market noise."""
+        import numpy as np
+        from scan.signal_backtest import _add_cluster
+        rng = np.random.default_rng(seed)
+        shocks = rng.normal(0, 1.0, days + 12)
+        stats = {"clusters": {}}
+        index = {}
+        for d in range(days):
+            day = f"D{d:04d}"
+            index[day] = d
+            common = shocks[d + 1:d + 11].mean()                   # the next ten sessions
+            for _ in range(per_day):
+                _add_cluster(stats["clusters"], day, edge + common + rng.normal(0, 0.3))
+        return stats, index
+
+    def test_buy_gate_lower_bound_respects_overlapping_windows(self):
+        from scan.signal_backtest import LOWER_BOUND_Z, _evidence_fields, clustered_mean_se
+        stats, index = self._overlapping_evidence()
+        mean, se_cl, _ = clustered_mean_se(stats["clusters"])
+        ev = _evidence_fields(stats, index, 10)
+        assert ev["inference"] == "OVERLAP_ROBUST"
+        assert ev["se_r"] > 2 * se_cl                               # day clustering ignores the overlap
+        assert ev["lower_r"] < mean - LOWER_BOUND_Z * se_cl         # strictly harder to call "proven"
+
+    def test_buy_gate_without_a_session_index_takes_the_worst_case(self):
+        from scan.signal_backtest import _evidence_fields, clustered_mean_se
+        stats, _ = self._overlapping_evidence()
+        _, se_cl, _ = clustered_mean_se(stats["clusters"])
+        ev = _evidence_fields(stats, None, 10)
+        assert ev["inference"] == "WORST_CASE_NO_SESSION_INDEX"
+        assert abs(ev["se_r"] - se_cl * 10 ** 0.5) < 1e-3
+        partial = _evidence_fields(stats, {"D0000": 0}, 10)          # a day without an ordinal
+        assert partial["inference"] == "WORST_CASE_NO_SESSION_INDEX"
+
+    def test_overlapping_noise_does_not_prove_a_null_setup(self):
+        """With zero true edge the day-clustered bound 'proves' often; the gate's bound must not."""
+        from scan.signal_backtest import LOWER_BOUND_Z, _evidence_fields, clustered_mean_se
+        old = new = 0
+        for seed in range(120):
+            stats, index = self._overlapping_evidence(edge=0.0, seed=seed)
+            mean, se_cl, _ = clustered_mean_se(stats["clusters"])
+            old += (mean - LOWER_BOUND_Z * se_cl) > 0
+            new += _evidence_fields(stats, index, 10)["lower_r"] > 0
+        assert old >= 25            # the superseded bound: ~30% false "proven" (one-sided 5% nominal)
+        assert new <= 12            # overlap-robust: near the nominal 5%
+
+    def test_copying_trades_into_the_next_session_does_not_prove_an_edge(self):
+        from scan.signal_backtest import _add_cluster, _evidence_fields
+        import numpy as np
+        rng = np.random.default_rng(3)
+        stats = {"clusters": {}}
+        index = {}
+        for d in range(0, 260, 2):                                   # 130 real days, each copied to d+1
+            r = [0.05 + rng.normal(0, 1.0) for _ in range(4)]
+            for day in (d, d + 1):
+                index[f"D{day:04d}"] = day
+                for x in r:
+                    _add_cluster(stats["clusters"], f"D{day:04d}", x)
+        honest = {"clusters": {k: v for k, v in stats["clusters"].items() if int(k[1:]) % 2 == 0}}
+        assert _evidence_fields(stats, index, 10)["se_r"] >= 0.95 * _evidence_fields(honest, index, 10)["se_r"]
+
+    def test_backtest_session_index_is_the_realised_official_sessions(self):
+        from scan.signal_backtest import realised_session_index
+        idx = realised_session_index(["2026-11-09", "2026-11-10", "2026-11-11", "2026-11-14", "2025-03-14"])
+        assert "2026-11-10" not in idx                               # declared 2026 holiday: dropped
+        assert "2026-11-14" not in idx                               # a Saturday is never a session
+        assert idx == {"2025-03-14": 0, "2026-11-09": 1, "2026-11-11": 2}
+
     def test_tracker_resolves_like_the_backtest_and_stamps_its_rulebook(self, tmp_path, monkeypatch):
         import core.signal_outcome_tracker as SOT
         import core.outcome_resolver as OR

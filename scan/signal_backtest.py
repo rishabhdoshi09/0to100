@@ -258,15 +258,41 @@ def clustered_mean_se(clusters: dict) -> tuple[float, float | None, int]:
     return mean, var ** 0.5, g
 
 
-def _evidence_fields(stats: dict) -> dict:
-    mean, se, g = clustered_mean_se(stats.get("clusters") or {})
-    lower = None if se is None else mean - LOWER_BOUND_Z * se
-    return {
-        "expectancy_r_precise": round(mean, 4),
-        "se_r": None if se is None else round(se, 4),
-        "lower_r": None if lower is None else round(lower, 4),
-        "clusters": g,
-    }
+def _evidence_fields(stats: dict, session_index: dict[str, int] | None = None,
+                     horizon: int = _EVAL_HORIZON) -> dict:
+    """The BUY gate's evidence: mean R and a one-sided 95% lower bound.
+
+    Trades on different days are NOT independent when their 10-session
+    windows overlap, so the day-clustered error alone is several-fold too
+    narrow. With the realised NSE session index the bound comes from
+    research.overlap_inference (offset-subsample Minkowski bound, lag-h
+    residual widening, Student t on independent blocks). Without an index the
+    day-clustered error is widened by sqrt(horizon), the worst case for
+    windows of that length; it is never left at the clustered value.
+    """
+    import math
+
+    clusters = stats.get("clusters") or {}
+    mean, se_cl, g = clustered_mean_se(clusters)
+    out = {"expectancy_r_precise": round(mean, 4), "clusters": g,
+           "se_r_day_clustered": None if se_cl is None else round(se_cl, 4)}
+    indexed = session_index is not None and all(str(d)[:10] in session_index for d in clusters)
+    if indexed and g >= 2:
+        from research.overlap_inference import cells_from_clusters, overlap_robust_test
+
+        rep = overlap_robust_test(cells_from_clusters(clusters, session_index), horizon)
+        se, lower = rep["se"], rep["lower_95_one_sided"]
+        out.update({"inference": "OVERLAP_ROBUST", "independent_sessions": rep["independent_sessions"],
+                    "df": rep["df"], "variance_inflation": rep["variance_inflation"]})
+        if rep["reason"] == "DEGENERATE_ZERO_DISPERSION":
+            se, lower = 0.0, mean
+    else:
+        se = None if se_cl is None else se_cl * math.sqrt(max(1, int(horizon)))
+        lower = None if se is None else mean - LOWER_BOUND_Z * se
+        out["inference"] = "WORST_CASE_NO_SESSION_INDEX"
+    out["se_r"] = None if se is None else round(se, 4)
+    out["lower_r"] = None if lower is None else round(lower, 4)
+    return out
 
 
 # Pre-declared exit-construction experiment (research only; never changes the
@@ -307,19 +333,23 @@ def exit_variant_results(entry: float, stop: float, target: float, fwd, horizon:
     return out
 
 
+def _day_clustered_reference(stats: dict) -> dict:
+    mean, se, g = clustered_mean_se(stats.get("clusters") or {})
+    return {"expectancy_r_precise": round(mean, 4), "se_r": None if se is None else round(se, 4),
+            "clusters": g, "note": "reference only: ignores overlapping outcome windows"}
+
+
 def exit_variant_report(exit_stats: dict, *, horizon: int = _EVAL_HORIZON,
                         session_index: dict[str, int] | None = None) -> dict:
     """Net expectancy per pre-declared exit variant, with honest inference.
 
-    Same unit as confirmation_report: trades are pooled into non-overlapping
-    blocks of ``horizon`` NSE sessions (trade-weighted mean R per block); a
-    one-sample Student t on the block means; Benjamini-Hochberg across the
+    Same inference as confirmation_report: trade-weighted mean R with the
+    overlap-robust error of research.overlap_inference (trades a few sessions
+    apart share most of their 10-session window, and adjacent blocks still
+    overlap), Student t on independent blocks, Benjamini-Hochberg across the
     variants. Fewer than MIN_INDEPENDENT_SESSIONS blocks, or zero dispersion,
-    is INSUFFICIENT EVIDENCE. The day-clustered fields are kept for reference;
-    they understate uncertainty because consecutive days share outcome windows.
+    is INSUFFICIENT EVIDENCE. The day-clustered fields are reference only.
     """
-    import math
-
     all_days = sorted({d for st in exit_stats.values() for d in (st.get("clusters") or {})})
     ordinals = session_index if session_index is not None else _session_ordinals(all_days)
     rows: dict = {}
@@ -330,41 +360,25 @@ def exit_variant_report(exit_stats: dict, *, horizon: int = _EVAL_HORIZON,
             continue
         row = {"trades": st["trades"], "win_rate": round(st["wins"] / st["trades"] * 100, 1),
                "scratch_rate": round(st.get("scratches", 0) / st["trades"] * 100, 1),
-               "day_clustered": _evidence_fields(st)}
+               "day_clustered": _day_clustered_reference(st)}
         rows[name] = row
         if ordinals is None:
             row.update({"verdict": "INSUFFICIENT EVIDENCE", "reason": "EXCHANGE_CALENDAR_UNAVAILABLE"})
             continue
-        blocks: dict[int, list[float]] = {}
-        for day, (r_sum, n) in (st.get("clusters") or {}).items():
-            if day in ordinals and n:
-                b = blocks.setdefault(ordinals[day] // max(1, int(horizon)), [0.0, 0])
-                b[0] += float(r_sum)
-                b[1] += int(n)
-        means = [v[0] / v[1] for _, v in sorted(blocks.items()) if v[1]]
-        k = len(means)
-        row["independent_sessions"] = k
-        if k < MIN_INDEPENDENT_SESSIONS:
-            row.update({"verdict": "INSUFFICIENT EVIDENCE",
-                        "reason": f"{k} independent blocks < {MIN_INDEPENDENT_SESSIONS}"})
-            continue
-        m = sum(means) / k
-        sd = math.sqrt(sum((x - m) ** 2 for x in means) / (k - 1))
-        row["block_mean_r"] = round(m, 4)
-        if not math.isfinite(sd) or sd <= 1e-9:
-            row.update({"verdict": "INSUFFICIENT EVIDENCE", "reason": "DEGENERATE_ZERO_DISPERSION"})
-            continue
-        t = m / (sd / math.sqrt(k))
-        try:
-            from scipy.stats import t as student_t
+        from research.overlap_inference import cells_from_clusters, overlap_robust_test
 
-            pval = float(2.0 * student_t.sf(abs(t), df=k - 1))
-        except Exception:
-            pval = math.erfc(abs(t) / math.sqrt(2.0))
-        half = 1.96 * sd / math.sqrt(k)
-        row.update({"t": round(t, 3), "df": k - 1, "p_two_sided": round(pval, 6),
-                    "block_ci95_r": [round(m - half, 4), round(m + half, 4)]})
-        pvals.append(pval)
+        rep = overlap_robust_test(cells_from_clusters(st.get("clusters") or {}, ordinals), horizon)
+        row["independent_sessions"] = rep["independent_sessions"]
+        if rep["mean"] is not None:
+            row["block_mean_r"] = round(rep["mean"], 4)
+        if rep["status"] != "OK":
+            row.update({"verdict": "INSUFFICIENT EVIDENCE", "reason": rep["reason"]})
+            continue
+        row.update({"t": round(rep["t"], 3), "df": rep["df"], "p_two_sided": round(rep["p_two_sided"], 6),
+                    "se_r": round(rep["se"], 4), "variance_inflation": rep["variance_inflation"],
+                    "residual_dependence": rep["residual_dependence"],
+                    "block_ci95_r": [round(x, 4) for x in rep["ci95"]]})
+        pvals.append(rep["p_two_sided"])
         names.append(name)
     if pvals:
         from research.harness import benjamini_hochberg
@@ -382,8 +396,9 @@ def exit_variant_report(exit_stats: dict, *, horizon: int = _EVAL_HORIZON,
     return {
         "variants": rows,
         "status": "RESEARCH_ONLY",
-        "inference": (f"trade-weighted mean R per non-overlapping {int(horizon)}-session NSE block; "
-                      f"Student t (df=blocks-1); BH across variants; >= {MIN_INDEPENDENT_SESSIONS} blocks"),
+        "inference": (f"trade-weighted mean R; overlap-robust error for {int(horizon)}-session windows "
+                      f"(research.overlap_inference); Student t (df=blocks-1); BH across variants; "
+                      f">= {MIN_INDEPENDENT_SESSIONS} independent blocks"),
         "note": ("Same trades, same fills, four pre-declared exits; costs included. A "
                  "construction change reaches PAPER only through a champion/challenger gate."),
     }
@@ -427,7 +442,7 @@ def confirmation_features(hist) -> dict[str, float] | None:
 
 #: A verdict other than INSUFFICIENT EVIDENCE needs at least this many
 #: non-overlapping horizon blocks, i.e. ~independent outcome windows.
-MIN_INDEPENDENT_SESSIONS = 20
+from research.overlap_inference import MIN_INDEPENDENT_BLOCKS as MIN_INDEPENDENT_SESSIONS  # noqa: E402
 
 
 def _average_ranks(values: list[float]) -> list[float]:
@@ -470,48 +485,63 @@ def spearman_ic(xs: list[float], ys: list[float]) -> float | None:
 def _session_ordinals(days: list[str]) -> dict[str, int] | None:
     """NSE session number of each day (holidays and weekends skipped).
 
-    None when the exchange calendar is unavailable: independence cannot then
-    be established, and the caller must not reach a verdict.
+    None unless the exchange holiday calendar is available AND covers every
+    year the days span (nse_calendar.strict_session_ordinals): an uncovered
+    year would count its holidays as sessions and inflate the independent-
+    block count, so the caller must not reach a verdict.
     """
-    from datetime import date as _date, timedelta
-
     try:
-        from research.intelligence.data.nse_calendar import is_session, load_holidays
+        from research.intelligence.data.nse_calendar import load_holidays, strict_session_ordinals
 
-        holidays = load_holidays()
-        parsed = sorted({_date.fromisoformat(str(d)[:10]) for d in days})
+        return strict_session_ordinals(days, load_holidays())
     except Exception:
         return None
-    if not holidays:
-        # load_holidays() silently degrades to weekends-only; counting holidays
-        # as sessions would inflate the independent-block count.
-        return None
-    if not parsed:
-        return {}
-    ordinals: dict[str, int] = {}
-    n, cur = 0, parsed[0]
-    wanted = {d.isoformat() for d in parsed}
-    while cur <= parsed[-1]:
-        if is_session(cur, holidays):
-            n += 1
-        if cur.isoformat() in wanted:
-            ordinals[cur.isoformat()] = n
-        cur += timedelta(days=1)
-    return ordinals
+
+
+def realised_session_index(dates) -> dict[str, int]:
+    """Ordinals from the official bars actually present (the walk-forward's index).
+
+    Every NSE session publishes a bhavcopy, so the union of bar dates across
+    the sampled universe is the realised session list. A session missing from
+    the data can only make two days look CLOSER than they are (more overlap
+    assumed, fewer blocks counted): conservative. Dates the covered holiday
+    calendar rules out (weekends, declared holidays) are dropped.
+    """
+    from datetime import date as _date
+
+    try:
+        from research.intelligence.data.nse_calendar import covered_years, is_session, load_holidays
+
+        holidays = load_holidays()
+        years = covered_years(holidays)
+    except Exception:
+        holidays, years, is_session = set(), set(), None
+    keep = []
+    for d in {str(x)[:10] for x in dates}:
+        try:
+            day = _date.fromisoformat(d)
+        except ValueError:
+            continue
+        if day.weekday() >= 5:
+            continue
+        if is_session is not None and day.year in years and not is_session(day, holidays):
+            continue
+        keep.append(d)
+    return {d: i for i, d in enumerate(sorted(keep))}
 
 
 def confirmation_report(rows: list[dict], *, horizon: int = _EVAL_HORIZON,
                         session_index: dict[str, int] | None = None) -> dict:
     """Out-of-sample test of the pre-registered features (discovery window excluded).
 
-    Inference unit: daily ICs (tie-corrected Spearman, feature vs net R) are
-    averaged within consecutive, non-overlapping blocks of ``horizon`` NSE
-    sessions. Trades a few sessions apart share most of their outcome window,
-    so days are not independent; blocks one horizon long are approximately
-    so. The test is a one-sample Student t on the block means (df = blocks-1),
+    Inference unit: daily ICs (tie-corrected Spearman, feature vs net R),
+    keyed by NSE session. Days a few sessions apart share most of their
+    outcome window, and consecutive non-overlapping blocks still share the
+    sessions at their boundary, so the error is the overlap-robust bound of
+    research.overlap_inference (Student t, df = independent blocks - 1),
     Benjamini-Hochberg across features. A verdict other than INSUFFICIENT
-    EVIDENCE needs >= MIN_INDEPENDENT_SESSIONS blocks and non-zero dispersion:
-    identical block means are a degenerate sample, never a decisive one.
+    EVIDENCE needs >= MIN_INDEPENDENT_SESSIONS blocks and non-zero
+    dispersion: identical daily ICs are a degenerate sample, never decisive.
     """
     import math
 
@@ -541,35 +571,21 @@ def confirmation_report(rows: list[dict], *, horizon: int = _EVAL_HORIZON,
                         "reason": "EXCHANGE_CALENDAR_UNAVAILABLE"})
             results[feat] = res
             continue
-        blocks: dict[int, list[float]] = {}
-        for day, ic in daily:
-            if day in ordinals:
-                blocks.setdefault(ordinals[day] // max(1, int(horizon)), []).append(ic)
-        means = [sum(v) / len(v) for _, v in sorted(blocks.items())]
-        k = len(means)
-        res["independent_sessions"] = k
-        if k < MIN_INDEPENDENT_SESSIONS:
-            res.update({"verdict": "INSUFFICIENT EVIDENCE",
-                        "reason": f"{k} independent blocks < {MIN_INDEPENDENT_SESSIONS}"})
-            results[feat] = res
-            continue
-        m = sum(means) / k
-        sd = math.sqrt(sum((x - m) ** 2 for x in means) / (k - 1))
-        res["mean_ic"] = round(m, 4)
-        if not math.isfinite(sd) or sd <= 1e-9:
-            res.update({"verdict": "INSUFFICIENT EVIDENCE", "reason": "DEGENERATE_ZERO_DISPERSION"})
-            results[feat] = res
-            continue
-        t = m / (sd / math.sqrt(k))
-        try:
-            from scipy.stats import t as student_t
+        from research.overlap_inference import cells_from_pairs, overlap_robust_test
 
-            p = float(2.0 * student_t.sf(abs(t), df=k - 1))
-        except Exception:
-            p = math.erfc(abs(t) / math.sqrt(2.0))
-        res.update({"t": round(t, 3), "df": k - 1, "p_two_sided": round(p, 6)})
+        rep = overlap_robust_test(cells_from_pairs((ordinals[d], ic) for d, ic in daily if d in ordinals), horizon)
+        res["independent_sessions"] = rep["independent_sessions"]
+        if rep["mean"] is not None:
+            res["mean_ic"] = round(rep["mean"], 4)
+        if rep["status"] != "OK":
+            res.update({"verdict": "INSUFFICIENT EVIDENCE", "reason": rep["reason"]})
+            results[feat] = res
+            continue
+        res.update({"t": round(rep["t"], 3), "df": rep["df"], "p_two_sided": round(rep["p_two_sided"], 6),
+                    "se": round(rep["se"], 5), "variance_inflation": rep["variance_inflation"],
+                    "residual_dependence": rep["residual_dependence"]})
         results[feat] = res
-        pvals.append(p)
+        pvals.append(rep["p_two_sided"])
         names.append(feat)
     if pvals:
         from research.harness import benjamini_hochberg
@@ -587,9 +603,9 @@ def confirmation_report(rows: list[dict], *, horizon: int = _EVAL_HORIZON,
     return {
         "status": "RESEARCH_ONLY",
         "discovery_window_excluded": list(DISCOVERY_WINDOW),
-        "inference": (f"tie-corrected Spearman IC per day; means of non-overlapping {int(horizon)}-session "
-                      f"NSE blocks; Student t (df=blocks-1); BH across features; "
-                      f">= {MIN_INDEPENDENT_SESSIONS} blocks and non-zero dispersion required"),
+        "inference": (f"tie-corrected Spearman IC per day; overlap-robust error for {int(horizon)}-session "
+                      f"windows (research.overlap_inference); Student t (df=blocks-1); BH across features; "
+                      f">= {MIN_INDEPENDENT_SESSIONS} independent blocks and non-zero dispersion required"),
         "trades_used": len(usable),
         "days_used": len(days),
         "features": results,
@@ -666,11 +682,16 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
     exit_stats: dict[str, dict] = {}            # exit variant → aggregate (research only)
     confirm_rows: list[dict] = []               # pre-registered feature confirmation (research only)
     combo_stats: dict[str, dict] = {}           # exact signal combination → aggregate
+    seen_dates: set[str] = set()                # realised NSE sessions (official bars present)
 
     for si, sym in enumerate(symbols):
         df = get_ohlcv(sym)
         if df is None or len(df) < 60 + horizon + 20:
             continue
+        try:
+            seen_dates.update(pd.DatetimeIndex(df.index).strftime("%Y-%m-%d"))
+        except Exception:
+            seen_dates.update(str(x)[:10] for x in df.index)
         n = len(df)
         start = max(60, n - horizon - lookback_sessions)
         for t in range(start, n - horizon, sample_step):
@@ -791,6 +812,9 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
         with _state_lock:
             _state["progress"] = si + 1
 
+    # Overlapping 10-session windows: inference needs the session index.
+    session_index = realised_session_index(seen_dates)
+
     # Derive rates & expectancy — true average R across ALL filled trades
     # (wins, losses, AND flats marked at horizon), no survivorship bias.
     report: dict[str, dict] = {}
@@ -815,7 +839,7 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
             "verdict": signal_verdict(closed, exp),
             "flat": s["flat"],
             "by_regime": by_regime,
-            **_evidence_fields(s),
+            **_evidence_fields(s, session_index, horizon),
         }
 
     combos: dict[str, dict] = {}
@@ -823,7 +847,7 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
         if cs["trades"] < COMBO_MIN_TRADES:
             continue
         combos[key] = {"trades": cs["trades"], "wins": cs["wins"], "losses": cs["losses"],
-                       **_evidence_fields(cs)}
+                       **_evidence_fields(cs, session_index, horizon)}
 
     target_sweep = {}
     for label, ts in tgt_stats.items():
@@ -849,8 +873,11 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
            "signals": report,
            "combos": combos,
            "target_sweep": target_sweep,
-           "exit_variants": exit_variant_report(exit_stats),
-           "feature_confirmation": confirmation_report(confirm_rows),
+           "exit_variants": exit_variant_report(exit_stats, horizon=horizon, session_index=session_index),
+           "feature_confirmation": confirmation_report(confirm_rows, horizon=horizon,
+                                                       session_index=session_index),
+           "evidence_inference": {"method": "research.overlap_inference", "session_index": "realised official bars",
+                                  "sessions_indexed": len(session_index)},
            "recommended_target_pct": recommended,
            "elapsed_s": round(time.time() - t0, 1)}
     if len(symbols) < MIN_SYMBOLS_TO_SAVE or not report:
