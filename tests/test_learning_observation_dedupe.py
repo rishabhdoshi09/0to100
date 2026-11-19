@@ -254,3 +254,25 @@ def test_scoreboard_counts_decisions_and_never_labels_unmeasured_trades_measured
     assert board["settled_trades"] == 0
     assert board["evidence_label"] == "INSUFFICIENT EVIDENCE"
     assert board["win_rate"] is None
+
+
+def test_home_learning_impact_counts_decisions_not_cycle_copies(monkeypatch, tmp_path):
+    """Home's LEARNING IMPACT showed 740 missed winners for ~185 decisions (2026-11-19)."""
+    from product import autonomous_learning as AL
+
+    cf = tmp_path / "cf.jsonl"
+    monkeypatch.setenv("QT_COUNTERFACTUALS", str(cf))
+    rows = []
+    for _cycle in range(12):
+        rows.append({"as_of": "2026-09-01", "symbol": "TCS", "reason_code": "DD_GATE_FAILED", "classification": "MISSED_WINNER"})
+        rows.append({"as_of": "2026-09-01", "symbol": "INFY", "reason_code": "DD_GATE_FAILED", "classification": "CORRECT_REJECTION"})
+    cf.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    monkeypatch.setenv("QT_EVIDENCE_PROVENANCE", FE.REAL_FORWARD_MARKET)
+    for cycle in range(5):
+        FE.freeze_cycle({"as_of": "2026-09-01", "cycle_id": f"c{cycle}", "rules_hash": "h",
+                         "rejections": [{"symbol": "TCS", "reason_code": "DD_GATE_FAILED", "decision": "WAIT",
+                                         "entry": 100, "stop": 94, "target": 115}]})
+    counts = AL._evidence_counts()
+    assert counts["missed_winners"] == 1
+    assert counts["correct_rejects"] == 1
+    assert counts["forward_evidence_count"] == 1

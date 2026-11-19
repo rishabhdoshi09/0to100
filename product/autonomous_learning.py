@@ -157,11 +157,18 @@ def _evidence_counts() -> dict[str, Any]:
     replay_n = 0
     classes: dict[str, int] = {}
     try:
-        from product.forward_evidence import REAL_FORWARD_MARKET, load_ledger
+        from product.forward_evidence import REAL_FORWARD_MARKET, decision_unit, load_ledger
         from product.evidence_class import HISTORICAL_REPLAY, PAPER_FORWARD
 
+        # Every paper cycle re-freezes the names it rejects: count each decision
+        # once (provenance + session + symbol + group + reason), never per cycle.
+        seen_units: set[tuple] = set()
         for row in load_ledger():
             provenance = str(row.get("provenance") or row.get("evidence_class") or "")
+            unit = (provenance, *decision_unit(row))
+            if unit in seen_units:
+                continue
+            seen_units.add(unit)
             cls = str(row.get("classification") or "")
             if provenance in {REAL_FORWARD_MARKET, PAPER_FORWARD, "PAPER_FORWARD", "REAL_FORWARD", EVIDENCE_FORWARD}:
                 forward_n += 1
@@ -181,6 +188,7 @@ def _evidence_counts() -> dict[str, Any]:
         from product.counterfactual_learning import (
             AVOIDED_LOSER, CORRECT_REJECTION, GOOD_WAIT, MISSED_WINNER,
         )
+        seen_cf: set[tuple[str, str, str]] = set()
         for line in (cf_path().read_text(encoding="utf-8").splitlines() if cf_path().exists() else []):
             try:
                 item = json.loads(line)
@@ -188,6 +196,14 @@ def _evidence_counts() -> dict[str, Any]:
                 continue
             if not isinstance(item, dict):
                 continue
+            cf_unit = (
+                str(item.get("as_of") or "")[:10],
+                str(item.get("symbol") or "").upper(),
+                str(item.get("reason_code") or ""),
+            )
+            if cf_unit in seen_cf:
+                continue  # the same rejection re-frozen by a later cycle
+            seen_cf.add(cf_unit)
             cls = str(item.get("classification") or "")
             if cls:
                 classes[cls] = classes.get(cls, 0)

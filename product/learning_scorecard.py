@@ -507,7 +507,7 @@ def graduation(card: Mapping[str, Any], *, institutional: Mapping[str, Any] | No
         )
     if domain_ok("data") is not True:
         research_unmet.append("point-in-time data controls not certified (institutional 'data' domain)"
-                              if domains else "point-in-time data certification not evaluated")
+                              if domains else "point-in-time data controls: not in the nightly snapshot (live: /api/institutional-readiness)")
     if cal.get("verdict") not in {"MEASURED"}:
         research_unmet.append(f"setup score calibration: {cal.get('verdict')} (AUC {cal.get('auc')})")
 
@@ -525,7 +525,10 @@ def graduation(card: Mapping[str, Any], *, institutional: Mapping[str, Any] | No
     for key in ("operations", "reconciliation", "execution", "protection", "risk"):
         ok = domain_ok(key)
         if ok is not True:
-            ops_unmet.append(f"institutional '{key}' domain {'not READY' if ok is False else 'not evaluated'}")
+            ops_unmet.append(
+                f"institutional '{key}' domain not READY" if ok is False else
+                f"institutional '{key}' domain not in the nightly snapshot (live: /api/institutional-readiness)"
+            )
     pipeline = card.get("outcome_pipeline") or {}
     if pipeline.get("stuck_past_horizon"):
         ops_unmet.append(f"{pipeline['stuck_past_horizon']} BUY outcomes stuck past horizon")
