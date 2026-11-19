@@ -318,3 +318,94 @@ venv/bin/python -m product.learning_policy_repair          # dry run: review the
 venv/bin/python -m product.learning_policy_repair --apply  # backs up, then rewrites
 curl -s 'http://127.0.0.1:8765/api/learning-scorecard?refresh=true' | head -c 2000
 ```
+
+## 9. Continuation, 19 Nov 2026 (after the GitHub unblock)
+
+Authority: autonomous development and paper-only work. **Not deployed**:
+production is still on `125880a6`. No production learning ledger was
+modified, and live trading stays LOCKED.
+
+### 9.1 Release state
+
+| Item | State |
+|---|---|
+| GitHub branch head | the commit that adds this section (see the final report) |
+| Deployed | `125880a6` (08:22 IST, 19 Nov). Rollback target for the next deploy. |
+| Pushed since then | `63238457` (test fixes), `85ea49f1` (Home learning-impact counts), `741eab96` (production-chain acceptance test), `fbd6101b` (exit experiment, maturity rule), `a4c8e1b7` (bars_held reconciliation), `134e02d1` (pre-registered feature confirmation), `e19ceed7` (report schema 3) |
+| CI | All 5 workflows green on `85ea49f1`. Superseded runs were cancelled. The final SHA's result is in the final report. |
+
+### 9.2 Root causes, with proof
+
+- **BUY outcomes were never settled by the installed handler.** Production installs `outcome_integrity.strict_outcome_resolution` over `outcome_liveness._run_outcome_resolution_light`. Only the replaced `jobs.run_outcome_resolution` called `update_outcomes`.
+  - `jobs.settle_signal_log()` is now called by both handlers.
+  - `research.autonomy.install_runtime_handlers()` is the exact production install sequence.
+  - `tests/test_buy_outcome_acceptance.py` runs that sequence in a fresh interpreter with real frames in `data.bhavcopy_store._store`. A BUY logged on 1 Sep settles to +6% after its target touch, a BUY inside its horizon stays open, one with no bars is reported stuck, a rerun settles nothing twice, and an empty store reports `OFFICIAL_STORE_NOT_LOADED`.
+- **Home LEARNING IMPACT counted copies** (740 missed winners for about 185 decisions). `autonomous_learning._evidence_counts` now counts decision units. There is a regression test.
+- **`bars_held` counted marks, not sessions.** RPEL shows 3 after 5 sessions. `outcome_liveness.reconcile_bars_held` rebuilds the count from official bars at every EOD settlement, so RPEL becomes 5 at the first settlement after deploy. No hand edit is needed.
+- **The scorecard had a maturation bias.** November rows that resolved early were counted while their peers were still open. A signal now counts only 16 or more calendar days after it was logged.
+
+### 9.3 Learning-policy repair: reconciliation (dry run, not applied)
+
+- **Backup:** `logs/backup/learning_policies_20261119_092827_pre_repair_review.json`, SHA-256 `58dfd70f…dd695080`, identical to the live file.
+- **Evidence:** 4,258 forward-ledger rows and 4,101 counterfactual-ledger rows are **815 independent decisions** (706 appear in both ledgers).
+- **Effect:** seven policies get corrected sample sizes and means, and **none changes status**. All stay REJECTED or OBSERVING, so none affects selection before or after.
+- **Gap:** `ENTRY_QUALITY::GOOD_WAIT` (n=18, OBSERVING) cannot be rebuilt because no settled ledger row carries GOOD_WAIT.
+- **Duplicates cannot come back:** the observation ledger claims each unit before it is counted, and the tests pin that. The production claims store is created by the first deduplicated ingest, which is the first EOD after deploy.
+
+### 9.4 Why the system has no edge: diagnosis
+
+The forward tracked sample: 4,628 matured signals with defined R, 24 sessions. Statistics are per session.
+
+| Question | Result | Verdict |
+|---|---|---|
+| Selection: excess 10-session return vs the same-window universe | +0.15%, CI [−0.80, +1.52], t = 0.28 | no detectable skill |
+| Ranking: `quality_score` per-session IC | +0.036 to +0.040, t ≈ 0.9 | no skill |
+| Entry: share of signals whose next open is already above the trigger | 19%; −0.16R vs −0.19R otherwise | not the main problem |
+| Exit: production (breakeven trail, 10 sessions) | −0.086R, CI [−0.21, +0.07]; 29% scratches | — |
+| Exit: no trail, 20 sessions (pre-declared V3) | +0.102R, CI [−0.10, +0.37] | not significant after BH (q = 0.28) |
+
+The 2-year walk-forward (`logs/signal_backtest.json`, about 800 symbols, about 5,000 trades) shows **every setup family negative**: CUP_HANDLE −0.12R, POCKET_PIVOT −0.13R, PRE_BREAKOUT −0.17R, ASC_TRIANGLE −0.34R, all with 110–290 session clusters. A +2% target is reached 76% of the time, yet expectancy is −0.13R. The signals select almost nothing, and the stop/trail construction turns drift into losses.
+
+**Discovery: three point-in-time features rank excess returns** (per-session IC over 20 sessions, BH across 9 candidates):
+
+- lower ATR %: +0.078, t 4.76;
+- closer to the 52-week high: +0.089, t 3.36;
+- less extended above the 50-DMA: oriented +0.060, t 2.96.
+
+RS 20/60, sector strength, volume ratio and liquidity show no skill. These results come from one regime and 20 sessions, so they are **hypotheses, not findings**.
+
+### 9.5 Baseline versus challenger
+
+| Candidate | Evidence today | Verdict |
+|---|---|---|
+| Baseline: `quality_score` ranking with production exits | net −0.086 to −0.127 R/session; AUC 0.509; Brier skill −1.47 | rejected as an edge (no proof of skill) |
+| Exit challengers V1–V3 | forward point estimates −0.06 to +0.10 R, none BH-significant | **INSUFFICIENT EVIDENCE**; pre-registered in the walk-forward (`exit_variants`) |
+| Feature challenger (low ATR, near high, not extended, composite) | in-sample IC t 3–5 | **INSUFFICIENT EVIDENCE** (in-sample only); pre-registered out-of-sample `feature_confirmation`, discovery window excluded |
+| ML challenger | 21 of 25 features had no producer; 8 PIT features added (`bded0395`) | INSUFFICIENT EVIDENCE (0 forward outcomes) |
+
+**Did learning improve decisions?** No. Zero decisions have changed, and no challenger has passed a gate. The schema-3 walk-forward reruns on the first closed-market night after deploy and returns the out-of-sample verdicts. A CONFIRMED feature must still pass champion/challenger before it reaches PAPER.
+
+### 9.6 End-to-end loop status
+
+| Boundary | Status |
+|---|---|
+| Kite data → scan → ranking | runs daily; the evidence gate blocks unproven BUYs (0 BUY today) |
+| Frozen decision → paper execute or reject | runs; 1 open position (RPEL), 0 closed |
+| Outcome settlement: paper book | runs nightly; outage catch-up and `bars_held` reconciliation (from the next deploy) |
+| Outcome settlement: BUY signals | **fixed in code, not deployed**. Backlog backfilled; the acceptance test passes on the production chain. |
+| Learning evidence | deduplicated; repair awaiting approval |
+| Challenger evaluation → policy update | gates in place; no candidate qualifies |
+| Future decision changed by learning | none yet |
+
+**Forward paper evidence:** 0 settled trades. The 29 closed legacy paper trades in `trades.db` (13 Jul–9 Nov, legacy rules, only 4 with a usable stop) are excluded. The legacy engine is dormant in the canonical stack.
+
+### 9.7 Graduation
+
+RESEARCH, FORWARD PAPER and OPERATIONAL are **NOT READY**. SUPERVISED LIVE and AUTONOMOUS LIVE are **NOT ELIGIBLE**. The stage is 0 of 5.
+
+On the operational side, the OMS, reconciliation, protection and risk-governor modules exist but are uncertified. `risk/iron_lock.py` (a legacy kill switch) is unused by the canonical path. The paper kill switch is the owner halt and pause control.
+
+### 9.8 Owner approvals needed
+
+1. **"deploy <final SHA>"** activates BUY settlement, the Home count fix, `bars_held` reconciliation, the maturity rule and the schema-3 rerun. Rollback is to `125880a6`.
+2. **"apply repair"** rewrites the 7 inflated counterfactual policies to independent counts. No status changes; the backup is verified.
