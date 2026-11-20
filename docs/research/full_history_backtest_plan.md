@@ -94,7 +94,15 @@ The first cold run cost about 20 s more, a one-off warm-up.
 
 **Survivorship.** `universe_history.json` records 707 delisted symbols, and 465 symbols whose last bar predates 2026 are still in the store. Delisted names are present, so the store does not look survivorship-biased.
 
-**Independent blocks per signal** (40-symbol sample; 800 symbols would fill more of them). With the corporate-action-covered lookback, signals reach 65–118 blocks against 13–24 at 250 sessions. **Every signal's mean stays negative** at every lookback in the sample, from −0.006R to −0.18R at 1,690 sessions. The longer history narrows the uncertainty around negative or near-zero edges; it shows no positive edge.
+**Independent blocks and means per signal** (40-symbol sample; 800 symbols would fill more of the blocks).
+
+- **250 sessions.** The 7 signals with ≥ 30 trades have 16–24 blocks, and every one has a negative mean.
+- **1,288 sessions (corporate-action covered).** The 13 signals with ≥ 30 trades have 28–118 blocks (10 of them have 65 or more). **Every one has a negative mean**, from −0.012R to −0.19R.
+- **1,690 sessions (includes the uncovered years).** One signal with ≥ 30 trades is marginally positive: VCP, +0.025R on exactly 30 trades and 20 blocks, with a robust lower bound of −0.49R. The other 13 are negative, from −0.006R to −0.18R.
+- **Below the 30-trade floor.** A few signals show positive point estimates: PULLBACK_SUPPORT +0.10R on 25 trades and DELIVERY_SPIKE +0.18R on 11 at 250 sessions; BREAKOUT_52W +0.33R on 8 at 1,690.
+- **Lower bounds.** Every computed robust lower bound is below zero at every lookback.
+
+The longer history narrows the uncertainty around negative or near-zero edges. It shows no provable positive edge.
 
 **Failure modes, quantified:**
 

@@ -966,6 +966,12 @@ The review was delivered at 02:17:50Z and acknowledged at 02:18:36Z. Nothing was
 - **The stated guarantee:** P(any false walk-forward BUY admission in a calendar year) ≤ 5% across all program versions, including selection among them.
 - **Out of scope:** research and challenger programs that cannot admit a BUY reserve no looks. Attestations from an old program still do not verify under the current gate.
 - **Tests:** sequential and parallel mutation of 5 programs (look 53 gets α = 0), best-of-8 programs (Σα ≤ 5%), and a program change.
+- **Legacy ledgers.** A research ledger written by the per-program code has duplicate `(year, look_index)` pairs, so creating the global index raised `IntegrityError`. `verify` failed closed, but `reserve` crashed, and a walk-forward on such a ledger would have crashed on every run. `_connect` now runs a one-time migration in a `BEGIN IMMEDIATE` transaction:
+  - it renumbers every legacy look into one sequence per IST year, in reservation order;
+  - nothing is deleted or refunded, and looks beyond the 52nd get α = 0;
+  - legacy attestations carry no report binding, so they still never verify.
+
+  A test of 3 programs × 30 legacy looks shows the next look is #91 with α = 0. No production instance of this ledger exists, because production `125880a6` predates it.
 
 ### 17.2 Attestation identity and cache (P0)
 
@@ -987,7 +993,10 @@ The review was delivered at 02:17:50Z and acknowledged at 02:18:36Z. Nothing was
 - **Corporate-action coverage starts 2021-08-28.** Only **1,288 sessions (~128 blocks)** are trustworthy, not ~169.
 - **Survivorship looks sound:** 707 delisted symbols are recorded and the ended symbols are retained.
 - **Horizon:** 0.8–1.1% of windows are skipped for not being exactly 10 sessions.
-- **Edge:** with the covered history, signals reach 65–118 blocks in a 40-symbol sample, and **every signal's mean stays negative**.
+- **Edge (40-symbol sample):**
+  - With the covered history (1,288 sessions), the 13 signals with ≥ 30 trades reach 28–118 blocks and **every mean is negative**.
+  - At 1,690 sessions one is marginally positive: VCP, +0.025R on 30 trades, with a robust lower bound of −0.49R.
+  - No computed lower bound is above zero at any lookback.
 
 ### 17.4 No-BUY acceptance (P1)
 
