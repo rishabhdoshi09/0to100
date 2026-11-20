@@ -662,6 +662,12 @@ def _withdraw_uncertified(card: dict[str, Any], certified: set[str] | None) -> d
     out["edge_gated"] = True
     out["evidence_withdrawn"] = True
     out["verdict"] = "WATCH"
+    if str(out.get("canonical_decision") or "").upper() == "BUY":
+        # A projected committee BUY outranks the tier in every decision reader:
+        # keep it for audit, never as the current decision (overnight review E-03).
+        out["published_canonical_decision"] = "BUY"
+        out["canonical_decision"] = ""
+        out["buy_zone_authorized"] = False
     reasons = list(out.get("reasons") or [])
     reasons.append("⚖ BUY withdrawn at read time: not certified by the current evidence — "
                    "not a production entry (research/exploration only)")

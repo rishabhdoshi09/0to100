@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
-from product.decision import BUY, Decision
+from product.decision import BUY, WATCH, Decision
 
 # Demote-only use of historical replay (Invariant 6: negative-edge combos
 # auto-demote to WATCH). Owner's Mac 2026-11-11: EMAMILTD showed BUY while its
@@ -291,6 +291,11 @@ def _best_trades_from_production_thesis(
     return best[: max(0, int(limit))], errors
 
 
+BUY_NOT_CERTIFIED_AT_READ = "BUY_NOT_CERTIFIED_AT_READ"
+_UNCERTIFIED_NOTE = ("⚖ BUY not certified at read time (evidence withdrawn, expired or unavailable, or "
+                     "another scan generation): WATCH research only.")
+
+
 def decision_board(
     *,
     workspace: Mapping[str, Any] | None = None,
@@ -321,6 +326,16 @@ def decision_board(
             "thesis": {},
         }
 
+    # A BUY on the board must be a BUY the authoritative scan read certifies NOW,
+    # for this board's scan generation (cross-review C-8): saved recommendations
+    # keep the verdict they were published with. Withdraw BEFORE enrichment, so
+    # the write-once feature observation never freezes an uncertified BUY
+    # (overnight review E-03).
+    from product.scan_store import current_buy_certificate, withdraw_uncertified_cards
+    certified = current_buy_certificate(str(workspace.get("scan_scanned_at") or ""))
+    workspace = withdraw_uncertified_cards(workspace, certified)
+    withdrawn_symbols = {str(c.get("symbol") or "").upper() for c in _cards(workspace)
+                         if c.get("evidence_withdrawn")}
     decisions = decisions_from_workspace(
         workspace, market_state=market_state, sector_state=sector_state
     )
@@ -330,22 +345,22 @@ def decision_board(
     gaps: dict[str, int] = {}
     all_rows: list[dict[str, Any]] = []
     demoted = 0
-    # A BUY on the board must be a BUY the authoritative scan read certifies NOW,
-    # for this board's scan generation (cross-review C-8): saved recommendations
-    # keep the verdict they were published with.
-    from product.scan_store import current_buy_certificate
-    certified = current_buy_certificate(str(workspace.get("scan_scanned_at") or ""))
+    withdrawn = 0
     for row in ranked:
         decision = row.decision
         intelligence = dict((decision.historical_evidence or {}).get("evidence_intelligence") or {})
         demotion = historical_demotion(intelligence) if decision.state == BUY else ""
         demoted_by = "HISTORICAL_NEGATIVE_EDGE" if demotion else ""
         if decision.state == BUY and not demotion and str(decision.symbol or "").upper() not in certified:
-            demotion = ("⚖ BUY not certified at read time (evidence withdrawn, expired or unavailable, or "
-                        "another scan generation): WATCH research only.")
-            demoted_by = "BUY_NOT_CERTIFIED_AT_READ"
+            demotion = _UNCERTIFIED_NOTE
+            demoted_by = BUY_NOT_CERTIFIED_AT_READ
         shown_state = "WATCH" if demotion else decision.state
         demoted += 1 if demotion else 0
+        # A card withdrawn before enrichment is a WATCH decision already; the row
+        # still says what it was published as and why it is not a BUY now.
+        was_withdrawn = (not demotion and decision.state != BUY
+                         and str(decision.symbol or "").upper() in withdrawn_symbols)
+        withdrawn += 1 if was_withdrawn else 0
         counts[shown_state] = counts.get(shown_state, 0) + 1
         for item in decision.missing_evidence:
             gaps[item.id] = gaps.get(item.id, 0) + 1
@@ -370,6 +385,10 @@ def decision_board(
             payload["engine_state"] = decision.state
             payload["demoted_by"] = demoted_by
             payload["why"] = f"{payload['why']} {demotion}".strip()
+        elif was_withdrawn:
+            payload["engine_state"] = BUY
+            payload["demoted_by"] = BUY_NOT_CERTIFIED_AT_READ
+            payload["why"] = f"{payload['why']} {_UNCERTIFIED_NOTE}".strip()
         try:
             from product.trading_thesis import decision_quality
             payload["trade_quality"] = decision_quality(
@@ -416,14 +435,70 @@ def decision_board(
         # Research-actionable BUY states remain available to historical replay.
         "actionable": sum(1 for r in ranked if r.decision.state == BUY) - demoted,
         "research_actionable": sum(1 for r in ranked if r.decision.state == BUY) - demoted,
-        "historically_demoted": demoted,
+        "historically_demoted": demoted + withdrawn,
         # Paper-actionable is the truth used by readiness/no-trade semantics.
         # Capacity reserves passed all entry gates but are not an execution slot.
         "paper_actionable": sum(
             1 for row in best_trades if bool(row.get("production_execution_slot"))
         ),
+        # Every row shown as BUY (all ranks, not only the first ``limit``), so a
+        # cached board can be re-certified exactly when served (recertify_board).
+        "buy_symbols": sorted({str(r.get("symbol") or "").upper() for r in all_rows
+                               if str(r.get("state") or "") == BUY}),
         "evidence_gaps": dict(sorted(gaps.items(), key=lambda kv: -kv[1])),
     }
+
+
+def recertify_board(board: Mapping[str, Any] | None) -> Any:
+    """A board re-checked against the CURRENT BUY certificate at serve time.
+
+    The board is expensive and cached; a scan or evidence authority that changes
+    after the build must not let the cache serve a withdrawn BUY, even for the
+    one request that triggers the rebuild or while a rebuild is failing
+    (overnight review E-01). Demotes every BUY row the current certificate does
+    not hold, keeps the counts consistent and drops uncertified best trades.
+    """
+    if not isinstance(board, Mapping) or not board.get("available"):
+        return board
+    from product.scan_store import current_buy_certificate
+    certified = current_buy_certificate(str(board.get("scan_scanned_at") or ""))
+    out = dict(board)
+    declared = board.get("buy_symbols")
+    if not isinstance(declared, list):
+        # A board without the BUY roster cannot be re-counted exactly: withhold
+        # every BUY rather than serve one unverified.
+        declared = [str(r.get("symbol") or "").upper() for r in board.get("decisions") or []
+                    if isinstance(r, Mapping) and str(r.get("state") or "") == BUY]
+    declared = {str(s).upper() for s in declared}
+    withdrawn = {s for s in declared if s not in certified}
+    rows = []
+    for row in board.get("decisions") or []:
+        if (isinstance(row, Mapping) and str(row.get("state") or "") == BUY
+                and str(row.get("symbol") or "").upper() not in certified):
+            row = dict(row)
+            row["state"] = WATCH
+            row["engine_state"] = row.get("engine_state") or BUY
+            row["demoted_by"] = BUY_NOT_CERTIFIED_AT_READ
+            row["why"] = f"{row.get('why') or ''} {_UNCERTIFIED_NOTE}".strip()
+        rows.append(row)
+    out["decisions"] = rows
+    if withdrawn:
+        n = len(withdrawn)
+        counts = dict(board.get("counts") or {})
+        counts[BUY] = max(0, int(counts.get(BUY, 0)) - n)
+        if not counts[BUY]:
+            counts.pop(BUY)
+        counts[WATCH] = int(counts.get(WATCH, 0)) + n
+        out["counts"] = counts
+        for key in ("actionable", "research_actionable"):
+            out[key] = max(0, int(board.get(key) or 0) - n)
+        out["historically_demoted"] = int(board.get("historically_demoted") or 0) + n
+        out["buy_symbols"] = sorted(declared - withdrawn)
+    best = [b for b in board.get("best_trades") or []
+            if isinstance(b, Mapping) and str(b.get("symbol") or "").upper() in certified]
+    out["best_trades"] = best
+    out["paper_actionable"] = sum(1 for b in best if bool(b.get("production_execution_slot")))
+    return out
 
 
 def _scan_membership(symbol: str) -> tuple[dict[str, Any] | None, dict[str, Any]]:
@@ -538,8 +613,13 @@ def decision_why(
         except Exception:
             workspace = None
 
+    # The same read-time certificate as the board, before enrichment: a withdrawn
+    # BUY is explained as the WATCH it is now (overnight review E-03).
+    from product.scan_store import current_buy_certificate, withdraw_uncertified_cards
+    read_workspace = withdraw_uncertified_cards(
+        workspace, current_buy_certificate(str((workspace or {}).get("scan_scanned_at") or "")))
     decisions = decisions_from_workspace(
-        workspace, market_state=market_state, sector_state=sector_state
+        read_workspace, market_state=market_state, sector_state=sector_state
     )
     match = next((d for d in decisions if d.symbol == wanted), None)
     if match is None:

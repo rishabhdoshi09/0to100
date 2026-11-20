@@ -1389,6 +1389,20 @@ def run_reco_paper_cycle(
         from risk.portfolio_risk import account_exposure_gate, account_mutation_lock
         in_lock_saved = True
         with account_mutation_lock():
+            if (certified is not None
+                    and str((decision.card or {}).get("lane") or "") != EXPLORATION
+                    and str(decision.symbol or "").upper() not in _current_scan_certificate(payload)):
+                # The certificate read before ranking can be superseded by a scan
+                # published mid-cycle. Re-read it here, at the linearization point
+                # of the entry: a production open happens only while the CURRENT
+                # authoritative scan still certifies this BUY (overnight review E-02).
+                fail = decision.as_dict()
+                fail["decision"] = BLOCK
+                fail["reason_code"] = EVIDENCE_WITHDRAWN
+                fail["detail"] = "the current scan no longer certifies this BUY at execution time"
+                fail["group"] = "REJECTED"
+                rejections.append(fail)
+                continue
             if str((decision.card or {}).get("lane") or "") == EXPLORATION:
                 # Re-check and reserve the day's exploration slot under the lock,
                 # before the fill: the quota can neither be raced nor lost.

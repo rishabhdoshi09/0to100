@@ -115,9 +115,16 @@ def test_home_rechecks_committee_wal_verdict_after_cached_discovery(tmp_path, mo
         "best_trades": [{"symbol": "AAA", "discovery_decision": "ENTER_NOW"},
                         {"symbol": "PENDING", "discovery_decision": "ENTER_NOW"}],
     })
+    # This test is about the committee WAL; the BUY certificate is held fixed
+    # (and, last, withdrawn: overnight review E-03).
+    certified = {"AAA", "PENDING"}
+    monkeypatch.setattr("product.scan_store.current_buy_certificate", lambda _at: set(certified))
     writer = _candidate_db(path)
     try:
         assert [r["symbol"] for r in _canonical_best_trade_rows(history_current=True)] == ["AAA"]
+        certified.clear()
+        assert _canonical_best_trade_rows(history_current=True) == []
+        certified.update({"AAA", "PENDING"})
         writer.execute("ALTER TABLE candidates ADD COLUMN entry_state TEXT")
         writer.execute("UPDATE candidates SET entry_state='WAIT_EVIDENCE'")
         writer.commit()

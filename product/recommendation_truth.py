@@ -108,13 +108,31 @@ def _wait_trigger(candidate: Mapping[str, Any]) -> dict[str, Any]:
     return dict(parsed) if isinstance(parsed, Mapping) else {}
 
 
+BUY_WITHDRAWN_AT_READ = "BUY_WITHDRAWN_AT_READ"
+
+
+def _certificate(scan_run_id: str) -> set[str]:
+    """The read-time BUY certificate for this scan generation; empty (fail closed) on any error."""
+    try:
+        from product.scan_store import current_buy_certificate
+        return current_buy_certificate(scan_run_id)
+    except Exception:
+        return set()
+
+
 def project_candidate_truth(
     card: Mapping[str, Any],
     *,
     scan_run_id: str,
     candidate: Mapping[str, Any] | None,
+    certified: set[str] | None = None,
 ) -> dict[str, Any]:
     """Return UI fields for one card without mutating the recommendation evidence.
+
+    ``certified`` is the read-time BUY certificate (scan_store.current_buy_certificate).
+    When given, a frozen committee BUY the current scan no longer certifies is NOT
+    projected as the current decision: it stays in the audit fields
+    (``published_decision``, ids) with status BUY_WITHDRAWN_AT_READ (overnight review E-03).
 
     A row is canonical only when all three pieces line up with the current scan:
     ``scan_run_id``, ``recommendation_id`` and the decision-id suffix written by
@@ -177,6 +195,21 @@ def project_candidate_truth(
         base["decision_match_scope"] = "EXACT_SCAN_CANDIDATE_ONLY"
         return base
 
+    if decision == "BUY" and certified is not None and symbol not in certified:
+        base.update({
+            "decision_truth_status": BUY_WITHDRAWN_AT_READ,
+            "decision_match_scope": "EXACT_SCAN_RUN",
+            "published_decision": decision,
+            "candidate_id": candidate.get("candidate_id"),
+            "opportunity_id": candidate.get("opportunity_id"),
+            "recommendation_id": recommendation_id,
+            "decision_id": decision_id,
+            "paper_intent_id": candidate.get("paper_intent_id"),
+            "outcome_id": candidate.get("outcome_id"),
+            "canonical_execution_state": str(candidate.get("execution_state") or ""),
+            "decision_reason_code": BUY_WITHDRAWN_AT_READ,
+        })
+        return base
     base.update({
         "canonical_decision": decision,
         "decision_truth_status": "CANONICAL_CURRENT_SCAN",
@@ -205,7 +238,8 @@ def decorate_current_recommendation(card: Mapping[str, Any]) -> dict[str, Any]:
     scan_run_id = current_scan_run_id()
     symbol = str(card.get("symbol") or "").upper()
     candidate = candidates_for_current_scan(scan_run_id).get(symbol) if scan_run_id and symbol else None
-    return project_candidate_truth(card, scan_run_id=scan_run_id, candidate=candidate)
+    return project_candidate_truth(card, scan_run_id=scan_run_id, candidate=candidate,
+                                   certified=_certificate(scan_run_id))
 
 
 def project_workspace_truth(workspace: Mapping[str, Any]) -> dict[str, Any]:
@@ -218,10 +252,13 @@ def project_workspace_truth(workspace: Mapping[str, Any]) -> dict[str, Any]:
     except (sqlite3.Error, OSError):
         candidates, unavailable = {}, True
 
+    certified = _certificate(scan) if scan and scan == current else None
+
     def decorate(card: Mapping[str, Any]) -> dict[str, Any]:
         truth = project_candidate_truth(
             card, scan_run_id=scan if scan == current else "",
             candidate=candidates.get(str(card.get("symbol") or "").upper()),
+            certified=certified,
         )
         if unavailable:
             truth["decision_truth_status"] = "TRUTH_UNAVAILABLE"

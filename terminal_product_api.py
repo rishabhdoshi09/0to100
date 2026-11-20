@@ -769,10 +769,15 @@ def _build_decision_board(limit: int) -> dict[str, Any]:
 def decisions_board(limit: int = 40) -> dict[str, Any]:
     """The canonical ranked decision board. Reads the saved scan, never runs one."""
     try:
+        from product.decision_service import recertify_board
+
         cap = max(1, min(int(limit or 40), 500))
-        return DECISION_BOARD_CACHE.get(
+        # The enrichment is cached; the BUY certificate is not. Every response,
+        # including a stale one served while a rebuild runs or fails, is checked
+        # against the current scan and evidence authority (overnight review E-01).
+        return recertify_board(DECISION_BOARD_CACHE.get(
             ("board", cap), lambda: _build_decision_board(cap), identity=_decision_board_identity,
-        )
+        ))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Decision board failed: {exc}") from exc
 

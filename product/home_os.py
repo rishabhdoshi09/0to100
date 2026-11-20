@@ -214,6 +214,7 @@ def _canonical_best_trade_rows(*, history_current: bool, limit: int = 5) -> list
 
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
+    certified: set[str] | None = None
     for raw in gate.get("best_trades") or []:
         if not isinstance(raw, Mapping):
             continue
@@ -222,8 +223,11 @@ def _canonical_best_trade_rows(*, history_current: bool, limit: int = 5) -> list
         if not symbol or symbol in seen:
             continue
         if scan_run_id:
-            from product.recommendation_truth import project_candidate_truth
-            truth = project_candidate_truth(row, scan_run_id=scan_run_id, candidate=candidates.get(symbol))
+            from product.recommendation_truth import _certificate, project_candidate_truth
+            if certified is None:
+                certified = _certificate(scan_run_id)
+            truth = project_candidate_truth(row, scan_run_id=scan_run_id, candidate=candidates.get(symbol),
+                                            certified=certified)
             # Discovery is cached independently of committee WAL commits. A
             # pending/WAIT/AVOID verdict cannot inherit its earlier eligibility.
             if truth["canonical_decision"] != "BUY":
