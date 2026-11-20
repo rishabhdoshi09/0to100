@@ -166,11 +166,28 @@ def apply_plan(report: Mapping[str, Any], *, backup_dir: Path | None = None) -> 
     backup_dir = backup_dir or policy_file.parent.parent / "backup"
     backup_dir.mkdir(parents=True, exist_ok=True)
     backup = backup_dir / f"{policy_file.stem}_{stamp}_pre_independent_rebuild.json"
-    if policy_file.exists():
-        shutil.copy2(policy_file, backup)
     ledger = LO.ledger_path_for(policy_file)
     with LO.writer_lock(ledger):       # the one writer protocol of the live store (L-04)
+        # The plan describes the ledgers as they were when it was made. Rebuilt
+        # inside the lock from the same inputs, it must be identical, or an
+        # observation committed since would be overwritten (verification review
+        # QT-04): refuse, write nothing, and let the owner re-plan.
+        fresh = plan(forward_path=Path(report["forward_path"]), cf_path=Path(report["counterfactual_path"]),
+                     policy_file=policy_file)
+        if _plan_signature(fresh) != _plan_signature(report):
+            raise StalePlan("the ledgers or policies changed since this plan was made; re-run the dry run")
+        if policy_file.exists():
+            shutil.copy2(policy_file, backup)          # the backup at the same boundary as the write
         return _apply_plan_locked(report, policy_file, ledger, backup)
+
+
+class StalePlan(RuntimeError):
+    """A repair plan no longer matches the ledgers it was computed from."""
+
+
+def _plan_signature(report: Mapping[str, Any]) -> list[tuple]:
+    return [(c.get("policy_id"), c.get("stored_n"), c.get("independent_n"), c.get("expectancy_R"),
+             c.get("stored_expectancy_R")) for c in report.get("changes") or []]
 
 
 def _apply_plan_locked(report: Mapping[str, Any], policy_file: Path, ledger: Path, backup: Path) -> dict[str, Any]:

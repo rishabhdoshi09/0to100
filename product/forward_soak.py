@@ -218,6 +218,38 @@ def settle_pending_from_market(
     floors: Mapping[str, int] | None = None,
     policy_path=None,
 ) -> dict[str, Any]:
+    """Settle under ONE cross-process settlement lock (see _settle_pending_locked).
+
+    Two settlers (the EOD job and the autonomous cycle) must not interleave: a
+    stale one would compute another outcome for a row the other already
+    committed, replace its still-pending learning event and then quarantine
+    it, leaving a committed outcome with no replayable event (verification
+    review QT-02). The pending rows are read fresh INSIDE the lock. Not
+    re-entrant: never call it from inside a settlement.
+    """
+    import fcntl
+
+    from product.forward_evidence import ledger_path as fwd_path
+
+    ledger = Path(fwd_path())
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    with open(ledger.with_name(ledger.name + ".settle.lock"), "a+") as fh:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            return _settle_pending_locked(horizon=horizon, outcome_fn=outcome_fn, later_entered=later_entered,
+                                          floors=floors, policy_path=policy_path)
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+def _settle_pending_locked(
+    *,
+    horizon: int = SETTLE_HORIZON,
+    outcome_fn: Callable[[str, str, Mapping[str, Any]], Mapping[str, Any] | None] | None = None,
+    later_entered: Mapping[str, bool] | None = None,
+    floors: Mapping[str, int] | None = None,
+    policy_path=None,
+) -> dict[str, Any]:
     """Rejected / waited / not-surfaced names get a classification when bars exist.
 
     Each rejection is judged as a taken trade would be (counterfactual_outcome:

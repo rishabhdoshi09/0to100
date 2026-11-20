@@ -762,3 +762,167 @@ def test_l08_no_archive_means_the_credit_stays_pending(monkeypatch):
     freeze_decision(symbol="TCS", decision="WAIT", reason_code="WAIT_FOR_PULLBACK",
                     entry=100, stop=94, target=115, as_of="2026-09-01")
     assert PLL.note_later_entry("TCS", as_of="2026-09-03")["updated"] == 0
+
+
+# ── Verification pass (GPT, 38429d98..f0ccf35a): QT-01..QT-05 ───────────────────
+
+def test_qt01_ca_restart_preserves_unresolved_factor_conflict(tmp_path, monkeypatch):
+    import json
+    from datetime import date
+    from data import bhavcopy_store as bs, corporate_actions_resilient as ca
+    from tests.test_corporate_actions_resilient import _event
+
+    today = date(2026, 8, 28)
+    events, coverage = tmp_path / "events.json", tmp_path / "coverage.json"
+    start = ca.build_windows(today=today, years=1)[0].start
+    events.write_text(json.dumps([_event(ex_date=str(start), factor=2)]))
+    monkeypatch.setattr(bs, "reload_corporate_actions", lambda: None)
+
+    def fetch(lo, hi):
+        if lo == start:
+            return [_event(ex_date=str(lo), factor=3)]
+        return [_event(symbol="OTHER", ex_date=str(lo))]
+
+    args = dict(years=1, today=today, events_path=events, coverage_path=coverage)
+    run = dict(nse_json_fetcher=fetch, nse_csv_fetcher=lambda s, e: [], bse_fetcher=lambda s, e: [],
+               sleep_fn=lambda _s: None, budget_s=30)
+    atomic, writes = ca._atomic_json, []
+
+    def interrupt(path, value):
+        if path == events:
+            writes.append(1)
+            if len(writes) == 2:
+                raise OSError("interrupted after first window commit")
+        return atomic(path, value)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ca, "_atomic_json", interrupt)
+        with pytest.raises(OSError):
+            ca.refresh_events_resilient(**args, **run)
+    assert ca.coverage_status(**args)["unresolved_conflicts"] == 1
+    ca.refresh_events_resilient(**args, **run)
+    status = ca.coverage_status(**args)
+    # (Readiness gates on conflicts in the installed equity-filter wrapper.)
+    assert status["unresolved_conflicts"] == 1
+    assert "ABC" not in json.dumps(json.loads(events.read_text()))      # neither factor is applied
+
+
+def test_qt01_a_later_single_factor_fetch_does_not_resolve_a_conflict():
+    from data import corporate_actions_resilient as ca
+    from tests.test_corporate_actions_resilient import _event
+
+    prior = [{"symbol": "ABC", "ex_date": "2026-01-15", "type": "bonus", "factors": [2.0, 3.0]}]
+    merged, conflicts = ca.merge_verified_events([], [_event(factor=3.0)], prior)
+    assert merged == [] and len(conflicts) == 1 and conflicts[0]["factors"] == [2.0, 3.0]
+
+
+def test_qt02_two_settlers_never_interleave(monkeypatch):
+    import threading
+    from product import forward_evidence as fe, forward_soak as fs, learning_observations as lo
+    from tests.evidence_fixtures import rulebook_outcome
+    from tests.test_learning_exactly_once import _ledger, _n
+
+    _review_freeze()
+    a_started, b_inside = threading.Event(), threading.Event()
+    results = {}
+
+    def b_outcome(*args):
+        b_inside.set()                         # B holds the settlement lock, mid-measurement
+        a_started.wait(2)
+        return rulebook_outcome(0.6, "WIN")
+
+    def settler_a():
+        a_started.set()
+        results["a"] = fs.settle_pending_from_market(outcome_fn=lambda *a: rulebook_outcome(-0.4, "LOSS"))
+
+    b = threading.Thread(target=lambda: results.setdefault("b", fs.settle_pending_from_market(outcome_fn=b_outcome)))
+    b.start()
+    assert b_inside.wait(5)
+    a = threading.Thread(target=settler_a)
+    a.start()
+    b.join(10)
+    a.join(10)
+    (row,) = fe.load_ledger()
+    assert row["later_outcome"]["counterfactual_R"] == pytest.approx(0.6)     # B committed; A saw it settled
+    assert results["a"]["updated"] == 0
+    assert (_n(), lo.outbox_counts(_ledger())) == (1, {lo.DONE: 1})
+
+
+def test_qt03_legacy_unit_claim_cannot_resume_from_another_decision(monkeypatch):
+    from product import learning_observations as lo, paper_learning_loop as pll
+    from product.counterfactual_learning import settle_rulebook
+    from tests.evidence_fixtures import rulebook_outcome
+    from tests.test_learning_exactly_once import _n
+
+    reason = "EVIDENCE_POLICY_BLOCK"
+    base = dict(symbol="TCS", as_of="2026-09-01", reason_code=reason, evidence={"setup_label": "VCP"})
+    loss = settle_rulebook(dict(base, decision_id="first"), rulebook_outcome(-0.4, "LOSS"))
+    win = settle_rulebook(dict(base, decision_id="second"), rulebook_outcome(0.6, "WIN"))
+    claim, mark = lo.claim, lo.mark_applied
+
+    def legacy_claim(path, scope, key, day, payload=None):
+        if scope == "COUNTERFACTUAL":
+            payload = {"kind": "counterfactual_ingest", "decision_id": "first"}
+        return claim(path, scope, key, day, payload=payload)
+
+    def interrupt(path, scope, key):
+        if scope == "COUNTERFACTUAL":
+            raise OSError("stopped before the unit mark")
+        return mark(path, scope, key)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(lo, "claim", legacy_claim)
+        patch.setattr(lo, "mark_applied", interrupt)
+        with pytest.raises(OSError):
+            pll.ingest_counterfactual(loss)
+    out = pll.ingest_counterfactual(win)
+    assert out.get("deferred_to_decision") == "first"
+    assert (_n(f"REJECT::{reason}"), _n("SETUP::VCP")) == (1, 0)
+    pll.ingest_counterfactual(loss)                                 # its own decision resumes it
+    assert lo.claim_state(lo.ledger_path_for(__import__("product.learning_policy_store",
+                          fromlist=["x"]).policy_path()), "COUNTERFACTUAL", "cf:2026-09-01|TCS|" + reason) == lo.APPLIED
+
+
+def test_qt04_repair_refuses_a_plan_made_before_a_new_observation(tmp_path):
+    from product import forward_evidence as fe
+    from product import learning_policy_repair as repair, learning_policy_store as lps
+    from tests.test_learning_exactly_once import _n, _settle
+
+    _review_freeze()
+    _settle()
+    plan = repair.plan(forward_path=fe.ledger_path(), cf_path=tmp_path / "empty.jsonl",
+                       policy_file=lps.policy_path())
+    fe.freeze_observation(dict(symbol="INFY", decision="BLOCK", reason_code="ENTRY_TOO_EXTENDED",
+                               entry=100, stop=94, target=115),
+                          cycle_id="second", as_of="2026-09-01", group="REJECTED",
+                          provenance=fe.REAL_FORWARD_MARKET)
+    _settle()
+    assert _n() == 2
+    with pytest.raises(repair.StalePlan):
+        repair.apply_plan(plan, backup_dir=tmp_path / "backup")
+    assert _n() == 2 and not (tmp_path / "backup").exists() or not any((tmp_path / "backup").iterdir())
+
+
+def test_qt05_closed_book_retries_the_ladder_before_its_checkpoint(monkeypatch):
+    from types import SimpleNamespace
+    from product import learning_policy_store as lps, paper_learning_loop as pll
+    from tests.test_learning_exactly_once import _n
+
+    book = SimpleNamespace(closed=[dict(decision_id="d1", paper_intent_id="i1", context_key="ctx", symbol="TCS",
+                                        setup_label="VCP", entry_date="2026-09-01", exit_date="2026-09-02",
+                                        exit_reason="TARGET", realized_R=1.0)])
+    record = lps.record_measured_outcome
+
+    def fail_ladder(**kwargs):
+        if kwargs["policy_id"] == "cond::ctx":
+            raise OSError("ladder unavailable before claim")
+        return record(**kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(lps, "record_measured_outcome", fail_ladder)
+        with pytest.raises(Exception):
+            pll.ingest_closed_book(book)
+    pll.ingest_closed_book(book)
+    assert _n("cond::ctx") == 1 and _n("SETUP::VCP") == 1
+    pll.ingest_closed_book(book)
+    assert _n("cond::ctx") == 1 and _n("SETUP::VCP") == 1

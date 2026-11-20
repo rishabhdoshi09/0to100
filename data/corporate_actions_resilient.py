@@ -473,11 +473,29 @@ def _event_exact(row: dict[str, Any]) -> tuple[str, str, str, float]:
     return (*ident, factor)
 
 
-def merge_verified_events(existing: Iterable[dict[str, Any]], incoming: Iterable[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Merge exact events and preserve provenance; conflicting factors fail closed."""
+def _conflict_identity(conflict: dict[str, Any]) -> tuple[str, str, str]:
+    return _event_identity({"symbol": conflict.get("symbol"), "ex_date": conflict.get("ex_date"),
+                            "type": conflict.get("type")})
+
+
+def merge_verified_events(existing: Iterable[dict[str, Any]], incoming: Iterable[dict[str, Any]],
+                          prior_conflicts: Iterable[dict[str, Any]] = ()) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Merge exact events and preserve provenance; conflicting factors fail closed.
+
+    ``prior_conflicts`` are disagreements an earlier refresh recorded. They stay
+    unresolved and keep their identity out of the events: a later fetch that
+    happens to see only one of the factors does not resolve a disagreement,
+    and a skipped window cannot silently drop it (verification review QT-01).
+    A conflict is cleared only by an explicit, human resolution (remove it
+    from the coverage file and commit the verified event).
+    """
     rows: dict[tuple[str, str, str, float], dict[str, Any]] = {}
     factors: dict[tuple[str, str, str], set[float]] = {}
     conflicts: list[dict[str, Any]] = []
+    blocked: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for prior in prior_conflicts or ():
+        if isinstance(prior, dict) and all(_conflict_identity(prior)[:2]):
+            blocked.setdefault(_conflict_identity(prior), dict(prior))
 
     for source_row in list(existing) + list(incoming):
         if not isinstance(source_row, dict):
@@ -486,6 +504,10 @@ def merge_verified_events(existing: Iterable[dict[str, Any]], incoming: Iterable
         exact = _event_exact(row)
         ident, factor = exact[:3], exact[3]
         if not ident[0] or not ident[1] or factor <= 0 or abs(factor - 1.0) <= 1e-12:
+            continue
+        if ident in blocked:
+            held = blocked[ident]
+            held["factors"] = sorted(set(float(f) for f in held.get("factors") or []) | {factor})
             continue
         known = factors.setdefault(ident, set())
         if known and factor not in known:
@@ -530,6 +552,8 @@ def merge_verified_events(existing: Iterable[dict[str, Any]], incoming: Iterable
         if len(sources) >= 2:
             current["verification"] = "official_cross_verified"
     ordered = sorted(rows.values(), key=lambda r: (str(r.get("ex_date") or ""), str(r.get("symbol") or "")))
+    new_idents = {_conflict_identity(c) for c in conflicts}
+    conflicts = [c for c in blocked.values() if _conflict_identity(c) not in new_idents] + conflicts
     return ordered, conflicts
 
 
@@ -666,6 +690,8 @@ def refresh_events_resilient(*, force: bool = False, years: int = 5, budget_s: f
     # replaced since, every window is fetched again rather than vouched for.
     coverage_windows = trusted_windows(coverage, events_path)
     coverage["commit_protocol"] = COMMIT_PROTOCOL
+    # Recorded disagreements are carried, trusted file or not (QT-01).
+    prior_conflicts = [dict(c) for c in coverage.get("conflicts") or [] if isinstance(c, dict)]
     # A corrupt events file is never overwritten: it stays for a human, the
     # walk stops, and coverage stays unbound (certifies nothing).
     can_write = isinstance(existing_raw, list) or not events_path.exists()
@@ -709,7 +735,7 @@ def refresh_events_resilient(*, force: bool = False, years: int = 5, budget_s: f
         if not can_write:
             break
         # Commit the events this window vouches for FIRST; only then its record.
-        merged, conflicts = merge_verified_events(existing, incoming)
+        merged, conflicts = merge_verified_events(existing, incoming, prior_conflicts)
         _atomic_json(events_path, merged)
 
         if nse_success:
@@ -733,7 +759,7 @@ def refresh_events_resilient(*, force: bool = False, years: int = 5, budget_s: f
         coverage["events_sha256"] = events_digest(events_path)
         _atomic_json(coverage_path, coverage)
 
-    merged, conflicts = merge_verified_events(existing, incoming)
+    merged, conflicts = merge_verified_events(existing, incoming, prior_conflicts)
     if can_write:
         _atomic_json(events_path, merged)
         try:

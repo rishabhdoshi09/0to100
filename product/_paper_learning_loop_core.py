@@ -185,7 +185,7 @@ def record_conditional_evidence(row: Mapping[str, Any]) -> dict[str, Any] | None
             evidence_class=PAPER_FORWARD,
         )
         update = record_outcome(outcome, context_key=context_key,
-                                evidence_class=PAPER_FORWARD)
+                                evidence_class=PAPER_FORWARD, strict_ladder=True)
         learning_observation = None
         try:
             from product.evidence_intelligence import record_resolved_prediction
@@ -209,6 +209,9 @@ def record_conditional_evidence(row: Mapping[str, Any]) -> dict[str, Any] | None
             "learning_observation": learning_observation,
         }
     except Exception as exc:
+        from product.conditional_evidence import LadderPending
+        if isinstance(exc, LadderPending):
+            raise                       # retryable: the close must not be checkpointed (QT-05)
         log_note = str(exc)[:200]
         return {"error": log_note, "decision_id": decision_id}
 
@@ -355,12 +358,19 @@ def ingest_closed_book(book, *, path=None, floors: Mapping[str, int] | None = No
     closed = list(getattr(book, "closed", []) or [])
     applied = 0
     last = None
+    failures: list[BaseException] = []
     for trade in closed:
         row = trade.as_dict() if hasattr(trade, "as_dict") else dict(trade)
         key = _trade_key(row)
         if key in seen:
             continue
-        last = ingest_closed_trade(row, path=path, floors=floors)
+        try:
+            last = ingest_closed_trade(row, path=path, floors=floors)
+        except Exception as exc:
+            # Not checkpointed: the next call retries this close, and every sink
+            # is idempotent per outcome. The others still land (QT-05).
+            failures.append(exc)
+            continue
         seen.add(key)
         applied += 1
     target = ingested_path()
@@ -374,6 +384,8 @@ def ingest_closed_book(book, *, path=None, floors: Mapping[str, int] | None = No
     }
     from core.atomic_io import atomic_write_text
     atomic_write_text(target, json.dumps(payload, indent=2))
+    if failures:
+        raise failures[0]
     return {"applied": applied, "last_policy": last}
 
 
@@ -456,8 +468,18 @@ def ingest_counterfactual(
             # Resume the unit with ITS OWN payload, never this delivery's: two
             # cycle copies of one unit can differ (target, outcome), and a unit
             # must not finish with effects from two decisions (overnight review
-            # L-03). A claim from before payloads were stored resumes as given.
-            stored = (LO.claim_payload(unit_ledger, "COUNTERFACTUAL", key) or {}).get("settled")
+            # L-03).
+            claimed = LO.claim_payload(unit_ledger, "COUNTERFACTUAL", key) or {}
+            stored = claimed.get("settled")
+            if not isinstance(stored, dict):
+                # A claim from before payloads were stored names only its
+                # decision: resume it only with a delivery OF THAT decision; any
+                # other delivery waits as a duplicate, never mixes its effects
+                # into the unit (verification review QT-03).
+                owner = str(claimed.get("decision_id") or "")
+                if owner and owner != decision_id:
+                    return {"duplicate_observation": True, "observation_key": key,
+                            "deferred_to_decision": owner}
             if isinstance(stored, dict) and (counterfactual_observation_key(stored) == keyed
                                              or keyed[0].startswith("cfd:")):
                 settled = stored
