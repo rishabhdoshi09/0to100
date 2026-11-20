@@ -1,7 +1,9 @@
-"""The annual alpha budget is enforced by a durable ledger, not by a constant."""
+"""The annual alpha budget is global, report-bound and enforced by a durable ledger."""
 
 from __future__ import annotations
 
+import os
+import shutil
 import threading
 from datetime import datetime, timezone
 
@@ -14,92 +16,174 @@ PROGRAM = {"family_method": "Holm", "eval_spec": "sim:h10:be2:gap", "horizon_ses
 T = datetime(2026, 11, 20, 1, 0, tzinfo=timezone.utc)
 
 
+def _binding(tag="r", universe="u" * 64):
+    return {"generated_at": f"2026-11-20T01:00:{tag}", "code_sha": "sha", "universe_sha256": universe,
+            "data_first_session": "2025-11-03", "data_last_session": "2026-11-18",
+            "members_sha256": "m" * 64, "family_size": 44}
+
+
+def _reserve(path, look_id, program=PROGRAM, now=T, binding=None):
+    return AL.reserve(program, look_id, now=now, path=path, family_size=44, members_sha256="m" * 64,
+                      binding=binding or _binding(look_id))
+
+
+def _verify(att, path, program=PROGRAM, binding="from_att"):
+    b = _binding(att["look_id"]) if binding == "from_att" else binding
+    return AL.verify(att, program=program, binding=b, path=path)
+
+
 def test_the_fifty_third_look_of_a_year_gets_no_alpha_and_never_verifies(tmp_path):
     path = tmp_path / "ledger.db"
-    atts = [AL.reserve(PROGRAM, f"look-{i}", now=T, path=path) for i in range(53)]
+    atts = [_reserve(path, f"look-{i}") for i in range(53)]
     assert [a["look_index"] for a in atts] == list(range(1, 54))
-    assert all(a["alpha"] == pytest.approx(0.05 / 52) for a in atts[:52])
-    assert atts[52]["alpha"] == 0.0 and atts[52]["exhausted"] is True
-    assert AL.verify(atts[51], program=PROGRAM, path=path) == ""
-    assert "exhausted at look 53" in AL.verify(atts[52], program=PROGRAM, path=path)
-    assert sum(a["alpha"] for a in atts) <= 0.05 + 1e-12                      # the union bound holds
+    assert all(a["alpha"] == pytest.approx(0.05 / 52) for a in atts[:52]) and atts[52]["alpha"] == 0.0
+    assert _verify(atts[51], path) == ""
+    assert "exhausted at look 53" in _verify(atts[52], path)
 
 
-def test_a_forced_rerun_on_the_same_data_spends_budget_but_a_write_retry_does_not(tmp_path):
+@pytest.mark.parametrize("pattern", ["sequential", "parallel"])
+def test_program_mutation_never_opens_a_fresh_budget(tmp_path, pattern):
+    """One global budget: changing the method/rulebook (or running variants side by side) shares the 52 looks."""
     path = tmp_path / "ledger.db"
-    first = AL.reserve(PROGRAM, "look-A", now=T, path=path)
-    retry = AL.reserve(PROGRAM, "look-A", now=T, path=path)                  # same report, re-written
-    rerun = AL.reserve(PROGRAM, "look-B", now=T, path=path)                  # same data, new report SHA
+    programs = [{**PROGRAM, "family_method": f"variant-{k}"} for k in range(5)]
+    atts = []
+    for i in range(53):
+        prog = programs[i // 13] if pattern == "sequential" else programs[i % 5]
+        atts.append(_reserve(path, f"look-{i}", program=prog))
+    assert atts[52]["alpha"] == 0.0 and atts[52]["look_index"] == 53
+    assert len({a["program_id"] for a in atts}) == 5
+    assert sum(a["alpha"] for a in atts) <= 0.05 + 1e-12          # union bound across all program versions
+
+
+def test_keeping_the_best_looking_program_is_covered_by_the_global_bound(tmp_path):
+    """Selecting among programs after seeing results: every look of every program spent from one 5%."""
+    path = tmp_path / "ledger.db"
+    spent = 0.0
+    for k in range(8):                                            # 8 candidate programs, 6 looks each
+        prog = {**PROGRAM, "family_method": f"candidate-{k}"}
+        for i in range(6):
+            spent += _reserve(path, f"look-{k}-{i}", program=prog)["alpha"]
+    assert spent <= 0.05 + 1e-12
+    assert AL.summary(path=path)["years"]["2026"]["looks"] == 48
+
+
+def test_a_program_change_does_not_carry_old_attestations_into_the_new_gate(tmp_path):
+    path = tmp_path / "ledger.db"
+    old = _reserve(path, "look-old")
+    changed = {**PROGRAM, "family_method": "Holm v2"}
+    assert "different hypothesis program" in _verify(old, path, program=changed)
+
+
+def test_a_write_retry_is_free_but_a_rerun_spends(tmp_path):
+    path = tmp_path / "ledger.db"
+    first = _reserve(path, "look-A")
+    retry = _reserve(path, "look-A")
+    rerun = _reserve(path, "look-B", binding=_binding("look-A"))                 # same data, new report id
     assert retry == first and rerun["look_index"] == 2
 
 
-def test_changing_family_membership_cannot_reset_the_budget(tmp_path):
+@pytest.mark.parametrize("change", ["program", "membership", "binding"])
+def test_a_reused_look_id_with_a_different_identity_is_refused(tmp_path, change):
     path = tmp_path / "ledger.db"
-    for i in range(52):
-        AL.reserve(PROGRAM, f"look-{i}", now=T, path=path, family_size=40, members_sha256=f"m{i % 3}")
-    more_members = AL.reserve(PROGRAM, "look-new-family", now=T, path=path, family_size=90, members_sha256="other")
-    assert more_members["alpha"] == 0.0
+    _reserve(path, "look-X")
+    with pytest.raises(AL.LedgerConflict):
+        if change == "program":
+            _reserve(path, "look-X", program={**PROGRAM, "family_method": "other"})
+        elif change == "membership":
+            AL.reserve(PROGRAM, "look-X", now=T, path=path, family_size=45, members_sha256="m" * 64,
+                       binding=_binding("look-X"))
+        else:
+            _reserve(path, "look-X", binding=_binding("look-X", universe="v" * 64))
 
 
-def test_a_program_change_is_a_new_budget_and_old_attestations_do_not_carry_over(tmp_path):
+def test_an_attestation_replayed_onto_another_report_never_verifies(tmp_path):
     path = tmp_path / "ledger.db"
-    old = AL.reserve(PROGRAM, "look-old", now=T, path=path)
-    changed = {**PROGRAM, "family_method": "Holm alpha/52 v2"}
-    assert "different hypothesis program" in AL.verify(old, program=changed, path=path)
-    new = AL.reserve(changed, "look-new", now=T, path=path)
-    assert new["program_id"] != old["program_id"] and new["look_index"] == 1
-
-
-def test_a_rolled_back_report_keeps_its_original_look(tmp_path):
-    path = tmp_path / "ledger.db"
-    older = AL.reserve(PROGRAM, "look-older", now=T, path=path)
-    AL.reserve(PROGRAM, "look-newer", now=T, path=path)
-    assert AL.verify(older, program=PROGRAM, path=path) == ""                 # the look happened; still counted
-    assert AL.summary(path=path)["programs"][f"{older['program_id']}:2026"]["looks"] == 2
+    att = _reserve(path, "look-1")
+    assert _verify(att, path) == ""
+    other_report = _binding("look-1", universe="w" * 64)                         # different universe
+    assert "different report" in _verify(att, path, binding=other_report)
+    forged = {**att, "binding_sha256": AL.binding_sha256(other_report)}
+    assert "binding differs" in _verify(forged, path, binding=other_report)
 
 
 @pytest.mark.parametrize("tamper", [{"look_index": 1}, {"year": 2025}, {"alpha": 0.05}, {"look_id": "made-up"},
-                                    {"program_id": "x"}])
-def test_a_tampered_or_unknown_attestation_never_verifies(tmp_path, tamper):
+                                    {"family_size": 10}, {"members_sha256": "x"}])
+def test_a_tampered_attestation_never_verifies(tmp_path, tamper):
     path = tmp_path / "ledger.db"
-    AL.reserve(PROGRAM, "look-1", now=T, path=path)
-    att = AL.reserve(PROGRAM, "look-2", now=T, path=path)
-    assert AL.verify({**att, **tamper}, program=None if "program_id" in tamper else PROGRAM, path=path) != ""
+    _reserve(path, "look-0")
+    att = _reserve(path, "look-2")
+    assert _verify({**att, **tamper}, path, binding=_binding("look-2")) != ""
 
 
-def test_no_ledger_or_no_attestation_means_the_budget_is_unprovable(tmp_path):
+def test_no_ledger_no_attestation_or_an_unbound_look_is_unprovable(tmp_path):
     att = {"look_id": "x", "program_id": AL.program_id(PROGRAM), "year": 2026, "look_index": 1}
     assert "unavailable" in AL.verify(att, program=PROGRAM, path=tmp_path / "missing.db")
     assert "no alpha-budget attestation" in AL.verify(None, program=PROGRAM, path=tmp_path / "missing.db")
     bad = tmp_path / "corrupt.db"
     bad.write_bytes(b"not sqlite" * 50)
     assert "unreadable" in AL.verify(att, program=PROGRAM, path=bad)
+    unbound = AL.reserve(PROGRAM, "legacy", now=T, path=tmp_path / "l.db")       # reserved without a binding
+    assert "no report binding" in AL.verify(unbound, program=PROGRAM, path=tmp_path / "l.db")
+
+
+def test_a_same_size_replacement_with_restored_mtime_cannot_serve_a_stale_positive(tmp_path):
+    a, b = tmp_path / "ledger.db", tmp_path / "other.db"
+    att = _reserve(a, "look-1")
+    _reserve(b, "look-9")
+    assert _verify(att, a) == ""                                                 # cached positive
+    st = a.stat()
+    shutil.copyfile(b, a)                                                        # same inode, new content
+    os.utime(a, ns=(st.st_atime_ns, st.st_mtime_ns))                             # mtime restored
+    assert a.stat().st_size == st.st_size
+    assert "not recorded" in _verify(att, a)
+
+
+def test_a_rollback_copy_or_a_sidecar_write_invalidates_the_cache(tmp_path):
+    path = tmp_path / "ledger.db"
+    backup = tmp_path / "backup.db"
+    _reserve(path, "look-0")
+    shutil.copyfile(path, backup)                                                # before look-1 existed
+    att = _reserve(path, "look-1")
+    assert _verify(att, path) == ""
+    os.replace(backup, path)                                                     # rollback: rename over
+    assert "not recorded" in _verify(att, path)
+    att2 = _reserve(path, "look-2")
+    assert _verify(att2, path) == ""
+    before = AL._file_identity(path)
+    path.with_name(path.name + "-wal").write_bytes(b"x")                         # a WAL sidecar appears
+    assert AL._file_identity(path) != before                                     # cache key turns over
+
+
+def test_concurrent_reserve_and_verify_never_see_a_stale_positive(tmp_path):
+    path = tmp_path / "ledger.db"
+    atts = [_reserve(path, "seed")]
+    barrier, errors = threading.Barrier(8), []
+
+    def reserver(i):
+        barrier.wait()
+        atts.append(_reserve(path, f"look-{i}"))
+
+    def verifier():
+        barrier.wait()
+        for _ in range(20):
+            if _verify(atts[0], path) != "":
+                errors.append("seed stopped verifying")
+
+    threads = [threading.Thread(target=reserver, args=(i,)) for i in range(6)] + \
+              [threading.Thread(target=verifier) for _ in range(2)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert not errors and sorted(a["look_index"] for a in atts) == list(range(1, 8))
 
 
 def test_budgets_are_per_calendar_year_in_ist(tmp_path):
     path = tmp_path / "ledger.db"
-    late_dec = datetime(2026, 12, 31, 18, 40, tzinfo=timezone.utc)          # 1 Jan 2027 00:10 IST
-    a = AL.reserve(PROGRAM, "look-dec", now=datetime(2026, 12, 31, 10, 0, tzinfo=timezone.utc), path=path)
-    b = AL.reserve(PROGRAM, "look-jan", now=late_dec, path=path)
+    a = _reserve(path, "look-dec", now=datetime(2026, 12, 31, 10, 0, tzinfo=timezone.utc))
+    b = _reserve(path, "look-jan", now=datetime(2026, 12, 31, 18, 40, tzinfo=timezone.utc))   # 1 Jan 00:10 IST
     assert (a["year"], b["year"], b["look_index"]) == (2026, 2027, 1)
 
 
-def test_concurrent_reservations_get_distinct_contiguous_looks(tmp_path):
-    path = tmp_path / "ledger.db"
-    AL.reserve(PROGRAM, "seed", now=T, path=path)
-    barrier, out = threading.Barrier(10), []
-
-    def worker(i):
-        barrier.wait()
-        out.append(AL.reserve(PROGRAM, f"look-{i}", now=T, path=path)["look_index"])
-
-    threads = [threading.Thread(target=worker, args=(i,)) for i in range(10)]
-    [t.start() for t in threads]
-    [t.join() for t in threads]
-    assert sorted(out) == list(range(2, 12))
-
-
-def test_the_walk_forward_report_spends_and_attests_a_look(monkeypatch):
+def test_the_walk_forward_report_spends_and_attests_a_bound_look():
     import scan.signal_backtest as SB
     from research import alpha_ledger
     from scan.unified_scanner import evidence_provenance_note
@@ -108,8 +192,7 @@ def test_the_walk_forward_report_spends_and_attests_a_look(monkeypatch):
     prov = proven_provenance()
     assert evidence_provenance_note(prov) == ""
     assert prov["alpha_accounting"]["program_id"] == alpha_ledger.program_id(SB.gate_program())
-    exhausted = {**prov["alpha_accounting"], "look_index": 99}
-    assert "does not match the ledger" in evidence_provenance_note({**prov, "alpha_accounting": exhausted})
+    assert "different report" in evidence_provenance_note({**prov, "universe_sha256": "z" * 64})
     assert "no alpha-budget attestation" in evidence_provenance_note({**prov, "alpha_accounting": None})
 
 

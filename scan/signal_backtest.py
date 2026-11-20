@@ -985,8 +985,14 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
 
     members = sorted(list(report) + [f"combo:{k}" for k in combos])
     members_sha = hashlib.sha256("\n".join(members).encode()).hexdigest()
-    attestation = alpha_ledger.reserve(gate_program(), f"look-{uuid.uuid4().hex}",
-                                       family_size=len(members), members_sha256=members_sha)
+    generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    binding = {"generated_at": generated_at, "code_sha": _code_sha(),
+               "universe_sha256": hashlib.sha256("\n".join(sorted(map(str, symbols))).encode()).hexdigest(),
+               "data_first_session": min(seen_dates) if seen_dates else "",
+               "data_last_session": max(seen_dates) if seen_dates else "",
+               "members_sha256": members_sha, "family_size": len(members)}
+    attestation = alpha_ledger.reserve(gate_program(), f"look-{uuid.uuid4().hex}", family_size=len(members),
+                                       members_sha256=members_sha, binding=binding)
     family = apply_family_correction(report, combos, alpha=attestation["alpha"])
     family["members_sha256"] = members_sha
 
@@ -1019,20 +1025,20 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                                                        session_index=session_index),
            "evidence_inference": {"method": "research.overlap_inference", "session_index": "realised official bars",
                                   "sessions_indexed": len(session_index), "family_correction": family},
-           "evidence_provenance": {"generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+           "evidence_provenance": {"generated_at": binding["generated_at"],
                                    "report_schema": REPORT_SCHEMA, "eval_spec": _eval_spec_tag(horizon),
-                                   "horizon_sessions": int(horizon), "code_sha": _code_sha(),
+                                   "horizon_sessions": int(horizon), "code_sha": binding["code_sha"],
+                                   "members_sha256": members_sha,
                                    "family_method": family.get("method"), "family_size": family.get("family_size"),
                                    "sessions_indexed": len(session_index), "sampling": SAMPLING,
                                    "exact_horizon_check": bool(official_index),
                                    "horizon_gap_windows_skipped": horizon_gaps,
                                    # Data version and universe: hashed into the snapshot id with
                                    # the rest of the report, so any change re-keys the evidence.
-                                   "universe_sha256": hashlib.sha256(
-                                       "\n".join(sorted(map(str, symbols))).encode()).hexdigest(),
+                                   "universe_sha256": binding["universe_sha256"],
                                    "symbols": len(symbols),
-                                   "data_first_session": min(seen_dates) if seen_dates else "",
-                                   "data_last_session": max(seen_dates) if seen_dates else "",
+                                   "data_first_session": binding["data_first_session"],
+                                   "data_last_session": binding["data_last_session"],
                                    "family_alpha": family.get("alpha"),
                                    "alpha_accounting": attestation},
            "recommended_target_pct": recommended,

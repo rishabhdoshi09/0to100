@@ -360,7 +360,9 @@ def evidence_provenance_note(provenance, *, now=None) -> str:
     try:
         from research import alpha_ledger
         from scan.signal_backtest import gate_program
-        why = alpha_ledger.verify(prov.get("alpha_accounting"), program=gate_program())
+        binding = {k: prov.get(k) for k in alpha_ledger.BINDING_FIELDS}
+        binding["family_size"] = prov.get("family_size", binding.get("family_size"))
+        why = alpha_ledger.verify(prov.get("alpha_accounting"), program=gate_program(), binding=binding)
     except Exception as exc:
         why = f"the alpha budget could not be verified ({type(exc).__name__})"
     return why
