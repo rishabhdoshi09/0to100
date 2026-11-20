@@ -580,3 +580,22 @@ def test_C8_the_desk_alert_never_sends_a_withdrawn_buy_as_a_pick(tmp_path, monke
     n.drain_desk_alerts()
     high, good = TelegramNotifier._reco_tiers(seen["w"])
     assert [c["symbol"] for c in high] == ["INFY"] and good == []
+
+
+def test_C10_the_legacy_trade_command_is_dormant_in_the_canonical_stack(monkeypatch):
+    """/trade reads the legacy auto_scan store, filled only by start_background_scan (legacy_app/ui)."""
+    import execution.autopilot as AP
+    import scan.auto_scan as AS
+    from alerts import telegram_commands as TC
+
+    calls = []
+    monkeypatch.setattr(AP, "get_status", lambda: {"armed": True, "mode": "PAPER"})
+    monkeypatch.setattr(AP, "consider", lambda **k: calls.append(k) or True)
+    monkeypatch.setattr(AS, "_results", [])
+    assert AS._thread_started is False                       # nothing canonical started the legacy worker
+    msg = TC._trade_now()
+    assert calls == [] and "Trade liya" not in msg            # nothing to trade: no legacy entry
+    import inspect
+    import terminal_product_api, operations.market_ops as MO, research.autonomy.supervisor as SUP
+    for module in (terminal_product_api, MO, SUP):
+        assert "start_background_scan" not in inspect.getsource(module)

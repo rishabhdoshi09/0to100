@@ -541,12 +541,50 @@ def ingest_counterfactual(
     return last
 
 
-def note_later_entry(symbol: str, *, path=None, floors: Mapping[str, int] | None = None) -> dict[str, Any]:
-    """A waited name later received a valid fill → GOOD_WAIT. Not booked as extra P&L."""
+#: A WAIT is credited with a later entry only inside its own outcome horizon.
+GOOD_WAIT_MAX_CALENDAR_DAYS = 14          # fallback when official sessions are unavailable (~10 sessions)
+
+
+def _wait_is_live(row: Mapping[str, Any], entry_day: str) -> bool:
+    """True when ``row`` is a WAIT whose own horizon still covers ``entry_day``.
+
+    GOOD_WAIT means "we waited and a valid entry came": it is a claim about
+    THAT wait. Crediting it to a hard rejection, or to a wait weeks older than
+    its horizon, rewarded unrelated decisions (cross-review open item,
+    2026-11-21).
+    """
+    if str(row.get("decision") or "").upper() != "WAIT":
+        return False
+    day = str(row.get("as_of") or "")[:10]
+    if len(day) != 10 or not entry_day or day > entry_day:
+        return False
+    try:
+        from core.evaluation_spec import OUTCOME_HORIZON_SESSIONS
+        from core.session_window import official_dates
+        sessions = official_dates()
+        if sessions:
+            between = [d for d in sessions if day < d <= entry_day]
+            return len(between) <= int(OUTCOME_HORIZON_SESSIONS)
+    except Exception:
+        pass
+    from datetime import date
+    return (date.fromisoformat(entry_day) - date.fromisoformat(day)).days <= GOOD_WAIT_MAX_CALENDAR_DAYS
+
+
+def note_later_entry(symbol: str, *, path=None, floors: Mapping[str, int] | None = None,
+                     as_of: str | None = None) -> dict[str, Any]:
+    """A waited name later received a valid fill → GOOD_WAIT. Not booked as extra P&L.
+
+    Only the symbol's pending WAIT decisions whose horizon still covers the
+    entry day are credited; other pending rows keep waiting for their own
+    rulebook outcome.
+    """
+    entry_day = str(as_of or datetime.now(timezone.utc).date().isoformat())[:10]
     return settle_pending_counterfactuals(
         later_entered={str(symbol).upper(): True},
         path=path,
         floors=floors,
+        row_filter=lambda row: _wait_is_live(row, entry_day),
     )
 
 
@@ -556,6 +594,7 @@ def settle_pending_counterfactuals(
     later_entered: Mapping[str, bool] | None = None,
     path=None,
     floors: Mapping[str, int] | None = None,
+    row_filter=None,
 ) -> dict[str, Any]:
     """Classify frozen rejects once a forward return is known. Does not create P&L."""
     ledger = ledger_path()
@@ -570,7 +609,7 @@ def settle_pending_counterfactuals(
             rewritten.append(row)
             continue
         symbol = str(row.get("symbol") or "").upper()
-        if symbol not in returns and symbol not in entered:
+        if (symbol not in returns and symbol not in entered) or (row_filter is not None and not row_filter(row)):
             rewritten.append(row)
             continue
         settled = settle(

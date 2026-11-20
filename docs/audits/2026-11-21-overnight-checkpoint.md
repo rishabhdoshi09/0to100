@@ -122,6 +122,16 @@ Consequences:
 
 **Tests.** `tests/test_result_digest.py` has 11 tests (finalise-then-save on a real stub run; every admission field inside the digest; a JSON round trip is stable). The behavioural ones fail on `70e3f43a`.
 
+## Cycle 6: GOOD_WAIT identity and age; legacy paths verified dormant
+
+**GOOD_WAIT (P2, confirmed).** Every paper entry ran `note_later_entry(symbol)`, which stamped GOOD_WAIT on every pending counterfactual of that symbol, including hard rejections and waits weeks older than their horizon. It now credits only the symbol's pending WAIT decisions whose own 10-session horizon covers the entry day; other rows keep waiting for their rulebook outcome. 1 regression test.
+
+**C-10 (legacy sniper and autopilot): dormant, verified and pinned by a test.**
+
+- The legacy scanner worker, and its disk warm-up (`scan_store.json`, last written 30 Jul and ignored once older than 3 days), are started only by `start_background_scan()`, which only `legacy_app.py` and the archived `ui/` pages call.
+- The Telegram `/trade` command reads that empty store, so it never reaches a legacy entry.
+- The test asserts that no canonical module (API, market_ops, supervisor) calls `start_background_scan`.
+
 ## Open (next)
 
-GOOD_WAIT age · research cycle.
+research cycle.

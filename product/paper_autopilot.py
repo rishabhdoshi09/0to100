@@ -1506,7 +1506,7 @@ def run_reco_paper_cycle(
         taken.append(taken_row)
         try:
             from product.paper_learning_loop import note_later_entry
-            note_later_entry(decision.symbol, path=policy_path)
+            note_later_entry(decision.symbol, path=policy_path, as_of=day)
         except Exception:
             pass
         if not in_lock_saved:

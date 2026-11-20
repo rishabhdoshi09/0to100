@@ -174,3 +174,18 @@ def test_a_legacy_label_is_skipped_not_learned():
     FS.settle_pending_from_market(outcome_fn=lambda *a: {**rulebook_outcome(-0.4, "LOSS"), "eval_spec": ""})
     assert _n() == 0
     assert json.dumps(LO.outbox_counts(_ledger())) == json.dumps({LO.DONE: 2})
+
+
+def test_good_wait_credits_only_a_live_wait_of_that_symbol(monkeypatch):
+    """A later entry credits a WAIT inside its own horizon, never a hard rejection or a stale wait."""
+    from product import _paper_learning_loop_core as core
+    from product.counterfactual_learning import freeze_decision
+
+    for decision, day, reason in (("WAIT", "2026-09-10", "WAIT_FOR_PULLBACK"),
+                                  ("BLOCK", "2026-09-10", "LOW_QUALITY_SETUP"),
+                                  ("WAIT", "2026-08-01", "WAIT_FOR_PULLBACK")):
+        freeze_decision(symbol="TCS", reason_code=reason, decision=decision, entry=100, stop=94, target=115,
+                        as_of=day, evidence={"note": f"{decision}-{day}"})
+    out = core.note_later_entry("TCS", as_of="2026-09-15")
+    assert out["updated"] == 1 and out["classifications"] == {"GOOD_WAIT": 1}
+    assert _n("ENTRY_QUALITY::GOOD_WAIT") == 1
