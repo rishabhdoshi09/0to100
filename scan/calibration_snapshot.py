@@ -212,6 +212,7 @@ def get_or_create_snapshot(
     model_version: str = MODEL_VERSION,
     directory: str | Path | None = None,
 ) -> dict[str, Any]:
+    from_disk = backtest_report is None
     if backtest_report is None or live_profile is None:
         loaded_bt, loaded_live = _load_inputs()
         if backtest_report is None:
@@ -234,26 +235,13 @@ def get_or_create_snapshot(
         # inputs: after a rollback to an older report the older snapshot is a
         # cache hit, and a stale pointer would make consumers verify scans
         # against evidence no scanner is using.
-        pointer = root / "current.json"
-        if str(_load(pointer).get("snapshot_id") or "") != candidate["snapshot_id"]:
-            _atomic_json(pointer, {
-                "schema_version": SCHEMA_VERSION,
-                "snapshot_id": candidate["snapshot_id"],
-                "snapshot_path": str(target),
-                "identities": candidate["identities"],
-            })
+        _point_to(root, candidate, target, recheck_disk=from_disk)
         out = dict(existing)
         out["cache_hit"] = True
         return out
 
     _atomic_json(target, candidate)
-    pointer = root / "current.json"
-    _atomic_json(pointer, {
-        "schema_version": SCHEMA_VERSION,
-        "snapshot_id": candidate["snapshot_id"],
-        "snapshot_path": str(target),
-        "identities": candidate["identities"],
-    })
+    _point_to(root, candidate, target, recheck_disk=from_disk)
     try:
         SR.save_registry(candidate["signal_registry"])
     except Exception:
@@ -261,6 +249,38 @@ def get_or_create_snapshot(
     out = dict(candidate)
     out["cache_hit"] = False
     return out
+
+
+def _point_to(root: Path, candidate: Mapping[str, Any], target: Path, *, recheck_disk: bool) -> bool:
+    """Move current.json to ``candidate`` under a lock; never to a superseded report.
+
+    Two processes can build snapshots while the report is being replaced; the
+    last pointer write must not be the stale one. Under an exclusive lock the
+    report on disk is re-read, and a candidate whose backtest hash no longer
+    matches it does not move the pointer (the next creation will). The write
+    itself is atomic (temp file + rename), so a crash leaves the old pointer.
+    """
+    import fcntl
+
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / "current.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            if recheck_disk:
+                disk_bt, _live = _load_inputs()
+                if _canonical_hash(disk_bt) != candidate["identities"]["backtest_evidence_hash"]:
+                    return False
+            pointer = root / "current.json"
+            if str(_load(pointer).get("snapshot_id") or "") != candidate["snapshot_id"]:
+                _atomic_json(pointer, {
+                    "schema_version": SCHEMA_VERSION,
+                    "snapshot_id": candidate["snapshot_id"],
+                    "snapshot_path": str(target),
+                    "identities": candidate["identities"],
+                })
+            return True
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
 
 
 def load_current(*, directory: str | Path | None = None) -> dict[str, Any]:

@@ -23,13 +23,8 @@ def _fresh_stamp(days_ago=1):
 
 
 def _provenance(generated_at="fresh", **over):
-    import scan.signal_backtest as SB
-    from core.evaluation_spec import HORIZON_SESSIONS
-    prov = {"generated_at": _fresh_stamp() if generated_at == "fresh" else generated_at,
-            "report_schema": SB.REPORT_SCHEMA, "eval_spec": SB._eval_spec_tag(HORIZON_SESSIONS),
-            "horizon_sessions": HORIZON_SESSIONS, "family_method": SB.FAMILY_METHOD, "code_sha": "test-sha"}
-    prov.update(over)
-    return {k: v for k, v in prov.items() if v is not None}
+    from tests.evidence_fixtures import proven_provenance
+    return proven_provenance(generated_at, **over)
 
 
 def _snap(edges, generated_at="fresh", **prov):
@@ -483,4 +478,21 @@ def test_the_scan_payload_names_its_evidence_identity():
     r = US.UnifiedScanner(calibration_snapshot=_snap(edges))._analyze("X", _breakout_frame())
     payload = build_scan_payload({"X": "X"}, [r], freshness={})
     assert payload["evidence_identity"]["id"] == "test" and payload["records"][0]["edge_evidence_id"] == "test"
+
+
+def test_a_snapshot_built_from_a_superseded_report_never_moves_the_pointer(tmp_path, monkeypatch):
+    """Report replaced between a process's read and its pointer write: the stale candidate loses."""
+    import scan.calibration_snapshot as CSN
+    old = {"signals": {"A": {"trades": 40, "expectancy_r": 0.1}}, "generated_at": "2026-11-01 10:00"}
+    new = {"signals": {"A": {"trades": 45, "expectancy_r": 0.2}}, "generated_at": "2026-11-08 10:00"}
+    disk = {"report": new}
+    monkeypatch.setattr(CSN, "_load_inputs", lambda: (disk["report"], {}))
+    kw = dict(data_identity="d", thesis_hash="t", directory=tmp_path)
+    fresh = CSN.get_or_create_snapshot(**kw)                          # B: built from the new report
+    assert CSN.load_current(directory=tmp_path)["snapshot_id"] == fresh["snapshot_id"]
+    reads = iter([old, new])                                          # A read the OLD report; disk is new
+    monkeypatch.setattr(CSN, "_load_inputs", lambda: (next(reads, new), {}))
+    stale = CSN.get_or_create_snapshot(**kw)
+    assert stale["snapshot_id"] != fresh["snapshot_id"]
+    assert CSN.load_current(directory=tmp_path)["snapshot_id"] == fresh["snapshot_id"]   # pointer not moved back
 

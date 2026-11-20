@@ -188,10 +188,17 @@ def build_conviction(results: list[dict], top_n: int = _ENRICH_TOP_N) -> list[di
         # excluded from the gate.
         n_pos_for_gate = n_pos - (1 if headline else 0)
         conviction_for_gate = conviction_before_buzz if headline else conviction
+        scanner_verdict = str(r.get("verdict") or "WATCH").upper()
         if chase_risk:
             # scanner's own don't-chase safety demotion — a WATCH for a
             # SPECIFIC reason (extended, no confirmed trigger), not just a
             # score miss. Buzz/earnings evidence must never override it.
+            verdict = "WATCH"
+        elif scanner_verdict not in ("BUY", "STRONG BUY"):
+            # Conviction ranks and annotates; it can never PROMOTE. Only the
+            # live evidence gate (scan.unified_scanner._evidence_verdict)
+            # certifies a BUY, and news/earnings "conviction" is not evidence
+            # of edge (2026-11-20 review: legacy bypass closed).
             verdict = "WATCH"
         elif conviction_for_gate >= 75 and n_pos_for_gate >= 4:
             verdict = "STRONG BUY"
