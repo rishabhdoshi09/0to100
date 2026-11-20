@@ -545,19 +545,26 @@ def analyse(collected: Mapping[str, Any], frames: Mapping[str, pd.DataFrame], *,
 # ── offline copy loading and the CLI ────────────────────────────────────────
 
 def load_copy(root: str | Path) -> dict[str, Any]:
-    """Load an SSD copy: store, corporate-action events (applied on read), coverage and membership."""
+    """Load an SSD copy: store, corporate-action events (applied on read), coverage and membership.
+
+    The copy becomes this process's runtime root (QT_RUNTIME_ROOT), so every
+    path, here and inside the production modules the run calls, resolves
+    through core.runtime_paths into the copy.
+    """
     root = Path(root).resolve()
     if str(root).startswith("/Volumes/"):
         raise SystemExit(f"refusing {root}: copy the store to the internal SSD first (never read the live runtime)")
+    os.environ["QT_RUNTIME_ROOT"] = str(root)
+    from core.runtime_paths import logs_path
     from data.corporate_actions import adjust_frame, load_events
-    with open(root / "logs" / "bhav" / "store_cache.pkl", "rb") as fh:
+    with open(logs_path("bhav", "store_cache.pkl"), "rb") as fh:
         store = pickle.load(fh)["store"]
-    events = load_events(root / "logs" / "ca_events.json")
+    events = load_events(logs_path("ca_events.json"))
     frames = {}
     for sym, df in store.items():
         ev = events.get(str(sym).upper())
         frames[str(sym).upper()] = adjust_frame(df.copy(), ev, copy=False) if ev else df
-    cov_p, uni_p = root / "logs" / "ca_coverage.json", root / "logs" / "universe_history.json"
+    cov_p, uni_p = logs_path("ca_coverage.json"), logs_path("universe_history.json")
     return {"frames": frames, "coverage": json.loads(cov_p.read_text()) if cov_p.exists() else {},
             "universe_rows": json.loads(uni_p.read_text()) if uni_p.exists() else None,
             "ca_event_symbols": len(events)}

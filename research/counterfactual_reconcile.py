@@ -211,11 +211,15 @@ def store_outcome_fn(store_root: str | Path) -> Callable[..., Mapping[str, Any] 
 
     from core.outcome_resolver import counterfactual_outcome
     from data.corporate_actions import adjust_frame, load_events
-    root = Path(store_root)
+    import os
+
+    from core.runtime_paths import logs_path
+    root = Path(store_root).resolve()
     _refuse_live(root)
-    with open(root / "logs" / "bhav" / "store_cache.pkl", "rb") as fh:
+    os.environ["QT_RUNTIME_ROOT"] = str(root)              # every path resolves inside the copy
+    with open(logs_path("bhav", "store_cache.pkl"), "rb") as fh:
         store = pickle.load(fh)["store"]
-    events = load_events(root / "logs" / "ca_events.json")
+    events = load_events(logs_path("ca_events.json"))
     cache: dict[str, Any] = {}
 
     def frame(sym: str):
