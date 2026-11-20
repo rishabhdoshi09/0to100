@@ -991,8 +991,16 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                "data_first_session": min(seen_dates) if seen_dates else "",
                "data_last_session": max(seen_dates) if seen_dates else "",
                "members_sha256": members_sha, "family_size": len(members)}
-    attestation = alpha_ledger.reserve(gate_program(), f"look-{uuid.uuid4().hex}", family_size=len(members),
-                                       members_sha256=members_sha, binding=binding)
+    # A report that will be discarded (too few symbols, e.g. a fresh process whose
+    # store is not loaded, or no signal at all) can admit nothing, so it spends no
+    # look. That is decided from counts alone, before any test sees an outcome.
+    will_save = len(symbols) >= MIN_SYMBOLS_TO_SAVE and bool(report)
+    if will_save:
+        attestation = alpha_ledger.reserve(gate_program(), f"look-{uuid.uuid4().hex}", family_size=len(members),
+                                           members_sha256=members_sha, binding=binding)
+    else:
+        attestation = {"program_id": alpha_ledger.program_id(gate_program()), "look_id": "", "look_index": 0,
+                       "alpha": 0.0, "unreserved": "REPORT_NOT_SAVED"}
     family = apply_family_correction(report, combos, alpha=attestation["alpha"])
     family["members_sha256"] = members_sha
 
@@ -1043,7 +1051,7 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                                    "alpha_accounting": attestation},
            "recommended_target_pct": recommended,
            "elapsed_s": round(time.time() - t0, 1)}
-    if len(symbols) < MIN_SYMBOLS_TO_SAVE or not report:
+    if not will_save:
         # Never replace a real calibration with an empty/thin one (e.g. a
         # process whose bhavcopy store was not loaded).
         log.warning("backtest_too_thin_not_saved", symbols=len(symbols), signals=len(report))

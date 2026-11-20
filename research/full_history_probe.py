@@ -13,7 +13,7 @@ symbol sample at several lookbacks, and measures:
     QT_RUNTIME_ROOT=<copy root> python -m research.full_history_probe --store <copy>/logs/bhav/store_cache.pkl \
         --symbols 40 --lookbacks 250,1288,1690 --out docs/research/full_history_probe_2026-11-20.json
 
-It spends research alpha-ledger looks in the COPY's runtime only (QT_RUNTIME_ROOT).
+It writes no report, so it reserves no alpha-ledger look (a discarded report spends none).
 """
 
 from __future__ import annotations

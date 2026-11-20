@@ -20,10 +20,12 @@ family would each spend budget unseen. This ledger makes every look real:
   size). A look_id reused with a different program or binding is refused,
   and verify() recomputes the binding from the report itself, so an
   attestation copied onto another report never verifies.
-* look: one walk-forward report generation. It is reserved BEFORE the family
-  correction runs, in one SQLite transaction (BEGIN IMMEDIATE), so a forced
-  rerun, a crash after reservation, or the same data re-run under a new
-  report SHA all spend budget. Nothing is ever refunded.
+* look: one walk-forward report generation that will be saved. It is
+  reserved BEFORE the family correction runs, in one SQLite transaction
+  (BEGIN IMMEDIATE), so a forced rerun, a crash after reservation, or the
+  same data re-run under a new report SHA all spend budget. Nothing is ever
+  refunded. A run whose report is discarded before any test (too few
+  symbols, no signal) reserves nothing and has alpha 0.
 * year: the IST calendar year of the look. Budgets do not combine across
   years, and the bound is stated per year.
 * attestation: the report carries {program_id, year, look_index, look_id,

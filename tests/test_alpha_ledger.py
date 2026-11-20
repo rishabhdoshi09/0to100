@@ -230,3 +230,124 @@ def test_an_exhausted_budget_admits_nothing_in_the_family_correction():
     rows = {"REAL": {"expectancy_r_precise": 0.5, "se_r": 0.01, "df": 30, "inference": "OVERLAP_ROBUST"}}
     SB.apply_family_correction(rows, {}, alpha=0.0)
     assert rows["REAL"]["family_significant"] is False
+
+
+# ── crash / restart integrity of look reservation ─────────────────────────────
+
+def _stub_walk_forward(monkeypatch, tmp_path, n_sym=3):
+    """A real run_backtest over small frames with a stub scanner (fast, deterministic)."""
+    from types import SimpleNamespace
+
+    import numpy as np
+    import pandas as pd
+
+    import data.bhavcopy_store as BS
+    import scan.signal_backtest as SB
+    import scan.unified_scanner as US
+
+    idx = pd.bdate_range("2025-01-01", periods=200)
+    rng = np.random.default_rng(1)
+    frames = {}
+    for k in range(n_sym):
+        c = 100 * np.exp(np.cumsum(rng.normal(0, 0.01, 200)))
+        frames[f"S{k}"] = pd.DataFrame({"open": c, "high": c * 1.01, "low": c * 0.99, "close": c,
+                                        "volume": np.full(200, 1e6)}, index=idx)
+
+    class Stub:
+        def __init__(self, *a, **k):
+            pass
+
+        def _analyze(self, sym, hist):
+            px = float(hist["close"].iloc[-1])
+            return SimpleNamespace(signals=["S"], entry=px * 1.001, stop=px * 0.95, target=px * 1.08, confidence=0.0)
+
+    monkeypatch.setattr(US, "UnifiedScanner", Stub)
+    monkeypatch.setattr(BS, "store_symbols", lambda: sorted(frames))
+    monkeypatch.setattr(BS, "get_ohlcv", lambda s: frames.get(s))
+    monkeypatch.setattr(BS, "_dates_on_disk", lambda: [d.date() for d in idx])
+    monkeypatch.setattr(SB, "_nifty_regime_series", lambda: None)
+    monkeypatch.setattr(SB, "_OUT", tmp_path / "signal_backtest.json")
+    return SB
+
+
+def _looks():
+    p = AL.ledger_path()
+    if not p.exists():
+        return []
+    import sqlite3
+    with closing(sqlite3.connect(p)) as c:
+        return [r[0] for r in c.execute("SELECT look_index FROM looks ORDER BY look_index")]
+
+
+def test_a_discarded_thin_run_spends_no_look(monkeypatch, tmp_path):
+    SB = _stub_walk_forward(monkeypatch, tmp_path)                 # 3 symbols < MIN_SYMBOLS_TO_SAVE
+    rep = SB.run_backtest(lookback_sessions=100)
+    assert rep["signals"] and not SB._OUT.exists()                 # measured, then discarded
+    acc = rep["evidence_provenance"]["alpha_accounting"]
+    assert acc["alpha"] == 0.0 and acc["unreserved"] == "REPORT_NOT_SAVED" and _looks() == []
+    assert not any(v.get("family_significant") for v in rep["signals"].values())
+    from scan.unified_scanner import evidence_provenance_note
+    assert evidence_provenance_note(rep["evidence_provenance"]) != ""      # can never certify a BUY
+
+
+def test_a_crash_after_reservation_spends_the_look_and_a_rerun_spends_another(monkeypatch, tmp_path):
+    SB = _stub_walk_forward(monkeypatch, tmp_path)
+    monkeypatch.setattr(SB, "MIN_SYMBOLS_TO_SAVE", 1)
+    real = SB.apply_family_correction
+
+    def crash(*a, **k):
+        raise RuntimeError("killed between reservation and test")
+
+    monkeypatch.setattr(SB, "apply_family_correction", crash)
+    with pytest.raises(RuntimeError):
+        SB.run_backtest(lookback_sessions=100)
+    assert _looks() == [1] and not SB._OUT.exists()                # spent, nothing written, never refunded
+    monkeypatch.setattr(SB, "apply_family_correction", real)
+    rep = SB.run_backtest(lookback_sessions=100)
+    assert _looks() == [1, 2] and SB._OUT.exists()
+    assert rep["evidence_provenance"]["alpha_accounting"]["look_index"] == 2
+
+
+def test_a_hard_kill_mid_migration_leaves_the_legacy_ledger_intact(tmp_path):
+    """A kill inside the one-time migration rolls back; the next open migrates cleanly."""
+    import sqlite3
+    import subprocess
+    import sys
+    import textwrap
+
+    path = tmp_path / "legacy.db"
+    with closing(sqlite3.connect(path)) as conn:
+        conn.execute("CREATE TABLE looks(program_id TEXT NOT NULL, year INTEGER NOT NULL, look_index INTEGER NOT NULL,"
+                     " look_id TEXT NOT NULL, alpha REAL NOT NULL, reserved_at TEXT NOT NULL, family_size INTEGER,"
+                     " members_sha256 TEXT, program TEXT NOT NULL, PRIMARY KEY (program_id, year, look_index),"
+                     " UNIQUE (look_id))")
+        for k in range(10):
+            for p in ("pA", "pB"):
+                conn.execute("INSERT INTO looks VALUES(?,?,?,?,?,?,?,?,?)",
+                             (p, 2026, k + 1, f"{p}-{k}", 0.05 / 52, f"2026-03-01T00:{k:02d}:00+00:00", 4, "m", "{}"))
+        conn.commit()
+    before = sorted(sqlite3.connect(path).execute("SELECT look_id, look_index FROM looks").fetchall())
+    child = textwrap.dedent(f"""
+        import os, sys
+        sys.path.insert(0, {str(os.getcwd())!r})
+        from research import alpha_ledger as AL
+        class Bomb:                       # dies on the 7th renumbered row, inside the transaction
+            calls = 0
+            def __ge__(self, other):
+                Bomb.calls += 1
+                if Bomb.calls == 7:
+                    os._exit(9)
+                return True
+            def __rtruediv__(self, other):
+                return other / 52
+        AL.LOOKS_PER_YEAR = Bomb()
+        AL._connect(AL.Path({str(path)!r}))
+    """)
+    rc = subprocess.run([sys.executable, "-c", child], cwd=os.getcwd()).returncode
+    assert rc == 9
+    with closing(sqlite3.connect(path)) as c:                      # opening rolls the hot journal back
+        assert sorted(c.execute("SELECT look_id, look_index FROM looks").fetchall()) == before
+        assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='one_global_index_per_year'").fetchone()
+    att = AL.reserve(PROGRAM, "after-kill", now=T, path=path, family_size=44, members_sha256="m" * 64,
+                     binding=_binding("after-kill"))
+    assert att["look_index"] == 21                                 # all 20 legacy looks still spent
