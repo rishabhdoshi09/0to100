@@ -123,21 +123,21 @@ def ensure_current_generation(*, identity: str | Path | None = None) -> dict[str
             # Defense in depth: derived HIST_* policies are generation-scoped.
             # Purge them immediately so stale setup eligibility cannot survive
             # while the new generation is being replayed.
-            from product.learning_policy_store import load_policies, policy_path, save_policies
+            from product.learning_policy_store import load_policies, policy_path, update_policies_locked
             policies_target = policy_path()
             store = load_policies(policies_target)
-            policies = [
-                dict(p)
-                for p in (store.get("policies") or [])
-                if isinstance(p, Mapping)
-            ]
-            kept = [
-                p for p in policies
-                if not str(p.get("policy_id") or "").startswith("HIST_")
-            ]
-            if len(kept) != len(policies):
-                store["policies"] = kept
-                save_policies(store, policies_target)
+            if any(str((p or {}).get("policy_id") or "").startswith("HIST_")
+                   for p in (store.get("policies") or []) if isinstance(p, Mapping)):
+                def purge(current):
+                    # Re-read under the learning writer lock (L-04): forward
+                    # rows committed meanwhile are kept.
+                    current["policies"] = [
+                        dict(p) for p in (current.get("policies") or [])
+                        if isinstance(p, Mapping) and not str(p.get("policy_id") or "").startswith("HIST_")
+                    ]
+                    return current
+
+                update_policies_locked(purge, policies_target)
                 invalidated.append(f"{policies_target}#HIST_*")
 
             state = state_path()

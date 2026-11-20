@@ -169,6 +169,11 @@ def apply_plan(report: Mapping[str, Any], *, backup_dir: Path | None = None) -> 
     if policy_file.exists():
         shutil.copy2(policy_file, backup)
     ledger = LO.ledger_path_for(policy_file)
+    with LO.writer_lock(ledger):       # the one writer protocol of the live store (L-04)
+        return _apply_plan_locked(report, policy_file, ledger, backup)
+
+
+def _apply_plan_locked(report: Mapping[str, Any], policy_file: Path, ledger: Path, backup: Path) -> dict[str, Any]:
     for change in report["changes"]:
         for key, session, _v in change["observations"]:
             LO.claim(ledger, "COUNTERFACTUAL", key, session)

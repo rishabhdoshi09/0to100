@@ -276,6 +276,29 @@ def record_measured_outcome(
         return out
 
 
+def update_policies_locked(mutate, path: str | Path | None = None) -> Path:
+    """Read-modify-write the policy store under the learning writer lock (overnight review L-04).
+
+    Every writer of the live store goes through the lock record_measured_outcome
+    holds across its claim → write → mark, so no writer can replace the file
+    with a copy read before another's committed update. ``mutate(store)``
+    returns the new store; it is read fresh INSIDE the lock. Not re-entrant.
+    """
+    from product import learning_observations as LO
+
+    target = policy_path(path)
+    with LO.writer_lock(LO.ledger_path_for(target)):
+        return save_policies(mutate(load_policies(target)), target)
+
+
+def locked_upsert_policy(**kwargs) -> dict[str, Any]:
+    """upsert_policy under the learning writer lock, for writers outside record_measured_outcome (L-04)."""
+    from product import learning_observations as LO
+
+    with LO.writer_lock(LO.ledger_path_for(policy_path(kwargs.get("path")))):
+        return upsert_policy(**kwargs)
+
+
 def recover_claims(path: str | Path | None = None, floors: Mapping[str, int] | None = None) -> dict[str, int]:
     """Replay policy claims a crash left CLAIMED (applied exactly once; idempotent)."""
     from product import learning_observations as LO

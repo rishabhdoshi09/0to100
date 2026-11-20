@@ -570,7 +570,7 @@ def ingest_counterfactual(
 
 
 #: A WAIT is credited with a later entry only inside its own outcome horizon.
-GOOD_WAIT_MAX_CALENDAR_DAYS = 14          # fallback when official sessions are unavailable (~10 sessions)
+GOOD_WAIT_MAX_CALENDAR_DAYS = 14          # retained for callers; no longer a fallback (L-08: unverifiable = pending)
 
 
 def _wait_is_live(row: Mapping[str, Any], entry_day: str) -> bool:
@@ -586,17 +586,46 @@ def _wait_is_live(row: Mapping[str, Any], entry_day: str) -> bool:
     day = str(row.get("as_of") or "")[:10]
     if len(day) != 10 or not entry_day or day > entry_day:
         return False
+    from core.evaluation_spec import OUTCOME_HORIZON_SESSIONS
+    n = _sessions_through(day, entry_day[:10])
+    # Unverifiable ordinal (no archive, a wait older than it, an uncovered
+    # calendar year): the credit stays pending, never guessed (L-08).
+    return n is not None and n <= int(OUTCOME_HORIZON_SESSIONS)
+
+
+def _sessions_through(day: str, entry_day: str) -> int | None:
+    """Official sessions in (day, entry_day], counted THROUGH the fill session; None when unverifiable.
+
+    The archive ends at the last completed session, so an intraday fill's own
+    session is not in it yet: the sessions after the archive come from the
+    verified holiday calendar, and a year it does not cover is unverifiable
+    (overnight review L-08). Without an archive nothing is verifiable.
+    """
+    from datetime import date, timedelta
     try:
-        from core.evaluation_spec import OUTCOME_HORIZON_SESSIONS
         from core.session_window import official_dates
-        sessions = official_dates()
-        if sessions:
-            between = [d for d in sessions if day < d <= entry_day]
-            return len(between) <= int(OUTCOME_HORIZON_SESSIONS)
+        sessions = list(official_dates() or [])
     except Exception:
-        pass
-    from datetime import date
-    return (date.fromisoformat(entry_day) - date.fromisoformat(day)).days <= GOOD_WAIT_MAX_CALENDAR_DAYS
+        return None
+    if not sessions or day < sessions[0]:
+        return None
+    n = sum(1 for d in sessions if day < d <= entry_day)
+    last = sessions[-1]
+    if entry_day > last:
+        try:
+            from research.intelligence.data.nse_calendar import covered_years, is_session, load_holidays
+            holidays = load_holidays()
+            years = covered_years(holidays)
+        except Exception:
+            return None
+        cur, end = date.fromisoformat(last) + timedelta(days=1), date.fromisoformat(entry_day)
+        while cur <= end:
+            if cur.year not in years:
+                return None
+            if is_session(cur, holidays):
+                n += 1
+            cur += timedelta(days=1)
+    return n
 
 
 def note_later_entry(symbol: str, *, path=None, floors: Mapping[str, int] | None = None,

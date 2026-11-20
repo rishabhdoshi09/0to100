@@ -334,9 +334,14 @@ def test_correct_rejection_is_not_pnl_and_does_not_disable_dd_gate(tmp_path):
     assert again["rejections"][0]["reason_code"] == "DD_GATE_FAILED"
 
 
-def test_better_entry_wait_classifies_good_wait(tmp_path):
+def test_better_entry_wait_classifies_good_wait(tmp_path, monkeypatch):
+    from core import session_window
     from product.counterfactual_learning import GOOD_WAIT, ledger_path
     import json as _json
+
+    # The wait's session ordinal is verified from the official archive (L-08):
+    # it holds the WAIT's session; the next-day fill's comes from the calendar.
+    monkeypatch.setattr(session_window, "official_dates", lambda: ["2026-08-31", "2026-09-01"])
 
     policy_path = tmp_path / "policies.json"
     chased = dict(_eligible_card())

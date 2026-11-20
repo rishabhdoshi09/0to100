@@ -186,7 +186,12 @@ def record_outcome(
 
     cell = json.loads(json.dumps(before))
     if outcome.outcome_id in (cell.get("contributing_outcome_ids") or []):
-        # Replaying the same settled outcome must not double-count it.
+        # Replaying the same settled outcome must not double-count it. The
+        # ladder is a separate sink: a crash after the cell save and before its
+        # claim must still reach it on the replay (idempotent per outcome:
+        # overnight review L-07), never be suppressed by the cell.
+        if also_update_policy_ladder and is_market_evidence(klass):
+            _ladder(outcome, context_key, policy_dimension, policy_bucket)
         return EvidenceUpdate(
             outcome_id=outcome.outcome_id,
             position_id=outcome.position_id,
@@ -214,21 +219,7 @@ def record_outcome(
     if also_update_policy_ladder and is_market_evidence(klass):
         # One settled outcome, one event, both stores. The policy ladder stays
         # the gate it always was; this is not a second source of the outcome.
-        try:
-            from product.learning_policy_store import record_measured_outcome
-
-            record_measured_outcome(
-                policy_id=f"cond::{context_key}",
-                dimension=policy_dimension,
-                bucket=policy_bucket or context_key,
-                realized_R=float(outcome.realized_R),
-                source="paper_forward",
-                observation_key=f"cond:{outcome.outcome_id}",
-                session=str(outcome.resolved_at or "")[:10] or None,
-            )
-        except Exception:
-            # The ladder is an additional consumer, never a gate on recording.
-            pass
+        _ladder(outcome, context_key, policy_dimension, policy_bucket)
 
     return EvidenceUpdate(
         outcome_id=outcome.outcome_id,
@@ -239,6 +230,25 @@ def record_outcome(
         after=_public(cell),
         evidence_class=klass,
     )
+
+
+def _ladder(outcome, context_key: str, policy_dimension: str, policy_bucket: str) -> None:
+    """The policy-ladder sink of one settled outcome (idempotent per outcome id)."""
+    try:
+        from product.learning_policy_store import record_measured_outcome
+
+        record_measured_outcome(
+            policy_id=f"cond::{context_key}",
+            dimension=policy_dimension,
+            bucket=policy_bucket or context_key,
+            realized_R=float(outcome.realized_R),
+            source="paper_forward",
+            observation_key=f"cond:{outcome.outcome_id}",
+            session=str(outcome.resolved_at or "")[:10] or None,
+        )
+    except Exception:
+        # The ladder is an additional consumer, never a gate on recording.
+        pass
 
 
 def _public(cell: Mapping[str, Any]) -> dict[str, Any]:

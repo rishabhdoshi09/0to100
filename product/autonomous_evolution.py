@@ -327,6 +327,7 @@ def _publish_history_policies(
         load_policies,
         policy_path,
         save_policies,
+        update_policies_locked,
         upsert_policy,
     )
 
@@ -401,7 +402,19 @@ def _publish_history_policies(
                 },
             ))
         target.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(stage, target)
+        hist = [dict(p) for p in (load_policies(stage).get("policies") or [])
+                if isinstance(p, Mapping) and str(p.get("policy_id") or "").startswith("HIST_")]
+
+        def swap(current: dict[str, Any]) -> dict[str, Any]:
+            # The forward rows are the CURRENT ones, read under the learning
+            # writer lock: an update committed after the staging snapshot is
+            # kept, never erased by a replace of the old copy (L-04).
+            kept = [dict(p) for p in (current.get("policies") or [])
+                    if isinstance(p, Mapping) and not str(p.get("policy_id") or "").startswith("HIST_")]
+            current["policies"] = sorted(kept + hist, key=lambda p: str(p.get("policy_id") or ""))
+            return current
+
+        update_policies_locked(swap, target)
     finally:
         if stage.exists():
             try:

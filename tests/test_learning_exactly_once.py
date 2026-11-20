@@ -178,9 +178,14 @@ def test_a_legacy_label_is_skipped_not_learned():
 
 def test_good_wait_credits_only_a_live_wait_of_that_symbol(monkeypatch):
     """A later entry credits a WAIT inside its own horizon, never a hard rejection or a stale wait."""
+    import pandas as pd
+    from core import session_window
     from product import _paper_learning_loop_core as core
     from product.counterfactual_learning import freeze_decision
 
+    # The session ordinal is verified from the official archive (L-08): give it one.
+    monkeypatch.setattr(session_window, "official_dates",
+                        lambda: [d.date().isoformat() for d in pd.bdate_range("2026-07-01", "2026-09-15")])
     for decision, day, reason in (("WAIT", "2026-09-10", "WAIT_FOR_PULLBACK"),
                                   ("BLOCK", "2026-09-10", "LOW_QUALITY_SETUP"),
                                   ("WAIT", "2026-08-01", "WAIT_FOR_PULLBACK")):

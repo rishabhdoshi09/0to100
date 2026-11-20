@@ -631,3 +631,134 @@ def test_l09_existing_schema_migrates_with_two_connections(tmp_path, monkeypatch
         workers = [pool.submit(open_db) for _ in range(2)]
         for worker in workers:
             worker.result(timeout=20)
+
+
+def test_l04_history_publication_preserves_interleaved_learning(monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from product import autonomous_evolution as history, learning_policy_store as LPS
+    from tests.test_learning_exactly_once import _n
+
+    staged, applied = threading.Event(), threading.Event()
+    real_save = LPS.save_policies
+    obs = dict(policy_id="REJECT::ENTRY_TOO_EXTENDED", dimension="reason_code",
+               bucket="ENTRY_TOO_EXTENDED", realized_R=0.4, observation_key="obs")
+
+    def save(payload, path=None):
+        result = real_save(payload, path)
+        if ".history-stage-" in str(path):
+            staged.set()
+            applied.wait(3)
+        return result
+
+    def learn_after_snapshot():
+        assert staged.wait(5)
+        try:
+            return LPS.record_measured_outcome(**obs)
+        finally:
+            applied.set()
+
+    monkeypatch.setattr(LPS, "save_policies", save)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        worker = pool.submit(learn_after_snapshot)
+        history._publish_history_policies({}, {}, generation_fingerprint="review")
+        worker.result(timeout=5)
+    LPS.record_measured_outcome(**obs)
+    assert _n() == 1
+
+
+def test_l04_history_publication_still_replaces_the_historical_projection():
+    from product import autonomous_evolution as history, learning_policy_store as LPS
+
+    LPS.upsert_policy(policy_id="HIST_SETUP::OLD", dimension="setup", bucket="OLD", sample_size=3,
+                      expectancy_R=0.1, source="backtest_reproduced")
+    LPS.record_measured_outcome(policy_id="REJECT::X", dimension="reason_code", bucket="X",
+                                realized_R=0.4, observation_key="k")
+    history._publish_history_policies({"NEW": {"n": 5, "mean_R": 0.2}}, {}, generation_fingerprint="g2")
+    ids = {p["policy_id"] for p in LPS.load_policies()["policies"]}
+    assert "HIST_SETUP::NEW" in ids and "HIST_SETUP::OLD" not in ids and "REJECT::X" in ids
+
+
+def test_l07_replayed_close_calibrates_once(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from product import decision_calibration, learning_policy_store as LPS, paper_learning_loop as PLL
+    from research import feature_store
+
+    monkeypatch.setattr(feature_store, "_DB_PATH", tmp_path / "features.sqlite3")
+    assert feature_store.snapshot("decision::d1", "TCS", "DECISION", {}, ts="2026-09-01",
+                                  meta={"predicted_p": 0.7})["status"] == "frozen"
+    book = SimpleNamespace(closed=[{
+        "decision_id": "d1", "paper_intent_id": "i1", "context_key": "ctx", "symbol": "TCS",
+        "setup_label": "VCP", "entry_date": "2026-09-01", "exit_date": "2026-09-02",
+        "exit_reason": "TARGET", "realized_R": 1.0}])
+    real_apply = LPS._apply_measured
+
+    def apply(**kw):
+        if kw["policy_id"] == "SETUP::VCP":
+            raise OSError("stop after calibration, before book checkpoint")
+        return real_apply(**kw)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(LPS, "_apply_measured", apply)
+        with pytest.raises(OSError):
+            PLL.ingest_closed_book(book)
+    PLL.ingest_closed_book(book)
+    assert len(decision_calibration.load_store()["observations"]) == 1
+
+
+def test_l07_a_crash_between_cell_and_ladder_still_reaches_the_ladder(monkeypatch):
+    from product import conditional_evidence as CE, learning_policy_store as LPS
+    from product.decision_chain import Outcome
+    from product.evidence_class import PAPER_FORWARD
+    from tests.test_learning_exactly_once import _n
+
+    outcome = Outcome(position_id="p1", paper_order_id="i1", paper_intent_id="i1", decision_id="d1",
+                      symbol="TCS", exit_reason="TARGET", realized_R=1.0, entry_price=100, exit_price=110,
+                      entry_session="2026-09-01", exit_session="2026-09-02", evidence_class=PAPER_FORWARD)
+    with monkeypatch.context() as patch:
+        patch.setattr(LPS, "record_measured_outcome",
+                      lambda **k: (_ for _ in ()).throw(OSError("crash after the cell save")))
+        CE.record_outcome(outcome, context_key="ctx", evidence_class=PAPER_FORWARD)
+    assert _n("cond::ctx") == 0
+    CE.record_outcome(outcome, context_key="ctx", evidence_class=PAPER_FORWARD)
+    CE.record_outcome(outcome, context_key="ctx", evidence_class=PAPER_FORWARD)
+    assert _n("cond::ctx") == 1
+
+
+def test_l08_good_wait_cannot_credit_session_eleven(monkeypatch):
+    from core import session_window
+    from product import paper_learning_loop as PLL
+    from product.counterfactual_learning import freeze_decision
+    from tests.test_learning_exactly_once import _n
+
+    dates = [f"2026-09-{day}" for day in ("01", "02", "03", "04", "07", "08", "09", "10", "11", "16", "17")]
+    monkeypatch.setattr(session_window, "official_dates", lambda: dates)
+    freeze_decision(symbol="TCS", decision="WAIT", reason_code="WAIT_FOR_PULLBACK",
+                    entry=100, stop=94, target=115, as_of="2026-09-01")
+    result = PLL.note_later_entry("TCS", as_of="2026-09-18")
+    assert (result["updated"], _n("ENTRY_QUALITY::GOOD_WAIT")) == (0, 0)
+
+
+def test_l08_a_fill_inside_the_horizon_is_still_a_good_wait(monkeypatch):
+    from core import session_window
+    from product import paper_learning_loop as PLL
+    from product.counterfactual_learning import freeze_decision
+    from tests.test_learning_exactly_once import _n
+
+    dates = [f"2026-09-{day}" for day in ("01", "02", "03", "04", "07")]
+    monkeypatch.setattr(session_window, "official_dates", lambda: dates)
+    freeze_decision(symbol="TCS", decision="WAIT", reason_code="WAIT_FOR_PULLBACK",
+                    entry=100, stop=94, target=115, as_of="2026-09-01")
+    result = PLL.note_later_entry("TCS", as_of="2026-09-08")      # session 5, intraday
+    assert (result["updated"], _n("ENTRY_QUALITY::GOOD_WAIT")) == (1, 1)
+
+
+def test_l08_no_archive_means_the_credit_stays_pending(monkeypatch):
+    from core import session_window
+    from product import paper_learning_loop as PLL
+    from product.counterfactual_learning import freeze_decision
+
+    monkeypatch.setattr(session_window, "official_dates", lambda: [])
+    freeze_decision(symbol="TCS", decision="WAIT", reason_code="WAIT_FOR_PULLBACK",
+                    entry=100, stop=94, target=115, as_of="2026-09-01")
+    assert PLL.note_later_entry("TCS", as_of="2026-09-03")["updated"] == 0

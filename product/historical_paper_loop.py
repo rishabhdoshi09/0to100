@@ -821,7 +821,7 @@ def update_historical_setup_policies(
             "|".join(sorted(str(r.get("trade_id") or "") for r in rows)).encode("utf-8")
         ).hexdigest()[:16]
 
-        from product.learning_policy_store import load_policies, upsert_policy
+        from product.learning_policy_store import load_policies, locked_upsert_policy as upsert_policy
 
         existing = next(
             (

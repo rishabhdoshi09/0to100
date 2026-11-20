@@ -327,6 +327,9 @@ def record_resolved_prediction(
             sector=str(meta.get("sector_state") or ""),
             decision_as_of=str(row.get("ts") or ""),
             outcome_as_of=str(resolved_at or datetime.now(timezone.utc).isoformat()),
+            # One taken outcome per decision observation: a replayed close
+            # calibrates once (overnight review L-07).
+            observation_id=f"taken:{_observation_id(decision_id)}",
         )
     except Exception as exc:
         out["calibration"] = {"error": str(exc)[:200]}

@@ -156,10 +156,20 @@ class DecisionCalibrationEngine:
         outcome_as_of: str,
         predicted_p: float | None = None,
         prediction_source: str = "",
+        observation_id: str = "",
     ) -> dict[str, Any]:
-        """PIT-safe: decision_as_of must be <= outcome_as_of. Future data cannot rewrite the prediction."""
+        """PIT-safe: decision_as_of must be <= outcome_as_of. Future data cannot rewrite the prediction.
+
+        ``observation_id`` names the immutable outcome being calibrated: a
+        replay of the same outcome returns the recorded row instead of
+        appending a second one (overnight review L-07).
+        """
         if outcome_as_of and decision_as_of and str(outcome_as_of) < str(decision_as_of):
             raise ValueError("outcome cannot precede the point-in-time decision")
+        if observation_id:
+            for prior in self.store.get("observations") or []:
+                if isinstance(prior, dict) and str(prior.get("observation_id") or "") == str(observation_id):
+                    return dict(prior)
         bucket = _bucket(predicted_confidence)
         implied = (
             _probability(predicted_p)
@@ -180,6 +190,8 @@ class DecisionCalibrationEngine:
             "recorded_at": datetime.now(timezone.utc).isoformat(),
             "production_changed": False,
         }
+        if observation_id:
+            row["observation_id"] = str(observation_id)
         obs = list(self.store.get("observations") or [])
         obs.append(row)
         self.store["observations"] = obs
