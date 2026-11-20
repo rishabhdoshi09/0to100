@@ -608,7 +608,13 @@ def main(argv=None) -> int:
     ap.add_argument("--sample-step", type=int, default=5)
     ap.add_argument("--out")
     args = ap.parse_args(argv)
-    rep = run(args.root, symbols=args.symbols, sample_step=args.sample_step)
+    # Every runtime path (scanner calibration snapshots, the backtest report path,
+    # resolved at import) must point at the COPY, never the live runtime.
+    root = Path(args.root).resolve()
+    if str(root).startswith("/Volumes/"):
+        raise SystemExit(f"refusing {root}: copy the store to the internal SSD first")
+    os.environ["QT_RUNTIME_ROOT"] = str(root)
+    rep = run(root, symbols=args.symbols, sample_step=args.sample_step)
     text = json.dumps(rep, indent=1, default=str)
     if args.out:
         Path(args.out).write_text(text + "\n", encoding="utf-8")

@@ -242,6 +242,8 @@ def main(argv=None) -> int:
     ap.add_argument("--stage")
     args = ap.parse_args(argv)
     _refuse_live(args.ledger, args.counterfactuals, args.store_root, args.out)
+    import os
+    os.environ["QT_RUNTIME_ROOT"] = str(Path(args.store_root).resolve())     # any runtime path -> the copy
     ledger, cf = _read_jsonl(args.ledger), _read_jsonl(args.counterfactuals)
     report = reconcile(ledger, cf, store_outcome_fn(args.store_root))
     staged = stage(report, ledger, cf, args.stage) if args.stage else None
