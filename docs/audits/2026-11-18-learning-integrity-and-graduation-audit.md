@@ -833,3 +833,77 @@ Reading:
 - `test_the_conservative_estimator_is_pinned` pins the exact SE, df and lower bound on three RNG-free fixtures. Any change to the estimator fails, and a less conservative change is named as such.
 - Synthetic nulls remain a stress test, not a guarantee.
 
+## 15. Trust boundary, lifetime error and power (20 Nov; ChatGPT review of `68514c59`)
+
+The review was delivered at 23:54:43Z and acknowledged at 23:56:27Z. Nothing was deployed and no production data was changed. Live trading is HARD-LOCKED.
+
+### 15.1 The evidence certificate's actual authority (P0)
+
+The review was right. `bind_evidence` compared a row's id with an id stored in the *same payload*, so a stale but self-consistent artifact passed. Tracing the chain:
+
+- **The authority.** It is the active calibration snapshot. Its id is a content hash over the whole walk-forward report (`backtest_evidence_hash` in the identities), plus the data, thesis, feature and model versions.
+- **Defect 1, the pointer.** `get_or_create_snapshot` did not move the `current.json` pointer on a cache hit. After a rollback to an older report, scanners used snapshot X while the pointer still named Y. Fixed: the pointer always names the snapshot built from the current inputs.
+- **Defect 2, the boundary.** `load_scan()` is the boundary between the producing scan and every later consumer, across processes and time. It now **re-derives** each BUY row's evidence from the authoritative snapshot: the snapshot's own edges for the row's signals, `unproven_reason`, and the provenance check.
+
+  These now fail:
+  - a stale self-consistent artifact;
+  - a verdict promoted after the scan;
+  - a report replaced between the scan and the read;
+  - stale authoritative provenance;
+  - a missing authority (nothing is certified).
+
+  Replays have their own explicit point-in-time route, so the forgeable `pit` exemption is removed from this path. The in-memory path straight from the scanner keeps the self-consistency check, because it was certified by the same snapshot moments earlier.
+- **Data binding.** The report now records the data version (first and last official sessions read), the universe (SHA-256 of the sampled symbols), the family size and the family alpha. They are hashed into the snapshot id.
+- **Holes found and fixed:**
+  - A zero-dispersion sample had `lower_r = mean` and showed a "proven" bound. It now has no bound.
+  - Family p-values were recomputed from 4-decimal values. They now use the unrounded p, coherent with the lower bound, and any non-finite p becomes 1.
+- **Legacy path found.** `scan/conviction.build_conviction` re-derives BUY / STRONG BUY from news-buzz and earnings "conviction", bypassing the gate. Only the legacy `auto_scan` calls it, and the canonical stack never starts that.
+- **`code_sha` is audit metadata, not an authority.** The authority for "same rules" is the report schema, eval spec, horizon and family method, which the running build checks against its own constants. This deliberately does not defend against an adversary who can write the runtime (and could equally edit the code). It defends against staleness, rollback, mixing, races, partial writes and promotion bugs.
+
+### 15.2 Per-report versus lifetime family-wise error (P0)
+
+Holm bounds false admissions *per report*. Weekly reports re-test overlapping data about 52 times a year. The predeclared rule is now Holm at **α / 52 per weekly report**. By the union bound, P(any false admission in a calendar year) ≤ 5% under any dependence, and the bound grows by 5% for each further year. The rule was chosen on theory.
+
+Lifetime null (seeds 601–602; weak dependence so the simulation can discriminate; 6 signals plus pairs; 52 weekly looks; 45 simulations):
+
+- Every procedure made 0 false admissions over 52 looks. With raw tests the Wilson upper bound is 7.9%, so this run cannot separate the procedures empirically.
+- A true +0.30R edge was admitted in 6.1% of looks uncorrected and 0% after any correction.
+- Still open: alpha spending across years, e-values, and a preregistered forward holdout (§15.4).
+
+### 15.3 Power: 20 blocks is a floor, not a sufficient sample (P1)
+
+`python -m research.power_study --sims 300` gives the power of one row's test (status OK, mean > 0, one-sided p below the threshold) under a true edge measured in per-session SD units. The thresholds are: one test at 5%, the worst-placed row of a 44-row Holm family, and the annual budget.
+
+| Dependence | Independent blocks | 0.3 SD: single / Holm / annual | 0.5 SD: single / Holm / annual |
+|---|---|---|---|
+| overlap | 20 (200 sessions) | 0.28 / 0.01 / 0.00 | 0.57 / 0.06 / 0.00 |
+| overlap | 40 (400 sessions) | 0.50 / 0.06 / 0.00 | 0.93 / 0.34 / 0.04 |
+| overlap | 80 (800 sessions) | 0.82 / 0.26 / 0.06 | 1.00 / 0.80 / 0.37 |
+| overlap | 160 (1600 sessions) | 0.98 / 0.73 / 0.27 | 1.00 / 1.00 / 0.96 |
+| overlap | 320 (3200 sessions) | 1.00 / 0.99 / 0.91 | 1.00 / 1.00 / 1.00 |
+| overlap + ar0.5 | 20 (200 sessions) | 0.26 / 0.01 / 0.00 | 0.55 / 0.06 / 0.01 |
+| overlap + ar0.5 | 40 (400 sessions) | 0.46 / 0.07 / 0.00 | 0.88 / 0.36 / 0.08 |
+| overlap + ar0.5 | 80 (800 sessions) | 0.72 / 0.21 / 0.04 | 0.98 / 0.76 / 0.31 |
+| overlap + ar0.5 | 160 (1600 sessions) | 0.98 / 0.67 / 0.27 | 1.00 / 1.00 / 0.93 |
+| overlap + ar0.5 | 320 (3200 sessions) | 1.00 / 0.96 / 0.77 | 1.00 / 1.00 / 1.00 |
+| overlap + ar0.9 | 20 (200 sessions) | 0.19 / 0.02 / 0.00 | 0.26 / 0.03 / 0.00 |
+| overlap + ar0.9 | 40 (400 sessions) | 0.24 / 0.02 / 0.00 | 0.51 / 0.08 / 0.00 |
+| overlap + ar0.9 | 80 (800 sessions) | 0.34 / 0.03 / 0.00 | 0.75 / 0.18 / 0.03 |
+| overlap + ar0.9 | 160 (1600 sessions) | 0.68 / 0.10 / 0.00 | 0.95 / 0.53 / 0.13 |
+| overlap + ar0.9 | 320 (3200 sessions) | 0.90 / 0.36 / 0.07 | 1.00 / 0.94 / 0.69 |
+
+What this means:
+
+- **At the verdict floor of 20 blocks, the annual budget has about 0 power even for 0.5 SD.** The production walk-forward uses a 250-session lookback (25 blocks), so under the current rules a BUY from the walk-forward alone is **unattainable**. That is a justified blocked outcome, not something to tune away.
+- **The attainable budget is larger.** The bhavcopy store holds about 1,760 sessions (~170 blocks). A walk-forward over the full history would give about 90% power at 0.3 SD under the annual budget with plain overlap. It would also make the weekly host job several times slower, so it is **an owner decision** and was not changed here.
+- **Evidence a claim would need.** Preregister ONE primary forward hypothesis, a single test with no family penalty, and confirm it on new forward sessions only. That needs about 40 blocks (400 sessions, ~1.6 years) for a 0.5 SD edge, or 80 blocks (~3 years) for 0.3 SD, at 80% power under plain overlap. Persistence raises it to 320+ blocks.
+- **The current real evidence** is 24 sessions, which is 4 blocks.
+
+### 15.4 Robustness (P1)
+
+- **Shadow ledger migration:**
+  - it keeps every session row and every prediction;
+  - a second open changes nothing;
+  - a simulated crash halfway through rolls back as a whole, and a rerun completes.
+- **Earlier guarantees re-checked:** exact 10-session windows, the calendar-contradiction check, the corrupt-ledger refusal and kill -9 recovery are all still covered by their tests.
+

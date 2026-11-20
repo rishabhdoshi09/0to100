@@ -1,0 +1,181 @@
+{
+  "rule": "as above; 6 signals + pairs, factor scale 0.3 (weak dependence), 52 weekly looks",
+  "null_52_looks": {
+    "seed": 601,
+    "sims": 45,
+    "looks": 52,
+    "adaptive_family": false,
+    "signals": 6,
+    "factor_scale": 0.3,
+    "edge": {},
+    "procedures": {
+      "none": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0016
+        ],
+        "any_false_admission_in_52_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.0787
+        ]
+      },
+      "bh": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0016
+        ],
+        "any_false_admission_in_52_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.0787
+        ]
+      },
+      "by": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0016
+        ],
+        "any_false_admission_in_52_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.0787
+        ]
+      },
+      "holm": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0016
+        ],
+        "any_false_admission_in_52_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.0787
+        ]
+      },
+      "bonferroni": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0016
+        ],
+        "any_false_admission_in_52_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.0787
+        ]
+      },
+      "holm_annual": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0016
+        ],
+        "any_false_admission_in_52_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.0787
+        ]
+      }
+    }
+  },
+  "power_52_looks_edge_0.30R": {
+    "seed": 602,
+    "sims": 20,
+    "looks": 52,
+    "adaptive_family": false,
+    "signals": 6,
+    "factor_scale": 0.3,
+    "edge": {
+      "S0": 0.3
+    },
+    "procedures": {
+      "none": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0037
+        ],
+        "any_false_admission_in_52_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.1611
+        ],
+        "true_row_admissions_per_look": 0.061
+      },
+      "bh": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0037
+        ],
+        "any_false_admission_in_52_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.1611
+        ],
+        "true_row_admissions_per_look": 0.0
+      },
+      "by": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0037
+        ],
+        "any_false_admission_in_52_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.1611
+        ],
+        "true_row_admissions_per_look": 0.0
+      },
+      "holm": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0037
+        ],
+        "any_false_admission_in_52_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.1611
+        ],
+        "true_row_admissions_per_look": 0.0
+      },
+      "bonferroni": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0037
+        ],
+        "any_false_admission_in_52_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.1611
+        ],
+        "true_row_admissions_per_look": 0.0
+      },
+      "holm_annual": {
+        "per_look_false_admission": 0.0,
+        "per_look_wilson95": [
+          0.0,
+          0.0037
+        ],
+        "any_false_admission_in_52_looks": 0.0,
+        "across_looks_wilson95": [
+          0.0,
+          0.1611
+        ],
+        "true_row_admissions_per_look": 0.0
+      }
+    }
+  },
+  "versions": {
+    "numpy": "2.4.4"
+  },
+  "elapsed_s": 88.5
+}

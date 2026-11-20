@@ -43,7 +43,8 @@ WINDOW = 250
 BAR = 0.05
 ALPHA = 0.05
 MIN_TRADES = 30
-PROCEDURES = ("none", "bh", "by", "holm", "bonferroni")
+PROCEDURES = ("none", "bh", "by", "holm", "bonferroni", "holm_annual")
+LOOKS_PER_YEAR = 52
 
 
 def adjust(pvals: list[float], method: str, alpha: float = ALPHA) -> list[bool]:
@@ -51,6 +52,8 @@ def adjust(pvals: list[float], method: str, alpha: float = ALPHA) -> list[bool]:
     m = len(pvals)
     if m == 0:
         return []
+    if method == "holm_annual":                     # Holm at alpha / 52: the annual union bound
+        return adjust(pvals, "holm", alpha / LOOKS_PER_YEAR)
     order = sorted(range(m), key=lambda i: pvals[i])
     out = [False] * m
     if method == "none":
@@ -74,7 +77,7 @@ def adjust(pvals: list[float], method: str, alpha: float = ALPHA) -> list[bool]:
     return out
 
 
-def simulate_rows(rng, *, looks: int, signals: int = 12, edge: dict | None = None):
+def simulate_rows(rng, *, looks: int, signals: int = 12, edge: dict | None = None, factor: float = 1.5):
     """Per-row daily [sum R, count] arrays over the whole horizon of looks."""
     T = WINDOW + (looks - 1) * 5 + H + 1
     market = rng.normal(size=T)
@@ -100,7 +103,7 @@ def simulate_rows(rng, *, looks: int, signals: int = 12, edge: dict | None = Non
         fire[j] = counts
         days = np.repeat(np.arange(n), counts)
         mu = (edge or {}).get(f"S{j}", 0.0)
-        r = mu + beta[j] * wm[days] * 1.5 + 0.8 * ws[style_of[j], days] * 1.5 + rng.normal(0, 1.2, size=len(days))
+        r = mu + beta[j] * wm[days] * factor + 0.8 * ws[style_of[j], days] * factor + rng.normal(0, 1.2, size=len(days))
         per_trade.append((days, r))
     rows: dict[str, tuple[np.ndarray, np.ndarray]] = {}
     for j, (days, r) in enumerate(per_trade):
@@ -113,8 +116,8 @@ def simulate_rows(rng, *, looks: int, signals: int = 12, edge: dict | None = Non
             continue
         days = np.repeat(np.arange(n), both)
         mu = ((edge or {}).get(f"S{a}", 0.0) + (edge or {}).get(f"S{b}", 0.0)) / 2
-        r = (mu + 0.5 * (beta[a] + beta[b]) * wm[days] * 1.5
-             + 0.4 * (ws[style_of[a], days] + ws[style_of[b], days]) * 1.5 + rng.normal(0, 1.2, size=len(days)))
+        r = (mu + 0.5 * (beta[a] + beta[b]) * wm[days] * factor
+             + 0.4 * (ws[style_of[a], days] + ws[style_of[b], days]) * factor + rng.normal(0, 1.2, size=len(days)))
         rows[f"S{a}|S{b}"] = (np.bincount(days, weights=r, minlength=n), np.bincount(days, minlength=n))
     return rows
 
@@ -134,8 +137,9 @@ def test_row(s: np.ndarray, c: np.ndarray, start: int) -> tuple[float, float, in
     return float(rep["mean"]), float(p), trades
 
 
-def one_sim(rng, *, looks: int, adaptive: bool, edge: dict | None = None) -> dict:
-    rows = simulate_rows(rng, looks=looks, edge=edge)
+def one_sim(rng, *, looks: int, adaptive: bool, edge: dict | None = None, signals: int = 12,
+            factor: float = 1.5) -> dict:
+    rows = simulate_rows(rng, looks=looks, edge=edge, signals=signals, factor=factor)
     true_pos = {k for k in rows if any(part in (edge or {}) for part in k.split("|"))}
     per_look = {m: [] for m in PROCEDURES}
     admitted_true = {m: 0 for m in PROCEDURES}
@@ -160,14 +164,15 @@ def one_sim(rng, *, looks: int, adaptive: bool, edge: dict | None = None) -> dic
     return {"per_look_false": per_look, "true_admissions": admitted_true, "family": len(rows)}
 
 
-def run(sims: int, looks: int, seed: int, *, adaptive: bool, edge: dict | None = None) -> dict:
+def run(sims: int, looks: int, seed: int, *, adaptive: bool, edge: dict | None = None, signals: int = 12,
+        factor: float = 1.5) -> dict:
     rng = np.random.default_rng(seed)
     any_look = {m: 0 for m in PROCEDURES}
     any_year = {m: 0 for m in PROCEDURES}
     looks_total = sims * looks
     true_hits = {m: 0 for m in PROCEDURES}
     for _ in range(sims):
-        out = one_sim(rng, looks=looks, adaptive=adaptive, edge=edge)
+        out = one_sim(rng, looks=looks, adaptive=adaptive, edge=edge, signals=signals, factor=factor)
         for m in PROCEDURES:
             fl = out["per_look_false"][m]
             any_look[m] += sum(1 for x in fl if x > 0)
@@ -183,8 +188,8 @@ def run(sims: int, looks: int, seed: int, *, adaptive: bool, edge: dict | None =
         }
         if edge:
             res[m]["true_row_admissions_per_look"] = round(true_hits[m] / looks_total, 3)
-    return {"seed": seed, "sims": sims, "looks": looks, "adaptive_family": adaptive,
-            "edge": edge or {}, "procedures": res}
+    return {"seed": seed, "sims": sims, "looks": looks, "adaptive_family": adaptive, "signals": signals,
+            "factor_scale": factor, "edge": edge or {}, "procedures": res}
 
 
 def main(argv=None) -> int:
@@ -192,8 +197,23 @@ def main(argv=None) -> int:
     ap.add_argument("--sims", type=int, default=200)
     ap.add_argument("--looks", type=int, default=26)
     ap.add_argument("--out")
+    ap.add_argument("--lifetime", action="store_true",
+                    help="52 weekly looks, weak dependence (discriminating null), Holm vs the annual budget")
     args = ap.parse_args(argv)
     t0 = time.time()
+    if args.lifetime:
+        out = {"rule": "as above; 6 signals + pairs, factor scale 0.3 (weak dependence), 52 weekly looks",
+               "null_52_looks": run(args.sims, 52, 601, adaptive=False, signals=6, factor=0.3),
+               "power_52_looks_edge_0.30R": run(max(20, args.sims // 3), 52, 602, adaptive=False, signals=6,
+                                                factor=0.3, edge={"S0": 0.30}),
+               "versions": {"numpy": np.__version__}}
+        out["elapsed_s"] = round(time.time() - t0, 1)
+        text = json.dumps(out, indent=2)
+        if args.out:
+            with open(args.out, "w", encoding="utf-8") as fh:
+                fh.write(text + "\n")
+        print(text)
+        return 0
     out = {
         "rule": f"mean >= {BAR}R, overlap-robust one-sided p < alpha after the family procedure, >= {MIN_TRADES} trades",
         "versions": {"numpy": np.__version__},
