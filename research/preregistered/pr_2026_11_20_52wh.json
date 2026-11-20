@@ -1,0 +1,68 @@
+{
+  "id": "PR-2026-11-20-52WH",
+  "title": "52-week-high proximity predicts the next 10 NSE sessions' cross-sectional returns",
+  "status": "PREREGISTERED_NOT_STARTED",
+  "frozen_on": "2026-11-20",
+  "lane": "SHADOW_ONLY",
+  "can_create_buy": false,
+  "can_place_orders": false,
+  "mechanism": "Anchoring: investors use the 52-week high as a reference point and under-react to news when a price is near it, so stocks close to their 52-week high drift up relative to stocks far from it (George and Hwang, 2004, Journal of Finance 59(5)). India-specific evidence is not assumed; that is what this test measures.",
+  "disclosure": "The author has seen in-sample walk-forward diagnostics of the scanner's event signals (for example BREAKOUT_52W at +0.33R on 8 trades in a 40-symbol probe). This thesis is a cross-sectional ranking, not that event signal, and was chosen from the external literature, not from those numbers. No historical return of this score was computed before freezing.",
+  "universe": {
+    "membership": "point-in-time: listed on or before the decision session and not delisted by it (logs/universe_history.json, official bhavcopy)",
+    "series": "EQ",
+    "min_history_sessions": 260,
+    "min_price_rs": 20.0,
+    "min_median_traded_value_rs_20d": 50000000,
+    "price_source": "official NSE bhavcopy, corporate-action adjusted on read"
+  },
+  "score": {
+    "name": "high_52w_proximity",
+    "definition": "close(d) / max(high over the 252 official sessions ending at d, inclusive)",
+    "lookback_sessions": 252,
+    "data_through": "decision session d only (no bar after d)"
+  },
+  "schedule": {
+    "decision_sessions": "every 10th official NSE session, starting at the first official session strictly after the freeze date",
+    "first_eligible_decision_session": "2026-11-23",
+    "freeze_deadline": "the score vector is frozen in the shadow ledger before 09:15 IST of the next calendar day (product.challenger_shadow rules); a session not frozen in time is MISSED, never backfilled",
+    "entry": "open of the official session after d",
+    "exit": "close of the 10th official session after d",
+    "horizon_sessions": 10
+  },
+  "primary_outcome": {
+    "statistic": "Spearman rank correlation (IC) between score(d) and the entry-to-exit return across the eligible universe, one value per decision session",
+    "independence": "decision sessions are 10 sessions apart, so outcome windows never overlap; each IC is one independent block",
+    "hypothesis": "H0: mean IC <= 0; H1: mean IC > 0",
+    "test": "one-sided t-test on the per-block IC series",
+    "alpha": 0.05,
+    "multiplicity": "a single pre-registered hypothesis (m = 1), outside the walk-forward BUY family and its annual budget"
+  },
+  "secondary_outcomes": [
+    "equal-weight top-20 basket return, net of 0.32% round-trip cost (core.costs CNC 0.22% + 0.10% slippage), minus the equal-weight eligible-universe return, per block, with a 95% interval; descriptive unless the primary passes",
+    "the same IC within BULL / CHOP / BEAR blocks of the equal-weight index (scan.signal_backtest.classify_regime); descriptive only"
+  ],
+  "power": {
+    "target_effect_ic": 0.03,
+    "assumed_sd_ic_per_block": 0.10,
+    "power": 0.80,
+    "required_blocks": 69,
+    "sensitivity_note": "required_blocks = ceil(((z_0.95 + z_0.80) * sd / effect)^2); the sample size is fixed at 69 and is never reduced after any look at the data"
+  },
+  "stopping": {
+    "final_analysis_at_blocks": 69,
+    "futility_look_at_blocks": 35,
+    "futility_rule": "non-binding: stop for futility if the mean IC at 35 blocks is <= 0",
+    "efficacy_early_stop": "none",
+    "inconclusive_if": "more than 10% of decision sessions are MISSED, or fewer than 500 eligible symbols on more than 10% of decision sessions"
+  },
+  "missing_data": {
+    "symbol_without_complete_window": "excluded from that block's IC and counted",
+    "unpublished_bhavcopy_or_failed_scan": "MISSED marker, never backfilled"
+  },
+  "decision_on_result": {
+    "PASS": "permits proposing a separate, owner-approved paper-only experiment; never a BUY, never a change to the live gate or risk limits",
+    "FAIL_OR_FUTILE": "the thesis is recorded as not supported in India for this horizon",
+    "INCONCLUSIVE": "reported as such; no extension without a new pre-registration"
+  }
+}
