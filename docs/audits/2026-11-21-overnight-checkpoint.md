@@ -70,6 +70,20 @@ The bias was real but small on this sample. The verdict is unchanged: NO_MATERIA
 
 **Tests.** `tests/test_stopped_symbol_censoring.py` has 3 tests (resolved loss counted; open trade censored; still-trading symbol pending). All 3 fail on `6d69603c`.
 
+## Cycle 3: QT-12, CA coverage is bound to the exact events it vouches for
+
+**Defect (confirmed on `b61ca527`).** The CA refresh persists each window's coverage as it walks, and writes the merged events only at the end. An interrupted refresh therefore left a newer coverage declaration over an older events file, and the point-in-time loader only checked that some events existed.
+
+**Fix.**
+
+- **Writer.** Coverage is marked unbound (`events_sha256: ""`) during the walk, and bound last to the SHA-256 of the events file actually written. `coverage_status()` reports `events_binding` (BOUND / UNBOUND / MISMATCH).
+- **PIT loader (`research/edge_diagnosis.load_copy`).**
+  - A MISMATCH is never trusted.
+  - UNBOUND (legacy) is trusted only with the explicit research flag `--accept-unbound-coverage`. The report records `ca_coverage_binding`, and a labelled `ca_coverage_accepted_unbound`.
+  - Production CA adjust-on-read is unchanged. The next nightly refresh binds the existing files.
+
+**Tests.** 4 tests in `tests/test_corporate_actions_resilient.py`, all failing on `b61ca527`.
+
 ## Open (next)
 
-QT-12 CA digest · C-8 remainder · C-2 result digest · GOOD_WAIT age · research cycle.
+C-8 remainder · C-2 result digest · GOOD_WAIT age · research cycle.

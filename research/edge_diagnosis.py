@@ -569,7 +569,7 @@ def analyse(collected: Mapping[str, Any], frames: Mapping[str, pd.DataFrame], *,
 
 # ── offline copy loading and the CLI ────────────────────────────────────────
 
-def load_copy(root: str | Path) -> dict[str, Any]:
+def load_copy(root: str | Path, *, accept_unbound_coverage: bool = False) -> dict[str, Any]:
     """Load an SSD copy: store, corporate-action events (applied on read), coverage and membership.
 
     The copy becomes this process's runtime root (QT_RUNTIME_ROOT), so every
@@ -591,18 +591,23 @@ def load_copy(root: str | Path) -> dict[str, Any]:
         frames[str(sym).upper()] = adjust_frame(df.copy(), ev, copy=False) if ev else df
     cov_p, uni_p = logs_path("ca_coverage.json"), logs_path("universe_history.json")
     coverage = json.loads(cov_p.read_text()) if cov_p.exists() else {}
-    if not events:
-        # A coverage file without the events it vouches for: the frames are
-        # raw, so nothing is covered (B-9).
+    from data.corporate_actions_resilient import coverage_binding
+    binding = coverage_binding(coverage, logs_path("ca_events.json"))
+    if not events or binding == "MISMATCH" or (binding == "UNBOUND" and not accept_unbound_coverage):
+        # A coverage declaration that does not vouch for THESE events (none
+        # loaded, another events generation, or never bound): nothing is
+        # covered (B-9, QT-12). --accept-unbound-coverage admits a LEGACY
+        # unbound file for research only, and the report says so.
         coverage = {}
-    return {"frames": frames, "coverage": coverage,
+    return {"frames": frames, "coverage": coverage, "coverage_binding": binding,
             "universe_rows": json.loads(uni_p.read_text()) if uni_p.exists() else None,
             "ca_event_symbols": len(events)}
 
 
-def run(root: str | Path, *, symbols: int, sample_step: int = 5) -> dict[str, Any]:
+def run(root: str | Path, *, symbols: int, sample_step: int = 5,
+        accept_unbound_coverage: bool = False) -> dict[str, Any]:
     from scan.sector_heat import _load_map
-    copy = load_copy(root)
+    copy = load_copy(root, accept_unbound_coverage=accept_unbound_coverage)
     frames = copy["frames"]
     collected = collect(frames, symbols=symbols, sample_step=sample_step)
     report = analyse(collected, frames, coverage=copy["coverage"], universe_rows=copy["universe_rows"],
@@ -613,6 +618,10 @@ def run(root: str | Path, *, symbols: int, sample_step: int = 5) -> dict[str, An
                                                                    report["last_session"],
                                                                    sample_step=sample_step),
                             "universe_history_rows": len(copy["universe_rows"] or []),
+                            # QT-12: is the CA coverage bound to the events actually loaded?
+                            "ca_coverage_binding": copy.get("coverage_binding"),
+                            "ca_coverage_accepted_unbound": bool(accept_unbound_coverage
+                                                                 and copy.get("coverage_binding") == "UNBOUND"),
                             "method": ("production run_backtest + core.evaluation_spec; nominal overlap-robust "
                                        "95% intervals per signal (research.overlap_inference); no multiplicity "
                                        "correction; in-sample diagnosis only")}
@@ -644,6 +653,8 @@ def main(argv=None) -> int:
     ap.add_argument("--symbols", type=int, default=120)
     ap.add_argument("--sample-step", type=int, default=5)
     ap.add_argument("--out")
+    ap.add_argument("--accept-unbound-coverage", action="store_true",
+                    help="research only: trust a LEGACY coverage file that carries no events digest (labelled)")
     args = ap.parse_args(argv)
     # Every runtime path (scanner calibration snapshots, the backtest report path,
     # resolved at import) must point at the COPY, never the live runtime.
@@ -651,7 +662,8 @@ def main(argv=None) -> int:
     if str(root).startswith("/Volumes/"):
         raise SystemExit(f"refusing {root}: copy the store to the internal SSD first")
     os.environ["QT_RUNTIME_ROOT"] = str(root)
-    rep = run(root, symbols=args.symbols, sample_step=args.sample_step)
+    rep = run(root, symbols=args.symbols, sample_step=args.sample_step,
+              accept_unbound_coverage=args.accept_unbound_coverage)
     text = json.dumps(rep, indent=1, default=str)
     if args.out:
         Path(args.out).write_text(text + "\n", encoding="utf-8")

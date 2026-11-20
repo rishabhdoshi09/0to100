@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 from datetime import date
+from pathlib import Path
+
+import pytest
 
 from data import corporate_actions_resilient as CAR
 
@@ -146,3 +149,70 @@ def test_nonempty_ledger_does_not_claim_complete_coverage(tmp_path):
     assert status["available"] is True
     assert status["coverage_complete"] is False
     assert status["missing_windows"]
+
+
+# ── QT-12: coverage is bound to the exact events it vouches for ──────────────
+
+def _refresh(tmp_path, *, crash_on_events=False, monkeypatch=None):
+    events = tmp_path / "ca_events.json"
+    coverage = tmp_path / "ca_coverage.json"
+    if crash_on_events:
+        real = CAR._atomic_json
+
+        def flaky(path, payload):
+            if Path(path) == events:
+                raise OSError("power cut before the events write")
+            return real(path, payload)
+
+        monkeypatch.setattr(CAR, "_atomic_json", flaky)
+    CAR.refresh_events_resilient(
+        years=1, today=date(2026, 8, 28), events_path=events, coverage_path=coverage,
+        nse_json_fetcher=lambda s, e: [_event(ex_date=s.isoformat())],
+        nse_csv_fetcher=lambda s, e: [], bse_fetcher=lambda s, e: [], sleep_fn=lambda _s: None, budget_s=30)
+    return events, coverage
+
+
+def test_a_completed_refresh_binds_coverage_to_its_events(tmp_path):
+    events, coverage = _refresh(tmp_path)
+    cov = json.loads(coverage.read_text())
+    assert cov["events_sha256"] == CAR.events_digest(events)
+    assert CAR.coverage_binding(cov, events) == "BOUND"
+    assert CAR.coverage_status(years=1, events_path=events, coverage_path=coverage,
+                               today=date(2026, 8, 28))["events_binding"] == "BOUND"
+
+
+def test_an_interrupted_refresh_never_vouches_for_older_events(tmp_path, monkeypatch):
+    events, coverage = tmp_path / "ca_events.json", tmp_path / "ca_coverage.json"
+    events.write_text(json.dumps([]))                         # an older events generation
+    with pytest.raises(OSError):
+        _refresh(tmp_path, crash_on_events=True, monkeypatch=monkeypatch)
+    cov = json.loads(coverage.read_text())                    # windows were persisted mid-walk ...
+    assert cov.get("windows")
+    assert CAR.coverage_binding(cov, events) == "UNBOUND"     # ... but vouch for nothing
+
+
+def test_a_changed_events_file_is_a_mismatch(tmp_path):
+    events, coverage = _refresh(tmp_path)
+    events.write_text(events.read_text().replace("2.0", "3.0"))
+    assert CAR.coverage_binding(json.loads(coverage.read_text()), events) == "MISMATCH"
+
+
+def test_the_pit_loader_trusts_only_bound_coverage(tmp_path, monkeypatch):
+    import pickle
+    from research import edge_diagnosis as ED
+
+    logs = tmp_path / "logs"
+    (logs / "bhav").mkdir(parents=True)
+    (logs / "bhav" / "store_cache.pkl").write_bytes(pickle.dumps({"store": {}}))
+    events, coverage = logs / "ca_events.json", logs / "ca_coverage.json"
+    events.write_text(json.dumps([_event()]))
+    windows = {"windows": {"w": {"success": True, "covered_from": "2025-01-01", "covered_to": "2026-11-19"}}}
+    coverage.write_text(json.dumps(windows))                  # legacy: no digest
+    monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
+    assert ED.load_copy(tmp_path)["coverage"] == {}
+    assert ED.load_copy(tmp_path, accept_unbound_coverage=True)["coverage_binding"] == "UNBOUND"
+    coverage.write_text(json.dumps({**windows, "events_sha256": "f" * 64}))
+    assert ED.load_copy(tmp_path, accept_unbound_coverage=True)["coverage"] == {}   # MISMATCH: never
+    coverage.write_text(json.dumps({**windows, "events_sha256": CAR.events_digest(events)}))
+    loaded = ED.load_copy(tmp_path)
+    assert loaded["coverage_binding"] == "BOUND" and ED.coverage_span(loaded["coverage"])[0] == "2025-01-01"

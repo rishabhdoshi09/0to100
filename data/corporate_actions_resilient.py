@@ -65,6 +65,33 @@ def _now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
+def events_digest(events_path: Path | str) -> str:
+    """SHA-256 of the exact events file bytes ('' when it does not exist)."""
+    import hashlib
+
+    p = Path(events_path)
+    try:
+        return hashlib.sha256(p.read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
+def coverage_binding(coverage: dict | None, events_path: Path | str) -> str:
+    """BOUND when the coverage declaration vouches for THESE events; else UNBOUND / MISMATCH.
+
+    Coverage windows are written as the refresh walks, before the merged events
+    are written; an interrupted refresh used to leave a newer coverage
+    declaration over an older events file (cross-review QT-12). The refresh
+    now binds coverage to the events file's digest only after the events are
+    durable; a declaration without that digest (legacy, or a walk in
+    progress) is UNBOUND, and one whose digest differs is MISMATCH.
+    """
+    declared = str(dict(coverage or {}).get("events_sha256") or "")
+    if not declared:
+        return "UNBOUND"
+    return "BOUND" if declared == events_digest(events_path) else "MISMATCH"
+
+
 def _atomic_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
@@ -570,6 +597,7 @@ def coverage_status(*, years: int = 5, events_path: Path | None = None,
         "events_path": str(events_path),
         "coverage_path": str(coverage_path),
         "source_mix": dict(coverage.get("source_mix") or {}),
+        "events_binding": coverage_binding(coverage, events_path),
     }
 
 
@@ -611,6 +639,9 @@ def refresh_events_resilient(*, force: bool = False, years: int = 5, budget_s: f
     bse_fetcher = bse_fetcher or (lambda s, e: _bse_fetch(s, e))
 
     coverage_windows = dict(coverage.get("windows") or {})
+    # Unbound while the walk runs: windows are persisted as they are fetched, but
+    # the events they vouch for are written only at the end (QT-12).
+    coverage["events_sha256"] = ""
     for window in windows:
         previous = dict(coverage_windows.get(window.window_id) or {})
         current_window = window.end == today
@@ -689,6 +720,8 @@ def refresh_events_resilient(*, force: bool = False, years: int = 5, budget_s: f
         "last_refresh_at": _now_iso(),
         "last_attempted_windows": attempted,
         "last_successful_windows": successful,
+        # Bound LAST, to the exact events file now on disk (QT-12).
+        "events_sha256": events_digest(events_path),
     })
     _atomic_json(coverage_path, coverage)
     status = coverage_status(years=years, events_path=events_path, coverage_path=coverage_path, today=today)
