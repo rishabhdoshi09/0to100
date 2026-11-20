@@ -963,7 +963,11 @@ class TelegramNotifier:
                     "reco_scan_scanned_at": reco_at,
                 }
             else:
-                recos = self.notify_recommendations(workspace)
+                # Per symbol too: a card published as high/good whose BUY the
+                # current read no longer certifies is research, not an alert (C-8).
+                from product.scan_store import current_buy_certificate, withdraw_uncertified_cards
+                recos = self.notify_recommendations(
+                    withdraw_uncertified_cards(workspace, current_buy_certificate(reco_at)))
         except Exception as exc:
             recos = {"sent": False, "reason": "error", "error": str(exc)[:200]}
         try:

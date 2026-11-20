@@ -751,8 +751,12 @@ EVOLUTION_LAB_CACHE = ProjectionCache("evolution_lab", fresh_s=300.0)
 
 def _decision_board_identity() -> tuple:
     from product.recommendations_store import DEFAULT_RECO_PATH
+    from product.scan_store import DEFAULT_SCAN_PATH, evidence_authority_key
 
-    return (file_identity(DEFAULT_RECO_PATH), _market_regime())
+    # The board re-verifies BUYs against the current scan and evidence authority
+    # (C-8): the cache must turn over when either changes, not only the recos.
+    return (file_identity(DEFAULT_RECO_PATH), file_identity(DEFAULT_SCAN_PATH), evidence_authority_key(),
+            _market_regime())
 
 
 def _build_decision_board(limit: int) -> dict[str, Any]:

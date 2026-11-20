@@ -194,47 +194,19 @@ EVIDENCE_WITHDRAWN = "EVIDENCE_WITHDRAWN"
 
 
 def _current_scan_certificate(payload: Mapping[str, Any] | None) -> set[str]:
-    """Symbols the AUTHORITATIVE scan read (product.scan_store.load_scan) certifies as BUY NOW.
+    """Symbols the authoritative scan read certifies as BUY now (product.scan_store.current_buy_certificate).
 
-    Every production entry must be in it. A saved card keeps the tier it was
-    published with, so a BUY withdrawn at read time (evidence superseded,
-    aged out, authority unavailable) could otherwise still be filled as a
-    production entry (GPT cross-review A-1/C-8). Fail closed: an unreadable
-    scan, or recommendations built from a different scan generation than the
-    one now on disk, certify NOTHING (the job-level freshness check can pass
-    just before the scan is replaced; cross-review verification QT-01).
+    Every production entry must be in it; fail closed on an unreadable scan or
+    another scan generation (cross-review A-1/C-8, QT-01).
     """
-    try:
-        from product.scan_store import load_scan
-        scan = load_scan()
-    except Exception:
-        return set()
-    if not scan:
-        return set()
-    reco_scan = str((payload or {}).get("scan_scanned_at") or "")
-    if not reco_scan or str(scan.get("scanned_at") or "") != reco_scan:
-        return set()
-    return {str(r.get("symbol") or "").upper() for r in scan.get("records") or []
-            if isinstance(r, Mapping) and str(r.get("verdict") or "").upper() in ("BUY", "STRONG BUY")}
+    from product.scan_store import current_buy_certificate
+    return current_buy_certificate(str((payload or {}).get("scan_scanned_at") or ""))
 
 
 def _withdraw_uncertified(card: dict[str, Any], certified: set[str] | None) -> dict[str, Any]:
-    """A production-tier card whose BUY is no longer certified becomes a gated WATCH card."""
-    if certified is None:
-        return card
-    symbol = str(card.get("symbol") or "").upper()
-    if str(card.get("reco_tier") or "") not in ELIGIBLE_TIERS or symbol in certified:
-        return card
-    out = dict(card)
-    out["reco_tier"] = TIER_WATCH
-    out["edge_gated"] = True
-    out["evidence_withdrawn"] = True
-    out["verdict"] = "WATCH"
-    reasons = list(out.get("reasons") or [])
-    reasons.append("⚖ BUY withdrawn at read time: not certified by the current evidence — "
-                   "not a production entry (research/exploration only)")
-    out["reasons"] = reasons
-    return out
+    """A production-tier card whose BUY is not certified becomes a gated WATCH card (scan_store)."""
+    from product.scan_store import _withdraw_uncertified as withdraw
+    return withdraw(card, certified)
 
 
 def _durable_save(save) -> bool:

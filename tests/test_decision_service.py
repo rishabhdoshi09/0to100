@@ -13,6 +13,20 @@ from product.decision import BUY, WATCH
 from product.decision_service import decision_board, decision_why, decisions_from_workspace
 
 
+class _CertifyAll(set):
+    """These tests are about ranking and selection; the read-time certificate is tested below."""
+
+    def __contains__(self, _item) -> bool:
+        return True
+
+
+@pytest.fixture(autouse=True)
+def _certified_scan(request, monkeypatch):
+    if "real_certificate" in request.keywords:
+        return
+    monkeypatch.setattr("product.scan_store.current_buy_certificate", lambda _at: _CertifyAll())
+
+
 def _workspace(*cards, scanned_at: str = "2026-09-12T03:00:00+00:00") -> dict:
     return {
         "schema_version": 4,
@@ -387,3 +401,19 @@ def test_best_trade_discovery_exposes_capacity_only_reserves_without_relaxing_th
         row["production_reason_code"] == "NOT_TOP_OF_PORTFOLIO"
         for row in board["best_trades"][3:]
     )
+
+
+@pytest.mark.real_certificate
+def test_a_buy_the_current_scan_does_not_certify_is_watch_and_never_a_best_trade(monkeypatch):
+    """Cross-review C-8: the saved board keeps the publication-time verdict; the read must not."""
+    ws = _workspace(_card("INFY"), _card("TCS"))
+    monkeypatch.setattr("product.scan_store.load_scan", lambda *a, **k: {
+        "scanned_at": ws["scan_scanned_at"],
+        "records": [{"symbol": "INFY", "verdict": "BUY"}, {"symbol": "TCS", "verdict": "WATCH"}]})
+    board = decision_board(workspace=ws)
+    by = {r["symbol"]: r for r in board["decisions"]}
+    assert by["TCS"]["state"] == "WATCH" and by["TCS"]["demoted_by"] == "BUY_NOT_CERTIFIED_AT_READ"
+    assert "TCS" not in {b["symbol"] for b in board["best_trades"]}
+    monkeypatch.setattr("product.scan_store.load_scan", lambda *a, **k: None)   # unreadable scan
+    board = decision_board(workspace=ws)
+    assert all(r["state"] != BUY for r in board["decisions"]) and board["best_trades"] == []

@@ -84,6 +84,25 @@ The bias was real but small on this sample. The verdict is unchanged: NO_MATERIA
 
 **Tests.** 4 tests in `tests/test_corporate_actions_resilient.py`, all failing on `b61ca527`.
 
+## Cycle 4: C-8 remainder, every consumer of a saved BUY re-checks it at read time
+
+**Defect (confirmed on `746d0a4f`).**
+
+- The decision board (`/api/decisions`, best trades) showed a BUY from the saved recommendations even after `load_scan()` had withdrawn it.
+- The Telegram desk alert checked the scan generation but not each symbol's certificate.
+- The board's API cache did not turn over when the scan or the evidence authority changed.
+
+**Fix.**
+
+- One certificate: `product/scan_store.current_buy_certificate(scan_scanned_at)` returns the symbols `load_scan()` certifies as BUY now, for that scan generation. It fails closed.
+- **Paper entry** uses it.
+- **Board:** an uncertified BUY shows as WATCH (`demoted_by: BUY_NOT_CERTIFIED_AT_READ`) and is never a best trade. The API cache key includes the scan file and `evidence_authority_key()`.
+- **Desk alert:** it sends `withdraw_uncertified_cards(workspace, certificate)`.
+- Publication-time consumers (`track_published_buys`, immediate alerts) were already re-certified in `f6081b26`.
+- Historical publication records are untouched.
+
+**Tests.** 2 new tests, both failing on `746d0a4f`. The board tests that are about ranking now use a labelled certify-all fixture, and the marker is registered.
+
 ## Open (next)
 
-C-8 remainder · C-2 result digest · GOOD_WAIT age · research cycle.
+C-2 result digest · GOOD_WAIT age · research cycle.

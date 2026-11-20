@@ -624,6 +624,77 @@ def load_scan(path: str | Path = DEFAULT_SCAN_PATH) -> dict[str, Any] | None:
         return None
 
 
+def current_buy_certificate(scan_scanned_at: str) -> set[str]:
+    """Symbols the AUTHORITATIVE read (load_scan) certifies as BUY now, for THIS scan generation.
+
+    The one read-time certificate every consumer of a saved BUY uses: paper
+    entry, the decision board, the Telegram desk alert (cross-review A-1/C-8).
+    A BUY valid when published can be withdrawn later (evidence superseded or
+    expired, authority unavailable, scan replaced). Fail closed: an
+    unreadable scan, or a recommendation/board built from another scan
+    generation, certifies NOTHING.
+    """
+    try:
+        scan = load_scan()
+    except Exception:
+        return set()
+    if not scan or not scan_scanned_at or str(scan.get("scanned_at") or "") != str(scan_scanned_at):
+        return set()
+    return {str(r.get("symbol") or "").upper() for r in scan.get("records") or []
+            if isinstance(r, Mapping) and str(r.get("verdict") or "").upper() in ("BUY", "STRONG BUY")}
+
+
+#: Production recommendation tiers (product.reco_ensemble TIER_HIGH / TIER_GOOD /
+#: TIER_WATCH, repeated here so this module imports nothing that binds load_scan).
+_PRODUCTION_TIERS = ("high_conviction", "good_setup")
+_WATCH_TIER = "watch"
+
+
+def _withdraw_uncertified(card: dict[str, Any], certified: set[str] | None) -> dict[str, Any]:
+    """A production-tier card whose BUY is not certified becomes a gated WATCH card (research)."""
+    if certified is None:
+        return card
+    symbol = str(card.get("symbol") or "").upper()
+    if str(card.get("reco_tier") or "") not in _PRODUCTION_TIERS or symbol in certified:
+        return card
+    out = dict(card)
+    out["reco_tier"] = _WATCH_TIER
+    out["edge_gated"] = True
+    out["evidence_withdrawn"] = True
+    out["verdict"] = "WATCH"
+    reasons = list(out.get("reasons") or [])
+    reasons.append("⚖ BUY withdrawn at read time: not certified by the current evidence — "
+                   "not a production entry (research/exploration only)")
+    out["reasons"] = reasons
+    return out
+
+
+def withdraw_uncertified_cards(workspace: Mapping[str, Any] | None, certified: set[str]) -> dict[str, Any]:
+    """A copy of a recommendations workspace whose production-tier cards are certified BUYs only.
+
+    Any other high/good card becomes a gated WATCH card (research), so no
+    consumer can present it as a qualified entry. An empty or missing
+    workspace is returned as it is.
+    """
+    if not workspace:
+        return workspace  # type: ignore[return-value]
+    out = dict(workspace)
+    cats = []
+    for cat in out.get("categories") or []:
+        if isinstance(cat, Mapping):
+            cat = dict(cat)
+            cat["cards"] = [_withdraw_uncertified(dict(c), certified) if isinstance(c, Mapping) else c
+                            for c in cat.get("cards") or []]
+        cats.append(cat)
+    out["categories"] = cats
+    life = dict(out.get("lifecycle") or {})
+    if life.get("active"):
+        life["active"] = [_withdraw_uncertified(dict(c), certified) if isinstance(c, Mapping) else c
+                          for c in life.get("active") or []]
+        out["lifecycle"] = life
+    return out
+
+
 def watchlist_rows(payload: Mapping[str, Any] | None, limit: int = 25) -> list[dict[str, Any]]:
     if not payload:
         return []

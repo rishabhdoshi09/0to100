@@ -330,10 +330,20 @@ def decision_board(
     gaps: dict[str, int] = {}
     all_rows: list[dict[str, Any]] = []
     demoted = 0
+    # A BUY on the board must be a BUY the authoritative scan read certifies NOW,
+    # for this board's scan generation (cross-review C-8): saved recommendations
+    # keep the verdict they were published with.
+    from product.scan_store import current_buy_certificate
+    certified = current_buy_certificate(str(workspace.get("scan_scanned_at") or ""))
     for row in ranked:
         decision = row.decision
         intelligence = dict((decision.historical_evidence or {}).get("evidence_intelligence") or {})
         demotion = historical_demotion(intelligence) if decision.state == BUY else ""
+        demoted_by = "HISTORICAL_NEGATIVE_EDGE" if demotion else ""
+        if decision.state == BUY and not demotion and str(decision.symbol or "").upper() not in certified:
+            demotion = ("⚖ BUY not certified at read time (evidence withdrawn, expired or unavailable, or "
+                        "another scan generation): WATCH research only.")
+            demoted_by = "BUY_NOT_CERTIFIED_AT_READ"
         shown_state = "WATCH" if demotion else decision.state
         demoted += 1 if demotion else 0
         counts[shown_state] = counts.get(shown_state, 0) + 1
@@ -358,7 +368,7 @@ def decision_board(
         if demotion:
             payload["state"] = shown_state
             payload["engine_state"] = decision.state
-            payload["demoted_by"] = "HISTORICAL_NEGATIVE_EDGE"
+            payload["demoted_by"] = demoted_by
             payload["why"] = f"{payload['why']} {demotion}".strip()
         try:
             from product.trading_thesis import decision_quality
@@ -388,6 +398,8 @@ def decision_board(
         market_state=market_state,
         limit=5,
     )
+    # Best trades are entries: only read-time certified BUYs (C-8).
+    best_trades = [b for b in best_trades if str((b or {}).get("symbol") or "").upper() in certified]
 
     return {
         "schema_version": SCHEMA_VERSION,

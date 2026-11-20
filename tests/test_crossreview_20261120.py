@@ -559,3 +559,24 @@ def test_QT05_home_revokes_a_buy_when_the_authority_target_disappears(tmp_path, 
     target.unlink()
     assert load_scan(scan)["records"][0]["verdict"] == "WATCH"
     assert HO.build_buy_only(rows, verified=True)["count"] == 0
+
+
+def test_C8_the_desk_alert_never_sends_a_withdrawn_buy_as_a_pick(tmp_path, monkeypatch):
+    """Matching scan generation, but load_scan() withdrew TCS: the alert gets it as research."""
+    from product import recommendations_store as RS, scan_store as SS
+    from research.autonomy.telegram_notifications import TelegramNotifier
+
+    stamp = "2026-11-20T05:00:00+00:00"
+    ws = {"scan_scanned_at": stamp, "categories": [{"cards": [
+        {"symbol": "INFY", "reco_tier": "high_conviction"}, {"symbol": "TCS", "reco_tier": "high_conviction"}]}]}
+    monkeypatch.setattr(RS, "load_recommendations", lambda *a, **k: ws)
+    monkeypatch.setattr(SS, "load_scan", lambda *a, **k: {"scanned_at": stamp, "records": [
+        {"symbol": "INFY", "verdict": "BUY"}, {"symbol": "TCS", "verdict": "WATCH"}]})
+    seen = {}
+    n = TelegramNotifier(tmp_path, engine_factory=lambda: None)
+    monkeypatch.setattr(n, "notify_recommendations", lambda w: seen.update(w=w) or {"sent": False})
+    monkeypatch.setattr(n, "notify_market_report_if_due", lambda: {})
+    monkeypatch.setattr(n, "drain_fno_alerts", lambda: {}, raising=False)
+    n.drain_desk_alerts()
+    high, good = TelegramNotifier._reco_tiers(seen["w"])
+    assert [c["symbol"] for c in high] == ["INFY"] and good == []
