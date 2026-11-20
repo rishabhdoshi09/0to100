@@ -27,6 +27,11 @@ def proven_provenance(generated_at="fresh", **over):
     binding = {k: prov.get(k) for k in alpha_ledger.BINDING_FIELDS}
     prov["alpha_accounting"] = alpha_ledger.reserve(SB.gate_program(), f"test-{uuid.uuid4().hex}",
                                                     family_size=44, members_sha256="m" * 64, binding=binding)
+    # A finalised look whose result digest the snapshot recomputed from its rows (C-2).
+    digest = uuid.uuid4().hex * 2
+    alpha_ledger.finalize(prov["alpha_accounting"]["look_id"], digest)
+    prov["result_sha256"] = digest
+    prov["result_sha256_recomputed"] = digest
     prov.update(over)
     return {k: v for k, v in prov.items() if v is not None}
 

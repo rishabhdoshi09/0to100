@@ -370,6 +370,15 @@ def evidence_provenance_note(provenance, *, now=None) -> str:
     data_age = evidence_age_note(prov.get("data_last_session"), now=now)
     if data_age:
         return "the walk-forward evidence data is stale: " + data_age.replace("the walk-forward evidence ", "")
+    # The statistical RESULT itself is bound (cross-review C-2): the rows this
+    # evidence was built from must digest to what the report declares, and the
+    # ledger look must have been finalised to that same digest. A partial or
+    # interrupted report, or rows changed after the fact, certify nothing.
+    declared = str(prov.get("result_sha256") or "")
+    if not declared:
+        return "the walk-forward evidence carries no finalised result digest"
+    if str(prov.get("result_sha256_recomputed") or "") != declared:
+        return "the walk-forward report rows differ from the result its look was finalised with"
     # The annual alpha budget must be provably real: the report's look is in
     # the durable ledger, under the CURRENT hypothesis program, within budget.
     try:
@@ -377,7 +386,8 @@ def evidence_provenance_note(provenance, *, now=None) -> str:
         from scan.signal_backtest import gate_program
         binding = {k: prov.get(k) for k in alpha_ledger.BINDING_FIELDS}
         binding["family_size"] = prov.get("family_size", binding.get("family_size"))
-        why = alpha_ledger.verify(prov.get("alpha_accounting"), program=gate_program(), binding=binding)
+        why = alpha_ledger.verify(prov.get("alpha_accounting"), program=gate_program(), binding=binding,
+                                  result_sha256=declared)
     except Exception as exc:
         why = f"the alpha budget could not be verified ({type(exc).__name__})"
     return why
@@ -832,7 +842,8 @@ class UnifiedScanner:
                     report = load_report() or {}
                     self._signal_edges = backtest_edges(report)
                     self._combo_edges = backtest_combo_edges(report)
-                    self._evidence_provenance = dict(report.get("evidence_provenance") or {})
+                    from scan.calibration_snapshot import _provenance_with_result_check
+                    self._evidence_provenance = _provenance_with_result_check(report)
                 except Exception:
                     self._signal_edges, self._combo_edges = {}, {}
             if self._signal_edges or self._combo_edges:

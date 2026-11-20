@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS looks(
     members_sha256 TEXT,
     program TEXT NOT NULL,
     binding_sha256 TEXT NOT NULL DEFAULT '',
+    result_sha256 TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (program_id, year, look_index),
     UNIQUE (look_id)
 );
@@ -118,6 +119,8 @@ def _connect(path: Path) -> sqlite3.Connection:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(looks)")}
     if cols and "binding_sha256" not in cols:            # research-ledger migration (column add only)
         conn.execute("ALTER TABLE looks ADD COLUMN binding_sha256 TEXT NOT NULL DEFAULT ''")
+    if cols and "result_sha256" not in cols:             # C-2: the finalised statistical result (write-once)
+        conn.execute("ALTER TABLE looks ADD COLUMN result_sha256 TEXT NOT NULL DEFAULT ''")
     if cols:
         _globalise_legacy_looks(conn)
     conn.executescript(_SCHEMA)
@@ -198,6 +201,41 @@ def reserve(program: Mapping[str, Any], look_id: str, *, now: datetime | None = 
     return _attestation(pid, year, index, look_id, alpha, bsha, family_size, members_sha256)
 
 
+def finalize(look_id: str, result_sha256: str, *, path: Path | None = None) -> bool:
+    """Bind a reserved look to the digest of the statistical result it produced. Write-once.
+
+    A look that was reserved but never finalised (a crash between reservation
+    and the saved report) can certify nothing, and a finalised look can never
+    be re-pointed at another result (cross-review C-2). True when this call
+    finalised it, or it already held exactly this digest.
+    """
+    if not look_id or not result_sha256:
+        return False
+    with closing(_connect(path or ledger_path())) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = conn.execute("SELECT result_sha256 FROM looks WHERE look_id=?", (str(look_id),)).fetchone()
+            if row is None:
+                conn.execute("ROLLBACK")
+                return False
+            if row[0]:
+                conn.execute("ROLLBACK")
+                if row[0] != result_sha256:
+                    raise LedgerConflict(f"look {look_id} is already finalised to another result")
+                return True
+            conn.execute("UPDATE looks SET result_sha256=? WHERE look_id=? AND result_sha256=''",
+                         (str(result_sha256), str(look_id)))
+            conn.execute("COMMIT")
+        except Exception:
+            try:
+                conn.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            raise
+    _VERIFY_CACHE.clear()
+    return True
+
+
 def provisioned_marker(path: Path | None = None) -> Path:
     """Sentinel written beside the ledger once a look has been spent through it."""
     p = path or ledger_path()
@@ -247,7 +285,8 @@ def _file_identity(p: Path) -> tuple:
 
 
 def verify(attestation: Mapping[str, Any] | None, *, program: Mapping[str, Any] | None = None,
-           binding: Mapping[str, Any] | None = None, path: Path | None = None) -> str:
+           binding: Mapping[str, Any] | None = None, path: Path | None = None,
+           result_sha256: str | None = None) -> str:
     """'' when the attestation matches a recorded, in-budget look bound to this report; else why not.
 
     ``binding``: the report's own pre-test identity (BINDING_FIELDS). When
@@ -261,11 +300,12 @@ def verify(attestation: Mapping[str, Any] | None, *, program: Mapping[str, Any] 
     p = path or ledger_path()
     key = (json.dumps(dict(attestation or {}), sort_keys=True, default=str),
            json.dumps(dict(program or {}), sort_keys=True, default=str),
-           json.dumps(dict(binding or {}), sort_keys=True, default=str), str(p), _file_identity(p))
+           json.dumps(dict(binding or {}), sort_keys=True, default=str), str(p), _file_identity(p),
+           str(result_sha256))
     hit = _VERIFY_CACHE.get(key)
     if hit is not None and (hit[0] != "" or _time.monotonic() - hit[1] < POSITIVE_TTL_S):
         return hit[0]
-    out = _verify(attestation, program=program, binding=binding, path=p)
+    out = _verify(attestation, program=program, binding=binding, path=p, result_sha256=result_sha256)
     if len(_VERIFY_CACHE) > 512:
         _VERIFY_CACHE.clear()
     _VERIFY_CACHE[key] = (out, _time.monotonic())
@@ -280,7 +320,7 @@ def override_active() -> bool:
 
 
 def _verify(attestation: Mapping[str, Any] | None, *, program: Mapping[str, Any] | None,
-            binding: Mapping[str, Any] | None = None, path: Path) -> str:
+            binding: Mapping[str, Any] | None = None, path: Path, result_sha256: str | None = None) -> str:
     att = dict(attestation or {})
     if not att:
         return "the evidence carries no alpha-budget attestation"
@@ -296,7 +336,7 @@ def _verify(attestation: Mapping[str, Any] | None, *, program: Mapping[str, Any]
     try:
         with closing(_connect(p)) as conn:
             row = conn.execute("SELECT program_id, year, look_index, alpha, binding_sha256, family_size,"
-                               " members_sha256 FROM looks WHERE look_id=?",
+                               " members_sha256, result_sha256 FROM looks WHERE look_id=?",
                                (str(att.get("look_id") or ""),)).fetchone()
     except sqlite3.DatabaseError as exc:
         return f"the alpha ledger is unreadable ({type(exc).__name__})"
@@ -317,6 +357,11 @@ def _verify(attestation: Mapping[str, Any] | None, *, program: Mapping[str, Any]
         return "the evidence's family membership differs from the ledger's"
     if binding is not None and binding_sha256(binding) != row[4]:
         return "the alpha attestation belongs to a different report (binding mismatch)"
+    if result_sha256 is not None:
+        if not (row[7] or ""):
+            return "the evidence's look was never finalised with its result (interrupted or partial report)"
+        if str(result_sha256) != row[7]:
+            return "the evidence's statistical result differs from the one finalised in the ledger"
     return ""
 
 

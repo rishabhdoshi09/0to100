@@ -103,6 +103,25 @@ The bias was real but small on this sample. The verdict is unchanged: NO_MATERIA
 
 **Tests.** 2 new tests, both failing on `746d0a4f`. The board tests that are about ranking now use a labelled certify-all fixture, and the marker is registered.
 
+## Cycle 5: C-2, the BUY evidence is bound to its statistical RESULT
+
+**Defect (confirmed on `70e3f43a`).** The alpha look was bound to report metadata only, so rows edited afterwards still verified: a family flag flipped, or a bound changed. A look reserved but never completed also verified.
+
+**Fix.**
+
+1. `signal_backtest.result_digest()` is a canonical SHA-256. It covers every signal and combination row's admission fields (trades, means, lower bound, blocks, inference, Holm flag, p-values, se, df), the family summary and the provenance binding.
+2. After inference, the reserved look is FINALISED to that digest (`alpha_ledger.finalize`: write-once; a different digest raises `LedgerConflict`), and only then is the report saved.
+3. The evidence snapshot and the scanner's report fallback RECOMPUTE the digest from the rows they will use.
+4. `evidence_provenance_note` requires the declared digest, the recomputed digest and the ledger's finalised digest to be equal.
+
+Consequences:
+
+- An interrupted report (reserved, not finalised), edited rows or a foreign digest certify nothing.
+- No external trust anchor is claimed. An attacker with write access to the runtime is still out of scope.
+- The column addition is additive. Old looks are unfinalised, so they cannot certify; that was already true after a deploy until the walk-forward reruns.
+
+**Tests.** `tests/test_result_digest.py` has 11 tests (finalise-then-save on a real stub run; every admission field inside the digest; a JSON round trip is stable). The behavioural ones fail on `70e3f43a`.
+
 ## Open (next)
 
-C-2 result digest · GOOD_WAIT age · research cycle.
+GOOD_WAIT age · research cycle.

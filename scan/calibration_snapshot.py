@@ -135,6 +135,18 @@ def effective_multipliers(
     return out
 
 
+def _provenance_with_result_check(report: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The report's provenance plus the digest RECOMPUTED from its rows (C-2): the gate requires both to agree."""
+    prov = dict((report or {}).get("evidence_provenance") or {})
+    if report:
+        try:
+            from scan.signal_backtest import result_digest
+            prov["result_sha256_recomputed"] = result_digest(dict(report))
+        except Exception:
+            prov["result_sha256_recomputed"] = ""
+    return prov
+
+
 def build_snapshot(
     *,
     backtest_report: Mapping[str, Any] | None = None,
@@ -175,7 +187,7 @@ def build_snapshot(
         "backtest_generated_at": str((backtest or {}).get("generated_at") or ""),
         # Everything the gate checks before a bound can certify a BUY: report
         # schema, rulebook (eval spec, horizon), family method, code SHA, time.
-        "backtest_provenance": dict((backtest or {}).get("evidence_provenance") or {}),
+        "backtest_provenance": _provenance_with_result_check(backtest),
         "backtest_combo_edges": _backtest_combo_edges(backtest),
         "signal_registry": registry,
     }

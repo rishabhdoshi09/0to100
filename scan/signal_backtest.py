@@ -439,6 +439,55 @@ def apply_family_correction(signals: dict, combos: dict, *, alpha: float = REPOR
             "survivors": int(sum(bool(x) for x in rejected))}
 
 
+#: Per-row fields the live gate's admission reads (scan.unified_scanner._report_rows),
+#: plus the family test's own outputs. Their digest IS the statistical result.
+RESULT_ROW_FIELDS = ("trades", "expectancy_r", "expectancy_r_precise", "lower_r", "independent_sessions",
+                     "inference", "family_significant", "family_size", "p_one_sided", "p_one_sided_raw",
+                     "se_r", "df", "degenerate")
+
+
+def _canon(value):
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, float):
+        return float(value)
+    try:
+        import numbers
+        if isinstance(value, numbers.Real):
+            return float(value)
+    except Exception:
+        pass
+    if isinstance(value, dict):
+        return {str(k): _canon(v) for k, v in sorted(value.items())}
+    if isinstance(value, (list, tuple)):
+        return [_canon(v) for v in value]
+    return str(value)
+
+
+def result_digest(report: dict | None) -> str:
+    """Canonical SHA-256 of the statistical result a report certifies (cross-review C-2).
+
+    Covers every signal and combination row's admission fields, the family
+    correction summary and the provenance binding (data, universe, rulebook,
+    configuration, look). Excludes the digest fields themselves. Any change to
+    a row that could move a BUY changes the digest.
+    """
+    rep = dict(report or {})
+    prov = {k: v for k, v in dict(rep.get("evidence_provenance") or {}).items()
+            if k not in ("result_sha256", "result_sha256_recomputed")}
+    body = {
+        "signals": {k: {f: v.get(f) for f in RESULT_ROW_FIELDS} for k, v in sorted((rep.get("signals") or {}).items())
+                    if isinstance(v, dict)},
+        "combos": {k: {f: v.get(f) for f in RESULT_ROW_FIELDS} for k, v in sorted((rep.get("combos") or {}).items())
+                   if isinstance(v, dict)},
+        "family": dict((rep.get("evidence_inference") or {}).get("family_correction") or {}),
+        "provenance": prov,
+    }
+    return hashlib.sha256(json.dumps(_canon(body), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
 def _alpha_ledger_lost() -> bool:
     """True when the alpha ledger is missing although looks were already spent through it.
 
@@ -1156,12 +1205,19 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                                    "alpha_accounting": attestation},
            "recommended_target_pct": recommended,
            "elapsed_s": round(time.time() - t0, 1)}
+    # C-2: the finished statistical result is digested and the reserved look is
+    # FINALISED to it before the report is saved. A look reserved but never
+    # finalised (a crash in between) certifies nothing; a report whose rows
+    # change afterwards no longer matches its finalised digest.
+    out["evidence_provenance"]["result_sha256"] = result_digest(out)
     if not will_save:
         # Never replace a real calibration with an empty/thin one (e.g. a
         # process whose bhavcopy store was not loaded).
         log.warning("backtest_too_thin_not_saved", symbols=len(symbols), signals=len(report))
     else:
         try:
+            if attestation.get("look_id"):
+                alpha_ledger.finalize(attestation["look_id"], out["evidence_provenance"]["result_sha256"])
             from core.atomic_io import atomic_write_text
             atomic_write_text(_OUT, json.dumps(out, indent=2))
         except Exception as exc:
