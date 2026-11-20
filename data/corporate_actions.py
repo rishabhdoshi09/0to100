@@ -103,7 +103,38 @@ def adjust_frame(df, events, copy: bool = True):
         out[c] = out[c].to_numpy(dtype=float) / divisor
     if "volume" in out.columns:
         out["volume"] = out["volume"].to_numpy(dtype=float) * divisor
+    # The (tiny) event list travels with the frame and its slices, so a
+    # point-in-time reader can recover the price that actually traded on a
+    # bar: an absolute filter (the scanner's ₹20 floor) must not see a split
+    # that happened AFTER the decision (GPT cross-review B-1).
+    try:
+        out.attrs["ca_events"] = [(pd.Timestamp(e["ex_date"]).date().isoformat(), float(e["factor"]))
+                                  for e in events]
+    except Exception:
+        pass
     return out
+
+
+def raw_price_multiplier(df) -> float:
+    """Factor that turns the adjusted price of ``df``'s LAST bar back into the traded price.
+
+    The product of the factors of every event whose ex-date is after that bar
+    (exactly the divisor adjust_frame applied to it). 1.0 when the frame
+    carries no events or has no rows.
+    """
+    try:
+        events = list((getattr(df, "attrs", None) or {}).get("ca_events") or [])
+        if not events or df is None or len(df) == 0:
+            return 1.0
+        import pandas as pd
+        last = pd.Timestamp(df.index[-1]).date().isoformat()
+        m = 1.0
+        for ex, factor in events:
+            if str(ex) > last:
+                m *= float(factor)
+        return m if m > 0 else 1.0
+    except Exception:
+        return 1.0
 
 
 def is_continuous(df, threshold_pct: float = None) -> bool:

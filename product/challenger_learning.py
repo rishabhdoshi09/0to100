@@ -162,7 +162,27 @@ def _rows() -> list[dict[str, Any]]:
         if _lane_weight(r) > 0
         and current_thesis
         and str((r.get("meta") or {}).get("thesis_hash") or "") == current_thesis
+        and _comparable_label(r)
     ]
+
+
+def _comparable_label(row: Mapping[str, Any]) -> bool:
+    """A simulated label (counterfactual / historical) must be measured on the CURRENT rulebook.
+
+    Real paper closes are the trade's own R. A counterfactual or replayed R
+    without the current ``eval_spec`` was measured under another rule (the
+    legacy 5-session close-to-close move, or the replay's close-path R) and
+    must not train the challenger (GPT cross-review A-4).
+    """
+    meta = dict(row.get("outcome_meta") or {})
+    lane = str(meta.get("evidence_class") or "").upper()
+    if lane in REAL_LANES:
+        return True
+    try:
+        from core.evaluation_spec import spec_tag
+        return str(meta.get("eval_spec") or "") == spec_tag()
+    except Exception:
+        return False
 
 
 def _matrix(rows: list[dict[str, Any]]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

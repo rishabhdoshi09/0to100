@@ -87,11 +87,11 @@ def classify_rulebook(outcome: Mapping[str, Any] | None, *, later_entered: bool 
 
 
 def settle_rulebook(row: Mapping[str, Any], outcome: Mapping[str, Any] | None, *,
-                    later_entered: bool = False) -> dict[str, Any]:
-    """Settle a frozen rejection from its rulebook outcome. Never P&L."""
+                    later_entered: bool = False, selected: bool = False) -> dict[str, Any]:
+    """Settle a frozen decision from its rulebook outcome. Never P&L."""
     out = dict(row)
     o = dict(outcome or {})
-    classification = classify_rulebook(o, later_entered=later_entered)
+    classification = classify_rulebook(o, later_entered=later_entered, selected=selected)
     out["outcome"] = {
         "forward_return_pct": o.get("return_pct"),
         "later_entered": later_entered,

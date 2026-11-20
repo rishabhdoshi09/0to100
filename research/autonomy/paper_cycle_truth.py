@@ -152,6 +152,11 @@ def install_paper_cycle_truth() -> None:
                 entry_block_reason=entry_block_reason,
                 session_phase=session_phase,
                 paper_enabled=paper_on,
+                # The open must be durable BEFORE the account lock is released,
+                # exactly as in the base Deps.run_paper_cycle; without it a
+                # legacy entry could read the old book inside the gap and open
+                # the same symbol (GPT cross-review C-11).
+                durable_book_save=brain._save_intel_book,
             )
             result = merge_cycle_truth(
                 result,

@@ -359,18 +359,33 @@ def exit_variant_results(entry: float, stop: float, target: float, fwd, horizon:
     return out
 
 
-def gate_program() -> dict:
+#: The production walk-forward configuration (the supervisor's weekly
+#: run_in_background() defaults). It is part of the gate program, so a run at
+#: any other configuration (a preview at another sample step, lookback or
+#: universe size) reserves its look under a DIFFERENT program and can never
+#: certify a BUY: configurations cannot be chosen after peeking at results
+#: (GPT cross-review C-4).
+PRODUCTION_RUN_CONFIG = {"sample_step": 5, "lookback_sessions": 250, "max_symbols": 800}
+
+
+def gate_program(run_config: dict | None = None) -> dict:
     """The predeclared hypothesis program whose annual alpha budget the gate spends.
 
-    Any change here (method, rulebook, horizon, sampling, membership rule,
-    report schema) is a NEW program with its own budget, attested as such.
+    Any change here (method, rulebook, horizon, sampling, run configuration,
+    membership rule, report schema) is a NEW program, attested as such; all
+    programs share the one global annual budget. The live gate verifies
+    against the PRODUCTION configuration only.
     """
+    cfg = dict(PRODUCTION_RUN_CONFIG if run_config is None else run_config)
     return {"family_method": FAMILY_METHOD, "eval_spec": _eval_spec_tag(_EVAL_HORIZON),
             "horizon_sessions": int(_EVAL_HORIZON), "sampling": SAMPLING, "report_schema": REPORT_SCHEMA,
-            "membership": f"every signal and exact combination with >= {COMBO_MIN_TRADES} trades"}
+            "run_config": {k: int(cfg[k]) for k in sorted(PRODUCTION_RUN_CONFIG) if k in cfg},
+            "membership": (f"every catalogue signal (untested ones at p = 1) and every exact combination "
+                           f"with >= {COMBO_MIN_TRADES} trades")}
 
 
-def apply_family_correction(signals: dict, combos: dict, *, alpha: float = REPORT_ALPHA) -> dict:
+def apply_family_correction(signals: dict, combos: dict, *, alpha: float = REPORT_ALPHA,
+                            untested: int = 0) -> dict:
     """Holm-Bonferroni (family-wise) across every row the live BUY gate can use.
 
     The gate judges each signal and each exact combination at a one-sided 5%;
@@ -380,7 +395,10 @@ def apply_family_correction(signals: dict, combos: dict, *, alpha: float = REPOR
     across the whole family: P(any false admission) <= alpha under ARBITRARY
     dependence. Rows that cannot be tested (not OVERLAP_ROBUST, zero or
     missing error) count with p = 1, so they enlarge the family and never
-    pass. Mutates and returns a summary.
+    pass. ``untested`` catalogue signals that produced no filled trade also
+    count at p = 1: the family is fixed before outcomes are seen, so it cannot
+    shrink to the signals that happened to trade (GPT cross-review C-4).
+    Mutates and returns a summary.
     """
     from research.overlap_inference import _t_sf
 
@@ -406,6 +424,7 @@ def apply_family_correction(signals: dict, combos: dict, *, alpha: float = REPOR
             p = 1.0
         r["p_one_sided"] = round(float(p), 8)
         pvals.append(float(p))
+    pvals.extend([1.0] * max(0, int(untested)))
     m = len(pvals)
     rejected = [False] * m
     for rank, i in enumerate(sorted(range(m), key=lambda i: pvals[i])):      # Holm step-down
@@ -416,8 +435,36 @@ def apply_family_correction(signals: dict, combos: dict, *, alpha: float = REPOR
     for r, rej in zip(rows, rejected):
         r["family_significant"] = bool(rej)
         r["family_size"] = m
-    return {"family_size": len(rows), "alpha": alpha, "method": FAMILY_METHOD,
+    return {"family_size": m, "alpha": alpha, "method": FAMILY_METHOD, "untested_members": max(0, int(untested)),
             "survivors": int(sum(bool(x) for x in rejected))}
+
+
+def _alpha_ledger_lost() -> bool:
+    """True when the alpha ledger is missing although looks were already spent through it.
+
+    Evidence of earlier spending: the ledger's own sentinel, the last saved
+    report's attestation, or the active calibration snapshot's provenance.
+    """
+    try:
+        from research import alpha_ledger
+        path = alpha_ledger.ledger_path()
+        if path.exists():
+            return False
+        if alpha_ledger.provisioned_marker(path).exists():
+            return True
+        prior = json.loads(Path(_OUT).read_text(encoding="utf-8")) if Path(_OUT).exists() else {}
+        acct = dict((prior.get("evidence_provenance") or {}).get("alpha_accounting") or {})
+        if int(acct.get("look_index") or 0) >= 1:
+            return True
+        try:
+            from scan.calibration_snapshot import load_current
+            snap = dict(load_current() or {})
+            sacct = dict((snap.get("backtest_provenance") or {}).get("alpha_accounting") or {})
+            return int(sacct.get("look_index") or 0) >= 1
+        except Exception:
+            return False
+    except Exception:
+        return False
 
 
 def _code_sha() -> str:
@@ -783,7 +830,9 @@ def run_backtest(sample_step: int = 5, lookback_sessions: int = 250,
     t0 = time.time()
     try:
         return _run_backtest_inner(sc, stats, symbols, sample_step,
-                                   lookback_sessions, horizon, t0, on_trade)
+                                   lookback_sessions, horizon, t0, on_trade,
+                                   run_config={"sample_step": sample_step, "lookback_sessions": lookback_sessions,
+                                               "max_symbols": max_symbols})
     finally:
         # Crash-proof: 'running' can never stick True and freeze the UI button
         with _state_lock:
@@ -791,7 +840,7 @@ def run_backtest(sample_step: int = 5, lookback_sessions: int = 250,
 
 
 def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
-                        horizon, t0, on_trade=None):
+                        horizon, t0, on_trade=None, run_config=None):
     from data.bhavcopy_store import get_ohlcv
 
     regime_series = _nifty_regime_series()      # None → regime split skipped
@@ -803,27 +852,41 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
     combo_stats: dict[str, dict] = {}           # exact signal combination → aggregate
     seen_dates: set[str] = set()                # realised NSE sessions (official bars present)
     try:
+        # Exact windows are checked against the realised archive sessions PLUS
+        # the verified calendar's sessions in covered years, minus uncovered
+        # future years (core.session_window): a market-wide missing archive
+        # leaves a hole instead of compressing two days into one.
+        from core.session_window import official_session_index
         from data.bhavcopy_store import _dates_on_disk
-        official_index = realised_session_index(d.isoformat() for d in _dates_on_disk())
+        official_index = official_session_index(d.isoformat() for d in _dates_on_disk())
     except Exception:
         official_index = {}
     horizon_gaps = 0                            # trades whose window is not exactly `horizon` sessions
 
+    evaluated = 0                               # symbols that had >= 1 analysed window (the save threshold)
     for si, sym in enumerate(symbols):
         df = get_ohlcv(sym)
-        if df is None or len(df) < 60 + horizon + 20:
+        if df is None or len(df) < 60 + horizon + 20 or not {"high", "low", "close"} <= set(df.columns):
             continue
-        try:
-            seen_dates.update(pd.DatetimeIndex(df.index).strftime("%Y-%m-%d"))
-        except Exception:
-            seen_dates.update(str(x)[:10] for x in df.index)
         n = len(df)
         start = max(60, n - horizon - lookback_sessions)
         day_keys = list(pd.DatetimeIndex(df.index).strftime("%Y-%m-%d")) if official_index else []
+        symbol_used = False
         for t in range(start, n - horizon, sample_step):
             if official_index and not window_is_exact(day_keys, t, horizon, official_index):
                 horizon_gaps += 1
                 continue
+            if not symbol_used:
+                # Counted (save threshold, data span) only once it contributes a
+                # real analysed window: an unusable or all-gap frame must not
+                # pad a thin run into a saved report, nor date its evidence
+                # (cross-review verification QT-11).
+                symbol_used = True
+                evaluated += 1
+                try:
+                    seen_dates.update(pd.DatetimeIndex(df.index).strftime("%Y-%m-%d"))
+                except Exception:
+                    seen_dates.update(str(x)[:10] for x in df.index)
             hist = df.iloc[:t]
             try:
                 r = sc._analyze(sym, hist)
@@ -983,7 +1046,12 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
     import uuid
     from research import alpha_ledger
 
-    members = sorted(list(report) + [f"combo:{k}" for k in combos])
+    try:
+        from scan.unified_scanner import SIGNAL_META
+        untested = sorted(set(SIGNAL_META) - set(report))
+    except Exception:
+        untested = []
+    members = sorted(list(report) + [f"combo:{k}" for k in combos] + [f"untested:{k}" for k in untested])
     members_sha = hashlib.sha256("\n".join(members).encode()).hexdigest()
     generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     binding = {"generated_at": generated_at, "code_sha": _code_sha(),
@@ -994,14 +1062,29 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
     # A report that will be discarded (too few symbols, e.g. a fresh process whose
     # store is not loaded, or no signal at all) can admit nothing, so it spends no
     # look. That is decided from counts alone, before any test sees an outcome.
-    will_save = len(symbols) >= MIN_SYMBOLS_TO_SAVE and bool(report)
-    if will_save:
-        attestation = alpha_ledger.reserve(gate_program(), f"look-{uuid.uuid4().hex}", family_size=len(members),
+    # The threshold counts symbols that actually had a usable frame, not the
+    # requested list: padding a preview with an empty symbol must not turn it
+    # into a saved, charged report (GPT cross-review C-4).
+    will_save = evaluated >= MIN_SYMBOLS_TO_SAVE and bool(report)
+    program = gate_program(run_config)
+    lost = will_save and _alpha_ledger_lost()
+    if lost:
+        # The ledger is gone although looks were spent through it: re-initialising
+        # it would open a fresh annual budget (GPT cross-review C-3). The run is
+        # NOT saved either, so the last spent report (and the loss) stays on disk
+        # and every later run detects it again: nothing certifies until the
+        # ledger is restored (cross-review verification QT-02).
+        log.warning("alpha_ledger_missing_with_prior_looks", path=str(alpha_ledger.ledger_path()))
+        will_save = False
+        attestation = {"program_id": alpha_ledger.program_id(program), "look_id": "", "look_index": 0,
+                       "alpha": 0.0, "unreserved": "LEDGER_LOST_WITH_PRIOR_LOOKS"}
+    elif will_save:
+        attestation = alpha_ledger.reserve(program, f"look-{uuid.uuid4().hex}", family_size=len(members),
                                            members_sha256=members_sha, binding=binding)
     else:
-        attestation = {"program_id": alpha_ledger.program_id(gate_program()), "look_id": "", "look_index": 0,
+        attestation = {"program_id": alpha_ledger.program_id(program), "look_id": "", "look_index": 0,
                        "alpha": 0.0, "unreserved": "REPORT_NOT_SAVED"}
-    family = apply_family_correction(report, combos, alpha=attestation["alpha"])
+    family = apply_family_correction(report, combos, alpha=attestation["alpha"], untested=len(untested))
     family["members_sha256"] = members_sha
 
     target_sweep = {}
@@ -1044,7 +1127,8 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                                    # Data version and universe: hashed into the snapshot id with
                                    # the rest of the report, so any change re-keys the evidence.
                                    "universe_sha256": binding["universe_sha256"],
-                                   "symbols": len(symbols),
+                                   "symbols": len(symbols), "symbols_evaluated": evaluated,
+                                   "run_config": program.get("run_config"),
                                    "data_first_session": binding["data_first_session"],
                                    "data_last_session": binding["data_last_session"],
                                    "family_alpha": family.get("alpha"),

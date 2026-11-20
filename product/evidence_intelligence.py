@@ -252,8 +252,14 @@ def settle_decision(
     not_pnl: bool = False,
     classification: str = "",
     resolved_at: str = "",
+    eval_spec: str = "",
 ) -> dict[str, Any]:
-    """Attach an immutable labelled outcome with explicit evidence provenance."""
+    """Attach an immutable labelled outcome with explicit evidence provenance.
+
+    ``eval_spec`` names the rulebook a simulated (counterfactual / historical)
+    R was measured under, so a learner can refuse labels measured under
+    another rulebook (GPT cross-review A-4).
+    """
     from research.feature_store import set_outcome
     return set_outcome(
         _observation_id(decision_id),
@@ -263,6 +269,7 @@ def settle_decision(
             "not_pnl": bool(not_pnl),
             "classification": str(classification or ""),
             "resolved_at": str(resolved_at or ""),
+            "eval_spec": str(eval_spec or ""),
         },
     )
 
@@ -275,6 +282,7 @@ def record_resolved_prediction(
     not_pnl: bool = False,
     classification: str = "",
     resolved_at: str = "",
+    eval_spec: str = "",
 ) -> dict[str, Any]:
     """Settle the feature observation and, for real taken paper, calibration.
 
@@ -288,6 +296,7 @@ def record_resolved_prediction(
         not_pnl=not_pnl,
         classification=classification,
         resolved_at=resolved_at,
+        eval_spec=eval_spec,
     )
     out: dict[str, Any] = {"feature_store": settled, "calibration": None}
     if not_pnl:

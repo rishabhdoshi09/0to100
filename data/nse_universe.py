@@ -551,16 +551,34 @@ def point_in_time_universe(as_of, path=None) -> dict:
         return {"as_of": str(asof.date()), "symbols": get_nse_universe(),
                 "survivorship_complete": False,
                 "note": f"membership history unreadable ({exc}); using survivors."}
+    if not isinstance(rows, list) or not rows:
+        # Parseable but not a membership table (wrong schema, empty list): an
+        # empty "complete" universe would read as "nothing was tradeable"
+        # (GPT cross-review B-10). It is incomplete, and says so.
+        return {"as_of": str(asof.date()), "symbols": get_nse_universe(),
+                "survivorship_complete": False,
+                "note": "membership history is not a non-empty list of {symbol, listed, delisted?} rows; "
+                        "using survivors."}
     live: List[str] = []
-    for r in rows if isinstance(rows, list) else []:
+    valid = 0
+    for r in rows:
         try:
             sym = str(r["symbol"]).strip().upper()
             listed = pd.Timestamp(r["listed"])
             delisted = pd.Timestamp(r["delisted"]) if r.get("delisted") else None
+            # A null/unparseable listing date (NaT), an empty symbol or a
+            # delisting before the listing is not a membership row (QT-13).
+            if not sym or pd.isna(listed) or (delisted is not None and (pd.isna(delisted) or delisted < listed)):
+                continue
+            valid += 1
             if listed <= asof and (delisted is None or delisted > asof):
                 live.append(sym)
         except Exception:
             continue
+    if not valid:
+        return {"as_of": str(asof.date()), "symbols": get_nse_universe(),
+                "survivorship_complete": False,
+                "note": "membership history has no valid rows; using survivors."}
     return {"as_of": str(asof.date()), "symbols": sorted(set(live)),
             "survivorship_complete": True, "note": ""}
 

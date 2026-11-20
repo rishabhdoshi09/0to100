@@ -18,6 +18,7 @@ still wins: QT_EVAL_HORIZON (all), QT_OUTCOME_HORIZON / QT_DECISION_HORIZON
 """
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 from typing import Sequence
@@ -106,6 +107,12 @@ def simulate_trade(
     breakeven trigger the stop moves to the fill price, so a faded winner is a
     SCRATCH. A trade still open after the last bar is FLAT, marked to that
     close. R is measured on the risk actually taken: fill minus stop.
+
+    Bars that cannot be traded are never invented (GPT cross-review B-8): a
+    bar with a non-finite high, low or close neither fills nor exits nor marks
+    the trade, and when the fill itself is at or above the target (the bar
+    opened beyond it) the target order executes at the fill, a SCRATCH at 0R,
+    never at a target price below everything the bar traded.
     """
     if be_pct is None:
         be_pct = BREAKEVEN_TRIGGER_PCT
@@ -116,9 +123,20 @@ def simulate_trade(
     fill = 0.0
     fill_i = -1
     cur_stop = stop
+    last_i = -1
     for i in range(n):
         h, low, c = float(highs[i]), float(lows[i]), float(closes[i])
+        if not (math.isfinite(h) and math.isfinite(low) and math.isfinite(c)):
+            continue             # an unusable bar: no fill, no exit, no mark
         o = float(opens[i]) if opens is not None and i < len(opens) else None
+        if opens is not None and (o is None or not math.isfinite(o)):
+            # Opens are part of this series, so a bar without one cannot place a
+            # gap-aware fill or exit: an open-less bar wholly above the trigger
+            # would otherwise fill at the trigger, below its own low (QT-07).
+            continue
+        tol = 1e-9 * max(1.0, abs(h))
+        if low > h + tol or not (low - tol <= c <= h + tol) or (o is not None and not (low - tol <= o <= h + tol)):
+            continue             # an incoherent bar (low > high, close/open outside the range)
         if fill_i < 0:
             if h < entry:
                 continue
@@ -128,6 +146,10 @@ def simulate_trade(
                 # Opened through the stop and above entry is impossible; a
                 # malformed bar must not invent a trade.
                 return TradeResult("NO_FILL", 0.0, 0.0, 0.0, -1, -1)
+            if fill >= target:
+                # The bar opened at or beyond the target: the target order
+                # executes at once, at the fill, not at the lower target price.
+                return TradeResult("SCRATCH", 0.0, fill, fill, i, i)
             be_level = fill * (1 + be_pct / 100) if be_pct > 0 else None
             gap_bar = False      # the fill bar's open is the fill, not a gap exit
         else:
@@ -143,10 +165,11 @@ def simulate_trade(
             return TradeResult("WIN", (target - fill) / risk, fill, target, fill_i, i)
         if be_level is not None and cur_stop < fill and h >= be_level:
             cur_stop = fill
+        last_i = i
     if fill_i < 0:
         return TradeResult("NO_FILL", 0.0, 0.0, 0.0, -1, -1)
-    last = float(closes[n - 1])
-    return TradeResult("FLAT", (last - fill) / (fill - stop), fill, last, fill_i, n - 1)
+    last = float(closes[last_i])
+    return TradeResult("FLAT", (last - fill) / (fill - stop), fill, last, fill_i, last_i)
 
 
 def _closed(fill: float, exit_px: float, stop_level: float, risk: float, fill_i: int, i: int) -> TradeResult:

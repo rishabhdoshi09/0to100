@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from core.evaluation_spec import spec_tag as _spec_tag
+
 from datetime import datetime, timedelta, timezone
 import warnings
 
@@ -69,6 +71,8 @@ def _seed(
             outcome_meta={
                 "evidence_class": lane,
                 "not_pnl": lane != "PAPER_FORWARD",
+                # A counterfactual label measured on the current rulebook (A-4).
+                **({} if lane == "PAPER_FORWARD" else {"eval_spec": _spec_tag()}),
             },
         )
         assert settled["status"] in {"settled", "exists"}

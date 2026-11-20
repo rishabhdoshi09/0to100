@@ -5931,3 +5931,190 @@ class TestPaperOutageCatchUp:
             return {"AAA": (100.0, 101.0, 99.0, 100.5)}
         catch_up_missed_sessions(book, bars_fn, "2026-09-04")
         assert seen == ["2026-09-02", "2026-09-03"]   # the settlement day itself is marked by the caller
+
+
+class TestCrossReview20261120:
+    """Money-path regressions from the first independent GPT cross-review (target 9636b030).
+
+    Each case FAILED on 9636b030. Paper only: nothing here can reach a broker.
+    """
+
+    # ── A-1 / C-8: a BUY withdrawn at read time is not a production entry ────
+
+    def _reco_cycle(self, monkeypatch, scan_verdict, *, exploration, quota=None):
+        from product import paper_autopilot as PA
+        from product import scan_store as SS
+        from product.paper_autopilot import run_reco_paper_cycle
+        from research.auto_research.paper_book import PaperBook
+        from tests.test_paper_autopilot_money_path import _eligible_card, _now, _workspace
+
+        if exploration:
+            monkeypatch.delenv("QT_PAPER_EXPLORATION", raising=False)
+        else:
+            monkeypatch.setenv("QT_PAPER_EXPLORATION", "0")
+        ws = _workspace([_eligible_card()])
+        scan = None if scan_verdict is None else {
+            "scanned_at": ws["scan_scanned_at"],
+            "records": [{"symbol": "TCS", "verdict": scan_verdict, "signals": ["VCP"]}]}
+        monkeypatch.setattr(SS, "load_scan", lambda *a, **k: scan)
+        if quota is not None:
+            monkeypatch.setattr(PA, "_exploration_path", lambda: quota)
+        book = PaperBook(capital=100_000)
+        out = run_reco_paper_cycle(book=book, cards=None, workspace=ws, now=_now(), as_of="2026-09-01",
+                                   entries_allowed=True, paper_enabled=True, enforce_history=False)
+        return book, out
+
+    def test_a_certified_buy_still_enters(self, monkeypatch):
+        book, out = self._reco_cycle(monkeypatch, "BUY", exploration=False)
+        assert len(book.open) == 1 and out["taken"][0]["lane"] == "PRODUCTION"
+
+    def test_a_withdrawn_buy_never_fills_as_a_production_entry(self, tmp_path, monkeypatch):
+        book, out = self._reco_cycle(monkeypatch, "WATCH", exploration=False)
+        assert not book.open and not out["taken"]
+        # QT-01: no readable scan at the cycle certifies nothing.
+        book, out = self._reco_cycle(monkeypatch, None, exploration=False)
+        assert not book.open and not out["taken"]
+        book, out = self._reco_cycle(monkeypatch, "WATCH", exploration=True, quota=tmp_path / "quota.json")
+        # Only the labelled research lane may probe it, at half risk.
+        assert all(t["lane"] == "EXPLORATION" for t in out["taken"])
+        for pos in book.open.values():
+            assert float(pos.approved_risk_pct) <= 0.5 + 1e-9
+
+    def test_the_certificate_fails_closed(self, monkeypatch):
+        from product import paper_autopilot as PA
+        from product import scan_store as SS
+
+        monkeypatch.setattr(SS, "load_scan", lambda *a, **k: {"scanned_at": "B", "records": [
+            {"symbol": "TCS", "verdict": "BUY"}]})
+        assert PA._current_scan_certificate({"scan_scanned_at": "A"}) == set()  # another generation: nothing
+        assert PA._current_scan_certificate({}) == set()
+        assert PA._current_scan_certificate({"scan_scanned_at": "B"}) == {"TCS"}
+        monkeypatch.setattr(SS, "load_scan", lambda *a, **k: None)
+        assert PA._current_scan_certificate({"scan_scanned_at": "B"}) == set()   # unreadable scan: nothing
+        card = {"symbol": "TCS", "reco_tier": "high_conviction", "entry_state": "ready"}
+        assert PA._withdraw_uncertified(dict(card), set())["reco_tier"] == "watch"
+        assert PA._withdraw_uncertified(dict(card), {"TCS"}) == card
+        assert PA._withdraw_uncertified(dict(card), None) == card
+
+    # ── C-11: the installed cycle persists the open before the lock is released
+
+    def test_the_installed_paper_cycle_passes_the_durability_callback(self, monkeypatch):
+        from research.autonomy import jobs as JOBS
+        import research.autonomy.paper_cycle_truth as PCT
+        from tests.test_parallel_release_followup import _Brain, _Deps, _Telegram, _install_truth_with
+
+        brain, seen = _Brain(), {}
+
+        def spy(**kwargs):
+            seen.update(kwargs)
+            return {"eligibility": "NO_ELIGIBLE_TRADE", "positions_opened": []}
+
+        original = JOBS.Deps.run_paper_cycle
+        try:
+            _install_truth_with(monkeypatch, brain, spy)
+            JOBS.run_paper_cycle(JOBS._Ctx(_Deps(_Telegram())))
+        finally:
+            JOBS.Deps.run_paper_cycle = original
+            PCT._INSTALLED = False
+        assert seen.get("durable_book_save") == brain._save_intel_book
+
+    # ── C-12: the exploration quota fails closed and is reserved before the fill
+
+    def test_an_unreadable_or_unwritable_quota_is_a_full_day(self, tmp_path, monkeypatch):
+        from product import paper_autopilot as PA
+
+        path = tmp_path / "paper_exploration.json"
+        assert PA._exploration_taken("2026-11-20", path=path) == []
+        assert PA._record_exploration("2026-11-20", "A", path=path) is True
+        assert PA._exploration_taken("2026-11-20", path=path) == ["A"]
+        path.write_text("{not json")
+        assert len(PA._exploration_taken("2026-11-20", path=path)) >= PA.EXPLORATION_MAX_PER_DAY
+        assert PA._record_exploration("2026-11-20", "B", path=path) is False
+        import core.atomic_io as AIO
+        path.write_text("{}")
+        monkeypatch.setattr(AIO, "atomic_write_text", lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+        assert PA._record_exploration("2026-11-20", "C", path=path) is False
+
+    def test_a_failed_quota_write_blocks_the_probe(self, tmp_path, monkeypatch):
+        from product import paper_autopilot as PA
+        from research.auto_research.paper_book import PaperBook
+        from tests.test_paper_autopilot_money_path import _cycle, _eligible_card
+
+        monkeypatch.delenv("QT_PAPER_EXPLORATION", raising=False)
+        monkeypatch.setattr(PA, "_exploration_path", lambda: tmp_path / "quota.json")
+        monkeypatch.setattr(PA, "_record_exploration", lambda *a, **k: False)
+        book = PaperBook(capital=100_000)
+        out = _cycle(book, [_eligible_card(reco_tier="watch")])
+        assert not book.open and not out["taken"]
+        assert any(r.get("reason_code") == "EXPLORATION_QUOTA_UNAVAILABLE" for r in out["rejections"])
+
+    # ── C-9: a Telegram paper tap obeys the sizer and the account gate ──────
+
+    def _isolated_journal(self, tmp_path, monkeypatch):
+        import execution.trade_executor as te
+        monkeypatch.setattr(te, "_DB", tmp_path / "trades.db")
+        monkeypatch.setattr(te, "kite_ready", lambda: False)
+        import risk.portfolio_risk as prm
+        monkeypatch.setattr(prm, "_capital", lambda: 100_000.0, raising=False)
+        return te
+
+    def test_a_zero_size_tap_is_refused_not_forced_to_one_share(self, tmp_path, monkeypatch):
+        import alerts.telegram_actions as ta
+        calls = []
+        monkeypatch.setattr("execution.trade_executor.place_trade", lambda **k: calls.append(k) or {"ok": True})
+        msg = ta._do_paper_trade("TCS", 15000, 13500, 17500)          # 1%/10% of ₹1 lakh allows 0 shares
+        assert calls == [] and "0 shares" in msg
+
+    def test_a_tap_cannot_duplicate_an_open_symbol(self, tmp_path, monkeypatch):
+        import alerts.telegram_actions as ta
+        import risk.portfolio_risk as prm
+        calls = []
+        monkeypatch.setattr("execution.trade_executor.place_trade", lambda **k: calls.append(k) or {"ok": True})
+        monkeypatch.setattr(prm, "account_exposure_gate",
+                            lambda sym, **k: {"ok": False, "reason_code": "DUPLICATE_POSITION",
+                                              "detail": f"{sym} already open in the account"})
+        msg = ta._do_paper_trade("HAL", 4500, 4300, 4600)
+        assert calls == [] and "already open" in msg
+        monkeypatch.setattr(prm, "account_exposure_gate", lambda sym, **k: {"ok": True})
+        ta._do_paper_trade("HAL", 4500, 4300, 4600)
+        assert len(calls) == 1 and calls[0]["paper"] is True and calls[0]["qty"] >= 1
+
+    def test_a_tap_respects_the_hard_caps_even_with_looser_settings(self, monkeypatch):
+        """QT-03: settings of 2% / 20% must not let a tap risk more than 1% or deploy more than 10%."""
+        from types import SimpleNamespace
+        import config
+        import alerts.telegram_actions as ta
+        import risk.portfolio_risk as prm
+        calls = []
+        monkeypatch.setattr(config, "settings", SimpleNamespace(trading_capital=100_000, risk_per_trade_pct=0.02,
+                                                                max_position_size_pct=0.20, max_open_positions=5))
+        monkeypatch.setattr("execution.trade_executor.place_trade", lambda **k: calls.append(k) or {"ok": True})
+        monkeypatch.setattr(prm, "account_exposure_gate", lambda sym, **k: {"ok": True})
+        ta._do_paper_trade("TCS", 100, 90, 120)
+        assert calls and calls[0]["qty"] <= 100           # 1% of ₹1 lakh / ₹10 risk = 100; 10% / ₹100 = 100
+
+    def test_a_failed_in_lock_save_never_releases_in_memory_exposure(self, monkeypatch):
+        """QT-04: a save that keeps failing rolls the open back BEFORE the account lock is released."""
+        from contextlib import contextmanager
+        import risk.portfolio_risk as prm
+        from research.auto_research.paper_book import PaperBook
+        from tests.test_paper_autopilot_money_path import _cycle, _eligible_card
+
+        book = PaperBook(capital=100_000)
+        at_release = []
+
+        @contextmanager
+        def lock():
+            yield
+            at_release.append(bool(book.open))
+
+        monkeypatch.setattr(prm, "account_mutation_lock", lock)
+        monkeypatch.setenv("QT_PAPER_EXPLORATION", "0")
+        with pytest.raises(RuntimeError):                   # the post-loop boundary still refuses to report
+            _cycle(book, [_eligible_card()], durable_book_save=lambda: False)
+        assert at_release and not any(at_release) and not book.open
+
+    def test_tap_buttons_keep_paise_precision(self):
+        from alerts.telegram_actions import build_setup_keyboard
+        kb = build_setup_keyboard([{"symbol": "IDEA", "entry": 48.6, "stop": 46.1, "target": 53.65}])
+        assert kb["inline_keyboard"][0][0]["callback_data"] == "pt|IDEA|48.60|46.10|53.65"

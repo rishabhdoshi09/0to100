@@ -5,6 +5,8 @@ must be caught using only already-persisted data.
 """
 from __future__ import annotations
 
+from core.evaluation_spec import spec_tag as _rulebook_spec
+
 from datetime import datetime, timezone
 
 from product.evolution import health, policy_registry as PR
@@ -30,6 +32,7 @@ def _seed(
         "graded_at": graded_at or (frozen_at if r is not None else None),
         "not_pnl": True, "is_champion_decision": is_champion,
         "counterfactual_R": r,
+        "eval_spec": _rulebook_spec(),   # graded on the one rulebook (QT-09)
         "evidence_class": evidence_class,
     }
     SD.save_graded_decision(row)

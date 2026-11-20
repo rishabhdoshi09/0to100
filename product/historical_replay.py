@@ -21,7 +21,6 @@ from product.counterfactual_learning import (
     GOOD_WAIT,
     MISSED_WINNER,
     RAN_AWAY,
-    classify_forward,
 )
 from product.evidence_class import HISTORICAL_REPLAY
 from product.paper_autopilot import (
@@ -278,25 +277,18 @@ def _map_decision(raw: str, reason_code: str | None = None) -> str:
     return REJECT
 
 
-def _forward_return(symbol: str, as_of: str) -> float | None:
-    try:
-        from core.outcome_resolver import session_close_return
-
-        result = session_close_return(symbol, as_of, horizon=5)
-    except Exception:
-        return None
-    if result is None:
-        return None
-    if isinstance(result, tuple) and len(result) >= 2:
-        try:
-            return float(result[1])
-        except (TypeError, ValueError):
-            return None
-    if isinstance(result, Mapping) and result.get("return_pct") is not None:
-        return float(result["return_pct"])
-    if isinstance(result, (int, float)):
-        return float(result)
-    return None
+#: The calibration every replayed session is scored with unless the caller
+#: supplies one: predeclared NEUTRAL weights. Today's snapshot is built from a
+#: walk-forward that measured outcomes AFTER the sessions being replayed, so
+#: scoring a September decision with November multipliers reconstructs the
+#: past with hindsight (GPT cross-review B-2/C-7).
+NEUTRAL_REPLAY_CALIBRATION = {
+    "snapshot_id": "neutral-uncalibrated-v1",
+    "multipliers": {},
+    "signal_registry": {},
+    "neutral": True,
+    "note": "historical replay: predeclared neutral signal weights, never a later calibration",
+}
 
 
 def scan_session(
@@ -312,9 +304,10 @@ def scan_session(
     if analyzer is None:
         from scan.unified_scanner import UnifiedScanner
 
+        calibration_snapshot = dict(calibration_snapshot or {}) or dict(NEUTRAL_REPLAY_CALIBRATION)
         scanner = UnifiedScanner(
             max_workers=1,
-            calibration_snapshot=dict(calibration_snapshot or {}) or None,
+            calibration_snapshot=calibration_snapshot,
             # Today's backtest covers the sessions being replayed: gating
             # them by it would be hindsight that inflates replay evidence.
             evidence_gate=False,
@@ -666,14 +659,52 @@ def decide_session(
     return out
 
 
+def _rulebook_outcome(item: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The replayed decision judged by the ONE rulebook (as a taken trade would be).
+
+    core.outcome_resolver.counterfactual_outcome on the point-in-time frame:
+    buy-stop fill, gap-aware stop/target, breakeven trail, exact official
+    sessions, costs. None while the horizon is not published.
+    """
+    from datetime import date, timedelta
+
+    from core.outcome_resolver import counterfactual_outcome
+
+    symbol = str(item.get("symbol") or "").upper()
+    as_of = str(item.get("as_of") or "")[:10]
+    if not symbol or not as_of:
+        return None
+    try:
+        end = (date.fromisoformat(as_of) + timedelta(days=45)).isoformat()   # > 10 sessions, holidays included
+        frame = ohlcv_as_of(symbol, end)
+    except Exception:
+        frame = None
+    if frame is None:
+        return None
+    try:
+        return counterfactual_outcome(symbol, as_of, item.get("entry"), item.get("stop"), item.get("target"),
+                                      frame=frame)
+    except Exception:
+        return None
+
+
 def evaluate_outcomes(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Settle replayed decisions on the one rulebook (core.evaluation_spec).
+
+    Until 2026-11-20 a replayed rejection was graded by a 5-session
+    close-to-close move that ignored the stop, and its training R was the 10th
+    close against the frozen entry, whether or not the buy-stop ever traded
+    or the stop was hit. A rejection that stopped out and recovered was a
+    MISSED_WINNER with a positive label (GPT cross-review B-7). Now the
+    classification and the R that reaches learning are the rulebook's; the
+    close-path metrics stay as diagnostics under ``path``. A trade that never
+    triggered has no R. A bare forward return without bars is not judgeable.
+    """
+    from product.counterfactual_learning import classify_rulebook
+
     classified: list[dict[str, Any]] = []
     for row in rows:
         item = dict(row)
-        fwd = item.get("forward_return_pct")
-        if fwd is None:
-            fwd = _forward_return(str(item.get("symbol") or ""), str(item.get("as_of") or ""))
-        item["forward_return_pct"] = fwd
         from product.decision_taxonomy import is_judgment_row
 
         decision = str(item.get("decision") or "").upper()
@@ -684,20 +715,15 @@ def evaluate_outcomes(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]
             item["attribution"] = {"updates_policy": False, "excluded": True}
             classified.append(item)
             continue
-        if fwd is None:
+        rb = _rulebook_outcome(item)
+        if rb is None or rb.get("outcome") == "NO_LEVELS":
             item["classification"] = "INCONCLUSIVE"
             item["outcome_status"] = "UNRESOLVED"
         elif decision == BUY:
             item["classification"] = FLAT
             item["outcome_status"] = "MATURED"
         else:
-            item["classification"] = classify_forward(
-                entry=item.get("entry"),
-                stop=item.get("stop"),
-                target=item.get("target"),
-                forward_return_pct=float(fwd),
-                later_entered=False,
-            )
+            item["classification"] = classify_rulebook(rb)
             item["outcome_status"] = "MATURED"
         try:
             from product.decision_outcomes import settle_frozen
@@ -705,6 +731,19 @@ def evaluate_outcomes(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]
             item = settle_frozen(item, horizon=10)
         except Exception:
             item["outcome_rewrote_freeze"] = False
+        if rb is not None:
+            item["eval_spec"] = rb.get("eval_spec")
+            item["rulebook_outcome"] = rb.get("outcome")
+            filled = rb.get("outcome") not in (None, "NO_FILL", "NO_LEVELS") and rb.get("net_r") is not None
+            # The learning unit is the rulebook's net R; an untriggered order is not a trade.
+            item["r_multiple"] = round(float(rb["net_r"]), 6) if filled else None
+            # The close path stays under item["path"]; the top-level return is
+            # the rulebook's, and None when the order never traded, so
+            # scorecards cannot fall back to a return for a non-trade (QT-10).
+            item["forward_return_pct"] = rb.get("return_pct") if filled else None
+        else:
+            item["r_multiple"] = None
+            item["forward_return_pct"] = None
         try:
             from product.decision_attribution import attribute_outcome
 
@@ -723,6 +762,7 @@ def evaluate_outcomes(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]
                     evidence_class=HISTORICAL_REPLAY,
                     not_pnl=True,
                     classification=str(item.get("classification") or ""),
+                    eval_spec=str(item.get("eval_spec") or ""),
                     resolved_at=str(item.get("outcome_resolved_at") or ""),
                 )
         except Exception as exc:
@@ -866,7 +906,9 @@ def replay_is_current(
         universe_limit=universe_limit,
         symbols=symbols,
         dates_fn=dates_fn,
-        calibration_snapshot=calibration_snapshot,
+        # The same default the run itself uses (neutral weights), so a default
+        # neutral replay is recognised as current (QT-14).
+        calibration_snapshot=dict(calibration_snapshot or {}) or dict(NEUTRAL_REPLAY_CALIBRATION),
     )
     if not ident.get("available"):
         return False
@@ -899,11 +941,9 @@ def run_historical_replay(
     target.mkdir(parents=True, exist_ok=True)
     frozen_calibration = dict(calibration_snapshot or {})
     if analyzer is None and not frozen_calibration:
-        try:
-            from scan.calibration_snapshot import get_or_create_snapshot
-            frozen_calibration = dict(get_or_create_snapshot())
-        except Exception:
-            frozen_calibration = {}
+        # Never today's snapshot: it is fitted on outcomes after the replayed
+        # sessions. Neutral, predeclared weights instead (B-2/C-7).
+        frozen_calibration = dict(NEUTRAL_REPLAY_CALIBRATION)
     identity = replay_identity(
         sessions=sessions,
         universe_limit=universe_limit,

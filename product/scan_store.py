@@ -423,6 +423,15 @@ def _evidence_authority() -> dict[str, Any] | None:
         pointer = Path(DEFAULT_DIR) / "current.json"
         st = pointer.stat()
         key = (str(pointer), st.st_mtime_ns, st.st_size)
+        # The pointer's TARGET is part of the identity too: replacing or
+        # deleting the snapshot file without touching the pointer must not
+        # leave the cached snapshot in use (GPT cross-review C-2).
+        try:
+            target_id = str(json.loads(pointer.read_text(encoding="utf-8")).get("snapshot_id") or "")
+            tst = (Path(DEFAULT_DIR) / f"{target_id}.json").stat()
+            key += (target_id, tst.st_ino, tst.st_mtime_ns, tst.st_size)
+        except Exception:
+            key += ("target-unreadable",)
     except Exception:
         return None
     if _AUTHORITY_CACHE["key"] != key:
@@ -440,13 +449,27 @@ def evidence_authority_key() -> tuple:
     Readers that cache a parsed scan must include this: the snapshot pointer
     or the alpha ledger can change while the scan file does not.
     """
+    import time as _time
+
     out = []
     try:
         from scan.calibration_snapshot import DEFAULT_DIR
-        st = (Path(DEFAULT_DIR) / "current.json").stat()
+        pointer = Path(DEFAULT_DIR) / "current.json"
+        st = pointer.stat()
         out.append(("pointer", st.st_mtime_ns, st.st_size))
+        # The pointer's TARGET too: deleting or replacing the snapshot file
+        # without touching the pointer must turn caches over (QT-05).
+        try:
+            target_id = str(json.loads(pointer.read_text(encoding="utf-8")).get("snapshot_id") or "")
+            tst = (Path(DEFAULT_DIR) / f"{target_id}.json").stat()
+            out.append(("target", target_id, tst.st_ino, tst.st_mtime_ns, tst.st_size))
+        except Exception:
+            out.append(("target", None))
     except Exception:
         out.append(("pointer", None))
+    # Evidence also expires with time (the 21-day age limit): re-verify at
+    # least hourly even when no file changed (QT-05).
+    out.append(("hour", int(_time.time() // 3600)))
     try:
         from research.alpha_ledger import ledger_path
         st = ledger_path().stat()
@@ -512,8 +535,23 @@ def bind_evidence(payload: dict[str, Any], authority: Any = _UNSET) -> dict[str,
             note = evidence_provenance_note(snap.get("backtest_provenance") or {})
         except Exception as exc:
             note = f"the evidence snapshot could not be verified ({type(exc).__name__})"
+    authority_id = str(snap.get("snapshot_id") or "")
+    if note:
+        # The read-time authority outage is the reason there is no BUY: carry it
+        # to the BUY-admission status, so it reads EVIDENCE_UNAVAILABLE rather
+        # than "no proven edge" (GPT cross-review C-13).
+        ident_out = dict(ident)
+        ident_out["note"] = str(ident_out.get("note") or "") or note
+        payload["evidence_identity"] = ident_out
     for row in rows:
         why = note
+        if not why and (str(row.get("edge_evidence_id") or "") != authority_id
+                        or (expected and expected != authority_id)):
+            # The verdict was judged under other evidence than the authority's.
+            # A later report that happens to prove the same signals does not
+            # retro-certify a BUY the scan made under superseded evidence
+            # (GPT cross-review B-3/C-2): the next scan re-judges it.
+            why = "its evidence snapshot is not the current authority"
         if not why:
             from scan.unified_scanner import setup_evidence, unproven_reason
             ev = setup_evidence(list(row.get("signals") or []), snap.get("backtest_edges") or {},
@@ -524,8 +562,9 @@ def bind_evidence(payload: dict[str, Any], authority: Any = _UNSET) -> dict[str,
             _withhold(row, f"⚖ BUY withheld at read time: not proven under the current evidence ({why}) — "
                            f"WATCH, not BUY")
             withheld += 1
-    payload["evidence_binding"] = {"mode": "authoritative", "authority_id": str(snap.get("snapshot_id") or ""),
-                                   "scan_evidence_id": expected, "buy_rows_withheld": withheld}
+    payload["evidence_binding"] = {"mode": "authoritative", "authority_id": authority_id,
+                                   "scan_evidence_id": expected, "buy_rows_withheld": withheld,
+                                   "authority_note": note}
     return payload
 
 

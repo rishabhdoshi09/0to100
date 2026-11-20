@@ -233,7 +233,10 @@ def settle_pending_from_market(
 
     getter = outcome_fn or (lambda symbol, as_of, row: _rulebook_outcome(symbol, as_of, row, horizon))
     entered = {str(k).upper(): bool(v) for k, v in dict(later_entered or {}).items()}
-    pending = [r for r in load_fwd() if not r.get("entered") and r.get("later_outcome") is None]
+    from product.forward_evidence import is_forward_evidence
+    # Simulated (BACKTEST / WALK_FORWARD) rows never become forward learning.
+    pending = [r for r in load_fwd() if not r.get("entered") and r.get("later_outcome") is None
+               and is_forward_evidence(r)]
     updated = 0
     pending_n = 0
     classifications: dict[str, int] = {}
@@ -305,59 +308,102 @@ def settle_pending_from_market(
 
 
 def attach_closed_trades(book, *, path=None) -> dict[str, Any]:
-    """Copy settled paper trades onto the ledger with execution-adjusted fields."""
+    """Copy settled paper trades onto the ledger with execution-adjusted fields.
+
+    Each close settles the ledger row of ITS OWN entry, once:
+
+    * joined on the paper position's decision id (``paper_decision_id``) when
+      the ledger row carries it;
+    * for older rows without it, on the symbol AND the entry session, and only
+      when exactly one unsettled entered row matches (ambiguity stays
+      unresolved, never guessed);
+    * a close already attached (``later_outcome.closed_trade_key``) is skipped.
+
+    Until 2026-11-20 every historical close was re-matched by symbol alone to
+    the newest unsettled entered row, so an old close settled a re-entry in the
+    same symbol with the old R, and the write-once settlement then blocked the
+    re-entry's real result (GPT cross-review A-2).
+    """
+    from product.forward_evidence import attach_settlements
+
     closed = list(getattr(book, "closed", []) or [])
-    attached = 0
+    ledger = load_ledger(path)
+    used = {str((r.get("later_outcome") or {}).get("closed_trade_key") or "") for r in ledger} - {""}
+    claimed: set[str] = set()
+    items: list[dict[str, Any]] = []
+    ambiguous = 0
     for trade in closed:
         row = trade.as_dict() if hasattr(trade, "as_dict") else dict(trade)
         symbol = str(row.get("symbol") or "").upper()
         if not symbol:
             continue
-        matches = [
-            r for r in load_ledger(path)
-            if r.get("entered") and str(r.get("symbol")) == symbol and r.get("later_outcome") is None
-        ]
-        if not matches:
+        did = str(row.get("decision_id") or "")
+        entry_day = str(row.get("entry_date") or "")[:10]
+        key = did or "|".join([symbol, entry_day, str(row.get("exit_date") or "")[:10],
+                               str(row.get("exit_reason") or "")])
+        if key in used:
             continue
-        target = matches[-1]
+        open_rows = [r for r in ledger
+                     if r.get("entered") and str(r.get("symbol")) == symbol and r.get("later_outcome") is None
+                     and str(r.get("decision_id")) not in claimed]
+        target = None
+        if did:
+            exact = [r for r in open_rows if str(r.get("paper_decision_id") or "") == did]
+            target = exact[0] if exact else None
+        if target is None:
+            # Legacy rows (no paper id): the symbol's entered rows of that entry
+            # session, settled OR pending, must be exactly one, and pending. A
+            # close attached by the old code (no closed_trade_key) to one row of
+            # the session must not settle a second (QT-08).
+            def _day(r):
+                return str(r.get("market_timestamp") or (r.get("pit_proof") or {}).get("as_of") or "")[:10]
+            same_session = [r for r in ledger if r.get("entered") and str(r.get("symbol")) == symbol
+                            and not r.get("paper_decision_id") and _day(r) == entry_day]
+            if len(same_session) == 1 and same_session[0].get("later_outcome") is None \
+                    and str(same_session[0].get("decision_id")) not in claimed:
+                target = same_session[0]
+            elif len(same_session) > 1:
+                ambiguous += 1
+        if target is None:
+            continue
         try:
             from product.evidence_integrity import settled_learning_result
             from product.paper_learning_loop import _lookup_taken
-            integrity = settled_learning_result(row, _lookup_taken(symbol))
+            taken_ctx = _lookup_taken(symbol, decision_id=did, entry_date=entry_day)
+            integrity = settled_learning_result(row, taken_ctx)
         except Exception:
+            taken_ctx = {}
             integrity = {
                 "gross_realized_R": row.get("realized_R"),
                 "execution_adjusted_R": None,
                 "execution_coverage": 0.0,
                 "execution_complete": False,
             }
-        shadow = {}
-        try:
-            from product.paper_learning_loop import _lookup_taken
-            shadow = dict((_lookup_taken(symbol) or {}).get("execution_reality_shadow") or {})
-        except Exception:
-            shadow = {}
+        shadow = dict((taken_ctx or {}).get("execution_reality_shadow") or {})
         charges = (shadow.get("execution_adjusted_result") or {}).get("charges_total")
         fill = dict(shadow.get("fill") or {})
-        attach_settlement(
-            str(target.get("decision_id")),
-            classification=str(row.get("exit_reason") or "CLOSED"),
-            gross_R=integrity.get("gross_realized_R"),
-            execution_adjusted_R=integrity.get("execution_adjusted_R"),
-            execution_coverage=integrity.get("execution_coverage"),
-            execution_charges=charges,
-            spread_status="measured" if any(
+        claimed.add(str(target.get("decision_id")))
+        used.add(key)
+        items.append({
+            "decision_id": str(target.get("decision_id")),
+            "classification": str(row.get("exit_reason") or "CLOSED"),
+            "gross_R": integrity.get("gross_realized_R"),
+            "execution_adjusted_R": integrity.get("execution_adjusted_R"),
+            "execution_coverage": integrity.get("execution_coverage"),
+            "execution_charges": charges,
+            "spread_status": "measured" if any(
                 f.get("name") == "bid_ask_spread" and f.get("measured")
                 for f in (fill.get("fields") or [])
                 if isinstance(f, Mapping)
             ) else "estimated_or_missing",
-            slippage_status=str(fill.get("reason") or "unknown"),
-            liquidity_assumptions="volume participation labelled; no L2 book invented",
-            outcome_provenance=current_provenance(),
-            path=path,
-        )
-        attached += 1
-    return {"attached": attached}
+            "slippage_status": str(fill.get("reason") or "unknown"),
+            "liquidity_assumptions": "volume participation labelled; no L2 book invented",
+            "outcome_provenance": current_provenance(),
+            "closed_trade_key": key,
+        })
+    if items:
+        attach_settlements(items, path=path)
+    return {"attached": len(items), "ambiguous_unresolved": ambiguous}
 
 
 def settle_and_report(

@@ -482,6 +482,17 @@ def run_whole_market_scan(
         })
     except Exception:
         pass
+    try:
+        # Publication-time certificate: the same authoritative re-verification
+        # load_scan() applies to every later reader. The recommendation
+        # projection, the immediate Telegram alerts and signal_log tracking are
+        # built from THIS in-memory payload, so a calibration that changed
+        # between scanner construction and publication must not let them carry
+        # a BUY the saved scan will not certify (GPT cross-review C-8).
+        from product.scan_store import _evidence_authority, bind_evidence
+        bind_evidence(payload, authority=_evidence_authority())
+    except Exception:
+        pass
     payload["coverage"] = coverage
     payload["coverage_state"] = str(coverage.get("state") or "UNKNOWN")
     if coverage.get("state") == "DEGRADED":

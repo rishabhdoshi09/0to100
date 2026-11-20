@@ -32,6 +32,18 @@ The method here:
 4. Degrees of freedom are the non-overlapping h-session blocks holding data,
    minus one, divided by the residual widening (effective blocks). Fewer than
    MIN_INDEPENDENT_BLOCKS raw blocks, or zero dispersion, is never a verdict.
+   Blocks are counted as the largest set of mutually disjoint windows, not
+   occupied bins.
+
+ASSUMPTION (stated, not testable from one history): dependence decays.
+The bound is valid when outcome dependence beyond 2h sessions is negligible
+or captured by the lag-h residual check. A single shock common to the WHOLE
+history (one market-wide sign that every trade shares) is one observation
+however many trades it touches, and no test on one realised history can
+detect it (GPT cross-review C-1). Every p-value, lower bound and family-wise
+claim built on this module inherits that assumption; the "any dependence"
+in the alpha-ledger guarantee refers to dependence BETWEEN looks and
+hypotheses (the union bound), not to dependence inside one test's data.
 
 Validated in tests/test_overlap_inference.py: under overlapping-window,
 persistent-regime and duplicated-block null data the false-confirmation
@@ -134,7 +146,18 @@ def overlap_robust_test(cells: Mapping[int, Sequence[float]], horizon: int, *,
         out["reason"] = "NO_DATA"
         return out
     first = items[0][0]
-    blocks = len({(o - first) // h for o, _, _ in items})
+    # Independent blocks = the largest set of sessions whose h-session windows
+    # are mutually disjoint (greedy, exact on a line). Occupied h-wide bins
+    # over-count: sessions 0, 19, 20, 39, 40 ... occupy a bin each, yet no more
+    # than half of their windows can be chosen without overlap (GPT
+    # cross-review C-1).
+    blocks = 0
+    last = None
+    for o, _s, _c in items:
+        if last is None or o >= last + h:
+            blocks += 1
+            last = o
+    out["occupied_bins"] = len({(o - first) // h for o, _, _ in items})
     out["independent_sessions"] = blocks
     mean = sum(s for _, s, _ in items) / n
     out["mean"] = mean

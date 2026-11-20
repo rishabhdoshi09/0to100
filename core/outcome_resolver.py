@@ -47,6 +47,15 @@ def _ohlcv(symbol: str):
         return None
 
 
+def _store_loaded() -> bool:
+    """True when the official bhavcopy store is loaded in this process (production)."""
+    try:
+        from data.bhavcopy_store import is_ready
+        return bool(is_ready())
+    except Exception:
+        return False
+
+
 def _after(df, from_date: str):
     if df is None or getattr(df, "empty", True):
         return None
@@ -69,6 +78,7 @@ def resolve_trade(
     *,
     horizon: int | None = None,
     frame: Any = None,
+    sessions: list[str] | None = None,
 ):
     """Resolve a logged signal exactly as the walk-forward backtest does.
 
@@ -77,22 +87,58 @@ def resolve_trade(
     close at the horizon). Returns the TradeResult, or None while the trade is
     still open or the bars are not there yet: a trade that has not exited is
     final only once the horizon-th session exists.
+
+    Only OFFICIAL session bars count:
+
+    * a live intraday overlay (``attrs["quantterm_live_overlay_date"]``, set by
+      data.nse_live) is not a published bar and is dropped;
+    * the bars must be exactly the next official sessions after the signal day
+      (core.session_window). A missing session (suspension, missing archive)
+      or an unofficial bar ends the verified window there, so a target first
+      touched in the 11th official session is never a 10-session WIN, and a
+      trade that has not exited inside its verified bars stays unresolved.
+
+    ``sessions`` is the sorted official-session list (a test seam); by default
+    it comes from the bhavcopy archive. Bars read from the store with no
+    archive listing are unresolved (fail closed); an explicit ``frame`` with no
+    listing (tests, an offline copy) is taken as given.
     """
     from core.evaluation_spec import simulate_trade
 
     horizon = int(horizon or PATH_HORIZON_SESSIONS)
+    from_store = frame is None
     df = frame if frame is not None else _ohlcv(symbol)
     if df is None or getattr(df, "empty", True) or not {"high", "low", "close"} <= set(df.columns):
         return None
     try:
         import pandas as pd
 
+        overlay = str((getattr(df, "attrs", None) or {}).get("quantterm_live_overlay_date") or "")[:10]
+        if overlay:
+            df = df[df.index < pd.Timestamp(overlay)]
         since = df[df.index > pd.Timestamp(str(opened_at or "")[:10])]
     except Exception:
         return None
     window = since.iloc[:horizon]
     if window.empty:
         return None
+    if sessions is None:
+        from core.session_window import official_dates
+
+        sessions = official_dates()
+    if not sessions and from_store and _store_loaded():
+        # Store bars (possibly restored from the pickle cache) without the
+        # official session list cannot be verified: never settle positionally
+        # (cross-review verification QT-06). An explicit frame is the
+        # caller's (tests, an offline copy) and is taken as given.
+        return None
+    if sessions:
+        from core.session_window import verified_prefix
+
+        days = [str(getattr(ix, "date", lambda: ix)())[:10] for ix in window.index]
+        window = window.iloc[:verified_prefix(days, str(opened_at or "")[:10], list(sessions))]
+        if window.empty:
+            return None
     opens = window["open"].to_numpy(dtype=float) if "open" in window.columns else None
     result = simulate_trade(
         entry, stop, target,
@@ -115,6 +161,7 @@ def counterfactual_outcome(
     *,
     horizon: int | None = None,
     frame: Any = None,
+    sessions: list[str] | None = None,
 ) -> dict[str, Any] | None:
     """A rejected or waited candidate, judged exactly as a taken trade would be.
 
@@ -136,7 +183,7 @@ def counterfactual_outcome(
         return {**base, "outcome": "NO_LEVELS", "gross_r": None, "net_r": None, "return_pct": None}
     if not (e > s > 0 and t > e):
         return {**base, "outcome": "NO_LEVELS", "gross_r": None, "net_r": None, "return_pct": None}
-    res = resolve_trade(symbol, as_of, e, s, t, horizon=h, frame=frame)
+    res = resolve_trade(symbol, as_of, e, s, t, horizon=h, frame=frame, sessions=sessions)
     if res is None:
         return None
     if not res.filled:

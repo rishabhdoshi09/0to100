@@ -2,6 +2,8 @@
 terminal_product_api.py wiring."""
 from __future__ import annotations
 
+from core.evaluation_spec import spec_tag as _rulebook_spec
+
 from product.evolution import policy_registry as PR
 from product.evolution.api import evolution_lab_board
 
@@ -33,6 +35,7 @@ def test_board_reports_champion_and_leaderboard_sorted_by_incremental_value(tmp_
             "outcome": {"forward_return_pct": r * 5}, "classification": "WINNER_TAKEN" if r > 0 else "LOSER_TAKEN",
             "graded_at": "x", "not_pnl": True, "is_champion_decision": policy_id == "CHAMP",
             "counterfactual_R": r,
+        "eval_spec": _rulebook_spec(),   # graded on the one rulebook (QT-09)
         })
 
     for i in range(10):

@@ -647,7 +647,11 @@ def learning_influence(policies: Sequence[Mapping[str, Any]], forward_rows: Sequ
             })
     effects: dict[str, int] = defaultdict(int)
     for r in independent_decisions(forward_rows):
-        effects[str(r.get("policy_effect") or "NEUTRAL")] += 1
+        # The forward ledger persists the effect as ``policy_result``
+        # (forward_evidence.freeze_observation); ``policy_effect`` is the
+        # in-memory decision field. Reading only the latter counted every
+        # recorded BLOCK/PENALIZE as NEUTRAL (GPT cross-review A-10).
+        effects[str(r.get("policy_result") or r.get("policy_effect") or "NEUTRAL")] += 1
     changed = sum(v for k, v in effects.items() if k not in {"NEUTRAL", ""})
     return {
         "policies_by_status": dict(by_status),

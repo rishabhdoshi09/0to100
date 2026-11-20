@@ -63,7 +63,9 @@ def test_snapshot_and_decision_are_pure_functions_of_their_inputs(tmp_path, monk
 def test_grading_never_resolves_before_the_horizon_has_elapsed(tmp_path, monkeypatch):
     """resolve_forward_outcome / grade_shadow_decision must return None (not
     a guess, not zero) until core.outcome_resolver.first_touch_path itself
-    says the horizon-th session actually exists in official data."""
+    says the horizon-th session actually exists in official data. Equity is
+    graded on the one rulebook (counterfactual_outcome)."""
+    from tests.evidence_fixtures import rulebook_outcome
     monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
     card = _card()
     snap = snapshot.build_snapshot(card, regime="TRENDING_BULL", domain="EQUITY")
@@ -71,12 +73,12 @@ def test_grading_never_resolves_before_the_horizon_has_elapsed(tmp_path, monkeyp
     verdict = policy_eval.evaluate_snapshot(snap, policy)
     row = shadow_decisions.freeze_shadow_decision(snap, verdict)
 
-    with mock.patch.object(grading, "first_touch_path", return_value=None):
+    with mock.patch.object(grading, "counterfactual_outcome", return_value=None):
         assert grading.grade_shadow_decision(row) is None
 
     # Now "time has passed" and the real resolver has a path -- grading
     # becomes available, using exactly that resolved outcome.
-    with mock.patch.object(grading, "first_touch_path", return_value=(2650.0, 6.0, 1)):
+    with mock.patch.object(grading, "counterfactual_outcome", return_value=rulebook_outcome(1.2, "WIN")):
         graded = grading.grade_shadow_decision(row)
     assert graded is not None
     assert graded["outcome"] is not None
@@ -87,15 +89,16 @@ def test_grading_is_idempotent_once_settled(tmp_path, monkeypatch):
     """A second grading attempt (e.g. a restarted off-hours job re-scanning
     pending rows) must never re-settle an already-graded decision, even if
     the forward-resolver would now return something different."""
+    from tests.evidence_fixtures import rulebook_outcome
     monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
     card = _card()
     snap = snapshot.build_snapshot(card, regime="TRENDING_BULL", domain="EQUITY")
     verdict = policy_eval.evaluate_snapshot(snap, {"policy_id": "P1", "weights": {}})
     row = shadow_decisions.freeze_shadow_decision(snap, verdict)
 
-    with mock.patch.object(grading, "first_touch_path", return_value=(2650.0, 6.0, 1)):
+    with mock.patch.object(grading, "counterfactual_outcome", return_value=rulebook_outcome(1.2, "WIN")):
         first = grading.grade_shadow_decision(row)
-    with mock.patch.object(grading, "first_touch_path", return_value=(1000.0, -90.0, 0)):
+    with mock.patch.object(grading, "counterfactual_outcome", return_value=rulebook_outcome(-1.0, "LOSS")):
         second = grading.grade_shadow_decision(shadow_decisions.get_shadow_decision(row["shadow_id"]))
 
     assert first["classification"] == second["classification"] == "WINNER_TAKEN"

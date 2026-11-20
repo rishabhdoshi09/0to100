@@ -82,13 +82,17 @@ def test_52_week_shortcut_needs_its_own_positive_evidence():
 def test_buy_needs_a_positive_measured_combo_edge():
     edges = {"FLAT_BASE": -0.83, "NR7_COIL": -0.45, "VOL_SQUEEZE": 0.08, "MOMENTUM": -0.03}
     verdict, why = US._evidence_verdict(90.0, ["FLAT_BASE", "NR7_COIL"], signal_edges=edges)
-    assert verdict == "WATCH" and "-0.64R" in why
+    assert verdict == "WATCH" and "-0.83R" in why          # judged on the weakest signal
     # Breakeven (NEUTRAL, within noise of zero) is not an edge either: the
     # two survivors of the 2026-11-12 scan measured +0.003R.
     verdict, why = US._evidence_verdict(90.0, ["VOL_SQUEEZE", "MOMENTUM"], signal_edges=edges)
-    assert verdict == "WATCH" and "+0.03R" in why and "+0.05R bar" in why
-    positive = {"VOL_SQUEEZE": _ok(0.08), "DELIVERY_SPIKE": _ok(0.04, lower=0.01)}
+    assert verdict == "WATCH" and "-0.03R" in why and "+0.05R bar" in why
+    positive = {"VOL_SQUEEZE": _ok(0.08), "DELIVERY_SPIKE": _ok(0.06, lower=0.01)}
     assert US._evidence_verdict(90.0, ["VOL_SQUEEZE", "DELIVERY_SPIKE"], signal_edges=positive) == ("BUY", "")
+    # A strong signal no longer carries a weak one past the bar on average
+    # (GPT cross-review C-5): +0.08 and +0.04 average +0.06, but the weakest is +0.04.
+    carried = {"VOL_SQUEEZE": _ok(0.08), "DELIVERY_SPIKE": _ok(0.04, lower=0.01)}
+    assert US._evidence_verdict(90.0, ["VOL_SQUEEZE", "DELIVERY_SPIKE"], signal_edges=carried)[0] == "WATCH"
     assert US._MIN_BUY_EDGE_R == 0.05
 
 
@@ -112,7 +116,7 @@ def test_floor_is_tunable(monkeypatch):
                                 signal_edges={"VOL_SQUEEZE": _ok(0.08), "MOMENTUM": _ok(0.06)})[0] == "WATCH"
     monkeypatch.setattr(US, "_MIN_BUY_EDGE_R", 0.0)
     assert US._evidence_verdict(90.0, ["VOL_SQUEEZE", "MOMENTUM"],
-                                signal_edges={"VOL_SQUEEZE": _ok(0.08), "MOMENTUM": _ok(-0.03, lower=0.01)})[0] == "BUY"
+                                signal_edges={"VOL_SQUEEZE": _ok(0.08), "MOMENTUM": _ok(0.0, lower=0.01)})[0] == "BUY"
 
 
 def test_backtest_edges_keep_only_evidenced_signals():
@@ -139,21 +143,21 @@ def test_scanner_turns_a_losing_buy_into_an_explained_watch():
     losing = {"BREAKOUT_52W": 0.2, "VOL_SQUEEZE": -0.5, "POCKET_PIVOT": -0.5}
     r = US.UnifiedScanner(calibration_snapshot=_snap(losing))._analyze("X", _breakout_frame())
     assert r.signals[:3] == ["BREAKOUT_52W", "VOL_SQUEEZE", "POCKET_PIVOT"]
-    assert r.verdict == "WATCH" and r.edge_gated is True and r.edge_r == pytest.approx(-0.267, abs=1e-3)
+    assert r.verdict == "WATCH" and r.edge_gated is True and r.edge_r == pytest.approx(-0.5, abs=1e-3)
     assert r.reasons[-1].startswith("⚖ Measured edge")
     assert not r.reasons[0].startswith("⚖")             # reasons[0] stays the safety slot
 
 
 def test_scanner_keeps_an_evidenced_positive_buy():
-    edges = {"VOL_SQUEEZE": _ok(0.12), "POCKET_PIVOT": _ok(0.04, lower=0.01)}
+    edges = {"VOL_SQUEEZE": _ok(0.12), "POCKET_PIVOT": _ok(0.06, lower=0.01)}
     r = US.UnifiedScanner(calibration_snapshot=_snap(edges))._analyze("X", _breakout_frame())
-    assert r.verdict == "BUY" and r.edge_gated is False and r.edge_r == pytest.approx(0.08)
+    assert r.verdict == "BUY" and r.edge_gated is False and r.edge_r == pytest.approx(0.06)
 
 
 def test_scanner_with_legacy_float_evidence_shows_why_it_is_not_a_buy():
-    r = US.UnifiedScanner(calibration_snapshot=_snap({"VOL_SQUEEZE": 0.12, "POCKET_PIVOT": 0.04}))._analyze(
+    r = US.UnifiedScanner(calibration_snapshot=_snap({"VOL_SQUEEZE": 0.12, "POCKET_PIVOT": 0.06}))._analyze(
         "X", _breakout_frame())
-    assert r.verdict == "WATCH" and r.edge_gated is True and r.edge_r == pytest.approx(0.08)
+    assert r.verdict == "WATCH" and r.edge_gated is True and r.edge_r == pytest.approx(0.06)
     assert "legacy evidence" in r.reasons[-1] and r.edge_lower_r is None
 
 
@@ -371,7 +375,7 @@ def test_a_duplicated_signal_cannot_double_its_weight():
     edges = {"VOL_SQUEEZE": _ok(0.30), "MOMENTUM": _ok(-0.50, lower=-0.6)}
     once = US.setup_evidence(["VOL_SQUEEZE", "MOMENTUM"], edges)
     twice = US.setup_evidence(["VOL_SQUEEZE", "VOL_SQUEEZE", "VOL_SQUEEZE", "MOMENTUM"], edges)
-    assert once["mean"] == twice["mean"] == pytest.approx(-0.10)
+    assert once["mean"] == twice["mean"] == pytest.approx(-0.50)
 
 
 def test_a_partial_or_corrupt_report_file_is_no_evidence(tmp_path, monkeypatch):

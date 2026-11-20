@@ -219,3 +219,35 @@ def test_generation_publication_holds_the_cross_process_publication_lock(monkeyp
     assert held == {"long": True, "desks": True, "save": True, "feature002": False}
     with publication_lock(timeout_s=0):      # released after publication
         pass
+
+
+def test_an_uncertified_buy_is_withdrawn_before_projections_and_tracking(monkeypatch):
+    """GPT cross-review C-8: projections, Telegram and signal_log consume the in-memory payload.
+
+    The scanner said BUY, but no evidence authority certifies it at publication
+    time. Every consumer built from this payload must see the WATCH that
+    load_scan() would serve, and signal_log must not track it as a BUY.
+    """
+    seen_by_desks, saved, tracked = {}, {}, []
+    monkeypatch.setattr(S, "_saved_priority_inputs", lambda: (None, None, None, []))
+    monkeypatch.setattr(S, "_feature002_hook", None)
+    monkeypatch.setattr("scan.scan_coverage.observe_scanner", _observe_scanner)
+    monkeypatch.setattr("scan.scan_coverage.save_audit", lambda _audit: None)
+    monkeypatch.setattr("scan.bulk_fetcher.cached_symbols", lambda: ["AAA"])
+    monkeypatch.setattr("product.scan_store._history_freshness", lambda: ({
+        "available_session": "2026-09-18", "expected_latest_completed_session": "2026-09-18",
+        "reason_code": "HISTORY_CURRENT", "stale_sessions": 0, "current": True}, ""))
+    monkeypatch.setattr("product.scan_store._evidence_authority", lambda: None)
+    monkeypatch.setattr("product.scan_store.save_scan", lambda payload: saved.update(dict(payload)))
+    monkeypatch.setattr("product.sepa_setup.persist_public_best_setups", lambda _p: None)
+    monkeypatch.setattr("scan.long_term_service.overlay_long_term_from_market_scan",
+                        lambda _p, **_k: SimpleNamespace(status="SUCCEEDED", payload={"records": []}, error_code=""))
+    monkeypatch.setattr("product.desk_scan_overlays.persist_desks_from_market_scan",
+                        lambda p: seen_by_desks.update(verdict=p["records"][0]["verdict"]) or {})
+    monkeypatch.setattr(S, "track_published_buys",
+                        lambda payload, **_k: tracked.extend(r for r in payload["records"] if r["verdict"] == "BUY"))
+
+    S.run_whole_market_scan(universe_provider=lambda: {"AAA": "Alpha"}, prefetch_fn=lambda *_a, **_k: None,
+                            scanner=_Scanner(), fno_provider=lambda: set(), save=True)
+    assert seen_by_desks["verdict"] == "WATCH" and saved["records"][0]["verdict"] == "WATCH"
+    assert tracked == []

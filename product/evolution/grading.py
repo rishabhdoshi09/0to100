@@ -3,9 +3,11 @@
 The Common Outcome Resolver principle: Champion and every Challenger are
 graded against the SAME realized price path, resolved once from official
 data -- no policy ever gets to define its own convenient outcome after the
-fact. Reuses core.outcome_resolver.first_touch_path (official bhavcopy bars
-only; returns None until the horizon has actually elapsed -- it never
-fabricates a "future" outcome) and product.counterfactual_learning's
+fact. Equity shadows are graded by core.outcome_resolver.counterfactual_outcome,
+the one rulebook taken trades use (official bhavcopy bars only; None until the
+horizon has elapsed -- it never fabricates a "future" outcome); F&O underlying
+shadows keep their direction-aware first-touch path. Reuses
+product.counterfactual_learning's
 freeze-then-settle grading (now covering both taken and not-taken
 decisions, see its WINNER_TAKEN/LOSER_TAKEN extension).
 
@@ -20,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from core.outcome_resolver import PATH_HORIZON_SESSIONS, first_touch_path
+from core.outcome_resolver import PATH_HORIZON_SESSIONS, counterfactual_outcome, first_touch_path
 
 
 def resolve_forward_outcome(
@@ -179,9 +181,29 @@ def grade_shadow_decision(
             horizon=horizon,
         )
     else:
-        forward = resolve_forward_outcome(
-            symbol, as_of, float(entry), float(stop), float(target), horizon=horizon,
+        # Equity shadows are graded on the ONE rulebook, exactly as a taken
+        # trade (core.outcome_resolver.counterfactual_outcome: buy-stop fill,
+        # gap-aware exits, breakeven trail, exact official sessions, costs).
+        # The legacy first-touch path exited a gap-down at the stop (-1R where
+        # the rulebook books the open, e.g. -2R), so challenger scorecards and
+        # promotion inputs used a second outcome unit (GPT cross-review A-8).
+        from product.counterfactual_learning import settle_rulebook
+
+        rb = counterfactual_outcome(symbol, as_of, entry, stop, target, horizon=horizon)
+        if rb is None:
+            return None
+        selected = str(row.get("decision") or "") == "ENTER_NOW"
+        settled = settle_rulebook(
+            dict(row, hypothetical_entry=entry, hypothetical_stop=stop, hypothetical_target=target),
+            rb, selected=selected,
         )
+        settled["graded_at"] = datetime.now(timezone.utc).isoformat()
+        settled["resolved_exit_price"] = rb.get("exit_price")
+        settled["resolved_worked"] = (-1 if rb.get("outcome") in ("NO_FILL", "NO_LEVELS")
+                                      else 1 if float(rb.get("net_r") or 0.0) > 0 else 0)
+        from product.evolution.shadow_decisions import save_graded_decision
+
+        return save_graded_decision(settled, path=path)
     if forward is None:
         return None
 

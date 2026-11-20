@@ -45,13 +45,17 @@ SCRIPT = textwrap.dedent(
     T.log_signal("YOUNG", "UNIFIED_BUY", 200.0, 200.0, 192.0, 216.0, 65.0, 30.0, "VCP", "CHOPPY")
 
     idx = pd.bdate_range("2026-08-03", "2026-09-30")
-    close = [99.0 if d <= pd.Timestamp("2026-09-01") else 104.0 for d in idx]
+    idx = idx[idx != pd.Timestamp("2026-09-14")]    # an NSE holiday has no bar
+    close = [99.0 if d <= pd.Timestamp("2026-09-01") else 100.5 for d in idx]   # a close inside its bar
     high = [99.5 if d <= pd.Timestamp("2026-09-01") else 101.0 for d in idx]
     high[list(idx).index(pd.Timestamp("2026-09-04"))] = 107.0   # target 106 touched
     frame = pd.DataFrame({"open": 99.0, "high": high, "low": 98.5, "close": close, "volume": 1e6}, index=idx)
     young = pd.DataFrame({"open": 200.0, "high": 201.0, "low": 199.0, "close": 200.0, "volume": 1e6}, index=idx)
     BS._store["WINCO"] = frame                       # the real store, no patched get_ohlcv
     BS._store["YOUNG"] = young
+    # The archive listing that names the official sessions: without it a loaded
+    # store never settles positionally (core.session_window, QT-06).
+    BS._dates_on_disk = lambda: [d.date() for d in idx]
 
     class Deps:
         def now_ist(self):
@@ -134,3 +138,6 @@ def test_rerun_is_idempotent_and_an_empty_store_is_reported(tmp_path):
     third = out["third"]
     assert third["error"] == "OFFICIAL_STORE_NOT_LOADED"
     assert "official store not loaded" in third["summary"]
+    # A failed surfaced-BUY settlement is not a SUCCEEDED job: it retries and
+    # does not release the learning dependency (GPT cross-review A-9).
+    assert third["status"] == "RETRYABLE_FAILED"

@@ -84,29 +84,49 @@ def _exploration_path():
     return logs_dir() / "product" / "paper_exploration.json"
 
 
+#: Returned for a quota file that exists but cannot be read: the day counts as full.
+_QUOTA_UNREADABLE = ["<quota unreadable>"] * 99
+
+
 def _exploration_taken(day: str, *, path=None) -> list[str]:
+    """Exploration slots used on ``day``. An unreadable quota fails closed (full)."""
     import json
-    try:
-        data = json.loads((path or _exploration_path()).read_text(encoding="utf-8") or "{}")
-    except Exception:
+    target = path or _exploration_path()
+    if not target.exists():
         return []
+    try:
+        data = json.loads(target.read_text(encoding="utf-8") or "{}")
+        if not isinstance(data, dict):
+            raise ValueError("quota is not a mapping")
+    except Exception:
+        return list(_QUOTA_UNREADABLE)
     return [str(s) for s in (data.get(str(day)) or [])]
 
 
-def _record_exploration(day: str, symbol: str, *, path=None) -> None:
+def _record_exploration(day: str, symbol: str, *, path=None) -> bool:
+    """Reserve one exploration slot durably. False when it could not be written.
+
+    The slot is reserved under the account lock BEFORE the fill, so a failed
+    write blocks the probe and a restart after the fill cannot lose the slot
+    (GPT cross-review C-12). A probe that then fails to fill keeps its slot:
+    conservative, never a second probe.
+    """
     import json
     target = path or _exploration_path()
     try:
         data = json.loads(target.read_text(encoding="utf-8") or "{}") if target.exists() else {}
+        if not isinstance(data, dict):
+            return False
     except Exception:
-        data = {}
+        return False
     data = {k: v for k, v in data.items() if str(k) >= str(day)[:7]}   # keep this month
     data.setdefault(str(day), []).append(str(symbol).upper())
     try:
         from core.atomic_io import atomic_write_text
         atomic_write_text(target, json.dumps(data, indent=1, sort_keys=True))
     except Exception:
-        pass
+        return False
+    return True
 
 
 # Only these refusals may be explored (owner decision 2026-11-11: "allow 1
@@ -168,6 +188,75 @@ def _exploration_pick(decisions, *, day: str, evaluate, path=None):
                                 f"{EXPLORATION_RISK_PCT:g}% risk; {candidate.detail}").strip()
             return candidate
     return None
+
+
+EVIDENCE_WITHDRAWN = "EVIDENCE_WITHDRAWN"
+
+
+def _current_scan_certificate(payload: Mapping[str, Any] | None) -> set[str]:
+    """Symbols the AUTHORITATIVE scan read (product.scan_store.load_scan) certifies as BUY NOW.
+
+    Every production entry must be in it. A saved card keeps the tier it was
+    published with, so a BUY withdrawn at read time (evidence superseded,
+    aged out, authority unavailable) could otherwise still be filled as a
+    production entry (GPT cross-review A-1/C-8). Fail closed: an unreadable
+    scan, or recommendations built from a different scan generation than the
+    one now on disk, certify NOTHING (the job-level freshness check can pass
+    just before the scan is replaced; cross-review verification QT-01).
+    """
+    try:
+        from product.scan_store import load_scan
+        scan = load_scan()
+    except Exception:
+        return set()
+    if not scan:
+        return set()
+    reco_scan = str((payload or {}).get("scan_scanned_at") or "")
+    if not reco_scan or str(scan.get("scanned_at") or "") != reco_scan:
+        return set()
+    return {str(r.get("symbol") or "").upper() for r in scan.get("records") or []
+            if isinstance(r, Mapping) and str(r.get("verdict") or "").upper() in ("BUY", "STRONG BUY")}
+
+
+def _withdraw_uncertified(card: dict[str, Any], certified: set[str] | None) -> dict[str, Any]:
+    """A production-tier card whose BUY is no longer certified becomes a gated WATCH card."""
+    if certified is None:
+        return card
+    symbol = str(card.get("symbol") or "").upper()
+    if str(card.get("reco_tier") or "") not in ELIGIBLE_TIERS or symbol in certified:
+        return card
+    out = dict(card)
+    out["reco_tier"] = TIER_WATCH
+    out["edge_gated"] = True
+    out["evidence_withdrawn"] = True
+    out["verdict"] = "WATCH"
+    reasons = list(out.get("reasons") or [])
+    reasons.append("⚖ BUY withdrawn at read time: not certified by the current evidence — "
+                   "not a production entry (research/exploration only)")
+    out["reasons"] = reasons
+    return out
+
+
+def _durable_save(save) -> bool:
+    try:
+        return save() is not False
+    except Exception:
+        return False
+
+
+def _rollback_open(book, pos) -> bool:
+    """Undo an in-memory open on a plain PaperBook (True), or report that it cannot be undone (False)."""
+    try:
+        from research.auto_research.paper_book import PaperBook
+    except Exception:
+        return False
+    if type(book) is not PaperBook or pos is None:
+        return False
+    for key, held in list(getattr(book, "open", {}).items()):
+        if held is pos:
+            del book.open[key]
+            return True
+    return False
 
 
 def _risk_pct_for(card: Mapping[str, Any] | None) -> float:
@@ -1126,7 +1215,9 @@ def run_reco_paper_cycle(
             pass
 
     ranked: list[tuple[float, AutopilotDecision]] = []
+    certified = _current_scan_certificate(payload) if cards is None else None
     for card in card_list:
+        card = _withdraw_uncertified(dict(card), certified)
         decision = evaluate_selection_candidate(
             card,
             book=book,
@@ -1326,6 +1417,18 @@ def run_reco_paper_cycle(
         from risk.portfolio_risk import account_exposure_gate, account_mutation_lock
         in_lock_saved = True
         with account_mutation_lock():
+            if str((decision.card or {}).get("lane") or "") == EXPLORATION:
+                # Re-check and reserve the day's exploration slot under the lock,
+                # before the fill: the quota can neither be raced nor lost.
+                if (len(_exploration_taken(day)) >= EXPLORATION_MAX_PER_DAY
+                        or not _record_exploration(day, decision.symbol)):
+                    fail = decision.as_dict()
+                    fail["decision"] = BLOCK
+                    fail["reason_code"] = "EXPLORATION_QUOTA_UNAVAILABLE"
+                    fail["detail"] = "exploration slot already used today, or the quota could not be recorded"
+                    fail["group"] = "REJECTED"
+                    rejections.append(fail)
+                    continue
             gate = account_exposure_gate(
                 decision.symbol,
                 qty=int(_f(decision.card.get("approved_quantity")) or 0),
@@ -1357,10 +1460,24 @@ def run_reco_paper_cycle(
                     pos.sector = str(decision.card.get("sector") or "")
                 except Exception:
                     pass
-                try:
-                    in_lock_saved = durable_book_save() is not False
-                except Exception:
-                    in_lock_saved = False
+                in_lock_saved = _durable_save(durable_book_save) or _durable_save(durable_book_save)
+                if not in_lock_saved:
+                    # Never release the lock with exposure that exists only in
+                    # memory: the other books' risk read is the disk book
+                    # (cross-review verification QT-04). A plain PaperBook is
+                    # rolled back so memory equals disk; any other book (the
+                    # OMS adapter) is retired fail-closed by the job boundary.
+                    if not _rollback_open(book, pos):
+                        raise RuntimeError(
+                            f"paper book durable save failed under the account lock for {decision.symbol}"
+                        )
+                    fail = decision.as_dict()
+                    fail["decision"] = BLOCK
+                    fail["reason_code"] = "PAPER_BOOK_PERSISTENCE_FAILED"
+                    fail["detail"] = "the open could not be persisted; rolled back before the lock was released"
+                    fail["group"] = "REJECTED"
+                    rejections.append(fail)
+                    break
         if pos is None:
             reason = ""
             refusals = list(getattr(book, "refusals", []) or [])
@@ -1388,14 +1505,16 @@ def run_reco_paper_cycle(
         cluster_risk[sector] = cluster_risk.get(sector, 0.0) + _risk_pct_for(decision.card)
         opened.append((ENSEMBLE_ID, decision.symbol))
         lane = str((decision.card or {}).get("lane") or "PRODUCTION")
-        if lane == EXPLORATION:
-            _record_exploration(day, decision.symbol)
         taken_row = {
             **decision.as_dict(),
             "lane": lane,
             "thesis_hash": str(thesis.get("thesis_hash") or ""),
             "qty": getattr(pos, "qty", None),
             "entry_fill": getattr(pos, "entry_price", None),
+            # The paper position's own decision id: the join key from its close
+            # back to this entry (forward_soak.attach_closed_trades).
+            "paper_decision_id": str(getattr(pos, "decision_id", "") or ""),
+            "entry_date": str(getattr(pos, "entry_date", "") or day),
             "status": "TAKEN",
             "group": "TAKEN",
         }

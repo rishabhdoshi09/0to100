@@ -255,10 +255,15 @@ def setup_evidence(signals: list[str], edges: dict | None, combos: dict | None =
         return None
     lowers = [r["lower"] for r in rows]
     kinds = {r["inference"] for r in rows}
+    # Without tested evidence for the exact combination, a setup is judged on
+    # its WEAKEST evidenced signal. An average of marginal bounds is not a
+    # tested hypothesis and let a strong signal carry a negative one past the
+    # gate (GPT cross-review C-5); the minimum is never looser than the
+    # average. Stated limit: the exact intersection itself is tested only once
+    # it has its own >= COMBO_MIN_TRADES trades.
     return {
-        "mean": sum(r["mean"] for r in rows) / len(rows),
-        # Averaging lower bounds is conservative for overlapping signals.
-        "lower": None if any(x is None for x in lowers) else sum(lowers) / len(lowers),
+        "mean": min(r["mean"] for r in rows),
+        "lower": None if any(x is None for x in lowers) else min(lowers),
         "n": min(r["n"] for r in rows),
         "blocks": min(r["blocks"] for r in rows),
         "inference": kinds.pop() if len(kinds) == 1 else "MIXED",
@@ -355,6 +360,16 @@ def evidence_provenance_note(provenance, *, now=None) -> str:
         return "the walk-forward evidence was not corrected with the predeclared multiple-testing procedure"
     if not str(prov.get("code_sha") or "").strip():
         return "the walk-forward evidence does not name the code that produced it"
+    # Every measured window must have been checked against the official
+    # sessions; a report produced without that index (no archive listing)
+    # measured positional rows that can span a suspension (GPT cross-review C-6).
+    if prov.get("exact_horizon_check") is not True:
+        return "the walk-forward evidence did not verify its outcome windows against official sessions"
+    # A freshly generated report over stale data is stale evidence: the data
+    # it measured must end inside the same age limit.
+    data_age = evidence_age_note(prov.get("data_last_session"), now=now)
+    if data_age:
+        return "the walk-forward evidence data is stale: " + data_age.replace("the walk-forward evidence ", "")
     # The annual alpha budget must be provably real: the report's look is in
     # the durable ledger, under the CURRENT hypothesis program, within budget.
     try:
@@ -926,7 +941,15 @@ class UnifiedScanner:
                  if "deliv_per" in df.columns else None)
 
         price = float(close[-1])
-        if price < 20:               # skip penny stocks
+        # The penny-stock floor is an ABSOLUTE price: judge it on the price that
+        # traded that day, not the back-adjusted one, or a split after the
+        # decision would remove the setup from history (GPT cross-review B-1).
+        try:
+            from data.corporate_actions import raw_price_multiplier
+            traded_price = price * raw_price_multiplier(df)
+        except Exception:
+            traded_price = price
+        if traded_price < 20:        # skip penny stocks
             return None
         if vol is not None and np.nanmean(vol[-20:]) * price < 1e7:
             return None              # < ₹1 cr avg daily turnover — illiquid

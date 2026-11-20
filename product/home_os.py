@@ -300,6 +300,8 @@ def _scan_evidence_index() -> dict[str, Any]:
             "edge_source": str(raw.get("edge_source") or ""),
             "score": raw.get("score"),
             "signals": list(raw.get("signals") or [])[:6],
+            # The read-time (re-verified) verdict: the per-row BUY certificate.
+            "verdict": str(raw.get("verdict") or "").upper(),
         }
         by_symbol[symbol] = ev
         if str(raw.get("verdict") or "").upper() in {"BUY", "STRONG BUY"}:
@@ -352,8 +354,13 @@ def build_buy_only(best_rows: Sequence[Mapping[str, Any]], *, verified: bool, ex
         symbol = str(row.get("symbol") or "").upper().strip()
         if not symbol:
             continue
-        explained = explain_opportunity(row)
         ev = dict(index["by_symbol"].get(symbol) or {})
+        if ev.get("verdict") not in {"BUY", "STRONG BUY"}:
+            # A committee/discovery BUY whose scan row load_scan() no longer
+            # certifies (evidence superseded, aged out, authority unavailable)
+            # is not a BUY on Home (GPT cross-review C-8).
+            continue
+        explained = explain_opportunity(row)
         entry = explained.get("entry")
         stop = explained.get("stop")
         target = explained.get("target")

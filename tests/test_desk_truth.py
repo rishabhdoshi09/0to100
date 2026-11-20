@@ -249,16 +249,34 @@ def test_g_replay_persists_decision_records(tmp_path):
     assert row["decision"]
 
 
-def test_h_outcome_links_to_historical_decision():
+def test_h_outcome_links_to_historical_decision(monkeypatch):
+    """Replayed decisions settle on the one rulebook (GPT cross-review B-7), from real bars only."""
+    import product.historical_replay as HR
+    from product.counterfactual_learning import AVOIDED_LOSER
+
+    idx = pd.bdate_range("2026-06-02", periods=12)
+
+    def frame(rows):
+        return pd.DataFrame(rows, columns=["open", "high", "low", "close"], index=idx[:len(rows)])
+
+    frames = {
+        "AAA": frame([(99.5, 100.5, 99.0, 100.0), (99.0, 99.5, 94.0, 94.5)] + [(96, 97, 95.5, 96)] * 8),
+        "BBB": frame([(99.5, 100.5, 99.0, 100.0), (101, 111.0, 100.5, 110.5)] + [(110, 111, 109, 110)] * 8),
+    }
+    monkeypatch.setattr(HR, "ohlcv_as_of", lambda symbol, *_a, **_k: frames.get(symbol))
     rows = evaluate_outcomes([
-        {"symbol": "AAA", "as_of": "2026-06-01", "decision": "REJECT", "entry": 100, "stop": 95, "target": 110, "forward_return_pct": -6},
-        {"symbol": "BBB", "as_of": "2026-06-01", "decision": "REJECT", "entry": 100, "stop": 95, "target": 110, "forward_return_pct": 9},
+        # A bare forward return is not judgeable on the rulebook: the bars are.
+        {"symbol": "AAA", "as_of": "2026-06-01", "decision": "REJECT", "entry": 100, "stop": 95, "target": 110, "forward_return_pct": 9},
+        {"symbol": "BBB", "as_of": "2026-06-01", "decision": "REJECT", "entry": 100, "stop": 95, "target": 110},
         {"symbol": "CCC", "as_of": "2026-06-01", "decision": "WAIT", "forward_return_pct": None},
     ])
     by_symbol = {row["symbol"]: row for row in rows}
-    assert by_symbol["AAA"]["classification"] == CORRECT_REJECTION
-    assert by_symbol["BBB"]["classification"] == MISSED_WINNER
+    assert by_symbol["AAA"]["classification"] == AVOIDED_LOSER          # stopped out on day 2
+    assert by_symbol["AAA"]["r_multiple"] < 0 and by_symbol["AAA"]["eval_spec"]
+    assert by_symbol["BBB"]["classification"] == MISSED_WINNER          # target on day 2
+    assert by_symbol["BBB"]["r_multiple"] > 0
     assert by_symbol["CCC"]["outcome_status"] == "UNRESOLVED"
+    assert CORRECT_REJECTION != by_symbol["AAA"]["classification"]
 
 
 def test_i_scanner_request_executes_real_analyzer():

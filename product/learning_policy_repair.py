@@ -73,8 +73,12 @@ def independent_units(forward_rows: Iterable[Mapping[str, Any]], cf_rows: Iterab
     """
     units: dict[tuple[str, str, str], dict[str, str]] = {}
     excluded = excluded if excluded is not None else {}
+    from product.forward_evidence import is_forward_evidence
     for row in forward_rows:
         if row.get("entered") or not row.get("later_outcome"):
+            continue
+        if not is_forward_evidence(row):
+            excluded["simulated_provenance"] = excluded.get("simulated_provenance", 0) + 1
             continue
         cls = str(row.get("counterfactual_classification") or "")
         if not cls:

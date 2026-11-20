@@ -103,6 +103,8 @@ def record_taken_evidence(taken: Sequence[Mapping[str, Any]], *, as_of: str) -> 
             "entry_quality": row.get("entry_quality") or "",
             "execution_reality_shadow": row.get("execution_reality_shadow"),
             "why": row.get("why") or {},
+            "paper_decision_id": str(row.get("paper_decision_id") or ""),
+            "entry_date": str(row.get("entry_date") or as_of or "")[:10],
         })
 
 
@@ -115,13 +117,29 @@ def _trade_key(trade: Mapping[str, Any]) -> str:
     ])
 
 
-def _lookup_taken(symbol: str) -> dict[str, Any]:
+def _lookup_taken(symbol: str, *, decision_id: str = "", entry_date: str = "") -> dict[str, Any]:
+    """The taken-entry context of a paper position.
+
+    Joined on the position's decision id when both sides carry it, else on its
+    entry session. A symbol-only match is used only when the trade names
+    neither: a re-entry in the same symbol must not lend its setup and
+    execution geometry to an older close (GPT cross-review A-2).
+    """
     symbol = symbol.upper()
-    rows = _read_jsonl(taken_path())
-    for row in reversed(rows):
-        if str(row.get("symbol") or "").upper() == symbol:
-            return row
-    return {}
+    rows = [r for r in _read_jsonl(taken_path()) if str(r.get("symbol") or "").upper() == symbol]
+    if decision_id:
+        for row in reversed(rows):
+            if str(row.get("paper_decision_id") or "") == str(decision_id):
+                return row
+    if entry_date:
+        day = str(entry_date)[:10]
+        # A row naming ANOTHER position is never borrowed, and the date match
+        # must be unambiguous (cross-review verification QT-08).
+        dated = [r for r in rows if str(r.get("entry_date") or r.get("as_of") or "")[:10] == day
+                 and not (decision_id and r.get("paper_decision_id")
+                          and str(r.get("paper_decision_id")) != str(decision_id))]
+        return dated[0] if len(dated) == 1 else {}
+    return rows[-1] if rows else {}
 
 
 def record_conditional_evidence(row: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -211,7 +229,8 @@ def ingest_closed_trade(
     symbol = str(row.get("symbol") or "").upper()
     if not symbol:
         return None
-    evidence = _lookup_taken(symbol)
+    evidence = _lookup_taken(symbol, decision_id=str(row.get("decision_id") or ""),
+                             entry_date=str(row.get("entry_date") or ""))
     setup = str(evidence.get("setup_label") or row.get("setup_label") or "UNKNOWN_SETUP")
     sector = str(evidence.get("sector") or row.get("sector") or "")
     regime = str(evidence.get("regime") or row.get("regime") or "")
@@ -426,6 +445,7 @@ def ingest_counterfactual(
                 evidence_class="FORWARD_COUNTERFACTUAL",
                 not_pnl=True,
                 classification=classification,
+                eval_spec=str(spec or ""),
                 resolved_at=str(
                     (settled.get("outcome") or {}).get("resolved_at")
                     or datetime.now(timezone.utc).isoformat()

@@ -26,8 +26,19 @@ family would each spend budget unseen. This ledger makes every look real:
   same data re-run under a new report SHA all spend budget. Nothing is ever
   refunded. A run whose report is discarded before any test (too few
   symbols, no signal) reserves nothing and has alpha 0.
-* year: the IST calendar year of the look. Budgets do not combine across
-  years, and the bound is stated per year.
+* year: the IST calendar year in which the look was RESERVED. Budgets do not
+  combine across years, and the bound is stated per reservation year: a look
+  reserved on 31 December may admit setups in early January, and that
+  admission is charged to December's year (GPT cross-review C-3).
+* identity: the production gate trusts only the canonical ledger file. A
+  QT_ALPHA_LEDGER override (the hermetic test suite's per-test isolation, an
+  offline research run) never certifies a BUY outside pytest, and a report
+  run refuses to open a fresh budget when the ledger is missing although the
+  last saved report already spent looks (a lost ledger is not a new year).
+* dependence: the union bound holds under any dependence BETWEEN looks and
+  hypotheses. Each look's own p-values rest on research.overlap_inference,
+  which assumes outcome dependence decays within ~2 horizons; a shock common
+  to the whole history is not detectable from one history (C-1).
 * attestation: the report carries {program_id, year, look_index, look_id,
   alpha}. The live gate re-reads the ledger and refuses eligibility when the
   attestation is missing, unknown, mismatched, or beyond the annual budget.
@@ -183,7 +194,26 @@ def reserve(program: Mapping[str, Any], look_id: str, *, now: datetime | None = 
             if conn.in_transaction:
                 conn.execute("ROLLBACK")
             raise
+    _mark_provisioned(path or ledger_path())
     return _attestation(pid, year, index, look_id, alpha, bsha, family_size, members_sha256)
+
+
+def provisioned_marker(path: Path | None = None) -> Path:
+    """Sentinel written beside the ledger once a look has been spent through it."""
+    p = path or ledger_path()
+    return p.with_name(p.name + ".provisioned")
+
+
+def _mark_provisioned(path: Path) -> None:
+    """A ledger that ever spent a look leaves a sentinel: its later absence is a LOSS, not a new budget."""
+    marker = provisioned_marker(path)
+    if marker.exists():
+        return
+    try:
+        marker.write_text(json.dumps({"ledger": path.name,
+                                      "first_spent_at": datetime.now(timezone.utc).isoformat()}))
+    except OSError:
+        pass
 
 
 def _attestation(pid: str, year: int, index: int, look_id: str, alpha: float, bsha: str = "",
@@ -242,11 +272,22 @@ def verify(attestation: Mapping[str, Any] | None, *, program: Mapping[str, Any] 
     return out
 
 
+def override_active() -> bool:
+    """True when QT_ALPHA_LEDGER redirects the ledger outside the hermetic test suite."""
+    import os
+
+    return bool(os.environ.get("QT_ALPHA_LEDGER", "").strip()) and not os.environ.get("PYTEST_CURRENT_TEST")
+
+
 def _verify(attestation: Mapping[str, Any] | None, *, program: Mapping[str, Any] | None,
             binding: Mapping[str, Any] | None = None, path: Path) -> str:
     att = dict(attestation or {})
     if not att:
         return "the evidence carries no alpha-budget attestation"
+    if override_active():
+        # A redirected ledger is a different budget: an exhausted year could be
+        # "reset" by pointing at a new file (GPT cross-review C-3).
+        return "the alpha ledger path is overridden (QT_ALPHA_LEDGER); only the canonical ledger certifies"
     if program is not None and att.get("program_id") != program_id(program):
         return "the evidence was spent under a different hypothesis program than the current gate"
     p = path

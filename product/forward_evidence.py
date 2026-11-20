@@ -35,6 +35,16 @@ PROVENANCES = {
 }
 
 
+#: Provenances that describe SIMULATED decisions. They may sit in the ledger
+#: for display, but never settle into forward learning (GPT cross-review A-6).
+SIMULATED_PROVENANCES = frozenset({BACKTEST, WALK_FORWARD})
+
+
+def is_forward_evidence(row: Mapping[str, Any]) -> bool:
+    """False for a row frozen as a backtest / walk-forward simulation."""
+    return str((row or {}).get("provenance") or "") not in SIMULATED_PROVENANCES
+
+
 def ledger_path(path: str | Path | None = None) -> Path:
     if path is not None:
         return Path(path)
@@ -202,6 +212,7 @@ def freeze_observation(
         "target": row.get("target"),
         "surfaced": bool(surfaced),
         "entered": bool(entered),
+        "paper_decision_id": str(row.get("paper_decision_id") or ""),
         "why": row.get("why") or row.get("detail") or "",
         "reason_code": reason,
         "group": str(group or row.get("group") or ""),
@@ -246,6 +257,7 @@ def _apply_settlement(
     outcome_provenance: str | None = None,
     eval_spec: str | None = None,
     counterfactual_R: float | None = None,
+    closed_trade_key: str | None = None,
 ) -> dict[str, Any]:
     updated = dict(row)
     if updated.get("later_outcome") is None:
@@ -259,6 +271,9 @@ def _apply_settlement(
             "eval_spec": eval_spec,
             "counterfactual_R": counterfactual_R,
         }
+        if closed_trade_key:
+            # Which paper close settled this row: a close is attached once.
+            updated["later_outcome"]["closed_trade_key"] = str(closed_trade_key)
         if classification and updated.get("counterfactual_classification") is None:
             updated["counterfactual_classification"] = classification
         if gross_R is not None and updated.get("gross_R") is None:

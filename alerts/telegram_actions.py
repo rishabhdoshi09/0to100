@@ -45,20 +45,59 @@ def build_setup_keyboard(setups: list[dict]) -> dict:
         sym = p["symbol"]
         e, s, t = p.get("entry", 0), p.get("stop", 0), p.get("target", 0)
         rows.append([
-            {"text": f"📝 {sym} paper", "callback_data": f"pt|{sym}|{e:.0f}|{s:.0f}|{t:.0f}"},
-            {"text": f"👁 watch", "callback_data": f"wl|{sym}|{e:.0f}|{s:.0f}|{t:.0f}"},
+            # Paise precision: rounding a ₹48.60/₹46.10 plan to whole rupees
+            # moved its risk by ~40% (GPT cross-review C-9).
+            {"text": f"📝 {sym} paper", "callback_data": f"pt|{sym}|{e:.2f}|{s:.2f}|{t:.2f}"},
+            {"text": f"👁 watch", "callback_data": f"wl|{sym}|{e:.2f}|{s:.2f}|{t:.2f}"},
         ])
     return {"inline_keyboard": rows}
 
 
+#: Hard per-trade ceilings for a Telegram paper tap (CLAUDE.md invariant 5).
+HARD_RISK_PCT = 0.01
+HARD_POSITION_PCT = 0.10
+
+
 def _do_paper_trade(sym: str, entry: float, stop: float, target: float) -> str:
+    """A tapped PAPER trade, under the same account limits as every paper engine.
+
+    Until 2026-11-20 a tap forced at least one share when the 1% / 10% sizer
+    said zero (a ₹15,000 share risked 1.5% and deployed 15% of ₹1 lakh), and
+    never checked the account: a second tap opened the same symbol again, past
+    the 5-position and 5% open-risk caps and across the modern book (GPT
+    cross-review C-9). Now a zero size is refused, and the account exposure
+    gate (duplicates across every paper book, position count, sector, total
+    open risk) is re-checked under the shared account lock before the journal
+    write. Never a live order.
+    """
     from execution.trade_executor import place_trade
     from risk.position_sizer import size_position
-    ps = size_position(entry, stop)
-    qty = max(1, int(ps.get("qty") or 1))
-    res = place_trade(symbol=sym, qty=qty, entry_type="LIMIT",
-                      entry_price=entry, stop=stop, target=target,
-                      paper=True)
+    # The 1% / 10% invariants are HARD ceilings for a tap, whatever looser
+    # values the settings carry (cross-review verification QT-03).
+    try:
+        from config import settings
+        capital = float(settings.trading_capital or 0.0)
+        risk_pct = min(float(settings.risk_per_trade_pct or HARD_RISK_PCT), HARD_RISK_PCT)
+    except Exception:
+        capital, risk_pct = 0.0, HARD_RISK_PCT
+    ps = size_position(entry, stop, capital=capital or None, risk_pct=risk_pct)
+    qty = int(ps.get("qty") or 0)
+    if capital > 0 and entry > 0:
+        qty = min(qty, int((capital * HARD_POSITION_PCT) // entry))
+    if qty < 1:
+        return (f"❌ {sym}: the 1% risk / 10% position limits allow 0 shares at "
+                f"₹{entry:,.2f} (stop ₹{stop:,.2f}) — no paper trade.")
+    try:
+        from risk.portfolio_risk import account_exposure_gate, account_mutation_lock
+    except Exception as exc:
+        return f"❌ {sym}: account risk check unavailable ({type(exc).__name__}) — no paper trade."
+    with account_mutation_lock():
+        gate = account_exposure_gate(sym, qty=qty, entry=entry, stop=stop)
+        if not gate.get("ok"):
+            return f"❌ {sym}: {gate.get('detail') or gate.get('reason_code') or 'account limit'} — no paper trade."
+        res = place_trade(symbol=sym, qty=qty, entry_type="LIMIT",
+                          entry_price=entry, stop=stop, target=target,
+                          paper=True)
     if res["ok"]:
         return (f"📝 Paper trade: {qty} × {sym} @ ₹{entry:,.0f} "
                 f"(stop ₹{stop:,.0f} / target ₹{target:,.0f})")

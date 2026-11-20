@@ -16,10 +16,13 @@ def proven_provenance(generated_at="fresh", **over):
     from research import alpha_ledger
 
     stamp = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat() if generated_at == "fresh" else generated_at
+    # The data a valid report measured ends with (at most) its generation day.
+    last_session = str(stamp)[:10] if str(stamp)[:4].isdigit() else "2026-11-18"
     prov = {"generated_at": stamp, "report_schema": SB.REPORT_SCHEMA,
             "eval_spec": SB._eval_spec_tag(HORIZON_SESSIONS), "horizon_sessions": HORIZON_SESSIONS,
             "family_method": SB.FAMILY_METHOD, "code_sha": "test-sha", "universe_sha256": "u" * 64,
-            "data_first_session": "2025-11-03", "data_last_session": "2026-11-18",
+            "data_first_session": "2025-11-03", "data_last_session": last_session,
+            "exact_horizon_check": True,
             "members_sha256": "m" * 64, "family_size": 44}
     binding = {k: prov.get(k) for k in alpha_ledger.BINDING_FIELDS}
     prov["alpha_accounting"] = alpha_ledger.reserve(SB.gate_program(), f"test-{uuid.uuid4().hex}",

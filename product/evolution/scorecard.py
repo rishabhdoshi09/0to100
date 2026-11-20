@@ -58,10 +58,28 @@ def graded_rows(
     policy_id: str, *, domain: str | None = None, path: str | Path | None = None,
 ) -> list[dict[str, Any]]:
     rows = SD.list_shadow_decisions(policy_id=policy_id, path=path)
-    rows = [r for r in rows if r.get("outcome") is not None]
+    rows = [r for r in rows if r.get("outcome") is not None and _comparable_grade(r)]
     if domain is not None:
         rows = [r for r in rows if r.get("domain") == domain]
     return rows
+
+
+def _comparable_grade(row: dict[str, Any]) -> bool:
+    """An EQUITY grade counts only when measured on the CURRENT rulebook.
+
+    Equity shadows used to be graded by a first-touch path (a gap-down exited
+    at the stop, -1R where the rulebook books the open). Those stored grades
+    stay on disk but never feed scorecards, pairs or promotion (cross-review
+    verification QT-09). F&O underlying shadows keep their own direction-aware
+    grading and are unaffected.
+    """
+    if str(row.get("domain") or "EQUITY") != "EQUITY":
+        return True
+    try:
+        from product.counterfactual_learning import is_rulebook
+        return is_rulebook(row.get("eval_spec") or (row.get("outcome") or {}).get("eval_spec"))
+    except Exception:
+        return False
 
 
 def realized_r_stream(

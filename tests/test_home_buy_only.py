@@ -16,7 +16,7 @@ def _index(**over):
 def test_buy_rows_carry_levels_reward_and_the_measured_edge(monkeypatch):
     monkeypatch.setattr(HO, "_scan_evidence_index", lambda: _index(by_symbol={
         "INFY": {"edge_r": 0.12, "edge_lower_r": 0.03, "edge_source": "combination",
-                 "signals": ["MOMENTUM", "VOL_SQUEEZE"], "score": 81}}))
+                 "signals": ["MOMENTUM", "VOL_SQUEEZE"], "score": 81, "verdict": "BUY"}}))
     out = HO.build_buy_only([{"symbol": "INFY", "decision": "BUY", "cmp": 1500, "entry": 1505,
                               "stop": 1450, "target": 1615}], verified=True)
     assert out["count"] == 1 and out["empty_reason"] == ""
@@ -24,6 +24,15 @@ def test_buy_rows_carry_levels_reward_and_the_measured_edge(monkeypatch):
     assert row["symbol"] == "INFY" and row["reward_r"] == 2.0
     assert row["edge_r"] == 0.12 and row["edge_lower_r"] == 0.03 and row["edge_source"] == "combination"
     assert "+0.05R" in out["rule"] and "Paper only" in out["rule"]
+
+
+def test_a_committee_buy_the_scan_no_longer_certifies_is_not_listed(monkeypatch):
+    """GPT cross-review C-8: load_scan() withdrew INFY's BUY (WATCH) after the board was built."""
+    monkeypatch.setattr(HO, "_scan_evidence_index", lambda: _index(by_symbol={
+        "INFY": {"edge_r": 0.12, "edge_lower_r": 0.03, "signals": ["MOMENTUM"], "score": 81, "verdict": "WATCH"}}))
+    out = HO.build_buy_only([{"symbol": "INFY", "decision": "BUY", "cmp": 1500, "entry": 1505,
+                              "stop": 1450, "target": 1615}], verified=True)
+    assert out["rows"] == [] and out["admission_state"] == "NO_ELIGIBLE_BUY"
 
 
 def test_an_empty_day_says_why_and_never_lists_near_misses(monkeypatch):

@@ -125,8 +125,12 @@ def mde(se: float | None, df: int | None, *, alpha: float = 0.05, power: float =
     return float((_t_ppf(1 - alpha, int(df)) + _t_ppf(power, int(df))) * float(se))
 
 
-def coverage_start(coverage: Mapping[str, Any] | None) -> str | None:
-    """Start of the contiguous run of successful corporate-action windows that ends at the latest one."""
+def coverage_span(coverage: Mapping[str, Any] | None) -> tuple[str | None, str | None]:
+    """(start, end) of the contiguous run of successful corporate-action windows that ends at the latest one.
+
+    Both bounds matter: a decision after the verified end is not covered,
+    however long after the start it is (GPT cross-review B-9).
+    """
     wins = sorted(((w.get("covered_from"), w.get("covered_to"), bool(w.get("success")))
                    for w in (dict(coverage or {}).get("windows") or {}).values()
                    if w.get("covered_from") and w.get("covered_to")), key=lambda w: w[0])
@@ -139,8 +143,13 @@ def coverage_start(coverage: Mapping[str, Any] | None) -> str | None:
         contiguous = prev_end is not None and (date.fromisoformat(frm) - date.fromisoformat(prev_end)).days <= 1
         if start is None or not contiguous:
             start = frm
-        prev_end = to
-    return start
+        prev_end = to if prev_end is None else max(prev_end, to)
+    return start, (prev_end if start is not None else None)
+
+
+def coverage_start(coverage: Mapping[str, Any] | None) -> str | None:
+    """Start of the contiguous run of successful corporate-action windows that ends at the latest one."""
+    return coverage_span(coverage)[0]
 
 
 def membership(rows: Iterable[Mapping[str, Any]] | None) -> dict[str, tuple[str, str | None]]:
@@ -293,12 +302,16 @@ def symbol_end_truncations(frames: Mapping[str, pd.DataFrame], symbols: Iterable
 
 # ── analysis ────────────────────────────────────────────────────────────────
 
-def tier_map(ordinal: Mapping[str, int], cover: str | None) -> dict[str, str]:
-    """Corporate-action tier of every session (STRICT / ENTRY_ONLY / UNCOVERED)."""
+def tier_map(ordinal: Mapping[str, int], cover: str | None, cover_end: str | None = None) -> dict[str, str]:
+    """Corporate-action tier of every session (STRICT / ENTRY_ONLY / UNCOVERED).
+
+    A session after ``cover_end`` (the verified coverage's last day) is
+    UNCOVERED: coverage that stopped cannot vouch for later actions.
+    """
     first = min((d for d in ordinal if cover and d >= cover), default=None)
     out = {}
     for d, o in ordinal.items():
-        if first is None or d < first:
+        if first is None or d < first or (cover_end and d > cover_end):
             out[d] = "UNCOVERED"
         else:
             out[d] = "STRICT" if o - ordinal[first] >= STRICT_LOOKBACK_SESSIONS else "ENTRY_ONLY"
@@ -453,7 +466,10 @@ def enrich(trades: list[dict], frames: Mapping[str, pd.DataFrame], ew: pd.Series
                     "n_signals": len(t.get("signals") or []),
                     "risk_frac": risk_frac, "gross_ret": gross_ret, "net_ret": net_ret, "bench_ret": bench,
                     "excess_ret": (net_ret - bench) if bench is not None else None,
-                    "regime": reg_by_day.get(d, "UNKNOWN"), "tier": tiers[d],
+                    "regime": reg_by_day.get(d, "UNKNOWN"),
+                    # The exit must be covered too: a window that runs past the
+                    # verified coverage end is UNCOVERED (B-9).
+                    "tier": (tiers[d] if tiers.get(t["exit_datetime"], tiers[d]) != "UNCOVERED" else "UNCOVERED"),
                     "member": is_member(member, sym, d), "sector": sectors.get(sym, "UNMAPPED"),
                     "phantom_gap_in_window": gap_hit})
     return out
@@ -466,9 +482,9 @@ def analyse(collected: Mapping[str, Any], frames: Mapping[str, pd.DataFrame], *,
     floor = materiality_r() if floor is None else float(floor)
     all_dates = sorted({d for df in frames.values() for d in pd.DatetimeIndex(df.index).strftime("%Y-%m-%d")})
     ordinal = realised_session_index(all_dates)
-    cover = coverage_start(coverage)
+    cover, cover_end = coverage_span(coverage)
     member = membership(universe_rows)
-    tiers_by_day = tier_map(ordinal, cover)
+    tiers_by_day = tier_map(ordinal, cover, cover_end)
     ew = equal_weight_index(frames, min_names=ew_min_names)
     rows = enrich(list(collected["trades"]), frames, ew, regime_series(ew), ordinal, tiers_by_day, member,
                   sectors or {})
@@ -478,11 +494,16 @@ def analyse(collected: Mapping[str, Any], frames: Mapping[str, pd.DataFrame], *,
         if r["member"] is False:
             excluded["not_a_member_on_decision_date"] += 1
             continue
+        if r["member"] is None:
+            # Unknown membership is not verified membership: excluded from every
+            # tier, not merely counted (cross-review verification QT-13).
+            excluded["no_membership_row"] += 1
+            continue
         if not math.isfinite(r["risk_frac"]) or r["risk_frac"] <= 0:
             excluded["non_positive_risk"] += 1
             continue
         kept.append(r)
-    excluded["no_membership_row"] = sum(1 for r in kept if r["member"] is None)
+    excluded["no_membership_row"] = excluded.get("no_membership_row", 0)
     excluded["phantom_gap_in_window_flagged"] = sum(1 for r in kept if r["phantom_gap_in_window"])
     excluded["no_benchmark_for_window"] = sum(1 for r in kept if r["bench_ret"] is None)
     events = [e for e in collected["events"] if e["decision"] in ordinal]
@@ -524,7 +545,7 @@ def analyse(collected: Mapping[str, Any], frames: Mapping[str, pd.DataFrame], *,
     sectors_out = {k: {"trades": len(v), "mean_net_r": round(float(np.mean(v)), 4)}
                    for k, v in sorted(sector_rows.items(), key=lambda kv: -len(kv[1]))[:10]}
     return {
-        "coverage_start": cover, "materiality_floor_r": floor,
+        "coverage_start": cover, "coverage_end": cover_end, "materiality_floor_r": floor,
         "sessions_in_copy": len(all_dates), "first_session": all_dates[0] if all_dates else None,
         "last_session": all_dates[-1] if all_dates else None,
         "trades_captured": len(rows), "trades_kept": len(kept), "exclusions": dict(excluded),
@@ -565,7 +586,12 @@ def load_copy(root: str | Path) -> dict[str, Any]:
         ev = events.get(str(sym).upper())
         frames[str(sym).upper()] = adjust_frame(df.copy(), ev, copy=False) if ev else df
     cov_p, uni_p = logs_path("ca_coverage.json"), logs_path("universe_history.json")
-    return {"frames": frames, "coverage": json.loads(cov_p.read_text()) if cov_p.exists() else {},
+    coverage = json.loads(cov_p.read_text()) if cov_p.exists() else {}
+    if not events:
+        # A coverage file without the events it vouches for: the frames are
+        # raw, so nothing is covered (B-9).
+        coverage = {}
+    return {"frames": frames, "coverage": coverage,
             "universe_rows": json.loads(uni_p.read_text()) if uni_p.exists() else None,
             "ca_event_symbols": len(events)}
 

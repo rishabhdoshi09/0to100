@@ -9,7 +9,10 @@ import scan.signal_backtest as SB
 
 def _fwd(highs, lows, closes, opens=None):
     n = len(highs)
-    return pd.DataFrame({"open": opens or [closes[0]] * n, "high": highs, "low": lows, "close": closes},
+    # Default opens stay inside each bar: an open outside [low, high] is an
+    # incoherent bar the rulebook refuses to trade (QT-07).
+    opens = opens or [min(max(closes[0], lo), hi) for hi, lo in zip(highs, lows)]
+    return pd.DataFrame({"open": opens, "high": highs, "low": lows, "close": closes},
                         index=pd.bdate_range("2026-01-05", periods=n))
 
 
@@ -18,7 +21,7 @@ def test_trail_turns_a_drifting_winner_into_a_scratch_only_in_trail_variants():
     highs = [100.5, 102.5, 101.0] + [104.0] * 17
     lows = [99.5, 100.5, 99.8] + [103.0] * 17
     closes = [100.2, 102.0, 100.4] + [103.8] * 17
-    opens = [99.9, 100.3, 101.5] + [103.5] * 17           # no gap through the trailed stop
+    opens = [99.9, 100.6, 100.9] + [103.5] * 17           # no gap through the trailed stop (opens within each bar)
     got = {n: (o, r) for n, o, r in SB.exit_variant_results(100.0, 94.0, 112.0, _fwd(highs, lows, closes, opens), 10)}
     assert got["V0_prod_be_h"][0] == "SCRATCH"            # stopped at entry after arming
     assert got["V1_no_trail_h"][0] == "FLAT" and got["V1_no_trail_h"][1] > 0.5

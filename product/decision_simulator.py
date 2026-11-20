@@ -24,7 +24,6 @@ from product.counterfactual_learning import (
     GOOD_WAIT,
     MISSED_WINNER,
     RAN_AWAY,
-    classify_forward,
 )
 from product.forward_evidence import BACKTEST
 from core.runtime_paths import logs_dir
@@ -174,41 +173,31 @@ def _decision_rows() -> list[dict[str, Any]]:
     return unique
 
 
-def _forward_return(symbol: str, as_of: str, entry: Any) -> float | None:
+def _rulebook_outcome(row: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The decision judged by the one rulebook, as a taken trade would be (None while pending)."""
+    symbol, as_of = str(row.get("symbol") or ""), str(row.get("as_of") or "")
     if not symbol or not as_of:
         return None
     try:
-        from core.outcome_resolver import session_close_return
-        result = session_close_return(symbol, as_of, horizon=5)
-        if isinstance(result, tuple) and len(result) >= 2:
-            return float(result[1])
-        if isinstance(result, Mapping) and result.get("return_pct") is not None:
-            return float(result["return_pct"])
-        if isinstance(result, (int, float)):
-            return float(result)
+        from core.outcome_resolver import counterfactual_outcome
+        return counterfactual_outcome(symbol, as_of, row.get("entry"), row.get("stop"), row.get("target"))
     except Exception:
         return None
-    return None
 
 
 def _classify(row: Mapping[str, Any]) -> str:
+    """Grade an unlabelled decision on the one rulebook (until 2026-11-20: a 5-session close move)."""
+    from product.counterfactual_learning import classify_rulebook
+
     existing = str(row.get("classification") or "")
     if existing:
         return existing
-    fwd = row.get("forward_return_pct")
-    if fwd is None:
-        fwd = _forward_return(str(row.get("symbol") or ""), str(row.get("as_of") or ""), row.get("entry"))
-    if fwd is None:
+    rb = _rulebook_outcome(row)
+    if rb is None or rb.get("outcome") == "NO_LEVELS":
         return INCONCLUSIVE
     if str(row.get("decision") or "").upper() in {"TAKEN", "ENTER"}:
-        return INCONCLUSIVE if fwd is None else FLAT
-    return classify_forward(
-        entry=row.get("entry") if row.get("entry") is not None else None,
-        stop=row.get("stop") if row.get("stop") is not None else None,
-        target=row.get("target") if row.get("target") is not None else None,
-        forward_return_pct=float(fwd),
-        later_entered=False,
-    )
+        return FLAT
+    return classify_rulebook(rb)
 
 
 def _filter_scores(rows: Sequence[Mapping[str, Any]]) -> tuple[list[str], list[str]]:

@@ -110,7 +110,8 @@ def test_champion_rejects_challenger_takes_and_it_wins_counts_for_challenger(tmp
 
     # The market later proves it was a big winner -- grade BOTH with the
     # SAME realized price path (the Common Outcome Resolver principle).
-    with mock.patch.object(grading, "first_touch_path", return_value=(115.0, 15.0, 1)):
+    from tests.evidence_fixtures import rulebook_outcome
+    with mock.patch.object(grading, "counterfactual_outcome", return_value=rulebook_outcome(1.8, "WIN")):
         champ_graded = grading.grade_shadow_decision(row["champion"])
         chal_graded = grading.grade_shadow_decision(row["challengers"]["BOLD_CHALLENGER"])
 
@@ -138,16 +139,15 @@ def test_champion_takes_challenger_rejects_and_it_loses_credits_challenger(tmp_p
     assert row["champion"]["decision"] == "ENTER_NOW"
     assert row["challengers"]["CAUTIOUS_CHALLENGER"]["decision"] == "REJECT"
 
-    with mock.patch.object(grading, "first_touch_path", return_value=(95.0, -5.0, 0)):
+    from tests.evidence_fixtures import rulebook_outcome
+    with mock.patch.object(grading, "counterfactual_outcome", return_value=rulebook_outcome(-1.05, "LOSS")):
         champ_graded = grading.grade_shadow_decision(row["champion"])
         chal_graded = grading.grade_shadow_decision(row["challengers"]["CAUTIOUS_CHALLENGER"])
 
     assert champ_graded["classification"] == "LOSER_TAKEN"
-    # product.counterfactual_learning's pre-existing taxonomy labels a clear
-    # stop-level decline as CORRECT_REJECTION here (AVOIDED_LOSER is its
-    # label for a milder decline below -5% that doesn't reach the stop) --
-    # either way this is unambiguously "good for the rejecting policy".
-    assert chal_graded["classification"] == "CORRECT_REJECTION"
+    # On the one rulebook a rejection that would have been stopped out is an
+    # AVOIDED_LOSER: unambiguously "good for the rejecting policy".
+    assert chal_graded["classification"] == "AVOIDED_LOSER"
 
     paired = scorecard.paired_comparison("CHAMP", "CAUTIOUS_CHALLENGER")
     assert paired["incremental_expectancy_R"] > 0  # challenger's R (0 risk taken) beats champion's realized loss

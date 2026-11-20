@@ -35,13 +35,19 @@ def _unreported_forward_failures() -> list[dict[str, str]]:
     """Find resolver errors that the legacy forward-ledger loop can otherwise hide."""
     failures: list[dict[str, str]] = []
     try:
-        from core.outcome_resolver import session_close_return
+        from core.outcome_resolver import counterfactual_outcome
         from product.forward_evidence import load_ledger
     except Exception:
         return failures
 
     for row in load_ledger() or []:
-        if not isinstance(row, dict) or row.get("later_outcome") or not row.get("decision_id"):
+        # Probe exactly what the settlement loop settles (autonomous_loop.
+        # settle_official_outcomes): unsettled, NOT entered rows, through the
+        # same rulebook resolver. Until 2026-11-20 this re-probed the retired
+        # 5-session close-to-close resolver, so an error in the resolver in use
+        # could never surface here.
+        if (not isinstance(row, dict) or row.get("later_outcome") or not row.get("decision_id")
+                or row.get("entered")):
             continue
         symbol = str(row.get("symbol") or "").strip().upper()
         day = str(row.get("market_timestamp") or (row.get("pit_proof") or {}).get("as_of") or "")[:10]
@@ -49,7 +55,7 @@ def _unreported_forward_failures() -> list[dict[str, str]]:
             continue
         try:
             # None is an expected not-yet-mature horizon and must NOT fail the job.
-            session_close_return(symbol, day, horizon=5)
+            counterfactual_outcome(symbol, day, row.get("entry"), row.get("stop"), row.get("target"))
         except Exception as exc:
             failures.append({
                 "symbol": symbol,
@@ -89,6 +95,22 @@ def strict_outcome_resolution(ctx):
             "paper outcomes settled but learning ingest failed",
             error_code="PAPER_LEARNING_INGEST_FAILED",
             error_message="; ".join(ingest_errors)[:240],
+            failures=set(getattr(result, "failures", set()) or set()),
+            state_hint=getattr(result, "state_hint", None),
+            new_entries_allowed=bool(getattr(result, "new_entries_allowed", True)),
+            metadata=metadata,
+        )
+    # The surfaced-BUY tracker (signal_log) must also have written: a write or
+    # fatal error, or an unloaded official store, is a failed settlement, not
+    # a SUCCEEDED job (the July-November stall reported SUCCEEDED for four
+    # months; GPT cross-review A-9).
+    signal_error = str(metadata.get("signal_outcomes_error") or "")
+    if signal_error:
+        return J.JobResult(
+            JS.RETRYABLE_FAILED,
+            f"{getattr(result, 'summary', '') or 'outcomes resolved'} · RETRY: surfaced-BUY settlement failed",
+            error_code="SIGNAL_LOG_SETTLEMENT_FAILED",
+            error_message=signal_error[:240],
             failures=set(getattr(result, "failures", set()) or set()),
             state_hint=getattr(result, "state_hint", None),
             new_entries_allowed=bool(getattr(result, "new_entries_allowed", True)),

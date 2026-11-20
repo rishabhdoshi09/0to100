@@ -630,6 +630,9 @@ def settle_official_outcomes(session: str | None = None) -> dict[str, Any]:
         for row in load_ledger():
             if row.get("later_outcome") or not row.get("decision_id") or row.get("entered"):
                 continue
+            from product.forward_evidence import is_forward_evidence
+            if not is_forward_evidence(row):
+                continue            # a simulated decision never settles into forward learning
             symbol = str(row.get("symbol") or "")
             day = str(row.get("market_timestamp") or row.get("pit_proof", {}).get("as_of") or as_of)[:10]
             try:

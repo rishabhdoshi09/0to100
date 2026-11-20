@@ -155,6 +155,15 @@ def reconcile(ledger_rows: list[dict[str, Any]], cf_rows: list[dict[str, Any]],
     }
 
 
+def _cf_identity(row: Mapping[str, Any]) -> str:
+    """A counterfactual freeze's identity: its id, else its full frozen content (unit + geometry)."""
+    for key in ("counterfactual_id", "canonical_freeze_id", "freeze_id"):
+        if row.get(key):
+            return f"{key}:{row[key]}"
+    return "content:" + "|".join(str(row.get(k)) for k in (
+        "symbol", "as_of", "reason_code", "hypothetical_entry", "hypothetical_stop", "hypothetical_target"))
+
+
 def stage(report: Mapping[str, Any], ledger_rows: list[dict[str, Any]], cf_rows: list[dict[str, Any]],
           stage_dir: str | Path) -> dict[str, str]:
     """Write migrated COPIES (never in place). Legacy outcomes are preserved under legacy_* keys."""
@@ -183,11 +192,14 @@ def stage(report: Mapping[str, Any], ledger_rows: list[dict[str, Any]], cf_rows:
             row["counterfactual_classification"] = j["new"]
         out_rows.append(row)
     cf_out = []
-    cf_keyed = {(str(j["row"].get("symbol")), str(j["row"].get("as_of")), str(j["row"].get("reason_code"))): j
-                for j in report["_cf_judged"]}
+    # Keyed on the freeze's own identity, never on (symbol, day, reason): two
+    # freezes of the same unit with different geometry are judged separately
+    # and must keep their own outcomes (GPT cross-review A-5). The
+    # independent-unit key is for aggregation only.
+    cf_keyed = {_cf_identity(j["row"]): j for j in report["_cf_judged"]}
     for raw in cf_rows:
         row = dict(raw)
-        j = cf_keyed.get((str(row.get("symbol")), str(row.get("as_of")), str(row.get("reason_code"))))
+        j = cf_keyed.get(_cf_identity(row))
         if j is not None and j["new"] != "PENDING" and str(row.get("classification") or "") == j["old"]:
             o = j["outcome"] or {}
             row["legacy_classification"] = row.get("classification")

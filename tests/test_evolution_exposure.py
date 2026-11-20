@@ -6,6 +6,8 @@ makes the coverage gap visible to an operator, which nothing did before.
 """
 from __future__ import annotations
 
+from core.evaluation_spec import spec_tag as _rulebook_spec
+
 from product.evolution import policy_registry as PR
 from product.evolution import shadow_decisions as SD
 from product.evolution.exposure import exposure_report, LOW_COVERAGE_THRESHOLD
@@ -22,6 +24,7 @@ def _seed(policy_id, sid, r, *, decision="ENTER_NOW"):
         "classification": "WINNER_TAKEN" if r > 0 else "LOSER_TAKEN",
         "graded_at": "x", "not_pnl": True, "is_champion_decision": policy_id.endswith("CHAMP"),
         "counterfactual_R": r,
+        "eval_spec": _rulebook_spec(),   # graded on the one rulebook (QT-09)
     }
     SD.save_graded_decision(row)
 

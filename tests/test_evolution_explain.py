@@ -6,6 +6,8 @@ reading any source code.
 """
 from __future__ import annotations
 
+from core.evaluation_spec import spec_tag as _rulebook_spec
+
 from datetime import datetime, timezone
 
 from product.evolution import policy_registry as PR
@@ -26,6 +28,7 @@ def _seed(policy_id, sid, r, *, regime="TRENDING_BULL", sector="IT"):
         "classification": "WINNER_TAKEN" if r > 0 else "LOSER_TAKEN",
         "graded_at": "x", "not_pnl": True, "is_champion_decision": policy_id.endswith("CHAMP"),
         "counterfactual_R": r,
+        "eval_spec": _rulebook_spec(),   # graded on the one rulebook (QT-09)
         "evidence_class": "EVOLUTION_SHADOW",
     }
     SD.save_graded_decision(row)
