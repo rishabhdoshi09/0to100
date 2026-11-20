@@ -16,6 +16,7 @@ Run from the UI (background thread) or:  python -m scan.signal_backtest
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os as _os
 from datetime import datetime, timezone
@@ -224,13 +225,20 @@ def sweep_targets(entry: float, stop: float, fwd_high, fwd_low, fwd_close,
 # 4: evidence_provenance (code SHA, eval spec, horizon, family-correction
 # method) and per-row family correction; the live gate refuses anything older.
 REPORT_SCHEMA = 4
+#: Weekly walk-forward reports re-test overlapping data about 52 times a year.
+#: Holm bounds false admissions per REPORT; the annual union bound spends the
+#: 5% family-wise budget across a year's reports (alpha / 52 each), so
+#: P(any false admission in a calendar year) <= 5% under any dependence.
+ANNUAL_FAMILY_ALPHA = 0.05
+REPORTS_PER_YEAR = 52
+REPORT_ALPHA = ANNUAL_FAMILY_ALPHA / REPORTS_PER_YEAR
 #: The predeclared multiple-testing procedure for the live gate's family.
 #: Holm (family-wise) rather than BH: a BUY admission is an individual
 #: decision. BH controls the expected share of false discoveries, needs
 #: positive dependence, and says nothing about one admitted row. Holm bounds
 #: P(any false admission) at alpha under arbitrary dependence
 #: (research/admission_stress.py; 2026-11-20 review).
-FAMILY_METHOD = "Holm-Bonferroni (family-wise), one-sided edge > 0"
+FAMILY_METHOD = "Holm-Bonferroni (family-wise), one-sided edge > 0, alpha 0.05/52 per weekly report"
 #: Exact signal combinations need their own sample before they make a claim.
 COMBO_MIN_TRADES = 30
 #: One-sided 95% lower bound: mean - 1.645 * clustered standard error.
@@ -295,7 +303,13 @@ def _evidence_fields(stats: dict, session_index: dict[str, int] | None = None,
         out.update({"inference": "OVERLAP_ROBUST", "independent_sessions": rep["independent_sessions"],
                     "df": rep["df"], "variance_inflation": rep["variance_inflation"]})
         if rep["reason"] == "DEGENERATE_ZERO_DISPERSION":
-            se, lower = 0.0, mean
+            # Identical outcomes are a degenerate sample, not certainty: no bound.
+            se, lower = None, None
+            out["degenerate"] = True
+        elif rep["t"] is not None and rep["df"]:
+            from research.overlap_inference import _t_sf
+            p_raw = _t_sf(float(rep["t"]), int(rep["df"]))           # unrounded, coherent with lower_r
+            out["p_one_sided_raw"] = p_raw if math.isfinite(p_raw) else 1.0
     else:
         se = None if se_cl is None else se_cl * math.sqrt(max(1, int(horizon)))
         lower = None if se is None else mean - LOWER_BOUND_Z * se
@@ -343,7 +357,7 @@ def exit_variant_results(entry: float, stop: float, target: float, fwd, horizon:
     return out
 
 
-def apply_family_correction(signals: dict, combos: dict, *, alpha: float = 0.05) -> dict:
+def apply_family_correction(signals: dict, combos: dict, *, alpha: float = REPORT_ALPHA) -> dict:
     """Holm-Bonferroni (family-wise) across every row the live BUY gate can use.
 
     The gate judges each signal and each exact combination at a one-sided 5%;
@@ -357,6 +371,8 @@ def apply_family_correction(signals: dict, combos: dict, *, alpha: float = 0.05)
     """
     from research.overlap_inference import _t_sf
 
+    import math
+
     rows = [r for r in list((signals or {}).values()) + list((combos or {}).values()) if isinstance(r, dict)]
     pvals = []
     for r in rows:
@@ -364,9 +380,18 @@ def apply_family_correction(signals: dict, combos: dict, *, alpha: float = 0.05)
             mean, se, df = float(r.get("expectancy_r_precise")), float(r.get("se_r") or 0.0), int(r.get("df") or 0)
         except (TypeError, ValueError):
             mean, se, df = 0.0, 0.0, 0
-        ok = r.get("inference") == "OVERLAP_ROBUST" and se > 0 and df > 0
-        p = _t_sf(mean / se, df) if ok else 1.0
-        r["p_one_sided"] = round(float(p), 6)
+        ok = (r.get("inference") == "OVERLAP_ROBUST" and math.isfinite(mean) and math.isfinite(se)
+              and se > 0 and df > 0 and not r.get("degenerate"))
+        raw = r.get("p_one_sided_raw")
+        if not ok:
+            p = 1.0
+        elif isinstance(raw, (int, float)) and math.isfinite(raw) and 0.0 <= raw <= 1.0:
+            p = float(raw)                      # unrounded: coherent with the row's lower bound
+        else:
+            p = _t_sf(mean / se, df)
+        if not math.isfinite(p):
+            p = 1.0
+        r["p_one_sided"] = round(float(p), 8)
         pvals.append(float(p))
     m = len(pvals)
     rejected = [False] * m
@@ -977,7 +1002,15 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                                    "family_method": family.get("method"), "family_size": family.get("family_size"),
                                    "sessions_indexed": len(session_index), "sampling": SAMPLING,
                                    "exact_horizon_check": bool(official_index),
-                                   "horizon_gap_windows_skipped": horizon_gaps},
+                                   "horizon_gap_windows_skipped": horizon_gaps,
+                                   # Data version and universe: hashed into the snapshot id with
+                                   # the rest of the report, so any change re-keys the evidence.
+                                   "universe_sha256": hashlib.sha256(
+                                       "\n".join(sorted(map(str, symbols))).encode()).hexdigest(),
+                                   "symbols": len(symbols),
+                                   "data_first_session": min(seen_dates) if seen_dates else "",
+                                   "data_last_session": max(seen_dates) if seen_dates else "",
+                                   "family_alpha": family.get("alpha")},
            "recommended_target_pct": recommended,
            "elapsed_s": round(time.time() - t0, 1)}
     if len(symbols) < MIN_SYMBOLS_TO_SAVE or not report:

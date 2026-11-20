@@ -230,6 +230,18 @@ def get_or_create_snapshot(
     target = root / f"{candidate['snapshot_id']}.json"
     existing = _load(target)
     if existing:
+        # The pointer must always name the snapshot built from the CURRENT
+        # inputs: after a rollback to an older report the older snapshot is a
+        # cache hit, and a stale pointer would make consumers verify scans
+        # against evidence no scanner is using.
+        pointer = root / "current.json"
+        if str(_load(pointer).get("snapshot_id") or "") != candidate["snapshot_id"]:
+            _atomic_json(pointer, {
+                "schema_version": SCHEMA_VERSION,
+                "snapshot_id": candidate["snapshot_id"],
+                "snapshot_path": str(target),
+                "identities": candidate["identities"],
+            })
         out = dict(existing)
         out["cache_hit"] = True
         return out

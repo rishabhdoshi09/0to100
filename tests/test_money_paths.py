@@ -5807,10 +5807,43 @@ class TestOneRulebook:
         combos = {"LEGACY": {"expectancy_r_precise": 0.5, "se_r": 0.01}}          # untestable: p = 1
         out = apply_family_correction(signals, combos)
         assert out["family_size"] == 32 and signals["REAL"]["family_significant"] is True
+        assert out["alpha"] == 0.05 / 52                                       # annual union bound
         assert combos["LEGACY"]["family_significant"] is False and combos["LEGACY"]["p_one_sided"] == 1.0
         assert out["method"].startswith("Holm")
         survivors = sum(1 for k, r in signals.items() if k != "REAL" and r["family_significant"])
         assert survivors == 0                     # Holm: alpha / 32 per null row
+
+    def test_family_p_values_are_coherent_and_never_non_finite(self):
+        from scan.signal_backtest import apply_family_correction
+        rows = {"NAN": {"expectancy_r_precise": float("nan"), "se_r": 0.02, "df": 20, "inference": "OVERLAP_ROBUST"},
+                "INF": {"expectancy_r_precise": 0.2, "se_r": float("inf"), "df": 20, "inference": "OVERLAP_ROBUST"},
+                "NEGSE": {"expectancy_r_precise": 0.2, "se_r": -0.01, "df": 20, "inference": "OVERLAP_ROBUST"},
+                "NODF": {"expectancy_r_precise": 0.2, "se_r": 0.01, "df": 0, "inference": "OVERLAP_ROBUST"},
+                "DEGEN": {"expectancy_r_precise": 0.2, "se_r": 0.0, "df": 20, "inference": "OVERLAP_ROBUST",
+                          "degenerate": True},
+                "BADRAW": {"expectancy_r_precise": 0.2, "se_r": 0.05, "df": 20, "inference": "OVERLAP_ROBUST",
+                           "p_one_sided_raw": float("nan")}}
+        apply_family_correction(rows, {})
+        for key in ("NAN", "INF", "NEGSE", "NODF", "DEGEN"):
+            assert rows[key]["p_one_sided"] == 1.0 and rows[key]["family_significant"] is False, key
+        assert 0.0 < rows["BADRAW"]["p_one_sided"] < 1.0                         # recomputed, not NaN
+
+    def test_a_degenerate_sample_has_no_lower_bound(self):
+        from scan.signal_backtest import _add_cluster, _evidence_fields
+        stats = {"clusters": {}}
+        index = {}
+        for d in range(260):
+            index[f"D{d:04d}"] = d
+            _add_cluster(stats["clusters"], f"D{d:04d}", 0.3)                 # identical outcomes
+        ev = _evidence_fields(stats, index, 10)
+        assert ev["lower_r"] is None and ev.get("degenerate") is True
+
+    def test_the_lower_bound_and_the_family_p_value_agree(self):
+        from scan.signal_backtest import _evidence_fields
+        for seed in range(6):
+            stats, index = self._overlapping_evidence(edge=0.05 * seed, seed=seed)
+            ev = _evidence_fields(stats, index, 10)
+            assert (ev["lower_r"] > 0) == (ev["p_one_sided_raw"] < 0.05) or abs(ev["lower_r"]) < 1e-4
 
     def test_backtest_session_index_is_the_realised_official_sessions(self):
         from scan.signal_backtest import realised_session_index

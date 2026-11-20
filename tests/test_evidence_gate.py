@@ -407,20 +407,74 @@ def test_a_legacy_rolled_back_or_mixed_artifact_cannot_certify_a_buy():
     mixed = bind_evidence(_payload([_row("A"), _row("B", evidence="older-snapshot"), _row("C", evidence="")]))
     assert [r["verdict"] for r in mixed["records"]] == ["BUY", "WATCH", "WATCH"]
     assert mixed["records"][1]["status"] == "Watch" and mixed["evidence_binding"]["buy_rows_withheld"] == 2
-    replay = bind_evidence(_payload([_row("A", evidence="")], ident=None, pit=True))
-    assert replay["records"][0]["verdict"] == "BUY"                           # research replay untouched
+    forged = bind_evidence(_payload([_row("A", evidence="")], ident=None, pit=True))
+    assert forged["records"][0]["verdict"] == "WATCH"                         # a pit flag exempts nothing
 
 
-def test_load_scan_and_the_recommendation_workspace_apply_the_binding(tmp_path):
-    from product.scan_store import save_scan, load_scan
+def _authority(edges, snapshot_id="test", **prov):
+    return {"snapshot_id": snapshot_id, "backtest_edges": edges, "backtest_combo_edges": {},
+            "backtest_provenance": _provenance(**prov)}
+
+
+def _srow(sym, signals, verdict="BUY", evidence="test"):
+    return {**_row(sym, verdict, evidence), "signals": list(signals)}
+
+
+PROVEN = {"VOL_SQUEEZE": _ok(0.30), "POCKET_PIVOT": _ok(0.30)}
+
+
+def test_load_scan_re_verifies_every_buy_against_the_authoritative_snapshot(tmp_path, monkeypatch):
+    import product.scan_store as SS
     from product.recommendations_workspace import build_recommendations_workspace
-    payload = _payload([_row("AAA"), _row("BBB", evidence="stale")])
-    path = save_scan(payload, tmp_path / "scan.json")
-    loaded = load_scan(path)
-    assert [r["verdict"] for r in loaded["records"]] == ["BUY", "WATCH"]
+    payload = _payload([_srow("AAA", ["VOL_SQUEEZE", "POCKET_PIVOT"]), _srow("BBB", ["MOMENTUM", "NR7_COIL"])])
+    path = SS.save_scan(payload, tmp_path / "scan.json")
+    monkeypatch.setattr(SS, "_evidence_authority", lambda: _authority(PROVEN))
+    loaded = SS.load_scan(path)
+    assert [r["verdict"] for r in loaded["records"]] == ["BUY", "WATCH"]       # BBB: no proof for its signals
+    assert loaded["evidence_binding"]["mode"] == "authoritative"
     original = [dict(r) for r in payload["records"]]
     build_recommendations_workspace(scan_payload=payload)
     assert payload["records"] == original                                     # caller's payload not mutated
+
+
+@pytest.mark.parametrize("case", ["no_authority", "superseded_evidence", "stale_provenance",
+                                  "promoted_verdict", "self_consistent_stale_artifact"])
+def test_no_self_consistent_artifact_can_certify_a_buy_without_the_authority(tmp_path, monkeypatch, case):
+    import product.scan_store as SS
+    rows = [_srow("AAA", ["VOL_SQUEEZE", "POCKET_PIVOT"])]
+    authority = _authority(PROVEN)
+    if case == "no_authority":
+        authority = None
+    elif case == "superseded_evidence":                       # the report was replaced after the scan
+        authority = _authority({"VOL_SQUEEZE": _ok(0.30, lower=-0.2), "POCKET_PIVOT": _ok(0.30, lower=-0.2)},
+                               snapshot_id="newer")
+    elif case == "stale_provenance":
+        authority = _authority(PROVEN, generated_at="2026-01-02 10:00")
+    elif case == "promoted_verdict":                          # a WATCH row edited to BUY after publication
+        rows = [_srow("AAA", ["MOMENTUM", "NR7_COIL"])]
+    elif case == "self_consistent_stale_artifact":            # old scan, its own id everywhere, old evidence
+        rows = [_srow("AAA", ["VOL_SQUEEZE", "POCKET_PIVOT"], evidence="old")]
+        authority = _authority({"VOL_SQUEEZE": _ok(0.30, family=False), "POCKET_PIVOT": _ok(0.30, family=False)},
+                               snapshot_id="current")
+    path = SS.save_scan(_payload(rows, ident="old" if case == "self_consistent_stale_artifact" else "test"),
+                        tmp_path / "scan.json")
+    monkeypatch.setattr(SS, "_evidence_authority", lambda: authority)
+    loaded = SS.load_scan(path)
+    assert loaded["records"][0]["verdict"] == "WATCH", case
+    assert loaded["records"][0]["reasons"][-1].startswith("⚖ BUY withheld at read time")
+
+
+def test_the_snapshot_pointer_follows_a_rollback(tmp_path):
+    from scan.calibration_snapshot import get_or_create_snapshot, load_current
+    old = {"signals": {"A": {"trades": 40, "expectancy_r": 0.1}}, "generated_at": "2026-11-01 10:00"}
+    new = {"signals": {"A": {"trades": 45, "expectancy_r": 0.2}}, "generated_at": "2026-11-08 10:00"}
+    kw = dict(live_profile={}, data_identity="d", thesis_hash="t", directory=tmp_path)
+    first = get_or_create_snapshot(backtest_report=old, **kw)
+    second = get_or_create_snapshot(backtest_report=new, **kw)
+    assert load_current(directory=tmp_path)["snapshot_id"] == second["snapshot_id"]
+    back = get_or_create_snapshot(backtest_report=old, **kw)                  # rollback: a cache hit
+    assert back["cache_hit"] and back["snapshot_id"] == first["snapshot_id"]
+    assert load_current(directory=tmp_path)["snapshot_id"] == first["snapshot_id"]
 
 
 def test_the_scan_payload_names_its_evidence_identity():

@@ -16,7 +16,24 @@ class Signal:
         self.edge_evidence_id = "ev"         # a gated scanner stamps every row with its evidence
 
 
-def test_saved_scan_preserves_full_universe_and_watchlist(tmp_path):
+def _proving_authority(monkeypatch):
+    """load_scan re-verifies BUY rows against the active calibration snapshot: give it one."""
+    import product.scan_store as SS
+    import scan.signal_backtest as SB
+    from core.evaluation_spec import HORIZON_SESSIONS
+    from datetime import datetime as _dt, timezone as _tz
+    proof = {"mean": 0.3, "lower": 0.1, "n": 90, "blocks": 24, "inference": "OVERLAP_ROBUST", "family": True}
+    snap = {"snapshot_id": "ev", "backtest_edges": {"MOMENTUM": proof, "BREAKOUT_52W": proof},
+            "backtest_combo_edges": {},
+            "backtest_provenance": {"generated_at": _dt.now(_tz.utc).isoformat(), "report_schema": SB.REPORT_SCHEMA,
+                                    "eval_spec": SB._eval_spec_tag(HORIZON_SESSIONS),
+                                    "horizon_sessions": HORIZON_SESSIONS, "family_method": SB.FAMILY_METHOD,
+                                    "code_sha": "t"}}
+    monkeypatch.setattr(SS, "_evidence_authority", lambda: snap)
+
+
+def test_saved_scan_preserves_full_universe_and_watchlist(tmp_path, monkeypatch):
+    _proving_authority(monkeypatch)
     payload = build_scan_payload(
         {"AAA": "Alpha", "BBB": "Beta", "CCC": "Gamma"},
         [Signal("AAA", signals=["MOMENTUM"], verdict="BUY", score=80),

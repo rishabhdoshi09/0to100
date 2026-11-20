@@ -412,37 +412,98 @@ def save_scan(payload: Mapping[str, Any], path: str | Path = DEFAULT_SCAN_PATH) 
 
 EVIDENCE_WITHHELD = ("⚖ BUY withheld: its evidence identity does not match this scan's (legacy, "
                      "rolled-back or mixed artifact) — WATCH, not BUY")
+_UNSET = object()
+_AUTHORITY_CACHE: dict[str, Any] = {"key": None, "snapshot": None}
 
 
-def bind_evidence(payload: dict[str, Any]) -> dict[str, Any]:
-    """In memory, withhold every BUY row not certified by the scan's own evidence identity.
+def _evidence_authority() -> dict[str, Any] | None:
+    """The authoritative evidence snapshot: the calibration pointer's target (read-only, cached)."""
+    try:
+        from scan.calibration_snapshot import DEFAULT_DIR, load_current
+        pointer = Path(DEFAULT_DIR) / "current.json"
+        st = pointer.stat()
+        key = (str(pointer), st.st_mtime_ns, st.st_size)
+    except Exception:
+        return None
+    if _AUTHORITY_CACHE["key"] != key:
+        try:
+            snap = load_current()
+        except Exception:
+            snap = {}
+        _AUTHORITY_CACHE.update(key=key, snapshot=dict(snap) if snap else None)
+    return _AUTHORITY_CACHE["snapshot"]
 
-    A BUY counts only when the payload names exactly one evidence identity and
-    the row carries that same id. A legacy artifact (no identity), a
-    rolled-back or mixed one, or a row with a missing or different id is read
-    as WATCH, with the reason. Historical point-in-time replays (``pit``)
-    are research measurement and are left as they are. Never writes the file.
+
+def _withhold(row: dict[str, Any], reason: str) -> None:
+    row["verdict"] = "WATCH"
+    if row.get("status") == "Ready to trade":
+        row["status"] = "Watch"
+    row["edge_gated"] = True
+    reasons = list(row.get("reasons") or [])
+    if reason not in reasons:
+        reasons.append(reason)
+    row["reasons"] = reasons
+
+
+def bind_evidence(payload: dict[str, Any], authority: Any = _UNSET) -> dict[str, Any]:
+    """In memory, withhold every BUY row that its evidence does not certify.
+
+    Without ``authority``: a self-consistency check for an in-memory payload
+    straight from the scanner. A BUY counts only when the payload names one
+    evidence identity and the row carries that id.
+
+    With ``authority`` (load_scan, the boundary between the producing scan and
+    every later consumer): the AUTHORITATIVE check. Each BUY row's evidence is
+    re-derived from the current calibration snapshot, the pointer
+    get_or_create_snapshot keeps on the snapshot built from the current
+    report. That re-derivation takes the snapshot's own edges for the row's
+    signals and runs unproven_reason plus the provenance check. A stale but
+    self-consistent artifact, a verdict promoted after the scan, or evidence
+    superseded since the scan all fail. No authority certifies nothing.
+    There is no ``pit`` exemption here: historical replays use their own
+    point-in-time route (build_recommendations_workspace(point_in_time=True)).
+    Never writes the file.
     """
-    if not isinstance(payload, dict) or payload.get("pit"):
+    if not isinstance(payload, dict):
         return payload
+    rows = [r for r in payload.get("records") or []
+            if isinstance(r, dict) and str(r.get("verdict") or "").upper() in ("BUY", "STRONG BUY")]
     ident = payload.get("evidence_identity") if isinstance(payload.get("evidence_identity"), Mapping) else {}
     expected = str(ident.get("id") or "")
     withheld = 0
-    for row in payload.get("records") or []:
-        if not isinstance(row, dict) or str(row.get("verdict") or "").upper() not in ("BUY", "STRONG BUY"):
-            continue
-        if expected and str(row.get("edge_evidence_id") or "") == expected:
-            continue
-        row["verdict"] = "WATCH"
-        if row.get("status") == "Ready to trade":
-            row["status"] = "Watch"
-        row["edge_gated"] = True
-        reasons = list(row.get("reasons") or [])
-        if EVIDENCE_WITHHELD not in reasons:
-            reasons.append(EVIDENCE_WITHHELD)
-        row["reasons"] = reasons
-        withheld += 1
-    payload["evidence_binding"] = {"expected_id": expected, "buy_rows_withheld": withheld}
+    if authority is _UNSET:
+        for row in rows:
+            if expected and str(row.get("edge_evidence_id") or "") == expected:
+                continue
+            _withhold(row, EVIDENCE_WITHHELD)
+            withheld += 1
+        payload["evidence_binding"] = {"mode": "self_consistency", "expected_id": expected,
+                                       "buy_rows_withheld": withheld}
+        return payload
+    snap = dict(authority or {})
+    note = ""
+    if not snap:
+        note = "no authoritative evidence snapshot is available"
+    else:
+        try:
+            from scan.unified_scanner import evidence_provenance_note
+            note = evidence_provenance_note(snap.get("backtest_provenance") or {})
+        except Exception as exc:
+            note = f"the evidence snapshot could not be verified ({type(exc).__name__})"
+    for row in rows:
+        why = note
+        if not why:
+            from scan.unified_scanner import setup_evidence, unproven_reason
+            ev = setup_evidence(list(row.get("signals") or []), snap.get("backtest_edges") or {},
+                                snap.get("backtest_combo_edges") or {})
+            why = unproven_reason(ev)
+            why = "" if not why else (why[4:] if why.startswith("but ") else why)
+        if why:
+            _withhold(row, f"⚖ BUY withheld at read time: not proven under the current evidence ({why}) — "
+                           f"WATCH, not BUY")
+            withheld += 1
+    payload["evidence_binding"] = {"mode": "authoritative", "authority_id": str(snap.get("snapshot_id") or ""),
+                                   "scan_evidence_id": expected, "buy_rows_withheld": withheld}
     return payload
 
 
@@ -497,7 +558,7 @@ def load_scan(path: str | Path = DEFAULT_SCAN_PATH) -> dict[str, Any] | None:
         valid, _reason = scan_source_status(payload)
         if not valid:
             return None
-        return bind_evidence(payload)
+        return bind_evidence(payload, authority=_evidence_authority())
     except Exception:
         return None
 
