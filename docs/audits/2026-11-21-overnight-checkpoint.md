@@ -132,6 +132,24 @@ Consequences:
 - The Telegram `/trade` command reads that empty store, so it never reaches a legacy entry.
 - The test asserts that no canonical module (API, market_ops, supervisor) calls `start_background_scan`.
 
+## Cycle 7 (research): a pre-registered momentum portfolio alternative
+
+**Pre-registration.** `PR-2026-11-21-MOM12-1` was frozen and committed in `ab4b1690` BEFORE any evaluation. It covers: 12-1 momentum, top 20% equal-weight, monthly, costs, an equal-weight benchmark, one primary test (m = 1, outside the BUY alpha budget), power (about 223 months for 0.5%/month), the missing-data rule, and a held-out year evaluated once.
+
+**Code.** `research/momentum_portfolio.py`: SHA-pinned, refuses the live runtime, refuses the held-out year without an explicit single look. 6 hermetic tests (future-poisoning, coverage gating, missing bars, costs, traded-price floor, frozen spec).
+
+**Discovery (37 months, Oct 2022 to Oct 2025).**
+
+- Net excess +0.31%/month, t = 0.85, p = 0.20: **NOT SIGNIFICANT**.
+- Regression alpha −0.04%/month, **beta 1.18**: the outperformance is market exposure, not selection.
+- Maximum drawdown −28.7%; worst month −14.6%; turnover 31% one-way.
+- 66 held names had no bar at exit. 50 of them resumed later (data gaps, not losses); 16 did not.
+- The held-out year was NOT evaluated (the spec forbids it after a non-PASS).
+
+Report: `docs/research/momentum_12_1_discovery_2026-11-21.md`.
+
+**Scientific position.** It is unchanged: no strategy, old or new, shows positive risk-adjusted expectancy after costs. NO ELIGIBLE BUY remains correct.
+
 ## Open (next)
 
 research cycle.

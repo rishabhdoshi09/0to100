@@ -1,0 +1,909 @@
+{
+ "spec_id": "PR-2026-11-21-MOM12-1",
+ "spec_sha256": "86a959d2dde8424537e7e6e028a426f80fddaa61c3338dbe347bc9e84fdc106f",
+ "period": "discovery",
+ "months": 37,
+ "first_entry": "2022-10-03",
+ "last_exit": "2025-11-03",
+ "primary": {
+  "mean_monthly_net_excess": 0.003133154836703399,
+  "hac_se": 0.003667672123243319,
+  "t": 0.854262521681669,
+  "p_one_sided": 0.1993043396829266,
+  "ci95": [
+   -0.004055482524853507,
+   0.010321792198260304
+  ],
+  "verdict": "NOT_SIGNIFICANT"
+ },
+ "secondary": {
+  "mean_monthly_net": 0.022541684949135315,
+  "mean_monthly_benchmark": 0.019408530112431904,
+  "alpha_monthly": -0.0004236050211225556,
+  "beta": 1.1832575592907846,
+  "max_drawdown": -0.28734297716521096,
+  "worst_month_net": -0.14613428747745993,
+  "hit_rate_excess": 0.5675675675675675,
+  "mean_turnover_one_way": 0.3085145906022576,
+  "mean_names": 142.54054054054055,
+  "mean_max_sector_share": 0.7341891891891892,
+  "held_names_stopped_trading": 66,
+  "stopped_resumed_later": 50,
+  "stopped_never_resumed": 16
+ },
+ "stopped_events": [
+  {
+   "symbol": "HNDFDS",
+   "entry": "2022-12-01",
+   "exit": "2023-01-02",
+   "resumes_later": true
+  },
+  {
+   "symbol": "MIRZAINT",
+   "entry": "2023-03-01",
+   "exit": "2023-04-03",
+   "resumes_later": true
+  },
+  {
+   "symbol": "KECL",
+   "entry": "2023-05-02",
+   "exit": "2023-06-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "MAHINDCIE",
+   "entry": "2023-06-01",
+   "exit": "2023-07-03",
+   "resumes_later": false
+  },
+  {
+   "symbol": "JBMA",
+   "entry": "2023-08-01",
+   "exit": "2023-09-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "LSIL",
+   "entry": "2023-08-01",
+   "exit": "2023-09-01",
+   "resumes_later": false
+  },
+  {
+   "symbol": "ZENTEC",
+   "entry": "2023-08-01",
+   "exit": "2023-09-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "FORCEMOT",
+   "entry": "2023-10-03",
+   "exit": "2023-11-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "KIRLFER",
+   "entry": "2023-10-03",
+   "exit": "2023-11-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "PRAKASH",
+   "entry": "2023-10-03",
+   "exit": "2023-11-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "SUZLON",
+   "entry": "2023-10-03",
+   "exit": "2023-11-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "NEWGEN",
+   "entry": "2023-11-01",
+   "exit": "2023-12-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "SAKSOFT",
+   "entry": "2023-11-01",
+   "exit": "2023-12-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "TALBROAUTO",
+   "entry": "2023-11-01",
+   "exit": "2023-12-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "63MOONS",
+   "entry": "2023-12-01",
+   "exit": "2024-01-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "CUPID",
+   "entry": "2023-12-01",
+   "exit": "2024-01-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "WELSPUNIND",
+   "entry": "2023-12-01",
+   "exit": "2024-01-01",
+   "resumes_later": false
+  },
+  {
+   "symbol": "BHARATWIRE",
+   "entry": "2024-01-01",
+   "exit": "2024-02-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "HSCL",
+   "entry": "2024-01-01",
+   "exit": "2024-02-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "TARC",
+   "entry": "2024-01-01",
+   "exit": "2024-02-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "TRIL",
+   "entry": "2024-01-01",
+   "exit": "2024-02-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "DBCORP",
+   "entry": "2024-02-01",
+   "exit": "2024-03-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "GALLANTT",
+   "entry": "2024-02-01",
+   "exit": "2024-03-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "MANINDS",
+   "entry": "2024-02-01",
+   "exit": "2024-03-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "PFS",
+   "entry": "2024-02-01",
+   "exit": "2024-03-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "SCHNEIDER",
+   "entry": "2024-02-01",
+   "exit": "2024-03-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "SHAKTIPUMP",
+   "entry": "2024-02-01",
+   "exit": "2024-03-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "TATAINVEST",
+   "entry": "2024-02-01",
+   "exit": "2024-03-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "WOCKPHARMA",
+   "entry": "2024-03-01",
+   "exit": "2024-04-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "HLVLTD",
+   "entry": "2024-04-01",
+   "exit": "2024-05-02",
+   "resumes_later": true
+  },
+  {
+   "symbol": "PURVA",
+   "entry": "2024-04-01",
+   "exit": "2024-05-02",
+   "resumes_later": true
+  },
+  {
+   "symbol": "WEBELSOLAR",
+   "entry": "2024-04-01",
+   "exit": "2024-05-02",
+   "resumes_later": true
+  },
+  {
+   "symbol": "TECHNOE",
+   "entry": "2024-06-03",
+   "exit": "2024-07-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "GEPIL",
+   "entry": "2024-07-01",
+   "exit": "2024-08-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "IBREALEST",
+   "entry": "2024-07-01",
+   "exit": "2024-08-01",
+   "resumes_later": false
+  },
+  {
+   "symbol": "KPIGREEN",
+   "entry": "2024-07-01",
+   "exit": "2024-08-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "PTCIL",
+   "entry": "2024-07-01",
+   "exit": "2024-08-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "ASHIMASYN",
+   "entry": "2024-08-01",
+   "exit": "2024-09-02",
+   "resumes_later": true
+  },
+  {
+   "symbol": "SARLAPOLY",
+   "entry": "2024-08-01",
+   "exit": "2024-09-02",
+   "resumes_later": true
+  },
+  {
+   "symbol": "COCHINSHIP",
+   "entry": "2024-09-02",
+   "exit": "2024-10-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "TIPSINDLTD",
+   "entry": "2024-09-02",
+   "exit": "2024-10-01",
+   "resumes_later": false
+  },
+  {
+   "symbol": "CENTURYTEX",
+   "entry": "2024-10-01",
+   "exit": "2024-11-01",
+   "resumes_later": false
+  },
+  {
+   "symbol": "PCJEWELLER",
+   "entry": "2024-10-01",
+   "exit": "2024-11-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "RADHIKAJWE",
+   "entry": "2024-10-01",
+   "exit": "2024-11-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "REFEX",
+   "entry": "2024-10-01",
+   "exit": "2024-11-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "TVSHLTD",
+   "entry": "2024-10-01",
+   "exit": "2024-11-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "HERCULES",
+   "entry": "2024-11-01",
+   "exit": "2024-12-02",
+   "resumes_later": true
+  },
+  {
+   "symbol": "IIFLSEC",
+   "entry": "2024-12-02",
+   "exit": "2025-01-01",
+   "resumes_later": false
+  },
+  {
+   "symbol": "KITEX",
+   "entry": "2024-12-02",
+   "exit": "2025-01-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "SHAILY",
+   "entry": "2024-12-02",
+   "exit": "2025-01-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "GLS",
+   "entry": "2025-01-01",
+   "exit": "2025-02-03",
+   "resumes_later": false
+  },
+  {
+   "symbol": "ZOMATO",
+   "entry": "2025-04-01",
+   "exit": "2025-05-02",
+   "resumes_later": false
+  },
+  {
+   "symbol": "AMIORG",
+   "entry": "2025-05-02",
+   "exit": "2025-06-02",
+   "resumes_later": false
+  },
+  {
+   "symbol": "SUVENPHAR",
+   "entry": "2025-05-02",
+   "exit": "2025-06-02",
+   "resumes_later": false
+  },
+  {
+   "symbol": "BALUFORGE",
+   "entry": "2025-06-02",
+   "exit": "2025-07-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "CAMLINFINE",
+   "entry": "2025-06-02",
+   "exit": "2025-07-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "SHILPAMED",
+   "entry": "2025-06-02",
+   "exit": "2025-07-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "SUVEN",
+   "entry": "2025-06-02",
+   "exit": "2025-07-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "ITDCEM",
+   "entry": "2025-09-01",
+   "exit": "2025-10-01",
+   "resumes_later": false
+  },
+  {
+   "symbol": "PEL",
+   "entry": "2025-09-01",
+   "exit": "2025-10-01",
+   "resumes_later": false
+  },
+  {
+   "symbol": "SHANKARA",
+   "entry": "2025-09-01",
+   "exit": "2025-10-01",
+   "resumes_later": true
+  },
+  {
+   "symbol": "DHANI",
+   "entry": "2025-10-01",
+   "exit": "2025-11-03",
+   "resumes_later": false
+  },
+  {
+   "symbol": "MAHSCOOTER",
+   "entry": "2025-10-01",
+   "exit": "2025-11-03",
+   "resumes_later": true
+  },
+  {
+   "symbol": "MANGCHEFER",
+   "entry": "2025-10-01",
+   "exit": "2025-11-03",
+   "resumes_later": false
+  },
+  {
+   "symbol": "NSIL",
+   "entry": "2025-10-01",
+   "exit": "2025-11-03",
+   "resumes_later": true
+  },
+  {
+   "symbol": "SUNDARMHLD",
+   "entry": "2025-10-01",
+   "exit": "2025-11-03",
+   "resumes_later": false
+  }
+ ],
+ "remainder_loss_assumed": 0.0,
+ "coverage": {
+  "from": "2021-08-28",
+  "to": "2026-11-19"
+ },
+ "rows": [
+  {
+   "entry": "2022-10-03",
+   "exit": "2022-11-01",
+   "names": 113,
+   "universe": 566,
+   "gross": 0.030792647346827434,
+   "net": 0.029192647346827433,
+   "benchmark": 0.03485181112240665,
+   "excess": -0.005659163775579217,
+   "turnover_one_way": 0.5000000000000007,
+   "max_sector_share": 0.646
+  },
+  {
+   "entry": "2022-11-01",
+   "exit": "2022-12-01",
+   "names": 97,
+   "universe": 489,
+   "gross": 0.011674707368326211,
+   "net": 0.010611197179166783,
+   "benchmark": 0.036639800606848114,
+   "excess": -0.026028603427681332,
+   "turnover_one_way": 0.3323469341123214,
+   "max_sector_share": 0.629
+  },
+  {
+   "entry": "2022-12-01",
+   "exit": "2023-01-02",
+   "names": 107,
+   "universe": 536,
+   "gross": -0.04053043109676265,
+   "net": -0.04164427310049671,
+   "benchmark": -0.018662671076670873,
+   "excess": -0.022981602023825837,
+   "turnover_one_way": 0.34807562616689397,
+   "max_sector_share": 0.692
+  },
+  {
+   "entry": "2023-01-02",
+   "exit": "2023-02-01",
+   "names": 111,
+   "universe": 556,
+   "gross": -0.06119473897997335,
+   "net": -0.06236137402778263,
+   "benchmark": -0.04825878439759729,
+   "excess": -0.01410258963018534,
+   "turnover_one_way": 0.3645734524403999,
+   "max_sector_share": 0.703
+  },
+  {
+   "entry": "2023-02-01",
+   "exit": "2023-03-01",
+   "names": 98,
+   "universe": 493,
+   "gross": -0.018923552348587634,
+   "net": -0.02002777871343631,
+   "benchmark": -0.011055152997527691,
+   "excess": -0.008972625715908619,
+   "turnover_one_way": 0.3450707390152113,
+   "max_sector_share": 0.673
+  },
+  {
+   "entry": "2023-03-01",
+   "exit": "2023-04-03",
+   "names": 98,
+   "universe": 494,
+   "gross": 0.011466638164060995,
+   "net": 0.010622108902926575,
+   "benchmark": -0.0035155285253442104,
+   "excess": 0.014137637428270785,
+   "turnover_one_way": 0.2639153941045062,
+   "max_sector_share": 0.704
+  },
+  {
+   "entry": "2023-04-03",
+   "exit": "2023-05-02",
+   "names": 100,
+   "universe": 501,
+   "gross": 0.08225932398708702,
+   "net": 0.08125112793306467,
+   "benchmark": 0.06872223021613551,
+   "excess": 0.012528897716929166,
+   "turnover_one_way": 0.3150612668819824,
+   "max_sector_share": 0.61
+  },
+  {
+   "entry": "2023-05-02",
+   "exit": "2023-06-01",
+   "names": 106,
+   "universe": 534,
+   "gross": 0.061263310852056066,
+   "net": 0.06045134380116824,
+   "benchmark": 0.05103104833645511,
+   "excess": 0.009420295464713131,
+   "turnover_one_way": 0.25373970340244617,
+   "max_sector_share": 0.651
+  },
+  {
+   "entry": "2023-06-01",
+   "exit": "2023-07-03",
+   "names": 119,
+   "universe": 595,
+   "gross": 0.08444188721474837,
+   "net": 0.0833149704611104,
+   "benchmark": 0.061254454568433626,
+   "excess": 0.022060515892676776,
+   "turnover_one_way": 0.35216148551186155,
+   "max_sector_share": 0.706
+  },
+  {
+   "entry": "2023-07-03",
+   "exit": "2023-08-01",
+   "names": 134,
+   "universe": 670,
+   "gross": 0.11850354362590876,
+   "net": 0.11754040620267492,
+   "benchmark": 0.07441419750042012,
+   "excess": 0.043126208702254795,
+   "turnover_one_way": 0.3009804447605767,
+   "max_sector_share": 0.784
+  },
+  {
+   "entry": "2023-08-01",
+   "exit": "2023-09-01",
+   "names": 139,
+   "universe": 696,
+   "gross": 0.08871709593773286,
+   "net": 0.08774545171883322,
+   "benchmark": 0.06008698002435874,
+   "excess": 0.027658471694474475,
+   "turnover_one_way": 0.30363881840613904,
+   "max_sector_share": 0.748
+  },
+  {
+   "entry": "2023-09-01",
+   "exit": "2023-10-03",
+   "names": 146,
+   "universe": 734,
+   "gross": 0.03807891949907184,
+   "net": 0.03716811162109036,
+   "benchmark": 0.018221373991406165,
+   "excess": 0.0189467376296842,
+   "turnover_one_way": 0.2846274618692121,
+   "max_sector_share": 0.74
+  },
+  {
+   "entry": "2023-10-03",
+   "exit": "2023-11-01",
+   "names": 149,
+   "universe": 746,
+   "gross": -0.008358501935675442,
+   "net": -0.009284459544866137,
+   "benchmark": -0.023069019367480816,
+   "excess": 0.01378455982261468,
+   "turnover_one_way": 0.28936175287209204,
+   "max_sector_share": 0.765
+  },
+  {
+   "entry": "2023-11-01",
+   "exit": "2023-12-01",
+   "names": 142,
+   "universe": 711,
+   "gross": 0.11581582246458286,
+   "net": 0.1149049834342379,
+   "benchmark": 0.09463642790746234,
+   "excess": 0.02026855552677556,
+   "turnover_one_way": 0.2846371969828017,
+   "max_sector_share": 0.782
+  },
+  {
+   "entry": "2023-12-01",
+   "exit": "2024-01-01",
+   "names": 141,
+   "universe": 709,
+   "gross": 0.05945840250695744,
+   "net": 0.05835470015041572,
+   "benchmark": 0.06928172659895414,
+   "excess": -0.010927026448538421,
+   "turnover_one_way": 0.3449069864192883,
+   "max_sector_share": 0.766
+  },
+  {
+   "entry": "2024-01-01",
+   "exit": "2024-02-01",
+   "names": 160,
+   "universe": 800,
+   "gross": 0.11361592299226415,
+   "net": 0.11257930672012524,
+   "benchmark": 0.0665180746235624,
+   "excess": 0.046061232096562835,
+   "turnover_one_way": 0.32394258504340917,
+   "max_sector_share": 0.744
+  },
+  {
+   "entry": "2024-02-01",
+   "exit": "2024-03-01",
+   "names": 165,
+   "universe": 826,
+   "gross": 0.011371332401362568,
+   "net": 0.01055804178981658,
+   "benchmark": 0.007363634963531315,
+   "excess": 0.0031944068262852662,
+   "turnover_one_way": 0.2541533161081212,
+   "max_sector_share": 0.745
+  },
+  {
+   "entry": "2024-03-01",
+   "exit": "2024-04-01",
+   "names": 163,
+   "universe": 819,
+   "gross": -0.031362840851764086,
+   "net": -0.032535585230674686,
+   "benchmark": -0.023597855704771298,
+   "excess": -0.008937729525903389,
+   "turnover_one_way": 0.3664826184095621,
+   "max_sector_share": 0.742
+  },
+  {
+   "entry": "2024-04-01",
+   "exit": "2024-05-02",
+   "names": 155,
+   "universe": 775,
+   "gross": 0.07999222068191619,
+   "net": 0.07906716779370608,
+   "benchmark": 0.06121018968320345,
+   "excess": 0.01785697811050263,
+   "turnover_one_way": 0.28907902756566145,
+   "max_sector_share": 0.781
+  },
+  {
+   "entry": "2024-05-02",
+   "exit": "2024-06-03",
+   "names": 151,
+   "universe": 755,
+   "gross": 0.031277210122003254,
+   "net": 0.03053882244608521,
+   "benchmark": 0.007797303667430645,
+   "excess": 0.022741518778654567,
+   "turnover_one_way": 0.2307461487243886,
+   "max_sector_share": 0.755
+  },
+  {
+   "entry": "2024-06-03",
+   "exit": "2024-07-01",
+   "names": 142,
+   "universe": 714,
+   "gross": 0.058342294473223366,
+   "net": 0.05742239898480823,
+   "benchmark": 0.08391138712387916,
+   "excess": -0.026488988139070933,
+   "turnover_one_way": 0.2874673401297316,
+   "max_sector_share": 0.746
+  },
+  {
+   "entry": "2024-07-01",
+   "exit": "2024-08-01",
+   "names": 168,
+   "universe": 841,
+   "gross": 0.052192284802345,
+   "net": 0.051311421498445545,
+   "benchmark": 0.04359663643950524,
+   "excess": 0.007714785058940306,
+   "turnover_one_way": 0.275269782468581,
+   "max_sector_share": 0.732
+  },
+  {
+   "entry": "2024-08-01",
+   "exit": "2024-09-02",
+   "names": 171,
+   "universe": 855,
+   "gross": 0.006043952599240448,
+   "net": 0.005136419299918728,
+   "benchmark": 0.015288657173025369,
+   "excess": -0.01015223787310664,
+   "turnover_one_way": 0.2836041560380376,
+   "max_sector_share": 0.719
+  },
+  {
+   "entry": "2024-09-02",
+   "exit": "2024-10-01",
+   "names": 171,
+   "universe": 858,
+   "gross": 0.011182531193191885,
+   "net": 0.010292348115180034,
+   "benchmark": 0.021432363370080306,
+   "excess": -0.011140015254900272,
+   "turnover_one_way": 0.27818221187870373,
+   "max_sector_share": 0.702
+  },
+  {
+   "entry": "2024-10-01",
+   "exit": "2024-11-01",
+   "names": 169,
+   "universe": 847,
+   "gross": -0.03769050928171294,
+   "net": -0.03865193488527706,
+   "benchmark": -0.04531851572664838,
+   "excess": 0.006666580841371318,
+   "turnover_one_way": 0.3004455011137868,
+   "max_sector_share": 0.751
+  },
+  {
+   "entry": "2024-11-01",
+   "exit": "2024-12-02",
+   "names": 156,
+   "universe": 784,
+   "gross": 0.01094293079947182,
+   "net": 0.009961650956292176,
+   "benchmark": 0.003994964728736979,
+   "excess": 0.0059666862275551975,
+   "turnover_one_way": 0.3066499509936389,
+   "max_sector_share": 0.744
+  },
+  {
+   "entry": "2024-12-02",
+   "exit": "2025-01-01",
+   "names": 153,
+   "universe": 765,
+   "gross": -0.005619335008487802,
+   "net": -0.006572452990171171,
+   "benchmark": -0.0060408624774699726,
+   "excess": -0.0005315905127011985,
+   "turnover_one_way": 0.2978493692760529,
+   "max_sector_share": 0.745
+  },
+  {
+   "entry": "2025-01-01",
+   "exit": "2025-02-03",
+   "names": 156,
+   "universe": 783,
+   "gross": -0.14510427805546067,
+   "net": -0.14613428747745993,
+   "benchmark": -0.09551860729462638,
+   "excess": -0.05061568018283355,
+   "turnover_one_way": 0.3218779443747696,
+   "max_sector_share": 0.782
+  },
+  {
+   "entry": "2025-02-03",
+   "exit": "2025-03-03",
+   "names": 147,
+   "universe": 735,
+   "gross": -0.1336634031835577,
+   "net": -0.13469491466257852,
+   "benchmark": -0.11828743405401855,
+   "excess": -0.01640748060855997,
+   "turnover_one_way": 0.32234733719400227,
+   "max_sector_share": 0.769
+  },
+  {
+   "entry": "2025-03-03",
+   "exit": "2025-04-01",
+   "names": 146,
+   "universe": 733,
+   "gross": 0.11901669410038249,
+   "net": 0.11796992234770662,
+   "benchmark": 0.08417243471605786,
+   "excess": 0.03379748763164876,
+   "turnover_one_way": 0.3271161727112077,
+   "max_sector_share": 0.795
+  },
+  {
+   "entry": "2025-04-01",
+   "exit": "2025-05-02",
+   "names": 158,
+   "universe": 792,
+   "gross": -0.008641125657234992,
+   "net": -0.009540036855413858,
+   "benchmark": 0.016700149322550064,
+   "excess": -0.02624018617796392,
+   "turnover_one_way": 0.28090974943089553,
+   "max_sector_share": 0.772
+  },
+  {
+   "entry": "2025-05-02",
+   "exit": "2025-06-02",
+   "names": 152,
+   "universe": 761,
+   "gross": 0.08360128827279249,
+   "net": 0.08270556311141061,
+   "benchmark": 0.09184055825299527,
+   "excess": -0.009134995141584654,
+   "turnover_one_way": 0.27991411293183605,
+   "max_sector_share": 0.75
+  },
+  {
+   "entry": "2025-06-02",
+   "exit": "2025-07-01",
+   "names": 158,
+   "universe": 794,
+   "gross": 0.03092180179494705,
+   "net": 0.029997619845696228,
+   "benchmark": 0.03208407114426265,
+   "excess": -0.002086451298566421,
+   "turnover_one_way": 0.2888068591408824,
+   "max_sector_share": 0.778
+  },
+  {
+   "entry": "2025-07-01",
+   "exit": "2025-08-01",
+   "names": 163,
+   "universe": 815,
+   "gross": -0.007813624763607018,
+   "net": -0.008854454374974058,
+   "benchmark": -0.032222310639137344,
+   "excess": 0.023367856264163288,
+   "turnover_one_way": 0.32525925355220003,
+   "max_sector_share": 0.748
+  },
+  {
+   "entry": "2025-08-01",
+   "exit": "2025-09-01",
+   "names": 158,
+   "universe": 791,
+   "gross": 0.007141967634950146,
+   "net": 0.006183842017418787,
+   "benchmark": -0.002127496427474508,
+   "excess": 0.008311338444893296,
+   "turnover_one_way": 0.29941425547854966,
+   "max_sector_share": 0.747
+  },
+  {
+   "entry": "2025-09-01",
+   "exit": "2025-10-01",
+   "names": 153,
+   "universe": 767,
+   "gross": 0.013372486610947639,
+   "net": 0.012422463249048447,
+   "benchmark": 0.012260775300608111,
+   "excess": 0.00016168794844033559,
+   "turnover_one_way": 0.29688230059349735,
+   "max_sector_share": 0.745
+  },
+  {
+   "entry": "2025-10-01",
+   "exit": "2025-11-03",
+   "names": 159,
+   "universe": 795,
+   "gross": 0.03798559436173964,
+   "net": 0.03703985805396273,
+   "benchmark": 0.028478601466438647,
+   "excess": 0.008561256587524085,
+   "turnover_one_way": 0.2955425961802839,
+   "max_sector_share": 0.774
+  }
+ ],
+ "sensitivity_stopped_names": {
+  "0.5": {
+   "mean_monthly_net_excess": 0.00011790567572978958,
+   "hac_se": 0.003597785990604799,
+   "t": 0.032771731291879665,
+   "p_one_sided": 0.4870188247176981,
+   "ci95": [
+    -0.006933754865855617,
+    0.007169566217315196
+   ],
+   "verdict": "NOT_SIGNIFICANT"
+  },
+  "1.0": {
+   "mean_monthly_net_excess": -0.002897765764460439,
+   "hac_se": 0.0036746869175194805,
+   "t": -0.7885748716836303,
+   "p_one_sided": 0.7822385195479314,
+   "ci95": [
+    -0.010100152122798621,
+    0.0043046205938777424
+   ],
+   "verdict": "NOT_SIGNIFICANT"
+  }
+ },
+ "ca_coverage_binding": "UNBOUND",
+ "ca_coverage_accepted_unbound": true
+}
