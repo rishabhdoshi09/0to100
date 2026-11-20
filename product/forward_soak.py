@@ -235,8 +235,10 @@ def settle_pending_from_market(
     entered = {str(k).upper(): bool(v) for k, v in dict(later_entered or {}).items()}
     from product.forward_evidence import is_forward_evidence
     # Simulated (BACKTEST / WALK_FORWARD) rows never become forward learning.
+    # A row without its decision id cannot be attached or tied to a learning
+    # event: it is never settled here (and never by a second settler, L-01).
     pending = [r for r in load_fwd() if not r.get("entered") and r.get("later_outcome") is None
-               and is_forward_evidence(r)]
+               and is_forward_evidence(r) and str(r.get("decision_id") or "").strip()]
     updated = 0
     pending_n = 0
     classifications: dict[str, int] = {}
@@ -249,9 +251,9 @@ def settle_pending_from_market(
     failures: list[str] = []
     # Events a crash stranded (settled on the ledger, learning never confirmed)
     # are applied first; idempotent (cross-review A-3).
-    replayed = replay_learning_outbox(policy_path=policy_path, floors=floors,
-                                      settled_ids=_settled_decision_ids(load_fwd()))
+    replayed = replay_learning_outbox(policy_path=policy_path, floors=floors)
     failures.extend(replayed.get("errors") or [])
+    conflicts: list[str] = []
 
     def _flush() -> None:
         # Exactly once across crashes (cross-review A-3). Order per chunk:
@@ -272,9 +274,19 @@ def settle_pending_from_market(
         events = [(_learning_event_id(settled_row), settled_row) for _item, settled_row in batch
                   if settled_row.get("forward_decision_id")]
         for event_id, settled_row in events:
-            LO.enqueue_event(outbox, event_id, LEARNING_EVENT_KIND, settled_row)
-        attach_settlements([item for item, _settled in batch])
+            # These rows are not settled yet, so a PENDING event under the same
+            # id was never committed: this measurement supersedes it (L-02).
+            state = LO.upsert_pending_event(outbox, event_id, LEARNING_EVENT_KIND, settled_row)
+            if state not in ("NEW", "REPLACED"):
+                conflicts.append(f"{event_id}: already {state}")
+        committed = attach_settlements([item for item, _settled in batch])
         for event_id, settled_row in events:
+            # Learn only what the ledger committed, exactly as committed (L-02).
+            why = committed_mismatch(settled_row, committed.get(str(settled_row.get("forward_decision_id"))))
+            if why:
+                LO.quarantine_event(outbox, event_id, why)
+                conflicts.append(f"{event_id}: {why}")
+                continue
             err = _apply_learning_event(outbox, event_id, settled_row, policy_path=policy_path, floors=floors)
             if err:
                 failures.append(err)
@@ -305,6 +317,10 @@ def settle_pending_from_market(
                         "setup_label": row.get("setup"),
                         "regime": row.get("regime"),
                         "rules_hash": row.get("rules_hash"),
+                        # The decision's own id, so the label reaches the
+                        # feature observation frozen under it (L-06). A label
+                        # call for an id with no observation changes nothing.
+                        "decision_id": str(row.get("decision_id") or ""),
                     },
                     "setup": row.get("setup"),
                     "regime": row.get("regime"),
@@ -331,12 +347,65 @@ def settle_pending_from_market(
     finally:
         _flush()
     _ = cf_path
+    result = {"updated": updated, "pending": pending_n, "classifications": classifications,
+              "learning_conflicts": conflicts}
     if failures:
         # Settled and durably queued; learning retries from the outbox. Raise so
         # the outcome job is RETRYABLE, never a silent SUCCEEDED (A-3).
-        raise RuntimeError(f"{len(failures)} learning event(s) not yet applied (queued for replay): "
-                           + "; ".join(failures[:3]))
-    return {"updated": updated, "pending": pending_n, "classifications": classifications}
+        raise LearningPending(f"{len(failures)} learning event(s) not yet applied (queued for replay): "
+                              + "; ".join(failures[:3]), result=result)
+    return result
+
+
+class LearningPending(RuntimeError):
+    """Outcomes were settled and their learning durably queued, but not all of it applied yet."""
+
+    def __init__(self, message: str, *, result: Mapping[str, Any] | None = None):
+        super().__init__(message)
+        self.result = dict(result or {})
+
+
+def committed_mismatch(payload: Mapping[str, Any], row: Mapping[str, Any] | None) -> str:
+    """'' when a learning payload is exactly the settlement the forward ledger committed, else why not.
+
+    The outbox can hold a payload the ledger never committed (a crash before
+    the write, then a different retry) or a damaged one. Learning applies a
+    payload only when its identity, measurement and provenance equal the
+    committed row's (overnight review L-02).
+    """
+    from product.forward_evidence import is_forward_evidence
+
+    if not isinstance(row, Mapping):
+        return "NOT_ON_LEDGER"
+    later = row.get("later_outcome")
+    if not isinstance(later, Mapping):
+        return "NOT_SETTLED"
+    if row.get("entered") or not is_forward_evidence(row):
+        return "NOT_A_FORWARD_COUNTERFACTUAL"
+    exact = {
+        "FORWARD_DECISION_ID": (payload.get("forward_decision_id"), row.get("decision_id")),
+        "SYMBOL": (str(payload.get("symbol") or "").upper(), str(row.get("symbol") or "").upper()),
+        "REASON_CODE": (payload.get("reason_code"), row.get("reason_code")),
+        "CLASSIFICATION": (payload.get("classification"), row.get("counterfactual_classification")),
+        "EVAL_SPEC": (payload.get("eval_spec"), later.get("eval_spec")),
+    }
+    for name, (a, b) in exact.items():
+        if str(a or "") != str(b or ""):
+            return f"{name}_MISMATCH"
+    numeric = {
+        "COUNTERFACTUAL_R": (payload.get("counterfactual_R"), later.get("counterfactual_R")),
+        "FORWARD_RETURN": ((payload.get("outcome") or {}).get("forward_return_pct")
+                           if isinstance(payload.get("outcome"), Mapping) else None,
+                           later.get("forward_return_pct")),
+    }
+    for name, (a, b) in numeric.items():
+        try:
+            same = (a is None and b is None) or (a is not None and b is not None and abs(float(a) - float(b)) <= 1e-9)
+        except (TypeError, ValueError):
+            same = False
+        if not same:
+            return f"{name}_MISMATCH"
+    return ""
 
 
 LEARNING_EVENT_KIND = "counterfactual"
@@ -370,28 +439,46 @@ def _apply_learning_event(outbox, event_id: str, settled_row: Mapping[str, Any],
     return ""
 
 
-def replay_learning_outbox(*, policy_path=None, floors=None, settled_ids: set[str] | None = None) -> dict[str, Any]:
+def replay_learning_outbox(*, policy_path=None, floors=None, settled_ids: set[str] | None = None,
+                           ledger_rows: Sequence[Mapping[str, Any]] | None = None) -> dict[str, Any]:
     """Apply every PENDING settlement → learning event (crash recovery; idempotent).
 
-    An event whose forward-ledger row is not settled yet stays PENDING: its
-    settlement will be redone and will apply it. A corrupt event is
-    QUARANTINED, never guessed. Policy claims a crash left half-applied are
+    Every event is checked against the forward ledger as committed (read here
+    unless ``ledger_rows`` is given), whatever the arguments (L-02): an event
+    whose row is not settled yet stays PENDING (its settlement will be redone
+    and will supersede it); one that is not exactly the committed settlement,
+    or is corrupt, is QUARANTINED, never guessed. ``settled_ids`` can only
+    narrow what is applied. Policy claims a crash left half-applied are
     replayed first (learning_policy_store.recover_claims).
     """
     from product import learning_observations as LO
+    from product.forward_evidence import load_ledger as load_fwd
     from product.learning_policy_store import policy_path as _policy_path, recover_claims
 
     outbox = LO.ledger_path_for(_policy_path(policy_path))
     out: dict[str, Any] = {"claims": recover_claims(policy_path, floors), "applied": 0, "waiting": 0,
                            "quarantined": 0, "errors": []}
-    for ev in LO.pending_events(outbox, kind=LEARNING_EVENT_KIND):
+    events = LO.pending_events(outbox, kind=LEARNING_EVENT_KIND)
+    if not events:
+        return out
+    rows = load_fwd() if ledger_rows is None else ledger_rows
+    by_id = {str(r.get("decision_id")): r for r in rows or [] if isinstance(r, Mapping) and r.get("decision_id")}
+    for ev in events:
         payload = ev.get("payload")
         if not isinstance(payload, dict) or _learning_event_id(payload) != ev["event_id"]:
             LO.quarantine_event(outbox, ev["event_id"], "CORRUPT_OR_MISMATCHED_PAYLOAD")
             out["quarantined"] += 1
             continue
-        if settled_ids is not None and str(payload.get("forward_decision_id")) not in settled_ids:
+        fid = str(payload.get("forward_decision_id"))
+        row = by_id.get(fid)
+        if (row is None or row.get("later_outcome") is None
+                or (settled_ids is not None and fid not in settled_ids)):
             out["waiting"] += 1
+            continue
+        why = committed_mismatch(payload, row)
+        if why:
+            LO.quarantine_event(outbox, ev["event_id"], why)
+            out["quarantined"] += 1
             continue
         err = _apply_learning_event(outbox, ev["event_id"], payload, policy_path=policy_path, floors=floors)
         if err:

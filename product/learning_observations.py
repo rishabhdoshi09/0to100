@@ -91,22 +91,41 @@ _OUTBOX = (
 )
 
 
+def _schema_current(conn: sqlite3.Connection) -> bool:
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(observations)")}
+    if not {"state", "payload"} <= cols:
+        return False
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='outbox'").fetchone() is not None
+
+
 def _connect(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), timeout=30.0)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=FULL")
-    conn.execute(_SCHEMA)
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(observations)")}
-    if "state" not in cols:
-        # Existing claims cannot say whether their apply landed: LEGACY.
-        conn.execute(f"ALTER TABLE observations ADD COLUMN state TEXT NOT NULL DEFAULT '{LEGACY}'")
-    if "payload" not in cols:
-        conn.execute("ALTER TABLE observations ADD COLUMN payload TEXT NOT NULL DEFAULT ''")
-    conn.execute("CREATE INDEX IF NOT EXISTS observations_state ON observations(state)")
-    conn.execute(_OUTBOX)
-    conn.execute("CREATE INDEX IF NOT EXISTS outbox_state ON outbox(state)")
-    conn.commit()
+    if _schema_current(conn):
+        return conn
+    # Create / migrate under ONE write transaction: two processes opening a
+    # legacy ledger at once must not both see the old columns and both ALTER
+    # (overnight review L-09). BEGIN IMMEDIATE serialises them; the second
+    # re-reads the schema inside its own transaction and finds nothing to do.
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute(_SCHEMA)
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(observations)")}
+        if "state" not in cols:
+            # Existing claims cannot say whether their apply landed: LEGACY.
+            conn.execute(f"ALTER TABLE observations ADD COLUMN state TEXT NOT NULL DEFAULT '{LEGACY}'")
+        if "payload" not in cols:
+            conn.execute("ALTER TABLE observations ADD COLUMN payload TEXT NOT NULL DEFAULT ''")
+        conn.execute("CREATE INDEX IF NOT EXISTS observations_state ON observations(state)")
+        conn.execute(_OUTBOX)
+        conn.execute("CREATE INDEX IF NOT EXISTS outbox_state ON outbox(state)")
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        conn.close()
+        raise
     return conn
 
 
@@ -168,6 +187,27 @@ def claim_state(path: str | Path, scope: str, observation_key: str) -> str:
             conn.close()
 
 
+def claim_payload(path: str | Path, scope: str, observation_key: str) -> dict[str, Any] | None:
+    """The payload stored with a claim; None when unclaimed, empty, or not a JSON object."""
+    target = Path(path)
+    if not target.exists():
+        return None
+    with _LOCK:
+        conn = _connect(target)
+        try:
+            row = conn.execute("SELECT payload FROM observations WHERE scope=? AND observation_key=?",
+                               (str(scope), str(observation_key))).fetchone()
+        finally:
+            conn.close()
+    if row is None or not row[0]:
+        return None
+    try:
+        body = json.loads(row[0])
+    except ValueError:
+        return None
+    return body if isinstance(body, dict) else None
+
+
 def mark_applied(path: str | Path, scope: str, observation_key: str) -> None:
     with _LOCK:
         conn = _connect(Path(path))
@@ -217,6 +257,39 @@ def enqueue_event(path: str | Path, event_id: str, kind: str, payload: Mapping[s
             )
             conn.commit()
             return cur.rowcount == 1
+        finally:
+            conn.close()
+
+
+def upsert_pending_event(path: str | Path, event_id: str, kind: str, payload: Mapping[str, Any]) -> str:
+    """Queue an event, REPLACING the payload of a still-PENDING one (overnight review L-02).
+
+    Call it only for a settlement that is not yet committed: a PENDING event
+    for such a row was never committed either (a crash before the ledger
+    write), so the new measurement supersedes it. Returns NEW, REPLACED, or
+    the state of an event that was already finished (DONE / QUARANTINED),
+    which is left untouched.
+    """
+    if not event_id or not kind:
+        raise ValueError("event_id and kind are required")
+    body = json.dumps(dict(payload), sort_keys=True, default=str)
+    with _LOCK:
+        conn = _connect(Path(path))
+        try:
+            conn.execute("BEGIN IMMEDIATE")          # read-decide-write as one cross-process step
+            row = conn.execute("SELECT state FROM outbox WHERE event_id=?", (str(event_id),)).fetchone()
+            if row is None:
+                conn.execute("INSERT INTO outbox(event_id, kind, payload, state, created_at) VALUES (?, ?, ?, ?, ?)",
+                             (str(event_id), str(kind), body, PENDING, datetime.now(timezone.utc).isoformat()))
+                result = "NEW"
+            elif str(row[0]) == PENDING:
+                conn.execute("UPDATE outbox SET payload=?, kind=? WHERE event_id=? AND state=?",
+                             (body, str(kind), str(event_id), PENDING))
+                result = "REPLACED"
+            else:
+                result = str(row[0])
+            conn.commit()
+            return result
         finally:
             conn.close()
 

@@ -287,16 +287,38 @@ def recover_claims(path: str | Path | None = None, floors: Mapping[str, int] | N
         return _recover_locked(path, floors, ledger)
 
 
+_CLAIM_FIELDS = ("policy_id", "dimension", "bucket", "realized_R", "source", "extra")
+
+
+def _valid_policy_claim(scope: str, payload: Any) -> bool:
+    """A replayable policy claim: every field present and typed, and its policy IS the claim's scope."""
+    if not isinstance(payload, dict) or any(k not in payload for k in _CLAIM_FIELDS):
+        return False
+    if str(payload.get("policy_id") or "") != str(scope or "") or not str(scope or ""):
+        return False
+    try:
+        r = float(payload["realized_R"])
+    except (TypeError, ValueError):
+        return False
+    return (r == r and abs(r) != float("inf") and isinstance(payload.get("extra"), dict)
+            and all(isinstance(payload.get(k), str) for k in ("dimension", "bucket", "source")))
+
+
 def _recover_locked(path, floors, ledger) -> dict[str, int]:
     from product import learning_observations as LO
 
     out = {"replayed": 0, "confirmed": 0, "corrupt": 0}
     for row in LO.claimed_unapplied(ledger):
         payload = row.get("payload")
-        if not isinstance(payload, dict) or "policy_id" not in payload:
-            if payload is None:
-                out["corrupt"] += 1            # stays CLAIMED and visible; never guessed
+        if isinstance(payload, dict) and "policy_id" not in payload and payload.get("kind"):
             continue                           # not a policy claim (e.g. a whole-ingest claim)
+        if not _valid_policy_claim(row["scope"], payload):
+            # Malformed, or a payload for ANOTHER policy than the claim's scope:
+            # applying it would bypass that policy's own claim and count one
+            # observation twice (overnight review L-05). It stays CLAIMED and
+            # visible, never guessed, and never blocks the other claims.
+            out["corrupt"] += 1
+            continue
         store = load_policies(path)
         existing = next((dict(p) for p in (store.get("policies") or [])
                          if p.get("policy_id") == row["scope"]), None)

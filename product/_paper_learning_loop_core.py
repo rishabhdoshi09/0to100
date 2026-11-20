@@ -422,7 +422,8 @@ def ingest_counterfactual(
     if classification in FORWARD_OUTCOME_CLASSES and not is_rulebook(spec):
         return {"skipped": "INCOMPATIBLE_EVAL_SPEC", "eval_spec": spec, "classification": classification}
     evidence = dict(settled.get("evidence") or {})
-    decision_id = str(evidence.get("decision_id") or settled.get("decision_id") or "")
+    decision_id = str(evidence.get("decision_id") or settled.get("decision_id")
+                      or settled.get("forward_decision_id") or "")
     keyed = counterfactual_observation_key(settled)
     if keyed is None and decision_id:
         # No (day, symbol) unit: key it by its decision, so a replay of the same
@@ -444,27 +445,30 @@ def ingest_counterfactual(
         if state in (LO.APPLIED, LO.LEGACY):
             return {"duplicate_observation": True, "observation_key": key}
         if not state:
-            LO.claim(unit_ledger, "COUNTERFACTUAL", key, day,
-                     payload={"kind": "counterfactual_ingest", "decision_id": decision_id})
+            # The claim stores the WHOLE delivery that won it (L-03).
+            body = {"kind": "counterfactual_ingest", "decision_id": decision_id,
+                    "settled": json.loads(json.dumps(dict(settled), default=str))}
+            if not LO.claim(unit_ledger, "COUNTERFACTUAL", key, day, payload=body):
+                state = LO.claim_state(unit_ledger, "COUNTERFACTUAL", key)   # another worker won
+                if state in (LO.APPLIED, LO.LEGACY):
+                    return {"duplicate_observation": True, "observation_key": key}
+        if state == LO.CLAIMED:
+            # Resume the unit with ITS OWN payload, never this delivery's: two
+            # cycle copies of one unit can differ (target, outcome), and a unit
+            # must not finish with effects from two decisions (overnight review
+            # L-03). A claim from before payloads were stored resumes as given.
+            stored = (LO.claim_payload(unit_ledger, "COUNTERFACTUAL", key) or {}).get("settled")
+            if isinstance(stored, dict) and (counterfactual_observation_key(stored) == keyed
+                                             or keyed[0].startswith("cfd:")):
+                settled = stored
+                classification = str(settled.get("classification") or "")
+                reason = str(settled.get("reason_code") or "REJECTED")
+                spec = settled.get("eval_spec") or (settled.get("outcome") or {}).get("eval_spec")
+                evidence = dict(settled.get("evidence") or {})
+                decision_id = str(evidence.get("decision_id") or settled.get("decision_id")
+                                  or settled.get("forward_decision_id") or "")
         obs = {"observation_key": key, "session": day}
     counterfactual_r = settled.get("counterfactual_R")
-    if decision_id and counterfactual_r is not None:
-        try:
-            from product.evidence_intelligence import record_resolved_prediction
-            record_resolved_prediction(
-                decision_id,
-                float(counterfactual_r),
-                evidence_class="FORWARD_COUNTERFACTUAL",
-                not_pnl=True,
-                classification=classification,
-                eval_spec=str(spec or ""),
-                resolved_at=str(
-                    (settled.get("outcome") or {}).get("resolved_at")
-                    or datetime.now(timezone.utc).isoformat()
-                ),
-            )
-        except Exception:
-            pass
     mapped = {
         CORRECT_REJECTION: 0.40,
         AVOIDED_LOSER: 0.40,
@@ -535,6 +539,30 @@ def ingest_counterfactual(
             extra={"classification": GOOD_WAIT, "not_pnl": True, "symbol": settled.get("symbol")},
             **obs,
         )
+    if decision_id and counterfactual_r is not None:
+        # The feature label is a sink of its own (L-06): idempotent (an equal
+        # label is "exists"), so a failure is raised, the unit stays CLAIMED
+        # and the event is retried; the policy effects above are idempotent per
+        # observation key, so the retry changes only what did not land.
+        from product.evidence_intelligence import record_resolved_prediction
+        labelled = record_resolved_prediction(
+            decision_id,
+            float(counterfactual_r),
+            evidence_class="FORWARD_COUNTERFACTUAL",
+            not_pnl=True,
+            classification=classification,
+            eval_spec=str(spec or ""),
+            resolved_at=str(
+                (settled.get("outcome") or {}).get("resolved_at")
+                or datetime.now(timezone.utc).isoformat()
+            ),
+        )
+        label_status = str(((labelled or {}).get("feature_store") or {}).get("status") or "")
+        if label_status == "error":
+            raise RuntimeError(f"feature label for {decision_id} failed: "
+                               f"{((labelled or {}).get('feature_store') or {}).get('reason')}"[:240])
+        if isinstance(last, dict):
+            last = {**last, "feature_label": label_status}
     if unit_ledger is not None:
         from product import learning_observations as LO
         LO.mark_applied(unit_ledger, "COUNTERFACTUAL", obs["observation_key"])

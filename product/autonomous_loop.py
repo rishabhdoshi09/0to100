@@ -548,7 +548,7 @@ def settle_official_outcomes(session: str | None = None) -> dict[str, Any]:
     """
     from core.outcome_resolver import counterfactual_outcome
     from product.counterfactual_learning import classify_rulebook, ledger_path as cf_path
-    from product.forward_evidence import attach_settlements, load_ledger
+    # forward-ledger rows: settled below by the one owner (forward_soak), not here
 
     as_of = session or session_date()
     settled, pending, failed = [], [], []
@@ -621,41 +621,22 @@ def settle_official_outcomes(session: str | None = None) -> dict[str, Any]:
     except Exception as exc:
         failed.append({"error": str(exc)[:200]})
 
-    # The ledger is rewritten whole on every write, so settle in batches: one
-    # rewrite per _SETTLE_FLUSH_EVERY rows, not one per row (see
-    # forward_evidence.attach_settlements). Flushed in `finally` so rows
-    # already resolved are kept even if a later row raises.
-    queued: list[dict[str, Any]] = []
+    # Forward-ledger rows have ONE settlement owner (overnight review L-01):
+    # forward_soak.settle_pending_from_market, which commits each outcome with
+    # its durable learning event. This function used to settle the same rows
+    # itself, with no event, and a row it settled first never reached learning.
+    from product.forward_soak import LearningPending, settle_pending_from_market
     try:
-        for row in load_ledger():
-            if row.get("later_outcome") or not row.get("decision_id") or row.get("entered"):
-                continue
-            from product.forward_evidence import is_forward_evidence
-            if not is_forward_evidence(row):
-                continue            # a simulated decision never settles into forward learning
-            symbol = str(row.get("symbol") or "")
-            day = str(row.get("market_timestamp") or row.get("pit_proof", {}).get("as_of") or as_of)[:10]
-            try:
-                resolved = counterfactual_outcome(symbol, day, row.get("entry"), row.get("stop"), row.get("target"))
-            except Exception:
-                continue
-            if resolved is None:
-                pending.append({"symbol": symbol, "decision_id": row.get("decision_id"), "reason": "HORIZON_NOT_REACHED"})
-                continue
-            ret = resolved.get("return_pct")
-            classification = classify_rulebook(resolved)
-            queued.append({"decision_id": str(row["decision_id"]), "classification": classification,
-                           "forward_return_pct": ret, "eval_spec": resolved.get("eval_spec"),
-                           "counterfactual_R": resolved.get("net_r")})
-            settled.append({"symbol": symbol, "decision_id": row.get("decision_id"), "classification": classification,
-                            "return_pct": ret, "eval_spec": resolved.get("eval_spec")})
-            if len(queued) >= _SETTLE_FLUSH_EVERY:
-                attach_settlements(queued)
-                queued = []
-    finally:
-        if queued:
-            attach_settlements(queued)
-    return {"settled": settled, "pending": pending, "failed": failed, "n_settled": len(settled)}
+        forward = settle_pending_from_market()
+    except LearningPending as exc:
+        # Settled and queued; the learning replays from the outbox next run.
+        forward = dict(exc.result)
+        failed.append({"stage": "forward_learning", "error": str(exc)[:200]})
+    n_forward = int(forward.get("updated") or 0)
+    return {"settled": settled, "pending": pending, "failed": failed,
+            "forward_settled": n_forward, "forward_pending": int(forward.get("pending") or 0),
+            "forward_classifications": dict(forward.get("classifications") or {}),
+            "n_settled": len(settled) + n_forward}
 
 
 def consume_learning_memory(session: str | None = None) -> dict[str, Any]:

@@ -408,3 +408,226 @@ def test_e06_ca_binding_checks_the_bytes_used_for_adjustment(tmp_path, monkeypat
     loaded = ed.load_copy(tmp_path)
     assert loaded["frames"]["ABC"]["close"].iloc[0] == pytest.approx(50.0)   # generation A applied
     assert loaded["coverage"] == {} and loaded["coverage_binding"] == "MISMATCH"
+
+
+# ── L: settlement → learning exactly once ────────────────────────────────────────
+
+def _review_freeze(*, cycle="review", decision_id="", reason="ENTRY_TOO_EXTENDED", target=115):
+    from product import forward_evidence as FE
+    return FE.freeze_observation(
+        {"symbol": "TCS", "decision": "BLOCK", "decision_id": decision_id,
+         "reason_code": reason, "entry": 100, "stop": 94, "target": target, "setup_label": "VCP"},
+        cycle_id=cycle, as_of="2026-09-01", group="REJECTED", provenance=FE.REAL_FORWARD_MARKET,
+    )
+
+
+def test_l01_official_settler_cannot_bypass_learning(monkeypatch):
+    from core import outcome_resolver
+    from product.autonomous_loop import settle_official_outcomes
+    from tests.evidence_fixtures import rulebook_outcome
+    from tests.test_forward_settlement_batch import _open_ids
+    from tests.test_learning_exactly_once import _n, _settle
+
+    _review_freeze()
+    monkeypatch.setattr(outcome_resolver, "counterfactual_outcome", lambda *a, **k: rulebook_outcome(-0.4, "LOSS"))
+    assert settle_official_outcomes("2026-09-18")["n_settled"] == 1
+    assert _open_ids() == []
+    _settle()
+    assert _n() == 1
+
+
+def test_l02_replay_rejects_corrupt_body_with_matching_id(monkeypatch):
+    import json
+    import sqlite3
+    from product import forward_evidence as FE, forward_soak as FS, learning_observations as LO
+    from product import paper_learning_loop as PLL
+    from tests.test_learning_exactly_once import _ledger, _n, _settle
+
+    _review_freeze()
+
+    def fail(*a, **k):
+        raise OSError("stop after ledger write")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(PLL, "ingest_counterfactual", fail)
+        with pytest.raises(RuntimeError):
+            _settle()
+    (event,) = LO.pending_events(_ledger())
+    bad = {k: event["payload"][k] for k in ("forward_decision_id", "eval_spec")}
+    bad["classification"] = "AVOIDED_LOSER"
+    conn = sqlite3.connect(_ledger())
+    with conn:
+        conn.execute("UPDATE outbox SET payload=? WHERE event_id=?", (json.dumps(bad), event["event_id"]))
+    conn.close()
+    FS.replay_learning_outbox(settled_ids=FS._settled_decision_ids(FE.load_ledger()))
+    assert (LO.event_state(_ledger(), event["event_id"]), _n("REJECT::REJECTED")) == (LO.QUARANTINED, 0)
+
+
+def test_l02_replay_waits_for_uncommitted_settlement(monkeypatch):
+    from product import forward_soak as FS
+    from tests.test_learning_exactly_once import _n, _settle
+
+    _review_freeze()
+
+    def fail(*a, **k):
+        raise OSError("stop before ledger write")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(FS, "attach_settlements", fail)
+        with pytest.raises(OSError):
+            _settle()
+    result = FS.replay_learning_outbox()
+    assert (result["waiting"], _n()) == (1, 0)
+
+
+def test_l02_a_retry_with_a_different_outcome_learns_the_committed_one(monkeypatch):
+    from product import forward_soak as FS, learning_observations as LO
+    from tests.evidence_fixtures import rulebook_outcome
+    from tests.test_learning_exactly_once import _ledger
+
+    _review_freeze()
+
+    def fail(*a, **k):
+        raise OSError("stop before ledger write")
+
+    with monkeypatch.context() as patch:                      # queued: a LOSS, never committed
+        patch.setattr(FS, "attach_settlements", fail)
+        with pytest.raises(OSError):
+            FS.settle_pending_from_market(outcome_fn=lambda *a: rulebook_outcome(-0.4, "LOSS"))
+    from product import paper_learning_loop as PLL
+
+    def ingest_fails(*a, **k):
+        raise OSError("stop after the ledger write")
+
+    with monkeypatch.context() as patch:                      # committed: a WIN; learning crashes
+        patch.setattr(PLL, "ingest_counterfactual", ingest_fails)
+        with pytest.raises(RuntimeError):
+            FS.settle_pending_from_market(outcome_fn=lambda *a: rulebook_outcome(0.6, "WIN"))
+    FS.replay_learning_outbox()                               # the replay must learn the WIN
+    (row,) = [r for r in __import__("product.forward_evidence", fromlist=["x"]).load_ledger()]
+    assert row["later_outcome"]["counterfactual_R"] == pytest.approx(0.6)
+    assert LO.outbox_counts(_ledger()) == {LO.DONE: 1}
+    from product import learning_policy_store as LPS
+    pol = next(p for p in LPS.load_policies()["policies"] if p["policy_id"] == "REJECT::ENTRY_TOO_EXTENDED")
+    assert pol["sample_size"] == 1 and pol["classification"] == row["counterfactual_classification"]
+
+
+def test_l03_resume_uses_the_original_unit_payload(monkeypatch):
+    from product import forward_soak as FS, learning_observations as LO
+    from tests.evidence_fixtures import rulebook_outcome
+    from tests.test_learning_exactly_once import _n
+
+    reason = "EVIDENCE_POLICY_BLOCK"
+    first = _review_freeze(cycle="first", reason=reason)
+    _review_freeze(cycle="second", reason=reason, target=103)
+    real_mark = LO.mark_applied
+    failed = False
+
+    def mark(path, scope, key):
+        nonlocal failed
+        if scope == "COUNTERFACTUAL" and not failed:
+            failed = True
+            raise OSError("stop before the first unit's final mark")
+        return real_mark(path, scope, key)
+
+    def outcome(_symbol, _day, row):
+        if row["decision_id"] == first["decision_id"]:
+            return rulebook_outcome(-0.4, "LOSS")
+        return rulebook_outcome(0.4, "WIN")
+
+    monkeypatch.setattr(LO, "mark_applied", mark)
+    with pytest.raises(RuntimeError):
+        FS.settle_pending_from_market(outcome_fn=outcome)
+    FS.settle_pending_from_market(outcome_fn=outcome)
+    assert (_n(f"REJECT::{reason}"), _n("SETUP::VCP")) == (1, 0)
+
+
+def test_l05_recovery_rejects_claim_for_another_policy():
+    from product import learning_observations as LO, learning_policy_store as LPS
+    from tests.test_learning_exactly_once import _ledger, _n
+
+    body = dict(policy_id="SETUP::B", dimension="setup", bucket="B", realized_R=1.0,
+                source="paper_forward", extra={})
+    LPS.record_measured_outcome(**body, observation_key="same", session="2026-09-01")
+    assert LO.claim(_ledger(), "SETUP::A", "same", "2026-09-01", payload=body)
+    LPS.recover_claims()
+    assert (_n("SETUP::B"), LO.claim_state(_ledger(), "SETUP::A", "same")) == (1, LO.CLAIMED)
+
+
+def test_l05_a_malformed_claim_never_blocks_recovery_of_the_others():
+    from product import learning_observations as LO, learning_policy_store as LPS
+    from tests.test_learning_exactly_once import _ledger, _n
+
+    good = dict(policy_id="SETUP::G", dimension="setup", bucket="G", realized_R=1.0,
+                source="paper_forward", extra={})
+    assert LO.claim(_ledger(), "SETUP::M", "k1", "2026-09-01", payload={"policy_id": "SETUP::M"})
+    assert LO.claim(_ledger(), "SETUP::G", "k2", "2026-09-01", payload=good)
+    out = LPS.recover_claims()
+    assert out["corrupt"] == 1 and out["replayed"] == 1 and _n("SETUP::G") == 1
+
+
+def test_l06_committed_counterfactual_labels_linked_features(tmp_path, monkeypatch):
+    from research import feature_store
+    from tests.test_learning_exactly_once import _settle
+
+    monkeypatch.setattr(feature_store, "_DB_PATH", tmp_path / "features.sqlite3")
+    feature_id = "decision::d1"
+    assert feature_store.snapshot(feature_id, "TCS", "DECISION", {}, ts="2026-09-01")["status"] == "frozen"
+    _review_freeze(decision_id="d1")
+    _settle()
+    assert feature_store.get_observation(feature_id)["outcome"] == pytest.approx(-0.4)
+
+
+def test_l06_a_failed_feature_label_is_retried_not_dropped(tmp_path, monkeypatch):
+    from product import evidence_intelligence as EI, learning_observations as LO
+    from research import feature_store
+    from tests.test_learning_exactly_once import _ledger, _n, _settle
+
+    monkeypatch.setattr(feature_store, "_DB_PATH", tmp_path / "features.sqlite3")
+    assert feature_store.snapshot("decision::d1", "TCS", "DECISION", {}, ts="2026-09-01")["status"] == "frozen"
+    _review_freeze(decision_id="d1")
+    with monkeypatch.context() as patch:
+        patch.setattr(EI, "settle_decision", lambda *a, **k: {"status": "error", "reason": "locked"})
+        with pytest.raises(RuntimeError):
+            _settle()
+    assert feature_store.get_observation("decision::d1")["outcome"] is None and _n() == 1
+    _settle()                                                  # the replay retries only what did not land
+    assert feature_store.get_observation("decision::d1")["outcome"] == pytest.approx(-0.4) and _n() == 1
+    assert LO.outbox_counts(_ledger()) == {LO.DONE: 1}
+
+
+def test_l09_existing_schema_migrates_with_two_connections(tmp_path, monkeypatch):
+    import sqlite3
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from product import learning_observations as LO
+
+    db = tmp_path / "legacy.sqlite3"
+    connect = sqlite3.connect
+    conn = connect(db)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(LO._SCHEMA)
+    conn.close()
+    both_inspected = threading.Barrier(2)
+
+    class Connection(sqlite3.Connection):
+        def execute(self, sql, parameters=()):
+            result = super().execute(sql, parameters)
+            if sql == "PRAGMA table_info(observations)":
+                rows = result.fetchall()
+                try:
+                    both_inspected.wait(timeout=3)
+                except threading.BrokenBarrierError:
+                    pass
+                return rows
+            return result
+
+    monkeypatch.setattr(LO.sqlite3, "connect", lambda *a, **k: connect(*a, factory=Connection, **k))
+
+    def open_db():
+        LO._connect(db).close()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        workers = [pool.submit(open_db) for _ in range(2)]
+        for worker in workers:
+            worker.result(timeout=20)

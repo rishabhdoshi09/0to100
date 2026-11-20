@@ -145,14 +145,15 @@ def test_missing_bars_stay_pending_and_cost_no_rewrite(monkeypatch):
     _freeze_rejections(4)
     writes = _count_writes(monkeypatch)
     out = FS.settle_pending_from_market(outcome_fn=lambda _symbol, _as_of, _row: None)
-    assert out == {"updated": 0, "pending": 4, "classifications": {}}
+    assert out == {"updated": 0, "pending": 4, "classifications": {}, "learning_conflicts": []}
     assert writes == []
 
 
 def test_official_settlement_rewrites_ledger_per_chunk_not_per_row(monkeypatch):
     from product import autonomous_loop as LOOP
 
-    monkeypatch.setattr(LOOP, "_SETTLE_FLUSH_EVERY", 4)
+    # Forward rows have one settlement owner (overnight review L-01): its batching.
+    monkeypatch.setattr(FS, "_SETTLE_FLUSH_EVERY", 4)
     _freeze_rejections(9)
     monkeypatch.setattr(
         "core.outcome_resolver.counterfactual_outcome",
