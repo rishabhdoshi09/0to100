@@ -188,6 +188,31 @@ They reported 16 findings: E-01..E-07 and L-01..L-09, of which 14 were P0, 1 was
 - 0 decisions changed by learning; stage 0.
 - Tracked BUYs: mean −0.127R, 95% CI [−0.31, +0.06].
 
+## Cycle 9: one GPT verification pass over the fixes (`38429d98..f0ccf35a`)
+
+**Status of `f0ccf35a` before this pass.**
+
+- All 5 CI workflows are green on that exact SHA.
+- The full local suite passed: 503 test files, 0 failing. Every file ran in its own interpreter under the Mac guard.
+
+**Review.** One read-only Codex pass reported 8 findings (QT-01..QT-08). It confirmed that the 16 earlier fixes close their defects, and found no nested acquisition of the learning writer lock. As agreed, this is the only review of the fixes tonight: there was no further loop.
+
+**Fixed in `4c299dca`.** Each finding has a test that fails on `f0ccf35a` and passes on the fix.
+
+| Finding | Fix |
+|---|---|
+| QT-01 (P0) | Recorded CA factor conflicts are carried forward and keep their identity out of the events. A skipped window or a later single-factor fetch can no longer clear one; only a human resolution can. This was also true before the commit protocol: the old refresh rewrote the conflict list every run. |
+| QT-02 (P0) | Settlement runs under one cross-process settlement lock, and pending rows are read inside it. A stale concurrent settler can no longer replace, then quarantine, the event of an outcome the other committed. |
+| QT-03 (P0) | A unit claim stored before payloads existed resumes only with a delivery of the decision it names. Such claims only come from the never-deployed `6d69603c..8281810c`, but the guard is cheap. |
+| QT-04 (P0) | `apply_plan` recomputes the repair plan inside the writer lock and refuses a stale plan (`StalePlan`). The backup is taken at the same boundary. |
+| QT-05 (P0) | A policy-ladder failure after the cell save is retryable (`LadderPending`). `ingest_closed_book` checkpoints only the closes that fully landed. |
+
+**Left open, with reasons.**
+
+- **QT-06 (P1): feature-label identity.** The L-06 fix labels a feature observation only when the ids match. The paper cycle's rejected rows carry a cycle id, while the board freezes features under the canonical `dec_…` id, so those labels are `not_found` in production. This identity gap predates tonight. Closing it means carrying the canonical id onto rejected decisions, and building that id freezes a feature observation, so it is a separate change. The gap affects only the research corpus: no BUY, risk or policy ladder path.
+- **QT-07 (P1): GOOD_WAIT retry.** A GOOD_WAIT checked while the session archive is EMPTY is not re-tried later. On this host the archive and the paper fills sit on the same runtime storage, so an empty archive while fills happen is not a reachable state. A lagging archive is handled (L-08). Recorded, not fixed.
+- **QT-08 (P1): DISAGREE.** The walk-forward's stride-5 grid is anchored to each symbol's bar count, so appending bars shifts which decisions are sampled. This is outcome-independent subsampling, not a bias against losses: equally many decisions enter as leave. Anchoring the grid to session ordinals changes which decisions every report samples. That is an alpha-program change and needs its own decision. Deferred, with the E-07 test kept at stride 1.
+
 ## Open (next)
 
 Owner decisions:
@@ -197,7 +222,8 @@ Owner decisions:
 - the stricter C-5 policy;
 - starting the 52WH shadow test;
 - a full-history whole-universe run;
-- whether to reconcile legacy settled-without-event forward rows into learning (L-01).
+- whether to reconcile legacy settled-without-event forward rows into learning (L-01);
+- how to resolve any carried CA factor conflict (QT-01), which keeps "corporate actions incomplete" up until it is resolved.
 
 Not done tonight:
 
