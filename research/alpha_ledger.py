@@ -105,8 +105,39 @@ def _connect(path: Path) -> sqlite3.Connection:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(looks)")}
     if cols and "binding_sha256" not in cols:            # research-ledger migration (column add only)
         conn.execute("ALTER TABLE looks ADD COLUMN binding_sha256 TEXT NOT NULL DEFAULT ''")
+    if cols:
+        _globalise_legacy_looks(conn)
     conn.executescript(_SCHEMA)
     return conn
+
+
+def _globalise_legacy_looks(conn: sqlite3.Connection) -> None:
+    """One-time migration of a pre-global research ledger (look_index counted per program).
+
+    Every legacy look stays spent: rows are renumbered into one sequence per
+    IST year in reservation order, and looks beyond the 52nd get alpha 0.
+    Nothing is deleted or refunded. Legacy attestations carry no report
+    binding, so they never verified and still do not.
+    """
+    has_index = "SELECT 1 FROM sqlite_master WHERE type='index' AND name='one_global_index_per_year'"
+    if conn.execute(has_index).fetchone():
+        return
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if not conn.execute(has_index).fetchone():                # another process may have migrated
+            rows = conn.execute("SELECT rowid, year FROM looks ORDER BY year, reserved_at, rowid").fetchall()
+            conn.execute("UPDATE looks SET look_index = -rowid")  # unique placeholders: no transient clash
+            seq: dict[int, int] = {}
+            for rowid, year in rows:
+                seq[year] = seq.get(year, 0) + 1
+                alpha = ANNUAL_ALPHA / LOOKS_PER_YEAR if seq[year] <= LOOKS_PER_YEAR else 0.0
+                conn.execute("UPDATE looks SET look_index=?, alpha=? WHERE rowid=?", (seq[year], alpha, rowid))
+            conn.execute("CREATE UNIQUE INDEX one_global_index_per_year ON looks(year, look_index)")
+        conn.execute("COMMIT")
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
 
 
 def _year(now: datetime) -> int:

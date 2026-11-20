@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import os
 import shutil
+import sqlite3
 import threading
+from contextlib import closing
 from datetime import datetime, timezone
 
 import pytest
@@ -194,6 +196,33 @@ def test_the_walk_forward_report_spends_and_attests_a_bound_look():
     assert prov["alpha_accounting"]["program_id"] == alpha_ledger.program_id(SB.gate_program())
     assert "different report" in evidence_provenance_note({**prov, "universe_sha256": "z" * 64})
     assert "no alpha-budget attestation" in evidence_provenance_note({**prov, "alpha_accounting": None})
+
+
+def test_a_legacy_per_program_ledger_is_globalised_without_refunding_any_look(tmp_path):
+    """A ledger written by the per-program code: every old look stays spent, none verifies, reserve works."""
+    path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE looks(program_id TEXT NOT NULL, year INTEGER NOT NULL, look_index INTEGER NOT NULL,"
+                 " look_id TEXT NOT NULL, alpha REAL NOT NULL, reserved_at TEXT NOT NULL, family_size INTEGER,"
+                 " members_sha256 TEXT, program TEXT NOT NULL, PRIMARY KEY (program_id, year, look_index),"
+                 " UNIQUE (look_id))")
+    legacy = []
+    for k in range(30):                        # 3 programs x 30 looks: 90 per-program looks in 2026
+        for p in ("pA", "pB", "pC"):
+            legacy.append({"program_id": p, "year": 2026, "look_index": k + 1, "look_id": f"{p}-{k}",
+                           "alpha": 0.05 / 52})
+            conn.execute("INSERT INTO looks VALUES(?,?,?,?,?,?,?,?,?)",
+                         (p, 2026, k + 1, f"{p}-{k}", 0.05 / 52, f"2026-03-01T00:{k:02d}:00+00:00", 44, "m", "{}"))
+    conn.commit()
+    conn.close()
+
+    att = _reserve(path, "look-new")
+    assert att["look_index"] == 91 and att["alpha"] == 0.0                     # the 90 legacy looks are spent
+    assert all(_verify(a, path, binding=None) != "" for a in legacy[:3])       # no legacy look ever verifies
+    with closing(sqlite3.connect(path)) as c:
+        idx = [r[0] for r in c.execute("SELECT look_index FROM looks WHERE year=2026 ORDER BY look_index")]
+        spent = c.execute("SELECT SUM(alpha) FROM looks WHERE year=2026").fetchone()[0]
+    assert idx == list(range(1, 92)) and spent <= 0.05 + 1e-12
 
 
 def test_an_exhausted_budget_admits_nothing_in_the_family_correction():
