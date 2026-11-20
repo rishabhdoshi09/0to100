@@ -14,9 +14,9 @@ Safety:
 
 * It never writes a backtest report. ``MIN_SYMBOLS_TO_SAVE`` is raised for
   the run and restored afterwards.
-* It never touches the production alpha ledger. ``QT_ALPHA_LEDGER`` points
-  at a throwaway file for the run, so the walk-forward's look is spent there
-  and discarded.
+* It never touches the production alpha ledger. A discarded report reserves
+  no look at all, and ``QT_ALPHA_LEDGER`` also points at a throwaway file
+  for the run as defence in depth.
 * It refuses a copy on an external volume (the live runtime lives there), so
   it cannot add IO to the desk.
 * It makes no network calls. The Nifty regime lookup is replaced by an
@@ -216,7 +216,8 @@ def collect(frames: Mapping[str, pd.DataFrame], *, symbols: int, sample_step: in
         cur.clear()
         if res is not None and getattr(res, "signals", None):
             risk_ok = (res.entry - res.stop) > 0
-            cur.update(sym=sym, decision=str(hist.index[-1])[:10], signals=tuple(res.signals), simulated=False)
+            cur.update(sym=sym, decision=str(hist.index[-1])[:10], signals=tuple(res.signals), simulated=False,
+                       trigger=float(res.entry), decision_close=float(hist["close"].iloc[-1]))
             events.append({"symbol": sym, "decision": cur["decision"], "signals": cur["signals"],
                            "fate": "PENDING" if risk_ok else "RISK_SKIP"})
             cur["event"] = events[-1]
@@ -230,7 +231,8 @@ def collect(frames: Mapping[str, pd.DataFrame], *, symbols: int, sample_step: in
         return res
 
     def sink(rec):
-        trades.append({**rec, "decision": cur.get("decision"), "entry_datetime": str(rec["entry_datetime"])[:10],
+        trades.append({**rec, "decision": cur.get("decision"), "trigger_price": cur.get("trigger"),
+                       "decision_close": cur.get("decision_close"), "entry_datetime": str(rec["entry_datetime"])[:10],
                        "exit_datetime": str(rec["exit_datetime"])[:10], "signals": list(rec["signals"])})
 
     with tempfile.TemporaryDirectory(prefix="qt_edge_diag_") as tmp:
@@ -261,6 +263,11 @@ def collect(frames: Mapping[str, pd.DataFrame], *, symbols: int, sample_step: in
     prov = rep.get("evidence_provenance") or {}
     sampled = SB._spread_sample(sorted(frames), symbols)
     return {"events": events, "trades": trades, "sampled_symbols": sampled,
+            # Pre-declared experiments the production walk-forward already runs on the same
+            # trades (exit constructions, target geometry, confirmation features): reported,
+            # never searched. They cover the whole sampled lookback, not one tier.
+            "production_experiments": {k: rep.get(k) for k in ("exit_variants", "target_sweep",
+                                                              "feature_confirmation", "recommended_target_pct")},
             "provenance": {"elapsed_s": round(elapsed, 1), "lookback_sessions": lookback,
                            "sample_step": sample_step, "horizon_sessions": horizon,
                            "eval_spec": prov.get("eval_spec") or rep.get("eval_spec"),
@@ -374,8 +381,23 @@ def _signal_report(rows: list[dict], events: list[dict], ordinal: Mapping[str, i
             drivers.append("MARKET_DRIFT_NOT_SELECTION")
         if excess.get("ci95") and excess["ci95"][1] < 0:
             drivers.append("UNDERPERFORMS_EQUAL_WEIGHT_MARKET")
+    def _bucket(rs):
+        return {"trades": len(rs), "mean_net_r": round(float(np.mean([r["net_r"] for r in rs])), 4) if rs else None}
+
+    gaps = [r for r in rows if r.get("trigger_gap") is not None]
+    entry_quality = {
+        "trigger_within_1pct_of_close": _bucket([r for r in gaps if r["trigger_gap"] < 0.01]),
+        "trigger_1_to_3pct_above": _bucket([r for r in gaps if 0.01 <= r["trigger_gap"] < 0.03]),
+        "trigger_3pct_or_more_above": _bucket([r for r in gaps if r["trigger_gap"] >= 0.03]),
+        "filled_at_trigger": _bucket([r for r in rows if (r.get("fill_vs_trigger") or 0.0) <= 0.001]),
+        "gapped_through_trigger": _bucket([r for r in rows if (r.get("fill_vs_trigger") or 0.0) > 0.001]),
+    }
+    fast = sum(1 for r in rows if r.get("fast_failure"))
     return {
         "verdict": classify(net, floor=floor), "gross_verdict": classify(gross, floor=floor),
+        "false_breakout_rate": round(fast / len(rows), 4) if rows else None,
+        "false_breakout_note": "share of filled trades stopped out within 3 sessions",
+        "entry_quality": entry_quality,
         "detections": sum(fates.values()), "risk_skips": fates.get("RISK_SKIP", 0),
         "no_fills": fates.get("NO_FILL", 0), "trades": len(rows), "fill_rate": fill_rate,
         "net_r": net, "gross_r": gross, "mean_cost_r": round(cost_mean, 4) if cost_mean is not None else None,
@@ -422,7 +444,13 @@ def enrich(trades: list[dict], frames: Mapping[str, pd.DataFrame], ew: pd.Series
         lo = max(0, ordinal[d] - STRICT_LOOKBACK_SESSIONS)
         gap_hit = any(lo <= ordinal.get(g, -1) <= ordinal.get(t["exit_datetime"], ordinal[d] + HORIZON)
                       for g in gaps[sym])
+        trig, dclose = t.get("trigger_price"), t.get("decision_close")
+        trigger_gap = (float(trig) / float(dclose) - 1.0) if trig and dclose else None
+        fill_vs_trigger = (fill / float(trig) - 1.0) if trig else None
         out.append({**t, "net_r": float(t["net_R"]), "gross_r": float(t["gross_R"]), "cost_r": cost_r,
+                    "trigger_gap": trigger_gap, "fill_vs_trigger": fill_vs_trigger,
+                    "fast_failure": str(t.get("exit_reason")) == "LOSS" and int(t.get("holding_period") or 99) <= 3,
+                    "n_signals": len(t.get("signals") or []),
                     "risk_frac": risk_frac, "gross_ret": gross_ret, "net_ret": net_ret, "bench_ret": bench,
                     "excess_ret": (net_ret - bench) if bench is not None else None,
                     "regime": reg_by_day.get(d, "UNKNOWN"), "tier": tiers[d],
@@ -475,6 +503,21 @@ def analyse(collected: Mapping[str, Any], frames: Mapping[str, pd.DataFrame], *,
         tiers[tier] = {"sessions": sessions, "trades": len(rs), "signals": by_signal(rs, es, sessions)}
     strict = [r for r in kept if r["tier"] == "STRICT"]
     clean = [r for r in strict if not r["phantom_gap_in_window"]]
+    combos: dict[str, list[dict]] = defaultdict(list)
+    for r in strict:
+        combos["+".join(sorted(r["signals"]))].append(r)
+    interactions = {}
+    for key, rs in sorted(combos.items(), key=lambda kv: -len(kv[1])):
+        if len(rs) < MIN_TRADES:
+            continue
+        inf = _infer(rs, "net_r", ordinal)
+        interactions[key] = {"trades": len(rs), "net_r": inf, "verdict": classify(inf, floor=floor)}
+    by_count = {}
+    for label, test in (("1_signal", lambda n: n == 1), ("2_signals", lambda n: n == 2),
+                        ("3_or_more", lambda n: n >= 3)):
+        rs = [r for r in strict if test(r["n_signals"])]
+        inf = _infer(rs, "net_r", ordinal)
+        by_count[label] = {"trades": len(rs), "net_r": inf, "verdict": classify(inf, floor=floor)}
     sector_rows = defaultdict(list)
     for r in strict:
         sector_rows[r["sector"]].append(r["net_r"])
@@ -490,6 +533,9 @@ def analyse(collected: Mapping[str, Any], frames: Mapping[str, pd.DataFrame], *,
         "strict_without_phantom_gap_windows": {ANY: _signal_report(clean, [], ordinal, floor,
                                                                    tiers["STRICT"]["sessions"])},
         "strict_by_sector_top10": sectors_out,
+        "strict_signal_combinations": interactions,
+        "strict_by_signal_count": by_count,
+        "production_experiments": collected.get("production_experiments") or {},
         "equal_weight_index": {"first": str(ew.index[0])[:10] if len(ew) else None,
                                "last": str(ew.index[-1])[:10] if len(ew) else None,
                                "min_names_per_day": EW_MIN_NAMES, "daily_clip": EW_DAILY_CLIP},

@@ -122,6 +122,21 @@ def test_cost_and_slippage_sensitivity_only_ever_lower_the_mean():
     assert rep["breakeven_cost_multiple"] == pytest.approx(rep["gross_r"]["mean"] / rep["mean_cost_r"], abs=0.01)
 
 
+def test_false_breakouts_and_entry_quality_are_measured_not_searched():
+    days = [d.strftime("%Y-%m-%d") for d in pd.bdate_range("2022-01-03", periods=100)]
+    ordinal = {d: i for i, d in enumerate(days)}
+    rows = _rows([-1.0, -1.0, 0.5, 2.0], days[:4])
+    for r, (reason, held, gap, through) in zip(rows, [("LOSS", 2, 0.005, 0.0), ("LOSS", 7, 0.02, 0.0),
+                                                      ("FLAT", 10, 0.04, 0.01), ("WIN", 5, 0.005, 0.0)]):
+        r.update(exit_reason=reason, holding_period=held, trigger_gap=gap, fill_vs_trigger=through,
+                 fast_failure=reason == "LOSS" and held <= 3)
+    rep = ED._signal_report(rows, [], ordinal, 0.05, 100)
+    assert rep["false_breakout_rate"] == 0.25                                   # one stop-out inside 3 sessions
+    eq = rep["entry_quality"]
+    assert eq["trigger_within_1pct_of_close"] == {"trades": 2, "mean_net_r": 0.5}
+    assert eq["trigger_3pct_or_more_above"]["trades"] == 1 and eq["gapped_through_trigger"]["trades"] == 1
+
+
 def test_a_positive_gross_edge_eaten_by_costs_is_named():
     days = [d.strftime("%Y-%m-%d") for d in pd.bdate_range("2022-01-03", periods=300)]
     ordinal = {d: i for i, d in enumerate(days)}
@@ -166,6 +181,14 @@ def test_the_diagnosis_runs_the_production_walk_forward_and_writes_nothing(tmp_p
     assert any_row["trades"] == tiers["COVERED_ALL"]["trades"] and any_row["verdict"] in {
         ED.INSUFFICIENT, ED.NEGATIVE_EDGE, ED.NO_MATERIAL_EDGE, ED.UNDERPOWERED, ED.POSITIVE_IN_SAMPLE}
     assert "| ANY_SIGNAL |" in ED.summary_table(rep, "COVERED_ALL")
+    # decomposition fields: false breakouts, entry quality, interactions, pre-declared exit experiments
+    assert 0.0 <= any_row["false_breakout_rate"] <= 1.0
+    eq = any_row["entry_quality"]
+    assert eq["filled_at_trigger"]["trades"] + eq["gapped_through_trigger"]["trades"] == any_row["trades"]
+    assert set(rep["strict_by_signal_count"]) == {"1_signal", "2_signals", "3_or_more"}
+    assert all(v["trades"] >= ED.MIN_TRADES for v in rep["strict_signal_combinations"].values())
+    assert "exit_variants" in rep["production_experiments"]
+    assert all(t["trigger_price"] and t["decision_close"] for t in out["trades"])
 
 
 def test_future_bars_cannot_change_an_earlier_decision_or_its_outcome():
