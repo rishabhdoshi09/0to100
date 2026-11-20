@@ -213,6 +213,23 @@ They reported 16 findings: E-01..E-07 and L-01..L-09, of which 14 were P0, 1 was
 - **QT-07 (P1): GOOD_WAIT retry.** A GOOD_WAIT checked while the session archive is EMPTY is not re-tried later. On this host the archive and the paper fills sit on the same runtime storage, so an empty archive while fills happen is not a reachable state. A lagging archive is handled (L-08). Recorded, not fixed.
 - **QT-08 (P1): DISAGREE.** The walk-forward's stride-5 grid is anchored to each symbol's bar count, so appending bars shifts which decisions are sampled. This is outcome-independent subsampling, not a bias against losses: equally many decisions enter as leave. Anchoring the grid to session ordinals changes which decisions every report samples. That is an alpha-program change and needs its own decision. Deferred, with the E-07 test kept at stride 1.
 
+## Publication and relay (21 Nov ~02:40 IST)
+
+- **Candidate:** `f92a3e80` (code identical to `4c299dca`, plus the cycle 9 journal).
+- **Local:** the full suite passed on that exact SHA, 503/503 test files.
+- **CI:** all 5 workflows green on that exact SHA:
+  - Host Migration Gate 44812882565;
+  - Terminal UI 44812882436;
+  - Dependency Vulnerability Advisory 44812882312;
+  - CI 44812882359;
+  - Product Acceptance 44812882321.
+- **GPT cross-review: performed three times.**
+  - Runs E and L over `f6081b26..8281810c`.
+  - One verification pass over `38429d98..f0ccf35a`.
+- **GitHub publication: succeeded.** The report went through the relay's verified `report` command (dry run first) as #333 comment 7050466612. The relay refuses to post unless the SHA is the branch head with all 5 workflows green.
+- **Relay delivery: confirmed.** Its retarget to this session was verified with TEST delivery `qr-5e240bd2c62c` (acked). Earlier in the night, GPT instruction 7046791627 was delivered as `qr-9a22ec4b3666` and acked exactly once.
+- **Later commits:** any commit after `f92a3e80` is docs only.
+
 ## Open (next)
 
 Owner decisions:
