@@ -907,3 +907,50 @@ What this means:
   - a simulated crash halfway through rolls back as a whole, and a rerun completes.
 - **Earlier guarantees re-checked:** exact 10-session windows, the calendar-contradiction check, the corrupt-ledger refusal and kill -9 recovery are all still covered by their tests.
 
+## 16. Alpha accounting, the full-history decision, honest UX (20 Nov; ChatGPT review of `f89c60af`)
+
+The review was delivered at 01:11:28Z and acknowledged at 01:12:21Z. Nothing was deployed, no production data was changed, and no long backtest was run. Live trading is HARD-LOCKED.
+
+### 16.1 The annual budget is now enforced, not just declared (P0)
+
+`0.05/52` was a constant: forced reruns, restarts, extra report dates or a changed family could all spend budget unseen. `research/alpha_ledger.py` is a durable, research-only SQLite ledger (`logs/research/alpha_ledger.db`, new, not a production learning ledger).
+
+- **Programs.** Each program is the hash of the predeclared family method, rulebook, horizon, sampling, membership rule and report schema. A program change opens a new budget, and old attestations do not verify under the current program.
+- **Looks.** Each walk-forward report reserves one numbered look **before** its family correction runs, in one `BEGIN IMMEDIATE` transaction:
+  - a forced rerun, a crash after reservation, or the same data under a new report SHA all spend budget;
+  - a write retry of the same report does not;
+  - nothing is refunded.
+- **Budget.** Budgets are per IST calendar year. Look 53 gets α = 0 and admits nothing. Changing family membership cannot reset the budget.
+- **Attestation.** Report schema 5 carries `alpha_accounting` (program, year, look index, look id, α). The gate (`evidence_provenance_note`) re-reads the ledger and refuses a missing, unknown, tampered or exhausted look, or one from another program. It does the same at read time in `load_scan`.
+- **Tests:** the 53rd look, a forced rerun versus a retry, membership change, program change, rollback, five tampering cases, missing or corrupt ledger, the year boundary, 10 concurrent reservers, and an exhausted family correction.
+
+### 16.2 Full-history walk-forward: plan only (P1)
+
+`docs/research/full_history_backtest_plan.md`:
+
+- **Cost.** About 70 minutes of one core on the i5-5250U, measured from the production 609.5 s run and an evaluation cost that is flat in history length.
+- **Data validity.** It lists the checks needed first (corporate-action PASS on an SSD copy, survivorship of older years, exact-horizon skip rates).
+- **Options compared:** one off-hours run, incremental recomputation, a partitioned resumable run, symbol sampling, a preregistered single hypothesis, and prospective paper evidence.
+- **What the current report shows.** Every signal with ≥ 30 trades is measured **negative** (−0.02R to −0.88R), so a longer history buys precision, not an edge.
+- **Not executed;** the owner decides.
+
+### 16.3 Honest UX while no BUY is eligible (P1)
+
+Home's BUY-only section:
+
+- now reports `admission_state = NO_ELIGIBLE_BUY` and, when the evidence itself is the blocker (stale, unprovable budget, wrong rulebook), says so;
+- states the actual admission standard and that "a BUY is not a win probability";
+- has an evidence cache that turns over when the evidence authority changes (snapshot pointer or alpha ledger), not only when the scan file does.
+
+Unchanged and checked:
+
+- Telegram sends only WATCH lists when nothing is eligible; paper EXPLORATION stays labelled and separate.
+- Legacy and missing-data paths were covered by earlier end-to-end tests.
+
+### 16.4 Legacy bypass and pointer concurrency (P2)
+
+- **Conviction.** `scan/conviction.build_conviction` can no longer **promote**: a row the evidence gate held at WATCH stays WATCH whatever its news or earnings "conviction".
+  - A regression fails if any canonical module calls `build_conviction(` or imports `scan.conviction`.
+  - The canonical `product.conviction.build_conviction_shortlist` inherits the gate: HIGH_CONVICTION needs a re-verified "Ready to trade" row.
+- **Snapshot pointer.** Writes happen under an exclusive lock, and the report on disk is re-read inside the lock. A snapshot built from a report replaced in the meantime never moves the pointer. Writes are atomic (temp file + rename), so a crash leaves the previous pointer.
+
