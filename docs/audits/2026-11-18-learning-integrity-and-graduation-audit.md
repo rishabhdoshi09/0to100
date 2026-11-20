@@ -954,3 +954,50 @@ Unchanged and checked:
   - The canonical `product.conviction.build_conviction_shortlist` inherits the gate: HIGH_CONVICTION needs a re-verified "Ready to trade" row.
 - **Snapshot pointer.** Writes happen under an exclusive lock, and the report on disk is re-read inside the lock. A snapshot built from a report replaced in the meantime never moves the pointer. Writes are atomic (temp file + rename), so a crash leaves the previous pointer.
 
+## 17. Global alpha scope, report-bound attestations, measured full-history cost (20 Nov; review of `3ba4ec9e`)
+
+The review was delivered at 02:17:50Z and acknowledged at 02:18:36Z. Nothing was deployed, no production data was changed, and no long backtest was run. Live trading is HARD-LOCKED.
+
+### 17.1 The 5% bound was per program, so it is now global (P0)
+
+`reserve` counted looks per `(program_id, year)`, and a program change opened a fresh 5%. Sequential mutation, parallel variants, or keeping the best-looking version could each spend another 5%.
+
+- **One global annual budget.** All program versions now share 52 looks per IST calendar year, with a unique `(year, look_index)` index.
+- **The stated guarantee:** P(any false walk-forward BUY admission in a calendar year) ≤ 5% across all program versions, including selection among them.
+- **Out of scope:** research and challenger programs that cannot admit a BUY reserve no looks. Attestations from an old program still do not verify under the current gate.
+- **Tests:** sequential and parallel mutation of 5 programs (look 53 gets α = 0), best-of-8 programs (Σα ≤ 5%), and a program change.
+
+### 17.2 Attestation identity and cache (P0)
+
+- **Report binding.** Each look stores `binding_sha256`, a hash of the report's pre-test identity: generation time, code SHA, universe hash, data span, family membership and size.
+  - `reserve` refuses a reused `look_id` with a different program, membership or binding (`LedgerConflict`); a byte-identical write retry stays free.
+  - `verify` compares binding, membership and family size, and recomputes the binding from the report's own provenance. An attestation copied onto another report fails, and so do the forged variants.
+- **Cache.** It is keyed on inode, size, mtime and ctime of the ledger **and** its `-journal` and `-wal` sidecars, with a 60-second TTL on positive answers. Covered:
+  - a same-size replacement with mtime restored;
+  - a rollback renamed over the file;
+  - sidecar writes;
+  - concurrent reserve and verify.
+- **Mutation checks.** Four guard removals are all caught: per-program counting, the binding check, a key without inode and ctime, and an unchecked reused id.
+
+### 17.3 Full-history economics, measured offline (P1)
+
+`research/full_history_probe.py` ran the production walk-forward on an SSD copy (one 184 MB sequential copy before market hours; nothing else read from the live runtime). Details are in `docs/research/full_history_backtest_plan.md` §7.
+
+- **Cost.** About 2.2–2.4 ms per evaluation warm, which is about 6 min for 800 symbols over the full history in an isolated process. Inside the desk process it would be about 50 min, from the measured production ×5.5. Peak memory is about 560 MB.
+- **Corporate-action coverage starts 2021-08-28.** Only **1,288 sessions (~128 blocks)** are trustworthy, not ~169.
+- **Survivorship looks sound:** 707 delisted symbols are recorded and the ended symbols are retained.
+- **Horizon:** 0.8–1.1% of windows are skipped for not being exactly 10 sessions.
+- **Edge:** with the covered history, signals reach 65–118 blocks in a 40-symbol sample, and **every signal's mean stays negative**.
+
+### 17.4 No-BUY acceptance (P1)
+
+`tests/test_no_buy_acceptance.py` drives a fresh scan with production-shaped negative evidence through every consumer:
+
+- the scanner record (WATCH with its reason);
+- the paper autopilot (no ENTER_NOW);
+- Opportunities (no Buy badge);
+- Telegram (no qualified setup);
+- Home (NO_ELIGIBLE_BUY).
+
+It also checks that a stale BUY artifact is withheld at read time, that partial evidence (missing attestation, code SHA, method or date) never certifies, and that EXPLORATION stays outside the eligible tiers. The `scan/conviction` no-promotion check is inside the function itself, so it holds whatever startup wiring changes (see §16.4).
+

@@ -74,3 +74,34 @@ Risks:
 4. **For any future promotion claim:** pair it with E (one preregistered hypothesis) and F (forward confirmation). The walk-forward alone should remain a screening device.
 
 Thresholds are not changed by any of this, and a longer history is not proof. It only makes the existing test able to see an edge if one exists.
+
+## 7. Measured validation (20 Nov 2026, offline, on an SSD copy; supersedes §3's extrapolation)
+
+`research/full_history_probe.py` ran the **production** walk-forward on an SSD copy of the bhavcopy cache. Nothing in the live runtime was read except one 184 MB sequential copy before market hours. Corporate-action events came from a copy as well. The sample was 40 even-stride symbols; results are in `docs/research/full_history_probe_2026-11-20.json`.
+
+| Item | 250 sessions | 1,288 sessions (corporate-action covered) | 1,690 sessions (full) |
+|---|---|---|---|
+| Scanner evaluations (40 symbols) | 1,525 | 6,548 | 7,628 |
+| Isolated process, warm, ms per evaluation | 2.15 | 2.41 | 2.39 |
+| Extrapolated to 800 symbols, isolated process | ~1.1 min | ~5.3 min | ~6.1 min |
+| Extrapolated **inside the desk process** (×5.5, from the production 609.5 s run of the 250 lookback) | ~10 min (measured) | ~42 min | ~51 min |
+| Windows skipped as not exactly 10 official sessions | 17 (1.1%) | 60 (0.9%) | 64 (0.8%) |
+| Peak memory of the isolated probe (the whole store in memory) | ~560 MB | | |
+
+The first cold run cost about 20 s more, a one-off warm-up.
+
+**Corporate actions bound the trustworthy history.** The store runs from 2019-08-23 to 2026-11-19 (1,761 sessions), but corporate-action coverage (`ca_coverage.json`) starts on **2021-08-28**. Only **1,288 sessions (~128 blocks)** have verified split and bonus adjustment; the earlier 473 sessions can carry phantom gaps. A full-history run should be capped at 2021-08-28, or the earlier corporate-action windows backfilled and verified first. The ~169 blocks in §1 are an over-count.
+
+**Survivorship.** `universe_history.json` records 707 delisted symbols, and 465 symbols whose last bar predates 2026 are still in the store. Delisted names are present, so the store does not look survivorship-biased.
+
+**Independent blocks per signal** (40-symbol sample; 800 symbols would fill more of them). With the corporate-action-covered lookback, signals reach 65–118 blocks against 13–24 at 250 sessions. **Every signal's mean stays negative** at every lookback in the sample, from −0.006R to −0.18R at 1,690 sessions. The longer history narrows the uncertainty around negative or near-zero edges; it shows no positive edge.
+
+**Failure modes, quantified:**
+
+- **Inside the desk:** about 40–50 minutes of one core, competing with scans and paper slots. Run it isolated (~5–6 min), outside market hours.
+- **Memory:** an isolated process loads the full store (~560 MB) on an 8 GB host already in swap. Run it only with the desk idle.
+- **No checkpointing yet:** a sleep or crash loses the run. The partitioned driver (option C) fixes that.
+- **Budget:** each run spends one look of the global annual alpha budget.
+
+**Decision unchanged:** do not run on the host without the owner's authorization. If authorized, use an isolated process, cap the history at 2021-08-28 (~128 blocks), run off-hours, and expect confirmation of the negatives rather than a BUY.
+

@@ -1,0 +1,401 @@
+{
+  "store_sessions": 1761,
+  "first_session": "2019-08-23",
+  "last_session": "2026-11-19",
+  "store_symbols": 3469,
+  "sample_symbols": 40,
+  "ca_event_symbols": 424,
+  "runs": {
+    "250": {
+      "elapsed_s": 23.6,
+      "evaluations": 1525,
+      "ms_per_evaluation": 15.47,
+      "extrapolated_800_symbols_min": 7.9,
+      "horizon_gap_windows_skipped": 17,
+      "data_first_session": "2019-08-23",
+      "sessions_indexed": 1761,
+      "signals": {
+        "CUP_HANDLE": {
+          "trades": 63,
+          "blocks": 17,
+          "mean_r": -0.0477,
+          "lower_r": -0.4001,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "POCKET_PIVOT": {
+          "trades": 60,
+          "blocks": 24,
+          "mean_r": -0.2281,
+          "lower_r": -0.8597,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "ASC_TRIANGLE": {
+          "trades": 60,
+          "blocks": 21,
+          "mean_r": -0.3549,
+          "lower_r": -4.0317,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "PRE_BREAKOUT": {
+          "trades": 56,
+          "blocks": 24,
+          "mean_r": -0.1386,
+          "lower_r": -5.3635,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "MOMENTUM": {
+          "trades": 38,
+          "blocks": 19,
+          "mean_r": -0.2318,
+          "lower_r": -0.6718,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "FLAT_BASE": {
+          "trades": 38,
+          "blocks": 18,
+          "mean_r": -0.4585,
+          "lower_r": -0.8728,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "ACCUMULATION": {
+          "trades": 35,
+          "blocks": 16,
+          "mean_r": -0.0891,
+          "lower_r": -0.5177,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "PULLBACK_SUPPORT": {
+          "trades": 25,
+          "blocks": 14,
+          "mean_r": 0.0956,
+          "lower_r": -0.4201,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "VOL_SQUEEZE": {
+          "trades": 20,
+          "blocks": 14,
+          "mean_r": -0.2181,
+          "lower_r": -0.8482,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "NR7_COIL": {
+          "trades": 19,
+          "blocks": 13,
+          "mean_r": -0.4291,
+          "lower_r": -0.805,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "DELIVERY_SPIKE": {
+          "trades": 11,
+          "blocks": 10,
+          "mean_r": 0.1848,
+          "lower_r": -0.79,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "VCP": {
+          "trades": 8,
+          "blocks": 5,
+          "mean_r": -0.3827,
+          "lower_r": -0.8761,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "DOUBLE_BOTTOM": {
+          "trades": 8,
+          "blocks": 7,
+          "mean_r": -0.4826,
+          "lower_r": -1.1486,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "GOLDEN_CROSS": {
+          "trades": 7,
+          "blocks": 4,
+          "mean_r": -0.2775,
+          "lower_r": -0.4917,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "BREAKOUT_RES": {
+          "trades": 3,
+          "blocks": 3,
+          "mean_r": 0.0987,
+          "lower_r": -0.6813,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "HIGH_TIGHT_FLAG": {
+          "trades": 2,
+          "blocks": 2,
+          "mean_r": -0.0394,
+          "lower_r": -0.0521,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "BREAKOUT_52W": {
+          "trades": 1,
+          "blocks": null,
+          "mean_r": -0.0508,
+          "lower_r": null,
+          "inference": "WORST_CASE_NO_SESSION_INDEX"
+        }
+      }
+    },
+    "1288": {
+      "elapsed_s": 15.3,
+      "evaluations": 6548,
+      "ms_per_evaluation": 2.34,
+      "extrapolated_800_symbols_min": 5.1,
+      "horizon_gap_windows_skipped": 60,
+      "data_first_session": "2019-08-23",
+      "sessions_indexed": 1761,
+      "signals": {
+        "CUP_HANDLE": {
+          "trades": 354,
+          "blocks": 105,
+          "mean_r": -0.0118,
+          "lower_r": -0.2223,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "PRE_BREAKOUT": {
+          "trades": 330,
+          "blocks": 111,
+          "mean_r": -0.1131,
+          "lower_r": -0.3189,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "ASC_TRIANGLE": {
+          "trades": 324,
+          "blocks": 100,
+          "mean_r": -0.1097,
+          "lower_r": -0.3614,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "POCKET_PIVOT": {
+          "trades": 320,
+          "blocks": 118,
+          "mean_r": -0.1792,
+          "lower_r": -0.3602,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "MOMENTUM": {
+          "trades": 280,
+          "blocks": 105,
+          "mean_r": -0.1469,
+          "lower_r": -0.4307,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "PULLBACK_SUPPORT": {
+          "trades": 236,
+          "blocks": 101,
+          "mean_r": -0.1082,
+          "lower_r": -0.3536,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "ACCUMULATION": {
+          "trades": 148,
+          "blocks": 73,
+          "mean_r": -0.1742,
+          "lower_r": -0.4247,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "VOL_SQUEEZE": {
+          "trades": 146,
+          "blocks": 79,
+          "mean_r": -0.028,
+          "lower_r": -0.5516,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "FLAT_BASE": {
+          "trades": 134,
+          "blocks": 65,
+          "mean_r": -0.1469,
+          "lower_r": -0.4372,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "NR7_COIL": {
+          "trades": 98,
+          "blocks": 66,
+          "mean_r": -0.1639,
+          "lower_r": -0.5435,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "DOUBLE_BOTTOM": {
+          "trades": 97,
+          "blocks": 57,
+          "mean_r": -0.0578,
+          "lower_r": -0.5176,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "DELIVERY_SPIKE": {
+          "trades": 69,
+          "blocks": 54,
+          "mean_r": -0.1885,
+          "lower_r": -0.491,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "GOLDEN_CROSS": {
+          "trades": 36,
+          "blocks": 28,
+          "mean_r": -0.0513,
+          "lower_r": -0.4206,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "VCP": {
+          "trades": 24,
+          "blocks": 16,
+          "mean_r": -0.0801,
+          "lower_r": -0.7032,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "BREAKOUT_RES": {
+          "trades": 19,
+          "blocks": 16,
+          "mean_r": -0.182,
+          "lower_r": -0.5969,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "HIGH_TIGHT_FLAG": {
+          "trades": 6,
+          "blocks": 5,
+          "mean_r": -0.5028,
+          "lower_r": -1.5008,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "BREAKOUT_52W": {
+          "trades": 4,
+          "blocks": 4,
+          "mean_r": -0.3023,
+          "lower_r": -1.2079,
+          "inference": "OVERLAP_ROBUST"
+        }
+      }
+    },
+    "1690": {
+      "elapsed_s": 18.3,
+      "evaluations": 7628,
+      "ms_per_evaluation": 2.4,
+      "extrapolated_800_symbols_min": 6.1,
+      "horizon_gap_windows_skipped": 64,
+      "data_first_session": "2019-08-23",
+      "sessions_indexed": 1761,
+      "signals": {
+        "CUP_HANDLE": {
+          "trades": 412,
+          "blocks": 123,
+          "mean_r": -0.0061,
+          "lower_r": -0.196,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "POCKET_PIVOT": {
+          "trades": 402,
+          "blocks": 135,
+          "mean_r": -0.0364,
+          "lower_r": -0.2287,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "PRE_BREAKOUT": {
+          "trades": 401,
+          "blocks": 132,
+          "mean_r": -0.0652,
+          "lower_r": -0.2654,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "ASC_TRIANGLE": {
+          "trades": 392,
+          "blocks": 123,
+          "mean_r": -0.0693,
+          "lower_r": -0.2579,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "MOMENTUM": {
+          "trades": 365,
+          "blocks": 127,
+          "mean_r": -0.0844,
+          "lower_r": -0.2765,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "PULLBACK_SUPPORT": {
+          "trades": 286,
+          "blocks": 122,
+          "mean_r": -0.1819,
+          "lower_r": -0.3913,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "ACCUMULATION": {
+          "trades": 174,
+          "blocks": 91,
+          "mean_r": -0.1116,
+          "lower_r": -0.4025,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "VOL_SQUEEZE": {
+          "trades": 172,
+          "blocks": 91,
+          "mean_r": -0.0442,
+          "lower_r": -0.3289,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "FLAT_BASE": {
+          "trades": 166,
+          "blocks": 85,
+          "mean_r": -0.0568,
+          "lower_r": -0.3269,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "NR7_COIL": {
+          "trades": 121,
+          "blocks": 81,
+          "mean_r": -0.0181,
+          "lower_r": -0.4881,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "DELIVERY_SPIKE": {
+          "trades": 96,
+          "blocks": 73,
+          "mean_r": -0.1232,
+          "lower_r": -0.6846,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "DOUBLE_BOTTOM": {
+          "trades": 94,
+          "blocks": 56,
+          "mean_r": -0.1555,
+          "lower_r": -0.7242,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "GOLDEN_CROSS": {
+          "trades": 38,
+          "blocks": 33,
+          "mean_r": -0.0509,
+          "lower_r": -0.4437,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "VCP": {
+          "trades": 30,
+          "blocks": 20,
+          "mean_r": 0.0247,
+          "lower_r": -0.4908,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "BREAKOUT_RES": {
+          "trades": 27,
+          "blocks": 23,
+          "mean_r": -0.0137,
+          "lower_r": -0.5327,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "BREAKOUT_52W": {
+          "trades": 8,
+          "blocks": 7,
+          "mean_r": 0.3293,
+          "lower_r": -0.5844,
+          "inference": "OVERLAP_ROBUST"
+        },
+        "HIGH_TIGHT_FLAG": {
+          "trades": 3,
+          "blocks": 3,
+          "mean_r": 0.1296,
+          "lower_r": -0.6412,
+          "inference": "OVERLAP_ROBUST"
+        }
+      }
+    }
+  },
+  "peak_rss_mb": 539.2
+}
