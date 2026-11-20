@@ -864,6 +864,16 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
     horizon_gaps = 0                            # trades whose window is not exactly `horizon` sessions
 
     evaluated = 0                               # symbols that had >= 1 analysed window (the save threshold)
+    # A symbol whose bars END before the last official session stopped trading
+    # (delisted, suspended, merged). Its final signals used to be skipped for
+    # want of a full window, so an observable early stop-out of a dying stock
+    # silently left the evidence: optimistic survivorship (cross-review B-6).
+    # Such a window now counts when the trade RESOLVES inside the bars that
+    # exist (stop, target, scratch); one still open when prices stop is
+    # censored: counted, reported, never invented as a win or a loss.
+    global_last = max(official_index) if official_index else ""
+    ended_terminal = 0                          # partial windows of stopped symbols that resolved
+    ended_censored = 0                          # ... that were still open when prices stopped
     for si, sym in enumerate(symbols):
         df = get_ohlcv(sym)
         if df is None or len(df) < 60 + horizon + 20 or not {"high", "low", "close"} <= set(df.columns):
@@ -871,9 +881,12 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
         n = len(df)
         start = max(60, n - horizon - lookback_sessions)
         day_keys = list(pd.DatetimeIndex(df.index).strftime("%Y-%m-%d")) if official_index else []
+        ended = bool(global_last and day_keys and day_keys[-1] < global_last)
         symbol_used = False
-        for t in range(start, n - horizon, sample_step):
-            if official_index and not window_is_exact(day_keys, t, horizon, official_index):
+        for t in range(start, n if ended else n - horizon, sample_step):
+            avail = min(horizon, n - t)
+            partial = avail < horizon
+            if official_index and not window_is_exact(day_keys, t, avail, official_index):
                 horizon_gaps += 1
                 continue
             if not symbol_used:
@@ -910,6 +923,11 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
             _e_off, _x_off = sim.entry_offset, sim.exit_offset
             if outcome == "NO_FILL":
                 continue          # order never triggered — not a trade
+            if partial:
+                if outcome not in ("WIN", "LOSS", "SCRATCH"):
+                    ended_censored += 1     # open when prices stopped: outcome unobservable
+                    continue
+                ended_terminal += 1
             gross_r = r_mult      # before costs — the ledger keeps both
             # NET of round-trip trading costs — the edge you'd actually keep, not
             # the gross move. Same cost hits the target-geometry sweep below.
@@ -954,10 +972,10 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                     es["scratches"] += voutcome == "SCRATCH"
                     _add_cluster(es["clusters"], day_key, vr)
 
-            # Target geometry sweep — same fill, +2/+3/+4% targets
-            for label, (o2, r2) in sweep_targets(
+            # Target geometry sweep — same fill, +2/+3/+4% targets (full windows only)
+            for label, (o2, r2) in ({} if partial else sweep_targets(
                     r.entry, r.stop, fwd["high"].values,
-                    fwd["low"].values, fwd["close"].values).items():
+                    fwd["low"].values, fwd["close"].values)).items():
                 ts = tgt_stats.setdefault(label, {"trades": 0, "wins": 0,
                                                   "closed": 0, "r_sum": 0.0})
                 ts["trades"] += 1
@@ -1124,6 +1142,9 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                                    "sessions_indexed": len(session_index), "sampling": SAMPLING,
                                    "exact_horizon_check": bool(official_index),
                                    "horizon_gap_windows_skipped": horizon_gaps,
+                                   # Symbols that stopped trading before the last session (B-6):
+                                   "stopped_symbol_trades_resolved": ended_terminal,
+                                   "stopped_symbol_trades_censored": ended_censored,
                                    # Data version and universe: hashed into the snapshot id with
                                    # the rest of the report, so any change re-keys the evidence.
                                    "universe_sha256": binding["universe_sha256"],

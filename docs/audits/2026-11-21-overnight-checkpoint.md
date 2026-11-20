@@ -48,6 +48,28 @@ Two older tests that pinned the at-most-once loss now assert exactly once.
 
 **Production note.** Nothing was migrated. On first use, the claim table gains `state`/`payload` columns, with existing rows marked LEGACY, plus an `outbox` table. Both changes are additive.
 
+## Cycle 2: B-6, a stock that stops trading cannot silently leave the evidence
+
+**Defect (confirmed on `6d69603c`).** The walk-forward evaluated a signal only when a full 10-session window followed it. A delisted or suspended stock's final signals were dropped, even when the stop had already been hit in the bars that exist. That is an optimistic bias: dying stocks' losses disappeared.
+
+**Fix (`scan/signal_backtest.py`).** For a symbol whose bars end before the last official session:
+
+- a partial window counts when the trade RESOLVES inside it (stop, target or scratch), and must be exact official sessions up to the last bar;
+- a trade still open when prices stop is CENSORED: never priced at the last close and never counted as a win or a loss, but reported (`stopped_symbol_trades_censored`, beside `_resolved`).
+
+A still-trading symbol's recent signals stay pending. The target sweep uses full windows only.
+
+**Offline before/after** (the same SSD copy and 200 symbols):
+
+| Tier | Before | After |
+|---|---|---|
+| STRICT | 5,239 trades, −0.0922R [−0.186, +0.001] | 5,242 trades, −0.0924R [−0.186, +0.001] |
+| COVERED_ALL | 6,031 trades, −0.0811R | 6,035 trades, −0.0812R |
+
+The bias was real but small on this sample. The verdict is unchanged: NO_MATERIAL_EDGE.
+
+**Tests.** `tests/test_stopped_symbol_censoring.py` has 3 tests (resolved loss counted; open trade censored; still-trading symbol pending). All 3 fail on `6d69603c`.
+
 ## Open (next)
 
-B-6 delisting truncation · QT-12 CA digest · C-8 remainder · C-2 result digest · GOOD_WAIT age · research cycle.
+QT-12 CA digest · C-8 remainder · C-2 result digest · GOOD_WAIT age · research cycle.

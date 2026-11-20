@@ -282,6 +282,10 @@ def collect(frames: Mapping[str, pd.DataFrame], *, symbols: int, sample_step: in
                            "eval_spec": prov.get("eval_spec") or rep.get("eval_spec"),
                            "code_sha": prov.get("code_sha"),
                            "horizon_gap_windows_skipped": prov.get("horizon_gap_windows_skipped"),
+                           # B-6: stopped symbols' partial windows (resolved = counted; censored = open
+                           # when prices stopped, excluded and reported as a bias bound).
+                           "stopped_symbol_trades_resolved": prov.get("stopped_symbol_trades_resolved"),
+                           "stopped_symbol_trades_censored": prov.get("stopped_symbol_trades_censored"),
                            "data_first_session": all_dates[0] if all_dates else None,
                            "data_last_session": all_dates[-1] if all_dates else None}}
 
