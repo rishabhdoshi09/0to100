@@ -224,7 +224,9 @@ def sweep_targets(entry: float, stop: float, fwd_high, fwd_low, fwd_close,
 # after deploy instead of the following Saturday.
 # 4: evidence_provenance (code SHA, eval spec, horizon, family-correction
 # method) and per-row family correction; the live gate refuses anything older.
-REPORT_SCHEMA = 4
+# 5: alpha_accounting - every report reserves a look in research.alpha_ledger
+# before its family correction; the gate verifies the attestation.
+REPORT_SCHEMA = 5
 #: Weekly walk-forward reports re-test overlapping data about 52 times a year.
 #: Holm bounds false admissions per REPORT; the annual union bound spends the
 #: 5% family-wise budget across a year's reports (alpha / 52 each), so
@@ -355,6 +357,17 @@ def exit_variant_results(entry: float, stop: float, target: float, fwd, horizon:
         cost = cost_in_r((sim.fill_price - stop) / sim.fill_price, "CNC") if sim.fill_price > stop else 0.0
         out.append((name, sim.outcome, float(sim.r) - cost))
     return out
+
+
+def gate_program() -> dict:
+    """The predeclared hypothesis program whose annual alpha budget the gate spends.
+
+    Any change here (method, rulebook, horizon, sampling, membership rule,
+    report schema) is a NEW program with its own budget, attested as such.
+    """
+    return {"family_method": FAMILY_METHOD, "eval_spec": _eval_spec_tag(_EVAL_HORIZON),
+            "horizon_sessions": int(_EVAL_HORIZON), "sampling": SAMPLING, "report_schema": REPORT_SCHEMA,
+            "membership": f"every signal and exact combination with >= {COMBO_MIN_TRADES} trades"}
 
 
 def apply_family_correction(signals: dict, combos: dict, *, alpha: float = REPORT_ALPHA) -> dict:
@@ -965,7 +978,17 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
         combos[key] = {"trades": cs["trades"], "wins": cs["wins"], "losses": cs["losses"],
                        **_evidence_fields(cs, session_index, horizon)}
 
-    family = apply_family_correction(report, combos)
+    # Spend one look of the annual alpha budget BEFORE testing: a forced rerun,
+    # a crash after this point, or the same data re-run all count.
+    import uuid
+    from research import alpha_ledger
+
+    members = sorted(list(report) + [f"combo:{k}" for k in combos])
+    members_sha = hashlib.sha256("\n".join(members).encode()).hexdigest()
+    attestation = alpha_ledger.reserve(gate_program(), f"look-{uuid.uuid4().hex}",
+                                       family_size=len(members), members_sha256=members_sha)
+    family = apply_family_correction(report, combos, alpha=attestation["alpha"])
+    family["members_sha256"] = members_sha
 
     target_sweep = {}
     for label, ts in tgt_stats.items():
@@ -1010,7 +1033,8 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                                    "symbols": len(symbols),
                                    "data_first_session": min(seen_dates) if seen_dates else "",
                                    "data_last_session": max(seen_dates) if seen_dates else "",
-                                   "family_alpha": family.get("alpha")},
+                                   "family_alpha": family.get("alpha"),
+                                   "alpha_accounting": attestation},
            "recommended_target_pct": recommended,
            "elapsed_s": round(time.time() - t0, 1)}
     if len(symbols) < MIN_SYMBOLS_TO_SAVE or not report:

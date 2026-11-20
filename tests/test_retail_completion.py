@@ -25,10 +25,7 @@ def _proving_authority(monkeypatch):
     proof = {"mean": 0.3, "lower": 0.1, "n": 90, "blocks": 24, "inference": "OVERLAP_ROBUST", "family": True}
     snap = {"snapshot_id": "ev", "backtest_edges": {"MOMENTUM": proof, "BREAKOUT_52W": proof},
             "backtest_combo_edges": {},
-            "backtest_provenance": {"generated_at": _dt.now(_tz.utc).isoformat(), "report_schema": SB.REPORT_SCHEMA,
-                                    "eval_spec": SB._eval_spec_tag(HORIZON_SESSIONS),
-                                    "horizon_sessions": HORIZON_SESSIONS, "family_method": SB.FAMILY_METHOD,
-                                    "code_sha": "t"}}
+            "backtest_provenance": __import__("tests.evidence_fixtures", fromlist=["x"]).proven_provenance()}
     monkeypatch.setattr(SS, "_evidence_authority", lambda: snap)
 
 

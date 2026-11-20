@@ -317,7 +317,7 @@ def _proven(ev: dict | None) -> bool:
 
 
 #: The oldest walk-forward report schema whose bounds may certify a BUY.
-EVIDENCE_MIN_SCHEMA = 4
+EVIDENCE_MIN_SCHEMA = 5
 
 
 def evidence_provenance_note(provenance, *, now=None) -> str:
@@ -355,7 +355,15 @@ def evidence_provenance_note(provenance, *, now=None) -> str:
         return "the walk-forward evidence was not corrected with the predeclared multiple-testing procedure"
     if not str(prov.get("code_sha") or "").strip():
         return "the walk-forward evidence does not name the code that produced it"
-    return ""
+    # The annual alpha budget must be provably real: the report's look is in
+    # the durable ledger, under the CURRENT hypothesis program, within budget.
+    try:
+        from research import alpha_ledger
+        from scan.signal_backtest import gate_program
+        why = alpha_ledger.verify(prov.get("alpha_accounting"), program=gate_program())
+    except Exception as exc:
+        why = f"the alpha budget could not be verified ({type(exc).__name__})"
+    return why
 
 
 def evidence_age_note(generated_at, *, now=None, max_age_days: int | None = None) -> str:

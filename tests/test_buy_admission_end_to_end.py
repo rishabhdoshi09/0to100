@@ -59,10 +59,8 @@ def _snap(edges, generated_at=FRESH):
     from core.evaluation_spec import HORIZON_SESSIONS
     snap = {"snapshot_id": "e2e", "multipliers": {}, "signal_registry": {}, "backtest_edges": edges}
     if generated_at is not None:
-        snap["backtest_provenance"] = {"generated_at": generated_at, "report_schema": SB.REPORT_SCHEMA,
-                                       "eval_spec": SB._eval_spec_tag(HORIZON_SESSIONS),
-                                       "horizon_sessions": HORIZON_SESSIONS, "family_method": SB.FAMILY_METHOD,
-                                       "code_sha": "e2e-sha"}
+        from tests.evidence_fixtures import proven_provenance
+        snap["backtest_provenance"] = proven_provenance(generated_at)
     return snap
 
 
