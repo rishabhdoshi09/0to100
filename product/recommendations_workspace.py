@@ -558,6 +558,17 @@ def _pullback_cards(scan: Mapping[str, Any], buckets: Mapping[str, Any], *, scan
     return cards[:_BUCKET_CAP]
 
 
+def _buy_admission(scan: Mapping[str, Any], *, point_in_time: bool) -> dict[str, Any]:
+    from product.buy_admission import from_scan_payload
+    try:
+        if not scan:
+            return from_scan_payload({}, scan_current=False)
+        current = str(scan.get("records_status") or "") != "PRIOR_DAY_SNAPSHOT"
+        return from_scan_payload(dict(scan), scan_current=current or point_in_time)
+    except Exception:
+        return from_scan_payload({}, scan_current=False)
+
+
 def _empty_detail_for(
     category_id: str,
     *,
@@ -1050,6 +1061,9 @@ def build_recommendations_workspace(
         "long_term_scanned_at": lt_at,
         "records_status": str(scan.get("records_status") or ""),
         "same_ist_day": bool(scan.get("same_ist_day")),
+        # Why there is (or is not) a BUY: not current / evidence unavailable /
+        # no proven edge / no setup (product.buy_admission, the same as Home and Telegram).
+        "buy_admission": _buy_admission(scan, point_in_time=point_in_time),
         "scan_meta": {
             "market_scanned_at": scan_at,
             "market_row_count": len(scan_rows),

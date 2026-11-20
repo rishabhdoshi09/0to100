@@ -809,6 +809,13 @@ export function RecommendationsView({
         </div>
       </header>
 
+      {data.buy_admission && data.buy_admission.code !== 'ELIGIBLE_BUY' ? (
+        <p className="reco-scan-meta" role="status" data-admission={data.buy_admission.code}>
+          <strong>{data.buy_admission.headline}</strong>
+          {data.buy_admission.detail ? ` · ${data.buy_admission.detail}` : ''}
+        </p>
+      ) : null}
+
       {data.ensemble?.empty_high_conviction ? (
         <div className="reco-empty reco-hc-empty" role="status">
           <strong>{data.ensemble.empty_line || 'NO HIGH-CONVICTION OPPORTUNITY'}</strong>

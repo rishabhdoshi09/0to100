@@ -783,6 +783,9 @@ export type BuyOnlySection = {
   session?: string
   scanned_at?: string
   empty_reason?: string
+  admission_reason?: 'ELIGIBLE_BUY' | 'SCAN_NOT_CURRENT' | 'EVIDENCE_UNAVAILABLE' | 'NO_PROVEN_EDGE' | 'NO_SETUP'
+  admission_headline?: string
+  admission_action?: string
   rule?: string
 }
 
@@ -1364,6 +1367,7 @@ export type RecommendationsWorkspace = {
   long_term_scanned_at: string
   records_status: string
   same_ist_day: boolean
+  buy_admission?: { code: string; headline: string; detail: string; action: string }
   cmp_note: string
   scan_meta?: {
     market_scanned_at?: string

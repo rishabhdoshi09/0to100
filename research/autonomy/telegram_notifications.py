@@ -513,13 +513,21 @@ class TelegramNotifier:
         self._record_delivery("scan", sent)
 
         if phase == "eod" and not self._was_sent("eod_scan_summary", day):
+            # "Setups" are scanner detections, WATCH included; only BUY rows passed
+            # the evidence gate. Say which, and why there is no BUY (product.buy_admission).
+            from product.buy_admission import ELIGIBLE_BUY, from_scan_payload
+            adm = from_scan_payload(payload)
+            buys = sum(1 for r in records if str(r.get("verdict", "")).upper() in ("BUY", "STRONG BUY"))
+            why = "" if adm["code"] == ELIGIBLE_BUY else (
+                f"\n\n⚖ <b>{self._esc(adm['headline'])}</b>\n{self._esc(adm['detail'])}")
             msg = (
                 "📊 <b>QuantTerm EOD scan complete</b>\n\n"
                 f"Universe: {int(payload.get('universe_size', 0) or 0):,}\n"
-                f"Qualified setups: {int(summary.get('with_any_setup', 0) or 0)}\n"
-                f"Ready to trade: {int(summary.get('ready_to_trade', 0) or 0)}\n"
+                f"BUY (proven edge): {buys}\n"
+                f"Setups detected (research, WATCH included): {int(summary.get('with_any_setup', 0) or 0)}\n"
                 f"Near breakout: {int(summary.get('near_breakout', 0) or 0)}\n"
                 f"Momentum: {int(summary.get('momentum', 0) or 0)}"
+                f"{why}"
             )
             if self._send_once("eod_scan_summary", msg):
                 sent["eod"] = 1

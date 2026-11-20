@@ -326,7 +326,8 @@ def _scan_evidence_index() -> dict[str, Any]:
     return value
 
 
-def build_buy_only(best_rows: Sequence[Mapping[str, Any]], *, verified: bool) -> dict[str, Any]:
+def build_buy_only(best_rows: Sequence[Mapping[str, Any]], *, verified: bool, expected_session: str = "",
+                   login_required: bool = False) -> dict[str, Any]:
     """Home's BUY-only section: every canonical BUY and nothing else.
 
     A row is here only when the scanner's setup cleared the evidence gate AND
@@ -334,8 +335,17 @@ def build_buy_only(best_rows: Sequence[Mapping[str, Any]], *, verified: bool) ->
     scan -- the same authority as Home's best trades, without the top-5 cap.
     Watchlist, research, WAIT and withheld names never appear; when there is
     no BUY the section says so and why, instead of showing a near-miss.
+
+    ``admission_reason`` (product.buy_admission) tells apart a scan that is not
+    current, evidence that cannot certify, setups without a proven edge, and no
+    setup. A saved scan older than ``expected_session`` is never explained as
+    "no edge": its rows are withheld and it is reported as not current.
     """
+    from product import buy_admission
+
     index = _scan_evidence_index()
+    scan_session = str(index.get("session") or "")[:10]
+    session_stale = bool(scan_session and expected_session and scan_session < str(expected_session)[:10])
     rows: list[dict[str, Any]] = []
     for raw in best_rows:
         row = dict(raw)
@@ -375,10 +385,21 @@ def build_buy_only(best_rows: Sequence[Mapping[str, Any]], *, verified: bool) ->
     except Exception:
         bar = 0.05
     note = str(index.get("evidence_note") or "")
+    if session_stale:
+        rows = []                                   # stale must look stale: never a BUY from an old scan
+    closest = ""
+    if index["withheld"] and index["withheld"][0].get("edge_r") is not None:
+        closest = f"{index['withheld'][0]['symbol']} at {float(index['withheld'][0]['edge_r']):+.2f}R/trade"
+    admission = buy_admission.classify(
+        buys=len(rows), scan_current=bool(verified) and not session_stale, evidence_note=note,
+        withheld=int(index["withheld_count"]), login_required=login_required, scan_session=scan_session,
+        expected_session=str(expected_session or "")[:10], closest=closest)
     if rows:
         empty_reason = ""
     elif not verified:
         empty_reason = "Verifying the current scan — earlier BUYs are not current signals."
+    elif session_stale:
+        empty_reason = f"Scan not current. {admission['detail']} {admission['action']}".strip()
     elif note:
         # The evidence itself cannot certify anything (stale, unprovable budget,
         # wrong rulebook): say so instead of implying no setup qualified.
@@ -397,6 +418,9 @@ def build_buy_only(best_rows: Sequence[Mapping[str, Any]], *, verified: bool) ->
         "rows": rows,
         "count": len(rows),
         "admission_state": "ELIGIBLE_BUY" if rows else "NO_ELIGIBLE_BUY",
+        "admission_reason": admission["code"],
+        "admission_headline": admission["headline"],
+        "admission_action": admission["action"],
         "evidence_note": note,
         "verified": bool(verified),
         "withheld_count": int(index["withheld_count"]),
@@ -759,7 +783,9 @@ def build_home_os(
 
     buy_rows = _canonical_best_trade_rows(history_current=history_current, limit=BUY_ONLY_LIMIT)
     best_rows = buy_rows[:5]
-    buy_only = build_buy_only(buy_rows, verified=bool(history_current))
+    buy_only = build_buy_only(buy_rows, verified=bool(history_current),
+                              expected_session=str(freshness.get("expected_latest_completed_session") or ""),
+                              login_required=broker_login_required)
     opportunities = [explain_opportunity(row) for row in best_rows]
     for opportunity, row in zip(opportunities, best_rows):
         opportunity["champion_policy_id"] = str(row.get("champion_policy_id") or "")

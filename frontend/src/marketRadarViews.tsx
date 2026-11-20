@@ -537,8 +537,9 @@ export function BuyOnlyPanel({
         </div>
       ) : (
         <div className="home-os-past buy-only-empty">
-          <strong>{section.verified ? 'Nothing to buy today' : 'Verifying the current scan'}</strong>
+          <strong>{section.admission_headline || (section.verified ? 'Nothing to buy today' : 'Verifying the current scan')}</strong>
           <small>{section.empty_reason || 'No BUY in the current scan.'}</small>
+          {section.admission_action ? <small>{section.admission_action}</small> : null}
         </div>
       )}
     </section>
