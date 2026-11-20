@@ -713,6 +713,25 @@ def window_is_exact(day_keys, t: int, horizon: int, session_index: dict[str, int
         return False
 
 
+def exact_prefix(day_keys, t: int, horizon: int, session_index: dict[str, int] | None) -> int:
+    """How many bars from t are exactly the next official sessions after bar t-1 (0 .. horizon).
+
+    The verified part of a trade's window: it stops at the first missing
+    session (a suspension) or at the symbol's last bar. Outcomes observed
+    inside it are exact; anything after it is not (overnight review E-07).
+    """
+    if not session_index:
+        return max(0, min(int(horizon), len(day_keys) - t))
+    try:
+        prev = session_index[day_keys[t - 1]]
+    except (KeyError, IndexError):
+        return 0
+    k = 0
+    while k < int(horizon) and t + k < len(day_keys) and session_index.get(day_keys[t + k]) == prev + 1 + k:
+        k += 1
+    return k
+
+
 def realised_session_index(dates) -> dict[str, int]:
     """Ordinals from the official bars actually present (the walk-forward's index).
 
@@ -919,7 +938,10 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
     # silently left the evidence: optimistic survivorship (cross-review B-6).
     # Such a window now counts when the trade RESOLVES inside the bars that
     # exist (stop, target, scratch); one still open when prices stop is
-    # censored: counted, reported, never invented as a win or a loss.
+    # censored: counted, reported, never invented as a win or a loss. The same
+    # holds for a mid-window suspension: only the verified consecutive prefix
+    # of official sessions is simulated, so bars that resume later can neither
+    # erase an observed exit nor stretch the window (overnight review E-07).
     global_last = max(official_index) if official_index else ""
     ended_terminal = 0                          # partial windows of stopped symbols that resolved
     ended_censored = 0                          # ... that were still open when prices stopped
@@ -930,13 +952,18 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
         n = len(df)
         start = max(60, n - horizon - lookback_sessions)
         day_keys = list(pd.DatetimeIndex(df.index).strftime("%Y-%m-%d")) if official_index else []
-        ended = bool(global_last and day_keys and day_keys[-1] < global_last)
         symbol_used = False
-        for t in range(start, n if ended else n - horizon, sample_step):
-            avail = min(horizon, n - t)
-            partial = avail < horizon
-            if official_index and not window_is_exact(day_keys, t, avail, official_index):
+        for t in range(start, n if official_index else n - horizon, sample_step):
+            # The verified prefix of the window (overnight review E-07): a stop
+            # observed before a suspension or the symbol's last bar is exact,
+            # whatever bars come later. A window whose prefix reaches the last
+            # official session is still being written: pending, not measured.
+            avail = exact_prefix(day_keys, t, horizon, official_index) if official_index else horizon
+            if avail <= 0:
                 horizon_gaps += 1
+                continue
+            partial = avail < horizon
+            if partial and day_keys[t + avail - 1] >= global_last:
                 continue
             if not symbol_used:
                 # Counted (save threshold, data span) only once it contributes a
@@ -959,7 +986,7 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
             risk = r.entry - r.stop
             if risk <= 0:
                 continue
-            fwd = df.iloc[t:t + horizon]
+            fwd = df.iloc[t:t + avail]
             # The same rulebook as the forward tracker and the paper book
             # (core.evaluation_spec): buy-stop fill at the open when it gaps
             # above entry, gap-aware stop/target exits, breakeven trail.
@@ -974,7 +1001,7 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                 continue          # order never triggered — not a trade
             if partial:
                 if outcome not in ("WIN", "LOSS", "SCRATCH"):
-                    ended_censored += 1     # open when prices stopped: outcome unobservable
+                    ended_censored += 1     # open at the first missing session: unobservable
                     continue
                 ended_terminal += 1
             gross_r = r_mult      # before costs — the ledger keeps both
@@ -1009,8 +1036,10 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
             if feats is not None:
                 confirm_rows.append({"day": day_key, "r": r_mult, **feats})
 
-            # Pre-declared exit-construction experiment on the same trade.
-            if t + 2 * horizon <= n:
+            # Pre-declared exit-construction experiment on the same trade: only
+            # over 2 x horizon bars that are exactly consecutive official sessions.
+            if not partial and t + 2 * horizon <= n and (
+                    not official_index or exact_prefix(day_keys, t, 2 * horizon, official_index) == 2 * horizon):
                 for vname, voutcome, vr in exit_variant_results(
                         r.entry, r.stop, r.target, df.iloc[t:t + 2 * horizon], horizon):
                     es = exit_stats.setdefault(vname, {"trades": 0, "wins": 0, "scratches": 0,

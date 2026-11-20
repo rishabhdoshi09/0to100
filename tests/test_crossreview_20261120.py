@@ -242,9 +242,10 @@ def test_A4_a_legacy_counterfactual_label_does_not_train_the_challenger(monkeypa
 # ── BUY admission ─────────────────────────────────────────────────────────────
 
 def _authority(snapshot_id="new", edges=None):
-    return {"snapshot_id": snapshot_id, "backtest_provenance": proven_provenance(),
-            "backtest_edges": edges or {"VCP": {"mean": .5, "lower": .2, "n": 90, "blocks": 30,
-                                                "inference": "OVERLAP_ROBUST", "family": True}}}
+    from tests.evidence_fixtures import seal_snapshot
+    return seal_snapshot({"snapshot_id": snapshot_id, "backtest_provenance": proven_provenance(),
+                          "backtest_edges": edges or {"VCP": {"mean": .5, "lower": .2, "n": 90, "blocks": 30,
+                                                              "inference": "OVERLAP_ROBUST", "family": True}}})
 
 
 def test_B3_a_later_report_does_not_retro_certify_an_earlier_scans_buy():

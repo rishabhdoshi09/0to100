@@ -92,6 +92,27 @@ def coverage_binding(coverage: dict | None, events_path: Path | str) -> str:
     return "BOUND" if declared == events_digest(events_path) else "MISMATCH"
 
 
+#: Coverage write protocol 2 (overnight review E-05): a window record is written
+#: only AFTER the events it vouches for are durable in the events file, and is
+#: marked ``events_committed``. Records from before it (whose events may have
+#: been lost in a crash) are never trusted again: the next refresh refetches them.
+COMMIT_PROTOCOL = 2
+
+
+def trusted_windows(coverage: dict | None, events_path: Path | str) -> dict[str, dict]:
+    """The coverage records whose events are known to be in THIS events file.
+
+    Only under the commit protocol, only while the declaration is BOUND to the
+    file's bytes, and only records written after their events. Anything else
+    certifies no window (overnight review E-05).
+    """
+    cov = dict(coverage or {})
+    if int(cov.get("commit_protocol") or 0) != COMMIT_PROTOCOL or coverage_binding(cov, events_path) != "BOUND":
+        return {}
+    return {str(k): dict(v) for k, v in dict(cov.get("windows") or {}).items()
+            if isinstance(v, dict) and v.get("events_committed")}
+
+
 def _atomic_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
@@ -545,7 +566,9 @@ def coverage_status(*, years: int = 5, events_path: Path | None = None,
     today = today or date.today()
     coverage = _coverage_file(coverage_path, years=years)
     windows = build_windows(today=today, years=years)
-    records = dict(coverage.get("windows") or {})
+    # Only records committed with their events count (E-05): an interrupted or
+    # pre-protocol declaration is not complete, however many windows it lists.
+    records = trusted_windows(coverage, events_path)
     # The open window ends "today", but the nightly refresh can only have
     # fetched through its own run day. Requiring today flipped coverage to
     # incomplete at every midnight and raised corporate_actions_incomplete for
@@ -627,7 +650,7 @@ def refresh_events_resilient(*, force: bool = False, years: int = 5, budget_s: f
     today = today or date.today()
     windows = build_windows(today=today, years=years)
     coverage = _coverage_file(coverage_path, years=years)
-    existing_raw = _safe_json(events_path, [])
+    existing_raw = _safe_json(events_path, None)
     existing = [dict(x) for x in existing_raw] if isinstance(existing_raw, list) else []
     incoming: list[dict[str, Any]] = []
     started = time.monotonic()
@@ -638,10 +661,14 @@ def refresh_events_resilient(*, force: bool = False, years: int = 5, budget_s: f
     nse_csv_fetcher = nse_csv_fetcher or (lambda s, e: _nse_csv_fetch(s, e))
     bse_fetcher = bse_fetcher or (lambda s, e: _bse_fetch(s, e))
 
-    coverage_windows = dict(coverage.get("windows") or {})
-    # Unbound while the walk runs: windows are persisted as they are fetched, but
-    # the events they vouch for are written only at the end (QT-12).
-    coverage["events_sha256"] = ""
+    # Resume only from records committed with their events, under this exact
+    # events file (E-05). After a crash, a pre-protocol file, or an events file
+    # replaced since, every window is fetched again rather than vouched for.
+    coverage_windows = trusted_windows(coverage, events_path)
+    coverage["commit_protocol"] = COMMIT_PROTOCOL
+    # A corrupt events file is never overwritten: it stays for a human, the
+    # walk stops, and coverage stays unbound (certifies nothing).
+    can_write = isinstance(existing_raw, list) or not events_path.exists()
     for window in windows:
         previous = dict(coverage_windows.get(window.window_id) or {})
         current_window = window.end == today
@@ -679,6 +706,11 @@ def refresh_events_resilient(*, force: bool = False, years: int = 5, budget_s: f
                 window_errors.append(str(bse_exc)[:_MAX_ERROR])
         incoming.extend(rows)
         incoming.extend(bse_rows)
+        if not can_write:
+            break
+        # Commit the events this window vouches for FIRST; only then its record.
+        merged, conflicts = merge_verified_events(existing, incoming)
+        _atomic_json(events_path, merged)
 
         if nse_success:
             successful += 1
@@ -692,13 +724,17 @@ def refresh_events_resilient(*, force: bool = False, years: int = 5, budget_s: f
             "bse_rows": len(bse_rows),
             "attempted_at": _now_iso(),
             "errors": window_errors[-6:],
+            "events_committed": True,
         }
-        # Persist after every window so a crash resumes instead of restarting the walk.
+        # Persist after every window so a crash resumes instead of restarting
+        # the walk, bound to the events file just written.
         coverage["windows"] = coverage_windows
+        coverage["conflicts"] = conflicts
+        coverage["events_sha256"] = events_digest(events_path)
         _atomic_json(coverage_path, coverage)
 
     merged, conflicts = merge_verified_events(existing, incoming)
-    if merged or existing:
+    if can_write:
         _atomic_json(events_path, merged)
         try:
             from data.bhavcopy_store import reload_corporate_actions
@@ -720,8 +756,9 @@ def refresh_events_resilient(*, force: bool = False, years: int = 5, budget_s: f
         "last_refresh_at": _now_iso(),
         "last_attempted_windows": attempted,
         "last_successful_windows": successful,
-        # Bound LAST, to the exact events file now on disk (QT-12).
-        "events_sha256": events_digest(events_path),
+        # Bound LAST, to the exact events file now on disk (QT-12); never to
+        # a corrupt file this refresh refused to touch.
+        "events_sha256": events_digest(events_path) if can_write else "",
     })
     _atomic_json(coverage_path, coverage)
     status = coverage_status(years=years, events_path=events_path, coverage_path=coverage_path, today=today)

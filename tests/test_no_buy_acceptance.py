@@ -31,8 +31,9 @@ def _frame():
 
 
 def _snap(edges, prov):
-    return {"snapshot_id": "acc", "multipliers": {}, "signal_registry": {}, "backtest_edges": edges,
-            "backtest_provenance": prov}
+    from tests.evidence_fixtures import seal_snapshot
+    return seal_snapshot({"snapshot_id": "acc", "multipliers": {}, "signal_registry": {}, "backtest_edges": edges,
+                          "backtest_provenance": prov})
 
 
 def _real_negative_edges():

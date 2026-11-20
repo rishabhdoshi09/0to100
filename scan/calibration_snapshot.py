@@ -17,7 +17,7 @@ from typing import Any, Mapping
 from core.runtime_paths import logs_path
 from scan import signal_registry as SR
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2   # 2: the snapshot carries its ledger-bound admission rows (overnight review E-04)
 FEATURE_VERSION = "unified-scanner-features-v1"
 MODEL_VERSION = "signal-calibration-v1"
 DEFAULT_DIR = logs_path("scan", "calibration_snapshots")
@@ -147,6 +147,58 @@ def _provenance_with_result_check(report: Mapping[str, Any] | None) -> dict[str,
     return prov
 
 
+def admission_body(report: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The exact admission rows result_digest covers: every signal/combo row field and the family summary."""
+    from scan.signal_backtest import RESULT_ROW_FIELDS
+    rep = dict(report or {})
+
+    def rows(key: str) -> dict[str, dict]:
+        return {str(k): {f: v.get(f) for f in RESULT_ROW_FIELDS}
+                for k, v in dict(rep.get(key) or {}).items() if isinstance(v, Mapping)}
+
+    return {"signals": rows("signals"), "combos": rows("combos"),
+            "family": dict((rep.get("evidence_inference") or {}).get("family_correction") or {})}
+
+
+def verified_view(snapshot: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The snapshot as the BUY gate may use it: edges DERIVED from its own admission rows.
+
+    The ledger finalizes one digest of the statistical result (C-2). A snapshot
+    file stores both the rows that digest covers and edges derived from them;
+    the stored edges are never trusted. Here the digest is recomputed from the
+    stored rows (``result_sha256_recomputed``, which the gate requires to equal
+    the declared, ledger-finalized digest) and the edges are re-derived from
+    those same rows, so editing either part of the file can only fail closed
+    (overnight review E-04). A snapshot without admission rows certifies nothing.
+    """
+    snap = dict(snapshot or {})
+    if not snap:
+        return snap
+    prov = dict(snap.get("backtest_provenance") or {})
+    admission = snap.get("backtest_admission")
+    if not isinstance(admission, Mapping):
+        if prov:
+            prov["result_sha256_recomputed"] = ""
+            snap["backtest_provenance"] = prov
+        snap.update(backtest_edges={}, backtest_combo_edges={})
+        return snap
+    report = {"signals": dict(admission.get("signals") or {}), "combos": dict(admission.get("combos") or {}),
+              "evidence_inference": {"family_correction": dict(admission.get("family") or {})},
+              "evidence_provenance": prov}
+    try:
+        from scan.signal_backtest import result_digest
+        recomputed = result_digest(report)
+        edges, combos = _backtest_edges(report), _backtest_combo_edges(report)
+    except Exception:
+        recomputed, edges, combos = "", {}, {}
+    if prov:
+        # No provenance stays no provenance: the gate names that reason itself.
+        prov["result_sha256_recomputed"] = recomputed
+        snap["backtest_provenance"] = prov
+    snap.update(backtest_edges=edges, backtest_combo_edges=combos)
+    return snap
+
+
 def build_snapshot(
     *,
     backtest_report: Mapping[str, Any] | None = None,
@@ -167,6 +219,9 @@ def build_snapshot(
         "signal_registry_version": str(registry.get("registry_version") or SR.registry_version()),
         "backtest_evidence_hash": _canonical_hash(backtest),
         "forward_evidence_hash": _canonical_hash(live),
+        # A new layout is a new snapshot: an older file without admission rows
+        # is never a cache hit for these inputs (it would certify nothing).
+        "snapshot_schema_version": str(SCHEMA_VERSION),
     }
     snapshot_id = "cal_" + _canonical_hash(identities)[:20]
     return {
@@ -189,6 +244,9 @@ def build_snapshot(
         # schema, rulebook (eval spec, horizon), family method, code SHA, time.
         "backtest_provenance": _provenance_with_result_check(backtest),
         "backtest_combo_edges": _backtest_combo_edges(backtest),
+        # The rows the ledger-finalized digest covers; every consumer derives
+        # the edges from these through verified_view() (overnight review E-04).
+        "backtest_admission": admission_body(backtest),
         "signal_registry": registry,
     }
 

@@ -26,6 +26,7 @@ def _proving_authority(monkeypatch):
     snap = {"snapshot_id": "ev", "backtest_edges": {"MOMENTUM": proof, "BREAKOUT_52W": proof},
             "backtest_combo_edges": {},
             "backtest_provenance": __import__("tests.evidence_fixtures", fromlist=["x"]).proven_provenance()}
+    snap = __import__("tests.evidence_fixtures", fromlist=["x"]).seal_snapshot(snap)
     monkeypatch.setattr(SS, "_evidence_authority", lambda: snap)
 
 

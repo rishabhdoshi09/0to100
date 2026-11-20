@@ -829,9 +829,13 @@ class UnifiedScanner:
             import hashlib
             stored = self._calibration_snapshot.get("backtest_edges")
             if isinstance(stored, dict):
-                self._signal_edges = copy.deepcopy(dict(stored))
-                self._combo_edges = copy.deepcopy(dict(self._calibration_snapshot.get("backtest_combo_edges") or {}))
-                prov = dict(self._calibration_snapshot.get("backtest_provenance") or {})
+                # Edges and the recomputed digest come from the snapshot's own
+                # admission rows, never from its stored edges (E-04).
+                from scan.calibration_snapshot import verified_view
+                verified = verified_view(self._calibration_snapshot)
+                self._signal_edges = copy.deepcopy(dict(verified.get("backtest_edges") or {}))
+                self._combo_edges = copy.deepcopy(dict(verified.get("backtest_combo_edges") or {}))
+                prov = dict(verified.get("backtest_provenance") or {})
                 if not prov and self._calibration_snapshot.get("backtest_generated_at"):
                     prov = {"generated_at": self._calibration_snapshot.get("backtest_generated_at")}
                 self._evidence_provenance = prov

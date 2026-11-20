@@ -15,6 +15,7 @@ import pandas as pd
 import pytest
 
 from scan import unified_scanner as US
+from tests.evidence_fixtures import seal_snapshot
 
 
 def _fresh_stamp(days_ago=1):
@@ -31,7 +32,7 @@ def _snap(edges, generated_at="fresh", **prov):
     snap = {"snapshot_id": "test", "multipliers": {}, "signal_registry": {}, "backtest_edges": edges}
     if generated_at is not None:
         snap["backtest_provenance"] = _provenance(generated_at, **prov)
-    return snap
+    return seal_snapshot(snap)
 
 
 def _ok(mean, lower=0.05, n=60, blocks=24, inference="OVERLAP_ROBUST", family=True):
@@ -140,7 +141,7 @@ def test_backtest_edges_keep_only_evidenced_signals():
 # ── scanner integration ───────────────────────────────────────────────────────
 
 def test_scanner_turns_a_losing_buy_into_an_explained_watch():
-    losing = {"BREAKOUT_52W": 0.2, "VOL_SQUEEZE": -0.5, "POCKET_PIVOT": -0.5}
+    losing = {"BREAKOUT_52W": _ok(0.2), "VOL_SQUEEZE": _ok(-0.5, lower=-0.6), "POCKET_PIVOT": _ok(-0.5, lower=-0.6)}
     r = US.UnifiedScanner(calibration_snapshot=_snap(losing))._analyze("X", _breakout_frame())
     assert r.signals[:3] == ["BREAKOUT_52W", "VOL_SQUEEZE", "POCKET_PIVOT"]
     assert r.verdict == "WATCH" and r.edge_gated is True and r.edge_r == pytest.approx(-0.5, abs=1e-3)
@@ -155,10 +156,15 @@ def test_scanner_keeps_an_evidenced_positive_buy():
 
 
 def test_scanner_with_legacy_float_evidence_shows_why_it_is_not_a_buy():
+    # A bare float is display-only legacy evidence that can never prove a BUY...
+    legacy = US.setup_evidence(["VOL_SQUEEZE", "POCKET_PIVOT"], {"VOL_SQUEEZE": 0.12, "POCKET_PIVOT": 0.06})
+    assert legacy["mean"] == pytest.approx(0.06) and legacy["lower"] is None
+    assert "legacy evidence" in US.unproven_reason(legacy)
+    # ...and a snapshot cannot even carry it to the gate: its edges are derived
+    # from ledger-bound admission rows, which a float is not (overnight review E-04).
     r = US.UnifiedScanner(calibration_snapshot=_snap({"VOL_SQUEEZE": 0.12, "POCKET_PIVOT": 0.06}))._analyze(
         "X", _breakout_frame())
-    assert r.verdict == "WATCH" and r.edge_gated is True and r.edge_r == pytest.approx(0.06)
-    assert "legacy evidence" in r.reasons[-1] and r.edge_lower_r is None
+    assert r.verdict == "WATCH" and r.edge_gated is True and r.edge_r is None
 
 
 def test_replay_and_backtest_scanners_measure_raw_setups():
@@ -206,7 +212,8 @@ def test_snapshot_freezes_the_gate_evidence(tmp_path):
 def test_scan_record_carries_the_edge_fields():
     from product.scan_store import _record
 
-    r = US.UnifiedScanner(calibration_snapshot=_snap({"VOL_SQUEEZE": -0.5, "POCKET_PIVOT": -0.5}))._analyze(
+    r = US.UnifiedScanner(calibration_snapshot=_snap({"VOL_SQUEEZE": _ok(-0.5, lower=-0.6),
+                                                      "POCKET_PIVOT": _ok(-0.5, lower=-0.6)}))._analyze(
         "X", _breakout_frame())
     row = _record(r, {}, set())
     assert row["verdict"] == "WATCH" and row["status"] != "Ready to trade"
@@ -248,7 +255,7 @@ def test_the_52_week_shortcut_needs_proof_not_just_a_positive_average():
 def test_scanner_reports_the_evidence_it_judged_on():
     combos = {"BREAKOUT_52W|POCKET_PIVOT|VOL_SQUEEZE": _ok(0.30, lower=0.10, n=45)}
     edges = {"VOL_SQUEEZE": _ok(-0.5, lower=-0.6, n=545)}
-    snap = {**_snap(edges), "backtest_combo_edges": combos}
+    snap = seal_snapshot({**_snap(edges), "backtest_combo_edges": combos})
     r = US.UnifiedScanner(calibration_snapshot=snap)._analyze("X", _breakout_frame())
     assert r.verdict == "BUY" and r.edge_source == "combination"
     assert r.edge_r == pytest.approx(0.30) and r.edge_lower_r == pytest.approx(0.10)
@@ -411,8 +418,8 @@ def test_a_legacy_rolled_back_or_mixed_artifact_cannot_certify_a_buy():
 
 
 def _authority(edges, snapshot_id="test", **prov):
-    return {"snapshot_id": snapshot_id, "backtest_edges": edges, "backtest_combo_edges": {},
-            "backtest_provenance": _provenance(**prov)}
+    return seal_snapshot({"snapshot_id": snapshot_id, "backtest_edges": edges, "backtest_combo_edges": {},
+                          "backtest_provenance": _provenance(**prov)})
 
 
 def _srow(sym, signals, verdict="BUY", evidence="test"):

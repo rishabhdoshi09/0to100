@@ -279,7 +279,7 @@ def _ca_coverage(tmp_path, covered_to: str, *, success: bool = True):
     records = {
         w.window_id: {
             "window_id": w.window_id, "covered_from": w.start.isoformat(),
-            "covered_to": w.end.isoformat(), "success": True,
+            "covered_to": w.end.isoformat(), "success": True, "events_committed": True,
         }
         for w in windows
     }
@@ -288,7 +288,9 @@ def _ca_coverage(tmp_path, covered_to: str, *, success: bool = True):
     coverage = tmp_path / "ca_coverage.json"
     events.write_text("[]")
     coverage.write_text(_json.dumps({"version": 1, "years": 1, "windows": records,
-                                     "last_refresh_at": "2026-11-11T18:06:49+05:30"}))
+                                     "last_refresh_at": "2026-11-11T18:06:49+05:30",
+                                     "commit_protocol": CAR.COMMIT_PROTOCOL,
+                                     "events_sha256": CAR.events_digest(events)}))
     return CAR, events, coverage
 
 

@@ -581,18 +581,30 @@ def load_copy(root: str | Path, *, accept_unbound_coverage: bool = False) -> dic
         raise SystemExit(f"refusing {root}: copy the store to the internal SSD first (never read the live runtime)")
     os.environ["QT_RUNTIME_ROOT"] = str(root)
     from core.runtime_paths import logs_path
-    from data.corporate_actions import adjust_frame, load_events
+    from data import corporate_actions as CA
     with open(logs_path("bhav", "store_cache.pkl"), "rb") as fh:
         store = pickle.load(fh)["store"]
-    events = load_events(logs_path("ca_events.json"))
+    # One read of the events: the coverage binding is checked against the digest
+    # of the very bytes applied below (overnight review E-06).
+    events, events_sha256 = CA.load_events_with_digest(logs_path("ca_events.json"))
+    adjust_frame = CA.adjust_frame
     frames = {}
     for sym, df in store.items():
         ev = events.get(str(sym).upper())
         frames[str(sym).upper()] = adjust_frame(df.copy(), ev, copy=False) if ev else df
     cov_p, uni_p = logs_path("ca_coverage.json"), logs_path("universe_history.json")
     coverage = json.loads(cov_p.read_text()) if cov_p.exists() else {}
-    from data.corporate_actions_resilient import coverage_binding
-    binding = coverage_binding(coverage, logs_path("ca_events.json"))
+    from data.corporate_actions_resilient import COMMIT_PROTOCOL
+    declared = str(dict(coverage or {}).get("events_sha256") or "")
+    binding = "UNBOUND" if not declared else ("BOUND" if declared == events_sha256 else "MISMATCH")
+    if binding == "BOUND":
+        if int(dict(coverage).get("commit_protocol") or 0) != COMMIT_PROTOCOL:
+            # Bound by the pre-E-05 refresh, which could vouch for windows whose
+            # events a crash lost: as untrusted as a legacy unbound file.
+            binding = "UNBOUND"
+        else:
+            coverage = {**coverage, "windows": {k: v for k, v in dict(coverage.get("windows") or {}).items()
+                                                if isinstance(v, dict) and v.get("events_committed")}}
     if not events or binding == "MISMATCH" or (binding == "UNBOUND" and not accept_unbound_coverage):
         # A coverage declaration that does not vouch for THESE events (none
         # loaded, another events generation, or never bound): nothing is

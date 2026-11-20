@@ -61,7 +61,8 @@ def _snap(edges, generated_at=FRESH):
     if generated_at is not None:
         from tests.evidence_fixtures import proven_provenance
         snap["backtest_provenance"] = proven_provenance(generated_at)
-    return snap
+    from tests.evidence_fixtures import seal_snapshot
+    return seal_snapshot(snap)
 
 
 SIGNALS = ("BREAKOUT_52W", "VOL_SQUEEZE", "POCKET_PIVOT")

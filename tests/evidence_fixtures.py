@@ -42,3 +42,48 @@ def rulebook_outcome(net_r: float, outcome: str = "FLAT", return_pct: float | No
     return {"eval_spec": spec_tag(), "horizon_sessions": OUTCOME_HORIZON_SESSIONS, "not_pnl": True,
             "outcome": outcome, "gross_r": net_r + 0.05, "net_r": net_r, "cost_r": 0.05,
             "return_pct": return_pct if return_pct is not None else net_r * 6.0}
+
+
+def _admission_row(edge: dict) -> dict:
+    """The report row an edge-format test row ({mean, lower, n, blocks, inference, family}) stands for."""
+    return {"trades": edge.get("n"), "expectancy_r": edge.get("mean"), "expectancy_r_precise": edge.get("mean"),
+            "lower_r": edge.get("lower"), "independent_sessions": edge.get("blocks") or 0,
+            "inference": edge.get("inference") or "", "family_significant": edge.get("family")}
+
+
+def seal_snapshot(snap: dict) -> dict:
+    """A test snapshot made consistent the way a real one is (overnight review E-04).
+
+    Every consumer derives a snapshot's edges from its ledger-bound admission
+    rows (scan.calibration_snapshot.verified_view). This builds those rows from
+    the test's edges and, when the provenance claims a finalised look, reserves
+    a fresh look with the same binding and finalises the digest of exactly
+    these rows. A snapshot whose provenance is deliberately broken stays broken.
+    """
+    import uuid
+
+    import scan.signal_backtest as SB
+    from research import alpha_ledger
+
+    snap = dict(snap)
+    def rows(key):
+        # A legacy float "edge" has no admission row: it can prove nothing.
+        return {k: _admission_row(v) for k, v in dict(snap.get(key) or {}).items() if isinstance(v, dict)}
+
+    admission = {"signals": rows("backtest_edges"), "combos": rows("backtest_combo_edges"), "family": {}}
+    snap["backtest_admission"] = admission
+    prov = dict(snap.get("backtest_provenance") or {})
+    acct = prov.get("alpha_accounting")
+    if isinstance(acct, dict) and prov.get("result_sha256") and prov.get("result_sha256") == prov.get(
+            "result_sha256_recomputed"):
+        binding = {k: prov.get(k) for k in alpha_ledger.BINDING_FIELDS}
+        prov["alpha_accounting"] = alpha_ledger.reserve(
+            SB.gate_program(), f"test-{uuid.uuid4().hex}", family_size=int(prov.get("family_size") or 44),
+            members_sha256=str(prov.get("members_sha256") or "m" * 64), binding=binding)
+        report = {"signals": admission["signals"], "combos": admission["combos"],
+                  "evidence_inference": {"family_correction": {}}, "evidence_provenance": prov}
+        digest = SB.result_digest(report)
+        alpha_ledger.finalize(prov["alpha_accounting"]["look_id"], digest)
+        prov["result_sha256"] = prov["result_sha256_recomputed"] = digest
+        snap["backtest_provenance"] = prov
+    return snap

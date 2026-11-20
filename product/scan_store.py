@@ -526,6 +526,11 @@ def bind_evidence(payload: dict[str, Any], authority: Any = _UNSET) -> dict[str,
                                        "buy_rows_withheld": withheld}
         return payload
     snap = dict(authority or {})
+    if snap:
+        # The edges a BUY is re-judged on are derived from the snapshot's own
+        # ledger-bound admission rows, never read from its stored edges (E-04).
+        from scan.calibration_snapshot import verified_view
+        snap = verified_view(snap)
     note = ""
     if not snap:
         note = "no authoritative evidence snapshot is available"

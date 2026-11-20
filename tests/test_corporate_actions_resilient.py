@@ -186,9 +186,12 @@ def test_an_interrupted_refresh_never_vouches_for_older_events(tmp_path, monkeyp
     events.write_text(json.dumps([]))                         # an older events generation
     with pytest.raises(OSError):
         _refresh(tmp_path, crash_on_events=True, monkeypatch=monkeypatch)
-    cov = json.loads(coverage.read_text())                    # windows were persisted mid-walk ...
-    assert cov.get("windows")
-    assert CAR.coverage_binding(cov, events) == "UNBOUND"     # ... but vouch for nothing
+    # Commit protocol (overnight review E-05): a window is recorded only after its
+    # events are durable, so a crash on the events write records no window at all.
+    cov = json.loads(coverage.read_text()) if coverage.exists() else {}
+    assert CAR.trusted_windows(cov, events) == {}
+    assert not CAR.coverage_status(years=1, events_path=events, coverage_path=coverage,
+                                   today=date(2026, 8, 28))["coverage_complete"]
 
 
 def test_a_changed_events_file_is_a_mismatch(tmp_path):
@@ -214,5 +217,9 @@ def test_the_pit_loader_trusts_only_bound_coverage(tmp_path, monkeypatch):
     coverage.write_text(json.dumps({**windows, "events_sha256": "f" * 64}))
     assert ED.load_copy(tmp_path, accept_unbound_coverage=True)["coverage"] == {}   # MISMATCH: never
     coverage.write_text(json.dumps({**windows, "events_sha256": CAR.events_digest(events)}))
+    assert ED.load_copy(tmp_path)["coverage"] == {}         # bound, but before the commit protocol (E-05)
+    committed = {"windows": {"w": {**windows["windows"]["w"], "events_committed": True}}}
+    coverage.write_text(json.dumps({**committed, "commit_protocol": CAR.COMMIT_PROTOCOL,
+                                    "events_sha256": CAR.events_digest(events)}))
     loaded = ED.load_copy(tmp_path)
     assert loaded["coverage_binding"] == "BOUND" and ED.coverage_span(loaded["coverage"])[0] == "2025-01-01"

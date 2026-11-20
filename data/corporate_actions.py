@@ -47,7 +47,6 @@ def load_events(path=None) -> dict:
     system runs exactly as it did before, un-adjusted but flagged by the
     integrity guard). Each event: {ex_date, factor>0, type}. Malformed rows are
     dropped, not guessed."""
-    import pandas as pd
     p = Path(path) if path else _events_path()
     if not p.exists():
         return {}
@@ -55,6 +54,34 @@ def load_events(path=None) -> dict:
         raw = json.loads(p.read_text())
     except Exception:
         return {}
+    return parse_events(raw)
+
+
+def load_events_with_digest(path=None) -> tuple[dict, str]:
+    """(events, SHA-256 of the exact bytes they were parsed from); ({}, '') when absent.
+
+    One read: a consumer that checks a coverage declaration's digest must check
+    it against the bytes it actually applies, not a second read of a file that
+    may have been replaced in between (overnight review E-06).
+    """
+    import hashlib
+
+    p = Path(path) if path else _events_path()
+    try:
+        data = p.read_bytes()
+    except OSError:
+        return {}, ""
+    digest = hashlib.sha256(data).hexdigest()
+    try:
+        raw = json.loads(data.decode("utf-8"))
+    except Exception:
+        return {}, digest
+    return parse_events(raw), digest
+
+
+def parse_events(raw) -> dict:
+    """Validated {SYMBOL: [event, ...]} from a parsed events list (malformed rows dropped)."""
+    import pandas as pd
     out: dict[str, list[dict]] = {}
     for row in raw if isinstance(raw, list) else []:
         try:
