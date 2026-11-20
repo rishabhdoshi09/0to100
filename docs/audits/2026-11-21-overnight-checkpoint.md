@@ -150,6 +150,56 @@ Report: `docs/research/momentum_12_1_discovery_2026-11-21.md`.
 
 **Scientific position.** It is unchanged: no strategy, old or new, shows positive risk-adjusted expectancy after costs. NO ELIGIBLE BUY remains correct.
 
+## Cycle 8: independent GPT review of the overnight work, and its fixes
+
+**Review.** Two independent, read-only Codex (GPT) reviews of `f6081b26..8281810c` ran on a frozen detached worktree, with no secrets and no network or broker access:
+
+- Run E covered evidence, BUY admission, censoring and corporate-action coverage.
+- Run L covered settlement → learning.
+
+They reported 16 findings: E-01..E-07 and L-01..L-09, of which 14 were P0, 1 was P1 (E-07, L-08) and 1 was P2 (L-09). GPT ran no tests. Its claims were treated as hypotheses.
+
+**Verification.** Every finding was first reproduced by a deterministic test on the base (`38429d98`), which failed there. It was then fixed, and the test passes on the fix. The tests are in `tests/test_overnight_review_20261121.py`, with 36 tests: 30 fail on the base, and the 6 that pass there are controls (a certified BUY still opens and still shows, a proven snapshot still certifies, a recent window stays pending, the HIST projection is still replaced, and a GOOD_WAIT inside the horizon still counts). All 36 pass on the fix. GPT's original sketches are used where they ran as written. E-06's original sketch patches a function the fix no longer calls, so it was run once on the base, where it fails, and the suite carries an equivalent hook on the new single read.
+
+| Commit | Findings | What changed |
+|---|---|---|
+| `02010369` | E-01, E-02, E-03 | Every BUY is re-certified at its point of use. The paper entry re-reads the certificate inside the account lock. The cached `/api/decisions` is re-certified on every response, stale or fresh. The board and Why-This-Decision withdraw uncertified cards before enrichment, so the write-once feature observation never freezes an uncertified BUY. A committee BUY the current scan does not certify reads `BUY_WITHDRAWN_AT_READ`. |
+| `3c7aae7a` | E-04, E-05, E-06, E-07 | A calibration snapshot carries the exact admission rows its ledger-finalised digest covers. Edges are derived from those rows (`verified_view`), never from its stored edges; snapshot schema 2 is a new id. The walk-forward simulates the verified prefix of official sessions: an exit before a suspension survives later bars, and a trade open at a gap is censored. CA commit protocol 2 writes events before the window record, so only committed records count. The PIT loader hashes and parses one read. |
+| `9971fb06` | L-01, L-02, L-03, L-05, L-06, L-09 | Forward rows have one settlement owner (`settle_official_outcomes` delegates). Every learning apply is checked against the ledger as committed; a mismatch is quarantined, and replay waits for uncommitted rows. A resumed unit uses its own stored payload. Recovery requires that the scope equals the payload's policy. The feature label gets the decision id, and its errors are retried. The schema migration runs under `BEGIN IMMEDIATE`. |
+| `ee6cf5e0` | L-04, L-07, L-08 | One writer protocol for the policy store (history publication, generation purge, replay priors, repair). Calibration is idempotent per taken outcome, and the ladder sink is not suppressed by the cell. GOOD_WAIT counts sessions through the fill session; an unverifiable ordinal stays pending. |
+
+**Disagreements and limits.**
+
+- **E-02.** GPT asked for scan publication to be coordinated with execution. The fix re-checks the certificate inside the account lock instead. That check is the entry's linearisation point: a BUY certified at that instant is a valid entry, and a scan published during the few milliseconds of the in-lock open does not undo it.
+- **E-03.**
+  - **Write-once freeze.** The board's freeze now records WATCH when the certificate is empty. That includes a transient unreadable scan, which fails closed. This is conservative.
+  - **Held positions.** For a position already open under a BUY that was later withdrawn, the committee view shows `BUY_WITHDRAWN_AT_READ`, with its execution state kept for audit.
+- **L-01.** Rows that the old second settler already settled without a learning event are NOT reconciled automatically. Applying them would change production learning records, so that is an owner decision (below).
+- **L-06.** Legacy forward rows are labelled under their forward decision id. A call for an id with no feature observation is `not_found` and changes nothing.
+
+**Deploy consequences (if the owner deploys).**
+
+1. The next scan builds a schema-2 snapshot (a new id). Saved BUYs from the old snapshot stay WATCH until that scan re-judges them, which fails closed.
+2. The first CA refresh re-walks all 11 half-year windows once under protocol 2. Until it finishes, `corporate_actions_incomplete` (and "new paper entries: limited") shows, which is honest.
+3. GOOD_WAIT credits wait when the archive cannot verify the session ordinal.
+
+**Production learning scorecard (read-only, unchanged tonight).**
+
+- 0 decisions changed by learning; stage 0.
+- Tracked BUYs: mean −0.127R, 95% CI [−0.31, +0.06].
+
 ## Open (next)
 
-research cycle.
+Owner decisions:
+
+- `deploy <sha>`;
+- `apply repair` (independent-unit policy rebuild);
+- the stricter C-5 policy;
+- starting the 52WH shadow test;
+- a full-history whole-universe run;
+- whether to reconcile legacy settled-without-event forward rows into learning (L-01).
+
+Not done tonight:
+
+- an edge-diagnosis rerun to report the E-07 censoring counts on the SSD copy;
+- a GPT review of live-broker controls and account risk (outside both runs' scope).
