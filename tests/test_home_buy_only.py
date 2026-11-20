@@ -84,3 +84,39 @@ def test_closest_withheld_means_best_measured_edge_not_best_score(tmp_path, monk
     monkeypatch.setattr(HO, "_SCAN_EVIDENCE_CACHE", {"key": None, "value": None})
     assert [w["symbol"] for w in HO._scan_evidence_index()["withheld"]] == ["APOLLO", "DCBBANK", "NOEDGE"]
 
+
+def test_no_eligible_buy_says_why_when_the_evidence_itself_is_the_blocker(monkeypatch):
+    import product.home_os as H
+    monkeypatch.setattr(H, "_scan_evidence_index", lambda: {
+        "by_symbol": {}, "withheld": [], "withheld_count": 4, "scanner_buys": 0, "session": "2026-11-19",
+        "scanned_at": "", "read_time_withheld": 0,
+        "evidence_note": "the annual alpha budget was exhausted at look 53 of 52"})
+    out = H.build_buy_only([], verified=True)
+    assert out["admission_state"] == "NO_ELIGIBLE_BUY" and out["count"] == 0
+    assert "alpha budget was exhausted" in out["empty_reason"] and "WATCH research only" in out["empty_reason"]
+    assert "not a win probability" in out["rule"] and "family-wise" in out["rule"]
+
+
+def test_the_home_evidence_cache_turns_over_when_the_authority_changes(tmp_path, monkeypatch):
+    import product.home_os as H
+    import product.scan_store as SS
+    path = SS.save_scan({"schema_version": 2, "records": [], "evidence_identity": {"id": "x"}}, tmp_path / "s.json")
+    monkeypatch.setattr(SS, "DEFAULT_SCAN_PATH", path)
+    authority = {"k": 1}
+    monkeypatch.setattr(SS, "evidence_authority_key", lambda: (("pointer", authority["k"]),))
+    calls = {"n": 0}
+    real = SS.load_scan
+
+    def counting(*a, **k):
+        calls["n"] += 1
+        return real(path)
+
+    monkeypatch.setattr(SS, "load_scan", counting)
+    H._SCAN_EVIDENCE_CACHE.update(key=None, value=None)
+    H._scan_evidence_index()
+    H._scan_evidence_index()
+    assert calls["n"] == 1                                             # cached while nothing changed
+    authority["k"] = 2
+    H._scan_evidence_index()
+    assert calls["n"] == 2                                             # authority moved: re-read
+

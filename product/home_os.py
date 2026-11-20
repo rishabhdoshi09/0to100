@@ -268,13 +268,15 @@ def _scan_evidence_index() -> dict[str, Any]:
     on every poll is what made Home slow before. Keyed on the file identity.
     """
     empty = {"by_symbol": {}, "withheld": [], "withheld_count": 0, "scanner_buys": 0,
-             "session": "", "scanned_at": ""}
+             "session": "", "scanned_at": "", "evidence_note": "", "read_time_withheld": 0}
     try:
-        from product.scan_store import DEFAULT_SCAN_PATH, load_scan
+        from product.scan_store import DEFAULT_SCAN_PATH, evidence_authority_key, load_scan
         from pathlib import Path
 
         st = Path(DEFAULT_SCAN_PATH).stat()
-        key = (str(DEFAULT_SCAN_PATH), st.st_mtime_ns, st.st_size)
+        # load_scan re-verifies BUYs against the evidence authority, so the
+        # cache must turn over when the authority changes, not only the scan.
+        key = (str(DEFAULT_SCAN_PATH), st.st_mtime_ns, st.st_size, evidence_authority_key())
     except Exception:
         return empty
     if _SCAN_EVIDENCE_CACHE["key"] == key and _SCAN_EVIDENCE_CACHE["value"] is not None:
@@ -308,7 +310,11 @@ def _scan_evidence_index() -> dict[str, Any]:
     withheld.sort(key=lambda r: (r.get("edge_r") is None, -float(r.get("edge_r") or 0.0),
                                  -float(r.get("score") or 0.0)))
     provenance = dict(payload.get("provenance") or {})
+    ident = dict(payload.get("evidence_identity") or {})
+    binding = dict(payload.get("evidence_binding") or {})
     value = {
+        "evidence_note": str(ident.get("note") or ""),
+        "read_time_withheld": int(binding.get("buy_rows_withheld") or 0),
         "by_symbol": by_symbol,
         "withheld": withheld[:3],
         "withheld_count": len(withheld),
@@ -368,10 +374,15 @@ def build_buy_only(best_rows: Sequence[Mapping[str, Any]], *, verified: bool) ->
         from scan.unified_scanner import _MIN_BUY_EDGE_R as bar
     except Exception:
         bar = 0.05
+    note = str(index.get("evidence_note") or "")
     if rows:
         empty_reason = ""
     elif not verified:
         empty_reason = "Verifying the current scan — earlier BUYs are not current signals."
+    elif note:
+        # The evidence itself cannot certify anything (stale, unprovable budget,
+        # wrong rulebook): say so instead of implying no setup qualified.
+        empty_reason = f"No BUY today: {note}. Setups are shown as WATCH research only."
     elif index["withheld_count"]:
         best = index["withheld"][0]
         edge = best.get("edge_r")
@@ -385,6 +396,8 @@ def build_buy_only(best_rows: Sequence[Mapping[str, Any]], *, verified: bool) ->
     return {
         "rows": rows,
         "count": len(rows),
+        "admission_state": "ELIGIBLE_BUY" if rows else "NO_ELIGIBLE_BUY",
+        "evidence_note": note,
         "verified": bool(verified),
         "withheld_count": int(index["withheld_count"]),
         "scanner_buys": int(index["scanner_buys"]),
@@ -392,8 +405,10 @@ def build_buy_only(best_rows: Sequence[Mapping[str, Any]], *, verified: bool) ->
         "scanned_at": index["scanned_at"],
         "empty_reason": empty_reason,
         "rule": (
-            f"BUY only: setup's measured edge >= {bar:+.2f}R/trade with a 95% lower bound above zero "
-            "(walk-forward backtest, net of costs), and the committee says BUY · enter now. Paper only."
+            f"BUY only: setup's measured edge >= {bar:+.2f}R/trade (walk-forward backtest, net of costs) "
+            "with a dependence-aware 95% lower bound above zero over >= 20 independent 10-session windows, "
+            "surviving the family-wise correction within the year's alpha budget, from current, dated "
+            "evidence — and the committee says BUY · enter now. A BUY is not a win probability. Paper only."
         ),
     }
 

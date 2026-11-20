@@ -434,6 +434,28 @@ def _evidence_authority() -> dict[str, Any] | None:
     return _AUTHORITY_CACHE["snapshot"]
 
 
+def evidence_authority_key() -> tuple:
+    """Identity of everything load_scan's BUY re-verification depends on besides the scan file.
+
+    Readers that cache a parsed scan must include this: the snapshot pointer
+    or the alpha ledger can change while the scan file does not.
+    """
+    out = []
+    try:
+        from scan.calibration_snapshot import DEFAULT_DIR
+        st = (Path(DEFAULT_DIR) / "current.json").stat()
+        out.append(("pointer", st.st_mtime_ns, st.st_size))
+    except Exception:
+        out.append(("pointer", None))
+    try:
+        from research.alpha_ledger import ledger_path
+        st = ledger_path().stat()
+        out.append(("alpha", st.st_mtime_ns, st.st_size))
+    except Exception:
+        out.append(("alpha", None))
+    return tuple(out)
+
+
 def _withhold(row: dict[str, Any], reason: str) -> None:
     row["verdict"] = "WATCH"
     if row.get("status") == "Ready to trade":
