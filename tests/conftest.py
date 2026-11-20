@@ -239,6 +239,10 @@ def isolate_mutable_runtime_state(tmp_path_factory, monkeypatch, request):
     monkeypatch.setenv("QT_LEARNING_INGESTED", str(ingested))
     challengers = tmp_path_factory.mktemp("challengers") / "challengers.json"
     monkeypatch.setenv("QT_CHALLENGERS", str(challengers))
+    # The alpha budget is global per year: a shared ledger would let one test's
+    # fixture reservations exhaust another test's budget.
+    alpha_ledger = tmp_path_factory.mktemp("alpha_ledger") / "alpha_ledger.db"
+    monkeypatch.setenv("QT_ALPHA_LEDGER", str(alpha_ledger))
     calibration = tmp_path_factory.mktemp("calibration") / "calibration.json"
     monkeypatch.setenv("QT_CALIBRATION", str(calibration))
     forward_ledger = tmp_path_factory.mktemp("forward_ledger") / "forward_evidence.jsonl"

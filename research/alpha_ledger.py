@@ -83,6 +83,12 @@ def binding_sha256(binding: Mapping[str, Any] | None) -> str:
 
 
 def ledger_path() -> Path:
+    """logs/research/alpha_ledger.db; QT_ALPHA_LEDGER overrides it (the hermetic test suite isolates per test)."""
+    import os
+
+    override = os.environ.get("QT_ALPHA_LEDGER", "").strip()
+    if override:
+        return Path(override)
     from core.runtime_paths import logs_path
 
     return logs_path("research", LEDGER_FILE)
