@@ -527,3 +527,69 @@ def test_an_unrecorded_exceptional_session_never_silently_changes_the_horizon(tm
     rep = CS.evaluate(full.get, maturity=odd, holidays=HOLIDAYS, path=path)
     assert rep["sessions_evaluated"] == 0
     assert rep["session_outcomes"] == {"WINDOW_NOT_YET_VERIFIED": 1}
+
+
+def _legacy_ledger(path, sessions=("2026-11-16", "2026-11-17", "2026-11-18", "2026-11-19")):
+    conn = sqlite3.connect(path)
+    conn.executescript(CS._SCHEMA)
+    for session in sessions:
+        h = _header(session, scan_id="dup")
+        conn.execute("INSERT INTO sessions(session,status,reason,hypothesis,schema_version,frozen_at,entry_deadline,"
+                     "scan_id,scan_completed_at,model_version,candidates,frozen,exclusions,universe,payload_sha256) "
+                     "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                     (session, "FROZEN", "", CS.HYPOTHESIS, CS.SCHEMA_VERSION, h["frozen_at"], h["entry_deadline"],
+                      "dup", h["scan_completed_at"], "{}", 0, 0, "{}", "{}", "x"))
+        conn.execute("INSERT INTO predictions(session, symbol) VALUES(?, 'SYM')", (session,))
+    conn.commit()
+    conn.close()
+
+
+def _dump(path):
+    with sqlite3.connect(path) as conn:
+        return (conn.execute("SELECT session, status, reason FROM sessions ORDER BY rowid").fetchall(),
+                conn.execute("SELECT session, symbol FROM predictions ORDER BY rowid").fetchall())
+
+
+def test_the_migration_keeps_every_row_and_is_idempotent(tmp_path):
+    path = tmp_path / "legacy.db"
+    _legacy_ledger(path)
+    before = _dump(path)
+    with closing(CS._connect(path)):
+        pass
+    first = _dump(path)
+    with closing(CS._connect(path)):
+        pass
+    assert _dump(path) == first                                                # idempotent
+    assert len(first[0]) == len(before[0]) and first[1] == before[1]           # nothing deleted
+    assert [s for s, *_ in first[0]] == [s for s, *_ in before[0]]
+
+
+def test_a_crash_halfway_through_the_migration_changes_nothing(tmp_path, monkeypatch):
+    path = tmp_path / "legacy.db"
+    _legacy_ledger(path)
+    before = _dump(path)
+    real_connect = sqlite3.connect
+
+    class Proxy:
+        def __init__(self, conn):
+            self._conn, self.updates = conn, 0
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+        def execute(self, sql, *args):
+            if sql.lstrip().upper().startswith("UPDATE SESSIONS"):
+                self.updates += 1
+                if self.updates == 2:
+                    raise sqlite3.OperationalError("simulated crash mid-migration")
+            return self._conn.execute(sql, *args)
+
+    monkeypatch.setattr(CS.sqlite3, "connect", lambda *a, **k: Proxy(real_connect(*a, **k)))
+    with pytest.raises(sqlite3.OperationalError):
+        CS._connect(path)
+    monkeypatch.setattr(CS.sqlite3, "connect", real_connect)
+    assert _dump(path) == before                                               # rolled back as a whole
+    with closing(CS._connect(path)):
+        pass
+    sessions, preds = _dump(path)
+    assert [st for _s, st, _r in sessions] == ["FROZEN", "MISSED", "MISSED", "MISSED"] and preds == before[1]
