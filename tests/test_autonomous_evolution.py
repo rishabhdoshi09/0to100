@@ -404,6 +404,7 @@ def test_degraded_bootstrap_does_not_publish_partial_history(monkeypatch, tmp_pa
 def test_historical_over_rejection_links_to_forward_counterfactual(monkeypatch, tmp_path):
     from product.learning_policy_store import load_policies
     from product.paper_learning_loop import ingest_counterfactual
+    from core.evaluation_spec import spec_tag
     from product.counterfactual_learning import MISSED_WINNER
 
     policy_path = tmp_path / "policies.json"
@@ -426,6 +427,7 @@ def test_historical_over_rejection_links_to_forward_counterfactual(monkeypatch, 
             "symbol": "XYZ",
             "reason_code": "SOFT_FILTER",
             "classification": MISSED_WINNER,
+            "eval_spec": spec_tag(),
             "evidence": {"regime": "RISK_ON"},
         },
         floors={"experimental": 1, "eligible": 2, "active": 3},

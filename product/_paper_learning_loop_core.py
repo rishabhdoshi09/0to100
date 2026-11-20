@@ -392,6 +392,16 @@ def ingest_counterfactual(
     """
     classification = str(settled.get("classification") or "")
     reason = str(settled.get("reason_code") or "REJECTED")
+    # One rulebook: a forward-outcome label counts only when it was measured
+    # under the CURRENT rulebook (horizon, stop/target path, costs), the same as
+    # taken trades. Legacy 5-session close-to-close labels, or any other spec,
+    # never reach a policy, the feature store or a dedupe claim.
+    from product.counterfactual_learning import FORWARD_OUTCOME_CLASSES, UNMEASURED, is_rulebook
+    spec = settled.get("eval_spec") or (settled.get("outcome") or {}).get("eval_spec")
+    if classification == UNMEASURED:
+        return {"skipped": "UNMEASURED", "classification": classification}
+    if classification in FORWARD_OUTCOME_CLASSES and not is_rulebook(spec):
+        return {"skipped": "INCOMPATIBLE_EVAL_SPEC", "eval_spec": spec, "classification": classification}
     evidence = dict(settled.get("evidence") or {})
     keyed = counterfactual_observation_key(settled)
     obs: dict[str, Any] = {}

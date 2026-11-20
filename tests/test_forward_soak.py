@@ -37,6 +37,7 @@ from product.forward_soak import (
 )
 from product.paper_autopilot import DD_GATE_FAILED, STALE_RECOMMENDATION, run_reco_paper_cycle
 from research.auto_research.paper_book import PaperBook
+from tests.evidence_fixtures import rulebook_outcome
 
 
 def _now():
@@ -229,10 +230,10 @@ def test_rejected_candidates_settle_automatically_and_are_not_pnl():
             "regime": "RISK_ON",
         }],
     })
-    first = settle_pending_from_market(return_fn=lambda symbol, _as_of: 14.8 if symbol == "WIPRO" else None)
+    first = settle_pending_from_market(outcome_fn=lambda symbol, _as_of, _row: rulebook_outcome(2.5, "WIN", 14.8) if symbol == "WIPRO" else None)
     assert first["updated"] == 1
     assert first["classifications"][MISSED_WINNER] == 1
-    second = settle_pending_from_market(return_fn=lambda symbol, _as_of: 14.8 if symbol == "WIPRO" else None)
+    second = settle_pending_from_market(outcome_fn=lambda symbol, _as_of, _row: rulebook_outcome(2.5, "WIN", 14.8) if symbol == "WIPRO" else None)
     assert second["updated"] == 0
     row = load_ledger()[0]
     assert row["entered"] is False
@@ -254,7 +255,7 @@ def test_missed_winner_does_not_disable_hard_dd_or_chase_gates():
             "target": 115,
         }],
     })
-    settle_pending_from_market(return_fn=lambda symbol, _as_of: 12.0)
+    settle_pending_from_market(outcome_fn=lambda symbol, _as_of, _row: rulebook_outcome(2.0, "WIN", 12.0))
     failed = dict(_eligible_card())
     failed["dd_verdict"] = "FAIL"
     blocked = _cycle(PaperBook(capital=100_000), [failed], persist_journal=False)
@@ -478,12 +479,12 @@ def test_settle_and_report_is_idempotent_eod_hook():
     first = settle_and_report(
         "2026-09-02",
         book=book,
-        forward_returns={"WIPRO": -6.5},
+        outcomes={"WIPRO": rulebook_outcome(-1.0, "LOSS", -6.5)},
     )
     second = settle_and_report(
         "2026-09-02",
         book=book,
-        forward_returns={"WIPRO": -6.5},
+        outcomes={"WIPRO": rulebook_outcome(-1.0, "LOSS", -6.5)},
     )
     assert first["closed_attached"]["attached"] == 1
     assert second["closed_attached"]["attached"] == 0
@@ -547,7 +548,7 @@ def test_missing_later_bars_stay_pending():
             "target": 115,
         }],
     })
-    out = settle_pending_from_market(return_fn=lambda symbol, _as_of: None)
+    out = settle_pending_from_market(outcome_fn=lambda symbol, _as_of, _row: None)
     assert out["updated"] == 0
     assert out["pending"] == 1
     assert load_ledger()[0]["later_outcome"] is None
@@ -643,6 +644,7 @@ def test_completed_scan_with_zero_qualifiers_is_not_scan_failure(monkeypatch):
 
 
 def test_rejection_gate_scorecard_keeps_counterfactuals_out_of_pnl():
+    from core.evaluation_spec import spec_tag
     from product.forward_soak import rejection_gate_scorecard
 
     rows = [
@@ -652,7 +654,7 @@ def test_rejection_gate_scorecard_keeps_counterfactuals_out_of_pnl():
             "counterfactual_classification": "MISSED_WINNER",
             "entry": 100.0,
             "stop": 95.0,
-            "later_outcome": {"forward_return_pct": 10.0},
+            "later_outcome": {"forward_return_pct": 10.0, "eval_spec": spec_tag()},
         },
         {
             "entered": False,
@@ -660,7 +662,7 @@ def test_rejection_gate_scorecard_keeps_counterfactuals_out_of_pnl():
             "counterfactual_classification": "CORRECT_REJECTION",
             "entry": 100.0,
             "stop": 95.0,
-            "later_outcome": {"forward_return_pct": -5.0},
+            "later_outcome": {"forward_return_pct": -5.0, "eval_spec": spec_tag()},
         },
     ]
 

@@ -4,6 +4,18 @@ Rejected trades are never booked as P&L. Forward bars classify the decision:
 
   CORRECT_REJECTION / MISSED_WINNER / AVOIDED_LOSER /
   RAN_AWAY_WITHOUT_ENTRY / GOOD_WAIT / FLAT
+
+Two measurements exist on disk:
+
+* RULEBOOK (current): ``settle_rulebook`` judges a rejection exactly as a taken
+  trade is judged. It uses ``core.outcome_resolver.counterfactual_outcome``,
+  the same 10-session rulebook, stop/target path and costs as signal_log, the
+  paper book and the walk-forward. The settled row carries ``eval_spec``.
+* LEGACY: ``classify_forward``/``settle`` grade a bare forward return. Until
+  2026-11-20 the forward ledger fed them a 5-session close-to-close move that
+  ignored the stop, so a rejection that was stopped out and then recovered
+  counted as a missed winner. Rows settled that way carry no ``eval_spec``,
+  and ``is_rulebook`` keeps them out of learning scores.
 """
 from __future__ import annotations
 
@@ -31,6 +43,70 @@ FLAT = "FLAT"
 # take" rather than inventing a second outcome vocabulary.
 WINNER_TAKEN = "WINNER_TAKEN"
 LOSER_TAKEN = "LOSER_TAKEN"
+# Rulebook-only outcomes: the buy-stop never traded (the rejection cost nothing),
+# or the candidate had no valid levels to judge (no label at all).
+NOT_TRIGGERED = "NOT_TRIGGERED"
+UNMEASURED = "UNMEASURED"
+#: Classifications that depend on a forward outcome, so they are horizon-bound.
+FORWARD_OUTCOME_CLASSES = frozenset({CORRECT_REJECTION, MISSED_WINNER, AVOIDED_LOSER, RAN_AWAY, FLAT,
+                                     NOT_TRIGGERED, WINNER_TAKEN, LOSER_TAKEN})
+
+
+def is_rulebook(eval_spec: Any) -> bool:
+    """True only for an outcome measured under the CURRENT rulebook (horizon, trail, gaps)."""
+    from core.evaluation_spec import spec_tag
+    return bool(eval_spec) and str(eval_spec) == spec_tag()
+
+
+def classify_rulebook(outcome: Mapping[str, Any] | None, *, later_entered: bool = False,
+                      selected: bool = False) -> str:
+    """Grade a candidate from its rulebook outcome, the same way for taken and rejected.
+
+    A taken trade with positive net R is WINNER_TAKEN; a rejected one with
+    positive net R is MISSED_WINNER. One rule, so the two rates compare.
+    """
+    if later_entered and not selected:
+        return GOOD_WAIT
+    out = dict(outcome or {})
+    kind = str(out.get("outcome") or "")
+    net = out.get("net_r")
+    if kind == "NO_LEVELS" or (net is None and kind != "NO_FILL"):
+        return UNMEASURED
+    if kind == "NO_FILL":
+        return FLAT if selected else NOT_TRIGGERED
+    if kind == "SCRATCH":
+        return FLAT
+    net = float(net)
+    if selected:
+        return WINNER_TAKEN if net > 0 else LOSER_TAKEN if net < 0 else FLAT
+    if net > 0:
+        return MISSED_WINNER
+    if net < 0:
+        return AVOIDED_LOSER if kind == "LOSS" else CORRECT_REJECTION
+    return FLAT
+
+
+def settle_rulebook(row: Mapping[str, Any], outcome: Mapping[str, Any] | None, *,
+                    later_entered: bool = False) -> dict[str, Any]:
+    """Settle a frozen rejection from its rulebook outcome. Never P&L."""
+    out = dict(row)
+    o = dict(outcome or {})
+    classification = classify_rulebook(o, later_entered=later_entered)
+    out["outcome"] = {
+        "forward_return_pct": o.get("return_pct"),
+        "later_entered": later_entered,
+        "not_pnl": True,
+        "resolved_at": datetime.now(timezone.utc).isoformat(),
+        "eval_spec": o.get("eval_spec"),
+        "rulebook_outcome": o.get("outcome"),
+        "gross_r": o.get("gross_r"),
+        "net_r": o.get("net_r"),
+    }
+    out["eval_spec"] = o.get("eval_spec")
+    out["classification"] = classification
+    # The same unit as a taken paper trade: rulebook R net of costs.
+    out["counterfactual_R"] = None if o.get("net_r") is None else round(float(o["net_r"]), 6)
+    return out
 
 
 def ledger_path(path: str | Path | None = None) -> Path:

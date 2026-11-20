@@ -19,6 +19,8 @@ from product import forward_soak as FS
 from product import learning_observations as LO
 from product import learning_policy_store as LPS
 from product.paper_learning_loop import ingest_closed_trade, ingest_counterfactual
+from core.evaluation_spec import spec_tag
+from tests.evidence_fixtures import rulebook_outcome
 
 
 def _policy(path, policy_id):
@@ -32,6 +34,7 @@ def _settled_reject(symbol="TCS", as_of="2026-09-01", reason="ENTRY_TOO_EXTENDED
         "as_of": as_of,
         "reason_code": reason,
         "classification": cls,
+        "eval_spec": spec_tag(),
         "evidence": {"setup_label": "VCP", "regime": "RISK_ON"},
     }
 
@@ -164,7 +167,7 @@ def test_forward_soak_cycles_of_same_rejections_count_independent_units(tmp_path
                 for i in range(5)
             ],
         })
-    out = FS.settle_pending_from_market(return_fn=lambda _s, _d: -3.0, policy_path=policy_path)
+    out = FS.settle_pending_from_market(outcome_fn=lambda _s, _d, _r: rulebook_outcome(-0.5, "LOSS", -3.0), policy_path=policy_path)
     assert out["updated"] == 60  # every ledger row keeps its own settlement (audit trail)
     assert _policy(policy_path, "REJECT::ENTRY_TOO_EXTENDED")["sample_size"] == 5
 
@@ -179,9 +182,9 @@ def test_learning_memory_counts_decisions_not_cycle_copies(tmp_path, monkeypatch
     rows = []
     for _cycle in range(10):  # ten cycles re-freeze the same two decisions
         rows.append({"as_of": "2026-09-01", "symbol": "TCS", "reason_code": "DD_GATE_FAILED",
-                     "classification": "MISSED_WINNER", "setup": "VCP"})
+                     "classification": "MISSED_WINNER", "setup": "VCP", "eval_spec": spec_tag()})
         rows.append({"as_of": "2026-09-01", "symbol": "INFY", "reason_code": "DD_GATE_FAILED",
-                     "classification": "CORRECT_REJECTION", "setup": "VCP"})
+                     "classification": "CORRECT_REJECTION", "setup": "VCP", "eval_spec": spec_tag()})
     cf.write_text("".join(json.dumps(r) + "\n" for r in rows))
     memory = LOOP.consume_learning_memory("2026-09-02")
     assert memory["ledger_rows"] == 20
@@ -208,7 +211,7 @@ def test_repair_rebuilds_inflated_policy_from_independent_units_and_blocks_reing
     for cycle in range(20):
         for sym, cls in (("TCS", "MISSED_WINNER"), ("INFY", "CORRECT_REJECTION")):
             rows.append({"symbol": sym, "reason_code": "DD_GATE_FAILED", "market_timestamp": "2026-09-01",
-                         "entered": False, "later_outcome": {"forward_return_pct": 1.0},
+                         "entered": False, "later_outcome": {"forward_return_pct": 1.0, "eval_spec": spec_tag()},
                          "counterfactual_classification": cls, "cycle_id": f"c{cycle}"})
     fwd.write_text("".join(json.dumps(r) + "\n" for r in rows))
     report = REPAIR.plan(forward_path=fwd, cf_path=tmp_path / "missing.jsonl", policy_file=policy_file)
@@ -224,9 +227,42 @@ def test_repair_rebuilds_inflated_policy_from_independent_units_and_blocks_reing
     assert rebuilt["rebuilt_from_independent_units"]["previous_sample_size"] == 40
     assert _policy(policy_file, "SETUP::VCP")["sample_size"] == 7
     # The live ingest now treats those decisions as already counted.
-    ingest_counterfactual({"symbol": "TCS", "as_of": "2026-09-01", "reason_code": "DD_GATE_FAILED",
-                           "classification": "MISSED_WINNER"}, path=policy_file)
+    dup = ingest_counterfactual({"symbol": "TCS", "as_of": "2026-09-01", "reason_code": "DD_GATE_FAILED",
+                                 "classification": "MISSED_WINNER", "eval_spec": spec_tag()}, path=policy_file)
+    assert dup.get("duplicate_observation") is True
     assert _policy(policy_file, "REJECT::DD_GATE_FAILED")["sample_size"] == 2
+
+
+def test_repair_never_rebuilds_from_legacy_horizon_labels(tmp_path):
+    """The repair mirrors the live ingest: 5-session close-to-close labels are excluded,
+    and a policy whose only evidence is legacy is reset to n = 0, not kept stale."""
+    from product import learning_policy_repair as REPAIR
+
+    policy_file = tmp_path / "product" / "policies.json"
+    for reason in ("DD_GATE_FAILED", "LOW_QUALITY_SETUP"):
+        LPS.upsert_policy(policy_id=f"REJECT::{reason}", dimension="reason_code", bucket=reason,
+                          sample_size=30, expectancy_R=-0.40, source="counterfactual_not_pnl", path=policy_file,
+                          extra={"affects_selection": False})
+    rows = [  # LOW_QUALITY_SETUP has only legacy labels; DD_GATE_FAILED has one of each
+        {"symbol": "A", "reason_code": "LOW_QUALITY_SETUP", "market_timestamp": "2026-09-01", "entered": False,
+         "later_outcome": {"forward_return_pct": 9.0}, "counterfactual_classification": "MISSED_WINNER"},
+        {"symbol": "B", "reason_code": "DD_GATE_FAILED", "market_timestamp": "2026-09-01", "entered": False,
+         "later_outcome": {"forward_return_pct": 9.0}, "counterfactual_classification": "MISSED_WINNER"},
+        {"symbol": "C", "reason_code": "DD_GATE_FAILED", "market_timestamp": "2026-09-01", "entered": False,
+         "later_outcome": {"forward_return_pct": -6.0, "eval_spec": spec_tag()},
+         "counterfactual_classification": "AVOIDED_LOSER"},
+    ]
+    fwd = tmp_path / "fwd.jsonl"
+    fwd.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    report = REPAIR.plan(forward_path=fwd, cf_path=tmp_path / "missing.jsonl", policy_file=policy_file)
+    assert report["independent_units"] == 1 and report["excluded_incompatible_eval_spec"] == {"forward_ledger": 2}
+    by_id = {c["policy_id"]: c for c in report["changes"]}
+    assert (by_id["REJECT::DD_GATE_FAILED"]["independent_n"], by_id["REJECT::DD_GATE_FAILED"]["expectancy_R"]) \
+        == (1, 0.4)
+    assert by_id["REJECT::LOW_QUALITY_SETUP"]["independent_n"] == 0
+    REPAIR.apply_plan(report, backup_dir=tmp_path / "backup")
+    reset = _policy(policy_file, "REJECT::LOW_QUALITY_SETUP")
+    assert reset["sample_size"] == 0 and reset["production_status"] == "OBSERVING"
 
 
 def test_scoreboard_counts_decisions_and_never_labels_unmeasured_trades_measured(monkeypatch):
@@ -243,7 +279,7 @@ def test_scoreboard_counts_decisions_and_never_labels_unmeasured_trades_measured
                 for i in range(30)
             ],
         })
-    FS.settle_pending_from_market(return_fn=lambda _s, _d: -3.0)
+    FS.settle_pending_from_market(outcome_fn=lambda _s, _d, _r: rulebook_outcome(-0.5, "LOSS", -3.0))
     board = FS.scoreboard()
     assert board["real_forward_ledger_rows"] == 240
     assert board["real_forward_observations"] == 30

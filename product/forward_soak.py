@@ -36,7 +36,10 @@ VERIFY_PATH = logs_dir() / "product" / "forward_soak_verify.json"
 SCHEMA_VERSION = 1
 MIN_SCOREBOARD_N = 20
 VERIFY_MIN_INTERVAL_S = 60
-SETTLE_HORIZON = 5
+# Counterfactual rejections settle on the ONE rulebook (core.evaluation_spec),
+# exactly like taken paper trades. Until 2026-11-20 this was a 5-session
+# close-to-close move that ignored the stop (see counterfactual_learning).
+from core.evaluation_spec import OUTCOME_HORIZON_SESSIONS as SETTLE_HORIZON  # noqa: E402
 
 NOT_STARTED = "NOT_STARTED"
 COLLECTING = "COLLECTING"
@@ -193,11 +196,12 @@ def record_cycle_evidence(cycle: Mapping[str, Any]) -> dict[str, Any]:
     return {"ledger": frozen, "journey": journey.get("summary")}
 
 
-def _forward_return(symbol: str, from_date: str, horizon: int = SETTLE_HORIZON) -> float | None:
+def _rulebook_outcome(symbol: str, as_of: str, row: Mapping[str, Any], horizon: int = SETTLE_HORIZON):
+    """The rejection judged as if taken: same rulebook, stop/target path and costs."""
     try:
-        from core.outcome_resolver import session_close_return
-        got = session_close_return(symbol, from_date, horizon=horizon)
-        return None if got is None else float(got[1])
+        from core.outcome_resolver import counterfactual_outcome
+        return counterfactual_outcome(symbol, as_of, row.get("entry"), row.get("stop"), row.get("target"),
+                                      horizon=horizon)
     except Exception:
         return None
 
@@ -209,20 +213,25 @@ _SETTLE_FLUSH_EVERY = 250
 def settle_pending_from_market(
     *,
     horizon: int = SETTLE_HORIZON,
-    return_fn: Callable[[str, str], float | None] | None = None,
+    outcome_fn: Callable[[str, str, Mapping[str, Any]], Mapping[str, Any] | None] | None = None,
     later_entered: Mapping[str, bool] | None = None,
     floors: Mapping[str, int] | None = None,
     policy_path=None,
 ) -> dict[str, Any]:
     """Rejected / waited / not-surfaced names get a classification when bars exist.
 
-    Never books P&L. Missing bars stay pending. Duplicate settlement is a no-op.
+    Each rejection is judged as a taken trade would be (counterfactual_outcome:
+    the rulebook horizon, stop/target path and costs), so a missed winner here
+    means what a winner means for a taken trade. The settled row carries the
+    rulebook's ``eval_spec``. Never books P&L. Missing bars stay pending.
+    Duplicate settlement is a no-op. ``outcome_fn(symbol, as_of, row)`` is the
+    test seam and must return a rulebook outcome dict (or None while pending).
     """
     from product.paper_learning_loop import ingest_counterfactual
-    from product.counterfactual_learning import settle as cf_settle, ledger_path as cf_path
+    from product.counterfactual_learning import settle_rulebook, ledger_path as cf_path
     from product.forward_evidence import load_ledger as load_fwd
 
-    getter = return_fn or (lambda symbol, as_of: _forward_return(symbol, as_of, horizon))
+    getter = outcome_fn or (lambda symbol, as_of, row: _rulebook_outcome(symbol, as_of, row, horizon))
     entered = {str(k).upper(): bool(v) for k, v in dict(later_entered or {}).items()}
     pending = [r for r in load_fwd() if not r.get("entered") and r.get("later_outcome") is None]
     updated = 0
@@ -247,12 +256,12 @@ def settle_pending_from_market(
         for row in pending:
             symbol = str(row.get("symbol") or "").upper()
             as_of = str(row.get("market_timestamp") or row.get("pit_proof", {}).get("as_of") or "")[:10]
-            fwd = getter(symbol, as_of) if as_of else None
+            outcome = getter(symbol, as_of, row) if as_of else None
             later = entered.get(symbol, False)
-            if fwd is None and not later:
+            if outcome is None and not later:
                 pending_n += 1
                 continue
-            settled = cf_settle(
+            settled = settle_rulebook(
                 {
                     "hypothetical_entry": row.get("entry"),
                     "hypothetical_stop": row.get("stop"),
@@ -270,15 +279,17 @@ def settle_pending_from_market(
                     "setup": row.get("setup"),
                     "regime": row.get("regime"),
                 },
-                forward_return_pct=fwd,
+                outcome,
                 later_entered=later,
             )
             chunk.append((
                 {
                     "decision_id": str(row.get("decision_id")),
                     "classification": str(settled.get("classification") or ""),
-                    "forward_return_pct": fwd,
-                    "outcome_provenance": COUNTERFACTUAL if later or fwd is not None else None,
+                    "forward_return_pct": (settled.get("outcome") or {}).get("forward_return_pct"),
+                    "outcome_provenance": COUNTERFACTUAL if later or outcome is not None else None,
+                    "eval_spec": settled.get("eval_spec"),
+                    "counterfactual_R": settled.get("counterfactual_R"),
                 },
                 settled,
             ))
@@ -353,17 +364,17 @@ def settle_and_report(
     as_of: str,
     *,
     book=None,
-    forward_returns: Mapping[str, float] | None = None,
+    outcomes: Mapping[str, Mapping[str, Any]] | None = None,
     later_entered: Mapping[str, bool] | None = None,
     floors: Mapping[str, int] | None = None,
     policy_path=None,
 ) -> dict[str, Any]:
     """EOD hook: ingest is already done by the caller; this settles and reports."""
     closed = attach_closed_trades(book) if book is not None else {"attached": 0}
-    returns = {str(k).upper(): float(v) for k, v in dict(forward_returns or {}).items()}
-    return_fn = (lambda symbol, _as_of: returns.get(symbol)) if forward_returns is not None else None
+    by_symbol = {str(k).upper(): dict(v) for k, v in dict(outcomes or {}).items()}
+    outcome_fn = (lambda symbol, _as_of, _row: by_symbol.get(symbol)) if outcomes is not None else None
     settled = settle_pending_from_market(
-        return_fn=return_fn,
+        outcome_fn=outcome_fn,
         later_entered=later_entered,
         floors=floors,
         policy_path=policy_path,
@@ -650,7 +661,20 @@ def _group_expectancy(rows: Sequence[Mapping[str, Any]], key: str) -> dict[str, 
     return out
 
 
+def _is_comparable_rejection(row: Mapping[str, Any]) -> bool:
+    """A settled rejection measured under the CURRENT rulebook (or an event label like GOOD_WAIT)."""
+    from product.counterfactual_learning import FORWARD_OUTCOME_CLASSES, is_rulebook
+    cls = str(row.get("counterfactual_classification") or "")
+    return cls not in FORWARD_OUTCOME_CLASSES or is_rulebook((row.get("later_outcome") or {}).get("eval_spec"))
+
+
 def _counterfactual_r(row: Mapping[str, Any]) -> float | None:
+    later_rb = dict(row.get("later_outcome") or {})
+    if later_rb.get("counterfactual_R") is not None:          # rulebook net R, the taken-trade unit
+        try:
+            return float(later_rb["counterfactual_R"])
+        except (TypeError, ValueError):
+            return None
     try:
         entry = float(row.get("entry"))
         stop = float(row.get("stop"))
@@ -677,7 +701,7 @@ def rejection_gate_scorecard(
         if row.get("entered"):
             continue
         classification = str(row.get("counterfactual_classification") or "")
-        if not classification:
+        if not classification or not _is_comparable_rejection(row):
             continue
         reason = str(row.get("reason_code") or "UNSPECIFIED_REJECTION")
         bucket = buckets.setdefault(
@@ -740,7 +764,10 @@ def scoreboard() -> dict[str, Any]:
     use = independent_decisions(real) if real else []
     taken = [r for r in use if r.get("entered")]
     settled_taken = [r for r in taken if r.get("gross_R") is not None]
-    rejected_settled = [r for r in use if not r.get("entered") and r.get("counterfactual_classification")]
+    all_rejected_settled = [r for r in use if not r.get("entered") and r.get("counterfactual_classification")]
+    # Only rejections judged under the same rulebook as taken trades are counted;
+    # legacy 5-session close-to-close labels are reported aside, never pooled.
+    rejected_settled = [r for r in all_rejected_settled if _is_comparable_rejection(r)]
     adj = [r for r in settled_taken if r.get("execution_adjusted_R") is not None]
     coverage = (len(adj) / len(settled_taken)) if settled_taken else 0.0
     gross_vals = [float(r["gross_R"]) for r in settled_taken]
@@ -811,6 +838,7 @@ def scoreboard() -> dict[str, Any]:
             1 for r in real if not r.get("entered") and r.get("counterfactual_classification")
         ),
         "rejection_gate_evidence": rejection_gate_scorecard(rejected_settled),
+        "rejected_legacy_eval_spec_excluded": len(all_rejected_settled) - len(rejected_settled),
         "missed_winners": counts.get("MISSED_WINNER", 0),
         "avoided_losers": counts.get("AVOIDED_LOSER", 0),
         "good_waits": counts.get("GOOD_WAIT", 0),

@@ -55,14 +55,32 @@ def _read_jsonl(path: Path) -> Iterable[dict[str, Any]]:
     return out
 
 
-def independent_units(forward_rows: Iterable[Mapping[str, Any]], cf_rows: Iterable[Mapping[str, Any]]):
-    """{(day, symbol, reason): {"classification", "setup"}} — first settlement wins."""
+def _comparable(cls: str, spec: Any) -> bool:
+    """Mirror of the live ingest guard: a forward-outcome label counts only under the current rulebook."""
+    from product.counterfactual_learning import FORWARD_OUTCOME_CLASSES, UNMEASURED, is_rulebook
+    if cls == UNMEASURED:
+        return False
+    return cls not in FORWARD_OUTCOME_CLASSES or is_rulebook(spec)
+
+
+def independent_units(forward_rows: Iterable[Mapping[str, Any]], cf_rows: Iterable[Mapping[str, Any]],
+                      excluded: dict[str, int] | None = None):
+    """{(day, symbol, reason): {"classification", "setup"}} — first settlement wins.
+
+    Labels measured under another rulebook (the legacy 5-session close-to-close
+    counterfactuals) are not comparable with taken trades and are skipped, as
+    the live ingest skips them; ``excluded`` counts them.
+    """
     units: dict[tuple[str, str, str], dict[str, str]] = {}
+    excluded = excluded if excluded is not None else {}
     for row in forward_rows:
         if row.get("entered") or not row.get("later_outcome"):
             continue
         cls = str(row.get("counterfactual_classification") or "")
         if not cls:
+            continue
+        if not _comparable(cls, (row.get("later_outcome") or {}).get("eval_spec")):
+            excluded["forward_ledger"] = excluded.get("forward_ledger", 0) + 1
             continue
         day = str(row.get("market_timestamp") or (row.get("pit_proof") or {}).get("as_of") or "")[:10]
         key = (day, str(row.get("symbol") or "").upper(), str(row.get("reason_code") or "REJECTED"))
@@ -71,6 +89,9 @@ def independent_units(forward_rows: Iterable[Mapping[str, Any]], cf_rows: Iterab
     for row in cf_rows:
         cls = str(row.get("classification") or "")
         if not cls:
+            continue
+        if not _comparable(cls, row.get("eval_spec") or (row.get("outcome") or {}).get("eval_spec")):
+            excluded["counterfactuals"] = excluded.get("counterfactuals", 0) + 1
             continue
         day = str(row.get("as_of") or "")[:10]
         key = (day, str(row.get("symbol") or "").upper(), str(row.get("reason_code") or "REJECTED"))
@@ -94,10 +115,16 @@ def _observations(units) -> dict[str, list[tuple[str, str, float]]]:
 
 
 def plan(*, forward_path: Path, cf_path: Path, policy_file: Path) -> dict[str, Any]:
-    units = independent_units(_read_jsonl(forward_path), _read_jsonl(cf_path))
+    excluded: dict[str, int] = {}
+    units = independent_units(_read_jsonl(forward_path), _read_jsonl(cf_path), excluded)
     per = _observations(units)
     store = LPS.load_policies(policy_file)
     existing = {str(p.get("policy_id")): dict(p) for p in store.get("policies") or []}
+    # A counterfactual-owned policy with no comparable observation left (only
+    # legacy-horizon evidence) is reset to n = 0 rather than kept stale.
+    for policy_id, old in existing.items():
+        if str(old.get("evidence_source") or "").startswith("counterfactual") and policy_id not in per:
+            per[policy_id] = []
     changes = []
     for policy_id, obs in sorted(per.items()):
         old = existing.get(policy_id)
@@ -105,7 +132,7 @@ def plan(*, forward_path: Path, cf_path: Path, policy_file: Path) -> dict[str, A
             continue  # only policies the counterfactual ingest owns
         values = [v for _k, _s, v in obs]
         n = len(values)
-        mean = sum(values) / n
+        mean = sum(values) / n if n else 0.0
         sd = math.sqrt(sum((v - mean) ** 2 for v in values) / (n - 1)) if n > 1 else None
         half = 1.96 * sd / math.sqrt(n) if sd is not None else None
         changes.append({
@@ -121,6 +148,7 @@ def plan(*, forward_path: Path, cf_path: Path, policy_file: Path) -> dict[str, A
         })
     return {
         "independent_units": len(units),
+        "excluded_incompatible_eval_spec": excluded,
         "changes": changes,
         "forward_path": str(forward_path),
         "counterfactual_path": str(cf_path),

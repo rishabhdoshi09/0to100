@@ -244,6 +244,8 @@ def _apply_settlement(
     slippage_status: str | None = None,
     liquidity_assumptions: str | None = None,
     outcome_provenance: str | None = None,
+    eval_spec: str | None = None,
+    counterfactual_R: float | None = None,
 ) -> dict[str, Any]:
     updated = dict(row)
     if updated.get("later_outcome") is None:
@@ -252,6 +254,10 @@ def _apply_settlement(
             "settled_at": settled_at,
             "provenance": current_provenance(outcome_provenance),
             "not_pnl": not bool(updated.get("entered")),
+            # The rulebook the outcome was measured under; absent on legacy
+            # 5-session close-to-close rows, which never enter learning scores.
+            "eval_spec": eval_spec,
+            "counterfactual_R": counterfactual_R,
         }
         if classification and updated.get("counterfactual_classification") is None:
             updated["counterfactual_classification"] = classification

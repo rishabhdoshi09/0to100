@@ -534,9 +534,20 @@ _SETTLE_FLUSH_EVERY = 500
 
 
 def settle_official_outcomes(session: str | None = None) -> dict[str, Any]:
-    """Resolve frozen decisions from official completed bars. No Kite."""
-    from core.outcome_resolver import session_close_return
-    from product.counterfactual_learning import classify_forward, ledger_path as cf_path
+    """Resolve frozen REJECTED/WAITED decisions from official completed bars. No Kite.
+
+    Each one is judged as a taken trade would be (core.outcome_resolver.
+    counterfactual_outcome: the one rulebook's horizon, stop/target path and
+    costs) and carries the rulebook's ``eval_spec``. Until 2026-11-20 this
+    used a 5-session close-to-close move.
+
+    Entered (taken) rows are never settled here. A taken trade's outcome is its
+    real paper close (forward_soak.attach_closed_trades). A counterfactual
+    stamped on it first would block that real result forever, because the
+    ledger settles a row once.
+    """
+    from core.outcome_resolver import counterfactual_outcome
+    from product.counterfactual_learning import classify_rulebook, ledger_path as cf_path
     from product.forward_evidence import attach_settlements, load_ledger
 
     as_of = session or session_date()
@@ -560,7 +571,8 @@ def settle_official_outcomes(session: str | None = None) -> dict[str, Any]:
             symbol = str(row.get("symbol") or "")
             day = str(row.get("as_of") or as_of)[:10]
             try:
-                resolved = session_close_return(symbol, day, horizon=5)
+                resolved = counterfactual_outcome(symbol, day, row.get("hypothetical_entry"),
+                                                  row.get("hypothetical_stop"), row.get("hypothetical_target"))
             except Exception as exc:
                 failed.append({"symbol": symbol, "error": str(exc)[:160]})
                 rewritten.append(row)
@@ -569,18 +581,18 @@ def settle_official_outcomes(session: str | None = None) -> dict[str, Any]:
                 pending.append({"symbol": symbol, "as_of": day, "reason": "HORIZON_NOT_REACHED"})
                 rewritten.append(row)
                 continue
-            _exit, ret = resolved
-            classification = classify_forward(
-                entry=row.get("hypothetical_entry"),
-                stop=row.get("hypothetical_stop"),
-                target=row.get("hypothetical_target"),
-                forward_return_pct=ret,
-            )
+            ret = resolved.get("return_pct")
+            classification = classify_rulebook(resolved)
             row = dict(row)
-            row["outcome"] = {"forward_return_pct": ret, "exit": _exit, "not_pnl": True, "source": "official_bhavcopy"}
+            row["outcome"] = {"forward_return_pct": ret, "exit": resolved.get("exit_price"), "not_pnl": True,
+                              "source": "official_bhavcopy", "eval_spec": resolved.get("eval_spec"),
+                              "rulebook_outcome": resolved.get("outcome"), "net_r": resolved.get("net_r")}
+            row["eval_spec"] = resolved.get("eval_spec")
+            row["counterfactual_R"] = resolved.get("net_r")
             row["classification"] = classification
             rewritten.append(row)
-            settled.append({"symbol": symbol, "classification": classification, "return_pct": ret, "as_of": day})
+            settled.append({"symbol": symbol, "classification": classification, "return_pct": ret, "as_of": day,
+                            "eval_spec": resolved.get("eval_spec")})
             from product.missed_winner import analyze_decision_quality
 
             quality = analyze_decision_quality(
@@ -593,6 +605,7 @@ def settle_official_outcomes(session: str | None = None) -> dict[str, Any]:
                 "reason_code": row.get("reason_code"),
                 "decision_quality": quality,
                 "provenance": "REAL_FORWARD_MARKET",
+                "eval_spec": resolved.get("eval_spec"),
                 "updates_policy": False,
                 "observation": "counterfactual_settled",
             })
@@ -615,24 +628,24 @@ def settle_official_outcomes(session: str | None = None) -> dict[str, Any]:
     queued: list[dict[str, Any]] = []
     try:
         for row in load_ledger():
-            if row.get("later_outcome") or not row.get("decision_id"):
+            if row.get("later_outcome") or not row.get("decision_id") or row.get("entered"):
                 continue
             symbol = str(row.get("symbol") or "")
             day = str(row.get("market_timestamp") or row.get("pit_proof", {}).get("as_of") or as_of)[:10]
             try:
-                resolved = session_close_return(symbol, day, horizon=5)
+                resolved = counterfactual_outcome(symbol, day, row.get("entry"), row.get("stop"), row.get("target"))
             except Exception:
                 continue
             if resolved is None:
                 pending.append({"symbol": symbol, "decision_id": row.get("decision_id"), "reason": "HORIZON_NOT_REACHED"})
                 continue
-            _exit, ret = resolved
-            classification = classify_forward(
-                entry=row.get("entry"), stop=row.get("stop"), target=row.get("target"),
-                forward_return_pct=ret,
-            )
-            queued.append({"decision_id": str(row["decision_id"]), "classification": classification, "forward_return_pct": ret})
-            settled.append({"symbol": symbol, "decision_id": row.get("decision_id"), "classification": classification, "return_pct": ret})
+            ret = resolved.get("return_pct")
+            classification = classify_rulebook(resolved)
+            queued.append({"decision_id": str(row["decision_id"]), "classification": classification,
+                           "forward_return_pct": ret, "eval_spec": resolved.get("eval_spec"),
+                           "counterfactual_R": resolved.get("net_r")})
+            settled.append({"symbol": symbol, "decision_id": row.get("decision_id"), "classification": classification,
+                            "return_pct": ret, "eval_spec": resolved.get("eval_spec")})
             if len(queued) >= _SETTLE_FLUSH_EVERY:
                 attach_settlements(queued)
                 queued = []
@@ -653,6 +666,8 @@ def consume_learning_memory(session: str | None = None) -> dict[str, Any]:
     by_reason_detail: dict[str, dict[str, int]] = {}
     observations = 0
     ledger_rows = 0
+    legacy_excluded = 0
+    from product.counterfactual_learning import FORWARD_OUTCOME_CLASSES, is_rulebook
     # Every paper cycle re-freezes the names it rejects, so one decision (day,
     # symbol, reason) has a row per cycle. Memory counts the decision once.
     seen_units: set[tuple[str, str, str]] = set()
@@ -672,6 +687,12 @@ def consume_learning_memory(session: str | None = None) -> dict[str, Any]:
                 if not classification:
                     continue
                 ledger_rows += 1
+                # One rulebook: a forward-outcome label measured under another spec
+                # (the legacy 5-session close-to-close) is counted aside, never pooled.
+                spec = row.get("eval_spec") or (row.get("outcome") or {}).get("eval_spec")
+                if classification in FORWARD_OUTCOME_CLASSES and not is_rulebook(spec):
+                    legacy_excluded += 1
+                    continue
                 unit = (
                     str(row.get("as_of") or "")[:10],
                     str(row.get("symbol") or "").upper(),
@@ -710,6 +731,7 @@ def consume_learning_memory(session: str | None = None) -> dict[str, Any]:
         "generated_at": _now(),
         "observations": observations,
         "ledger_rows": ledger_rows,
+        "legacy_eval_spec_excluded": legacy_excluded,
         "observation_unit": "decision session x symbol x reason_code (one per unit, not per cycle)",
         "classification_counts": dict(by_class),
         "reason_code_stats": dict(by_reason),

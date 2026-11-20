@@ -68,6 +68,7 @@ def resolve_trade(
     target: float,
     *,
     horizon: int | None = None,
+    frame: Any = None,
 ):
     """Resolve a logged signal exactly as the walk-forward backtest does.
 
@@ -80,7 +81,7 @@ def resolve_trade(
     from core.evaluation_spec import simulate_trade
 
     horizon = int(horizon or PATH_HORIZON_SESSIONS)
-    df = _ohlcv(symbol)
+    df = frame if frame is not None else _ohlcv(symbol)
     if df is None or getattr(df, "empty", True) or not {"high", "low", "close"} <= set(df.columns):
         return None
     try:
@@ -103,6 +104,52 @@ def resolve_trade(
     if result.outcome in ("WIN", "LOSS", "SCRATCH"):
         return result
     return result if len(window) >= horizon else None
+
+
+def counterfactual_outcome(
+    symbol: str,
+    as_of: str,
+    entry: Any,
+    stop: Any,
+    target: Any,
+    *,
+    horizon: int | None = None,
+    frame: Any = None,
+) -> dict[str, Any] | None:
+    """A rejected or waited candidate, judged exactly as a taken trade would be.
+
+    The same rulebook as signal_log and the paper book (resolve_trade ->
+    core.evaluation_spec.simulate_trade: buy-stop fill, gap-aware stop and
+    target, breakeven trail, marked at the horizon close) and the same costs
+    as the walk-forward (core.costs.cost_in_r). Returns None while the trade
+    is still open or the bars are not published, so nothing is settled early.
+    A candidate without valid levels cannot be judged and comes back as
+    NO_LEVELS with no R.
+    """
+    from core.evaluation_spec import spec_tag
+
+    h = int(horizon or PATH_HORIZON_SESSIONS)
+    base = {"eval_spec": spec_tag(h), "horizon_sessions": h, "not_pnl": True}
+    try:
+        e, s, t = float(entry), float(stop), float(target)
+    except (TypeError, ValueError):
+        return {**base, "outcome": "NO_LEVELS", "gross_r": None, "net_r": None, "return_pct": None}
+    if not (e > s > 0 and t > e):
+        return {**base, "outcome": "NO_LEVELS", "gross_r": None, "net_r": None, "return_pct": None}
+    res = resolve_trade(symbol, as_of, e, s, t, horizon=h, frame=frame)
+    if res is None:
+        return None
+    if not res.filled:
+        return {**base, "outcome": "NO_FILL", "gross_r": 0.0, "net_r": 0.0, "return_pct": 0.0}
+    try:
+        from core.costs import cost_in_r
+        cost = cost_in_r((res.fill_price - s) / res.fill_price, "CNC")
+    except Exception:
+        cost = 0.0
+    return {**base, "outcome": res.outcome, "gross_r": round(float(res.r), 6),
+            "net_r": round(float(res.r) - cost, 6), "cost_r": round(cost, 6),
+            "fill_price": float(res.fill_price), "exit_price": float(res.exit_price),
+            "return_pct": round((res.exit_price / res.fill_price - 1.0) * 100.0, 4)}
 
 
 def session_close_return(

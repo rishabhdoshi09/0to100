@@ -60,9 +60,10 @@ def test_official_outcome_settles_without_kite(tmp_path, monkeypatch):
         evidence={"scan_run_id": "s1", "decision_id": "d1"},
         path=cf,
     )
+    from tests.evidence_fixtures import rulebook_outcome
     monkeypatch.setattr(
-        "core.outcome_resolver.session_close_return",
-        lambda symbol, day, horizon=5: (110.0, 10.0),
+        "core.outcome_resolver.counterfactual_outcome",
+        lambda *a, **k: rulebook_outcome(1.0, "WIN", 10.0),
     )
     out = LOOP.settle_official_outcomes("2026-08-03")
     assert out["n_settled"] >= 1, out
@@ -207,6 +208,8 @@ def test_consume_learning_memory_does_not_change_policy(tmp_path, monkeypatch):
     )
     row = json.loads(cf.read_text().strip())
     row["classification"] = "MISSED_WINNER"
+    from core.evaluation_spec import spec_tag
+    row["eval_spec"] = spec_tag()                     # settled under the current rulebook
     cf.write_text(json.dumps(row) + "\n")
     memory = LOOP.consume_learning_memory("2026-09-02")
     assert memory["updates_policy"] is False

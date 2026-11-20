@@ -71,8 +71,8 @@ SHADOW_SIGNAL_TYPE = "EDGE_GATED_SHADOW"
 
 def eval_spec_tag() -> str:
     """Which rulebook resolved a row (legacy rows carry NULL)."""
-    from core.evaluation_spec import BREAKEVEN_TRIGGER_PCT, OUTCOME_HORIZON_SESSIONS
-    return f"sim:h{OUTCOME_HORIZON_SESSIONS}:be{BREAKEVEN_TRIGGER_PCT:g}:gap"
+    from core.evaluation_spec import spec_tag
+    return spec_tag()
 
 
 def _get_conn() -> sqlite3.Connection:

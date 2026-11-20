@@ -39,8 +39,9 @@ NOT_DISTINGUISHABLE = "NOT_DISTINGUISHABLE_FROM_ZERO"
 
 # <30 = no claim is the system's standing evidence invariant (CLAUDE.md #6).
 MIN_N = 30
-# Same reasoning as learning_policy_store.MIN_SESSIONS_ELIGIBLE: ~4
-# non-overlapping 10-session horizons before any direction is called.
+# 20 distinct sessions is only 2 non-overlapping 10-session horizons, so it is a
+# coverage floor, not an independence claim: a direction is called only by the
+# overlap-robust interval (research.overlap_inference) on the session series.
 MIN_SESSIONS = 20
 # Improvement/deterioration needs two independent halves that each clear the floor.
 MIN_SESSIONS_TREND = 2 * MIN_SESSIONS
@@ -570,7 +571,14 @@ def forward_evidence(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     taken = [r for r in units if r.get("entered")]
     settled_taken = [r for r in taken if r.get("gross_R") is not None or r.get("execution_adjusted_R") is not None]
     rejected = [r for r in units if not r.get("entered")]
-    settled_rej = [r for r in rejected if r.get("counterfactual_classification")]
+    from core.evaluation_spec import spec_tag
+    from product.counterfactual_learning import is_rulebook
+    all_settled_rej = [r for r in rejected if r.get("counterfactual_classification")]
+    # One rulebook: only rejections judged exactly as taken trades are judged
+    # (same horizon, stop/target path, costs) are comparable with them. Legacy
+    # 5-session close-to-close rows are counted aside, never mixed in.
+    settled_rej = [r for r in all_settled_rej if is_rulebook((r.get("later_outcome") or {}).get("eval_spec"))]
+    legacy_rej = len(all_settled_rej) - len(settled_rej)
     by_reason: dict[str, dict[str, Any]] = {}
     for r in settled_rej:
         reason = str(r.get("reason_code") or "UNSPECIFIED")
@@ -596,7 +604,7 @@ def forward_evidence(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             "missed_winner_rate": round(b["missed_winner"] / b["n"], 4),
             "missed_winner_rate_ci95": wilson_interval(b["missed_winner"], b["n"]),
             "avoided_or_correct_rate": round(b["avoided_or_correct"] / b["n"], 4),
-            "mean_forward_return_pct_5s": None if not fr else round(_mean(fr), 3),
+            "mean_forward_return_pct": None if not fr else round(_mean(fr), 3),
             "evidence": INSUFFICIENT if (b["n"] < MIN_N or sessions < MIN_SESSIONS) else "MEASURED",
         }
     gross = [float(r["gross_R"]) for r in settled_taken if r.get("gross_R") is not None]
@@ -613,8 +621,11 @@ def forward_evidence(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "execution_adjusted_coverage": None if not settled_taken else round(len(adj) / len(settled_taken), 4),
         "paper_evidence": INSUFFICIENT if len(settled_taken) < MIN_N else "MEASURED",
         "rejections_settled_independent": len(settled_rej),
+        "rejections_legacy_excluded": legacy_rej,
         "rejection_gates": gates,
-        "counterfactual_note": "Rejections are hypothetical, not P&L; 5-session close-to-close.",
+        "counterfactual_eval_spec": spec_tag(),
+        "counterfactual_note": ("Rejections are hypothetical, not P&L, judged as if taken under the same rulebook "
+                                f"({spec_tag()}); {legacy_rej} legacy 5-session close-to-close rows are excluded."),
     }
 
 

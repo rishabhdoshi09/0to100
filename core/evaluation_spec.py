@@ -52,6 +52,16 @@ DECISION_HORIZON_SESSIONS = _int_env("QT_DECISION_HORIZON", "QT_EVAL_HORIZON", d
 BREAKEVEN_TRIGGER_PCT = _float_env("QT_BT_BREAKEVEN_PCT", 2.0)
 
 
+def spec_tag(horizon: int | None = None) -> str:
+    """Identity of the rulebook a settled outcome was measured under.
+
+    Every settled row carries it, so outcomes measured under different rules
+    (the pre-2026-11-15 5-session close-to-close counterfactuals, say) can be
+    told apart and never pooled into one learning score.
+    """
+    return f"sim:h{int(horizon or OUTCOME_HORIZON_SESSIONS)}:be{BREAKEVEN_TRIGGER_PCT:g}:gap"
+
+
 @dataclass(frozen=True)
 class TradeResult:
     """One simulated trade. ``r`` is net of nothing: costs are applied by the caller."""

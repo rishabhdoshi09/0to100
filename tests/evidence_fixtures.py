@@ -26,3 +26,11 @@ def proven_provenance(generated_at="fresh", **over):
                                                     family_size=44, members_sha256="m" * 64, binding=binding)
     prov.update(over)
     return {k: v for k, v in prov.items() if v is not None}
+
+
+def rulebook_outcome(net_r: float, outcome: str = "FLAT", return_pct: float | None = None) -> dict:
+    """A counterfactual outcome as core.outcome_resolver.counterfactual_outcome returns it."""
+    from core.evaluation_spec import OUTCOME_HORIZON_SESSIONS, spec_tag
+    return {"eval_spec": spec_tag(), "horizon_sessions": OUTCOME_HORIZON_SESSIONS, "not_pnl": True,
+            "outcome": outcome, "gross_r": net_r + 0.05, "net_r": net_r, "cost_r": 0.05,
+            "return_pct": return_pct if return_pct is not None else net_r * 6.0}

@@ -13,6 +13,7 @@ import pytest
 
 from product import forward_evidence as FE
 from product import forward_soak as FS
+from tests.evidence_fixtures import rulebook_outcome
 
 
 def _freeze_rejections(n: int, *, as_of: str = "2026-09-01", cycle_id: str = "batch-1") -> None:
@@ -102,13 +103,13 @@ def test_counterfactual_settlement_rewrites_ledger_per_chunk_not_per_row(monkeyp
     _freeze_rejections(25)
     writes = _count_writes(monkeypatch)
 
-    out = FS.settle_pending_from_market(return_fn=lambda _symbol, _as_of: -2.0)
+    out = FS.settle_pending_from_market(outcome_fn=lambda _symbol, _as_of, _row: rulebook_outcome(-0.4, "FLAT", -2.0))
 
     assert out["updated"] == 25
     assert out["pending"] == 0
     assert len(writes) == 3  # 10 + 10 + 5, not 25
     assert _open_ids() == []
-    again = FS.settle_pending_from_market(return_fn=lambda _symbol, _as_of: -2.0)
+    again = FS.settle_pending_from_market(outcome_fn=lambda _symbol, _as_of, _row: rulebook_outcome(-0.4, "FLAT", -2.0))
     assert again["updated"] == 0
 
 
@@ -131,11 +132,11 @@ def test_counterfactual_crash_mid_chunk_never_double_ingests(monkeypatch):
 
     monkeypatch.setattr(PLL, "ingest_counterfactual", flaky)
     with pytest.raises(RuntimeError):
-        FS.settle_pending_from_market(return_fn=lambda _symbol, _as_of: -2.0)
+        FS.settle_pending_from_market(outcome_fn=lambda _symbol, _as_of, _row: rulebook_outcome(-0.4, "FLAT", -2.0))
 
     # The whole chunk is settled on the ledger, so the rerun ingests nothing again.
     assert _open_ids() == []
-    rerun = FS.settle_pending_from_market(return_fn=lambda _symbol, _as_of: -2.0)
+    rerun = FS.settle_pending_from_market(outcome_fn=lambda _symbol, _as_of, _row: rulebook_outcome(-0.4, "FLAT", -2.0))
     assert rerun["updated"] == 0
     assert len(ingested) == len(set(ingested)) == 2
 
@@ -143,7 +144,7 @@ def test_counterfactual_crash_mid_chunk_never_double_ingests(monkeypatch):
 def test_missing_bars_stay_pending_and_cost_no_rewrite(monkeypatch):
     _freeze_rejections(4)
     writes = _count_writes(monkeypatch)
-    out = FS.settle_pending_from_market(return_fn=lambda _symbol, _as_of: None)
+    out = FS.settle_pending_from_market(outcome_fn=lambda _symbol, _as_of, _row: None)
     assert out == {"updated": 0, "pending": 4, "classifications": {}}
     assert writes == []
 
@@ -154,8 +155,8 @@ def test_official_settlement_rewrites_ledger_per_chunk_not_per_row(monkeypatch):
     monkeypatch.setattr(LOOP, "_SETTLE_FLUSH_EVERY", 4)
     _freeze_rejections(9)
     monkeypatch.setattr(
-        "core.outcome_resolver.session_close_return",
-        lambda symbol, day, horizon=5: (101.0, 1.0),
+        "core.outcome_resolver.counterfactual_outcome",
+        lambda *a, **k: rulebook_outcome(0.1, "FLAT", 1.0),
     )
     writes = _count_writes(monkeypatch)
 
@@ -173,19 +174,19 @@ def test_official_settlement_keeps_resolved_rows_when_a_later_row_raises(monkeyp
 
     _freeze_rejections(3)
     monkeypatch.setattr(
-        "core.outcome_resolver.session_close_return",
-        lambda symbol, day, horizon=5: (101.0, 1.0),
+        "core.outcome_resolver.counterfactual_outcome",
+        lambda *a, **k: rulebook_outcome(0.1, "FLAT", 1.0),
     )
-    real_classify = CF.classify_forward
+    real_classify = CF.classify_rulebook
     seen: list[int] = []
 
-    def classify(**kwargs):
+    def classify(*args, **kwargs):
         seen.append(1)
         if len(seen) == 3:
             raise RuntimeError("bad row")
-        return real_classify(**kwargs)
+        return real_classify(*args, **kwargs)
 
-    monkeypatch.setattr(CF, "classify_forward", classify)
+    monkeypatch.setattr(CF, "classify_rulebook", classify)
     with pytest.raises(RuntimeError):
         LOOP.settle_official_outcomes("2026-09-08")
     assert len(_open_ids()) == 1
