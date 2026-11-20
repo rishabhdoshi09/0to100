@@ -125,7 +125,12 @@ def test_historical_sources_stay_capped_regardless_of_sessions():
     assert LPS._status_for(500, 1.0, source="backtest_reproduced", sessions=400) == LPS.EXPERIMENTAL
 
 
-def test_crash_after_claim_under_counts_never_double_counts(tmp_path, monkeypatch):
+def test_a_crash_after_the_claim_is_replayed_exactly_once(tmp_path, monkeypatch):
+    """Cross-review A-3: claim-then-apply used to LOSE the observation on a crash in between.
+
+    The two-phase claim keeps it CLAIMED with its payload; the retry of the
+    same unit resumes it and applies it once. Never zero, never twice.
+    """
     path = tmp_path / "policies.json"
     real_save = LPS.save_policies
     boom = {"armed": True}
@@ -139,9 +144,11 @@ def test_crash_after_claim_under_counts_never_double_counts(tmp_path, monkeypatc
     with pytest.raises(RuntimeError):
         ingest_counterfactual(_settled_reject(), path=path)
     ingest_counterfactual(_settled_reject(), path=path)  # retry of the same unit
-    assert not path.exists() or not json.loads(path.read_text()).get("policies")
-    ingest_counterfactual(_settled_reject("INFY"), path=path)
     assert _policy(path, "REJECT::ENTRY_TOO_EXTENDED")["sample_size"] == 1
+    ingest_counterfactual(_settled_reject(), path=path)  # a third delivery changes nothing
+    assert _policy(path, "REJECT::ENTRY_TOO_EXTENDED")["sample_size"] == 1
+    ingest_counterfactual(_settled_reject("INFY"), path=path)
+    assert _policy(path, "REJECT::ENTRY_TOO_EXTENDED")["sample_size"] == 2
 
 
 def test_observation_ledger_lives_beside_its_policy_store(tmp_path):

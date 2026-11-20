@@ -254,18 +254,73 @@ def record_measured_outcome(
     """
     from product import learning_observations as LO
 
+    ledger = LO.ledger_path_for(policy_path(path))
+    key = str(observation_key or f"unkeyed:{uuid.uuid4().hex}")
+    session_day = str(session or _today_ist())[:10]
+    args = {"policy_id": policy_id, "dimension": dimension, "bucket": bucket,
+            "realized_R": float(realized_R), "source": source, "extra": dict(extra or {})}
+    # Exactly once (cross-review A-3): a TWO-PHASE claim carries everything the
+    # apply needs, under one cross-process writer lock. A crash between the
+    # claim and the policy write leaves a CLAIMED row that recover_claims()
+    # replays; it no longer silently becomes a permanent duplicate.
+    with LO.writer_lock(ledger):
+        _recover_locked(path, floors, ledger)
+        if not LO.claim(ledger, policy_id, key, session_day, payload=args):
+            store = load_policies(path)
+            existing = next((dict(p) for p in (store.get("policies") or [])
+                             if p.get("policy_id") == policy_id), None)
+            return {**(existing or {"policy_id": policy_id}), "duplicate_observation": True,
+                    "observation_key": key}
+        out = _apply_measured(path=path, floors=floors, ledger=ledger, observation_key=key, **args)
+        LO.mark_applied(ledger, policy_id, key)
+        return out
+
+
+def recover_claims(path: str | Path | None = None, floors: Mapping[str, int] | None = None) -> dict[str, int]:
+    """Replay policy claims a crash left CLAIMED (applied exactly once; idempotent)."""
+    from product import learning_observations as LO
+
+    ledger = LO.ledger_path_for(policy_path(path))
+    if not ledger.exists():
+        return {"replayed": 0, "confirmed": 0, "corrupt": 0}
+    with LO.writer_lock(ledger):
+        return _recover_locked(path, floors, ledger)
+
+
+def _recover_locked(path, floors, ledger) -> dict[str, int]:
+    from product import learning_observations as LO
+
+    out = {"replayed": 0, "confirmed": 0, "corrupt": 0}
+    for row in LO.claimed_unapplied(ledger):
+        payload = row.get("payload")
+        if not isinstance(payload, dict) or "policy_id" not in payload:
+            if payload is None:
+                out["corrupt"] += 1            # stays CLAIMED and visible; never guessed
+            continue                           # not a policy claim (e.g. a whole-ingest claim)
+        store = load_policies(path)
+        existing = next((dict(p) for p in (store.get("policies") or [])
+                         if p.get("policy_id") == row["scope"]), None)
+        if existing and str(existing.get("last_observation_key") or "") == str(row["observation_key"]):
+            out["confirmed"] += 1              # the apply landed before the crash
+        else:
+            _apply_measured(path=path, floors=floors, ledger=ledger, observation_key=row["observation_key"],
+                            **{k: payload[k] for k in ("policy_id", "dimension", "bucket", "realized_R",
+                                                       "source", "extra")})
+            out["replayed"] += 1
+        LO.mark_applied(ledger, row["scope"], row["observation_key"])
+    return out
+
+
+def _apply_measured(*, path, floors, ledger, observation_key: str, policy_id: str, dimension: str, bucket: str,
+                    realized_R: float, source: str, extra: Mapping[str, Any] | None) -> dict[str, Any]:
+    """One increment of a policy, stamped with the observation it applies (atomic JSON write)."""
+    from product import learning_observations as LO
+
     store = load_policies(path)
     existing = next(
         (dict(p) for p in (store.get("policies") or []) if p.get("policy_id") == policy_id),
         None,
     )
-    ledger = LO.ledger_path_for(policy_path(path))
-    key = str(observation_key or f"unkeyed:{uuid.uuid4().hex}")
-    session_day = str(session or _today_ist())[:10]
-    # Claim BEFORE incrementing: a crash in between under-counts, never doubles.
-    if not LO.claim(ledger, policy_id, key, session_day):
-        return {**(existing or {"policy_id": policy_id}), "duplicate_observation": True,
-                "observation_key": key}
     sessions = LO.distinct_sessions(ledger, policy_id)
     n_old = int((existing or {}).get("sample_size") or 0)
     mean_old = float((existing or {}).get("expectancy_R") or 0.0)
@@ -273,6 +328,7 @@ def record_measured_outcome(
     mean = mean_old + (float(realized_R) - mean_old) / n
     payload = dict(extra or {})
     payload["last_observation_R"] = round(float(realized_R), 4)
+    payload["last_observation_key"] = str(observation_key)   # the replay's "did it land?" marker
     payload["sessions_observed"] = sessions
     if str(source) == "paper_forward_taken_gross_only":
         if mean < 0.0:

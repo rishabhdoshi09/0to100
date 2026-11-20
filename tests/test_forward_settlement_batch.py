@@ -113,8 +113,8 @@ def test_counterfactual_settlement_rewrites_ledger_per_chunk_not_per_row(monkeyp
     assert again["updated"] == 0
 
 
-def test_counterfactual_crash_mid_chunk_never_double_ingests(monkeypatch):
-    """Ledger is written before the learning ingest, so a rerun cannot re-count."""
+def test_counterfactual_crash_mid_chunk_is_replayed_exactly_once(monkeypatch):
+    """Cross-review A-3: the outbox replays what a crash stranded; nothing is lost or counted twice."""
     from product import paper_learning_loop as PLL
 
     monkeypatch.setattr(FS, "_SETTLE_FLUSH_EVERY", 5)
@@ -134,11 +134,11 @@ def test_counterfactual_crash_mid_chunk_never_double_ingests(monkeypatch):
     with pytest.raises(RuntimeError):
         FS.settle_pending_from_market(outcome_fn=lambda _symbol, _as_of, _row: rulebook_outcome(-0.4, "FLAT", -2.0))
 
-    # The whole chunk is settled on the ledger, so the rerun ingests nothing again.
+    # The whole chunk is settled on the ledger; the failed event stays queued.
     assert _open_ids() == []
     rerun = FS.settle_pending_from_market(outcome_fn=lambda _symbol, _as_of, _row: rulebook_outcome(-0.4, "FLAT", -2.0))
     assert rerun["updated"] == 0
-    assert len(ingested) == len(set(ingested)) == 2
+    assert len(ingested) == len(set(ingested)) == 5          # every observation exactly once
 
 
 def test_missing_bars_stay_pending_and_cost_no_rewrite(monkeypatch):

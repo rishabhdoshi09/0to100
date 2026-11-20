@@ -422,19 +422,31 @@ def ingest_counterfactual(
     if classification in FORWARD_OUTCOME_CLASSES and not is_rulebook(spec):
         return {"skipped": "INCOMPATIBLE_EVAL_SPEC", "eval_spec": spec, "classification": classification}
     evidence = dict(settled.get("evidence") or {})
+    decision_id = str(evidence.get("decision_id") or settled.get("decision_id") or "")
     keyed = counterfactual_observation_key(settled)
+    if keyed is None and decision_id:
+        # No (day, symbol) unit: key it by its decision, so a replay of the same
+        # event can never count twice (an "unkeyed" observation always counted).
+        keyed = (f"cfd:{decision_id}", "")
     obs: dict[str, Any] = {}
+    unit_ledger = None
     if keyed is not None:
         from product import learning_observations as LO
         from product.learning_policy_store import policy_path
 
         key, day = keyed
-        # Whole-ingest dedupe: a repeat of an independent unit updates nothing,
-        # not the policy ladder and not the calibration record below.
-        if not LO.claim(LO.ledger_path_for(policy_path(path)), "COUNTERFACTUAL", key, day):
+        unit_ledger = LO.ledger_path_for(policy_path(path))
+        # Whole-ingest dedupe, resumable (cross-review A-3): an independent unit
+        # applied before (or by the pre-two-phase code: LEGACY) updates nothing;
+        # a unit a crash left CLAIMED is RESUMED. Every effect below is itself
+        # idempotent per observation key, so resuming never double-counts.
+        state = LO.claim_state(unit_ledger, "COUNTERFACTUAL", key)
+        if state in (LO.APPLIED, LO.LEGACY):
             return {"duplicate_observation": True, "observation_key": key}
+        if not state:
+            LO.claim(unit_ledger, "COUNTERFACTUAL", key, day,
+                     payload={"kind": "counterfactual_ingest", "decision_id": decision_id})
         obs = {"observation_key": key, "session": day}
-    decision_id = str(evidence.get("decision_id") or settled.get("decision_id") or "")
     counterfactual_r = settled.get("counterfactual_R")
     if decision_id and counterfactual_r is not None:
         try:
@@ -523,6 +535,9 @@ def ingest_counterfactual(
             extra={"classification": GOOD_WAIT, "not_pnl": True, "symbol": settled.get("symbol")},
             **obs,
         )
+    if unit_ledger is not None:
+        from product import learning_observations as LO
+        LO.mark_applied(unit_ledger, "COUNTERFACTUAL", obs["observation_key"])
     return last
 
 
