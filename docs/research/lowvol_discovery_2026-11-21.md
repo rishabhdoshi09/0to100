@@ -45,3 +45,30 @@ Reproduce: `nice -n 19 venv/bin/python -m research.lowvol_portfolio --root <SSD 
 - **Two portfolio hypotheses were pre-registered this week.** 12-1 momentum was NOT_SIGNIFICANT, and this one passed. Each was declared at m = 1, but across the two a Bonferroni α of 0.025 would not be met in discovery. The held-out year is the real test. That year has not been looked at for this score.
 - **The mechanism's prediction matched.** Lower beta, lower raw return in a rising market, and higher risk-adjusted return with a shallower drawdown. This is the first result this week that is not market exposure in disguise. The 12-1 momentum outperformance was beta 1.18.
 - **Not a BUY and not a trading system.** At best it is a candidate for an owner-approved paper experiment. Any proposal waits for the held-out look.
+
+## Held-out year: the single look (run at commit `0d60d8f2`, after the discovery result was committed; no rule changed)
+
+12 monthly periods, entries 2025-11-03 to 2026-10-01, last exit 2026-11-02, all inside verified CA coverage.
+
+| Measure | Held-out |
+|---|---|
+| **Alpha (primary)** | **−0.30% per month**, NW SE 0.58%, t = −0.53, one-sided p = 0.70: **NOT_SIGNIFICANT** |
+| Beta | 0.61 (as in discovery) |
+| Mean monthly net return / benchmark | −0.40% / −0.16% (a flat-to-down year) |
+| Net Sharpe / benchmark Sharpe | −0.34 / −0.10 |
+| Maximum drawdown / worst month | −9.4% / −7.7% |
+| Stopped-name sensitivities (50% / 100%) | alpha −0.31% / −0.31%, NOT_SIGNIFICANT |
+
+**Decision per the frozen spec.**
+
+- The discovery PASS did not replicate.
+- No paper experiment is proposed, and nothing reaches a BUY, a gate or a risk limit.
+- The spec is closed: it is not re-run, and no parameter is changed.
+
+**What this does and does not show.**
+
+- Twelve months give an alpha SE of 0.58%, which is low power: the held-out year cannot rule out a small positive alpha.
+- It gives **no out-of-sample support** to the hypothesis, though.
+- Discovery's own p (0.049) did not survive a Bonferroni correction across this week's two portfolio pre-registrations.
+- The honest standing is that low volatility in liquid NSE names is **unsupported**: inconclusive, with the burden on new prospective evidence.
+- The reduced beta (about 0.6) is real and stable. A lower-risk portfolio is not the same as alpha.
