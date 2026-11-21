@@ -59,13 +59,23 @@ def test_distinct_symbols_days_and_reasons_are_distinct_observations(tmp_path):
 
 
 def test_duplicate_counterfactual_does_not_touch_calibration_record(tmp_path, monkeypatch):
+    from research import feature_store
+
     calls = []
     monkeypatch.setattr(
         "product.evidence_intelligence.record_resolved_prediction",
         lambda *a, **k: calls.append(a),
     )
+    # A VERIFIED feature link (QT-06 / QT-C2-06): the observation is decision d-1,
+    # PAPER_FORWARD, at the row's levels and scan.
+    monkeypatch.setattr(feature_store, "_DB_PATH", tmp_path / "features.sqlite3")
+    feature_store.snapshot("decision::d-1", "TCS", "DECISION", {}, ts="2026-09-01", meta={
+        "decision_id": "d-1", "evidence_class": "PAPER_FORWARD", "entry": 100, "stop": 94, "target": 115,
+        "source_scan_id": "scan-A"})
     path = tmp_path / "policies.json"
-    row = {**_settled_reject(), "decision_id": "d-1", "counterfactual_R": -0.5}
+    row = {**_settled_reject(), "decision_id": "d-1", "counterfactual_R": -0.5, "hypothetical_entry": 100,
+           "hypothetical_stop": 94, "hypothetical_target": 115}
+    row["evidence"] = {**row["evidence"], "scan_scanned_at": "scan-A"}
     ingest_counterfactual(row, path=path)
     ingest_counterfactual({**row, "decision_id": "d-2"}, path=path)  # next cycle, same unit
     assert len(calls) == 1

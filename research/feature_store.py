@@ -230,6 +230,32 @@ def set_outcome(
 # Read path — reproducible research consumption
 # ══════════════════════════════════════════════════════════════════════════════
 
+class FeatureStoreUnavailable(RuntimeError):
+    """The store could not be read: unknown, never "absent" (cycle-2 review QT-C2-06)."""
+
+
+def get_observation_strict(observation_id: str) -> dict | None:
+    """Like get_observation, but a store failure RAISES FeatureStoreUnavailable; None means truly absent."""
+    try:
+        c = _conn()
+    except Exception as exc:
+        raise FeatureStoreUnavailable(f"{type(exc).__name__}: {exc}") from exc
+    try:
+        row = c.execute("SELECT * FROM observations WHERE observation_id=?", (observation_id,)).fetchone()
+    except Exception as exc:
+        raise FeatureStoreUnavailable(f"{type(exc).__name__}: {exc}") from exc
+    finally:
+        c.close()
+    if not row:
+        return None
+    d = dict(row)
+    d["features"] = json.loads(d["features"] or "{}")
+    d["validation"] = json.loads(d["validation"] or "[]")
+    d["meta"] = json.loads(d["meta"]) if d.get("meta") else None
+    d["outcome_meta"] = json.loads(d["outcome_meta"]) if d.get("outcome_meta") else {}
+    return d
+
+
 def get_observation(observation_id: str) -> dict | None:
     try:
         c = _conn()

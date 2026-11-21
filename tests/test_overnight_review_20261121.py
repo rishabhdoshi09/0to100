@@ -570,10 +570,19 @@ def test_l06_committed_counterfactual_labels_linked_features(tmp_path, monkeypat
     from research import feature_store
     from tests.test_learning_exactly_once import _settle
 
+    from product import forward_evidence as FE
+
     monkeypatch.setattr(feature_store, "_DB_PATH", tmp_path / "features.sqlite3")
     feature_id = "decision::d1"
-    assert feature_store.snapshot(feature_id, "TCS", "DECISION", {}, ts="2026-09-01")["status"] == "frozen"
-    _review_freeze(decision_id="d1")
+    # The verified binding (QT-C2-06): the observation IS decision d1, PAPER_FORWARD,
+    # same levels and scan as the forward row.
+    assert feature_store.snapshot(feature_id, "TCS", "DECISION", {}, ts="2026-09-01", meta={
+        "decision_id": "d1", "evidence_class": "PAPER_FORWARD", "entry": 100, "stop": 94, "target": 115,
+        "source_scan_id": "scan-A"})["status"] == "frozen"
+    FE.freeze_observation({"symbol": "TCS", "decision": "BLOCK", "decision_id": "d1", "reason_code":
+                           "ENTRY_TOO_EXTENDED", "entry": 100, "stop": 94, "target": 115, "setup_label": "VCP",
+                           "scan_scanned_at": "scan-A"}, cycle_id="review", as_of="2026-09-01",
+                          group="REJECTED", provenance=FE.REAL_FORWARD_MARKET)
     _settle()
     assert feature_store.get_observation(feature_id)["outcome"] == pytest.approx(-0.4)
 
@@ -583,9 +592,16 @@ def test_l06_a_failed_feature_label_is_retried_not_dropped(tmp_path, monkeypatch
     from research import feature_store
     from tests.test_learning_exactly_once import _ledger, _n, _settle
 
+    from product import forward_evidence as FE
+
     monkeypatch.setattr(feature_store, "_DB_PATH", tmp_path / "features.sqlite3")
-    assert feature_store.snapshot("decision::d1", "TCS", "DECISION", {}, ts="2026-09-01")["status"] == "frozen"
-    _review_freeze(decision_id="d1")
+    assert feature_store.snapshot("decision::d1", "TCS", "DECISION", {}, ts="2026-09-01", meta={
+        "decision_id": "d1", "evidence_class": "PAPER_FORWARD", "entry": 100, "stop": 94, "target": 115,
+        "source_scan_id": "scan-A"})["status"] == "frozen"
+    FE.freeze_observation({"symbol": "TCS", "decision": "BLOCK", "decision_id": "d1", "reason_code":
+                           "ENTRY_TOO_EXTENDED", "entry": 100, "stop": 94, "target": 115, "setup_label": "VCP",
+                           "scan_scanned_at": "scan-A"}, cycle_id="review", as_of="2026-09-01",
+                          group="REJECTED", provenance=FE.REAL_FORWARD_MARKET)
     with monkeypatch.context() as patch:
         patch.setattr(EI, "settle_decision", lambda *a, **k: {"status": "error", "reason": "locked"})
         with pytest.raises(RuntimeError):

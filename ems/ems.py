@@ -190,8 +190,27 @@ class EMS:
         self.ledger.record_position(pos)
 
     def _exit_position(self, order, reason: str) -> None:
-        SM.apply_transition(order, SM.CLOSED, f"exit:{reason}")
-        self.ledger.remove_position(order.strategy_id, order.symbol)
+        """Closed only when the BROKER is flat in the symbol (broker audit QT-B09).
+
+        The adapter has no exit primitive, so the EMS cannot itself sell. It
+        must never report CLOSED, nor drop its local position, while the broker
+        still holds the fill: that position would be unprotected AND invisible.
+        Unconfirmed flatness is RECONCILIATION_REQUIRED with a critical incident.
+        """
+        try:
+            held = sum(int(getattr(p, "qty", 0) or 0) for p in self.broker.list_positions()
+                       if getattr(p, "symbol", None) == order.symbol)
+        except Exception as exc:                          # unknown broker state is not flat
+            held, why = None, f"{type(exc).__name__}: {exc}"
+        else:
+            why = f"broker still holds {held}"
+        if held == 0:
+            SM.apply_transition(order, SM.CLOSED, f"exit:{reason}")
+            self.ledger.remove_position(order.strategy_id, order.symbol)
+            return
+        self.new_entries_blocked = True
+        self._incident("CRITICAL", "EXIT_UNCONFIRMED", f"{order.symbol}: {reason}; {why}")
+        SM.apply_transition(order, SM.RECONCILIATION_REQUIRED, f"exit:{reason}:unconfirmed")
 
     # ── reconciliation (broker is authority) ─────────────────────────────────────
     def reconcile(self) -> SC.ReconciliationReport:

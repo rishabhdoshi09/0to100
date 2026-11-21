@@ -638,6 +638,11 @@ BINDING_POLICY_REASONS = {
 }
 
 
+def _was_ranked(row: Mapping[str, Any]) -> bool:
+    """True when the decision reached the selection ranking: a policy's score effect could have moved it."""
+    return bool(row.get("entered")) or str(row.get("reason_code") or "").upper() in {"NO_TRADE", "ENTER_NOW"}
+
+
 def learning_influence(policies: Sequence[Mapping[str, Any]], forward_rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     from product.forward_evidence import independent_decisions
 
@@ -657,7 +662,10 @@ def learning_influence(policies: Sequence[Mapping[str, Any]], forward_rows: Sequ
     recorded_not_binding = 0
     rank_adjusted = 0
     exploration = 0
-    for r in independent_decisions(forward_rows):
+    from product.forward_evidence import is_forward_evidence
+    # Real forward decisions only, BEFORE dedupe: a BACKTEST / WALK_FORWARD row
+    # never counts as a decision learning changed (cycle-2 review QT-C2-09).
+    for r in independent_decisions([row for row in forward_rows if is_forward_evidence(row)]):
         # The forward ledger persists the effect as ``policy_result``
         # (forward_evidence.freeze_observation); ``policy_effect`` is the
         # in-memory decision field. Reading only the latter counted every
@@ -675,7 +683,9 @@ def learning_influence(policies: Sequence[Mapping[str, Any]], forward_rows: Sequ
             binding[reason] += 1
         elif effect == "EXPLORATION":
             exploration += 1
-        elif effect in {"PENALIZE", "SUPPORT"}:
+        elif effect in {"PENALIZE", "SUPPORT"} and _was_ranked(r):
+            # A score adjustment can change selection only for a decision that
+            # reached the ranking (taken, or eligible but not top of the cycle).
             rank_adjusted += 1
         elif effect not in {"NEUTRAL", ""}:
             recorded_not_binding += 1
@@ -690,6 +700,8 @@ def learning_influence(policies: Sequence[Mapping[str, Any]], forward_rows: Sequ
         "decisions_rank_adjusted_by_learned_policy": rank_adjusted,
         "decisions_in_exploration_lane": exploration,
         "decisions_changed_by_learning": changed,
+        "limits": ("A selection change through the active challenger adjustment, or a baseline-versus-learned "
+                   "ranking, is not persisted on the forward row, so it cannot be counted here."),
         "answer": (
             "YES" if changed and influencing else
             "NO: no learned policy currently clears the sample, edge and session floors"

@@ -1629,6 +1629,17 @@ def _reconcile_live_fills() -> None:
                    if str(o.get("order_id", "")) == oid), None) if oid else None
         if od:
             stt = str(od.get("status", "")).upper()
+            try:
+                filled = int(float(od.get("filled_quantity") or 0))
+            except (TypeError, ValueError):
+                filled = 0
+            if stt in ("REJECTED", "CANCELLED") and filled > 0:
+                # A cancelled order that PARTLY filled is a position: never an
+                # ENTRY_FAILED row (that dropped real shares from exposure and
+                # from protection recovery: cycle-2 review QT-C2-04).
+                _log_activity(f"⚠️ {t['symbol']} entry {stt} after {filled} share(s) filled — position kept "
+                              f"open; protection and reconciliation required")
+                continue
             if stt in ("REJECTED", "CANCELLED"):
                 _set_status(t["id"], "ENTRY_FAILED", f"entry {stt} at broker")
                 _log_activity(f"❌ {t['symbol']} entry {stt} — position bani "

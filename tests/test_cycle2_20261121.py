@@ -94,8 +94,10 @@ def test_qt06_another_scans_observation_is_a_conflict_and_a_legacy_row_is_unlink
 
     monkeypatch.setattr(feature_store, "_DB_PATH", tmp_path / "features.sqlite3")
     feature_store.snapshot("decision::dec_a", "TCS", "DECISION", {}, ts="2026-09-01",
-                           meta={"evidence_class": "PAPER_FORWARD", "source_scan_id": "scan-A"})
+                           meta={"evidence_class": "PAPER_FORWARD", "source_scan_id": "scan-A",
+                                 "decision_id": "dec_a", "entry": 100, "stop": 94, "target": 115})
     other_scan = settle_rulebook({"symbol": "TCS", "as_of": "2026-09-01", "reason_code": "R1",
+                                  "hypothetical_entry": 100, "hypothetical_stop": 94, "hypothetical_target": 115,
                                   "evidence": {"feature_decision_id": "dec_a", "scan_scanned_at": "scan-B"}},
                                  rulebook_outcome(-0.4, "LOSS"))
     assert PLL.ingest_counterfactual(other_scan)["feature_link"] == "LINK_CONFLICT_SCAN"
@@ -253,14 +255,17 @@ def test_qt08_the_production_program_is_the_anchored_grid_and_a_new_program():
     assert SB.gate_program()["sampling"] == SB.SAMPLING != "even_stride"   # earlier attestations fail closed
 
 
-def test_qt08_a_new_listing_displaces_at_most_one_sampled_symbol():
+def test_qt08_a_new_listing_never_evicts_a_sampled_symbol_under_the_cap():
     from scan.signal_backtest import _spread_sample
 
     store = sorted(f"SYM{i:04d}" for i in range(3469))
     before = set(_spread_sample(store, 800))
-    for extra in ("AAAA", "MMMM", "ZZZZ"):
+    for extra in ("AAAA", "MMMM", "ZZZZ", "NEW1", "NEW2"):
         after = set(_spread_sample(sorted(store + [extra]), 800))
-        assert len(before - after) <= 1 and len(after - before) <= 1
+        assert before <= after and len(after - before) <= 1      # only the newcomer itself can join
+    # past the cap a rank cut applies: at most one displacement per new name
+    small = set(_spread_sample(store, 50))
+    assert len(small - set(_spread_sample(sorted(store + ["NEW1"]), 50))) <= 1
 
 
 # ── Learning effectiveness: a recorded policy effect is not a changed decision ──
@@ -313,3 +318,100 @@ def test_learning_effectiveness_report_classifies_policies_and_measures_reach(tm
     assert rep["learning_reach"]["settled_independent_counterfactuals"] == 2
     assert rep["learning_reach"]["reached_learning_unit_claim"] == 1           # B was settled, never learned
     assert rep["decision_impact"]["decisions_changed_by_learning"] == 0
+
+
+# ── QT-C2-06: the feature link is the decision's own, and an outage is retried ──
+
+@pytest.mark.parametrize("read_outage", [False, True])
+def test_c2_06_feature_label_requires_exact_link_and_retries_reads(tmp_path, monkeypatch, read_outage):
+    import sqlite3
+    from product import forward_evidence as fe, forward_soak as fs
+    from research import feature_store as store
+    from tests.evidence_fixtures import rulebook_outcome
+
+    monkeypatch.setattr(store, "_DB_PATH", tmp_path / "features.db")
+    monkeypatch.setenv("QT_CONDITIONAL_EVIDENCE", str(tmp_path / "conditional.json"))
+    store.snapshot("decision::dec_link", "TCS", "DECISION", {}, ts="2026-09-01",
+                   meta=dict(evidence_class="PAPER_FORWARD", source_scan_id="scan-A", decision_id="dec_link",
+                             entry=100 if read_outage else 105, stop=94, target=115))
+    fe.freeze_observation(dict(symbol="TCS", decision="WAIT", reason_code="ENTRY_TOO_EXTENDED",
+                               feature_decision_id="dec_link", scan_scanned_at="scan-A",
+                               entry=100, stop=94, target=115),
+                          cycle_id="c", as_of="2026-09-01", group="WAITS", provenance=fe.REAL_FORWARD_MARKET)
+
+    def unavailable():
+        raise sqlite3.OperationalError("temporarily unavailable")
+
+    with monkeypatch.context() as patch:
+        if read_outage:
+            patch.setattr(store, "_conn", unavailable)
+        try:
+            fs.settle_pending_from_market(outcome_fn=lambda *a: rulebook_outcome(-0.4, "LOSS"))
+        except fs.LearningPending:
+            pass
+    fs.replay_learning_outbox()
+    outcome = store.get_observation("decision::dec_link")["outcome"]
+    assert outcome == (pytest.approx(-0.4) if read_outage else None)    # mislinked levels: never labelled
+
+
+# ── QT-C2-07 / 08: GOOD_WAIT needs a verified fill; one failure never stalls the rest ──
+
+def test_c2_07_a_symbol_boolean_cannot_credit_good_wait():
+    from product import forward_evidence as fe, forward_soak as fs
+    from tests.test_learning_exactly_once import _n
+
+    fe.freeze_observation(dict(symbol="TCS", decision="BLOCK", reason_code="DD_GATE_FAILED", entry=100, stop=94,
+                               target=115), cycle_id="c", as_of="2026-09-01", group="REJECTED",
+                          provenance=fe.REAL_FORWARD_MARKET)
+    fs.settle_pending_from_market(outcome_fn=lambda *a: None, later_entered={"TCS": True})
+    assert _n("ENTRY_QUALITY::GOOD_WAIT") == 0
+
+
+def test_c2_07_ingestion_refuses_an_unverified_good_wait():
+    from product import paper_learning_loop as PLL
+    from product.counterfactual_learning import settle_rulebook
+    from tests.evidence_fixtures import rulebook_outcome
+    from tests.test_learning_exactly_once import _n
+
+    settled = settle_rulebook({"symbol": "TCS", "as_of": "2026-09-01", "reason_code": "WAIT_FOR_PULLBACK",
+                               "decision": "WAIT"}, rulebook_outcome(0.2, "WIN"), later_entered=True)
+    assert settled["classification"] == "GOOD_WAIT"
+    assert PLL.ingest_counterfactual(settled)["skipped"] == "UNVERIFIED_GOOD_WAIT"
+    assert _n("ENTRY_QUALITY::GOOD_WAIT") == 0
+
+
+def test_c2_08_a_failed_good_wait_does_not_hold_an_expired_wait(tmp_path, monkeypatch):
+    import json
+    from product import _paper_learning_loop_core as core
+
+    ledger = tmp_path / "waits.jsonl"
+    rows = [dict(symbol=s, decision="WAIT", as_of="2026-09-01", later_entry_pending={"fill_session": fill})
+            for s, fill in (("TCS", "2026-09-03"), ("INFY", "2026-09-25"))]
+    ledger.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    monkeypatch.setattr(core, "ledger_path", lambda: ledger)
+    monkeypatch.setattr(core, "_sessions_through", lambda day, fill: 2 if fill.endswith("-03") else 17)
+
+    def fail(*a, **k):
+        raise OSError("learning unavailable")
+
+    monkeypatch.setattr(core, "ingest_counterfactual", fail)
+    out = core.retry_pending_good_waits(today="2026-11-30")
+    tcs, infy = [json.loads(line) for line in ledger.read_text().splitlines()]
+    assert "later_entry_pending" not in infy and infy["later_entry_expired"] == "2026-09-25"
+    assert tcs["later_entry_pending"]["fill_session"] == "2026-09-03" and out["errors"]
+
+
+@pytest.mark.parametrize("provenance", ["REAL_FORWARD_MARKET", "WALK_FORWARD"])
+def test_c2_09_support_cannot_change_a_chase_veto(tmp_path, provenance):
+    from product import forward_evidence as fe, paper_autopilot as pa
+    from product.learning_scorecard import learning_influence
+    from tests.test_paper_autopilot_money_path import _eligible_card
+
+    policies = [dict(policy_id="SETUP::VCP", dimension="setup", bucket="VCP", production_status="ACTIVE",
+                     sample_size=30, expectancy_difference_R=0.35)]
+    decision = pa.evaluate_selection_candidate(_eligible_card(chase_risk=True), policies=policies,
+                                               enforce_history=False)
+    assert decision.reason_code == "ENTRY_TOO_EXTENDED"
+    row = fe.freeze_observation(decision.as_dict(), cycle_id="c", as_of="2026-09-01", group="WAITS",
+                                provenance=provenance, path=tmp_path / "forward.jsonl")
+    assert learning_influence(policies, [row])["decisions_changed_by_learning"] == 0

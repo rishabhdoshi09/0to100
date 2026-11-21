@@ -157,7 +157,9 @@ def test_learning_influence_reports_no_change_when_nothing_is_eligible():
 
 
 def test_learning_influence_counts_each_decision_once():
-    rows = [{"symbol": "A", "market_timestamp": "2026-01-01", "group": "REJECTED", "reason_code": "X",
+    # An eligible decision that reached the ranking (NO_TRADE: not top of the cycle),
+    # re-frozen by 9 cycles: one decision a score effect could change (QT-C2-09).
+    rows = [{"symbol": "A", "market_timestamp": "2026-01-01", "group": "REJECTED", "reason_code": "NO_TRADE",
              "policy_effect": "PENALIZE", "cycle_id": f"c{i}"} for i in range(9)]
     out = LS.learning_influence(
         [{"policy_id": "SETUP::VCP", "production_status": "ELIGIBLE", "affects_selection": True,

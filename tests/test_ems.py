@@ -145,10 +145,14 @@ class TestProtection:
         b = SimBroker(script={"WIN": {"protection_reject": True}})
         ems, _, ledger, _ = _ems(broker=b)
         order = _submit(ems)
-        assert order.state == SM.CLOSED                    # unprotectable → exited
+        # Unprotectable, and the EMS has no exit primitive: the broker still holds
+        # the fill, so it is NOT closed (broker audit QT-B09) -- it is a critical
+        # reconciliation, entries blocked, until the broker is flat.
+        assert b.list_positions()
+        assert order.state == SM.RECONCILIATION_REQUIRED
         assert ems.new_entries_blocked                     # protection infra unhealthy
         assert ledger.has_critical_incident()
-        assert not ledger.open_positions()
+        assert "UNKNOWN_MANUAL_POSITION" in [kind for kind, _detail in ems.reconcile().findings]
 
     def test_local_flag_alone_cannot_mark_protected(self):
         class NoVerifyBroker(SimBroker):

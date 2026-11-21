@@ -283,6 +283,7 @@ class AutopilotDecision:
     # (evidence_intelligence.enrich): the only id a later research outcome may
     # label, kept apart from the forward-ledger row id (QT-06).
     feature_decision_id: str = ""
+    feature_scan_id: str = ""          # the scan the canonical decision (and its feature row) was built from
     evolution_policy_id: str = ""
     evolution_policy_version: int = 0
     evolution_policy_status: str = ""
@@ -317,7 +318,7 @@ class AutopilotDecision:
             "freeze_id": self.freeze_id,
             "evidence_fingerprint": self.evidence_fingerprint,
             "feature_decision_id": self.feature_decision_id,
-            "scan_scanned_at": self.card.get("scan_scanned_at"),
+            "scan_scanned_at": self.feature_scan_id or self.card.get("scan_scanned_at"),
             "evolution_policy_id": self.evolution_policy_id,
             "evolution_policy_version": self.evolution_policy_version,
             "evolution_policy_status": self.evolution_policy_status,
@@ -748,7 +749,12 @@ def evaluate_candidate(
             )
 
         from research.intelligence.runtime.position_sizing import size_long_cash
+        from risk.portfolio_risk import _max_position_pct as _account_position_pct
+        from risk.portfolio_risk import _risk_per_trade_pct as _account_risk_pct
         risk_capital = getattr(book, "risk_capital", None)
+        # Size INSIDE the account's configured caps, never only the book's: a
+        # stricter account setting must shrink the trade, not let the shared
+        # gate refuse a quantity the engine could have reduced (QT-C2-10).
         sizing = size_long_cash(
             capital=float(
                 risk_capital() if callable(risk_capital)
@@ -757,8 +763,8 @@ def evaluate_candidate(
             entry=entry,
             stop=stop,
             requested_risk_pct=_risk_pct_for(card),
-            max_risk_fraction=float(getattr(book, "risk_per_trade_pct", 0.01) or 0.01),
-            max_position_fraction=float(getattr(book, "max_position_pct", 0.10) or 0.10),
+            max_risk_fraction=min(float(getattr(book, "risk_per_trade_pct", 0.01) or 0.01), _account_risk_pct()),
+            max_position_fraction=min(float(getattr(book, "max_position_pct", 0.10) or 0.10), _account_position_pct()),
             slippage_bps=float(getattr(book, "slippage_bps", 0.0) or 0.0),
         )
         if not sizing.ok:
@@ -1196,6 +1202,7 @@ def run_reco_paper_cycle(
             # _decision_fingerprint_evidence built (and enrich() froze) the
             # canonical Decision: its id names that feature observation (QT-06).
             decision.feature_decision_id = str(evidence.get("decision_id") or "")
+            decision.feature_scan_id = str(payload.get("scan_scanned_at") or day)
         except Exception:
             pass
 

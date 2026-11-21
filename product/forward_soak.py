@@ -264,7 +264,11 @@ def _settle_pending_locked(
     from product.forward_evidence import load_ledger as load_fwd
 
     getter = outcome_fn or (lambda symbol, as_of, row: _rulebook_outcome(symbol, as_of, row, horizon))
-    entered = {str(k).upper(): bool(v) for k, v in dict(later_entered or {}).items()}
+    # A later entry is a verified FILL SESSION per symbol, applied only to that
+    # symbol's WAITs whose ordinal it verifies LIVE. A bare True (the old symbol
+    # boolean) credits nothing (cycle-2 review QT-C2-07).
+    entered = {str(k).upper(): str(v)[:10] for k, v in dict(later_entered or {}).items()
+               if isinstance(v, str) and len(str(v)) >= 10}
     from product.forward_evidence import is_forward_evidence
     # Simulated (BACKTEST / WALK_FORWARD) rows never become forward learning.
     # A row without its decision id cannot be attached or tied to a learning
@@ -328,7 +332,13 @@ def _settle_pending_locked(
             symbol = str(row.get("symbol") or "").upper()
             as_of = str(row.get("market_timestamp") or row.get("pit_proof", {}).get("as_of") or "")[:10]
             outcome = getter(symbol, as_of, row) if as_of else None
-            later = entered.get(symbol, False)
+            fill = entered.get(symbol, "")
+            later = False
+            if fill:
+                from product._paper_learning_loop_core import _wait_ordinal_state
+                wait_view = {"decision": str(row.get("selection_result") or row.get("decision") or ""),
+                             "as_of": as_of}
+                later = _wait_ordinal_state(wait_view, fill) == "LIVE"
             if outcome is None and not later:
                 pending_n += 1
                 continue
@@ -363,6 +373,8 @@ def _settle_pending_locked(
                 outcome,
                 later_entered=later,
             )
+            if later:
+                settled["later_entry_verified"] = fill
             chunk.append((
                 {
                     "decision_id": str(row.get("decision_id")),
@@ -419,6 +431,10 @@ def committed_mismatch(payload: Mapping[str, Any], row: Mapping[str, Any] | None
         return "NOT_A_FORWARD_COUNTERFACTUAL"
     exact = {
         "FORWARD_DECISION_ID": (payload.get("forward_decision_id"), row.get("decision_id")),
+        # the feature link is part of the committed decision (QT-C2-06)
+        "FEATURE_DECISION_ID": ((payload.get("evidence") or {}).get("feature_decision_id")
+                                if isinstance(payload.get("evidence"), Mapping) else None,
+                                row.get("feature_decision_id")),
         "SYMBOL": (str(payload.get("symbol") or "").upper(), str(row.get("symbol") or "").upper()),
         "REASON_CODE": (payload.get("reason_code"), row.get("reason_code")),
         "CLASSIFICATION": (payload.get("classification"), row.get("counterfactual_classification")),

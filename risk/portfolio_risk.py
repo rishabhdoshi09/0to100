@@ -33,12 +33,17 @@ def _capital() -> float:
         return 100_000.0
 
 
+#: The house slot limit for the WHOLE account (equity + F&O). Configuration may
+#: tighten it, never loosen it (cycle-2 review QT-C2-03).
+HOUSE_MAX_POSITIONS = 5
+
+
 def _max_positions() -> int:
     try:
         from config import settings
-        return int(settings.max_open_positions)
+        return max(0, min(HOUSE_MAX_POSITIONS, int(settings.max_open_positions)))
     except Exception:
-        return 5
+        return HOUSE_MAX_POSITIONS
 
 
 def _trade_cap_capital() -> float:
@@ -340,11 +345,15 @@ def account_exposure_gate(
                       f"{len(packs[sector])} positions across both engines",
             "report": report,
         }
-    if qty and report["open_risk_pct"] > 5:
+    # Unrounded rupees against the 5% account budget (QT-C2-03): the report's
+    # 2-decimal percentage let Rs 5,003 on Rs 100,000 read as 5.00% and pass.
+    open_risk_rupees = sum(_row_risk(r) for r in all_rows) + (
+        _row_risk(probe) if qty else 0.0)
+    if qty and open_risk_rupees > 0.05 * _capital() + 1e-6:
         return {
             "ok": False, "reason_code": GATE_MAX_PORTFOLIO_RISK,
-            "detail": f"combined open risk would reach {report['open_risk_pct']:.2f}% "
-                      "of account capital — over the 5% ceiling",
+            "detail": f"combined open risk would reach ₹{open_risk_rupees:,.2f} "
+                      f"({open_risk_rupees / _capital() * 100:.3f}% of account capital) — over the 5% ceiling",
             "report": report,
         }
     return {"ok": True, "reason_code": "", "detail": "", "report": report}

@@ -133,6 +133,25 @@ class _GuardedKiteProxy:
         guarded.__name__ = guarded.__qualname__ = name
         return guarded
 
+    # Object-protocol escape hatches that would hand the backing SDK out
+    # (Python 3.11 object.__getstate__ returns the slot state; pickling and
+    # copying go through the same state): refused (cycle-2 review QT-C2-05).
+    # Defence in depth only: in-process isolation is impossible.
+    def __getstate__(self):
+        raise TypeError("the guarded Kite proxy has no exportable state")
+
+    def __reduce__(self):
+        raise TypeError("the guarded Kite proxy cannot be pickled")
+
+    def __reduce_ex__(self, protocol):
+        raise TypeError("the guarded Kite proxy cannot be pickled")
+
+    def __copy__(self):
+        raise TypeError("the guarded Kite proxy cannot be copied")
+
+    def __deepcopy__(self, memo):
+        raise TypeError("the guarded Kite proxy cannot be copied")
+
     def __setattr__(self, name: str, value: Any) -> None:
         # The proxy is a read-only facade. Assignment through it is refused
         # outright rather than per-name: a caller that can install an attribute

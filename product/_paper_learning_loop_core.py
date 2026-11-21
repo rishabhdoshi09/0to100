@@ -408,24 +408,35 @@ def verified_feature_link(settled: Mapping[str, Any], decision_id: str = "") -> 
     candidate = explicit or str(decision_id or "")
     if not candidate:
         return "", "NO_DECISION_ID"
-    try:
-        from product.evidence_class import PAPER_FORWARD
-        from product.evidence_intelligence import _observation_id
-        from research.feature_store import get_observation
-        obs = get_observation(_observation_id(candidate))
-    except Exception:
-        return "", "FEATURE_STORE_UNAVAILABLE"
+    from product.evidence_class import PAPER_FORWARD
+    from product.evidence_intelligence import _observation_id
+    from research.feature_store import get_observation_strict
+    # A store that cannot be read RAISES (FeatureStoreUnavailable): the unit stays
+    # CLAIMED and the event is retried, never completed as "absent" (QT-C2-06).
+    obs = get_observation_strict(_observation_id(candidate))
     if not obs:
         return "", "UNLINKED" if explicit else "NO_FEATURE_OBSERVATION"
     if str(obs.get("symbol") or "").upper() != str(settled.get("symbol") or "").upper():
         return "", "LINK_CONFLICT_SYMBOL"
     meta = dict(obs.get("meta") or {})
-    klass = str(meta.get("evidence_class") or "")
-    if klass and klass != PAPER_FORWARD:
+    # Explicit forward provenance only: a missing class is not PAPER_FORWARD.
+    if str(meta.get("evidence_class") or "") != PAPER_FORWARD:
         return "", "LINK_CONFLICT_EVIDENCE_CLASS"
+    # The immutable binding: the observation must BE this decision, at these levels.
+    if str(meta.get("decision_id") or "") != candidate:
+        return "", "LINK_CONFLICT_DECISION_ID"
+    for key, mine in (("entry", settled.get("hypothetical_entry", settled.get("entry"))),
+                      ("stop", settled.get("hypothetical_stop", settled.get("stop"))),
+                      ("target", settled.get("hypothetical_target", settled.get("target")))):
+        theirs = meta.get(key)
+        try:
+            if mine is None or theirs is None or abs(float(mine) - float(theirs)) > 1e-6 * max(1.0, abs(float(mine))):
+                return "", f"LINK_CONFLICT_{key.upper()}"
+        except (TypeError, ValueError):
+            return "", f"LINK_CONFLICT_{key.upper()}"
     scan = str(evidence.get("scan_scanned_at") or "")
     source = str(meta.get("source_scan_id") or "")
-    if scan and source and scan != source:
+    if not scan or not source or scan != source:
         return "", "LINK_CONFLICT_SCAN"
     return candidate, "VERIFIED"
 
@@ -472,6 +483,10 @@ def ingest_counterfactual(
     spec = settled.get("eval_spec") or (settled.get("outcome") or {}).get("eval_spec")
     if classification == UNMEASURED:
         return {"skipped": "UNMEASURED", "classification": classification}
+    if classification == GOOD_WAIT and not str(settled.get("later_entry_verified") or ""):
+        # GOOD_WAIT is a claim about a WAIT and a fill verified inside its own
+        # horizon; without the verified fill session it is never learned (QT-C2-07).
+        return {"skipped": "UNVERIFIED_GOOD_WAIT", "classification": classification}
     if classification in FORWARD_OUTCOME_CLASSES and not is_rulebook(spec):
         return {"skipped": "INCOMPATIBLE_EVAL_SPEC", "eval_spec": spec, "classification": classification}
     evidence = dict(settled.get("evidence") or {})
@@ -724,7 +739,14 @@ def retry_pending_good_waits(*, path=None, floors: Mapping[str, int] | None = No
             settled = settle({k: v for k, v in row.items() if k != "later_entry_pending"},
                              forward_return_pct=None, later_entered=True)
             settled["later_entry_verified"] = fill
-            ingest_counterfactual(settled, path=path, floors=floors)
+            try:
+                ingest_counterfactual(settled, path=path, floors=floors)
+            except Exception as exc:
+                # This row stays queued for the next pass; the others are still
+                # verified, expired or dropped and persisted (QT-C2-08).
+                out.setdefault("errors", []).append(f"{row.get('symbol')}: {type(exc).__name__}: {exc}"[:200])
+                rewritten.append(row)
+                continue
             rewritten.append(settled)
             out["credited"] += 1
             changed = True
@@ -801,6 +823,7 @@ def note_later_entry(symbol: str, *, path=None, floors: Mapping[str, int] | None
         path=path,
         floors=floors,
         row_filter=lambda row: _wait_is_live(row, entry_day),
+        verified_fill=entry_day,
     )
 
 
@@ -811,8 +834,14 @@ def settle_pending_counterfactuals(
     path=None,
     floors: Mapping[str, int] | None = None,
     row_filter=None,
+    verified_fill: str | None = None,
 ) -> dict[str, Any]:
-    """Classify frozen rejects once a forward return is known. Does not create P&L."""
+    """Classify frozen rejects once a forward return is known. Does not create P&L.
+
+    ``later_entered`` alone never makes a GOOD_WAIT: the caller must also name the
+    ``verified_fill`` session it checked each row against (note_later_entry), and
+    the settled row carries it (cycle-2 review QT-C2-07).
+    """
     ledger = ledger_path()
     rows = _read_jsonl(ledger)
     returns = {str(k).upper(): float(v) for k, v in dict(forward_return_by_symbol or {}).items()}
@@ -828,11 +857,14 @@ def settle_pending_counterfactuals(
         if (symbol not in returns and symbol not in entered) or (row_filter is not None and not row_filter(row)):
             rewritten.append(row)
             continue
+        later = bool(entered.get(symbol, False) and verified_fill)
         settled = settle(
             row,
             forward_return_pct=returns.get(symbol),
-            later_entered=entered.get(symbol, False),
+            later_entered=later,
         )
+        if later:
+            settled["later_entry_verified"] = str(verified_fill)[:10]
         ingest_counterfactual(settled, path=path, floors=floors)
         rewritten.append(settled)
         updated += 1

@@ -857,7 +857,12 @@ def _eval_spec_tag(horizon: int) -> str:
 #: Part of the gate program (gate_program) and of the report: a change is a NEW
 #: evidence program, so earlier attestations fail closed and the supervisor
 #: reruns the walk-forward (Supervisor._legacy_calibration).
-SAMPLING = "hash_rank_session_anchored_v1"
+SAMPLING = "hash_threshold_session_anchored_v1"
+
+#: Fraction of the store in the walk-forward's symbol sample (Bernoulli by a fixed
+#: per-symbol hash). 0.2 x 3,469 = ~694 names, under the production 800 cap with
+#: headroom for listings: membership never depends on other symbols.
+HASH_SAMPLE_FRACTION = 0.2
 
 #: Which decision days the walk-forward measures (verification review QT-08).
 #: "rolling": every ``sample_step``-th bar from a start that moves with the
@@ -870,7 +875,9 @@ SAMPLING = "hash_rank_session_anchored_v1"
 #: SE from phase alone; the anchored grid kept 100% and moved them by <= 0.05 SE.
 #: The even-stride SYMBOL sample moved even more when a few names listed
 #: (symbol Jaccard 0.26, per-signal shift median 0.84 / max 1.97 SE), so the
-#: symbols are now a hash-rank sample (_spread_sample), stable under additions.
+#: symbols are now a hash-THRESHOLD sample (_spread_sample): a symbol is in it iff its
+#: own fixed hash falls under HASH_SAMPLE_FRACTION, so a new listing never evicts an
+#: incumbent's history (cycle-2 review QT-C2-02) unless the store outgrows the cap.
 GRID_ROLLING = "rolling"
 GRID_SESSION_ANCHORED = "session_anchored"
 DECISION_GRID = GRID_SESSION_ANCHORED
@@ -894,9 +901,20 @@ def _spread_sample(symbols: list[str], limit: int) -> list[str]:
     names = list(symbols)
     if limit <= 0 or len(names) <= limit:
         return names
-    ranked = sorted(names, key=lambda s: hashlib.sha256(f"qt-sample-v1|{s}".encode()).hexdigest())
-    chosen = set(ranked[:limit])
-    return [s for s in names if s in chosen]
+
+    def h(s: str) -> int:
+        return int.from_bytes(hashlib.sha256(f"qt-sample-v1|{s}".encode()).digest()[:8], "big")
+
+    # Bernoulli by a fixed per-symbol hash (QT-C2-02): a ranked cut over the
+    # whole list let a NEW listing evict an incumbent from all its history.
+    threshold = int(HASH_SAMPLE_FRACTION * 2 ** 64)
+    chosen = [s for s in names if h(s) < threshold]
+    if len(chosen) > limit:
+        # Only past the cap (store growth, or a research call with a small limit)
+        # does a rank cut apply; the run records it.
+        keep = set(sorted(chosen, key=h)[:limit])
+        chosen = [s for s in chosen if s in keep]
+    return chosen
 
 
 def run_backtest(sample_step: int = 5, lookback_sessions: int = 250,
@@ -1197,6 +1215,11 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
     # requested list: padding a preview with an empty symbol must not turn it
     # into a saved, charged report (GPT cross-review C-4).
     will_save = evaluated >= MIN_SYMBOLS_TO_SAVE and bool(report)
+    # Only the PRODUCTION decision grid is the attested program: any other grid
+    # is research-only, never reserves a look and is never saved, so it can
+    # never certify a BUY as the production program (cycle-2 review QT-C2-01).
+    if decision_grid != DECISION_GRID:
+        will_save = False
     program = gate_program(run_config)
     lost = will_save and _alpha_ledger_lost()
     if lost:

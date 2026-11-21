@@ -317,3 +317,98 @@ def test_b06_an_older_sell_never_closes_a_newer_trade():
     assert not ap._exit_after_entry({"order_timestamp": "2026-09-01 09:20:00"}, trade)
     assert ap._exit_after_entry({"order_timestamp": "2026-09-01 14:00:00"}, trade)
     assert not ap._exit_after_entry({}, trade)                              # unknown time: never matched
+
+
+# ── QT-B09: the EMS never reports CLOSED while the broker still holds the fill ───
+
+def test_b09_ems_reports_closed_only_after_broker_flat():
+    from ems import simulator, state_machine as sm
+    from tests.test_ems import _ems, _submit
+
+    broker = simulator.SimBroker(script={"WIN": {"protection_reject": True}})
+    ems, *_ = _ems(broker=broker)
+    order = _submit(ems)
+    assert ems.new_entries_blocked
+    assert order.state != sm.CLOSED or not broker.list_positions()
+
+
+# ── Cycle-2 checkpoint review (QT-C2-01..05, 10) ─────────────────────────────────
+
+def test_c2_03_equity_cannot_open_a_sixth_account_slot(_account, monkeypatch):
+    from config import settings
+
+    te, pr = _account
+    monkeypatch.setattr(settings, "max_open_positions", 10)
+    monkeypatch.setattr(pr, "_fno_open_rows", lambda: [dict(symbol="NIFTY", qty=25, entry=10., stop=8.,
+                                                           book=pr.FNO_BOOK)])
+    for symbol in ("INFY", "TCS", "SBIN", "ITC"):
+        assert te.place_trade(symbol, 10, "LIMIT", 100, 95, 120, paper=True)["ok"]
+    assert not te.place_trade("RELIANCE", 10, "LIMIT", 100, 95, 120, paper=True)["ok"]
+
+
+def test_c2_03_the_account_cap_uses_unrounded_risk(_account, monkeypatch):
+    te, pr = _account
+    for symbol in ("INFY", "TCS", "SBIN", "ITC"):
+        assert te.place_trade(symbol, 100, "LIMIT", 100, 90, 120, paper=True)["ok"]
+    monkeypatch.setattr(pr, "_trade_cap_capital", lambda: 101_000.)
+    out = te.place_trade("RELIANCE", 100, "LIMIT", 100, 89.97, 120, paper=True)   # Rs 5,003 total
+    assert not out["ok"] and out.get("reason_code") == "MAX_PORTFOLIO_RISK"
+
+
+def test_c2_04_cancelled_partial_survives_legacy_reconciliation(tmp_path, monkeypatch):
+    import sqlite3
+    from types import SimpleNamespace
+    from data import kite_client
+    from execution import autopilot
+    from risk.position_manager import _open_trades
+
+    order = dict(order_id="FAKE-BUY", status="CANCELLED", filled_quantity=4)
+    te = _pending_gtt_world(tmp_path, monkeypatch, [order], lambda *a, **k: pytest.fail("locked GTT reached broker"))
+    conn = sqlite3.connect(te._DB)
+    conn.execute("UPDATE trades SET note='AUTOPILOT:scanner'")
+    conn.commit()
+    conn.close()
+    assert te.ensure_pending_gtts() == 0
+    monkeypatch.setattr(kite_client, "KiteClient", lambda: SimpleNamespace(is_connected=lambda: True,
+                                                                         get_orders=lambda: [order]))
+    monkeypatch.setattr(autopilot, "_log_activity", lambda *_: None)
+    autopilot._reconcile_live_fills()
+    assert _open_trades(strict=True)[0]["status"] == "PENDING_GTT"
+
+
+def test_c2_05_proxy_state_does_not_export_sdk():
+    import copy
+    import pickle
+    from data.kite_client import _GuardedKiteProxy
+
+    sdk = object()
+    proxy = _GuardedKiteProxy(sdk)
+    for attempt in (lambda: proxy.__getstate__(), lambda: pickle.dumps(proxy), lambda: copy.copy(proxy),
+                    lambda: copy.deepcopy(proxy), lambda: proxy.__reduce_ex__(2)):
+        with pytest.raises(TypeError):
+            attempt()
+
+
+def test_c2_01_a_rolling_grid_run_cannot_attest_as_production(monkeypatch, tmp_path):
+    from research import alpha_ledger
+    from tests.test_alpha_ledger import _stub_walk_forward
+
+    sb = _stub_walk_forward(monkeypatch, tmp_path)
+    monkeypatch.setattr(sb, "MIN_SYMBOLS_TO_SAVE", 1)
+    monkeypatch.setattr(sb, "_code_sha", lambda: "test-build")
+    report = sb.run_backtest(decision_grid=sb.GRID_ROLLING)
+    att = report["evidence_provenance"]["alpha_accounting"]
+    assert not att.get("look_id") and att.get("unreserved") == "REPORT_NOT_SAVED"
+
+
+def test_c2_10_modern_equity_sizes_down_to_the_configured_account_limit(monkeypatch):
+    from config import settings
+    from research.auto_research.paper_book import PaperBook
+    from tests.test_paper_autopilot_money_path import _cycle, _eligible_card
+
+    monkeypatch.setattr(settings, "risk_per_trade_pct", 0.005)
+    book = PaperBook(capital=100_000)
+    result = _cycle(book, [_eligible_card()])
+    assert result["taken"]
+    pos = next(iter(book.open.values()))
+    assert pos.qty * (pos.entry_price - pos.stop_price) <= 500 + 1e-6
