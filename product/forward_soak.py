@@ -349,10 +349,13 @@ def _settle_pending_locked(
                         "setup_label": row.get("setup"),
                         "regime": row.get("regime"),
                         "rules_hash": row.get("rules_hash"),
-                        # The decision's own id, so the label reaches the
-                        # feature observation frozen under it (L-06). A label
-                        # call for an id with no observation changes nothing.
+                        # The decision's own id (L-06) and, separately, the id of
+                        # the feature observation it froze (QT-06). The label
+                        # goes only to a VERIFIED feature link.
                         "decision_id": str(row.get("decision_id") or ""),
+                        "feature_decision_id": str(row.get("feature_decision_id") or ""),
+                        "scan_scanned_at": str((row.get("pit_proof") or {}).get("scan_scanned_at")
+                                               or row.get("data_snapshot_id") or ""),
                     },
                     "setup": row.get("setup"),
                     "regime": row.get("regime"),
@@ -467,6 +470,9 @@ def _apply_learning_event(outbox, event_id: str, settled_row: Mapping[str, Any],
         return err
     result = ("duplicate" if res.get("duplicate_observation") else
               f"skipped:{res.get('skipped')}" if res.get("skipped") else "applied")
+    if res.get("feature_link") and result == "applied":
+        # Durable, countable: did the research label reach its decision (QT-06)?
+        result = f"applied;feature={res.get('feature_link')}:{res.get('feature_label') or '-'}"
     LO.finish_event(outbox, event_id, result=result)
     return ""
 

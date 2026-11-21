@@ -553,6 +553,13 @@ def settle_official_outcomes(session: str | None = None) -> dict[str, Any]:
     as_of = session or session_date()
     settled, pending, failed = [], [], []
     try:
+        # A later fill queued while the archive could not verify it is credited
+        # (or dropped) BEFORE any WAIT settles on its price path (QT-07).
+        from product.paper_learning_loop import retry_pending_good_waits
+        good_waits = retry_pending_good_waits(today=as_of)     # aged against the settled session
+    except Exception as exc:
+        good_waits = {"error": f"{type(exc).__name__}: {exc}"[:200]}
+    try:
         rows = []
         path = cf_path()
         if path.exists():
@@ -566,6 +573,13 @@ def settle_official_outcomes(session: str | None = None) -> dict[str, Any]:
         rewritten = []
         for row in rows:
             if row.get("classification") or row.get("outcome"):
+                rewritten.append(row)
+                continue
+            if row.get("later_entry_pending"):
+                # Its fill is still being verified: settling it on price now
+                # would erase a GOOD_WAIT it may have earned (QT-07).
+                pending.append({"symbol": row.get("symbol"), "as_of": row.get("as_of"),
+                                "reason": "LATER_ENTRY_UNVERIFIED"})
                 rewritten.append(row)
                 continue
             symbol = str(row.get("symbol") or "")
@@ -633,7 +647,7 @@ def settle_official_outcomes(session: str | None = None) -> dict[str, Any]:
         forward = dict(exc.result)
         failed.append({"stage": "forward_learning", "error": str(exc)[:200]})
     n_forward = int(forward.get("updated") or 0)
-    return {"settled": settled, "pending": pending, "failed": failed,
+    return {"settled": settled, "pending": pending, "failed": failed, "good_waits": good_waits,
             "forward_settled": n_forward, "forward_pending": int(forward.get("pending") or 0),
             "forward_classifications": dict(forward.get("classifications") or {}),
             "n_settled": len(settled) + n_forward}

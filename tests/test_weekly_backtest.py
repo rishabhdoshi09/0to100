@@ -116,10 +116,13 @@ def test_calibration_sample_spans_the_whole_alphabet_not_a_prefix():
     store = sorted(f"{chr(65 + i % 26)}{i:05d}" for i in range(3466))
     sample = _spread_sample(store, 800)
     assert len(sample) == 800 == len(set(sample))
-    assert sample[0] == store[0] and sample[-1].startswith("Z")
-    assert len({s[0] for s in sample}) == 26
+    assert len({s[0] for s in sample}) == 26                # the whole alphabet, not a prefix
+    assert min(sum(s[0] == c for s in sample) for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ") > 15
     assert sample == _spread_sample(store, 800)            # deterministic
     assert _spread_sample(store[:50], 800) == store[:50]   # small store: everything
+    # QT-08: a new listing displaces at most one sampled name
+    grown = sorted(store + ["NEWLISTING1"])
+    assert len(set(sample) ^ set(_spread_sample(grown, 800))) <= 2
 
 
 def test_a_prefix_sampled_calibration_is_due_whatever_its_age(monkeypatch, tmp_path):

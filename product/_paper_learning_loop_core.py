@@ -389,6 +389,47 @@ def ingest_closed_book(book, *, path=None, floors: Mapping[str, int] | None = No
     return {"applied": applied, "last_policy": last}
 
 
+def verified_feature_link(settled: Mapping[str, Any], decision_id: str = "") -> tuple[str, str]:
+    """(feature decision id, status) for the feature observation a research outcome may label.
+
+    The outcome of a rejected or waited decision labels the feature observation
+    THAT decision froze, and nothing else (verification review QT-06):
+
+    * the explicit ``feature_decision_id`` the decision carried, else the
+      decision's own id (an explicitly linked legacy row);
+    * the observation must exist, belong to the same symbol, be a PAPER_FORWARD
+      decision (a simulated or replayed observation is never labelled with a
+      forward outcome), and come from the same scan when both name one.
+
+    Anything else returns ('', reason): reported, never matched by guesswork.
+    """
+    evidence = dict(settled.get("evidence") or {})
+    explicit = str(evidence.get("feature_decision_id") or settled.get("feature_decision_id") or "")
+    candidate = explicit or str(decision_id or "")
+    if not candidate:
+        return "", "NO_DECISION_ID"
+    try:
+        from product.evidence_class import PAPER_FORWARD
+        from product.evidence_intelligence import _observation_id
+        from research.feature_store import get_observation
+        obs = get_observation(_observation_id(candidate))
+    except Exception:
+        return "", "FEATURE_STORE_UNAVAILABLE"
+    if not obs:
+        return "", "UNLINKED" if explicit else "NO_FEATURE_OBSERVATION"
+    if str(obs.get("symbol") or "").upper() != str(settled.get("symbol") or "").upper():
+        return "", "LINK_CONFLICT_SYMBOL"
+    meta = dict(obs.get("meta") or {})
+    klass = str(meta.get("evidence_class") or "")
+    if klass and klass != PAPER_FORWARD:
+        return "", "LINK_CONFLICT_EVIDENCE_CLASS"
+    scan = str(evidence.get("scan_scanned_at") or "")
+    source = str(meta.get("source_scan_id") or "")
+    if scan and source and scan != source:
+        return "", "LINK_CONFLICT_SCAN"
+    return candidate, "VERIFIED"
+
+
 def counterfactual_observation_key(settled: Mapping[str, Any]) -> tuple[str, str] | None:
     """(key, session) for the independent unit a settled counterfactual is.
 
@@ -561,14 +602,16 @@ def ingest_counterfactual(
             extra={"classification": GOOD_WAIT, "not_pnl": True, "symbol": settled.get("symbol")},
             **obs,
         )
-    if decision_id and counterfactual_r is not None:
+    feature_id, feature_link = verified_feature_link(settled, decision_id)
+    if feature_id and counterfactual_r is not None:
         # The feature label is a sink of its own (L-06): idempotent (an equal
         # label is "exists"), so a failure is raised, the unit stays CLAIMED
         # and the event is retried; the policy effects above are idempotent per
-        # observation key, so the retry changes only what did not land.
+        # observation key, so the retry changes only what did not land. It goes
+        # only to a VERIFIED link (QT-06).
         from product.evidence_intelligence import record_resolved_prediction
         labelled = record_resolved_prediction(
-            decision_id,
+            feature_id,
             float(counterfactual_r),
             evidence_class="FORWARD_COUNTERFACTUAL",
             not_pnl=True,
@@ -581,10 +624,12 @@ def ingest_counterfactual(
         )
         label_status = str(((labelled or {}).get("feature_store") or {}).get("status") or "")
         if label_status == "error":
-            raise RuntimeError(f"feature label for {decision_id} failed: "
+            raise RuntimeError(f"feature label for {feature_id} failed: "
                                f"{((labelled or {}).get('feature_store') or {}).get('reason')}"[:240])
         if isinstance(last, dict):
             last = {**last, "feature_label": label_status}
+    if isinstance(last, dict):
+        last = {**last, "feature_link": feature_link}
     if unit_ledger is not None:
         from product import learning_observations as LO
         LO.mark_applied(unit_ledger, "COUNTERFACTUAL", obs["observation_key"])
@@ -603,16 +648,107 @@ def _wait_is_live(row: Mapping[str, Any], entry_day: str) -> bool:
     its horizon, rewarded unrelated decisions (cross-review open item,
     2026-11-21).
     """
-    if str(row.get("decision") or "").upper() != "WAIT":
-        return False
-    day = str(row.get("as_of") or "")[:10]
-    if len(day) != 10 or not entry_day or day > entry_day:
-        return False
-    from core.evaluation_spec import OUTCOME_HORIZON_SESSIONS
-    n = _sessions_through(day, entry_day[:10])
     # Unverifiable ordinal (no archive, a wait older than it, an uncovered
     # calendar year): the credit stays pending, never guessed (L-08).
-    return n is not None and n <= int(OUTCOME_HORIZON_SESSIONS)
+    return _wait_ordinal_state(row, entry_day) == "LIVE"
+
+
+def _wait_ordinal_state(row: Mapping[str, Any], entry_day: str) -> str:
+    """LIVE / EXPIRED / UNVERIFIABLE for a WAIT and a later fill; NOT_A_WAIT otherwise."""
+    if str(row.get("decision") or "").upper() != "WAIT":
+        return "NOT_A_WAIT"
+    day = str(row.get("as_of") or "")[:10]
+    if len(day) != 10 or not entry_day or day > entry_day:
+        return "NOT_A_WAIT"
+    from core.evaluation_spec import OUTCOME_HORIZON_SESSIONS
+    n = _sessions_through(day, str(entry_day)[:10])
+    if n is None:
+        return "UNVERIFIABLE"
+    return "LIVE" if n <= int(OUTCOME_HORIZON_SESSIONS) else "EXPIRED"
+
+
+#: A fill queued for verification is dropped (the WAIT settles on its own price
+#: path) when the archive still cannot verify it this long after the fill.
+LATER_ENTRY_VERIFY_MAX_DAYS = 45
+
+
+def _queue_unverified_fills(symbol: str, entry_day: str) -> int:
+    """Record a later fill on each pending WAIT of ``symbol`` whose ordinal cannot be verified YET.
+
+    Without this, a fill seen while the official archive is unavailable was
+    simply lost: the next settlement classified the WAIT by price path and the
+    GOOD_WAIT it earned never came back (verification review QT-07). The
+    earliest fill is kept; nothing is credited until it verifies.
+    """
+    ledger = ledger_path()
+    rows = _read_jsonl(ledger)
+    changed = 0
+    for row in rows:
+        if row.get("classification") or str(row.get("symbol") or "").upper() != symbol:
+            continue
+        if row.get("later_entry_pending"):
+            continue
+        if _wait_ordinal_state(row, entry_day) == "UNVERIFIABLE":
+            row["later_entry_pending"] = {"fill_session": str(entry_day)[:10],
+                                          "noted_at": datetime.now(timezone.utc).isoformat()}
+            changed += 1
+    if changed:
+        from core.atomic_io import atomic_write_text
+        atomic_write_text(ledger, "".join(json.dumps(r, default=str) + "\n" for r in rows))
+    return changed
+
+
+def retry_pending_good_waits(*, path=None, floors: Mapping[str, int] | None = None,
+                             today: str | None = None) -> dict[str, Any]:
+    """Re-verify queued later fills; credit GOOD_WAIT only when the ordinal now verifies LIVE (QT-07).
+
+    EXPIRED drops the fill (the WAIT settles on its own price path); still
+    UNVERIFIABLE keeps it queued, until LATER_ENTRY_VERIFY_MAX_DAYS after the
+    fill, then drops it as unverifiable. Never fabricates a session.
+    """
+    from datetime import date
+    ledger = ledger_path()
+    rows = _read_jsonl(ledger)
+    now = str(today or datetime.now(timezone.utc).date().isoformat())[:10]
+    out = {"credited": 0, "expired": 0, "still_unverifiable": 0, "dropped_unverifiable": 0}
+    rewritten: list[dict[str, Any]] = []
+    changed = False
+    for row in rows:
+        pending = row.get("later_entry_pending")
+        if row.get("classification") or not isinstance(pending, Mapping):
+            rewritten.append(row)
+            continue
+        fill = str(pending.get("fill_session") or "")[:10]
+        state = _wait_ordinal_state(row, fill)
+        if state == "LIVE":
+            settled = settle({k: v for k, v in row.items() if k != "later_entry_pending"},
+                             forward_return_pct=None, later_entered=True)
+            settled["later_entry_verified"] = fill
+            ingest_counterfactual(settled, path=path, floors=floors)
+            rewritten.append(settled)
+            out["credited"] += 1
+            changed = True
+            continue
+        if state == "UNVERIFIABLE":
+            try:
+                age = (date.fromisoformat(now) - date.fromisoformat(fill)).days
+            except ValueError:
+                age = LATER_ENTRY_VERIFY_MAX_DAYS + 1
+            if age <= LATER_ENTRY_VERIFY_MAX_DAYS:
+                out["still_unverifiable"] += 1
+                rewritten.append(row)
+                continue
+            out["dropped_unverifiable"] += 1
+        else:
+            out["expired"] += 1
+        kept = {k: v for k, v in row.items() if k != "later_entry_pending"}
+        kept["later_entry_unverified" if state == "UNVERIFIABLE" else "later_entry_expired"] = fill
+        rewritten.append(kept)
+        changed = True
+    if changed:
+        from core.atomic_io import atomic_write_text
+        atomic_write_text(ledger, "".join(json.dumps(r, default=str) + "\n" for r in rewritten))
+    return out
 
 
 def _sessions_through(day: str, entry_day: str) -> int | None:
@@ -659,6 +795,7 @@ def note_later_entry(symbol: str, *, path=None, floors: Mapping[str, int] | None
     rulebook outcome.
     """
     entry_day = str(as_of or datetime.now(timezone.utc).date().isoformat())[:10]
+    _queue_unverified_fills(str(symbol).upper(), entry_day)
     return settle_pending_counterfactuals(
         later_entered={str(symbol).upper(): True},
         path=path,

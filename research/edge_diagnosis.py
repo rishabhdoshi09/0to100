@@ -198,7 +198,8 @@ def regime_series(level: pd.Series) -> pd.Series:
 # ── collection: the production walk-forward with hooks ──────────────────────
 
 def collect(frames: Mapping[str, pd.DataFrame], *, symbols: int, sample_step: int = 5,
-            lookback_sessions: int | None = None, horizon: int = HORIZON) -> dict[str, Any]:
+            lookback_sessions: int | None = None, horizon: int = HORIZON,
+            decision_grid: str | None = None) -> dict[str, Any]:
     """Run the production walk-forward on `frames` (already CA-adjusted) and capture every candidate.
 
     Returns {"events": [...], "trades": [...], "provenance": {...}}. ``events``
@@ -257,7 +258,7 @@ def collect(frames: Mapping[str, pd.DataFrame], *, symbols: int, sample_step: in
             UnifiedScanner._analyze = analyze
             t0 = time.perf_counter()
             rep = SB.run_backtest(sample_step=sample_step, lookback_sessions=lookback, horizon=horizon,
-                                  max_symbols=symbols, on_trade=sink)
+                                  max_symbols=symbols, on_trade=sink, decision_grid=decision_grid)
             elapsed = time.perf_counter() - t0
         finally:
             BS.store_symbols, BS.get_ohlcv, BS._dates_on_disk = (saved["store_symbols"], saved["get_ohlcv"],

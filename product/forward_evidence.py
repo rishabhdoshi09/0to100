@@ -213,6 +213,9 @@ def freeze_observation(
         "surfaced": bool(surfaced),
         "entered": bool(entered),
         "paper_decision_id": str(row.get("paper_decision_id") or ""),
+        # The feature observation this decision froze, if any: never the row id
+        # (QT-06). Empty on legacy rows, which are never guessed into a link.
+        "feature_decision_id": str(row.get("feature_decision_id") or ""),
         "why": row.get("why") or row.get("detail") or "",
         "reason_code": reason,
         "group": str(group or row.get("group") or ""),

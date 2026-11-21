@@ -1,0 +1,288 @@
+{
+  "grid": "session_anchored",
+  "lookback_sessions": 250,
+  "sample_step": 5,
+  "symbols": 200,
+  "fixed_symbols": true,
+  "cuts": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "last_session": "2026-11-19",
+  "symbol_sample_jaccard_vs_k0": {
+    "0": 1.0,
+    "1": 1.0,
+    "2": 1.0,
+    "3": 1.0,
+    "4": 1.0
+  },
+  "decision_grid_constant_in_code": "rolling",
+  "common_window": [
+    "2019-12-31",
+    "2026-10-28"
+  ],
+  "overlap": {
+    "0": {
+      "decisions": 1177,
+      "shared_with_k0": 1177,
+      "jaccard_vs_k0": 1.0
+    },
+    "1": {
+      "decisions": 1177,
+      "shared_with_k0": 1177,
+      "jaccard_vs_k0": 1.0
+    },
+    "2": {
+      "decisions": 1178,
+      "shared_with_k0": 1177,
+      "jaccard_vs_k0": 0.9992
+    },
+    "3": {
+      "decisions": 1179,
+      "shared_with_k0": 1177,
+      "jaccard_vs_k0": 0.9983
+    },
+    "4": {
+      "decisions": 1179,
+      "shared_with_k0": 1177,
+      "jaccard_vs_k0": 0.9983
+    }
+  },
+  "max_outcome_difference_on_shared_decisions": {
+    "0": 0.0,
+    "1": 0.0,
+    "2": 0.0,
+    "3": 0.0,
+    "4": 0.0
+  },
+  "per_signal": {
+    "ACCUMULATION": {
+      "phases": 5,
+      "mean_of_means": -0.0798,
+      "between_phase_sd": 0.0,
+      "mean_se": 0.0526,
+      "sd_over_se": 0.0,
+      "lower_bound_sign_flips": false,
+      "trades_by_phase": {
+        "0": 144,
+        "1": 144,
+        "2": 144,
+        "3": 144,
+        "4": 144
+      }
+    },
+    "ANY_SIGNAL": {
+      "phases": 5,
+      "mean_of_means": -0.1976,
+      "between_phase_sd": 0.0004,
+      "mean_se": 0.033,
+      "sd_over_se": 0.013,
+      "lower_bound_sign_flips": false,
+      "trades_by_phase": {
+        "0": 1177,
+        "1": 1177,
+        "2": 1178,
+        "3": 1179,
+        "4": 1179
+      }
+    },
+    "ASC_TRIANGLE": {
+      "phases": 5,
+      "mean_of_means": -0.3888,
+      "between_phase_sd": 0.0,
+      "mean_se": 0.0592,
+      "sd_over_se": 0.0,
+      "lower_bound_sign_flips": false,
+      "trades_by_phase": {
+        "0": 323,
+        "1": 323,
+        "2": 324,
+        "3": 324,
+        "4": 324
+      }
+    },
+    "CUP_HANDLE": {
+      "phases": 5,
+      "mean_of_means": -0.1578,
+      "between_phase_sd": 0.0,
+      "mean_se": 0.0397,
+      "sd_over_se": 0.0,
+      "lower_bound_sign_flips": false,
+      "trades_by_phase": {
+        "0": 326,
+        "1": 326,
+        "2": 326,
+        "3": 326,
+        "4": 326
+      }
+    },
+    "DELIVERY_SPIKE": {
+      "phases": 5,
+      "mean_of_means": 0.0732,
+      "between_phase_sd": 0.0,
+      "mean_se": 0.1472,
+      "sd_over_se": 0.0,
+      "lower_bound_sign_flips": false,
+      "trades_by_phase": {
+        "0": 44,
+        "1": 44,
+        "2": 44,
+        "3": 44,
+        "4": 44
+      }
+    },
+    "DOUBLE_BOTTOM": {
+      "phases": 5,
+      "mean_of_means": -0.2901,
+      "between_phase_sd": 0.0,
+      "mean_se": 0.0939,
+      "sd_over_se": 0.0,
+      "lower_bound_sign_flips": false,
+      "trades_by_phase": {
+        "0": 61,
+        "1": 61,
+        "2": 61,
+        "3": 61,
+        "4": 61
+      }
+    },
+    "FLAT_BASE": {
+      "phases": 5,
+      "mean_of_means": -0.5988,
+      "between_phase_sd": 0.0,
+      "mean_se": 0.0721,
+      "sd_over_se": 0.0,
+      "lower_bound_sign_flips": false,
+      "trades_by_phase": {
+        "0": 191,
+        "1": 191,
+        "2": 191,
+        "3": 191,
+        "4": 191
+      }
+    },
+    "GOLDEN_CROSS": {
+      "phases": 5,
+      "mean_of_means": -0.2621,
+      "between_phase_sd": 0.0,
+      "mean_se": 0.0827,
+      "sd_over_se": 0.0,
+      "lower_bound_sign_flips": false,
+      "trades_by_phase": {
+        "0": 39,
+        "1": 39,
+        "2": 39,
+        "3": 39,
+        "4": 39
+      }
+    },
+    "MOMENTUM": {
+      "phases": 5,
+      "mean_of_means": -0.128,
+      "between_phase_sd": 0.0018,
+      "mean_se": 0.0593,
+      "sd_over_se": 0.03,
+      "lower_bound_sign_flips": false,
+      "trades_by_phase": {
+        "0": 248,
+        "1": 248,
+        "2": 248,
+        "3": 249,
+        "4": 249
+      }
+    },
+    "NR7_COIL": {
+      "phases": 5,
+      "mean_of_means": -0.627,
+      "between_phase_sd": 0.0008,
+      "mean_se": 0.1018,
+      "sd_over_se": 0.008,
+      "lower_bound_sign_flips": false,
+      "trades_by_phase": {
+        "0": 129,
+        "1": 129,
+        "2": 130,
+        "3": 130,
+        "4": 130
+      }
+    },
+    "POCKET_PIVOT": {
+      "phases": 5,
+      "mean_of_means": -0.0982,
+      "between_phase_sd": 0.0016,
+      "mean_se": 0.0507,
+      "sd_over_se": 0.031,
+      "lower_bound_sign_flips": false,
+      "trades_by_phase": {
+        "0": 293,
+        "1": 293,
+        "2": 293,
+        "3": 294,
+        "4": 294
+      }
+    },
+    "PRE_BREAKOUT": {
+      "phases": 5,
+      "mean_of_means": -0.2985,
+      "between_phase_sd": 0.0011,
+      "mean_se": 0.0682,
+      "sd_over_se": 0.016,
+      "lower_bound_sign_flips": false,
+      "trades_by_phase": {
+        "0": 364,
+        "1": 364,
+        "2": 365,
+        "3": 366,
+        "4": 366
+      }
+    },
+    "PULLBACK_SUPPORT": {
+      "phases": 5,
+      "mean_of_means": -0.1195,
+      "between_phase_sd": 0.0,
+      "mean_se": 0.0509,
+      "sd_over_se": 0.0,
+      "lower_bound_sign_flips": false,
+      "trades_by_phase": {
+        "0": 181,
+        "1": 181,
+        "2": 181,
+        "3": 181,
+        "4": 181
+      }
+    },
+    "VCP": {
+      "phases": 5,
+      "mean_of_means": -0.8653,
+      "between_phase_sd": 0.0,
+      "mean_se": 0.1836,
+      "sd_over_se": 0.0,
+      "lower_bound_sign_flips": false,
+      "trades_by_phase": {
+        "0": 31,
+        "1": 31,
+        "2": 31,
+        "3": 31,
+        "4": 31
+      }
+    },
+    "VOL_SQUEEZE": {
+      "phases": 5,
+      "mean_of_means": -0.1502,
+      "between_phase_sd": 0.0039,
+      "mean_se": 0.0732,
+      "sd_over_se": 0.054,
+      "lower_bound_sign_flips": false,
+      "trades_by_phase": {
+        "0": 111,
+        "1": 111,
+        "2": 111,
+        "3": 112,
+        "4": 112
+      }
+    }
+  }
+}

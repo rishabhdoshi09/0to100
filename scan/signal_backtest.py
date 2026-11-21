@@ -854,27 +854,54 @@ def _eval_spec_tag(horizon: int) -> str:
 
 #: How run_backtest picks its symbols; recorded in every saved report so a
 #: calibration built by the old alphabetical prefix is recognisably legacy.
-SAMPLING = "even_stride"
+#: Part of the gate program (gate_program) and of the report: a change is a NEW
+#: evidence program, so earlier attestations fail closed and the supervisor
+#: reruns the walk-forward (Supervisor._legacy_calibration).
+SAMPLING = "hash_rank_session_anchored_v1"
+
+#: Which decision days the walk-forward measures (verification review QT-08).
+#: "rolling": every ``sample_step``-th bar from a start that moves with the
+#: symbol's bar count, so appending one bar shifts the whole grid.
+#: "session_anchored": a decision day is sampled iff its official-session
+#: ordinal is a multiple of ``sample_step``: appending data only ADDS decisions.
+#: Measured on the SSD copy (docs/research/qt08_sampling_stability_2026-11-21.md):
+#: appending 1-4 sessions kept ~17% of the rolling grid's decisions (Jaccard
+#: 0.09) and moved per-signal means by a median 0.38 (max 0.68) of their own
+#: SE from phase alone; the anchored grid kept 100% and moved them by <= 0.05 SE.
+#: The even-stride SYMBOL sample moved even more when a few names listed
+#: (symbol Jaccard 0.26, per-signal shift median 0.84 / max 1.97 SE), so the
+#: symbols are now a hash-rank sample (_spread_sample), stable under additions.
+GRID_ROLLING = "rolling"
+GRID_SESSION_ANCHORED = "session_anchored"
+DECISION_GRID = GRID_SESSION_ANCHORED
 
 
 def _spread_sample(symbols: list[str], limit: int) -> list[str]:
-    """Deterministic, evenly spaced ``limit`` symbols across the whole store.
+    """Deterministic ``limit`` symbols, uniformly spread, STABLE as the store grows.
 
     store_symbols() is alphabetical (the store is built with groupby), so the
     old ``[:max_symbols]`` prefix calibrated every signal on roughly the A-D
     names only (first weekly run on the owner's Mac, 2026-11-15: 800 of 3,466
-    symbols). An even stride keeps the same runtime budget, covers the whole
-    alphabet, and picks the same names for the same store.
+    symbols). The even stride that replaced it covered the alphabet but moved
+    almost every pick whenever a few names listed (QT-08: symbol Jaccard 0.26
+    after the listings of 1-4 sessions). Each symbol now has a fixed hash rank;
+    the ``limit`` lowest are taken, so a new listing displaces at most one
+    sampled name and the selection is independent of names and outcomes.
+    Returned in store order.
     """
+    import hashlib
+
     names = list(symbols)
-    n = len(names)
-    if limit <= 0 or n <= limit:
+    if limit <= 0 or len(names) <= limit:
         return names
-    return [names[(i * n) // limit] for i in range(limit)]
+    ranked = sorted(names, key=lambda s: hashlib.sha256(f"qt-sample-v1|{s}".encode()).hexdigest())
+    chosen = set(ranked[:limit])
+    return [s for s in names if s in chosen]
 
 
 def run_backtest(sample_step: int = 5, lookback_sessions: int = 250,
-                 horizon: int = _EVAL_HORIZON, max_symbols: int = 800, on_trade=None) -> dict:
+                 horizon: int = _EVAL_HORIZON, max_symbols: int = 800, on_trade=None,
+                 decision_grid: str | None = None) -> dict:
     """
     Walk-forward backtest across the bhav store. Returns and persists
     per-signal stats. Needs ≥ (60 + lookback + horizon) sessions of data.
@@ -900,7 +927,8 @@ def run_backtest(sample_step: int = 5, lookback_sessions: int = 250,
         return _run_backtest_inner(sc, stats, symbols, sample_step,
                                    lookback_sessions, horizon, t0, on_trade,
                                    run_config={"sample_step": sample_step, "lookback_sessions": lookback_sessions,
-                                               "max_symbols": max_symbols})
+                                               "max_symbols": max_symbols},
+                                   decision_grid=decision_grid or DECISION_GRID)
     finally:
         # Crash-proof: 'running' can never stick True and freeze the UI button
         with _state_lock:
@@ -908,7 +936,7 @@ def run_backtest(sample_step: int = 5, lookback_sessions: int = 250,
 
 
 def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
-                        horizon, t0, on_trade=None, run_config=None):
+                        horizon, t0, on_trade=None, run_config=None, decision_grid=GRID_ROLLING):
     from data.bhavcopy_store import get_ohlcv
 
     regime_series = _nifty_regime_series()      # None → regime split skipped
@@ -953,7 +981,14 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
         start = max(60, n - horizon - lookback_sessions)
         day_keys = list(pd.DatetimeIndex(df.index).strftime("%Y-%m-%d")) if official_index else []
         symbol_used = False
-        for t in range(start, n if official_index else n - horizon, sample_step):
+        anchored = decision_grid == GRID_SESSION_ANCHORED
+        for t in range(start, n if official_index else n - horizon, 1 if anchored else sample_step):
+            if anchored:
+                # The decision day is bar t-1: sampled iff its official ordinal
+                # (else, without an index, its bar position) is on the stride.
+                o = official_index.get(day_keys[t - 1]) if official_index else t - 1
+                if o is None or int(o) % int(sample_step):
+                    continue
             # The verified prefix of the window (overnight review E-07): a stop
             # observed before a suspension or the symbol's last bar is exact,
             # whatever bars come later. A window whose prefix reaches the last
@@ -1202,6 +1237,7 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
     out = {"generated_at": time.strftime("%Y-%m-%d %H:%M"),
            "symbols": len(symbols), "horizon_days": horizon,
            "sampling": SAMPLING,
+           "decision_grid": decision_grid,
            "report_schema": REPORT_SCHEMA,
            "eval_spec": _eval_spec_tag(horizon),
            "signals": report,
