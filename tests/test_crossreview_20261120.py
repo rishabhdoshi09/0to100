@@ -160,11 +160,14 @@ def test_A10_the_scorecard_reads_the_recorded_policy_effect(tmp_path):
     from product.forward_evidence import freeze_observation
     from product.learning_scorecard import learning_influence
 
-    row = freeze_observation({"symbol": "INFY", "decision": "BLOCK", "policy_effect": "BLOCK"},
+    row = freeze_observation({"symbol": "INFY", "decision": "BLOCK", "policy_effect": "BLOCK",
+                              "reason_code": "EVIDENCE_POLICY_BLOCK"},
                              cycle_id="one", as_of="2026-09-01", path=tmp_path / "forward.jsonl")
     assert row["policy_result"] == "BLOCK"
     policy = {"policy_id": "SETUP::VCP", "production_status": "ACTIVE"}
-    assert learning_influence([policy], [row])["decisions_changed_by_learning"] == 1
+    out = learning_influence([policy], [row])
+    assert out["decisions_by_policy_effect"] == {"BLOCK": 1}            # the recorded effect is read
+    assert out["decisions_changed_by_learning"] == 1                    # a learned policy was the binding reason
 
 
 def test_A6_a_simulated_rejection_never_feeds_a_forward_policy(tmp_path, monkeypatch):

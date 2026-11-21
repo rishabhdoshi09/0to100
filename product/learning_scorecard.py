@@ -631,6 +631,13 @@ def forward_evidence(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 
 # ── learning influence & challengers ─────────────────────────────────────────
 
+#: Reason codes that mean the evidence/learning policy itself refused the entry.
+BINDING_POLICY_REASONS = {
+    "EVIDENCE_POLICY_BLOCK": "an active learned policy blocked the setup",
+    "HISTORICAL_EVIDENCE_PENDING": "the history-first system gate (setup not yet reproduced in PIT history)",
+}
+
+
 def learning_influence(policies: Sequence[Mapping[str, Any]], forward_rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     from product.forward_evidence import independent_decisions
 
@@ -646,17 +653,42 @@ def learning_influence(policies: Sequence[Mapping[str, Any]], forward_rows: Sequ
                 "edge_R": p.get("expectancy_difference_R"),
             })
     effects: dict[str, int] = defaultdict(int)
+    binding: dict[str, int] = defaultdict(int)
+    recorded_not_binding = 0
+    rank_adjusted = 0
+    exploration = 0
     for r in independent_decisions(forward_rows):
         # The forward ledger persists the effect as ``policy_result``
         # (forward_evidence.freeze_observation); ``policy_effect`` is the
         # in-memory decision field. Reading only the latter counted every
         # recorded BLOCK/PENALIZE as NEUTRAL (GPT cross-review A-10).
-        effects[str(r.get("policy_result") or r.get("policy_effect") or "NEUTRAL")] += 1
-    changed = sum(v for k, v in effects.items() if k not in {"NEUTRAL", ""})
+        effect = str(r.get("policy_result") or r.get("policy_effect") or "NEUTRAL")
+        effects[effect] += 1
+        reason = str(r.get("reason_code") or "")
+        # The policy engine's final effect is stamped on EVERY candidate,
+        # including those another gate already rejected; and in production
+        # the BLOCK is the history-first SYSTEM gate, not a learned policy. A
+        # decision was changed by LEARNING only when a learned policy was its
+        # BINDING reason, or a learned policy moved its score (cycle 2
+        # learning-effectiveness audit).
+        if reason in BINDING_POLICY_REASONS:
+            binding[reason] += 1
+        elif effect == "EXPLORATION":
+            exploration += 1
+        elif effect in {"PENALIZE", "SUPPORT"}:
+            rank_adjusted += 1
+        elif effect not in {"NEUTRAL", ""}:
+            recorded_not_binding += 1
+    changed = binding.get("EVIDENCE_POLICY_BLOCK", 0) + rank_adjusted
     return {
         "policies_by_status": dict(by_status),
         "policies_influencing_selection": influencing,
         "decisions_by_policy_effect": dict(effects),
+        "decisions_by_binding_policy_reason": dict(binding),
+        "decisions_blocked_by_history_first_gate": binding.get("HISTORICAL_EVIDENCE_PENDING", 0),
+        "decisions_with_effect_recorded_but_rejected_by_another_gate": recorded_not_binding,
+        "decisions_rank_adjusted_by_learned_policy": rank_adjusted,
+        "decisions_in_exploration_lane": exploration,
         "decisions_changed_by_learning": changed,
         "answer": (
             "YES" if changed and influencing else

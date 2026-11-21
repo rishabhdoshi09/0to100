@@ -261,3 +261,55 @@ def test_qt08_a_new_listing_displaces_at_most_one_sampled_symbol():
     for extra in ("AAAA", "MMMM", "ZZZZ"):
         after = set(_spread_sample(sorted(store + [extra]), 800))
         assert len(before - after) <= 1 and len(after - before) <= 1
+
+
+# ── Learning effectiveness: a recorded policy effect is not a changed decision ──
+
+def test_learning_counts_only_decisions_a_learned_policy_actually_changed(tmp_path):
+    from product.forward_evidence import freeze_observation
+    from product.learning_scorecard import learning_influence
+
+    path = tmp_path / "forward.jsonl"
+    rows = [freeze_observation({"symbol": s, "decision": "BLOCK", "policy_effect": "BLOCK", "reason_code": r},
+                               cycle_id="c", as_of="2026-09-01", path=path)
+            for s, r in (("A", "LOW_QUALITY_SETUP"), ("B", "HISTORICAL_EVIDENCE_PENDING"),
+                         ("C", "EVIDENCE_POLICY_BLOCK"))]
+    out = learning_influence([], rows)
+    assert out["decisions_by_policy_effect"] == {"BLOCK": 3}
+    # A: another gate rejected it; B: the history-first SYSTEM gate; C: a learned policy.
+    assert out["decisions_with_effect_recorded_but_rejected_by_another_gate"] == 1
+    assert out["decisions_blocked_by_history_first_gate"] == 1
+    assert out["decisions_changed_by_learning"] == 1
+
+
+def test_learning_effectiveness_report_classifies_policies_and_measures_reach(tmp_path):
+    import json
+    import sqlite3
+    from research import learning_effectiveness as LE
+
+    consumption = {c["policy_id"]: c["consumption"] for c in LE.policy_consumption([
+        {"policy_id": "REJECT::X", "production_status": "REJECTED", "dimension": "reason_code", "bucket": "X"},
+        {"policy_id": "SETUP::VCP", "production_status": "ACTIVE", "dimension": "setup", "bucket": "VCP",
+         "confidence": "MEASURED"},
+        {"policy_id": "HIST_SETUP::VCP", "production_status": "EXPERIMENTAL", "affects_selection": False},
+        {"policy_id": "SETUP::NR7", "production_status": "ELIGIBLE", "confidence": "INSUFFICIENT_EVIDENCE"}])}
+    assert consumption["REJECT::X"].startswith("IGNORED")
+    assert consumption["SETUP::VCP"] == "CAN_AFFECT_SELECTION"
+    assert consumption["HIST_SETUP::VCP"] == "HISTORY_FIRST_GATE_INPUT"
+    assert consumption["SETUP::NR7"].startswith("NEUTRAL")
+
+    logs = tmp_path / "logs" / "product"
+    logs.mkdir(parents=True)
+    rows = [{"decision_id": f"d{i}", "symbol": s, "group": "REJECTED", "reason_code": "R",
+             "market_timestamp": "2026-09-01", "provenance": "REAL_FORWARD_MARKET", "entered": False,
+             "later_outcome": {"eval_spec": "x"}} for i, s in enumerate(("A", "B"))]
+    (logs / "forward_evidence.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    conn = sqlite3.connect(logs / "learning_policies.observations.sqlite3")
+    conn.execute("CREATE TABLE observations (scope TEXT, observation_key TEXT, session TEXT, recorded_at TEXT)")
+    conn.execute("INSERT INTO observations VALUES ('COUNTERFACTUAL', 'cf:2026-09-01|A|R', '2026-09-01', 'x')")
+    conn.commit()
+    conn.close()
+    rep = LE.build_report(tmp_path)
+    assert rep["learning_reach"]["settled_independent_counterfactuals"] == 2
+    assert rep["learning_reach"]["reached_learning_unit_claim"] == 1           # B was settled, never learned
+    assert rep["decision_impact"]["decisions_changed_by_learning"] == 0
