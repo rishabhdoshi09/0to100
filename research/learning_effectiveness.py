@@ -130,14 +130,29 @@ def feature_labels(db: Path) -> dict[str, Any]:
 
 
 def build_report(root: str | Path) -> dict[str, Any]:
-    from product.forward_evidence import independent_decisions
-    from product.learning_scorecard import learning_influence
+    """The report for the runtime COPY at ``root`` (QT_RUNTIME_ROOT is pointed at it, then restored)."""
+    import os
 
     root = Path(root).resolve()
     if str(root).startswith("/Volumes/"):
         raise SystemExit(f"refusing {root}: copy the runtime first (never read the live runtime)")
-    logs = root / "logs" if (root / "logs").exists() else root
-    product = logs / "product"
+    previous = os.environ.get("QT_RUNTIME_ROOT")
+    os.environ["QT_RUNTIME_ROOT"] = str(root)
+    try:
+        return _build_report()
+    finally:
+        if previous is None:
+            os.environ.pop("QT_RUNTIME_ROOT", None)
+        else:
+            os.environ["QT_RUNTIME_ROOT"] = previous
+
+
+def _build_report() -> dict[str, Any]:
+    from core.runtime_paths import logs_path
+    from product.forward_evidence import independent_decisions
+    from product.learning_scorecard import learning_influence
+
+    product = logs_path("product")
     forward = _jsonl(product / "forward_evidence.jsonl")
     policies = list((json.loads((product / "learning_policies.json").read_text()) if
                      (product / "learning_policies.json").exists() else {}).get("policies") or [])
@@ -189,7 +204,7 @@ def build_report(root: str | Path) -> dict[str, Any]:
         "baseline_vs_learned": (
             "IDENTICAL: no learned policy is consulted by selection, so the learned policy set equals the baseline"
             if not can_affect else "COMPARE: see per-policy edge_vs_baseline_R with n and sessions"),
-        "feature_store": feature_labels(logs / "feature_store.db"),
+        "feature_store": feature_labels(logs_path("feature_store.db")),
         "challengers": challengers,
         "cannot_promote_because": blockers,
     }
