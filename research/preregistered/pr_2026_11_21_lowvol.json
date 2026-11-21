@@ -1,0 +1,76 @@
+{
+  "id": "PR-2026-11-21-LOWVOL",
+  "title": "Low-volatility portfolio, monthly rebalanced, liquid NSE equities: research only, risk-adjusted alpha as the primary outcome, with an untouched held-out year",
+  "status": "FROZEN",
+  "frozen_on": "2026-11-21",
+  "lane": "RESEARCH_ONLY",
+  "can_create_buy": false,
+  "can_place_orders": false,
+  "mechanism": "Leverage-constrained and lottery-seeking investors overpay for high-volatility, high-beta stocks, so low-volatility stocks earn higher RISK-ADJUSTED returns than the market (Blitz and van Vliet 2007; Frazzini and Pedersen 2014, betting against beta; Baker, Bradley and Wurgler 2011). The claim is about alpha, not raw return: a low-volatility portfolio is expected to lag the market in strong rallies. Persistence in Indian equities after costs is NOT assumed.",
+  "disclosure": "Before freezing, the author had seen: the desk's short-horizon breakout diagnosis (no stock-selection alpha against the equal-weight market, docs/research/loss_attribution_2026-11-21.md) and the 12-1 momentum discovery result (no alpha, beta 1.18, docs/research/momentum_12_1_discovery_2026-11-21.md). No return of THIS score on this data was computed before this file was frozen and committed.",
+  "universe": {
+    "source": "official NSE EQ bhavcopy store (offline SSD copy; delisted names included)",
+    "membership": "listed on or before the information cutoff and not delisted by it (universe_history.json); unknown membership is excluded, never assumed",
+    "min_bars_in_formation": 240,
+    "formation_sessions": 252,
+    "min_traded_price_inr": 20,
+    "traded_price_note": "judged on the price that traded on the cutoff day, not the back-adjusted price",
+    "min_median_traded_value_20d_inr": 50000000,
+    "corporate_actions": "back-adjusted on read; a rebalance is evaluated only when its whole formation window and holding period lie inside verified corporate-action coverage"
+  },
+  "score": {
+    "definition": "minus the sample standard deviation of daily log close-to-close returns over the formation window (sessions c-252 .. c), where c is the information cutoff (the official session before the rebalance session); bars up to c only; at least min_bars_in_formation finite returns",
+    "name": "trailing 252-session volatility, lowest first"
+  },
+  "schedule": {
+    "rebalance": "first official session of each calendar month",
+    "information_cutoff": "close of the previous official session",
+    "execution": "close of the rebalance session",
+    "holding": "until the close of the next rebalance session"
+  },
+  "portfolio": {
+    "selection": "the 20% of eligible names with the LOWEST trailing volatility",
+    "weights": "equal",
+    "min_names": 20
+  },
+  "costs": {
+    "per_side_pct": 0.16,
+    "basis": "core.costs round trip 0.22% taxes and fees plus 0.10% slippage = 0.32%, charged on traded weight (turnover) at every rebalance"
+  },
+  "benchmark": "equal-weight portfolio of ALL eligible names, rebalanced on the same schedule, gross of costs (conservative for the strategy)",
+  "periods": {
+    "discovery": {"entry_on_or_after": "first rebalance inside verified coverage", "entry_before": "2025-11-01"},
+    "held_out": {
+      "entry_on_or_after": "2025-11-01",
+      "entry_before": "2026-11-01",
+      "rule": "evaluated ONCE, after the discovery result is committed, with no rule changed; never used to choose anything"
+    }
+  },
+  "primary_outcome": {
+    "statistic": "monthly alpha: the intercept of the OLS regression of the portfolio's monthly NET return on the benchmark's monthly return",
+    "test": "one-sided t-test for alpha > 0 with a Newey-West (lag 1, Bartlett) covariance of the regression, alpha 0.05",
+    "multiplicity": "m = 1, outside the walk-forward BUY family and its alpha budget",
+    "unit": "non-overlapping monthly holding periods"
+  },
+  "secondary_outcomes": [
+    "beta to the benchmark",
+    "mean monthly NET excess return over the benchmark (expected negative in rallies; not a test)",
+    "Sharpe ratio of monthly net returns versus the benchmark's",
+    "maximum drawdown and worst month",
+    "mean one-way turnover per rebalance",
+    "names held",
+    "count of held names that stopped trading during a holding period"
+  ],
+  "missing_data": {
+    "stopped_trading_during_holding": "primary: the name's return to its last traded close, then cash; sensitivity: a further 50% and a 100% loss on the remainder; counts reported",
+    "no_bar_on_rebalance_day": "not executable: excluded from that rebalance"
+  },
+  "power": {
+    "assumed_monthly_residual_sd_pct": 2.5,
+    "detect_alpha_pct_per_month": 0.5,
+    "months_needed_80pct_one_sided_5pct": 155,
+    "statement": "Discovery spans about three years of monthly periods, so its power for a 0.5%/month alpha is LOW. An insignificant result is INCONCLUSIVE, not evidence of no alpha; a significant one needs the held-out year."
+  },
+  "stopping": "one discovery analysis and one held-out analysis; no early stop, no re-run with changed parameters",
+  "decision_on_result": "PASS in discovery permits exactly one held-out evaluation. PASS on both is a proposal for an owner-approved paper experiment only: never a BUY, never a change to any gate, risk limit or admission rule."
+}
