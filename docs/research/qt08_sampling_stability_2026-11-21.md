@@ -54,8 +54,11 @@ The results are under `docs/research/qt08/`.
 ## The correction (implemented)
 
 1. **Decision grid** (`scan.signal_backtest.DECISION_GRID = "session_anchored"`). A decision day is sampled when its official-session ordinal is a multiple of the stride. Appending data can only **add** decisions.
-2. **Symbol sample** (`_spread_sample`). Each symbol has a fixed SHA-256 rank and the `limit` lowest are taken. A new listing displaces at most one name. The sample is still spread across the alphabet and independent of names and outcomes.
-3. **Versioned.** `SAMPLING = "hash_rank_session_anchored_v1"` is part of `gate_program()`. Every earlier attestation therefore belongs to another program and **fails closed**, and the supervisor reruns the walk-forward because `sampling` changed (`Supervisor._legacy_calibration`).
+2. **Symbol sample** (`_spread_sample`). This was first a hash-RANK cut (the `limit` lowest fixed SHA-256 ranks), as measured in the table above. The cycle-2 checkpoint review (QT-C2-02) showed that a future listing could still evict an incumbent's WHOLE history at the cap.
+   - It is now a **Bernoulli hash-THRESHOLD** sample: a symbol is in iff its own fixed hash falls under `HASH_SAMPLE_FRACTION` (0.2, about 694 of 3,469 names, under the production 800 cap). Membership never depends on other symbols.
+   - A rank cut applies only past the cap.
+   - It is still spread across the alphabet and independent of names and outcomes.
+3. **Versioned.** `SAMPLING = "hash_threshold_session_anchored_v1"` is part of `gate_program()`. Every earlier attestation therefore belongs to another program and **fails closed**, and the supervisor reruns the walk-forward because `sampling` changed (`Supervisor._legacy_calibration`).
    - The rerun spends one look from the year's alpha budget.
    - No BUY was certified anyway, so nothing is lost.
 
