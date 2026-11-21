@@ -111,14 +111,26 @@ class _GuardedKiteProxy:
     def __getattr__(self, name: str):
         raw = object.__getattribute__(self, "_GuardedKiteProxy__raw")
         attr = getattr(raw, name)
-        if not _is_guarded_attribute(name, attr):
+        if not callable(attr):
             return attr
+        if name.startswith("__") and name.endswith("__"):
+            return attr
+        # Never hand out the SDK's bound method (its __self__ IS the
+        # authenticated SDK) nor a functools.wraps wrapper (its __wrapped__ is
+        # the unguarded method): broker audit QT-B01. A plain function is
+        # returned instead. This is defence in depth only: Python cannot isolate
+        # arbitrary code running in the same process as the credentials, so no
+        # untrusted or user-typed code may run in a process that holds them.
+        if not _is_guarded_attribute(name, attr):
+            def read(*args, **kwargs):
+                return getattr(object.__getattribute__(self, "_GuardedKiteProxy__raw"), name)(*args, **kwargs)
+            read.__name__ = read.__qualname__ = name
+            return read
 
-        @wraps(attr)
         def guarded(*args, **kwargs):
             assert_live_execution_allowed(f"kite.raw.{name}")
-            return attr(*args, **kwargs)
-
+            return getattr(object.__getattribute__(self, "_GuardedKiteProxy__raw"), name)(*args, **kwargs)
+        guarded.__name__ = guarded.__qualname__ = name
         return guarded
 
     def __setattr__(self, name: str, value: Any) -> None:

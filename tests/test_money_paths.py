@@ -83,7 +83,8 @@ class TestTradeExecutor:
         monkeypatch.setattr(te, "_DB", tmp_path / "trades.db")
         monkeypatch.setattr(te, "kite_ready", lambda: False)
 
-        res = te.place_trade("HAL", qty=10, entry_type="LIMIT",
+        # 2 x 4500 = 9% notional, 0.4% risk: inside the house limits (QT-B02).
+        res = te.place_trade("HAL", qty=2, entry_type="LIMIT",
                              entry_price=4500, stop=4300, target=4900)
         assert res["ok"] and res["mode"] == "PAPER"
         rows = te.recent_trades(5)
@@ -591,10 +592,11 @@ class TestPortfolioRisk:
         monkeypatch.setattr(te, "_DB", tmp_path / "trades.db")
         monkeypatch.setattr(te, "kite_ready", lambda: False)
         assert prm.portfolio_risk_report()["verdict"] == "OK"
-        te.place_trade("DLF", 20, "LIMIT", 800, 780, 850)
-        te.place_trade("GODREJPROP", 10, "LIMIT", 2500, 2450, 2650)
+        # House-sized (<= 10% notional, <= 1% risk: QT-B02); the ladder is the sector pack.
+        assert te.place_trade("DLF", 12, "LIMIT", 800, 780, 850)["ok"]
+        assert te.place_trade("GODREJPROP", 4, "LIMIT", 2500, 2450, 2650)["ok"]
         assert prm.portfolio_risk_report()["verdict"] in ("CAUTION", "DANGER")
-        te.place_trade("PRESTIGE", 10, "LIMIT", 1500, 1470, 1600)
+        assert te.place_trade("PRESTIGE", 6, "LIMIT", 1500, 1470, 1600)["ok"]
         assert prm.portfolio_risk_report()["verdict"] == "DANGER"
 
     def test_simulation_never_mutates(self, tmp_path, monkeypatch):
@@ -603,7 +605,7 @@ class TestPortfolioRisk:
         monkeypatch.setenv("QT_RUNTIME_ROOT", str(tmp_path))
         monkeypatch.setattr(te, "_DB", tmp_path / "trades.db")
         monkeypatch.setattr(te, "kite_ready", lambda: False)
-        te.place_trade("HAL", 10, "LIMIT", 4500, 4300, 4900)
+        assert te.place_trade("HAL", 2, "LIMIT", 4500, 4300, 4900)["ok"]
         prm.check_new_trade("INFY", 200, 1500, 1450)
         assert prm.portfolio_risk_report()["n_positions"] == 1
 
@@ -633,10 +635,10 @@ class TestPortfolioRisk:
         assert report["open_risk"] == 10 * (4500.0 - 4300.0)
 
         # Both books open simultaneously: total risk is the union, not either alone.
-        te.place_trade("INFY", 10, "LIMIT", 1500, 1450, 1600)
+        assert te.place_trade("INFY", 6, "LIMIT", 1500, 1450, 1600)["ok"]
         combined = prm.portfolio_risk_report()
         assert combined["n_positions"] == 2
-        assert combined["open_risk"] == 10 * (4500.0 - 4300.0) + 10 * (1500.0 - 1450.0)
+        assert combined["open_risk"] == 10 * (4500.0 - 4300.0) + 6 * (1500.0 - 1450.0)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1414,10 +1416,12 @@ class TestAutopilot:
         ap.set_config(conviction_sizing=False)
         assert ap.consider("BASE", 500, 450, 85, 0.30, "Defence", "t") is True
         assert int(te.recent_trades(1)[0]["qty"]) == 20
-        # conviction on: 1.5× → 30 qty (caps still respected)
+        # conviction on: 1.5x would be 30 qty = 1.5% risk. The account's 1%
+        # rule is a hard cap at sizing and at the shared gate (broker audit
+        # QT-B02): conviction can shrink a trade, never take it past 1%.
         ap.set_config(conviction_sizing=True)
         assert ap.consider("CONV", 500, 450, 85, 0.30, "Defence", "t") is True
-        assert int(te.recent_trades(1)[0]["qty"]) == 30
+        assert int(te.recent_trades(1)[0]["qty"]) == 20
 
     def test_adaptive_source_gate_pauses_proven_loser(self, tmp_path, monkeypatch):
         ap, te = self._setup(tmp_path, monkeypatch)
@@ -2123,11 +2127,11 @@ class TestProfitBooking:
         ap.consider("BEL", 1000, 960, 80, 0.2, "Defence", "t", grade="A")
         t2 = te.recent_trades(1)[0]
         assert t2["stop_price"] > t1["stop_price"]          # tightened
-        assert t2["qty"] > t1["qty"]                        # bigger qty
-        mv1 = 1500 / (t1["qty"] * 1000); mv2 = 1500 / (t2["qty"] * 1000)
-        assert mv2 < mv1 / 1.8                              # ≥1.8× faster
-        # rupee risk still inside the 1%-rule budget (tight stop pays for qty)
-        assert (1000 - t2["stop_price"]) * t2["qty"] <= 100000 * 0.015 * 1.51
+        # The bounded cap-relax can no longer take a name past the account's
+        # 10% per-name cap (broker audit QT-B02): the tight stop now LOWERS
+        # rupee risk at the same, house-capped size instead of buying 2x qty.
+        assert t2["qty"] * 1000 <= 100000 * 0.10 and t1["qty"] * 1000 <= 100000 * 0.10
+        assert (1000 - t2["stop_price"]) * t2["qty"] <= (1000 - t1["stop_price"]) * t1["qty"]
         # unconfirmed setup: wide stop + normal cap — discipline unchanged
         ap.consider("BHEL", 1000, 960, 80, 0.2, "Defence", "t")
         t3 = te.recent_trades(1)[0]
@@ -5088,12 +5092,12 @@ class TestAccountOpenRiskSpansEveryPaperBook:
     def test_account_gate_counts_open_fno_paper_risk(self, tmp_path, monkeypatch):
         from risk.portfolio_risk import account_exposure_gate, portfolio_risk_report
         self._isolate(tmp_path, monkeypatch)
-        self._write_fno_position(tmp_path, entry=50.0, stop=30.0, qty=80)  # Rs 4,000 of FULL premium exposed
-        assert portfolio_risk_report()["open_risk"] == 4_000
-        gate = account_exposure_gate("TCS", qty=100, entry=100.0, stop=85.0)  # +1,500
+        self._write_fno_position(tmp_path, entry=50.0, stop=30.0, qty=90)  # Rs 4,500 of FULL premium exposed
+        assert portfolio_risk_report()["open_risk"] == 4_500
+        gate = account_exposure_gate("TCS", qty=66, entry=100.0, stop=85.0)   # +990 (inside the 1% rule)
         assert gate["ok"] is False
         assert gate["reason_code"] == "MAX_PORTFOLIO_RISK"
-        assert account_exposure_gate("TCS", qty=100, entry=100.0, stop=95.0)["ok"] is True
+        assert account_exposure_gate("TCS", qty=66, entry=100.0, stop=95.0)["ok"] is True
 
     def test_equity_entry_in_open_fno_underlying_is_a_duplicate(self, tmp_path, monkeypatch):
         from risk.portfolio_risk import account_exposure_gate
@@ -5543,7 +5547,9 @@ class TestPaperTradeIsOnlyOkWhenRecorded:
         monkeypatch.setattr(te, "_DB", db)
         res = te.place_trade("HAL", 5, "MARKET", 100.0, 95.0, 110.0, paper=True)
         assert res["ok"] is False and res["mode"] == "PAPER"
-        assert "not recorded" in res["message"]
+        # An unreadable journal is unknown exposure: the account gate refuses
+        # before the write (QT-B02); either way no HAL position exists.
+        assert "no hal position exists" in res["message"].lower()
 
     def test_recorded_paper_trade_reports_success(self, tmp_path, monkeypatch):
         import execution.trade_executor as te

@@ -153,10 +153,27 @@ def place_trade(symbol: str, qty: int, entry_type: str, entry_price: float,
 
     if paper or not kite_ready():
         # Existing compatibility behaviour. The response explicitly identifies PAPER.
-        recorded = _journal({"mode": "PAPER", "symbol": symbol, "qty": qty,
-                             "entry_type": entry_type, "entry_price": entry_price,
-                             "stop_price": stop, "target_price": target,
-                             "product": product, "status": "PAPER_OPEN", "note": note})
+        # Every INR paper journal entry passes the ONE account gate under the
+        # account lock, whoever calls (ticket, Street Pulse, Telegram, legacy
+        # autopilot): per-trade 1% / 10%, duplicates, slots and the 5% ceiling
+        # (broker audit QT-B02). The US autopilot is a separate USD pool.
+        import contextlib as _ctx
+        gate_ctx = _ctx.nullcontext()
+        if "US_AUTOPILOT" not in str(note or ""):
+            from risk.portfolio_risk import account_exposure_gate, account_mutation_lock
+            gate_ctx = account_mutation_lock()
+        with gate_ctx:
+            if "US_AUTOPILOT" not in str(note or ""):
+                gate = account_exposure_gate(symbol, qty=qty, entry=entry_price, stop=stop)
+                if not gate.get("ok"):
+                    return {"ok": False, "mode": "PAPER", "fallback": not paper,
+                            "reason_code": gate.get("reason_code"),
+                            "message": f"Paper trade refused by the account risk gate: "
+                                       f"{gate.get('detail') or gate.get('reason_code')}. No {symbol} position exists."}
+            recorded = _journal({"mode": "PAPER", "symbol": symbol, "qty": qty,
+                                 "entry_type": entry_type, "entry_price": entry_price,
+                                 "stop_price": stop, "target_price": target,
+                                 "product": product, "status": "PAPER_OPEN", "note": note})
         if not recorded:
             return {"ok": False, "mode": "PAPER", "fallback": not paper,
                     "message": f"Paper trade not recorded: the trade journal could not be "
@@ -310,6 +327,9 @@ def _place_gtt(kite, symbol: str, qty: int, entry_price: float,
         gtt_id = gtt.get("trigger_id") if isinstance(gtt, dict) else gtt
         return gtt_id, f" · GTT OCO set (stop ₹{stop:,.1f} / target ₹{target:,.1f})"
     except Exception as exc:
+        from product.live_execution_interlock import LiveExecutionBlocked
+        if isinstance(exc, LiveExecutionBlocked):
+            raise          # an authorization refusal is not a broker outcome (QT-B07)
         log.warning("gtt_failed", symbol=symbol, error=str(exc))
         return None, (f" · GTT failed ({str(exc)[:80]}); position is unprotected and "
                       f"requires immediate recovery.")
@@ -342,14 +362,32 @@ def ensure_pending_gtts() -> int:
             except Exception:
                 continue
             new_status, gtt_id = None, None
-            if status == "COMPLETE":
-                gtt_id, _msg = _place_gtt(
-                    kite, t["symbol"], int(t["qty"]), float(t["entry_price"]),
-                    float(t["stop_price"]), float(t["target_price"]),
-                    t["product"] or "CNC")
-                new_status = "PLACED" if gtt_id else "PLACED_NO_GTT"
-                if gtt_id:
-                    placed += 1
+            try:
+                filled = int(float((hist[-1] or {}).get("filled_quantity") or 0)) if hist else 0
+            except (TypeError, ValueError):
+                filled = 0
+            protect_qty = int(t["qty"]) if status == "COMPLETE" else filled
+            if status == "COMPLETE" or (status in ("REJECTED", "CANCELLED") and filled > 0):
+                # A cancelled order that PARTLY filled is a position, not a
+                # failed entry: its filled quantity needs protection (QT-B07).
+                from product.live_execution_interlock import LiveExecutionBlocked
+                try:
+                    gtt_id, _msg = _place_gtt(
+                        kite, t["symbol"], protect_qty, float(t["entry_price"]),
+                        float(t["stop_price"]), float(t["target_price"]),
+                        t["product"] or "CNC")
+                except LiveExecutionBlocked:
+                    # The lock refused the mutation: the protection work stays
+                    # PENDING (durably actionable), never consumed (QT-B07).
+                    log.warning("pending_gtt_held_by_live_lock", symbol=t["symbol"])
+                    continue
+                if not gtt_id:
+                    # Broker rejection or unknown state: still unresolved, kept
+                    # PENDING for the next pass and reported, never closed out.
+                    log.warning("pending_gtt_unresolved", symbol=t["symbol"])
+                    continue
+                new_status = "PLACED"
+                placed += 1
             elif status in ("REJECTED", "CANCELLED"):
                 new_status = "ENTRY_FAILED"
             if new_status:

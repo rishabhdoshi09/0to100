@@ -100,25 +100,52 @@ def evaluate_state(s: dict) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _read_state() -> dict:
+    """The durable governance state. Missing = clean; UNREADABLE = halted (broker audit QT-B10).
+
+    A kill-switch file that exists but cannot be read means the human halt is
+    unknown, and an unknown halt is a halt.
+    """
     try:
-        return json.loads(_STATE_FILE.read_text())
-    except Exception:
-        return {}
+        if not _STATE_FILE.exists():
+            return {}
+        data = json.loads(_STATE_FILE.read_text())
+        if not isinstance(data, dict):
+            raise ValueError("governance state is not an object")
+        return data
+    except Exception as exc:
+        return {"manual_halt": True, "state_unreadable": f"{type(exc).__name__}: {exc}"[:200]}
 
 
-def _write_state(d: dict) -> None:
+def _write_state(d: dict) -> bool:
+    """Atomic write (temp file + replace). False on failure; never half-written."""
+    import os
+    tmp = _STATE_FILE.with_name(f".{_STATE_FILE.name}.{os.getpid()}.tmp")
     try:
         _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _STATE_FILE.write_text(json.dumps(d))
+        tmp.write_text(json.dumps({k: v for k, v in d.items() if k != "state_unreadable"}))
+        os.replace(tmp, _STATE_FILE)
+        return True
     except Exception:
-        pass
+        try:
+            tmp.unlink()
+        except Exception:
+            pass
+        return False
 
 
 def set_manual_halt(on: bool) -> None:
-    """The human kill-switch — absolute, survives restarts."""
+    """The human kill-switch — absolute, survives restarts.
+
+    The write is atomic and CONFIRMED: a halt that could not be persisted
+    raises, it is never reported as set (QT-B10). The cached assessment is
+    dropped so this process sees it at once; every process reads the durable
+    flag on each can_place_order() call anyway.
+    """
     d = _read_state()
     d["manual_halt"] = bool(on)
-    _write_state(d)
+    if not _write_state(d):
+        raise RuntimeError("governance kill-switch could not be persisted")
+    _cache.update(ts=0.0, data=None)
 
 
 def record_order_result(ok: bool, gtt_ok: bool | None = None) -> None:
@@ -191,6 +218,12 @@ def can_place_order() -> tuple[bool, float, str]:
     """(allowed, size_multiplier, reason) — the one call every LIVE order path
     makes. HALT blocks the order; DE_RISK allows it at reduced size; NORMAL is
     clear."""
+    durable = _read_state()
+    if durable.get("manual_halt"):
+        # Read at EVERY decision, never from the 60 s cache: a halt recorded by
+        # any process takes effect on the next order attempt (QT-B10).
+        why = "state file unreadable" if durable.get("state_unreadable") else "manual kill-switch"
+        return False, 0.0, f"🛑 Trading HALTED: {why}"
     g = assess()
     if g["state"] == HALT:
         return False, 0.0, "🛑 Trading HALTED: " + "; ".join(g["kill_reasons"])

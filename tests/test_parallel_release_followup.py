@@ -43,6 +43,9 @@ class _Brain:
 
     def run_intelligence_cycle_day(self, **kwargs):
         return {
+            # A healthy management cycle (the real brain always states its status;
+            # the installed composer refuses entries on an unknown one: QT-B05).
+            "status": "NO_ACTION",
             "eligibility": "BLOCKED_SAFETY",
             "entry_block_reason": "RECO_SELECTION_AUTHORITY",
             "positions_opened": [],

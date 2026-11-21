@@ -178,21 +178,24 @@ def test_combined_open_risk_cap_blocks_a_new_trade_from_either_engine(tmp_path, 
     monkeypatch.setattr(te, "kite_ready", lambda: False)
     monkeypatch.setattr(prm, "_capital", lambda: 100_000.0)
 
-    # Legacy book: 2000 rupees of open risk (100 qty x 20 rupee stop width).
-    te.place_trade("AAA", 100, "LIMIT", 100.0, 80.0, 130.0)
+    # Legacy book: 2500 rupees of open risk, written straight to the journal
+    # (a historical row: the entry gate itself now caps a new trade at 1%).
+    assert te._journal({"mode": "PAPER", "symbol": "AAA", "qty": 125, "entry_type": "LIMIT",
+                        "entry_price": 100.0, "stop_price": 80.0, "target_price": 130.0,
+                        "product": "CNC", "status": "PAPER_OPEN", "note": ""})
     # Modern book: another 2000 rupees of open risk.
     _write_modern_open("BBB", qty=100, entry=200.0, stop=180.0)
-    # Combined existing risk: 4000 (4% of 100,000) -- well under the 5% cap
-    # when read from EITHER book alone, but a new 1500-rupee-risk trade pushes
-    # the COMBINED total to 5500 (5.5%), over the ceiling.
-    gate = prm.account_exposure_gate("CCC", qty=100, entry=300.0, stop=285.0, sector="Metals")
+    # Combined existing risk: 4500 (4.5% of 100,000) -- under the 5% cap when
+    # read from EITHER book alone, but a new 990-rupee-risk trade (inside the
+    # 1% rule) pushes the COMBINED total to 5490 (5.49%), over the ceiling.
+    gate = prm.account_exposure_gate("CCC", qty=66, entry=150.0, stop=135.0, sector="Metals")
     assert gate["ok"] is False
     assert gate["reason_code"] == prm.GATE_MAX_PORTFOLIO_RISK
     assert gate["report"]["open_risk_pct"] > 5
 
     # The same candidate at a size that keeps the combined total under the
     # cap is approved.
-    small = prm.account_exposure_gate("CCC", qty=10, entry=300.0, stop=285.0, sector="Metals")
+    small = prm.account_exposure_gate("CCC", qty=10, entry=150.0, stop=135.0, sector="Metals")
     assert small["ok"] is True
 
 
@@ -334,7 +337,10 @@ def test_both_engines_acquire_the_shared_lock_on_a_real_entry(tmp_path, monkeypa
 
     ap, te = _arm_legacy(tmp_path, monkeypatch)
     assert ap.consider("WIPRO", 400, 380, 85, 0.3, "Technology", "test") is True
-    assert calls == ["acquire", "release"], "legacy engine did not use the shared lock"
+    # The legacy path holds the lock across its gate and place_trade(), which
+    # re-enters it for the journal's own final gate (QT-B02): nested, balanced.
+    assert calls and calls[0] == "acquire" and calls[-1] == "release", "legacy engine did not use the shared lock"
+    assert calls.count("acquire") == calls.count("release")
 
     calls.clear()
     book = PaperBook(capital=100_000)

@@ -279,6 +279,10 @@ class AutopilotDecision:
     portfolio: dict[str, Any] = field(default_factory=dict)
     freeze_id: str = ""
     evidence_fingerprint: str = ""
+    # The canonical decision id whose feature observation this decision froze
+    # (evidence_intelligence.enrich): the only id a later research outcome may
+    # label, kept apart from the forward-ledger row id (QT-06).
+    feature_decision_id: str = ""
     evolution_policy_id: str = ""
     evolution_policy_version: int = 0
     evolution_policy_status: str = ""
@@ -312,6 +316,8 @@ class AutopilotDecision:
             "portfolio_authority": self.portfolio or None,
             "freeze_id": self.freeze_id,
             "evidence_fingerprint": self.evidence_fingerprint,
+            "feature_decision_id": self.feature_decision_id,
+            "scan_scanned_at": self.card.get("scan_scanned_at"),
             "evolution_policy_id": self.evolution_policy_id,
             "evolution_policy_version": self.evolution_policy_version,
             "evolution_policy_status": self.evolution_policy_status,
@@ -770,9 +776,13 @@ def evaluate_candidate(
         # above -- the final, race-closing re-check happens again under
         # account_mutation_lock() in run_reco_paper_cycle() right before the
         # position is actually opened.
+        try:
+            book_capital = float(book.risk_capital()) if hasattr(book, "risk_capital") else None
+        except Exception:
+            book_capital = None
         gate = account_exposure_gate(
             symbol, qty=int(sizing.quantity), entry=float(sizing.effective_entry),
-            stop=float(stop), sector=str(row.get("sector") or ""),
+            stop=float(stop), sector=str(row.get("sector") or ""), capital_base=book_capital,
         )
         if not gate["ok"]:
             kind = BLOCK if gate["reason_code"] == DUPLICATE_POSITION else PORTFOLIO_BLOCK
@@ -1183,6 +1193,9 @@ def run_reco_paper_cycle(
                 or ""
             )
             decision.evidence_fingerprint = str(frozen.get("decision_fingerprint") or "")
+            # _decision_fingerprint_evidence built (and enrich() froze) the
+            # canonical Decision: its id names that feature observation (QT-06).
+            decision.feature_decision_id = str(evidence.get("decision_id") or "")
         except Exception:
             pass
 
@@ -1415,12 +1428,17 @@ def run_reco_paper_cycle(
                     fail["group"] = "REJECTED"
                     rejections.append(fail)
                     continue
+            try:
+                book_capital = float(book.risk_capital()) if hasattr(book, "risk_capital") else None
+            except Exception:
+                book_capital = None
             gate = account_exposure_gate(
                 decision.symbol,
                 qty=int(_f(decision.card.get("approved_quantity")) or 0),
                 entry=float(_f(decision.card.get("entry")) or 0.0),
                 stop=float(_f(decision.card.get("stop")) or 0.0),
                 sector=str(decision.card.get("sector") or ""),
+                capital_base=book_capital,
             )
             if not gate["ok"]:
                 fail = decision.as_dict()

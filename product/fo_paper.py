@@ -229,6 +229,10 @@ class FoPaperBook:
         # The total-risk ceiling is an account limit, so it is shared.
         self.external_open_risk = float(external_open_risk)
         self.account_capital = None if account_capital is None else float(account_capital)
+        # The equity books' open positions: the slot limit and the one-position-
+        # per-underlying rule are ACCOUNT limits too (broker audit QT-B03).
+        self.external_positions = 0
+        self.external_underlyings: set[str] = set()
         self.risk_per_trade_pct = float(risk_per_trade_pct)
         # For purchased options the full premium can be lost through gaps or
         # expiry. A stop distance is not a reliable maximum-loss definition.
@@ -331,7 +335,10 @@ class FoPaperBook:
         if any(pos.underlying == clean_underlying for pos in self.open.values()):
             self.refusals.append((symbol, "UNDERLYING_ALREADY_OPEN"))
             return None
-        if len(self.open) >= self.max_positions:
+        if clean_underlying in self.external_underlyings:
+            self.refusals.append((symbol, "UNDERLYING_OPEN_IN_EQUITY"))
+            return None
+        if len(self.open) + int(self.external_positions) >= self.max_positions:
             self.refusals.append((symbol, "MAX_POSITIONS"))
             return None
         entry = float(entry)

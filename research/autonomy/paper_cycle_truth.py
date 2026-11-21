@@ -133,17 +133,41 @@ def install_paper_cycle_truth() -> None:
                 capability_failures=capability_failures,
                 fresh_live_symbols=(live.fresh_symbols() if live is not None else ()),
             )
+        if not isinstance(management, dict):
+            management = {"status": "FAILED_SAFE", "error": "invalid intelligence cycle response"}
         result = dict(management or {})
         failure_message = ""
         failure_cause: Exception | None = None
 
+        # The same fail-closed checks as the base Deps.run_paper_cycle, which
+        # this composer replaces in production (broker audit QT-B05): no paper
+        # entry after an unverified or failed management cycle, and a paper
+        # permission that cannot be read is UNKNOWN, never ON.
+        upstream_status = str(result.get("status") or "").upper()
+        if upstream_status not in {"OK", "NO_ACTION", "ALREADY_DONE"}:
+            result["reco_autopilot"] = {
+                "error": f"INTELLIGENCE_CYCLE_BLOCKED: {upstream_status or 'UNKNOWN'}",
+                "status": "BLOCKED_UPSTREAM",
+            }
+            result["eligibility"] = "BLOCKED_SAFETY"
+            result["new_entries_allowed"] = False
+            self.telegram.notify_paper_cycle(result, book=brain.intel_book)
+            return result
+        try:
+            paper_on = bool(brain.is_paper_auto_enabled())
+        except Exception as exc:
+            result["reco_autopilot"] = {
+                "error": f"PAPER_AUTO_AUTHORITY_UNAVAILABLE: {type(exc).__name__}",
+                "status": "BLOCKED_SAFETY",
+            }
+            result["status"] = "FAILED_SAFE"
+            result["eligibility"] = "BLOCKED_SAFETY"
+            result["new_entries_allowed"] = False
+            self.telegram.notify_paper_cycle(result, book=brain.intel_book)
+            return result
+
         try:
             from product.paper_autopilot import run_reco_paper_cycle
-
-            try:
-                paper_on = bool(brain.is_paper_auto_enabled())
-            except Exception:
-                paper_on = True
 
             reco = run_reco_paper_cycle(
                 book=brain.intel_book,

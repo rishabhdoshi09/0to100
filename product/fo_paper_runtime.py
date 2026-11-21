@@ -1,6 +1,8 @@
 """Durable paper-cycle orchestration for NSE long-premium option candidates."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from contextlib import ExitStack
 from dataclasses import fields
 from datetime import datetime, timedelta
@@ -257,9 +259,44 @@ def run_fo_paper_cycle(
     cost_model: Callable[[float, float, int], float] | None = None,
     cost_model_name: str = "",
 ) -> dict[str, Any]:
-    """Settle existing paper options, then open fresh eligible paper candidates."""
+    """Settle existing paper options, then open fresh eligible paper candidates.
+
+    The whole read → modify → commit of the F&O book runs under ONE
+    cross-process cycle lock, management-only cycles included: two lanes
+    (FNO_REFRESH, DATA_PREPARE) could otherwise each load the book and the
+    staler commit would erase the other's position from exposure and exit
+    supervision (broker audit QT-B04). Lock order: this lock, then the account
+    lock (entries); no equity path takes this one. Not re-entrant.
+    """
+    import fcntl
+
     owned_store = store is None
     store = store or FoPaperStore()
+    lock_path = Path(store.path).with_name(Path(store.path).name + ".cycle.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "a+") as lock_fh:
+        fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+        try:
+            return _run_fo_paper_cycle_locked(
+                directional, client=client, now_ist=now_ist, allow_new_entries=allow_new_entries,
+                store=store, owned_store=owned_store, capital=capital, cost_model=cost_model,
+                cost_model_name=cost_model_name)
+        finally:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+
+
+def _run_fo_paper_cycle_locked(
+    directional: Mapping[str, Any],
+    *,
+    client,
+    now_ist: datetime,
+    allow_new_entries: bool,
+    store: FoPaperStore,
+    owned_store: bool,
+    capital: float = 100_000.0,
+    cost_model: Callable[[float, float, int], float] | None = None,
+    cost_model_name: str = "",
+) -> dict[str, Any]:
     account_lock = ExitStack()
     try:
         session = now_ist.date().isoformat()
@@ -562,14 +599,21 @@ def run_fo_paper_cycle(
             from risk.portfolio_risk import (
                 AccountRiskUnreadable,
                 _capital,
+                _max_positions,
+                _row_risk,
                 account_mutation_lock,
-                equity_books_open_risk,
+                equity_open_rows,
             )
 
             account_lock.enter_context(account_mutation_lock())
             try:
-                book.external_open_risk = equity_books_open_risk()
+                equity_rows = equity_open_rows()
+                book.external_open_risk = sum(_row_risk(r) for r in equity_rows)
                 book.account_capital = _capital()
+                # Account-wide slots and underlyings (QT-B03), read under the lock.
+                book.external_positions = len(equity_rows)
+                book.external_underlyings = {str(r.get("symbol") or "").upper() for r in equity_rows}
+                book.max_positions = min(int(book.max_positions), int(_max_positions()))
             except AccountRiskUnreadable as exc:
                 account_risk_error = str(exc)
         if expired_unsettled:

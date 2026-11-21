@@ -41,6 +41,45 @@ def _max_positions() -> int:
         return 5
 
 
+def _trade_cap_capital() -> float:
+    """The capital the per-trade 1% / 10% caps are measured against.
+
+    The configured account capital, or the modern equity book's realized-equity
+    risk capital (capital + realized P&L, its own sizing base) when that is
+    larger: a profitable paper book may size on its earned equity; a book in
+    drawdown already sizes smaller itself. An unreadable book adds nothing.
+    """
+    base = _capital()
+    try:
+        import json
+        from core.runtime_paths import logs_path
+        path = logs_path("intelligence", "intel_book.json")
+        if path.exists():
+            book = json.loads(path.read_text(encoding="utf-8"))
+            equity = float(book.get("capital")) + float(book.get("realized_pnl") or 0.0)
+            if math.isfinite(equity):
+                base = max(base, equity)
+    except Exception:
+        pass
+    return base
+
+
+def _risk_per_trade_pct() -> float:
+    try:
+        from config import settings
+        return min(0.01, float(settings.risk_per_trade_pct))      # never looser than the 1% rule
+    except Exception:
+        return 0.01
+
+
+def _max_position_pct() -> float:
+    try:
+        from config import settings
+        return min(0.10, float(settings.max_position_size_pct))   # never looser than the 10% cap
+    except Exception:
+        return 0.10
+
+
 class AccountRiskUnreadable(RuntimeError):
     """A paper book exists but its open positions cannot be read. Account
     exposure is UNKNOWN, which must block new entries rather than read as 0."""
@@ -207,11 +246,14 @@ GATE_MAX_POSITIONS = "MAX_POSITIONS"
 GATE_SECTOR_CAP = "SECTOR_CAP"
 GATE_MAX_PORTFOLIO_RISK = "MAX_PORTFOLIO_RISK"
 GATE_RISK_BOOK_UNREADABLE = "RISK_BOOK_UNREADABLE"
+GATE_INVALID_TRADE_PLAN = "INVALID_TRADE_PLAN"
+GATE_TRADE_RISK_CAP = "TRADE_RISK_CAP"
+GATE_POSITION_SIZE_CAP = "POSITION_SIZE_CAP"
 
 
 def account_exposure_gate(
     symbol: str, *, qty: int = 0, entry: float = 0.0, stop: float = 0.0,
-    sector: str = "",
+    sector: str = "", capital_base: float | None = None,
 ) -> dict:
     """The ONE pre-mutation check BOTH equity paper-trading engines
     (execution.autopilot and product.paper_autopilot) must pass before
@@ -234,8 +276,37 @@ def account_exposure_gate(
     Returns {"ok": bool, "reason_code": str, "detail": str, "report": dict}.
     """
     symbol = str(symbol or "").upper()
+    if qty:
+        # The per-trade house limits are HARD at the one shared boundary every
+        # account-backed paper entry passes (broker audit QT-B02): planned stop
+        # risk <= 1% of capital and notional <= 10%, on a valid plan. A caller's
+        # own sizing (a conviction multiplier, a typed ticket quantity) can
+        # never exceed them.
+        try:
+            q, e, s = int(qty), float(entry), float(stop)
+        except (TypeError, ValueError):
+            q, e, s = 0, float("nan"), float("nan")
+        if q != qty or q < 1 or not (math.isfinite(e) and math.isfinite(s)) or not (e > s > 0):
+            return {"ok": False, "reason_code": GATE_INVALID_TRADE_PLAN,
+                    "detail": f"invalid trade plan (qty {qty}, entry {entry}, stop {stop}): needs qty >= 1 "
+                              "and entry > stop > 0", "report": None}
+        cap = _trade_cap_capital()
+        if capital_base is not None and math.isfinite(float(capital_base)) and float(capital_base) > 0:
+            # The modern engine's in-process book equity (PaperBook.risk_capital,
+            # its one sizing base): a profitable book is sized on earned equity.
+            cap = max(cap, float(capital_base))
+        risk_cap, size_cap = cap * _risk_per_trade_pct(), cap * _max_position_pct()
+        if q * (e - s) > risk_cap + 0.01:
+            return {"ok": False, "reason_code": GATE_TRADE_RISK_CAP,
+                    "detail": f"planned stop risk ₹{q * (e - s):,.0f} exceeds the 1% per-trade cap "
+                              f"₹{risk_cap:,.0f}", "report": None}
+        if q * e > size_cap + 0.01:
+            return {"ok": False, "reason_code": GATE_POSITION_SIZE_CAP,
+                    "detail": f"position ₹{q * e:,.0f} exceeds the 10% per-name cap ₹{size_cap:,.0f}",
+                    "report": None}
     try:
-        existing = {r["symbol"] for r in _combined_open_rows()}
+        all_rows = _combined_open_rows()
+        existing = {r["symbol"] for r in all_rows}
         if symbol in existing:
             return {
                 "ok": False, "reason_code": GATE_DUPLICATE_POSITION,
@@ -252,10 +323,12 @@ def account_exposure_gate(
         return {"ok": False, "reason_code": GATE_RISK_BOOK_UNREADABLE,
                 "detail": str(exc), "report": None}
 
-    if report["n_positions"] > report["max_positions"]:
+    # Account-wide slots (QT-B03): every open position of every book, F&O
+    # included, plus this one, against the one MAX_OPEN_POSITIONS.
+    if len(all_rows) + 1 > report["max_positions"]:
         return {
             "ok": False, "reason_code": GATE_MAX_POSITIONS,
-            "detail": "combined account already at max open positions "
+            "detail": "combined account (equity and F&O) already at max open positions "
                       f"({report['max_positions']})",
             "report": report,
         }
@@ -277,6 +350,16 @@ def account_exposure_gate(
     return {"ok": True, "reason_code": "", "detail": "", "report": report}
 
 
+import threading as _threading
+
+_LOCK_STATE = _threading.local()
+
+
+def equity_open_rows() -> list[dict]:
+    """Open rows of both equity books (no F&O), for the F&O lane's account checks. Raises AccountRiskUnreadable."""
+    return _combined_open_rows(include_fno=False)
+
+
 @contextlib.contextmanager
 def account_mutation_lock():
     """Cross-process mutual exclusion around the equity PAPER
@@ -295,10 +378,23 @@ def account_mutation_lock():
     import fcntl
     from core.runtime_paths import ensure_logs_path
 
-    path = ensure_logs_path("risk", "account_exposure.lock")
-    with open(path, "a+", encoding="utf-8") as fh:
-        fcntl.flock(fh, fcntl.LOCK_EX)
+    # Re-entrant within one thread: a caller that already holds the lock (the
+    # Telegram tap, the legacy autopilot) can call place_trade(), which takes
+    # it again for its own final gate (QT-B02), without deadlocking on flock.
+    depth = getattr(_LOCK_STATE, "depth", 0)
+    if depth:
+        _LOCK_STATE.depth = depth + 1
         try:
             yield
         finally:
+            _LOCK_STATE.depth -= 1
+        return
+    path = ensure_logs_path("risk", "account_exposure.lock")
+    with open(path, "a+", encoding="utf-8") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        _LOCK_STATE.depth = 1
+        try:
+            yield
+        finally:
+            _LOCK_STATE.depth = 0
             fcntl.flock(fh, fcntl.LOCK_UN)

@@ -39,8 +39,18 @@ DEFAULT_RISK = {
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+#: User-typed strategy code is never executed in a process that can hold broker
+#: credentials (broker audit QT-B01): in-process Python cannot be sandboxed
+#: away from the authenticated SDK. The legacy AlgoLab live runner is archived
+#: (not started by the product); this refuses it outright.
+LIVE_STRATEGY_EXEC_DISABLED = True
+
+
 def _evaluate_strategy(code: str, df: pd.DataFrame) -> Optional[int]:
     """Compile + execute `generate_signals(df)`; return the last signal (-1/0/+1)."""
+    if LIVE_STRATEGY_EXEC_DISABLED:
+        raise RuntimeError("Live strategy code execution is disabled: arbitrary code cannot run in a process "
+                           "that can hold broker credentials. Backtest it offline instead.")
     import builtins
     namespace = {
         "pd": pd,

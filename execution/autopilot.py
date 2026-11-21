@@ -837,7 +837,18 @@ def _size(entry: float, stop: float, mult: float = 1.0,
         cap_pct = min(0.40, cap_pct * cap_mult)
     cap_qty = int((pool * cap_pct) / entry)
     avail_qty = int(available / entry)
-    return max(0, min(risk_qty, cap_qty, avail_qty))
+    # The ACCOUNT house limits bound every engine (broker audit QT-B02): 1%
+    # planned risk and 10% notional of account capital, whatever the pool,
+    # the conviction multiplier or a FAST-BOOK relax. The shared gate refuses
+    # anything above them; sizing inside them keeps the engine trading.
+    try:
+        from risk.portfolio_risk import _capital, _max_position_pct, _risk_per_trade_pct
+        account = float(_capital())
+        house_risk_qty = int((account * _risk_per_trade_pct()) / (entry - stop))
+        house_cap_qty = int((account * _max_position_pct()) / entry)
+    except Exception:
+        return 0
+    return max(0, min(risk_qty, cap_qty, avail_qty, house_risk_qty, house_cap_qty))
 
 
 # ── Entry paths (hooked from scanner + sniper, additive) ─────────────────────
@@ -1637,7 +1648,9 @@ def _reconcile_live_fills() -> None:
                  and str(o.get("transaction_type", "")).upper() == "SELL"
                  and str(o.get("status", "")).upper() == "COMPLETE"
                  and int(o.get("quantity") or 0) == int(t["qty"] or 0)
-                 and str(o.get("order_id", "")) != oid]
+                 and str(o.get("order_id", "")) != oid
+                 # an older or unrelated sell never closes this trade (QT-B06)
+                 and _exit_after_entry(o, t)]
         if sells:
             exit_px = float(sells[-1].get("average_price") or 0)
             if exit_px > 0:
@@ -1824,10 +1837,34 @@ def _account_closed_trades() -> None:
         _save()
 
 
+_CROSS_INCIDENTS: set = set()
+
+
+def _exit_after_entry(order: dict, trade: dict) -> bool:
+    """True only when a SELL is provably later than the trade's entry (QT-B06); unknown = False."""
+    try:
+        import pandas as pd
+        sold = pd.Timestamp(order.get("order_timestamp") or order.get("exchange_timestamp"))
+        placed = pd.Timestamp(trade.get("placed_at"))
+        if sold.tzinfo is not None:
+            sold = sold.tz_localize(None)
+        if placed.tzinfo is not None:
+            placed = placed.tz_convert("Asia/Kolkata").tz_localize(None)
+        return bool(pd.notna(sold) and pd.notna(placed) and sold >= placed)
+    except Exception:
+        return False
+
+
 def _close_crossed_live_trades() -> None:
-    """LIVE autopilot trades: GTT executes at the exchange; we mark the
-    journal when price crosses so the ledger compounds. (PAPER trades are
-    closed by the position manager already.)"""
+    """LIVE autopilot trades: a quote crossing the stop or target is an INCIDENT, never an exit.
+
+    A price cross does not prove a fill: a stop-limit can be skipped through,
+    a GTT can be missing or rejected, and the orderbook read can time out.
+    Closing the row on the cross dropped real exposure from the account
+    gate and from supervision (broker audit QT-B06). The row stays open until
+    a broker fill (_reconcile_live_fills) or a reconciled position snapshot
+    confirms it; the cross is logged once per trade for a human. (PAPER trades
+    are closed by the position manager already.)"""
     open_live = [t for t in _open_autopilot_trades() if t["mode"] == "LIVE"]
     if not open_live:
         return
@@ -1841,10 +1878,12 @@ def _close_crossed_live_trades() -> None:
         if not (q and q.get("price")):
             continue
         px = float(q["price"])
-        if px >= float(t["target_price"] or 9e18):
-            _set_status(t["id"], "AUTO_WIN", f"target cross @ ₹{px:,.1f}")
-        elif px <= float(t["stop_price"] or 0):
-            _set_status(t["id"], "AUTO_LOSS", f"stop cross @ ₹{px:,.1f}")
+        side = ("target" if px >= float(t["target_price"] or 9e18)
+                else "stop" if px <= float(t["stop_price"] or 0) else "")
+        if side and t["id"] not in _CROSS_INCIDENTS:
+            _CROSS_INCIDENTS.add(t["id"])
+            _log_activity(f"⚠️ {t['symbol']} LIVE {side} cross @ ₹{px:,.1f} — UNCONFIRMED: exposure kept "
+                          f"until a broker fill or position snapshot confirms the exit")
 
 
 def _circuit_breaker() -> None:
