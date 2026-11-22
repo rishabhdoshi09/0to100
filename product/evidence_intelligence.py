@@ -169,22 +169,51 @@ def decision_features(decision: Decision) -> dict[str, Any]:
     return FS.canonicalize(raw)
 
 
-def learning_features(decision: Decision) -> tuple[dict[str, Any], dict[str, Any]]:
+def learning_features(decision: Decision, *, producer: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
     """Features for the LEARNING record (freeze + challenger scoring).
 
-    ``decision_features`` plus point-in-time technical features computed from
-    official bars that existed at decision time (product.pit_features), filled
-    only where the decision itself carried no value. The live analog query
-    keeps using ``decision_features`` so current rankings do not change; a
-    model that wants the richer features must earn promotion as a challenger.
+    ``decision_features`` plus point-in-time features computed from official
+    data that existed at decision time (product.pit_features), filled only
+    where the decision itself carried no value. ``producer`` pins which
+    features may be filled: the freeze uses the current producer; a challenger
+    is scored with the producer it was trained under, so one model version is
+    always one predictor. The live analog query never sees the fills: it
+    reads ``decision_features`` and projects stored fills back out
+    (``_live_projection``).
     """
     base = decision_features(decision)
     try:
-        from product.pit_features import fill_missing
+        from product.pit_features import PRODUCER_VERSION, fill_missing
 
-        return fill_missing(base, decision.symbol, decision.generated_at)
+        return fill_missing(base, decision.symbol, decision.generated_at,
+                            producer=producer or PRODUCER_VERSION)
     except Exception as exc:
         return base, {"filled": [], "error": type(exc).__name__}
+
+
+def _live_projection(row: Mapping[str, Any]) -> tuple[dict[str, Any], int]:
+    """A stored observation as the live query would have seen it: (features, problem count).
+
+    Features product.pit_features filled into the learning record (recorded in
+    meta.pit_features.filled) are reset to what the decision itself carried,
+    and their validation is recomputed, so filling the learning record can
+    never move live analog distances, weights or the board's historical veto.
+    """
+    feats = dict(row.get("features") or {})
+    problems = list(row.get("validation") or [])
+    filled = [str(x) for x in (((row.get("meta") or {}).get("pit_features") or {}).get("filled") or [])]
+    filled = [name for name in filled if name in FS.FEATURE_REGISTRY]
+    if not filled:
+        return feats, len(problems)
+    gone = set(filled)
+    kept = [p for p in problems if not (isinstance(p, (list, tuple)) and p and str(p[0]) in gone)]
+    added = 0
+    for name in filled:
+        feat = FS.FEATURE_REGISTRY[name]
+        feats[name] = "UNKNOWN" if feat.dtype == "categorical" else None
+        verdict, _reason = feat.validate(feats[name])
+        added += 1 if verdict != FS.OK else 0
+    return feats, len(kept) + added
 
 
 def _observation_id(decision_id: str) -> str:
@@ -404,8 +433,10 @@ def _prepared_prior_corpus(before_ts: str) -> dict[str, Any]:
     )
     matrix = np.full((len(rows), len(numeric_names)), np.nan, dtype=float)
     setup_counts: dict[str, int] = {}
+    live_problems: list[int] = []
     for row_idx, row in enumerate(rows):
-        feats = dict(row.get("features") or {})
+        feats, n_problems = _live_projection(row)
+        live_problems.append(n_problems)
         meta = dict(row.get("meta") or {})
         setup = str(meta.get("setup") or "")
         if setup:
@@ -440,6 +471,7 @@ def _prepared_prior_corpus(before_ts: str) -> dict[str, Any]:
         "matrix": matrix,
         "scales": scales,
         "setup_counts": setup_counts,
+        "live_problems": live_problems,
     }
     if cache is not None:
         cache[key] = prepared
@@ -500,7 +532,7 @@ def _analogs(decision: Decision, *, k: int = DEFAULT_K) -> list[dict[str, Any]]:
             continue
         setup_weight = 1.0 if same_setup else 0.35
 
-        feats = dict(row.get("features") or {})
+        feats, _ = _live_projection(row)
         old_regime = str(feats.get("regime") or meta.get("market_state") or "")
         now_regime = str(query.get("regime") or decision.market_state or "")
         regime_weight = 1.0 if old_regime and now_regime and old_regime == now_regime else 0.70
@@ -510,8 +542,9 @@ def _analogs(decision: Decision, *, k: int = DEFAULT_K) -> list[dict[str, Any]]:
         )
         age_days = _days_between(row.get("ts"), decision.generated_at)
         recency = 0.5 ** (age_days / HALF_LIFE_DAYS)
-        problems = list(row.get("validation") or [])
-        quality = max(0.55, 1.0 - min(0.45, len(problems) * 0.05))
+        live_problems = prepared.get("live_problems") or []
+        n_problems = int(live_problems[row_idx]) if row_idx < len(live_problems) else len(row.get("validation") or [])
+        quality = max(0.55, 1.0 - min(0.45, n_problems * 0.05))
         outcome_meta = dict(row.get("outcome_meta") or {})
         lane = str(outcome_meta.get("evidence_class") or "").upper()
         if lane in {"PAPER_FORWARD", "REAL_FORWARD_PAPER"}:

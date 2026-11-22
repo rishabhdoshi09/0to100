@@ -16,29 +16,40 @@ OHLCV, using ONLY bars that existed at decision time:
 A missing or short history yields no feature (never an invented value). The
 values follow research.feature_schema's definitions.
 
-It also computes four market-context features from official data, under the
-same cutoff (``CONTEXT_PRODUCED``):
+It also computes four market-context features (``CONTEXT_PRODUCED``), all
+read from ONE source session: the latest official session whose bhavcopy
+archive is verified on disk AND was published by the decision's own
+``generated_at`` (NSE publication convention: 18:00 IST on the session day;
+``published_session``). A decision at 15:31 therefore reads the previous
+session's context, never that evening's archive, however late it is frozen.
 
-* ``delivery_pct``: the stock's official bhavcopy delivery % on its last bar
-  at or before the cutoff;
-* ``vix``: the official India VIX close on the last index row at or before the
-  cutoff, at most ``CONTEXT_MAX_AGE_DAYS`` old (the schema's own staleness);
-* ``index_trend``: official Nifty 50, from the point-in-time session classifier
-  of the historical curriculum: close > 50-DMA > 200-DMA is UP, close < 50-DMA
-  < 200-DMA is DOWN, anything else is FLAT;
-* ``breadth_pct_above_50dma``: scan.breadth's definition (close above the mean
-  of the last 50 closes, a symbol needs 51 bars, at least 300 names) over the
-  official store's stocks on that session. ETFs and funds are excluded by the
-  scanner universe's own filters. Only sessions whose official archive is
-  verified on disk count, so a live intraday overlay can never be frozen as
-  breadth.
+* ``delivery_pct``: the stock's official delivery % on its bar dated exactly
+  that session (no bar that day, e.g. a suspension, means missing);
+* ``vix``: the official India VIX close dated exactly that session;
+* ``index_trend``: official Nifty 50 through the historical curriculum's PIT
+  classifier on rows up to that session (200 distinct sessions): close >
+  50-DMA > 200-DMA is UP, close < 50-DMA < 200-DMA is DOWN, else FLAT;
+* ``breadth_pct_above_50dma``: scan.breadth's definition (close strictly above
+  the mean of its last 50 closes, a name needs 51 bars and a bar that
+  session, at least 300 names; a bad print in the window counts as not above,
+  as there) over the store's stocks, computed ONLY from bars of verified
+  archives (a live overlay row is never an input). Ties are decided in exact
+  arithmetic, so back-adjustment by a later corporate action cannot flip one.
+
+The provenance records the source session and this producer's version, and
+the challenger scores with the producer it was trained with
+(``PRODUCER_VERSION``), so a model version always names one predictor.
 
 They enter the frozen LEARNING record only (evidence_intelligence.
-learning_features). ``regime`` is deliberately not filled: the live analog
-query weights stored rows by their regime, so filling it would change live
-evidence. Cross-sectional percentiles (rel_strength, rs/sector/volatility),
-base geometry, ``correlation_regime``, ``usdinr`` and ``crude_usd`` are NOT
-computed here: they have no official point-in-time producer yet.
+learning_features); the live analog query projects them back out (it reads
+the stored vector minus what this module filled). ``regime`` is deliberately
+not filled. Not computed here, for want of an official point-in-time producer:
+cross-sectional percentiles (rel_strength, rs/sector/volatility), base
+geometry, ``correlation_regime``, ``usdinr`` and ``crude_usd``.
+
+Known limit: the store keeps no instrument name or ISIN, so an EQ-series fund
+whose symbol carries no ETF/BEES/LIQUID marker cannot be excluded from breadth
+point-in-time (the scanner classifies with today's names).
 """
 
 from __future__ import annotations
@@ -70,11 +81,23 @@ CONTEXT_PRODUCED = (
     "index_trend",
     "breadth_pct_above_50dma",
 )
-#: research.feature_schema gives vix max_age_days=3; one rule for all context.
-CONTEXT_MAX_AGE_DAYS = 3
+#: Which features this module fills, by version. The challenger records the
+#: version it was trained under and is scored with exactly that producer.
+LEGACY_PRODUCER = "pit_v1_technical"
+PRODUCER_VERSION = "pit_v2_context"
+PRODUCER_FEATURES = {
+    LEGACY_PRODUCER: PRODUCED,
+    PRODUCER_VERSION: PRODUCED + CONTEXT_PRODUCED,
+}
+#: research.intelligence.data.nse_calendar._PUBLISH_CUTOFF_HM
+PUBLISH_CUTOFF = time(18, 0)
 #: scan.breadth.MIN_N: fewer names is not the whole market.
 BREADTH_MIN_N = 300
 _BREADTH_MIN_BARS = 51          # scan.breadth.breadth_from_cache: len(df) >= 51
+#: Relative tie band for "close above its 50-DMA". Real differences are at
+#: least a tick / 50 (>= ~1e-10 of price even after a 1:100 adjustment); float
+#: error of a 50-value mean is ~1e-15. Inside the band is a tie: not above.
+_TIE_REL = 1e-12
 _CATEGORICAL_UNKNOWN = {"index_trend"}
 _TREND_FROM_REGIME = {"BULL_TREND": "UP", "BEAR": "DOWN"}
 
@@ -160,72 +183,133 @@ def technical_features(symbol: str, decided_at: Any, frame=None) -> dict[str, fl
         sma50 = float(close.iloc[-50:].mean())
         if sma50 > 0:
             out["dist_50dma_pct"] = (last_c / sma50 - 1.0) * 100.0
-    if "deliv_per" in cols:
-        deliv = _finite(df[cols["deliv_per"]].iloc[-1])
-        if deliv is not None and 0.0 <= deliv <= 100.0:
-            out["delivery_pct"] = deliv
     return {k: round(v, 6) for k, v in ((k, _finite(v)) for k, v in out.items()) if v is not None}
 
 
 # ── market context ────────────────────────────────────────────────────────────
+
+def _as_ist(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_IST)
+    return dt.astimezone(_IST)
+
+
+def _archive_dates() -> list[date]:
+    """Sessions whose official archive is verified on disk (not the settlement calendar)."""
+    from data.bhavcopy_store import _dates_on_disk
+    return list(_dates_on_disk())
+
+
+def published_session(decided_at: Any, *, archive_fn: Callable | None = None) -> date | None:
+    """Latest verified official session published by ``decided_at`` (and complete by its cutoff)."""
+    when = _as_ist(decided_at)
+    cut = cutoff_session(decided_at)
+    if when is None or cut is None:
+        return None
+    try:
+        days = sorted({d if isinstance(d, date) else date.fromisoformat(str(d)[:10])
+                       for d in (archive_fn or _archive_dates)()})
+    except Exception:
+        return None
+    today, now = when.date(), when.time().replace(tzinfo=None)
+    eligible = [d for d in days if d <= cut and (d < today or now >= PUBLISH_CUTOFF)]
+    return eligible[-1] if eligible else None
+
+
+def _daily(frame):
+    """(dates as datetime64[D], frame) sorted by date, one row per date (the last)."""
+    import numpy as np
+    import pandas as pd
+
+    idx = pd.DatetimeIndex(frame.index)
+    if idx.tz is not None:
+        idx = idx.tz_localize(None)
+    days = idx.values.astype("datetime64[D]")
+    if len(days) > 1 and not bool(np.all(days[1:] > days[:-1])):
+        order = np.argsort(days, kind="stable")
+        days, frame = days[order], frame.iloc[order]
+        keep = np.r_[days[1:] != days[:-1], True]
+        days, frame = days[keep], frame.iloc[np.flatnonzero(keep)]
+    return days, frame
+
 
 def _index_loader(ticker: str, as_of: str):
     from data.index_store import get_index_ohlcv_as_of_cached
     return get_index_ohlcv_as_of_cached(ticker, as_of)
 
 
-def _rows_through(frame, cut: date):
-    """Rows dated on/before ``cut``; never trusts a loader to have sliced."""
-    import pandas as pd
+def _index_through(frame, session: date):
+    """Index rows on/before ``session``, sorted, one per date; None unless the last is ``session``."""
+    import numpy as np
 
     if frame is None or getattr(frame, "empty", True):
         return None
     try:
-        days = pd.DatetimeIndex(frame.index)
-        if days.tz is not None:
-            days = days.tz_localize(None)
-        kept = frame.loc[days.normalize() <= pd.Timestamp(cut)]
+        days, frame = _daily(frame)
     except Exception:
         return None
-    return kept if len(kept) else None
-
-
-def _row_date(frame) -> date | None:
-    try:
-        return frame.index[-1].date()
-    except Exception:
+    keep = days <= np.datetime64(session, "D")
+    if not keep.any() or days[keep][-1] != np.datetime64(session, "D"):
         return None
+    return frame.iloc[np.flatnonzero(keep)]
 
 
-def market_context(cut: date | None, *, index_fn: Callable | None = None) -> dict[str, Any]:
-    """Official index context (vix, index_trend) as of ``cut``. {} when unknown."""
-    if cut is None:
+def market_context(session: date | None, *, index_fn: Callable | None = None) -> dict[str, Any]:
+    """Official index context (vix, index_trend) dated exactly ``session``. {} when unknown."""
+    if session is None:
         return {}
     loader = index_fn or _index_loader
     out: dict[str, Any] = {}
     try:
-        vix = _rows_through(loader("^INDIAVIX", cut.isoformat()), cut)
+        vix = _index_through(loader("^INDIAVIX", session.isoformat()), session)
     except Exception:
         vix = None
     if vix is not None:
-        cols = {c.lower(): c for c in vix.columns}
-        day = _row_date(vix)
+        cols = {str(c).lower(): c for c in vix.columns}
         value = _finite(vix[cols["close"]].iloc[-1]) if "close" in cols else None
-        if day is not None and (cut - day).days <= CONTEXT_MAX_AGE_DAYS and value is not None \
-                and 0.0 < value <= 200.0:
+        # India VIX is strictly positive by construction: a 0 is a data fault.
+        if value is not None and 0.0 < value <= 200.0:
             out["vix"] = round(value, 6)
     try:
-        nifty = _rows_through(loader("^NSEI", cut.isoformat()), cut)
+        nifty = _index_through(loader("^NSEI", session.isoformat()), session)
     except Exception:
         nifty = None
-    day = _row_date(nifty) if nifty is not None else None
-    if day is not None and (cut - day).days <= CONTEXT_MAX_AGE_DAYS:
+    if nifty is not None:
         from research.autonomy.historical_curriculum import classify_session
 
-        state = classify_session(cut.isoformat(), index_fn=lambda _t, _d: nifty)
+        state = classify_session(session.isoformat(), index_fn=lambda _t, _d: nifty)
         if state.available:
             out["index_trend"] = _TREND_FROM_REGIME.get(state.regime, "FLAT")
     return out
+
+
+def delivery_on(frame, session: date | None) -> float | None:
+    """Official delivery % on the bar dated exactly ``session``; never a live-overlay row."""
+    import numpy as np
+
+    if session is None or frame is None or getattr(frame, "empty", True):
+        return None
+    cols = {str(c).lower(): c for c in frame.columns}
+    if "deliv_per" not in cols:
+        return None
+    if str(getattr(frame, "attrs", {}).get("quantterm_live_overlay_date") or "") == session.isoformat():
+        return None
+    try:
+        days, frame = _daily(frame)
+    except Exception:
+        return None
+    hit = np.flatnonzero(days == np.datetime64(session, "D"))
+    if not hit.size:
+        return None
+    value = _finite(frame[cols["deliv_per"]].iloc[int(hit[-1])])
+    return value if value is not None and 0.0 <= value <= 100.0 else None
 
 
 def _store_symbols() -> list[str]:
@@ -234,17 +318,22 @@ def _store_symbols() -> list[str]:
 
 
 def _store_ohlcv(symbol: str):
-    from data.bhavcopy_store import get_ohlcv
-    return get_ohlcv(symbol)
+    import data.bhavcopy_store as _bs
+    return _bs.get_ohlcv(symbol)
 
 
-def _official_dates() -> list[str]:
-    from core.session_window import official_dates
-    return official_dates()
+def _store_generation() -> tuple:
+    """Identity of the in-memory store: what a cached breadth pass was computed from."""
+    try:
+        from data import bhavcopy_store as bs
+        return (getattr(bs, "_store_last_day", None), int(getattr(bs, "_store_sessions", 0) or 0),
+                len(getattr(bs, "_store", {}) or {}), id(getattr(bs, "_CA_EVENTS", None)))
+    except Exception:
+        return ("unavailable",)
 
 
 def _breadth_universe(symbols) -> list[str]:
-    """The scanner universe's own stock filters, applied by symbol."""
+    """The scanner universe's own stock filters, applied by symbol (see the module's known limit)."""
     try:
         from data.nse_universe import _is_non_stock_fund, _is_valid_symbol
     except Exception:
@@ -258,26 +347,32 @@ def _breadth_universe(symbols) -> list[str]:
 
 
 _BREADTH_LOCK = threading.Lock()
-_BREADTH_CACHE: tuple[tuple, dict[date, tuple[int, int]]] | None = None
+_BREADTH_CACHE: tuple[tuple, dict[date, tuple[int, int]], float] | None = None
+#: The newest verified session is the one a store still installing its
+#: archive can be missing; a cached pass that cannot measure it is rechecked
+#: at most this often (older sessions are immutable once installed).
+_BREADTH_RECHECK_S = 60.0
 _CONTEXT_LOCK = threading.Lock()
-_CONTEXT_CACHE: dict[date, tuple[float, dict[str, Any]]] = {}
+_CONTEXT_CACHE: dict[tuple, tuple[float, tuple, dict[str, Any]]] = {}
+_CONTEXT_TTL_S = 300.0
+_CONTEXT_MAX = 64
 
 
-def _breadth_counts(official: tuple[date, ...], symbols: list[str], ohlcv_fn: Callable) -> dict[date, tuple[int, int]]:
-    """{official session: (names above their 50-DMA, names measured)}.
+def _breadth_counts(archive: tuple[date, ...], symbols: list[str], ohlcv_fn: Callable) -> dict[date, tuple[int, int]]:
+    """{verified session: (names above their 50-DMA, names measured)}.
 
-    One vectorised pass per name: a 50-bar mean ending on each bar (all 50
-    closes finite, as pandas rolling(50) requires), measured from the 51st bar,
-    counted only on official sessions.
+    Each name's series is first reduced to the bars of verified archives (a
+    live-overlay row is dropped), then every 50-bar window is averaged on its
+    own (no running sum, so no drift) and compared within ``_TIE_REL``.
     """
     import numpy as np
-    import pandas as pd
+    from numpy.lib.stride_tricks import sliding_window_view
 
-    days = np.asarray(sorted(official), dtype="datetime64[D]")
-    above = np.zeros(len(days), dtype=np.int64)
-    valid = np.zeros(len(days), dtype=np.int64)
+    days = np.asarray(sorted(archive), dtype="datetime64[D]")
     if not len(days):
         return {}
+    above = np.zeros(len(days), dtype=np.int64)
+    valid = np.zeros(len(days), dtype=np.int64)
     for sym in symbols:
         try:
             df = ohlcv_fn(sym)
@@ -285,63 +380,57 @@ def _breadth_counts(official: tuple[date, ...], symbols: list[str], ohlcv_fn: Ca
             continue
         if df is None or getattr(df, "empty", True) or len(df) < _BREADTH_MIN_BARS:
             continue
-        cols = {c.lower(): c for c in df.columns}
+        cols = {str(c).lower(): c for c in df.columns}
         if "close" not in cols:
             continue
         try:
-            idx = pd.DatetimeIndex(df.index)
-            if idx.tz is not None:
-                idx = idx.tz_localize(None)
-            d = idx.normalize().values.astype("datetime64[D]")
-            c = pd.to_numeric(df[cols["close"]], errors="coerce").to_numpy(dtype=float)
+            d, df = _daily(df)
+            c = df[cols["close"]].to_numpy(dtype=float, na_value=np.nan)
         except Exception:
             continue
-        if len(d) > 1 and not bool(np.all(d[1:] > d[:-1])):
-            order = np.argsort(d, kind="stable")
-            d, c = d[order], c[order]
-            keep = np.r_[d[1:] != d[:-1], True]          # a duplicated day keeps its last bar
-            d, c = d[keep], c[keep]
-        n = len(c)
-        if n < _BREADTH_MIN_BARS:
+        loc = np.searchsorted(days, d)
+        official = (loc < len(days)) & (days[np.minimum(loc, len(days) - 1)] == d)
+        overlay = str(getattr(df, "attrs", {}).get("quantterm_live_overlay_date") or "")
+        if overlay:
+            official &= d != np.datetime64(overlay[:10], "D")
+        if int(official.sum()) < _BREADTH_MIN_BARS:
             continue
-        finite = np.isfinite(c)
-        csum = np.cumsum(np.where(finite, c, 0.0))
-        ccount = np.cumsum(finite.astype(np.int64))
-        win_sum = csum[49:] - np.r_[0.0, csum[:-50]]
-        win_n = ccount[49:] - np.r_[0, ccount[:-50]]
+        c, loc = c[official], loc[official]
         with np.errstate(invalid="ignore"):
-            sma = np.where(win_n == 50, win_sum / 50.0, np.nan)
-        last = c[49:]
-        ok = (np.arange(49, n) >= _BREADTH_MIN_BARS - 1) & np.isfinite(sma) & np.isfinite(last)
-        if not ok.any():
-            continue
-        when = d[49:][ok]
-        up = (last > sma)[ok]
-        loc = np.searchsorted(days, when)
-        inside = loc < len(days)
-        inside[inside] = days[loc[inside]] == when[inside]
-        np.add.at(valid, loc[inside], 1)
-        np.add.at(above, loc[inside][up[inside]], 1)
+            sma = sliding_window_view(c, 50).mean(axis=1)[1:]      # windows ending at bar 51, 52, ...
+            last = c[50:]
+            up = (last - sma) > _TIE_REL * np.abs(last)            # NaN anywhere -> not above
+        at = loc[50:]
+        valid += np.bincount(at, minlength=len(days))
+        if up.any():
+            above += np.bincount(at[up], minlength=len(days))
     return {days[i].astype(object): (int(above[i]), int(valid[i])) for i in np.flatnonzero(valid)}
 
 
+def _breadth_key(archive: tuple[date, ...], n_symbols: int, sources: tuple) -> tuple:
+    return (len(archive), archive[0] if archive else None, archive[-1] if archive else None,
+            n_symbols, _store_generation(), sources)
+
+
 def breadth_pct_above_50dma(
-    cut: date | None,
+    session: date | None,
     *,
     symbols_fn: Callable | None = None,
     ohlcv_fn: Callable | None = None,
-    official_fn: Callable | None = None,
+    archive_fn: Callable | None = None,
 ) -> float | None:
-    """Official-session breadth as of ``cut``; None when not measurable."""
+    """Breadth on the verified session ``session``; None when not measurable."""
     global _BREADTH_CACHE
-    if cut is None:
+    import time as _time
+
+    if session is None:
         return None
     try:
-        official = tuple(sorted(date.fromisoformat(str(d)[:10]) for d in (official_fn or _official_dates)()))
+        archive = tuple(sorted({d if isinstance(d, date) else date.fromisoformat(str(d)[:10])
+                                for d in (archive_fn or _archive_dates)()}))
     except Exception:
         return None
-    usable = [d for d in official if d <= cut]
-    if not usable or (cut - usable[-1]).days > CONTEXT_MAX_AGE_DAYS:
+    if session not in archive:
         return None
     try:
         symbols = _breadth_universe((symbols_fn or _store_symbols)())
@@ -350,16 +439,25 @@ def breadth_pct_above_50dma(
     if len(symbols) < BREADTH_MIN_N:
         return None
     # Injected sources (tests, research) are part of the key by identity; the
-    # production key is the official archive state and the universe size.
-    key = (official[-1], len(official), len(symbols), symbols_fn, ohlcv_fn, official_fn)
+    # production key is the archive set plus the store generation.
+    key = _breadth_key(archive, len(symbols), (symbols_fn, ohlcv_fn, archive_fn))
     with _BREADTH_LOCK:
-        hit = _BREADTH_CACHE if _BREADTH_CACHE is not None and _BREADTH_CACHE[0] == key else None
-        if hit is None:
-            counts = _breadth_counts(official, symbols, ohlcv_fn or _store_ohlcv)
-            _BREADTH_CACHE = (key, counts)
-        else:
-            counts = hit[1]
-    up, n = counts.get(usable[-1], (0, 0))
+        now = _time.monotonic()
+        counts = None
+        if _BREADTH_CACHE is not None and _BREADTH_CACHE[0] == key:
+            counts = _BREADTH_CACHE[1]
+            stale_newest = (session == archive[-1]
+                            and counts.get(session, (0, 0))[1] < BREADTH_MIN_N
+                            and now - _BREADTH_CACHE[2] >= _BREADTH_RECHECK_S)
+            if stale_newest:
+                counts = None
+        if counts is None:
+            counts = _breadth_counts(archive, symbols, ohlcv_fn or _store_ohlcv)
+            # A store that changed during the pass is not one generation: keep
+            # the answer for nobody.
+            if _breadth_key(archive, len(symbols), (symbols_fn, ohlcv_fn, archive_fn)) == key:
+                _BREADTH_CACHE = (key, counts, now)
+    up, n = counts.get(session, (0, 0))
     if n < BREADTH_MIN_N:
         return None
     return round(up / n * 100.0, 6)
@@ -373,31 +471,39 @@ def reset_breadth_cache() -> None:
         _CONTEXT_CACHE.clear()
 
 
-#: A board enriches every card with the same cutoff; the official index can
-#: still land later in the day, so a cached read expires.
-_CONTEXT_TTL_S = 300.0
+_SHARED_CONTEXT = ("vix", "index_trend", "breadth_pct_above_50dma")
 
 
 def context_features(decided_at: Any) -> dict[str, Any]:
-    """Market context shared by every decision with this cutoff (official sources)."""
+    """Market context for a decision (official sources, one published session).
+
+    Returns the shared features plus ``_session`` (the source session, ISO) when
+    one exists. Only a COMPLETE result is cached, and only while the store
+    generation it came from is current, so a source that is still loading is
+    re-read on the next decision instead of being frozen as absent.
+    """
     import time as _time
 
-    cut = cutoff_session(decided_at)
-    if cut is None:
+    session = published_session(decided_at)
+    if session is None:
         return {}
+    gen = _store_generation()
+    key = (session, gen)
     now = _time.monotonic()
     with _CONTEXT_LOCK:
-        hit = _CONTEXT_CACHE.get(cut)
+        hit = _CONTEXT_CACHE.get(key)
     if hit is not None and now - hit[0] < _CONTEXT_TTL_S:
-        return dict(hit[1])
-    out = dict(market_context(cut))
-    breadth = breadth_pct_above_50dma(cut)
+        return dict(hit[2])
+    out = dict(market_context(session))
+    breadth = breadth_pct_above_50dma(session)
     if breadth is not None:
         out["breadth_pct_above_50dma"] = breadth
-    with _CONTEXT_LOCK:
-        if len(_CONTEXT_CACHE) > 64:
-            _CONTEXT_CACHE.clear()
-        _CONTEXT_CACHE[cut] = (now, dict(out))
+    out["_session"] = session.isoformat()
+    if all(out.get(k) is not None for k in _SHARED_CONTEXT) and _store_generation() == gen:
+        with _CONTEXT_LOCK:
+            if len(_CONTEXT_CACHE) >= _CONTEXT_MAX:
+                _CONTEXT_CACHE.clear()
+            _CONTEXT_CACHE[key] = (now, gen, dict(out))
     return out
 
 
@@ -414,33 +520,59 @@ def fill_missing(
     frame=None,
     *,
     context: Mapping[str, Any] | None = None,
+    producer: str = PRODUCER_VERSION,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Fill only features the decision did not carry. Returns (features, provenance).
 
-    ``context`` lets a caller pass precomputed market context; by default it
-    is read from official sources (``context_features``).
+    ``producer`` selects which features may be filled (``PRODUCER_FEATURES``);
+    an unknown producer fills nothing. ``context`` lets a caller pass
+    precomputed market context (it must carry ``_session``).
     """
+    allowed = PRODUCER_FEATURES.get(producer)
     merged = dict(features)
-    own = [k for k in PRODUCED + ("delivery_pct",) if _missing(k, merged.get(k))]
-    shared = [k for k in CONTEXT_PRODUCED if k != "delivery_pct" and _missing(k, merged.get(k))]
-    if not own and not shared:
-        return merged, {"filled": [], "cutoff_session": None}
-    computed = technical_features(symbol, decided_at, frame=frame) if own else {}
-    if shared:
+    if allowed is None:
+        return merged, {"filled": [], "cutoff_session": None, "producer": producer,
+                        "error": "UNKNOWN_PRODUCER"}
+    own = [k for k in PRODUCED if k in allowed and _missing(k, merged.get(k))]
+    want_delivery = "delivery_pct" in allowed and _missing("delivery_pct", merged.get("delivery_pct"))
+    shared = [k for k in _SHARED_CONTEXT if k in allowed and _missing(k, merged.get(k))]
+    cut = cutoff_session(decided_at)
+    prov: dict[str, Any] = {"filled": [], "cutoff_session": None if cut is None else cut.isoformat(),
+                            "source": "official_bhavcopy_pit", "producer": producer}
+    if not own and not want_delivery and not shared:
+        return merged, {"filled": [], "cutoff_session": None, "producer": producer}
+    if frame is None and (own or want_delivery):
+        try:
+            frame = _store_ohlcv(str(symbol or "").upper())
+        except Exception:
+            frame = None
+    computed: dict[str, Any] = technical_features(symbol, decided_at, frame=frame) if own and frame is not None else {}
+    ctx: dict[str, Any] = {}
+    if want_delivery or shared:
         try:
             ctx = dict(context) if context is not None else context_features(decided_at)
         except Exception:
             ctx = {}
+        session = None
+        try:
+            session = date.fromisoformat(str(ctx.get("_session") or "")[:10]) if ctx.get("_session") else None
+        except ValueError:
+            session = None
+        if want_delivery and session is not None:
+            deliv = delivery_on(frame, session)
+            if deliv is not None:
+                computed["delivery_pct"] = round(deliv, 6)
         computed.update({k: ctx[k] for k in shared if ctx.get(k) is not None})
-    filled = [k for k in own + shared if k in computed]
+        prov["context_session"] = None if session is None else session.isoformat()
+        prov["context_source"] = {
+            "delivery_pct": "official_bhavcopy_pit",
+            "vix": "official_index_pit",
+            "index_trend": "official_index_pit:historical_curriculum.classify_session",
+            "breadth_pct_above_50dma": "official_bhavcopy_pit:scan.breadth",
+        }
+        prov["publication_rule"] = "verified archive published by generated_at (18:00 IST convention)"
+    filled = [k for k in own + (["delivery_pct"] if want_delivery else []) + shared if k in computed]
     for k in filled:
         merged[k] = computed[k]
-    cut = cutoff_session(decided_at)
-    return merged, {"filled": filled, "cutoff_session": None if cut is None else cut.isoformat(),
-                    "source": "official_bhavcopy_pit",
-                    "context_source": {
-                        "delivery_pct": "official_bhavcopy_pit",
-                        "vix": "official_index_pit",
-                        "index_trend": "official_index_pit:historical_curriculum.classify_session",
-                        "breadth_pct_above_50dma": "official_bhavcopy_pit:scan.breadth",
-                    }}
+    prov["filled"] = filled
+    return merged, prov

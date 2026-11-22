@@ -103,6 +103,8 @@ def test_frozen_learning_record_gets_features_but_live_analog_query_does_not(mon
 
 from datetime import date as _date, timedelta  # noqa: E402
 
+import numpy as np  # noqa: E402
+
 
 def _index(n=260, start="2025-09-01", close=100.0, step=0.0):
     idx = pd.bdate_range(start, periods=n)
@@ -111,60 +113,83 @@ def _index(n=260, start="2025-09-01", close=100.0, step=0.0):
                          "Close": closes, "Volume": 0.0}, index=idx)
 
 
-def test_delivery_pct_comes_from_the_cutoff_bar_and_never_from_a_later_one():
+@pytest.mark.parametrize("decided_at,expected", [
+    ("2026-09-04T11:00:00+05:30", "2026-09-03"),   # intraday: yesterday's archive
+    ("2026-09-04T15:31:00+05:30", "2026-09-03"),   # closed, not yet published
+    ("2026-09-04T17:59:00+05:30", "2026-09-03"),
+    ("2026-09-04T18:00:00+05:30", "2026-09-04"),   # the publication convention
+    ("2026-09-04T23:00:00+05:30", "2026-09-04"),
+    ("2026-09-07T10:00:00+05:30", "2026-09-04"),   # Monday morning: Friday
+    ("2026-09-08T10:00:00+05:30", "2026-09-04"),   # Monday's archive never landed: Friday, not a guess
+    ("", None),
+])
+def test_the_source_session_is_the_latest_archive_published_by_the_decision(decided_at, expected):
+    archive = [_date(2026, 9, 2), _date(2026, 9, 3), _date(2026, 9, 4)]
+    got = PF.published_session(decided_at, archive_fn=lambda: archive)
+    assert (got.isoformat() if got else None) == expected
+
+
+def test_delivery_is_read_on_the_source_session_only():
     frame = _frame(n=80)
     frame["deliv_per"] = 40.0
-    day = frame.index[60]
-    frame.loc[day, "deliv_per"] = 63.5
-    frame.iloc[61:, frame.columns.get_loc("deliv_per")] = 99.0      # future
-    after = PF.technical_features("X", f"{day.date().isoformat()}T16:00:00+05:30", frame=frame)
-    intraday = PF.technical_features("X", f"{day.date().isoformat()}T11:00:00+05:30", frame=frame)
-    assert after["delivery_pct"] == pytest.approx(63.5)
-    assert intraday["delivery_pct"] == pytest.approx(40.0)        # the previous session's bar
+    day = frame.index[60].date()
+    frame.loc[frame.index[60], "deliv_per"] = 63.5
+    frame.iloc[61:, frame.columns.get_loc("deliv_per")] = 99.0      # later sessions
+    assert PF.delivery_on(frame, day) == pytest.approx(63.5)
+    assert PF.delivery_on(frame, day + timedelta(days=1000)) is None  # no bar that session
+    short = frame.iloc[55:61]                                         # 6 bars still has the value
+    assert PF.delivery_on(short, day) == pytest.approx(63.5)
+
+
+def test_delivery_is_never_read_from_a_live_overlay_row():
+    frame = _frame(n=80)
+    frame["deliv_per"] = 40.0
+    day = frame.index[-1].date()
+    frame.attrs["quantterm_live_overlay_date"] = day.isoformat()
+    assert PF.delivery_on(frame, day) is None
+    assert PF.delivery_on(frame, frame.index[-2].date()) == pytest.approx(40.0)
 
 
 @pytest.mark.parametrize("bad", [float("nan"), -1.0, 100.5])
-def test_delivery_pct_outside_its_physical_range_is_missing_not_clipped(bad):
+def test_delivery_outside_its_physical_range_is_missing_not_clipped(bad):
     frame = _frame(n=80)
     frame["deliv_per"] = bad
-    assert "delivery_pct" not in PF.technical_features("X", "2026-12-31T16:00:00+05:30", frame=frame)
+    assert PF.delivery_on(frame, frame.index[-1].date()) is None
 
 
-def test_vix_is_the_official_close_at_the_cutoff_and_ignores_rows_a_loader_failed_to_slice():
+def test_vix_is_the_official_close_dated_exactly_the_source_session():
     vix = _index(n=40, start="2026-08-03", close=14.0)
-    vix.loc[vix.index > "2026-09-04", "Close"] = 99.0                  # rows after the cutoff
+    vix.loc[vix.index > "2026-09-04", "Close"] = 99.0                  # rows after the session
     calls = []
 
     def loader(ticker, as_of):
         calls.append((ticker, as_of))
         return vix if ticker == "^INDIAVIX" else None                   # deliberately unsliced
     got = PF.market_context(_date(2026, 9, 4), index_fn=loader)
-    assert got["vix"] == pytest.approx(14.0)
+    assert got == {"vix": pytest.approx(14.0)}
     assert ("^INDIAVIX", "2026-09-04") in calls
-    assert "index_trend" not in got                                    # no Nifty: no trend
-
-
-def test_stale_vix_is_missing():
-    vix = _index(n=40, start="2026-06-01", close=14.0)                 # ends late July
-    got = PF.market_context(_date(2026, 9, 4), index_fn=lambda t, d: vix if t == "^INDIAVIX" else None)
-    assert "vix" not in got
+    # The index store lags the bhavcopy by a session: that is stale, not "close enough".
+    assert PF.market_context(_date(2026, 9, 7), index_fn=lambda t, d: vix.loc[:"2026-09-04"]) == {}
 
 
 @pytest.mark.parametrize("step,expected", [(1.0, "UP"), (-1.0, "DOWN"), (0.0, "FLAT")])
 def test_index_trend_uses_the_point_in_time_session_classifier(step, expected):
     nifty = _index(n=260, start="2025-09-01", close=1000.0, step=step)
-    cut = nifty.index[-1].date()
-    got = PF.market_context(cut, index_fn=lambda t, d: nifty if t == "^NSEI" else None)
-    assert got["index_trend"] == expected
+    session = nifty.index[-1].date()
+    assert PF.market_context(session, index_fn=lambda t, d: nifty if t == "^NSEI" else None)["index_trend"] == expected
 
 
-def test_index_trend_needs_200_rows_and_a_current_row():
-    short = _index(n=150, start="2026-01-01", close=1000.0, step=1.0)
-    assert "index_trend" not in PF.market_context(short.index[-1].date(),
-                                                  index_fn=lambda t, d: short if t == "^NSEI" else None)
-    nifty = _index(n=260, start="2025-01-01", close=1000.0, step=1.0)
-    late = nifty.index[-1].date() + timedelta(days=10)
-    assert "index_trend" not in PF.market_context(late, index_fn=lambda t, d: nifty if t == "^NSEI" else None)
+def test_index_trend_counts_distinct_sessions_and_needs_the_session_row():
+    nifty = _index(n=199, start="2025-09-01", close=1000.0, step=1.0)
+    padded = pd.concat([nifty, nifty.iloc[[-1]]])                     # 199 sessions + a duplicate
+    session = nifty.index[-1].date()
+    assert "index_trend" not in PF.market_context(session, index_fn=lambda t, d: padded if t == "^NSEI" else None)
+    full = _index(n=260, start="2025-01-01", close=1000.0, step=1.0)
+    shuffled = full.sample(frac=1.0, random_state=3)                  # unsorted input
+    last = full.index[-1].date()
+    assert PF.market_context(last, index_fn=lambda t, d: shuffled if t == "^NSEI" else None)["index_trend"] == "UP"
+    assert "index_trend" not in PF.market_context(last + timedelta(days=3),
+                                                  index_fn=lambda t, d: full if t == "^NSEI" else None)
 
 
 def _universe(n_up, n_down, *, n_bars=80, start="2026-06-01", extra=None):
@@ -179,14 +204,13 @@ def _universe(n_up, n_down, *, n_bars=80, start="2026-06-01", extra=None):
     return idx, frames
 
 
-def _breadth(cut, frames, official):
+def _breadth(session, frames, archive):
     PF.reset_breadth_cache()
-    return PF.breadth_pct_above_50dma(
-        cut, symbols_fn=lambda: list(frames), ohlcv_fn=frames.get,
-        official_fn=lambda: [d.date().isoformat() for d in official])
+    return PF.breadth_pct_above_50dma(session, symbols_fn=lambda: list(frames), ohlcv_fn=frames.get,
+                                      archive_fn=lambda: [d.date() for d in archive])
 
 
-def test_breadth_matches_scan_breadth_on_the_cutoff_session():
+def test_breadth_matches_scan_breadth_on_the_session():
     from scan.breadth import breadth_from_results
 
     idx, frames = _universe(240, 160)
@@ -194,25 +218,31 @@ def test_breadth_matches_scan_breadth_on_the_cutoff_session():
     for df in frames.values():
         c = df["close"].to_numpy()
         rows.append({"change_pct": (c[-1] / c[-2] - 1) * 100, "above_sma50": bool(c[-1] > c[-50:].mean())})
-    expected = breadth_from_results(rows)["pct_above_50"]
-    got = _breadth(idx[-1].date(), frames, idx)
-    assert got == pytest.approx(60.0)
-    assert round(got, 1) == expected
+    assert _breadth(idx[-1].date(), frames, idx) == pytest.approx(60.0)
+    assert round(_breadth(idx[-1].date(), frames, idx), 1) == breadth_from_results(rows)["pct_above_50"]
 
 
-def test_breadth_is_point_in_time_and_official_only():
+def test_breadth_is_measured_only_on_verified_sessions_from_verified_bars():
     idx, frames = _universe(240, 160)
-    day = idx[-2].date()                                  # everyone flat at 100 on that session
-    assert _breadth(day, frames, idx) == pytest.approx(0.0)
-    # The last session is not yet a verified official archive (e.g. a live
-    # intraday overlay): it is never measured, and a cutoff on it falls back
-    # to the previous official session.
-    assert _breadth(idx[-1].date(), frames, idx[:-1]) == pytest.approx(0.0)
-    # A cutoff more than three days after the last official session is stale.
-    assert _breadth(idx[-1].date() + timedelta(days=5), frames, idx) is None
+    assert _breadth(idx[-2].date(), frames, idx) == pytest.approx(0.0)      # everyone flat then
+    assert _breadth(idx[-1].date(), frames, idx[:-1]) is None              # its archive is not verified
+    # An archive missing in the middle: that row is not an input to anyone's mean.
+    gap = idx.delete(70)
+    spiked = {k: v.copy() for k, v in frames.items()}
+    for v in spiked.values():
+        v.iloc[70, 0] = 1e6
+    assert _breadth(idx[-2].date(), spiked, gap) == pytest.approx(0.0)
 
 
-def test_breadth_needs_300_stocks_and_excludes_funds():
+def test_a_flat_series_is_a_tie_even_after_a_later_split_adjustment():
+    idx = pd.bdate_range("2019-12-02", periods=1765)
+    flat = pd.DataFrame({"close": 101.0}, index=idx)
+    adjusted = pd.DataFrame({"close": 101.0 / 3.0}, index=idx)
+    frames = {f"S{i:03d}": (adjusted if i % 2 else flat) for i in range(300)}
+    assert _breadth(idx[-1].date(), frames, idx) == 0.0
+
+
+def test_breadth_needs_300_stocks_and_excludes_marked_funds():
     idx, frames = _universe(150, 140)                     # 290 names
     assert _breadth(idx[-1].date(), frames, idx) is None
     funds = {name: pd.DataFrame({"close": [100.0] * 79 + [110.0]}, index=idx)
@@ -224,54 +254,112 @@ def test_breadth_needs_300_stocks_and_excludes_funds():
     assert _breadth(idx[-1].date(), frames, idx) == pytest.approx(160 / 300 * 100)
 
 
-def test_breadth_needs_51_bars_per_name():
+def test_breadth_needs_51_official_bars_per_name():
     idx, frames = _universe(300, 0, n_bars=51)
     assert _breadth(idx[-1].date(), frames, idx) == pytest.approx(100.0)
     assert _breadth(idx[-2].date(), frames, idx) is None   # only 50 bars there: nobody measured
 
 
-def test_breadth_cache_follows_the_official_archive():
+def test_breadth_cache_follows_the_archive_and_the_store_generation(monkeypatch):
     idx, frames = _universe(240, 160)
     calls = []
 
     def ohlcv(sym):
         calls.append(sym)
         return frames.get(sym)
-    official = [d.date().isoformat() for d in idx[:-1]]
+    archive = [d.date() for d in idx[:-1]]
     PF.reset_breadth_cache()
-    kw = dict(symbols_fn=lambda: list(frames), ohlcv_fn=ohlcv, official_fn=lambda: official)
-    assert PF.breadth_pct_above_50dma(idx[-1].date(), **kw) == pytest.approx(0.0)
-    first = len(calls)
+    kw = dict(symbols_fn=lambda: list(frames), ohlcv_fn=ohlcv, archive_fn=lambda: archive)
     assert PF.breadth_pct_above_50dma(idx[-2].date(), **kw) == pytest.approx(0.0)
-    assert len(calls) == first                             # one pass per archive state
-    official.append(idx[-1].date().isoformat())            # the session's archive lands
+    first = len(calls)
+    assert PF.breadth_pct_above_50dma(idx[-3].date(), **kw) == pytest.approx(0.0)
+    assert len(calls) == first                             # one pass per generation
+    archive.append(idx[-1].date())                         # the session's archive lands
     assert PF.breadth_pct_above_50dma(idx[-1].date(), **kw) == pytest.approx(60.0)
+    second = len(calls)
+    generation = ["g1"]
+    monkeypatch.setattr(PF, "_store_generation", lambda: tuple(generation))
+    PF.breadth_pct_above_50dma(idx[-1].date(), **kw)
+    third = len(calls)
+    assert third > second                                  # new key: recomputed once
+    PF.breadth_pct_above_50dma(idx[-1].date(), **kw)
+    assert len(calls) == third
+    generation[0] = "g2"                                   # the store installed new bars
+    PF.breadth_pct_above_50dma(idx[-1].date(), **kw)
+    assert len(calls) > third
+
+
+def test_breadth_equals_the_scan_definition_on_every_session_of_a_random_market():
+    rng = np.random.default_rng(7)
+    idx = pd.bdate_range("2025-01-01", periods=140)
+    frames = {}
+    for i in range(330):
+        start = int(rng.integers(0, 30))
+        closes = np.round(100 * np.exp(np.cumsum(rng.normal(0, 0.02, len(idx) - start))), 2)
+        if i % 37 == 0:
+            closes[int(rng.integers(0, len(closes)))] = np.nan     # a bad print
+        if i % 41 == 0:
+            closes[:] = 250.0                                       # never trades away from 250
+        frames[f"S{i:03d}"] = pd.DataFrame({"close": closes}, index=idx[start:])
+    checked = 0
+    for k in (60, 80, 100, 120, 139):
+        cut = idx[k]
+        ups = n = 0
+        for df in frames.values():
+            hist = df.loc[:cut, "close"].to_numpy(dtype=float)
+            if len(hist) < 51 or df.index[min(len(hist), len(df)) - 1] != cut:
+                continue
+            n += 1
+            ups += bool(hist[-1] > hist[-50:].mean())               # scan.breadth: NaN -> not above
+        got = _breadth(cut.date(), frames, idx)
+        if n < 300:
+            assert got is None
+        else:
+            checked += 1
+            assert got == pytest.approx(ups / n * 100)
+    assert checked >= 2
 
 
 def test_fill_missing_treats_unknown_trend_as_missing_and_never_touches_regime():
-    ctx = {"vix": 13.2, "index_trend": "UP", "breadth_pct_above_50dma": 55.0}
+    frame = _frame(n=80, start="2026-09-01")
+    frame["deliv_per"] = 44.0
+    session = frame.index[-1].date().isoformat()
+    ctx = {"vix": 13.2, "index_trend": "UP", "breadth_pct_above_50dma": 55.0, "_session": session}
     merged, prov = PF.fill_missing(
         {"index_trend": "UNKNOWN", "regime": "UNKNOWN", "vix": None, "breadth_pct_above_50dma": 71.0},
-        "X", "2026-12-31T16:00:00+05:30", frame=_frame(), context=ctx)
+        "X", "2026-12-31T16:00:00+05:30", frame=frame, context=ctx)
     assert merged["index_trend"] == "UP" and merged["vix"] == 13.2
     assert merged["breadth_pct_above_50dma"] == 71.0       # carried value wins
     assert merged["regime"] == "UNKNOWN"                   # live analogs weight stored regime
-    assert set(prov["filled"]) >= {"index_trend", "vix"}
+    assert merged["delivery_pct"] == pytest.approx(44.0)   # read on the source session
+    assert set(prov["filled"]) >= {"index_trend", "vix", "delivery_pct"}
     assert "breadth_pct_above_50dma" not in prov["filled"] and "regime" not in prov["filled"]
-    assert prov["context_source"]["vix"] == "official_index_pit"
+    assert prov["context_session"] == session and prov["producer"] == PF.PRODUCER_VERSION
+
+
+def test_a_legacy_producer_fills_only_the_technical_features_and_an_unknown_one_nothing():
+    ctx = {"vix": 13.2, "index_trend": "UP", "breadth_pct_above_50dma": 55.0, "_session": "2026-12-30"}
+    legacy, prov = PF.fill_missing({"vix": None, "atr_pct": None}, "X", "2026-12-31T16:00:00+05:30",
+                                   frame=_frame(), context=ctx, producer=PF.LEGACY_PRODUCER)
+    assert legacy["vix"] is None and legacy["atr_pct"] == pytest.approx(2.0)
+    assert set(prov["filled"]) <= set(PF.PRODUCED)
+    unknown, prov = PF.fill_missing({"vix": None, "atr_pct": None}, "X", "2026-12-31T16:00:00+05:30",
+                                    frame=_frame(), context=ctx, producer="pit_v9")
+    assert unknown == {"vix": None, "atr_pct": None} and prov["error"] == "UNKNOWN_PRODUCER"
 
 
 def test_learning_record_gets_market_context_but_the_live_query_does_not(monkeypatch):
     from product import evidence_intelligence as EI
     from product.decision import Decision
 
-    frame = _frame(n=80)
+    frame = _frame(n=80, start="2026-06-01")
     frame["deliv_per"] = 47.0
+    session = frame.index[-1].date()
     monkeypatch.setattr("data.bhavcopy_store.get_ohlcv", lambda s: frame)
-    monkeypatch.setattr(PF, "context_features",
-                        lambda decided_at: {"vix": 12.5, "index_trend": "DOWN", "breadth_pct_above_50dma": 38.0})
-    decision = Decision(symbol="TCS", state="WATCH", setup="VCP", generated_at="2026-09-20T16:00:00+05:30",
-                        technical_evidence={"rsi": 55.0})
+    monkeypatch.setattr(PF, "context_features", lambda decided_at: {
+        "vix": 12.5, "index_trend": "DOWN", "breadth_pct_above_50dma": 38.0, "_session": session.isoformat()})
+    decision = Decision(symbol="TCS", state="WATCH", setup="VCP",
+                        generated_at=f"{session.isoformat()}T19:00:00+05:30", technical_evidence={"rsi": 55.0})
     live = EI.decision_features(decision)
     learning, prov = EI.learning_features(decision)
     for name in ("vix", "breadth_pct_above_50dma", "delivery_pct"):
@@ -280,48 +368,30 @@ def test_learning_record_gets_market_context_but_the_live_query_does_not(monkeyp
     assert learning["vix"] == 12.5 and learning["index_trend"] == "DOWN"
     assert learning["breadth_pct_above_50dma"] == 38.0 and learning["delivery_pct"] == 47.0
     assert learning["regime"] == live["regime"]
+    assert prov["context_session"] == session.isoformat()
 
 
-def test_breadth_equals_the_scan_definition_on_every_session_of_a_random_market():
-    import numpy as np
-
-    rng = np.random.default_rng(7)
-    idx = pd.bdate_range("2025-01-01", periods=140)
-    frames = {}
-    for i in range(330):
-        start = int(rng.integers(0, 60))
-        closes = 100 * np.exp(np.cumsum(rng.normal(0, 0.02, len(idx) - start)))
-        if i % 37 == 0:
-            closes[int(rng.integers(0, len(closes)))] = np.nan     # a bad print
-        frames[f"S{i:03d}"] = pd.DataFrame({"close": closes}, index=idx[start:])
-    official = idx[::1]
-    for k in (50, 75, 100, 139):
-        cut = idx[k]
-        rows = []
-        for df in frames.values():
-            hist = df.loc[:cut, "close"].astype(float)
-            if len(hist) < 51 or hist.index[-1] != cut:
-                continue
-            sma = hist.rolling(50, min_periods=50).mean()
-            if not (np.isfinite(hist.iloc[-1]) and np.isfinite(sma.iloc[-1])):
-                continue
-            rows.append(bool(hist.iloc[-1] > sma.iloc[-1]))
-        got = _breadth(cut.date(), frames, official)
-        if len(rows) < 300:
-            assert got is None
-        else:
-            assert got == pytest.approx(sum(rows) / len(rows) * 100)
-
-
-def test_context_is_read_once_per_cutoff_for_a_whole_board(monkeypatch):
+def test_only_a_complete_context_is_cached_and_only_for_its_generation(monkeypatch):
     PF.reset_breadth_cache()
+    archive = [_date(2026, 9, 3), _date(2026, 9, 4)]
+    monkeypatch.setattr(PF, "_archive_dates", lambda: archive)
     calls = []
-    monkeypatch.setattr(PF, "market_context", lambda cut, index_fn=None: calls.append(cut) or {"vix": 11.0})
-    monkeypatch.setattr(PF, "breadth_pct_above_50dma", lambda cut, **kw: 52.0)
+    state = {"vix": None, "gen": "g1"}
+    monkeypatch.setattr(PF, "_store_generation", lambda: (state["gen"],))
+    monkeypatch.setattr(PF, "market_context", lambda s, index_fn=None: calls.append(s) or (
+        {"vix": state["vix"], "index_trend": "UP"} if state["vix"] else {"index_trend": "UP"}))
+    monkeypatch.setattr(PF, "breadth_pct_above_50dma", lambda s, **kw: 52.0)
+    at = "2026-09-04T19:00:00+05:30"
+    for _ in range(3):
+        assert "vix" not in PF.context_features(at)          # still loading: never cached
+    assert len(calls) == 3
+    state["vix"] = 11.0
     for _ in range(50):
-        got = PF.context_features("2026-09-04T16:00:00+05:30")
-    assert got == {"vix": 11.0, "breadth_pct_above_50dma": 52.0}
-    assert len(calls) == 1
-    PF.context_features("2026-09-07T16:00:00+05:30")
-    assert len(calls) == 2
+        got = PF.context_features(at)
+    assert got == {"vix": 11.0, "index_trend": "UP", "breadth_pct_above_50dma": 52.0, "_session": "2026-09-04"}
+    assert len(calls) == 4                                   # one board, one read
+    assert PF.context_features("2026-09-04T16:00:00+05:30")["_session"] == "2026-09-03"
+    state["gen"] = "g2"                                      # the store moved on
+    PF.context_features(at)
+    assert len(calls) == 6
     PF.reset_breadth_cache()

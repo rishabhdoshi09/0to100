@@ -499,6 +499,7 @@ def _serialize_model(
         "counterfactual_n": cf_n,
         "historical_n": historical_n,
         "features": list(MODEL_FEATURES),
+        "feature_producer": _current_producer(),
         "coef": [round(float(x), 10) for x in coef],
         "intercept": round(float(intercept), 10),
         "medians": [round(float(x), 10) for x in medians],
@@ -703,6 +704,17 @@ def maybe_promote(*, path: str | Path | None = None) -> dict[str, Any]:
     return store
 
 
+def _current_producer() -> str:
+    from product.pit_features import PRODUCER_VERSION
+    return PRODUCER_VERSION
+
+
+def _model_producer(model: Mapping[str, Any]) -> str:
+    """The feature producer a model was trained under; models from before it was recorded are legacy."""
+    from product.pit_features import LEGACY_PRODUCER
+    return str(model.get("feature_producer") or LEGACY_PRODUCER)
+
+
 def _score_features(feature_values: Mapping[str, Any], model: Mapping[str, Any]) -> float | None:
     try:
         coef = np.asarray(model.get("coef") or [], dtype=float)
@@ -731,9 +743,13 @@ def score_decision(decision, *, path: str | Path | None = None) -> dict[str, Any
             "live_locked": True,
         }
     try:
-        # Same features the model was trained on (no train/serve skew).
+        # Same features AND the same producer the model was trained on (no
+        # train/serve skew): a model version names exactly one predictor.
         from product.evidence_intelligence import learning_features
-        p = _score_features(learning_features(decision)[0], model)
+        from product.pit_features import PRODUCER_FEATURES
+        producer = _model_producer(model)
+        p = (_score_features(learning_features(decision, producer=producer)[0], model)
+             if producer in PRODUCER_FEATURES else None)
     except Exception:
         p = None
     return {
