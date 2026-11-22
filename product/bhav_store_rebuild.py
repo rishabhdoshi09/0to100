@@ -360,7 +360,11 @@ def _desk_running() -> list[str]:
 
 
 def _check_desk(target: Path, target_is_copy: bool) -> None:
-    if target_is_copy and not _on_live_volume(target.resolve()):
+    # Copy mode only when NEITHER the entry apply/rollback replaces (parent
+    # resolved, final name kept: os.replace writes that entry) NOR its referent
+    # is on a live volume (GPT C7V-05, cycle 7).
+    entry = Path(target).parent.resolve() / Path(target).name
+    if target_is_copy and not _on_live_volume(entry) and not _on_live_volume(Path(target).resolve()):
         return
     running = _desk_running()
     if running:

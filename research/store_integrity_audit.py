@@ -252,6 +252,7 @@ def main(argv=None) -> int:
     ap.add_argument("--pickle", default=None, help="audit this pickle instead of the copy's own")
     ap.add_argument("--out", required=True)
     a = ap.parse_args(argv)
+    _refuse_live(a.out)                # the report is written to a copy, never the live runtime (C7V-05)
     rep = audit(a.root, pickle_path=a.pickle)
     Path(a.out).write_text(json.dumps(rep, indent=2, default=str))
     print(json.dumps({k: rep[k] for k in ("pickle", "archives", "counts", "contamination_kinds",

@@ -220,6 +220,12 @@ def apply_live_to_store() -> int:
         today_ts = pd.Timestamp(session_today)
         updated = 0
         with bs._lock:
+            # A call that crossed into another NSE session while it fetched
+            # (suspended over midnight) holds quotes of the NEW session under
+            # the OLD date: discard them; the next call dates them right (C7V-09).
+            if today_ist() != session_today:
+                log.info("live_overlay_skipped", reason="the NSE session changed during the fetch")
+                return 0
             # Re-check under the lock that publishes the quotes: today's
             # official archive may have been installed while they were being
             # fetched, and an official bar is never overwritten (GPT ST-05).

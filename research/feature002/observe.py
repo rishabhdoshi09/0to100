@@ -174,7 +174,26 @@ def _input_provenance(hist, cutoff: str):
     prov["bars_after_cutoff_dropped"] = dropped
     prov["bars"] = int(len(cut))
     prov["symbol_hist_as_of"] = _as_of_from_hist(cut) if len(cut) else None
+    # A live (intraday) bar is not an archive bar: when the overlaid bar survived
+    # the cutoff, say so (GPT C7V-07, cycle 7).
+    overlay = str(attrs.get("quantterm_live_overlay_date") or "")[:10]
+    prov["live_overlay_date"] = overlay if overlay and prov["symbol_hist_as_of"] == overlay else None
     return cut, prov
+
+
+def _rank_inputs(inputs: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    """What the cross-sectional ranking was computed from, and whether it is coherent.
+
+    A candidate set read across a Kite snapshot switch mixes two generations of
+    history: ranking them together would freeze a percentile that describes
+    neither (GPT C7V-08, cycle 7). Such a set is not ranked.
+    """
+    snaps = sorted({str(i.get("snapshot_id")) for i in inputs.values()
+                    if i.get("source") == "kite_snapshot" and i.get("snapshot_id")})
+    sources = sorted({str(i.get("source")) for i in inputs.values() if i.get("source") not in (None, "none")})
+    coherent = len(snaps) <= 1
+    return {"sources": sources, "snapshot_ids": snaps, "coherent": coherent,
+            "withheld": None if coherent else "MIXED_KITE_SNAPSHOTS"}
 
 
 def _as_of_from_hist(hist) -> str | None:
@@ -283,7 +302,8 @@ def build_shadow_records(
     hist_as_of = session_date
     if as_ofs:
         hist_as_of = max(as_ofs)
-    rs_table = _build_rs_table(symbols, hist_as_of, frames=hists)
+    rank_inputs = _rank_inputs(inputs)
+    rs_table = _build_rs_table(symbols, hist_as_of, frames=hists) if rank_inputs["coherent"] else None
 
     rows: list[dict[str, Any]] = []
     fam_counter: Counter[str] = Counter()
@@ -302,6 +322,7 @@ def build_shadow_records(
             feat = dict(feat)
             feat["hist_as_of"] = hist_as_of
             feat["input"] = inputs.get(sym) or {"version": INPUT_PROVENANCE_VERSION, "source": "none"}
+            feat["rank_inputs"] = rank_inputs
         trend = feat.get("trend") or {}
         rs = feat.get("rs") or {}
         verdict = str(card.get("verdict") or "")
@@ -336,6 +357,11 @@ def build_shadow_records(
         })
 
     apply_shadow_ranks(rows)
+    if not rank_inputs["coherent"]:
+        # no cross-sectional RS, so nothing derived from it either (C7V-08)
+        for row in rows:
+            row.update({"rs_rank": None, "rs_pctl_in_set": None, "r3_score": None,
+                        "combined_shadow_rank": None})
     set_id = candidate_set_id(scan_cycle_id)
     ph = protocol_hash()
     for row in rows:

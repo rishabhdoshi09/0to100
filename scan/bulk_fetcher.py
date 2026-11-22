@@ -482,25 +482,39 @@ def backfill_missing(symbols: list[str], *, client=None, now: datetime | None = 
         }
 
     wanted = set(missing)
+    official: dict = {}
+
+    def official_rung() -> dict:
+        got = _repair_via_bhavcopy(missing) or {}
+        official.update(got)
+        return got
+
+    def public_rung() -> dict:
+        # Only what the official rung could not supply: a public download must
+        # never replace official bars for the same name (GPT C7V-06, cycle 7).
+        rest = [s for s in missing if s not in official]
+        return _repair_via_yfinance(rest) if rest else {}
+
     result = acquire(
         "scan_history_repair",
         [
             Source(
                 "nse_bhavcopy",
                 SourceTier.OFFICIAL_FILE,
-                lambda: _repair_via_bhavcopy(missing),
+                official_rung,
                 _repair_frames_validator,
                 identifier="NSE bhavcopy store",
             ),
             Source(
                 "yfinance_daily",
                 SourceTier.REPUTABLE_PUBLIC,
-                lambda: _repair_via_yfinance(missing),
+                public_rung,
                 _repair_frames_validator,
                 identifier="yfinance 1d",
             ),
         ],
-        accumulate=lambda acc, new: {**acc, **new},
+        # earlier (higher-tier) results win on any overlap
+        accumulate=lambda acc, new: {**new, **acc},
         complete=lambda acc: wanted <= set(acc),
         parser_version="2-offline-fallback",
     )
@@ -694,10 +708,19 @@ def _prefetch_yf(
             continue
         if raw is None or raw.empty:
             continue
-        single = len(ns_syms) == 1
+        grouped = isinstance(raw.columns, pd.MultiIndex)
         for sym, ns in zip(chunk, ns_syms):
             try:
-                df = raw.copy() if single else raw[ns].copy()
+                # group_by="ticker" can return (ticker, field) columns even for ONE
+                # ticker: select by ticker whenever the columns are grouped
+                if grouped:
+                    if ns not in raw.columns.get_level_values(0):
+                        continue
+                    df = raw[ns].copy()
+                elif len(ns_syms) == 1:
+                    df = raw.copy()
+                else:
+                    continue            # flat columns for several tickers: whose bars are these?
                 df.columns = [str(c).lower() for c in df.columns]
                 df = df.dropna(subset=["close"])
                 if len(df) >= 30:

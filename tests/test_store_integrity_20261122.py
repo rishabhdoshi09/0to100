@@ -861,3 +861,42 @@ def test_a_different_case_volumes_spelling_is_still_production(monkeypatch):
         RB._not_live(Path("/VOLUMES/QuantTermStorage/x"), "the staging root")
     with pytest.raises(SystemExit, match="refusing"):
         AU._refuse_live("/volumes/QuantTermStorage/QuantTerm/runtime")
+
+
+# ── GPT cycle-7 verification pass (C7V): sketches ──
+
+# GPT C7V-05 (cycle-7 verification sketch)
+# (adapted: the fake audit result gains 'affected_sessions', a key main() prints)
+def test_c7v_rebuild_checks_the_entry_it_replaces(tmp_path, monkeypatch):
+    from product import bhav_store_rebuild as rb
+
+    live = tmp_path / "volumes" / "test-volume"
+    live.mkdir(parents=True)
+    backing = tmp_path / "old.pkl"
+    backing.write_bytes(b"old")
+    target = live / "store_cache.pkl"
+    target.symlink_to(backing)
+    monkeypatch.setattr(rb, "_on_live_volume",
+                        lambda p: live in Path(p).parents)
+    monkeypatch.setattr(rb, "_desk_running", lambda: ["desk"])
+
+    with pytest.raises(SystemExit, match="desk is running"):
+        rb._check_desk(target, target_is_copy=True)
+
+
+def test_c7v_audit_refuses_live_output(tmp_path, monkeypatch):
+    from research import store_integrity_audit as audit
+
+    out = tmp_path / "report.json"
+    resolve = Path.resolve
+    monkeypatch.setattr(
+        Path, "resolve",
+        lambda p, *a, **k: Path("/volumes/test-volume/report.json")
+        if p == out else resolve(p, *a, **k),
+    )
+    monkeypatch.setattr(audit, "audit", lambda *a, **k: dict.fromkeys(
+        ("pickle", "archives", "counts", "contamination_kinds", "incomplete_kinds",
+          "affected_sessions"), {}))
+    with pytest.raises(SystemExit, match="live runtime"):
+        audit.main(["--root", str(tmp_path), "--out", str(out)])
+    assert not out.exists()

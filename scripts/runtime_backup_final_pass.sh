@@ -59,12 +59,28 @@ done
 [ "$VERIFY_ONLY" -eq 0 ] || [ -n "$BASELINE" ] || { echo "refusing: --verify-only needs --baseline" >&2; exit 2; }
 if [ "$SRC" -ef "$DST" ]; then echo "refusing: the source and the backup are the same directory" >&2; exit 2; fi
 
-SRC=$(cd -P "$SRC" && pwd)
-DST=$(cd -P "$DST" && pwd)
-# absolute: the delta search runs from inside the source (a relative stamp or
-# baseline path would silently resolve against the wrong directory)
-STAMP="$(cd -P "$(dirname "$STAMP")" && pwd)/$(basename "$STAMP")"
-[ -z "$BASELINE" ] || BASELINE="$(cd -P "$(dirname "$BASELINE")" && pwd)/$(basename "$BASELINE")"
+# Physical paths, with a sentinel: $(...) strips EVERY trailing newline, so a
+# symlink to 'source\n' would otherwise resolve to its sibling 'source'
+# (GPT C7V-04, cycle 7). The resolved paths are then refused if they hold one.
+phys_dir() {
+    local out
+    out=$(cd -P -- "$1" && pwd -P && printf x) || return 1
+    out=${out%x}
+    printf '%s' "${out%"$NL"}"
+}
+SRC=$(phys_dir "$SRC"; printf x) || exit 2; SRC=${SRC%x}
+DST=$(phys_dir "$DST"; printf x) || exit 2; DST=${DST%x}
+sdir=$(phys_dir "$(dirname -- "$STAMP")"; printf x) || exit 2; sdir=${sdir%x}
+STAMP="$sdir/$(basename -- "$STAMP")"
+if [ -n "$BASELINE" ]; then
+    bdir=$(phys_dir "$(dirname -- "$BASELINE")"; printf x) || exit 2; bdir=${bdir%x}
+    BASELINE="$bdir/$(basename -- "$BASELINE")"
+fi
+for resolved in "$SRC" "$DST" "$STAMP" "$BASELINE"; do
+    case "$resolved" in *"$NL"*)
+        echo "refusing: a path resolves to a name containing a newline" >&2; exit 2;;
+    esac
+done
 case "$DST/" in "$SRC/"*) echo "refusing: the backup $DST is the source or inside it" >&2; exit 2;; esac
 case "$SRC/" in "$DST/"*) echo "refusing: the source $SRC is inside the backup" >&2; exit 2;; esac
 if [ "${QT_FINAL_PASS_ALLOW_SAME_FS:-0}" != "1" ]; then
@@ -173,6 +189,28 @@ def sha(path):
     return h.hexdigest()
 
 
+def safe_regular(root, rel):
+    """'' when root/rel is a regular file reached through no symlink and inside
+    root; else why not (GPT C7V-03, cycle 7: a backup file replaced by a symlink
+    to the source would otherwise verify while holding nothing)."""
+    import stat as S
+    parts = rel.split(b"/")
+    if rel.startswith(b"/") or any(p in (b"", b".", b"..") for p in parts):
+        return "the path escapes the backup root"
+    cur = root
+    for i, part in enumerate(parts):
+        cur = os.path.join(cur, part)
+        try:
+            st = os.lstat(cur)
+        except OSError:
+            return "missing from the backup"
+        if S.S_ISLNK(st.st_mode):
+            return "a symlink in the backup path"
+        if i == len(parts) - 1 and not S.S_ISREG(st.st_mode):
+            return "not a regular file in the backup"
+    return ""
+
+
 verified, bad, gone = set(), [], 0
 for path, want in entries.items():
     if not verify_only:
@@ -182,10 +220,14 @@ for path, want in entries.items():
             gone += 1                       # deleted since the bulk pass; --delete mirrored it
             continue
     target = os.path.join(dst, path)
+    why = safe_regular(dst, path)
+    if why:
+        bad.append((path, why))
+        continue
     try:
         got = sha(target)
     except OSError:
-        bad.append((path, "missing from the backup"))
+        bad.append((path, "unreadable in the backup"))
         continue
     if got == want:
         verified.add(path)

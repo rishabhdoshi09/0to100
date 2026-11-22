@@ -342,16 +342,29 @@ def _carries_cross(features: dict, filled) -> list:
     return out
 
 
+#: The columns the plan's judgment depends on, in this order (the digest's projection).
+SCOPE_COLUMNS = "observation_id, symbol, ts, kind, features, meta"
+
+
 def _scope_digest(rows, changed) -> tuple[str, int]:
-    """Identity of every observation the plan judged: (sha256, count) over
-    sorted 'id|vector sha' of rows of a changed symbol or carrying a market-wide
-    value. apply recomputes it inside its transaction (GPT R2, cycle 6)."""
+    """Identity of every observation the plan judged: (sha256, count).
+
+    Each row of a changed symbol, or carrying a market-wide value, contributes
+    EVERY immutable input the planner used: id, symbol, decision time, kind,
+    the vector and its PIT-fill provenance. Mutable settlement columns (outcome)
+    are not part of it. apply recomputes it before writing and again inside its
+    transaction (GPT R2, cycle 6; C7V-01, cycle 7: a row with the same id and
+    vector but no PIT-fill marker was judged differently and must not match).
+    """
     items = []
-    for oid, sym, feats, meta in rows:
+    for oid, sym, ts, kind, feats, meta in rows:
         f = json.loads(feats or "{}")
-        filled = (json.loads(meta or "{}").get("pit_features") or {}).get("filled") or []
+        pit = json.loads(meta or "{}").get("pit_features") or {}
+        filled = pit.get("filled") or []
         if sym in changed or _carries_cross(f, filled):
-            items.append(f"{oid}|{_vector_sha(feats)}")
+            items.append(json.dumps({"id": oid, "symbol": sym, "ts": ts, "kind": kind,
+                                     "vector": _vector_sha(feats), "pit": pit},
+                                    sort_keys=True, default=str))
     items.sort()
     return hashlib.sha256("\n".join(items).encode()).hexdigest(), len(items)
 
@@ -504,7 +517,7 @@ def plan(features_db: str | Path, current_pickle: str | Path, repaired_pickle: s
                              "features": diffs, "vector_sha256": _vector_sha(feats)})
     proven = {a["observation_id"] for a in affected}
     binding = _binding(store_manifest, cur_p, rep_p)
-    digest, scope_n = _scope_digest([(r[0], r[1], r[3], r[4]) for r in rows], changed)
+    digest, scope_n = _scope_digest([(r[0], r[1], r[2], r[6], r[3], r[4]) for r in rows], changed)
     manifest = {
         "schema": 2,
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -632,7 +645,7 @@ def apply(manifest_path: str | Path, features_db: str | Path, owner_approval: st
         con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
         try:
             pre, _n = _scope_digest(con.execute(
-                "SELECT observation_id, symbol, features, meta FROM observations").fetchall(),
+                f"SELECT {SCOPE_COLUMNS} FROM observations").fetchall(),
                 set(m.get("changed_symbols") or []))
         finally:
             con.close()
@@ -652,7 +665,7 @@ def apply(manifest_path: str | Path, features_db: str | Path, owner_approval: st
         # Inside the write transaction: the store holds exactly the observations
         # the plan judged, none added or changed since (GPT R2, cycle 6).
         got, _n = _scope_digest(con.execute(
-            "SELECT observation_id, symbol, features, meta FROM observations").fetchall(), changed)
+            f"SELECT {SCOPE_COLUMNS} FROM observations").fetchall(), changed)
         if got != want:
             raise FS.QuarantineRefused("the observation set changed since the plan")
 

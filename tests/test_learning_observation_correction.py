@@ -841,3 +841,26 @@ def test_a_different_case_volumes_spelling_cannot_use_copy_mode(world):
         LOC._check_copy_mode(Path("/volumes/QuantTermStorage/QuantTerm/runtime/logs/feature_store.db"), True)
     with pytest.raises(SystemExit, match="/Volumes"):
         LOC._not_live("/volumes/QuantTermStorage/x", "the feature store")
+
+
+# ── GPT cycle-7 verification pass (C7V): sketches ──
+
+# GPT C7V-01 (cycle-7 verification sketch)
+def test_c7v_scope_binds_pit_fill_metadata(world, monkeypatch):
+    plan, manifest, repair = _bound_plan(world, monkeypatch)
+    oid = "decision::yng"
+    assert [row["observation_id"] for row in plan["affected"]] == [oid]
+    other = world["tmp"] / "other.db"
+    raw = PF.technical_features("YNG", DECIDED, frame=world["current"]["YNG"])
+
+    with monkeypatch.context() as patch:
+        patch.setattr(fs, "_DB_PATH", other)
+        assert fs.snapshot(oid, "YNG", "DECISION", raw, ts=DECIDED)["status"] == "frozen"
+        fresh = LOC.plan(other, world["cur"], world["rep"],
+                         world["tmp"] / "other.json", world["ca"],
+                         store_manifest=repair)
+        assert fresh["complete"] and fresh["affected"] == []
+
+        with pytest.raises(SystemExit, match="observation set changed"):
+            LOC.apply(manifest, other, "approve correction")
+        assert fs.quarantined_ids() == set()

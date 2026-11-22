@@ -93,6 +93,43 @@ All three now compare case-insensitively, and each is mutation-checked.
 - Three backup-script guards first survived, because a deeper layer also failed the run.
 - Specific tests now pin the newline refusal, the malformed-line refusal and verify-only's reported mismatch.
 
+## 3b. GPT verification pass (`2e082e44..7f018681`, the one the protocol allows)
+
+**Status of the C7 fixes:**
+
+| Status | Findings |
+|---|---|
+| Closed for the reported cases | C7-01, C7-02, C7-05, C7-06 |
+| Partly closed | C7-03, C7-04, C7-07, C7-08 |
+
+**New findings.** 9 (1 P0, 8 P1), **all confirmed**: each sketch fails on `7f018681` at its claim.
+
+- The C7V-05 audit sketch was adapted: its fake audit result gains `affected_sessions`, a key `main()` prints.
+- The C7V-02 runbook test lands with the runbook correction commit.
+
+There is no further GPT loop.
+
+| Finding | What it was | Fix |
+|---|---|---|
+| C7V-01 (P0) | The scope digest hashed only id and vector: the same id and vector without a PIT-fill marker was judged differently, yet it would still have been quarantined | The digest covers every immutable input the planner judged: id, symbol, ts, kind, vector and `meta.pit_features`. Outcome columns are excluded |
+| C7V-02 | Stage 3 ran the final pass without `--baseline` | The runbook wires the Stage 1 manifest into a pre-window verify-only and the in-window pass (runbook correction commit) |
+| C7V-03 | A backup file replaced by a symlink to the source passed verify-only | An entry verifies only as a regular file, inside the root, with no symlinked component |
+| C7V-04 | A symlink to `source\n` still had its newline stripped | Physical paths are taken with a sentinel; resolved paths containing a newline are refused |
+| C7V-05 | The rebuild checked only the referent of a target entry; the audit's `--out` was unchecked | The rebuild checks the entry `os.replace` writes AND its referent; the audit refuses a live `--out` before running |
+| C7V-06 | A public download overwrote a partial official repair in the same backfill | The public rung fetches only unresolved names; earlier (official) results win the merge |
+| C7V-07 | A live bar's provenance was dropped | `live_overlay_date` is recorded when the overlaid bar survives the cutoff |
+| C7V-08 | A snapshot switch mid-set mixed generations in the RS ranking | A set spanning more than one Kite snapshot is not ranked: RS and the ranks derived from it are withheld (`rank_inputs.withheld = MIXED_KITE_SNAPSHOTS`) |
+| C7V-09 | An overlay call spanning IST midnight mis-dated the new session's quote | The IST session is re-checked under the publication lock, and a crossed fetch is discarded |
+
+**Found while fixing.** `_prefetch_yf` parsed a single ticker as flat columns. yfinance can return `(ticker, field)` columns even for one ticker, so it now selects by ticker whenever the columns are grouped, and skips flat multi-ticker frames.
+
+**Mutation checks.** Each reverted fix fails its test. Two first survived, each because a second layer also catches the case:
+
+- the newline stripping;
+- the merge order.
+
+Each layer now has its own pin: a test of the resolved-path refusal, and an overlapping-public-result test.
+
 ## 4. Stage 1 backup (owner-approved; see the Stage 1 report)
 
 Recorded separately in the Stage 1 report and the corrected runbook (§1).

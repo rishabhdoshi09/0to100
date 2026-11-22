@@ -377,3 +377,39 @@ def test_verify_only_reports_a_changed_entry_as_a_baseline_mismatch(tmp_path):
     (dst / "ledger.db").write_bytes(b"bad!")
     out = _run2(src, dst, stamp, "--baseline", base, "--verify-only")
     assert out.returncode == 1 and "BASELINE_MISMATCH ledger.db" in out.stderr
+
+
+# ── GPT cycle-7 verification pass (C7V): sketches ──
+
+# GPT C7V-03 (cycle-7 verification sketch)
+def test_c7v_verify_only_requires_a_regular_backup_file(tmp_path):
+    src, dst, base, stamp = _corrupt_setup(tmp_path)
+    ledger = dst / "ledger.db"
+    ledger.unlink()
+    ledger.symlink_to(src / ledger.name)
+
+    result = _run2(src, dst, stamp, "--baseline", base, "--verify-only")
+    assert result.returncode != 0
+    assert "BASELINE_OK" not in result.stdout
+
+# GPT C7V-04 (cycle-7 verification sketch)
+def test_c7v_refuses_newline_in_resolved_source(tmp_path):
+    src, sibling, dst = [tmp_path / name for name in ("source\n", "source", "backup")]
+    for directory in (src, sibling, dst):
+        directory.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(src, target_is_directory=True)
+    (src / "ledger.db").write_bytes(b"correct")
+    shutil.copy2(src / "ledger.db", dst / "ledger.db")
+    base = _baseline(dst, tmp_path / "baseline")
+    stamp = tmp_path / "stamp"
+    stamp.touch()
+    os.utime(stamp, (2_000_000_000, 2_000_000_000))
+    wrong = sibling / "other.db"
+    wrong.write_bytes(b"wrong tree")
+    os.utime(wrong, (2_000_000_002, 2_000_000_002))
+
+    result = _run2(alias, dst, stamp, "--baseline", base)
+    assert result.returncode == 2 and "newline" in result.stderr
+    assert (dst / "ledger.db").read_bytes() == b"correct"
+    assert not (dst / "other.db").exists()

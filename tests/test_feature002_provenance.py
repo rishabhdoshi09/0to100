@@ -190,3 +190,116 @@ def test_the_live_bar_is_dated_by_the_exchange_session_and_kept(monkeypatch, bui
     row = build(live.copy(), session=ist_day.isoformat())
     assert row["feature_snapshot"]["trend"]["price"] == 195.0
     assert row_input(row)["bars_after_cutoff_dropped"] == 0
+
+
+# ── GPT cycle-7 verification pass (C7V): sketches ──
+
+# GPT C7V-06 (cycle-7 verification sketch)
+def test_c7v_partial_official_repair_keeps_precedence(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    from data import acquisition
+    from scan import bulk_fetcher as bf
+
+    official = bf._tag_source(_hist(), "bhavcopy_store")
+    yahoo = pd.concat({s + ".NS": _hist(last="2026-08-20")
+                       for s in ("AAA", "BBB")}, axis=1)
+    monkeypatch.setattr(bf, "_kite_authoritative", lambda: False)
+    monkeypatch.setattr(bf, "_bhav_ok", False)
+    monkeypatch.setattr(bf, "_bhav_symbols", lambda: set())
+    monkeypatch.setattr(bf, "_yf_cache", {})
+    monkeypatch.setattr(bf, "_yf_cache_ts", 0)
+    monkeypatch.setattr(bf, "_repair_via_bhavcopy", lambda _: {"AAA": official})
+    monkeypatch.setattr(acquisition, "write_provenance", lambda _: None)
+    monkeypatch.setitem(sys.modules, "yfinance",
+                        SimpleNamespace(download=lambda *a, **k: yahoo))
+
+    assert bf.backfill_missing(["AAA", "BBB"])["loaded"] == 2
+    assert bf.get_cached("AAA").attrs["quantterm_source"] == "bhavcopy_store"
+    assert bf.get_cached("BBB").attrs["quantterm_source"] == "yfinance"
+
+# GPT C7V-07 (cycle-7 verification sketch)
+def test_c7v_persisted_input_distinguishes_live_from_official(monkeypatch, build):
+    from data import bhavcopy_store as bs
+    from scan import bulk_fetcher as bf
+
+    day = "2026-08-24"
+    live = _hist(last=day)
+    live.attrs["quantterm_live_overlay_date"] = day
+    monkeypatch.setattr(bf, "_kite_authoritative", lambda: False)
+    monkeypatch.setattr(bf, "_bhav_ok", True)
+    monkeypatch.setattr(bs, "get_ohlcv", lambda _: live.copy())
+
+    served = bf.get_cached("AAA")
+    assert row_input(build(served)).get("live_overlay_date") == day
+
+# GPT C7V-08 (cycle-7 verification sketch)
+def test_c7v_rs_uses_one_snapshot_for_the_candidate_set(monkeypatch):
+    day = "2026-08-24"
+    aaa_a = _hist(last=day, tag="kite_snapshot", snapshot="A")
+    bbb_a = _hist(last=day, tag="kite_snapshot", snapshot="A")
+    bbb_a["close"] = 100.0
+    bbb_b = bbb_a.copy()
+    bbb_b.attrs["quantterm_snapshot_id"] = "B"
+    bbb_b.loc[bbb_b.index[-1], "close"] = 300.0
+    monkeypatch.setattr(OBS, "_sector_map", lambda: ({}, "test"))
+    monkeypatch.setattr(OBS, "_hist", {"AAA": aaa_a, "BBB": bbb_b}.__getitem__)
+
+    _, rows = OBS.build_shadow_records(
+        [CARD, dict(CARD, symbol="BBB")], session_date=day,
+        recorded_at=f"{day}T10:30:00+05:30", scan_cycle_id="switch", source="live_scan",
+    )
+    assert row_input(rows[0])["snapshot_id"] == "A"
+    coherent = OBS._build_rs_table(["AAA", "BBB"], day, {"AAA": aaa_a, "BBB": bbb_a})
+    assert coherent["percentiles"]["AAA"] == 50.0
+    assert rows[0]["rs_percentile"] in (None, coherent["percentiles"]["AAA"])
+
+# GPT C7V-09 (cycle-7 verification sketch)
+def test_c7v_overlay_does_not_publish_across_ist_sessions(monkeypatch):
+    from datetime import date, datetime
+    from types import SimpleNamespace
+    from core import market_clock
+    from data import bhavcopy_store as bs, kite_client, nse_live, nse_universe
+
+    ist = market_clock.IST
+    now = [datetime(2026, 8, 24, 15, 59, tzinfo=ist)]
+
+    class Clock:
+        @staticmethod
+        def now(tz=None):
+            return now[0].astimezone(tz) if tz else now[0].replace(tzinfo=None)
+
+    def fetch():
+        now[0] = datetime(2026, 8, 25, 9, 16, tzinfo=ist)
+        return {"AAA": dict(open=190, high=196, low=189, close=195, volume=1000)}
+
+    monkeypatch.setattr(nse_live, "datetime", Clock)
+    monkeypatch.setattr(market_clock, "datetime", Clock)
+    monkeypatch.setattr(nse_live, "date", SimpleNamespace(today=lambda: now[0].date()))
+    monkeypatch.setattr(bs, "_store", {"AAA": _hist(last="2026-08-21")})
+    monkeypatch.setattr(bs, "_store_last_day", date(2026, 8, 21))
+    monkeypatch.setattr(nse_universe, "get_nse_universe", lambda: [])
+    monkeypatch.setattr(kite_client, "kite_credentials_available", lambda: False)
+    monkeypatch.setattr(nse_live, "fetch_live_snapshot", fetch)
+
+    nse_live.apply_live_to_store()
+    assert pd.Timestamp("2026-08-24") not in bs._store["AAA"].index
+
+
+def test_an_overlapping_public_result_never_replaces_an_official_frame(monkeypatch):
+    """C7V-06, the second layer: even if the public rung returned a name the
+    official rung already supplied, the official frame wins the merge."""
+    from data import acquisition
+    from scan import bulk_fetcher as bf
+
+    official = bf._tag_source(_hist(), "bhavcopy_store")
+    monkeypatch.setattr(bf, "_kite_authoritative", lambda: False)
+    monkeypatch.setattr(bf, "_bhav_ok", False)
+    monkeypatch.setattr(bf, "_bhav_symbols", lambda: set())
+    monkeypatch.setattr(bf, "_yf_cache", {})
+    monkeypatch.setattr(bf, "_repair_via_bhavcopy", lambda _: {"AAA": official})
+    monkeypatch.setattr(bf, "_repair_via_yfinance", lambda names: {
+        s: bf._tag_source(_hist(last="2026-08-20"), "yfinance") for s in ("AAA", "BBB")})
+    monkeypatch.setattr(acquisition, "write_provenance", lambda _: None)
+    assert bf.backfill_missing(["AAA", "BBB"])["loaded"] == 2
+    assert bf.get_cached("AAA").attrs["quantterm_source"] == "bhavcopy_store"
