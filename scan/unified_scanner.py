@@ -321,8 +321,11 @@ def _proven(ev: dict | None) -> bool:
     return bool(ev) and unproven_reason(ev) == ""
 
 
-#: The oldest walk-forward report schema whose bounds may certify a BUY.
-EVIDENCE_MIN_SCHEMA = 5
+#: The oldest walk-forward report schema whose bounds may certify a BUY. Schema
+#: 6 is the first whose walk-forward refuses out-of-order frames (a frame cut
+#: by position could hand a decision its future bars): an earlier report
+#: cannot certify, whatever its other provenance (GPT R1, cycle 6).
+EVIDENCE_MIN_SCHEMA = 6
 
 
 def evidence_provenance_note(provenance, *, now=None) -> str:

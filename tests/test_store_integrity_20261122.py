@@ -786,3 +786,60 @@ def test_a_verified_apply_still_never_discards_a_newer_cache(runtime, tmp_path, 
     RB._pickle(runtime).write_bytes(pickle.dumps({"store": {"NEW": 1}}))
     with pytest.raises(SystemExit, match="newer cache"):
         RB.rollback(path, target_is_copy=True)
+
+
+# ── GPT cycle-6 verification pass (R1, R7) ──
+
+
+# R1: a walk-forward from code without the chronology guard (schema < 6) cannot certify
+def test_parent_walk_forward_cannot_certify_a_saved_buy(tmp_path, monkeypatch):
+    import json
+    from product import scan_store as SS
+    from scan import calibration_snapshot as CS
+    from tests.evidence_fixtures import proven_provenance, seal_snapshot
+
+    snap = seal_snapshot({
+        "snapshot_id": "parent",
+        "backtest_provenance": proven_provenance(
+            report_schema=5, code_sha="783f342f"
+        ),
+        "backtest_edges": {
+            "VCP": {"mean": .5, "lower": .2, "n": 90, "blocks": 30,
+                    "inference": "OVERLAP_ROBUST", "family": True}
+        },
+    })
+    monkeypatch.setattr(CS, "DEFAULT_DIR", tmp_path)
+    monkeypatch.setattr(SS, "scan_source_status", lambda _: (True, ""))
+    (tmp_path / "current.json").write_text('{"snapshot_id":"parent"}')
+    (tmp_path / "parent.json").write_text(json.dumps(snap))
+    scan = tmp_path / "scan.json"
+    scan.write_text(json.dumps({
+        "schema_version": 2,
+        "evidence_identity": {"id": "parent"},
+        "records": [{"symbol": "TCS", "signals": ["VCP"], "verdict": "BUY",
+                     "edge_evidence_id": "parent"}],
+    }))
+    assert SS.load_scan(scan)["records"][0]["verdict"] == "WATCH"
+
+# R7
+def test_unverified_rollback_can_be_retried(runtime, tmp_path, monkeypatch):
+    from product import bhav_store_rebuild as RB
+
+    path = tmp_path / "manifest.json"
+    RB.plan(runtime, tmp_path / "staging", path)
+    monkeypatch.setattr(RB, "_held_open", lambda _: [])
+    RB.apply(path, "approve", target_is_copy=True)
+    target = RB._pickle(runtime)
+    replace = RB.os.replace
+
+    def damage_first_restore(src, dst):
+        replace(src, dst)
+        if Path(dst) == target and Path(src).name.startswith(".rollback-"):
+            target.write_bytes(b"failed read-back")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(RB.os, "replace", damage_first_restore)
+        with pytest.raises(SystemExit, match="did not restore"):
+            RB.rollback(path, target_is_copy=True)
+    assert json.loads(path.read_text())["state"] == "rollback_unverified"
+    assert RB.rollback(path, target_is_copy=True)["rollback_ok"]

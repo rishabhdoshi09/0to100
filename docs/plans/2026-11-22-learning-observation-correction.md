@@ -1,6 +1,6 @@
 # Plan: withholding the learning observations built from truncated price history (22 Nov 2026)
 
-**Status: planned, not applied. Revised after the GPT review (QT-02..QT-05, QT-09).** Applying it is an owner decision ("apply quarantine"); runbook stage 5 (`docs/runbooks/2026-11-22-paper-upgrade-and-store-repair.md`).
+**Status: planned, not applied.** Revised after the GPT review (QT-02..QT-05, QT-09) and its verification pass (R2..R6). Applying it is an owner decision ("apply quarantine"); runbook stage 5 (`docs/runbooks/2026-11-22-paper-upgrade-and-store-repair.md`).
 
 - No production learning record has been modified.
 - Every number below comes from read-only runs on SSD copies.
@@ -26,26 +26,34 @@ The store integrity audit (`docs/research/store_integrity_2026-11-22.md`) found 
      - champion calibration on a paper close (`record_resolved_prediction`);
      - `research/non_event`'s rejection analysis, threshold replay and reason trend.
    - **The challenger.** A model fitted before a quarantine is not served (`STALE_TRAINING_INPUTS`) and is refitted at the next `train()`; the model records the quarantine fingerprint it saw.
+   - **Calibration rows already recorded** for a quarantined observation (`taken:<id>`) no longer count in any summary, drift or dossier; they stay on disk for audit (R3).
+   - **The challenger's fingerprint** is captured before its rows are read, and a fit is not published if a quarantine landed meanwhile. The cache is keyed on the database and its WAL (R4).
    - **Kept as raw reads:** outcome settlement and audit reads, so a quarantined row still settles.
    - Re-freezing "corrected" values was rejected. The decision itself (its setup, levels and the scanner's own features) was made on the same history and cannot be re-derived, so a corrected vector would describe a decision that never happened.
 3. **Proof before action.** A row is quarantined by default only when one of its stored fills is **reproduced exactly** from the current store AND differs **materially** on the repaired store.
    - Materiality: more than 0.05 absolute AND more than 1% relative. The 20-EMA seed effect, at most 0.0035 pp, is not a defect.
    - A stored value that **cannot exist** on the complete history (the repaired recompute omits it) is also a defect (QT-03).
    - A stored value the current store does not reproduce is reported as `unexplained`, and the plan is then incomplete: `apply` refuses.
-   - A decision whose cutoff reaches a verified session that the repaired store lacks is also `unexplained`. That is checked against the repair manifest's archive calendar, so a weekend decision is not refused (QT-02).
+   - A decision whose cutoff reaches a session that the repaired store lacks is also `unexplained`. The sessions come from the **verified NSE calendar**, not the archives held, so a missing Monday archive is caught; a year the calendar does not cover fails closed, and a weekend decision is not refused (QT-02, R2).
 4. **Never claim more than was re-derived** (QT-03). Breadth and the RS percentile are computed across all symbols, so a changed listing moves every peer.
    - Any observation carrying one of them, and any changed symbol's own delivery fill, is counted under `not_rederived`, and the plan is incomplete.
-   - Production records carry none of them today (producer `pit_v1_technical`).
-5. **Bound to the repair** (QT-02).
+   - Production PIT fills carry none of them today (producer `pit_v1_technical`).
+   - The scanner also writes breadth straight into non-event vectors (R6). That carried breadth is **bounded**: breadth is recomputed per session on both stores, and only a session where the stores differ by more than 0.05 pp makes those rows `not_rederived`.
+   - In production, 1,318 carried values (26–30 July) moved by at most **0.042 pp**, so they are immaterial.
+   - Any other carried market-wide value (RS, sector, volatility percentiles) is `not_rederived`; production carries none.
+5. **Bound to the repair and to the observations judged** (QT-02, R2).
    - The plan records the store manifest it assumes: the current pickle must be its `target_sha256` and the repaired pickle its `new_sha256`, and both must end on the same session.
-   - A live `apply` refuses an unbound plan.
+   - A live `apply` refuses an unbound plan, and refuses when the live store is not the repaired pickle (the repair is not installed).
+   - The plan records a digest of every observation it judged: each changed symbol's row and each row carrying a market-wide value (1,418 in production). `apply` recomputes it inside its transaction, so an observation frozen after the plan refuses the apply.
 6. **Exposure is reported, not assumed** (QT-09).
    - A row is `exposed` when its **input prefix** differs between the two stores: every bar up to its cutoff, in the stored order the producer read (an EMA is seeded at the first bar).
    - Exposed rows have no proven wrong fill, and they are quarantined only with `--include-exposed`.
-7. **One transaction, one batch** (QT-05).
-   - `apply` validates every vector and inserts every row inside one `BEGIN IMMEDIATE` transaction, under a batch id derived from the plan; a refusal or failure writes nothing.
+7. **One transaction, one batch** (QT-05, R5).
+   - `apply` validates every vector and inserts every row inside one `BEGIN IMMEDIATE` transaction; a refusal or failure writes nothing.
+   - The batch id is unique to the plan instance.
+   - The approved scope (ids and `--include-exposed`) is persisted before the first attempt, and a retry must match it.
    - A rerun after an interruption completes the same batch.
-   - `rollback` releases exactly that batch, never an earlier quarantine.
+   - `rollback` releases exactly that batch, never an earlier quarantine or another plan's.
 
 ## 3. Dry run (`product/learning_observation_correction.py plan`)
 
@@ -150,7 +158,7 @@ The vectors were never touched, so this restores the previous learning view exac
 
 ## 6. Tests
 
-`tests/test_learning_observation_correction.py` (34 tests) covers:
+`tests/test_learning_observation_correction.py` (40 tests) covers:
 
 - **Loaders and quarantine:**
   - both loaders skip quarantined rows, and the frozen record is byte-identical;
@@ -175,6 +183,12 @@ The vectors were never touched, so this restores the previous learning view exac
   - QT-04: no calibration and no rejection analysis from a quarantined row; a stale challenger is not served;
   - QT-05: an atomic batch; rollback keeps a prior quarantine; an interrupted apply completes on rerun;
   - QT-09: scanner input order.
+- **GPT verification sketches:**
+  - R2: a missing weekday archive; observations added after the plan;
+  - R3: an already-settled calibration row;
+  - R4: a WAL quarantine;
+  - R5: a second plan's rollback keeps the first plan's quarantine;
+  - R6: scanner breadth on an unchanged peer.
 
 **Mutation checks.** Each of these, reverted on its own, fails its test:
 

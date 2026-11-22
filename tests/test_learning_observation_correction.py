@@ -228,10 +228,12 @@ def test_apply_quarantines_exactly_the_plan_and_only_once(world):
         LOC.apply(out, world["db"], "again", target_is_copy=True)
 
 
-def _store_manifest(world, *, target=None, new=None, ready=True):
+def _store_manifest(world, *, target=None, new=None, ready=True, installed=None):
+    """A repair manifest; ``installed`` is the live pickle (default: the repaired one, i.e. applied)."""
     path = world["tmp"] / "store_manifest.json"
     path.write_text(json.dumps({"target_sha256": target or LOC._file_sha(world["cur"]),
-                                "new_sha256": new or LOC._file_sha(world["rep"]), "ready": ready}))
+                                "new_sha256": new or LOC._file_sha(world["rep"]), "ready": ready,
+                                "target_pickle": str(installed or world["rep"])}))
     return path
 
 
@@ -246,8 +248,12 @@ def test_apply_on_a_live_target_needs_a_verified_repair_binding_and_a_stopped_de
                      store_manifest=_store_manifest(world, new="0" * 64))
     assert wrong["store_binding"]["verified"] is False
     bound = world["tmp"] / "bound.json"
-    m = LOC.plan(world["db"], world["cur"], world["rep"], bound, world["ca"], store_manifest=_store_manifest(world))
+    m = LOC.plan(world["db"], world["cur"], world["rep"], bound, world["ca"],
+                 store_manifest=_store_manifest(world, installed=world["cur"]))
     assert m["store_binding"]["verified"] is True
+    with pytest.raises(SystemExit, match="not the repaired pickle"):
+        LOC.apply(bound, world["db"], "owner words")              # the repair is not installed (R2)
+    _store_manifest(world)                                          # now it is
     monkeypatch.setattr(R, "_desk_running", lambda: ["launchd:com.quantterm.desk:123"])
     with pytest.raises(SystemExit, match="desk is running"):
         LOC.apply(bound, world["db"], "owner words")
@@ -530,9 +536,111 @@ def test_exposure_preserves_scanner_input_order(world):
 
 def test_a_weekend_decision_is_inside_the_store_but_a_missing_session_is_not():
     """A Sunday decision's calendar cutoff is Saturday: no session the store lacks."""
-    fri = pd.Timestamp("2026-11-20")
+    fri, mon = pd.Timestamp("2026-11-20"), pd.Timestamp("2026-11-23")
     assert LOC._unseen_session(fri, pd.Timestamp("2026-11-21").date(), None) is False      # Saturday
-    assert LOC._unseen_session(fri, pd.Timestamp("2026-11-23").date(), None) is True       # Monday
-    archive = [pd.Timestamp("2026-11-20"), pd.Timestamp("2026-11-25")]                       # Mon/Tue holidays
-    assert LOC._unseen_session(fri, pd.Timestamp("2026-11-24").date(), archive) is False
-    assert LOC._unseen_session(fri, pd.Timestamp("2026-11-25").date(), archive) is True
+    assert LOC._unseen_session(fri, mon.date(), None) is True                               # Monday session
+    # the VERIFIED calendar decides, not the archives held (GPT R2): 24 Nov 2026 is an NSE holiday
+    assert LOC._unseen_session(mon, pd.Timestamp("2026-11-24").date(), [fri, mon]) is False
+    assert LOC._unseen_session(mon, pd.Timestamp("2026-11-25").date(), [fri, mon]) is True
+    # a year the calendar does not cover fails closed
+    assert LOC._unseen_session(pd.Timestamp("2031-01-03"), pd.Timestamp("2031-01-04").date(), None) is True
+
+
+# ── GPT cycle-6 verification pass (R1..R10): sketches as written unless noted ──
+
+
+# R2
+def test_bound_plan_refuses_a_missing_weekday_archive(world):
+    ts = "2026-09-07T19:00:00+05:30"  # Monday after the producer cutoff
+    raw = PF.technical_features("YNG", ts, frame=world["current"]["YNG"])
+    fs.snapshot("decision::monday", "YNG", "DECISION", raw, ts=ts,
+                meta={"pit_features": {"filled": sorted(raw)}})
+    store_manifest = _store_manifest(world)
+    manifest = json.loads(store_manifest.read_text())
+    manifest["source"] = {"archives": {"04092026.csv": {}}}
+    store_manifest.write_text(json.dumps(manifest))
+    result = LOC.plan(world["db"], world["cur"], world["rep"],
+                      world["tmp"] / "coverage.json", world["ca"],
+                      store_manifest=store_manifest)
+    assert not result["complete"]
+
+
+def test_apply_refuses_observations_added_after_the_plan(world, monkeypatch):
+    from product import bhav_store_rebuild as RB
+
+    _freeze("decision::first", "YNG", world["current"]["YNG"])
+    _, plan_path = _plan(world)
+    _freeze("decision::late", "YNG", world["current"]["YNG"])
+    monkeypatch.setattr(RB, "_desk_running", lambda: [])
+    with pytest.raises(SystemExit):
+        LOC.apply(plan_path, world["db"], "approve", target_is_copy=True)
+
+# R3
+def test_quarantine_removes_an_already_settled_calibration_sample(world, monkeypatch):
+    from product import decision_calibration as DC, evidence_intelligence as EI
+
+    monkeypatch.setenv("QT_CALIBRATION", str(world["tmp"] / "calibration.json"))
+    fs.snapshot("decision::x", "YNG", "DECISION", {}, ts=DECIDED,
+                meta={"predicted_p": .8})
+    EI.record_resolved_prediction("x", 1.0, evidence_class="PAPER_FORWARD",
+                                  resolved_at="2026-09-21T18:00:00+05:30")
+    assert DC.DecisionCalibrationEngine().summary()["probability_sample_size"] == 1
+    fs.quarantine_observation("decision::x", LOC.REASON)
+    assert DC.DecisionCalibrationEngine().summary()["probability_sample_size"] == 0
+
+# R4 (did not reproduce on 8126d597; kept as a regression test after the WAL-aware cache)
+def test_wal_quarantine_withholds_the_active_challenger(world, monkeypatch):
+    from product import challenger_learning as CL, evidence_intelligence as EI
+
+    _freeze("decision::x", "YNG", world["current"]["YNG"])
+    db = sqlite3.connect(world["db"])
+    try:
+        assert db.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+        model_path = world["tmp"] / "challenger.json"
+        n = len(CL.MODEL_FEATURES)
+        CL.save({"current": {
+            "status": CL.PAPER_ACTIVE, "feature_producer": PF.PRODUCER_VERSION,
+            "quarantine_fingerprint": fs.quarantine_fingerprint(),
+            "coef": [0.] * n, "medians": [0.] * n, "scales": [1.] * n,
+        }}, model_path)
+        monkeypatch.setattr(EI, "learning_features", lambda *a, **kw: ({}, {}))
+        assert CL.score_decision(None, path=model_path)["available"]
+        fs.quarantine_observation("decision::x", LOC.REASON)
+        assert fs.is_quarantined("decision::x")
+        assert not CL.score_decision(None, path=model_path)["available"]
+    finally:
+        db.close()
+
+# R5
+def test_noop_plan_rollback_preserves_the_first_plans_quarantine(world):
+    _freeze("decision::x", "YNG", world["current"]["YNG"])
+    _, first = _plan(world, "first.json")
+    _, second = _plan(world, "second.json")
+    LOC.apply(first, world["db"], "first approval", target_is_copy=True)
+    done = LOC.apply(second, world["db"], "second approval", target_is_copy=True)
+    assert done["results"] == {"decision::x": "exists"}
+    LOC.rollback(second, world["db"], target_is_copy=True)
+    assert fs.quarantined_ids() == {"decision::x"}
+
+# R6
+def test_scanner_breadth_on_unchanged_peer_blocks_complete_plan(world, monkeypatch):
+    from research import non_event
+    from scan import breadth, bulk_fetcher
+
+    peer = _flat(51)
+    young = peer.copy()
+    young.loc[young.index[-1], "close"] = 110.0
+    old = {f"P{i:03}": peer for i in range(300)}
+    old["YNG"] = young.iloc[1:]
+    new = dict(old, YNG=young)
+    monkeypatch.setattr(bulk_fetcher, "cached_symbols", lambda: list(old))
+    monkeypatch.setattr(bulk_fetcher, "get_cached", old.get)
+    before = breadth.breadth_from_cache()["pct_above_50"]
+    monkeypatch.setattr(bulk_fetcher, "get_cached", new.get)
+    assert breadth.breadth_from_cache()["pct_above_50"] != before
+    non_event.capture_rejection("P000", {"breadth_pct_above_50dma": before},
+                                "OTHER", ts=DECIDED)
+    _pickle(world["cur"], old)
+    _pickle(world["rep"], new)
+    result, _ = _plan(world)
+    assert not result["complete"]

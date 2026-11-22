@@ -1,6 +1,6 @@
 # Runbook: paper-only upgrade, price-store repair and learning-record quarantine (prepared 22 Nov 2026)
 
-**Status: prepared, not executed.** Revised after the independent GPT review (QT-01..QT-10, all confirmed and addressed; see the cycle-6 journal).
+**Status: prepared, not executed.** Revised after the independent GPT review (QT-01..QT-10) and its verification pass (R1..R10). The cycle-6 journal records each finding and how it was addressed.
 
 - Nothing in this runbook has been run against production except the read-only checks in §0 and the read-only `plan` in §2.
 - Live broker execution stays **HARD-LOCKED**, before, during and after every stage.
@@ -146,16 +146,20 @@ bash $M/code/scripts/runtime_backup_final_pass.sh /Volumes/QuantTermStorage/Quan
 hdiutil detach /Volumes/QTBackupPreUpgrade
 # the independent tier on the internal SSD: ledgers, paper and execution state, the store pickle
 TS=$(date +%Y%m%d_%H%M%S); mkdir -p $M/backup
-for db in signal_outcomes.db feature_store.db trades.db oms/orders.db protection/plans.db options/fo_paper.sqlite3; do
+# ledgers and every SQLite paper/execution ledger (the live F&O book is product/fo_paper.sqlite3)
+for db in signal_outcomes.db feature_store.db trades.db oms/orders.db protection/plans.db \
+          product/fo_paper.sqlite3 product/learning_policies.observations.sqlite3; do
   sqlite3 "$R/$db" ".backup '$M/backup/$(echo $db | tr / _).$TS'" || echo "BACKUP FAILED $db"
 done
 cp -p $R/intelligence/intel_book.json $R/intelligence/paper_config.json $R/intelligence/runtime_state.json \
       $R/autopilot.json $R/us_autopilot.json $R/product/learning_policies.json $R/ca_events.json $M/backup/
 cp -p $R/bhav/store_cache.pkl $M/backup/store_cache_pre_repair.pkl
+# the paper state, hashed AFTER the backups opened the databases; re-checked before any start
 (cd $R && shasum -a 256 intelligence/intel_book.json intelligence/paper_config.json intelligence/runtime_state.json \
-   autopilot.json us_autopilot.json) > $M/paper_state.sha256                       # re-checked in stage 6
+   autopilot.json us_autopilot.json trades.db oms/orders.db protection/plans.db product/fo_paper.sqlite3) > $M/paper_state.sha256
 shasum -a 256 $R/bhav/store_cache.pkl $M/backup/store_cache_pre_repair.pkl         # the pair must match
 for f in $M/backup/*.$TS; do echo "$f $(sqlite3 "$f" 'pragma integrity_check')"; done   # each prints ok
+ls $M/backup/*.$TS | wc -l                                                          # 7; any BACKUP FAILED stops the runbook
 ```
 
 If anything is still running after the stop, do not kill it blindly. Check its identity (ppid, cwd, user) as in §13.5 of the 8 Nov audit, and stop it cleanly. `apply` refuses on any match, and treats a failed probe as running.
@@ -231,6 +235,11 @@ The plan is **bound to that repair** (QT-02):
 
 Otherwise the plan is incomplete, and `apply` refuses.
 
+`apply` also refuses when:
+
+- the live store is not the repaired pickle;
+- any observation was frozen or changed since the plan. That digest is checked inside the transaction (R2).
+
 ```bash
 cd $M/code
 /Users/apple/0to100/venv/bin/python -m product.learning_observation_correction plan \
@@ -238,7 +247,8 @@ cd $M/code
   --repaired-pickle $M/staging/logs/bhav/store_cache.pkl --ca-events $M/backup/ca_events.json \
   --store-manifest $M/store_manifest.json --out $M/quarantine_manifest.json
 #   review: "complete": true, store_binding_verified true, unexplained [], not_rederived {}, refusals [];
-#   affected = the 10 proven rows of the 22 Nov dry run (VEDPOWER 8, ASHIKAG 2) plus any frozen since
+#   affected = the 10 proven rows of the 22 Nov dry run (VEDPOWER 8, ASHIKAG 2) plus any frozen since;
+#   carried_breadth_bound.material_sessions [] (22 Nov dry run: 1,318 values, max shift 0.042 pp)
 /Users/apple/0to100/venv/bin/python -m product.learning_observation_correction apply \
   --manifest $M/quarantine_manifest.json --features-db $R/feature_store.db \
   --owner-approval "<the owner's words>"
@@ -261,15 +271,15 @@ No vector, label or other table changes.
 
 ## 6. Deploy `<SHA>` **[OWNER: "deploy `<SHA>`"]** (about 4–9 min to READY)
 
-The service starts only after the paper state is proven untouched (QT-10):
+The service starts only after the paper state is proven untouched. The chain stops at the first failure, so a failed hash check cannot start the desk (QT-10, R10):
 
 ```bash
 cd /Users/apple/0to100
 git status --porcelain                                    # nothing
 git merge --ff-only <SHA>
-venv/bin/python -m product.host_install install --runtime-root /Volumes/QuantTermStorage/QuantTerm/runtime --env-file .env --manager launchd --no-start
-(cd $R && shasum -a 256 -c $M/paper_state.sha256)          # every line OK, BEFORE the service starts
-venv/bin/python -m product.host_install install --runtime-root /Volumes/QuantTermStorage/QuantTerm/runtime --env-file .env --manager launchd
+venv/bin/python -m product.host_install install --runtime-root /Volumes/QuantTermStorage/QuantTerm/runtime --env-file .env --manager launchd --no-start \
+  && (cd $R && shasum -a 256 -c $M/paper_state.sha256) \
+  && venv/bin/python -m product.host_install install --runtime-root /Volumes/QuantTermStorage/QuantTerm/runtime --env-file .env --manager launchd
 venv/bin/python -m product.host_install status --runtime-root /Volumes/QuantTermStorage/QuantTerm/runtime --manager launchd
 curl -s http://127.0.0.1:8765/api/health | head -c 400    # "lifecycle":"READY", official history current
 ```
@@ -286,14 +296,23 @@ curl -s http://127.0.0.1:8765/api/health | head -c 400    # "lifecycle":"READY",
 
 ```bash
 venv/bin/python -m product.launchd_control stop
-cd $M/code && /Users/apple/0to100/venv/bin/python -m product.bhav_store_rebuild rollback --manifest $M/store_manifest.json
-cd /Users/apple/0to100 && git reset --hard 125880a6
-venv/bin/python -m product.host_install install --runtime-root /Volumes/QuantTermStorage/QuantTerm/runtime --env-file .env --manager launchd --no-start
-(cd $R && shasum -a 256 -c $M/paper_state.sha256)          # if any FAILED: see "paper state" below, before starting
-venv/bin/python -m product.host_install install --runtime-root /Volumes/QuantTermStorage/QuantTerm/runtime --env-file .env --manager launchd
+cd $M/code && /Users/apple/0to100/venv/bin/python -m product.bhav_store_rebuild rollback --manifest $M/store_manifest.json \
+  && cd /Users/apple/0to100 && git reset --hard 125880a6 \
+  && venv/bin/python -m product.host_install install --runtime-root /Volumes/QuantTermStorage/QuantTerm/runtime --env-file .env --manager launchd --no-start \
+  && (cd $R && shasum -a 256 -c $M/paper_state.sha256) \
+  && venv/bin/python -m product.host_install install --runtime-root /Volumes/QuantTermStorage/QuantTerm/runtime --env-file .env --manager launchd
+#   a failed hash check stops here: see "paper state" below
 ```
 
-**If the store rollback refuses.** It refuses if the new desk already saved a newer pickle (for example, after the next EOD archive). The repaired store is then kept, and that is acceptable for a short while: the old code loads it and it is closer to the archives. But the old writer drops `pending` on its next save, so a **new stage-2 plan is required before upgrading again**.
+**If the store rollback refuses** (the new desk already saved a newer pickle, for example after the next EOD archive), **do not start `125880a6` on that pickle** (R9). Its writer would drop `pending` on its first save. Choose one:
+
+- **Fix forward:** stay on the new code. This is preferred, because the rollback trigger is then a code defect to fix, not a data one.
+- **Go back:** the pickle is a cache, so the newer session is not lost. On the owner's explicit approval to discard the newer cache:
+  1. Verify `$M/backup/store_cache_pre_repair.pkl` against `target_sha256`.
+  2. Copy it over the target with the desk stopped.
+  3. Run the chain above from `git reset`.
+
+  The old desk re-appends any newer session from its archive on its first refresh. Before upgrading again, a new stage-2 plan is required.
 
 **Paper state.** A file reverts only on the owner's explicit decision; this is a ledger change, separate from "deploy". With the desk stopped:
 

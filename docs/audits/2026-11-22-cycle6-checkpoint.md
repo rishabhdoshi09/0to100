@@ -163,6 +163,47 @@ It also covers rollback triggers and exact commands for the store, the quarantin
 - **90 exposed**;
 - 0 unexplained.
 
+## 5b. GPT verification pass (`783f342f..8126d597`, the one pass the protocol allows, 445 s)
+
+**Status of the earlier fixes.**
+
+- **Closed** for its counterexample: QT-09.
+- **Partial:** QT-01..QT-07 and QT-10.
+- **Open:** QT-08.
+
+**New findings.** The remaining parts are reported as R1..R10 (5 P0, 5 P1). **9 are confirmed:** their sketches fail on `8126d597` at the claim.
+
+**R4 did not reproduce.** Its WAL sketch passes on `8126d597`. The cache key was hardened anyway, and the sketch is kept as a regression test.
+
+There is no further GPT loop. Every fix is verified by test and mutation-checked.
+
+| Finding | What it was | Fix |
+|---|---|---|
+| R1 (P0) | A schema-5 walk-forward written by code without the chronology guard could still certify a BUY | `REPORT_SCHEMA` 6 and `EVIDENCE_MIN_SCHEMA` 6: no pre-guard report can certify, and the supervisor reruns. There is no extra alpha cost after a deploy, because the deployed report is schema 2 and reruns once either way |
+| R2 (P0) | Coverage passed when an archive was missing. Apply accepted a plan after new observations were frozen, and never checked the repair was installed | Expected sessions now come from the verified NSE calendar (an unknown year fails closed). The plan records a digest of every observation it judged (1,418 in production); apply recomputes it **inside** its transaction. A live apply needs the live pickle to be the repaired one |
+| R3 (P0) | An already-recorded calibration row of a quarantined observation still counted | `DecisionCalibrationEngine._rows()` drops rows linked (`taken:<id>`) to a quarantined observation in every summary, drift and dossier read. The raw row is kept for audit and rollback |
+| R4 (P0, not reproduced) | Fingerprint cache keyed on the main file only (WAL) | Keyed on the main file **and** its `-wal`. The challenger captures the fingerprint before reading rows and refuses to publish if it changed during the fit |
+| R5 (P0) | Two plans shared a batch id, so rolling back one released the other's rows | The batch id is unique per plan instance. The approved scope (ids and `include_exposed`) is persisted, and a retry must match it |
+| R6 (P1) | Scanner-written breadth in non-event vectors bypassed the plan | Carried market-wide values are handled. Breadth is **bounded** by recomputing it on both stores per session (production: 1,318 values, maximum shift 0.042 pp, under the 0.05 tolerance, so immaterial). Any other carried market-wide value is `not_rederived` |
+| R7 (P1) | A failed rollback read-back made the next rollback impossible | `rolling_back` is recorded before the rename; `rollback_unverified` and `rolling_back` are recoverable from a verified backup |
+| R8 (P1) | The final pass could miss a same-size file published with a preserved old mtime | Files are selected by mtime **or ctime** (`-cnewer`), which `utime` cannot fake, then force-copied and compared |
+| R9 (P1) | The runbook let the old desk start on a pending-bearing newer pickle | Removed. Either fix forward, or, on explicit approval, restore the verified pre-repair copy (a cache: the old desk re-appends newer sessions from its archives) and re-plan before upgrading again |
+| R10 (P1) | A failed paper-state check still started the desk; the F&O path was wrong (`options/`, live is `product/fo_paper.sqlite3`); the SQLite paper ledgers were not hashed | `&&`-chained, so a failed check cannot start anything. The correct F&O path, every SQLite paper ledger and the claims store are backed up, integrity-checked and hashed |
+
+**Adaptations.**
+
+- R9's sketch asserts that the immutable deployed writer keeps `pending`, so it is fixed by procedure, as QT-08 was.
+- The other sketches are adopted as written.
+
+**CI catch on `8126d597`.** `mktemp -t qt-final-pass` is BSD-only, and GNU `mktemp` needs `XXXXXX`, so the hermetic gate failed on Linux. Fixed with a portable template.
+
+**Re-run on the production snapshots** (final tool, bound):
+
+- `complete: true`;
+- 10 proven, 90 exposed, 0 unexplained;
+- scope of 1,418 observations;
+- carried-breadth bound 0.042 pp.
+
 ## 6. Verification
 
 See the report (filled in after the regression run and CI).

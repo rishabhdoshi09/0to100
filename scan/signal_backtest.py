@@ -226,7 +226,7 @@ def sweep_targets(entry: float, stop: float, fwd_high, fwd_low, fwd_close,
 # method) and per-row family correction; the live gate refuses anything older.
 # 5: alpha_accounting - every report reserves a look in research.alpha_ledger
 # before its family correction; the gate verifies the attestation.
-REPORT_SCHEMA = 5
+REPORT_SCHEMA = 6                  # 6: non-chronological frames refused (GPT R1, cycle 6)
 #: Weekly walk-forward reports re-test overlapping data about 52 times a year.
 #: Holm bounds false admissions per REPORT; the annual union bound spends the
 #: 5% family-wise budget across a year's reports (alpha / 52 each), so

@@ -312,16 +312,19 @@ def vector_sha256(features_json: str | None) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
-def quarantine_batch(entries, *, batch_id: str) -> dict:
+def quarantine_batch(entries, *, batch_id: str, precondition=None) -> dict:
     """Withhold several observations from learning in ONE write transaction.
 
     ``entries``: dicts with ``observation_id``, ``reason``, optional
     ``evidence`` and optional ``vector_sha256`` (the vector the plan proved
     wrong). Every row is validated and inserted inside one ``BEGIN IMMEDIATE``
     transaction: a missing row, a changed vector or any write failure rolls the
-    whole batch back (GPT QT-05). Returns {observation_id: 'quarantined' |
-    'exists'}; an 'exists' row keeps its original batch, so undoing this batch
-    never releases it.
+    whole batch back (GPT QT-05). ``precondition(connection)``, when given,
+    runs inside the same transaction before any insert and raises
+    QuarantineRefused to abort (the planner checks that the observation set it
+    judged is still exactly the store's, GPT R2). Returns {observation_id:
+    'quarantined' | 'exists'}; an 'exists' row keeps its original batch, so
+    undoing this batch never releases it.
     """
     batch_id = str(batch_id or "").strip()
     if not batch_id:
@@ -334,6 +337,8 @@ def quarantine_batch(entries, *, batch_id: str) -> dict:
     try:
         c.execute("BEGIN IMMEDIATE")
         try:
+            if precondition is not None:
+                precondition(c)
             results = {}
             stamp = time.strftime("%Y-%m-%dT%H:%M:%S")
             for e in rows:
@@ -405,25 +410,46 @@ def is_quarantined(observation_id: str) -> bool:
     return str(observation_id or "") in quarantined_ids()
 
 
-_FP_CACHE: dict = {}
+_Q_CACHE: dict = {}
+
+
+def _db_identity() -> tuple | None:
+    """The store's on-disk identity, INCLUDING its WAL: a WAL commit leaves the
+    main file untouched until a checkpoint (GPT R4, cycle 6)."""
+    key = [str(_DB_PATH)]
+    for suffix in ("", "-wal"):
+        try:
+            st = os.stat(f"{_DB_PATH}{suffix}")
+            key += [st.st_mtime_ns, st.st_size, st.st_ino]
+        except FileNotFoundError:
+            key += [None, None, None]
+        except OSError:
+            return None
+    return None if key[1] is None else tuple(key)
+
+
+def _quarantine_state() -> tuple[frozenset, str]:
+    import hashlib
+
+    ident = _db_identity()
+    hit = _Q_CACHE.get("state")
+    if ident is not None and hit and hit[0] == ident:
+        return hit[1], hit[2]
+    ids = frozenset(quarantined_ids()) if ident is not None else frozenset()
+    fp = hashlib.sha256("\n".join(sorted(ids)).encode()).hexdigest() if ids else ""
+    if ident is not None:
+        _Q_CACHE["state"] = (ident, ids, fp)
+    return ids, fp
 
 
 def quarantine_fingerprint() -> str:
-    """sha256 of the sorted quarantined ids ('' when none). Cached on the db file's identity."""
-    import hashlib
+    """sha256 of the sorted quarantined ids ('' when none), cached on the db's identity."""
+    return _quarantine_state()[1]
 
-    try:
-        st = os.stat(_DB_PATH)
-        key = (str(_DB_PATH), st.st_mtime_ns, st.st_size)
-    except OSError:
-        return ""
-    hit = _FP_CACHE.get("fp")
-    if hit and hit[0] == key:
-        return hit[1]
-    ids = sorted(quarantined_ids())
-    fp = hashlib.sha256("\n".join(ids).encode()).hexdigest() if ids else ""
-    _FP_CACHE["fp"] = (key, fp)
-    return fp
+
+def quarantined_ids_cached() -> frozenset:
+    """quarantined_ids() for hot read paths (calibration summaries), cached on the db's identity."""
+    return _quarantine_state()[0]
 
 
 def load_matrix(kind: str | None = None, feature_names=None,

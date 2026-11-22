@@ -198,6 +198,25 @@ class DecisionCalibrationEngine:
         save_store(self.store, self.path)
         return row
 
+    def _rows(self) -> list:
+        """Calibration rows that still count: a row linked ("taken:<observation>")
+        to a QUARANTINED feature observation is kept on disk for audit and
+        rollback, but no summary, drift or dossier counts it (GPT R3, cycle 6)."""
+        rows = list(self.store.get("observations") or [])
+        try:
+            from research.feature_store import quarantined_ids_cached
+            withheld = quarantined_ids_cached()
+        except Exception:
+            withheld = frozenset()
+        if not withheld:
+            return rows
+
+        def linked(r) -> str:
+            oid = str((r or {}).get("observation_id") or "") if isinstance(r, dict) else ""
+            return oid.split(":", 1)[1] if oid.startswith("taken:") else oid
+
+        return [r for r in rows if linked(r) not in withheld]
+
     def summary(
         self,
         *,
@@ -216,7 +235,7 @@ class DecisionCalibrationEngine:
         with 0.5 or any other invented value.
         """
         rows = [
-            r for r in (self.store.get("observations") or [])
+            r for r in self._rows()
             if r.get("realized_win") is not None
             and (not bucket or r.get("predicted_confidence") == _bucket(bucket))
             and (not setup or r.get("setup") == setup)
@@ -348,7 +367,7 @@ class DecisionCalibrationEngine:
         monitoring evidence only; it cannot change production by itself.
         """
         rows = [
-            r for r in (self.store.get("observations") or [])
+            r for r in self._rows()
             if r.get("realized_win") is not None
             and _probability(r.get("predicted_p")) is not None
             and (not bucket or r.get("predicted_confidence") == _bucket(bucket))
@@ -450,7 +469,7 @@ class DecisionCalibrationEngine:
     def dossier(self) -> dict[str, Any]:
         """Read-only calibration dossier for operator/research inspection."""
         rows = [
-            r for r in (self.store.get("observations") or [])
+            r for r in self._rows()
             if r.get("realized_win") is not None
         ]
         explicit_rows = [
@@ -495,7 +514,7 @@ class DecisionCalibrationEngine:
     def buckets(self) -> dict[str, Any]:
         found = sorted({
             str(r.get("predicted_confidence"))
-            for r in self.store.get("observations") or []
+            for r in self._rows()
             if str(r.get("predicted_confidence") or "")
         })
         return {b: self.summary(bucket=b) for b in found}

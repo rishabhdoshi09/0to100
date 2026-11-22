@@ -549,7 +549,10 @@ def rollback(manifest_path: str | Path, *, target_is_copy: bool = False,
         raise SystemExit("nothing to roll back: no backup recorded or found (pass --backup <verified copy>)")
     if _sha256(backup) != m["target_sha256"]:
         raise SystemExit("refusing: the backup does not match the pre-rebuild sha256")
-    interrupted = m.get("state") in {"swapping", "swap_unverified"}
+    # An interrupted swap, and an interrupted or unverified ROLLBACK, leave the
+    # target's bytes unknown: recovery from a verified backup is always allowed
+    # (GPT QT-06, R7, cycle 6).
+    interrupted = m.get("state") in {"swapping", "swap_unverified", "rolling_back", "rollback_unverified"}
     if not interrupted and m.get("state") not in {"applied", "rolled_back"}:
         raise SystemExit(f"nothing to roll back: the manifest is in state {m.get('state')!r}")
     target = Path(m["target_pickle"])
@@ -569,6 +572,8 @@ def rollback(manifest_path: str | Path, *, target_is_copy: bool = False,
         if holders:
             raise SystemExit(f"refusing: the target pickle is held open by {holders} (stop the desk first)")
         candidate = _durable_copy(backup, target.parent, ".rollback-", m["target_sha256"])
+        m.update({"state": "rolling_back", "rollback_started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
+        _write_manifest(manifest_path, m)
         os.replace(candidate, target)
         _fsync_dir(target.parent)
         ok = _sha256(target) == m["target_sha256"]

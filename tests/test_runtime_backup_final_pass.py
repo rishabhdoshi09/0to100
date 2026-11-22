@@ -68,3 +68,44 @@ def test_final_pass_refuses_without_the_bulk_stamp(tmp_path):
     (tmp_path / "d").mkdir()
     out = _run(tmp_path / "s", tmp_path / "d", tmp_path / "missing")
     assert out.returncode == 2 and "no bulk-pass stamp" in out.stderr
+
+
+# ── GPT cycle-6 verification pass (R8, R10) ──
+
+
+# R8
+def test_final_pass_verifies_same_size_copy_with_preserved_mtime(tmp_path):
+    src, dst = tmp_path / "src", tmp_path / "dst"
+    src.mkdir()
+    dst.mkdir()
+    stamp = tmp_path / "stamp"
+    original, update = src / "autopilot.json", tmp_path / "update.json"
+    stamp.touch()
+    original.write_text('{"qty":1}')
+    update.write_text('{"qty":2}')
+    for p in (stamp, original, update):
+        os.utime(p, (1_700_000_000, 1_700_000_000))
+    shutil.copy2(original, dst / original.name)
+    shutil.copy2(update, original)  # Published after bulk, with an older mtime.
+    out = _run(src, dst, stamp)
+    assert out.returncode == 0, out.stderr
+    assert (dst / original.name).read_bytes() == original.read_bytes()
+
+# R10
+def test_runbook_stops_before_start_on_a_paper_hash_failure(tmp_path):
+    runbook = SCRIPT.parents[1] / "docs/runbooks/2026-11-22-paper-upgrade-and-store-repair.md"
+    stage = runbook.read_text().split("## 6. Deploy", 1)[1]
+    block = stage.split("```bash\n", 1)[1].split("```", 1)[0]
+    start = block.index("venv/bin/python -m product.host_install install")
+    end = block.index("venv/bin/python -m product.host_install status")
+    commands = block[start:end].replace("venv/bin/python", "desk")
+    stubs = """
+shasum() { return 1; }
+desk() {
+  case "$*" in *--no-start*) return 0;; esac
+  touch "$M/started"
+}
+"""
+    subprocess.run(["bash", "-c", stubs + commands],
+                   env={**os.environ, "M": str(tmp_path), "R": str(tmp_path)})
+    assert not (tmp_path / "started").exists()

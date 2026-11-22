@@ -9,7 +9,10 @@
 # on macOS rsync 2.6.9) can skip a same-size rewrite in the same second (GPT
 # QT-07, cycle 6). So:
 #   1. an ordinary rsync -a --delete pass catches new, removed and resized files;
-#   2. every file modified since the stamp is copied AGAIN, unconditionally (-I);
+#   2. every file whose data OR inode changed since the stamp is copied AGAIN,
+#      unconditionally (-I). The inode-change time (ctime) is the key: a copy
+#      that preserves an old mtime (cp -p, shutil.copy2, rename into place)
+#      still gets a new ctime, and utime cannot set ctime (GPT R8, cycle 6);
 #   3. each of those is compared byte for byte (cmp) with its source.
 # A file untouched since the stamp was copied whole by the bulk pass, which
 # started after the stamp. Prints FINAL_PASS_OK and the count, or exits non-zero.
@@ -26,9 +29,9 @@ DST=${DST%/}
 
 rsync -a --delete "$SRC/" "$DST/"
 
-LIST=$(mktemp -t qt-final-pass)
+LIST=$(mktemp "${TMPDIR:-/tmp}/qt-final-pass.XXXXXX")     # portable: BSD and GNU mktemp
 trap 'rm -f "$LIST"' EXIT
-(cd "$SRC" && find . -type f -newer "$STAMP" -print0) > "$LIST"
+(cd "$SRC" && find . -type f \( -newer "$STAMP" -o -cnewer "$STAMP" \) -print0) > "$LIST"
 n=$(tr -cd '\0' < "$LIST" | wc -c | tr -d ' ')
 if [ "$n" -gt 0 ]; then
     rsync -a -I --from0 --files-from="$LIST" "$SRC/" "$DST/"

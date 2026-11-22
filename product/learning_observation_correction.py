@@ -77,6 +77,10 @@ EXPOSED_REASON = "TRUNCATED_HISTORY_INPUT_WINDOW"
 CROSS_SECTIONAL = ("breadth_pct_above_50dma", "rs_percentile")
 #: Fills computed from the symbol's own frame but not by technical_features.
 OWN_FRAME_OTHER = ("delivery_pct",)
+#: Market-wide values the SCANNER writes straight into a vector (non-event
+#: rows, cards): they carry no PIT-fill marker (GPT R6, cycle 6).
+CARRIED_CROSS = ("breadth_pct_above_50dma", "rs_percentile", "sector_rank_percentile",
+                 "sector_strength", "volatility_percentile")
 
 
 def _not_live(path: str | Path, what: str) -> Path:
@@ -264,22 +268,66 @@ def _archive_sessions(store_manifest) -> list | None:
         return None
 
 
-def _unseen_session(last, cut, sessions) -> bool:
+def _unseen_session(last, cut, sessions, holidays=None) -> bool:
     """Could a decision with this cutoff have read a session the store lacks?
 
-    Against the archive calendar when one is known; else any weekday counts
-    (fail closed: a weekday holiday refuses, a weekend never does).
+    The expected sessions come from the VERIFIED exchange calendar
+    (research.intelligence.data.nse_calendar), not from the archives the store
+    happens to hold: a missing Monday archive is a missing session, not a gap in
+    the calendar (GPT R2, cycle 6). A year the calendar does not cover fails
+    closed. An archive the calendar does not list (a special session) counts too.
     """
     import pandas as pd
+    from research.intelligence.data import nse_calendar as NC
 
     if cut is None or last is None:
         return False
-    cut = pd.Timestamp(cut)
+    cut, last = pd.Timestamp(cut).normalize(), pd.Timestamp(last).normalize()
     if cut <= last:
         return False
-    if sessions is not None:
-        return any(last < d <= cut for d in sessions)
-    return len(pd.bdate_range(last + pd.Timedelta(days=1), cut)) > 0
+    if sessions is not None and any(last < d <= cut for d in sessions):
+        return True
+    hol = NC.load_holidays() if holidays is None else holidays
+    if NC.calendar_gap((last + pd.Timedelta(days=1)).date(), cut.date(), hol):
+        return True                                     # unknown coverage: fail closed
+    day = last + pd.Timedelta(days=1)
+    while day <= cut:
+        if NC.is_session(day.date(), hol):
+            return True
+        day += pd.Timedelta(days=1)
+    return False
+
+
+def _carries_cross(features: dict, filled) -> list:
+    """Market-wide values in a vector: PIT fills, or written by the scanner."""
+    out = [k for k in (filled or []) if k in CROSS_SECTIONAL]
+    out += [k for k in CARRIED_CROSS if k not in out and features.get(k) is not None]
+    return out
+
+
+def _scope_digest(rows, changed) -> tuple[str, int]:
+    """Identity of every observation the plan judged: (sha256, count) over
+    sorted 'id|vector sha' of rows of a changed symbol or carrying a market-wide
+    value. apply recomputes it inside its transaction (GPT R2, cycle 6)."""
+    items = []
+    for oid, sym, feats, meta in rows:
+        f = json.loads(feats or "{}")
+        filled = (json.loads(meta or "{}").get("pit_features") or {}).get("filled") or []
+        if sym in changed or _carries_cross(f, filled):
+            items.append(f"{oid}|{_vector_sha(feats)}")
+    items.sort()
+    return hashlib.sha256("\n".join(items).encode()).hexdigest(), len(items)
+
+
+def _breadth_by_session(frames: dict, sessions) -> dict:
+    """{session: % of names above their 50-DMA} on one store (product.pit_features' market pass)."""
+    from product.pit_features import BREADTH_MIN_N, _market_pass
+
+    if not sessions:
+        return {}
+    syms = sorted(frames)
+    market = _market_pass(tuple(d.date() for d in sessions), syms, frames.get)
+    return {d: (100.0 * up / n) for d, (up, n) in market.items() if n >= BREADTH_MIN_N}
 
 
 def _binding(store_manifest, cur_p: Path, rep_p: Path) -> dict:
@@ -329,12 +377,49 @@ def plan(features_db: str | Path, current_pickle: str | Path, repaired_pickle: s
     import pandas as pd
 
     affected, unexplained, examined, not_rederived, exposed = [], [], 0, {}, []
+    # Scanner-carried breadth is bounded by recomputing breadth on BOTH stores:
+    # only the changed names can move it, so |repaired - current| per session is
+    # the most the store defect can have shifted any carried value (GPT R6).
+    breadth_cur = breadth_rep = None
+    breadth_bound = {"sessions_checked": 0, "max_abs_delta_pp": 0.0, "material_sessions": []}
+    needs_breadth = bool(changed) and any(
+        json.loads(f or "{}").get("breadth_pct_above_50dma") is not None for _o, _s, _t, f, _m, _x, _k in rows)
+    if needs_breadth:
+        cal = sessions if sessions is not None else sorted(
+            {pd.Timestamp(d).normalize() for fr in repaired.values() if fr is not None
+             for d in pd.DatetimeIndex(fr.index)})
+        breadth_cur, breadth_rep = _breadth_by_session(current, cal), _breadth_by_session(repaired, cal)
+    archive_days = sessions
     for oid, sym, ts, feats, meta, outcome, kind in rows:
         all_filled = (json.loads(meta or "{}").get("pit_features") or {}).get("filled") or []
+        vec = json.loads(feats or "{}")
         for k in all_filled:
             # A cross-sectional fill moves when ANY symbol's history changes.
             if k in CROSS_SECTIONAL and changed:
                 not_rederived[k] = not_rederived.get(k, 0) + 1
+        for k in CARRIED_CROSS:
+            if k in all_filled or vec.get(k) is None or not changed:
+                continue
+            if k != "breadth_pct_above_50dma" or breadth_cur is None:
+                not_rederived[f"{k}[carried]"] = not_rederived.get(f"{k}[carried]", 0) + 1
+                continue
+            cut = cutoff_session(ts)
+            day = None
+            if cut is not None:
+                pool = archive_days if archive_days is not None else sorted(breadth_rep)
+                prior = [d for d in pool if pd.Timestamp(d).normalize() <= pd.Timestamp(cut)]
+                day = pd.Timestamp(prior[-1]).date() if prior else None
+            a, b = breadth_cur.get(day), breadth_rep.get(day)
+            if a is None or b is None:
+                not_rederived[f"{k}[carried]"] = not_rederived.get(f"{k}[carried]", 0) + 1
+                continue
+            breadth_bound["sessions_checked"] += 1
+            delta = abs(b - a)
+            breadth_bound["max_abs_delta_pp"] = max(breadth_bound["max_abs_delta_pp"], round(delta, 6))
+            if delta > ABS_TOL:
+                not_rederived[f"{k}[carried]"] = not_rederived.get(f"{k}[carried]", 0) + 1
+                if str(day) not in breadth_bound["material_sessions"]:
+                    breadth_bound["material_sessions"].append(str(day))
         if sym not in changed:
             continue
         for k in all_filled:
@@ -378,6 +463,7 @@ def plan(features_db: str | Path, current_pickle: str | Path, repaired_pickle: s
                              "features": diffs, "vector_sha256": _vector_sha(feats)})
     proven = {a["observation_id"] for a in affected}
     binding = _binding(store_manifest, cur_p, rep_p)
+    digest, scope_n = _scope_digest([(r[0], r[1], r[3], r[4]) for r in rows], changed)
     manifest = {
         "schema": 2,
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -398,7 +484,10 @@ def plan(features_db: str | Path, current_pickle: str | Path, repaired_pickle: s
         "exposure_rule": "input prefix up to the cutoff differs, in stored order",
         "unexplained": unexplained,
         "not_rederived": not_rederived,
+        "carried_breadth_bound": breadth_bound,
         "refusals": refusals,
+        "changed_symbols": sorted(changed),
+        "scope": {"sha256": digest, "observations": scope_n},
         "complete": not unexplained and not not_rederived and not refusals,
         "state": "planned",
     }
@@ -406,9 +495,11 @@ def plan(features_db: str | Path, current_pickle: str | Path, repaired_pickle: s
         sdb = _not_live(shadow_db, "the feature002 shadow ledger")
         manifest["shadow_feature002"] = dict(_shadow_report(sdb, current, repaired, events, changed),
                                              path=str(sdb), sha256=_file_sha(sdb), written=False)
-    manifest["batch_id"] = "loc-" + hashlib.sha256(json.dumps(
-        {k: manifest[k] for k in ("features_db_sha256", "store_binding", "affected", "exposed")},
-        sort_keys=True, default=str).encode()).hexdigest()[:20]
+    # Unique per plan instance: two plans never share a batch, so rolling one
+    # back can never release the other's rows (GPT R5, cycle 6).
+    import uuid
+
+    manifest["batch_id"] = f"loc-{uuid.uuid4().hex[:20]}"
     _write_json(Path(out), manifest)
     return manifest
 
@@ -428,8 +519,16 @@ def apply(manifest_path: str | Path, features_db: str | Path, owner_approval: st
         raise SystemExit("refusing: the plan is incomplete (unexplained or not re-derived fills, or a "
                          "coverage refusal); investigate before quarantining anything")
     db = Path(features_db).resolve()
-    if not target_is_copy and not (m.get("store_binding") or {}).get("verified"):
-        raise SystemExit("refusing: the plan is not bound to a verified store repair manifest (--store-manifest)")
+    binding = m.get("store_binding") or {}
+    if not target_is_copy:
+        if not binding.get("verified"):
+            raise SystemExit("refusing: the plan is not bound to a verified store repair manifest (--store-manifest)")
+        # The repair the plan assumes must be the one INSTALLED (GPT R2, cycle 6).
+        sm = json.loads(Path(binding["store_manifest"]).read_text())
+        live = Path(str(sm.get("target_pickle") or ""))
+        if not sm.get("target_pickle") or not live.is_file() or _file_sha(live) != sm.get("new_sha256"):
+            raise SystemExit("refusing: the live store is not the repaired pickle the plan is bound to "
+                             "(apply the store repair first)")
     _check_desk(db, target_is_copy)
     entries = [{"observation_id": r["observation_id"], "reason": m["reason"],
                 "vector_sha256": r["vector_sha256"],
@@ -443,16 +542,32 @@ def apply(manifest_path: str | Path, features_db: str | Path, owner_approval: st
                      "evidence": {"plan": str(manifest_path), "rule": m.get("exposure_rule"),
                                   "repaired_pickle": m["repaired_pickle"]}}
                     for r in m.get("exposed", [])]
+    scope = {"ids": sorted(e["observation_id"] for e in entries), "include_exposed": bool(include_exposed)}
+    if m.get("state") == "applying" and m.get("approved_scope") != scope:
+        # A retry resumes exactly the transaction it is completing (GPT R5).
+        raise SystemExit("refusing: a retry must use the same scope as the interrupted apply "
+                         f"(include_exposed={m.get('approved_scope', {}).get('include_exposed')})")
     # The transaction record goes first: an interruption after the commit
     # leaves a manifest whose batch id drives a rerun or the rollback.
-    m.update({"state": "applying", "owner_approval": owner_approval.strip(),
+    m.update({"state": "applying", "owner_approval": owner_approval.strip(), "approved_scope": scope,
               "included_exposed": include_exposed, "apply_started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
     _write_json(manifest_path, m)
+    changed = set(m.get("changed_symbols") or [])
+    want = (m.get("scope") or {}).get("sha256")
+
+    def same_observations(con) -> None:
+        # Inside the write transaction: the store holds exactly the observations
+        # the plan judged, none added or changed since (GPT R2, cycle 6).
+        got, _n = _scope_digest(con.execute(
+            "SELECT observation_id, symbol, features, meta FROM observations").fetchall(), changed)
+        if want and got != want:
+            raise FS.QuarantineRefused("the observation set changed since the plan")
+
     saved = FS._DB_PATH
     FS._DB_PATH = db
     try:
         try:
-            results = FS.quarantine_batch(entries, batch_id=m["batch_id"])
+            results = FS.quarantine_batch(entries, batch_id=m["batch_id"], precondition=same_observations)
         except FS.QuarantineRefused as exc:
             raise SystemExit(f"refusing: {exc}; nothing was quarantined (re-plan)")
     finally:

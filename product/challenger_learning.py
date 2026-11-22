@@ -548,10 +548,14 @@ def _quarantine_fp() -> str:
 def train(*, path: str | Path | None = None, force: bool = False) -> dict[str, Any]:
     store = load(path)
     current = dict(store.get("current") or {})
+    # The quarantine state is captured BEFORE the rows are read and re-checked
+    # before the fit is published, so a quarantine landing mid-fit can never be
+    # stamped onto inputs that still contain it (GPT R4, cycle 6).
+    fp_before = _quarantine_fp()
     rows = _rows()
     # A model fitted before some of its inputs were quarantined is refitted on
     # the remaining rows, whatever its status (GPT QT-04, cycle 6).
-    if current and str(current.get("quarantine_fingerprint") or "") != _quarantine_fp():
+    if current and str(current.get("quarantine_fingerprint") or "") != fp_before:
         force = True
 
     if current and not force and current.get("status") in {SHADOW_CANDIDATE, PAPER_ACTIVE}:
@@ -581,6 +585,10 @@ def train(*, path: str | Path | None = None, force: bool = False) -> dict[str, A
         validation=validation,
         status=status,
     )
+    model["quarantine_fingerprint"] = fp_before
+    if _quarantine_fp() != fp_before:
+        return {"status": OBSERVING, "trained_n": len(rows), "affects_selection": False, "live_locked": True,
+                "reason": "the quarantine changed during the fit; not published (refit next cycle)"}
     history = list(store.get("history") or [])
     if current:
         history.append(current)
