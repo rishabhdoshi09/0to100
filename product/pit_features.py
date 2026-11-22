@@ -43,7 +43,10 @@ ranked market-wide as 100 * (names scoring strictly below) / N over the
 breadth universe with a verified bar that session (N >= 300). The shadow
 observer in research.feature002 ranks within a scan's cards instead; this is
 the market-wide definition. A name whose composite is not finite (a bad print
-in a horizon) is missing here, where build_rs_table would rank it at 0.
+in a horizon) is missing here, where build_rs_table would rank it at 0;
+composites within ``_RS_TIE`` are ties. RS is computed lazily per window of
+sessions (``_RS_WINDOW``), and a name's own composite is read from the window
+it is ranked in.
 
 The provenance records the source session and this producer's version, and
 the challenger scores with the producer it was trained with
@@ -339,11 +342,17 @@ def _store_ohlcv(symbol: str):
 
 
 def _store_generation() -> tuple:
-    """Identity of the in-memory store: what a cached breadth pass was computed from."""
+    """Identity of the in-memory store: what a cached pass was computed from.
+
+    The store's monotonic revision and the identity of its symbol map catch a
+    rebuild that keeps the same last day, session count and size (GPT RS-03).
+    """
     try:
         from data import bhavcopy_store as bs
-        return (getattr(bs, "_store_last_day", None), int(getattr(bs, "_store_sessions", 0) or 0),
-                len(getattr(bs, "_store", {}) or {}), id(getattr(bs, "_CA_EVENTS", None)))
+        revision = bs.store_revision() if hasattr(bs, "store_revision") else (None, None)
+        return (revision, id(getattr(bs, "_store", None)), getattr(bs, "_store_last_day", None),
+                int(getattr(bs, "_store_sessions", 0) or 0), len(getattr(bs, "_store", {}) or {}),
+                id(getattr(bs, "_CA_EVENTS", None)))
     except Exception:
         return ("unavailable",)
 
@@ -363,7 +372,7 @@ def _breadth_universe(symbols) -> list[str]:
 
 
 _BREADTH_LOCK = threading.Lock()
-_BREADTH_CACHE: tuple[tuple, dict[date, tuple[int, int]], float] | None = None
+_BREADTH_CACHE: "dict | None" = None
 #: The newest verified session is the one a store still installing its
 #: archive can be missing; a cached pass that cannot measure it is rechecked
 #: at most this often (older sessions are immutable once installed).
@@ -423,13 +432,12 @@ def _rs_scores(c):
 
 
 class _MarketPass(dict):
-    """{verified session: (above, measured)} for breadth, plus ``rs``: {session: sorted scores}."""
-    rs: dict
+    """{verified session: (above, measured)} for breadth (``archive``: the sessions it covers)."""
     archive: frozenset = frozenset()
 
 
 def _market_pass(archive: tuple[date, ...], symbols: list[str], ohlcv_fn: Callable) -> "_MarketPass":
-    """One pass over the store: breadth counts and the per-session sorted rs_cs_v1 scores.
+    """One pass over the store for breadth counts (no RS: breadth-only callers stay light, RS-05).
 
     Each name's series is first reduced to the bars of verified archives (a
     live-overlay row is dropped), then every 50-bar window is averaged on its
@@ -440,13 +448,10 @@ def _market_pass(archive: tuple[date, ...], symbols: list[str], ohlcv_fn: Callab
 
     days = np.asarray(sorted(archive), dtype="datetime64[D]")
     result = _MarketPass()
-    result.rs = {}
     if not len(days):
         return result
     above = np.zeros(len(days), dtype=np.int64)
     valid = np.zeros(len(days), dtype=np.int64)
-    rs_day: list = []
-    rs_val: list = []
     for sym in symbols:
         try:
             df = ohlcv_fn(sym)
@@ -468,22 +473,68 @@ def _market_pass(archive: tuple[date, ...], symbols: list[str], ohlcv_fn: Callab
         valid += np.bincount(at, minlength=len(days))
         if up.any():
             above += np.bincount(at[up], minlength=len(days))
-        scores = _rs_scores(c)
-        keep = np.isfinite(scores)
-        if keep.any():
-            rs_day.append(loc[keep])
-            rs_val.append(scores[keep])
     for i in np.flatnonzero(valid):
         result[days[i].astype(object)] = (int(above[i]), int(valid[i]))
-    if rs_day:
-        all_day = np.concatenate(rs_day)
-        all_val = np.concatenate(rs_val)
-        order = np.lexsort((all_val, all_day))
-        all_day, all_val = all_day[order], all_val[order]
-        cuts = np.flatnonzero(np.diff(all_day)) + 1
-        for chunk_day, chunk_val in zip(np.split(all_day, cuts), np.split(all_val, cuts)):
-            result.rs[days[int(chunk_day[0])].astype(object)] = chunk_val
     return result
+
+
+#: RS is computed lazily for a window of sessions starting at the one asked
+#: for (replay walks forward; a live board asks one session), and at most
+#: ``_RS_WINDOWS_MAX`` windows are kept: ~2,000 names x 64 sessions x 12 bytes
+#: is ~1.5 MB a window, instead of the whole history.
+_RS_WINDOW = 64
+_RS_WINDOWS_MAX = 4
+#: Ranking tie band: composites closer than this are ties. A later corporate
+#: action rescales a name's whole window, which leaves its return exact in
+#: arithmetic but not in floating point (RS-01); real composites differ by far
+#: more (a tick on a high-priced name moves r_n by ~1e-7).
+_RS_TIE = 1e-12
+_RS_LOCK = threading.Lock()
+_RS_CACHE: "dict[tuple, dict]" = {}
+
+
+def _rs_window(days, start: int, symbols: tuple, ohlcv_fn: Callable) -> dict:
+    """{session: (sorted composites, symbol ids in that order)} for days[start : start + _RS_WINDOW]."""
+    import numpy as np
+
+    stop = min(len(days), start + _RS_WINDOW)
+    want = days[start:stop]
+    day_ids: list = []
+    vals: list = []
+    sym_ids: list = []
+    for sid, sym in enumerate(symbols):
+        try:
+            df = ohlcv_fn(sym)
+        except Exception:
+            continue
+        got = _official_closes(df, days)
+        if got is None:
+            continue
+        _d, c, loc = got
+        if len(c) <= RS_HORIZONS[-1]:
+            continue
+        inside = (loc >= start) & (loc < stop)
+        if not inside.any():
+            continue
+        scores = _rs_scores(c)
+        keep = inside & np.isfinite(scores)
+        if keep.any():
+            day_ids.append(loc[keep] - start)
+            vals.append(scores[keep])
+            sym_ids.append(np.full(int(keep.sum()), sid, dtype=np.int32))
+    out: dict = {}
+    if not vals:
+        return out
+    all_day = np.concatenate(day_ids)
+    all_val = np.concatenate(vals)
+    all_sym = np.concatenate(sym_ids)
+    order = np.lexsort((all_val, all_day))
+    all_day, all_val, all_sym = all_day[order], all_val[order], all_sym[order]
+    cuts = np.flatnonzero(np.diff(all_day)) + 1
+    for chunk_day, chunk_val, chunk_sym in zip(np.split(all_day, cuts), np.split(all_val, cuts),
+                                               np.split(all_sym, cuts)):
+        out[want[int(chunk_day[0])].astype(object)] = (chunk_val.copy(), chunk_sym.copy())
+    return out
 
 
 def _breadth_counts(archive: tuple[date, ...], symbols: list[str], ohlcv_fn: Callable) -> dict[date, tuple[int, int]]:
@@ -495,64 +546,67 @@ def _as_date(value) -> date:
     return value if isinstance(value, date) else date.fromisoformat(str(value)[:10])
 
 
-def _cached_pass(
+def _pass_entry(
     session: date | None,
     *,
     symbols_fn: Callable | None = None,
     ohlcv_fn: Callable | None = None,
     archive_fn: Callable | None = None,
-) -> tuple["_MarketPass | None", tuple]:
-    """The market pass that covers ``session`` (cached per archive set and store generation).
+) -> dict | None:
+    """The cached breadth pass covering ``session``, with its archive days and universe.
 
     The cache is checked on cheap identities of the raw sources (archive
     length and end points, raw symbol count, store generation, injected
     sources) BEFORE any per-symbol work: a board asks once per decision, and
     re-filtering ~3,500 symbols each time cost ~40 ms a decision.
-    Returns (pass, archive dates as datetime64[D]).
     """
     global _BREADTH_CACHE
     import time as _time
     import numpy as np
 
     if session is None:
-        return None, ()
+        return None
     try:
         raw_days = list((archive_fn or _archive_dates)())
         raw_syms = list((symbols_fn or _store_symbols)())
         if not raw_days:
-            return None, ()
+            return None
         key = (len(raw_days), _as_date(raw_days[0]), _as_date(raw_days[-1]), len(raw_syms),
                _store_generation(), (symbols_fn, ohlcv_fn, archive_fn))
     except Exception:
-        return None, ()
+        return None
     with _BREADTH_LOCK:
         now = _time.monotonic()
-        entry = _BREADTH_CACHE if _BREADTH_CACHE is not None and _BREADTH_CACHE[0] == key else None
+        entry = _BREADTH_CACHE if _BREADTH_CACHE is not None and _BREADTH_CACHE["key"] == key else None
         if entry is not None:
-            market, days = entry[1], entry[3]
+            market, days = entry["market"], entry["days"]
             stale_newest = (market is not None and days.size
                             and np.datetime64(session, "D") == days[-1]
                             and market.get(session, (0, 0))[1] < BREADTH_MIN_N
-                            and now - entry[2] >= _BREADTH_RECHECK_S)
+                            and now - entry["at"] >= _BREADTH_RECHECK_S)
             if not stale_newest:
-                return (market if session in market.archive else None) if market is not None else None, days
+                return entry if market is not None and session in market.archive else None
         try:
             archive = tuple(sorted({_as_date(d) for d in raw_days}))
         except Exception:
-            return None, ()
+            return None
         days = np.asarray(archive, dtype="datetime64[D]")
-        symbols = _breadth_universe(raw_syms)
+        symbols = tuple(_breadth_universe(raw_syms))
         market = None
         if len(symbols) >= BREADTH_MIN_N:
-            market = _market_pass(archive, symbols, ohlcv_fn or _store_ohlcv)
+            market = _market_pass(archive, list(symbols), ohlcv_fn or _store_ohlcv)
             market.archive = frozenset(archive)
-        # A store that changed during the pass is not one generation: keep
-        # the answer for nobody.
-        if key[4] == _store_generation():
-            _BREADTH_CACHE = (key, market, now, days)
+        if key[4] != _store_generation():
+            # The store changed under the pass: it is not one coherent
+            # generation, so nobody gets it, not even this caller (RS-03).
+            return None
+        entry = {"key": key, "market": market, "at": now, "days": days, "symbols": symbols,
+                 "index": {sym: i for i, sym in enumerate(symbols)},
+                 "ohlcv_fn": ohlcv_fn or _store_ohlcv}
+        _BREADTH_CACHE = entry
     if market is None or session not in market.archive:
-        return None, days
-    return market, days
+        return None
+    return entry
 
 
 def breadth_pct_above_50dma(
@@ -563,10 +617,10 @@ def breadth_pct_above_50dma(
     archive_fn: Callable | None = None,
 ) -> float | None:
     """Breadth on the verified session ``session``; None when not measurable."""
-    market, _days = _cached_pass(session, symbols_fn=symbols_fn, ohlcv_fn=ohlcv_fn, archive_fn=archive_fn)
-    if market is None:
+    entry = _pass_entry(session, symbols_fn=symbols_fn, ohlcv_fn=ohlcv_fn, archive_fn=archive_fn)
+    if entry is None:
         return None
-    up, n = market.get(session, (0, 0))
+    up, n = entry["market"].get(session, (0, 0))
     if n < BREADTH_MIN_N:
         return None
     return round(up / n * 100.0, 6)
@@ -574,43 +628,65 @@ def breadth_pct_above_50dma(
 
 def rs_percentile_on(
     symbol: str,
-    frame,
     session: date | None,
     *,
     symbols_fn: Callable | None = None,
     ohlcv_fn: Callable | None = None,
     archive_fn: Callable | None = None,
 ) -> float | None:
-    """Market-wide rs_cs_v1 percentile of ``symbol`` on the verified session; None when not measurable."""
+    """Market-wide rs_cs_v1 percentile of ``symbol`` on the verified session; None when not measurable.
+
+    The name's own composite is read from the same window it is ranked in (by
+    symbol id), never recomputed from another copy of its frame (RS-03), and
+    composites within ``_RS_TIE`` of it count as ties, not below (RS-01).
+    """
     import numpy as np
 
     sym = str(symbol or "").strip().upper()
-    if session is None or not sym or not _breadth_universe([sym]):
+    if session is None or not sym:
         return None
-    market, days = _cached_pass(session, symbols_fn=symbols_fn, ohlcv_fn=ohlcv_fn, archive_fn=archive_fn)
-    if market is None:
+    entry = _pass_entry(session, symbols_fn=symbols_fn, ohlcv_fn=ohlcv_fn, archive_fn=archive_fn)
+    if entry is None or sym not in entry["index"]:
         return None
-    ranked = getattr(market, "rs", {}).get(session)
-    if ranked is None or len(ranked) < BREADTH_MIN_N:
+    days = entry["days"]
+    pos = int(np.searchsorted(days, np.datetime64(session, "D")))
+    if pos >= len(days) or days[pos] != np.datetime64(session, "D"):
         return None
-    got = _official_closes(frame, days)
-    if got is None:
+    window = None
+    with _RS_LOCK:
+        for (key, start), cached in _RS_CACHE.items():
+            if key == entry["key"] and start <= pos < start + _RS_WINDOW:
+                window = cached
+                break
+    if window is None:
+        built = _rs_window(days, pos, entry["symbols"], entry["ohlcv_fn"])
+        if _store_generation() != entry["key"][4]:
+            return None                       # the store moved under the window (RS-03)
+        with _RS_LOCK:
+            if len(_RS_CACHE) >= _RS_WINDOWS_MAX:
+                _RS_CACHE.pop(next(iter(_RS_CACHE)))
+            _RS_CACHE[(entry["key"], pos)] = built
+        window = built
+    ranked = window.get(session)
+    if ranked is None:
         return None
-    d, c, _loc = got
-    hit = np.flatnonzero(d == np.datetime64(session, "D"))
+    scores, ids = ranked
+    if len(scores) < BREADTH_MIN_N:
+        return None
+    hit = np.flatnonzero(ids == entry["index"][sym])
     if not hit.size:
         return None
-    score = _rs_scores(c)[int(hit[-1])]
-    if not np.isfinite(score):
-        return None
-    below = int(np.searchsorted(ranked, score, side="left"))
-    return round(100.0 * below / len(ranked), 6)
+    own = float(scores[int(hit[0])])
+    below = int(np.searchsorted(scores, own - _RS_TIE * max(1.0, abs(own)), side="left"))
+    return round(100.0 * below / len(scores), 6)
 
 
 def reset_breadth_cache() -> None:
     global _BREADTH_CACHE
     with _BREADTH_LOCK:
         _BREADTH_CACHE = None
+    with _RS_LOCK:
+        _RS_CACHE.clear()
     with _CONTEXT_LOCK:
         _CONTEXT_CACHE.clear()
 
@@ -710,7 +786,7 @@ def fill_missing(
         if want_rs and session is not None:
             try:
                 rs = ctx.get("rs_percentile") if context is not None and "rs_percentile" in ctx \
-                    else rs_percentile_on(symbol, frame, session)
+                    else rs_percentile_on(symbol, session)
             except Exception:
                 rs = None
             if rs is not None:

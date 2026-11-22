@@ -36,8 +36,7 @@ def _sources(frames, archive):
 def _rs(sym, frames, idx, session, archive=None):
     archive = list(idx.date) if archive is None else archive
     symbols_fn, ohlcv_fn, archive_fn = _sources(frames, archive)
-    return PF.rs_percentile_on(sym, frames.get(sym), session, symbols_fn=symbols_fn,
-                               ohlcv_fn=ohlcv_fn, archive_fn=archive_fn)
+    return PF.rs_percentile_on(sym, session, symbols_fn=symbols_fn, ohlcv_fn=ohlcv_fn, archive_fn=archive_fn)
 
 
 @pytest.fixture(autouse=True)
@@ -80,10 +79,10 @@ def test_needs_a_bar_on_the_session_253_bars_a_stock_symbol_and_300_ranked_names
     idx, frames = _market()
     session = idx[-1].date()
     frames["GAP"] = frames["S000"].iloc[:-1].copy()           # no bar on the session
-    assert _rs("GAP", frames, idx, session) is None
     frames["YOUNG"] = frames["S001"].iloc[-200:].copy()       # 200 bars < 253
-    assert _rs("YOUNG", frames, idx, session) is None
     frames["GOLDBEES"] = frames["S002"].copy()                # a marked fund
+    assert _rs("GAP", frames, idx, session) is None
+    assert _rs("YOUNG", frames, idx, session) is None
     assert _rs("GOLDBEES", frames, idx, session) is None
     assert _rs("S003", frames, idx, idx[250].date()) is None  # nobody has 253 bars there
     small = dict(list(frames.items())[:250])
@@ -154,7 +153,7 @@ def test_a_warm_cache_answers_without_refiltering_the_universe(monkeypatch):
     first = _rs("S010", frames, idx, session)
     # The cold call filters the universe once (plus the one-name check per call).
     big = [n for n in calls if n > 1]
-    assert big == [len(frames)]
+    assert big == [len(frames)] and first is not None
     for sym in list(frames)[:50]:
         _rs(sym, frames, idx, session)
     assert [n for n in calls if n > 1] == big            # warm: never re-filtered

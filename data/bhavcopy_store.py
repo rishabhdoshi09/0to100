@@ -44,6 +44,16 @@ _lock = threading.Lock()
 _store: dict[str, pd.DataFrame] = {}     # symbol -> OHLCV df (lowercase cols)
 _store_last_day: Optional[date] = None
 _store_sessions: int = 0                  # how many sessions the store covers
+#: Monotonic revision of the official history held in ``_store``: bumped by
+#: every builder (full build, append, pickle load, reset), never by the live
+#: intraday overlay. Derived caches key on it (product.pit_features).
+_store_revision: int = 0
+
+
+def store_revision() -> tuple[int, int]:
+    """(revision, identity of the symbol map) of the official history in memory."""
+    with _lock:
+        return _store_revision, id(_store)
 _MIN_DAYS = 60                            # need at least this much history to be usable
 _PKL = _BHAV_DIR / "store_cache.pkl"      # consolidated cache — skip re-parsing CSVs
 DEFAULT_DAYS = 500                        # ~2 years: doubles backtest evidence
@@ -328,6 +338,7 @@ def _load_pkl() -> bool:
             _store = data["store"]
             _store_last_day = data["last_day"]
             _store_sessions = int(data.get("sessions") or 0)
+            _bump_revision_locked()
         log.info("bhav_store_loaded_from_cache", symbols=len(_store),
                  sessions=_store_sessions, latest=str(_store_last_day))
         return True
@@ -338,6 +349,11 @@ def _load_pkl() -> bool:
         except Exception:
             pass
         return False
+
+
+def _bump_revision_locked() -> None:
+    global _store_revision
+    _store_revision += 1
 
 
 def _full_build(available: list[date]) -> int:
@@ -364,6 +380,7 @@ def _full_build(available: list[date]) -> int:
         _store = new_store
         _store_last_day = max(parsed_days)
         _store_sessions = len(frames)
+        _bump_revision_locked()
     log.info("bhav_store_built", symbols=len(new_store), sessions=len(frames),
              latest=str(max(parsed_days)))
     _save_pkl()
@@ -379,7 +396,25 @@ def _incremental_append(new_days: list[date]) -> None:
         return
     frames = [f for _, f in parsed]
     allday = pd.concat(frames, ignore_index=True)
+    dropped = 0
     with _lock:
+        # An archive is the authority for its own session. A symbol it does
+        # not list has no official bar that day, so a row of that date can
+        # only be a live intraday overlay: drop it before it is persisted as
+        # history (GPT cross-review RS-02, 22 Nov 2026).
+        for d, f in parsed:
+            listed = set(f["symbol"].astype(str))
+            ts = pd.Timestamp(d)
+            for sym in list(_store):
+                if sym in listed:
+                    continue
+                frame = _store[sym]
+                if ts in frame.index:
+                    kept = frame.drop(index=ts)
+                    kept.attrs = {k: v for k, v in frame.attrs.items()
+                                  if not (k == "quantterm_live_overlay_date" and str(v)[:10] == d.isoformat())}
+                    _store[sym] = kept
+                    dropped += 1
         for sym, g in allday.groupby("symbol"):
             g = g.sort_values("date").set_index("date")
             cols = [c for c in ("open", "high", "low", "close", "volume",
@@ -393,6 +428,10 @@ def _incremental_append(new_days: list[date]) -> None:
                 _store[sym] = g[cols]
         _store_last_day = max(d for d, _ in parsed)
         _store_sessions += len(frames)
+        _bump_revision_locked()
+    if dropped:
+        log.warning("bhav_store_overlay_rows_dropped", rows=dropped,
+                    reason="symbol absent from that session's official archive")
     log.info("bhav_store_appended", days=len(frames), latest=str(_store_last_day))
     _save_pkl()
 
@@ -722,6 +761,7 @@ def reset_in_memory_store() -> None:
         _store = {}
         _store_last_day = None
         _store_sessions = 0
+        _bump_revision_locked()
 
 
 def is_ready() -> bool:

@@ -328,8 +328,13 @@ def _cv(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _model_version(rows: list[dict[str, Any]]) -> str:
-    material = "|".join(str(r.get("observation_id") or "") for r in rows)
+def _model_version(rows: list[dict[str, Any]], producer: str | None = None) -> str:
+    """One version names one predictor: the feature producer, the ordered feature
+    list and the training observations (GPT RS-04). A refit across a producer
+    upgrade gets a new version, so it cannot inherit the old one's forward evidence."""
+    material = "|".join([f"producer={producer or _current_producer()}",
+                         "features=" + ",".join(MODEL_FEATURES)]
+                        + [str(r.get("observation_id") or "") for r in rows])
     return "clf_" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:12]
 
 
@@ -489,7 +494,8 @@ def _serialize_model(
         1 for r in rows
         if str((r.get("outcome_meta") or {}).get("evidence_class") or "").upper() in HISTORICAL_LANES
     )
-    version = _model_version(rows)
+    producer = _current_producer()
+    version = _model_version(rows, producer)
     return {
         "model_version": version,
         "status": status,
@@ -499,7 +505,7 @@ def _serialize_model(
         "counterfactual_n": cf_n,
         "historical_n": historical_n,
         "features": list(MODEL_FEATURES),
-        "feature_producer": _current_producer(),
+        "feature_producer": producer,
         "coef": [round(float(x), 10) for x in coef],
         "intercept": round(float(intercept), 10),
         "medians": [round(float(x), 10) for x in medians],
