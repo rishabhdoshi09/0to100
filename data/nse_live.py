@@ -215,10 +215,20 @@ def apply_live_to_store() -> int:
         today_ts = pd.Timestamp(date.today())
         updated = 0
         with bs._lock:
+            # Re-check under the lock that publishes the quotes: today's
+            # official archive may have been installed while they were being
+            # fetched, and an official bar is never overwritten (GPT ST-05).
+            last_official = bs._store_last_day
+            if last_official is not None and last_official >= today_ts.date():
+                log.info("live_overlay_skipped", reason="today's official archive is installed")
+                return 0
             for sym, bar in snap.items():
                 df = bs._store.get(sym)
                 if df is None:
                     continue
+                if len(df) and df.index[-1] == today_ts and \
+                        str(df.attrs.get("quantterm_live_overlay_date") or "")[:10] != today_ts.date().isoformat():
+                    continue                      # an official row of today: never a quote
                 if len(df) and df.index[-1] == today_ts:
                     df.loc[today_ts, ["open", "high", "low", "close", "volume"]] = [
                         bar["open"], bar["high"], bar["low"], bar["close"], bar["volume"]]

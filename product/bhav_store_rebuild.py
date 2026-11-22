@@ -10,21 +10,28 @@ parser and builder, no network, no second database.
 
 Three phases, each refusing anything it cannot prove:
 
-* ``plan``: builds a NEW pickle in a staging root that the caller owns (never
-  under ``/Volumes``), audits it against the archives
-  (research.store_integrity_audit), diffs it row by row against the CURRENT
-  pickle and writes a manifest (sha256 of both, counts, every gate). Read-only
-  for the target.
-* ``apply``: replaces the target pickle with the planned one. It refuses unless
-  the caller states the owner's approval in words, every plan gate passed, the
-  target pickle still has the sha256 the plan saw, and no process holds it
-  open. The old pickle is kept as ``store_cache.pkl.pre-rebuild-<stamp>`` with
-  its sha256 verified after the copy; the swap is an atomic rename.
-* ``rollback``: restores that backup (sha256 checked before and after).
+* ``plan`` copies an IMMUTABLE snapshot of the target's archives and runtime
+  calendar into a staging root the caller owns (never under ``/Volumes``) and
+  records a source manifest (name, size, mtime, sha256 per archive). It builds
+  a NEW pickle there in a fresh interpreter, keeps every name and the key ORDER
+  the current store serves (the deployed walk-forward samples by that order),
+  audits the new and the current pickle against the snapshot
+  (research.store_integrity_audit, complete finding lists) and diffs them row
+  by row. Every gate is written to the manifest. Read-only for the target.
+* ``apply`` refuses unless the caller states the owner's approval in words,
+  every gate passed, the target pickle still has the planned sha256, the
+  target's archives and calendar still match the source manifest, no desk
+  process or launchd service runs (the desk saves its in-memory store again on
+  the next append) and the probe itself succeeded. It takes the store's
+  maintenance lock (``data.bhavcopy_store.maintenance_lock_path``: no store
+  writer saves while it exists), writes a transaction record, keeps a
+  sha-verified ``store_cache.pkl.pre-rebuild-<stamp>`` backup, swaps by an
+  atomic same-directory rename of a verified, fsynced temp file, and releases
+  the lock.
+* ``rollback`` restores that backup only while the target still holds exactly
+  the applied pickle: a cache the desk saved after the apply is never discarded.
 
-Live trading and the learning ledgers are not touched. A running desk keeps its
-in-memory store until it restarts: apply only with the desk stopped (the
-open-file check enforces it for the pickle itself).
+Live trading and the learning ledgers are not touched.
 
     python -m product.bhav_store_rebuild plan --target <runtime root> --staging <dir> --out <manifest.json>
     python -m product.bhav_store_rebuild apply --manifest <manifest.json> --owner-approval "<the owner's words>"
@@ -41,12 +48,28 @@ import pickle
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
 REPO = Path(__file__).resolve().parents[1]
 PICKLE = Path("logs") / "bhav" / "store_cache.pkl"
+CALENDAR = Path("logs") / "nse_holidays.json"
+LOCK_NAME = "MAINTENANCE.lock"          # data.bhavcopy_store.MAINTENANCE_LOCK
+_SAFE_ENV = ("KITE_API_KEY", "KITE_API_SECRET", "KITE_ACCESS_TOKEN", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
+
+#: Command lines of every process that can hold or save the store: the launchd
+#: entrypoints and supervisor, the startup writer, the API (both stacks), the
+#: report API, autonomy and market ops. Matched with ``pgrep -f``.
+DESK_PATTERNS = (
+    "product.host_entrypoint", "product.host_launchd_entrypoint", "product.host_bootstrap",
+    "host_supervisor", "run_quantterm_complete", "run_quantterm.sh",
+    "terminal_product_api", "api.app:app", "report_api", "main.py autonomy",
+    "operations.market_ops", "operations/market_ops",
+)
+LAUNCHD_LABEL = "com.quantterm.desk"
 
 
 def _sha256(path: Path) -> str:
@@ -64,32 +87,65 @@ def _not_live(path: Path, what: str) -> Path:
     return p
 
 
-def _stage(target: Path, staging: Path) -> Path:
-    """A staging runtime whose archives are read-only links to the target's archives."""
-    src = target / "logs" / "bhav"
+def _archive_files(root: Path) -> list[Path]:
+    return sorted(f for f in (root / "logs" / "bhav").iterdir() if f.suffix.lower() == ".csv" and f.is_file())
+
+
+def _source_manifest(root: Path, *, hashes: bool) -> dict[str, Any]:
+    """Identity of the archives and runtime calendar the store would be built from."""
+    files = {}
+    for f in _archive_files(root):
+        st = f.stat()
+        files[f.name] = {"size": st.st_size, "mtime_ns": st.st_mtime_ns,
+                         **({"sha256": _sha256(f)} if hashes else {})}
+    cal = root / CALENDAR
+    calendar = {"present": cal.exists(), **({"sha256": _sha256(cal)} if cal.exists() else {})}
+    return {"archives": files, "calendar": calendar}
+
+
+def _stage(target: Path, staging: Path) -> dict[str, Any]:
+    """An immutable snapshot of the target's archives and calendar in a fresh staging root."""
     dst = staging / "logs" / "bhav"
     if dst.exists():
         raise SystemExit(f"staging already exists: {dst} (use a fresh directory)")
     dst.mkdir(parents=True)
-    for f in sorted(src.iterdir()):
-        if f.suffix.lower() == ".csv" and f.is_file():
-            os.symlink(f, dst / f.name)
-    return staging
+    for f in _archive_files(target):
+        shutil.copy2(f, dst / f.name)
+    if (target / CALENDAR).exists():
+        shutil.copy2(target / CALENDAR, staging / CALENDAR)
+    staged = _source_manifest(staging, hashes=True)
+    source = _source_manifest(target, hashes=False)
+    for name, meta in source["archives"].items():
+        got = staged["archives"].get(name)
+        if got is None or got["size"] != meta["size"]:
+            raise SystemExit(f"the staged snapshot does not match the target archive {name}")
+        meta["sha256"] = got["sha256"]
+    if set(source["archives"]) != set(staged["archives"]):
+        raise SystemExit("the target's archive set changed while it was being copied")
+    source["calendar"] = staged["calendar"]
+    return source
 
 
-def _build_in(staging: Path, keep_symbols: list[str]) -> dict[str, Any]:
-    """Run the store's own local build in a FRESH interpreter bound to the staging root.
+def _env(**extra) -> dict:
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", **extra)
+    for key in _SAFE_ENV:
+        env[key] = ""
+    return env
 
-    The full build drops names below its 30-row floor, while appends have always
-    admitted a new listing from its first row, so the live store serves young
-    listings a bare rebuild would silently remove. A reconstruction changes ROWS
-    only: every name the current store holds is promoted from the build's
-    pending (below-floor) set with its complete official history.
+
+def _build_in(staging: Path, keep_order: list[str]) -> dict[str, Any]:
+    """The store's own local build, in a FRESH interpreter bound to the staging root.
+
+    The full build drops names below its 30-row floor, while appends admit a new
+    listing from its first row, so the live store serves young listings a bare
+    rebuild would silently remove. A reconstruction changes ROWS only: every
+    name the current store holds is promoted from the build's pending set with
+    its complete history, and the served keys keep the current store's order.
     """
-    keep_file = staging / "keep_symbols.json"
-    keep_file.write_text(json.dumps(sorted(keep_symbols)))
+    keep_file = staging / "keep_order.json"
+    keep_file.write_text(json.dumps(list(keep_order)))
     code = (
-        "import json, sys\n"
+        "import json\n"
         "from data import bhavcopy_store as bs\n"
         "n = bs.build_from_local()\n"
         f"keep = json.load(open({str(keep_file)!r}))\n"
@@ -99,30 +155,26 @@ def _build_in(staging: Path, keep_symbols: list[str]) -> dict[str, Any]:
         "        if sym not in bs._store and sym in bs._pending:\n"
         "            bs._store[sym] = bs._pending.pop(sym)\n"
         "            promoted += 1\n"
+        "    held = set(keep)\n"
+        "    ordered = {s: bs._store[s] for s in keep if s in bs._store}\n"
+        "    ordered.update({s: bs._store[s] for s in sorted(bs._store) if s not in held})\n"
+        "    bs._store = ordered\n"
         "bs._save_pkl()\n"
         "print(json.dumps({'built_symbols': n, 'promoted_below_floor': promoted, 'symbols': len(bs._store),\n"
         "                  'pending': len(bs._pending), 'last_day': str(bs._store_last_day),\n"
         "                  'sessions': bs._store_sessions}))\n"
     )
-    env = dict(os.environ, QT_RUNTIME_ROOT=str(staging), PYTHONDONTWRITEBYTECODE="1")
-    for key in _SAFE_ENV:
-        env[key] = ""
-    out = subprocess.run([sys.executable, "-c", code], cwd=str(REPO), env=env, capture_output=True,
-                         text=True, timeout=3600)
+    out = subprocess.run([sys.executable, "-c", code], cwd=str(REPO), env=_env(QT_RUNTIME_ROOT=str(staging)),
+                         capture_output=True, text=True, timeout=3600)
     if out.returncode != 0:
         raise SystemExit(f"staging build failed: {out.stderr[-2000:]}")
     return json.loads(out.stdout.strip().splitlines()[-1])
 
 
-_SAFE_ENV = ("KITE_API_KEY", "KITE_API_SECRET", "KITE_ACCESS_TOKEN", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
-
-
 def _audit_in(staging: Path, pickle_path: Path, out: Path) -> dict[str, Any]:
     """research.store_integrity_audit in a FRESH interpreter bound to the staging root."""
-    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    env = _env()
     env.pop("QT_RUNTIME_ROOT", None)
-    for key in _SAFE_ENV:
-        env[key] = ""
     run = subprocess.run([sys.executable, "-m", "research.store_integrity_audit", "--root", str(staging),
                           "--pickle", str(pickle_path), "--out", str(out)],
                          cwd=str(REPO), env=env, capture_output=True, text=True, timeout=7200)
@@ -131,44 +183,29 @@ def _audit_in(staging: Path, pickle_path: Path, out: Path) -> dict[str, Any]:
     return json.loads(out.read_text())
 
 
-#: Processes of a running desk. The desk keeps its store in memory and saves it
-#: again on the next append, which would overwrite a rebuilt pickle with the
-#: old store: apply and rollback need the desk stopped, not only the file closed.
-DESK_PATTERNS = ("terminal_product_api", "main.py autonomy", "operations/market_ops", "operations.market_ops",
-                 "host_supervisor", "run_quantterm_complete")
-
-
-def _desk_running() -> list[str]:
-    found = []
-    for pattern in DESK_PATTERNS:
-        try:
-            out = subprocess.run(["pgrep", "-f", pattern], capture_output=True, text=True, timeout=30)
-        except Exception:
-            return ["pgrep unavailable"]
-        found += [f"{pattern}:{pid}" for pid in out.stdout.split() if pid.strip() and int(pid) != os.getpid()]
-    return found
-
-
 def _frames(path: Path) -> dict:
     with open(path, "rb") as fh:
         return dict((pickle.load(fh) or {}).get("store") or {})
 
 
 def _row_diff(old: dict, new: dict) -> dict[str, Any]:
-    """Rows removed, added and changed between two stores (normalized dates)."""
+    """Every row removed, added and value-changed between two stores (complete multisets)."""
     import numpy as np
     import pandas as pd
 
-    removed, added, changed, unsorted_old = [], [], [], []
+    removed, added, changed, unsorted_old = Counter(), Counter(), Counter(), []
     for sym in sorted(set(old) | set(new)):
         a, b = old.get(sym), new.get(sym)
         ai = pd.DatetimeIndex([]) if a is None else pd.DatetimeIndex(a.index).normalize()
         bi = pd.DatetimeIndex([]) if b is None else pd.DatetimeIndex(b.index).normalize()
         if a is not None and not ai.is_monotonic_increasing:
             unsorted_old.append(sym)
-        removed += [(sym, t.date().isoformat()) for t in ai.difference(bi)]
-        added += [(sym, t.date().isoformat()) for t in bi.difference(ai)]
-        common = ai.intersection(bi)
+        ca, cb = Counter(ai), Counter(bi)
+        for t, n in (ca - cb).items():
+            removed[(sym, t.date().isoformat())] += n
+        for t, n in (cb - ca).items():
+            added[(sym, t.date().isoformat())] += n
+        common = ai.unique().intersection(bi.unique())
         if a is None or b is None or not len(common):
             continue
         a2 = a.copy(); a2.index = ai; a2 = a2[~a2.index.duplicated(keep="last")]
@@ -177,8 +214,13 @@ def _row_diff(old: dict, new: dict) -> dict[str, Any]:
             x = pd.to_numeric(a2.loc[common, col], errors="coerce").to_numpy(dtype=float)
             y = pd.to_numeric(b2.loc[common, col], errors="coerce").to_numpy(dtype=float)
             bad = ~((x == y) | (np.isnan(x) & np.isnan(y)))
-            changed += [(sym, t.date().isoformat(), col) for t in common[bad]]
+            for t in common[bad]:
+                changed[(sym, t.date().isoformat(), col)] += 1
     return {"removed": removed, "added": added, "changed": changed, "unsorted_in_old": unsorted_old}
+
+
+def _multiset(rows, width: int) -> Counter:
+    return Counter(tuple(r[:width]) for r in rows)
 
 
 def plan(target: str | Path, staging: str | Path, out: str | Path) -> dict[str, Any]:
@@ -189,7 +231,7 @@ def plan(target: str | Path, staging: str | Path, out: str | Path) -> dict[str, 
     if not current.exists():
         raise SystemExit(f"no current pickle at {current}")
     before = _sha256(current)
-    _stage(target, staging)
+    source = _stage(target, staging)
     # The current pickle is audited from a copy on the staging disk: the
     # target is only ever read.
     current_copy = staging / "store_cache.current.pkl"
@@ -203,30 +245,33 @@ def plan(target: str | Path, staging: str | Path, out: str | Path) -> dict[str, 
     old_audit = _audit_in(staging, current_copy, staging / "audit_current.json")
     new_frames = _frames(new)
     diff = _row_diff(old_frames, new_frames)
-    contamination = {k: audited["counts"].get(k, 0) for k in
-                     ("ORPHAN_ON_ARCHIVE_DATE", "NO_ARCHIVE_FOR_DATE", "VALUE_MISMATCH", "DUPLICATE_DATE",
-                      "MISSING_OFFICIAL_ROW", "MISSING_SYMBOL")}
+    f_old = old_audit["findings"]
+    truncated = sorted(set(old_audit.get("findings_truncated") or []) | set(audited.get("findings_truncated") or []))
+    wrong_rows = _multiset(f_old.get("ORPHAN_ON_ARCHIVE_DATE", []) + f_old.get("NO_ARCHIVE_FOR_DATE", []), 2)
+    for sym, day in f_old.get("DUPLICATE_DATE", []):
+        wrong_rows[(sym, day)] += 1                      # the store held one row too many there
     gates = {
         "target_unchanged_during_plan": _sha256(current) == before,
-        "new_store_has_no_contamination": not any(contamination.values()),
+        "finding_lists_complete": not truncated,
+        "new_store_has_no_contamination": not audited["contamination_kinds"],
+        "new_store_is_complete": not audited["incomplete_kinds"],
         "new_store_last_day_is_latest_archive": built["last_day"] == audited["archives"]["last"],
         "new_store_sessions_equal_verified_archives": int(built["sessions"]) == audited["archives"]["verified_sessions"],
-        "no_value_changed_on_a_kept_row": not diff["changed"],
         "symbol_set_preserved": set(new_frames) == set(old_frames),
-        "removed_rows_are_exactly_the_contamination": (
-            sorted(map(tuple, diff["removed"])) == sorted(
-                map(tuple, old_audit["findings"].get("ORPHAN_ON_ARCHIVE_DATE", [])
-                    + old_audit["findings"].get("NO_ARCHIVE_FOR_DATE", [])))),
-        "added_rows_are_exactly_the_missing_official_rows": (
-            sorted(map(tuple, diff["added"])) == sorted(
-                map(tuple, old_audit["findings"].get("MISSING_OFFICIAL_ROW", [])))),
+        "symbol_order_preserved": list(new_frames) == list(old_frames),
+        "removed_rows_are_exactly_the_contamination": diff["removed"] == wrong_rows,
+        "added_rows_are_exactly_the_missing_official_rows": diff["added"] == _multiset(
+            f_old.get("MISSING_OFFICIAL_ROW", []), 2),
+        "changed_values_are_exactly_the_audited_mismatches": diff["changed"] == _multiset(
+            f_old.get("VALUE_MISMATCH", []), 3),
     }
     manifest = {
-        "schema": 1,
+        "schema": 2,
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "target_root": str(target),
         "target_pickle": str(current),
         "target_sha256": before,
+        "source": source,
         "staging_root": str(staging),
         "new_pickle": str(new),
         "new_sha256": _sha256(new),
@@ -234,22 +279,43 @@ def plan(target: str | Path, staging: str | Path, out: str | Path) -> dict[str, 
         "audit_of_new": {"counts": audited["counts"], "archives": audited["archives"]},
         "audit_of_current": {"counts": old_audit["counts"], "affected_symbols": old_audit["affected_symbols"],
                              "affected_sessions": old_audit["affected_sessions"]},
-        "diff": {"removed": len(diff["removed"]), "added": len(diff["added"]), "changed": len(diff["changed"]),
-                 "removed_rows": diff["removed"][:500], "unsorted_in_old": diff["unsorted_in_old"],
+        "diff": {"removed": sum(diff["removed"].values()), "added": sum(diff["added"].values()),
+                 "changed": sum(diff["changed"].values()),
+                 "removed_rows": sorted(diff["removed"])[:500], "unsorted_in_old": diff["unsorted_in_old"],
                  "added_symbols": sorted({s for s, _ in diff["added"]})},
         "gates": gates,
         "ready": all(gates.values()),
+        "state": "planned",
     }
     Path(out).write_text(json.dumps(manifest, indent=2, default=str))
     return manifest
 
 
-def _held_open(path: Path) -> list[str]:
-    try:
-        out = subprocess.run(["lsof", "-t", "--", str(path)], capture_output=True, text=True, timeout=30)
-    except Exception:
-        return ["lsof unavailable"]
-    return [p for p in out.stdout.split() if p.strip()]
+# ── apply / rollback ───────────────────────────────────────────────────────────
+
+def _desk_running() -> list[str]:
+    """Live desk processes and services; a failed probe is reported as running (fail closed)."""
+    found = []
+    for pattern in DESK_PATTERNS:
+        try:
+            out = subprocess.run(["pgrep", "-f", pattern], capture_output=True, text=True, timeout=30)
+        except Exception as exc:
+            return [f"pgrep failed: {type(exc).__name__}"]
+        if out.returncode not in (0, 1):
+            return [f"pgrep failed: rc={out.returncode}"]
+        found += [f"{pattern}:{pid}" for pid in out.stdout.split() if pid.strip() and int(pid) != os.getpid()]
+    if sys.platform == "darwin":
+        try:
+            out = subprocess.run(["launchctl", "list"], capture_output=True, text=True, timeout=30)
+        except Exception as exc:
+            return found + [f"launchctl failed: {type(exc).__name__}"]
+        if out.returncode != 0:
+            return found + [f"launchctl failed: rc={out.returncode}"]
+        for line in out.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 3 and parts[-1] == LAUNCHD_LABEL and parts[0] != "-":
+                found.append(f"launchd:{LAUNCHD_LABEL}:{parts[0]}")
+    return found
 
 
 def _check_desk(target: Path, target_is_copy: bool) -> None:
@@ -260,44 +326,134 @@ def _check_desk(target: Path, target_is_copy: bool) -> None:
         raise SystemExit(f"refusing: the desk is running ({running}); stop it first")
 
 
+def _held_open(path: Path) -> list[str]:
+    try:
+        out = subprocess.run(["lsof", "-t", "--", str(path)], capture_output=True, text=True, timeout=30)
+    except Exception:
+        return ["lsof unavailable"]
+    return [p for p in out.stdout.split() if p.strip()]
+
+
+def _write_manifest(path: Path, m: dict) -> None:
+    tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}")
+    with open(tmp, "w") as fh:
+        fh.write(json.dumps(m, indent=2, default=str))
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+
+
+def _durable_copy(src: Path, directory: Path, prefix: str, expect_sha: str) -> Path:
+    """Copy into a unique, fsynced temp file in ``directory``; verify its sha256 before any rename."""
+    fd, name = tempfile.mkstemp(prefix=prefix, dir=str(directory))
+    tmp = Path(name)
+    try:
+        with os.fdopen(fd, "wb") as out, open(src, "rb") as inp:
+            shutil.copyfileobj(inp, out, 1 << 20)
+            out.flush()
+            os.fsync(out.fileno())
+        if _sha256(tmp) != expect_sha:
+            raise SystemExit(f"refusing: the copy of {src.name} does not match its expected sha256")
+        return tmp
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def _fsync_dir(directory: Path) -> None:
+    try:
+        fd = os.open(str(directory), os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+
+
+class _MaintenanceLock:
+    """The store's maintenance lock: while it exists no store writer saves the pickle."""
+
+    def __init__(self, bhav_dir: Path, purpose: str):
+        self.path = bhav_dir / LOCK_NAME
+        self.purpose = purpose
+
+    def __enter__(self):
+        try:
+            fd = os.open(str(self.path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        except FileExistsError:
+            raise SystemExit(f"refusing: the store is already under maintenance ({self.path})")
+        with os.fdopen(fd, "w") as fh:
+            fh.write(json.dumps({"pid": os.getpid(), "purpose": self.purpose,
+                                 "since": time.strftime("%Y-%m-%dT%H:%M:%S%z")}))
+        return self
+
+    def __exit__(self, *exc):
+        self.path.unlink(missing_ok=True)
+        return False
+
+
+def _verify_source(m: dict) -> None:
+    target = Path(m["target_root"])
+    now = _source_manifest(target, hashes=False)
+    planned = m["source"]
+    if set(now["archives"]) != set(planned["archives"]):
+        raise SystemExit("refusing: the target's archive set changed since the plan (re-plan)")
+    for name, meta in now["archives"].items():
+        was = planned["archives"][name]
+        if (meta["size"], meta["mtime_ns"]) != (was["size"], was["mtime_ns"]):
+            raise SystemExit(f"refusing: archive {name} changed since the plan (re-plan)")
+    cal = target / CALENDAR
+    if cal.exists() != bool(planned["calendar"].get("present")) or (
+            cal.exists() and _sha256(cal) != planned["calendar"].get("sha256")):
+        raise SystemExit("refusing: the target's runtime calendar changed since the plan (re-plan)")
+
+
 def apply(manifest_path: str | Path, owner_approval: str, *, target_is_copy: bool = False) -> dict[str, Any]:
-    m = json.loads(Path(manifest_path).read_text())
+    manifest_path = Path(manifest_path)
+    m = json.loads(manifest_path.read_text())
     if not str(owner_approval or "").strip():
         raise SystemExit("refusing: apply needs the owner's approval in words (--owner-approval)")
     if not m.get("ready"):
         raise SystemExit(f"refusing: the plan's gates did not all pass: {m.get('gates')}")
+    if m.get("state") != "planned":
+        raise SystemExit(f"refusing: the manifest is in state {m.get('state')!r}, not 'planned'")
     target, new = Path(m["target_pickle"]), Path(m["new_pickle"])
-    if _sha256(target) != m["target_sha256"]:
-        raise SystemExit("refusing: the target pickle changed since the plan (re-plan)")
-    if _sha256(new) != m["new_sha256"]:
-        raise SystemExit("refusing: the planned pickle changed since the plan")
     _check_desk(target, target_is_copy)
-    holders = _held_open(target)
-    if holders:
-        raise SystemExit(f"refusing: the target pickle is held open by {holders} (stop the desk first)")
-    stamp = time.strftime("%Y%m%d_%H%M%S")
-    backup = target.with_name(f"{target.name}.pre-rebuild-{stamp}")
-    shutil.copy2(target, backup)
-    if _sha256(backup) != m["target_sha256"]:
-        backup.unlink(missing_ok=True)
-        raise SystemExit("refusing: the backup copy does not match the target")
-    tmp = target.with_name(f"{target.name}.rebuild-tmp")
-    shutil.copy2(new, tmp)
-    if _sha256(tmp) != m["new_sha256"]:
-        tmp.unlink(missing_ok=True)
-        raise SystemExit("refusing: the staged copy does not match the plan")
-    os.replace(tmp, target)
-    ok = _sha256(target) == m["new_sha256"]
-    m.update({"applied_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "backup_pickle": str(backup),
-              "owner_approval": owner_approval.strip(), "applied_ok": ok})
-    Path(manifest_path).write_text(json.dumps(m, indent=2, default=str))
+    with _MaintenanceLock(target.parent, "bhav_store_rebuild apply"):
+        _check_desk(target, target_is_copy)                       # nothing started meanwhile
+        if _sha256(target) != m["target_sha256"]:
+            raise SystemExit("refusing: the target pickle changed since the plan (re-plan)")
+        if _sha256(new) != m["new_sha256"]:
+            raise SystemExit("refusing: the planned pickle changed since the plan")
+        _verify_source(m)
+        holders = _held_open(target)
+        if holders:
+            raise SystemExit(f"refusing: the target pickle is held open by {holders} (stop the desk first)")
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        backup = target.with_name(f"{target.name}.pre-rebuild-{stamp}")
+        btmp = _durable_copy(target, target.parent, ".backup-", m["target_sha256"])
+        os.replace(btmp, backup)
+        candidate = _durable_copy(new, target.parent, ".rebuild-", m["new_sha256"])
+        # Transaction record BEFORE the swap: an interruption after this point
+        # leaves a manifest that can drive the rollback.
+        m.update({"state": "swapping", "backup_pickle": str(backup), "owner_approval": owner_approval.strip(),
+                  "swap_started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
+        _write_manifest(manifest_path, m)
+        os.replace(candidate, target)
+        _fsync_dir(target.parent)
+        ok = _sha256(target) == m["new_sha256"]
+        m.update({"state": "applied" if ok else "swap_unverified", "applied_ok": ok,
+                  "applied_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
+        _write_manifest(manifest_path, m)
     if not ok:
         raise SystemExit("the target does not match the planned pickle after the swap: run rollback")
     return m
 
 
 def rollback(manifest_path: str | Path, *, target_is_copy: bool = False) -> dict[str, Any]:
-    m = json.loads(Path(manifest_path).read_text())
+    manifest_path = Path(manifest_path)
+    m = json.loads(manifest_path.read_text())
     recorded = str(m.get("backup_pickle") or "").strip()
     backup = Path(recorded) if recorded else None
     if backup is None or not backup.is_file():
@@ -306,15 +462,27 @@ def rollback(manifest_path: str | Path, *, target_is_copy: bool = False) -> dict
         raise SystemExit("refusing: the backup does not match the pre-rebuild sha256")
     target = Path(m["target_pickle"])
     _check_desk(target, target_is_copy)
-    holders = _held_open(target)
-    if holders:
-        raise SystemExit(f"refusing: the target pickle is held open by {holders} (stop the desk first)")
-    tmp = target.with_name(f"{target.name}.rollback-tmp")
-    shutil.copy2(backup, tmp)
-    os.replace(tmp, target)
-    ok = _sha256(target) == m["target_sha256"]
-    m.update({"rolled_back_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "rollback_ok": ok})
-    Path(manifest_path).write_text(json.dumps(m, indent=2, default=str))
+    with _MaintenanceLock(target.parent, "bhav_store_rebuild rollback"):
+        _check_desk(target, target_is_copy)
+        current = _sha256(target)
+        if current == m["target_sha256"]:
+            m.update({"state": "rolled_back", "rollback_ok": True,
+                      "rolled_back_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
+            _write_manifest(manifest_path, m)
+            return m                                              # already the pre-rebuild pickle
+        if current != m["new_sha256"]:
+            raise SystemExit("refusing: the target changed after the apply (the desk saved a newer cache); "
+                             "rolling back would discard it")
+        holders = _held_open(target)
+        if holders:
+            raise SystemExit(f"refusing: the target pickle is held open by {holders} (stop the desk first)")
+        candidate = _durable_copy(backup, target.parent, ".rollback-", m["target_sha256"])
+        os.replace(candidate, target)
+        _fsync_dir(target.parent)
+        ok = _sha256(target) == m["target_sha256"]
+        m.update({"state": "rolled_back" if ok else "rollback_unverified", "rollback_ok": ok,
+                  "rolled_back_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
+        _write_manifest(manifest_path, m)
     if not ok:
         raise SystemExit("rollback did not restore the pre-rebuild pickle")
     return m

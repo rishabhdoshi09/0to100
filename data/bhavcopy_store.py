@@ -53,6 +53,25 @@ _store_revision: int = 0
 #: store with its COMPLETE history, not only the sessions after the build
 #: (store integrity audit 2026-11-22: 50 names had lost up to 27 sessions).
 _pending: dict[str, pd.DataFrame] = {}
+#: {session ISO date: (size, mtime_ns)} of every archive merged into the store.
+#: None means a legacy pickle that never recorded it. A refresh re-merges any
+#: verified archive whose identity is new or changed, so a late or corrected
+#: archive at or before the newest session is no longer skipped (GPT ST-08).
+_incorporated: Optional[dict[str, tuple[int, int]]] = None
+MAINTENANCE_LOCK = "MAINTENANCE.lock"
+
+
+def maintenance_lock_path() -> Path:
+    """While this file exists the store pickle is under repair: no process saves it (GPT ST-01)."""
+    return _BHAV_DIR / MAINTENANCE_LOCK
+
+
+def _archive_identity(d: date) -> Optional[tuple[int, int]]:
+    try:
+        st = _day_path(d).stat()
+    except OSError:
+        return None
+    return int(st.st_size), int(st.st_mtime_ns)
 
 
 def store_revision() -> tuple[int, int]:
@@ -310,9 +329,16 @@ def _save_pkl() -> None:
     """Persist the built store so restarts load in seconds, not minutes."""
     try:
         import pickle
+        if (_PKL.parent / MAINTENANCE_LOCK).exists():
+            log.warning("bhav_pkl_save_refused", reason="store under maintenance",
+                        lock=str(_PKL.parent / MAINTENANCE_LOCK))
+            return
         with _lock:
-            data = {"store": _store, "last_day": _store_last_day,
-                    "sessions": _store_sessions, "pending": _pending}
+            # Shallow copies of the maps under the lock: a concurrent append
+            # cannot add or swap a frame half-way through serialisation.
+            data = {"store": dict(_store), "last_day": _store_last_day,
+                    "sessions": _store_sessions, "pending": dict(_pending),
+                    "incorporated": None if _incorporated is None else dict(_incorporated)}
         _PKL.parent.mkdir(parents=True, exist_ok=True)
         tmp = _PKL.with_suffix(".pkl.tmp")
         with open(tmp, "wb") as f:
@@ -324,7 +350,7 @@ def _save_pkl() -> None:
 
 def _load_pkl() -> bool:
     """Load the consolidated cache. False if absent/corrupt."""
-    global _store, _store_last_day, _store_sessions, _pending
+    global _store, _store_last_day, _store_sessions, _pending, _incorporated
     try:
         import pickle
         if not _PKL.exists():
@@ -344,6 +370,8 @@ def _load_pkl() -> bool:
             _store_last_day = data["last_day"]
             _store_sessions = int(data.get("sessions") or 0)
             _pending = dict(data.get("pending") or {})
+            inc = data.get("incorporated")
+            _incorporated = None if inc is None else {str(k): tuple(v) for k, v in dict(inc).items()}
             _bump_revision_locked()
         log.info("bhav_store_loaded_from_cache", symbols=len(_store),
                  sessions=_store_sessions, latest=str(_store_last_day))
@@ -363,7 +391,7 @@ def _bump_revision_locked() -> None:
 
 
 def _full_build(available: list[date]) -> int:
-    global _store, _store_last_day, _store_sessions, _pending
+    global _store, _store_last_day, _store_sessions, _pending, _incorporated
     frames = []
     parsed_days = []
     for d in sorted(available):
@@ -386,9 +414,11 @@ def _full_build(available: list[date]) -> int:
             new_store[sym] = frame
         else:
             new_pending[sym] = frame
+    incorporated = {d.isoformat(): ident for d in parsed_days if (ident := _archive_identity(d)) is not None}
     with _lock:
         _store = new_store
         _pending = new_pending
+        _incorporated = incorporated
         _store_last_day = max(parsed_days)
         _store_sessions = len(frames)
         _bump_revision_locked()
@@ -399,8 +429,8 @@ def _full_build(available: list[date]) -> int:
 
 
 def _incremental_append(new_days: list[date]) -> None:
-    """Append only the fresh sessions onto the loaded store."""
-    global _store_last_day, _store_sessions
+    """Merge these sessions' archives into the loaded store (new, late or corrected)."""
+    global _store_last_day, _store_sessions, _incorporated
     parsed = [(d, f) for d in sorted(new_days)
               if (f := _read_day(d)) is not None]
     if not parsed:
@@ -442,14 +472,55 @@ def _incremental_append(new_days: list[date]) -> None:
                 _store[sym] = merged[~merged.index.duplicated(keep="last")].sort_index()
             elif len(g) >= 1:
                 _store[sym] = g[cols]
-        _store_last_day = max(d for d, _ in parsed)
-        _store_sessions += len(frames)
+        newest = max(d for d, _ in parsed)
+        _store_last_day = newest if _store_last_day is None else max(_store_last_day, newest)
+        if _incorporated is None:
+            _store_sessions += len(frames)           # legacy pickle: no identities to count
+        else:
+            for d, _f in parsed:
+                ident = _archive_identity(d)
+                if ident is not None:
+                    _incorporated[d.isoformat()] = ident
+            _store_sessions = len(_incorporated)
         _bump_revision_locked()
     if dropped:
         log.warning("bhav_store_overlay_rows_dropped", rows=dropped,
                     reason="symbol absent from that session's official archive")
     log.info("bhav_store_appended", days=len(frames), latest=str(_store_last_day))
     _save_pkl()
+
+
+def _store_dates() -> set:
+    """Every session date held by any served frame."""
+    with _lock:
+        indexes = [f.index for f in _store.values()]
+    seen: set = set()
+    for idx in indexes:
+        seen.update(pd.DatetimeIndex(idx).normalize().unique())
+    return seen
+
+
+def _migrate_legacy_identities(verified: list[date]) -> None:
+    """A pickle saved before identities were recorded: infer what it incorporated.
+
+    A verified session present in the store is taken as incorporated with the
+    archive's current identity; from then on a change to that file is
+    detected. A session absent from every frame was never merged and is left
+    out, so the refresh merges it (a late archive). A legacy session whose file
+    was corrected in place before this migration cannot be told apart: that
+    residual needs a rebuild (product.bhav_store_rebuild).
+    """
+    global _incorporated
+    with _lock:
+        if _incorporated is not None:
+            return
+    present = _store_dates()
+    inferred = {d.isoformat(): ident for d in verified
+                if pd.Timestamp(d) in present and (ident := _archive_identity(d)) is not None}
+    with _lock:
+        if _incorporated is None:
+            _incorporated = inferred
+    log.info("bhav_store_identities_migrated", sessions=len(inferred), verified=len(verified))
 
 
 class HistoryAcquisitionCancelled(RuntimeError):
@@ -525,11 +596,25 @@ def build_store(days: int = DEFAULT_DAYS, progress=None, should_stop=None) -> in
 
     if have_store:
         deep_enough = sessions >= min(days, len(available)) * 0.9
-        if last == newest and deep_enough:
+        if deep_enough:
+            verified = sorted(set(_dates_on_disk()) | set(available))
+            _migrate_legacy_identities(verified)
             with _lock:
-                return len(_store)            # current — nothing to do
-        if deep_enough and last and last < newest:
-            _incremental_append([d for d in available if d > last])
+                known = dict(_incorporated or {})
+            present = _store_dates()
+            # Merge every verified archive the store never took in (absent
+            # from every frame: a late archive behind the newest session) or
+            # whose file changed since it was merged (a correction), not only
+            # the sessions after the high-water date (GPT ST-08).
+            todo = []
+            for d in verified:
+                seen = known.get(d.isoformat())
+                if pd.Timestamp(d) not in present:
+                    todo.append(d)
+                elif seen is not None and seen != _archive_identity(d):
+                    todo.append(d)
+            if todo:
+                _incremental_append(todo)
             with _lock:
                 return len(_store)
         # store too shallow (e.g. old 260-day cache, now want 500) → rebuild
@@ -772,10 +857,11 @@ def membership_rows() -> tuple[list[dict], dict]:
 
 def reset_in_memory_store() -> None:
     """Clear the process-local symbol map (tests and worker isolation)."""
-    global _store, _store_last_day, _store_sessions, _pending
+    global _store, _store_last_day, _store_sessions, _pending, _incorporated
     with _lock:
         _store = {}
         _pending = {}
+        _incorporated = None
         _store_last_day = None
         _store_sessions = 0
         _bump_revision_locked()

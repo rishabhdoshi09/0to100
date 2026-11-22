@@ -217,3 +217,204 @@ def test_rollback_without_a_backup_refuses(tmp_path):
     manifest.write_text(json.dumps({"target_pickle": str(tmp_path / "x.pkl"), "target_sha256": "0" * 64}))
     with pytest.raises(SystemExit, match="nothing to roll back"):
         RB.rollback(manifest, target_is_copy=True)
+
+
+# ── GPT cross-review of 8a52e49d (ST-01..ST-09): GPT's own sketches ───────────
+# Each failed on 8a52e49d at its claim-bearing assertion.
+
+@pytest.mark.parametrize("command", [
+    "python -u -m product.host_entrypoint",
+    "python -u -m product.host_launchd_entrypoint",
+    "python -u -m product.host_bootstrap --child",
+])
+def test_review_apply_blocks_installed_host(runtime, tmp_path, monkeypatch, command):
+    import re
+    from subprocess import CompletedProcess
+    from product import bhav_store_rebuild as rb
+
+    manifest = tmp_path / "manifest.json"
+    assert rb.plan(runtime, tmp_path / "stage", manifest)["ready"]
+
+    def probe(args, **kwargs):
+        hit = args[0] == "pgrep" and re.search(args[-1], command)
+        return CompletedProcess(args, 0 if hit else 1, "999999\n" if hit else "", "")
+
+    monkeypatch.setattr(rb.subprocess, "run", probe)
+    with pytest.raises(SystemExit, match="desk is running"):
+        rb.apply(manifest, "test approval")
+
+
+def test_review_plan_uses_target_holidays(runtime, tmp_path):
+    from product import bhav_store_rebuild as rb
+    from research.store_integrity_audit import audit
+
+    day = DAYS[10]
+    (runtime / "logs/nse_holidays.json").write_text(json.dumps([day.date().isoformat()]))
+    pkl = runtime / rb.PICKLE
+    payload = pickle.loads(pkl.read_bytes())
+    for symbol, frame in payload["store"].items():
+        payload["store"][symbol] = frame.drop(day, errors="ignore")
+    pkl.write_bytes(pickle.dumps(payload))
+
+    m = rb.plan(runtime, tmp_path / "stage", tmp_path / "manifest.json")
+    if m["ready"]:
+        assert not audit(runtime, pickle_path=m["new_pickle"])["contamination_kinds"]
+
+
+def test_review_apply_rejects_archive_correction(runtime, tmp_path, monkeypatch):
+    from product import bhav_store_rebuild as rb
+
+    manifest = tmp_path / "manifest.json"
+    assert rb.plan(runtime, tmp_path / "stage", manifest)["ready"]
+    day = DAYS[10]
+    csv = runtime / "logs/bhav" / day.strftime("%d%m%Y.csv")
+    corrected = csv.with_suffix(".tmp")
+    corrected.write_text(_archive(day, [("AAA", 999.0), ("BBB", _official("BBB", 10))]))
+    corrected.replace(csv)
+    monkeypatch.setattr(rb, "_held_open", lambda _: [])
+
+    with pytest.raises(SystemExit):
+        rb.apply(manifest, "test approval", target_is_copy=True)
+
+
+def test_review_rollback_preserves_post_apply_update(runtime, tmp_path, monkeypatch):
+    from product import bhav_store_rebuild as rb
+
+    manifest = tmp_path / "manifest.json"
+    assert rb.plan(runtime, tmp_path / "stage", manifest)["ready"]
+    monkeypatch.setattr(rb, "_held_open", lambda _: [])
+    rb.apply(manifest, "test approval", target_is_copy=True)
+    target = runtime / rb.PICKLE
+    payload = pickle.loads(target.read_bytes())
+    payload["store"]["AAA"].loc[DAYS[-1], "volume"] = 2000
+    updated = pickle.dumps(payload)
+    target.write_bytes(updated)
+
+    with pytest.raises(SystemExit):
+        rb.rollback(manifest, target_is_copy=True)
+    assert target.read_bytes() == updated
+
+
+def test_review_audit_detects_wrong_pending_close(runtime):
+    from product import bhav_store_rebuild as rb
+    from research.store_integrity_audit import audit
+
+    pkl = runtime / rb.PICKLE
+    payload = pickle.loads(pkl.read_bytes())
+    young = payload["store"].pop("YOUNG").reindex(DAYS[23:]).copy()
+    for i in range(23, 29):
+        close = _official("YOUNG", i)
+        young.loc[DAYS[i]] = [close, close + 1, close - 1, close, 1000, 45.5]
+    young.loc[DAYS[25], "close"] = 999.0
+    payload["pending"] = {"YOUNG": young}
+    pkl.write_bytes(pickle.dumps(payload))
+
+    assert "YOUNG" in audit(runtime)["affected_symbols"]
+
+
+def test_review_quote_cannot_overwrite_concurrent_archive(tmp_path, monkeypatch):
+    from data import kite_client, nse_live, nse_universe
+    from product import bhav_store_rebuild as rb
+
+    prior, today, after = DAYS[:3]
+    pkl = tmp_path / "store_cache.pkl"
+    monkeypatch.setattr(BS, "_PKL", pkl)
+    monkeypatch.setattr(BS, "_store", {"AAA": _frame([prior])})
+    monkeypatch.setattr(BS, "_store_last_day", prior.date())
+    monkeypatch.setattr(BS, "_store_sessions", 1)
+    monkeypatch.setattr(BS, "_read_day", lambda d: pd.DataFrame({
+        "symbol": ["AAA"], "date": pd.Timestamp(d), "open": 110.0,
+        "high": 110.0, "low": 110.0, "close": 110.0, "volume": 1000.0,
+    }))
+    monkeypatch.setattr(nse_live, "date", type("Clock", (), {
+        "today": staticmethod(today.date),
+    }))
+    monkeypatch.setattr(nse_live, "_is_trading_now", lambda: True)
+    monkeypatch.setattr(nse_universe, "get_nse_universe", lambda: [])
+    monkeypatch.setattr(kite_client, "kite_credentials_available", lambda: False)
+
+    def fetch():
+        BS._incremental_append([today.date()])
+        return {"AAA": dict(open=777.0, high=777.0, low=777.0, close=777.0, volume=7.0)}
+
+    monkeypatch.setattr(nse_live, "fetch_live_snapshot", fetch)
+    nse_live.apply_live_to_store()
+    BS._incremental_append([after.date()])
+    assert rb._frames(pkl)["AAA"].at[today, "close"] == 110.0
+
+
+def test_review_rebuild_preserves_deployed_sampling_order(runtime, tmp_path):
+    from product import bhav_store_rebuild as rb
+
+    pkl = runtime / rb.PICKLE
+    payload = pickle.loads(pkl.read_bytes())
+    order = ["BBB", "AAA", "YOUNG"]
+    payload["store"] = {s: payload["store"][s] for s in order}
+    pkl.write_bytes(pickle.dumps(payload))
+
+    m = rb.plan(runtime, tmp_path / "stage", tmp_path / "manifest.json")
+    assert m["ready"]
+    assert list(rb._frames(m["new_pickle"])) == order
+
+
+@pytest.mark.parametrize("defect", ["missing_delivery", "non_midnight", "overlay_marker"])
+def test_review_audit_flags_reader_visible_differences(runtime, defect):
+    from product import bhav_store_rebuild as rb
+    from research.store_integrity_audit import audit
+
+    pkl = runtime / rb.PICKLE
+    payload = pickle.loads(pkl.read_bytes())
+    frame = payload["store"]["AAA"]
+    if defect == "missing_delivery":
+        frame.drop(columns="deliv_per", inplace=True)
+    elif defect == "non_midnight":
+        frame.index += pd.Timedelta(hours=15, minutes=30)
+    else:
+        frame.attrs["quantterm_live_overlay_date"] = DAYS[-1].date().isoformat()
+    pkl.write_bytes(pickle.dumps(payload))
+
+    assert "AAA" in audit(runtime)["affected_symbols"]
+
+
+def test_review_public_refresh_incorporates_late_archive(monkeypatch):
+    first, late, newest = DAYS[:3]
+    monkeypatch.setattr(BS, "_store", {"AAA": _frame([first, newest])})
+    monkeypatch.setattr(BS, "_store_last_day", newest.date())
+    monkeypatch.setattr(BS, "_store_sessions", 2)
+    monkeypatch.setattr(BS, "_MIN_DAYS", 1)
+    monkeypatch.setattr(BS, "_trading_days_back",
+                        lambda _: [newest.date(), late.date(), first.date()])
+    monkeypatch.setattr(BS, "_is_valid_archive", lambda *_: True)
+    monkeypatch.setattr(BS, "_read_day", lambda d: pd.DataFrame({
+        "symbol": ["AAA"], "date": pd.Timestamp(d), "open": 100.0,
+        "high": 100.0, "low": 100.0, "close": 100.0, "volume": 1000.0,
+    }))
+    monkeypatch.setattr(BS, "_save_pkl", lambda: None)
+
+    BS.build_store(days=2)
+    assert late in BS._store["AAA"].index
+
+
+def test_review_complete_diff_can_exceed_display_cap(runtime, tmp_path):
+    from product import bhav_store_rebuild as rb
+
+    pkl = runtime / rb.PICKLE
+    payload = pickle.loads(pkl.read_bytes())
+    extra = pd.date_range(end=DAYS[0] - pd.Timedelta(days=1), periods=2001)
+    payload["store"]["AAA"] = pd.concat([_frame(extra), payload["store"]["AAA"]])
+    pkl.write_bytes(pickle.dumps(payload))
+
+    m = rb.plan(runtime, tmp_path / "stage", tmp_path / "manifest.json")
+    assert m["diff"]["removed"] == 2002  # Includes the fixture's BBB orphan.
+    assert m["gates"]["removed_rows_are_exactly_the_contamination"]
+
+
+def test_no_store_writer_saves_while_the_store_is_under_maintenance(tmp_path, monkeypatch):
+    monkeypatch.setattr(BS, "_PKL", tmp_path / "store_cache.pkl")
+    monkeypatch.setattr(BS, "_store", {"AAA": _frame(DAYS[:3])})
+    (tmp_path / BS.MAINTENANCE_LOCK).write_text("{}")
+    BS._save_pkl()
+    assert not (tmp_path / "store_cache.pkl").exists()
+    (tmp_path / BS.MAINTENANCE_LOCK).unlink()
+    BS._save_pkl()
+    assert (tmp_path / "store_cache.pkl").exists()

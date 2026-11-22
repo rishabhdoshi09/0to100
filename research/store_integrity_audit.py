@@ -97,8 +97,71 @@ def _audit(pickle_path: Path | None) -> dict[str, Any]:
         bs._BHAV_DIR, bs._SESSION_LISTING, bs._DATES_CACHE = saved
 
 
-def _compare(store: dict, payload: dict, pkl: Path, bs) -> dict[str, Any]:
+#: Kinds that mean the store holds something the archives do not (wrong data).
+CONTAMINATION = ("ORPHAN_ON_ARCHIVE_DATE", "NO_ARCHIVE_FOR_DATE", "VALUE_MISMATCH", "DUPLICATE_DATE",
+                 "UNSORTED", "TZ_AWARE_INDEX", "NON_MIDNIGHT_INDEX", "MISSING_COLUMN",
+                 "PERSISTED_OVERLAY_MARKER", "PENDING_OVERLAPS_STORE",
+                 "ARCHIVE_CHANGED_SINCE_INCORPORATED")
+#: Kinds that mean the store lacks official history it should hold.
+INCOMPLETE = ("MISSING_OFFICIAL_ROW", "MISSING_SYMBOL", "BELOW_FLOOR_NOT_PENDING", "ARCHIVE_NOT_INCORPORATED")
+#: Findings kept per kind in the report; counts are always exact. A truncated
+#: list is flagged, and a gate that needs the whole list must refuse.
+FINDINGS_CAP = 200_000
+
+
+def _check_frame(sym: str, frame, ref, archive_set, findings, prefix: str, per_symbol, per_date) -> int:
+    """Classify one frame (served or pending) against its official rows; returns rows checked."""
     import numpy as np
+    import pandas as pd
+
+    def add(kind, *row):
+        findings[prefix + kind].append((sym, *row))
+        per_symbol[sym] += 1
+        if row and isinstance(row[0], str):
+            per_date[row[0]] += 1
+
+    raw = pd.DatetimeIndex(frame.index)
+    if raw.tz is not None:
+        add("TZ_AWARE_INDEX", str(raw.tz))
+        raw = raw.tz_convert("Asia/Kolkata").tz_localize(None)
+    if len(raw) and bool((raw != raw.normalize()).any()):
+        add("NON_MIDNIGHT_INDEX", str(raw[raw != raw.normalize()][0]))
+    if not raw.is_monotonic_increasing:
+        add("UNSORTED", int((raw[1:] < raw[:-1]).sum()))
+    marker = getattr(frame, "attrs", {}).get("quantterm_live_overlay_date")
+    if marker:
+        add("PERSISTED_OVERLAY_MARKER", str(marker)[:10])
+    frame = frame.copy()
+    frame.index = raw.normalize()
+    for ts in frame.index[frame.index.duplicated(keep=False)].unique():
+        add("DUPLICATE_DATE", ts.date().isoformat())
+    frame = frame[~frame.index.duplicated(keep="last")]
+    for ts in frame.index:
+        if ts not in archive_set:
+            add("NO_ARCHIVE_FOR_DATE", ts.date().isoformat())
+        elif ref is None or ts not in ref.index:
+            add("ORPHAN_ON_ARCHIVE_DATE", ts.date().isoformat())
+    if ref is None:
+        return len(frame)
+    for col in VALUE_COLUMNS:
+        if col not in ref.columns:
+            continue
+        if col not in frame.columns:
+            if pd.to_numeric(ref[col], errors="coerce").notna().any():
+                add("MISSING_COLUMN", col)
+            continue
+        common = frame.index.intersection(ref.index)
+        a = pd.to_numeric(frame.loc[common, col], errors="coerce").to_numpy(dtype=float)
+        b = pd.to_numeric(ref.loc[common, col], errors="coerce").to_numpy(dtype=float)
+        differ = ~((a == b) | (np.isnan(a) & np.isnan(b)))
+        for ts, va, vb in zip(common[differ], a[differ], b[differ]):
+            add("VALUE_MISMATCH", ts.date().isoformat(), col, va, vb)
+    for ts in ref.index.difference(frame.index):
+        add("MISSING_OFFICIAL_ROW", ts.date().isoformat())
+    return len(frame)
+
+
+def _compare(store: dict, payload: dict, pkl: Path, bs) -> dict[str, Any]:
     import pandas as pd
 
     archive_days = list(bs._dates_on_disk())
@@ -112,84 +175,77 @@ def _compare(store: dict, payload: dict, pkl: Path, bs) -> dict[str, Any]:
             unreadable.append(d.isoformat())
             continue
         parts.append(f)
-    official = pd.concat(parts, ignore_index=True)
+    official = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=["symbol", "date"])
     official["date"] = pd.to_datetime(official["date"]).dt.normalize()
     official = official.drop_duplicates(["symbol", "date"], keep="last")
     official_rows = {s: g.set_index("date") for s, g in official.groupby("symbol", sort=False)}
-    listed_on = official.groupby("date")["symbol"].apply(set).to_dict()
 
     findings: dict[str, list] = defaultdict(list)
     per_symbol: Counter = Counter()
     per_date: Counter = Counter()
-    max_rel: dict[str, float] = {}
     checked_rows = 0
     for sym, frame in store.items():
-        idx = pd.DatetimeIndex(frame.index)
-        if idx.tz is not None:
-            idx = idx.tz_localize(None)
-        frame = frame.copy()
-        frame.index = idx.normalize()
-        ref = official_rows.get(sym)
-        for ts in frame.index[frame.index.duplicated(keep=False)].unique():
-            findings["DUPLICATE_DATE"].append((sym, ts.date().isoformat()))
-        frame = frame[~frame.index.duplicated(keep="last")]
-        checked_rows += len(frame)
-        for ts in frame.index:
-            if ts not in archive_set:
-                findings["NO_ARCHIVE_FOR_DATE"].append((sym, ts.date().isoformat()))
-                per_symbol[sym] += 1
-                per_date[ts.date().isoformat()] += 1
-            elif ref is None or ts not in ref.index:
-                findings["ORPHAN_ON_ARCHIVE_DATE"].append((sym, ts.date().isoformat()))
-                per_symbol[sym] += 1
-                per_date[ts.date().isoformat()] += 1
-        if ref is None:
-            continue
-        common = frame.index.intersection(ref.index)
-        for col in VALUE_COLUMNS:
-            if col not in frame.columns or col not in ref.columns:
-                continue
-            a = pd.to_numeric(frame.loc[common, col], errors="coerce").to_numpy(dtype=float)
-            b = pd.to_numeric(ref.loc[common, col], errors="coerce").to_numpy(dtype=float)
-            both_nan = np.isnan(a) & np.isnan(b)
-            differ = ~both_nan & ~np.isclose(a, b, rtol=0.0, atol=0.0, equal_nan=False)
-            if differ.any():
-                for ts, va, vb in zip(common[differ], a[differ], b[differ]):
-                    findings["VALUE_MISMATCH"].append((sym, ts.date().isoformat(), col, va, vb))
-                    per_symbol[sym] += 1
-                    per_date[ts.date().isoformat()] += 1
-                    if col == "close" and vb == vb and vb != 0 and va == va:
-                        max_rel[f"{sym}:{ts.date().isoformat()}"] = abs(va / vb - 1.0)
-        missing = ref.index.difference(frame.index)
-        for ts in missing:
-            findings["MISSING_OFFICIAL_ROW"].append((sym, ts.date().isoformat()))
+        checked_rows += _check_frame(sym, frame, official_rows.get(sym), archive_set, findings, "",
+                                     per_symbol, per_date)
+
+    has_pending = "pending" in payload
+    pending: dict = dict(payload.get("pending") or {})
+    for sym, frame in pending.items():
+        if sym in store:
+            findings["PENDING_OVERLAPS_STORE"].append((sym,))
+        _check_frame(sym, frame, official_rows.get(sym), archive_set, findings, "PENDING_",
+                     per_symbol, per_date)
 
     for sym, g in official_rows.items():
-        if sym not in store:
-            kind = "BELOW_BUILD_FLOOR" if len(g) < BUILD_FLOOR else "MISSING_SYMBOL"
-            findings[kind].append((sym, len(g)))
+        if sym in store or sym in pending:
+            continue
+        if len(g) >= BUILD_FLOOR:
+            findings["MISSING_SYMBOL"].append((sym, len(g)))
+        elif has_pending:
+            findings["BELOW_FLOOR_NOT_PENDING"].append((sym, len(g)))
+        else:
+            findings["BELOW_BUILD_FLOOR"].append((sym, len(g)))
 
-    contamination = [k for k in ("ORPHAN_ON_ARCHIVE_DATE", "NO_ARCHIVE_FOR_DATE", "VALUE_MISMATCH",
-                                 "DUPLICATE_DATE") if findings.get(k)]
-    affected = sorted({row[0] for k in contamination for row in findings[k]})
-    sessions = sorted({row[1] for k in contamination for row in findings[k]})
+    incorporated = payload.get("incorporated")
+    if incorporated is not None:
+        recorded = {str(k): tuple(v) for k, v in dict(incorporated).items()}
+        for d in archive_days:
+            ident = bs._archive_identity(d) if hasattr(bs, "_archive_identity") else None
+            seen = recorded.get(d.isoformat())
+            if seen is None:
+                findings["ARCHIVE_NOT_INCORPORATED"].append((d.isoformat(),))
+            elif ident is not None and tuple(seen) != tuple(ident):
+                findings["ARCHIVE_CHANGED_SINCE_INCORPORATED"].append((d.isoformat(),))
+
+    def kinds(names):
+        return [k for k in sorted(findings) if findings[k] and (k in names or k.removeprefix("PENDING_") in names)]
+
+    contamination = kinds(CONTAMINATION)
+    incomplete = kinds(INCOMPLETE)
+    affected = sorted({row[0] for k in contamination for row in findings[k]
+                       if not k.startswith("ARCHIVE_")})
+    sessions = sorted({row[1] for k in contamination for row in findings[k]
+                       if len(row) > 1 and isinstance(row[1], str) and row[1][:4].isdigit()})
     return {
         "pickle": {"path": str(pkl), "sha256": _sha256(pkl), "last_day": str(payload.get("last_day")),
-                   "sessions": payload.get("sessions"), "symbols": len(store), "rows_checked": checked_rows},
+                   "sessions": payload.get("sessions"), "symbols": len(store), "pending": len(pending),
+                   "has_pending_map": has_pending, "incorporated_recorded": incorporated is not None,
+                   "rows_checked": checked_rows},
         "archives": {"verified_sessions": len(archive_days),
                      "first": archive_days[0].isoformat() if archive_days else None,
                      "last": archive_days[-1].isoformat() if archive_days else None,
                      "unreadable": unreadable, "official_rows": int(len(official))},
         "counts": {k: len(v) for k, v in sorted(findings.items())},
         "contamination_kinds": contamination,
+        "incomplete_kinds": incomplete,
         "affected_symbols": affected,
         "affected_sessions": sessions,
         "rows_per_session": dict(sorted(per_date.items())),
         "rows_per_symbol_top": per_symbol.most_common(25),
-        "close_mismatch_max_rel": max(max_rel.values()) if max_rel else None,
-        "findings": {k: v[:2000] for k, v in sorted(findings.items())},
-        "listed_on_sessions": len(listed_on),
-        "method": "every store row vs data.bhavcopy_store._read_day of the verified archives (_dates_on_disk)",
+        "findings": {k: v[:FINDINGS_CAP] for k, v in sorted(findings.items())},
+        "findings_truncated": sorted(k for k, v in findings.items() if len(v) > FINDINGS_CAP),
+        "method": "every served and pending row vs data.bhavcopy_store._read_day of the verified archives "
+                  "(_dates_on_disk), plus raw index structure, live markers and archive identities",
         "read_only": True,
     }
 
@@ -203,7 +259,7 @@ def main(argv=None) -> int:
     rep = audit(a.root, pickle_path=a.pickle)
     Path(a.out).write_text(json.dumps(rep, indent=2, default=str))
     print(json.dumps({k: rep[k] for k in ("pickle", "archives", "counts", "contamination_kinds",
-                                          "affected_sessions", "close_mismatch_max_rel")},
+                                          "incomplete_kinds", "affected_sessions")},
                      indent=1, default=str)[:6000])
     return 0
 
