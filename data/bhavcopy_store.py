@@ -48,6 +48,11 @@ _store_sessions: int = 0                  # how many sessions the store covers
 #: every builder (full build, append, pickle load, reset), never by the live
 #: intraday overlay. Derived caches key on it (product.pit_features).
 _store_revision: int = 0
+#: Official history of names below the full build's 30-row floor. They are not
+#: served, but they are kept: when a later archive lists one, it joins the
+#: store with its COMPLETE history, not only the sessions after the build
+#: (store integrity audit 2026-11-22: 50 names had lost up to 27 sessions).
+_pending: dict[str, pd.DataFrame] = {}
 
 
 def store_revision() -> tuple[int, int]:
@@ -307,7 +312,7 @@ def _save_pkl() -> None:
         import pickle
         with _lock:
             data = {"store": _store, "last_day": _store_last_day,
-                    "sessions": _store_sessions}
+                    "sessions": _store_sessions, "pending": _pending}
         _PKL.parent.mkdir(parents=True, exist_ok=True)
         tmp = _PKL.with_suffix(".pkl.tmp")
         with open(tmp, "wb") as f:
@@ -319,7 +324,7 @@ def _save_pkl() -> None:
 
 def _load_pkl() -> bool:
     """Load the consolidated cache. False if absent/corrupt."""
-    global _store, _store_last_day, _store_sessions
+    global _store, _store_last_day, _store_sessions, _pending
     try:
         import pickle
         if not _PKL.exists():
@@ -338,6 +343,7 @@ def _load_pkl() -> bool:
             _store = data["store"]
             _store_last_day = data["last_day"]
             _store_sessions = int(data.get("sessions") or 0)
+            _pending = dict(data.get("pending") or {})
             _bump_revision_locked()
         log.info("bhav_store_loaded_from_cache", symbols=len(_store),
                  sessions=_store_sessions, latest=str(_store_last_day))
@@ -357,7 +363,7 @@ def _bump_revision_locked() -> None:
 
 
 def _full_build(available: list[date]) -> int:
-    global _store, _store_last_day, _store_sessions
+    global _store, _store_last_day, _store_sessions, _pending
     frames = []
     parsed_days = []
     for d in sorted(available):
@@ -372,12 +378,17 @@ def _full_build(available: list[date]) -> int:
     if "deliv_per" in allday.columns:
         keep_cols.append("deliv_per")
     new_store: dict[str, pd.DataFrame] = {}
+    new_pending: dict[str, pd.DataFrame] = {}
     for sym, g in allday.groupby("symbol"):
         g = g.sort_values("date").set_index("date")
+        frame = g[[c for c in keep_cols if c in g.columns]]
         if len(g) >= 30:
-            new_store[sym] = g[[c for c in keep_cols if c in g.columns]]
+            new_store[sym] = frame
+        else:
+            new_pending[sym] = frame
     with _lock:
         _store = new_store
+        _pending = new_pending
         _store_last_day = max(parsed_days)
         _store_sessions = len(frames)
         _bump_revision_locked()
@@ -420,10 +431,15 @@ def _incremental_append(new_days: list[date]) -> None:
             cols = [c for c in ("open", "high", "low", "close", "volume",
                                 "deliv_per") if c in g.columns]
             old = _store.get(sym)
+            if old is None and sym in _pending:
+                old = _pending.pop(sym)
             if old is not None:
                 merged = pd.concat([old, g[[c for c in cols if c in old.columns
                                             or c in g.columns]]])
-                _store[sym] = merged[~merged.index.duplicated(keep="last")]
+                # A late archive (older than rows already held) must not leave
+                # the history out of date order: readers take iloc[-1] as the
+                # latest bar (store integrity audit 2026-11-22).
+                _store[sym] = merged[~merged.index.duplicated(keep="last")].sort_index()
             elif len(g) >= 1:
                 _store[sym] = g[cols]
         _store_last_day = max(d for d, _ in parsed)
@@ -756,9 +772,10 @@ def membership_rows() -> tuple[list[dict], dict]:
 
 def reset_in_memory_store() -> None:
     """Clear the process-local symbol map (tests and worker isolation)."""
-    global _store, _store_last_day, _store_sessions
+    global _store, _store_last_day, _store_sessions, _pending
     with _lock:
         _store = {}
+        _pending = {}
         _store_last_day = None
         _store_sessions = 0
         _bump_revision_locked()
