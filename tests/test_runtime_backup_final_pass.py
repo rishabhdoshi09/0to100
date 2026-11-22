@@ -520,3 +520,69 @@ def test_an_excluded_path_listed_in_the_baseline_is_outside_the_claim(tmp_path):
     assert out.returncode == 1 and "BASELINE_MISMATCH logs/cron.log" in out.stderr
     out = _run2(src, dst, stamp, "--baseline", base, "--verify-only", "--exclude", "logs/cron.log")
     assert out.returncode == 0 and "BASELINE_OK" in out.stdout
+
+
+# ── C7V-02 (GPT verification pass, cycle 7) and A9 (stage 1, 22-23 Nov 2026) ──
+
+
+def _stage3_final_pass_commands():
+    runbook = SCRIPT.parents[1] / "docs/runbooks/2026-11-22-paper-upgrade-and-store-repair.md"
+    stage = runbook.read_text().split("## 3. Maintenance window", 1)[1]
+    block = stage.split("```bash\n", 1)[1].split("```", 1)[0]
+    lines = block.replace("\\\n", " ").splitlines()
+    calls = [(i, line) for i, line in enumerate(lines) if "runtime_backup_final_pass.sh" in line]
+    stop = next(i for i, line in enumerate(lines) if "product.launchd_control stop" in line)
+    return calls, stop
+
+
+def test_c7v02_the_documented_stage3_verifies_the_baseline_before_the_stop():
+    calls, stop = _stage3_final_pass_commands()
+    assert len(calls) == 2
+    (before_i, before), (after_i, after) = calls
+    assert before_i < stop < after_i
+    assert "--verify-only" in before and "--baseline $M/copy/manifest.sha256" in before
+    assert "--verify-only" not in after
+    for line in (before, after):
+        assert "/Volumes/QuantTermStorage/QuantTerm/runtime /Volumes/QTBackupPreUpgrade/QuantTerm/runtime" in line
+        assert "--exclude logs/cron.log" in line and "--exclude logs/simplequant.log.1" in line
+
+
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_c7v02_the_documented_stage3_commands_run_as_written(tmp_path, corrupt):
+    """Runs the runbook's own two final-pass lines on a fixture: a corrupted
+    unchanged backup file stops the pre-stop check, and the excluded log is
+    never copied into the backup."""
+    src, dst = tmp_path / "QuantTermStorage" / "runtime", tmp_path / "QTBackupPreUpgrade" / "runtime"
+    M = tmp_path / "M"
+    for directory in (src / "logs", dst / "logs", M / "copy"):
+        directory.mkdir(parents=True)
+    (src / "logs" / "trades.db").write_bytes(b"T" * 4096)
+    (src / "logs" / "cron.log").write_bytes(b"static September log")
+    (src / "logs" / "simplequant.log.1").write_bytes(b"static September log 2")
+    shutil.copy2(src / "logs" / "trades.db", dst / "logs" / "trades.db")
+    _baseline(dst, M / "copy" / "manifest.sha256")
+    (M / "bulk_started").write_text("")
+    os.utime(M / "bulk_started", (2_000_000_000, 2_000_000_000))
+    if corrupt:
+        st = (dst / "logs" / "trades.db").stat()
+        (dst / "logs" / "trades.db").write_bytes(b"X" * 4096)
+        os.utime(dst / "logs" / "trades.db", ns=(st.st_atime_ns, st.st_mtime_ns))
+    calls, _stop = _stage3_final_pass_commands()
+    results = []
+    for _i, line in calls:
+        cmd = (line.split("#", 1)[0]
+               .replace("$M/code/scripts/runtime_backup_final_pass.sh", str(SCRIPT))
+               .replace("/Volumes/QuantTermStorage/QuantTerm/runtime", str(src))
+               .replace("/Volumes/QTBackupPreUpgrade/QuantTerm/runtime", str(dst)))
+        results.append(subprocess.run(["bash", "-c", cmd], capture_output=True, text=True,
+                                      env=_env(M=str(M))))
+        if results[-1].returncode != 0:
+            break                                   # the runbook stops on the first failure
+    if corrupt:
+        assert len(results) == 1 and results[0].returncode == 1
+        assert "BASELINE_MISMATCH logs/trades.db" in results[0].stderr
+    else:
+        assert [r.returncode for r in results] == [0, 0], [r.stderr for r in results]
+        assert "BASELINE_OK" in results[0].stdout and "excluded=2" in results[0].stdout
+        assert "FINAL_PASS_OK" in results[1].stdout and "excluded=2" in results[1].stdout
+    assert not (dst / "logs" / "cron.log").exists() and not (dst / "logs" / "simplequant.log.1").exists()
