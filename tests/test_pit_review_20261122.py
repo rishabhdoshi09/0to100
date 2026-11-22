@@ -237,8 +237,8 @@ def test_review_why_does_not_build_breadth_synchronously(tmp_path, monkeypatch):
     monkeypatch.setattr(PF, "market_context", lambda cut, index_fn=None: {})
     monkeypatch.setattr(PF, "technical_features", lambda *a, **kw: {})
     passes = []
-    monkeypatch.setattr(PF, "_breadth_counts",
-                        lambda *a: passes.append(PF._BREADTH_LOCK.locked()) or {})
+    monkeypatch.setattr(PF, "_market_pass",
+                        lambda *a: passes.append(PF._BREADTH_LOCK.locked()) or PF._MarketPass())
     workspace = {"scan_scanned_at": at, "categories": [{"cards": [
         {"symbol": "TCS", "reco_tier": "watch"},
         {"symbol": "INFY", "reco_tier": "watch"},

@@ -36,6 +36,15 @@ session's context, never that evening's archive, however late it is frozen.
   archives (a live overlay row is never an input). Ties are decided in exact
   arithmetic, so back-adjustment by a later corporate action cannot flip one.
 
+It also fills ``rs_percentile`` (``CROSS_SECTIONAL_PRODUCED``), on the same
+source session: research.sepa's rs_cs_v1 composite (0.40*r63 + 0.20*r126 +
+0.20*r189 + 0.20*r252, returns over the name's own verified-archive bars),
+ranked market-wide as 100 * (names scoring strictly below) / N over the
+breadth universe with a verified bar that session (N >= 300). The shadow
+observer in research.feature002 ranks within a scan's cards instead; this is
+the market-wide definition. A name whose composite is not finite (a bad print
+in a horizon) is missing here, where build_rs_table would rank it at 0.
+
 The provenance records the source session and this producer's version, and
 the challenger scores with the producer it was trained with
 (``PRODUCER_VERSION``), so a model version always names one predictor.
@@ -84,11 +93,18 @@ CONTEXT_PRODUCED = (
 #: Which features this module fills, by version. The challenger records the
 #: version it was trained under and is scored with exactly that producer.
 LEGACY_PRODUCER = "pit_v1_technical"
-PRODUCER_VERSION = "pit_v2_context"
+CONTEXT_PRODUCER = "pit_v2_context"
+PRODUCER_VERSION = "pit_v3_rs"
+#: Cross-sectional features (one market-wide ranking per source session).
+CROSS_SECTIONAL_PRODUCED = ("rs_percentile",)
 PRODUCER_FEATURES = {
     LEGACY_PRODUCER: PRODUCED,
-    PRODUCER_VERSION: PRODUCED + CONTEXT_PRODUCED,
+    CONTEXT_PRODUCER: PRODUCED + CONTEXT_PRODUCED,
+    PRODUCER_VERSION: PRODUCED + CONTEXT_PRODUCED + CROSS_SECTIONAL_PRODUCED,
 }
+#: research.sepa (rs_cs_v1): composite of bar-count horizon returns.
+RS_HORIZONS = (63, 126, 189, 252)
+RS_WEIGHTS = (0.40, 0.20, 0.20, 0.20)
 #: research.intelligence.data.nse_calendar._PUBLISH_CUTOFF_HM
 PUBLISH_CUTOFF = time(18, 0)
 #: scan.breadth.MIN_N: fewer names is not the whole market.
@@ -358,8 +374,61 @@ _CONTEXT_TTL_S = 300.0
 _CONTEXT_MAX = 64
 
 
-def _breadth_counts(archive: tuple[date, ...], symbols: list[str], ohlcv_fn: Callable) -> dict[date, tuple[int, int]]:
-    """{verified session: (names above their 50-DMA, names measured)}.
+def _official_closes(df, days) -> tuple | None:
+    """(dates, closes, positions in ``days``) of a frame's verified-archive bars.
+
+    The live-overlay row is dropped. One definition for the market pass and
+    for a single name, so a name's own score ranks against exactly the same
+    numbers.
+    """
+    import numpy as np
+
+    if df is None or getattr(df, "empty", True):
+        return None
+    cols = {str(c).lower(): c for c in df.columns}
+    if "close" not in cols:
+        return None
+    try:
+        d, df = _daily(df)
+        c = df[cols["close"]].to_numpy(dtype=float, na_value=np.nan)
+    except Exception:
+        return None
+    loc = np.searchsorted(days, d)
+    official = (loc < len(days)) & (days[np.minimum(loc, len(days) - 1)] == d)
+    overlay = str(getattr(df, "attrs", {}).get("quantterm_live_overlay_date") or "")
+    if overlay:
+        official &= d != np.datetime64(overlay[:10], "D")
+    return d[official], c[official], loc[official]
+
+
+def _rs_scores(c):
+    """rs_cs_v1 composite at every bar with 252 earlier bars; NaN where not finite or a price <= 0."""
+    import numpy as np
+
+    n = len(c)
+    out = np.full(n, np.nan)
+    span = RS_HORIZONS[-1]
+    if n <= span:
+        return out
+    last = c[span:]
+    acc = np.zeros(n - span)
+    ok = np.isfinite(last) & (last > 0)
+    for h, w in zip(RS_HORIZONS, RS_WEIGHTS):
+        start = c[span - h: n - h]
+        ok &= np.isfinite(start) & (start > 0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            acc = acc + w * (last / start - 1.0)
+    out[span:] = np.where(ok, acc, np.nan)
+    return out
+
+
+class _MarketPass(dict):
+    """{verified session: (above, measured)} for breadth, plus ``rs``: {session: sorted scores}."""
+    rs: dict
+
+
+def _market_pass(archive: tuple[date, ...], symbols: list[str], ohlcv_fn: Callable) -> "_MarketPass":
+    """One pass over the store: breadth counts and the per-session sorted rs_cs_v1 scores.
 
     Each name's series is first reduced to the bars of verified archives (a
     live-overlay row is dropped), then every 50-bar window is averaged on its
@@ -369,10 +438,14 @@ def _breadth_counts(archive: tuple[date, ...], symbols: list[str], ohlcv_fn: Cal
     from numpy.lib.stride_tricks import sliding_window_view
 
     days = np.asarray(sorted(archive), dtype="datetime64[D]")
+    result = _MarketPass()
+    result.rs = {}
     if not len(days):
-        return {}
+        return result
     above = np.zeros(len(days), dtype=np.int64)
     valid = np.zeros(len(days), dtype=np.int64)
+    rs_day: list = []
+    rs_val: list = []
     for sym in symbols:
         try:
             df = ohlcv_fn(sym)
@@ -380,22 +453,12 @@ def _breadth_counts(archive: tuple[date, ...], symbols: list[str], ohlcv_fn: Cal
             continue
         if df is None or getattr(df, "empty", True) or len(df) < _BREADTH_MIN_BARS:
             continue
-        cols = {str(c).lower(): c for c in df.columns}
-        if "close" not in cols:
+        got = _official_closes(df, days)
+        if got is None:
             continue
-        try:
-            d, df = _daily(df)
-            c = df[cols["close"]].to_numpy(dtype=float, na_value=np.nan)
-        except Exception:
+        _d, c, loc = got
+        if len(c) < _BREADTH_MIN_BARS:
             continue
-        loc = np.searchsorted(days, d)
-        official = (loc < len(days)) & (days[np.minimum(loc, len(days) - 1)] == d)
-        overlay = str(getattr(df, "attrs", {}).get("quantterm_live_overlay_date") or "")
-        if overlay:
-            official &= d != np.datetime64(overlay[:10], "D")
-        if int(official.sum()) < _BREADTH_MIN_BARS:
-            continue
-        c, loc = c[official], loc[official]
         with np.errstate(invalid="ignore"):
             sma = sliding_window_view(c, 50).mean(axis=1)[1:]      # windows ending at bar 51, 52, ...
             last = c[50:]
@@ -404,12 +467,80 @@ def _breadth_counts(archive: tuple[date, ...], symbols: list[str], ohlcv_fn: Cal
         valid += np.bincount(at, minlength=len(days))
         if up.any():
             above += np.bincount(at[up], minlength=len(days))
-    return {days[i].astype(object): (int(above[i]), int(valid[i])) for i in np.flatnonzero(valid)}
+        scores = _rs_scores(c)
+        keep = np.isfinite(scores)
+        if keep.any():
+            rs_day.append(loc[keep])
+            rs_val.append(scores[keep])
+    for i in np.flatnonzero(valid):
+        result[days[i].astype(object)] = (int(above[i]), int(valid[i]))
+    if rs_day:
+        all_day = np.concatenate(rs_day)
+        all_val = np.concatenate(rs_val)
+        order = np.lexsort((all_val, all_day))
+        all_day, all_val = all_day[order], all_val[order]
+        cuts = np.flatnonzero(np.diff(all_day)) + 1
+        for chunk_day, chunk_val in zip(np.split(all_day, cuts), np.split(all_val, cuts)):
+            result.rs[days[int(chunk_day[0])].astype(object)] = chunk_val
+    return result
+
+
+def _breadth_counts(archive: tuple[date, ...], symbols: list[str], ohlcv_fn: Callable) -> dict[date, tuple[int, int]]:
+    """{verified session: (names above their 50-DMA, names measured)} (see ``_market_pass``)."""
+    return dict(_market_pass(archive, symbols, ohlcv_fn))
 
 
 def _breadth_key(archive: tuple[date, ...], n_symbols: int, sources: tuple) -> tuple:
     return (len(archive), archive[0] if archive else None, archive[-1] if archive else None,
             n_symbols, _store_generation(), sources)
+
+
+def _cached_pass(
+    session: date | None,
+    *,
+    symbols_fn: Callable | None = None,
+    ohlcv_fn: Callable | None = None,
+    archive_fn: Callable | None = None,
+) -> tuple["_MarketPass | None", tuple]:
+    """The market pass that covers ``session`` (cached per archive set and store generation)."""
+    global _BREADTH_CACHE
+    import time as _time
+
+    if session is None:
+        return None, ()
+    try:
+        archive = tuple(sorted({d if isinstance(d, date) else date.fromisoformat(str(d)[:10])
+                                for d in (archive_fn or _archive_dates)()}))
+    except Exception:
+        return None, ()
+    if session not in archive:
+        return None, archive
+    try:
+        symbols = _breadth_universe((symbols_fn or _store_symbols)())
+    except Exception:
+        return None, archive
+    if len(symbols) < BREADTH_MIN_N:
+        return None, archive
+    # Injected sources (tests, research) are part of the key by identity; the
+    # production key is the archive set plus the store generation.
+    key = _breadth_key(archive, len(symbols), (symbols_fn, ohlcv_fn, archive_fn))
+    with _BREADTH_LOCK:
+        now = _time.monotonic()
+        market = None
+        if _BREADTH_CACHE is not None and _BREADTH_CACHE[0] == key:
+            market = _BREADTH_CACHE[1]
+            stale_newest = (session == archive[-1]
+                            and market.get(session, (0, 0))[1] < BREADTH_MIN_N
+                            and now - _BREADTH_CACHE[2] >= _BREADTH_RECHECK_S)
+            if stale_newest:
+                market = None
+        if market is None:
+            market = _market_pass(archive, symbols, ohlcv_fn or _store_ohlcv)
+            # A store that changed during the pass is not one generation: keep
+            # the answer for nobody.
+            if _breadth_key(archive, len(symbols), (symbols_fn, ohlcv_fn, archive_fn)) == key:
+                _BREADTH_CACHE = (key, market, now)
+    return market, archive
 
 
 def breadth_pct_above_50dma(
@@ -420,47 +551,49 @@ def breadth_pct_above_50dma(
     archive_fn: Callable | None = None,
 ) -> float | None:
     """Breadth on the verified session ``session``; None when not measurable."""
-    global _BREADTH_CACHE
-    import time as _time
-
-    if session is None:
+    market, _archive = _cached_pass(session, symbols_fn=symbols_fn, ohlcv_fn=ohlcv_fn, archive_fn=archive_fn)
+    if market is None:
         return None
-    try:
-        archive = tuple(sorted({d if isinstance(d, date) else date.fromisoformat(str(d)[:10])
-                                for d in (archive_fn or _archive_dates)()}))
-    except Exception:
-        return None
-    if session not in archive:
-        return None
-    try:
-        symbols = _breadth_universe((symbols_fn or _store_symbols)())
-    except Exception:
-        return None
-    if len(symbols) < BREADTH_MIN_N:
-        return None
-    # Injected sources (tests, research) are part of the key by identity; the
-    # production key is the archive set plus the store generation.
-    key = _breadth_key(archive, len(symbols), (symbols_fn, ohlcv_fn, archive_fn))
-    with _BREADTH_LOCK:
-        now = _time.monotonic()
-        counts = None
-        if _BREADTH_CACHE is not None and _BREADTH_CACHE[0] == key:
-            counts = _BREADTH_CACHE[1]
-            stale_newest = (session == archive[-1]
-                            and counts.get(session, (0, 0))[1] < BREADTH_MIN_N
-                            and now - _BREADTH_CACHE[2] >= _BREADTH_RECHECK_S)
-            if stale_newest:
-                counts = None
-        if counts is None:
-            counts = _breadth_counts(archive, symbols, ohlcv_fn or _store_ohlcv)
-            # A store that changed during the pass is not one generation: keep
-            # the answer for nobody.
-            if _breadth_key(archive, len(symbols), (symbols_fn, ohlcv_fn, archive_fn)) == key:
-                _BREADTH_CACHE = (key, counts, now)
-    up, n = counts.get(session, (0, 0))
+    up, n = market.get(session, (0, 0))
     if n < BREADTH_MIN_N:
         return None
     return round(up / n * 100.0, 6)
+
+
+def rs_percentile_on(
+    symbol: str,
+    frame,
+    session: date | None,
+    *,
+    symbols_fn: Callable | None = None,
+    ohlcv_fn: Callable | None = None,
+    archive_fn: Callable | None = None,
+) -> float | None:
+    """Market-wide rs_cs_v1 percentile of ``symbol`` on the verified session; None when not measurable."""
+    import numpy as np
+
+    sym = str(symbol or "").strip().upper()
+    if session is None or not sym or not _breadth_universe([sym]):
+        return None
+    market, archive = _cached_pass(session, symbols_fn=symbols_fn, ohlcv_fn=ohlcv_fn, archive_fn=archive_fn)
+    if market is None:
+        return None
+    ranked = getattr(market, "rs", {}).get(session)
+    if ranked is None or len(ranked) < BREADTH_MIN_N:
+        return None
+    days = np.asarray(archive, dtype="datetime64[D]")
+    got = _official_closes(frame, days)
+    if got is None:
+        return None
+    d, c, _loc = got
+    hit = np.flatnonzero(d == np.datetime64(session, "D"))
+    if not hit.size:
+        return None
+    score = _rs_scores(c)[int(hit[-1])]
+    if not np.isfinite(score):
+        return None
+    below = int(np.searchsorted(ranked, score, side="left"))
+    return round(100.0 * below / len(ranked), 6)
 
 
 def reset_breadth_cache() -> None:
@@ -535,20 +668,21 @@ def fill_missing(
                         "error": "UNKNOWN_PRODUCER"}
     own = [k for k in PRODUCED if k in allowed and _missing(k, merged.get(k))]
     want_delivery = "delivery_pct" in allowed and _missing("delivery_pct", merged.get("delivery_pct"))
+    want_rs = "rs_percentile" in allowed and _missing("rs_percentile", merged.get("rs_percentile"))
     shared = [k for k in _SHARED_CONTEXT if k in allowed and _missing(k, merged.get(k))]
     cut = cutoff_session(decided_at)
     prov: dict[str, Any] = {"filled": [], "cutoff_session": None if cut is None else cut.isoformat(),
                             "source": "official_bhavcopy_pit", "producer": producer}
-    if not own and not want_delivery and not shared:
+    if not own and not want_delivery and not want_rs and not shared:
         return merged, {"filled": [], "cutoff_session": None, "producer": producer}
-    if frame is None and (own or want_delivery):
+    if frame is None and (own or want_delivery or want_rs):
         try:
             frame = _store_ohlcv(str(symbol or "").upper())
         except Exception:
             frame = None
     computed: dict[str, Any] = technical_features(symbol, decided_at, frame=frame) if own and frame is not None else {}
     ctx: dict[str, Any] = {}
-    if want_delivery or shared:
+    if want_delivery or want_rs or shared:
         try:
             ctx = dict(context) if context is not None else context_features(decided_at)
         except Exception:
@@ -562,6 +696,14 @@ def fill_missing(
             deliv = delivery_on(frame, session)
             if deliv is not None:
                 computed["delivery_pct"] = round(deliv, 6)
+        if want_rs and session is not None:
+            try:
+                rs = ctx.get("rs_percentile") if context is not None and "rs_percentile" in ctx \
+                    else rs_percentile_on(symbol, frame, session)
+            except Exception:
+                rs = None
+            if rs is not None:
+                computed["rs_percentile"] = rs
         computed.update({k: ctx[k] for k in shared if ctx.get(k) is not None})
         prov["context_session"] = None if session is None else session.isoformat()
         prov["context_source"] = {
@@ -569,9 +711,11 @@ def fill_missing(
             "vix": "official_index_pit",
             "index_trend": "official_index_pit:historical_curriculum.classify_session",
             "breadth_pct_above_50dma": "official_bhavcopy_pit:scan.breadth",
+            "rs_percentile": "official_bhavcopy_pit:research.sepa.rs_cs_v1:market_wide",
         }
         prov["publication_rule"] = "verified archive published by generated_at (18:00 IST convention)"
-    filled = [k for k in own + (["delivery_pct"] if want_delivery else []) + shared if k in computed]
+    filled = [k for k in own + (["delivery_pct"] if want_delivery else [])
+              + (["rs_percentile"] if want_rs else []) + shared if k in computed]
     for k in filled:
         merged[k] = computed[k]
     prov["filled"] = filled
