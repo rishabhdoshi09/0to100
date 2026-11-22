@@ -220,7 +220,9 @@ def test_rollback_without_a_backup_refuses(tmp_path):
 
 
 # ── GPT cross-review of 8a52e49d (ST-01..ST-09): GPT's own sketches ───────────
-# Each failed on 8a52e49d at its claim-bearing assertion.
+# Each failed on 8a52e49d at its claim-bearing assertion. One adaptation: the
+# tool resolves runtime paths through core.runtime_paths (the isolation gate),
+# so ``runtime / rb.PICKLE`` is spelled ``rb._pickle(runtime)``.
 
 @pytest.mark.parametrize("command", [
     "python -u -m product.host_entrypoint",
@@ -250,7 +252,7 @@ def test_review_plan_uses_target_holidays(runtime, tmp_path):
 
     day = DAYS[10]
     (runtime / "logs/nse_holidays.json").write_text(json.dumps([day.date().isoformat()]))
-    pkl = runtime / rb.PICKLE
+    pkl = rb._pickle(runtime)
     payload = pickle.loads(pkl.read_bytes())
     for symbol, frame in payload["store"].items():
         payload["store"][symbol] = frame.drop(day, errors="ignore")
@@ -284,7 +286,7 @@ def test_review_rollback_preserves_post_apply_update(runtime, tmp_path, monkeypa
     assert rb.plan(runtime, tmp_path / "stage", manifest)["ready"]
     monkeypatch.setattr(rb, "_held_open", lambda _: [])
     rb.apply(manifest, "test approval", target_is_copy=True)
-    target = runtime / rb.PICKLE
+    target = rb._pickle(runtime)
     payload = pickle.loads(target.read_bytes())
     payload["store"]["AAA"].loc[DAYS[-1], "volume"] = 2000
     updated = pickle.dumps(payload)
@@ -299,7 +301,7 @@ def test_review_audit_detects_wrong_pending_close(runtime):
     from product import bhav_store_rebuild as rb
     from research.store_integrity_audit import audit
 
-    pkl = runtime / rb.PICKLE
+    pkl = rb._pickle(runtime)
     payload = pickle.loads(pkl.read_bytes())
     young = payload["store"].pop("YOUNG").reindex(DAYS[23:]).copy()
     for i in range(23, 29):
@@ -346,7 +348,7 @@ def test_review_quote_cannot_overwrite_concurrent_archive(tmp_path, monkeypatch)
 def test_review_rebuild_preserves_deployed_sampling_order(runtime, tmp_path):
     from product import bhav_store_rebuild as rb
 
-    pkl = runtime / rb.PICKLE
+    pkl = rb._pickle(runtime)
     payload = pickle.loads(pkl.read_bytes())
     order = ["BBB", "AAA", "YOUNG"]
     payload["store"] = {s: payload["store"][s] for s in order}
@@ -362,7 +364,7 @@ def test_review_audit_flags_reader_visible_differences(runtime, defect):
     from product import bhav_store_rebuild as rb
     from research.store_integrity_audit import audit
 
-    pkl = runtime / rb.PICKLE
+    pkl = rb._pickle(runtime)
     payload = pickle.loads(pkl.read_bytes())
     frame = payload["store"]["AAA"]
     if defect == "missing_delivery":
@@ -398,7 +400,7 @@ def test_review_public_refresh_incorporates_late_archive(monkeypatch):
 def test_review_complete_diff_can_exceed_display_cap(runtime, tmp_path):
     from product import bhav_store_rebuild as rb
 
-    pkl = runtime / rb.PICKLE
+    pkl = rb._pickle(runtime)
     payload = pickle.loads(pkl.read_bytes())
     extra = pd.date_range(end=DAYS[0] - pd.Timedelta(days=1), periods=2001)
     payload["store"]["AAA"] = pd.concat([_frame(extra), payload["store"]["AAA"]])

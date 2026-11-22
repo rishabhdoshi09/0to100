@@ -55,8 +55,6 @@ from pathlib import Path
 from typing import Any
 
 REPO = Path(__file__).resolve().parents[1]
-PICKLE = Path("logs") / "bhav" / "store_cache.pkl"
-CALENDAR = Path("logs") / "nse_holidays.json"
 LOCK_NAME = "MAINTENANCE.lock"          # data.bhavcopy_store.MAINTENANCE_LOCK
 _SAFE_ENV = ("KITE_API_KEY", "KITE_API_SECRET", "KITE_ACCESS_TOKEN", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
 
@@ -70,6 +68,33 @@ DESK_PATTERNS = (
     "operations.market_ops", "operations/market_ops",
 )
 LAUNCHD_LABEL = "com.quantterm.desk"
+
+
+def _logs(root: Path, *parts: str) -> Path:
+    """``logs/<parts>`` of the runtime at ``root``, resolved by core.runtime_paths.
+
+    This tool addresses explicit runtimes (the target and a staging copy), not
+    the process's own, so the runtime root is bound per call and restored.
+    """
+    from core.runtime_paths import ENV_VAR, logs_path
+
+    previous = os.environ.get(ENV_VAR)
+    os.environ[ENV_VAR] = str(root)
+    try:
+        return logs_path(*parts)
+    finally:
+        if previous is None:
+            os.environ.pop(ENV_VAR, None)
+        else:
+            os.environ[ENV_VAR] = previous
+
+
+def _pickle(root: Path) -> Path:
+    return _logs(Path(root), "bhav", "store_cache.pkl")
+
+
+def _calendar(root: Path) -> Path:
+    return _logs(Path(root), "nse_holidays.json")
 
 
 def _sha256(path: Path) -> str:
@@ -88,7 +113,7 @@ def _not_live(path: Path, what: str) -> Path:
 
 
 def _archive_files(root: Path) -> list[Path]:
-    return sorted(f for f in (root / "logs" / "bhav").iterdir() if f.suffix.lower() == ".csv" and f.is_file())
+    return sorted(f for f in _logs(root, "bhav").iterdir() if f.suffix.lower() == ".csv" and f.is_file())
 
 
 def _source_manifest(root: Path, *, hashes: bool) -> dict[str, Any]:
@@ -98,21 +123,21 @@ def _source_manifest(root: Path, *, hashes: bool) -> dict[str, Any]:
         st = f.stat()
         files[f.name] = {"size": st.st_size, "mtime_ns": st.st_mtime_ns,
                          **({"sha256": _sha256(f)} if hashes else {})}
-    cal = root / CALENDAR
+    cal = _calendar(root)
     calendar = {"present": cal.exists(), **({"sha256": _sha256(cal)} if cal.exists() else {})}
     return {"archives": files, "calendar": calendar}
 
 
 def _stage(target: Path, staging: Path) -> dict[str, Any]:
     """An immutable snapshot of the target's archives and calendar in a fresh staging root."""
-    dst = staging / "logs" / "bhav"
+    dst = _logs(staging, "bhav")
     if dst.exists():
         raise SystemExit(f"staging already exists: {dst} (use a fresh directory)")
     dst.mkdir(parents=True)
     for f in _archive_files(target):
         shutil.copy2(f, dst / f.name)
-    if (target / CALENDAR).exists():
-        shutil.copy2(target / CALENDAR, staging / CALENDAR)
+    if _calendar(target).exists():
+        shutil.copy2(_calendar(target), _calendar(staging))
     staged = _source_manifest(staging, hashes=True)
     source = _source_manifest(target, hashes=False)
     for name, meta in source["archives"].items():
@@ -227,7 +252,7 @@ def plan(target: str | Path, staging: str | Path, out: str | Path) -> dict[str, 
     target = Path(target).resolve()
     staging = _not_live(Path(staging), "the staging root")
     out = _not_live(Path(out), "the manifest")
-    current = target / PICKLE
+    current = _pickle(target)
     if not current.exists():
         raise SystemExit(f"no current pickle at {current}")
     before = _sha256(current)
@@ -240,7 +265,7 @@ def plan(target: str | Path, staging: str | Path, out: str | Path) -> dict[str, 
         raise SystemExit("the copy of the current pickle does not match it")
     old_frames = _frames(current_copy)
     built = _build_in(staging, list(old_frames))
-    new = staging / PICKLE
+    new = _pickle(staging)
     audited = _audit_in(staging, new, staging / "audit_new.json")
     old_audit = _audit_in(staging, current_copy, staging / "audit_current.json")
     new_frames = _frames(new)
@@ -403,7 +428,7 @@ def _verify_source(m: dict) -> None:
         was = planned["archives"][name]
         if (meta["size"], meta["mtime_ns"]) != (was["size"], was["mtime_ns"]):
             raise SystemExit(f"refusing: archive {name} changed since the plan (re-plan)")
-    cal = target / CALENDAR
+    cal = _calendar(target)
     if cal.exists() != bool(planned["calendar"].get("present")) or (
             cal.exists() and _sha256(cal) != planned["calendar"].get("sha256")):
         raise SystemExit("refusing: the target's runtime calendar changed since the plan (re-plan)")
