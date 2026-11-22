@@ -757,3 +757,87 @@ def test_a_plan_whose_binding_target_was_edited_is_refused(world, monkeypatch):
     with pytest.raises(SystemExit, match="bound target"):
         LOC.apply(out, world["db"], "owner words")
     assert _untouched(world, out)
+
+
+# ── GPT cycle-7 review (C7-04, C7-05): sketches as written ──
+
+# GPT C7-04 (cycle-7 review sketch)
+def test_cycle7_review_bind_the_entry_the_rebuild_swaps(world, monkeypatch):
+    from product import bhav_store_rebuild as rebuild
+
+    monkeypatch.setattr(rebuild, "_desk_running", lambda: [])
+    monkeypatch.setattr(rebuild, "_held_open", lambda _: [])
+    monkeypatch.setattr(rebuild, "_verify_source", lambda _: None)
+    _freeze("decision::yng", "YNG", world["current"]["YNG"])
+
+    target = world["tmp"] / "live.pkl"
+    target.symlink_to(world["cur"])
+    sm = _store_manifest(world, installed=target)
+    payload = json.loads(sm.read_text())
+    payload.update(state="planned", new_pickle=str(world["rep"]))
+    sm.write_text(json.dumps(payload))
+
+    out = world["tmp"] / "correction.json"
+    plan = LOC.plan(world["db"], world["cur"], world["rep"], out,
+                    world["ca"], store_manifest=sm)
+    assert plan["complete"] and plan["store_binding"]["verified"]
+    assert rebuild.apply(sm, "approve rebuild", target_is_copy=True)["applied_ok"]
+    assert target.read_bytes() == world["rep"].read_bytes()
+    assert LOC.apply(out, world["db"], "approve correction")["state"] == "applied"
+
+# GPT C7-05 (cycle-7 review sketch)
+def test_cycle7_review_documented_rollback_releases_batch(world, monkeypatch):
+    import shlex
+    from pathlib import Path
+
+    _, out, _ = _bound_plan(world, monkeypatch)
+    LOC.apply(out, world["db"], "approve correction")
+
+    runbook = Path(LOC.__file__).parents[1] / (
+        "docs/runbooks/2026-11-22-paper-upgrade-and-store-repair.md"
+    )
+    block = runbook.read_text().split(
+        "-m product.learning_observation_correction rollback", 1
+    )[1].split("```", 1)[0]
+    argv = shlex.split(block.replace("\\\n", " "))
+    argv = [{"$M/quarantine_manifest.json": str(out),
+             "$R/feature_store.db": str(world["db"])}.get(arg, arg)
+            for arg in argv]
+
+    assert LOC.main(["rollback", *argv]) == 0
+    assert fs.quarantined_ids() == set()
+
+
+def test_a_stale_plan_refuses_before_marking_the_manifest(world, monkeypatch):
+    """Refusal ordering: an observation frozen after the plan refuses BEFORE the
+    manifest is written as 'applying' (the in-transaction check is the backstop)."""
+    m, out, sm = _bound_plan(world, monkeypatch)
+    _freeze("decision::late", "YNG", world["current"]["YNG"])
+    with pytest.raises(SystemExit, match="nothing was written"):
+        LOC.apply(out, world["db"], "owner words")
+    assert _untouched(world, out)
+
+
+def test_the_in_transaction_check_still_catches_a_race(world, monkeypatch):
+    """An observation frozen between the pre-check and the write transaction."""
+    m, out, sm = _bound_plan(world, monkeypatch)
+    real, calls = LOC._scope_digest, {"n": 0}
+
+    def racing(rows, changed):
+        calls["n"] += 1
+        return real(rows, changed) if calls["n"] == 1 else ("0" * 64, 0)
+
+    monkeypatch.setattr(LOC, "_scope_digest", racing)
+    with pytest.raises(SystemExit, match="changed since the plan"):
+        LOC.apply(out, world["db"], "owner words")
+    assert calls["n"] == 2 and fs.quarantined_ids() == set()
+
+
+def test_a_different_case_volumes_spelling_cannot_use_copy_mode(world):
+    from pathlib import Path
+    assert LOC._is_production("/volumes/QuantTermStorage/QuantTerm/runtime/logs/feature_store.db")
+    assert LOC._is_production("/VOLUMES/QuantTermStorage/x")
+    with pytest.raises(SystemExit, match="copy mode"):
+        LOC._check_copy_mode(Path("/volumes/QuantTermStorage/QuantTerm/runtime/logs/feature_store.db"), True)
+    with pytest.raises(SystemExit, match="/Volumes"):
+        LOC._not_live("/volumes/QuantTermStorage/x", "the feature store")

@@ -82,6 +82,8 @@ def test_old_overlay_cannot_become_an_official_rs_bar(monkeypatch, flat_rs_store
             return e
 
     monkeypatch.setattr(nse_live, "date", Clock)
+    from core import market_clock
+    monkeypatch.setattr(market_clock, "today_ist", lambda: e)      # the producer dates by the NSE clock (C7-08)
     monkeypatch.setattr(nse_live, "_is_trading_now", lambda: True)
     monkeypatch.setattr(nse_universe, "get_nse_universe", lambda: [])
     monkeypatch.setattr(kite_client, "kite_credentials_available", lambda: False)

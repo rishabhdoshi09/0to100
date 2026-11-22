@@ -139,7 +139,8 @@ def _hist(symbol: str):
         from data.bhavcopy_store import get_ohlcv
         df = get_ohlcv(symbol)
         if df is not None:
-            df.attrs.setdefault("quantterm_source", "bhavcopy_store")   # get_ohlcv returns a copy
+            df.attrs["quantterm_source"] = "bhavcopy_store"   # read from the store; get_ohlcv returns a copy
+            df.attrs.pop("quantterm_snapshot_id", None)
         return df
     except Exception:
         return None
@@ -193,9 +194,17 @@ def _frames_for(symbols: Sequence[str]) -> dict:
     return frames
 
 
-def _build_rs_table(symbols: Sequence[str], as_of: str):
-    """Same rs_cs_v1 formula. FastRS if present, else sepa.rs.build_rs_table."""
-    frames = _frames_for(symbols)
+def _build_rs_table(symbols: Sequence[str], as_of: str, frames: Mapping[str, Any] | None = None):
+    """Same rs_cs_v1 formula. FastRS if present, else sepa.rs.build_rs_table.
+
+    ``frames``: the frames the caller already captured (and cut to the session).
+    Ranking a SECOND read could mix snapshots or live updates with the frames
+    the row's trend and provenance describe (GPT C7-07, cycle 7).
+    """
+    if frames is None:
+        frames = _frames_for(symbols)
+    else:
+        frames = {str(s).upper(): f for s, f in frames.items() if f is not None and len(f)}
     if not frames:
         return None
     try:
@@ -274,7 +283,7 @@ def build_shadow_records(
     hist_as_of = session_date
     if as_ofs:
         hist_as_of = max(as_ofs)
-    rs_table = _build_rs_table(symbols, hist_as_of)
+    rs_table = _build_rs_table(symbols, hist_as_of, frames=hists)
 
     rows: list[dict[str, Any]] = []
     fam_counter: Counter[str] = Counter()

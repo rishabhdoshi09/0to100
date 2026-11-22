@@ -17,14 +17,17 @@
 # Baseline (--baseline, Cycle 7): an UNCHANGED source file is never re-read by
 # 1-3, so a backup copy corrupted after the bulk pass (same size, same mtime)
 # would pass. The baseline is the stage-1 manifest of the backup ('sha256  path',
-# verified against the source when it was written). Every baseline entry that
-# is NOT in the delta is re-hashed in the backup and must match. That re-reads
-# the whole backup; --verify-only runs exactly this check (no copy, no delete)
-# so it can be done BEFORE the maintenance window, leaving only the delta inside.
+# verified against the source when it was written). The verifier then requires
+# EVERY regular file in the backup to be covered: compared with its source in
+# the delta, or matching its baseline entry. --verify-only checks every baseline
+# entry (no copy, no delete), so the whole-backup re-read can be done BEFORE the
+# maintenance window, leaving only the delta inside it.
 #
-# Refuses (exit 2): identical or nested source/backup paths, a backup on the
-# same filesystem as the source, a missing stamp or baseline.
-# Prints FINAL_PASS_OK (or BASELINE_OK for --verify-only), else exits 1.
+# Refuses (exit 2): any path containing a newline (arguments or files: the
+# baseline is line-based), identical or nested source/backup paths, a backup on
+# the same filesystem as the source, a missing stamp, a missing, empty or
+# malformed baseline. Prints FINAL_PASS_OK (BASELINE_OK for --verify-only),
+# else exits 1. The baseline verifier needs python3 (QT_PYTHON overrides).
 set -euo pipefail
 
 usage="usage: runtime_backup_final_pass.sh <source_dir> <backup_dir> <stamp_file> [--baseline <manifest>] [--verify-only]"
@@ -41,11 +44,20 @@ while [ $# -gt 0 ]; do
         *) echo "$usage" >&2; exit 2;;
     esac
 done
+NL=$'\n'
+for arg in "$SRC" "$DST" "$STAMP" "$BASELINE"; do
+    case "$arg" in *"$NL"*)
+        # command substitution strips trailing newlines: 'source\n' would
+        # silently become its sibling 'source' (GPT C7-03, cycle 7)
+        echo "refusing: a path argument contains a newline" >&2; exit 2;;
+    esac
+done
 [ -d "$SRC" ] || { echo "refusing: no source directory $SRC" >&2; exit 2; }
 [ -d "$DST" ] || { echo "refusing: no backup directory $DST" >&2; exit 2; }
 [ -f "$STAMP" ] || { echo "refusing: no bulk-pass stamp $STAMP" >&2; exit 2; }
 [ -z "$BASELINE" ] || [ -f "$BASELINE" ] || { echo "refusing: no baseline manifest $BASELINE" >&2; exit 2; }
 [ "$VERIFY_ONLY" -eq 0 ] || [ -n "$BASELINE" ] || { echo "refusing: --verify-only needs --baseline" >&2; exit 2; }
+if [ "$SRC" -ef "$DST" ]; then echo "refusing: the source and the backup are the same directory" >&2; exit 2; fi
 
 SRC=$(cd -P "$SRC" && pwd)
 DST=$(cd -P "$DST" && pwd)
@@ -63,13 +75,19 @@ if [ "${QT_FINAL_PASS_ALLOW_SAME_FS:-0}" != "1" ]; then
         exit 2
     fi
 fi
+PY=${QT_PYTHON:-python3}
+if [ -n "$BASELINE" ] && ! command -v "$PY" >/dev/null 2>&1; then
+    echo "refusing: the baseline verifier needs python3 (set QT_PYTHON)" >&2; exit 2
+fi
 
 LIST=$(mktemp "${TMPDIR:-/tmp}/qt-final-pass.XXXXXX")     # portable: BSD and GNU mktemp
-CHECK=$(mktemp "${TMPDIR:-/tmp}/qt-final-base.XXXXXX")
-PATHS=$(mktemp "${TMPDIR:-/tmp}/qt-final-paths.XXXXXX")
-trap 'rm -f "$LIST" "$CHECK" "$PATHS"' EXIT
+trap 'rm -f "$LIST"' EXIT
 (cd "$SRC" && find . -type f \( -newer "$STAMP" -o -cnewer "$STAMP" \) -print0) > "$LIST"
 n=$(tr -cd '\0' < "$LIST" | wc -c | tr -d ' ')
+if [ "$(tr -cd '\n' < "$LIST" | wc -c | tr -d ' ')" -ne 0 ]; then
+    echo "refusing: a file changed since the stamp has a newline in its name; the baseline cannot represent it" >&2
+    exit 2
+fi
 
 if [ "$VERIFY_ONLY" -eq 0 ]; then
     rsync -a --delete "$SRC/" "$DST/"
@@ -93,44 +111,101 @@ if [ -z "$BASELINE" ]; then
     echo "FINAL_PASS_OK rechecked=$n NO_BASELINE (unchanged files were not re-verified)"
     exit 0
 fi
-# Baseline: every standard 'sha256  path' entry not in the delta, re-hashed in the backup.
-tr '\0' '\n' < "$LIST" | sed 's|^\./||' > "$PATHS"
-awk -v pf="$PATHS" 'BEGIN { while ((getline l < pf) > 0) skip[l] = 1 }
-     length($1) == 64 && $1 ~ /^[0-9a-f]+$/ && substr($0, 65, 2) == "  " {
-         p = substr($0, 67); if (!(p in skip)) print }' "$BASELINE" > "$CHECK"
-# (the skip list is read with getline: with NR==FNR an EMPTY skip list would
-#  swallow the whole baseline)
-# (no {64} interval: BSD awk on macOS does not support it)
-gone=0
-if [ "$VERIFY_ONLY" -eq 0 ]; then
-    # a file the desk deleted since the bulk pass was mirrored by --delete: its
-    # baseline entry no longer applies (verify-only keeps it: the backup still has it)
-    KEPT=$(mktemp "${TMPDIR:-/tmp}/qt-final-kept.XXXXXX")
-    while IFS= read -r line; do
-        if [ -e "$SRC/${line:66}" ]; then printf '%s\n' "$line"; else gone=$((gone + 1)); fi
-    done < "$CHECK" > "$KEPT"
-    mv "$KEPT" "$CHECK"
-fi
-m=$(wc -l < "$CHECK" | tr -d ' ')
-total=$(grep -c '' "$BASELINE" || true)
-if [ "$m" -eq 0 ] && [ "$total" -gt 0 ] && [ $((n + gone)) -lt "$total" ]; then
-    echo "refusing: the baseline has no usable 'sha256  path' entries" >&2
-    exit 2
-fi
-bad=0
-if [ "$m" -gt 0 ]; then
-    result=$(cd "$DST" && shasum -a 256 -c "$CHECK" 2>&1 || true)
-    bad=$(printf '%s\n' "$result" | grep -v -c ': OK$' || true)
-    if [ "$bad" -ne 0 ]; then
-        printf '%s\n' "$result" | grep -v ': OK$' | head -20 | sed 's/^/BASELINE_MISMATCH /' >&2
-    fi
-fi
-if [ "$bad" -ne 0 ]; then
-    echo "FINAL_PASS_FAILED baseline_mismatches=$bad" >&2
-    exit 1
-fi
-if [ "$VERIFY_ONLY" -eq 1 ]; then
-    echo "BASELINE_OK verified=$m"
-else
-    echo "FINAL_PASS_OK rechecked=$n baseline_verified=$m deleted_since_bulk=$gone"
-fi
+
+# Baseline and coverage, on exact path bytes (Cycle 7).
+"$PY" -I - "$SRC" "$DST" "$BASELINE" "$LIST" "$VERIFY_ONLY" <<'PYEOF'
+import hashlib
+import os
+import sys
+
+src, dst, base, lst, verify_only = sys.argv[1:6]
+src, dst = os.fsencode(src), os.fsencode(dst)
+verify_only = verify_only == "1"
+HEX = set(b"0123456789abcdef")
+
+
+def refuse(msg):
+    print(f"refusing: {msg}", file=sys.stderr)
+    sys.exit(2)
+
+
+delta = set()
+for p in open(lst, "rb").read().split(b"\0"):
+    if p:
+        delta.add(p[2:] if p.startswith(b"./") else p)
+
+entries, malformed, symlinks = {}, 0, 0
+for raw in open(base, "rb").read().split(b"\n"):
+    if not raw.strip():
+        continue
+    if raw.startswith(b"symlink:"):
+        symlinks += 1                       # recreated by rsync -a; not a content entry
+        continue
+    h, sep, path = raw[:64], raw[64:66], raw[66:]
+    if len(raw) > 66 and sep == b"  " and set(h) <= HEX:
+        entries[path] = h.decode()
+    else:
+        malformed += 1
+if malformed:
+    refuse(f"the baseline has {malformed} malformed line(s)")
+
+
+def regular_files(root):
+    out = []
+    for d, _subs, files in os.walk(root):
+        for f in files:
+            full = os.path.join(d, f)
+            if os.path.isfile(full) and not os.path.islink(full):
+                out.append(os.path.relpath(full, root))
+    return out
+
+
+present = regular_files(dst)
+if not entries and present:
+    refuse("the baseline has no entries but the backup holds files")
+
+
+def sha(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+verified, bad, gone = set(), [], 0
+for path, want in entries.items():
+    if not verify_only:
+        if path in delta:
+            continue                        # compared with its source above
+        if not os.path.lexists(os.path.join(src, path)):
+            gone += 1                       # deleted since the bulk pass; --delete mirrored it
+            continue
+    target = os.path.join(dst, path)
+    try:
+        got = sha(target)
+    except OSError:
+        bad.append((path, "missing from the backup"))
+        continue
+    if got == want:
+        verified.add(path)
+    else:
+        bad.append((path, "differs from the baseline"))
+
+bad_paths = {p for p, _ in bad}
+uncovered = [p for p in present if p not in verified and p not in bad_paths
+             and (verify_only or p not in delta)]
+for path, why in bad[:20]:
+    print(f"BASELINE_MISMATCH {os.fsdecode(path)}: {why}", file=sys.stderr)
+for path in uncovered[:20]:
+    print(f"UNCOVERED {os.fsdecode(path)}: neither in the delta nor verified against the baseline",
+          file=sys.stderr)
+if bad or uncovered:
+    print(f"FINAL_PASS_FAILED baseline_mismatches={len(bad)} uncovered={len(uncovered)}", file=sys.stderr)
+    sys.exit(1)
+if verify_only:
+    print(f"BASELINE_OK verified={len(verified)} files={len(present)}")
+else:
+    print(f"FINAL_PASS_OK rechecked={len(delta)} baseline_verified={len(verified)} "
+          f"deleted_since_bulk={gone} files={len(present)}")
+PYEOF

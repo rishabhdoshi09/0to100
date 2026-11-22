@@ -98,6 +98,24 @@ def _current_kite_snapshot():
     return store, sid
 
 
+def _tag_source(frame, source: str, snapshot_id: str | None = None):
+    """Record where a frame was ACQUIRED, replacing any inherited provenance.
+
+    Consumers (feature002) persist this as the input's origin, so it is set at
+    acquisition, never inferred from which cache serves the frame later (GPT
+    C7-06, cycle 7). Sources: kite_snapshot (with its id), kite_historical,
+    bhavcopy_store, yfinance.
+    """
+    if frame is None:
+        return frame
+    frame.attrs["quantterm_source"] = source
+    if snapshot_id:
+        frame.attrs["quantterm_snapshot_id"] = snapshot_id
+    else:
+        frame.attrs.pop("quantterm_snapshot_id", None)
+    return frame
+
+
 def _read_kite_snapshot_frames(path, sid: str) -> dict[str, pd.DataFrame]:
     """Read once in chunks, without also materializing Snapshot's row objects."""
     parts: dict[str, list[pd.DataFrame]] = {}
@@ -120,9 +138,7 @@ def _read_kite_snapshot_frames(path, sid: str) -> dict[str, pd.DataFrame]:
             frame[col] = pd.to_numeric(frame[col], errors="coerce")
         frame = frame.dropna(subset=[col for col in ("open", "high", "low", "close") if col in frame.columns])
         if len(frame) >= 30:
-            frame.attrs["quantterm_source"] = "kite_snapshot"
-            frame.attrs["quantterm_snapshot_id"] = sid
-            loaded[symbol] = frame
+            loaded[symbol] = _tag_source(frame, "kite_snapshot", sid)
     return loaded
 
 
@@ -313,7 +329,7 @@ def _frame_from_kite(candles: list[dict]) -> Optional[pd.DataFrame]:
         return None
     frame = pd.DataFrame(rows, columns=["date", "open", "high", "low", "close", "volume"])
     frame = frame.drop_duplicates(subset=["date"], keep="last").sort_values("date").set_index("date")
-    return frame
+    return _tag_source(frame, "kite_historical")      # broker history: no snapshot id
 
 
 def _repair_via_bhavcopy(missing: list[str]) -> dict:
@@ -361,7 +377,7 @@ def _repair_via_bhavcopy(missing: list[str]) -> dict:
         except Exception:
             continue
         if frame is not None and len(frame) >= 30:
-            out[symbol] = frame
+            out[symbol] = _tag_source(frame, "bhavcopy_store")   # get_ohlcv returns a copy
     return out
 
 
@@ -602,19 +618,15 @@ def get_cached(symbol: str) -> Optional[pd.DataFrame]:
             from data.bhavcopy_store import get_ohlcv
             df = get_ohlcv(clean)
             if df is not None:
-                # get_ohlcv returns a private copy: tag WHICH source served it,
-                # so a consumer can record its input's provenance (Cycle 7)
-                df.attrs.setdefault("quantterm_source", "bhavcopy_store")
-                return df
+                # read straight from the official store: that IS its acquisition
+                return _tag_source(df, "bhavcopy_store")       # get_ohlcv returns a private copy
         except Exception:
             pass
     with _lock:
         df = _yf_cache.get(clean)
-    if df is None:
-        return None
-    out = df.copy()
-    out.attrs.setdefault("quantterm_source", "yfinance_cache")
-    return out
+    # The offline cache holds yfinance AND official-store repairs: each frame
+    # carries the tag set when it was acquired; an untagged one stays unknown.
+    return df.copy() if df is not None else None
 
 
 def cached_symbols() -> list[str]:
@@ -689,7 +701,7 @@ def _prefetch_yf(
                 df.columns = [str(c).lower() for c in df.columns]
                 df = df.dropna(subset=["close"])
                 if len(df) >= 30:
-                    result[sym] = df
+                    result[sym] = _tag_source(df, "yfinance")
             except Exception:
                 pass
         if progress:

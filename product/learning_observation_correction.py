@@ -52,7 +52,8 @@ and evidence consumers skip it.
         --store-manifest <store_manifest.json> --out <manifest.json>
     python -m product.learning_observation_correction apply --manifest <manifest.json> \\
         --features-db <db> --owner-approval "<the owner's words>"
-    python -m product.learning_observation_correction rollback --manifest <manifest.json> --features-db <db>
+    python -m product.learning_observation_correction rollback --manifest <manifest.json> --features-db <db> \\
+        --owner-approval "<the owner's words>"
 """
 
 from __future__ import annotations
@@ -89,7 +90,10 @@ PRODUCTION_PREFIXES = ("/Volumes/",)
 
 
 def _is_production(path: str | Path) -> bool:
-    return str(Path(path).resolve()).startswith(PRODUCTION_PREFIXES)
+    """Case-insensitively: the Mac's volumes are case-insensitive and realpath keeps
+    the spelling given, so '/volumes/...' is the same production path (cycle-7 review)."""
+    p = str(Path(path).resolve()).lower()
+    return p.startswith(tuple(x.lower() for x in PRODUCTION_PREFIXES))
 
 
 def _not_live(path: str | Path, what: str) -> Path:
@@ -99,12 +103,22 @@ def _not_live(path: str | Path, what: str) -> Path:
     return p
 
 
+def _entry(path: str | Path) -> str:
+    """The directory ENTRY a repair writes: the parent resolved, the final name
+    kept. bhav_store_rebuild swaps with os.replace(candidate, target), which
+    replaces that entry (a final-component symlink included), so resolving the
+    final component would make a successful repair invalidate its own
+    correction plan (GPT C7-04, cycle 7)."""
+    p = Path(path)
+    return str(p.parent.resolve() / p.name)
+
+
 def _repair_identity(sm: dict) -> dict:
     """The IMMUTABLE identity of a store repair: which file it replaces, from what
     to what. Its state, backup path and timestamps legitimately change as the
     repair is applied; these three never do (Cycle 7)."""
     target = str(sm.get("target_pickle") or "")
-    return {"target_pickle": str(Path(target).resolve()) if target else "",
+    return {"target_pickle": _entry(target) if target else "",
             "target_sha256": str(sm.get("target_sha256") or ""),
             "new_sha256": str(sm.get("new_sha256") or "")}
 
@@ -566,7 +580,7 @@ def _require_installed_repair(binding: dict) -> None:
     if current != recorded:
         raise SystemExit("refusing: the repair manifest no longer describes the repair the plan was bound to")
     live = Path(target)
-    if str(live.resolve()) != recorded["target_pickle"] or recorded["new_sha256"] != repaired:
+    if _entry(live) != recorded["target_pickle"] or recorded["new_sha256"] != repaired:
         raise SystemExit("refusing: the bound target is not the repair's target")
     if not live.is_file() or _file_sha(live) != repaired:
         raise SystemExit("refusing: the live store is not the repaired pickle the plan is bound to "
@@ -611,6 +625,21 @@ def apply(manifest_path: str | Path, features_db: str | Path, owner_approval: st
         # A retry resumes exactly the transaction it is completing (GPT R5).
         raise SystemExit("refusing: a retry must use the same scope as the interrupted apply "
                          f"(include_exposed={m.get('approved_scope', {}).get('include_exposed')})")
+    # Read-only pre-check BEFORE any write: a stale plan refuses without even
+    # marking the manifest 'applying' (the in-transaction check below stays the
+    # authority against a race) (GPT cycle-7 review, refusal ordering).
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            pre, _n = _scope_digest(con.execute(
+                "SELECT observation_id, symbol, features, meta FROM observations").fetchall(),
+                set(m.get("changed_symbols") or []))
+        finally:
+            con.close()
+    except sqlite3.Error as exc:
+        raise SystemExit(f"refusing: the feature store cannot be read ({type(exc).__name__})")
+    if pre != (m.get("scope") or {}).get("sha256"):
+        raise SystemExit("refusing: the observation set changed since the plan; nothing was written (re-plan)")
     # The transaction record goes first: an interruption after the commit
     # leaves a manifest whose batch id drives a rerun or the rollback.
     m.update({"state": "applying", "owner_approval": owner_approval.strip(), "approved_scope": scope,

@@ -331,6 +331,8 @@ def test_review_quote_cannot_overwrite_concurrent_archive(tmp_path, monkeypatch)
     monkeypatch.setattr(nse_live, "date", type("Clock", (), {
         "today": staticmethod(today.date),
     }))
+    from core import market_clock
+    monkeypatch.setattr(market_clock, "today_ist", today.date)     # the producer dates by the NSE clock (C7-08)
     monkeypatch.setattr(nse_live, "_is_trading_now", lambda: True)
     monkeypatch.setattr(nse_universe, "get_nse_universe", lambda: [])
     monkeypatch.setattr(kite_client, "kite_credentials_available", lambda: False)
@@ -579,6 +581,8 @@ def test_adversarial_late_archive_does_not_freeze_live_quote(tmp_path, monkeypat
     monkeypatch.setattr(BS, "_store_sessions", 1)
     monkeypatch.setattr(nse_live, "_is_trading_now", lambda: True)
     monkeypatch.setattr(nse_live, "date", type("Clock", (), {"today": staticmethod(today.date)}))
+    from core import market_clock
+    monkeypatch.setattr(market_clock, "today_ist", today.date)     # the producer dates by the NSE clock (C7-08)
     monkeypatch.setattr(nse_universe, "get_nse_universe", lambda: [])
     monkeypatch.setattr(kite_client, "kite_credentials_available", lambda: False)
     prices = iter([777.0, 778.0])
@@ -843,3 +847,17 @@ def test_unverified_rollback_can_be_retried(runtime, tmp_path, monkeypatch):
             RB.rollback(path, target_is_copy=True)
     assert json.loads(path.read_text())["state"] == "rollback_unverified"
     assert RB.rollback(path, target_is_copy=True)["rollback_ok"]
+
+
+def test_a_different_case_volumes_spelling_is_still_production(monkeypatch):
+    """macOS volumes are case-insensitive and realpath keeps the spelling given."""
+    from product import bhav_store_rebuild as RB
+    from research import store_integrity_audit as AU
+
+    monkeypatch.setattr(RB, "_desk_running", lambda: ["launchd:com.quantterm.desk:1"])
+    with pytest.raises(SystemExit, match="desk is running"):
+        RB._check_desk(Path("/volumes/QuantTermStorage/QuantTerm/runtime/logs/bhav/store_cache.pkl"), True)
+    with pytest.raises(SystemExit, match="refusing"):
+        RB._not_live(Path("/VOLUMES/QuantTermStorage/x"), "the staging root")
+    with pytest.raises(SystemExit, match="refusing"):
+        AU._refuse_live("/volumes/QuantTermStorage/QuantTerm/runtime")

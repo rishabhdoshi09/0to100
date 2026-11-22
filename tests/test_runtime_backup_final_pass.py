@@ -228,7 +228,7 @@ def test_a_baseline_with_no_usable_entries_is_refused(tmp_path):
     stamp.write_text("")
     os.utime(stamp, (2_000_000_000, 2_000_000_000))
     out = _run2(src, dst, stamp, "--baseline", bad, "--verify-only")
-    assert out.returncode == 2 and "no usable" in out.stderr
+    assert out.returncode == 2 and "malformed" in out.stderr
 
 
 def test_relative_stamp_and_baseline_paths_work(tmp_path):
@@ -261,3 +261,119 @@ def test_a_file_deleted_since_the_bulk_pass_is_mirrored_not_a_baseline_failure(t
     out = _run2(src, dst, stamp, "--baseline", base)
     assert out.returncode == 0, out.stderr
     assert "baseline_verified=1" in out.stdout and not (dst / "gone").exists()
+
+
+# ── GPT cycle-7 review (C7-01..C7-03): sketches as written ──
+
+# GPT C7-01 (cycle-7 review sketch)
+@pytest.mark.parametrize("mode", ["newline_delta", "empty", "malformed"])
+def test_cycle7_review_final_checks_unchanged_backup(tmp_path, mode):
+    src, dst = tmp_path / "src", tmp_path / "dst"
+    src.mkdir()
+    dst.mkdir()
+    ledger = src / "ledger.db"
+    ledger.write_bytes(b"good")
+    (src / "healthy").write_bytes(b"healthy")
+    shutil.copy2(ledger, dst / ledger.name)
+    shutil.copy2(src / "healthy", dst / "healthy")
+    base = _baseline(dst, tmp_path / "baseline")
+    stamp = tmp_path / "stamp"
+    stamp.touch()
+    os.utime(stamp, (2_000_000_000, 2_000_000_000))
+
+    if mode == "newline_delta":
+        added = src / "new\nledger.db"
+        added.write_bytes(b"fresh")
+        os.utime(added, (2_000_000_002, 2_000_000_002))
+    elif mode == "empty":
+        base.write_text("")
+    else:
+        base.write_text("bad-hash  ledger.db\n" + next(
+            line for line in base.read_text().splitlines(keepends=True)
+            if line.endswith("  healthy\n")
+        ))
+
+    (dst / ledger.name).write_bytes(b"bad!")
+    shutil.copystat(ledger, dst / ledger.name)
+    out = _run2(src, dst, stamp, "--baseline", base)
+    assert out.returncode != 0 and "FINAL_PASS_OK" not in out.stdout
+
+# GPT C7-02 (cycle-7 review sketch)
+def test_cycle7_review_verify_only_checks_a_changed_baseline_entry(tmp_path):
+    src, dst = tmp_path / "src", tmp_path / "dst"
+    src.mkdir()
+    dst.mkdir()
+    ledger = src / "ledger.db"
+    ledger.write_bytes(b"bulk")
+    shutil.copy2(ledger, dst / ledger.name)
+    base = _baseline(dst, tmp_path / "baseline")
+    stamp = tmp_path / "stamp"
+    stamp.touch()
+    os.utime(stamp, (2_000_000_000, 2_000_000_000))
+    ledger.write_bytes(b"live")
+    os.utime(ledger, (2_000_000_002, 2_000_000_002))
+    (dst / ledger.name).write_bytes(b"bad!")
+
+    out = _run2(src, dst, stamp, "--baseline", base, "--verify-only")
+    assert (dst / ledger.name).read_bytes() == b"bad!"
+    assert out.returncode != 0 and "BASELINE_OK" not in out.stdout
+
+# GPT C7-03 (cycle-7 review sketch)
+def test_cycle7_review_final_pass_preserves_directory_name_bytes(tmp_path):
+    src, sibling, dst = [tmp_path / n for n in ("source\n", "source", "backup")]
+    for path in (src, sibling, dst):
+        path.mkdir()
+    (src / "ledger.db").write_bytes(b"correct")
+    shutil.copy2(src / "ledger.db", dst / "ledger.db")
+    (sibling / "other.db").write_bytes(b"wrong tree")
+    base = _baseline(dst, tmp_path / "baseline")
+    stamp = tmp_path / "stamp"
+    stamp.touch()
+    os.utime(stamp, (2_000_000_000, 2_000_000_000))
+
+    out = _run2(src, dst, stamp, "--baseline", base)
+    assert (dst / "ledger.db").exists(), out.stdout
+    assert (dst / "ledger.db").read_bytes() == b"correct"
+    assert not (dst / "other.db").exists()
+
+
+# Each guard on its own (the layers above would also fail these runs, later):
+
+def _corrupt_setup(tmp_path):
+    src, dst = tmp_path / "src", tmp_path / "dst"
+    src.mkdir()
+    dst.mkdir()
+    (src / "ledger.db").write_bytes(b"good")
+    (src / "healthy").write_bytes(b"healthy")
+    for n in ("ledger.db", "healthy"):
+        shutil.copy2(src / n, dst / n)
+    base = _baseline(dst, tmp_path / "baseline")
+    stamp = tmp_path / "stamp"
+    stamp.touch()
+    os.utime(stamp, (2_000_000_000, 2_000_000_000))
+    return src, dst, base, stamp
+
+
+def test_a_newline_in_a_changed_file_name_is_refused_outright(tmp_path):
+    src, dst, base, stamp = _corrupt_setup(tmp_path)
+    added = src / "new\nledger.db"
+    added.write_bytes(b"fresh")
+    os.utime(added, (2_000_000_002, 2_000_000_002))
+    out = _run2(src, dst, stamp, "--baseline", base)
+    assert out.returncode == 2 and "newline" in out.stderr
+
+
+def test_a_malformed_baseline_line_is_refused_even_beside_good_ones(tmp_path):
+    src, dst, base, stamp = _corrupt_setup(tmp_path)
+    base.write_text("bad-hash  ledger.db\n" + base.read_text())
+    out = _run2(src, dst, stamp, "--baseline", base)
+    assert out.returncode == 2 and "malformed" in out.stderr
+
+
+def test_verify_only_reports_a_changed_entry_as_a_baseline_mismatch(tmp_path):
+    src, dst, base, stamp = _corrupt_setup(tmp_path)
+    (src / "ledger.db").write_bytes(b"live")
+    os.utime(src / "ledger.db", (2_000_000_002, 2_000_000_002))
+    (dst / "ledger.db").write_bytes(b"bad!")
+    out = _run2(src, dst, stamp, "--baseline", base, "--verify-only")
+    assert out.returncode == 1 and "BASELINE_MISMATCH ledger.db" in out.stderr

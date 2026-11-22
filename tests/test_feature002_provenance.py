@@ -101,13 +101,92 @@ def test_get_cached_tags_the_served_copy_not_the_cache(monkeypatch):
     assert served.attrs["quantterm_source"] == "bhavcopy_store"
     assert "quantterm_source" not in stored.attrs
 
+    # the offline cache serves whatever was tagged at ACQUISITION (GPT C7-06):
+    # an untagged frame there stays unknown; a yfinance download says so
     monkeypatch.setattr(bulk_fetcher, "_bhav_ok", False)
     monkeypatch.setitem(bulk_fetcher._yf_cache, "BBB", stored)
-    served = bulk_fetcher.get_cached("BBB")
-    assert served.attrs["quantterm_source"] == "yfinance_cache"
+    assert "quantterm_source" not in bulk_fetcher.get_cached("BBB").attrs
+    tagged = bulk_fetcher._tag_source(_hist(), "yfinance")
+    monkeypatch.setitem(bulk_fetcher._yf_cache, "CCC", tagged)
+    assert bulk_fetcher.get_cached("CCC").attrs["quantterm_source"] == "yfinance"
     assert "quantterm_source" not in stored.attrs
 
 
 def test_a_row_without_history_records_none(build):
     assert row_input_source(build(None)) == "unknown"
     assert row_input(build(None))["source"] == "none"
+
+
+# ── GPT cycle-7 review (C7-06, C7-07): sketches as written ──
+
+# GPT C7-06 (cycle-7 review sketch)
+def test_cycle7_review_official_repair_keeps_its_source(monkeypatch):
+    from data import acquisition, bhavcopy_store as BS
+    from research.intelligence.data import nse_calendar as cal
+    from scan import bulk_fetcher as bf
+
+    official = _hist()
+    monkeypatch.setattr(bf, "_kite_authoritative", lambda: False)
+    monkeypatch.setattr(bf, "_bhav_ok", False)
+    monkeypatch.setattr(bf, "_yf_cache", {})
+    monkeypatch.setattr(BS, "_store", {})
+    monkeypatch.setattr(BS, "_CA_EVENTS", {})
+    monkeypatch.setattr(BS, "is_ready", lambda: True)
+    monkeypatch.setattr(BS, "latest_two_eq_sessions", lambda: (None, None, None))
+    monkeypatch.setattr(BS, "build_store", lambda: BS._store.update(AAA=official))
+    monkeypatch.setattr(cal, "load_holidays", lambda: set())
+    monkeypatch.setattr(cal, "latest_required_session", lambda *_: pd.Timestamp("2026-08-24"))
+    monkeypatch.setattr(acquisition, "write_provenance", lambda _: None)
+
+    assert bf.backfill_missing(["AAA"])["sources"] == ["nse_bhavcopy"]
+    _, inp = OBS._input_provenance(OBS._hist("AAA"), "2026-08-24")
+    assert row_input_source({"feature_snapshot": {"input": inp}}) == "bhavcopy_store"
+
+# GPT C7-07 (cycle-7 review sketch)
+def test_cycle7_review_rs_uses_the_recorded_frame(monkeypatch):
+    from research.sepa.config import DEFAULT_CONFIG
+    from research.sepa.rs import score_one
+
+    day = "2026-08-24"
+    a = _hist(last=day, tag="kite_snapshot", snapshot="A")
+    b = a.copy()
+    b.attrs["quantterm_snapshot_id"] = "B"
+    b.loc[b.index[-1], "close"] *= 2
+    reads = iter([a, b])
+    monkeypatch.setattr(OBS, "_hist", lambda _: next(reads))
+    monkeypatch.setattr(OBS, "_sector_map", lambda: ({}, "test"))
+
+    _, rows = OBS.build_shadow_records(
+        [CARD], session_date=day, recorded_at=f"{day}T10:30:00+05:30",
+        scan_cycle_id="test-cycle", source="live_scan",
+    )
+    assert row_input(rows[0])["snapshot_id"] == "A"
+    assert rows[0]["rs_score"] == pytest.approx(score_one(a, DEFAULT_CONFIG)["score"])
+
+
+def test_the_live_bar_is_dated_by_the_exchange_session_and_kept(monkeypatch, build):
+    """GPT C7-08, adapted: the sketch built an already mis-dated frame (the pre-fix
+    producer's output). The fix is AT the producer, so this drives the producer with
+    a host calendar one day ahead of IST: the live bar lands on the IST session and
+    survives feature002's cutoff."""
+    from datetime import date as _date
+    from core import market_clock
+    from data import bhavcopy_store as BS, kite_client, nse_live, nse_universe
+
+    ist_day = _date(2026, 8, 24)
+    monkeypatch.setattr(BS, "_store", {"AAA": _hist(last="2026-08-21")})
+    monkeypatch.setattr(BS, "_store_last_day", _date(2026, 8, 21))
+    monkeypatch.setattr(nse_live, "_is_trading_now", lambda: True)
+    monkeypatch.setattr(market_clock, "today_ist", lambda: ist_day)
+    monkeypatch.setattr(nse_live, "date", type("HostClock", (), {"today": staticmethod(lambda: _date(2026, 8, 25))}))
+    monkeypatch.setattr(nse_universe, "get_nse_universe", lambda: [])
+    monkeypatch.setattr(kite_client, "kite_credentials_available", lambda: False)
+    monkeypatch.setattr(nse_live, "fetch_live_snapshot", lambda: {
+        "AAA": {"open": 190.0, "high": 196.0, "low": 189.0, "close": 195.0, "volume": 1000.0}})
+    assert nse_live.apply_live_to_store() == 1
+    live = BS._store["AAA"]
+    assert live.index[-1] == pd.Timestamp(ist_day)
+    assert live.attrs["quantterm_live_overlay_date"] == ist_day.isoformat()
+    row = build(live.copy(), session=ist_day.isoformat())
+    assert row["feature_snapshot"]["trend"]["price"] == 195.0
+    assert row_input(row)["bars_after_cutoff_dropped"] == 0

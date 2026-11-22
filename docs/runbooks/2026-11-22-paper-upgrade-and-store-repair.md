@@ -266,8 +266,11 @@ No vector, label or other table changes.
 
 ```bash
 /Users/apple/0to100/venv/bin/python -m product.learning_observation_correction rollback \
-  --manifest $M/quarantine_manifest.json --features-db $R/feature_store.db
+  --manifest $M/quarantine_manifest.json --features-db $R/feature_store.db \
+  --owner-approval "<the owner's words>"
 ```
+
+A live rollback needs the owner's words too, because releasing rows changes what learning reads (Cycle 7).
 
 ## 6. Deploy `<SHA>` **[OWNER: "deploy `<SHA>`"]** (about 4–9 min to READY)
 

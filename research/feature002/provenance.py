@@ -2,7 +2,7 @@
 
 A row frozen before ``f002-input.v1`` carries no record of which history its
 features were computed from (the active Kite snapshot, the official bhavcopy
-store, or the yfinance cache: scan.bulk_fetcher.get_cached). Its provenance is
+store, broker history or yfinance: scan.bulk_fetcher.get_cached). Its provenance is
 UNKNOWN and stays unknown: it is never inferred from which source happens to be
 authoritative today. Analyses separate rows by ``row_input_source``.
 """
@@ -11,7 +11,8 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping
 
-KNOWN = ("kite_snapshot", "bhavcopy_store", "yfinance_cache")
+#: Sources tagged at acquisition (scan.bulk_fetcher._tag_source).
+KNOWN = ("kite_snapshot", "kite_historical", "bhavcopy_store", "yfinance")
 
 
 def row_input(row: Mapping[str, Any]) -> dict:

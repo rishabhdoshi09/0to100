@@ -105,9 +105,16 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _on_live_volume(path: str | Path) -> bool:
+    """Under /Volumes, compared case-insensitively: the Mac's volumes are
+    case-insensitive and realpath keeps the spelling given, so '/volumes/...'
+    reaches the same production files (cycle-7 review)."""
+    return str(path).lower().startswith("/volumes/")
+
+
 def _not_live(path: Path, what: str) -> Path:
     p = Path(path).resolve()
-    if str(p).startswith("/Volumes/"):
+    if _on_live_volume(p):
         raise SystemExit(f"refusing {what} under /Volumes: {p} (stage on a disk you own)")
     return p
 
@@ -353,7 +360,7 @@ def _desk_running() -> list[str]:
 
 
 def _check_desk(target: Path, target_is_copy: bool) -> None:
-    if target_is_copy and not str(target.resolve()).startswith("/Volumes/"):
+    if target_is_copy and not _on_live_volume(target.resolve()):
         return
     running = _desk_running()
     if running:

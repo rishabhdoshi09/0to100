@@ -181,9 +181,14 @@ def apply_live_to_store() -> int:
     try:
         import pandas as pd
         from data import bhavcopy_store as bs
+        # The NSE session date, not the host's calendar: on a host whose clock is
+        # not IST the two differ near midnight, and a live bar dated by the host
+        # would land on the wrong session (GPT C7-08, cycle 7).
+        from core.market_clock import today_ist
+        session_today = today_ist()
         with bs._lock:
             last_day = bs._store_last_day
-        if last_day == date.today():
+        if last_day == session_today:
             return 0            # today's official bhavcopy already in store
 
         # Kite first — proven working; NSE public API only as fallback
@@ -212,7 +217,7 @@ def apply_live_to_store() -> int:
             )
             return 0
 
-        today_ts = pd.Timestamp(date.today())
+        today_ts = pd.Timestamp(session_today)
         updated = 0
         with bs._lock:
             # Re-check under the lock that publishes the quotes: today's
