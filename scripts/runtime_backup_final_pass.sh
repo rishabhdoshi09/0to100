@@ -2,7 +2,7 @@
 # Final, VERIFIED pass of a runtime backup, run with the desk STOPPED.
 #
 #   bash scripts/runtime_backup_final_pass.sh <source_dir> <backup_dir> <stamp_file> \
-#        [--baseline <manifest.sha256>] [--verify-only]
+#        [--baseline <manifest.sha256>] [--verify-only] [--exclude <relpath>]...
 #
 # <stamp_file> was touched BEFORE the bulk pass started (runbook stage 1).
 #
@@ -23,6 +23,14 @@
 # entry (no copy, no delete), so the whole-backup re-read can be done BEFORE the
 # maintenance window, leaving only the delta inside it.
 #
+# Exclusions (--exclude, repeatable; Stage 1 of 22 Nov 2026): a literal path relative
+# to <source_dir> (a file, or a directory and everything under it) that the backup
+# deliberately does not hold. It is neither copied nor deleted by rsync, never in the
+# delta, and not required to be covered by the baseline. Without this, a path the
+# stage-1 backup excluded (two static 10 GB September logs) would be copied INSIDE
+# the maintenance window, or fail coverage if present. Wildcards, '.', '..', empty
+# components, a leading '/' and newlines are refused: the path is matched literally.
+#
 # Refuses (exit 2): any path containing a newline (arguments or files: the
 # baseline is line-based), identical or nested source/backup paths, a backup on
 # the same filesystem as the source, a missing stamp, a missing, empty or
@@ -30,21 +38,38 @@
 # else exits 1. The baseline verifier needs python3 (QT_PYTHON overrides).
 set -euo pipefail
 
-usage="usage: runtime_backup_final_pass.sh <source_dir> <backup_dir> <stamp_file> [--baseline <manifest>] [--verify-only]"
+usage="usage: runtime_backup_final_pass.sh <source_dir> <backup_dir> <stamp_file> [--baseline <manifest>] [--verify-only] [--exclude <relpath>]..."
 SRC=${1:?$usage}
 DST=${2:?$usage}
 STAMP=${3:?$usage}
 shift 3
 BASELINE=""
 VERIFY_ONLY=0
+EXCLUDES=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --baseline) BASELINE=${2:?$usage}; shift 2;;
         --verify-only) VERIFY_ONLY=1; shift;;
+        --exclude) [ $# -ge 2 ] || { echo "$usage" >&2; exit 2; }; EXCLUDES+=("$2"); shift 2;;
         *) echo "$usage" >&2; exit 2;;
     esac
 done
 NL=$'\n'
+RSYNC_EXCL=()
+FIND_EXCL=()
+for ex in ${EXCLUDES[@]+"${EXCLUDES[@]}"}; do
+    case "$ex" in
+        ""|/*|*"$NL"*|*'*'*|*'?'*|*'['*|*'\'*)
+            echo "refusing: --exclude takes a literal relative path (no wildcard, newline or leading /): $ex" >&2; exit 2;;
+    esac
+    ex=${ex%/}                                  # one trailing slash names a directory
+    case "/$ex/" in
+        *"//"*|*"/./"*|*"/../"*)
+            echo "refusing: --exclude path has an empty, '.' or '..' component: $ex" >&2; exit 2;;
+    esac
+    RSYNC_EXCL+=("--exclude=/$ex")
+    FIND_EXCL+=(! -path "./$ex" ! -path "./$ex/*")
+done
 for arg in "$SRC" "$DST" "$STAMP" "$BASELINE"; do
     case "$arg" in *"$NL"*)
         # command substitution strips trailing newlines: 'source\n' would
@@ -98,7 +123,7 @@ fi
 
 LIST=$(mktemp "${TMPDIR:-/tmp}/qt-final-pass.XXXXXX")     # portable: BSD and GNU mktemp
 trap 'rm -f "$LIST"' EXIT
-(cd "$SRC" && find . -type f \( -newer "$STAMP" -o -cnewer "$STAMP" \) -print0) > "$LIST"
+(cd "$SRC" && find . -type f \( -newer "$STAMP" -o -cnewer "$STAMP" \) ${FIND_EXCL[@]+"${FIND_EXCL[@]}"} -print0) > "$LIST"
 n=$(tr -cd '\0' < "$LIST" | wc -c | tr -d ' ')
 if [ "$(tr -cd '\n' < "$LIST" | wc -c | tr -d ' ')" -ne 0 ]; then
     echo "refusing: a file changed since the stamp has a newline in its name; the baseline cannot represent it" >&2
@@ -106,7 +131,7 @@ if [ "$(tr -cd '\n' < "$LIST" | wc -c | tr -d ' ')" -ne 0 ]; then
 fi
 
 if [ "$VERIFY_ONLY" -eq 0 ]; then
-    rsync -a --delete "$SRC/" "$DST/"
+    rsync -a --delete ${RSYNC_EXCL[@]+"${RSYNC_EXCL[@]}"} "$SRC/" "$DST/"
     if [ "$n" -gt 0 ]; then
         rsync -a -I --from0 --files-from="$LIST" "$SRC/" "$DST/"
     fi
@@ -124,12 +149,12 @@ if [ "$VERIFY_ONLY" -eq 0 ]; then
 fi
 
 if [ -z "$BASELINE" ]; then
-    echo "FINAL_PASS_OK rechecked=$n NO_BASELINE (unchanged files were not re-verified)"
+    echo "FINAL_PASS_OK rechecked=$n NO_BASELINE (unchanged files were not re-verified) excluded=${#EXCLUDES[@]}"
     exit 0
 fi
 
 # Baseline and coverage, on exact path bytes (Cycle 7).
-"$PY" -I - "$SRC" "$DST" "$BASELINE" "$LIST" "$VERIFY_ONLY" <<'PYEOF'
+"$PY" -I - "$SRC" "$DST" "$BASELINE" "$LIST" "$VERIFY_ONLY" ${EXCLUDES[@]+"${EXCLUDES[@]}"} <<'PYEOF'
 import hashlib
 import os
 import sys
@@ -137,6 +162,11 @@ import sys
 src, dst, base, lst, verify_only = sys.argv[1:6]
 src, dst = os.fsencode(src), os.fsencode(dst)
 verify_only = verify_only == "1"
+excluded = [os.fsencode(e.rstrip("/")) for e in sys.argv[6:]]
+
+
+def is_excluded(rel):
+    return any(rel == e or rel.startswith(e + b"/") for e in excluded)
 HEX = set(b"0123456789abcdef")
 
 
@@ -172,7 +202,9 @@ def regular_files(root):
         for f in files:
             full = os.path.join(d, f)
             if os.path.isfile(full) and not os.path.islink(full):
-                out.append(os.path.relpath(full, root))
+                rel = os.path.relpath(full, root)
+            if not is_excluded(rel):
+                out.append(rel)
     return out
 
 
@@ -213,6 +245,8 @@ def safe_regular(root, rel):
 
 verified, bad, gone = set(), [], 0
 for path, want in entries.items():
+    if is_excluded(path):
+        continue                            # deliberately not held by the backup
     if not verify_only:
         if path in delta:
             continue                        # compared with its source above
@@ -246,8 +280,8 @@ if bad or uncovered:
     print(f"FINAL_PASS_FAILED baseline_mismatches={len(bad)} uncovered={len(uncovered)}", file=sys.stderr)
     sys.exit(1)
 if verify_only:
-    print(f"BASELINE_OK verified={len(verified)} files={len(present)}")
+    print(f"BASELINE_OK verified={len(verified)} files={len(present)} excluded={len(excluded)}")
 else:
     print(f"FINAL_PASS_OK rechecked={len(delta)} baseline_verified={len(verified)} "
-          f"deleted_since_bulk={gone} files={len(present)}")
+          f"deleted_since_bulk={gone} files={len(present)} excluded={len(excluded)}")
 PYEOF

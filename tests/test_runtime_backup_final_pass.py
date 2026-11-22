@@ -413,3 +413,110 @@ def test_c7v_refuses_newline_in_resolved_source(tmp_path):
     assert result.returncode == 2 and "newline" in result.stderr
     assert (dst / "ledger.db").read_bytes() == b"correct"
     assert not (dst / "other.db").exists()
+
+
+# ── Stage 1 (22 Nov 2026): paths the stage-1 backup deliberately excluded ──
+
+
+def _stage1_tree(tmp_path):
+    """A backup that holds everything except one large static log, which
+    stage 1 excluded; the baseline is that backup's manifest."""
+    src, dst = tmp_path / "src", tmp_path / "dst"
+    (src / "logs").mkdir(parents=True)
+    dst.mkdir()
+    (src / "ledger.db").write_bytes(b"L" * 2048)
+    (src / "logs" / "cron.log").write_bytes(b"static September log")
+    (dst / "logs").mkdir()
+    shutil.copy2(src / "ledger.db", dst / "ledger.db")
+    base = _baseline(dst, tmp_path / "baseline.sha256")
+    stamp = tmp_path / "stamp"
+    stamp.write_text("")
+    os.utime(stamp, (2_000_000_000, 2_000_000_000))              # nothing written since
+    return src, dst, base, stamp
+
+
+def test_without_exclude_a_stage1_excluded_log_is_copied_in_the_window_and_fails_coverage(tmp_path):
+    """The gap: rsync --delete copies the excluded 10 GB log inside the
+    downtime, and the copy is then neither in the delta nor in the baseline."""
+    src, dst, base, stamp = _stage1_tree(tmp_path)
+    out = _run2(src, dst, stamp, "--baseline", base)
+    assert out.returncode == 1 and "UNCOVERED logs/cron.log" in out.stderr
+    assert (dst / "logs" / "cron.log").exists()
+
+
+def test_an_excluded_path_is_neither_copied_nor_required_by_the_baseline(tmp_path):
+    src, dst, base, stamp = _stage1_tree(tmp_path)
+    out = _run2(src, dst, stamp, "--baseline", base, "--exclude", "logs/cron.log")
+    assert out.returncode == 0, out.stderr
+    assert "FINAL_PASS_OK" in out.stdout and "excluded=1" in out.stdout
+    assert not (dst / "logs" / "cron.log").exists()
+    out = _run2(src, dst, stamp, "--baseline", base, "--verify-only", "--exclude", "logs/cron.log")
+    assert out.returncode == 0 and "BASELINE_OK" in out.stdout
+
+
+def test_exclude_does_not_hide_other_files_or_corruption(tmp_path):
+    src, dst, base, stamp = _stage1_tree(tmp_path)
+    st = (dst / "ledger.db").stat()
+    (dst / "ledger.db").write_bytes(b"X" * 2048)                 # corrupt a NON-excluded backup file
+    os.utime(dst / "ledger.db", ns=(st.st_atime_ns, st.st_mtime_ns))
+    out = _run2(src, dst, stamp, "--baseline", base, "--exclude", "logs/cron.log")
+    assert out.returncode == 1 and "BASELINE_MISMATCH ledger.db" in out.stderr
+    # an exclude names one literal path: a sibling with a shared prefix is still covered
+    (dst / "ledger.db").write_bytes(b"L" * 2048)
+    (src / "logs" / "cron.log.2").write_bytes(b"x")
+    out = _run2(src, dst, stamp, "--baseline", base, "--exclude", "logs/cron.log")
+    assert out.returncode == 1 and "UNCOVERED logs/cron.log.2" in out.stderr
+
+
+def test_an_excluded_file_changed_after_the_stamp_is_not_recopied(tmp_path):
+    src, dst, base, stamp = _stage1_tree(tmp_path)
+    os.utime(src / "logs" / "cron.log", (2_000_000_005, 2_000_000_005))
+    out = _run2(src, dst, stamp, "--baseline", base, "--exclude", "logs/cron.log")
+    assert out.returncode == 0 and "rechecked=0" in out.stdout
+    assert not (dst / "logs" / "cron.log").exists()
+
+
+def test_an_excluded_directory_covers_everything_under_it(tmp_path):
+    src, dst, base, stamp = _stage1_tree(tmp_path)
+    (src / "logs" / "big").mkdir()
+    (src / "logs" / "big" / "a.log").write_bytes(b"a")
+    out = _run2(src, dst, stamp, "--baseline", base, "--exclude", "logs/cron.log", "--exclude", "logs/big/")
+    assert out.returncode == 0 and "excluded=2" in out.stdout
+    assert not (dst / "logs" / "big").exists()
+
+
+@pytest.mark.parametrize("bad", ["/logs/cron.log", "logs/*.log", "logs/cron.lo?", "logs/[c]ron.log",
+                                 "logs/../ledger.db", "./logs", "logs//cron.log", "logs\\cron.log",
+                                 "logs/cron.log\n", ""])
+def test_exclude_accepts_only_a_literal_relative_path(tmp_path, bad):
+    src, dst, base, stamp = _stage1_tree(tmp_path)
+    out = _run2(src, dst, stamp, "--baseline", base, "--exclude", bad)
+    assert out.returncode == 2 and "refusing" in out.stderr
+    assert not (dst / "logs" / "cron.log").exists()
+
+
+def test_an_excluded_file_already_in_the_backup_is_kept_and_not_required(tmp_path):
+    """An earlier partial pass left the excluded log in the backup, outside the
+    baseline: verify-only must not call it UNCOVERED, and --delete keeps it."""
+    src, dst, base, stamp = _stage1_tree(tmp_path)
+    shutil.copy2(src / "logs" / "cron.log", dst / "logs" / "cron.log")
+    out = _run2(src, dst, stamp, "--baseline", base, "--verify-only")
+    assert out.returncode == 1 and "UNCOVERED logs/cron.log" in out.stderr
+    out = _run2(src, dst, stamp, "--baseline", base, "--verify-only", "--exclude", "logs/cron.log")
+    assert out.returncode == 0 and "BASELINE_OK" in out.stdout
+    (src / "logs" / "cron.log").unlink()
+    out = _run2(src, dst, stamp, "--baseline", base, "--exclude", "logs/cron.log")
+    assert out.returncode == 0 and (dst / "logs" / "cron.log").exists()
+
+
+def test_an_excluded_path_listed_in_the_baseline_is_outside_the_claim(tmp_path):
+    """An exclusion takes the path out of the backup's claim entirely: a
+    baseline entry for it is not demanded from the backup."""
+    src, dst, base, stamp = _stage1_tree(tmp_path)
+    shutil.copy2(src / "logs" / "cron.log", dst / "logs" / "cron.log")
+    base = _baseline(dst, tmp_path / "baseline2.sha256")
+    (dst / "logs" / "cron.log").unlink()                         # freed from the backup later
+    out = _run2(src, dst, stamp, "--baseline", base, "--verify-only")
+    assert out.returncode == 1 and "BASELINE_MISMATCH logs/cron.log" in out.stderr
+    out = _run2(src, dst, stamp, "--baseline", base, "--verify-only", "--exclude", "logs/cron.log")
+    assert out.returncode == 0 and "BASELINE_OK" in out.stdout
