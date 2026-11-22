@@ -204,9 +204,25 @@ There is no further GPT loop. Every fix is verified by test and mutation-checked
 - scope of 1,418 observations;
 - carried-breadth bound 0.042 pp.
 
-## 6. Verification
+## 6. Verification (code `5d898671`)
 
-See the report (filled in after the regression run and CI).
+**Local, Mac guard, one interpreter per file:**
+
+- **235 of 235 affected test files pass** on the final code. That is every reader of the bhavcopy store, the walk-forward, the scanner and BUY admission, the scan store, calibration, the feature store and its learners, the rebuild and correction tools, the final-pass script and the runtime-root isolation gate.
+- **The suites for this cycle:**
+  - `tests/test_learning_observation_correction.py`: 40 tests;
+  - `tests/test_store_integrity_20261122.py`: 44;
+  - `tests/test_runtime_backup_final_pass.py`: 5.
+- **The isolation gate** passes on the staged tree, checked by its exit code.
+
+**Mutation checks:** 9 for the first review's fixes and 9 for the verification pass's fixes. Each reverted fix fails its test.
+
+**Production snapshots** (read-only):
+
+- the store plan: READY, 11/11 gates;
+- the bound correction plan: complete, 10 proven, 90 exposed.
+
+**CI.** `8126d597` failed only the hermetic Linux gate, on BSD-only `mktemp` (fixed). CI for the final head is in the #333 report, since a commit cannot contain its own CI result.
 
 ## Open (owner decisions)
 
