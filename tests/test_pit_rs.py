@@ -21,17 +21,32 @@ def _market(n_names=320, n_bars=300, start="2025-01-01", seed=11):
     return idx, frames
 
 
+_SOURCES: dict = {}
+
+
+def _sources(frames, archive):
+    """One identity per (market, archive): injected sources are part of the cache key."""
+    key = (id(frames), tuple(archive))
+    if key not in _SOURCES:
+        names = list(frames)
+        _SOURCES[key] = (lambda: names, frames.get, lambda: list(archive))
+    return _SOURCES[key]
+
+
 def _rs(sym, frames, idx, session, archive=None):
     archive = list(idx.date) if archive is None else archive
-    return PF.rs_percentile_on(sym, frames.get(sym), session, symbols_fn=lambda: list(frames),
-                               ohlcv_fn=frames.get, archive_fn=lambda: archive)
+    symbols_fn, ohlcv_fn, archive_fn = _sources(frames, archive)
+    return PF.rs_percentile_on(sym, frames.get(sym), session, symbols_fn=symbols_fn,
+                               ohlcv_fn=ohlcv_fn, archive_fn=archive_fn)
 
 
 @pytest.fixture(autouse=True)
 def _fresh_cache():
     PF.reset_breadth_cache()
+    _SOURCES.clear()
     yield
     PF.reset_breadth_cache()
+    _SOURCES.clear()
 
 
 def test_equals_research_sepa_build_rs_table_when_the_universes_coincide():
@@ -124,3 +139,23 @@ def test_the_live_analog_query_never_sees_a_filled_rs_percentile():
            "meta": {"pit_features": {"filled": ["rs_percentile"]}}}
     feats, problems = EI._live_projection(row)
     assert feats["rs_percentile"] is None and feats["rsi"] == 55.0 and problems == 1
+
+
+def test_a_warm_cache_answers_without_refiltering_the_universe(monkeypatch):
+    idx, frames = _market()
+    session = idx[-1].date()
+    calls = []
+    real = PF._breadth_universe
+
+    def counting(symbols):
+        calls.append(len(list(symbols)))
+        return real(symbols)
+    monkeypatch.setattr(PF, "_breadth_universe", counting)
+    first = _rs("S010", frames, idx, session)
+    # The cold call filters the universe once (plus the one-name check per call).
+    big = [n for n in calls if n > 1]
+    assert big == [len(frames)]
+    for sym in list(frames)[:50]:
+        _rs(sym, frames, idx, session)
+    assert [n for n in calls if n > 1] == big            # warm: never re-filtered
+    assert _rs("S010", frames, idx, session) == first

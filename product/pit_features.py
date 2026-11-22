@@ -425,6 +425,7 @@ def _rs_scores(c):
 class _MarketPass(dict):
     """{verified session: (above, measured)} for breadth, plus ``rs``: {session: sorted scores}."""
     rs: dict
+    archive: frozenset = frozenset()
 
 
 def _market_pass(archive: tuple[date, ...], symbols: list[str], ohlcv_fn: Callable) -> "_MarketPass":
@@ -490,9 +491,8 @@ def _breadth_counts(archive: tuple[date, ...], symbols: list[str], ohlcv_fn: Cal
     return dict(_market_pass(archive, symbols, ohlcv_fn))
 
 
-def _breadth_key(archive: tuple[date, ...], n_symbols: int, sources: tuple) -> tuple:
-    return (len(archive), archive[0] if archive else None, archive[-1] if archive else None,
-            n_symbols, _store_generation(), sources)
+def _as_date(value) -> date:
+    return value if isinstance(value, date) else date.fromisoformat(str(value)[:10])
 
 
 def _cached_pass(
@@ -502,45 +502,57 @@ def _cached_pass(
     ohlcv_fn: Callable | None = None,
     archive_fn: Callable | None = None,
 ) -> tuple["_MarketPass | None", tuple]:
-    """The market pass that covers ``session`` (cached per archive set and store generation)."""
+    """The market pass that covers ``session`` (cached per archive set and store generation).
+
+    The cache is checked on cheap identities of the raw sources (archive
+    length and end points, raw symbol count, store generation, injected
+    sources) BEFORE any per-symbol work: a board asks once per decision, and
+    re-filtering ~3,500 symbols each time cost ~40 ms a decision.
+    Returns (pass, archive dates as datetime64[D]).
+    """
     global _BREADTH_CACHE
     import time as _time
+    import numpy as np
 
     if session is None:
         return None, ()
     try:
-        archive = tuple(sorted({d if isinstance(d, date) else date.fromisoformat(str(d)[:10])
-                                for d in (archive_fn or _archive_dates)()}))
+        raw_days = list((archive_fn or _archive_dates)())
+        raw_syms = list((symbols_fn or _store_symbols)())
+        if not raw_days:
+            return None, ()
+        key = (len(raw_days), _as_date(raw_days[0]), _as_date(raw_days[-1]), len(raw_syms),
+               _store_generation(), (symbols_fn, ohlcv_fn, archive_fn))
     except Exception:
         return None, ()
-    if session not in archive:
-        return None, archive
-    try:
-        symbols = _breadth_universe((symbols_fn or _store_symbols)())
-    except Exception:
-        return None, archive
-    if len(symbols) < BREADTH_MIN_N:
-        return None, archive
-    # Injected sources (tests, research) are part of the key by identity; the
-    # production key is the archive set plus the store generation.
-    key = _breadth_key(archive, len(symbols), (symbols_fn, ohlcv_fn, archive_fn))
     with _BREADTH_LOCK:
         now = _time.monotonic()
-        market = None
-        if _BREADTH_CACHE is not None and _BREADTH_CACHE[0] == key:
-            market = _BREADTH_CACHE[1]
-            stale_newest = (session == archive[-1]
+        entry = _BREADTH_CACHE if _BREADTH_CACHE is not None and _BREADTH_CACHE[0] == key else None
+        if entry is not None:
+            market, days = entry[1], entry[3]
+            stale_newest = (market is not None and days.size
+                            and np.datetime64(session, "D") == days[-1]
                             and market.get(session, (0, 0))[1] < BREADTH_MIN_N
-                            and now - _BREADTH_CACHE[2] >= _BREADTH_RECHECK_S)
-            if stale_newest:
-                market = None
-        if market is None:
+                            and now - entry[2] >= _BREADTH_RECHECK_S)
+            if not stale_newest:
+                return (market if session in market.archive else None) if market is not None else None, days
+        try:
+            archive = tuple(sorted({_as_date(d) for d in raw_days}))
+        except Exception:
+            return None, ()
+        days = np.asarray(archive, dtype="datetime64[D]")
+        symbols = _breadth_universe(raw_syms)
+        market = None
+        if len(symbols) >= BREADTH_MIN_N:
             market = _market_pass(archive, symbols, ohlcv_fn or _store_ohlcv)
-            # A store that changed during the pass is not one generation: keep
-            # the answer for nobody.
-            if _breadth_key(archive, len(symbols), (symbols_fn, ohlcv_fn, archive_fn)) == key:
-                _BREADTH_CACHE = (key, market, now)
-    return market, archive
+            market.archive = frozenset(archive)
+        # A store that changed during the pass is not one generation: keep
+        # the answer for nobody.
+        if key[4] == _store_generation():
+            _BREADTH_CACHE = (key, market, now, days)
+    if market is None or session not in market.archive:
+        return None, days
+    return market, days
 
 
 def breadth_pct_above_50dma(
@@ -551,7 +563,7 @@ def breadth_pct_above_50dma(
     archive_fn: Callable | None = None,
 ) -> float | None:
     """Breadth on the verified session ``session``; None when not measurable."""
-    market, _archive = _cached_pass(session, symbols_fn=symbols_fn, ohlcv_fn=ohlcv_fn, archive_fn=archive_fn)
+    market, _days = _cached_pass(session, symbols_fn=symbols_fn, ohlcv_fn=ohlcv_fn, archive_fn=archive_fn)
     if market is None:
         return None
     up, n = market.get(session, (0, 0))
@@ -575,13 +587,12 @@ def rs_percentile_on(
     sym = str(symbol or "").strip().upper()
     if session is None or not sym or not _breadth_universe([sym]):
         return None
-    market, archive = _cached_pass(session, symbols_fn=symbols_fn, ohlcv_fn=ohlcv_fn, archive_fn=archive_fn)
+    market, days = _cached_pass(session, symbols_fn=symbols_fn, ohlcv_fn=ohlcv_fn, archive_fn=archive_fn)
     if market is None:
         return None
     ranked = getattr(market, "rs", {}).get(session)
     if ranked is None or len(ranked) < BREADTH_MIN_N:
         return None
-    days = np.asarray(archive, dtype="datetime64[D]")
     got = _official_closes(frame, days)
     if got is None:
         return None
