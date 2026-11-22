@@ -121,6 +121,12 @@ def _regime() -> str:
         return ""
 
 
+#: Input provenance recorded on every new row (Cycle 7). A row without it has
+#: UNKNOWN provenance: it is never inferred afterwards (for example from which
+#: source is authoritative today).
+INPUT_PROVENANCE_VERSION = "f002-input.v1"
+
+
 def _hist(symbol: str):
     try:
         from scan.bulk_fetcher import get_cached
@@ -131,9 +137,43 @@ def _hist(symbol: str):
         pass
     try:
         from data.bhavcopy_store import get_ohlcv
-        return get_ohlcv(symbol)
+        df = get_ohlcv(symbol)
+        if df is not None:
+            df.attrs.setdefault("quantterm_source", "bhavcopy_store")   # get_ohlcv returns a copy
+        return df
     except Exception:
         return None
+
+
+def _input_provenance(hist, cutoff: str):
+    """(hist cut to bars on or before ``cutoff``, provenance of that input).
+
+    The source comes only from the frame's own tag (scan.bulk_fetcher tags every
+    frame it serves); an untagged frame is 'unknown'. Bars after the cutoff (a
+    replay, or a source that runs ahead of the session) are dropped and counted,
+    so no feature can see them.
+    """
+    import pandas as pd
+
+    prov = {"version": INPUT_PROVENANCE_VERSION, "cutoff": str(cutoff)[:10], "source": "none",
+            "snapshot_id": None, "symbol_hist_as_of": None, "bars": 0, "bars_after_cutoff_dropped": 0}
+    if hist is None or not len(hist):
+        return hist, prov
+    attrs = dict(getattr(hist, "attrs", {}) or {})
+    prov["source"] = str(attrs.get("quantterm_source") or "unknown")
+    prov["snapshot_id"] = attrs.get("quantterm_snapshot_id")
+    try:
+        idx = pd.DatetimeIndex(hist.index)
+        idx = idx.tz_localize(None) if idx.tz is not None else idx
+        keep = idx.normalize() <= pd.Timestamp(str(cutoff)[:10])
+        dropped = int((~keep).sum())
+        cut = hist[keep] if dropped else hist
+    except Exception:
+        return hist, dict(prov, source=prov["source"], error="unparsable index")
+    prov["bars_after_cutoff_dropped"] = dropped
+    prov["bars"] = int(len(cut))
+    prov["symbol_hist_as_of"] = _as_of_from_hist(cut) if len(cut) else None
+    return cut, prov
 
 
 def _as_of_from_hist(hist) -> str | None:
@@ -225,8 +265,10 @@ def build_shadow_records(
     label_map = _label_to_key()
     sectors, sector_ver = _sector_map()
     symbols = [str(c.get("symbol") or "").upper() for c in detached if c.get("symbol")]
-    hists = {sym: _hist(sym) for sym in symbols}
-    as_ofs = [_as_of_from_hist(h) for h in hists.values() if h is not None]
+    hists, inputs = {}, {}
+    for sym in symbols:
+        hists[sym], inputs[sym] = _input_provenance(_hist(sym), session_date)
+    as_ofs = [_as_of_from_hist(h) for h in hists.values() if h is not None and len(h)]
     # Feature bars are last official/hist date. Session date stays the IST
     # scan calendar so weekend/Monday scans do not collide with Friday event_ids.
     hist_as_of = session_date
@@ -250,6 +292,7 @@ def build_shadow_records(
         if isinstance(feat, dict):
             feat = dict(feat)
             feat["hist_as_of"] = hist_as_of
+            feat["input"] = inputs.get(sym) or {"version": INPUT_PROVENANCE_VERSION, "source": "none"}
         trend = feat.get("trend") or {}
         rs = feat.get("rs") or {}
         verdict = str(card.get("verdict") or "")

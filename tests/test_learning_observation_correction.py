@@ -248,12 +248,14 @@ def test_apply_on_a_live_target_needs_a_verified_repair_binding_and_a_stopped_de
                      store_manifest=_store_manifest(world, new="0" * 64))
     assert wrong["store_binding"]["verified"] is False
     bound = world["tmp"] / "bound.json"
+    live = world["tmp"] / "live_store.pkl"                          # the repair's target, not yet repaired
+    live.write_bytes(world["cur"].read_bytes())
     m = LOC.plan(world["db"], world["cur"], world["rep"], bound, world["ca"],
-                 store_manifest=_store_manifest(world, installed=world["cur"]))
+                 store_manifest=_store_manifest(world, installed=live))
     assert m["store_binding"]["verified"] is True
     with pytest.raises(SystemExit, match="not the repaired pickle"):
         LOC.apply(bound, world["db"], "owner words")              # the repair is not installed (R2)
-    _store_manifest(world)                                          # now it is
+    live.write_bytes(world["rep"].read_bytes())                     # the store repair installs it
     monkeypatch.setattr(R, "_desk_running", lambda: ["launchd:com.quantterm.desk:123"])
     with pytest.raises(SystemExit, match="desk is running"):
         LOC.apply(bound, world["db"], "owner words")
@@ -644,3 +646,114 @@ def test_scanner_breadth_on_unchanged_peer_blocks_complete_plan(world, monkeypat
     _pickle(world["rep"], new)
     result, _ = _plan(world)
     assert not result["complete"]
+
+
+# ── Cycle 7 (relay review of 011dffb0): the repair binding is immutable ──────
+
+def _bound_plan(world, monkeypatch, name="bound.json"):
+    """A live-style plan bound to repair manifest A (target = the repaired pickle, installed)."""
+    import product.bhav_store_rebuild as R
+
+    monkeypatch.setattr(R, "_desk_running", lambda: [])
+    _freeze("decision::yng", "YNG", world["current"]["YNG"])
+    sm = _store_manifest(world)
+    out = world["tmp"] / name
+    m = LOC.plan(world["db"], world["cur"], world["rep"], out, world["ca"], store_manifest=sm)
+    assert m["store_binding"]["verified"] is True and m["complete"] is True
+    return m, out, sm
+
+
+def _untouched(world, out):
+    return fs.quarantined_ids() == set() and json.loads(out.read_text())["state"] == "planned"
+
+
+def test_a_swapped_repair_manifest_cannot_authorize_apply(world, monkeypatch):
+    """Plan against repair A; replace the manifest with repair B and install B at
+    B's target; the observations are unchanged. apply must refuse before it
+    writes anything (no quarantine row, no 'applying' state)."""
+    m, out, sm = _bound_plan(world, monkeypatch)
+    other = world["tmp"] / "repair_b.pkl"
+    _pickle(other, {"YNG": world["current"]["YNG"], "FLAT": _flat(), "EXTRA": _flat()})
+    sm.write_text(json.dumps({"target_sha256": LOC._file_sha(world["cur"]), "new_sha256": LOC._file_sha(other),
+                              "ready": True, "target_pickle": str(other)}))
+    with pytest.raises(SystemExit, match="repair"):
+        LOC.apply(out, world["db"], "owner words")
+    assert _untouched(world, out)
+
+
+def test_a_redirected_target_with_the_same_bytes_is_refused(world, monkeypatch):
+    m, out, sm = _bound_plan(world, monkeypatch)
+    twin = world["tmp"] / "twin.pkl"
+    twin.write_bytes(world["rep"].read_bytes())                      # same sha, another path
+    payload = json.loads(sm.read_text())
+    payload["target_pickle"] = str(twin)
+    sm.write_text(json.dumps(payload))
+    with pytest.raises(SystemExit, match="repair|target"):
+        LOC.apply(out, world["db"], "owner words")
+    assert _untouched(world, out)
+
+
+def test_legitimate_repair_manifest_transitions_still_apply(world, monkeypatch):
+    """The repair manifest moves planned -> swapping -> applied (state, backup path,
+    timestamps); its identity (target, both shas) does not change."""
+    m, out, sm = _bound_plan(world, monkeypatch)
+    payload = json.loads(sm.read_text())
+    payload.update({"state": "applied", "applied_ok": True, "backup_pickle": "/x/backup.pkl",
+                    "applied_at": "2026-11-23T01:00:00+0530", "owner_approval": "apply store repair"})
+    sm.write_text(json.dumps(payload))
+    done = LOC.apply(out, world["db"], "owner words")
+    assert done["state"] == "applied" and done["results"] == {"decision::yng": "quarantined"}
+
+
+@pytest.mark.parametrize("drop", ["scope", "changed_symbols", "binding_target", "binding_repaired_sha"])
+def test_missing_binding_or_scope_fields_refuse_before_any_write(world, monkeypatch, drop):
+    m, out, sm = _bound_plan(world, monkeypatch)
+    plan_json = json.loads(out.read_text())
+    if drop == "scope":
+        plan_json.pop("scope")
+    elif drop == "changed_symbols":
+        plan_json.pop("changed_symbols")
+    elif drop == "binding_target":
+        plan_json["store_binding"].pop("target_pickle", None)
+    else:
+        plan_json["store_binding"].pop("repaired_sha256")
+    out.write_text(json.dumps(plan_json))
+    with pytest.raises(SystemExit):
+        LOC.apply(out, world["db"], "owner words")
+    assert _untouched(world, out)
+
+
+def test_copy_mode_cannot_authorize_a_production_path(world, monkeypatch):
+    """--target-is-copy is for copies; a features db on a production volume is refused
+    in copy mode, for apply and for rollback."""
+    _freeze("decision::yng", "YNG", world["current"]["YNG"])
+    _, out = _plan(world)
+    monkeypatch.setattr(LOC, "PRODUCTION_PREFIXES", (str(world["tmp"]) + "/",))
+    with pytest.raises(SystemExit, match="copy mode"):
+        LOC.apply(out, world["db"], "owner words", target_is_copy=True)
+    with pytest.raises(SystemExit, match="copy mode"):
+        LOC.rollback(out, world["db"], target_is_copy=True)
+    assert fs.quarantined_ids() == set()
+
+
+def test_a_live_rollback_needs_the_owners_words(world, monkeypatch):
+    m, out, sm = _bound_plan(world, monkeypatch)
+    LOC.apply(out, world["db"], "owner words")
+    with pytest.raises(SystemExit, match="approval"):
+        LOC.rollback(out, world["db"])
+    assert fs.quarantined_ids() == {"decision::yng"}
+    assert LOC.rollback(out, world["db"], owner_approval="release the quarantine")["released"] == 1
+
+
+def test_a_plan_whose_binding_target_was_edited_is_refused(world, monkeypatch):
+    """The plan file itself names the target it will check: editing it to point at
+    a twin of the repaired bytes, with the recorded identity left intact, refuses."""
+    m, out, sm = _bound_plan(world, monkeypatch)
+    twin = world["tmp"] / "twin.pkl"
+    twin.write_bytes(world["rep"].read_bytes())
+    plan_json = json.loads(out.read_text())
+    plan_json["store_binding"]["target_pickle"] = str(twin)
+    out.write_text(json.dumps(plan_json))
+    with pytest.raises(SystemExit, match="bound target"):
+        LOC.apply(out, world["db"], "owner words")
+    assert _untouched(world, out)

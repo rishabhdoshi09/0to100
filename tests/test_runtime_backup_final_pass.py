@@ -15,8 +15,10 @@ pytestmark = pytest.mark.skipif(shutil.which("rsync") is None, reason="rsync not
 
 
 def _run(src, dst, stamp):
+    # tmp_path source and backup share one filesystem; the script refuses that
+    # outside tests (test_the_backup_must_be_on_another_filesystem)
     return subprocess.run(["bash", str(SCRIPT), str(src), str(dst), str(stamp)],
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, env={**os.environ, "QT_FINAL_PASS_ALLOW_SAME_FS": "1"})
 
 
 def test_final_backup_refreshes_same_size_db(tmp_path):
@@ -109,3 +111,153 @@ desk() {
     subprocess.run(["bash", "-c", stubs + commands],
                    env={**os.environ, "M": str(tmp_path), "R": str(tmp_path)})
     assert not (tmp_path / "started").exists()
+
+
+# ── Cycle 7 (relay review of 011dffb0): unchanged-file corruption, aliasing ──
+
+def _env(**extra):
+    return {**os.environ, "QT_FINAL_PASS_ALLOW_SAME_FS": "1", **extra}
+
+
+def _run2(*argv):
+    return subprocess.run(["bash", str(SCRIPT), *map(str, argv)], capture_output=True, text=True, env=_env())
+
+
+def _baseline(dst, out):
+    """A stage-1 style manifest of the backup: 'sha256  relpath' lines."""
+    lines = []
+    for p in sorted(Path(dst).rglob("*")):
+        if p.is_file() and not p.is_symlink():
+            import hashlib
+            lines.append(f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.relative_to(dst)}")
+    Path(out).write_text("\n".join(lines) + "\n")
+    return out
+
+
+def test_corruption_of_an_unchanged_backup_file_fails_with_a_verified_baseline(tmp_path):
+    src, dst = tmp_path / "src", tmp_path / "dst"
+    src.mkdir()
+    dst.mkdir()
+    (src / "ledger.db").write_bytes(b"A" * 4096)
+    shutil.copy2(src / "ledger.db", dst / "ledger.db")
+    base = _baseline(dst, tmp_path / "baseline.sha256")       # verified at stage 1
+    stamp = tmp_path / "stamp"
+    stamp.write_text("")
+    os.utime(stamp, (2_000_000_000, 2_000_000_000))             # nothing written since
+    st = (dst / "ledger.db").stat()
+    (dst / "ledger.db").write_bytes(b"B" * 4096)                # silent corruption of the BACKUP
+    os.utime(dst / "ledger.db", ns=(st.st_atime_ns, st.st_mtime_ns))
+    out = _run2(src, dst, stamp, "--baseline", base)
+    assert out.returncode != 0 and "FINAL_PASS_OK" not in out.stdout
+
+
+def test_without_a_baseline_unchanged_file_corruption_is_not_detectable(tmp_path):
+    """Documents the limit: rsync's quick check and the post-stamp delta never
+    read an unchanged file, which is why the runbook passes --baseline."""
+    src, dst = tmp_path / "src", tmp_path / "dst"
+    src.mkdir()
+    dst.mkdir()
+    (src / "ledger.db").write_bytes(b"A" * 4096)
+    shutil.copy2(src / "ledger.db", dst / "ledger.db")
+    stamp = tmp_path / "stamp"
+    stamp.write_text("")
+    os.utime(stamp, (2_000_000_000, 2_000_000_000))
+    st = (dst / "ledger.db").stat()
+    (dst / "ledger.db").write_bytes(b"B" * 4096)
+    os.utime(dst / "ledger.db", ns=(st.st_atime_ns, st.st_mtime_ns))
+    out = _run2(src, dst, stamp)
+    assert out.returncode == 0 and "NO_BASELINE" in out.stdout
+
+
+@pytest.mark.parametrize("case", ["same", "dst_inside_src", "src_inside_dst"])
+def test_aliased_or_nested_paths_are_refused(tmp_path, case):
+    stamp = tmp_path / "stamp"
+    stamp.write_text("")
+    if case == "src_inside_dst":
+        dst = tmp_path / "outer"
+        src = dst / "inner"
+        src.mkdir(parents=True)
+    else:
+        src = tmp_path / "src"
+        src.mkdir()
+        dst = src if case == "same" else src / "backup"
+        dst.mkdir(exist_ok=True)
+    (src / "a").write_text("x")
+    out = _run2(src, dst, stamp)
+    assert out.returncode == 2 and "refusing" in out.stderr
+    assert (src / "a").exists()                                   # nothing was deleted
+
+
+def test_the_backup_must_be_on_another_filesystem(tmp_path):
+    src, dst = tmp_path / "src", tmp_path / "dst"
+    src.mkdir()
+    dst.mkdir()
+    stamp = tmp_path / "stamp"
+    stamp.write_text("")
+    out = subprocess.run(["bash", str(SCRIPT), str(src), str(dst), str(stamp)], capture_output=True, text=True,
+                         env={k: v for k, v in os.environ.items() if k != "QT_FINAL_PASS_ALLOW_SAME_FS"})
+    assert out.returncode == 2 and "same filesystem" in out.stderr
+
+
+def test_verify_only_checks_the_baseline_without_copying(tmp_path):
+    src, dst = tmp_path / "src", tmp_path / "dst"
+    src.mkdir()
+    dst.mkdir()
+    (src / "a.json").write_text('{"a": 1}')
+    shutil.copy2(src / "a.json", dst / "a.json")
+    base = _baseline(dst, tmp_path / "baseline.sha256")
+    (src / "new.json").write_text("{}")                          # must NOT be copied in verify-only
+    stamp = tmp_path / "stamp"
+    stamp.write_text("")
+    out = _run2(src, dst, stamp, "--baseline", base, "--verify-only")
+    assert out.returncode == 0 and "BASELINE_OK" in out.stdout and not (dst / "new.json").exists()
+    (dst / "a.json").write_text('{"a": 2}')
+    out = _run2(src, dst, stamp, "--baseline", base, "--verify-only")
+    assert out.returncode == 1 and "BASELINE_MISMATCH" in out.stderr
+
+
+def test_a_baseline_with_no_usable_entries_is_refused(tmp_path):
+    src, dst = tmp_path / "src", tmp_path / "dst"
+    src.mkdir()
+    dst.mkdir()
+    (src / "a").write_text("x")
+    shutil.copy2(src / "a", dst / "a")
+    bad = tmp_path / "bad.sha256"
+    bad.write_text("not-a-hash  a\n")
+    stamp = tmp_path / "stamp"
+    stamp.write_text("")
+    os.utime(stamp, (2_000_000_000, 2_000_000_000))
+    out = _run2(src, dst, stamp, "--baseline", bad, "--verify-only")
+    assert out.returncode == 2 and "no usable" in out.stderr
+
+
+def test_relative_stamp_and_baseline_paths_work(tmp_path):
+    """Found by the cycle-7 benchmark: the delta search runs inside the source, so a
+    relative stamp path must be made absolute first."""
+    src, dst = tmp_path / "src", tmp_path / "dst"
+    src.mkdir()
+    dst.mkdir()
+    (src / "a").write_text("x")
+    shutil.copy2(src / "a", dst / "a")
+    _baseline(dst, tmp_path / "baseline.sha256")
+    (tmp_path / "stamp").write_text("")
+    out = subprocess.run(["bash", str(SCRIPT), "src", "dst", "stamp", "--baseline", "baseline.sha256"],
+                         capture_output=True, text=True, cwd=tmp_path, env=_env())
+    assert out.returncode == 0, out.stderr
+    assert "baseline_verified=1" in out.stdout
+
+
+def test_a_file_deleted_since_the_bulk_pass_is_mirrored_not_a_baseline_failure(tmp_path):
+    src, dst = tmp_path / "src", tmp_path / "dst"
+    src.mkdir()
+    dst.mkdir()
+    for n in ("keep", "gone"):
+        (src / n).write_text(n)
+        shutil.copy2(src / n, dst / n)
+    base = _baseline(dst, tmp_path / "baseline.sha256")
+    stamp = tmp_path / "stamp"
+    stamp.write_text("")
+    (src / "gone").unlink()                                      # the desk deleted it during the bulk pass
+    out = _run2(src, dst, stamp, "--baseline", base)
+    assert out.returncode == 0, out.stderr
+    assert "baseline_verified=1" in out.stdout and not (dst / "gone").exists()

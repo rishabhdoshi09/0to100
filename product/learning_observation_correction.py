@@ -83,11 +83,34 @@ CARRIED_CROSS = ("breadth_pct_above_50dma", "rs_percentile", "sector_rank_percen
                  "sector_strength", "volatility_percentile")
 
 
+#: Paths on the production runtime volume. Copy mode (--target-is-copy) can
+#: never authorize a path under one of these (Cycle 7).
+PRODUCTION_PREFIXES = ("/Volumes/",)
+
+
+def _is_production(path: str | Path) -> bool:
+    return str(Path(path).resolve()).startswith(PRODUCTION_PREFIXES)
+
+
 def _not_live(path: str | Path, what: str) -> Path:
     p = Path(path).resolve()
-    if str(p).startswith("/Volumes/"):
+    if _is_production(p):
         raise SystemExit(f"refusing {what} under /Volumes: {p} (work on a copy)")
     return p
+
+
+def _repair_identity(sm: dict) -> dict:
+    """The IMMUTABLE identity of a store repair: which file it replaces, from what
+    to what. Its state, backup path and timestamps legitimately change as the
+    repair is applied; these three never do (Cycle 7)."""
+    target = str(sm.get("target_pickle") or "")
+    return {"target_pickle": str(Path(target).resolve()) if target else "",
+            "target_sha256": str(sm.get("target_sha256") or ""),
+            "new_sha256": str(sm.get("new_sha256") or "")}
+
+
+def _identity_sha(identity: dict) -> str:
+    return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
 
 
 def _vector_sha(features_json: str) -> str:
@@ -334,12 +357,16 @@ def _binding(store_manifest, cur_p: Path, rep_p: Path) -> dict:
     """Tie the plan to the store repair it assumes (GPT QT-02)."""
     if store_manifest is None:
         return {"verified": False, "reason": "no store manifest given"}
-    sm_path = Path(store_manifest)
+    sm_path = Path(store_manifest).resolve()
     sm = json.loads(sm_path.read_text())
     cur_sha, rep_sha = _file_sha(cur_p), _file_sha(rep_p)
-    ok = cur_sha == sm.get("target_sha256") and rep_sha == sm.get("new_sha256") and bool(sm.get("ready"))
+    identity = _repair_identity(sm)
+    ok = (cur_sha == identity["target_sha256"] and rep_sha == identity["new_sha256"]
+          and bool(identity["target_pickle"]) and bool(sm.get("ready")))
     return {"verified": ok, "store_manifest": str(sm_path), "store_manifest_sha256": _file_sha(sm_path),
             "current_sha256": cur_sha, "repaired_sha256": rep_sha,
+            "target_pickle": identity["target_pickle"],
+            "repair_identity": identity, "repair_identity_sha256": _identity_sha(identity),
             "expected_current_sha256": sm.get("target_sha256"), "expected_repaired_sha256": sm.get("new_sha256"),
             "repair_ready": bool(sm.get("ready"))}
 
@@ -504,6 +531,48 @@ def plan(features_db: str | Path, current_pickle: str | Path, repaired_pickle: s
     return manifest
 
 
+def _check_copy_mode(db: Path, target_is_copy: bool) -> None:
+    if target_is_copy and _is_production(db):
+        raise SystemExit(f"refusing: copy mode cannot authorize a production path ({db})")
+
+
+def _require_scope(m: dict) -> None:
+    """The judged observation set must be pinned; an absent digest is a refusal,
+    never a skipped check (Cycle 7)."""
+    scope = m.get("scope") or {}
+    if not scope.get("sha256") or "changed_symbols" not in m or not isinstance(m.get("changed_symbols"), list):
+        raise SystemExit("refusing: the plan does not pin the observation set it judged (scope / changed_symbols)")
+
+
+def _require_installed_repair(binding: dict) -> None:
+    """The repair INSTALLED must be exactly the one the plan was bound to.
+
+    The binding's own recorded identity is the authority: the repair manifest is
+    re-read only to confirm its immutable identity (target path, both shas) is
+    unchanged, so a manifest replaced by another repair, or a target redirected
+    to an identical-looking file, refuses. Its mutable fields (state, backup,
+    timestamps) may change as the repair is applied (Cycle 7).
+    """
+    if not binding.get("verified"):
+        raise SystemExit("refusing: the plan is not bound to a verified store repair manifest (--store-manifest)")
+    target, repaired = str(binding.get("target_pickle") or ""), str(binding.get("repaired_sha256") or "")
+    recorded = binding.get("repair_identity") or {}
+    if not target or not repaired or not recorded or binding.get("repair_identity_sha256") != _identity_sha(recorded):
+        raise SystemExit("refusing: the plan's repair binding is incomplete (re-plan with --store-manifest)")
+    try:
+        current = _repair_identity(json.loads(Path(binding["store_manifest"]).read_text()))
+    except Exception as exc:
+        raise SystemExit(f"refusing: the bound repair manifest cannot be read ({type(exc).__name__})")
+    if current != recorded:
+        raise SystemExit("refusing: the repair manifest no longer describes the repair the plan was bound to")
+    live = Path(target)
+    if str(live.resolve()) != recorded["target_pickle"] or recorded["new_sha256"] != repaired:
+        raise SystemExit("refusing: the bound target is not the repair's target")
+    if not live.is_file() or _file_sha(live) != repaired:
+        raise SystemExit("refusing: the live store is not the repaired pickle the plan is bound to "
+                         "(apply the store repair first)")
+
+
 def apply(manifest_path: str | Path, features_db: str | Path, owner_approval: str, *,
           target_is_copy: bool = False, include_exposed: bool = False) -> dict[str, Any]:
     from product.bhav_store_rebuild import _check_desk
@@ -519,16 +588,11 @@ def apply(manifest_path: str | Path, features_db: str | Path, owner_approval: st
         raise SystemExit("refusing: the plan is incomplete (unexplained or not re-derived fills, or a "
                          "coverage refusal); investigate before quarantining anything")
     db = Path(features_db).resolve()
+    _check_copy_mode(db, target_is_copy)
+    _require_scope(m)
     binding = m.get("store_binding") or {}
     if not target_is_copy:
-        if not binding.get("verified"):
-            raise SystemExit("refusing: the plan is not bound to a verified store repair manifest (--store-manifest)")
-        # The repair the plan assumes must be the one INSTALLED (GPT R2, cycle 6).
-        sm = json.loads(Path(binding["store_manifest"]).read_text())
-        live = Path(str(sm.get("target_pickle") or ""))
-        if not sm.get("target_pickle") or not live.is_file() or _file_sha(live) != sm.get("new_sha256"):
-            raise SystemExit("refusing: the live store is not the repaired pickle the plan is bound to "
-                             "(apply the store repair first)")
+        _require_installed_repair(binding)
     _check_desk(db, target_is_copy)
     entries = [{"observation_id": r["observation_id"], "reason": m["reason"],
                 "vector_sha256": r["vector_sha256"],
@@ -560,7 +624,7 @@ def apply(manifest_path: str | Path, features_db: str | Path, owner_approval: st
         # the plan judged, none added or changed since (GPT R2, cycle 6).
         got, _n = _scope_digest(con.execute(
             "SELECT observation_id, symbol, features, meta FROM observations").fetchall(), changed)
-        if want and got != want:
+        if got != want:
             raise FS.QuarantineRefused("the observation set changed since the plan")
 
     saved = FS._DB_PATH
@@ -577,16 +641,23 @@ def apply(manifest_path: str | Path, features_db: str | Path, owner_approval: st
     return m
 
 
-def rollback(manifest_path: str | Path, features_db: str | Path, *, target_is_copy: bool = False) -> dict[str, Any]:
-    """Release exactly the rows this plan's batch inserted (never a prior quarantine)."""
+def rollback(manifest_path: str | Path, features_db: str | Path, *, target_is_copy: bool = False,
+             owner_approval: str = "") -> dict[str, Any]:
+    """Release exactly the rows this plan's batch inserted (never a prior quarantine).
+
+    Releasing rows changes what learning reads, so a live rollback needs the
+    owner's words like apply does; copy mode cannot touch a production path."""
     from product.bhav_store_rebuild import _check_desk
     from research import feature_store as FS
 
     manifest_path = Path(manifest_path)
     m = json.loads(manifest_path.read_text())
+    db = Path(features_db).resolve()
+    _check_copy_mode(db, target_is_copy)
     if m.get("state") not in {"applying", "applied"}:
         raise SystemExit(f"nothing to roll back: the manifest is in state {m.get('state')!r}")
-    db = Path(features_db).resolve()
+    if not target_is_copy and not str(owner_approval or "").strip():
+        raise SystemExit("refusing: a live rollback needs the owner's approval in words (--owner-approval)")
     _check_desk(db, target_is_copy)
     saved = FS._DB_PATH
     FS._DB_PATH = db
@@ -595,7 +666,7 @@ def rollback(manifest_path: str | Path, features_db: str | Path, *, target_is_co
     finally:
         FS._DB_PATH = saved
     m.update({"state": "rolled_back", "rolled_back_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-              "released": released})
+              "released": released, "rollback_approval": str(owner_approval or "").strip()})
     _write_json(manifest_path, m)
     return m
 
@@ -622,6 +693,7 @@ def main(argv=None) -> int:
     r.add_argument("--manifest", required=True)
     r.add_argument("--features-db", required=True)
     r.add_argument("--target-is-copy", action="store_true")
+    r.add_argument("--owner-approval", default="", help="required for a live rollback")
     args = ap.parse_args(argv)
     if args.cmd == "plan":
         out = plan(args.features_db, args.current_pickle, args.repaired_pickle, args.out, args.ca_events,
@@ -642,7 +714,8 @@ def main(argv=None) -> int:
                     include_exposed=args.include_exposed)
         print(json.dumps({"batch_id": out["batch_id"], "results": out["results"]}, indent=1))
     else:
-        out = rollback(args.manifest, args.features_db, target_is_copy=args.target_is_copy)
+        out = rollback(args.manifest, args.features_db, target_is_copy=args.target_is_copy,
+                       owner_approval=args.owner_approval)
         print(json.dumps({"batch_id": out["batch_id"], "released": out["released"]}, indent=1))
     return 0
 

@@ -602,12 +602,19 @@ def get_cached(symbol: str) -> Optional[pd.DataFrame]:
             from data.bhavcopy_store import get_ohlcv
             df = get_ohlcv(clean)
             if df is not None:
+                # get_ohlcv returns a private copy: tag WHICH source served it,
+                # so a consumer can record its input's provenance (Cycle 7)
+                df.attrs.setdefault("quantterm_source", "bhavcopy_store")
                 return df
         except Exception:
             pass
     with _lock:
         df = _yf_cache.get(clean)
-    return df.copy() if df is not None else None
+    if df is None:
+        return None
+    out = df.copy()
+    out.attrs.setdefault("quantterm_source", "yfinance_cache")
+    return out
 
 
 def cached_symbols() -> list[str]:
