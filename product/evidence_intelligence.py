@@ -333,7 +333,12 @@ def record_resolved_prediction(
     if str(evidence_class or "").upper() not in {"PAPER_FORWARD", "REAL_FORWARD_PAPER"}:
         return out
     try:
-        from research.feature_store import get_observation
+        from research.feature_store import get_observation, is_quarantined
+        if is_quarantined(_observation_id(decision_id)):
+            # A withheld observation still settles (above), but its prediction
+            # never calibrates the champion (GPT QT-05/QT-04, cycle 6).
+            out["calibration"] = {"skipped": "QUARANTINED"}
+            return out
         row = get_observation(_observation_id(decision_id)) or {}
         meta = dict(row.get("meta") or {})
         predicted_p = _f(meta.get("predicted_p"))

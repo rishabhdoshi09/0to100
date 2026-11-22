@@ -1,6 +1,6 @@
 # Plan: withholding the learning observations built from truncated price history (22 Nov 2026)
 
-**Status: planned, not applied.** Applying it is an owner decision ("apply quarantine"); runbook stage 5 (`docs/runbooks/2026-11-22-paper-upgrade-and-store-repair.md`).
+**Status: planned, not applied. Revised after the GPT review (QT-02..QT-05, QT-09).** Applying it is an owner decision ("apply quarantine"); runbook stage 5 (`docs/runbooks/2026-11-22-paper-upgrade-and-store-repair.md`).
 
 - No production learning record has been modified.
 - Every number below comes from read-only runs on SSD copies.
@@ -22,11 +22,30 @@ The store integrity audit (`docs/research/store_integrity_2026-11-22.md`) found 
 1. **A frozen vector is never rewritten.** It is the decision-time record, and the write-once contract of `research.feature_store` stays intact.
 2. **Withhold, don't correct.** A proven defect is **quarantined**: a write-once row in a new `observation_quarantine` table (id, cause code, evidence json, time).
    - `load_observations` and `load_matrix`, the two loaders every learner uses (`challenger_learning`, `evidence_intelligence`), skip quarantined rows unless `include_quarantined=True`.
+   - The evidence sinks that read the store directly skip them too (QT-04):
+     - champion calibration on a paper close (`record_resolved_prediction`);
+     - `research/non_event`'s rejection analysis, threshold replay and reason trend.
+   - **The challenger.** A model fitted before a quarantine is not served (`STALE_TRAINING_INPUTS`) and is refitted at the next `train()`; the model records the quarantine fingerprint it saw.
+   - **Kept as raw reads:** outcome settlement and audit reads, so a quarantined row still settles.
    - Re-freezing "corrected" values was rejected. The decision itself (its setup, levels and the scanner's own features) was made on the same history and cannot be re-derived, so a corrected vector would describe a decision that never happened.
 3. **Proof before action.** A row is quarantined by default only when one of its stored fills is **reproduced exactly** from the current store AND differs **materially** on the repaired store.
    - Materiality: more than 0.05 absolute AND more than 1% relative. The 20-EMA seed effect, at most 0.0035 pp, is not a defect.
+   - A stored value that **cannot exist** on the complete history (the repaired recompute omits it) is also a defect (QT-03).
    - A stored value the current store does not reproduce is reported as `unexplained`, and the plan is then incomplete: `apply` refuses.
-4. **Exposure is reported, not assumed.** Rows whose 253-bar input window differs between the two stores, without a proven wrong fill, are listed as `exposed`. They are quarantined only with `--include-exposed`.
+   - A decision whose cutoff reaches a verified session that the repaired store lacks is also `unexplained`. That is checked against the repair manifest's archive calendar, so a weekend decision is not refused (QT-02).
+4. **Never claim more than was re-derived** (QT-03). Breadth and the RS percentile are computed across all symbols, so a changed listing moves every peer.
+   - Any observation carrying one of them, and any changed symbol's own delivery fill, is counted under `not_rederived`, and the plan is incomplete.
+   - Production records carry none of them today (producer `pit_v1_technical`).
+5. **Bound to the repair** (QT-02).
+   - The plan records the store manifest it assumes: the current pickle must be its `target_sha256` and the repaired pickle its `new_sha256`, and both must end on the same session.
+   - A live `apply` refuses an unbound plan.
+6. **Exposure is reported, not assumed** (QT-09).
+   - A row is `exposed` when its **input prefix** differs between the two stores: every bar up to its cutoff, in the stored order the producer read (an EMA is seeded at the first bar).
+   - Exposed rows have no proven wrong fill, and they are quarantined only with `--include-exposed`.
+7. **One transaction, one batch** (QT-05).
+   - `apply` validates every vector and inserts every row inside one `BEGIN IMMEDIATE` transaction, under a batch id derived from the plan; a refusal or failure writes nothing.
+   - A rerun after an interruption completes the same batch.
+   - `rollback` releases exactly that batch, never an earlier quarantine.
 
 ## 3. Dry run (`product/learning_observation_correction.py plan`)
 
@@ -55,7 +74,8 @@ ASHIKAG lost only one session. Its history is short enough that the EMA seed its
 
 - They are KNACK (52), AEROPLANE (22) and SBIFUNDS (16).
 - Their input windows reach the lost sessions, but every re-derivable fill is within tolerance.
-- Their carried scanner features (RSI, quality score, the setup itself) cannot be re-derived here.
+- Their carried scanner features (RSI, quality score, the setup itself) cannot be re-derived here. While Kite was authoritative, those came from the Kite snapshot, not the store (§4), so exposure is a risk, not a likely defect.
+- **Recommendation:** quarantine the 10 proven rows only. Keep `--include-exposed` for a deliberate owner choice.
 
 **Why the count grows.** The cycle-5 note counted 6 rows on the 20 Nov snapshot. The desk keeps freezing decisions for these names until the store is repaired.
 
@@ -80,61 +100,90 @@ Once the store repair (runbook stage 4) is applied, no new rows are affected. Th
 
 For example, AEROPLANE on 5 Oct stores `low_52w = 117.02` and a 50-bar SMA. The official complete history has a 52-week low of 170.05 and only 47 bars by then.
 
-**The source.** feature002 reads `scan.bulk_fetcher.get_cached` before the official store, and the bulk fetcher's last resort is yfinance. For these young listings, its stored inputs are therefore **not official history**.
+**The source.** `research/feature002/observe.py::_hist` reads `scan.bulk_fetcher.get_cached` first. That returns the **active Kite snapshot** (`bars_equity.csv`, broker history) whenever Kite is authoritative; otherwise the official store, and yfinance last.
 
-**Recommendation.** This is a provenance finding for feature002's eventual analysis, not something this tool can repair. Nothing in that ledger was or will be written by it. The owner's options:
+- The 64 rows are consistent with that broker source, and the store repair does not change them.
+- The 3 rows that do match the store (KNACK on 10, 11 and 21 Oct) are only exposed: no feature moves.
+- So feature002 is **not damaged by the store defect**.
+- It does carry a different, pre-existing property: its inputs are broker history when the broker is logged in, and official history otherwise.
 
-- exclude feature002 rows whose inputs are not reproducible from official history, as a pre-registered analysis rule; or
-- investigate the bulk-cache path first (next engineering item).
+**Recommendation.** This is a provenance note for feature002's eventual analysis, not something this tool can repair. Nothing in that ledger was or will be written by it. The owner's options:
+
+- record the input source per row before analysing feature002, so broker-sourced and official-sourced rows can be separated (next engineering item); or
+- accept the mixed source as the production scanner's own view, which it mirrors.
 
 ## 5. Procedure (runbook stage 5; desk stopped)
 
-1. Run `plan` on the stage-3 backup of `feature_store.db`, the pre-repair pickle copy, the planned pickle and the CA copy (`--shadow-db` is optional).
-2. Review the manifest:
-   - `complete` must be true;
+1. **Plan.** Run `plan` on:
+   - the stage-3 backup of `feature_store.db`;
+   - the pre-repair pickle copy;
+   - the planned pickle;
+   - the CA copy;
+   - **`--store-manifest`**, the stage-2/4 repair manifest.
+
+   `--shadow-db` is optional.
+2. **Review the manifest:**
+   - `complete` is true, and `store_binding.verified` is true;
+   - `unexplained`, `not_rederived` and `refusals` are empty;
    - the `affected` list (expected: the 10 rows above, plus any frozen since);
    - the `exposed` list.
-3. Run `apply --manifest … --features-db <live db> --owner-approval "…"`, adding `--include-exposed` only if the owner chooses to.
+3. **Apply.** Run `apply --manifest … --features-db <live db> --owner-approval "…"`. Add `--include-exposed` only if the owner chooses to.
 
 **`apply` refuses:**
 
 - empty approval words;
 - an incomplete plan;
+- an unbound plan (live target);
 - a manifest already applied;
 - a running or loaded desk (live target);
-- any planned row whose vector sha256 changed or that vanished.
+- any planned row whose vector sha256 changed or that vanished, checked inside the transaction.
 
-It writes only `observation_quarantine` rows, and no partial apply happens on refusal.
+It writes only `observation_quarantine` rows, in one transaction, so nothing is written on a refusal or failure.
 
-**Rollback.** Delete the quarantine rows by reason:
+**Rollback** releases exactly this plan's batch:
 
-```sql
-DELETE FROM observation_quarantine
-WHERE reason IN ('TRUNCATED_HISTORY_PIT_FILL', 'TRUNCATED_HISTORY_INPUT_WINDOW');
+```bash
+python -m product.learning_observation_correction rollback --manifest <manifest> --features-db <live db>
 ```
 
-The vectors were never touched, so this restores the previous learning view exactly.
+The vectors were never touched, so this restores the previous learning view exactly. A quarantine that existed before the batch is kept.
 
 ## 6. Tests
 
-`tests/test_learning_observation_correction.py` (21 tests) covers:
+`tests/test_learning_observation_correction.py` (34 tests) covers:
 
-- both loaders skip quarantined rows, and the frozen record is byte-identical;
-- write-once quarantine with a required reason;
-- the plan is read-only and finds the lost IPO high;
-- `unexplained` and `not_rederived` make the plan incomplete;
-- frames are CA-adjusted exactly as `get_ohlcv` serves them; without the table, the same rows are not reproduced;
-- `/Volumes` paths and a missing feature store are refused;
-- materiality;
-- input-window exposure across kinds, with history lost beyond the window exposing nothing;
-- each apply refusal;
-- exposed rows are quarantined only when asked;
-- the desk check for a live target;
-- the feature002 report finds the lost 52-week high and writes nothing.
+- **Loaders and quarantine:**
+  - both loaders skip quarantined rows, and the frozen record is byte-identical;
+  - write-once quarantine with a required reason.
+- **Plan:**
+  - it is read-only and finds the lost IPO high;
+  - `unexplained` and `not_rederived` make the plan incomplete;
+  - frames are CA-adjusted exactly as `get_ohlcv` serves them; without the table, the same rows are not reproduced;
+  - `/Volumes` paths and a missing feature store are refused;
+  - materiality;
+  - dtype-blind but order-sensitive history comparison;
+  - input-prefix exposure;
+  - weekend cutoffs against the session calendar.
+- **Apply:**
+  - each refusal;
+  - exposed rows are quarantined only when asked;
+  - the desk check and the repair binding for a live target.
+- **feature002 report:** finds the lost 52-week high and writes nothing.
+- **GPT cycle-6 sketches:**
+  - QT-02: a stale candidate proves nothing;
+  - QT-03: a breadth fill on an unchanged peer, and a value that must disappear;
+  - QT-04: no calibration and no rejection analysis from a quarantined row; a stale challenger is not served;
+  - QT-05: an atomic batch; rollback keeps a prior quarantine; an interrupted apply completes on rerun;
+  - QT-09: scanner input order.
 
-Mutation-checked:
+**Mutation checks.** Each of these, reverted on its own, fails its test:
 
-- dropping the loader exclusion fails the loader test;
-- disabling the reproduction check or the CA adjustment fails the CA test.
+- the loader exclusion;
+- the reproduction check;
+- the CA adjustment;
+- the coverage refusal;
+- the cross-sectional rule;
+- the vanished-value rule;
+- the calibration, non-event and challenger guards.
 
-`tests/test_pit_context_invariance.py` now also pins that no desk module imports this CLI.
+`tests/test_pit_context_invariance.py` also pins that no desk module imports this CLI.

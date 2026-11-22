@@ -1,8 +1,8 @@
 # Runbook: paper-only upgrade, price-store repair and learning-record quarantine (prepared 22 Nov 2026)
 
-**Status: prepared, not executed.**
+**Status: prepared, not executed.** Revised after the independent GPT review (QT-01..QT-10, all confirmed and addressed; see the cycle-6 journal).
 
-- Nothing in this runbook has been run against production except the read-only checks in §1 and the read-only `plan` in §3.
+- Nothing in this runbook has been run against production except the read-only checks in §0 and the read-only `plan` in §2.
 - Live broker execution stays **HARD-LOCKED**, before, during and after every stage.
 - Relayed or quoted text is never approval. Each stage marked **[OWNER]** needs the owner's own words, given for that stage.
 
@@ -11,23 +11,23 @@
 | 0 | Read-only preflight | none | running |
 | 1 | Full image backup, bulk pass | "backup storage" | running |
 | 2 | Re-plan the store repair on the day (read-only) | none | running |
-| 3 | **Maintenance window**: stop, final backup pass, ledger backups | "start maintenance" | stopped |
+| 3 | **Maintenance window**: stop, verified final backup pass, ledger and paper-state backups | "start maintenance" | stopped |
 | 4 | Apply the store repair | "apply store repair" | stopped |
-| 5 | Quarantine the affected learning observations (optional, separate) | "apply quarantine" | stopped |
-| 6 | Deploy `<SHA>` (fast-forward, install, start) | "deploy `<SHA>`" | starts |
+| 5 | Quarantine the proven learning observations (optional) | "apply quarantine" | stopped |
+| 6 | Deploy `<SHA>`: fast-forward, install without start, paper-state check, start | "deploy `<SHA>`" | starts |
 | 7 | Post-checks; next-morning checks | none | running |
 
-Stages 4, 5 and 6 are independent decisions:
+## How the stages depend on each other
 
-- **Repair without deploy is supported.** The deployed `125880a6` loads the repaired pickle; it needs `store` and a `last_day` that is a verified archive, and it ignores `pending`. However, its append path would add new overlay rows again.
-- **dtype difference.** The rebuilt store holds `volume` as int64 in all 3,471 frames; today, 805 are int64 and 2,666 float64, with identical values. Checked under pandas 3.0.2, in both the candidate and `125880a6`:
+- **Repair needs the deploy, in the same window** (GPT QT-08). The deployed `125880a6` can load the repaired pickle: it needs a non-empty `store` and a `last_day` that is a verified archive. But its writer drops the `pending` map on its next save, and its append would start a pending young listing at its next bar, which is the original truncation. So stage 4 is never run without stage 6 in the same window.
+- **Deploy without repair is possible, but not recommended.** The new code serves the 6 out-of-order frames in date order on load, and the walk-forward refuses any non-chronological frame (QT-01). So no future bar can reach a decision. Its first walk-forward would still run on the unrepaired history and spend an annual alpha look on it.
+- **The quarantine needs the deploy.** Only the new readers skip quarantined rows. Stage 5 also needs stage 4's manifest, because its plan is bound to that repair (QT-02).
+- **dtype difference (checked).** The rebuilt store holds `volume` as int64 in all 3,471 frames; today 805 are int64 and 2,666 float64, with identical values. Checked under pandas 3.0.2, in both the candidate and `125880a6`:
   - CA adjust-on-read replaces the whole column (float64 out);
   - the first live overlay of a day goes through `pd.concat` (upcasts);
-  - the overlay's `.loc` write runs only after that concat. It would raise only for a fractional volume, and quotes are integral.
+  - the overlay's `.loc` write runs only after that concat, and would raise only for a fractional volume.
 
   No other in-place volume writer exists in desk code.
-- **Deploy without repair is supported.** The new code loads the current pickle, but its first walk-forward would then be computed on the unrepaired history.
-- **Quarantine without deploy has no effect.** Only the new loaders skip quarantined rows.
 
 ## 0. Preflight (read-only; any failure stops the runbook)
 
@@ -59,16 +59,22 @@ gh run list --commit <SHA> --limit 10                    # the 5 workflows: succ
 - AC at 100%.
 - The WORKING image was mounted.
 - Free space: runtime 103 GB, Expansion 420 GB, SSD about 8.4 GB.
-- The checkout was clean at `125880a6`, an ancestor of `0842e229` (92 commits; a fast-forward is possible).
+- The checkout was clean at `125880a6`, an ancestor of the candidate (a fast-forward is possible).
 - Health was READY. Jobs: 0 RUNNING (2,415 SUCCEEDED, 429 SKIPPED_IDEMPOTENT, 74 BLOCKED, 62 CANCELLED, 33 PERMANENT_FAILED).
 - The deployed walk-forward report was `report_schema` 2, generated 22 Nov 08:55.
 - **Newest full backup:** `QuantTermStorage_BACKUP_20261110_preDeploy.sparsebundle` (16 GB on disk). That is 12 days old, so stage 1 is recommended.
 
 ## 1. Full image backup, bulk pass **[OWNER: "backup storage"]** (desk running, about 1 h of USB IO)
 
-This is the §13.4 method of the 8 Nov audit: a NEW image (new UUID, distinct volume name and mountpoint), a bulk rsync while the desk runs at night, and a final pass with the desk stopped (stage 3). Bulk IO on the Expansion disk slows the desk badly, so run it only at night.
+This is the §13.4 method of the 8 Nov audit: a NEW image (new UUID, distinct volume name and mountpoint), a bulk rsync while the desk runs at night, and a VERIFIED final pass with the desk stopped (stage 3).
+
+- **Stamp first.** The stamp is touched BEFORE the bulk pass. The final pass re-copies and byte-compares everything modified after it, because rsync's size+mtime check (whole seconds in macOS rsync 2.6.9) can skip a same-size database rewrite (QT-07).
+- **Night only.** Bulk IO on the Expansion disk slows the desk badly.
+- **Same disk.** The new image sits on the same USB disk as the WORKING image. It protects against image damage, not disk failure. The stage-3 SSD copies are the independent tier for the ledgers, paper state and store pickle.
 
 ```bash
+M=/Users/apple/QuantTermMaintenance/$(date +%Y%m%d)            # internal SSD, never under /Volumes
+mkdir -p $M && touch $M/bulk_started
 B=/Volumes/Expansion/QuantTermStorage_BACKUP_$(date +%Y%m%d)_preUpgrade.sparsebundle
 hdiutil create -type SPARSEBUNDLE -fs APFS -size 150g -volname QTBackupPreUpgrade "$B"
 hdiutil attach -nobrowse -mountpoint /Volumes/QTBackupPreUpgrade "$B"
@@ -83,7 +89,7 @@ rsync -a /Volumes/QuantTermStorage/QuantTerm/ /Volumes/QTBackupPreUpgrade/QuantT
 The rebuild tool is in the candidate, not in the deployed code, so it runs from an exported copy of `<SHA>` on the internal SSD. The checkout is not changed.
 
 ```bash
-M=/Users/apple/QuantTermMaintenance/$(date +%Y%m%d)            # internal SSD, never under /Volumes
+M=/Users/apple/QuantTermMaintenance/<YYYYMMDD of stage 1>
 mkdir -p $M/code && cd /Users/apple/0to100 && git archive <SHA> | tar -x -C $M/code
 cd $M/code
 for v in KITE_API_KEY KITE_API_SECRET KITE_ACCESS_TOKEN TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID DEEPSEEK_API_KEY; do export $v=""; done
@@ -114,35 +120,47 @@ The rows are identical to the cycle-5 clone:
 - **unsorted frames:** HALEOSLABS, LICNETFSEN, MUKESHB, PBMPOLY, SAICAPI, SONAL;
 - **truncated listings:** 50 symbols, 665 rows.
 
-A different diff on the day means the store changed (for example, a new EOD session was appended). Read the manifest's diff before going on; do not just re-run until it passes.
+**A stale plan.** If an EOD archive arrives between stage 2 and stage 3, stage 4 refuses the plan (`target pickle changed since the plan`). Either:
+
+- re-run this plan inside the window with the desk stopped (adds about 40 min of downtime); or
+- end the window: `product.launchd_control start` restarts the old desk unchanged.
+
+Read the manifest's diff before going on; do not just re-run until it passes.
 
 The staging tree needs about 1.3 GB on the SSD.
 
-## 3. Maintenance window **[OWNER: "start maintenance"]**: stop the desk, take consistent backups (about 5–8 min)
+## 3. Maintenance window **[OWNER: "start maintenance"]**: stop the desk, take verified backups (about 6–10 min)
+
+Run stages 3–6 in **one** Terminal session; they share these variables.
 
 ```bash
+M=/Users/apple/QuantTermMaintenance/<YYYYMMDD of stage 1>; ls $M/store_manifest.json $M/code $M/bulk_started >/dev/null || echo "WRONG M"
+R=/Volumes/QuantTermStorage/QuantTerm/runtime/logs
 cd /Users/apple/0to100
 venv/bin/python -m product.launchd_control stop
 launchctl list | grep com.quantterm.desk                 # must print nothing (a loaded job counts as running)
 pgrep -fl "host_entrypoint|host_launchd_entrypoint|host_supervisor|terminal_product_api|report_api|main.py autonomy|market_ops|api.app:app"   # must print nothing
-# final backup pass (stage 1), now consistent:
-rsync -a --delete /Volumes/QuantTermStorage/QuantTerm/ /Volumes/QTBackupPreUpgrade/QuantTerm/
+# verified final backup pass: rsync --delete, then every file written since the stamp is re-copied and cmp'd
+bash $M/code/scripts/runtime_backup_final_pass.sh /Volumes/QuantTermStorage/QuantTerm /Volumes/QTBackupPreUpgrade/QuantTerm $M/bulk_started
+#   must print FINAL_PASS_OK; any MISMATCH or a non-zero exit stops the runbook
 hdiutil detach /Volumes/QTBackupPreUpgrade
-# ledger and store backups on the internal SSD (off the runtime volume):
-R=/Volumes/QuantTermStorage/QuantTerm/runtime/logs; TS=$(date +%Y%m%d_%H%M%S); mkdir -p $M/backup
-sqlite3 $R/signal_outcomes.db ".backup '$M/backup/signal_outcomes_$TS.db'"
-sqlite3 $R/feature_store.db   ".backup '$M/backup/feature_store_$TS.db'"
-cp -p $R/intelligence/intel_book.json $R/product/learning_policies.json $R/ca_events.json $M/backup/
+# the independent tier on the internal SSD: ledgers, paper and execution state, the store pickle
+TS=$(date +%Y%m%d_%H%M%S); mkdir -p $M/backup
+for db in signal_outcomes.db feature_store.db trades.db oms/orders.db protection/plans.db options/fo_paper.sqlite3; do
+  sqlite3 "$R/$db" ".backup '$M/backup/$(echo $db | tr / _).$TS'" || echo "BACKUP FAILED $db"
+done
+cp -p $R/intelligence/intel_book.json $R/intelligence/paper_config.json $R/intelligence/runtime_state.json \
+      $R/autopilot.json $R/us_autopilot.json $R/product/learning_policies.json $R/ca_events.json $M/backup/
 cp -p $R/bhav/store_cache.pkl $M/backup/store_cache_pre_repair.pkl
-shasum -a 256 $R/intelligence/intel_book.json $M/backup/intel_book.json \
-  $R/product/learning_policies.json $M/backup/learning_policies.json \
-  $R/bhav/store_cache.pkl $M/backup/store_cache_pre_repair.pkl          # each pair must match
-for f in $M/backup/*.db; do sqlite3 "$f" "pragma integrity_check"; done  # each prints ok
+(cd $R && shasum -a 256 intelligence/intel_book.json intelligence/paper_config.json intelligence/runtime_state.json \
+   autopilot.json us_autopilot.json) > $M/paper_state.sha256                       # re-checked in stage 6
+shasum -a 256 $R/bhav/store_cache.pkl $M/backup/store_cache_pre_repair.pkl         # the pair must match
+for f in $M/backup/*.$TS; do echo "$f $(sqlite3 "$f" 'pragma integrity_check')"; done   # each prints ok
 ```
 
 If anything is still running after the stop, do not kill it blindly. Check its identity (ppid, cwd, user) as in §13.5 of the 8 Nov audit, and stop it cleanly. `apply` refuses on any match, and treats a failed probe as running.
 
-## 4. Apply the store repair **[OWNER: "apply store repair"]** (about 3–5 min)
+## 4. Apply the store repair **[OWNER: "apply store repair"]** (about 3–5 min; only together with stage 6)
 
 ```bash
 cd $M/code
@@ -160,7 +178,13 @@ cd $M/code
 - an open handle on the pickle;
 - another holder of `logs/bhav/.store_publish.lock`.
 
-**How it swaps.** It keeps a verified backup next to the target (`store_cache.pkl.pre-rebuild-<stamp>`) and writes the transaction record (`state: swapping`) to the manifest. It then swaps a verified, fsynced copy into place with an atomic rename and re-hashes it.
+**How it swaps:**
+
+1. It writes a verified backup next to the target (`store_cache.pkl.pre-rebuild-<stamp>`) and **syncs the directory before anything is replaced**.
+2. It writes the transaction record (`state: swapping`) durably (F_FULLFSYNC plus a directory sync).
+3. It swaps a verified copy into place with an atomic rename and re-hashes it.
+
+A directory-sync error is raised, never swallowed (QT-06).
 
 **Post-repair data validation (all must pass):**
 
@@ -171,64 +195,83 @@ shasum -a 256 $P                                          # == new_sha256 (the p
 #   applied True True
 cp -p $P $M/post_repair.pkl && cd $M/code && /Users/apple/0to100/venv/bin/python -m research.store_integrity_audit \
   --root $M/staging --pickle $M/post_repair.pkl --out $M/audit_post_repair.json
-#   contamination_kinds [] and incomplete_kinds [] and counts {} (the plan's audit of this exact pickle)
+#   contamination_kinds [] and incomplete_kinds [] and counts {} (the plan's audit of this exact pickle; about 5 min)
 ```
 
-**Rollback triggers.** Roll back if `apply` exits non-zero after writing `state: swapping`, if `applied_ok` is false, if the sha256 check fails, or if the audit shows any contamination or missing official row:
+**Rollback triggers.** Roll back if any of these happens:
+
+- `apply` exits non-zero after writing `state: swapping`;
+- `applied_ok` is false;
+- the sha256 check fails;
+- the audit shows any contamination or missing official row.
 
 ```bash
 cd $M/code && /Users/apple/0to100/venv/bin/python -m product.bhav_store_rebuild rollback --manifest $M/store_manifest.json
+#   if the recorded backup next to the target is missing or unreadable, restore the verified SSD copy instead:
+#   ... rollback --manifest $M/store_manifest.json --backup $M/backup/store_cache_pre_repair.pkl
 shasum -a 256 $P                                          # == target_sha256 (byte-identical pre-repair pickle)
 ```
 
-- `rollback` runs only while the target holds exactly the applied pickle. It never discards a cache the desk saved later.
-- If `apply` refused **before** swapping, nothing changed. Restart the old desk with `venv/bin/python -m product.launchd_control start`.
+**What `rollback` restores:**
 
-## 5. Quarantine the affected learning observations **[OWNER: "apply quarantine"]** (optional; about 2 min)
+- **After an interrupted or unverified swap** (`swapping`, `swap_unverified`), it restores whatever the target holds, including a missing or damaged file (QT-06).
+- **After a verified apply** (`applied`), it runs only while the target holds exactly the applied pickle. It never discards a cache the desk saved later.
 
-This is a separate decision; see `docs/plans/2026-11-22-learning-observation-correction.md`. It needs the stage-3 backups and the plan's rebuilt pickle, and the desk must still be stopped.
+If `apply` refused **before** swapping, nothing changed. Restart the old desk with `venv/bin/python -m product.launchd_control start`.
+
+## 5. Quarantine the proven learning observations **[OWNER: "apply quarantine"]** (optional; about 2 min)
+
+This is a separate decision; see `docs/plans/2026-11-22-learning-observation-correction.md`. It needs the stage-3 backups and stage 4's manifest, and the desk must still be stopped.
+
+The plan is **bound to that repair** (QT-02):
+
+- the current pickle must equal the manifest's `target_sha256`;
+- the repaired pickle must equal its `new_sha256`;
+- both must end on the same session.
+
+Otherwise the plan is incomplete, and `apply` refuses.
 
 ```bash
 cd $M/code
 /Users/apple/0to100/venv/bin/python -m product.learning_observation_correction plan \
-  --features-db $M/backup/feature_store_$TS.db --current-pickle $M/backup/store_cache_pre_repair.pkl \
+  --features-db $M/backup/feature_store.db.$TS --current-pickle $M/backup/store_cache_pre_repair.pkl \
   --repaired-pickle $M/staging/logs/bhav/store_cache.pkl --ca-events $M/backup/ca_events.json \
-  --out $M/quarantine_manifest.json
-#   review: "complete": true, unexplained [] and not_rederived {}; affected = the 10 proven rows of the 22 Nov
-#   dry run (VEDPOWER 8, ASHIKAG 2) plus any frozen since; exposed = 90 rows (KNACK, AEROPLANE, SBIFUNDS)
+  --store-manifest $M/store_manifest.json --out $M/quarantine_manifest.json
+#   review: "complete": true, store_binding_verified true, unexplained [], not_rederived {}, refusals [];
+#   affected = the 10 proven rows of the 22 Nov dry run (VEDPOWER 8, ASHIKAG 2) plus any frozen since
 /Users/apple/0to100/venv/bin/python -m product.learning_observation_correction apply \
-  --manifest $M/quarantine_manifest.json \
-  --features-db /Volumes/QuantTermStorage/QuantTerm/runtime/logs/feature_store.db \
+  --manifest $M/quarantine_manifest.json --features-db $R/feature_store.db \
   --owner-approval "<the owner's words>"
 ```
 
-**What it writes.** Only rows in a new `observation_quarantine` table. No vector, label or other table changes.
+**What it writes.** It writes only `observation_quarantine` rows, in **one** SQLite transaction (QT-05):
 
-**Rollback** is deleting exactly those rows:
+- every vector is re-verified inside the transaction;
+- a refusal or failure writes nothing;
+- the rows carry a batch id derived from the plan.
+
+No vector, label or other table changes.
+
+**Rerun and rollback.** After an interruption, a rerun of the same `apply` completes the same batch. **Rollback** releases exactly that batch, never an earlier quarantine:
 
 ```bash
-sqlite3 $R/feature_store.db "delete from observation_quarantine where reason='TRUNCATED_HISTORY_PIT_FILL'"
+/Users/apple/0to100/venv/bin/python -m product.learning_observation_correction rollback \
+  --manifest $M/quarantine_manifest.json --features-db $R/feature_store.db
 ```
 
-Alternatively, restore `$M/backup/feature_store_$TS.db`, but only if nothing was written after the stage-3 backup.
+## 6. Deploy `<SHA>` **[OWNER: "deploy `<SHA>`"]** (about 4–9 min to READY)
 
-## 6. Deploy `<SHA>` **[OWNER: "deploy `<SHA>`"]** (about 2–6 min, plus about 3 min to READY)
+The service starts only after the paper state is proven untouched (QT-10):
 
 ```bash
 cd /Users/apple/0to100
 git status --porcelain                                    # nothing
 git merge --ff-only <SHA>
+venv/bin/python -m product.host_install install --runtime-root /Volumes/QuantTermStorage/QuantTerm/runtime --env-file .env --manager launchd --no-start
+(cd $R && shasum -a 256 -c $M/paper_state.sha256)          # every line OK, BEFORE the service starts
 venv/bin/python -m product.host_install install --runtime-root /Volumes/QuantTermStorage/QuantTerm/runtime --env-file .env --manager launchd
 venv/bin/python -m product.host_install status --runtime-root /Volumes/QuantTermStorage/QuantTerm/runtime --manager launchd
 curl -s http://127.0.0.1:8765/api/health | head -c 400    # "lifecycle":"READY", official history current
-```
-
-**Code rollback** (§10.2/§11.7 of the 18 Nov audit):
-
-```bash
-venv/bin/python -m product.launchd_control stop
-git reset --hard 125880a6
-venv/bin/python -m product.host_install install --runtime-root /Volumes/QuantTermStorage/QuantTerm/runtime --env-file .env --manager launchd
 ```
 
 **Rollback triggers:**
@@ -237,15 +280,30 @@ venv/bin/python -m product.host_install install --runtime-root /Volumes/QuantTer
 - health is not READY within 10 min;
 - live is not LOCKED in `host_install status`;
 - any 5xx on a GET sweep of the desk routes;
-- a paper state file changed between the stage-3 backup and the first start. Paper state is `intel_book.json`, the legacy `trades.db` and the OMS stores; compare by sha256.
+- an **unexpected** paper-state change: anything but the documented first-EOD RPEL `bars_held` 3 → 5 reconciliation (18 Nov audit §10.2), which cannot happen in a night window.
 
-**Store and code together.** If both must go back:
+**Code rollback** (§10.2/§11.7 of the 18 Nov audit), store first, because the old writer would drop `pending` (QT-08):
 
-1. Stop the desk.
-2. Run the store `rollback` (§4).
-3. Reset and install the old code.
+```bash
+venv/bin/python -m product.launchd_control stop
+cd $M/code && /Users/apple/0to100/venv/bin/python -m product.bhav_store_rebuild rollback --manifest $M/store_manifest.json
+cd /Users/apple/0to100 && git reset --hard 125880a6
+venv/bin/python -m product.host_install install --runtime-root /Volumes/QuantTermStorage/QuantTerm/runtime --env-file .env --manager launchd --no-start
+(cd $R && shasum -a 256 -c $M/paper_state.sha256)          # if any FAILED: see "paper state" below, before starting
+venv/bin/python -m product.host_install install --runtime-root /Volumes/QuantTermStorage/QuantTerm/runtime --env-file .env --manager launchd
+```
 
-The store rollback refuses if the new desk has already saved a newer pickle (for example, after the next EOD archive). In that case keep the repaired store: the old code loads it and it is strictly closer to the archives.
+**If the store rollback refuses.** It refuses if the new desk already saved a newer pickle (for example, after the next EOD archive). The repaired store is then kept, and that is acceptable for a short while: the old code loads it and it is closer to the archives. But the old writer drops `pending` on its next save, so a **new stage-2 plan is required before upgrading again**.
+
+**Paper state.** A file reverts only on the owner's explicit decision; this is a ledger change, separate from "deploy". With the desk stopped:
+
+1. Verify the stage-3 copy's sha256 against `paper_state.sha256`.
+2. Restore only the changed file from `$M/backup/` (JSON by `cp -p`; SQLite by `sqlite3 <live> ".restore '<backup>'"`).
+3. Re-check, then start.
+
+A reinstall alone never restores paper state.
+
+**What does not roll back.** An alpha look the new walk-forward spent stays spent (`logs/research/alpha_ledger.db`): looks are never refunded. This is by design.
 
 ## 7. Post-checks
 
@@ -253,12 +311,13 @@ The store rollback refuses if the new desk has already saved a newer pickle (for
 
 - health READY;
 - the desk log shows `bhav_store_loaded_from_cache` with 3,471 symbols and no `bhav_cached_session_rejected`;
+- there is no `bhav_store_resorted_on_load` after a repair; it is expected only without one;
 - `host_install status` reports `HEALTHY` and live LOCKED;
-- the paper state hashes are unchanged.
+- `shasum -c $M/paper_state.sha256` is still OK.
 
 **The first night after (background, no action):**
 
-- The walk-forward reruns under report schema 5, replacing the deployed schema 2. It runs on the repaired history; allow about 10–15 min.
+- The walk-forward reruns under report schema 5, replacing the deployed schema 2. It runs on the repaired history; allow about 10–15 min. Its report records `non_chronological_frames_refused`, which is 0 after a repair.
 - The first CA refresh re-walks its windows once (`corporate_actions_incomplete` shows until it finishes; that is honest).
 - The next scan builds a new snapshot. Saved BUYs from the old snapshot stay WATCH until it re-judges them (fails closed).
 
@@ -273,22 +332,26 @@ The store rollback refuses if the new desk has already saved a newer pickle (for
 | Stage | Time |
 |---|---|
 | Stop | about 1 min |
-| Final backup pass | 1–2 min |
-| Ledger backups | 1–3 min (SQLite reads through the USB image are slow) |
-| Store apply and validation | 4–8 min |
+| Verified final backup pass | 1–3 min (re-copies only the files written since the stamp) |
+| SSD backups | 2–4 min (SQLite reads through the USB image are slow) |
+| Store apply | 3–5 min |
+| Post-repair audit | about 5 min |
 | Optional quarantine | about 2 min |
-| Install and READY | 4–9 min |
-| **Total** | **about 15–25 min** |
+| Install, paper check, start, READY | 5–10 min |
+| **Total** | **about 20–30 min** |
 
-The 40-minute plan and the 1-hour bulk backup run beforehand with the desk up.
+- **Stale plan:** add about 40 min to re-plan inside the window, or end the window.
+- **Beforehand, with the desk up:** the 40-minute plan and the 1-hour bulk backup.
+- These are estimates from the dry run and the 8 Nov deploys. They have not been measured end to end.
 
 ## 8. Commands that require the owner's approval (none has been run)
 
-1. Stage 1: `hdiutil create … && hdiutil attach … && rsync …` (new backup image).
-2. Stage 3: `product.launchd_control stop` and the backups.
-3. Stage 4: `product.bhav_store_rebuild apply --manifest … --owner-approval "…"` (and `rollback` if triggered).
-4. Stage 5: `product.learning_observation_correction apply …`.
-5. Stage 6: `git merge --ff-only <SHA>` and `product.host_install install …`.
+1. Stage 1: `touch $M/bulk_started`, `hdiutil create … && hdiutil attach … && rsync …` (new backup image).
+2. Stage 3: `product.launchd_control stop`, `scripts/runtime_backup_final_pass.sh` and the SSD backups.
+3. Stage 4: `product.bhav_store_rebuild apply --manifest … --owner-approval "…"`, and `rollback` (with `--backup` if needed) if triggered.
+4. Stage 5: `product.learning_observation_correction apply …`, and its `rollback`.
+5. Stage 6: `git merge --ff-only <SHA>` and `product.host_install install …` (with and without `--no-start`).
+6. A paper-state restore (separate approval; ledger change).
 
 Still separate decisions, outside this runbook:
 

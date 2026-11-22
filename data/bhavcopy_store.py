@@ -382,12 +382,16 @@ def _load_pkl() -> bool:
         if not isinstance(last_day, date) or last_day not in _dates_on_disk():
             log.warning("bhav_cached_session_rejected", last_day=str(last_day))
             return False
+        store, pending = data["store"], dict(data.get("pending") or {})
+        resorted = _chronological(store) + _chronological(pending)
         with _lock:
-            _store = data["store"]
+            _store = store
             _store_last_day = data["last_day"]
             _store_sessions = int(data.get("sessions") or 0)
-            _pending = dict(data.get("pending") or {})
+            _pending = pending
             _bump_revision_locked()
+        if resorted:
+            log.warning("bhav_store_resorted_on_load", frames=resorted)
         log.info("bhav_store_loaded_from_cache", symbols=len(_store),
                  sessions=_store_sessions, latest=str(_store_last_day))
         return True
@@ -398,6 +402,31 @@ def _load_pkl() -> bool:
         except Exception:
             pass
         return False
+
+
+def _chronological(frames: dict) -> int:
+    """Re-sort, in place, any frame whose dates are out of order. Returns how many.
+
+    A pickle saved before cycle 5 can hold frames where a late archive was
+    appended after a live row (6 in production). Every reader slices bars by
+    position, so an out-of-order frame hands a decision its FUTURE bars (GPT
+    QT-01, cycle 6). The audit and the gated rebuild still see the pickle as
+    saved; only the served copy is put in date order. Attributes (the live
+    overlay marker) are kept.
+    """
+    fixed = 0
+    for sym, df in list(frames.items()):
+        try:
+            if df is None or df.index.is_monotonic_increasing:
+                continue
+            attrs = dict(getattr(df, "attrs", {}) or {})
+            out = df.sort_index(kind="stable")
+            out.attrs.update(attrs)
+            frames[sym] = out
+            fixed += 1
+        except Exception:
+            continue
+    return fixed
 
 
 def _bump_revision_locked() -> None:

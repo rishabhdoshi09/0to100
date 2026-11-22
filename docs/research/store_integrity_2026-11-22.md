@@ -130,5 +130,6 @@ The first plan run, before the symbol-set fix, was correctly **refused** by its 
 
 **feature002 shadow ledger (not covered above).** It holds 67 rows for 18 of the truncated names. 64 of them are **not reproducible from either store**: for example, AEROPLANE `low_52w` is 117.02 against an official 170.05, with 50+ bars where official history has 47.
 
-- That ledger reads `scan.bulk_fetcher.get_cached` first, and the bulk fetcher's last resort is yfinance.
-- So, for these names, its inputs are not official history. This is a provenance finding for its eventual analysis; see the plan, §4.
+- `research/feature002/observe.py::_hist` reads `scan.bulk_fetcher.get_cached` first. That returns the **active Kite snapshot** (`bars_equity.csv`, broker history) whenever Kite is authoritative; otherwise the official store, and yfinance last.
+- Those rows are therefore consistent with broker history, and the store defect did not reach them; the 3 store-sourced rows show no change.
+- The mixed source is a provenance note for feature002's eventual analysis; see the plan, §4.

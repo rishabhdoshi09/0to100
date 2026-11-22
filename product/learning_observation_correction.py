@@ -4,48 +4,55 @@ The store integrity audit (docs/research/store_integrity_2026-11-22.md) found
 50 young listings whose first weeks of official history were missing from the
 OHLCV store. A DECISION observation frozen for one of them carries point-in-time
 technical features (product.pit_features) computed from that truncated history.
-Most are unaffected, because their windows are short, but a 252-bar feature
-such as ``dist_from_high_pct`` is wrong when the true high sat in the lost
-sessions (VEDPOWER on 2026-11-20: stored 8.68%, true 29.79%).
+Most are unaffected, but a long window such as the 252-bar
+``dist_from_high_pct`` is wrong when the true high sat in the lost sessions
+(VEDPOWER on 2026-11-20: stored 8.68%, true 29.79%).
 
 The frozen vector is the decision-time record and is never rewritten. A proven
-defect is QUARANTINED (research.feature_store.quarantine_observation), so the
-learning loaders skip it.
+defect is QUARANTINED (research.feature_store.quarantine_batch), so learning
+and evidence consumers skip it.
 
-* ``plan`` (read-only; COPIES only, ``/Volumes`` refused) recomputes every PIT
-  fill of every affected-symbol DECISION observation twice: on the current
-  store (it must reproduce the stored value, or the row is not explained by the
-  store defect and is left alone) and on the repaired store
-  (product.bhav_store_rebuild's planned pickle), each read the way
-  ``get_ohlcv`` serves it (corporate actions applied from ``--ca-events``). A
-  row is affected when a repaired value differs from the stored one by more
-  than ``ABS_TOL`` AND more than ``REL_TOL`` of it. The manifest records each
-  row's vector sha256. Fills this tool cannot re-derive per symbol (market
-  context, cross-sectional RS) are counted under ``not_rederived``; a plan with
-  any is flagged incomplete rather than silently passed.
+* ``plan`` (read-only; COPIES only, ``/Volumes`` refused) is bound to the
+  store repair's manifest: the current pickle must be its ``target_sha256`` and
+  the repaired pickle its ``new_sha256``, and both must cover the same sessions.
+  It recomputes every PIT fill of every changed-history DECISION observation
+  twice, each frame read the way ``get_ohlcv`` serves it (corporate actions
+  from ``--ca-events``):
+    - on the current store, where it must reproduce the stored value, or the
+      row is ``unexplained`` and the plan incomplete;
+    - on the repaired store, where a value that moves by more than ``ABS_TOL``
+      AND more than ``REL_TOL``, or disappears, is a proven defect.
+  Cross-sectional fills (breadth, RS percentile) depend on every symbol, so ANY
+  observation carrying one, and a changed symbol's own delivery fill, is
+  counted under ``not_rederived`` and the plan is incomplete: it never claims
+  more than it re-derived (GPT QT-03).
 
   Features the decision carried itself (the scanner's RSI, quality score, the
-  setup and its levels) were computed from the same history but cannot be
-  recomputed here. So the plan also lists, as ``exposed``, every observation of
-  any kind whose input window (the last ``LOOKBACK`` bars up to its cutoff, the
-  longest window any feature reads) differs between the two stores. Exposed
-  rows are evidence of risk, not proof of a wrong value.
+  setup and its levels) came from the scanner's history (this store, or the
+  active Kite snapshot while Kite is authoritative: scan.bulk_fetcher.get_cached)
+  and cannot be recomputed here. So the plan also lists, as ``exposed``, every
+  observation of any kind whose INPUT PREFIX (every bar up to its cutoff, in
+  the order the producer read it: an EMA is seeded at the first bar) differs
+  between the two stores (GPT QT-09). Exposed rows are evidence of risk, not
+  proof of a wrong value.
 
   With ``--shadow-db`` (a copy of ``logs/feature002/shadow.db``) the plan also
   re-derives that research ledger's trend features (research.feature001) for
-  the same symbols and REPORTS the rows that differ. Its ranks are
-  cross-sectional, so a row cannot be corrected in place; nothing in that ledger
-  is ever written by this tool.
-* ``apply`` quarantines exactly the planned rows. It needs the owner's
-  approval in words, a stopped desk for a live target, and an unchanged vector
-  sha256 for every row. ``--include-exposed`` also quarantines the exposed
-  rows. Nothing else in the store is written.
+  the same symbols and REPORTS the rows that differ. Nothing in that ledger is
+  ever written by this tool.
+* ``apply`` quarantines exactly the planned rows in ONE SQLite transaction
+  (every vector re-verified inside it), under a batch id derived from the plan,
+  so a rerun after an interruption completes the same batch and ``rollback``
+  releases exactly that batch (GPT QT-05). It needs the owner's approval in
+  words, a complete plan, a verified repair binding and a stopped desk for a
+  live target. ``--include-exposed`` also quarantines the exposed rows.
 
     python -m product.learning_observation_correction plan --features-db <copy> \\
         --current-pickle <copy> --repaired-pickle <planned pickle> --ca-events <copy> \\
-        --out <manifest.json>
+        --store-manifest <store_manifest.json> --out <manifest.json>
     python -m product.learning_observation_correction apply --manifest <manifest.json> \\
         --features-db <db> --owner-approval "<the owner's words>"
+    python -m product.learning_observation_correction rollback --manifest <manifest.json> --features-db <db>
 """
 
 from __future__ import annotations
@@ -53,6 +60,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import pickle
 import sqlite3
 import time
@@ -65,9 +73,10 @@ ABS_TOL = 0.05
 REL_TOL = 0.01
 REASON = "TRUNCATED_HISTORY_PIT_FILL"
 EXPOSED_REASON = "TRUNCATED_HISTORY_INPUT_WINDOW"
-#: The longest window any frozen feature reads: 252 bars (dist_from_high_pct,
-#: the scanner's 52-week checks) plus the bar before it.
-LOOKBACK = 253
+#: Fills computed across the whole market: a changed name moves every peer.
+CROSS_SECTIONAL = ("breadth_pct_above_50dma", "rs_percentile")
+#: Fills computed from the symbol's own frame but not by technical_features.
+OWN_FRAME_OTHER = ("delivery_pct",)
 
 
 def _not_live(path: str | Path, what: str) -> Path:
@@ -78,8 +87,9 @@ def _not_live(path: str | Path, what: str) -> Path:
 
 
 def _vector_sha(features_json: str) -> str:
-    canonical = json.dumps(json.loads(features_json or "{}"), sort_keys=True, default=str)
-    return hashlib.sha256(canonical.encode()).hexdigest()
+    from research.feature_store import vector_sha256
+
+    return vector_sha256(features_json)
 
 
 def _file_sha(path: Path) -> str:
@@ -90,55 +100,34 @@ def _file_sha(path: Path) -> str:
     return h.hexdigest()
 
 
-def _frames(path: Path) -> dict:
+def _payload(path: Path) -> dict:
     with open(path, "rb") as fh:
-        return dict((pickle.load(fh) or {}).get("store") or {})
+        return dict(pickle.load(fh) or {})
 
 
-def _sorted(frame):
-    return frame if frame is None or frame.index.is_monotonic_increasing else frame.sort_index(kind="stable")
-
-
-def _changed_symbols(current: dict, repaired: dict) -> set:
-    """Symbols whose rows differ in any date, value OR order.
-
-    A corrected archive changes values only, and a re-sorted frame changes
-    neither: the desk's rolling windows read the frame in its stored order, so
-    an out-of-order frame is examined like any other changed history.
-    """
-    out = set()
-    for sym in set(current) | set(repaired):
-        if not _same_window(current.get(sym), repaired.get(sym)):
-            out.add(sym)
-    return out
-
-
-def _served(frame, events):
-    """The frame as data.bhavcopy_store.get_ohlcv serves it (CA-adjusted on read)."""
-    if frame is None or not events:
-        return frame
-    from data.corporate_actions import adjust_frame
-
-    return adjust_frame(frame, events, copy=True)
-
-
-def _window(frame, ts):
-    """The last LOOKBACK bars a decision at ``ts`` could read (None when no cutoff)."""
+def _last_day(payload: dict):
     import pandas as pd
-    from product.pit_features import cutoff_session
 
-    cut = cutoff_session(ts)
-    if cut is None or frame is None:
-        return None
-    idx = pd.DatetimeIndex(frame.index)
-    if idx.tz is not None:
-        idx = idx.tz_localize(None)
-    keep = idx.normalize() <= pd.Timestamp(cut)
-    return _sorted(frame[keep]).iloc[-LOOKBACK:]
+    day = payload.get("last_day")
+    if day is not None:
+        return pd.Timestamp(day).normalize()
+    ends = [pd.DatetimeIndex(f.index).max() for f in (payload.get("store") or {}).values()
+            if f is not None and len(f)]
+    return pd.Timestamp(max(ends)).normalize() if ends else None
+
+
+def _write_json(path: Path, obj: dict) -> None:
+    """Atomic: a reader sees the old manifest or the new one, never a torn file."""
+    tmp = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    with open(tmp, "w") as fh:
+        fh.write(json.dumps(obj, indent=2, default=str))
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
 
 
 def _same_window(a, b) -> bool:
-    """Same dates in the same order and the same VALUES (dtype-blind: a full build
+    """Same dates in the same ORDER and the same VALUES (dtype-blind: a full build
     stores volume as int64 where appends left float64, which is not a change)."""
     import numpy as np
 
@@ -167,6 +156,41 @@ def _index_equal(a, b) -> bool:
     return np.array_equal(ia.normalize().as_unit("ns").asi8, ib.normalize().as_unit("ns").asi8)
 
 
+def _changed_symbols(current: dict, repaired: dict) -> set:
+    """Symbols whose rows differ in any date, value OR order.
+
+    A corrected archive changes values only, and a re-sorted frame changes
+    neither: the desk's rolling windows read the frame in its stored order, so
+    an out-of-order frame is examined like any other changed history.
+    """
+    out = set()
+    for sym in set(current) | set(repaired):
+        if not _same_window(current.get(sym), repaired.get(sym)):
+            out.add(sym)
+    return out
+
+
+def _served(frame, events):
+    """The frame as data.bhavcopy_store.get_ohlcv serves it (CA-adjusted on read)."""
+    if frame is None or not events:
+        return frame
+    from data.corporate_actions import adjust_frame
+
+    return adjust_frame(frame, events, copy=True)
+
+
+def _prefix(frame, cut):
+    """Every bar up to ``cut`` (inclusive), in STORED order: what a producer read."""
+    import pandas as pd
+
+    if frame is None or cut is None:
+        return None
+    idx = pd.DatetimeIndex(frame.index)
+    if idx.tz is not None:
+        idx = idx.tz_localize(None)
+    return frame[idx.normalize() <= pd.Timestamp(cut)]
+
+
 def _material(stored: float, repaired: float) -> bool:
     diff = abs(float(repaired) - float(stored))
     return diff > ABS_TOL and diff > REL_TOL * max(abs(float(stored)), 1e-12)
@@ -185,14 +209,6 @@ def _shadow_report(shadow_db: Path, current: dict, repaired: dict, events: dict,
         con.close()
     rep: dict[str, Any] = {"examined": 0, "affected": [], "exposed_only": [], "unexplained": []}
     sets = set()
-
-    def upto(frame, cut):
-        if frame is None:
-            return None
-        idx = pd.DatetimeIndex(frame.index)
-        idx = idx.tz_localize(None) if idx.tz is not None else idx
-        return _sorted(frame[idx.normalize() <= cut])
-
     for eid, cset, sym, sess, snap, elig in rows:
         if sym not in changed:
             continue
@@ -200,9 +216,9 @@ def _shadow_report(shadow_db: Path, current: dict, repaired: dict, events: dict,
         trend = snap.get("trend") or {}
         cut = pd.Timestamp(str(snap.get("hist_as_of") or sess)[:10])
         ev = events.get(str(sym or "").upper())
-        a = upto(_served(current.get(sym), ev), cut)
-        b = upto(_served(repaired.get(sym), ev), cut)
-        if _same_window(None if a is None else a.iloc[-LOOKBACK:], None if b is None else b.iloc[-LOOKBACK:]):
+        a = _prefix(_served(current.get(sym), ev), cut)
+        b = _prefix(_served(repaired.get(sym), ev), cut)
+        if _same_window(a, b):
             continue
         rep["examined"] += 1
         now = compute_trend_features(a) if a is not None and len(a) else {}
@@ -235,11 +251,56 @@ def _shadow_report(shadow_db: Path, current: dict, repaired: dict, events: dict,
     return rep
 
 
+def _archive_sessions(store_manifest) -> list | None:
+    """Verified sessions named by the repair manifest's archives (DDMMYYYY.csv), or None."""
+    import pandas as pd
+
+    if store_manifest is None:
+        return None
+    try:
+        names = (json.loads(Path(store_manifest).read_text()).get("source") or {}).get("archives") or {}
+        return sorted(pd.Timestamp(f"{n[4:8]}-{n[2:4]}-{n[0:2]}") for n in names if len(n) >= 12)
+    except Exception:
+        return None
+
+
+def _unseen_session(last, cut, sessions) -> bool:
+    """Could a decision with this cutoff have read a session the store lacks?
+
+    Against the archive calendar when one is known; else any weekday counts
+    (fail closed: a weekday holiday refuses, a weekend never does).
+    """
+    import pandas as pd
+
+    if cut is None or last is None:
+        return False
+    cut = pd.Timestamp(cut)
+    if cut <= last:
+        return False
+    if sessions is not None:
+        return any(last < d <= cut for d in sessions)
+    return len(pd.bdate_range(last + pd.Timedelta(days=1), cut)) > 0
+
+
+def _binding(store_manifest, cur_p: Path, rep_p: Path) -> dict:
+    """Tie the plan to the store repair it assumes (GPT QT-02)."""
+    if store_manifest is None:
+        return {"verified": False, "reason": "no store manifest given"}
+    sm_path = Path(store_manifest)
+    sm = json.loads(sm_path.read_text())
+    cur_sha, rep_sha = _file_sha(cur_p), _file_sha(rep_p)
+    ok = cur_sha == sm.get("target_sha256") and rep_sha == sm.get("new_sha256") and bool(sm.get("ready"))
+    return {"verified": ok, "store_manifest": str(sm_path), "store_manifest_sha256": _file_sha(sm_path),
+            "current_sha256": cur_sha, "repaired_sha256": rep_sha,
+            "expected_current_sha256": sm.get("target_sha256"), "expected_repaired_sha256": sm.get("new_sha256"),
+            "repair_ready": bool(sm.get("ready"))}
+
+
 def plan(features_db: str | Path, current_pickle: str | Path, repaired_pickle: str | Path,
          out: str | Path, ca_events: str | Path | None = None,
-         shadow_db: str | Path | None = None) -> dict[str, Any]:
+         shadow_db: str | Path | None = None, store_manifest: str | Path | None = None) -> dict[str, Any]:
     from data.corporate_actions import load_events_with_digest
-    from product.pit_features import PRODUCED, technical_features
+    from product.pit_features import PRODUCED, cutoff_session, technical_features
 
     db = _not_live(features_db, "the feature store")
     if not db.is_file():
@@ -248,29 +309,49 @@ def plan(features_db: str | Path, current_pickle: str | Path, repaired_pickle: s
     out = _not_live(out, "the manifest")
     ca_p = None if ca_events is None else _not_live(ca_events, "the corporate-action table")
     events, ca_digest = load_events_with_digest(ca_p) if ca_p is not None else ({}, "")
-    current, repaired = _frames(cur_p), _frames(rep_p)
+    cur_payload, rep_payload = _payload(cur_p), _payload(rep_p)
+    current, repaired = dict(cur_payload.get("store") or {}), dict(rep_payload.get("store") or {})
+    cur_last, rep_last = _last_day(cur_payload), _last_day(rep_payload)
+    refusals = []
+    if cur_last is None or rep_last is None or cur_last != rep_last:
+        # A repaired store that ends on another session cannot judge a decision
+        # the other one could see (GPT QT-02): a stale candidate is not proof.
+        refusals.append({"reason": "COVERAGE_MISMATCH", "current_last_day": str(cur_last),
+                         "repaired_last_day": str(rep_last)})
     changed = _changed_symbols(current, repaired)
+    sessions = _archive_sessions(store_manifest)
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
         rows = con.execute("SELECT observation_id, symbol, ts, features, meta, outcome, kind "
                            "FROM observations").fetchall()
     finally:
         con.close()
+    import pandas as pd
+
     affected, unexplained, examined, not_rederived, exposed = [], [], 0, {}, []
     for oid, sym, ts, feats, meta, outcome, kind in rows:
+        all_filled = (json.loads(meta or "{}").get("pit_features") or {}).get("filled") or []
+        for k in all_filled:
+            # A cross-sectional fill moves when ANY symbol's history changes.
+            if k in CROSS_SECTIONAL and changed:
+                not_rederived[k] = not_rederived.get(k, 0) + 1
         if sym not in changed:
+            continue
+        for k in all_filled:
+            if k in OWN_FRAME_OTHER or (k not in PRODUCED and k not in CROSS_SECTIONAL
+                                        and k not in ("vix", "index_trend")):
+                not_rederived[k] = not_rederived.get(k, 0) + 1
+        cut = cutoff_session(ts)
+        if _unseen_session(rep_last, cut, sessions):
+            unexplained.append({"observation_id": oid, "reason": "AFTER_STORE_COVERAGE", "cutoff": str(cut)})
             continue
         ev = events.get(str(sym or "").upper())
         cur_f, rep_f = _served(current.get(sym), ev), _served(repaired.get(sym), ev)
-        if not _same_window(_window(cur_f, ts), _window(rep_f, ts)):
+        if not _same_window(_prefix(cur_f, cut), _prefix(rep_f, cut)):
             exposed.append({"observation_id": oid, "symbol": sym, "ts": ts, "kind": kind,
                             "settled": outcome is not None, "vector_sha256": _vector_sha(feats)})
         if kind != "DECISION":
             continue
-        all_filled = (json.loads(meta or "{}").get("pit_features") or {}).get("filled") or []
-        for k in all_filled:
-            if k not in PRODUCED:
-                not_rederived[k] = not_rederived.get(k, 0) + 1
         filled = [k for k in all_filled if k in PRODUCED]
         if not filled:
             continue
@@ -281,42 +362,54 @@ def plan(features_db: str | Path, current_pickle: str | Path, repaired_pickle: s
         diffs = {}
         for k in filled:
             s, a, b = stored.get(k), now.get(k), fixed.get(k)
-            if s is None or a is None or b is None:
+            if s is None:
                 continue
-            if abs(float(a) - float(s)) > 1e-6:
+            if a is None or abs(float(a) - float(s)) > 1e-6:
                 unexplained.append({"observation_id": oid, "feature": k, "stored": s, "current_recompute": a})
                 continue
-            if _material(s, b):
+            if b is None:
+                # The value cannot exist on complete history (GPT QT-03): the
+                # stored number is not a property of the official record.
+                diffs[k] = {"stored": s, "repaired": None}
+            elif _material(s, b):
                 diffs[k] = {"stored": s, "repaired": round(float(b), 6)}
         if diffs:
             affected.append({"observation_id": oid, "symbol": sym, "ts": ts, "settled": outcome is not None,
                              "features": diffs, "vector_sha256": _vector_sha(feats)})
+    proven = {a["observation_id"] for a in affected}
+    binding = _binding(store_manifest, cur_p, rep_p)
     manifest = {
-        "schema": 1,
+        "schema": 2,
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "reason": REASON,
         "features_db": str(db),
+        "features_db_sha256": _file_sha(db),
         "current_pickle": str(cur_p),
         "repaired_pickle": str(rep_p),
+        "store_binding": binding,
+        "coverage": {"current_last_day": str(cur_last), "repaired_last_day": str(rep_last)},
         "ca_events": None if ca_p is None else str(ca_p),
         "ca_events_sha256": ca_digest,
-        "features_db_sha256": _file_sha(db),
         "tolerance": {"abs": ABS_TOL, "rel": REL_TOL},
         "symbols_with_changed_history": len(changed),
         "observations_examined": examined,
         "affected": affected,
-        "exposed": [r for r in exposed if r["observation_id"] not in {a["observation_id"] for a in affected}],
-        "lookback_bars": LOOKBACK,
+        "exposed": [r for r in exposed if r["observation_id"] not in proven],
+        "exposure_rule": "input prefix up to the cutoff differs, in stored order",
         "unexplained": unexplained,
         "not_rederived": not_rederived,
-        "complete": not unexplained and not not_rederived,
+        "refusals": refusals,
+        "complete": not unexplained and not not_rederived and not refusals,
         "state": "planned",
     }
     if shadow_db is not None:
         sdb = _not_live(shadow_db, "the feature002 shadow ledger")
         manifest["shadow_feature002"] = dict(_shadow_report(sdb, current, repaired, events, changed),
                                              path=str(sdb), sha256=_file_sha(sdb), written=False)
-    Path(out).write_text(json.dumps(manifest, indent=2, default=str))
+    manifest["batch_id"] = "loc-" + hashlib.sha256(json.dumps(
+        {k: manifest[k] for k in ("features_db_sha256", "store_binding", "affected", "exposed")},
+        sort_keys=True, default=str).encode()).hexdigest()[:20]
+    _write_json(Path(out), manifest)
     return manifest
 
 
@@ -329,43 +422,66 @@ def apply(manifest_path: str | Path, features_db: str | Path, owner_approval: st
     m = json.loads(manifest_path.read_text())
     if not str(owner_approval or "").strip():
         raise SystemExit("refusing: apply needs the owner's approval in words (--owner-approval)")
-    if m.get("state") != "planned":
+    if m.get("state") not in {"planned", "applying"}:
         raise SystemExit(f"refusing: the manifest is in state {m.get('state')!r}, not 'planned'")
     if not m.get("complete"):
-        raise SystemExit("refusing: the plan is incomplete (unexplained or not re-derived fills); "
-                         "investigate before quarantining anything")
+        raise SystemExit("refusing: the plan is incomplete (unexplained or not re-derived fills, or a "
+                         "coverage refusal); investigate before quarantining anything")
     db = Path(features_db).resolve()
+    if not target_is_copy and not (m.get("store_binding") or {}).get("verified"):
+        raise SystemExit("refusing: the plan is not bound to a verified store repair manifest (--store-manifest)")
     _check_desk(db, target_is_copy)
-    chosen = [(row, m["reason"]) for row in m["affected"]]
+    entries = [{"observation_id": r["observation_id"], "reason": m["reason"],
+                "vector_sha256": r["vector_sha256"],
+                "evidence": {"features": r["features"], "plan": str(manifest_path),
+                             "repaired_pickle": m["repaired_pickle"],
+                             "source": "docs/research/store_integrity_2026-11-22.md"}}
+               for r in m["affected"]]
     if include_exposed:
-        chosen += [(row, EXPOSED_REASON) for row in m.get("exposed", [])]
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-    try:
-        for row, _reason in chosen:
-            got = con.execute("SELECT features FROM observations WHERE observation_id=?",
-                              (row["observation_id"],)).fetchone()
-            if got is None or _vector_sha(got[0]) != row["vector_sha256"]:
-                raise SystemExit(f"refusing: {row['observation_id']} is missing or changed since the plan")
-    finally:
-        con.close()
+        entries += [{"observation_id": r["observation_id"], "reason": EXPOSED_REASON,
+                     "vector_sha256": r["vector_sha256"],
+                     "evidence": {"plan": str(manifest_path), "rule": m.get("exposure_rule"),
+                                  "repaired_pickle": m["repaired_pickle"]}}
+                    for r in m.get("exposed", [])]
+    # The transaction record goes first: an interruption after the commit
+    # leaves a manifest whose batch id drives a rerun or the rollback.
+    m.update({"state": "applying", "owner_approval": owner_approval.strip(),
+              "included_exposed": include_exposed, "apply_started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
+    _write_json(manifest_path, m)
     saved = FS._DB_PATH
     FS._DB_PATH = db
-    results = {}
     try:
-        for row, reason in chosen:
-            evidence = {"plan": str(manifest_path), "repaired_pickle": m["repaired_pickle"],
-                        "source": "docs/research/store_integrity_2026-11-22.md"}
-            if "features" in row:
-                evidence["features"] = row["features"]
-            else:
-                evidence["input_window_bars"] = m.get("lookback_bars")
-            results[row["observation_id"]] = FS.quarantine_observation(row["observation_id"], reason, evidence)
+        try:
+            results = FS.quarantine_batch(entries, batch_id=m["batch_id"])
+        except FS.QuarantineRefused as exc:
+            raise SystemExit(f"refusing: {exc}; nothing was quarantined (re-plan)")
     finally:
         FS._DB_PATH = saved
-    m.update({"state": "applied", "applied_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-              "owner_approval": owner_approval.strip(), "included_exposed": include_exposed,
-              "results": results})
-    manifest_path.write_text(json.dumps(m, indent=2, default=str))
+    m.update({"state": "applied", "applied_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "results": results})
+    _write_json(manifest_path, m)
+    return m
+
+
+def rollback(manifest_path: str | Path, features_db: str | Path, *, target_is_copy: bool = False) -> dict[str, Any]:
+    """Release exactly the rows this plan's batch inserted (never a prior quarantine)."""
+    from product.bhav_store_rebuild import _check_desk
+    from research import feature_store as FS
+
+    manifest_path = Path(manifest_path)
+    m = json.loads(manifest_path.read_text())
+    if m.get("state") not in {"applying", "applied"}:
+        raise SystemExit(f"nothing to roll back: the manifest is in state {m.get('state')!r}")
+    db = Path(features_db).resolve()
+    _check_desk(db, target_is_copy)
+    saved = FS._DB_PATH
+    FS._DB_PATH = db
+    try:
+        released = FS.undo_quarantine_batch(m["batch_id"])
+    finally:
+        FS._DB_PATH = saved
+    m.update({"state": "rolled_back", "rolled_back_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+              "released": released})
+    _write_json(manifest_path, m)
     return m
 
 
@@ -377,6 +493,7 @@ def main(argv=None) -> int:
     p.add_argument("--current-pickle", required=True)
     p.add_argument("--repaired-pickle", required=True)
     p.add_argument("--ca-events", required=True, help="a copy of logs/ca_events.json (absent file: no CA)")
+    p.add_argument("--store-manifest", required=True, help="the store repair's manifest (bhav_store_rebuild plan)")
     p.add_argument("--shadow-db", default=None, help="a copy of logs/feature002/shadow.db (report only)")
     p.add_argument("--out", required=True)
     a = sub.add_parser("apply")
@@ -386,23 +503,32 @@ def main(argv=None) -> int:
     a.add_argument("--target-is-copy", action="store_true")
     a.add_argument("--include-exposed", action="store_true",
                    help="also quarantine the exposed (unproven) rows")
+    r = sub.add_parser("rollback")
+    r.add_argument("--manifest", required=True)
+    r.add_argument("--features-db", required=True)
+    r.add_argument("--target-is-copy", action="store_true")
     args = ap.parse_args(argv)
     if args.cmd == "plan":
         out = plan(args.features_db, args.current_pickle, args.repaired_pickle, args.out, args.ca_events,
-                   args.shadow_db)
+                   args.shadow_db, args.store_manifest)
         print(json.dumps({k: out[k] for k in ("symbols_with_changed_history", "observations_examined",
-                                              "unexplained", "not_rederived", "complete")}
-                         | {"affected": len(out["affected"]), "exposed": len(out["exposed"])},
+                                              "unexplained", "not_rederived", "refusals", "complete")}
+                         | {"affected": len(out["affected"]), "exposed": len(out["exposed"]),
+                            "store_binding_verified": out["store_binding"]["verified"],
+                            "batch_id": out["batch_id"]},
                          indent=1, default=str))
         for row in out["affected"]:
             print(row["observation_id"], row["symbol"], row["ts"], json.dumps(row["features"]))
         if "shadow_feature002" in out:
             sh = out["shadow_feature002"]
             print("feature002:", json.dumps({k: (len(v) if isinstance(v, list) else v) for k, v in sh.items()}))
-    else:
+    elif args.cmd == "apply":
         out = apply(args.manifest, args.features_db, args.owner_approval, target_is_copy=args.target_is_copy,
                     include_exposed=args.include_exposed)
-        print(json.dumps(out["results"], indent=1))
+        print(json.dumps({"batch_id": out["batch_id"], "results": out["results"]}, indent=1))
+    else:
+        out = rollback(args.manifest, args.features_db, target_is_copy=args.target_is_copy)
+        print(json.dumps({"batch_id": out["batch_id"], "released": out["released"]}, indent=1))
     return 0
 
 

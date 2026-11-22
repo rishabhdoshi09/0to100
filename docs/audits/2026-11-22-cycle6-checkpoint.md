@@ -74,19 +74,20 @@ A fresh full backup is recommended before the upgrade (runbook stage 1). Its bul
 - **10 proven rows** (none settled):
   - VEDPOWER: 6 on 20 Nov and 2 on 22 Nov, `dist_from_high_pct` 8.68% / 9.52% stored, against 29.79% / 30.43% true;
   - ASHIKAG: 2 on 22 Nov, `dist_20ema_pct` −1.73 stored, against −0.20 true.
-- **90 exposed rows** (KNACK 52, AEROPLANE 22, SBIFUNDS 16). Their 253-bar input window reaches the lost sessions, but no re-derivable fill moves. The scanner's own carried features cannot be re-derived.
+- **90 exposed rows** (KNACK 52, AEROPLANE 22, SBIFUNDS 16). Their input prefix reaches the lost sessions, but no re-derivable fill moves. The scanner's own carried features cannot be re-derived.
 - **The cycle-5 count was 6.** The desk keeps freezing affected rows until the store is repaired, which is why stage 5 re-plans inside the window.
 
 **New finding: feature002 shadow ledger provenance.** cycle 5 did not cover `logs/feature002/shadow.db`. It holds 67 rows for 18 truncated names, and **64 are not reproducible from either store**.
 
 - AEROPLANE stores `low_52w = 117.02` and a 50-bar SMA, where official history has a low of 170.05 and only 47 bars.
-- feature002 reads `scan.bulk_fetcher.get_cached` first, and its last resort is yfinance.
-- The tool reports this and writes nothing. The analysis rule is an owner decision (plan, §4).
+- `research/feature002/observe.py::_hist` reads `scan.bulk_fetcher.get_cached` first. That returns the **active Kite snapshot** (`bars_equity.csv`, broker history) whenever Kite is authoritative; otherwise the official store, and yfinance last. (code read).
+- So these rows reflect broker history, and the store defect did not reach them. The 3 store-sourced rows show no change.
+- The tool reports this and writes nothing. How to treat the mixed source in feature002's analysis is an owner decision (plan, §4).
 
 **Own review fixes before the GPT pass:**
 
 - The changed-symbol test compared dates only. A corrected value, or a re-sorted frame, now counts as changed history too, because the desk reads frames in stored order.
-- Windows are sorted before slicing.
+- Windows were sorted before slicing. GPT's QT-09 showed that this hides ordering defects, so it was reverted in §5: inputs are compared in stored order.
 - The PIT import-boundary guard now allowlists the offline CLI. A new test pins that no desk module imports it.
 - **The value comparison was first dtype-strict.** It flagged 2,668 symbols as changed, because a full build stores `volume` as int64 where appends left float64. It now compares values dtype-blind, and a test pins this.
 - **That raised a desk question:** after the repair, every frame's volume is int64, against 805 today. Checked under pandas 3.0.2 in both builds:
@@ -109,16 +110,67 @@ A fresh full backup is recommended before the upgrade (runbook stage 1). Its bul
 6. deploy (fast-forward and `host_install`);
 7. post-checks.
 
-It also covers rollback triggers and exact commands for the store, the quarantine and the code. Expected downtime is about 15–25 min; the plan and bulk backup run beforehand with the desk up. Every owner-gated command is listed in §8.
+It also covers rollback triggers and exact commands for the store, the quarantine and the code. Expected downtime is about 20–30 min after the review revisions; the plan and bulk backup run beforehand with the desk up. Every owner-gated command is listed in §8.
 
-## 5. Independent GPT review
+## 5. Independent GPT review (`0842e229..783f342f`, one read-only pass, 514 s)
 
-See §6 (added after the pass).
+**Scope.** The whole rebuild module, the runbook, and the correction tool and quarantine.
+
+**Result.** 10 findings, 5 P0 and 5 P1. **All 10 were confirmed:** each of GPT's 13 sketches fails on `783f342f` at its claim-bearing assertion. GPT also verified the following as correct:
+
+- both store readers accept the rebuilt payload;
+- stage 4 refuses a changed target, candidate, archive or calendar;
+- both loaders exclude quarantined rows;
+- the live broker interlock is LOCKED.
+
+| Finding | What it was | Fix |
+|---|---|---|
+| QT-01 (P0) | Deploying without the repair let the walk-forward cut an out-of-order frame by position and hand a decision its future bars, then spend an alpha look | `_load_pkl` serves every frame (served and pending) in date order, keeping attrs. `_run_backtest_inner` refuses any non-chronological frame and reports `non_chronological_frames_refused` |
+| QT-02 (P0) | Stage 5 could compare a newer backup with a stale repaired pickle and "prove" a correct row wrong | The plan is bound to the repair manifest (both pickle shas) and refuses a coverage mismatch. A decision that reaches a session the store lacks is unexplained, checked against the archive calendar |
+| QT-03 (P0) | A breadth or RS fill on an unchanged peer, and a value that must disappear, passed as complete | Cross-sectional fills on any row are `not_rederived` (incomplete). A vanished value is a defect |
+| QT-04 (P0) | Calibration, the rejection analysis and a fitted challenger still consumed quarantined rows | Those sinks are quarantine-aware. A challenger fitted before a quarantine is not served and is refitted |
+| QT-05 (P0) | Apply committed row by row; rollback by reason deleted a prior quarantine; the manifest write was not atomic | One `BEGIN IMMEDIATE` transaction with in-transaction vector checks and a plan-derived batch id; `rollback` by batch; atomic manifest writes |
+| QT-06 (P1) | The documented store rollback failed on the damage that triggers it; directory syncs were swallowed | `rollback` recovers `swapping` and `swap_unverified` states, including a missing or damaged target, and takes `--backup <verified SSD copy>`. The backup is synced before the swap. F_FULLFSYNC is used. Directory-sync errors are raised |
+| QT-07 (P1) | The final rsync pass could keep a same-size, same-second database rewrite | `scripts/runtime_backup_final_pass.sh`: an rsync `--delete` pass, then every file modified since a pre-bulk stamp is re-copied with `-I` and compared byte for byte |
+| QT-08 (P1) | The old desk drops `pending` on its next save | The runbook couples the repair to the deploy. The code rollback rolls the store back first, and a re-plan is required before re-upgrading |
+| QT-09 (P1) | Exposure sorted both sides and used a 253-bar cap (an EMA is seeded at the first bar) | Exposure compares the whole input prefix in stored order |
+| QT-10 (P1) | The deploy rollback could not restore paper state, and the service started before any check | Install with `--no-start`, check the paper-state hashes, then start. The restore procedure is explicit and separately approved. Spent alpha looks are documented as never refunded |
+
+**Adaptations, documented in the tests:**
+
+- **QT-05 rollback sketch.** It ran the old reason-based DELETE; it now runs `rollback`.
+- **QT-07 sketch.** It parsed a single rsync line; it now runs the script on a realistic same-second rewrite.
+- **QT-08.** It concerns immutable deployed code, so it is fixed by procedure.
+- **QT-10.** It asserted that a reinstall restores files, which is not the installer's job, so it is fixed by procedure.
+
+**Own catch while fixing.** My first coverage check compared the calendar cutoff with the store's last day, so it refused every Sunday decision (cutoff Saturday). It now checks for an unseen **verified session**, and a test pins this.
+
+**Mutation checks.** Each of these, reverted on its own, fails its test:
+
+- the walk-forward guard;
+- the load-time sort;
+- the calibration, non-event and challenger guards;
+- the interrupted-swap rollback;
+- the coverage refusal;
+- the cross-sectional rule;
+- the vanished-value rule;
+- the forced re-copy in the final pass.
+
+**Re-run on the production snapshots** with the final tool, bound to the real repair manifest:
+
+- `complete: true`, `store_binding.verified: true`, batch `loc-9e9815dd89c6fe1298c9`;
+- **10 proven** (VEDPOWER 8, ASHIKAG 2);
+- **90 exposed**;
+- 0 unexplained.
+
+## 6. Verification
+
+See the report (filled in after the regression run and CI).
 
 ## Open (owner decisions)
 
 - Stages 1, 3, 4, 5 and 6 of the runbook: "backup storage", "start maintenance", "apply store repair", "apply quarantine" (with or without the exposed tier), "deploy `<SHA>`".
-- feature002 provenance: the analysis-time exclusion rule, or an investigation of the bulk cache first.
+- feature002 provenance: record each row's input source (Kite snapshot or official store) before its analysis.
 
 Still open:
 

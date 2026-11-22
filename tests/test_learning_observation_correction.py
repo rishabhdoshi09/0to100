@@ -228,14 +228,29 @@ def test_apply_quarantines_exactly_the_plan_and_only_once(world):
         LOC.apply(out, world["db"], "again", target_is_copy=True)
 
 
-def test_apply_on_a_live_target_checks_the_desk(world, monkeypatch):
+def _store_manifest(world, *, target=None, new=None, ready=True):
+    path = world["tmp"] / "store_manifest.json"
+    path.write_text(json.dumps({"target_sha256": target or LOC._file_sha(world["cur"]),
+                                "new_sha256": new or LOC._file_sha(world["rep"]), "ready": ready}))
+    return path
+
+
+def test_apply_on_a_live_target_needs_a_verified_repair_binding_and_a_stopped_desk(world, monkeypatch):
     import product.bhav_store_rebuild as R
 
     _freeze("decision::yng", "YNG", world["current"]["YNG"])
-    _, out = _plan(world)
+    _, unbound = _plan(world)
+    with pytest.raises(SystemExit, match="not bound"):
+        LOC.apply(unbound, world["db"], "owner words")              # not a copy
+    wrong = LOC.plan(world["db"], world["cur"], world["rep"], world["tmp"] / "wrong.json", world["ca"],
+                     store_manifest=_store_manifest(world, new="0" * 64))
+    assert wrong["store_binding"]["verified"] is False
+    bound = world["tmp"] / "bound.json"
+    m = LOC.plan(world["db"], world["cur"], world["rep"], bound, world["ca"], store_manifest=_store_manifest(world))
+    assert m["store_binding"]["verified"] is True
     monkeypatch.setattr(R, "_desk_running", lambda: ["launchd:com.quantterm.desk:123"])
     with pytest.raises(SystemExit, match="desk is running"):
-        LOC.apply(out, world["db"], "owner words")                 # not a copy
+        LOC.apply(bound, world["db"], "owner words")
     assert fs.quarantined_ids() == set()
 
 
@@ -253,24 +268,27 @@ def test_rows_whose_input_window_differs_are_exposed_whatever_their_kind(world):
     assert [(r["observation_id"], r["kind"]) for r in m["exposed"]] == [("rejection::yng", "REJECTION")]
 
 
-def test_history_lost_beyond_the_longest_window_exposes_nothing(tmp_path, monkeypatch):
+def test_exposure_is_any_difference_in_the_input_prefix(tmp_path, monkeypatch):
+    """An EMA is seeded at the first bar, so a loss 300 bars back still exposes a
+    decision; a change AFTER its cutoff does not (GPT QT-09)."""
     monkeypatch.setattr(fs, "_DB_PATH", tmp_path / "fs.db")
     idx = pd.bdate_range("2025-06-02", periods=400)
     close = np.linspace(100.0, 140.0, 400)
     full = pd.DataFrame({"open": close, "high": close + 1, "low": close - 1, "close": close,
                          "volume": 1e6, "deliv_per": 40.0}, index=idx)
-    cur = _pickle(tmp_path / "c.pkl", {"OLD": full.iloc[20:]})       # lost 20 bars, 380 kept
-    rep = _pickle(tmp_path / "r.pkl", {"OLD": full})
+    stale = full.copy()
+    stale.iloc[300, stale.columns.get_loc("volume")] = 0.0             # a bad row at bar 300
+    cur = _pickle(tmp_path / "c.pkl", {"OLD": full.iloc[20:], "ETF": stale})
+    rep = _pickle(tmp_path / "r.pkl", {"OLD": full, "ETF": full})
     late = (idx[-1] + pd.Timedelta(days=1)).strftime("%Y-%m-%dT10:00:00+05:30")
-    early = (idx[100] + pd.Timedelta(days=1)).strftime("%Y-%m-%dT10:00:00+05:30")
-    for oid, ts in (("decision::late", late), ("decision::early", early)):
-        raw = PF.technical_features("OLD", ts, frame=full.iloc[20:])
-        fs.snapshot(oid, "OLD", "DECISION", raw, ts=ts, meta={"pit_features": {"filled": sorted(raw)}})
+    before = (idx[200] + pd.Timedelta(days=1)).strftime("%Y-%m-%dT10:00:00+05:30")
+    fs.snapshot("decision::late", "OLD", "DECISION", {"rsi": 50.0}, ts=late)
+    fs.snapshot("decision::before_bad_row", "ETF", "DECISION", {"rsi": 50.0}, ts=before)
+    fs.snapshot("decision::after_bad_row", "ETF", "DECISION", {"rsi": 50.0}, ts=late)
     m = LOC.plan(tmp_path / "fs.db", cur, rep, tmp_path / "m.json", tmp_path / "absent.json")
     assert m["complete"] is True
-    exposed_or_affected = {r["observation_id"] for r in m["exposed"] + m["affected"]}
-    assert "decision::late" not in exposed_or_affected          # its 253-bar window is identical
-    assert "decision::early" in exposed_or_affected             # its window reaches the lost bars
+    exposed = {r["observation_id"] for r in m["exposed"]}
+    assert exposed == {"decision::late", "decision::after_bad_row"}
 
 
 def test_apply_quarantines_exposed_rows_only_when_asked(world):
@@ -323,3 +341,198 @@ def test_the_shadow_ledger_report_finds_the_lost_52_week_high_and_writes_nothing
     assert row["event_id"] == "e1" and "dist_from_52w_high_pct" in row["features"]
     assert row["features"]["high_52w"]["repaired"] == 200.0
     assert sh["candidate_sets_with_affected_rows"] == 1
+
+
+# ── GPT cycle-6 review (QT-02..QT-05, QT-09): sketches, adapted only where noted ──
+
+def test_stale_candidate_cannot_prove_a_defect(world):
+    """QT-02: a repaired store that ends a session earlier is not proof."""
+    fresh = _flat(59)
+    stale = fresh.iloc[:-1].copy()
+    fresh.loc[fresh.index[-1], "high"] = 160.0
+    _pickle(world["cur"], {"AAA": fresh})
+    _pickle(world["rep"], {"AAA": stale})
+    _freeze("decision::fresh", "AAA", fresh)
+
+    m, _ = _plan(world)
+    assert not m["complete"] or not m["affected"]
+    assert m["refusals"][0]["reason"] == "COVERAGE_MISMATCH"
+
+
+def test_replay_detects_breadth_change_on_unchanged_peer(world):
+    """QT-03: a cross-sectional fill on an UNCHANGED symbol is not re-derived, so the plan is incomplete."""
+    peer = _flat(51)
+    young = peer.copy()
+    young.loc[young.index[-1], "close"] = 110.0
+    cur = {f"P{i:03}": peer for i in range(300)}
+    fixed = dict(cur, YNG=young)
+    cur["YNG"] = young.iloc[1:]
+    sessions = tuple(peer.index.date)
+    day = sessions[-1]
+    assert PF._market_pass(sessions, list(cur), cur.get)[day] == (0, 300)
+    assert PF._market_pass(sessions, list(fixed), fixed.get)[day] == (1, 301)
+    ts = f"{day}T19:00:00+05:30"
+    vec, prov = PF.fill_missing(
+        {}, "P000", ts, frame=peer, producer=PF.CONTEXT_PRODUCER,
+        context={"_session": day.isoformat(), "breadth_pct_above_50dma": 0.0},
+    )
+    fs.snapshot("decision::peer", "P000", "DECISION", vec, ts=ts,
+                meta={"pit_features": prov})
+    _pickle(world["cur"], cur)
+    _pickle(world["rep"], fixed)
+
+    m, _ = _plan(world)
+    assert not m["complete"] or m["affected"]
+
+
+def test_replay_flags_a_fill_that_should_disappear(world):
+    """QT-03: a stored value that cannot exist on the complete history is a defect."""
+    fixed = _flat(22)
+    cur = fixed.copy()
+    cur.loc[cur.index[-2], "volume"] = 700_000.0
+    _pickle(world["cur"], {"YNG": cur})
+    _pickle(world["rep"], {"YNG": fixed})
+    _freeze("decision::volume", "YNG", cur)
+    assert "volume_z" not in PF.technical_features("YNG", DECIDED, frame=fixed)
+
+    m, _ = _plan(world)
+    assert not m["complete"] or m["affected"]
+
+
+def test_a_vanished_value_is_proven_and_a_decision_past_the_store_is_unexplained(world):
+    fixed = _flat(22)
+    cur = fixed.copy()
+    cur.loc[cur.index[-2], "volume"] = 700_000.0
+    _pickle(world["cur"], {"YNG": cur})
+    _pickle(world["rep"], {"YNG": fixed})
+    inside = (fixed.index[-1] + pd.Timedelta(days=1)).strftime("%Y-%m-%dT10:00:00+05:30")
+    raw = PF.technical_features("YNG", inside, frame=cur)
+    fs.snapshot("decision::inside", "YNG", "DECISION", raw, ts=inside,
+                meta={"pit_features": {"filled": sorted(raw)}})
+    _freeze("decision::past_the_store", "YNG", cur)               # cutoff 2026-09-03, store ends in July
+    m, _ = _plan(world)
+    assert [r["observation_id"] for r in m["affected"]] == ["decision::inside"]
+    assert m["affected"][0]["features"]["volume_z"]["repaired"] is None
+    assert [u["reason"] for u in m["unexplained"]] == ["AFTER_STORE_COVERAGE"]
+    assert m["complete"] is False
+
+
+def test_quarantined_decision_does_not_calibrate(world, monkeypatch):
+    """QT-04."""
+    from product import decision_calibration as DC, evidence_intelligence as EI
+
+    path = world["tmp"] / "calibration.json"
+    monkeypatch.setenv("QT_CALIBRATION", str(path))
+    fs.snapshot("decision::x", "YNG", "DECISION", {}, ts=DECIDED,
+                meta={"predicted_p": 0.8})
+    fs.quarantine_observation("decision::x", LOC.REASON)
+    EI.record_resolved_prediction(
+        "x", 1.0, evidence_class="PAPER_FORWARD",
+        resolved_at="2026-09-21T18:00:00+05:30",
+    )
+    assert DC.load_store(path)["observations"] == []
+
+
+def test_quarantined_rejection_does_not_reach_analysis(world):
+    """QT-04."""
+    from research import non_event
+
+    fs.snapshot("rejection::x", "YNG", "REJECTION", {},
+                ts=DECIDED, reason="OTHER", outcome=4.0)
+    fs.quarantine_observation("rejection::x", LOC.EXPOSED_REASON)
+    assert non_event.rejection_analysis() == []
+
+
+def test_a_challenger_fitted_before_a_quarantine_is_not_served(world, monkeypatch, tmp_path):
+    """QT-04: the saved coefficients are withheld until the next train() refits."""
+    from product import challenger_learning as CL
+
+    store = tmp_path / "challenger.json"
+    CL.save({"current": {"status": CL.SHADOW_CANDIDATE, "quarantine_fingerprint": "",
+                         "coef": [0.0] * len(CL.MODEL_FEATURES)}}, store)
+    _freeze("decision::q", "YNG", world["current"]["YNG"])
+    assert CL.score_decision({"symbol": "YNG"}, path=store).get("status") != "STALE_TRAINING_INPUTS"
+    fs.quarantine_observation("decision::q", LOC.REASON)
+    out = CL.score_decision({"symbol": "YNG"}, path=store)
+    assert out["available"] is False and out["status"] == "STALE_TRAINING_INPUTS"
+
+
+def test_quarantine_batch_is_atomic(world):
+    """QT-05."""
+    for suffix in ("a", "b"):
+        _freeze(f"decision::{suffix}", "YNG", world["current"]["YNG"])
+    _, path = _plan(world)
+    with sqlite3.connect(world["db"]) as con:
+        con.execute("""
+            CREATE TRIGGER fail_second BEFORE INSERT ON observation_quarantine
+            WHEN NEW.observation_id = 'decision::b'
+            BEGIN SELECT RAISE(ABORT, 'injected failure'); END
+        """)
+    with pytest.raises(sqlite3.IntegrityError, match="injected failure"):
+        LOC.apply(path, world["db"], "test", target_is_copy=True)
+    assert fs.quarantined_ids() == set()
+
+
+def test_quarantine_rollback_preserves_prior_entry(world):
+    """QT-05, adapted: the documented rollback is now `rollback --manifest` (this
+    batch's rows only), not a DELETE by reason, which is what the sketch ran."""
+    _freeze("decision::prior", "YNG", world["current"]["YNG"])
+    fs.quarantine_observation("decision::prior", LOC.REASON)
+    _freeze("decision::new", "YNG", world["current"]["YNG"])
+    _, path = _plan(world)
+    done = LOC.apply(path, world["db"], "test", target_is_copy=True)
+    assert done["results"]["decision::prior"] == "exists"
+    assert done["results"]["decision::new"] == "quarantined"
+    undone = LOC.rollback(path, world["db"], target_is_copy=True)
+    assert undone["released"] == 1
+    assert fs.quarantined_ids() == {"decision::prior"}
+
+
+def test_an_interrupted_apply_completes_on_rerun_with_the_same_batch(world, monkeypatch):
+    """QT-05: the transaction committed but the final manifest write was lost."""
+    _freeze("decision::a", "YNG", world["current"]["YNG"])
+    _, path = _plan(world)
+    real = LOC._write_json
+    calls = {"n": 0}
+
+    def crash_on_second(p, obj):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise KeyboardInterrupt("power cut after the commit")
+        real(p, obj)
+
+    monkeypatch.setattr(LOC, "_write_json", crash_on_second)
+    with pytest.raises(KeyboardInterrupt):
+        LOC.apply(path, world["db"], "test", target_is_copy=True)
+    monkeypatch.setattr(LOC, "_write_json", real)
+    assert json.loads(path.read_text())["state"] == "applying"
+    done = LOC.apply(path, world["db"], "test", target_is_copy=True)
+    assert done["results"] == {"decision::a": "exists"} and done["state"] == "applied"
+    assert LOC.rollback(path, world["db"], target_is_copy=True)["released"] == 1
+    assert fs.quarantined_ids() == set()
+
+
+def test_exposure_preserves_scanner_input_order(world):
+    """QT-09."""
+    from scan.unified_scanner import _rsi
+
+    fixed = _history().iloc[:59]
+    cur = pd.concat([fixed.iloc[:-2], fixed.iloc[[-1, -2]]])
+    old_rsi = _rsi(cur["close"].to_numpy())
+    assert old_rsi != _rsi(fixed["close"].to_numpy())
+    _pickle(world["cur"], {"YNG": cur})
+    _pickle(world["rep"], {"YNG": fixed})
+    fs.snapshot("decision::order", "YNG", "DECISION", {"rsi": old_rsi}, ts=DECIDED)
+
+    m, _ = _plan(world)
+    assert "decision::order" in {r["observation_id"] for r in m["exposed"]}
+
+
+def test_a_weekend_decision_is_inside_the_store_but_a_missing_session_is_not():
+    """A Sunday decision's calendar cutoff is Saturday: no session the store lacks."""
+    fri = pd.Timestamp("2026-11-20")
+    assert LOC._unseen_session(fri, pd.Timestamp("2026-11-21").date(), None) is False      # Saturday
+    assert LOC._unseen_session(fri, pd.Timestamp("2026-11-23").date(), None) is True       # Monday
+    archive = [pd.Timestamp("2026-11-20"), pd.Timestamp("2026-11-25")]                       # Mon/Tue holidays
+    assert LOC._unseen_session(fri, pd.Timestamp("2026-11-24").date(), archive) is False
+    assert LOC._unseen_session(fri, pd.Timestamp("2026-11-25").date(), archive) is True

@@ -71,7 +71,8 @@ CREATE TABLE IF NOT EXISTS observation_quarantine (
     observation_id TEXT PRIMARY KEY,  -- an observation learning must not consume
     reason TEXT NOT NULL,             -- structured cause code
     evidence TEXT,                    -- json: what proves the defect
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    batch_id TEXT                     -- the apply that inserted it (undo removes only its own rows)
 );
 """
 
@@ -91,6 +92,8 @@ def _conn() -> sqlite3.Connection:
     for col, decl in _MIGRATIONS:
         if col not in have:
             c.execute(f"ALTER TABLE observations ADD COLUMN {col} {decl}")
+    if "batch_id" not in {r["name"] for r in c.execute("PRAGMA table_info(observation_quarantine)")}:
+        c.execute("ALTER TABLE observation_quarantine ADD COLUMN batch_id TEXT")
     c.commit()
     return c
 
@@ -297,24 +300,92 @@ def get_observation(observation_id: str) -> dict | None:
 _NOT_QUARANTINED = "observation_id NOT IN (SELECT observation_id FROM observation_quarantine)"
 
 
-def quarantine_observation(observation_id: str, reason: str, evidence: dict | None = None) -> str:
-    """Withhold one observation from learning. Returns 'quarantined', 'exists' or 'missing'."""
-    reason = str(reason or "").strip()
-    if not reason:
-        raise ValueError("a quarantine needs a reason")
+class QuarantineRefused(RuntimeError):
+    """A planned quarantine no longer matches the store; nothing was written."""
+
+
+def vector_sha256(features_json: str | None) -> str:
+    """Canonical identity of a frozen vector (key order and spacing do not matter)."""
+    import hashlib
+
+    canonical = json.dumps(json.loads(features_json or "{}"), sort_keys=True, default=str)
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def quarantine_batch(entries, *, batch_id: str) -> dict:
+    """Withhold several observations from learning in ONE write transaction.
+
+    ``entries``: dicts with ``observation_id``, ``reason``, optional
+    ``evidence`` and optional ``vector_sha256`` (the vector the plan proved
+    wrong). Every row is validated and inserted inside one ``BEGIN IMMEDIATE``
+    transaction: a missing row, a changed vector or any write failure rolls the
+    whole batch back (GPT QT-05). Returns {observation_id: 'quarantined' |
+    'exists'}; an 'exists' row keeps its original batch, so undoing this batch
+    never releases it.
+    """
+    batch_id = str(batch_id or "").strip()
+    if not batch_id:
+        raise ValueError("a quarantine batch needs an id")
+    rows = list(entries or [])
+    for e in rows:
+        if not str(e.get("reason") or "").strip():
+            raise ValueError("a quarantine needs a reason")
     c = _conn()
     try:
-        if c.execute("SELECT 1 FROM observations WHERE observation_id=?", (observation_id,)).fetchone() is None:
-            return "missing"
-        if c.execute("SELECT 1 FROM observation_quarantine WHERE observation_id=?",
-                     (observation_id,)).fetchone() is not None:
-            return "exists"
-        c.execute("INSERT INTO observation_quarantine (observation_id, reason, evidence, created_at) "
-                  "VALUES (?,?,?,?)",
-                  (observation_id, reason, json.dumps(evidence or {}, sort_keys=True, default=str),
-                   time.strftime("%Y-%m-%dT%H:%M:%S")))
+        c.execute("BEGIN IMMEDIATE")
+        try:
+            results = {}
+            stamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+            for e in rows:
+                oid = str(e["observation_id"])
+                got = c.execute("SELECT features FROM observations WHERE observation_id=?", (oid,)).fetchone()
+                if got is None:
+                    raise QuarantineRefused(f"{oid} is not in the store")
+                want = e.get("vector_sha256")
+                if want and vector_sha256(got[0]) != want:
+                    raise QuarantineRefused(f"{oid} changed since the plan")
+                if c.execute("SELECT 1 FROM observation_quarantine WHERE observation_id=?",
+                             (oid,)).fetchone() is not None:
+                    results[oid] = "exists"
+                    continue
+                c.execute("INSERT INTO observation_quarantine (observation_id, reason, evidence, created_at, batch_id) "
+                          "VALUES (?,?,?,?,?)",
+                          (oid, str(e["reason"]).strip(),
+                           json.dumps(e.get("evidence") or {}, sort_keys=True, default=str), stamp, batch_id))
+                results[oid] = "quarantined"
+            c.commit()
+            return results
+        except BaseException:
+            c.rollback()
+            raise
+    finally:
+        c.close()
+
+
+def quarantine_observation(observation_id: str, reason: str, evidence: dict | None = None) -> str:
+    """Withhold one observation from learning. Returns 'quarantined', 'exists' or 'missing'."""
+    import uuid
+
+    if not str(reason or "").strip():
+        raise ValueError("a quarantine needs a reason")
+    try:
+        out = quarantine_batch([{"observation_id": observation_id, "reason": reason, "evidence": evidence}],
+                               batch_id=f"single-{uuid.uuid4().hex[:12]}")
+    except QuarantineRefused:
+        return "missing"
+    return out[observation_id]
+
+
+def undo_quarantine_batch(batch_id: str) -> int:
+    """Release exactly the rows one batch inserted. Returns how many."""
+    batch_id = str(batch_id or "").strip()
+    if not batch_id:
+        raise ValueError("a batch id is required")
+    c = _conn()
+    try:
+        n = c.execute("DELETE FROM observation_quarantine WHERE batch_id=?", (batch_id,)).rowcount
         c.commit()
-        return "quarantined"
+        return int(n)
     finally:
         c.close()
 
@@ -328,6 +399,31 @@ def quarantined_ids() -> set:
             c.close()
     except Exception:
         return set()
+
+
+def is_quarantined(observation_id: str) -> bool:
+    return str(observation_id or "") in quarantined_ids()
+
+
+_FP_CACHE: dict = {}
+
+
+def quarantine_fingerprint() -> str:
+    """sha256 of the sorted quarantined ids ('' when none). Cached on the db file's identity."""
+    import hashlib
+
+    try:
+        st = os.stat(_DB_PATH)
+        key = (str(_DB_PATH), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return ""
+    hit = _FP_CACHE.get("fp")
+    if hit and hit[0] == key:
+        return hit[1]
+    ids = sorted(quarantined_ids())
+    fp = hashlib.sha256("\n".join(ids).encode()).hexdigest() if ids else ""
+    _FP_CACHE["fp"] = (key, fp)
+    return fp
 
 
 def load_matrix(kind: str | None = None, feature_names=None,

@@ -255,9 +255,11 @@ def _load_settled(kind: str) -> list[dict]:
     try:
         c = _FS._conn()
         try:
+            # Quarantined observations settle but never inform an analysis
+            # (GPT QT-04, cycle 6).
             rows = c.execute(
                 "SELECT symbol, reason, subtype, outcome, meta, features FROM "
-                "observations WHERE kind=? AND outcome IS NOT NULL",
+                "observations WHERE kind=? AND outcome IS NOT NULL AND " + _FS._NOT_QUARANTINED,
                 (kind,)).fetchall()
             return [dict(r) for r in rows]
         finally:
@@ -379,7 +381,8 @@ def reason_trend(reason: str) -> str:
         try:
             rows = c.execute(
                 "SELECT outcome FROM observations WHERE kind='REJECTION' AND "
-                "reason=? AND outcome IS NOT NULL ORDER BY ts ASC", (r,)).fetchall()
+                "reason=? AND outcome IS NOT NULL AND " + _FS._NOT_QUARANTINED + " ORDER BY ts ASC",
+                (r,)).fetchall()
         finally:
             c.close()
     except Exception:

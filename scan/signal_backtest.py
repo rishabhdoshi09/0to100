@@ -991,9 +991,16 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
     global_last = max(official_index) if official_index else ""
     ended_terminal = 0                          # partial windows of stopped symbols that resolved
     ended_censored = 0                          # ... that were still open when prices stopped
+    non_chronological = 0                       # frames refused: dates out of order or repeated
     for si, sym in enumerate(symbols):
         df = get_ohlcv(sym)
         if df is None or len(df) < 60 + horizon + 20 or not {"high", "low", "close"} <= set(df.columns):
+            continue
+        # Every window below is cut by POSITION (df.iloc[:t]). A frame whose
+        # dates are not strictly increasing would hand a decision its future
+        # bars, so it is refused, and counted in the report (GPT QT-01).
+        if not pd.DatetimeIndex(df.index).is_monotonic_increasing or df.index.has_duplicates:
+            non_chronological += 1
             continue
         n = len(df)
         start = max(60, n - horizon - lookback_sessions)
@@ -1279,6 +1286,7 @@ def _run_backtest_inner(sc, stats, symbols, sample_step, lookback_sessions,
                                    "sessions_indexed": len(session_index), "sampling": SAMPLING,
                                    "exact_horizon_check": bool(official_index),
                                    "horizon_gap_windows_skipped": horizon_gaps,
+                                   "non_chronological_frames_refused": non_chronological,
                                    # Symbols that stopped trading before the last session (B-6):
                                    "stopped_symbol_trades_resolved": ended_terminal,
                                    "stopped_symbol_trades_censored": ended_censored,

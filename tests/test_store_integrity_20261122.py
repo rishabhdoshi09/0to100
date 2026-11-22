@@ -669,3 +669,120 @@ def test_adversarial_rebuild_accounts_for_every_duplicate(runtime, tmp_path):
 
     assert plan["diff"]["removed"] == 3  # Two duplicates and the fixture's BBB orphan.
     assert plan["gates"]["removed_rows_are_exactly_the_contamination"]
+
+
+# ── GPT cycle-6 review (QT-01, QT-06): sketches, adapted only where noted ─────
+
+def test_walk_forward_never_analyzes_future_bars(tmp_path, monkeypatch):
+    """QT-01: an out-of-order frame is refused by the walk-forward, not fed to it."""
+    from core import session_window
+    from scan import signal_backtest as SB, unified_scanner as US
+
+    days = pd.bdate_range("2025-01-01", periods=160)
+    order = list(range(len(days)))
+    order[69], order[99] = order[99], order[69]
+    frame = pd.DataFrame(
+        {"open": 100., "high": 101., "low": 99., "close": 100.},
+        index=days[order],
+    )
+    seen = []
+
+    class Scanner:
+        def __init__(self, **kwargs):
+            pass
+
+        def _analyze(self, symbol, hist):
+            seen.append((hist.index[-1], hist.index.max()))
+
+    monkeypatch.setattr(US, "UnifiedScanner", Scanner)
+    monkeypatch.setattr(BS, "store_symbols", lambda: ["AAA"])
+    monkeypatch.setattr(BS, "get_ohlcv", lambda _: frame)
+    monkeypatch.setattr(BS, "_dates_on_disk", lambda: list(days.date))
+    monkeypatch.setattr(session_window, "official_session_index",
+                        lambda _: {str(d.date()): i for i, d in enumerate(days)})
+    monkeypatch.setattr(SB, "_nifty_regime_series", lambda: None)
+    monkeypatch.setattr(SB, "_OUT", tmp_path / "report.json")
+    monkeypatch.setenv("QT_ALPHA_LEDGER", str(tmp_path / "alpha.db"))
+
+    SB.run_backtest()
+    assert all(latest <= decision for decision, latest in seen)
+
+
+def test_a_loaded_store_serves_every_frame_in_date_order(tmp_path, monkeypatch):
+    """QT-01: the 6 production frames saved out of order are served in date order."""
+    days = DAYS[:6]
+    bad = _frame(days)
+    bad = pd.concat([bad.iloc[:3], bad.iloc[[4, 3]], bad.iloc[5:]])
+    bad.attrs["quantterm_live_overlay_date"] = days[-1].date().isoformat()
+    monkeypatch.setattr(BS, "_PKL", tmp_path / "store_cache.pkl")
+    (tmp_path / "store_cache.pkl").write_bytes(pickle.dumps(
+        {"store": {"AAA": bad, "BBB": _frame(days)}, "pending": {"YOUNG": bad.copy()},
+         "last_day": days[-1].date(), "sessions": 6}))
+    monkeypatch.setattr(BS, "_dates_on_disk", lambda: [d.date() for d in days])
+    assert BS._load_pkl()
+    assert BS._store["AAA"].index.is_monotonic_increasing
+    assert BS._pending["YOUNG"].index.is_monotonic_increasing
+    assert BS._store["AAA"].attrs["quantterm_live_overlay_date"] == days[-1].date().isoformat()
+    assert list(BS._store["AAA"].index) == list(days)
+
+
+def test_rollback_recovers_an_interrupted_bad_swap(runtime, tmp_path, monkeypatch):
+    """QT-06."""
+    from product import bhav_store_rebuild as RB
+
+    path = tmp_path / "manifest.json"
+    m = RB.plan(runtime, tmp_path / "staging", path)
+    assert m["ready"]
+    target = RB._pickle(runtime)
+    replace = RB.os.replace
+
+    def damaged_swap(src, dst):
+        replace(src, dst)
+        if Path(dst) == target and Path(src).name.startswith(".rebuild-"):
+            target.write_bytes(b"damaged after rename")
+
+    monkeypatch.setattr(RB, "_held_open", lambda _: [])
+    monkeypatch.setattr(RB.os, "replace", damaged_swap)
+    with pytest.raises(SystemExit, match="run rollback"):
+        RB.apply(path, "test", target_is_copy=True)
+    assert RB.rollback(path, target_is_copy=True)["rollback_ok"]
+    assert RB._sha256(target) == m["target_sha256"]
+
+
+def test_rollback_restores_a_missing_target_from_a_verified_offline_copy(runtime, tmp_path, monkeypatch):
+    """QT-06: the swap was interrupted, the target is gone AND the same-image
+    backup is lost; the runbook's SSD copy (verified by sha256) restores it."""
+    import shutil
+    from product import bhav_store_rebuild as RB
+
+    path = tmp_path / "manifest.json"
+    m = RB.plan(runtime, tmp_path / "staging", path)
+    target = RB._pickle(runtime)
+    ssd_copy = tmp_path / "store_cache_pre_repair.pkl"
+    shutil.copy2(target, ssd_copy)
+    m.update({"state": "swapping", "backup_pickle": str(tmp_path / "gone.pkl")})
+    path.write_text(json.dumps(m))
+    target.unlink()
+    monkeypatch.setattr(RB, "_held_open", lambda _: [])
+    with pytest.raises(SystemExit, match="no backup"):
+        RB.rollback(path, target_is_copy=True)
+    wrong = tmp_path / "wrong.pkl"
+    wrong.write_bytes(b"not it")
+    with pytest.raises(SystemExit, match="does not match"):
+        RB.rollback(path, target_is_copy=True, backup_path=wrong)
+    out = RB.rollback(path, target_is_copy=True, backup_path=ssd_copy)
+    assert out["rollback_ok"] and out["rolled_back_from"] == "interrupted swap"
+    assert RB._sha256(target) == m["target_sha256"]
+
+
+def test_a_verified_apply_still_never_discards_a_newer_cache(runtime, tmp_path, monkeypatch):
+    """QT-06 must not weaken ST-03: after a VERIFIED apply, a newer save is kept."""
+    from product import bhav_store_rebuild as RB
+
+    path = tmp_path / "manifest.json"
+    RB.plan(runtime, tmp_path / "staging", path)
+    monkeypatch.setattr(RB, "_held_open", lambda _: [])
+    assert RB.apply(path, "test", target_is_copy=True)["applied_ok"]
+    RB._pickle(runtime).write_bytes(pickle.dumps({"store": {"NEW": 1}}))
+    with pytest.raises(SystemExit, match="newer cache"):
+        RB.rollback(path, target_is_copy=True)

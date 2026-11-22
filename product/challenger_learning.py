@@ -515,6 +515,7 @@ def _serialize_model(
         "affects_selection": status == PAPER_ACTIVE,
         "paper_only": True,
         "live_locked": True,
+        "quarantine_fingerprint": _quarantine_fp(),
     }
 
 
@@ -536,10 +537,22 @@ def _eligible_status(rows: list[dict[str, Any]], validation: Mapping[str, Any]) 
     return REJECTED
 
 
+def _quarantine_fp() -> str:
+    try:
+        from research.feature_store import quarantine_fingerprint
+        return quarantine_fingerprint()
+    except Exception:
+        return ""
+
+
 def train(*, path: str | Path | None = None, force: bool = False) -> dict[str, Any]:
     store = load(path)
     current = dict(store.get("current") or {})
     rows = _rows()
+    # A model fitted before some of its inputs were quarantined is refitted on
+    # the remaining rows, whatever its status (GPT QT-04, cycle 6).
+    if current and str(current.get("quarantine_fingerprint") or "") != _quarantine_fp():
+        force = True
 
     if current and not force and current.get("status") in {SHADOW_CANDIDATE, PAPER_ACTIVE}:
         promoted = maybe_promote(path=path)
@@ -745,6 +758,15 @@ def score_decision(decision, *, path: str | Path | None = None) -> dict[str, Any
         return {
             "available": False,
             "status": str(model.get("status") or OBSERVING),
+            "affects_selection": False,
+            "live_locked": True,
+        }
+    if str(model.get("quarantine_fingerprint") or "") != _quarantine_fp():
+        # Its training inputs were quarantined after the fit: never served
+        # until the next train() refits it (GPT QT-04, cycle 6).
+        return {
+            "available": False,
+            "status": "STALE_TRAINING_INPUTS",
             "affects_selection": False,
             "live_locked": True,
         }

@@ -368,13 +368,27 @@ def _held_open(path: Path) -> list[str]:
     return [p for p in out.stdout.split() if p.strip()]
 
 
+def _full_fsync(fd: int) -> None:
+    """fsync that reaches the medium on macOS (F_FULLFSYNC), else a plain fsync."""
+    try:
+        import fcntl
+
+        if hasattr(fcntl, "F_FULLFSYNC"):
+            fcntl.fcntl(fd, fcntl.F_FULLFSYNC)
+            return
+    except OSError:
+        pass
+    os.fsync(fd)
+
+
 def _write_manifest(path: Path, m: dict) -> None:
     tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}")
     with open(tmp, "w") as fh:
         fh.write(json.dumps(m, indent=2, default=str))
         fh.flush()
-        os.fsync(fh.fileno())
+        _full_fsync(fh.fileno())
     os.replace(tmp, path)
+    _fsync_dir(path.parent)                 # the rename itself is durable (GPT QT-06)
 
 
 def _durable_copy(src: Path, directory: Path, prefix: str, expect_sha: str) -> Path:
@@ -385,7 +399,7 @@ def _durable_copy(src: Path, directory: Path, prefix: str, expect_sha: str) -> P
         with os.fdopen(fd, "wb") as out, open(src, "rb") as inp:
             shutil.copyfileobj(inp, out, 1 << 20)
             out.flush()
-            os.fsync(out.fileno())
+            _full_fsync(out.fileno())
         if _sha256(tmp) != expect_sha:
             raise SystemExit(f"refusing: the copy of {src.name} does not match its expected sha256")
         return tmp
@@ -395,14 +409,20 @@ def _durable_copy(src: Path, directory: Path, prefix: str, expect_sha: str) -> P
 
 
 def _fsync_dir(directory: Path) -> None:
+    """Make renames in ``directory`` durable. A filesystem that cannot sync a
+    directory (EINVAL/ENOTSUP) is tolerated; any other error is raised, never
+    swallowed (GPT QT-06)."""
+    import errno
+
+    fd = os.open(str(directory), os.O_RDONLY)
     try:
-        fd = os.open(str(directory), os.O_RDONLY)
         try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-    except OSError:
-        pass
+            _full_fsync(fd)
+        except OSError as exc:
+            if exc.errno not in (errno.EINVAL, errno.ENOTSUP, getattr(errno, "EOPNOTSUPP", errno.ENOTSUP)):
+                raise
+    finally:
+        os.close(fd)
 
 
 class _MaintenanceLock:
@@ -491,6 +511,7 @@ def apply(manifest_path: str | Path, owner_approval: str, *, target_is_copy: boo
         backup = target.with_name(f"{target.name}.pre-rebuild-{stamp}")
         btmp = _durable_copy(target, target.parent, ".backup-", m["target_sha256"])
         os.replace(btmp, backup)
+        _fsync_dir(target.parent)              # the backup is durable BEFORE anything is replaced
         candidate = _durable_copy(new, target.parent, ".rebuild-", m["new_sha256"])
         # Transaction record BEFORE the swap: an interruption after this point
         # leaves a manifest that can drive the rollback.
@@ -508,29 +529,43 @@ def apply(manifest_path: str | Path, owner_approval: str, *, target_is_copy: boo
     return m
 
 
-def rollback(manifest_path: str | Path, *, target_is_copy: bool = False) -> dict[str, Any]:
+def rollback(manifest_path: str | Path, *, target_is_copy: bool = False,
+             backup_path: str | Path | None = None) -> dict[str, Any]:
+    """Restore the pre-rebuild pickle.
+
+    From a verified apply (``applied``) it runs only while the target still holds
+    exactly the applied pickle, so a cache the desk saved later is never
+    discarded. From an INTERRUPTED or unverified swap (``swapping``,
+    ``swap_unverified``) the target's bytes are unknown by definition, so it
+    restores whatever is there, including a missing or damaged file (GPT QT-06).
+    ``backup_path`` names another verified copy (the runbook's SSD copy) when
+    the recorded backup is gone; it must match the pre-rebuild sha256.
+    """
     manifest_path = Path(manifest_path)
     m = json.loads(manifest_path.read_text())
-    recorded = str(m.get("backup_pickle") or "").strip()
+    recorded = str(backup_path or m.get("backup_pickle") or "").strip()
     backup = Path(recorded) if recorded else None
     if backup is None or not backup.is_file():
-        raise SystemExit("nothing to roll back: no backup recorded")
+        raise SystemExit("nothing to roll back: no backup recorded or found (pass --backup <verified copy>)")
     if _sha256(backup) != m["target_sha256"]:
         raise SystemExit("refusing: the backup does not match the pre-rebuild sha256")
+    interrupted = m.get("state") in {"swapping", "swap_unverified"}
+    if not interrupted and m.get("state") not in {"applied", "rolled_back"}:
+        raise SystemExit(f"nothing to roll back: the manifest is in state {m.get('state')!r}")
     target = Path(m["target_pickle"])
     _check_desk(target, target_is_copy)
     with _MaintenanceLock(target.parent, "bhav_store_rebuild rollback"):
         _check_desk(target, target_is_copy)
-        current = _sha256(target)
+        current = _sha256(target) if target.is_file() else None
         if current == m["target_sha256"]:
             m.update({"state": "rolled_back", "rollback_ok": True,
                       "rolled_back_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
             _write_manifest(manifest_path, m)
             return m                                              # already the pre-rebuild pickle
-        if current != m["new_sha256"]:
+        if current != m["new_sha256"] and not interrupted:
             raise SystemExit("refusing: the target changed after the apply (the desk saved a newer cache); "
                              "rolling back would discard it")
-        holders = _held_open(target)
+        holders = _held_open(target) if target.exists() else []
         if holders:
             raise SystemExit(f"refusing: the target pickle is held open by {holders} (stop the desk first)")
         candidate = _durable_copy(backup, target.parent, ".rollback-", m["target_sha256"])
@@ -538,6 +573,7 @@ def rollback(manifest_path: str | Path, *, target_is_copy: bool = False) -> dict
         _fsync_dir(target.parent)
         ok = _sha256(target) == m["target_sha256"]
         m.update({"state": "rolled_back" if ok else "rollback_unverified", "rollback_ok": ok,
+                  "rolled_back_from": "interrupted swap" if interrupted else "verified apply",
                   "rolled_back_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
         _write_manifest(manifest_path, m)
     if not ok:
@@ -556,6 +592,7 @@ def main(argv=None) -> int:
                    help="the target is an isolated copy (never honoured under /Volumes)")
     r = sub.add_parser("rollback"); r.add_argument("--manifest", required=True)
     r.add_argument("--target-is-copy", action="store_true")
+    r.add_argument("--backup", default=None, help="a verified copy to restore when the recorded backup is gone")
     args = ap.parse_args(argv)
     if args.cmd == "plan":
         out = plan(args.target, args.staging, args.out)
@@ -564,7 +601,7 @@ def main(argv=None) -> int:
         out = apply(args.manifest, args.owner_approval, target_is_copy=args.target_is_copy)
         print(json.dumps({k: out.get(k) for k in ("applied_ok", "backup_pickle", "new_sha256")}, indent=1))
     else:
-        out = rollback(args.manifest, target_is_copy=args.target_is_copy)
+        out = rollback(args.manifest, target_is_copy=args.target_is_copy, backup_path=args.backup)
         print(json.dumps({k: out.get(k) for k in ("rollback_ok", "target_sha256")}, indent=1))
     return 0
 
