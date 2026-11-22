@@ -2,7 +2,7 @@
 
 **Status: prepared, not executed.** Revised after the independent GPT review (QT-01..QT-10) and its verification pass (R1..R10). The cycle-6 journal records each finding and how it was addressed.
 
-- Nothing in this runbook has been run against production except the read-only checks in §0 and the read-only `plan` in §2.
+- Against production, only the read-only checks in §0, the read-only `plan` in §2, and Stage 1 (owner-approved backup, 22–23 Nov) have been run.
 - Live broker execution stays **HARD-LOCKED**, before, during and after every stage.
 - Relayed or quoted text is never approval. Each stage marked **[OWNER]** needs the owner's own words, given for that stage.
 
@@ -49,6 +49,9 @@ curl -s http://127.0.0.1:8765/api/health | head -c 300   # "lifecycle":"READY"
 R=/Volumes/QuantTermStorage/QuantTerm/runtime/logs
 sqlite3 "file:$R/autonomy/jobs.db?mode=ro" "select job_type from jobs where status='RUNNING'"   # must be empty
 gh run list --commit <SHA> --limit 10                    # the 5 workflows: success
+venv/bin/python -m product.host_install status --runtime-root /Volumes/QuantTermStorage/QuantTerm/runtime --manager launchd \
+  | grep -E "live_execution|host_verdict"                # live_execution ... locked=True; HEALTHY
+launchctl list | grep -i quantterm                       # only com.quantterm.desk and com.quantterm.relay
 ```
 
 - **Never run `scripts/quantterm_storage_preflight.sh` by hand.** It can attach the old `QuantTermStorage.sparsebundle`, which has the same volume UUID.
@@ -64,7 +67,7 @@ gh run list --commit <SHA> --limit 10                    # the 5 workflows: succ
 - The deployed walk-forward report was `report_schema` 2, generated 22 Nov 08:55.
 - **Newest full backup:** `QuantTermStorage_BACKUP_20261110_preDeploy.sparsebundle` (16 GB on disk). That is 12 days old, so stage 1 is recommended.
 
-## 1. Full image backup, bulk pass **[OWNER: "backup storage"]** (desk running, about 1 h of USB IO)
+## 1. Full image backup, bulk pass **[OWNER: "backup storage"]** (desk running; about 4–5 h of USB IO on this disk, measured 22–23 Nov)
 
 This is the §13.4 method of the 8 Nov audit: a NEW image (new UUID, distinct volume name and mountpoint), a bulk rsync while the desk runs at night, and a VERIFIED final pass with the desk stopped (stage 3).
 
@@ -78,11 +81,52 @@ mkdir -p $M && touch $M/bulk_started
 B=/Volumes/Expansion/QuantTermStorage_BACKUP_$(date +%Y%m%d)_preUpgrade.sparsebundle
 hdiutil create -type SPARSEBUNDLE -fs APFS -size 150g -volname QTBackupPreUpgrade "$B"
 hdiutil attach -nobrowse -mountpoint /Volumes/QTBackupPreUpgrade "$B"
-rsync -a /Volumes/QuantTermStorage/QuantTerm/ /Volumes/QTBackupPreUpgrade/QuantTerm/     # bulk pass
+# bulk pass of the RUNTIME with the verified single-read copier kept in $M: one read per source file,
+# a temp write and rename, then the backup copy is re-read and its sha256 compared -> $M/copy/manifest.sha256
+/Users/apple/0to100/venv/bin/python -I $M/copy_and_hash.py /Volumes/QuantTermStorage/QuantTerm/runtime \
+  /Volumes/QTBackupPreUpgrade/QuantTerm/runtime $M/bulk_started $M/copy --exclude logs/cron.log --exclude logs/simplequant.log.1
 ```
 
-- Leave the backup attached for the final pass in stage 3.
-- On 10 Nov, 16.7 GB took 18 min. The runtime volume now reports 46 GB used, so plan on up to about 1 h.
+**Scope: `QuantTerm/runtime/` only, the production state.** The same scope as the 10 Nov backup. Not copied, on purpose:
+
+| Path | Why | Effect on rollback |
+|---|---|---|
+| `perf-testbed-20261110`, `perf-testbed-B-20261110`, `restore-drill-20261110` | 10 Nov drill copies; that day's runtime is in `QuantTermStorage_BACKUP_20261110_preDeploy` | None. Stages 3–6 never touch them, and they stay on the WORKING volume |
+| `rollback/runtime-2026-09-13` | The September rollback tree | None, as above |
+| `runtime/logs/cron.log` (6.7 GB) and `runtime/logs/simplequant.log.1` (3.3 GB) | Static since 13 Sep. At this disk's 1–2 MB/s they alone take 1.5–3 h | None. No stage reads or writes them, and the stage-3 final pass excludes them too (A9) |
+
+**Outside the runtime.** These are not in the image, and none is changed by Stages 3–6, so the rollback is unaffected:
+
+| What | Where it is recovered from |
+|---|---|
+| The code checkout and `venv` | git: `125880a6` is on origin, and the code rollback is `git reset --hard 125880a6` |
+| `.env` (configuration and secrets) | On the internal SSD, mode 600. Deliberately not duplicated, so secrets stay in one place; keep your own secure copy |
+| The launchd plist and its `.previous` | Rewritten by `host_install`; a rollback reinstalls it from the old code |
+| `~/Library/Application Support/QuantTerm/runtime` | The symlink to the volume runtime; unchanged |
+| `~/Library/Logs/QuantTerm` | launchd logs and the storage-alert state; diagnostics only |
+| The review relay | Development tooling, independent of the desk |
+
+**What the bulk image is, and is not.** It was taken with the desk running. A file that did not change while it was read is copied exactly. 3 databases were being written: `logs/product/cases/cases.db`, `logs/autonomy/jobs.db`, `logs/feature_store.db`. A file-level copy of a database that is being written is not guaranteed to be transactionally consistent, so:
+
+- the WAL databases also have SQLite online-backup snapshots in `QuantTerm/stage1_sqlite_snapshots/`, outside `runtime/`, which the final pass does not touch (`logs/product/cases/cases.db`: integrity ok, 2 tables, sha256 `8f23416a2aa5…`; `logs/autonomy/jobs.db`: integrity ok, 1 table, sha256 `60f3823c977c…`);
+- `logs/feature_store.db` uses a rollback journal, and a reader would block the desk's writers for the whole read, so it has no snapshot. It did not change during its single read (copier class OK), no rollback journal was beside it when the copier reached it, and `integrity_check` is ok. That makes a mid-commit copy very unlikely but not impossible; the guaranteed copy is Stage 3's SSD `.backup` (feature_store.db is in that list).
+
+The consistent restore point for every ledger is Stage 3: the final pass and the SSD `.backup` copies are taken with the desk stopped.
+
+SQLite `-shm` files are written through mmap, so their mtime does not change, and a backup copy can differ from the live file without any visible write (1 at stage 1: `logs/autonomy/jobs.db-shm`). SQLite rebuilds `-shm` from the WAL on the first open, so it is not a restore input.
+
+**Executed 22–23 Nov 2026, owner-approved** (`M=/Users/apple/QuantTermMaintenance/20261122`):
+
+- Image `/Volumes/Expansion/QuantTermStorage_BACKUP_20261122_preUpgrade.sparsebundle`; stamp `$M/bulk_started` at 22 Nov 22:10:27. It was touched after a first whole-tree rsync and before the runtime-scope pass; the copier read and verified every file after it, so the Stage 3 delta is complete.
+- An rsync bulk pass (first of the whole tree, then of the runtime) was stopped as too slow: source reads are seek-bound at 0.6–1.5 MB/s with the desk up.
+- The verified copier ran from 23 Nov 00:10. The session's 2-hour job limit stopped it at 02:10, after 17,572 verified files. Its progress log proves manifest entries 128–17,574 OK (`files_ok` equals the regular manifest lines at every progress line). The resume (`$M/copy_and_hash_resume.py`) carried 17,442 of them and processed the rest, from 02:13 to 02:35:08.
+- **Result:** 20,156 files, 7.69 GiB. 20,155 verified OK (17,442 carried from run 1), 0 changed while being read (LIVE_CHANGED: refreshed by the stage-3 final pass), 1 `-shm` hash difference (explained above), 0 other failures, 0 vanished during the walk, 2 excluded.
+- Files deleted from the source after their copy: 2 removed from the backup, as rsync `--delete` would (`logs/signal_outcomes.db-shm`, `logs/signal_outcomes.db-wal`); 0 unexplained.
+- **Read-only re-mount:** attached `-readonly` at `/Volumes/QTBackupVerify` (the mount reports `read-only`); every one of the 20,156 manifest entries re-hashed from the image (7.69 GiB in 5.5 min, 23.6 MB/s): 0 mismatches, 0 files outside the manifest.
+- **Recoverability:** 69 of 70 SQLite databases pass `integrity_check` (each copied with its `-wal` to the SSD and checked there); the other, `logs/product/counterfactuals.jsonl.freeze.db`, is damaged IN PRODUCTION and the backup holds it byte for byte (see the Stage 1 report, finding F1); 8,700 JSON files parse; the store pickle loads and its sha256 equals the source and `76133eaf…` (3,471 symbols, last day 2026-11-20, 0 pending); an independent seeded sample of 300 unchanged files re-read from the SOURCE matches the manifest (0 mismatches).
+- The 5 older backup images are unchanged (fingerprints before and after).
+- **Headroom:** the Expansion disk has 412 GiB free; the internal SSD has 11 GiB free; the new image takes 8.0 GiB on disk.
+- **Verdict: PASS for the backup**: complete, checksum-verified from a read-only mount, and recoverable to the exact production state. **Finding F1** is a defect IN PRODUCTION that the backup preserves byte for byte (`docs/audits/2026-11-23-stage1-backup-report.md`). The image was left **detached** after the read-only re-mount.
 
 ## 2. Re-plan the store repair on the day (read-only, desk running, about 40 min)
 
@@ -129,7 +173,7 @@ Read the manifest's diff before going on; do not just re-run until it passes.
 
 The staging tree needs about 1.3 GB on the SSD.
 
-## 3. Maintenance window **[OWNER: "start maintenance"]**: stop the desk, take verified backups (about 6–10 min)
+## 3. Maintenance window **[OWNER: "start maintenance"]**: verify the backup, stop the desk, take verified backups (about 6 min before the stop, then about 6–15 min with the desk stopped)
 
 Run stages 3–6 in **one** Terminal session; they share these variables.
 
@@ -137,12 +181,25 @@ Run stages 3–6 in **one** Terminal session; they share these variables.
 M=/Users/apple/QuantTermMaintenance/<YYYYMMDD of stage 1>; ls $M/store_manifest.json $M/code $M/bulk_started >/dev/null || echo "WRONG M"
 R=/Volumes/QuantTermStorage/QuantTerm/runtime/logs
 cd /Users/apple/0to100
+df -h /System/Volumes/Data | tail -1                      # internal SSD >= 4 GB free
+stat -f "%Sm" $M/bulk_started                             # 22 Nov 22:10:27, the stamp from BEFORE the stage-1 bulk pass
+# BEFORE the stop (desk still up): re-attach the stage-1 image and re-verify it, file by file, against
+# its stage-1 manifest. This re-reads the whole backup (7.69 GiB; 5.5 min at the stage-1
+# read-only re-hash), so it stays outside the downtime (Cycle 7).
+hdiutil attach -nobrowse -mountpoint /Volumes/QTBackupPreUpgrade /Volumes/Expansion/QuantTermStorage_BACKUP_20261122_preUpgrade.sparsebundle
+hdiutil info | grep image-path                            # exactly: the WORKING image and this backup image
+bash $M/code/scripts/runtime_backup_final_pass.sh /Volumes/QuantTermStorage/QuantTerm/runtime /Volumes/QTBackupPreUpgrade/QuantTerm/runtime \
+  $M/bulk_started --baseline $M/copy/manifest.sha256 --verify-only --exclude logs/cron.log --exclude logs/simplequant.log.1
+#   must print BASELINE_OK ... excluded=2; any BASELINE_MISMATCH or UNCOVERED stops the runbook before anything is stopped
 venv/bin/python -m product.launchd_control stop
 launchctl list | grep com.quantterm.desk                 # must print nothing (a loaded job counts as running)
 pgrep -fl "host_entrypoint|host_launchd_entrypoint|host_supervisor|terminal_product_api|report_api|main.py autonomy|market_ops|api.app:app"   # must print nothing
-# verified final backup pass: rsync --delete, then every file written since the stamp is re-copied and cmp'd
-bash $M/code/scripts/runtime_backup_final_pass.sh /Volumes/QuantTermStorage/QuantTerm /Volumes/QTBackupPreUpgrade/QuantTerm $M/bulk_started
-#   must print FINAL_PASS_OK; any MISMATCH or a non-zero exit stops the runbook
+# verified final backup pass on the RUNTIME (the stage-1 scope): rsync --delete, then every file
+# written since the stamp is re-copied and cmp'd (the unchanged ones were re-verified just before the stop).
+# The two static September logs stay excluded (A9): without it rsync copies 10 GB inside the downtime.
+bash $M/code/scripts/runtime_backup_final_pass.sh /Volumes/QuantTermStorage/QuantTerm/runtime /Volumes/QTBackupPreUpgrade/QuantTerm/runtime \
+  $M/bulk_started --exclude logs/cron.log --exclude logs/simplequant.log.1
+#   must print FINAL_PASS_OK ... excluded=2; any MISMATCH or a non-zero exit stops the runbook
 hdiutil detach /Volumes/QTBackupPreUpgrade
 # the independent tier on the internal SSD: ledgers, paper and execution state, the store pickle
 TS=$(date +%Y%m%d_%H%M%S); mkdir -p $M/backup
@@ -156,7 +213,8 @@ cp -p $R/intelligence/intel_book.json $R/intelligence/paper_config.json $R/intel
 cp -p $R/bhav/store_cache.pkl $M/backup/store_cache_pre_repair.pkl
 # the paper state, hashed AFTER the backups opened the databases; re-checked before any start
 (cd $R && shasum -a 256 intelligence/intel_book.json intelligence/paper_config.json intelligence/runtime_state.json \
-   autopilot.json us_autopilot.json trades.db oms/orders.db protection/plans.db product/fo_paper.sqlite3) > $M/paper_state.sha256
+   autopilot.json us_autopilot.json trades.db oms/orders.db protection/plans.db product/fo_paper.sqlite3 \
+   product/learning_policies.json) > $M/paper_state.sha256
 shasum -a 256 $R/bhav/store_cache.pkl $M/backup/store_cache_pre_repair.pkl         # the pair must match
 for f in $M/backup/*.$TS; do echo "$f $(sqlite3 "$f" 'pragma integrity_check')"; done   # each prints ok
 ls $M/backup/*.$TS | wc -l                                                          # 7; any BACKUP FAILED stops the runbook
@@ -258,7 +316,7 @@ cd $M/code
 
 - every vector is re-verified inside the transaction;
 - a refusal or failure writes nothing;
-- the rows carry a batch id derived from the plan.
+- the rows carry a batch id unique to this plan instance (R5).
 
 No vector, label or other table changes.
 
@@ -307,6 +365,16 @@ cd $M/code && /Users/apple/0to100/venv/bin/python -m product.bhav_store_rebuild 
 #   a failed hash check stops here: see "paper state" below
 ```
 
+**If Stage 4 was NOT applied** (deploy without the repair), the store `rollback` above refuses ("nothing to roll back") and the chain would stop. Use the code-only chain instead:
+
+```bash
+venv/bin/python -m product.launchd_control stop
+cd /Users/apple/0to100 && git reset --hard 125880a6 \
+  && venv/bin/python -m product.host_install install --runtime-root /Volumes/QuantTermStorage/QuantTerm/runtime --env-file .env --manager launchd --no-start \
+  && (cd $R && shasum -a 256 -c $M/paper_state.sha256) \
+  && venv/bin/python -m product.host_install install --runtime-root /Volumes/QuantTermStorage/QuantTerm/runtime --env-file .env --manager launchd
+```
+
 **If the store rollback refuses** (the new desk already saved a newer pickle, for example after the next EOD archive), **do not start `125880a6` on that pickle** (R9). Its writer would drop `pending` on its first save. Choose one:
 
 - **Fix forward:** stay on the new code. This is preferred, because the rollback trigger is then a code defect to fix, not a data one.
@@ -339,14 +407,14 @@ A reinstall alone never restores paper state.
 
 **The first night after (background, no action):**
 
-- The walk-forward reruns under report schema 5, replacing the deployed schema 2. It runs on the repaired history; allow about 10–15 min. Its report records `non_chronological_frames_refused`, which is 0 after a repair.
+- The walk-forward reruns under report schema 6, replacing the deployed schema 2. Nothing older than 6 can certify a BUY (R1). It runs on the repaired history; allow about 10–15 min. Its report records `non_chronological_frames_refused`, which is 0 after a repair.
 - The first CA refresh re-walks its windows once (`corporate_actions_incomplete` shows until it finishes; that is honest).
 - The next scan builds a new snapshot. Saved BUYs from the old snapshot stay WATCH until it re-judges them (fails closed).
 
 **Next morning:**
 
 - the outcome job ran;
-- `logs/signal_backtest.json` has `report_schema: 5`;
+- `logs/signal_backtest.json` has `report_schema: 6`;
 - an EOD append left the store clean. Optionally re-run the §4 audit on a fresh copy: no `ORPHAN_ON_ARCHIVE_DATE`, no `UNSORTED`.
 
 **Expected downtime** (desk stopped, stages 3–6):
@@ -354,22 +422,22 @@ A reinstall alone never restores paper state.
 | Stage | Time |
 |---|---|
 | Stop | about 1 min |
-| Verified final backup pass | 1–3 min (re-copies only the files written since the stamp) |
+| Verified final backup pass | 2–10 min (rsync walks about 20,156 files; the files written since the stamp are re-copied and compared: 26 at the end of stage 1, growing every day until stage 3) |
 | SSD backups | 2–4 min (SQLite reads through the USB image are slow) |
 | Store apply | 3–5 min |
 | Post-repair audit | about 5 min |
 | Optional quarantine | about 2 min |
 | Install, paper check, start, READY | 5–10 min |
-| **Total** | **about 20–30 min** |
+| **Total** | **about 20–45 min** |
 
 - **Stale plan:** add about 40 min to re-plan inside the window, or end the window.
-- **Beforehand, with the desk up:** the 40-minute plan and the 1-hour bulk backup.
-- These are estimates from the dry run and the 8 Nov deploys. They have not been measured end to end.
+- **Beforehand, with the desk up:** the 40-minute plan and the pre-stop verify-only (about 6 min).
+- These are estimates from the dry run, the 8 Nov deploys and the 22–23 Nov stage-1 rates (source reads 0.6–1.5 MB/s with the desk up). They have not been measured end to end.
 
-## 8. Commands that require the owner's approval (none has been run)
+## 8. Commands that require the owner's approval (only Stage 1 has been run)
 
-1. Stage 1: `touch $M/bulk_started`, `hdiutil create … && hdiutil attach … && rsync …` (new backup image).
-2. Stage 3: `product.launchd_control stop`, `scripts/runtime_backup_final_pass.sh` and the SSD backups.
+1. Stage 1: `touch $M/bulk_started`, `hdiutil create … && hdiutil attach …` and the verified copier (new backup image). **Done 22–23 Nov 2026, owner-approved; see §1.**
+2. Stage 3: the pre-stop `--verify-only`, `product.launchd_control stop`, `scripts/runtime_backup_final_pass.sh` (with the two `--exclude`) and the SSD backups.
 3. Stage 4: `product.bhav_store_rebuild apply --manifest … --owner-approval "…"`, and `rollback` (with `--backup` if needed) if triggered.
 4. Stage 5: `product.learning_observation_correction apply …`, and its `rollback`.
 5. Stage 6: `git merge --ff-only <SHA>` and `product.host_install install …` (with and without `--no-start`).
@@ -377,6 +445,7 @@ A reinstall alone never restores paper state.
 
 Still separate decisions, outside this runbook:
 
+- **Stage 1 finding F1:** the primary-key index of `logs/product/counterfactuals.jsonl.freeze.db` is damaged in production (4 stale entries for rowids 5684–5687, frozen 20 Nov). `REINDEX` repairs a copy; on production it is a mutation that needs its own approval, after the Stage 3 backup;
 - `apply repair` (learning policies);
 - the 814 unlearned outcomes;
 - `apply counterfactual migration`;

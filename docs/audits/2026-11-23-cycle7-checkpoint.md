@@ -130,9 +130,19 @@ There is no further GPT loop.
 
 Each layer now has its own pin: a test of the resolved-path refusal, and an overlapping-public-result test.
 
-## 4. Stage 1 backup (owner-approved; see the Stage 1 report)
+## 4. Stage 1 backup (owner-approved)
 
-Recorded separately in the Stage 1 report and the corrected runbook (§1).
+Recorded in `docs/audits/2026-11-23-stage1-backup-report.md` and the corrected runbook (§1).
+
+- **Verdict:** PASS for the backup: 20,156 files and 7.69 GiB, re-hashed from a read-only mount with 0 mismatches.
+- **Finding F1:** a damaged primary-key index in the production decision-freeze ledger. It predates the backup, and the backup holds the file byte for byte. Its repair needs the owner's approval.
+
+**Found while running it (A9).** The final-pass script had no way to exclude the two static September logs that Stage 1 excluded, so the Stage 3 pass would have:
+
+- copied 10 GB inside the downtime;
+- then failed coverage.
+
+The fix is `--exclude` (`7d136a5a`, with tests and 7 mutants).
 
 ## 5. Verification
 
