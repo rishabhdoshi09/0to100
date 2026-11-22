@@ -44,13 +44,16 @@ The audit checked 3,267,038 store rows against 3,268,040 official rows.
 - Past live scans and cards of the affected names (mostly illiquid or ETFs, which the stock scanner excludes) could have read a flat zero-volume bar. They are not reconstructable.
 - The snapshots end at 20 Nov 23:40. Later observations of truncated names inherit the same history until a rebuild.
 
-## 3. Root causes and fixes
+## 3. Root causes and fixes (after two GPT passes; journal cycle 5)
 
 1. **Stale overlay rows** (RS-02, `43cba9bb`). An archive is now the authority for its own day: appending it drops that date's row from every symbol it does not list.
-2. **Out-of-order frames** (this cycle). `_incremental_append` re-sorts every merged frame.
-3. **Truncated young listings** (this cycle).
-   - `_full_build` keeps names below the floor in a persisted `pending` map instead of discarding them. When a later archive lists one, it joins the store with its complete history.
+2. **Out-of-order frames.** `_incremental_append` re-sorts every merged frame. A live row's overlay marker survives the merge of an older archive.
+3. **Truncated young listings.**
+   - `_full_build` keeps names below the floor in a persisted `pending` map. When a later archive lists one, it joins the store with its complete history.
    - Which names the store serves does not change.
+4. **Late archives.** A refresh merges a verified session inside its window that no frame holds.
+5. **Corrected archives and history outside the window.** These are adopted only by the gated rebuild. A periodic refresh never silently re-merges history.
+6. **Concurrent publication.** Every save and every repair holds one OS `flock`. The live overlay re-checks, under the lock that publishes quotes, that today's official archive is not already installed.
 
 ## 4. Reconstruction procedure (`product/bhav_store_rebuild.py`), tested on the clone only
 
@@ -67,19 +70,28 @@ The store's own `build_from_local()` runs in a fresh interpreter bound to a stag
 - the removed rows are exactly the audit's contamination;
 - the added rows are exactly the audit's missing official rows.
 
+**Staging.** The plan works from an immutable snapshot of the target's archives and runtime calendar. Each archive's identity is recorded before and after its copy, so a file that changes mid-copy refuses the plan.
+
+**More gates:**
+
+- the symbol **order** is preserved (the deployed walk-forward samples by it);
+- the finding lists are complete;
+- changed values are exactly the audited mismatches.
+
 **`apply`** refuses each of the following:
 
 - empty owner-approval words;
 - any failed gate;
-- a target that changed since the plan;
-- a running desk (always checked under `/Volumes`; the desk saves its in-memory store again on the next append);
+- a target pickle that changed since the plan;
+- any archive whose **content** changed since the plan, and a changed calendar;
+- a running or loaded desk (all launch commands and the launchd service; a failed probe counts as running);
 - an open handle on the pickle.
 
-It keeps a sha-verified `store_cache.pkl.pre-rebuild-<stamp>` backup and swaps by atomic rename.
+It holds the store's publish `flock` from its checks to the swap, writes a transaction record before swapping, and uses verified, fsynced temp files.
 
-**`rollback`** restores that backup, checking its sha before and after.
+**`rollback`** runs only while the target holds exactly the applied pickle, so a cache the desk saved later is never discarded.
 
-**Result on the production clone:**
+**Result on the production clone.** The table below is the first symbol-preserving run. The final code (`05b518c2`) adds three gates (11 in all), all passing, with the same row counts; its rebuilt store and the post-apply audit are completely clean.
 
 | Step | Result |
 |---|---|
