@@ -226,9 +226,6 @@ def apply_live_to_store() -> int:
                 df = bs._store.get(sym)
                 if df is None:
                     continue
-                if len(df) and df.index[-1] == today_ts and \
-                        str(df.attrs.get("quantterm_live_overlay_date") or "")[:10] != today_ts.date().isoformat():
-                    continue                      # an official row of today: never a quote
                 if len(df) and df.index[-1] == today_ts:
                     df.loc[today_ts, ["open", "high", "low", "close", "volume"]] = [
                         bar["open"], bar["high"], bar["low"], bar["close"], bar["volume"]]

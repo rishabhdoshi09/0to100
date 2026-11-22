@@ -99,11 +99,10 @@ def _audit(pickle_path: Path | None) -> dict[str, Any]:
 
 #: Kinds that mean the store holds something the archives do not (wrong data).
 CONTAMINATION = ("ORPHAN_ON_ARCHIVE_DATE", "NO_ARCHIVE_FOR_DATE", "VALUE_MISMATCH", "DUPLICATE_DATE",
-                 "UNSORTED", "TZ_AWARE_INDEX", "NON_MIDNIGHT_INDEX", "MISSING_COLUMN",
-                 "PERSISTED_OVERLAY_MARKER", "PENDING_OVERLAPS_STORE",
-                 "ARCHIVE_CHANGED_SINCE_INCORPORATED")
-#: Kinds that mean the store lacks official history it should hold.
-INCOMPLETE = ("MISSING_OFFICIAL_ROW", "MISSING_SYMBOL", "BELOW_FLOOR_NOT_PENDING", "ARCHIVE_NOT_INCORPORATED")
+                 "UNSORTED", "NON_DATETIME_INDEX", "TZ_AWARE_INDEX", "NON_MIDNIGHT_INDEX", "MISSING_COLUMN",
+                 "PERSISTED_OVERLAY_MARKER", "PENDING_OVERLAPS_STORE")
+#: Kinds that mean the store lacks official history it should hold (served).
+INCOMPLETE = ("MISSING_OFFICIAL_ROW", "MISSING_SYMBOL", "ELIGIBLE_NAME_ONLY_PENDING", "BELOW_FLOOR_NOT_PENDING")
 #: Findings kept per kind in the report; counts are always exact. A truncated
 #: list is flagged, and a gate that needs the whole list must refuse.
 FINDINGS_CAP = 200_000
@@ -120,6 +119,10 @@ def _check_frame(sym: str, frame, ref, archive_set, findings, prefix: str, per_s
         if row and isinstance(row[0], str):
             per_date[row[0]] += 1
 
+    if not isinstance(frame.index, pd.DatetimeIndex):
+        # Readers call .normalize() on the stored index: string or object
+        # labels serve no history even when they parse (verification QT-10).
+        add("NON_DATETIME_INDEX", type(frame.index).__name__)
     raw = pd.DatetimeIndex(frame.index)
     if raw.tz is not None:
         add("TZ_AWARE_INDEX", str(raw.tz))
@@ -133,8 +136,9 @@ def _check_frame(sym: str, frame, ref, archive_set, findings, prefix: str, per_s
         add("PERSISTED_OVERLAY_MARKER", str(marker)[:10])
     frame = frame.copy()
     frame.index = raw.normalize()
-    for ts in frame.index[frame.index.duplicated(keep=False)].unique():
-        add("DUPLICATE_DATE", ts.date().isoformat())
+    counts = frame.index.value_counts()
+    for ts, n in counts[counts > 1].sort_index().items():
+        add("DUPLICATE_DATE", ts.date().isoformat(), int(n) - 1)     # rows too many on that date
     frame = frame[~frame.index.duplicated(keep="last")]
     for ts in frame.index:
         if ts not in archive_set:
@@ -197,39 +201,31 @@ def _compare(store: dict, payload: dict, pkl: Path, bs) -> dict[str, Any]:
                      per_symbol, per_date)
 
     for sym, g in official_rows.items():
-        if sym in store or sym in pending:
+        if sym in store:
             continue
         if len(g) >= BUILD_FLOOR:
-            findings["MISSING_SYMBOL"].append((sym, len(g)))
+            # Only the served map is read (get_ohlcv): an eligible name kept
+            # only in pending serves no history (verification QT-10).
+            findings["ELIGIBLE_NAME_ONLY_PENDING" if sym in pending else "MISSING_SYMBOL"].append((sym, len(g)))
+        elif sym in pending:
+            continue
         elif has_pending:
             findings["BELOW_FLOOR_NOT_PENDING"].append((sym, len(g)))
         else:
             findings["BELOW_BUILD_FLOOR"].append((sym, len(g)))
-
-    incorporated = payload.get("incorporated")
-    if incorporated is not None:
-        recorded = {str(k): tuple(v) for k, v in dict(incorporated).items()}
-        for d in archive_days:
-            ident = bs._archive_identity(d) if hasattr(bs, "_archive_identity") else None
-            seen = recorded.get(d.isoformat())
-            if seen is None:
-                findings["ARCHIVE_NOT_INCORPORATED"].append((d.isoformat(),))
-            elif ident is not None and tuple(seen) != tuple(ident):
-                findings["ARCHIVE_CHANGED_SINCE_INCORPORATED"].append((d.isoformat(),))
 
     def kinds(names):
         return [k for k in sorted(findings) if findings[k] and (k in names or k.removeprefix("PENDING_") in names)]
 
     contamination = kinds(CONTAMINATION)
     incomplete = kinds(INCOMPLETE)
-    affected = sorted({row[0] for k in contamination for row in findings[k]
-                       if not k.startswith("ARCHIVE_")})
+    affected = sorted({row[0] for k in contamination for row in findings[k]})
     sessions = sorted({row[1] for k in contamination for row in findings[k]
                        if len(row) > 1 and isinstance(row[1], str) and row[1][:4].isdigit()})
     return {
         "pickle": {"path": str(pkl), "sha256": _sha256(pkl), "last_day": str(payload.get("last_day")),
                    "sessions": payload.get("sessions"), "symbols": len(store), "pending": len(pending),
-                   "has_pending_map": has_pending, "incorporated_recorded": incorporated is not None,
+                   "has_pending_map": has_pending,
                    "rows_checked": checked_rows},
         "archives": {"verified_sessions": len(archive_days),
                      "first": archive_days[0].isoformat() if archive_days else None,
@@ -245,7 +241,7 @@ def _compare(store: dict, payload: dict, pkl: Path, bs) -> dict[str, Any]:
         "findings": {k: v[:FINDINGS_CAP] for k, v in sorted(findings.items())},
         "findings_truncated": sorted(k for k, v in findings.items() if len(v) > FINDINGS_CAP),
         "method": "every served and pending row vs data.bhavcopy_store._read_day of the verified archives "
-                  "(_dates_on_disk), plus raw index structure, live markers and archive identities",
+                  "(_dates_on_disk), plus raw index structure and live markers",
         "read_only": True,
     }
 

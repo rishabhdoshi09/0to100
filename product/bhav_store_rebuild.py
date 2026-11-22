@@ -55,7 +55,7 @@ from pathlib import Path
 from typing import Any
 
 REPO = Path(__file__).resolve().parents[1]
-LOCK_NAME = "MAINTENANCE.lock"          # data.bhavcopy_store.MAINTENANCE_LOCK
+PUBLISH_LOCK = ".store_publish.lock"    # data.bhavcopy_store.PUBLISH_LOCK
 _SAFE_ENV = ("KITE_API_KEY", "KITE_API_SECRET", "KITE_ACCESS_TOKEN", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
 
 #: Command lines of every process that can hold or save the store: the launchd
@@ -134,21 +134,26 @@ def _stage(target: Path, staging: Path) -> dict[str, Any]:
     if dst.exists():
         raise SystemExit(f"staging already exists: {dst} (use a fresh directory)")
     dst.mkdir(parents=True)
+    archives = {}
     for f in _archive_files(target):
+        before = f.stat()
         shutil.copy2(f, dst / f.name)
+        after = f.stat()
+        ident = (before.st_size, before.st_mtime_ns, before.st_ino)
+        if ident != (after.st_size, after.st_mtime_ns, after.st_ino):
+            raise SystemExit(f"refusing: archive {f.name} changed while it was being staged (re-plan)")
+        copied = dst / f.name
+        if copied.stat().st_size != before.st_size:
+            raise SystemExit(f"refusing: the staged copy of {f.name} is incomplete")
+        archives[f.name] = {"size": before.st_size, "mtime_ns": before.st_mtime_ns, "ino": before.st_ino,
+                            "sha256": _sha256(copied)}
+    if {f.name for f in _archive_files(target)} != set(archives):
+        raise SystemExit("refusing: the target's archive set changed while it was being staged (re-plan)")
     if _calendar(target).exists():
         shutil.copy2(_calendar(target), _calendar(staging))
-    staged = _source_manifest(staging, hashes=True)
-    source = _source_manifest(target, hashes=False)
-    for name, meta in source["archives"].items():
-        got = staged["archives"].get(name)
-        if got is None or got["size"] != meta["size"]:
-            raise SystemExit(f"the staged snapshot does not match the target archive {name}")
-        meta["sha256"] = got["sha256"]
-    if set(source["archives"]) != set(staged["archives"]):
-        raise SystemExit("the target's archive set changed while it was being copied")
-    source["calendar"] = staged["calendar"]
-    return source
+    staged_cal = _calendar(staging)
+    calendar = {"present": staged_cal.exists(), **({"sha256": _sha256(staged_cal)} if staged_cal.exists() else {})}
+    return {"archives": archives, "calendar": calendar}
 
 
 def _env(**extra) -> dict:
@@ -273,8 +278,10 @@ def plan(target: str | Path, staging: str | Path, out: str | Path) -> dict[str, 
     f_old = old_audit["findings"]
     truncated = sorted(set(old_audit.get("findings_truncated") or []) | set(audited.get("findings_truncated") or []))
     wrong_rows = _multiset(f_old.get("ORPHAN_ON_ARCHIVE_DATE", []) + f_old.get("NO_ARCHIVE_FOR_DATE", []), 2)
-    for sym, day in f_old.get("DUPLICATE_DATE", []):
-        wrong_rows[(sym, day)] += 1                      # the store held one row too many there
+    for row in f_old.get("DUPLICATE_DATE", []):
+        sym, day = row[0], row[1]
+        extra = int(row[2]) if len(row) > 2 else 1
+        wrong_rows[(sym, day)] += extra                  # the store held that many rows too many
     gates = {
         "target_unchanged_during_plan": _sha256(current) == before,
         "finding_lists_complete": not truncated,
@@ -338,7 +345,9 @@ def _desk_running() -> list[str]:
             return found + [f"launchctl failed: rc={out.returncode}"]
         for line in out.stdout.splitlines():
             parts = line.split()
-            if len(parts) >= 3 and parts[-1] == LAUNCHD_LABEL and parts[0] != "-":
+            # Loaded is active: between a crash and its KeepAlive restart the
+            # PID column reads "-" (verification QT-05).
+            if len(parts) >= 3 and parts[-1] == LAUNCHD_LABEL:
                 found.append(f"launchd:{LAUNCHD_LABEL}:{parts[0]}")
     return found
 
@@ -397,24 +406,44 @@ def _fsync_dir(directory: Path) -> None:
 
 
 class _MaintenanceLock:
-    """The store's maintenance lock: while it exists no store writer saves the pickle."""
+    """The store's publish lock, held from the checks to the swap.
 
-    def __init__(self, bhav_dir: Path, purpose: str):
-        self.path = bhav_dir / LOCK_NAME
+    Every store save takes the same exclusive OS lock (data.bhavcopy_store
+    ``PUBLISH_LOCK``), so a save prepared before the repair cannot publish after
+    it, and a desk that starts meanwhile defers its save. The OS releases the
+    lock if this process dies: it can never go stale (verification QT-05/QT-09).
+    """
+
+    def __init__(self, bhav_dir: Path, purpose: str, wait_s: float = 30.0):
+        self.path = bhav_dir / PUBLISH_LOCK
         self.purpose = purpose
+        self.wait_s = wait_s
+        self.fd = None
 
     def __enter__(self):
-        try:
-            fd = os.open(str(self.path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-        except FileExistsError:
-            raise SystemExit(f"refusing: the store is already under maintenance ({self.path})")
-        with os.fdopen(fd, "w") as fh:
-            fh.write(json.dumps({"pid": os.getpid(), "purpose": self.purpose,
-                                 "since": time.strftime("%Y-%m-%dT%H:%M:%S%z")}))
+        import fcntl
+
+        fd = os.open(str(self.path), os.O_RDWR | os.O_CREAT, 0o644)
+        deadline = time.monotonic() + self.wait_s
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    os.close(fd)
+                    raise SystemExit("refusing: a store writer holds the publish lock (stop the desk first)")
+                time.sleep(0.1)
+        self.fd = fd
         return self
 
     def __exit__(self, *exc):
-        self.path.unlink(missing_ok=True)
+        import fcntl
+
+        if self.fd is not None:
+            fcntl.flock(self.fd, fcntl.LOCK_UN)
+            os.close(self.fd)
+            self.fd = None
         return False
 
 
@@ -424,10 +453,13 @@ def _verify_source(m: dict) -> None:
     planned = m["source"]
     if set(now["archives"]) != set(planned["archives"]):
         raise SystemExit("refusing: the target's archive set changed since the plan (re-plan)")
+    bhav = _logs(target, "bhav")
     for name, meta in now["archives"].items():
         was = planned["archives"][name]
         if (meta["size"], meta["mtime_ns"]) != (was["size"], was["mtime_ns"]):
             raise SystemExit(f"refusing: archive {name} changed since the plan (re-plan)")
+        if _sha256(bhav / name) != was["sha256"]:
+            raise SystemExit(f"refusing: archive {name} content differs from the plan (re-plan)")
     cal = _calendar(target)
     if cal.exists() != bool(planned["calendar"].get("present")) or (
             cal.exists() and _sha256(cal) != planned["calendar"].get("sha256")):

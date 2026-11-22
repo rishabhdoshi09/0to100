@@ -259,8 +259,8 @@ def test_review_plan_uses_target_holidays(runtime, tmp_path):
     pkl.write_bytes(pickle.dumps(payload))
 
     m = rb.plan(runtime, tmp_path / "stage", tmp_path / "manifest.json")
-    if m["ready"]:
-        assert not audit(runtime, pickle_path=m["new_pickle"])["contamination_kinds"]
+    assert m["ready"], m["gates"]
+    assert not audit(runtime, pickle_path=m["new_pickle"])["contamination_kinds"]
 
 
 def test_review_apply_rejects_archive_correction(runtime, tmp_path, monkeypatch):
@@ -411,12 +411,261 @@ def test_review_complete_diff_can_exceed_display_cap(runtime, tmp_path):
     assert m["gates"]["removed_rows_are_exactly_the_contamination"]
 
 
-def test_no_store_writer_saves_while_the_store_is_under_maintenance(tmp_path, monkeypatch):
+def _hold_publish_lock(path):
+    """A separate process holding the store's publish lock (an in-flight writer or a repair)."""
+    import subprocess
+    import sys as _sys
+
+    code = ("import fcntl, os, sys\n"
+            f"fd = os.open({str(path)!r}, os.O_RDWR | os.O_CREAT, 0o644)\n"
+            "fcntl.flock(fd, fcntl.LOCK_EX)\n"
+            "print('locked', flush=True)\n"
+            "sys.stdin.readline()\n")
+    proc = subprocess.Popen([_sys.executable, "-c", code], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    assert proc.stdout.readline().strip() == "locked"
+    return proc
+
+
+def test_a_save_defers_while_a_repair_holds_the_publish_lock_and_retries_later(tmp_path, monkeypatch):
     monkeypatch.setattr(BS, "_PKL", tmp_path / "store_cache.pkl")
     monkeypatch.setattr(BS, "_store", {"AAA": _frame(DAYS[:3])})
-    (tmp_path / BS.MAINTENANCE_LOCK).write_text("{}")
+    monkeypatch.setattr(BS, "_SAVE_PENDING", False)
+    holder = _hold_publish_lock(tmp_path / BS.PUBLISH_LOCK)
+    try:
+        BS._save_pkl()
+        assert not (tmp_path / "store_cache.pkl").exists() and BS._SAVE_PENDING
+    finally:
+        holder.communicate("\n", timeout=10)
+    BS._save_pkl()                                               # the repair is over (the OS released the lock)
+    assert (tmp_path / "store_cache.pkl").exists() and not BS._SAVE_PENDING
+
+
+def test_a_repair_cannot_start_while_a_writer_holds_the_publish_lock(runtime, tmp_path):
+    """Verification QT-05, adapted: an in-flight writer and a repair exclude each other."""
+    from product import bhav_store_rebuild as rb
+
+    manifest = tmp_path / "manifest.json"
+    planned = rb.plan(runtime, tmp_path / "stage", manifest)
+    assert planned["ready"]
+    target = rb._pickle(runtime)
+    holder = _hold_publish_lock(target.parent / rb.PUBLISH_LOCK)
+    try:
+        with pytest.raises(SystemExit, match="publish lock"):
+            with rb._MaintenanceLock(target.parent, "test", wait_s=0.5):
+                pass
+        assert rb._sha256(target) == planned["target_sha256"]
+    finally:
+        holder.communicate("\n", timeout=10)
+    rb.apply(manifest, "test approval", target_is_copy=True)
+    assert rb._sha256(target) == planned["new_sha256"]
+
+
+def test_a_corrected_archive_is_found_by_the_audit_and_left_to_the_gated_rebuild(runtime, tmp_path):
+    """Verification QT-01 (corrected row) and QT-02, adapted: a periodic refresh never re-merges
+    history; the audit detects a corrected archive, served or pending, and the gated rebuild repairs it."""
+    from product import bhav_store_rebuild as rb
+    from research.store_integrity_audit import audit
+
+    day = DAYS[10]
+    csv = rb._pickle(runtime).parent / day.strftime("%d%m%Y.csv")
+    csv.write_text(_archive(day, [("AAA", 999.0), ("BBB", _official("BBB", 10))]))
+    path = rb._pickle(runtime)
+    payload = pickle.loads(path.read_bytes())
+    payload["pending"] = {"GONE": _frame([day], 5.0)}               # the correction dropped this name
+    path.write_bytes(pickle.dumps(payload))
+    rep = audit(runtime)
+    mismatches = [tuple(r[:3]) for r in rep["findings"]["VALUE_MISMATCH"]]
+    assert ("AAA", day.date().isoformat(), "close") in mismatches
+    assert "GONE" in rep["affected_symbols"]
+    m = rb.plan(runtime, tmp_path / "stage", tmp_path / "manifest.json")
+    assert m["ready"], m["gates"]
+    assert rb._frames(m["new_pickle"])["AAA"].at[day, "close"] == 999.0
+
+
+# ── GPT verification pass over 8a52e49d..9bfe1c70 (QT-01..QT-11): its sketches ──
+# QT-03 (identity of re-parsed bytes) and QT-08 (same-date republication) do not
+# apply: periodic refreshes no longer re-merge history; a correction is published
+# only by the gated rebuild with the desk stopped. See the cycle-5 journal.
+# Adaptations: the ``_incorporated`` monkeypatches are dropped (that mechanism
+# was removed), and QT-05's in-process interleaving (apply inside a save's
+# publish) is replaced by the two-process mutual-exclusion test above.
+
+def _adversarial_store(monkeypatch, tmp_path, candidates, verified=None):
+    monkeypatch.setattr(BS, "_BHAV_DIR", tmp_path)
+    monkeypatch.setattr(BS, "_PKL", tmp_path / "store_cache.pkl")
+    monkeypatch.setattr(BS, "_store", {})
+    monkeypatch.setattr(BS, "_pending", {})
+    monkeypatch.setattr(BS, "_store_last_day", None)
+    monkeypatch.setattr(BS, "_store_sessions", 0)
+    monkeypatch.setattr(BS, "_MIN_DAYS", 1)
+    monkeypatch.setattr(BS, "_trading_days_back", lambda _: [d.date() for d in candidates])
+    monkeypatch.setattr(BS, "_dates_on_disk",
+                        lambda: [d.date() for d in (candidates if verified is None else verified)])
+    monkeypatch.setattr(BS, "_is_valid_archive", lambda path, day: path.is_file())
+
+
+@pytest.mark.parametrize("overlay", [True])   # False: see the adapted audit test
+def test_adversarial_legacy_row_does_not_certify_archive(tmp_path, monkeypatch, overlay):
+    prior, today = DAYS[:2]
+    _adversarial_store(monkeypatch, tmp_path, [prior, today])
+    for day, close in [(prior, 100.0), (today, 110.0)]:
+        BS._day_path(day.date()).write_text(_archive(day, [("AAA", close)]))
+    old = pd.concat([_frame([prior]), _frame([today], 777.0)])
+    if overlay:
+        old.attrs["quantterm_live_overlay_date"] = today.date().isoformat()
+    BS._PKL.write_bytes(pickle.dumps({
+        "store": {"AAA": old},
+        "last_day": (prior if overlay else today).date(),
+        "sessions": 1 if overlay else 2,
+    }))
+
+    BS.build_store(days=1)
+
+    assert BS._store["AAA"].at[today, "close"] == 110.0
+
+
+def test_adversarial_apply_rejects_correction_during_stage(runtime, tmp_path, monkeypatch):
+    import os
+    from product import bhav_store_rebuild as rb
+
+    day = DAYS[10]
+    path = rb._pickle(runtime).parent / day.strftime("%d%m%Y.csv")
+    copy = rb.shutil.copy2
+    manifest = tmp_path / "manifest.json"
+
+    def copy_then_correct(src, dst):
+        result = copy(src, dst)
+        if Path(src) == path:
+            old = path.stat()
+            replacement = path.with_suffix(".new")
+            replacement.write_text(_archive(day, [("AAA", 710.0), ("BBB", _official("BBB", 10))]))
+            assert replacement.stat().st_size == old.st_size
+            os.utime(replacement, ns=(old.st_atime_ns, old.st_mtime_ns + 5_000_000_000))
+            replacement.replace(path)
+        return result
+
+    monkeypatch.setattr(rb.shutil, "copy2", copy_then_correct)
+    monkeypatch.setattr(rb, "_held_open", lambda _: [])
+    with pytest.raises(SystemExit, match="archive"):
+        rb.plan(runtime, tmp_path / "stage", manifest)
+        rb.apply(manifest, "test approval", target_is_copy=True)
+
+
+def test_adversarial_loaded_launchd_job_blocks_maintenance(monkeypatch):
+    from subprocess import CompletedProcess
+    from product import bhav_store_rebuild as rb
+
+    monkeypatch.setattr(rb.sys, "platform", "darwin")
+    monkeypatch.setattr(rb.subprocess, "run", lambda args, **kw: (
+        CompletedProcess(args, 0, "-\t9\tcom.quantterm.desk\n", "")
+        if args[0] == "launchctl" else CompletedProcess(args, 1, "", "")
+    ))
+
+    assert rb._desk_running()
+
+
+def test_adversarial_late_archive_does_not_freeze_live_quote(tmp_path, monkeypatch):
+    """Verification QT-06, adapted: GPT's sketch set _store_sessions to 0, which sends
+    build_store down the FULL-build path (a 1-archive window drops the name below the
+    floor) instead of the claim's path: an older archive merged into a deep store
+    while today's quote is live. The marker must survive and the next quote update."""
+    from data import kite_client, nse_live, nse_universe
+
+    late, prior, today = DAYS[:3]
+    _adversarial_store(monkeypatch, tmp_path, [late, prior])
+    BS._day_path(prior.date()).write_text(_archive(prior, [("AAA", 100.0)]))
+    monkeypatch.setattr(BS, "_store", {"AAA": _frame([prior])})
+    monkeypatch.setattr(BS, "_store_last_day", prior.date())
+    monkeypatch.setattr(BS, "_store_sessions", 1)
+    monkeypatch.setattr(nse_live, "_is_trading_now", lambda: True)
+    monkeypatch.setattr(nse_live, "date", type("Clock", (), {"today": staticmethod(today.date)}))
+    monkeypatch.setattr(nse_universe, "get_nse_universe", lambda: [])
+    monkeypatch.setattr(kite_client, "kite_credentials_available", lambda: False)
+    prices = iter([777.0, 778.0])
+    monkeypatch.setattr(nse_live, "fetch_live_snapshot", lambda: {
+        "AAA": dict(open=100.0, high=800.0, low=100.0, close=next(prices), volume=1000.0),
+    })
+    assert nse_live.apply_live_to_store() == 1
+
+    BS._day_path(late.date()).write_text(_archive(late, [("AAA", 95.0)]))
+    BS.build_store(days=1)
+    assert late in BS._store["AAA"].index                          # the late archive was merged
+    assert BS._store["AAA"].attrs.get("quantterm_live_overlay_date") == today.date().isoformat()
+
+    assert nse_live.apply_live_to_store() == 1
+    assert BS._store["AAA"].at[today, "close"] == 778.0
+
+
+@pytest.mark.parametrize("inside_build", [True, False])
+def test_adversarial_unchanged_refresh_does_not_promote_historical_name(
+    tmp_path, monkeypatch, inside_build,
+):
+    candidates = DAYS if inside_build else DAYS[1:]
+    _adversarial_store(monkeypatch, tmp_path, candidates, verified=DAYS)
+    for i, day in enumerate(DAYS):
+        rows = [("OLD", 50.0)] if i == 0 else [("AAA", 100.0)]
+        BS._day_path(day.date()).write_text(_archive(day, rows))
+    BS._full_build([d.date() for d in candidates])
+    order = BS.store_symbols()
+    assert order == ["AAA"]
+    reads = []
+    read = BS._read_day
+
+    def counted(day):
+        reads.append(day)
+        return read(day)
+
+    monkeypatch.setattr(BS, "_read_day", counted)
+    BS.build_store(days=len(candidates))
+
+    assert (reads, BS.store_symbols()) == ([], order)
+
+
+def test_adversarial_abandoned_maintenance_does_not_block_publication(tmp_path, monkeypatch):
+    day = DAYS[0]
+    _adversarial_store(monkeypatch, tmp_path, [day])
+    monkeypatch.setattr(BS, "_store", {"AAA": _frame([day])})
+    monkeypatch.setattr(BS, "_store_last_day", day.date())
+    monkeypatch.setattr(BS, "_store_sessions", 1)
+    (tmp_path / "MAINTENANCE.lock").write_text(
+        '{"pid":2147483647,"since":"2000-01-01T00:00:00+0000"}'
+    )
+
     BS._save_pkl()
-    assert not (tmp_path / "store_cache.pkl").exists()
-    (tmp_path / BS.MAINTENANCE_LOCK).unlink()
-    BS._save_pkl()
-    assert (tmp_path / "store_cache.pkl").exists()
+
+    assert BS._PKL.is_file()
+
+
+@pytest.mark.parametrize("defect", ["string_index", "eligible_name_only_pending"])
+def test_adversarial_audit_reports_reader_visible_missing_history(runtime, defect):
+    from product import bhav_store_rebuild as rb
+    from research.store_integrity_audit import audit
+
+    path = rb._pickle(runtime)
+    payload = pickle.loads(path.read_bytes())
+    if defect == "string_index":
+        frame = payload["store"]["AAA"]
+        frame.index = frame.index.strftime("%Y-%m-%d")
+    else:
+        payload["pending"] = {"AAA": payload["store"].pop("AAA")}
+    path.write_bytes(pickle.dumps(payload))
+
+    report = audit(runtime)
+    kinds = report["contamination_kinds"] + report["incomplete_kinds"]
+    assert any(row[0] == "AAA" for kind in kinds for row in report["findings"][kind])
+
+
+def test_adversarial_rebuild_accounts_for_every_duplicate(runtime, tmp_path):
+    from product import bhav_store_rebuild as rb
+
+    path = rb._pickle(runtime)
+    payload = pickle.loads(path.read_bytes())
+    frame = payload["store"]["AAA"]
+    one = frame.iloc[:1]
+    payload["store"]["AAA"] = pd.concat([frame, one, one]).sort_index()
+    path.write_bytes(pickle.dumps(payload))
+
+    plan = rb.plan(runtime, tmp_path / "stage", tmp_path / "manifest.json")
+
+    assert plan["diff"]["removed"] == 3  # Two duplicates and the fixture's BBB orphan.
+    assert plan["gates"]["removed_rows_are_exactly_the_contamination"]
