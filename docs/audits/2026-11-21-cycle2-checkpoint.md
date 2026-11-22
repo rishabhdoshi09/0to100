@@ -137,6 +137,29 @@ As agreed, there was no further review loop this cycle.
 | Forward-paper performance | **insufficient** | 0 settled paper trades |
 | Real-money execution authorization | **LOCKED** | also requires a separate broker process (B01/C2-05), durable order/fill identity (B06/B08) and an EMS exit primitive (B09) |
 
+## Publication and relay (22 Nov ~09:00 IST)
+
+- **Candidate:** `38f1864e`. It is `891e333d` plus one fix to `research/learning_effectiveness.py`.
+- **Why there was a fix:** on `891e333d`, CI's hermetic gate failed `tests/test_runtime_root_isolation.py`. The new report resolved a `logs` path itself, and now resolves it through `core.runtime_paths`.
+- **Local results:**
+  - The full suite on `891e333d` passed 505 of 506 files, each in its own interpreter under the Mac guard. The one failure was that same test.
+  - On `38f1864e`, both files that touch the changed module pass: `test_runtime_root_isolation.py` (21 tests) and `test_cycle2_20261121.py` (20 tests).
+- **CI on the exact SHA `38f1864e`: all 5 workflows green.**
+  - Host Migration Gate 44862238122;
+  - Terminal UI 44862238110;
+  - Dependency Vulnerability Advisory 44862238141;
+  - CI 44862238148;
+  - Product Acceptance 44862238127.
+- **GPT cross-review:** one checkpoint pass this cycle (§4), with no further loop.
+- **GitHub publication: succeeded.** The report went through the relay's verified `report` command, dry run first, as #333 comment 7073537262.
+- **Relay retargeted** to session `session_01JGESyRz5qmtMBC6o9UKzNw`. The previous target's cloud environment was deleted after a usage limit, so it could no longer receive deliveries. The config backup is `config.json.bak-20261122-pre-retarget`, and the ledger is kept.
+- **Host event (does not change the code candidate):**
+  - The desk was paused from Sat 21 Nov 09:46 to Sun 22 Nov ~08:49 IST. The host slept on battery, and the USB runtime returned `Errno 5`.
+  - After wake, the WORKING image was still attached, but through a stale helper, and its volume would not mount.
+  - A plain `hdiutil detach` of the stale attachment let the supervisor's own recovery re-attach the WORKING bundle. "Runtime recovered" was logged and `/api/health` answered with live LOCKED and verified.
+  - No NSE session fell in the gap.
+- **Later commits:** any commit after `38f1864e` is docs only.
+
 ## Open / owner decisions
 
 - `deploy <sha>`;
