@@ -50,17 +50,30 @@ def _summary(values: list[float]) -> dict[str, Any]:
 
 
 def run(root: str | Path, features_db: str | Path) -> dict[str, Any]:
+    """The report for the runtime COPY at ``root`` (QT_RUNTIME_ROOT is pointed at it, then restored)."""
     root = _refuse_live(root)
     features_db = _refuse_live(features_db)
-    os.environ["QT_RUNTIME_ROOT"] = str(root)       # read-only: CA events come from the copy
+    previous = os.environ.get("QT_RUNTIME_ROOT")
+    os.environ["QT_RUNTIME_ROOT"] = str(root)
+    try:
+        return _run(features_db)
+    finally:
+        if previous is None:
+            os.environ.pop("QT_RUNTIME_ROOT", None)
+        else:
+            os.environ["QT_RUNTIME_ROOT"] = previous
+
+
+def _run(features_db: Path) -> dict[str, Any]:
+    from core.runtime_paths import logs_path
     from data.corporate_actions import adjust_frame, load_events
     from product import pit_features as PF
 
-    with open(root / "logs" / "bhav" / "store_cache.pkl", "rb") as fh:
+    with open(logs_path("bhav", "store_cache.pkl"), "rb") as fh:
         payload = pickle.load(fh)
     store = dict(payload.get("store") or {})
-    events = load_events() or {}
-    with open(root / "logs" / "indices" / "index_store.pkl", "rb") as fh:
+    events = load_events() or {}            # read-only: the copy's CA table
+    with open(logs_path("indices", "index_store.pkl"), "rb") as fh:
         index_store = dict((pickle.load(fh) or {}).get("store") or {})
 
     def ohlcv(sym: str):
@@ -78,6 +91,9 @@ def run(root: str | Path, features_db: str | Path) -> dict[str, Any]:
 
     all_days = sorted({ts.date() for df in store.values() for ts in df.index})
     symbols = list(store)
+    days_set = sorted(set(all_days))
+    # One identity per source for the whole run: the breadth cache is keyed on it.
+    symbols_fn, archive_fn = (lambda: symbols), (lambda: days_set)
 
     con = sqlite3.connect(f"file:{features_db}?mode=ro", uri=True)
     rows = con.execute("SELECT symbol, ts, features FROM observations WHERE kind='DECISION'").fetchall()
@@ -100,7 +116,7 @@ def run(root: str | Path, features_db: str | Path) -> dict[str, Any]:
                 stored_present[name] += 1
         year = str(ts)[:4]
         by_year[year]["observations"] += 1
-        session = PF.published_session(ts, archive_fn=lambda: all_days)
+        session = PF.published_session(ts, archive_fn=archive_fn)
         if session is None:
             no_session += 1
             continue
@@ -109,8 +125,8 @@ def run(root: str | Path, features_db: str | Path) -> dict[str, Any]:
             lag_days.append((cut - session).days)
         if session not in context_by_session:
             ctx = PF.market_context(session, index_fn=index_fn)
-            breadth = PF.breadth_pct_above_50dma(session, symbols_fn=lambda: symbols, ohlcv_fn=ohlcv,
-                                                 archive_fn=lambda: all_days)
+            breadth = PF.breadth_pct_above_50dma(session, symbols_fn=symbols_fn, ohlcv_fn=ohlcv,
+                                                 archive_fn=archive_fn)
             if breadth is not None:
                 ctx["breadth_pct_above_50dma"] = breadth
             context_by_session[session] = ctx
