@@ -159,5 +159,21 @@ def test_only_the_learning_record_builder_imports_pit_features():
     # evidence_intelligence builds the learning record; challenger_learning only
     # reads the producer version a model was trained under.
     # research/pit_context_coverage.py is an offline measurement over a COPY.
+    # product/learning_observation_correction.py re-derives frozen fills on
+    # COPIES to find defective records; it is a CLI that nothing imports
+    # (test_the_correction_tool_is_never_imported_by_the_desk).
     assert sorted(set(importers)) == ["product/challenger_learning.py", "product/evidence_intelligence.py",
+                                      "product/learning_observation_correction.py",
                                       "research/pit_context_coverage.py"]
+
+
+def test_the_correction_tool_is_never_imported_by_the_desk():
+    importers = []
+    for py in REPO.rglob("*.py"):
+        rel = py.relative_to(REPO).as_posix()
+        if rel.startswith(("tests/", "venv/", "node_modules/", "frontend/", ".claude/")) or "/site-packages/" in rel:
+            continue
+        text = py.read_text(encoding="utf-8", errors="ignore")
+        if rel != "product/learning_observation_correction.py" and "learning_observation_correction" in text:
+            importers.append(rel)
+    assert importers == []

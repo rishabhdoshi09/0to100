@@ -110,3 +110,25 @@ The first plan run, before the symbol-set fix, was correctly **refused** by its 
 
 - Running `plan` and `apply` against production, which needs the desk stopped.
 - Whether to correct the 6 VEDPOWER observations.
+
+## 5. Addendum (22 Nov evening): production dry run, updated learning impact, feature002
+
+**Production plan (read-only).** `plan --target <production runtime>` ran from 17:46 to 18:23 IST at background priority, with the desk up.
+
+- The result is identical to the clone: READY, all 11 gates true; 22 rows removed, 665 added, 0 changed; 6 unsorted frames; 3,471 symbols in order.
+- The planned pickle `62ee822c…` audits with no finding of any kind.
+- The production pickle stayed `76133eaf…`, and nothing was added to production `logs/bhav`.
+- The procedure is in `docs/runbooks/2026-11-22-paper-upgrade-and-store-repair.md`.
+
+**Learning record, re-measured with `product/learning_observation_correction.py`.** The run (`docs/plans/2026-11-22-learning-observation-correction.md`) covers the 20 Nov snapshot plus the 160 DECISION rows frozen on 22 Nov. It reproduces every stored fill exactly.
+
+- **10 proven rows:**
+  - VEDPOWER: 6 on 20 Nov and 2 on 22 Nov, `dist_from_high_pct` 8.7–9.5% stored, against 29.8–30.4% true;
+  - ASHIKAG: 2 on 22 Nov, `dist_20ema_pct` −1.73 stored, against −0.20 true.
+- **90 exposed rows** (KNACK, AEROPLANE, SBIFUNDS) whose input window reaches the lost sessions without a re-derivable fill moving.
+- None is settled. The count grows daily until the store is repaired.
+
+**feature002 shadow ledger (not covered above).** It holds 67 rows for 18 of the truncated names. 64 of them are **not reproducible from either store**: for example, AEROPLANE `low_52w` is 117.02 against an official 170.05, with 50+ bars where official history has 47.
+
+- That ledger reads `scan.bulk_fetcher.get_cached` first, and the bulk fetcher's last resort is yfinance.
+- So, for these names, its inputs are not official history. This is a provenance finding for its eventual analysis; see the plan, §4.

@@ -67,6 +67,12 @@ CREATE TABLE IF NOT EXISTS observations (
 CREATE INDEX IF NOT EXISTS idx_obs_kind ON observations(kind, ts);
 CREATE INDEX IF NOT EXISTS idx_obs_symbol ON observations(symbol);
 CREATE INDEX IF NOT EXISTS idx_obs_reason ON observations(kind, reason);
+CREATE TABLE IF NOT EXISTS observation_quarantine (
+    observation_id TEXT PRIMARY KEY,  -- an observation learning must not consume
+    reason TEXT NOT NULL,             -- structured cause code
+    evidence TEXT,                    -- json: what proves the defect
+    created_at TEXT NOT NULL
+);
 """
 
 # Columns added after the table's first release — migrated in on connect so an
@@ -278,8 +284,54 @@ def get_observation(observation_id: str) -> dict | None:
         return None
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Quarantine — an observation proven defective is withheld, never rewritten
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# A frozen vector is the decision-time record and stays byte-for-byte as it was.
+# When it is later proven wrong (e.g. built from a store that had lost official
+# history, docs/research/store_integrity_2026-11-22.md), it is QUARANTINED: a
+# write-once row here, with its evidence, and the learning loaders
+# (load_observations, load_matrix) skip it unless asked to include it.
+
+_NOT_QUARANTINED = "observation_id NOT IN (SELECT observation_id FROM observation_quarantine)"
+
+
+def quarantine_observation(observation_id: str, reason: str, evidence: dict | None = None) -> str:
+    """Withhold one observation from learning. Returns 'quarantined', 'exists' or 'missing'."""
+    reason = str(reason or "").strip()
+    if not reason:
+        raise ValueError("a quarantine needs a reason")
+    c = _conn()
+    try:
+        if c.execute("SELECT 1 FROM observations WHERE observation_id=?", (observation_id,)).fetchone() is None:
+            return "missing"
+        if c.execute("SELECT 1 FROM observation_quarantine WHERE observation_id=?",
+                     (observation_id,)).fetchone() is not None:
+            return "exists"
+        c.execute("INSERT INTO observation_quarantine (observation_id, reason, evidence, created_at) "
+                  "VALUES (?,?,?,?)",
+                  (observation_id, reason, json.dumps(evidence or {}, sort_keys=True, default=str),
+                   time.strftime("%Y-%m-%dT%H:%M:%S")))
+        c.commit()
+        return "quarantined"
+    finally:
+        c.close()
+
+
+def quarantined_ids() -> set:
+    try:
+        c = _conn()
+        try:
+            return {r[0] for r in c.execute("SELECT observation_id FROM observation_quarantine")}
+        finally:
+            c.close()
+    except Exception:
+        return set()
+
+
 def load_matrix(kind: str | None = None, feature_names=None,
-                require_outcome: bool = False) -> dict:
+                require_outcome: bool = False, include_quarantined: bool = False) -> dict:
     """Aligned design matrix for research. Returns:
       X               — (n × d) float array, missing values as NaN
       features        — the d feature names, in order
@@ -300,6 +352,8 @@ def load_matrix(kind: str | None = None, feature_names=None,
                 clauses.append("kind=?"); args = args + (kind,)
             if require_outcome:
                 clauses.append("outcome IS NOT NULL")
+            if not include_quarantined:
+                clauses.append(_NOT_QUARANTINED)
             if clauses:
                 q += " WHERE " + " AND ".join(clauses)
             q += " ORDER BY ts ASC"
@@ -328,8 +382,12 @@ def load_observations(
     before_ts: str | None = None,
     schema_version: str | None = None,
     limit: int | None = None,
+    include_quarantined: bool = False,
 ) -> list[dict]:
     """Return immutable observations with provenance for evidence research.
+
+    Quarantined observations (``quarantine_observation``) are skipped unless
+    ``include_quarantined``.
 
     Unlike load_matrix this preserves timestamp, symbol, meta, validation and
     schema identity. before_ts is a strict point-in-time cutoff: rows at or
@@ -357,6 +415,8 @@ def load_observations(
             if schema_version:
                 clauses.append("schema_version=?")
                 args.append(str(schema_version))
+            if not include_quarantined:
+                clauses.append(_NOT_QUARANTINED)
             if clauses:
                 q += " WHERE " + " AND ".join(clauses)
             q += " ORDER BY ts ASC"
