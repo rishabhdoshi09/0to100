@@ -53,3 +53,50 @@ def test_unknown_power_and_send_failure_are_harmless():
     watch = PowerWatch(boom, now=lambda: 0.0)
     assert watch.observe(None) is None
     assert watch.observe({"source": "BATTERY", "percent": 10})   # still reported, no raise
+
+
+# ── Stage 1 finding F1 (cycle 8): flush before a lid-close sleep can drop the disk ──
+
+def test_the_poll_sees_the_19_november_window():
+    import product.host_power_watch as hpw
+    assert hpw.POLL_S <= 10        # the charger went 21 s before the lid closed
+
+
+def test_switching_to_battery_flushes_at_once_then_periodically():
+    clock = [0.0]
+    flushes = []
+    watch = PowerWatch(lambda m: None, now=lambda: clock[0], flush=lambda: flushes.append(clock[0]), flush_s=30)
+    watch.observe({"source": "AC", "percent": 90})
+    assert flushes == []                                    # on AC: never
+    watch.observe({"source": "BATTERY", "percent": 89})
+    assert flushes == [0.0]                                 # immediately on the switch
+    clock[0] = 20
+    watch.observe({"source": "BATTERY", "percent": 88})
+    assert flushes == [0.0]                                 # not yet
+    clock[0] = 31
+    watch.observe({"source": "BATTERY", "percent": 88})
+    assert flushes == [0.0, 31]
+    clock[0] = 35
+    watch.observe({"source": "AC", "percent": 88})
+    assert flushes == [0.0, 31]                             # on AC: never
+    clock[0] = 40                                           # only 9 s after the last flush
+    watch.observe({"source": "BATTERY", "percent": 88})     # a new switch flushes at once regardless
+    assert flushes == [0.0, 31, 40]
+
+
+def test_the_alert_names_the_lid_and_a_flush_failure_is_harmless():
+    sent = []
+    watch = PowerWatch(sent.append, now=lambda: 0.0, flush=lambda: (_ for _ in ()).throw(OSError("usb gone")))
+    assert watch.observe({"source": "BATTERY", "percent": 50})
+    assert "lid" in sent[0] and "OPEN" in sent[0]
+
+
+def test_flush_runtime_writes_syncs_and_full_fsyncs_the_root(tmp_path, monkeypatch):
+    import os
+    import core.atomic_io as aio
+    import product.host_power_watch as hpw
+    calls = []
+    monkeypatch.setattr(os, "sync", lambda: calls.append("sync"))
+    monkeypatch.setattr(aio, "_sync_directory", lambda d: calls.append(("dir", str(d))))
+    hpw.flush_runtime_writes(tmp_path)
+    assert calls == ["sync", ("dir", str(tmp_path))]

@@ -4,10 +4,19 @@ Owner's Mac, 2026-11-11 ~09:43 IST: the laptop ran on battery to ~12%, the
 USB "Expansion" drive lost power, the runtime sparsebundle detached and the
 desk stopped mid-session. Nothing told the owner the charger was out.
 
-This watcher reads ``pmset -g batt`` once a minute (macOS only) and sends a
-Telegram alert when the host switches to battery, repeats every 15 minutes
-while on battery at or below LOW_BATTERY_PCT, and confirms when AC returns.
-Read-only: it never changes power settings.
+This watcher reads ``pmset -g batt`` (macOS only) and sends a Telegram alert
+when the host switches to battery, repeats every 15 minutes while on battery at
+or below LOW_BATTERY_PCT, and confirms when AC returns. It never changes power
+settings.
+
+On battery it also FLUSHES pending writes to the runtime disk: ``sync`` plus
+``F_FULLFSYNC`` on the runtime root, at once when the charger goes and every
+FLUSH_S seconds after. Stage 1 finding F1 (cycle 8): both lost writes came
+seconds before a lid-close sleep with the runtime attached (16 Nov 10:21, 19
+Nov 11:06: the charger was pulled 21 s before the lid closed). A poll every
+POLL_S seconds sees that window; a minute did not. Whether the flush reaches
+the medium through the disk-image stack is not proven; it is defense in depth,
+and keeping the lid open on AC remains the fix.
 """
 from __future__ import annotations
 
@@ -20,7 +29,8 @@ from typing import Any, Callable, Sequence
 
 LOW_BATTERY_PCT = 40
 REPEAT_S = 15 * 60
-POLL_S = 60.0
+POLL_S = 5.0
+FLUSH_S = 30.0
 
 
 def _pmset(argv: Sequence[str]) -> str:
@@ -50,13 +60,27 @@ def read_power(run: Callable[[Sequence[str]], str] | None = None) -> dict[str, A
 
 class PowerWatch:
     def __init__(self, send: Callable[[str], Any], *, now: Callable[[], float] = time.time,
-                 low_pct: int = LOW_BATTERY_PCT, repeat_s: float = REPEAT_S) -> None:
+                 low_pct: int = LOW_BATTERY_PCT, repeat_s: float = REPEAT_S,
+                 flush: Callable[[], Any] | None = None, flush_s: float = FLUSH_S) -> None:
         self.send = send
         self.now = now
         self.low_pct = low_pct
         self.repeat_s = repeat_s
+        self.flush = flush
+        self.flush_s = flush_s
         self.state: str | None = None
         self.last_alert = 0.0
+        self.last_flush: float | None = None
+
+    def _maybe_flush(self, entering: bool) -> None:
+        if self.flush is None:
+            return
+        if entering or self.last_flush is None or self.now() - self.last_flush >= self.flush_s:
+            self.last_flush = self.now()
+            try:
+                self.flush()
+            except Exception:
+                pass
 
     def observe(self, power: dict[str, Any] | None) -> str | None:
         if not power:
@@ -66,11 +90,13 @@ class PowerWatch:
         pct_text = f"{pct}%" if pct is not None else "unknown %"
         message = None
         if source == "BATTERY":
+            self._maybe_flush(entering=self.state != "BATTERY")   # before anything else
             low = pct is not None and pct <= self.low_pct
             if self.state != "BATTERY" or (low and self.now() - self.last_alert >= self.repeat_s):
                 message = (
-                    f"⚠️ QuantTerm host is on BATTERY ({pct_text}). Plug in the charger: "
-                    "at low battery the USB runtime disk loses power and the desk stops."
+                    f"⚠️ QuantTerm host is on BATTERY ({pct_text}). Plug in the charger and keep the lid "
+                    "OPEN: closing it, or a drained battery, drops the USB runtime disk and loses the "
+                    "last writes (16 and 19 Nov)."
                 )
         elif source == "AC" and self.state == "BATTERY":
             message = f"✅ QuantTerm host is back on AC power ({pct_text})."
@@ -91,10 +117,31 @@ def _telegram_send(message: str) -> None:
     AlertEngine().send(message)
 
 
+def flush_runtime_writes(root: Any) -> None:
+    """``sync`` plus ``F_FULLFSYNC`` on the runtime root (best effort)."""
+    import os
+    from pathlib import Path
+
+    from core.atomic_io import _sync_directory
+
+    os.sync()
+    _sync_directory(Path(root))
+
+
+def _runtime_flush() -> Callable[[], None] | None:
+    try:
+        from core.runtime_paths import runtime_root
+
+        root = runtime_root()
+    except Exception:
+        return None
+    return lambda: flush_runtime_writes(root)
+
+
 def run_power_watch(stop: threading.Event, *, send: Callable[[str], Any] | None = None,
                     run: Callable[[Sequence[str]], str] | None = None,
-                    poll_s: float = POLL_S) -> None:
-    watch = PowerWatch(send or _telegram_send)
+                    poll_s: float = POLL_S, flush: Callable[[], Any] | None = None) -> None:
+    watch = PowerWatch(send or _telegram_send, flush=flush if flush is not None else _runtime_flush())
     while not stop.is_set():
         try:
             watch.observe(read_power(run))
