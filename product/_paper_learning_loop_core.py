@@ -24,6 +24,7 @@ from product.counterfactual_learning import (
     MISSED_WINNER,
     RAN_AWAY,
     ledger_path,
+    locked_ledger,
     settle,
 )
 from product.evidence_policy_engine import HARD_REASON_CODES
@@ -695,22 +696,21 @@ def _queue_unverified_fills(symbol: str, entry_day: str) -> int:
     GOOD_WAIT it earned never came back (verification review QT-07). The
     earliest fill is kept; nothing is credited until it verifies.
     """
-    ledger = ledger_path()
-    rows = _read_jsonl(ledger)
-    changed = 0
-    for row in rows:
-        if row.get("classification") or str(row.get("symbol") or "").upper() != symbol:
-            continue
-        if row.get("later_entry_pending"):
-            continue
-        if _wait_ordinal_state(row, entry_day) == "UNVERIFIABLE":
-            row["later_entry_pending"] = {"fill_session": str(entry_day)[:10],
-                                          "noted_at": datetime.now(timezone.utc).isoformat()}
-            changed += 1
-    if changed:
-        from core.atomic_io import atomic_write_text
-        atomic_write_text(ledger, "".join(json.dumps(r, default=str) + "\n" for r in rows))
-    return changed
+    with locked_ledger() as (ledger, rows, _):
+        changed = 0
+        for row in rows:
+            if row.get("classification") or str(row.get("symbol") or "").upper() != symbol:
+                continue
+            if row.get("later_entry_pending"):
+                continue
+            if _wait_ordinal_state(row, entry_day) == "UNVERIFIABLE":
+                row["later_entry_pending"] = {"fill_session": str(entry_day)[:10],
+                                              "noted_at": datetime.now(timezone.utc).isoformat()}
+                changed += 1
+        if changed:
+            from core.atomic_io import atomic_write_text
+            atomic_write_text(ledger, "".join(json.dumps(r, default=str) + "\n" for r in rows))
+        return changed
 
 
 def retry_pending_good_waits(*, path=None, floors: Mapping[str, int] | None = None,
@@ -722,55 +722,54 @@ def retry_pending_good_waits(*, path=None, floors: Mapping[str, int] | None = No
     fill, then drops it as unverifiable. Never fabricates a session.
     """
     from datetime import date
-    ledger = ledger_path()
-    rows = _read_jsonl(ledger)
-    now = str(today or datetime.now(timezone.utc).date().isoformat())[:10]
-    out = {"credited": 0, "expired": 0, "still_unverifiable": 0, "dropped_unverifiable": 0}
-    rewritten: list[dict[str, Any]] = []
-    changed = False
-    for row in rows:
-        pending = row.get("later_entry_pending")
-        if row.get("classification") or not isinstance(pending, Mapping):
-            rewritten.append(row)
-            continue
-        fill = str(pending.get("fill_session") or "")[:10]
-        state = _wait_ordinal_state(row, fill)
-        if state == "LIVE":
-            settled = settle({k: v for k, v in row.items() if k != "later_entry_pending"},
-                             forward_return_pct=None, later_entered=True)
-            settled["later_entry_verified"] = fill
-            try:
-                ingest_counterfactual(settled, path=path, floors=floors)
-            except Exception as exc:
-                # This row stays queued for the next pass; the others are still
-                # verified, expired or dropped and persisted (QT-C2-08).
-                out.setdefault("errors", []).append(f"{row.get('symbol')}: {type(exc).__name__}: {exc}"[:200])
+    with locked_ledger() as (ledger, rows, _):
+        now = str(today or datetime.now(timezone.utc).date().isoformat())[:10]
+        out = {"credited": 0, "expired": 0, "still_unverifiable": 0, "dropped_unverifiable": 0}
+        rewritten: list[dict[str, Any]] = []
+        changed = False
+        for row in rows:
+            pending = row.get("later_entry_pending")
+            if row.get("classification") or not isinstance(pending, Mapping):
                 rewritten.append(row)
                 continue
-            rewritten.append(settled)
-            out["credited"] += 1
+            fill = str(pending.get("fill_session") or "")[:10]
+            state = _wait_ordinal_state(row, fill)
+            if state == "LIVE":
+                settled = settle({k: v for k, v in row.items() if k != "later_entry_pending"},
+                                 forward_return_pct=None, later_entered=True)
+                settled["later_entry_verified"] = fill
+                try:
+                    ingest_counterfactual(settled, path=path, floors=floors)
+                except Exception as exc:
+                    # This row stays queued for the next pass; the others are still
+                    # verified, expired or dropped and persisted (QT-C2-08).
+                    out.setdefault("errors", []).append(f"{row.get('symbol')}: {type(exc).__name__}: {exc}"[:200])
+                    rewritten.append(row)
+                    continue
+                rewritten.append(settled)
+                out["credited"] += 1
+                changed = True
+                continue
+            if state == "UNVERIFIABLE":
+                try:
+                    age = (date.fromisoformat(now) - date.fromisoformat(fill)).days
+                except ValueError:
+                    age = LATER_ENTRY_VERIFY_MAX_DAYS + 1
+                if age <= LATER_ENTRY_VERIFY_MAX_DAYS:
+                    out["still_unverifiable"] += 1
+                    rewritten.append(row)
+                    continue
+                out["dropped_unverifiable"] += 1
+            else:
+                out["expired"] += 1
+            kept = {k: v for k, v in row.items() if k != "later_entry_pending"}
+            kept["later_entry_unverified" if state == "UNVERIFIABLE" else "later_entry_expired"] = fill
+            rewritten.append(kept)
             changed = True
-            continue
-        if state == "UNVERIFIABLE":
-            try:
-                age = (date.fromisoformat(now) - date.fromisoformat(fill)).days
-            except ValueError:
-                age = LATER_ENTRY_VERIFY_MAX_DAYS + 1
-            if age <= LATER_ENTRY_VERIFY_MAX_DAYS:
-                out["still_unverifiable"] += 1
-                rewritten.append(row)
-                continue
-            out["dropped_unverifiable"] += 1
-        else:
-            out["expired"] += 1
-        kept = {k: v for k, v in row.items() if k != "later_entry_pending"}
-        kept["later_entry_unverified" if state == "UNVERIFIABLE" else "later_entry_expired"] = fill
-        rewritten.append(kept)
-        changed = True
-    if changed:
-        from core.atomic_io import atomic_write_text
-        atomic_write_text(ledger, "".join(json.dumps(r, default=str) + "\n" for r in rewritten))
-    return out
+        if changed:
+            from core.atomic_io import atomic_write_text
+            atomic_write_text(ledger, "".join(json.dumps(r, default=str) + "\n" for r in rewritten))
+        return out
 
 
 def _sessions_through(day: str, entry_day: str) -> int | None:
@@ -842,38 +841,37 @@ def settle_pending_counterfactuals(
     ``verified_fill`` session it checked each row against (note_later_entry), and
     the settled row carries it (cycle-2 review QT-C2-07).
     """
-    ledger = ledger_path()
-    rows = _read_jsonl(ledger)
-    returns = {str(k).upper(): float(v) for k, v in dict(forward_return_by_symbol or {}).items()}
-    entered = {str(k).upper(): bool(v) for k, v in dict(later_entered or {}).items()}
-    updated = 0
-    classifications: dict[str, int] = {}
-    rewritten: list[dict[str, Any]] = []
-    for row in rows:
-        if row.get("classification"):
-            rewritten.append(row)
-            continue
-        symbol = str(row.get("symbol") or "").upper()
-        if (symbol not in returns and symbol not in entered) or (row_filter is not None and not row_filter(row)):
-            rewritten.append(row)
-            continue
-        later = bool(entered.get(symbol, False) and verified_fill)
-        settled = settle(
-            row,
-            forward_return_pct=returns.get(symbol),
-            later_entered=later,
-        )
-        if later:
-            settled["later_entry_verified"] = str(verified_fill)[:10]
-        ingest_counterfactual(settled, path=path, floors=floors)
-        rewritten.append(settled)
-        updated += 1
-        cls = str(settled.get("classification") or FLAT)
-        classifications[cls] = classifications.get(cls, 0) + 1
-    if updated:
-        from core.atomic_io import atomic_write_text
-        atomic_write_text(ledger, "".join(json.dumps(r, default=str) + "\n" for r in rewritten))
-    return {"updated": updated, "classifications": classifications}
+    with locked_ledger() as (ledger, rows, _):
+        returns = {str(k).upper(): float(v) for k, v in dict(forward_return_by_symbol or {}).items()}
+        entered = {str(k).upper(): bool(v) for k, v in dict(later_entered or {}).items()}
+        updated = 0
+        classifications: dict[str, int] = {}
+        rewritten: list[dict[str, Any]] = []
+        for row in rows:
+            if row.get("classification"):
+                rewritten.append(row)
+                continue
+            symbol = str(row.get("symbol") or "").upper()
+            if (symbol not in returns and symbol not in entered) or (row_filter is not None and not row_filter(row)):
+                rewritten.append(row)
+                continue
+            later = bool(entered.get(symbol, False) and verified_fill)
+            settled = settle(
+                row,
+                forward_return_pct=returns.get(symbol),
+                later_entered=later,
+            )
+            if later:
+                settled["later_entry_verified"] = str(verified_fill)[:10]
+            ingest_counterfactual(settled, path=path, floors=floors)
+            rewritten.append(settled)
+            updated += 1
+            cls = str(settled.get("classification") or FLAT)
+            classifications[cls] = classifications.get(cls, 0) + 1
+        if updated:
+            from core.atomic_io import atomic_write_text
+            atomic_write_text(ledger, "".join(json.dumps(r, default=str) + "\n" for r in rewritten))
+        return {"updated": updated, "classifications": classifications}
 
 
 def learning_dashboard(

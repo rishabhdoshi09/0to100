@@ -547,7 +547,7 @@ def settle_official_outcomes(session: str | None = None) -> dict[str, Any]:
     ledger settles a row once.
     """
     from core.outcome_resolver import counterfactual_outcome
-    from product.counterfactual_learning import classify_rulebook, ledger_path as cf_path
+    from product.counterfactual_learning import classify_rulebook, locked_ledger
     # forward-ledger rows: settled below by the one owner (forward_soak), not here
 
     as_of = session or session_date()
@@ -560,79 +560,72 @@ def settle_official_outcomes(session: str | None = None) -> dict[str, Any]:
     except Exception as exc:
         good_waits = {"error": f"{type(exc).__name__}: {exc}"[:200]}
     try:
-        rows = []
-        path = cf_path()
-        if path.exists():
-            for line in path.read_text(encoding="utf-8").splitlines():
-                if not line.strip():
+        with locked_ledger() as (path, rows, _):
+            rewritten = []
+            for row in rows:
+                if row.get("classification") or row.get("outcome"):
+                    rewritten.append(row)
                     continue
+                if row.get("later_entry_pending"):
+                    # Its fill is still being verified: settling it on price now
+                    # would erase a GOOD_WAIT it may have earned (QT-07).
+                    pending.append({"symbol": row.get("symbol"), "as_of": row.get("as_of"),
+                                    "reason": "LATER_ENTRY_UNVERIFIED"})
+                    rewritten.append(row)
+                    continue
+                symbol = str(row.get("symbol") or "")
+                day = str(row.get("as_of") or as_of)[:10]
                 try:
-                    rows.append(json.loads(line))
-                except Exception:
+                    resolved = counterfactual_outcome(symbol, day, row.get("hypothetical_entry"),
+                                                      row.get("hypothetical_stop"), row.get("hypothetical_target"))
+                except Exception as exc:
+                    failed.append({"symbol": symbol, "error": str(exc)[:160]})
+                    rewritten.append(row)
                     continue
-        rewritten = []
-        for row in rows:
-            if row.get("classification") or row.get("outcome"):
+                if resolved is None:
+                    pending.append({"symbol": symbol, "as_of": day, "reason": "HORIZON_NOT_REACHED"})
+                    rewritten.append(row)
+                    continue
+                ret = resolved.get("return_pct")
+                classification = classify_rulebook(resolved)
+                row = dict(row)
+                row["outcome"] = {"forward_return_pct": ret, "exit": resolved.get("exit_price"), "not_pnl": True,
+                                  "source": "official_bhavcopy", "eval_spec": resolved.get("eval_spec"),
+                                  "rulebook_outcome": resolved.get("outcome"), "net_r": resolved.get("net_r")}
+                row["eval_spec"] = resolved.get("eval_spec")
+                row["counterfactual_R"] = resolved.get("net_r")
+                row["classification"] = classification
                 rewritten.append(row)
-                continue
-            if row.get("later_entry_pending"):
-                # Its fill is still being verified: settling it on price now
-                # would erase a GOOD_WAIT it may have earned (QT-07).
-                pending.append({"symbol": row.get("symbol"), "as_of": row.get("as_of"),
-                                "reason": "LATER_ENTRY_UNVERIFIED"})
-                rewritten.append(row)
-                continue
-            symbol = str(row.get("symbol") or "")
-            day = str(row.get("as_of") or as_of)[:10]
-            try:
-                resolved = counterfactual_outcome(symbol, day, row.get("hypothetical_entry"),
-                                                  row.get("hypothetical_stop"), row.get("hypothetical_target"))
-            except Exception as exc:
-                failed.append({"symbol": symbol, "error": str(exc)[:160]})
-                rewritten.append(row)
-                continue
-            if resolved is None:
-                pending.append({"symbol": symbol, "as_of": day, "reason": "HORIZON_NOT_REACHED"})
-                rewritten.append(row)
-                continue
-            ret = resolved.get("return_pct")
-            classification = classify_rulebook(resolved)
-            row = dict(row)
-            row["outcome"] = {"forward_return_pct": ret, "exit": resolved.get("exit_price"), "not_pnl": True,
-                              "source": "official_bhavcopy", "eval_spec": resolved.get("eval_spec"),
-                              "rulebook_outcome": resolved.get("outcome"), "net_r": resolved.get("net_r")}
-            row["eval_spec"] = resolved.get("eval_spec")
-            row["counterfactual_R"] = resolved.get("net_r")
-            row["classification"] = classification
-            rewritten.append(row)
-            settled.append({"symbol": symbol, "classification": classification, "return_pct": ret, "as_of": day,
-                            "eval_spec": resolved.get("eval_spec")})
-            from product.missed_winner import analyze_decision_quality
+                settled.append({"symbol": symbol, "classification": classification, "return_pct": ret, "as_of": day,
+                                "eval_spec": resolved.get("eval_spec")})
+                from product.missed_winner import analyze_decision_quality
 
-            quality = analyze_decision_quality(
-                row, classification=classification, forward_return_pct=ret,
-            )
-            row["decision_quality"] = quality
-            _append_jsonl(LEARNING_PATH, {
-                "at": _now(), "symbol": symbol, "as_of": day,
-                "classification": classification, "return_pct": ret,
-                "reason_code": row.get("reason_code"),
-                "decision_quality": quality,
-                "provenance": "REAL_FORWARD_MARKET",
-                "eval_spec": resolved.get("eval_spec"),
-                "updates_policy": False,
-                "observation": "counterfactual_settled",
-            })
-            cid = CL.candidate_id(symbol, day)
-            if CL.get(cid):
-                CL.upsert(
-                    symbol=symbol, session_date=day, state=CL.CLOSED,
-                    reason=classification, outcome_id=f"{cid}:outcome", trigger="outcome",
+                quality = analyze_decision_quality(
+                    row, classification=classification, forward_return_pct=ret,
                 )
-        if rewritten:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("".join(json.dumps(r, default=str) + "\n" for r in rewritten), encoding="utf-8")
+                row["decision_quality"] = quality
+                _append_jsonl(LEARNING_PATH, {
+                    "at": _now(), "symbol": symbol, "as_of": day,
+                    "classification": classification, "return_pct": ret,
+                    "reason_code": row.get("reason_code"),
+                    "decision_quality": quality,
+                    "provenance": "REAL_FORWARD_MARKET",
+                    "eval_spec": resolved.get("eval_spec"),
+                    "updates_policy": False,
+                    "observation": "counterfactual_settled",
+                })
+                cid = CL.candidate_id(symbol, day)
+                if CL.get(cid):
+                    CL.upsert(
+                        symbol=symbol, session_date=day, state=CL.CLOSED,
+                        reason=classification, outcome_id=f"{cid}:outcome", trigger="outcome",
+                    )
+            if settled:
+                from core.atomic_io import atomic_write_text
+
+                atomic_write_text(path, "".join(json.dumps(r, default=str) + "\n" for r in rewritten))
     except Exception as exc:
+        settled.clear()
         failed.append({"error": str(exc)[:200]})
 
     # Forward-ledger rows have ONE settlement owner (overnight review L-01):

@@ -21,9 +21,10 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 from core.runtime_paths import logs_dir
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -141,6 +142,17 @@ def _read_ledger(path: Path) -> tuple[list[dict[str, Any]], bool]:
     return rows, bool(text and not text.endswith("\n"))
 
 
+@contextmanager
+def locked_ledger(path: str | Path | None = None) -> Iterator[tuple[Path, list[dict[str, Any]], bool]]:
+    """Read a validated snapshot under the lock shared by appenders and settlers."""
+    from product.learning_observations import writer_lock
+
+    target = ledger_path(path)
+    with writer_lock(target):
+        rows, needs_separator = _read_ledger(target)
+        yield target, rows, needs_separator
+
+
 def _counterfactual_freeze_path(path: str | Path | None) -> Path:
     # Counterfactual identity must be isolated with the ledger it protects.
     # This also makes QT_COUNTERFACTUALS test/runtime overrides authoritative
@@ -229,11 +241,7 @@ def freeze_decision(
         "classification": None,
         "not_pnl": True,
     }
-    from product.learning_observations import writer_lock
-
-    target_path = ledger_path(path)
-    with writer_lock(target_path):
-        existing_rows, needs_separator = _read_ledger(target_path)
+    with locked_ledger(path) as (target_path, existing_rows, needs_separator):
         for existing in existing_rows:
             if str(existing.get("counterfactual_id") or "") == counterfactual_id:
                 return existing

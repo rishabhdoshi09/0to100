@@ -249,3 +249,80 @@ def test_outcome_job_succeeds_on_official_without_snapshot():
     result = JOBS.run_outcome_resolution(JOBS._Ctx(Deps()))
     assert result.status == JS.SUCCEEDED
     assert "official" in result.summary
+
+
+def test_official_settlement_preserves_corrupt_counterfactual_ledger(tmp_path, monkeypatch):
+    from product import autonomous_loop as loop
+    from product import counterfactual_learning as cf
+
+    path = tmp_path / "counterfactuals.jsonl"
+    monkeypatch.setenv("QT_COUNTERFACTUALS", str(path))
+    monkeypatch.setattr("product.forward_soak.settle_pending_from_market", lambda: {})
+    monkeypatch.setattr(loop, "LEARNING_PATH", tmp_path / "learning.jsonl")
+    cf.freeze_decision(
+        symbol="HAL", reason_code="WAIT_FOR_ENTRY", decision="WAIT",
+        entry=100.0, stop=90.0, target=120.0, as_of="2026-08-03",
+        evidence={"decision_id": "d1"},
+    )
+    original = path.read_bytes() + b'{"torn":'
+    path.write_bytes(original)
+    from tests.evidence_fixtures import rulebook_outcome
+    monkeypatch.setattr(
+        "core.outcome_resolver.counterfactual_outcome",
+        lambda *a, **k: rulebook_outcome(1.0, "WIN", 10.0),
+    )
+
+    result = loop.settle_official_outcomes("2026-08-03")
+
+    assert not result["settled"]
+    assert "counterfactual ledger" in result["failed"][0]["error"]
+    assert path.read_bytes() == original
+    assert not loop.LEARNING_PATH.exists()
+
+
+def test_official_settlement_preserves_a_concurrent_counterfactual_freeze(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    from product import autonomous_loop as loop
+    from product import counterfactual_learning as cf
+    from tests.evidence_fixtures import rulebook_outcome
+
+    path = tmp_path / "counterfactuals.jsonl"
+    monkeypatch.setenv("QT_COUNTERFACTUALS", str(path))
+    monkeypatch.setattr("product.forward_soak.settle_pending_from_market", lambda: {})
+    monkeypatch.setattr(loop, "LEARNING_PATH", tmp_path / "learning.jsonl")
+    resolving = Event()
+    appended = Event()
+
+    def freeze(symbol):
+        return cf.freeze_decision(
+            symbol=symbol, reason_code="WAIT_FOR_ENTRY", decision="WAIT",
+            entry=100.0, stop=90.0, target=120.0, as_of="2026-08-03",
+            evidence={"decision_id": symbol},
+        )
+
+    def resolve(*args):
+        resolving.set()
+        # An uncoordinated writer completes its append after the settlement
+        # snapshot was read, then the rewrite silently loses that append.
+        appended.wait(timeout=1)
+        return rulebook_outcome(1.0, "WIN", 10.0)
+
+    def freeze_second():
+        row = freeze("TCS")
+        appended.set()
+        return row
+
+    freeze("HAL")
+    monkeypatch.setattr("core.outcome_resolver.counterfactual_outcome", resolve)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        settlement = pool.submit(loop.settle_official_outcomes, "2026-08-03")
+        assert resolving.wait(timeout=10)
+        second = pool.submit(freeze_second)
+        assert settlement.result(timeout=10)["n_settled"] == 1
+        assert second.result(timeout=10)["symbol"] == "TCS"
+
+    rows = {row["symbol"]: row for row in map(json.loads, path.read_text().splitlines())}
+    assert rows["HAL"]["classification"] == "MISSED_WINNER"
+    assert rows["TCS"]["classification"] is None
