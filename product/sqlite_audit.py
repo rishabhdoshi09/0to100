@@ -39,6 +39,10 @@ SQLITE_SUFFIXES = {".db", ".sqlite", ".sqlite3"}
 
 
 QUICK_CHECK_LIMIT = "quick_check cannot see index entries that disagree with their tables (finding F1)"
+# SQLite result codes that mean the DATA is damaged, whatever operation raised them
+# (GPT V2-05): a malformed schema committed only to the WAL raises while the check
+# reads the schema, after a successful open.
+_CORRUPTION_CODES = {11, 26}             # SQLITE_CORRUPT, SQLITE_NOTADB (primary codes)
 
 
 @dataclass(frozen=True)
@@ -47,6 +51,7 @@ class Probe:
     result: str
     error: str = ""
     check: str = "integrity_check"
+    corruption: bool = False              # an error whose SQLite code means damaged data
 
 
 @dataclass(frozen=True)
@@ -73,19 +78,27 @@ def _uri(path: Path, *, immutable: bool = False) -> str:
     return f"file:{encoded}?mode=ro{suffix}"
 
 
+def _is_corruption(exc: BaseException) -> bool:
+    code = getattr(exc, "sqlite_errorcode", None)
+    if code is not None and (int(code) & 0xFF) in _CORRUPTION_CODES:
+        return True
+    text = str(exc).lower()
+    return "malformed" in text or "not a database" in text
+
+
 def _check(path: Path, *, immutable: bool = False, quick: bool = False) -> Probe:
     pragma = "quick_check" if quick else "integrity_check"
     try:
         con = sqlite3.connect(_uri(path, immutable=immutable), uri=True, timeout=2.0)
     except Exception as exc:
-        return Probe(False, "", f"{type(exc).__name__}: {exc}"[:300], pragma)
+        return Probe(False, "", f"{type(exc).__name__}: {exc}"[:300], pragma, _is_corruption(exc))
     try:
         con.execute("PRAGMA query_only=ON")
         rows = [str(r[0]) for r in con.execute(f"PRAGMA {pragma}(20)").fetchall()]
         result = "; ".join(rows)[:1000]
         return Probe(rows == ["ok"], result, "", pragma)
     except Exception as exc:
-        return Probe(False, "", f"{type(exc).__name__}: {exc}"[:300], pragma)
+        return Probe(False, "", f"{type(exc).__name__}: {exc}"[:300], pragma, _is_corruption(exc))
     finally:
         con.close()
 
@@ -148,7 +161,7 @@ def audit_database(path: str | Path, *, quick: bool = False) -> DatabaseAudit:
         immutable_ok=immutable.ok,
         wal_present=wal,
         check=readonly.check,
-        readonly_diagnostic=(not readonly.ok and not readonly.error),
+        readonly_diagnostic=(not readonly.ok and (not readonly.error or readonly.corruption)),
     )
     try:
         size = int(target.stat().st_size)
