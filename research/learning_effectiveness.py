@@ -27,6 +27,8 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from core.live_volume import on_live_volume
+
 SELECTION_STATUSES = {"ACTIVE", "ELIGIBLE", "EXPERIMENTAL"}
 
 
@@ -134,7 +136,7 @@ def build_report(root: str | Path) -> dict[str, Any]:
     import os
 
     root = Path(root).resolve()
-    if str(root).startswith("/Volumes/"):
+    if on_live_volume(root):
         raise SystemExit(f"refusing {root}: copy the runtime first (never read the live runtime)")
     previous = os.environ.get("QT_RUNTIME_ROOT")
     os.environ["QT_RUNTIME_ROOT"] = str(root)

@@ -40,8 +40,8 @@ elif point == "after_applying_record":
     sir._reindex = lambda con, **kw: die()
 elif point == "inside_transaction":
     real_verifier = sir._precommit_verifier
-    def verifier(m):
-        check = real_verifier(m)
+    def verifier(m, **kw):
+        check = real_verifier(m, **kw)
         def run(con):
             check(con)
             die()                      # REINDEX done and proven, COMMIT not yet issued
@@ -81,6 +81,12 @@ elif point == "after_restore":
             die()
         return real(con)
     sir._checkpoint = checkpoint
+elif point == "during_backup_write":
+    def half(path, raw):                   # the backup file half written when the power goes
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        os.write(fd, raw[: len(raw) // 2])
+        die()
+    sir._write_new_file = half
 else:
     raise SystemExit(f"unknown point {point}")
 
@@ -120,6 +126,7 @@ def planned(tmp_path):
 
 
 @pytest.mark.parametrize("point, expect", [
+    ("during_backup_write", "original"),         # GPT C8-06: a partial backup, never left untracked
     ("before_applying_record", "original"),
     ("after_applying_record", "original"),
     ("inside_transaction", "original"),          # an uncommitted transaction never survives
@@ -130,6 +137,7 @@ def test_a_hard_crash_during_apply_leaves_original_or_repaired_and_recovers(tmp_
     db, manifest, m = planned
     r = _crash("apply", point, manifest)
     assert r.returncode == 137 and "COMPLETED" not in r.stdout, r.stderr[-400:]
+    crashed = json.loads(manifest.read_text())
     want = m["original_content"] if expect == "original" else m["expected_content"]
     assert sir._same_content(_content_as_sqlite_recovers_it(db, tmp_path), want)
 
@@ -139,6 +147,12 @@ def test_a_hard_crash_during_apply_leaves_original_or_repaired_and_recovers(tmp_
     leftovers = sorted(p.name for p in db.parent.iterdir() if p.name != db.name)
     assert all(".pre-reindex-" in name for name in leftovers), leftovers
     assert len(leftovers) <= 1, leftovers
+    final = json.loads(manifest.read_text())
+    assert Path(final["backup"]).name in leftovers and sir._sha256(Path(final["backup"])) == final["backup_sha256"]
+    if point == "during_backup_write":
+        partial = crashed["backup_pending"]                      # recorded BEFORE the write began
+        assert final["discarded_partial_backups"] == [partial] and not Path(partial).exists()
+        assert final["backup"] != partial
 
 
 @pytest.mark.parametrize("point", ["after_rolling_back_record", "after_restore"])
@@ -155,6 +169,24 @@ def test_a_hard_crash_during_rollback_leaves_repaired_or_original_and_recovers(t
     assert done["state"] == "rolled_back"
     assert sir._same_content(_content_as_sqlite_recovers_it(db, tmp_path), m["original_content"])
     assert json.loads(manifest.read_text())["state"] == "rolled_back"
+
+
+def test_a_header_mismatch_then_a_crash_after_commit_still_recovers(tmp_path, planned):
+    """GPT C8-05: the trial is proven (and that recorded durably) before COMMIT, so after a
+    crash past COMMIT both commands tell a proven repair whose header differs from an
+    unknown change: apply reaches applied_unverified, rollback restores."""
+    db, manifest, m = planned
+    m["expected_content"]["header"]["44-91"] = "00" * 48          # the committed header will differ
+    manifest.write_text(json.dumps(m))
+    r = _crash("apply", "after_commit", manifest)
+    assert r.returncode == 137, r.stderr[-400:]
+    assert json.loads(manifest.read_text())["verified_before_commit"] is True
+    with pytest.raises(SystemExit, match="applied_unverified"):
+        sir.apply(manifest, "recover", target_is_copy=True)
+    assert json.loads(manifest.read_text())["state"] == "applied_unverified"
+    done = sir.rollback(manifest, target_is_copy=True)
+    assert done["state"] == "rolled_back" and done["rollback_ok"]
+    assert sir._same_content(_content_as_sqlite_recovers_it(db, tmp_path), m["original_content"])
 
 
 def test_the_lock_dies_with_the_process(tmp_path, planned):

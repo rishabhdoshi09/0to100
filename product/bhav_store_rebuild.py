@@ -54,6 +54,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from core.live_volume import on_live_volume
+
 REPO = Path(__file__).resolve().parents[1]
 PUBLISH_LOCK = ".store_publish.lock"    # data.bhavcopy_store.PUBLISH_LOCK
 _SAFE_ENV = ("KITE_API_KEY", "KITE_API_SECRET", "KITE_ACCESS_TOKEN", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
@@ -106,11 +108,10 @@ def _sha256(path: Path) -> str:
 
 
 def _on_live_volume(path: str | Path) -> bool:
-    """Under /Volumes, compared case-insensitively: the Mac's volumes are
-    case-insensitive and realpath keeps the spelling given, so '/volumes/...'
-    reaches the same production files (cycle-7 review)."""
-    text = str(path).lower().rstrip("/")
-    return text == "/volumes" or text.startswith("/volumes/")      # the mount root too (GPT V2-04)
+    """Under /Volumes by text (any case, the mount root too: cycle-7, GPT V2-04) OR by
+    identity, so the firmlink spelling /System/Volumes/Data/Volumes/... is caught as
+    well (core.live_volume, cycle-8 review part 4)."""
+    return on_live_volume(path)
 
 
 def _not_live(path: Path, what: str) -> Path:

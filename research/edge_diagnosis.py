@@ -70,6 +70,8 @@ from typing import Any, Iterable, Mapping
 import numpy as np
 import pandas as pd
 
+from core.live_volume import on_live_volume
+
 HORIZON = 10
 STRICT_LOOKBACK_SESSIONS = 252          # the scanner's 52-week lookback must also be adjusted
 MIN_TRADES = 30
@@ -578,7 +580,7 @@ def load_copy(root: str | Path, *, accept_unbound_coverage: bool = False) -> dic
     through core.runtime_paths into the copy.
     """
     root = Path(root).resolve()
-    if str(root).startswith("/Volumes/"):
+    if on_live_volume(root):
         raise SystemExit(f"refusing {root}: copy the store to the internal SSD first (never read the live runtime)")
     os.environ["QT_RUNTIME_ROOT"] = str(root)
     from core.runtime_paths import logs_path
@@ -672,7 +674,7 @@ def main(argv=None) -> int:
     # Every runtime path (scanner calibration snapshots, the backtest report path,
     # resolved at import) must point at the COPY, never the live runtime.
     root = Path(args.root).resolve()
-    if str(root).startswith("/Volumes/"):
+    if on_live_volume(root):
         raise SystemExit(f"refusing {root}: copy the store to the internal SSD first")
     os.environ["QT_RUNTIME_ROOT"] = str(root)
     rep = run(root, symbols=args.symbols, sample_step=args.sample_step,

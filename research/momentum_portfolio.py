@@ -30,6 +30,8 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
+from core.live_volume import on_live_volume
+
 SPEC_PATH = Path(__file__).resolve().parent / "preregistered" / "pr_2026_11_21_mom12_1.json"
 #: SHA-256 of the spec bytes when it was frozen (2026-11-21). Never update it to "fix" a test.
 FROZEN_SHA256 = "86a959d2dde8424537e7e6e028a426f80fddaa61c3338dbe347bc9e84fdc106f"
@@ -298,7 +300,7 @@ def main(argv=None) -> int:
     ap.add_argument("--out")
     args = ap.parse_args(argv)
     root = Path(args.root).resolve()
-    if str(root).startswith("/Volumes/"):
+    if on_live_volume(root):
         raise SystemExit(f"refusing {root}: copy the store to the internal SSD first")
     os.environ["QT_RUNTIME_ROOT"] = str(root)
     rep = run(root, period=args.period, single_look=args.single_look,

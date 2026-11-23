@@ -24,22 +24,42 @@ repair routine ``apply`` runs, on a second copy, and proves:
   bytes REINDEX must not touch (0-23 and 40-91), and the full foreign-key
   violation list are unchanged.
 
+Only WAL-mode databases are planned (the freeze ledger is one): under the
+exclusive lock a rollback-journal database keeps its ``-journal`` file, so a
+crashed apply could never be re-run. A target with more than one hard link is
+refused: SQLite names ``-wal`` after the path it opened, so through a second
+name committed frames are invisible.
+
 ``apply`` repairs the LIVE database IN PLACE, inside SQLite's own locking: no
 file is renamed or replaced. It opens the target with ``locking_mode=EXCLUSIVE``
 (no other connection can read or write until it closes), full-sync barriers and
-``synchronous=FULL``; checkpoints; verifies the target's sha256 is the planned
-one; writes and syncs a byte backup; records ``applying`` durably; runs REINDEX
-in one transaction; checkpoints; and proves the result on a byte copy against
-the plan's digests, all before releasing the lock. A crash rolls the
-transaction back. Re-running ``apply`` after a crash finishes or redoes the
-repair, after success it is a no-op; a healthy database plans as
+``synchronous=FULL``; checkpoints; proves the live content is the planned
+original; writes and syncs a byte backup at a name recorded BEFORE it is
+written; records ``applying`` durably; runs REINDEX in one transaction, proves
+the trial against the plan and records that proof durably, all BEFORE COMMIT;
+checkpoints; and proves the committed result, all before releasing the lock. A
+crash rolls the transaction back. Re-running ``apply`` after a crash finishes or
+redoes the repair, after success it is a no-op; a healthy database plans as
 ``nothing_to_repair``.
 
-``rollback`` restores the backup through SQLite's backup API under the same
-exclusive lock, only while the target holds exactly the repaired content: in
-every state an unknown content digest is refused, so writes made after the
-repair are never discarded. Both need the owner's words for a live target and a
-stopped desk; copy mode is never honoured under /Volumes.
+While the lock is held nothing is opened BY NAME except new files created with
+``O_EXCL|O_NOFOLLOW`` (the backup, manifest temp files). POSIX releases every
+lock a process holds on a file when it closes ANY descriptor on it, and a name
+re-opened after a check can have become a link to the live file. So every proof
+of the live file is made on its bytes, read once through one pinned descriptor
+and diagnosed as an in-memory database, and every new file is verified through
+the descriptor that created it (cycle-8 review, part 4).
+
+``rollback`` proves the backup (sha256 AND content) in memory before the lock,
+then, under the same exclusive lock and only while the target holds exactly the
+repaired content, restores THAT in-memory database through SQLite's backup API.
+A repair changes index entries only, so a rollback must too: the backup's rows,
+schema, settings and foreign keys must equal the live database's, compared
+between the two databases themselves, never through the manifest (an edited
+manifest cannot make rollback install another database). In every state an
+unknown content digest is refused, so writes made after the repair are never
+discarded. Both need the owner's words for a live target and a stopped desk;
+copy mode is never honoured under /Volumes (any spelling: core.live_volume).
 """
 from __future__ import annotations
 
@@ -84,6 +104,12 @@ SCHEMA_COOKIE = "40-43"
 HEADER_PRAGMAS = ("page_size", "user_version", "application_id", "encoding", "auto_vacuum")
 _LIST_LIMIT = 200
 EXIT_INCONCLUSIVE = 3
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_CHUNK = 1 << 20
+#: What a repair (and so its rollback) must never change, compared database to database.
+PRESERVED = ("tables", "schema_sha256", "settings", "foreign_key_sha256")
+_UNVERIFIED = ("the content was proven before COMMIT, but the committed file's header differs from the plan's "
+               "(state applied_unverified): inspect with check; rollback accepts this state")
 
 
 # ── identity, copies, sidecars ───────────────────────────────────────────────
@@ -263,11 +289,49 @@ def _index_check(con: sqlite3.Connection, table: str, alias: str, index: str,
             "lookup_mismatches": lookup_bad[:_LIST_LIMIT], "lookup_mismatch_count": len(lookup_bad)}
 
 
-def _header(path: Path) -> dict[str, str]:
-    with open(path, "rb") as fh:
-        raw = fh.read(100)
+def _header_bytes(raw: bytes) -> dict[str, str]:
     return {f"{a}-{b - 1}": raw[a:b].hex() for a, b in HEADER_FIXED} | {
         "journal_header": {1: "rollback", 2: "wal"}.get(raw[18], str(raw[18]))}
+
+
+def _header(path: Path) -> dict[str, str]:
+    with open(path, "rb") as fh:
+        return _header_bytes(fh.read(100))
+
+
+def _memory_db(raw: bytes) -> sqlite3.Connection:
+    """The exact bytes as an in-memory database: no file is opened, by name or otherwise.
+
+    ``sqlite3_deserialize`` cannot use a WAL-mode image, so the write/read version
+    bytes (18, 19) are set to rollback mode IN THE COPY; header proofs are always
+    taken from the original bytes. A restore from it into a WAL database keeps
+    the destination in WAL mode (SQLite's backup sets the version back).
+    """
+    image = bytearray(raw)
+    if len(image) >= 100 and image[18] == 2 and image[19] == 2:
+        image[18] = image[19] = 1
+    con = sqlite3.connect(":memory:")
+    try:
+        con.deserialize(bytes(image))
+    except BaseException:
+        con.close()
+        raise
+    return con
+
+
+def _diagnose_bytes(raw: bytes) -> dict[str, Any]:
+    """``diagnose`` of a database image held in memory (identical result: tested)."""
+    try:
+        con = _memory_db(raw)
+        try:
+            out = _diagnose_connection(con)
+        finally:
+            con.close()
+        out["header"] = _header_bytes(raw)
+    except (sqlite3.DatabaseError, IndexError) as exc:
+        raise SystemExit(f"refusing: the bytes cannot be read as a database ({exc}); "
+                         "this is not index-only damage and REINDEX cannot repair it") from None
+    return out
 
 
 def diagnose(path: str | Path) -> dict[str, Any]:
@@ -348,6 +412,14 @@ def _same_content(a: dict[str, Any], b: dict[str, Any], *, ignore_header: bool =
     return strip(a) == strip(b)
 
 
+def _rows_preserved(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    """Same rows, schema, settings and foreign keys: what a repair, and so its rollback,
+    may never change. Compared between two databases' OWN proofs, never through the
+    manifest, so an edited manifest cannot make rollback install another database
+    (GPT C8-01, cycle-8 review part 4)."""
+    return all(a.get(k) == b.get(k) for k in PRESERVED)
+
+
 def _content(d: dict[str, Any]) -> dict[str, Any]:
     """The state proof: what a repair must preserve (tables, schema, settings, FKs) and
     what it produces (index entries AND integrity: GPT V2-02, a sorted entry digest
@@ -377,6 +449,11 @@ def _check_target(target: Path) -> Path:
         raise SystemExit(f"refusing: {target} is a symlink; name the database itself (GPT F1-04)")
     if not S.S_ISREG(st.st_mode):
         raise SystemExit(f"refusing: {target} is not a regular file")
+    if st.st_nlink != 1:
+        # SQLite names -wal/-shm after the PATH it opened: through a second name, frames
+        # committed through the other name's WAL are invisible, and a repair through it would
+        # back up and rewrite the shared inode without them (GPT C8-04).
+        raise SystemExit(f"refusing: {target} has {st.st_nlink} hard links; name the database's only entry")
     return entry
 
 
@@ -386,6 +463,13 @@ def _identity(p: Path) -> tuple[int, int] | None:
     except OSError:
         return None
     return (st.st_dev, st.st_ino)
+
+
+def _no_dotdot(p: Path, what: str) -> None:
+    """'..' is resolved AFTER symlinks by the kernel but textually by abspath, so a
+    checked spelling could land elsewhere (cycle-8 review part 4): never accept one."""
+    if ".." in Path(p).parts:
+        raise SystemExit(f"refusing: {what} must not contain '..' ({p}); name the directory directly")
 
 
 def _existing_chain(p: Path) -> list[Path]:
@@ -399,6 +483,7 @@ def _existing_chain(p: Path) -> list[Path]:
 
 def _check_staging(entry: Path, staging: Path) -> None:
     """``check``'s copies follow the same rule as ``plan``'s outputs."""
+    _no_dotdot(staging, "staging")
     _not_live(staging, "staging")
     target_dir = _identity(entry.parent)
     if any(_identity(c) == target_dir for c in _existing_chain(Path(staging))):
@@ -411,6 +496,8 @@ def _check_outputs(entry: Path, staging: Path, out: Path) -> None:
     Compared by FILESYSTEM IDENTITY up the resolved path, so a symlinked staging
     directory or a differently cased spelling cannot reach it (GPT F1-04, V2-04).
     """
+    _no_dotdot(staging, "staging")
+    _no_dotdot(out, "the manifest")
     _not_live(staging, "staging")
     _not_live(out.parent, "the manifest")
     target_dir = _identity(entry.parent)
@@ -432,6 +519,22 @@ def _check_outputs(entry: Path, staging: Path, out: Path) -> None:
             raise SystemExit(f"refusing: {out} exists and is not a {TOOL} manifest")
 
 
+def _manifest_path(path: str | Path, target: Path | None = None) -> Path:
+    """The manifest's REAL location, symlinks resolved once at the start; every later write
+    goes there. Never a name that could replace the database, its journals or its backups
+    were a directory swapped later: a .json name, not beginning with the database's name,
+    not in the database's directory (GPT C8-03)."""
+    real = Path(os.path.realpath(os.path.abspath(os.fspath(path))))
+    if real.suffix.lower() != ".json":
+        raise SystemExit(f"refusing: the manifest must be a .json file, not {real.name}")
+    if target is not None:
+        if real.name.lower().startswith(target.name.lower()):
+            raise SystemExit(f"refusing: the manifest name {real.name} could replace a file beside the database")
+        if _identity(real.parent) == _identity(target.parent):
+            raise SystemExit(f"refusing: the manifest must not be in the database's directory ({target.parent})")
+    return real
+
+
 def _write_manifest(path: Path, m: dict[str, Any]) -> None:
     """Durable manifest write through an EXCLUSIVELY created, no-follow temp file.
 
@@ -440,6 +543,8 @@ def _write_manifest(path: Path, m: dict[str, Any]) -> None:
     (GPT V2-04). ``os.replace`` then swaps the directory entry, never its target.
     """
     path = Path(path)
+    if os.path.realpath(path.parent) != str(path.parent):
+        raise SystemExit(f"refusing: the manifest's directory {path.parent} is not its real path (a symlink?)")
     tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
     try:
@@ -519,6 +624,7 @@ def plan(target: str | Path, staging: str | Path, out: str | Path, *, expect_sta
     entry = _check_target(Path(target))
     staging, out = Path(staging), Path(out)
     _check_outputs(entry, staging, out)
+    out = _manifest_path(out, entry)
     staging = staging.resolve()
     plan_id = uuid.uuid4().hex
     work = staging / f"plan-{time.strftime('%Y%m%d_%H%M%S')}-{plan_id[:8]}"
@@ -526,6 +632,10 @@ def plan(target: str | Path, staging: str | Path, out: str | Path, *, expect_sta
     original, repaired = work / "original.db", work / "repaired.db"
     copy = _quiet_copy(entry, original)
     before = _diagnose_or_refuse(original)
+    if before["header"].get("journal_header") != "wal":
+        raise SystemExit("refusing: only WAL-mode databases are supported. Under the exclusive lock a "
+                         "rollback-journal database keeps its -journal file, so a crashed apply could not be "
+                         "re-run (cycle-8 review, part 4); the freeze ledger is WAL")
     m: dict[str, Any] = {
         "tool": TOOL, "version": VERSION, "plan_id": plan_id,
         "planned_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -598,7 +708,8 @@ def _load(manifest_path: Path) -> dict[str, Any]:
     return m
 
 
-def _guards(m: dict[str, Any], target_is_copy: bool) -> Path:
+def _guards(m: dict[str, Any], target_is_copy: bool) -> tuple[Path, tuple[int, int]]:
+    """The checked target and its (device, inode): every later open must be that inode."""
     named = Path(m["target"])
     if target_is_copy and (_on_live_volume(named) or _on_live_volume(_entry(named))
                            or _on_live_volume(named.resolve())):
@@ -610,12 +721,13 @@ def _guards(m: dict[str, Any], target_is_copy: bool) -> Path:
     holders = [p for p in _held_open(target) if p != str(os.getpid())]
     if holders:
         raise SystemExit(f"refusing: {target.name} is held open by {holders} (stop the desk first)")
-    return target
+    st = os.lstat(target)
+    return target, (st.st_dev, st.st_ino)
 
 
 class _Pinned:
-    """One read-only descriptor on the live target, opened BEFORE the SQLite
-    connection and closed AFTER it.
+    """One read-only, no-follow descriptor on the live target, opened BEFORE the SQLite
+    connection and closed AFTER it, on the exact inode the guards checked.
 
     POSIX drops every fcntl lock a process holds on a file when the process
     closes ANY descriptor on it. Opening and closing the target with ordinary
@@ -624,57 +736,89 @@ class _Pinned:
     byte read of the live target goes through this one descriptor instead.
     """
 
-    def __init__(self, target: Path):
+    def __init__(self, target: Path, identity: tuple[int, int]):
         self.target = target
-        self.fd = os.open(str(target), os.O_RDONLY)
-        self.identity = _ident(os.fstat(self.fd))[:2]
+        try:
+            self.fd = os.open(str(target), os.O_RDONLY | _NOFOLLOW)
+        except OSError as exc:
+            raise SystemExit(f"refusing: {target.name} could not be opened as itself ({exc}); "
+                             "it was replaced after the checks") from None
+        st = os.fstat(self.fd)
+        if not S.S_ISREG(st.st_mode) or st.st_nlink != 1 or (st.st_dev, st.st_ino) != tuple(identity):
+            os.close(self.fd)                       # no SQLite connection yet: no lock to lose
+            raise SystemExit(f"refusing: {target.name} was replaced (or linked) after the checks")
+        self.identity = (st.st_dev, st.st_ino)
 
     def check_same_file(self) -> None:
-        if _ident(os.stat(self.target))[:2] != self.identity:
-            raise SystemExit("refusing: the target was replaced while it was locked")
+        """The NAME still is the pinned inode, the only link to it, and not a symlink."""
+        try:
+            st = os.lstat(self.target)
+        except OSError:
+            raise SystemExit("refusing: the target was moved while it was locked") from None
+        if (S.S_ISLNK(st.st_mode) or (st.st_dev, st.st_ino) != self.identity
+                or os.fstat(self.fd).st_nlink != 1):
+            raise SystemExit("refusing: the target was replaced (or linked) while it was locked")
 
-    def copy_to(self, dst: Path) -> str:
-        h = hashlib.sha256()
-        with open(dst, "xb") as out:
-            offset = 0
-            while True:
-                chunk = os.pread(self.fd, 1 << 20, offset)
-                if not chunk:
-                    break
-                h.update(chunk)
-                out.write(chunk)
-                offset += len(chunk)
-            out.flush()
-            _full_fsync(out.fileno())
-        if _sha256(dst) != h.hexdigest():
-            dst.unlink(missing_ok=True)
-            raise SystemExit("refusing: a copy of the target does not hash to the bytes read")
-        return h.hexdigest()
+    def read_all(self) -> bytes:
+        chunks, offset = [], 0
+        while chunk := os.pread(self.fd, _CHUNK, offset):
+            chunks.append(chunk)
+            offset += len(chunk)
+        return b"".join(chunks)
 
     def close(self) -> None:
         os.close(self.fd)
 
 
-def _live_content(pin: _Pinned, work: Path) -> tuple[str, dict[str, Any]]:
-    """sha256 and content digests of the (locked, checkpointed) live target, via a byte copy."""
+def _live_content(pin: _Pinned) -> tuple[str, dict[str, Any], bytes]:
+    """sha256, content proof and bytes of the (locked, checkpointed) live target, from ONE
+    read through the pinned descriptor, diagnosed in memory. No copy is written and re-opened
+    by name: that name could have become a link to the live file (GPT C8-02)."""
     pin.check_same_file()
-    copy = work / f"live-{uuid.uuid4().hex[:8]}.db"
-    sha = pin.copy_to(copy)
-    try:
-        return sha, _content(_diagnose_or_refuse(copy))
-    finally:
-        copy.unlink(missing_ok=True)
+    raw = pin.read_all()
+    return hashlib.sha256(raw).hexdigest(), _content(_diagnose_bytes(raw)), raw
 
 
-def _durable_backup(pin: _Pinned, backup: Path, expect_sha: str) -> None:
-    tmp = backup.with_name(f".backup-{uuid.uuid4().hex[:8]}")
+def _unlink_if_same(path: Path, identity: tuple[int, int]) -> bool:
+    """Remove ``path`` only while it still names ``identity`` (a file this tool created)."""
     try:
-        if pin.copy_to(tmp) != expect_sha:
-            raise SystemExit("refusing: the backup does not match the target's planned sha256")
-        os.replace(tmp, backup)
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return False
+    if (st.st_dev, st.st_ino) != tuple(identity) or not S.S_ISREG(st.st_mode):
+        return False
+    os.unlink(path)
+    return True
+
+
+def _write_new_file(path: Path, raw: bytes) -> None:
+    """``raw`` as a NEW file (``O_EXCL|O_NOFOLLOW``), F_FULLFSYNC'd, verified by reading it back
+    through the descriptor that created it (never re-opened by name), its directory synced."""
+    fd = os.open(str(path), os.O_RDWR | os.O_CREAT | os.O_EXCL | _NOFOLLOW, 0o644)
+    try:
+        view, offset = memoryview(raw), 0
+        while offset < len(raw):
+            offset += os.write(fd, view[offset:offset + _CHUNK])
+        _full_fsync(fd)
+        h, offset = hashlib.sha256(), 0
+        while chunk := os.pread(fd, _CHUNK, offset):
+            h.update(chunk)
+            offset += len(chunk)
+        created = os.fstat(fd)
     finally:
-        tmp.unlink(missing_ok=True)
-    _fsync_dir(backup.parent)                              # the backup is durable BEFORE the repair
+        os.close(fd)
+    if h.hexdigest() != hashlib.sha256(raw).hexdigest():
+        _unlink_if_same(path, (created.st_dev, created.st_ino))
+        raise SystemExit(f"refusing: {path.name} does not read back as the bytes written")
+    _fsync_dir(path.parent)
+
+
+def _durable_backup(backup: Path, raw: bytes, expect_sha: str) -> None:
+    """The exact bytes about to be repaired, at the name recorded BEFORE this write: a crash
+    leaves at most that one file, which the next run reuses or removes (GPT C8-06)."""
+    if hashlib.sha256(raw).hexdigest() != expect_sha:
+        raise SystemExit("refusing: the backup does not match the target's planned sha256")
+    _write_new_file(backup, raw)                           # durable BEFORE the repair
 
 
 def _all_gates_pass(m: dict[str, Any]) -> bool:
@@ -684,9 +828,11 @@ def _all_gates_pass(m: dict[str, Any]) -> bool:
             and all(v is True for v in gates.values()))
 
 
-def _precommit_verifier(m: dict[str, Any]):
+def _precommit_verifier(m: dict[str, Any], on_verified: Any = None):
     """Proves the trial repair against the plan INSIDE the transaction, before COMMIT (GPT V2-06):
-    a mismatch rolls the transaction back, so nothing unproven is ever committed."""
+    a mismatch rolls the transaction back, so nothing unproven is ever committed. ``on_verified``
+    records the proof durably, still before COMMIT, so a crash after COMMIT can tell a proven
+    repair from an unknown change (GPT C8-05)."""
     expected = m["expected_content"]
 
     def verify(con: sqlite3.Connection) -> None:
@@ -694,19 +840,44 @@ def _precommit_verifier(m: dict[str, Any]):
         if not _same_content(got, expected, ignore_header=True):
             raise SystemExit("refusing: the trial repair does not match the plan's proof; "
                              "the transaction was rolled back and nothing was committed")
+        if on_verified is not None:
+            on_verified()
     return verify
 
 
 def _fresh_backup_path(target: Path, sha: str) -> Path:
+    """A name no earlier attempt used (a random part every time), so a crashed attempt's
+    removed partial is never confused with the next attempt's backup (cycle-8 review part 4)."""
     stamp = time.strftime("%Y%m%d_%H%M%S")
-    path = target.with_name(f"{target.name}.pre-reindex-{stamp}-{sha[:8]}")
-    while path.exists() or path.is_symlink():
+    while True:
         path = target.with_name(f"{target.name}.pre-reindex-{stamp}-{sha[:8]}-{uuid.uuid4().hex[:6]}")
-    return path
+        if not (path.exists() or path.is_symlink()):
+            return path
+
+
+def _recorded_backups(m: dict[str, Any], identity: tuple[int, int]) -> list[tuple[str, Path, str, tuple]]:
+    """(key, path, sha256, identity) of each backup an earlier run recorded, read BEFORE the lock:
+    nothing a caller can name is opened while SQLite holds it. A link to the live file, a
+    symlink or a multiply linked file is never a backup (GPT V2-03)."""
+    out, seen = [], set()
+    for key in ("backup", "backup_pending"):
+        name = m.get(key)
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        p = Path(name)
+        try:
+            st = os.lstat(p)
+        except FileNotFoundError:
+            continue
+        if not S.S_ISREG(st.st_mode) or st.st_nlink != 1 or (st.st_dev, st.st_ino) == tuple(identity):
+            continue
+        out.append((key, p, _sha256(p), (st.st_dev, st.st_ino)))
+    return out
 
 
 def apply(manifest_path: str | Path, owner_approval: str, *, target_is_copy: bool = False) -> dict[str, Any]:
-    manifest_path = Path(manifest_path)
+    manifest_path = _manifest_path(manifest_path)
     m = _load(manifest_path)
     if not str(owner_approval or "").strip():
         raise SystemExit("refusing: apply needs the owner's approval in words (--owner-approval)")
@@ -715,17 +886,10 @@ def apply(manifest_path: str | Path, owner_approval: str, *, target_is_copy: boo
         raise SystemExit(f"refusing: the manifest is in state {m.get('state')!r}, not 'planned'")
     if not _all_gates_pass(m):
         raise SystemExit(f"refusing: the plan's gates did not all pass: {m.get('gates')}")
-    target = _guards(m, target_is_copy)
-    work = Path(m["work"])
-    # A recorded backup is checked HERE, before the lock: nothing a caller can name is
-    # opened while SQLite holds it, and a link to the live file is never a backup (GPT V2-03).
-    reuse = None
-    for key in ("backup", "backup_pending"):       # pending: written, but its recording was cut off
-        if reuse is None and m.get(key):
-            recorded = Path(m[key])
-            if recorded.is_file() and not recorded.is_symlink() and _identity(recorded) != _identity(target):
-                reuse = (recorded, _sha256(recorded))
-    pin = _Pinned(target)
+    target, identity = _guards(m, target_is_copy)
+    manifest_path = _manifest_path(manifest_path, target)
+    recorded = _recorded_backups(m, identity)
+    pin = _Pinned(target, identity)
     try:
         con = _maintenance_connection(target)
     except BaseException:
@@ -733,114 +897,163 @@ def apply(manifest_path: str | Path, owner_approval: str, *, target_is_copy: boo
         raise
     ok = False
     try:
+        pin.check_same_file()                  # SQLite opened the name the pin holds
         _checkpoint(con)
         if _hot(_sidecars(target)):
             raise SystemExit("refusing: the target still has a hot journal after the checkpoint")
-        sha, content = _live_content(pin, work)
+        sha, content, raw = _live_content(pin)
         if _same_content(content, m["expected_content"]):        # already repaired (or a crash after COMMIT)
             m.update({"state": "applied", "applied_ok": True, "applied_at": m.get("applied_at") or _now()})
             _write_manifest(manifest_path, m)
             return {**m, "noop": True}
+        if (m.get("verified_before_commit") is True
+                and _same_content(content, m["expected_content"], ignore_header=True)):
+            # committed after a trial proven before COMMIT, the final record cut off, and only the
+            # header differs from the plan's: the verdict an uninterrupted run reaches (GPT C8-05)
+            m.update({"state": "applied_unverified", "applied_ok": False,
+                      "applied_at": m.get("applied_at") or _now()})
+            _write_manifest(manifest_path, m)
+            raise SystemExit(_UNVERIFIED)
         if not _same_content(content, m["original_content"]):
             raise SystemExit("refusing: the target is neither the planned original nor the repaired database "
                              "(it changed since the plan; re-plan)")
-        if reuse is not None and reuse[1] == sha:
-            backup = reuse[0]
+        reuse = next((p for _k, p, s, _i in recorded if s == sha), None)
+        if reuse is not None:
+            backup = reuse
         else:
+            for key, p, _s, ident in recorded:
+                # the earlier run's partial write at the name it recorded before writing (GPT C8-06)
+                if key == "backup_pending" and str(p) != m.get("backup") and _unlink_if_same(p, ident):
+                    m.setdefault("discarded_partial_backups", []).append(str(p))
             backup = _fresh_backup_path(target, sha)
             # Recorded BEFORE it is written: a crash in between leaves a backup the next
-            # run finds and reuses, never an untracked file beside the live ledger.
+            # run finds and reuses, or a partial it removes, never an untracked file.
             m.update({"backup_pending": str(backup)})
             _write_manifest(manifest_path, m)
-            _durable_backup(pin, backup, sha)                 # the exact bytes about to be repaired
+            _durable_backup(backup, raw, sha)                 # the exact bytes about to be repaired
         m.update({"state": "applying", "backup": str(backup), "backup_sha256": sha,
                   "owner_approval": owner_approval.strip(), "apply_started_at": _now()})
         _write_manifest(manifest_path, m)
-        _reindex(con, verify=_precommit_verifier(m))
-        sha_after, content_after = _live_content(pin, work)
+
+        def record_trial() -> None:
+            m.update({"verified_before_commit": True, "trial_verified_at": _now()})
+            _write_manifest(manifest_path, m)
+
+        _reindex(con, verify=_precommit_verifier(m, on_verified=record_trial))
+        sha_after, content_after, _raw = _live_content(pin)
         ok = _same_content(content_after, m["expected_content"])
-        m.update({"state": "applied" if ok else "applied_unverified", "applied_ok": ok,
-                  "verified_before_commit": True, "applied_sha256": sha_after,
+        header_only = not ok and _same_content(content_after, m["expected_content"], ignore_header=True)
+        m.update({"state": "applied" if ok else "applied_unverified" if header_only else "apply_mismatch",
+                  "applied_ok": ok, "applied_sha256": sha_after,
                   "bytes_match_plan": sha_after == m["repaired_sha256"], "applied_at": _now()})
         _write_manifest(manifest_path, m)
+        if not ok and not header_only:
+            raise SystemExit("the trial was proven before COMMIT, but the file read back through the pinned "
+                             "descriptor is not the planned result (state apply_mismatch): stop, inspect with "
+                             "check, do not roll back blindly")
     finally:
         con.close()
         pin.close()                                            # only after SQLite released its locks
     if not ok:
-        raise SystemExit("the content was proven before COMMIT, but the committed file's header differs from "
-                         "the plan's (state applied_unverified): inspect with check; rollback accepts this state")
+        raise SystemExit(_UNVERIFIED)
     return m
 
 
-def _verified_rollback_source(backup: Path, target: Path, work: Path, m: dict[str, Any]) -> Path:
-    """A PRIVATE snapshot of the backup, proven by sha256 AND by content to be the pre-repair
-    ledger before the live one is touched; the restore reads only this snapshot (GPT V2-01)."""
+def _read_whole(path: Path) -> bytes:
+    """A regular file's bytes through ONE no-follow descriptor, unchanged from open to close."""
+    try:
+        fd = os.open(str(path), os.O_RDONLY | _NOFOLLOW)
+    except OSError as exc:
+        raise SystemExit(f"refusing: {path} cannot be opened as a regular file ({exc})") from None
+    try:
+        before = os.fstat(fd)
+        if not S.S_ISREG(before.st_mode):
+            raise SystemExit(f"refusing: {path} is not a regular file")
+        chunks, offset = [], 0
+        while chunk := os.pread(fd, _CHUNK, offset):
+            chunks.append(chunk)
+            offset += len(chunk)
+        after = os.fstat(fd)
+    finally:
+        os.close(fd)
+    try:
+        named = os.lstat(path)
+    except OSError:
+        named = None
+    if named is None or not (_ident(before) == _ident(after) == _ident(named)):
+        raise SystemExit(f"refusing: {path} changed (or was replaced) while it was read")
+    return b"".join(chunks)
+
+
+def _verified_rollback_source(backup: Path, target: Path, m: dict[str, Any]) -> tuple[sqlite3.Connection, dict]:
+    """The backup's bytes, read ONCE before the lock and proven by sha256 AND content to be the
+    pre-repair ledger, held as an in-memory database with its proof. The restore reads only that
+    connection: no name is re-opened after the proof (GPT V2-01, C8-02)."""
     if _identity(backup) == _identity(target):
         raise SystemExit("refusing: the backup is the live database itself")
-    snap = work / f"rollback-source-{uuid.uuid4().hex[:8]}.db"
-    sha = _quiet_copy(backup, snap)["sha256"]
-    try:
-        if sha not in {m["target_sha256"], m.get("backup_sha256")}:
-            raise SystemExit("refusing: the backup does not match the pre-repair sha256")
-        if not _same_content(_content(_diagnose_or_refuse(snap)), m["original_content"]):
-            raise SystemExit("refusing: the backup's content is not the pre-repair content")
-    except BaseException:
-        snap.unlink(missing_ok=True)
-        raise
-    return snap
+    side = _sidecars(backup)
+    if _hot(side):
+        raise SystemExit(f"refusing: the backup has {_hot(side)}: the file alone is not the database")
+    raw = _read_whole(backup)
+    if hashlib.sha256(raw).hexdigest() not in {m["target_sha256"], m.get("backup_sha256")}:
+        raise SystemExit("refusing: the backup does not match the pre-repair sha256")
+    content = _content(_diagnose_bytes(raw))
+    if not _same_content(content, m["original_content"]):
+        raise SystemExit("refusing: the backup's content is not the pre-repair content")
+    return _memory_db(raw), content
 
 
 def rollback(manifest_path: str | Path, owner_approval: str = "", *, target_is_copy: bool = False,
              backup_path: str | Path | None = None) -> dict[str, Any]:
-    manifest_path = Path(manifest_path)
+    manifest_path = _manifest_path(manifest_path)
     m = _load(manifest_path)
     target = _entry(Path(m["target"]))
     live = not target_is_copy or _on_live_volume(target) or _on_live_volume(target.resolve())
     if live and not str(owner_approval or "").strip():
         raise SystemExit("refusing: a live rollback needs the owner's approval in words (--owner-approval)")
-    if m.get("state") not in {"applying", "applied", "applied_unverified", "rolling_back", "rolled_back"}:
+    if m.get("state") not in {"applying", "applied", "applied_unverified", "apply_mismatch",
+                              "rolling_back", "rolled_back"}:
         raise SystemExit(f"nothing to roll back: the manifest is in state {m.get('state')!r}")
     recorded = str(backup_path or m.get("backup") or "").strip()
     backup = Path(recorded) if recorded else None
     if backup is None or not backup.is_file():
         raise SystemExit("nothing to roll back: no backup recorded or found (pass --backup <verified copy>)")
-    target = _guards(m, target_is_copy)
-    work = Path(m["work"])
-    snap = _verified_rollback_source(backup, target, work, m)
+    target, identity = _guards(m, target_is_copy)
+    manifest_path = _manifest_path(manifest_path, target)
+    src, src_content = _verified_rollback_source(backup, target, m)
     try:
-        pin = _Pinned(target)
+        pin = _Pinned(target, identity)
         try:
             con = _maintenance_connection(target)
         except BaseException:
             pin.close()
             raise
         try:
+            pin.check_same_file()
             _checkpoint(con)
-            _sha, content = _live_content(pin, work)
+            _sha, content, _raw = _live_content(pin)
             if _same_content(content, m["original_content"]):
                 m.update({"state": "rolled_back", "rollback_ok": True, "rolled_back_at": _now()})
                 _write_manifest(manifest_path, m)
                 return m                                       # already the pre-repair database
-            # A header-only difference is tolerated when the apply proved the content before
-            # COMMIT and only the post-commit header check failed. Keyed to those recorded
-            # facts, not to the state, so a retry after rolling_back keeps it (GPT, cycle 8).
-            header_only = m.get("verified_before_commit") is True and m.get("applied_ok") is False
+            # A header-only difference is tolerated once the apply PROVED the trial before COMMIT
+            # (recorded durably then): keyed to that fact, not to a state a crash may not have
+            # reached (GPT C8-05). Anything else holds writes made after the repair (GPT F1-02).
+            header_only = m.get("verified_before_commit") is True
             repaired = _same_content(content, m["expected_content"]) or (
                 header_only and _same_content(content, m["expected_content"], ignore_header=True))
             if not repaired:
-                # in EVERY state: anything else holds writes made after the repair (GPT F1-02)
                 raise SystemExit("refusing: the target holds neither the repaired nor the original content "
                                  "(writes were made after the repair); rolling back would discard them")
+            if not _rows_preserved(src_content, content):
+                raise SystemExit("refusing: the backup's rows, schema or settings differ from the live database's; "
+                                 "a repair changes index entries only, so its rollback must too")
             m.update({"state": "rolling_back", "rollback_started_at": _now(),
                       "rollback_approval": str(owner_approval or "").strip()})
             _write_manifest(manifest_path, m)
-            src = _open_ro(snap)
-            try:
-                src.backup(con)                                # under the same exclusive lock
-            finally:
-                src.close()
+            src.backup(con)                                    # under the same exclusive lock
             _checkpoint(con)
-            _sha, restored = _live_content(pin, work)
+            _sha, restored, _raw = _live_content(pin)
             ok = _same_content(restored, m["original_content"])
             m.update({"state": "rolled_back" if ok else "rollback_unverified", "rollback_ok": ok,
                       "rolled_back_at": _now()})
@@ -849,7 +1062,7 @@ def rollback(manifest_path: str | Path, owner_approval: str = "", *, target_is_c
             con.close()
             pin.close()
     finally:
-        snap.unlink(missing_ok=True)
+        src.close()
     if not ok:
         raise SystemExit("rollback did not restore the pre-repair content")
     return m

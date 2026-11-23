@@ -30,12 +30,14 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+from core.live_volume import on_live_volume
+
 _INDEX_NAMES = {"^NSEI": ("NIFTY 50", "Nifty 50"), "^INDIAVIX": ("INDIA VIX", "India VIX")}
 
 
 def _refuse_live(path: str | Path) -> Path:
     p = Path(path).resolve()
-    if str(p).startswith("/Volumes/"):
+    if on_live_volume(p):
         raise SystemExit(f"refusing a live runtime path: {p}")
     return p
 

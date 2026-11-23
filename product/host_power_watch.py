@@ -15,8 +15,14 @@ FLUSH_S seconds after. Stage 1 finding F1 (cycle 8): both lost writes came
 seconds before a lid-close sleep with the runtime attached (16 Nov 10:21, 19
 Nov 11:06: the charger was pulled 21 s before the lid closed). A poll every
 POLL_S seconds sees that window; a minute did not. Whether the flush reaches
-the medium through the disk-image stack is not proven; it is defense in depth,
-and keeping the lid open on AC remains the fix.
+the medium through the disk-image stack is not proven (macOS sync(2) may return
+before the buffers are written, and F_FULLFSYNC on the root orders nothing else);
+it is defense in depth, and keeping the lid open on AC remains the fix.
+
+The flush runs in its OWN daemon thread, at most one at a time, AFTER the alert
+is sent: a stalled USB disk is exactly when it can block in the kernel, and it
+must never hold back the warning, the next poll or shutdown (cycle-8 review,
+part 4).
 """
 from __future__ import annotations
 
@@ -71,16 +77,27 @@ class PowerWatch:
         self.state: str | None = None
         self.last_alert = 0.0
         self.last_flush: float | None = None
+        self.flush_thread: threading.Thread | None = None
+        self.flushes_skipped_busy = 0
+
+    def _run_flush(self) -> None:
+        try:
+            self.flush()
+        except Exception as exc:                 # reported, never raised into the watcher
+            print(f"[HOST POWER] runtime flush failed: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
 
     def _maybe_flush(self, entering: bool) -> None:
+        """Start a flush in the background when one is due; never wait for it."""
         if self.flush is None:
             return
-        if entering or self.last_flush is None or self.now() - self.last_flush >= self.flush_s:
-            self.last_flush = self.now()
-            try:
-                self.flush()
-            except Exception:
-                pass
+        if not (entering or self.last_flush is None or self.now() - self.last_flush >= self.flush_s):
+            return
+        if self.flush_thread is not None and self.flush_thread.is_alive():
+            self.flushes_skipped_busy += 1       # the last one is still stuck: never pile up more
+            return
+        self.last_flush = self.now()
+        self.flush_thread = threading.Thread(target=self._run_flush, name="quantterm-runtime-flush", daemon=True)
+        self.flush_thread.start()
 
     def observe(self, power: dict[str, Any] | None) -> str | None:
         if not power:
@@ -89,8 +106,8 @@ class PowerWatch:
         pct = power.get("percent")
         pct_text = f"{pct}%" if pct is not None else "unknown %"
         message = None
+        entering = source == "BATTERY" and self.state != "BATTERY"
         if source == "BATTERY":
-            self._maybe_flush(entering=self.state != "BATTERY")   # before anything else
             low = pct is not None and pct <= self.low_pct
             if self.state != "BATTERY" or (low and self.now() - self.last_alert >= self.repeat_s):
                 message = (
@@ -107,6 +124,8 @@ class PowerWatch:
                 pass
             self.last_alert = self.now()
             print(f"[HOST POWER] {message}", file=sys.stderr, flush=True)
+        if source == "BATTERY":
+            self._maybe_flush(entering=entering)                 # after the alert, in the background
         self.state = source or self.state
         return message
 

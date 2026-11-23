@@ -37,13 +37,15 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
+from core.live_volume import on_live_volume
+
 LEGACY = "LEGACY_REJECTION"
 BLOCKED_TAKEN = "BLOCKED_TAKEN"
 
 
 def _refuse_live(*paths: str | Path | None) -> None:
     for p in paths:
-        if p and str(Path(p).resolve()).startswith("/Volumes/"):
+        if p and on_live_volume(p):
             raise SystemExit(f"refusing {p}: work on an SSD copy, never the live runtime")
 
 

@@ -67,16 +67,20 @@ def test_apply_does_not_accept_an_out_of_order_freeze_index(f1):
         repair.apply(manifest, "test", target_is_copy=True)
 
 
-def test_apply_never_reuses_live_inode_as_backup(f1, monkeypatch):
+@pytest.mark.parametrize("link", ["hard", "symbolic"])
+def test_apply_never_reuses_live_inode_as_backup(f1, monkeypatch, link):
+    """TIGHTENED (cycle-8 review part 4): it used to pass on ANY refusal. A hard link makes
+    the target multiply linked, refused for exactly that reason with nothing touched; a
+    symlink leaves it singly linked, and must never be taken as the backup."""
     import os
     import subprocess
     import sys
 
     db, manifest = f1
     m = plan_f1(db, manifest)
-    alias = db.with_name("backup.db")
-    os.link(db, alias)
-    manifest.write_text(json.dumps({**m, "backup": str(alias)}))
+    alias = db.parent.parent / "backup.db"
+    (os.link if link == "hard" else os.symlink)(db, alias)
+    manifest.write_text(json.dumps({**m, "backup": str(alias), "backup_pending": str(alias)}))
     reindex = repair._reindex
     observed = []
 
@@ -99,13 +103,15 @@ def test_apply_never_reuses_live_inode_as_backup(f1, monkeypatch):
         reindex(con, **kw)
 
     monkeypatch.setattr(repair, "_reindex", probe_then_reindex)
-    try:
-        result = repair.apply(manifest, "test", target_is_copy=True)
-    except SystemExit:
-        assert repair._sha256(db) == m["target_sha256"]
+    if link == "hard":
+        with pytest.raises(SystemExit, match="2 hard links"):
+            repair.apply(manifest, "test", target_is_copy=True)
+        assert repair._sha256(db) == m["target_sha256"] and observed == []
         return
+    result = repair.apply(manifest, "test", target_is_copy=True)
     assert observed == ["locked"]
-    assert not db.samefile(result["backup"])
+    assert not db.samefile(result["backup"]) and Path(result["backup"]) != alias
+    assert alias.is_symlink() and os.readlink(alias) == str(db)        # never followed, never removed
 
 
 def test_plan_manifest_temp_cannot_truncate_source(f1):
@@ -228,9 +234,13 @@ def test_stage3_copy_fails_when_source_is_missing_and_old_backup_matches(f1):
     source = m / "source"
     (source / "product").mkdir(parents=True)
     block = _block_after(_runbook_text(), "**F1 only, in the stage 3 SSD tier")
+    kept = (m / "backup" / "f1_freeze_pre_repair.db").read_bytes()
     result = subprocess.run(
         ["bash", "-c", _as_written(block, source)],
         env={**os.environ, "M": str(m), "R": str(source)},
         capture_output=True, text=True,
     )
     assert result.returncode != 0
+    # TIGHTENED (cycle-8 review part 4): the failed copy never deletes the verified one
+    assert (m / "backup" / "f1_freeze_pre_repair.db").read_bytes() == kept
+    assert sorted(p.name for p in (m / "backup").iterdir()) == ["f1_freeze_pre_repair.db"]

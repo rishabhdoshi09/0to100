@@ -37,6 +37,8 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+from core.live_volume import on_live_volume
+
 #: Columns compared, as the store keeps them.
 VALUE_COLUMNS = ("open", "high", "low", "close", "volume", "deliv_per")
 BUILD_FLOOR = 30           # data.bhavcopy_store._full_build: len(g) >= 30
@@ -44,7 +46,7 @@ BUILD_FLOOR = 30           # data.bhavcopy_store._full_build: len(g) >= 30
 
 def _refuse_live(path: str | Path) -> Path:
     p = Path(path).resolve()
-    if str(p).lower().startswith("/volumes/"):         # case-insensitive volumes (cycle-7 review)
+    if on_live_volume(p):                  # any case, any spelling (cycle-7; cycle-8 review part 4)
         raise SystemExit(f"refusing a live runtime path: {p}")
     return p
 

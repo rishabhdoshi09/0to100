@@ -236,13 +236,17 @@ ls $M/backup/*.$TS | wc -l                                                      
 **F1 only, in the stage 3 SSD tier** (when stage 2 planned a repair). This is a BYTE copy of the damaged freeze ledger, verified against the plan. A `.backup` copy would fail `integrity_check` above, as the original does.
 
 ```bash
-# one chain: a copy that fails, or differs from the plan, never leaves a usable SSD backup behind (GPT V2-08)
-F1B=$M/backup/f1_freeze_pre_repair.db; rm -f "$F1B" "$F1B.tmp"
-cp -p $R/product/counterfactuals.jsonl.freeze.db "$F1B.tmp" \
-  && want=$(/Users/apple/0to100/venv/bin/python -I -c "import json,sys;print(json.load(open(sys.argv[1]))['target_sha256'])" $M/f1_manifest.json) \
-  && [ "$(shasum -a 256 "$F1B.tmp" | cut -d' ' -f1)" = "$want" ] \
-  && mv "$F1B.tmp" "$F1B" \
-  || { rm -f "$F1B.tmp"; echo "F1_BACKUP_MISMATCH: the copy failed or the ledger changed since the stage 2 plan; re-plan, skip 3b"; false; }
+# One chain. Every run makes and verifies a FRESH copy, so a failed copy or a ledger that changed since
+# the plan always fails (GPT V2-08). An existing copy is never deleted or overwritten: re-run after 3b,
+# it is the only off-volume pre-repair copy (cycle-8 review, part 4).
+F1B=$M/backup/f1_freeze_pre_repair.db
+want=$(/Users/apple/0to100/venv/bin/python -I -c "import json,sys;print(json.load(open(sys.argv[1]))['target_sha256'])" $M/f1_manifest.json) \
+  && T=$(mktemp "$M/backup/.f1_copy.XXXXXX") \
+  && cp -p $R/product/counterfactuals.jsonl.freeze.db "$T" \
+  && [ "$(shasum -a 256 "$T" | cut -d' ' -f1)" = "$want" ] \
+  && { if [ -e "$F1B" ]; then [ "$(shasum -a 256 "$F1B" | cut -d' ' -f1)" = "$want" ]; else mv -n "$T" "$F1B" && [ ! -e "$T" ]; fi; } \
+  && rm -f "$T" && echo "F1_BACKUP_OK: $F1B is the planned ledger" \
+  || { [ -n "${T:-}" ] && rm -f "$T"; echo "F1_BACKUP_MISMATCH: the copy failed, the ledger changed since the stage 2 plan, or an existing $F1B is not the planned ledger (it is kept untouched); re-plan, skip 3b"; false; }
 ```
 
 If anything is still running after the stop, do not kill it blindly. Check its identity (ppid, cwd, user) as in §13.5 of the 8 Nov audit, and stop it cleanly. `apply` refuses on any match, and treats a failed probe as running.

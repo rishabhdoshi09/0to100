@@ -68,6 +68,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from core.live_volume import on_live_volume
+
 #: A recomputed fill must differ by more than both to count as a defect: the
 #: 20-EMA moves by ~0.001 pp with a longer seed, which is not a defect.
 ABS_TOL = 0.05
@@ -93,7 +95,8 @@ def _is_production(path: str | Path) -> bool:
     """Case-insensitively: the Mac's volumes are case-insensitive and realpath keeps
     the spelling given, so '/volumes/...' is the same production path (cycle-7 review)."""
     p = str(Path(path).resolve()).lower()
-    return p.startswith(tuple(x.lower() for x in PRODUCTION_PREFIXES))
+    # by identity too: /System/Volumes/Data/Volumes/... is the same place (cycle-8 review, part 4)
+    return on_live_volume(path) or p.startswith(tuple(x.lower() for x in PRODUCTION_PREFIXES))
 
 
 def _not_live(path: str | Path, what: str) -> Path:
