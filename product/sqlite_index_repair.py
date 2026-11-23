@@ -397,6 +397,14 @@ def _existing_chain(p: Path) -> list[Path]:
     return [p, *p.parents]
 
 
+def _check_staging(entry: Path, staging: Path) -> None:
+    """``check``'s copies follow the same rule as ``plan``'s outputs."""
+    _not_live(staging, "staging")
+    target_dir = _identity(entry.parent)
+    if any(_identity(c) == target_dir for c in _existing_chain(Path(staging))):
+        raise SystemExit(f"refusing: staging must not be in the database's directory ({entry.parent})")
+
+
 def _check_outputs(entry: Path, staging: Path, out: Path) -> None:
     """Outputs live on a disk the operator owns, never in the database's directory.
 
@@ -490,7 +498,8 @@ def _reindex(con: sqlite3.Connection, verify: Any = None) -> None:
 
 def check(target: str | Path, staging: str | Path) -> dict[str, Any]:
     entry = _check_target(Path(target))
-    staging = _not_live(Path(staging), "staging")
+    _check_staging(entry, Path(staging))
+    staging = Path(staging).resolve()
     work = staging / f"check-{time.strftime('%Y%m%d_%H%M%S')}-{uuid.uuid4().hex[:8]}"
     work.mkdir(parents=True)
     side = _sidecars(entry)
@@ -711,10 +720,11 @@ def apply(manifest_path: str | Path, owner_approval: str, *, target_is_copy: boo
     # A recorded backup is checked HERE, before the lock: nothing a caller can name is
     # opened while SQLite holds it, and a link to the live file is never a backup (GPT V2-03).
     reuse = None
-    if m.get("backup"):
-        recorded = Path(m["backup"])
-        if recorded.is_file() and not recorded.is_symlink() and _identity(recorded) != _identity(target):
-            reuse = (recorded, _sha256(recorded))
+    for key in ("backup", "backup_pending"):       # pending: written, but its recording was cut off
+        if reuse is None and m.get(key):
+            recorded = Path(m[key])
+            if recorded.is_file() and not recorded.is_symlink() and _identity(recorded) != _identity(target):
+                reuse = (recorded, _sha256(recorded))
     pin = _Pinned(target)
     try:
         con = _maintenance_connection(target)
@@ -738,6 +748,10 @@ def apply(manifest_path: str | Path, owner_approval: str, *, target_is_copy: boo
             backup = reuse[0]
         else:
             backup = _fresh_backup_path(target, sha)
+            # Recorded BEFORE it is written: a crash in between leaves a backup the next
+            # run finds and reuses, never an untracked file beside the live ledger.
+            m.update({"backup_pending": str(backup)})
+            _write_manifest(manifest_path, m)
             _durable_backup(pin, backup, sha)                 # the exact bytes about to be repaired
         m.update({"state": "applying", "backup": str(backup), "backup_sha256": sha,
                   "owner_approval": owner_approval.strip(), "apply_started_at": _now()})
@@ -807,9 +821,12 @@ def rollback(manifest_path: str | Path, owner_approval: str = "", *, target_is_c
                 m.update({"state": "rolled_back", "rollback_ok": True, "rolled_back_at": _now()})
                 _write_manifest(manifest_path, m)
                 return m                                       # already the pre-repair database
+            # A header-only difference is tolerated when the apply proved the content before
+            # COMMIT and only the post-commit header check failed. Keyed to those recorded
+            # facts, not to the state, so a retry after rolling_back keeps it (GPT, cycle 8).
+            header_only = m.get("verified_before_commit") is True and m.get("applied_ok") is False
             repaired = _same_content(content, m["expected_content"]) or (
-                m.get("state") == "applied_unverified"
-                and _same_content(content, m["expected_content"], ignore_header=True))
+                header_only and _same_content(content, m["expected_content"], ignore_header=True))
             if not repaired:
                 # in EVERY state: anything else holds writes made after the repair (GPT F1-02)
                 raise SystemExit("refusing: the target holds neither the repaired nor the original content "

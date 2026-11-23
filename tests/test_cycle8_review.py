@@ -174,7 +174,8 @@ def test_plan_refuses_wal_that_appears_during_snapshot(f1, monkeypatch):
 
 
 def test_check_cannot_pass_on_base_only_with_live_wal(tmp_path):
-    db = healthy_freeze_db(tmp_path / "freeze.db")
+    (tmp_path / "live").mkdir()           # ADAPTED: check now refuses staging beside the database
+    db = healthy_freeze_db(tmp_path / "live" / "freeze.db")
     with closing(sqlite3.connect(db)) as writer:
         writer.execute("PRAGMA wal_autocheckpoint=0")
         append_freeze(writer)

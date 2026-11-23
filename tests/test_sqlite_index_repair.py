@@ -657,3 +657,36 @@ def test_already_applied_is_never_claimed_over_new_damage(tmp_path, damaged):
     assert any("Freelist" in m for m in _integrity(damaged))
     with pytest.raises(SystemExit, match="neither the planned original nor the repaired"):
         sir.apply(tmp_path / "manifest.json", "words", target_is_copy=True)
+
+
+def test_check_never_stages_in_the_database_directory(tmp_path, damaged):
+    """check, like plan, keeps its copies away from the database's own directory."""
+    with pytest.raises(SystemExit, match="must not be in the database's directory"):
+        sir.check(damaged, damaged.parent / "staging")
+    assert sorted(p.name for p in damaged.parent.iterdir()) == [damaged.name]
+
+
+def test_an_interrupted_rollback_from_applied_unverified_still_recovers(tmp_path, damaged, monkeypatch):
+    """GPT (cycle 8, part 3): rollback accepts a header-only mismatch for
+    applied_unverified. A crash after it records rolling_back must not lose that
+    acceptance on the retry."""
+    m = _plan(tmp_path, damaged)
+    m["expected_content"]["header"] = {**m["expected_content"]["header"], "44-91": "00" * 48}
+    (tmp_path / "manifest.json").write_text(json.dumps(m))       # the committed header will differ
+    with pytest.raises(SystemExit, match="applied_unverified"):
+        sir.apply(tmp_path / "manifest.json", "words", target_is_copy=True)
+    assert json.loads((tmp_path / "manifest.json").read_text())["state"] == "applied_unverified"
+    real = sir._write_manifest
+
+    def crash_after_rolling_back(path, data):
+        real(path, data)
+        if data.get("state") == "rolling_back":
+            raise KeyboardInterrupt("power cut")
+
+    monkeypatch.setattr(sir, "_write_manifest", crash_after_rolling_back)
+    with pytest.raises(KeyboardInterrupt):
+        sir.rollback(tmp_path / "manifest.json", target_is_copy=True)
+    monkeypatch.undo()
+    r = sir.rollback(tmp_path / "manifest.json", target_is_copy=True)
+    assert r["state"] == "rolled_back"
+    assert sir._same_content(_content_of(damaged, tmp_path), m["original_content"])
