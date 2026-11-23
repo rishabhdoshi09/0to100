@@ -544,6 +544,11 @@ def _check_outputs(entry: Path, staging: Path, out: Path) -> None:
             prior = None
         if not (isinstance(prior, dict) and prior.get("tool") == TOOL):
             raise SystemExit(f"refusing: {out} exists and is not a {TOOL} manifest")
+        recorded = [k for k in ("backup", "backup_pending", "earlier_backups") if prior.get(k)]
+        if prior.get("state") not in ("planned", "nothing_to_repair") or recorded:
+            # it is what rollback needs: its state and its backup record (cycle-8 review, part 7)
+            raise SystemExit(f"refusing: {out} is the record of an apply (state {prior.get('state')!r}, "
+                             f"{', '.join(recorded) or 'no backup yet'}); rollback needs it: plan to a new --out")
 
 
 def _manifest_path(path: str | Path) -> Path:

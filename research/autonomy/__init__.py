@@ -39,6 +39,34 @@ def _existing_owner(root) -> tuple[str, str]:
     return pid, state
 
 
+def install_sigterm_as_interrupt() -> bool:
+    """Make SIGTERM stop the autonomy process the way Ctrl-C does.
+
+    The host supervisor stops its children with SIGTERM. Python's default action kills
+    the process outright: no ``finally``, no ``atexit``. The decision-freeze stores keep
+    one idle connection per process (product.sqlite_runtime.keep_open) whose close at
+    exit checkpoints the WAL; killed outright, the store is left with a hot (durable)
+    WAL that the F1 repair tool and byte copies must refuse (cycle-8 review, part 7).
+    Raising KeyboardInterrupt reuses the loop's existing, designed owner-interrupt path:
+    the tick loop re-raises it, ``sup.shutdown()`` releases the scheduler lock, and the
+    interpreter exits normally. Only from the main thread, and only over the default
+    handler. Returns whether it was installed.
+    """
+    import signal
+    import threading
+
+    if threading.current_thread() is not threading.main_thread():
+        return False
+    if signal.getsignal(signal.SIGTERM) is not signal.SIG_DFL:
+        return False
+
+    def _interrupt(_signum, _frame):
+        raise KeyboardInterrupt("SIGTERM")
+
+    signal.signal(signal.SIGTERM, _interrupt)
+    return True
+
+
 def install_runtime_handlers() -> None:
     """Install every production handler wrapper, in production order.
 
@@ -120,6 +148,7 @@ def run_supervisor(*, root=None, interval_s: float = 15.0, max_iterations=None) 
     import os
     import traceback
 
+    install_sigterm_as_interrupt()
     install_runtime_handlers()
 
     from research.autonomy.supervisor import Supervisor

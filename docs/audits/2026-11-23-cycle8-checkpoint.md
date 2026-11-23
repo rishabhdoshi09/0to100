@@ -262,6 +262,23 @@ All 9 are reproduced and fixed, with tests in `tests/test_cycle8_part6.py`. Muta
 - **History:** the same bug was fixed on 18 Nov in `autonomous_loop._live_broker`, but not here.
 - **Tests:** `tests/test_broker_readiness.py`.
 
+## 6h. A Claude subagent's review of `2787a690..2cf44fc0`, re-run against `4bc96989`
+
+The subagent reported 8 findings and verified much more: no stranded recovery state at any crash point, no open-by-name under the lock, and no deletion. I ran its scripts against the current head.
+
+| Finding | Severity | At `4bc96989` | Result |
+|---|---|---|---|
+| **1** Freeze writes were not durable at return | P1 | Fixed by C8.6-01 (6g) | — |
+| **2** A symlink to the firmlink spelling escaped `on_live_volume` | P1 | Fixed by C8.6-02 (6g): refused | — |
+| **3** Test children stripped `QT_RUNTIME_ROOT`. The checkout's pointer is production's runtime when run from production's checkout | P1 | Real | Children get a temporary root (crash, keeper and runbook tests). `/Volumes` is root-owned, so the mount point could never have been created; my runs used worktrees with no pointer file |
+| **4** A forked child's NORMAL exit closed the inherited keeper and deleted another process's WAL: 15 committed rows became 5 | P2, latent: the product never forks | **Still real** | Inherited connections are pinned (`Py_IncRef`) and never deallocated or closed in the child |
+| **5** SIGTERM killed the autonomy process (the main freeze writer) without `atexit`, leaving a durable but hot WAL that the F1 plan and byte copies must refuse | P2 | **Still real** | SIGTERM now takes the loop's existing Ctrl-C path. `KeyboardInterrupt`, then `sup.shutdown()`, then a normal exit, and the keepers checkpoint. Installed only from the main thread over the default handler |
+| **6** A two-hop symlink chain was stat-ed inside the mount | P2 | Fixed by the component-wise resolver | — |
+| **7** A link through an alias inside the anchor back to `/` is refused | P2 | Kept by design | A conservative refusal of a path that passes through `/Volumes` |
+| **8** Re-planning to the same `--out` erased the apply's record, so rollback was impossible | P2, pre-existing | **Real** | `plan` refuses to overwrite a manifest past `planned`, or one that records backups |
+
+Tests are in `tests/test_cycle8_part7.py`. Mutants: **5 of 5 killed.**
+
 ## 7. Stage 2, evening (23 Nov, read-only)
 
 The F1 plan of the live ledger ran at 20:59. The store re-plan ran 22:14–22:33 with the code exported from `62750347`.

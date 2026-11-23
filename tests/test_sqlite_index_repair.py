@@ -596,8 +596,10 @@ def test_the_runbook_f1_commands_run_as_written(tmp_path):
         (stubs / tool).write_text(f"#!/bin/sh\nexit {rc}\n")
         (stubs / tool).chmod(0o755)
     target = _corrupt(logs / "product" / "counterfactuals.jsonl.freeze.db")
-    env = {**os.environ, "M": str(M), "R": str(logs), "PATH": f"{stubs}:{os.environ['PATH']}"}
-    env.pop("QT_RUNTIME_ROOT", None)
+    # the children get their OWN runtime root: stripping it would resolve the checkout's pointer,
+    # the production runtime when run from the production checkout (cycle-8 review, part 7)
+    env = {**os.environ, "M": str(M), "R": str(logs), "PATH": f"{stubs}:{os.environ['PATH']}",
+           "QT_RUNTIME_ROOT": str(tmp_path / "child-runtime")}
     text = _runbook_text()
     stage3b = text.split("## 3b. Repair", 1)[1].split("\n## 4.", 1)[0]
     blocks = {

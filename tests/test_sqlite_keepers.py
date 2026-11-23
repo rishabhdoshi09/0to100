@@ -103,7 +103,7 @@ def test_committed_freezes_survive_a_hard_process_death(tmp_path):
         "                            'decision': 'WATCH', 'reason_code': 'T'}, path=sys.argv[1])\n"
         "os._exit(9)\n"
     )
-    env = {k: v for k, v in os.environ.items() if k != "QT_RUNTIME_ROOT"}
+    env = {**os.environ, "QT_RUNTIME_ROOT": str(tmp_path / "child-runtime")}    # never the checkout's pointer
     r = subprocess.run([sys.executable, "-c", code, str(db)], capture_output=True, text=True, env=env, timeout=120)
     assert r.returncode == 9, r.stderr[-500:]
     assert _wal(db).exists()                                     # the keeper never checkpointed it

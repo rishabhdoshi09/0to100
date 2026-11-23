@@ -29,8 +29,16 @@ def _forget_inherited_keepers() -> None:
     Python workers (macOS multiprocessing spawns; subprocesses exec); this makes it safe if
     something ever does."""
     global _KEEPERS_LOCK
+    import ctypes
+
     _KEEPERS_LOCK = threading.Lock()
-    _INHERITED.extend(_KEEPERS.values())
+    for con in _KEEPERS.values():
+        # An extra reference the child never releases: the connection is never deallocated,
+        # so it is never closed, not even when the child's interpreter shuts down. Closing it
+        # here would let SQLite checkpoint from the parent's stale view and delete a WAL that
+        # holds other processes' commits (cycle-8 review, part 7: 15 committed rows became 5).
+        ctypes.pythonapi.Py_IncRef(ctypes.py_object(con))
+        _INHERITED.append(con)
     _KEEPERS.clear()
     _ATEXIT["registered_pid"] = None
 
