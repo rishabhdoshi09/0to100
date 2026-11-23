@@ -105,6 +105,9 @@ def _cached_auth_job() -> dict[str, Any]:
         if not db_path.exists():
             return {}
         connection = sqlite3.connect(str(db_path), timeout=0.25)
+        from core.atomic_io import make_sqlite_checkpoint_safe
+
+        make_sqlite_checkpoint_safe(connection)  # its close can checkpoint jobs.db (GPT V2-07)
         connection.row_factory = sqlite3.Row
         try:
             row = connection.execute(

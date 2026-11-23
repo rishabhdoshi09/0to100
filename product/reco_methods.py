@@ -309,6 +309,9 @@ def _shadow_by_symbol(symbols: Sequence[str]) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     try:
         con = sqlite3.connect(str(path), timeout=2.0)
+        from core.atomic_io import make_sqlite_checkpoint_safe
+
+        make_sqlite_checkpoint_safe(con)        # its close can checkpoint the WAL store (GPT V2-07)
         con.row_factory = sqlite3.Row
         try:
             chunk = 400
