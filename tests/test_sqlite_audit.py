@@ -91,11 +91,21 @@ def test_audit_cli_runs_directly_from_repo_root(tmp_path: Path):
 
 # ── Stage 1 finding F1 (22-23 Nov 2026): quick_check is blind to stale index entries ──
 
+
+def _rollback_mode(db: Path) -> Path:
+    """The same damage in rollback-journal mode. A read-only open of a WAL file
+    with no -shm fails on some SQLite builds (Linux CI) and works on others (the
+    Mac, 3.45): the audit tests must not depend on that difference."""
+    con = sqlite3.connect(db)
+    con.execute("PRAGMA journal_mode=DELETE")
+    con.close()
+    return db
+
 def test_the_audit_sees_stale_index_entries_that_quick_check_misses(tmp_path: Path):
     from tests.sqlite_damage import corrupt_index
     from product.sqlite_audit import QUICK_CHECK_LIMIT
 
-    db = corrupt_index(tmp_path / "counterfactuals.jsonl.freeze.db")
+    db = _rollback_mode(corrupt_index(tmp_path / "counterfactuals.jsonl.freeze.db"))
     full = audit_database(db)
     assert full.readonly.check == "integrity_check" and not full.readonly.ok
     assert "wrong # of entries in index sqlite_autoindex_freezes_1" in full.readonly.result
@@ -110,7 +120,7 @@ def test_the_audit_cli_defaults_to_the_full_check(tmp_path: Path, monkeypatch):
     import scripts.audit_sqlite_runtime as cli
     from tests.sqlite_damage import corrupt_index
 
-    corrupt_index(tmp_path / "f.db")
+    _rollback_mode(corrupt_index(tmp_path / "f.db"))
     monkeypatch.setattr(cli, "audit_runtime", lambda quick=False: [audit_database(tmp_path / "f.db", quick=quick)])
     assert cli.main([]) == 2
     assert cli.main(["--quick"]) == 0

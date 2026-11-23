@@ -1,6 +1,8 @@
 """Due-diligence engine: evidence-first, sector frameworks, no invented numbers."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from product.due_diligence.classify import classify_company
 from product.due_diligence.engine import build_due_diligence
 from product.due_diligence.news_layer import is_material
@@ -900,12 +902,16 @@ def test_suggest_endpoint_does_not_scrape(monkeypatch):
 
 
 def test_research_coverage_is_not_quality_score():
+    # The clock is pinned to the fixture's own fetch date: unpinned, the Jun 2026
+    # quarter correctly went stale once the Sep 2026 results deadline passed
+    # (CI failed on 23 Nov 2026 with 'stale' == 'current').
     payload = build_due_diligence(
         "TESTBANK",
         scan_payload={"records": [{"symbol": "TESTBANK", "status": "Ready to trade", "score": 89.4}]},
         long_term_payload={"records": [{"symbol": "TESTBANK", "sector": "Banking & Finance"}]},
         raw_fundamentals=BANK_RAW,
         news=[],
+        now=datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc),
     )
     coverage = payload["research_coverage"]
     assert coverage["not_a_quality_score"] is True
