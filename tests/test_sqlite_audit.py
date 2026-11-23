@@ -111,9 +111,15 @@ def test_the_audit_sees_stale_index_entries_that_quick_check_misses(tmp_path: Pa
     assert "wrong # of entries in index sqlite_autoindex_freezes_1" in full.readonly.result
     assert full.classification == "LIVE_VIEW_INTEGRITY_FAILURE"          # opened, and failed (GPT F1-07)
     assert summary([full])["needs_investigation"] == 1
-    quick = audit_database(db, quick=True)                  # the documented blind spot
-    assert quick.readonly.ok and quick.classification == "READONLY_OK"
-    assert QUICK_CHECK_LIMIT in quick.note and summary([quick])["limit"] == QUICK_CHECK_LIMIT
+    quick = audit_database(db, quick=True)
+    # Build-dependent: on the Mac's SQLite 3.45.1 (the production host) quick_check
+    # reported "ok" for F1; CI's Linux build flags the entry count. Either way a
+    # clean quick result must carry its blind-spot note.
+    if quick.readonly.ok:
+        assert quick.classification == "READONLY_OK"
+        assert QUICK_CHECK_LIMIT in quick.note and summary([quick])["limit"] == QUICK_CHECK_LIMIT
+    else:
+        assert "wrong # of entries in index" in quick.readonly.result
 
 
 def test_the_audit_cli_defaults_to_the_full_check(tmp_path: Path, monkeypatch):
@@ -122,5 +128,5 @@ def test_the_audit_cli_defaults_to_the_full_check(tmp_path: Path, monkeypatch):
 
     _rollback_mode(corrupt_index(tmp_path / "f.db"))
     monkeypatch.setattr(cli, "audit_runtime", lambda quick=False: [audit_database(tmp_path / "f.db", quick=quick)])
-    assert cli.main([]) == 2
-    assert cli.main(["--quick"]) == 0
+    assert cli.main([]) == 2                    # the full check flags F1 on every build
+    assert cli.main(["--quick"]) in (0, 2)      # quick_check's view of F1 depends on the build

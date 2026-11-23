@@ -113,7 +113,7 @@ There is no further GPT loop this cycle.
 
 ## 6. Measured SQLite facts (3.45.1)
 
-- **`quick_check`** reports `ok` on F1's ledger; `integrity_check` does not.
+- **`quick_check`** reports `ok` on F1's ledger on the Mac's 3.45.1, the production host; CI's Linux build flags the entry count. `integrity_check` catches it on both.
 - **A read-only connection's `integrity_check`** sees committed WAL rows but does not verify CHECK constraints; a read-write connection's does.
 - **What `REINDEX` changes in the header:** only the change counter, the version-valid-for number and, on the real file, the freelist. Root pages and the schema cookie are unchanged.
 - **The backup API** bumps the destination's schema cookie (3 to 4), so a restored ledger has identical content but different bytes.

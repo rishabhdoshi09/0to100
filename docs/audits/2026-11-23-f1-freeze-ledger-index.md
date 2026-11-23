@@ -16,7 +16,7 @@ This document records facts only and contains no secrets.
 |---|---|
 | sha256 of production, the Stage 1 backup, a 23 Nov 08:50 copy and both copier manifests | `e3625033…` in every case; the file has not been written since 20 Nov 10:39:11 |
 | `integrity_check` (on copies) | `wrong # of entries in index sqlite_autoindex_freezes_1` |
-| `quick_check` | `ok`: it skips the index/table comparison by design (see §5) |
+| `quick_check` | `ok` on the Mac's SQLite 3.45.1, the production host: it skips the index/table comparison by design (see §5). CI's Linux build flags the entry count |
 | Table scan vs primary-key index | 6,112 rows vs 6,116 entries; no duplicate keys; no table row is missing from the index |
 | Stale entries | `dec_991c357c…`, `dec_7cf72023…`, `dec_4160250e…`, `dec_52914c72…` |
 | Rows they point at | Rowids 5684–5687 (UNITEDPOLY, BBOX, HMAAGRO, PRIVISCL; `as_of` 2026-11-19; frozen 20 Nov 09:35 IST; WATCH). Each row also has its own, correct entry |
@@ -138,7 +138,7 @@ The first version swapped in a repaired copy by rename. The cycle-8 GPT review s
 
 ## 5. Detection: the SQLite audit used `quick_check`
 
-**The defect.** `product/sqlite_audit.py` (`scripts/audit_sqlite_runtime.py`) probed only `quick_check`, which never compares index entries with table rows. On F1's database it reported `ok` and classified the store `READONLY_OK`.
+**The defect.** `product/sqlite_audit.py` (`scripts/audit_sqlite_runtime.py`) probed only `quick_check`, which never compares index entries with table rows. On the production host's SQLite 3.45.1 it reported `ok` on F1's database and classified the store `READONLY_OK`.
 
 **The fix.** It now runs the full `integrity_check` by default. On F1 it reports `BASE_FILE_UNREADABLE_OR_INTEGRITY_FAILURE` and exits 2. `--quick` remains, labelled with its blind spot.
 

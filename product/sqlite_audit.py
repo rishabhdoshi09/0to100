@@ -11,10 +11,11 @@ An immutable success is *not* proof that the live database is current when a
 WAL exists: immutable mode intentionally ignores uncheckpointed WAL content.
 
 The probe is the FULL ``PRAGMA integrity_check`` by default. ``quick_check``
-skips the comparison of index entries with table rows by design, so it reports
-``ok`` for a store whose index holds stale entries; that is exactly Stage 1
-finding F1 (22-23 Nov 2026: the decision-freeze ledger passed quick_check and
-was classified READONLY_OK). ``quick=True`` remains available for a fast pass
+skips the comparison of index entries with table rows by design. On the
+production Mac's SQLite 3.45.1 it reported ``ok`` for a store whose index holds
+stale entries, which is exactly Stage 1 finding F1 (22-23 Nov 2026: the
+decision-freeze ledger passed quick_check and was classified READONLY_OK). Other
+builds, such as CI's, flag the entry count; ``integrity_check`` does on all. ``quick=True`` remains available for a fast pass
 and says what it cannot see.
 
 A live view that opens and reports a diagnostic is an integrity failure, never a
