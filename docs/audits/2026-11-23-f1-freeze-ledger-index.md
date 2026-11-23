@@ -102,7 +102,7 @@ The first version swapped in a repaired copy by rename. The cycle-8 GPT review s
 - the 4 stale keys resolve to nothing;
 - rollback restores the original content, and re-apply works.
 
-**Tests.** `tests/test_sqlite_index_repair.py` (48) and the reviewer's sketches in `tests/test_cycle8_review.py`. They cover:
+**Tests.** `tests/test_sqlite_index_repair.py` (49) and the reviewers' sketches in `tests/test_cycle8_review.py` (review) and `tests/test_cycle8_verification.py` (verification pass). They cover:
 
 - the plan proofs;
 - every refusal;
@@ -111,7 +111,12 @@ The first version swapped in a repaired copy by rename. The cycle-8 GPT review s
 - rollback never discarding newer writes;
 - the runbook's own commands, run as written, including a stage-3 copy that fails on a mismatch.
 
-**Mutants.** 23 of 24 guards, reverted on its own, fail a test. The survivor is the covering-scan check: a scan of only the key columns plus an unshadowed rowid alias is always covering for an ordinary index, so it is a defensive fail-closed guard with no reachable case.
+**Mutants.** 33 of 35 guards, reverted on their own, fail a test. There are two defensive survivors:
+
+- the covering-scan check: a scan of only the key columns plus an unshadowed rowid alias is always covering for an ordinary index;
+- the proof's lookup totals: `integrity_check` sees every lookup failure that could be constructed.
+
+**After the verification pass**, rollback restores only from a private snapshot proven by sha256 and content, and `apply` proves the trial repair BEFORE `COMMIT`.
 
 ## 4. Prevention: checkpoint barriers (`core.atomic_io.make_sqlite_checkpoint_safe`)
 

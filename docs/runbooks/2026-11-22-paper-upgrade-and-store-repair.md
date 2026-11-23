@@ -236,10 +236,13 @@ ls $M/backup/*.$TS | wc -l                                                      
 **F1 only, in the stage 3 SSD tier** (when stage 2 planned a repair). This is a BYTE copy of the damaged freeze ledger, verified against the plan. A `.backup` copy would fail `integrity_check` above, as the original does.
 
 ```bash
-cp -p $R/product/counterfactuals.jsonl.freeze.db $M/backup/f1_freeze_pre_repair.db
-want=$(/Users/apple/0to100/venv/bin/python -I -c "import json,sys;print(json.load(open(sys.argv[1]))['target_sha256'])" $M/f1_manifest.json)
-got=$(shasum -a 256 $M/backup/f1_freeze_pre_repair.db | cut -d' ' -f1)
-[ "$got" = "$want" ] || { echo "F1_BACKUP_MISMATCH: the ledger changed since the stage 2 plan; re-plan, skip 3b"; false; }
+# one chain: a copy that fails, or differs from the plan, never leaves a usable SSD backup behind (GPT V2-08)
+F1B=$M/backup/f1_freeze_pre_repair.db; rm -f "$F1B" "$F1B.tmp"
+cp -p $R/product/counterfactuals.jsonl.freeze.db "$F1B.tmp" \
+  && want=$(/Users/apple/0to100/venv/bin/python -I -c "import json,sys;print(json.load(open(sys.argv[1]))['target_sha256'])" $M/f1_manifest.json) \
+  && [ "$(shasum -a 256 "$F1B.tmp" | cut -d' ' -f1)" = "$want" ] \
+  && mv "$F1B.tmp" "$F1B" \
+  || { rm -f "$F1B.tmp"; echo "F1_BACKUP_MISMATCH: the copy failed or the ledger changed since the stage 2 plan; re-plan, skip 3b"; false; }
 ```
 
 If anything is still running after the stop, do not kill it blindly. Check its identity (ppid, cwd, user) as in §13.5 of the 8 Nov audit, and stop it cleanly. `apply` refuses on any match, and treats a failed probe as running.
@@ -251,11 +254,11 @@ If anything is still running after the stop, do not kill it blindly. Check its i
 **How the repair works.** It is the `REINDEX` that `plan` proved on a copy, run IN PLACE on the live ledger, inside SQLite's own exclusive lock. No file is renamed or replaced. Under that one lock, `apply`:
 
 1. checkpoints;
-2. verifies the ledger is byte-for-byte the planned one;
+2. verifies the ledger's content is the planned original: rows, index entries, integrity result, schema and fixed header fields;
 3. writes a synced backup;
 4. records `applying`;
-5. runs the `REINDEX` in one transaction;
-6. proves the result against the plan's digests (rows, index entries, schema, header).
+5. runs the `REINDEX` in one transaction and proves the trial result against the plan BEFORE `COMMIT` (a mismatch rolls back with nothing committed);
+6. checkpoints and proves the committed file again, header included.
 
 A crash rolls the transaction back; re-running `apply` finishes or redoes the repair.
 

@@ -74,6 +74,36 @@ See `docs/audits/2026-11-23-f1-freeze-ledger-index.md`.
 | F1-09 (P2): unique lookups ignored the index collation | **Confirmed** | Each lookup uses its index's collation |
 | F1-10 (P2): the stage-3 F1 copy was never compared; the rollback command was not runnable | **Confirmed** | The copy fails with `F1_BACKUP_MISMATCH` against the plan. There are two complete rollback commands. Stage 2 branches on `nothing_to_repair`. Tests run the blocks as written |
 
+## 4b. GPT verification pass (`dfe062e3..6ebb95bf`, the one the protocol allows)
+
+**Status of the earlier findings:**
+
+| Status | Findings |
+|---|---|
+| Closed | F1-05, F1-06, F1-09 |
+| Closed for the original case | F1-02 |
+| Partial | F1-01, F1-03, F1-04, F1-07, F1-08, F1-10 (all now fixed below) |
+
+**New findings.** 8, **all confirmed**: each sketch, saved to `tests/test_cycle8_verification.py`, failed on the code at its claim. Two sketches are adapted, each marked `ADAPTED`: V2-03 to the new `verify=` argument, and V2-08 to the new block.
+
+| Finding | What it was | Fix |
+|---|---|---|
+| V2-01 (P0) | Rollback hashed the backup, then reopened it by path: a file swapped in between, or an edited `backup_sha256`, was restored (200 rows became 1) | It restores only from a PRIVATE snapshot, proven by sha256 AND by content to be the pre-repair ledger before the live one is touched |
+| V2-02 (P0) | The "already applied" proof dropped the integrity result: an out-of-order index passed | The state proof carries the integrity result, stale, missing and lookup totals, and unsupported objects |
+| V2-03 (P0) | A recorded backup that is a hard link to the target was hashed under the lock, and that close dropped SQLite's lock; it was also accepted as the backup | A recorded backup is checked before the lock and never reused when it is the live inode. Nothing caller-named is opened under the lock |
+| V2-04 (P0) | The shared manifest writer opened a predictable `<name>.tmp-<pid>` with `"w"`: a symlink there **overwrote the source ledger with JSON**. Staging symlinks, and the `/Volumes` root itself, escaped the guards | The tool's own writer uses an exclusive, no-follow temp file. Output confinement compares filesystem identity up the resolved path. `_on_live_volume` includes `/Volumes` |
+| V2-05 (P1) | A malformed schema committed only to the WAL raised during the check and was classified as a sidecar constraint (exit 0) | Errors are classified by SQLite result code: CORRUPT and NOTADB escalate at any stage |
+| V2-06 (P2) | `apply` ignored the conditional `expected_stale` gate, and an edited `expected_content` was found only after COMMIT, leaving an unrecoverable state | Every recorded gate must pass. The trial repair is proven against the plan INSIDE the transaction, BEFORE COMMIT; a mismatch rolls back with nothing committed. `applied_unverified` (a header-only difference after a verified commit) is accepted by rollback |
+| V2-07 (P2) | Writable readers of existing WAL stores (`reco_methods`, `operator_health`) could checkpoint on close without the barrier | Both apply the barrier |
+| V2-08 (P2) | In an interactive shell, a failed `cp` left an older matching SSD copy accepted | One chain: remove, copy to a temp file, verify, rename; any failure prints `F1_BACKUP_MISMATCH` and leaves no usable copy |
+
+**Mutants.** 9 of 11 new guards, reverted on their own, fail a test.
+
+- The content proof's integrity field first survived, because the lookup field also catches the reviewer's case. A freelist-damage test now pins it on its own.
+- The lookup field is a defensive layer: `integrity_check` sees every lookup failure that could be constructed.
+
+There is no further GPT loop this cycle.
+
 ## 5. Found while fixing (by this cycle's own tests)
 
 - **A leaked candidate file.** v1's `apply` left its verified 25 MB copy beside the target when a crash hit the manifest write. Fixed before v1 was committed.
@@ -88,6 +118,12 @@ See `docs/audits/2026-11-23-f1-freeze-ledger-index.md`.
 - **What `REINDEX` changes in the header:** only the change counter, the version-valid-for number and, on the real file, the freelist. Root pages and the schema cookie are unchanged.
 - **The backup API** bumps the destination's schema cookie (3 to 4), so a restored ledger has identical content but different bytes.
 - **`locking_mode=EXCLUSIVE`** keeps both readers and writers out after `COMMIT`, through checkpoints and backup-API restores, until the connection closes.
+
+## 6b. Other defects found this cycle
+
+- **A time-bomb test fired on 23 Nov.** `test_research_coverage_is_not_quality_score` fails on the base commit too: it judged a Jun 2026 quarter against the wall clock, so it went stale once the Sep 2026 results deadline passed. Pinned to the fixture's fetch date; 24 other calls in that file still use the wall clock.
+- **Platform-dependent audit tests.** A read-only open of a WAL file without `-shm` fails on CI's Linux SQLite and works on the Mac's.
+- **The power watch** polled once a minute and only alerted. It now polls every 5 s and flushes the runtime on battery (`83cbc862`).
 
 ## 7. Verification
 
