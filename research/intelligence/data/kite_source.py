@@ -397,10 +397,10 @@ class KiteDataSource:
         prev_active = self.store.get_active_snapshot()
         sid = self.store.commit_snapshot(
             equity_rows, index_rows=index_rows,
-            extra_manifest={"source": "kite", "has_universe_history": True,
+            extra_manifest={"has_universe_history": True,
                             "adjustment_consistent": True, "corporate_action_coverage": 1.0,
                             "missing_session_rate": 0.0, "validation_errors": 0,
-                            **(extra_manifest or {})})
+                            **(extra_manifest or {}), "source": "kite"})
         rep.snapshot_id = sid
         self._write_runtime_progress(
             "snapshot_verify", current=total_symbols, total=total_symbols,

@@ -6,6 +6,7 @@ builder, and the flip from fixture-driven to SNAPSHOT-driven autonomous paper tr
 from __future__ import annotations
 
 import dataclasses
+import json
 
 import pytest
 
@@ -62,6 +63,54 @@ class TestSnapshotStore:
         b = s.commit_snapshot(list(rows))                 # identical content
         assert a == b                                     # same content → same id
         assert s.list_snapshots() == [a]                  # not rewritten / duplicated
+
+    def test_identical_bars_from_distinct_sources_keep_distinct_provenance(self, tmp_path):
+        store = SnapshotStore(tmp_path)
+        rows = _eq_rows("AAA", [100, 101])
+        nse = store.commit_snapshot(rows, extra_manifest={"source": "bhav_import"})
+        kite = store.commit_snapshot(rows, extra_manifest={"source": "kite"})
+        assert nse != kite
+        assert store.commit_snapshot(rows, extra_manifest={"source": "kite"}) == kite
+        assert store.open_snapshot(nse).manifest["source"] == "bhav_import"
+        assert store.open_snapshot(kite).manifest["source"] == "kite"
+
+    def test_snapshot_identity_binds_provenance_even_after_checksum_is_recomputed(self, tmp_path):
+        from research.intelligence.data.snapshot_store import _manifest_checksum
+
+        store = SnapshotStore(tmp_path)
+        sid = store.commit_snapshot(_eq_rows("AAA", [100, 101]), extra_manifest={"source": "bhav_import"})
+        path = tmp_path / sid / "manifest.json"
+        manifest = json.loads(path.read_text())
+        manifest.pop("manifest_checksum")
+        manifest["source"] = "kite"
+        manifest["manifest_checksum"] = _manifest_checksum(manifest)
+        path.write_text(json.dumps(manifest))
+        ok, failures = store.verify_snapshot(sid)
+        assert not ok
+        assert "snapshot identity mismatch" in failures
+
+    def test_legacy_snapshot_identity_remains_readable(self, tmp_path):
+        from hashlib import sha256
+
+        from research.intelligence.data.snapshot_store import _manifest_checksum
+
+        store = SnapshotStore(tmp_path)
+        new_id = store.commit_snapshot(_eq_rows("AAA", [100, 101]), extra_manifest={"source": "kite"})
+        directory = tmp_path / new_id
+        manifest_path = directory / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest.pop("manifest_checksum")
+        manifest.pop("identity_version")
+        equity = (directory / "bars_equity.csv").read_bytes()
+        index = (directory / "index_daily.csv").read_bytes()
+        legacy_id = sha256(equity + b"\x1e" + index + b"\x1e1.1").hexdigest()[:16]
+        manifest["snapshot_id"] = legacy_id
+        manifest["manifest_checksum"] = _manifest_checksum(manifest)
+        manifest_path.write_text(json.dumps(manifest))
+        assert not store.verify_snapshot(new_id)[0]
+        directory.rename(tmp_path / legacy_id)
+        assert store.verify_snapshot(legacy_id) == (True, [])
+        assert store.open_snapshot(legacy_id).manifest["source"] == "kite"
 
     def test_changed_content_is_a_successor(self, tmp_path):
         s = SnapshotStore(tmp_path)
