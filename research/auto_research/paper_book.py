@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from math import isfinite
+from math import fsum, isclose, isfinite
 from research.intelligence.runtime.position_sizing import size_long_cash
 
 
@@ -408,6 +408,21 @@ class PaperBook:
             if not all(isfinite(float(value)) for value in curve):
                 raise ValueError("non-finite paper equity curve")
             closed = [ClosedTrade(**t) for t in snap.get("closed", [])]
+            if strict:
+                for trade in closed:
+                    prices = (trade.entry_price, trade.stop_price, trade.exit_price)
+                    values = (*prices, trade.pnl, trade.realized_R)
+                    if (
+                        type(trade.qty) is not int or trade.qty <= 0
+                        or any(type(value) not in (int, float) or not isfinite(value) for value in values)
+                        or not 0 < trade.stop_price < trade.entry_price
+                        or trade.exit_price <= 0
+                    ):
+                        raise ValueError("invalid restored paper closeout")
+                # The book carries a complete close history. A half-paise
+                # tolerance admits float roundoff without inventing cash.
+                if not isclose(realized, fsum(t.pnl for t in closed), rel_tol=0, abs_tol=0.005):
+                    raise ValueError("persisted realized P&L disagrees with closed trades")
             opened = {}
             for raw in snap.get("open", []):
                 pos = PaperPosition(**raw)

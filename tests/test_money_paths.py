@@ -6124,3 +6124,27 @@ class TestCrossReview20261120:
         from alerts.telegram_actions import build_setup_keyboard
         kb = build_setup_keyboard([{"symbol": "IDEA", "entry": 48.6, "stop": 46.1, "target": 53.65}])
         assert kb["inline_keyboard"][0][0]["callback_data"] == "pt|IDEA|48.60|46.10|53.65"
+
+
+@pytest.mark.parametrize("defect", ["phantom_cash", "nonfinite_trade", "fractional_quantity"])
+def test_strict_paper_recovery_reconciles_realized_cash_with_closed_trades(defect):
+    from research.auto_research.paper_book import PaperBook
+
+    book = PaperBook()
+    assert book.open_position("equity", "TCS", 100, 90, 120, "2026-08-03", 10)
+    assert book.mark({"TCS": (100, 121, 98, 120)}, "2026-08-04")
+    snapshot = book.snapshot()
+    reloaded = PaperBook()
+    assert reloaded.restore(snapshot, strict=True)
+    original = reloaded.snapshot()
+
+    if defect == "phantom_cash":
+        snapshot["realized_pnl"] += 10_000
+    elif defect == "nonfinite_trade":
+        snapshot["closed"][0]["pnl"] = float("nan")
+    else:
+        snapshot["closed"][0]["qty"] = 0.5
+
+    with pytest.raises(ValueError, match="invalid persisted paper book"):
+        reloaded.restore(snapshot, strict=True)
+    assert reloaded.snapshot() == original
