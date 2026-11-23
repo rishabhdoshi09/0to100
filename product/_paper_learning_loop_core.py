@@ -696,7 +696,7 @@ def _queue_unverified_fills(symbol: str, entry_day: str) -> int:
     GOOD_WAIT it earned never came back (verification review QT-07). The
     earliest fill is kept; nothing is credited until it verifies.
     """
-    with locked_ledger() as (ledger, rows, _):
+    with locked_ledger(ledger_path()) as (ledger, rows, _):
         changed = 0
         for row in rows:
             if row.get("classification") or str(row.get("symbol") or "").upper() != symbol:
@@ -722,7 +722,7 @@ def retry_pending_good_waits(*, path=None, floors: Mapping[str, int] | None = No
     fill, then drops it as unverifiable. Never fabricates a session.
     """
     from datetime import date
-    with locked_ledger() as (ledger, rows, _):
+    with locked_ledger(ledger_path()) as (ledger, rows, _):
         now = str(today or datetime.now(timezone.utc).date().isoformat())[:10]
         out = {"credited": 0, "expired": 0, "still_unverifiable": 0, "dropped_unverifiable": 0}
         rewritten: list[dict[str, Any]] = []
@@ -841,7 +841,7 @@ def settle_pending_counterfactuals(
     ``verified_fill`` session it checked each row against (note_later_entry), and
     the settled row carries it (cycle-2 review QT-C2-07).
     """
-    with locked_ledger() as (ledger, rows, _):
+    with locked_ledger(ledger_path()) as (ledger, rows, _):
         returns = {str(k).upper(): float(v) for k, v in dict(forward_return_by_symbol or {}).items()}
         entered = {str(k).upper(): bool(v) for k, v in dict(later_entered or {}).items()}
         updated = 0
