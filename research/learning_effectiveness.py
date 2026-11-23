@@ -135,6 +135,8 @@ def build_report(root: str | Path) -> dict[str, Any]:
     """The report for the runtime COPY at ``root`` (QT_RUNTIME_ROOT is pointed at it, then restored)."""
     import os
 
+    if on_live_volume(root):
+        raise SystemExit(f"refusing {root}: copy the runtime first (never read the live runtime)")
     root = Path(root).resolve()
     if on_live_volume(root):
         raise SystemExit(f"refusing {root}: copy the runtime first (never read the live runtime)")

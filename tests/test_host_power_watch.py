@@ -62,25 +62,37 @@ def test_the_poll_sees_the_19_november_window():
     assert hpw.POLL_S <= 10        # the charger went 21 s before the lid closed
 
 
+def _settled(watch):
+    """The flush runs in its own thread (cycle-8 review part 4): wait for it, never for the scheduler."""
+    if watch.flush_thread is not None:
+        watch.flush_thread.join(5)
+        assert not watch.flush_thread.is_alive()
+
+
 def test_switching_to_battery_flushes_at_once_then_periodically():
     clock = [0.0]
     flushes = []
     watch = PowerWatch(lambda m: None, now=lambda: clock[0], flush=lambda: flushes.append(clock[0]), flush_s=30)
-    watch.observe({"source": "AC", "percent": 90})
+
+    def observe(source, pct):
+        watch.observe({"source": source, "percent": pct})
+        _settled(watch)
+
+    observe("AC", 90)
     assert flushes == []                                    # on AC: never
-    watch.observe({"source": "BATTERY", "percent": 89})
+    observe("BATTERY", 89)
     assert flushes == [0.0]                                 # immediately on the switch
     clock[0] = 20
-    watch.observe({"source": "BATTERY", "percent": 88})
+    observe("BATTERY", 88)
     assert flushes == [0.0]                                 # not yet
     clock[0] = 31
-    watch.observe({"source": "BATTERY", "percent": 88})
+    observe("BATTERY", 88)
     assert flushes == [0.0, 31]
     clock[0] = 35
-    watch.observe({"source": "AC", "percent": 88})
+    observe("AC", 88)
     assert flushes == [0.0, 31]                             # on AC: never
     clock[0] = 40                                           # only 9 s after the last flush
-    watch.observe({"source": "BATTERY", "percent": 88})     # a new switch flushes at once regardless
+    observe("BATTERY", 88)                                  # a new switch flushes at once regardless
     assert flushes == [0.0, 31, 40]
 
 
@@ -89,6 +101,7 @@ def test_the_alert_names_the_lid_and_a_flush_failure_is_harmless():
     watch = PowerWatch(sent.append, now=lambda: 0.0, flush=lambda: (_ for _ in ()).throw(OSError("usb gone")))
     assert watch.observe({"source": "BATTERY", "percent": 50})
     assert "lid" in sent[0] and "OPEN" in sent[0]
+    _settled(watch)                                         # the failure stayed in its thread
 
 
 def test_flush_runtime_writes_syncs_and_full_fsyncs_the_root(tmp_path, monkeypatch):

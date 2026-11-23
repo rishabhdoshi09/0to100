@@ -36,11 +36,16 @@ from tests.test_cycle8_review import f1, plan_f1  # noqa: F401  (the shared fixt
 
 REPO = Path(__file__).resolve().parents[1]
 
-# Process-wide audit hook (hooks cannot be removed); inert unless a test switches it on.
-_OPENED: dict = {"on": False, "events": []}
+# Process-wide audit hook (hooks cannot be removed); inert unless a test arms it. Armed, it
+# switches ON at the maintenance connection to the target itself (before SQLite takes the lock)
+# and OFF when the pin closes, after SQLite released it (GPT C8.5-10).
+_OPENED: dict = {"armed": None, "on": False, "events": []}
 
 
 def _audit(event, args):
+    if _OPENED["armed"] and event == "sqlite3.connect" and str(args[0]) == _OPENED["armed"]:
+        _OPENED["on"] = True
+        return
     if _OPENED["on"] and event in ("open", "sqlite3.connect"):
         _OPENED["events"].append((event, args))
 
@@ -89,34 +94,20 @@ def test_rollback_restores_the_bytes_it_proved_not_what_the_name_holds_later(f1,
     assert repair._same_content(repair._content(repair.diagnose(db)), m["original_content"])
 
 
-@pytest.mark.parametrize("op", ["apply", "rollback"])
-def test_nothing_existing_is_opened_by_name_while_the_lock_is_held(f1, monkeypatch, op):
-    """The class behind C8-02: closing ANY descriptor on the live inode releases SQLite's
-    POSIX locks, and a name re-opened after a check can be a link to it. While the lock is
-    held only NEW files (O_CREAT|O_EXCL), directories and in-memory databases are opened."""
-    db, manifest = f1
-    plan_f1(db, manifest)
-    if op == "rollback":
-        repair.apply(manifest, "test", target_is_copy=True)
-    real_conn, real_close = repair._maintenance_connection, repair._Pinned.close
-
-    def conn(path):
-        c = real_conn(path)
-        _OPENED["on"] = True
-        return c
+def _locked_opens(db, manifest, monkeypatch, op):
+    """Every open while the lock is held, classified by its FLAGS when it was made."""
+    real_close = repair._Pinned.close
 
     def close(self):
         _OPENED["on"] = False                      # con.close() has already run: the lock is gone
         real_close(self)
 
-    monkeypatch.setattr(repair, "_maintenance_connection", conn)
     monkeypatch.setattr(repair._Pinned, "close", close)
-    _OPENED["events"].clear()
+    _OPENED.update(armed=str(db), on=False, events=[])
     try:
         getattr(repair, op)(manifest, "test", target_is_copy=True)
     finally:
-        _OPENED["on"] = False
-    target = (db.stat().st_dev, db.stat().st_ino)
+        _OPENED.update(armed=None, on=False)
     bad = []
     for event, args in _OPENED["events"]:
         if event == "sqlite3.connect":
@@ -127,13 +118,44 @@ def test_nothing_existing_is_opened_by_name_while_the_lock_is_held(f1, monkeypat
         if isinstance(path, int):
             continue                                   # a descriptor this process already holds
         if flags & os.O_CREAT and flags & os.O_EXCL:
-            continue                                   # a new file: never the live inode
-        st = os.stat(path)
-        if os.path.isdir(path) and (st.st_dev, st.st_ino) != target:
-            continue                                   # a directory fsync
+            continue                                   # a NEW file: never an existing inode
+        if flags & os.O_DIRECTORY and flags & getattr(os, "O_NOFOLLOW", 0):
+            continue                                   # can only ever be a directory
         bad.append((event, args))
-    assert _OPENED["events"], "the hook saw nothing: the locked window was not observed"
+    return _OPENED["events"], bad
+
+
+@pytest.mark.parametrize("op", ["apply", "rollback"])
+def test_nothing_existing_is_opened_by_name_while_the_lock_is_held(f1, monkeypatch, op):
+    """The class behind C8-02: closing ANY descriptor on the live inode releases SQLite's
+    POSIX locks, and a name re-opened after a check can be a link to it. While the lock is
+    held only NEW files, no-follow directories and in-memory databases are opened."""
+    db, manifest = f1
+    plan_f1(db, manifest)
+    if op == "rollback":
+        repair.apply(manifest, "test", target_is_copy=True)
+    events, bad = _locked_opens(db, manifest, monkeypatch, op)
+    assert events, "the hook saw nothing: the locked window was not observed"
     assert bad == []
+
+
+def test_the_audit_window_starts_where_the_lock_does(f1, monkeypatch):
+    """GPT C8.5-10: an existing-file open right after the lock is taken must be caught."""
+    db, manifest = f1
+    plan_f1(db, manifest)
+    sentinel = manifest.parent / "existing.txt"
+    sentinel.write_text("existing")
+    real_connect = repair._maintenance_connection
+
+    def connect(path):
+        con = real_connect(path)
+        with sentinel.open():
+            pass
+        return con
+
+    monkeypatch.setattr(repair, "_maintenance_connection", connect)
+    _events, bad = _locked_opens(db, manifest, monkeypatch, "apply")
+    assert [str(a[0]) for _e, a in bad] == [str(sentinel)]
 
 
 # ── C8-03: swaps after the checks ──

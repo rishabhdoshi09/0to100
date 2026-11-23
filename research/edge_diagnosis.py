@@ -579,6 +579,8 @@ def load_copy(root: str | Path, *, accept_unbound_coverage: bool = False) -> dic
     path, here and inside the production modules the run calls, resolves
     through core.runtime_paths into the copy.
     """
+    if on_live_volume(root):
+        raise SystemExit(f"refusing {root}: copy the store to the internal SSD first (never read the live runtime)")
     root = Path(root).resolve()
     if on_live_volume(root):
         raise SystemExit(f"refusing {root}: copy the store to the internal SSD first (never read the live runtime)")
@@ -673,6 +675,8 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     # Every runtime path (scanner calibration snapshots, the backtest report path,
     # resolved at import) must point at the COPY, never the live runtime.
+    if on_live_volume(args.root):
+        raise SystemExit(f"refusing {args.root}: copy the store to the internal SSD first")
     root = Path(args.root).resolve()
     if on_live_volume(root):
         raise SystemExit(f"refusing {root}: copy the store to the internal SSD first")

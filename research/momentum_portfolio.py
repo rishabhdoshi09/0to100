@@ -299,6 +299,8 @@ def main(argv=None) -> int:
     ap.add_argument("--accept-unbound-coverage", action="store_true")
     ap.add_argument("--out")
     args = ap.parse_args(argv)
+    if on_live_volume(args.root):
+        raise SystemExit(f"refusing {args.root}: copy the store to the internal SSD first")
     root = Path(args.root).resolve()
     if on_live_volume(root):
         raise SystemExit(f"refusing {root}: copy the store to the internal SSD first")

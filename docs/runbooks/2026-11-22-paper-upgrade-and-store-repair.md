@@ -238,15 +238,19 @@ ls $M/backup/*.$TS | wc -l                                                      
 ```bash
 # One chain. Every run makes and verifies a FRESH copy, so a failed copy or a ledger that changed since
 # the plan always fails (GPT V2-08). An existing copy is never deleted or overwritten: re-run after 3b,
-# it is the only off-volume pre-repair copy (cycle-8 review, part 4).
-F1B=$M/backup/f1_freeze_pre_repair.db
+# it is the only off-volume pre-repair copy (cycle-8 review, part 4). OK is printed only for a REGULAR
+# file that is not a symlink, not the live ledger itself, and hashes to the plan; T starts empty here,
+# so an inherited T is never removed (GPT C8.5-08).
+F1B=$M/backup/f1_freeze_pre_repair.db; SRC=$R/product/counterfactuals.jsonl.freeze.db; T=""
 want=$(/Users/apple/0to100/venv/bin/python -I -c "import json,sys;print(json.load(open(sys.argv[1]))['target_sha256'])" $M/f1_manifest.json) \
   && T=$(mktemp "$M/backup/.f1_copy.XXXXXX") \
-  && cp -p $R/product/counterfactuals.jsonl.freeze.db "$T" \
+  && cp -p "$SRC" "$T" \
   && [ "$(shasum -a 256 "$T" | cut -d' ' -f1)" = "$want" ] \
-  && { if [ -e "$F1B" ]; then [ "$(shasum -a 256 "$F1B" | cut -d' ' -f1)" = "$want" ]; else mv -n "$T" "$F1B" && [ ! -e "$T" ]; fi; } \
-  && rm -f "$T" && echo "F1_BACKUP_OK: $F1B is the planned ledger" \
-  || { [ -n "${T:-}" ] && rm -f "$T"; echo "F1_BACKUP_MISMATCH: the copy failed, the ledger changed since the stage 2 plan, or an existing $F1B is not the planned ledger (it is kept untouched); re-plan, skip 3b"; false; }
+  && { [ -e "$F1B" ] || [ -L "$F1B" ] || mv -n "$T" "$F1B"; } \
+  && [ -f "$F1B" ] && [ ! -L "$F1B" ] && ! [ "$F1B" -ef "$SRC" ] \
+  && [ "$(shasum -a 256 "$F1B" | cut -d' ' -f1)" = "$want" ] \
+  && rm -f "$T" && echo "F1_BACKUP_OK: $F1B is a separate, verified copy of the planned ledger" \
+  || { [ -n "$T" ] && rm -f "$T"; echo "F1_BACKUP_MISMATCH: the copy failed, the ledger changed since the stage 2 plan, or an existing $F1B is not a separate verified copy (it is kept untouched); re-plan, skip 3b"; false; }
 ```
 
 If anything is still running after the stop, do not kill it blindly. Check its identity (ppid, cwd, user) as in §13.5 of the 8 Nov audit, and stop it cleanly. `apply` refuses on any match, and treats a failed probe as running.

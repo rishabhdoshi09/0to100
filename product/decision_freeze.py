@@ -56,6 +56,11 @@ def _connect(path: str | Path | None = None) -> sqlite3.Connection:
         )
         """
     )
+    # One connection per freeze, ~3,000 a day: keep the store open for the process so each
+    # close is not the last one and does not pay a barriered checkpoint (cycle-8 benchmark).
+    from product.sqlite_runtime import keep_open
+
+    keep_open(freeze_path(path))
     return con
 
 

@@ -36,6 +36,8 @@ _INDEX_NAMES = {"^NSEI": ("NIFTY 50", "Nifty 50"), "^INDIAVIX": ("INDIA VIX", "I
 
 
 def _refuse_live(path: str | Path) -> Path:
+    if on_live_volume(path):                           # as spelled, before resolving (GPT C8.5-04)
+        raise SystemExit(f"refusing a live runtime path: {path}")
     p = Path(path).resolve()
     if on_live_volume(p):
         raise SystemExit(f"refusing a live runtime path: {p}")

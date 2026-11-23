@@ -100,6 +100,8 @@ def _is_production(path: str | Path) -> bool:
 
 
 def _not_live(path: str | Path, what: str) -> Path:
+    if on_live_volume(path):                           # as spelled, before resolving (GPT C8.5-04)
+        raise SystemExit(f"refusing {what} under /Volumes: {path} (work on a copy)")
     p = Path(path).resolve()
     if _is_production(p):
         raise SystemExit(f"refusing {what} under /Volumes: {p} (work on a copy)")

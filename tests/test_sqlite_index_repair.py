@@ -469,8 +469,12 @@ def test_a_crash_before_the_reindex_leaves_the_original_and_reapplies(tmp_path, 
     assert saved["state"] == "applying" and _content_of(damaged, tmp_path) == m["original_content"]
     backup = saved["backup"]
     a = sir.apply(tmp_path / "manifest.json", "words", target_is_copy=True)    # finishes the repair
-    assert a["state"] == "applied" and a["backup"] == backup
-    assert len(list(damaged.parent.glob("*.pre-reindex-*"))) == 1
+    # every attempt writes and syncs its OWN backup; the earlier one is kept and recorded,
+    # never reused (its durability is unknown) and never deleted (GPT C8.5-01, C8.5-06)
+    assert a["state"] == "applied" and a["backup"] != backup and backup in a["earlier_backups"]
+    assert sorted(p.name for p in damaged.parent.glob("*.pre-reindex-*")) == sorted(
+        Path(n).name for n in (backup, a["backup"]))
+    assert sir._sha256(Path(backup)) == sir._sha256(Path(a["backup"])) == a["backup_sha256"]
 
 
 def test_a_crash_inside_the_reindex_transaction_rolls_back(tmp_path, damaged, monkeypatch):

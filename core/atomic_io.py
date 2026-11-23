@@ -146,8 +146,9 @@ def make_sqlite_checkpoint_safe(connection: Any) -> None:
     """Make a WAL store's checkpoints real write barriers on macOS (Stage 1 finding F1).
 
     On macOS ``fsync()`` does not flush the drive's cache; only ``F_FULLFSYNC``
-    does, and through the owner's storage stack (APFS in a sparsebundle on an
-    exFAT USB disk) writes sat unflushed for minutes to hours. A WAL checkpoint
+    does. On the owner's storage stack (APFS in a sparsebundle on an exFAT USB
+    disk) both F1 losses were writes from the last seconds before a clamshell
+    sleep dropped the disk, lost out of order. A WAL checkpoint
     copies pages into the database and then lets the WAL be overwritten: without
     a real barrier between the two, a power cut keeps some new pages and loses
     others. On 19 Nov 2026 that left a decision-freeze ledger with index pages
@@ -166,10 +167,12 @@ def make_sqlite_checkpoint_safe(connection: Any) -> None:
     """
     if sys.platform != "darwin":
         return
+    import sqlite3
+
     try:
         connection.execute("PRAGMA checkpoint_fullfsync=ON")
         level = connection.execute("PRAGMA synchronous").fetchone()[0]
         if int(level) <= 1:
             connection.execute("PRAGMA fullfsync=ON")
-    except Exception:
-        pass
+    except sqlite3.Error as exc:      # e.g. a closed or read-only connection: the store still works
+        print(f"[atomic_io] checkpoint barrier not set: {exc}", file=sys.stderr, flush=True)

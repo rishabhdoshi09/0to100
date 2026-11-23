@@ -45,6 +45,8 @@ BUILD_FLOOR = 30           # data.bhavcopy_store._full_build: len(g) >= 30
 
 
 def _refuse_live(path: str | Path) -> Path:
+    if on_live_volume(path):                           # as spelled, before resolving (GPT C8.5-04)
+        raise SystemExit(f"refusing a live runtime path: {path}")
     p = Path(path).resolve()
     if on_live_volume(p):                  # any case, any spelling (cycle-7; cycle-8 review part 4)
         raise SystemExit(f"refusing a live runtime path: {p}")

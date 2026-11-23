@@ -4,9 +4,95 @@ WAL + busy_timeout are the default. Callers still own schema CREATE.
 """
 from __future__ import annotations
 
+import atexit
+import os
 import sqlite3
+import sys
+import threading
+from collections import OrderedDict
 from pathlib import Path
 from core.runtime_paths import logs_dir, logs_path
+
+#: Idle keeper connections, at most this many per process (launchd's default soft
+#: limit is 256 descriptors; each keeper holds the database, its -wal and -shm).
+MAX_KEEPERS = 8
+_KEEPERS: "OrderedDict[tuple[int, str], sqlite3.Connection]" = OrderedDict()
+_KEEPERS_LOCK = threading.Lock()
+_ATEXIT = {"registered_pid": None}
+
+
+def keep_open(path: str | Path) -> None:
+    """Hold one idle connection to a WAL store for the life of this process.
+
+    A store that opens a connection per write (decision freezes: up to ~3,000 a
+    day) makes every close the LAST close, and the last close checkpoints the WAL.
+    With the F1 checkpoint barrier (``F_FULLFSYNC``) that costs, measured on the
+    owner's USB stack on 24 Nov: p50 280 ms, p99 964 ms per write, and a 110 s
+    stall in a 60 s sustained run. With one idle keeper the per-write close is not
+    the last: p50 0.95 ms, p99 5.1 ms. Checkpoints then happen through SQLite's
+    autocheckpoint (every ~1,000 WAL pages) and at the keeper's close at exit,
+    each still behind the barrier, so the F1 reordering stays impossible.
+
+    The keeper reads once so it holds the WAL's shared lock (that is what makes
+    another connection's close "not the last"), never starts a transaction, and is
+    closed (with its final, barriered checkpoint) at interpreter exit. Keyed by
+    pid: a forked child never touches its parent's keeper. Best effort: a store
+    that cannot be kept open keeps working exactly as before.
+    """
+    target = str(Path(path).resolve())
+    key = (os.getpid(), target)
+    evicted: list[sqlite3.Connection] = []
+    with _KEEPERS_LOCK:
+        if key in _KEEPERS:
+            _KEEPERS.move_to_end(key)
+            return
+        try:
+            con = sqlite3.connect(target, timeout=30.0, check_same_thread=False)
+        except sqlite3.Error:
+            return
+        try:
+            con.execute("PRAGMA busy_timeout=30000")
+            # this read opens the WAL and takes its shared lock, held until close: that is what
+            # makes another connection's close "not the last" (tests/test_sqlite_keepers.py)
+            mode = str(con.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+            if mode != "wal":
+                con.close()
+                return
+            con.execute("PRAGMA synchronous=NORMAL")
+            from core.atomic_io import make_sqlite_checkpoint_safe
+
+            make_sqlite_checkpoint_safe(con)                  # its exit checkpoint is barriered too
+            con.execute("SELECT count(*) FROM sqlite_master").fetchone()   # belt and braces: a read
+        except sqlite3.Error:
+            con.close()
+            return
+        _KEEPERS[key] = con
+        while len(_KEEPERS) > MAX_KEEPERS:
+            _old_key, old = _KEEPERS.popitem(last=False)
+            evicted.append(old)
+        if _ATEXIT["registered_pid"] != key[0]:
+            atexit.register(close_keepers)
+            _ATEXIT["registered_pid"] = key[0]
+    for old in evicted:
+        _close_quietly(old)
+
+
+def _close_quietly(con: sqlite3.Connection) -> None:
+    try:
+        con.close()                                           # the final checkpoint, barriered
+    except sqlite3.Error as exc:
+        print(f"[sqlite_runtime] keeper close failed: {exc}", file=sys.stderr, flush=True)
+
+
+def close_keepers() -> None:
+    """Close this process's keepers (registered at exit; also for tests and maintenance)."""
+    pid = os.getpid()
+    with _KEEPERS_LOCK:
+        mine = [(k, c) for k, c in _KEEPERS.items() if k[0] == pid]
+        for k, _c in mine:
+            del _KEEPERS[k]
+    for _k, con in mine:
+        _close_quietly(con)
 
 
 def connect_readonly(path: str | Path, *, timeout: float = 5.0) -> sqlite3.Connection | None:

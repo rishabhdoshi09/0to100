@@ -145,13 +145,14 @@ def test_a_hard_crash_during_apply_leaves_original_or_repaired_and_recovers(tmp_
     assert done["state"] == "applied"
     assert sir._same_content(_content_as_sqlite_recovers_it(db, tmp_path), m["expected_content"])
     leftovers = sorted(p.name for p in db.parent.iterdir() if p.name != db.name)
-    assert all(".pre-reindex-" in name for name in leftovers), leftovers
-    assert len(leftovers) <= 1, leftovers
     final = json.loads(manifest.read_text())
+    tracked = {Path(final["backup"]).name} | {Path(n).name for n in final.get("earlier_backups") or []}
+    assert all(".pre-reindex-" in name for name in leftovers), leftovers
+    assert set(leftovers) <= tracked, (leftovers, tracked)        # nothing beside the ledger is untracked
     assert Path(final["backup"]).name in leftovers and sir._sha256(Path(final["backup"])) == final["backup_sha256"]
     if point == "during_backup_write":
         partial = crashed["backup_pending"]                      # recorded BEFORE the write began
-        assert final["discarded_partial_backups"] == [partial] and not Path(partial).exists()
+        assert partial in final["earlier_backups"] and Path(partial).exists()      # kept, never deleted
         assert final["backup"] != partial
 
 

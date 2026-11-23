@@ -19,10 +19,11 @@ the medium through the disk-image stack is not proven (macOS sync(2) may return
 before the buffers are written, and F_FULLFSYNC on the root orders nothing else);
 it is defense in depth, and keeping the lid open on AC remains the fix.
 
-The flush runs in its OWN daemon thread, at most one at a time, AFTER the alert
-is sent: a stalled USB disk is exactly when it can block in the kernel, and it
-must never hold back the warning, the next poll or shutdown (cycle-8 review,
-part 4).
+The flush runs in its OWN daemon thread, at most one at a time, started BEFORE
+the alert is sent: a stalled USB disk is exactly when it can block in the
+kernel, so it must never hold back the warning, the next poll or shutdown
+(cycle-8 review, part 4), and a slow alert send (up to its 8 s HTTP timeout)
+must never delay the flush (GPT C8.5-09).
 """
 from __future__ import annotations
 
@@ -108,6 +109,7 @@ class PowerWatch:
         message = None
         entering = source == "BATTERY" and self.state != "BATTERY"
         if source == "BATTERY":
+            self._maybe_flush(entering=entering)                 # non-blocking, before the alert
             low = pct is not None and pct <= self.low_pct
             if self.state != "BATTERY" or (low and self.now() - self.last_alert >= self.repeat_s):
                 message = (
@@ -124,8 +126,6 @@ class PowerWatch:
                 pass
             self.last_alert = self.now()
             print(f"[HOST POWER] {message}", file=sys.stderr, flush=True)
-        if source == "BATTERY":
-            self._maybe_flush(entering=entering)                 # after the alert, in the background
         self.state = source or self.state
         return message
 

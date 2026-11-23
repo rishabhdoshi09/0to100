@@ -115,6 +115,8 @@ def _on_live_volume(path: str | Path) -> bool:
 
 
 def _not_live(path: Path, what: str) -> Path:
+    if _on_live_volume(path):                          # as spelled, before resolving (GPT C8.5-04)
+        raise SystemExit(f"refusing {what} under /Volumes: {path} (stage on a disk you own)")
     p = Path(path).resolve()
     if _on_live_volume(p):
         raise SystemExit(f"refusing {what} under /Volumes: {p} (stage on a disk you own)")
