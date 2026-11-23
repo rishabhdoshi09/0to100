@@ -12,6 +12,7 @@
 | 1 | Full image backup, bulk pass | "backup storage" | running |
 | 2 | Re-plan the store repair on the day (read-only) | none | running |
 | 3 | **Maintenance window**: stop, verified final backup pass, ledger and paper-state backups | "start maintenance" | stopped |
+| 3b | Repair the decision-freeze ledger's index (finding F1; optional, independent of 4–6) | "repair freeze index" | stopped |
 | 4 | Apply the store repair | "apply store repair" | stopped |
 | 5 | Quarantine the proven learning observations (optional) | "apply quarantine" | stopped |
 | 6 | Deploy `<SHA>`: fast-forward, install without start, paper-state check, start | "deploy `<SHA>`" | starts |
@@ -173,6 +174,16 @@ Read the manifest's diff before going on; do not just re-run until it passes.
 
 The staging tree needs about 1.3 GB on the SSD.
 
+**F1 (read-only, optional): plan the decision-freeze ledger's index repair on a byte copy.** See `docs/audits/2026-11-23-f1-freeze-ledger-index.md`.
+
+```bash
+cd $M/code && /Users/apple/0to100/venv/bin/python -m product.sqlite_index_repair plan \
+  --target /Volumes/QuantTermStorage/QuantTerm/runtime/logs/product/counterfactuals.jsonl.freeze.db \
+  --staging $M/f1_staging --out $M/f1_manifest.json --expect-stale 4
+#   must print "state": "planned", "ready": true, every gate true, stale_total 4, missing_total 0
+#   (a scan that freezes a new decision afterwards changes the target: stage 3b then refuses; re-plan)
+```
+
 ## 3. Maintenance window **[OWNER: "start maintenance"]**: verify the backup, stop the desk, take verified backups (about 6 min before the stop, then about 6–15 min with the desk stopped)
 
 Run stages 3–6 in **one** Terminal session; they share these variables.
@@ -218,9 +229,54 @@ cp -p $R/bhav/store_cache.pkl $M/backup/store_cache_pre_repair.pkl
 shasum -a 256 $R/bhav/store_cache.pkl $M/backup/store_cache_pre_repair.pkl         # the pair must match
 for f in $M/backup/*.$TS; do echo "$f $(sqlite3 "$f" 'pragma integrity_check')"; done   # each prints ok
 ls $M/backup/*.$TS | wc -l                                                          # 7; any BACKUP FAILED stops the runbook
+# F1 only: a BYTE copy of the damaged freeze ledger (a .backup copy would fail integrity_check above, as the original does)
+cp -p $R/product/counterfactuals.jsonl.freeze.db $M/backup/f1_freeze_pre_repair.db
+shasum -a 256 $M/backup/f1_freeze_pre_repair.db                                      # == target_sha256 in $M/f1_manifest.json
 ```
 
 If anything is still running after the stop, do not kill it blindly. Check its identity (ppid, cwd, user) as in §13.5 of the 8 Nov audit, and stop it cleanly. `apply` refuses on any match, and treats a failed probe as running.
+
+## 3b. Repair the decision-freeze ledger's index **[OWNER: "repair freeze index"]** (optional; desk stopped; about 1 min)
+
+Finding F1: the power cut of 19 Nov left 4 stale primary-key entries (rowids 5684–5687) in `logs/product/counterfactuals.jsonl.freeze.db`. A lookup of a stale key returns another decision's row. The repair swaps in the copy that `plan` rebuilt with `REINDEX` and proved:
+
+- the rows are identical;
+- every index matches its table;
+- every unique key resolves to its own row;
+- the schema is unchanged.
+
+It is independent of stages 4–6. The repaired ledger is valid for `125880a6` and for the candidate, so neither rollback chain needs to undo it.
+
+```bash
+cd $M/code
+/Users/apple/0to100/venv/bin/python -m product.sqlite_index_repair apply --manifest $M/f1_manifest.json \
+  --owner-approval "<the owner's words>"
+#   "state": "applied", "applied_ok": true; the original stays beside it as *.pre-reindex-<stamp>
+/Users/apple/0to100/venv/bin/python -m product.sqlite_index_repair check \
+  --target $R/product/counterfactuals.jsonl.freeze.db --staging $M/f1_check
+#   exit 0: integrity ok, stale_total 0, missing_total 0
+```
+
+**Before swapping, `apply` refuses each of these:**
+
+- no approval words;
+- a plan that is not ready;
+- a target or repaired copy whose sha256 changed since the plan;
+- a hot `-wal` or `-journal`;
+- a running or loaded desk;
+- an open handle.
+
+Re-running it after success is a no-op.
+
+**Rollback** (on the owner's words). It restores the original bytes:
+
+- from a verified apply, only while the target still holds the repaired bytes;
+- from an interrupted apply, always.
+
+```bash
+/Users/apple/0to100/venv/bin/python -m product.sqlite_index_repair rollback --manifest $M/f1_manifest.json \
+  --owner-approval "<the owner's words>" [--backup $M/backup/f1_freeze_pre_repair.db]
+```
 
 ## 4. Apply the store repair **[OWNER: "apply store repair"]** (about 3–5 min; only together with stage 6)
 
@@ -438,14 +494,15 @@ A reinstall alone never restores paper state.
 
 1. Stage 1: `touch $M/bulk_started`, `hdiutil create … && hdiutil attach …` and the verified copier (new backup image). **Done 22–23 Nov 2026, owner-approved; see §1.**
 2. Stage 3: the pre-stop `--verify-only`, `product.launchd_control stop`, `scripts/runtime_backup_final_pass.sh` (with the two `--exclude`) and the SSD backups.
-3. Stage 4: `product.bhav_store_rebuild apply --manifest … --owner-approval "…"`, and `rollback` (with `--backup` if needed) if triggered.
-4. Stage 5: `product.learning_observation_correction apply …`, and its `rollback`.
-5. Stage 6: `git merge --ff-only <SHA>` and `product.host_install install …` (with and without `--no-start`).
-6. A paper-state restore (separate approval; ledger change).
+3. Stage 3b (optional): `product.sqlite_index_repair apply --manifest $M/f1_manifest.json --owner-approval "…"`, and its `rollback`.
+4. Stage 4: `product.bhav_store_rebuild apply --manifest … --owner-approval "…"`, and `rollback` (with `--backup` if needed) if triggered.
+5. Stage 5: `product.learning_observation_correction apply …`, and its `rollback`.
+6. Stage 6: `git merge --ff-only <SHA>` and `product.host_install install …` (with and without `--no-start`).
+7. A paper-state restore (separate approval; ledger change).
 
 Still separate decisions, outside this runbook:
 
-- **Stage 1 finding F1:** the primary-key index of `logs/product/counterfactuals.jsonl.freeze.db` is damaged in production (4 stale entries for rowids 5684–5687, frozen 20 Nov). `REINDEX` repairs a copy; on production it is a mutation that needs its own approval, after the Stage 3 backup;
+- **Stage 1 finding F1** now has its own stage, 3b. It needs its own words ("repair freeze index"), given after the Stage 3 backup;
 - `apply repair` (learning policies);
 - the 814 unlearned outcomes;
 - `apply counterfactual migration`;
