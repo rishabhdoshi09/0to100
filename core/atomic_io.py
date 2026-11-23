@@ -129,12 +129,43 @@ def make_sqlite_durable(connection: Any) -> None:
 
     For stores whose loss costs money or truth and that commit rarely (paper
     F&O book, OMS orders, protection plans). Busy stores (job ledgers, caches)
-    must not use it: each commit then waits ~0.4 s on the owner's USB disk.
+    must not use it: with ``synchronous=FULL`` (SQLite's default) each commit
+    then waits ~0.4 s on the owner's USB disk. Every WAL store needs at least
+    :func:`make_sqlite_checkpoint_safe`.
     """
     if sys.platform != "darwin":
         return
     try:
         connection.execute("PRAGMA fullfsync=ON")
         connection.execute("PRAGMA checkpoint_fullfsync=ON")
+    except Exception:
+        pass
+
+
+def make_sqlite_checkpoint_safe(connection: Any) -> None:
+    """Make a WAL store's checkpoints real write barriers on macOS (Stage 1 finding F1).
+
+    On macOS ``fsync()`` does not flush the drive's cache; only ``F_FULLFSYNC``
+    does, and through the owner's storage stack (APFS in a sparsebundle on an
+    exFAT USB disk) writes sat unflushed for minutes to hours. A WAL checkpoint
+    copies pages into the database and then lets the WAL be overwritten: without
+    a real barrier between the two, a power cut keeps some new pages and loses
+    others. On 19 Nov 2026 that left a decision-freeze ledger with index pages
+    from one transaction and table pages from an older one.
+
+    ``checkpoint_fullfsync`` makes the checkpoint syncs ``F_FULLFSYNC``. It costs
+    nothing per commit at any ``synchronous`` level. With ``synchronous`` at
+    NORMAL or below, commits never sync, so ``fullfsync`` is also set: it only
+    affects the rare WAL-header sync. With FULL it would add a full flush to
+    every commit, which is :func:`make_sqlite_durable`'s deliberate choice.
+    Call it after the store's ``journal_mode`` and ``synchronous`` pragmas.
+    """
+    if sys.platform != "darwin":
+        return
+    try:
+        connection.execute("PRAGMA checkpoint_fullfsync=ON")
+        level = connection.execute("PRAGMA synchronous").fetchone()[0]
+        if int(level) <= 1:
+            connection.execute("PRAGMA fullfsync=ON")
     except Exception:
         pass

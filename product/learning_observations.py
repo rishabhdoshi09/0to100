@@ -103,6 +103,8 @@ def _connect(path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(path), timeout=30.0)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=FULL")
+    from core.atomic_io import make_sqlite_checkpoint_safe
+    make_sqlite_checkpoint_safe(conn)   # checkpoint barriers on macOS (finding F1)
     if _schema_current(conn):
         return conn
     # Create / migrate under ONE write transaction: two processes opening a

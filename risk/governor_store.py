@@ -122,6 +122,8 @@ class RiskDecisionStore:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA busy_timeout=10000")
         connection.execute("PRAGMA journal_mode=WAL")
+        from core.atomic_io import make_sqlite_checkpoint_safe
+        make_sqlite_checkpoint_safe(connection)   # checkpoint barriers on macOS (finding F1)
         return connection
 
     def _now(self) -> str:

@@ -73,6 +73,8 @@ def _conn(path: Path | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db), timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    from core.atomic_io import make_sqlite_checkpoint_safe
+    make_sqlite_checkpoint_safe(conn)   # checkpoint barriers on macOS (finding F1)
     for stmt in _DDL.strip().split(";"):
         stmt = stmt.strip()
         if stmt:

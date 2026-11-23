@@ -40,6 +40,10 @@ def connect(path: str | Path, *, timeout: float = 30.0, wal: bool = True) -> sql
         con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA synchronous=NORMAL")
     con.execute("PRAGMA foreign_keys=ON")
+    if wal:
+        from core.atomic_io import make_sqlite_checkpoint_safe
+
+        make_sqlite_checkpoint_safe(con)        # real checkpoint barriers on macOS (finding F1)
     return con
 
 

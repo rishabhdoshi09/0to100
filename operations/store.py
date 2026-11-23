@@ -231,6 +231,8 @@ class OperationStore:
                 con.execute("PRAGMA journal_mode=WAL")
                 con.execute("PRAGMA synchronous=NORMAL")
                 con.execute("PRAGMA busy_timeout=30000")
+                from core.atomic_io import make_sqlite_checkpoint_safe
+                make_sqlite_checkpoint_safe(con)   # checkpoint barriers on macOS (finding F1)
                 self._local.con = con
                 self._local.path = str(self.path)
                 return _BorrowedConnection(con)

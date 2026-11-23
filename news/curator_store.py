@@ -39,6 +39,8 @@ class NewsCuratorStore:
             with self._conn:
                 self._conn.execute("PRAGMA journal_mode=WAL")
                 self._conn.execute("PRAGMA synchronous=NORMAL")
+                from core.atomic_io import make_sqlite_checkpoint_safe
+                make_sqlite_checkpoint_safe(self._conn)   # checkpoint barriers on macOS (finding F1)
             self._init_schema()
 
     def _init_schema(self) -> None:

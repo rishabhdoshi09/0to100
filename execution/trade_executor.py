@@ -78,6 +78,8 @@ def connect():
     try:
         conn.execute("PRAGMA busy_timeout=10000")
         conn.execute("PRAGMA journal_mode=WAL")
+        from core.atomic_io import make_sqlite_checkpoint_safe
+        make_sqlite_checkpoint_safe(conn)   # checkpoint barriers on macOS (finding F1)
     except Exception:
         pass
     return conn

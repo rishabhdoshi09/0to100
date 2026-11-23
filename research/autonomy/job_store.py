@@ -124,6 +124,8 @@ class JobStore:
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA busy_timeout=30000")
         self._db.execute("PRAGMA journal_mode=WAL")
+        from core.atomic_io import make_sqlite_checkpoint_safe
+        make_sqlite_checkpoint_safe(self._db)   # checkpoint barriers on macOS (finding F1)
         self._db.executescript(_DDL)
         self._migrate()
         self._db.commit()
